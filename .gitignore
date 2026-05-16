@@ -1,0 +1,31 @@
+# External projects for evaluation (not part of Durin)
+/vendor/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+.Python
+env/
+venv/
+.venv/
+
+# Node / WebUI
+node_modules/
+webui/dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Tools
+.claude
+.pytest_cache
