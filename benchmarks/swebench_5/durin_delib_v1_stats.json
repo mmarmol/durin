@@ -1,0 +1,114 @@
+{
+  "run_id": "run5_delib",
+  "total_instances": 5,
+  "patches_generated": 5,
+  "errors": 0,
+  "avg_elapsed_s": 641.9,
+  "avg_tools_used": 13.8,
+  "avg_iterations": 13.8,
+  "total_tokens": 0,
+  "deliberation": true,
+  "model": "glm-5.1",
+  "max_iterations": 100,
+  "posture_events_total": 293,
+  "deliberation_events_total": 56,
+  "per_instance": [
+    {
+      "id": "astropy__astropy-12907",
+      "resolved": true,
+      "elapsed_s": 600.7,
+      "iterations": 0,
+      "tools": {},
+      "tokens": 0,
+      "posture_changes": 45,
+      "delib_count": 6,
+      "delib_time_ms": 384967.7,
+      "posture_final": {}
+    },
+    {
+      "id": "astropy__astropy-14182",
+      "resolved": true,
+      "elapsed_s": 1392.9,
+      "iterations": 0,
+      "tools": {},
+      "tokens": 0,
+      "posture_changes": 89,
+      "delib_count": 6,
+      "delib_time_ms": 275705.8,
+      "posture_final": {}
+    },
+    {
+      "id": "astropy__astropy-14365",
+      "resolved": true,
+      "elapsed_s": 505.5,
+      "iterations": 26,
+      "tools": {
+        "long_task": 1,
+        "read_file": 8,
+        "grep": 7,
+        "edit_file": 2,
+        "exec": 7,
+        "complete_goal": 1
+      },
+      "tokens": 0,
+      "posture_changes": 53,
+      "delib_count": 6,
+      "delib_time_ms": 307976.7,
+      "posture_final": {
+        "cautela": 0.5586,
+        "exploracion": 0.5667,
+        "profundidad": 0.5,
+        "disciplina": 0.5,
+        "conformidad": 0.7
+      }
+    },
+    {
+      "id": "astropy__astropy-14995",
+      "resolved": true,
+      "elapsed_s": 570.6,
+      "iterations": 35,
+      "tools": {
+        "long_task": 1,
+        "grep": 3,
+        "list_dir": 1,
+        "read_file": 6,
+        "edit_file": 1,
+        "exec": 22,
+        "complete_goal": 1
+      },
+      "tokens": 0,
+      "posture_changes": 76,
+      "delib_count": 7,
+      "delib_time_ms": 321866.6,
+      "posture_final": {
+        "cautela": 0.6465,
+        "exploracion": 0.5667,
+        "profundidad": 0.5,
+        "disciplina": 0.5,
+        "conformidad": 0.7
+      }
+    },
+    {
+      "id": "astropy__astropy-6938",
+      "resolved": true,
+      "elapsed_s": 139.9,
+      "iterations": 8,
+      "tools": {
+        "grep": 2,
+        "read_file": 4,
+        "edit_file": 2
+      },
+      "tokens": 0,
+      "posture_changes": 20,
+      "delib_count": 2,
+      "delib_time_ms": 80702.29999999999,
+      "posture_final": {
+        "cautela": 0.5058,
+        "exploracion": 0.5589,
+        "profundidad": 0.5,
+        "disciplina": 0.5,
+        "conformidad": 0.7
+      }
+    }
+  ]
+}

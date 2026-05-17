@@ -1,0 +1,83 @@
+{
+  "run_id": "run5_nanobot",
+  "condition": "nanobot_base",
+  "description": "Nanobot base agent — no posture, no deliberation",
+  "total_instances": 5,
+  "patches_generated": 5,
+  "errors": 0,
+  "avg_elapsed_s": 91.7,
+  "avg_tools_used": 12.8,
+  "avg_iterations": 12.8,
+  "total_tokens": 0,
+  "model": "glm-5.1",
+  "max_iterations": 100,
+  "per_instance": [
+    {
+      "id": "astropy__astropy-12907",
+      "resolved": true,
+      "elapsed_s": 97.3,
+      "iterations": 13,
+      "tools": {
+        "long_task": 1,
+        "grep": 1,
+        "read_file": 2,
+        "edit_file": 1,
+        "exec": 7,
+        "complete_goal": 1
+      },
+      "tokens": 0
+    },
+    {
+      "id": "astropy__astropy-14182",
+      "resolved": true,
+      "elapsed_s": 199.0,
+      "iterations": 28,
+      "tools": {
+        "grep": 8,
+        "my": 1,
+        "exec": 8,
+        "read_file": 10,
+        "edit_file": 1
+      },
+      "tokens": 0
+    },
+    {
+      "id": "astropy__astropy-14365",
+      "resolved": true,
+      "elapsed_s": 47.7,
+      "iterations": 7,
+      "tools": {
+        "grep": 1,
+        "read_file": 2,
+        "edit_file": 1,
+        "exec": 3
+      },
+      "tokens": 0
+    },
+    {
+      "id": "astropy__astropy-14995",
+      "resolved": true,
+      "elapsed_s": 91.8,
+      "iterations": 12,
+      "tools": {
+        "grep": 1,
+        "read_file": 5,
+        "edit_file": 1,
+        "exec": 5
+      },
+      "tokens": 0
+    },
+    {
+      "id": "astropy__astropy-6938",
+      "resolved": true,
+      "elapsed_s": 22.6,
+      "iterations": 4,
+      "tools": {
+        "grep": 1,
+        "edit_file": 1,
+        "read_file": 2
+      },
+      "tokens": 0
+    }
+  ]
+}

@@ -87,8 +87,9 @@ class TestGoalActiveSkip:
 
 class TestPostureDriftRedeliberation:
     @pytest.mark.asyncio
-    async def test_redeliberates_when_posture_drifts(self):
-        responses = ["usar JWT", "explorar", "OAuth2", "7", "8", "6", "5", "7", "9"] * 3
+    async def test_no_redeliberation_on_drift_in_v2(self):
+        """V2: deliberation only fires at iter 0, drift does NOT trigger re-deliberation."""
+        responses = ["usar JWT", "explorar", "OAuth2"] * 3
         provider = _mock_provider(responses)
         engine = _make_engine(provider)
 
@@ -110,13 +111,12 @@ class TestPostureDriftRedeliberation:
         first_verdict = hook.last_verdict
 
         # Simulate posture drift
-        posture_value[0] = 0.8  # +0.3, exceeds 0.15 threshold
+        posture_value[0] = 0.8  # +0.3, exceeds threshold
 
-        # Iteration 5 — should re-deliberate due to drift
+        # Iteration 5 — V2 does NOT re-deliberate
         ctx2 = _ctx(iteration=5)
         await hook.before_iteration(ctx2)
-        # A new deliberation happened
-        assert hook.last_verdict is not first_verdict
+        assert hook.last_verdict is first_verdict
 
     @pytest.mark.asyncio
     async def test_no_redeliberation_without_drift(self):

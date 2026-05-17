@@ -36,7 +36,7 @@ def build_hooks_from_config(
         hooks.append(posture_hook)
 
     delib_hook = _maybe_build_deliberation_hook(
-        defaults.deliberation, posture_hook, telemetry,
+        defaults.deliberation, posture_hook, telemetry, config=config,
     )
     if delib_hook:
         hooks.append(delib_hook)
@@ -73,7 +73,7 @@ def _maybe_build_posture_hook(
                 media=axis_cfg.media,
                 varianza=axis_cfg.varianza,
                 fuerza_retorno=axis_cfg.fuerza_retorno,
-                valor_actual=axis_cfg.media,
+                valor_actual=axis_cfg.valor_actual if axis_cfg.valor_actual is not None else axis_cfg.media,
             )
         else:
             axes[name] = AxisState(
@@ -90,6 +90,7 @@ def _maybe_build_deliberation_hook(
     delib_config: Any,
     posture_hook: AgentHook | None,
     telemetry: TelemetryLogger | None,
+    config: Any = None,
 ) -> AgentHook | None:
     if not delib_config.enabled:
         return None
@@ -100,18 +101,17 @@ def _maybe_build_deliberation_hook(
     from durin.deliberation.hook import DeliberationHook
     from durin.deliberation.types import GeneratorRole
 
-    provider = _make_deliberation_provider(delib_config.provider)
+    provider = _make_deliberation_provider(delib_config.provider, config=config)
     if provider is None:
         return None
 
     generators = _build_generators(delib_config.generators)
-    evaluators = _build_evaluators(delib_config.evaluators, provider)
 
     engine = DeliberationEngine(
         provider=provider,
         generators=generators,
-        evaluators=evaluators,
-        max_rounds=delib_config.max_rounds,
+        evaluators=[],  # V2: no evaluators, perspectives injected directly
+        max_rounds=1,   # V2: single round, no evolution
     )
 
     posture_snapshot_fn = None
@@ -126,14 +126,14 @@ def _maybe_build_deliberation_hook(
         telemetry=telemetry,
     )
     logger.info(
-        "DeliberationHook enabled — {} generators, {} evaluators, max_rounds={}",
-        len(generators), len(evaluators), delib_config.max_rounds,
+        "DeliberationHook enabled — {} generators, V2 (no evaluators), max_rounds=1",
+        len(generators),
     )
     return hook
 
 
-def _make_deliberation_provider(provider_name: str):
-    """Create the LLM provider for deliberation (local or ollama)."""
+def _make_deliberation_provider(provider_name: str, config: Any = None):
+    """Create the LLM provider for deliberation."""
     if provider_name == "local":
         try:
             from durin.providers.local_llama_provider import LocalLlamaProvider
@@ -159,6 +159,18 @@ def _make_deliberation_provider(provider_name: str):
                 "Start with: ollama serve"
             )
             return None
+
+    if provider_name == "custom" and config is not None:
+        p = getattr(config.providers, "custom", None)
+        if p and p.api_key and p.api_base:
+            from durin.providers.openai_compat_provider import OpenAICompatProvider
+            return OpenAICompatProvider(
+                api_key=p.api_key,
+                api_base=p.api_base,
+                default_model="glm-5-turbo",
+            )
+        logger.warning("Deliberation provider 'custom' lacks api_key/api_base")
+        return None
 
     logger.warning("Unknown deliberation provider '{}', skipping", provider_name)
     return None

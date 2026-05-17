@@ -1,20 +1,17 @@
-"""SWE-bench evaluation adapter for Durin.
+"""SWE-bench evaluation adapter for Nanobot (base agent, no posture or deliberation).
 
-Runs Durin agent against SWE-bench Lite instances and collects patches.
-Two conditions: deliberation ON vs OFF, both using GLM-5.1 via Z.ai API.
+Runs Nanobot agent against SWE-bench Lite instances and collects patches.
+This is the baseline condition: no posture tracking, no deliberation hooks.
 
 Usage:
-    # Run 5 instances without deliberation
-    python scripts/swebench_eval.py --n 5 --no-deliberation --run-id durin_nodelib
+    # Run 5 instances
+    source /tmp/swebench_env/bin/activate && python3 scripts/swebench_nanobot_eval.py --n 5 --run-id run5_nanobot
 
-    # Run 5 instances WITH deliberation
-    python scripts/swebench_eval.py --n 5 --deliberation --run-id durin_delib
+    # Run with specific offset
+    python scripts/swebench_nanobot_eval.py --n 5 --offset 0 --run-id run5_nanobot
 
-    # Evaluate collected predictions
-    python scripts/swebench_eval.py --evaluate --predictions /tmp/swebench_durin/durin_nodelib.jsonl
-
-    # Full pipeline: run + evaluate
-    python scripts/swebench_eval.py --n 30 --deliberation --run-id durin_delib --auto-eval
+    # Run specific instance IDs
+    python scripts/swebench_nanobot_eval.py --instance-ids django__django-11039 --run-id run5_nanobot
 """
 
 from __future__ import annotations
@@ -30,7 +27,8 @@ import tempfile
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# Insert nanobot vendor path so we can import from it
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "vendor" / "nanobot"))
 
 from datasets import load_dataset
 from loguru import logger
@@ -38,7 +36,6 @@ from loguru import logger
 _ZAI_API_KEY = os.environ.get("ZAI_API_KEY", "")
 _ZAI_API_BASE = "https://api.z.ai/api/coding/paas/v4"
 _MODEL = "glm-5.1"
-_DELIB_MODEL = "glm-5-turbo"
 _MAX_ITERATIONS = 100
 _RESULTS_DIR = Path("/tmp/swebench_durin")
 _REPOS_CACHE = Path("/tmp/swebench_repos")
@@ -55,6 +52,10 @@ When you're done, just say "DONE" — the git diff will be captured automaticall
 """
 
 _TASK_TEMPLATE = """\
+{system_prompt}
+
+---
+
 Repository: {repo}
 Issue: {instance_id}
 
@@ -108,36 +109,6 @@ def _get_diff(workspace: Path) -> str:
     return result.stdout
 
 
-def _collect_telemetry(session_key: str) -> list[dict]:
-    """Collect telemetry events for this session from the JSONL log."""
-    from pathlib import Path as P
-    import re
-    from datetime import date
-
-    telemetry_dir = P.home() / ".cache" / "durin" / "telemetry"
-    if not telemetry_dir.exists():
-        return []
-
-    safe_key = re.sub(r"[^\w\-]", "_", session_key)[:80]
-    today = date.today().isoformat()
-    filename = f"{safe_key}_{today}.jsonl"
-    telemetry_file = telemetry_dir / filename
-
-    if not telemetry_file.exists():
-        return []
-
-    events = []
-    with telemetry_file.open() as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                try:
-                    events.append(json.loads(line))
-                except json.JSONDecodeError:
-                    pass
-    return events
-
-
 def _extract_token_usage(messages: list[dict]) -> dict:
     """Extract aggregated token usage from LLM response messages."""
     total_prompt = 0
@@ -166,37 +137,11 @@ def _tool_breakdown(tools: list[str]) -> dict[str, int]:
     return counts
 
 
-def _build_config(
-    workspace: Path,
-    deliberation: bool,
-    posture_override: dict[str, float] | None = None,
-) -> dict:
-    """Build a Durin config dict for this evaluation run.
+def _build_config(workspace: Path) -> dict:
+    """Build a Nanobot config dict for this evaluation run.
 
-    Posture is ALWAYS enabled for observability (tracks agent behavior).
-    Only deliberation toggles between conditions.
-    posture_override: if provided, sets initial axis values (for carry-posture mode).
+    No posture, no deliberation — pure base agent.
     """
-    posture_cfg: dict = {"enabled": True}
-    if posture_override:
-        axes = {}
-        axis_defaults = {
-            "cautela": {"media": 0.6, "varianza": 0.15, "fuerza_retorno": 0.3},
-            "exploracion": {"media": 0.4, "varianza": 0.20, "fuerza_retorno": 0.4},
-            "profundidad": {"media": 0.5, "varianza": 0.20, "fuerza_retorno": 0.5},
-            "disciplina": {"media": 0.5, "varianza": 0.15, "fuerza_retorno": 0.2},
-            "conformidad": {"media": 0.7, "varianza": 0.15, "fuerza_retorno": 0.3},
-        }
-        for axis_name, defaults in axis_defaults.items():
-            val = posture_override.get(axis_name, defaults["media"])
-            axes[axis_name] = {
-                "media": defaults["media"],
-                "varianza": defaults["varianza"],
-                "fuerza_retorno": defaults["fuerza_retorno"],
-                "valor_actual": val,
-            }
-        posture_cfg["axes"] = axes
-
     config = {
         "agents": {
             "defaults": {
@@ -207,21 +152,6 @@ def _build_config(
                 "temperature": 0.1,
                 "max_tool_iterations": _MAX_ITERATIONS,
                 "workspace": str(workspace),
-                "posture": posture_cfg,
-                "deliberation": {
-                    "enabled": deliberation,
-                    "provider": "custom",
-                    "max_rounds": 3,
-                    "generators": {
-                        "pragmatico": {"model": _DELIB_MODEL, "temperature": 0.3},
-                        "explorador": {"model": _DELIB_MODEL, "temperature": 0.8},
-                        "critico": {"model": _DELIB_MODEL, "temperature": 0.5},
-                    },
-                    "evaluators": {
-                        "avance": {"model": _DELIB_MODEL},
-                        "reversibilidad": {"model": _DELIB_MODEL},
-                    },
-                },
             }
         },
         "providers": {
@@ -236,16 +166,14 @@ def _build_config(
 
 async def _run_instance(
     instance: dict,
-    deliberation: bool,
     workspace: Path,
-    carry_posture: dict[str, float] | None = None,
 ) -> dict:
-    """Run Durin on a single SWE-bench instance. Returns prediction dict."""
+    """Run Nanobot on a single SWE-bench instance. Returns prediction dict."""
     instance_id = instance["instance_id"]
     repo = instance["repo"]
     base_commit = instance["base_commit"]
 
-    logger.info(">>> {} (delib={})", instance_id, deliberation)
+    logger.info(">>> {} (nanobot base, no posture, no deliberation)", instance_id)
     start = time.time()
 
     # Checkout repo
@@ -253,17 +181,18 @@ async def _run_instance(
         return {
             "instance_id": instance_id,
             "model_patch": "",
-            "model_name_or_path": f"durin-glm51-{'delib' if deliberation else 'nodelib'}",
+            "model_name_or_path": "nanobot-glm51-base",
             "error": "checkout_failed",
         }
 
     # Build config and write to temp file
-    config = _build_config(workspace, deliberation, posture_override=carry_posture)
-    config_path = workspace / ".durin_eval_config.json"
+    config = _build_config(workspace)
+    config_path = workspace / ".nanobot_eval_config.json"
     config_path.write_text(json.dumps(config, indent=2))
 
-    # Run Durin SDK
+    # Build task with system prompt prepended
     task = _TASK_TEMPLATE.format(
+        system_prompt=_SYSTEM_PROMPT,
         repo=repo,
         instance_id=instance_id,
         problem_statement=instance["problem_statement"],
@@ -273,11 +202,10 @@ async def _run_instance(
     tools_used = []
     content = ""
     messages = []
-    posture_final = {}
 
     try:
-        from durin.durin_sdk import Durin
-        bot = Durin.from_config(config_path, workspace=workspace, session_key=session_key)
+        from nanobot.nanobot import Nanobot
+        bot = Nanobot.from_config(config_path, workspace=workspace)
         result = await asyncio.wait_for(
             bot.run(task, session_key=session_key),
             timeout=600,  # 10 min max per instance
@@ -285,11 +213,6 @@ async def _run_instance(
         tools_used = result.tools_used
         content = result.content
         messages = result.messages
-        # Extract final posture state from hooks
-        for hook in (bot._loop._extra_hooks or []):
-            if hasattr(hook, "current_vector"):
-                posture_final = hook.current_vector.snapshot()
-                break
     except asyncio.TimeoutError:
         logger.warning("Timeout on {}", instance_id)
         content = "TIMEOUT"
@@ -301,40 +224,33 @@ async def _run_instance(
     patch = _get_diff(workspace)
     elapsed = time.time() - start
 
-    # Collect telemetry (posture + deliberation events)
-    telemetry_events = _collect_telemetry(session_key)
-
     # Extract token usage from messages
     token_stats = _extract_token_usage(messages)
 
-    logger.info("<<< {} — patch={} chars, tools={}, time={:.0f}s, tokens={}, posture_events={}",
+    logger.info("<<< {} — patch={} chars, tools={}, time={:.0f}s, tokens={}",
                 instance_id, len(patch), len(tools_used), elapsed,
-                token_stats.get("total_tokens", 0), len(telemetry_events))
+                token_stats.get("total_tokens", 0))
 
     return {
         "instance_id": instance_id,
         "model_patch": patch,
-        "model_name_or_path": f"durin-glm51-{'delib' if deliberation else 'nodelib'}",
+        "model_name_or_path": "nanobot-glm51-base",
         "elapsed_s": round(elapsed, 1),
         "tools_used_count": len(tools_used),
         "tools_breakdown": _tool_breakdown(tools_used),
         "iterations": len([t for t in tools_used if t]),
         "token_stats": token_stats,
-        "telemetry": telemetry_events,
-        "posture_final": {k: round(v, 4) for k, v in posture_final.items()},
         "error": None if patch else ("timeout" if "TIMEOUT" in content else "no_patch"),
     }
 
 
 async def run_evaluation(
     n: int,
-    deliberation: bool,
     run_id: str,
     offset: int = 0,
     instance_ids: list[str] | None = None,
-    carry_posture: bool = False,
 ):
-    """Run Durin on N SWE-bench instances."""
+    """Run Nanobot on N SWE-bench instances."""
     _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     _REPOS_CACHE.mkdir(parents=True, exist_ok=True)
 
@@ -348,24 +264,17 @@ async def run_evaluation(
     predictions_path = _RESULTS_DIR / f"{run_id}.jsonl"
     stats_path = _RESULTS_DIR / f"{run_id}_stats.json"
 
-    logger.info("Running {} instances, deliberation={}, carry_posture={}, output={}",
-                len(instances), deliberation, carry_posture, predictions_path)
+    logger.info("Running {} instances (nanobot base), output={}",
+                len(instances), predictions_path)
 
     results = []
-    workspace = Path(tempfile.mkdtemp(prefix="swebench_work_"))
-    current_posture: dict[str, float] | None = None
+    workspace = Path(tempfile.mkdtemp(prefix="swebench_nanobot_"))
 
     try:
         for i, inst in enumerate(instances):
             logger.info("[{}/{}] Starting {}", i + 1, len(instances), inst["instance_id"])
-            posture_input = current_posture if carry_posture else None
-            pred = await _run_instance(inst, deliberation, workspace, carry_posture=posture_input)
+            pred = await _run_instance(inst, workspace)
             results.append(pred)
-
-            # Carry forward posture to next instance
-            if carry_posture and pred.get("posture_final"):
-                current_posture = pred["posture_final"]
-                logger.info("Carrying posture: {}", {k: f"{v:.3f}" for k, v in current_posture.items()})
 
             # Append prediction incrementally
             with predictions_path.open("a") as f:
@@ -377,7 +286,7 @@ async def run_evaluation(
     finally:
         shutil.rmtree(workspace, ignore_errors=True)
 
-    # Write detailed results (per-instance with telemetry)
+    # Write detailed results (per-instance)
     detailed_path = _RESULTS_DIR / f"{run_id}_detailed.jsonl"
     with detailed_path.open("w") as f:
         for r in results:
@@ -392,18 +301,10 @@ async def run_evaluation(
     avg_iterations = sum(r.get("iterations", 0) for r in results) / max(total, 1)
     total_tokens = sum(r.get("token_stats", {}).get("total_tokens", 0) for r in results)
 
-    # Posture telemetry summary
-    posture_events = []
-    delib_events = []
-    for r in results:
-        for ev in r.get("telemetry", []):
-            if ev.get("type", "").startswith("posture."):
-                posture_events.append(ev)
-            elif ev.get("type", "").startswith("deliberation."):
-                delib_events.append(ev)
-
     stats = {
         "run_id": run_id,
+        "condition": "nanobot_base",
+        "description": "Nanobot base agent — no posture, no deliberation",
         "total_instances": total,
         "patches_generated": non_empty,
         "errors": errors,
@@ -411,11 +312,8 @@ async def run_evaluation(
         "avg_tools_used": round(avg_tools, 1),
         "avg_iterations": round(avg_iterations, 1),
         "total_tokens": total_tokens,
-        "deliberation": deliberation,
         "model": _MODEL,
         "max_iterations": _MAX_ITERATIONS,
-        "posture_events_total": len(posture_events),
-        "deliberation_events_total": len(delib_events),
         "per_instance": [
             {
                 "id": r["instance_id"],
@@ -424,19 +322,10 @@ async def run_evaluation(
                 "iterations": r.get("iterations"),
                 "tools": r.get("tools_breakdown"),
                 "tokens": r.get("token_stats", {}).get("total_tokens", 0),
-                "posture_changes": len([e for e in r.get("telemetry", []) if e.get("type") == "posture.change"]),
-                "delib_count": len([e for e in r.get("telemetry", []) if e.get("type") == "deliberation.result"]),
-                "delib_time_ms": sum(
-                    e.get("data", {}).get("duration_ms", 0)
-                    for e in r.get("telemetry", [])
-                    if e.get("type") == "deliberation.result"
-                ),
-                "posture_final": r.get("posture_final", {}),
             }
             for r in results
         ],
     }
-    stats_path = _RESULTS_DIR / f"{run_id}_stats.json"
     stats_path.write_text(json.dumps(stats, indent=2, ensure_ascii=False))
     logger.info("Stats written to {}", stats_path)
     logger.info("Summary: {}/{} patches, avg {:.0f}s, avg {:.0f} iters, {} tokens total",
@@ -465,15 +354,11 @@ def run_swebench_evaluation(predictions_path: Path, run_id: str):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="SWE-bench evaluation for Durin")
+    parser = argparse.ArgumentParser(description="SWE-bench evaluation for Nanobot (base agent)")
     parser.add_argument("--n", type=int, default=5, help="Number of instances to run")
     parser.add_argument("--offset", type=int, default=0, help="Start from this index")
     parser.add_argument("--instance-ids", nargs="+", help="Specific instance IDs")
-    parser.add_argument("--deliberation", action="store_true", help="Enable deliberation")
-    parser.add_argument("--no-deliberation", action="store_true", help="Disable deliberation")
     parser.add_argument("--run-id", required=True, help="Unique run identifier")
-    parser.add_argument("--carry-posture", action="store_true",
-                        help="Carry posture state between instances")
     parser.add_argument("--evaluate", action="store_true", help="Only run evaluation")
     parser.add_argument("--predictions", type=Path, help="Path to predictions JSONL")
     parser.add_argument("--auto-eval", action="store_true", help="Evaluate after running")
@@ -486,15 +371,11 @@ def main():
         run_swebench_evaluation(args.predictions, args.run_id)
         return
 
-    deliberation = args.deliberation and not args.no_deliberation
-
     predictions_path = asyncio.run(run_evaluation(
         n=args.n,
-        deliberation=deliberation,
         run_id=args.run_id,
         offset=args.offset,
         instance_ids=args.instance_ids,
-        carry_posture=args.carry_posture,
     ))
 
     if args.auto_eval:

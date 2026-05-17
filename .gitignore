@@ -35,6 +35,8 @@ Thumbs.db
 /sessions/
 /memory/
 gold.*.json
+*.run*.json
+*.pilot_*.json
 
 # Workspace runtime files
 /AGENTS.md
