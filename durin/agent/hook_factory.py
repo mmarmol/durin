@@ -14,6 +14,7 @@ from durin.agent.hook import AgentHook
 
 if TYPE_CHECKING:
     from durin.config.schema import Config
+    from durin.deliberation.service import DeliberationService
     from durin.telemetry.logger import TelemetryLogger
 
 _POSTURE_DRIFT_THRESHOLD = 0.15
@@ -23,8 +24,9 @@ def build_hooks_from_config(
     config: Config,
     session_key: str | None = None,
 ) -> list[AgentHook]:
-    """Build posture + deliberation + plan hooks based on config flags.
+    """Build posture + plan hooks based on config flags.
 
+    Deliberation V3 is a service injected into PlanHook (not a standalone hook).
     Returns an empty list if all systems are disabled.
     """
     defaults = config.agents.defaults
@@ -35,13 +37,19 @@ def build_hooks_from_config(
     if posture_hook:
         hooks.append(posture_hook)
 
-    delib_hook = _maybe_build_deliberation_hook(
-        defaults.deliberation, posture_hook, telemetry, config=config,
+    delib_service = _maybe_build_deliberation_service(
+        defaults.deliberation, telemetry, config=config,
     )
-    if delib_hook:
-        hooks.append(delib_hook)
 
-    plan_hook = _maybe_build_plan_hook(config, session_key)
+    posture_snapshot_fn = None
+    if posture_hook is not None:
+        from durin.posture.hook import PostureHook
+        if isinstance(posture_hook, PostureHook):
+            posture_snapshot_fn = lambda: posture_hook.current_vector.snapshot()
+
+    plan_hook = _maybe_build_plan_hook(
+        config, session_key, delib_service, posture_snapshot_fn,
+    )
     if plan_hook:
         hooks.append(plan_hook)
 
@@ -90,50 +98,32 @@ def _maybe_build_posture_hook(
     return hook
 
 
-def _maybe_build_deliberation_hook(
+def _maybe_build_deliberation_service(
     delib_config: Any,
-    posture_hook: AgentHook | None,
     telemetry: TelemetryLogger | None,
     config: Any = None,
-) -> AgentHook | None:
+) -> "DeliberationService | None":
     if not delib_config.enabled:
         return None
 
     from durin.deliberation.engine import DeliberationEngine
-    from durin.deliberation.evaluator import LLMEvaluator
-    from durin.deliberation.generator import GeneratorConfig
-    from durin.deliberation.hook import DeliberationHook
-    from durin.deliberation.types import GeneratorRole
+    from durin.deliberation.service import DeliberationService
 
     provider = _make_deliberation_provider(delib_config.provider, config=config)
     if provider is None:
         return None
 
-    generators = _build_generators(delib_config.generators)
-
+    model = getattr(delib_config, "model", None) or "glm-5.1"
     engine = DeliberationEngine(
         provider=provider,
-        generators=generators,
-        evaluators=[],  # V2: no evaluators, perspectives injected directly
-        max_rounds=1,   # V2: single round, no evolution
+        model=model,
+        temperature=0.4,
+        max_tokens=2048,
     )
 
-    posture_snapshot_fn = None
-    if posture_hook is not None:
-        from durin.posture.hook import PostureHook
-        if isinstance(posture_hook, PostureHook):
-            posture_snapshot_fn = lambda: posture_hook.current_vector.snapshot()
-
-    hook = DeliberationHook(
-        engine=engine,
-        posture_snapshot_fn=posture_snapshot_fn,
-        telemetry=telemetry,
-    )
-    logger.info(
-        "DeliberationHook enabled — {} generators, V2 (no evaluators), max_rounds=1",
-        len(generators),
-    )
-    return hook
+    service = DeliberationService(engine=engine, telemetry=telemetry)
+    logger.info("DeliberationService V3 enabled — single-call multi-perspective, model={}", model)
+    return service
 
 
 def _make_deliberation_provider(provider_name: str, config: Any = None):
@@ -171,7 +161,7 @@ def _make_deliberation_provider(provider_name: str, config: Any = None):
             return OpenAICompatProvider(
                 api_key=p.api_key,
                 api_base=p.api_base,
-                default_model="glm-5-turbo",
+                default_model="glm-5.1",
             )
         logger.warning("Deliberation provider 'custom' lacks api_key/api_base")
         return None
@@ -180,82 +170,11 @@ def _make_deliberation_provider(provider_name: str, config: Any = None):
     return None
 
 
-def _build_generators(gen_configs: dict[str, Any]) -> list:
-    from durin.deliberation.generator import GeneratorConfig
-    from durin.deliberation.types import GeneratorRole
-
-    role_map = {
-        "pragmatico": GeneratorRole.PRAGMATICO,
-        "explorador": GeneratorRole.EXPLORADOR,
-        "critico": GeneratorRole.CRITICO,
-    }
-
-    prompt_templates = {
-        "pragmatico": (
-            "Sos el generador pragmático. Proponé un camino concreto "
-            "usando lo conocido y probado. Explicá brevemente por qué "
-            "es la opción más directa para este problema."
-        ),
-        "explorador": (
-            "Sos el generador explorador. Proponé un camino alternativo "
-            "que los demás no están considerando. Explicá brevemente qué "
-            "se gana explorando esta dirección."
-        ),
-        "critico": (
-            "Sos el generador crítico. Proponé el camino más seguro y "
-            "reversible. Explicá brevemente qué riesgos evitás con esta "
-            "dirección."
-        ),
-    }
-
-    generators = []
-    for name, cfg in gen_configs.items():
-        if not cfg.enabled:
-            continue
-        role = role_map.get(name)
-        if role is None:
-            continue
-        generators.append(GeneratorConfig(
-            role=role,
-            model=cfg.model,
-            temperature=cfg.temperature,
-            max_tokens=cfg.max_tokens,
-            prompt_template=prompt_templates.get(name, ""),
-        ))
-    return generators
-
-
-def _build_evaluators(eval_configs: dict[str, Any], provider) -> list:
-    from durin.deliberation.evaluator import LLMEvaluator
-
-    prompt_templates = {
-        "avance": (
-            "Del 0 al 10, cuanto avanza esta propuesta hacia el objetivo? "
-            "Responde SOLO el numero."
-        ),
-        "reversibilidad": (
-            "Del 0 al 10, si esta propuesta falla, cuan facil es volver atras? "
-            "Responde SOLO el numero."
-        ),
-    }
-
-    evaluators = []
-    for name, cfg in eval_configs.items():
-        template = prompt_templates.get(name, "Score 0-10.")
-        evaluators.append(LLMEvaluator(
-            _name=name,
-            _provider=provider,
-            _model=cfg.model,
-            _prompt_template=template,
-            _max_tokens=cfg.max_tokens,
-            _temperature=cfg.temperature,
-        ))
-    return evaluators
-
-
 def _maybe_build_plan_hook(
     config: Config,
     session_key: str | None,
+    deliberation: "DeliberationService | None" = None,
+    posture_snapshot_fn: Any = None,
 ) -> AgentHook | None:
     plan_config = getattr(config.agents.defaults, "plan", None)
     if plan_config is None:
@@ -271,6 +190,8 @@ def _maybe_build_plan_hook(
     hook = PlanHook(
         workspace=workspace,
         session_key=session_key or "default",
+        deliberation=deliberation,
+        posture_snapshot_fn=posture_snapshot_fn,
     )
     logger.info("PlanHook enabled — 3-tier execution model")
     return hook

@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
 from durin.agent.hook import AgentHook, AgentHookContext
 from durin.plan.store import PlanStore
 from durin.plan.types import ExecutionTier, Phase, PlanItem, PlanState
+
+if TYPE_CHECKING:
+    from durin.deliberation.service import DeliberationService
 
 
 _TIER_INSTRUCTIONS = """\
@@ -26,8 +30,9 @@ Choose the tier that matches the task complexity."""
 
 
 _VERIFY_REMINDER = (
-    "[Reminder] You edited code in execute_verify mode. "
-    "Run relevant tests to verify your change before completing."
+    "[Reminder] You edited in execute_verify mode. "
+    "Before completing: state what specific outcome confirms your change is correct, "
+    "then verify it."
 )
 
 
@@ -38,6 +43,8 @@ _PHASE_PROMPTS: dict[Phase, str] = {
     ),
     Phase.PLAN: (
         "[Plan: PLAN] Define or update your plan steps via update_plan(action='add', item='...'). "
+        "Your LAST step MUST be a verification step: describe what specific behavior, "
+        "output, or test result will confirm your fix is correct. "
         "When your plan is ready, proceed to EXECUTE."
     ),
     Phase.EXECUTE: (
@@ -45,8 +52,9 @@ _PHASE_PROMPTS: dict[Phase, str] = {
         "When done, move to CONFIRM by running tests."
     ),
     Phase.CONFIRM: (
-        "[Plan: CONFIRM] Run tests or validation to verify your changes. "
-        "If tests pass, mark the step complete. If they fail, investigate why."
+        "[Plan: CONFIRM] Execute the verification you defined in your plan. "
+        "Check the specific behavior or output you predicted. "
+        "If it matches, mark complete. If not, investigate why."
     ),
 }
 
@@ -54,12 +62,18 @@ _PHASE_PROMPTS: dict[Phase, str] = {
 class PlanHook(AgentHook):
     """Manages execution tiers. Only enforces cycle for Tier 3."""
 
-    __slots__ = ("_state", "_store", "_edit_detected", "_exec_detected", "_tier_set", "_pending_bias_events")
+    __slots__ = (
+        "_state", "_store", "_edit_detected", "_exec_detected", "_tier_set",
+        "_pending_bias_events", "_deliberation", "_deliberation_needed",
+        "_posture_snapshot_fn",
+    )
 
     def __init__(
         self,
         workspace: Path | None = None,
         session_key: str = "default",
+        deliberation: "DeliberationService | None" = None,
+        posture_snapshot_fn: Callable[[], dict[str, float]] | None = None,
     ) -> None:
         super().__init__()
         self._state = PlanState(goal="")
@@ -73,6 +87,9 @@ class PlanHook(AgentHook):
         self._exec_detected = False
         self._tier_set = False
         self._pending_bias_events: list[str] = []
+        self._deliberation: "DeliberationService | None" = deliberation
+        self._deliberation_needed = False
+        self._posture_snapshot_fn = posture_snapshot_fn
 
         # Register hook reference for tool discovery
         from durin.agent.tools.plan import set_plan_hook
@@ -131,6 +148,8 @@ class PlanHook(AgentHook):
             # Transition from INVESTIGATE to PLAN when items are added
             if state.current_phase == Phase.INVESTIGATE:
                 self._transition_phase(Phase.PLAN)
+                if self._deliberation:
+                    self._deliberation_needed = True
             self._save()
             return f"Added step: {item}"
 
@@ -185,6 +204,9 @@ class PlanHook(AgentHook):
 
         # FULL_PLAN: inject phase prompt + plan state
         if tier == ExecutionTier.FULL_PLAN:
+            if self._deliberation_needed and self._deliberation:
+                await self._run_deliberation(context)
+                self._deliberation_needed = False
             phase = self._state.current_phase or Phase.INVESTIGATE
             prompt = self._build_plan_prompt(phase)
             self._inject_system(context, prompt)
@@ -247,6 +269,7 @@ class PlanHook(AgentHook):
     def _on_confirm_fail(self, context: AgentHookContext) -> None:
         self._state.cycle_count += 1
         self._state.current_phase = Phase.INVESTIGATE
+        self._state.last_failure_context = context.error or ""
         if self._store:
             self._store.append_event(
                 "confirm_result", outcome="fail", cycle=self._state.cycle_count
@@ -297,6 +320,58 @@ class PlanHook(AgentHook):
         else:
             context.messages.append(msg)
         context.injected_messages_count += 1
+
+    async def _run_deliberation(self, context: AgentHookContext) -> None:
+        """Run deliberation at INVESTIGATE→PLAN transition and inject result."""
+        from durin.deliberation.types import DeliberationContext
+
+        investigation_context = self._extract_investigation_context(context)
+        goal = self._state.goal or self._extract_goal(context)
+        posture = self._posture_snapshot_fn() if self._posture_snapshot_fn else {}
+        previous_failure = ""
+        if self._state.cycle_count > 1:
+            previous_failure = getattr(self._state, "last_failure_context", "")
+
+        delib_context = DeliberationContext(
+            goal_summary=goal,
+            investigation_context=investigation_context,
+            posture_snapshot=posture,
+            previous_failure=previous_failure,
+        )
+
+        try:
+            result = await self._deliberation.deliberate(
+                delib_context,
+                trigger="investigate_to_plan",
+                cycle=self._state.cycle_count,
+            )
+            rendered = self._deliberation.render(result)
+            self._inject_system(context, rendered)
+            logger.info("PlanHook: deliberation injected ({:.0f}ms)", result.duration_ms)
+        except Exception as e:
+            logger.warning("PlanHook: deliberation failed: {}", e)
+
+    def _extract_investigation_context(self, context: AgentHookContext) -> str:
+        """Extract investigation findings from recent messages."""
+        parts: list[str] = []
+        for msg in context.messages[-15:]:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            if role == "tool" and isinstance(content, str) and len(content) > 100:
+                parts.append(content[:800])
+            elif role == "assistant" and isinstance(content, str) and len(content) > 50:
+                parts.append(content[:400])
+        combined = "\n---\n".join(parts[-5:])
+        return combined[:4000]
+
+    def _extract_goal(self, context: AgentHookContext) -> str:
+        """Extract goal from first user message."""
+        for msg in context.messages:
+            if msg.get("role") == "user":
+                content = msg.get("content", "")
+                if isinstance(content, str):
+                    return content[:300]
+        return "Unknown goal"
 
     def _save(self) -> None:
         if self._store:

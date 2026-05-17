@@ -1,57 +1,28 @@
-"""Synthesis — packages all perspectives as enrichment for the main LLM.
-
-V2: No winner selection. All 3 perspectives are presented to the main model
-so it can synthesize with full context. The value is in diversity of
-viewpoints, not in pre-selecting one.
-"""
+"""Synthesis — renders deliberation result for context injection."""
 
 from __future__ import annotations
 
-from durin.deliberation.types import (
-    GeneratorRole,
-    SynthesisResult,
-    Verdict,
-)
+from durin.deliberation.types import DeliberationResult
 
 
-def synthesize(
-    verdict: Verdict,
-    posture_snapshot: dict[str, float] | None = None,
-) -> SynthesisResult:
-    """Build multi-perspective enrichment from all generated proposals."""
-    pragmatico = ""
-    explorador = ""
-    critico = ""
+_DELIBERATION_TAG = "[Deliberación pre-análisis]"
 
-    for sp in verdict.all_proposals:
-        content = sp.proposal.content.strip()[:250]
-        if sp.proposal.role == GeneratorRole.PRAGMATICO:
-            pragmatico = content
-        elif sp.proposal.role == GeneratorRole.EXPLORADOR:
-            explorador = content
-        elif sp.proposal.role == GeneratorRole.CRITICO:
-            critico = content
-
-    direction = pragmatico or (explorador or critico)
-    reasoning = critico
-    alternatives = explorador
-
-    return SynthesisResult(
-        direction=direction,
-        reasoning=reasoning,
-        alternatives_brief=alternatives,
-        confidence="alta",
-        under_doubt=verdict.under_doubt,
-    )
+_ROLE_LABELS = {
+    "critico": "Riesgos identificados",
+    "explorador": "Alternativa considerada",
+    "pragmatico": "Enfoque directo",
+}
 
 
-def render_synthesis(result: SynthesisResult) -> str:
-    """Render all perspectives as enrichment text for injection."""
-    parts = []
-    if result.direction:
-        parts.append(f"Perspectiva directa: {result.direction}")
-    if result.alternatives_brief:
-        parts.append(f"Perspectiva alternativa: {result.alternatives_brief}")
-    if result.reasoning:
-        parts.append(f"Riesgos a considerar: {result.reasoning}")
+def render_for_injection(result: DeliberationResult) -> str:
+    """Format deliberation output for system message injection."""
+    parts = [_DELIBERATION_TAG, ""]
+
+    for p in result.perspectives:
+        label = _ROLE_LABELS.get(p.role, p.role.capitalize())
+        parts.append(f"{label}: {p.content}")
+
+    if result.synthesis:
+        parts.append(f"\nSíntesis: {result.synthesis}")
+
     return "\n".join(parts)

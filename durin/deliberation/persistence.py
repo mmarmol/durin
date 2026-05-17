@@ -1,25 +1,25 @@
-"""Verdict history session persistence."""
+"""Deliberation history session persistence."""
 
 from __future__ import annotations
 
 from typing import Any, Mapping, MutableMapping
 
-from durin.deliberation.history import VerdictHistory
+from durin.deliberation.history import DeliberationHistory
 
-VERDICT_HISTORY_KEY = "verdict_history"
+DELIBERATION_HISTORY_KEY = "deliberation_history"
 
 
-def save_verdict_history(
+def save_deliberation_history(
     metadata: MutableMapping[str, Any],
-    history: VerdictHistory,
+    history: DeliberationHistory,
 ) -> None:
-    metadata[VERDICT_HISTORY_KEY] = history.serialize()
+    metadata[DELIBERATION_HISTORY_KEY] = history.serialize()
 
 
-def restore_verdict_history(
+def restore_deliberation_history(
     metadata: Mapping[str, Any],
-) -> VerdictHistory | None:
-    data = metadata.get(VERDICT_HISTORY_KEY)
+) -> DeliberationHistory | None:
+    data = metadata.get(DELIBERATION_HISTORY_KEY)
     if not isinstance(data, list):
         return None
-    return VerdictHistory.deserialize(data)
+    return DeliberationHistory.deserialize(data)
