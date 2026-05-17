@@ -23,9 +23,9 @@ def build_hooks_from_config(
     config: Config,
     session_key: str | None = None,
 ) -> list[AgentHook]:
-    """Build posture + deliberation hooks based on config flags.
+    """Build posture + deliberation + plan hooks based on config flags.
 
-    Returns an empty list if both systems are disabled.
+    Returns an empty list if all systems are disabled.
     """
     defaults = config.agents.defaults
     hooks: list[AgentHook] = []
@@ -40,6 +40,10 @@ def build_hooks_from_config(
     )
     if delib_hook:
         hooks.append(delib_hook)
+
+    plan_hook = _maybe_build_plan_hook(config, session_key)
+    if plan_hook:
+        hooks.append(plan_hook)
 
     return hooks
 
@@ -247,3 +251,26 @@ def _build_evaluators(eval_configs: dict[str, Any], provider) -> list:
             _temperature=cfg.temperature,
         ))
     return evaluators
+
+
+def _maybe_build_plan_hook(
+    config: Config,
+    session_key: str | None,
+) -> AgentHook | None:
+    plan_config = getattr(config.agents.defaults, "plan", None)
+    if plan_config is None:
+        return None
+    enabled = getattr(plan_config, "enabled", None)
+    if enabled is not True:
+        return None
+
+    from pathlib import Path
+    from durin.plan.hook import PlanHook
+
+    workspace = Path(getattr(config, "workspace_dir", "."))
+    hook = PlanHook(
+        workspace=workspace,
+        session_key=session_key or "default",
+    )
+    logger.info("PlanHook enabled — 3-tier execution model")
+    return hook

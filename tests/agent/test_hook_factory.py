@@ -51,7 +51,7 @@ def _make_config(posture_enabled=False, deliberation_enabled=False, provider="lo
         "reversibilidad": eval_cfg,
     }
 
-    defaults = MagicMock()
+    defaults = MagicMock(spec=[])
     defaults.posture = posture
     defaults.deliberation = deliberation
 

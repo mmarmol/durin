@@ -146,6 +146,12 @@ class DeliberationConfig(Base):
     evaluators: dict[str, EvaluatorConfig] = Field(default_factory=_default_evaluators)
 
 
+class PlanConfig(Base):
+    """Plan system — 3-tier execution model."""
+
+    enabled: bool = True
+
+
 class InlineFallbackConfig(Base):
     """One inline fallback model configuration."""
 
@@ -230,6 +236,7 @@ class AgentDefaults(Base):
     dream: DreamConfig = Field(default_factory=DreamConfig)
     posture: PostureConfig = Field(default_factory=PostureConfig)
     deliberation: DeliberationConfig = Field(default_factory=lambda: DeliberationConfig())
+    plan: PlanConfig = Field(default_factory=PlanConfig)
 
 
 class AgentsConfig(Base):

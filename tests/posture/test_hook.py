@@ -72,14 +72,14 @@ class TestEventDetection:
         assert hook.current_vector.axes[AxisName.CAUTELA].valor_actual > PostureVector.default().axes[AxisName.CAUTELA].valor_actual
 
     @pytest.mark.asyncio
-    async def test_successful_tool_call_triggers_step_succeeded(self):
+    async def test_successful_tool_call_triggers_step_succeeded_no_cautela_change(self):
         hook = PostureHook(PostureVector.default())
         ctx = _make_context(
             tool_calls=[_make_tool_call()],
             tool_results=[{"output": "ok"}],
         )
         await hook.after_iteration(ctx)
-        assert hook.current_vector.axes[AxisName.CAUTELA].valor_actual < PostureVector.default().axes[AxisName.CAUTELA].valor_actual
+        assert hook.current_vector.axes[AxisName.CAUTELA].valor_actual == PostureVector.default().axes[AxisName.CAUTELA].valor_actual
 
     @pytest.mark.asyncio
     async def test_no_tool_calls_no_events(self):

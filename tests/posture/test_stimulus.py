@@ -9,13 +9,13 @@ from durin.posture.vector import AxisName
 class TestStimulusTable:
     def test_default_has_twelve_rules(self):
         table = StimulusTable.default()
-        assert len(table.rules) == 21
+        assert len(table.rules) == 28
 
     def test_default_covers_all_events(self):
         table = StimulusTable.default()
         events_covered = {rule.event for rule in table.rules}
         assert StimulusEvent.STEP_FAILED in events_covered
-        assert StimulusEvent.STEP_SUCCEEDED in events_covered
+        # STEP_SUCCEEDED deliberately has no rule (too weak a signal for posture change)
         assert StimulusEvent.CONSECUTIVE_SUCCESSES_3 in events_covered
         assert StimulusEvent.CONSECUTIVE_FAILURES_3 in events_covered
         assert StimulusEvent.GOAL_AMBIGUOUS in events_covered
@@ -25,10 +25,10 @@ class TestStimulusTable:
         assert StimulusEvent.EXPLORATORY_TASK in events_covered
         assert StimulusEvent.EXPLICIT_PROTOCOL in events_covered
 
-    def test_resolve_single_event(self):
+    def test_resolve_step_succeeded_has_no_effect(self):
         table = StimulusTable.default()
         deltas = table.resolve({StimulusEvent.STEP_SUCCEEDED})
-        assert deltas == {AxisName.CAUTELA: -0.03}
+        assert deltas == {}
 
     def test_resolve_event_with_multiple_axis_effects(self):
         table = StimulusTable.default()
@@ -63,14 +63,14 @@ class TestStimulusTable:
         extra = [StimulusRule(StimulusEvent.STEP_FAILED, AxisName.DISCIPLINA, +0.05)]
         extended = table.with_rules(extra)
 
-        assert len(extended.rules) == 22
+        assert len(extended.rules) == 29
         deltas = extended.resolve({StimulusEvent.STEP_FAILED})
         assert AxisName.DISCIPLINA in deltas
 
     def test_with_rules_does_not_modify_original(self):
         table = StimulusTable.default()
         table.with_rules([StimulusRule(StimulusEvent.STEP_FAILED, AxisName.DISCIPLINA, +0.05)])
-        assert len(table.rules) == 21
+        assert len(table.rules) == 28
 
     def test_consecutive_failures_affects_cautela_and_conformidad(self):
         table = StimulusTable.default()
@@ -83,7 +83,5 @@ class TestStimulusTable:
         for rule in table.rules:
             if rule.event == StimulusEvent.STEP_FAILED:
                 assert rule.delta > 0
-            if rule.event == StimulusEvent.STEP_SUCCEEDED:
-                assert rule.delta < 0
             if rule.event == StimulusEvent.USER_APPROVED_RISKY:
                 assert rule.delta < 0
