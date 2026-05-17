@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import fcntl
 import json
 import os
 import shutil
@@ -25,6 +26,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from datetime import date
 from pathlib import Path
 
 # Insert nanobot vendor path so we can import from it
@@ -37,7 +39,7 @@ _ZAI_API_KEY = os.environ.get("ZAI_API_KEY", "")
 _ZAI_API_BASE = "https://api.z.ai/api/coding/paas/v4"
 _MODEL = "glm-5.1"
 _MAX_ITERATIONS = 100
-_RESULTS_DIR = Path("/tmp/swebench_durin")
+_RESULTS_DIR = Path(__file__).resolve().parent.parent / "benchmarks" / "swebench_5"
 _REPOS_CACHE = Path("/tmp/swebench_repos")
 
 _SYSTEM_PROMPT = """\
@@ -317,7 +319,8 @@ async def run_evaluation(
         "per_instance": [
             {
                 "id": r["instance_id"],
-                "resolved": bool(r.get("model_patch")),
+                "patch_generated": bool(r.get("model_patch")),
+                "eval_resolved": None,
                 "elapsed_s": r.get("elapsed_s"),
                 "iterations": r.get("iterations"),
                 "tools": r.get("tools_breakdown"),
@@ -334,23 +337,77 @@ async def run_evaluation(
     return predictions_path
 
 
-def run_swebench_evaluation(predictions_path: Path, run_id: str):
-    """Run official swebench evaluation on collected predictions."""
-    logger.info("Running SWE-bench evaluation on {}", predictions_path)
-    cmd = [
-        sys.executable, "-m", "swebench.harness.run_evaluation",
-        "--dataset_name", "princeton-nlp/SWE-bench_Lite",
-        "--split", "test",
-        "--predictions_path", str(predictions_path),
-        "--max_workers", "2",
-        "--timeout", "300",
-        "--run_id", run_id,
-        "--cache_level", "base",
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
-    print(result.stdout)
-    if result.returncode != 0:
-        print(result.stderr[-500:], file=sys.stderr)
+def run_swebench_evaluation(predictions_path: Path, run_id: str) -> list[str]:
+    """Run official swebench evaluation and return resolved instance IDs."""
+    lock_path = Path("/tmp/swebench_eval.lock")
+    logger.info("Waiting for eval lock (run_id={})...", run_id)
+    with open(lock_path, "w") as lock_fd:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        logger.info("Running SWE-bench evaluation on {}", predictions_path)
+        cmd = [
+            sys.executable, "-m", "swebench.harness.run_evaluation",
+            "--dataset_name", "princeton-nlp/SWE-bench_Lite",
+            "--split", "test",
+            "--predictions_path", str(predictions_path),
+            "--max_workers", "2",
+            "--timeout", "300",
+            "--run_id", run_id,
+            "--cache_level", "base",
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+        print(result.stdout)
+        if result.returncode != 0:
+            print(result.stderr[-500:], file=sys.stderr)
+
+    resolved_ids = _parse_eval_report(run_id)
+    _update_stats_with_eval(run_id, resolved_ids)
+    return resolved_ids
+
+
+def _parse_eval_report(run_id: str) -> list[str]:
+    """Parse SWE-bench evaluation results from per-instance report.json files."""
+    resolved_ids: list[str] = []
+    eval_log_dir = Path("logs/run_evaluation") / run_id
+    if not eval_log_dir.exists():
+        logger.warning("Eval log dir not found: {}", eval_log_dir)
+        return []
+
+    for model_dir in eval_log_dir.iterdir():
+        if not model_dir.is_dir():
+            continue
+        for instance_dir in model_dir.iterdir():
+            if not instance_dir.is_dir():
+                continue
+            report_file = instance_dir / "report.json"
+            if not report_file.exists():
+                continue
+            try:
+                report = json.loads(report_file.read_text())
+                instance_id = instance_dir.name
+                if report.get(instance_id, {}).get("resolved", False):
+                    resolved_ids.append(instance_id)
+            except (json.JSONDecodeError, KeyError):
+                pass
+
+    logger.info("Eval result for {}: {} resolved ({})",
+                run_id, len(resolved_ids),
+                ", ".join(resolved_ids) or "none")
+    return resolved_ids
+
+
+def _update_stats_with_eval(run_id: str, resolved_ids: list[str]) -> None:
+    """Update the stats JSON with actual eval results."""
+    stats_path = _RESULTS_DIR / f"{run_id}_stats.json"
+    if not stats_path.exists():
+        return
+    stats = json.loads(stats_path.read_text())
+    total = stats.get("total_instances", 0)
+    for inst in stats.get("per_instance", []):
+        inst["eval_resolved"] = inst["id"] in resolved_ids
+    stats["eval_resolved"] = len(resolved_ids)
+    stats["eval_resolve_rate"] = f"{len(resolved_ids)}/{total}" if total else "0/0"
+    stats_path.write_text(json.dumps(stats, indent=2, ensure_ascii=False))
+    logger.info("Stats updated with eval results: {} resolved", len(resolved_ids))
 
 
 def main():
@@ -365,21 +422,25 @@ def main():
 
     args = parser.parse_args()
 
+    stamped_run_id = f"{date.today().isoformat()}_{args.run_id}"
+
     if args.evaluate:
         if not args.predictions:
             parser.error("--predictions required with --evaluate")
-        run_swebench_evaluation(args.predictions, args.run_id)
+        resolved = run_swebench_evaluation(args.predictions, stamped_run_id)
+        logger.info("Eval complete: {} resolved", len(resolved))
         return
 
     predictions_path = asyncio.run(run_evaluation(
         n=args.n,
-        run_id=args.run_id,
+        run_id=stamped_run_id,
         offset=args.offset,
         instance_ids=args.instance_ids,
     ))
 
     if args.auto_eval:
-        run_swebench_evaluation(predictions_path, args.run_id)
+        resolved = run_swebench_evaluation(predictions_path, stamped_run_id)
+        logger.info("Final: {}/{} resolved by eval harness", len(resolved), args.n)
 
 
 if __name__ == "__main__":

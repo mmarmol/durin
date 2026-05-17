@@ -11,9 +11,9 @@ from durin.posture.vector import AxisName
 
 
 class TestPostureConfig:
-    def test_default_disabled(self):
+    def test_default_enabled(self):
         cfg = PostureConfig()
-        assert cfg.enabled is False
+        assert cfg.enabled is True
 
     def test_default_axes_match_vector_defaults(self):
         from durin.posture.vector import PostureVector
@@ -63,12 +63,12 @@ class TestAgentDefaultsPosture:
         defaults = AgentDefaults()
         assert hasattr(defaults, "posture")
         assert isinstance(defaults.posture, PostureConfig)
-        assert defaults.posture.enabled is False
+        assert defaults.posture.enabled is True
 
     def test_backward_compat_without_posture_key(self):
         data = {"model": "anthropic/claude-opus-4-5", "maxTokens": 4096}
         defaults = AgentDefaults.model_validate(data)
-        assert defaults.posture.enabled is False
+        assert defaults.posture.enabled is True
 
     def test_json_with_posture_parses(self):
         data = {
