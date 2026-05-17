@@ -334,7 +334,8 @@ class AgentLoop:
         )
 
         existing_hooks = extra.pop("hooks", None) or []
-        auto_hooks = build_hooks_from_config(config)
+        session_key = extra.pop("session_key", None)
+        auto_hooks = build_hooks_from_config(config, session_key=session_key)
         hooks = auto_hooks + list(existing_hooks)
 
         return cls(

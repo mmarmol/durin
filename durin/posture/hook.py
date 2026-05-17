@@ -26,7 +26,11 @@ _PROTOCOL_MARKERS: frozenset[str] = frozenset({
 class PostureHook(AgentHook):
     """Tracks posture vector state and detects stimulus events from iteration outcomes."""
 
-    __slots__ = ("_vector", "_table", "_consecutive_failures", "_consecutive_successes", "_telemetry", "_protocol_detected")
+    __slots__ = (
+        "_vector", "_table", "_consecutive_failures", "_consecutive_successes",
+        "_telemetry", "_protocol_detected", "_edited_files", "_iters_since_edit",
+        "_recent_tool_types",
+    )
 
     def __init__(
         self,
@@ -41,6 +45,9 @@ class PostureHook(AgentHook):
         self._consecutive_successes = 0
         self._telemetry = telemetry
         self._protocol_detected = False
+        self._edited_files: set[str] = set()
+        self._iters_since_edit: int = 0
+        self._recent_tool_types: list[str] = []
 
     @property
     def current_vector(self) -> PostureVector:
@@ -132,7 +139,68 @@ class PostureHook(AgentHook):
             events.add(StimulusEvent.EXPLICIT_PROTOCOL)
             self._protocol_detected = True
 
+        # --- New stimuli ---
+        tool_names = [tc.name for tc in context.tool_calls]
+
+        # MULTI_FILE_EDIT: track distinct files edited
+        for tc in context.tool_calls:
+            if tc.name == "edit_file":
+                args = tc.arguments if isinstance(tc.arguments, dict) else {}
+                path = args.get("file_path") or args.get("path", "")
+                if path:
+                    self._edited_files.add(path)
+        if len(self._edited_files) > 2:
+            events.add(StimulusEvent.MULTI_FILE_EDIT)
+
+        # STUCK_NO_PROGRESS: many iterations without an edit
+        if "edit_file" in tool_names or "write_file" in tool_names:
+            self._iters_since_edit = 0
+        else:
+            self._iters_since_edit += 1
+        if self._iters_since_edit >= 10:
+            events.add(StimulusEvent.STUCK_NO_PROGRESS)
+
+        # VALIDATION_SUCCESS / VALIDATION_FAILURE: exec results
+        for i, tc in enumerate(context.tool_calls):
+            if tc.name != "exec":
+                continue
+            result = context.tool_results[i] if i < len(context.tool_results) else None
+            if self._is_validation_exec(tc, result):
+                if self._is_tool_failure(result):
+                    events.add(StimulusEvent.VALIDATION_FAILURE)
+                else:
+                    events.add(StimulusEvent.VALIDATION_SUCCESS)
+
+        # PHASE_TRANSITION: detect shift from exploration to implementation
+        phase = self._classify_tool_phase(tool_names)
+        if phase:
+            self._recent_tool_types.append(phase)
+            if len(self._recent_tool_types) > 10:
+                self._recent_tool_types = self._recent_tool_types[-10:]
+            if len(self._recent_tool_types) >= 4:
+                prev = self._recent_tool_types[-4:-2]
+                curr = self._recent_tool_types[-2:]
+                if all(p == "explore" for p in prev) and all(p == "implement" for p in curr):
+                    events.add(StimulusEvent.PHASE_TRANSITION)
+
         return events
+
+    @staticmethod
+    def _classify_tool_phase(tool_names: list[str]) -> str | None:
+        explore = {"read_file", "grep", "list_dir", "web_search", "web_fetch"}
+        implement = {"edit_file", "write_file"}
+        if any(t in implement for t in tool_names):
+            return "implement"
+        if any(t in explore for t in tool_names):
+            return "explore"
+        return None
+
+    @staticmethod
+    def _is_validation_exec(tc: object, result: object) -> bool:
+        args = tc.arguments if isinstance(tc.arguments, dict) else {}
+        cmd = args.get("command", "")
+        validation_markers = ("test", "pytest", "unittest", "check", "verify", "assert")
+        return any(m in cmd.lower() for m in validation_markers)
 
     @staticmethod
     def _has_protocol_markers(context: AgentHookContext) -> bool:

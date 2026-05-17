@@ -80,6 +80,7 @@ class AxisConfig(Base):
     media: float = Field(ge=0.0, le=1.0)
     varianza: float = Field(gt=0.0, le=0.5)
     fuerza_retorno: float = Field(gt=0.0, le=1.0)
+    valor_actual: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 def _default_axes() -> dict[str, AxisConfig]:

@@ -9,7 +9,7 @@ from durin.posture.vector import AxisName
 class TestStimulusTable:
     def test_default_has_twelve_rules(self):
         table = StimulusTable.default()
-        assert len(table.rules) == 12
+        assert len(table.rules) == 21
 
     def test_default_covers_all_events(self):
         table = StimulusTable.default()
@@ -63,14 +63,14 @@ class TestStimulusTable:
         extra = [StimulusRule(StimulusEvent.STEP_FAILED, AxisName.DISCIPLINA, +0.05)]
         extended = table.with_rules(extra)
 
-        assert len(extended.rules) == 13
+        assert len(extended.rules) == 22
         deltas = extended.resolve({StimulusEvent.STEP_FAILED})
         assert AxisName.DISCIPLINA in deltas
 
     def test_with_rules_does_not_modify_original(self):
         table = StimulusTable.default()
         table.with_rules([StimulusRule(StimulusEvent.STEP_FAILED, AxisName.DISCIPLINA, +0.05)])
-        assert len(table.rules) == 12
+        assert len(table.rules) == 21
 
     def test_consecutive_failures_affects_cautela_and_conformidad(self):
         table = StimulusTable.default()

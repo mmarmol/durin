@@ -1,6 +1,7 @@
 """Tests for MCP HTTP probe guard (prevents event-loop crash on unreachable servers)."""
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -16,9 +17,11 @@ from durin.agent.tools.registry import ToolRegistry
 @pytest.mark.asyncio
 async def test_probe_returns_true_for_open_port(tmp_path):
     """Start a trivial TCP server, probe should return True."""
-    server = await asyncio.start_server(
-        lambda r, w: None, "127.0.0.1", 0,
-    )
+    async def _accept(reader, writer):
+        writer.close()
+        await writer.wait_closed()
+
+    server = await asyncio.start_server(_accept, "127.0.0.1", 0)
     port = server.sockets[0].getsockname()[1]
     try:
         assert await _probe_http_url(f"http://127.0.0.1:{port}/mcp") is True
@@ -101,6 +104,3 @@ async def test_probe_not_called_for_stdio():
         await connect_mcp_servers({"s": cfg}, registry)
 
     assert not called, "probe should not be called for stdio transport"
-
-
-import asyncio

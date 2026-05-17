@@ -37,6 +37,7 @@ class DeliberationHook(AgentHook):
         "_engine", "_last_verdict", "_last_synthesis", "_last_synthesis_result",
         "_posture_snapshot_fn", "_telemetry",
         "_posture_at_last_deliberation", "_drift_threshold", "_history",
+        "_last_delib_iteration",
     )
 
     def __init__(
@@ -57,6 +58,7 @@ class DeliberationHook(AgentHook):
         self._posture_at_last_deliberation: dict[str, float] | None = None
         self._drift_threshold = drift_threshold
         self._history = history or VerdictHistory()
+        self._last_delib_iteration: int = -10
 
     @property
     def last_verdict(self) -> Verdict | None:
@@ -75,11 +77,10 @@ class DeliberationHook(AgentHook):
         return self._history
 
     async def before_iteration(self, context: AgentHookContext) -> None:
+        # V2: Only deliberate once at the start (iter 0).
+        # No re-deliberation on drift — the perspectives are seed context,
+        # not live guidance that needs updating mid-execution.
         if context.iteration != 0:
-            if self._should_redeliberate():
-                await self._run_deliberation(context, TriggerReason.PLANNING_MOMENT)
-                if self._last_synthesis:
-                    self._inject_as_pre_message(context)
             return
 
         if self._has_active_goal(context):
@@ -93,15 +94,10 @@ class DeliberationHook(AgentHook):
             self._inject_as_pre_message(context)
 
     async def before_execute_tools(self, context: AgentHookContext) -> None:
-        if context.iteration == 0:
-            return
-
-        for call in context.tool_calls:
-            if call.name in CRITICAL_TOOLS:
-                await self._run_deliberation(context, TriggerReason.CRITICAL_ACTION)
-                if self._last_synthesis:
-                    self._inject_as_pre_message(context)
-                return
+        # V2: No longer triggers on critical_action.
+        # Deliberation fires only at planning_moment (iter 0) and on posture drift.
+        # The main model has full context to judge tool safety itself.
+        pass
 
     def _should_redeliberate(self) -> bool:
         """Check if posture drifted enough since last deliberation to warrant re-evaluation."""
@@ -137,6 +133,7 @@ class DeliberationHook(AgentHook):
         context: AgentHookContext,
         trigger: TriggerReason,
     ) -> None:
+        self._last_delib_iteration = context.iteration
         delib_context = self._build_context(context, trigger)
         if self._telemetry:
             self._telemetry.log_deliberation_start(

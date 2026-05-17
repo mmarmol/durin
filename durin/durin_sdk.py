@@ -38,6 +38,7 @@ class Durin:
         config_path: str | Path | None = None,
         *,
         workspace: str | Path | None = None,
+        session_key: str | None = None,
     ) -> Durin:
         """Create a Durin instance from a config file.
 
@@ -45,6 +46,7 @@ class Durin:
             config_path: Path to ``config.json``.  Defaults to
                 ``~/.durin/config.json``.
             workspace: Override the workspace directory from config.
+            session_key: Session key for telemetry file naming.
         """
         from durin.config.loader import load_config, resolve_config_env_vars
         from durin.config.schema import Config
@@ -67,6 +69,7 @@ class Durin:
                 "openrouter": config.providers.openrouter,
                 "aihubmix": config.providers.aihubmix,
             },
+            session_key=session_key,
         )
         return cls(loop)
 

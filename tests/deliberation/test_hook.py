@@ -98,10 +98,11 @@ class TestPlanningMomentTiming:
 
 
 class TestCriticalActionTiming:
-    """CRITICAL_ACTION fires in before_execute_tools on non-zero iterations."""
+    """V2: before_execute_tools is a no-op — deliberation only fires at planning_moment."""
 
     @pytest.mark.asyncio
-    async def test_triggers_on_critical_tool(self):
+    async def test_no_trigger_on_critical_tool_v2(self):
+        """V2 does not trigger deliberation on critical tools."""
         engine = _mock_engine()
         hook = DeliberationHook(engine)
         ctx = _make_context(
@@ -109,7 +110,7 @@ class TestCriticalActionTiming:
             tool_calls=[ToolCallRequest(id="1", name="exec", arguments="{}")],
         )
         await hook.before_execute_tools(ctx)
-        engine.deliberate.assert_called_once()
+        engine.deliberate.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_no_trigger_on_safe_tool(self):
@@ -135,7 +136,8 @@ class TestCriticalActionTiming:
         engine.deliberate.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_injects_deliberation_message(self):
+    async def test_no_injection_from_execute_tools_v2(self):
+        """V2: before_execute_tools never injects deliberation messages."""
         engine = _mock_engine()
         hook = DeliberationHook(engine)
         ctx = _make_context(
@@ -144,7 +146,7 @@ class TestCriticalActionTiming:
         )
         await hook.before_execute_tools(ctx)
         delib_msgs = [m for m in ctx.messages if "Deliberación pre-análisis" in m.get("content", "")]
-        assert len(delib_msgs) == 1
+        assert len(delib_msgs) == 0
 
 
 class TestHookBehavior:
@@ -199,34 +201,17 @@ class TestHookBehavior:
         assert "deploy to production" in call_args.goal_summary
 
     @pytest.mark.asyncio
-    async def test_replaces_previous_deliberation_message(self):
+    async def test_deliberation_message_injected_at_planning(self):
+        """V2: Deliberation fires at planning_moment and injects message."""
         engine = _mock_engine()
         hook = DeliberationHook(engine)
 
         ctx = _make_context(iteration=0)
         await hook.before_iteration(ctx)
 
-        # Simulate second deliberation on critical action
-        ctx.iteration = 3
-        ctx.tool_calls = [ToolCallRequest(id="1", name="exec", arguments="{}")]
-
-        # Change engine response
-        sp2 = ScoredProposal(
-            proposal=Proposal(role=GeneratorRole.CRITICO, content="safer path", round_number=1),
-            scores=(),
-            final_score=0.8,
-        )
-        engine.deliberate.return_value = Verdict(
-            winner=sp2, accepted=True, threshold=0.55,
-            all_proposals=(sp2,), rounds_used=1, under_doubt=False,
-        )
-        await hook.before_execute_tools(ctx)
-
-        # Should have exactly one deliberation message
         delib_msgs = [m for m in ctx.messages if "Deliberación pre-análisis" in m.get("content", "")]
         assert len(delib_msgs) == 1
-        assert "safer path" in delib_msgs[0]["content"]
-        assert "do it directly" not in delib_msgs[0]["content"]
+        assert "do it directly" in delib_msgs[0]["content"]
 
 
 class TestSynthesisExposure:

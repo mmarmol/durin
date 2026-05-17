@@ -19,6 +19,11 @@ class StimulusEvent(StrEnum):
     CRITICAL_ACTION = "critical_action"
     EXPLORATORY_TASK = "exploratory_task"
     EXPLICIT_PROTOCOL = "explicit_protocol"
+    MULTI_FILE_EDIT = "multi_file_edit"
+    VALIDATION_SUCCESS = "validation_success"
+    VALIDATION_FAILURE = "validation_failure"
+    STUCK_NO_PROGRESS = "stuck_no_progress"
+    PHASE_TRANSITION = "phase_transition"
 
 
 @dataclass(frozen=True)
@@ -54,7 +59,8 @@ class StimulusTable:
             StimulusRule(StimulusEvent.STEP_FAILED, AxisName.CAUTELA, +0.10),
             StimulusRule(StimulusEvent.STEP_FAILED, AxisName.PROFUNDIDAD, +0.05),
             StimulusRule(StimulusEvent.STEP_SUCCEEDED, AxisName.CAUTELA, -0.03),
-            StimulusRule(StimulusEvent.CONSECUTIVE_SUCCESSES_3, AxisName.EXPLORACION, +0.05),
+            StimulusRule(StimulusEvent.CONSECUTIVE_SUCCESSES_3, AxisName.EXPLORACION, +0.02),
+            StimulusRule(StimulusEvent.CONSECUTIVE_SUCCESSES_3, AxisName.PROFUNDIDAD, -0.03),
             StimulusRule(StimulusEvent.CONSECUTIVE_FAILURES_3, AxisName.CAUTELA, +0.15),
             StimulusRule(StimulusEvent.CONSECUTIVE_FAILURES_3, AxisName.CONFORMIDAD, -0.10),
             StimulusRule(StimulusEvent.GOAL_AMBIGUOUS, AxisName.PROFUNDIDAD, +0.10),
@@ -63,4 +69,13 @@ class StimulusTable:
             StimulusRule(StimulusEvent.CRITICAL_ACTION, AxisName.CAUTELA, +0.10),
             StimulusRule(StimulusEvent.EXPLORATORY_TASK, AxisName.EXPLORACION, +0.10),
             StimulusRule(StimulusEvent.EXPLICIT_PROTOCOL, AxisName.DISCIPLINA, +0.10),
+            # New stimuli — activate dead axes
+            StimulusRule(StimulusEvent.MULTI_FILE_EDIT, AxisName.DISCIPLINA, +0.08),
+            StimulusRule(StimulusEvent.VALIDATION_SUCCESS, AxisName.CAUTELA, -0.05),
+            StimulusRule(StimulusEvent.VALIDATION_SUCCESS, AxisName.EXPLORACION, -0.03),
+            StimulusRule(StimulusEvent.VALIDATION_FAILURE, AxisName.CAUTELA, +0.10),
+            StimulusRule(StimulusEvent.VALIDATION_FAILURE, AxisName.PROFUNDIDAD, +0.08),
+            StimulusRule(StimulusEvent.STUCK_NO_PROGRESS, AxisName.EXPLORACION, +0.10),
+            StimulusRule(StimulusEvent.STUCK_NO_PROGRESS, AxisName.PROFUNDIDAD, +0.10),
+            StimulusRule(StimulusEvent.PHASE_TRANSITION, AxisName.PROFUNDIDAD, -0.10),
         ])
