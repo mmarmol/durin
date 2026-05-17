@@ -5,12 +5,12 @@ from __future__ import annotations
 from durin.deliberation.types import DeliberationResult
 
 
-_DELIBERATION_TAG = "[Deliberación pre-análisis]"
+_DELIBERATION_TAG = "[Pre-analysis deliberation]"
 
 _ROLE_LABELS = {
-    "critico": "Riesgos identificados",
-    "explorador": "Alternativa considerada",
-    "pragmatico": "Enfoque directo",
+    "critic": "Risks identified",
+    "explorer": "Alternative considered",
+    "pragmatic": "Direct approach",
 }
 
 
@@ -23,6 +23,6 @@ def render_for_injection(result: DeliberationResult) -> str:
         parts.append(f"{label}: {p.content}")
 
     if result.synthesis:
-        parts.append(f"\nSíntesis: {result.synthesis}")
+        parts.append(f"\nSynthesis: {result.synthesis}")
 
     return "\n".join(parts)

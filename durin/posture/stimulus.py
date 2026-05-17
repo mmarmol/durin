@@ -24,11 +24,9 @@ class StimulusEvent(StrEnum):
     VALIDATION_FAILURE = "validation_failure"
     STUCK_NO_PROGRESS = "stuck_no_progress"
     PHASE_TRANSITION = "phase_transition"
-    # Plan system layer 2 events
     CONFIRM_PASS = "confirm_pass"
     CONFIRM_FAIL = "confirm_fail"
     CYCLE_RESTART = "cycle_restart"
-    # Plan system layer 3 — one-shot bias
     PLAN_COMPLEX = "plan_complex"
 
 
@@ -62,37 +60,32 @@ class StimulusTable:
     @classmethod
     def default(cls) -> StimulusTable:
         return cls([
-            StimulusRule(StimulusEvent.STEP_FAILED, AxisName.CAUTELA, +0.10),
-            StimulusRule(StimulusEvent.STEP_FAILED, AxisName.PROFUNDIDAD, +0.05),
-            # STEP_SUCCEEDED no afecta cautela: señal demasiado débil (ausencia de error ≠ progreso)
-            # Cautela solo baja con VALIDATION_SUCCESS (oracle real) o USER_APPROVED_RISKY
-            StimulusRule(StimulusEvent.CONSECUTIVE_SUCCESSES_3, AxisName.EXPLORACION, +0.02),
-            StimulusRule(StimulusEvent.CONSECUTIVE_SUCCESSES_3, AxisName.PROFUNDIDAD, -0.03),
-            StimulusRule(StimulusEvent.CONSECUTIVE_FAILURES_3, AxisName.CAUTELA, +0.15),
-            StimulusRule(StimulusEvent.CONSECUTIVE_FAILURES_3, AxisName.CONFORMIDAD, -0.10),
-            StimulusRule(StimulusEvent.GOAL_AMBIGUOUS, AxisName.PROFUNDIDAD, +0.10),
-            StimulusRule(StimulusEvent.USER_CORRECTED, AxisName.CONFORMIDAD, +0.05),
-            StimulusRule(StimulusEvent.USER_APPROVED_RISKY, AxisName.CAUTELA, -0.05),
-            StimulusRule(StimulusEvent.CRITICAL_ACTION, AxisName.CAUTELA, +0.10),
-            StimulusRule(StimulusEvent.EXPLORATORY_TASK, AxisName.EXPLORACION, +0.10),
-            StimulusRule(StimulusEvent.EXPLICIT_PROTOCOL, AxisName.DISCIPLINA, +0.10),
-            # New stimuli — activate dead axes
-            StimulusRule(StimulusEvent.MULTI_FILE_EDIT, AxisName.DISCIPLINA, +0.08),
-            StimulusRule(StimulusEvent.VALIDATION_SUCCESS, AxisName.CAUTELA, -0.05),
-            StimulusRule(StimulusEvent.VALIDATION_SUCCESS, AxisName.EXPLORACION, -0.03),
-            StimulusRule(StimulusEvent.VALIDATION_FAILURE, AxisName.CAUTELA, +0.10),
-            StimulusRule(StimulusEvent.VALIDATION_FAILURE, AxisName.PROFUNDIDAD, +0.08),
-            StimulusRule(StimulusEvent.STUCK_NO_PROGRESS, AxisName.EXPLORACION, +0.10),
-            StimulusRule(StimulusEvent.STUCK_NO_PROGRESS, AxisName.PROFUNDIDAD, +0.10),
-            StimulusRule(StimulusEvent.PHASE_TRANSITION, AxisName.PROFUNDIDAD, -0.10),
-            # Plan layer 2: cycle-level signals (stronger than per-iteration)
-            StimulusRule(StimulusEvent.CONFIRM_PASS, AxisName.CAUTELA, -0.10),
-            StimulusRule(StimulusEvent.CONFIRM_PASS, AxisName.EXPLORACION, -0.05),
-            StimulusRule(StimulusEvent.CONFIRM_FAIL, AxisName.CAUTELA, +0.15),
-            StimulusRule(StimulusEvent.CONFIRM_FAIL, AxisName.PROFUNDIDAD, +0.10),
-            StimulusRule(StimulusEvent.CYCLE_RESTART, AxisName.DISCIPLINA, +0.05),
-            StimulusRule(StimulusEvent.CYCLE_RESTART, AxisName.EXPLORACION, +0.10),
-            # Plan layer 3: one-shot bias on plan creation
-            StimulusRule(StimulusEvent.PLAN_COMPLEX, AxisName.PROFUNDIDAD, +0.10),
-            StimulusRule(StimulusEvent.PLAN_COMPLEX, AxisName.CAUTELA, +0.05),
+            StimulusRule(StimulusEvent.STEP_FAILED, AxisName.CAUTION, +0.10),
+            StimulusRule(StimulusEvent.STEP_FAILED, AxisName.DEPTH, +0.05),
+            StimulusRule(StimulusEvent.CONSECUTIVE_SUCCESSES_3, AxisName.EXPLORATION, +0.02),
+            StimulusRule(StimulusEvent.CONSECUTIVE_SUCCESSES_3, AxisName.DEPTH, -0.03),
+            StimulusRule(StimulusEvent.CONSECUTIVE_FAILURES_3, AxisName.CAUTION, +0.15),
+            StimulusRule(StimulusEvent.CONSECUTIVE_FAILURES_3, AxisName.CONFORMITY, -0.10),
+            StimulusRule(StimulusEvent.GOAL_AMBIGUOUS, AxisName.DEPTH, +0.10),
+            StimulusRule(StimulusEvent.USER_CORRECTED, AxisName.CONFORMITY, +0.05),
+            StimulusRule(StimulusEvent.USER_APPROVED_RISKY, AxisName.CAUTION, -0.05),
+            StimulusRule(StimulusEvent.CRITICAL_ACTION, AxisName.CAUTION, +0.10),
+            StimulusRule(StimulusEvent.EXPLORATORY_TASK, AxisName.EXPLORATION, +0.10),
+            StimulusRule(StimulusEvent.EXPLICIT_PROTOCOL, AxisName.DISCIPLINE, +0.10),
+            StimulusRule(StimulusEvent.MULTI_FILE_EDIT, AxisName.DISCIPLINE, +0.08),
+            StimulusRule(StimulusEvent.VALIDATION_SUCCESS, AxisName.CAUTION, -0.05),
+            StimulusRule(StimulusEvent.VALIDATION_SUCCESS, AxisName.EXPLORATION, -0.03),
+            StimulusRule(StimulusEvent.VALIDATION_FAILURE, AxisName.CAUTION, +0.10),
+            StimulusRule(StimulusEvent.VALIDATION_FAILURE, AxisName.DEPTH, +0.08),
+            StimulusRule(StimulusEvent.STUCK_NO_PROGRESS, AxisName.EXPLORATION, +0.10),
+            StimulusRule(StimulusEvent.STUCK_NO_PROGRESS, AxisName.DEPTH, +0.10),
+            StimulusRule(StimulusEvent.PHASE_TRANSITION, AxisName.DEPTH, -0.10),
+            StimulusRule(StimulusEvent.CONFIRM_PASS, AxisName.CAUTION, -0.10),
+            StimulusRule(StimulusEvent.CONFIRM_PASS, AxisName.EXPLORATION, -0.05),
+            StimulusRule(StimulusEvent.CONFIRM_FAIL, AxisName.CAUTION, +0.15),
+            StimulusRule(StimulusEvent.CONFIRM_FAIL, AxisName.DEPTH, +0.10),
+            StimulusRule(StimulusEvent.CYCLE_RESTART, AxisName.DISCIPLINE, +0.05),
+            StimulusRule(StimulusEvent.CYCLE_RESTART, AxisName.EXPLORATION, +0.10),
+            StimulusRule(StimulusEvent.PLAN_COMPLEX, AxisName.DEPTH, +0.10),
+            StimulusRule(StimulusEvent.PLAN_COMPLEX, AxisName.CAUTION, +0.05),
         ])

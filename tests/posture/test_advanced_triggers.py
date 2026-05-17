@@ -13,7 +13,7 @@ from durin.providers.base import ToolCallRequest
 
 def _make_vector() -> PostureVector:
     axes = {
-        name: AxisState(media=0.5, varianza=0.15, fuerza_retorno=0.3, valor_actual=0.5)
+        name: AxisState(mean=0.5, variance=0.15, return_force=0.3, current_value=0.5)
         for name in AxisName
     }
     return PostureVector(axes=axes)
@@ -60,10 +60,10 @@ class TestUserCorrected:
     @pytest.mark.asyncio
     async def test_conformidad_increases_on_user_correction(self):
         hook = _make_hook()
-        before = hook.current_vector.snapshot()[AxisName.CONFORMIDAD]
+        before = hook.current_vector.snapshot()[AxisName.CONFORMITY]
         ctx = _ctx(injected_messages_count=1, tool_calls=[_tool_call("read_file")])
         await hook.after_iteration(ctx)
-        after = hook.current_vector.snapshot()[AxisName.CONFORMIDAD]
+        after = hook.current_vector.snapshot()[AxisName.CONFORMITY]
         assert after > before
 
 
@@ -101,10 +101,10 @@ class TestGoalAmbiguous:
     @pytest.mark.asyncio
     async def test_profundidad_increases_on_ambiguity(self):
         hook = _make_hook()
-        before = hook.current_vector.snapshot()[AxisName.PROFUNDIDAD]
+        before = hook.current_vector.snapshot()[AxisName.DEPTH]
         ctx = _ctx(iteration=3, tool_calls=[], final_content=None, error=None)
         await hook.after_iteration(ctx)
-        after = hook.current_vector.snapshot()[AxisName.PROFUNDIDAD]
+        after = hook.current_vector.snapshot()[AxisName.DEPTH]
         assert after > before
 
 
@@ -136,10 +136,10 @@ class TestCriticalAction:
     @pytest.mark.asyncio
     async def test_cautela_increases_on_critical_action(self):
         hook = _make_hook()
-        before = hook.current_vector.snapshot()[AxisName.CAUTELA]
+        before = hook.current_vector.snapshot()[AxisName.CAUTION]
         ctx = _ctx(tool_calls=[_tool_call("exec")])
         await hook.after_iteration(ctx)
-        after = hook.current_vector.snapshot()[AxisName.CAUTELA]
+        after = hook.current_vector.snapshot()[AxisName.CAUTION]
         assert after > before
 
 
@@ -190,9 +190,9 @@ class TestExplicitProtocol:
         events = hook._detect_events(ctx)
         assert StimulusEvent.EXPLICIT_PROTOCOL in events
 
-    def test_fires_on_paso_1(self):
+    def test_fires_on_step_1(self):
         hook = _make_hook()
-        ctx = self._ctx_with_system("Instrucciones: paso 1, hacer X")
+        ctx = self._ctx_with_system("Instructions: step 1, do X")
         events = hook._detect_events(ctx)
         assert StimulusEvent.EXPLICIT_PROTOCOL in events
 
@@ -211,7 +211,7 @@ class TestExplicitProtocol:
     @pytest.mark.asyncio
     async def test_disciplina_increases_on_protocol(self):
         hook = _make_hook()
-        before = hook.current_vector.snapshot()[AxisName.DISCIPLINA]
+        before = hook.current_vector.snapshot()[AxisName.DISCIPLINE]
         ctx = AgentHookContext(
             iteration=1,
             messages=[{"role": "system", "content": "## Steps\n\n1. Do X"}],
@@ -219,7 +219,7 @@ class TestExplicitProtocol:
             final_content="done",
         )
         await hook.after_iteration(ctx)
-        after = hook.current_vector.snapshot()[AxisName.DISCIPLINA]
+        after = hook.current_vector.snapshot()[AxisName.DISCIPLINE]
         assert after > before
 
     @pytest.mark.asyncio
@@ -232,7 +232,7 @@ class TestExplicitProtocol:
             final_content="done",
         )
         await hook.after_iteration(ctx)
-        after_first = hook.current_vector.snapshot()[AxisName.DISCIPLINA]
+        after_first = hook.current_vector.snapshot()[AxisName.DISCIPLINE]
 
         # Second iteration with same system prompt — should NOT fire again
         ctx2 = AgentHookContext(
@@ -242,7 +242,7 @@ class TestExplicitProtocol:
             final_content="done",
         )
         await hook.after_iteration(ctx2)
-        after_second = hook.current_vector.snapshot()[AxisName.DISCIPLINA]
+        after_second = hook.current_vector.snapshot()[AxisName.DISCIPLINE]
 
         # Disciplina should not have increased again (only return-to-mean effects)
         assert after_second <= after_first

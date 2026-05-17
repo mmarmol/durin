@@ -22,27 +22,27 @@ class TestRenderPostureUpdate:
         c = _console()
         data = {
             "axes": {
-                "cautela": 0.6,
-                "exploracion": 0.4,
-                "profundidad": 0.5,
-                "disciplina": 0.5,
-                "conformidad": 0.7,
+                "caution": 0.6,
+                "exploration": 0.4,
+                "depth": 0.5,
+                "discipline": 0.5,
+                "conformity": 0.7,
             },
             "deltas": {},
         }
         render_posture_update(c, data)
         output = c.file.getvalue()
-        assert "Cautela" in output
-        assert "Exploración" in output
-        assert "Profundidad" in output
+        assert "Caution" in output
+        assert "Exploration" in output
+        assert "Depth" in output
         assert "60%" in output
         assert "█" in output
 
     def test_renders_deltas(self):
         c = _console()
         data = {
-            "axes": {"cautela": 0.65, "exploracion": 0.35},
-            "deltas": {"cautela": 0.05, "exploracion": -0.05},
+            "axes": {"caution": 0.65, "exploration": 0.35},
+            "deltas": {"caution": 0.05, "exploration": -0.05},
         }
         render_posture_update(c, data)
         output = c.file.getvalue()
@@ -59,43 +59,30 @@ class TestRenderDeliberationResult:
     def test_renders_winner(self):
         c = _console()
         data = {
-            "winner": {
-                "role": "pragmatico",
-                "content": "usar JWT para autenticación",
-                "score": 0.75,
+            "perspectives": {
+                "pragmatic": "Use JWT for authentication",
+                "explorer": "Try passkeys",
+                "critic": "OAuth2 standard",
             },
-            "proposals": [
-                {"role": "pragmatico", "content": "usar JWT", "score": 0.75},
-                {"role": "explorador", "content": "probar passkeys", "score": 0.6},
-                {"role": "critico", "content": "OAuth2 estándar", "score": 0.7},
-            ],
-            "threshold": 0.55,
-            "rounds_used": 1,
-            "under_doubt": False,
-            "accepted": True,
+            "synthesis": "Use JWT with fallback.",
+            "duration_ms": 1500,
         }
         render_deliberation_result(c, data)
         output = c.file.getvalue()
-        assert "Pragmático" in output
-        assert "7.5/10" in output
-        assert "Explorador" in output
-        assert "Crítico" in output
+        assert "Pragmatic" in output
+        assert "Explorer" in output
+        assert "Critic" in output
+        assert "Synthesis" in output
 
-    def test_under_doubt_shows_warning(self):
+    def test_empty_perspectives_noop(self):
         c = _console()
         data = {
-            "winner": {"role": "critico", "content": "safe path", "score": 0.45},
-            "proposals": [
-                {"role": "critico", "content": "safe path", "score": 0.45},
-            ],
-            "threshold": 0.55,
-            "rounds_used": 3,
-            "under_doubt": True,
-            "accepted": True,
+            "perspectives": {},
+            "synthesis": "",
+            "duration_ms": 0,
         }
         render_deliberation_result(c, data)
-        output = c.file.getvalue()
-        assert "bajo duda" in output
+        assert c.file.getvalue() == ""
 
     def test_no_winner_noop(self):
         c = _console()
@@ -108,28 +95,23 @@ class TestRenderAgentUI:
         c = _console()
         blob = {
             "kind": "posture_update",
-            "data": {"axes": {"cautela": 0.6}, "deltas": {}},
+            "data": {"axes": {"caution": 0.6}, "deltas": {}},
         }
         assert render_agent_ui(c, blob) is True
-        assert "Cautela" in c.file.getvalue()
+        assert "Caution" in c.file.getvalue()
 
     def test_dispatches_deliberation(self):
         c = _console()
         blob = {
             "kind": "deliberation_result",
             "data": {
-                "winner": {"role": "explorador", "content": "try X", "score": 0.7},
-                "proposals": [
-                    {"role": "explorador", "content": "try X", "score": 0.7},
-                ],
-                "threshold": 0.5,
-                "rounds_used": 1,
-                "under_doubt": False,
-                "accepted": True,
+                "perspectives": {"explorer": "try X"},
+                "synthesis": "do X",
+                "duration_ms": 100,
             },
         }
         assert render_agent_ui(c, blob) is True
-        assert "Explorador" in c.file.getvalue()
+        assert "Explorer" in c.file.getvalue()
 
     def test_unknown_kind_returns_false(self):
         c = _console()

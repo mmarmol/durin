@@ -1,8 +1,8 @@
 """Deliberation engine V3 — single-call multi-perspective with merge.
 
-One LLM call generates Crítico → Explorador → Pragmático → Síntesis.
+One LLM call generates Critic → Explorer → Pragmatic → Synthesis.
 The ordering forces divergence: each perspective is conditioned on
-what came before but NOT on the "obvious" solution (pragmático last).
+what came before but NOT on the "obvious" solution (pragmatic last).
 """
 
 from __future__ import annotations
@@ -17,53 +17,53 @@ from durin.providers.base import LLMProvider
 
 
 _SYSTEM_PROMPT = """\
-Sos un sistema de análisis multi-perspectiva. Examiná el problema desde 3 \
-ángulos y luego sintetizá una recomendación.
+You are a multi-perspective analysis system. Examine the problem from 3 \
+angles and then synthesize a recommendation.
 
-IMPORTANTE: Cada perspectiva DEBE agregar información nueva. No repitas \
-lo que ya se dijo en perspectivas anteriores.
+IMPORTANT: Each perspective MUST add new information. Do not repeat \
+what was already said in previous perspectives.
 
 {modulation}
 
-Respondé EXACTAMENTE en este formato (usá los markers entre corchetes):
+Respond EXACTLY in this format (use the bracketed markers):
 
-[CRITICO]
-Identificá riesgos, supuestos no validados, errores potenciales. \
-NO propongas soluciones — solo señalá problemas.
+[CRITIC]
+Identify risks, unvalidated assumptions, potential errors. \
+Do NOT propose solutions — only flag problems.
 
-[EXPLORADOR]
-Proponé un approach alternativo o no obvio. Debe ser diferente al camino \
-directo. Considerá los riesgos ya identificados.
+[EXPLORER]
+Propose an alternative or non-obvious approach. Must differ from the \
+direct path. Consider the risks already identified.
 
-[PRAGMATICO]
-El camino más directo y viable. Incorporá los riesgos válidos del crítico. \
-Explicá por qué tu approach maneja esos riesgos.
+[PRAGMATIC]
+The most direct and viable path. Incorporate valid risks from the critic. \
+Explain why your approach handles those risks.
 
-[SINTESIS]
-Merge final: qué hacer, incorporando lo válido de cada perspectiva. \
-Si hay contradicción entre perspectivas, resolverla explícitamente."""
+[SYNTHESIS]
+Final merge: what to do, incorporating what is valid from each perspective. \
+If there is contradiction between perspectives, resolve it explicitly."""
 
 
 _USER_PROMPT = """\
-Objetivo: {goal}
+Goal: {goal}
 
-Contexto de investigación:
+Investigation context:
 {context}"""
 
 _USER_PROMPT_WITH_FAILURE = """\
-Objetivo: {goal}
+Goal: {goal}
 
-Contexto de investigación:
+Investigation context:
 {context}
 
-INTENTO PREVIO FALLIDO:
+PREVIOUS FAILED ATTEMPT:
 {failure}
 
-Considerá por qué el intento anterior falló al generar tus perspectivas."""
+Consider why the previous attempt failed when generating your perspectives."""
 
 
 _SECTION_PATTERN = re.compile(
-    r"\[(?:CRITICO|EXPLORADOR|PRAGMATICO|SINTESIS)\]",
+    r"\[(?:CRITIC|EXPLORER|PRAGMATIC|SYNTHESIS)\]",
     re.IGNORECASE,
 )
 
@@ -129,16 +129,16 @@ class DeliberationEngine:
         sections = _extract_sections(content)
 
         perspectives = []
-        for role in ("critico", "explorador", "pragmatico"):
+        for role in ("critic", "explorer", "pragmatic"):
             text = sections.get(role, "").strip()
             if text:
                 perspectives.append(Perspective(role=role, content=text))
 
-        synthesis = sections.get("sintesis", "").strip()
+        synthesis = sections.get("synthesis", "").strip()
 
         if not perspectives and not synthesis:
             return DeliberationResult(
-                perspectives=(Perspective(role="pragmatico", content=content.strip()),),
+                perspectives=(Perspective(role="pragmatic", content=content.strip()),),
                 synthesis=content.strip(),
             )
 

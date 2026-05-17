@@ -23,39 +23,39 @@ class TestPostureConfig:
         for name in AxisName:
             axis_cfg = cfg.axes[name.value]
             axis_state = defaults.axes[name]
-            assert axis_cfg.media == axis_state.media
-            assert axis_cfg.varianza == axis_state.varianza
-            assert axis_cfg.fuerza_retorno == axis_state.fuerza_retorno
+            assert axis_cfg.mean == axis_state.mean
+            assert axis_cfg.variance == axis_state.variance
+            assert axis_cfg.return_force == axis_state.return_force
 
     def test_custom_axes_override(self):
         cfg = PostureConfig(
             enabled=True,
             axes={
-                "cautela": AxisConfig(media=0.7, varianza=0.2, fuerza_retorno=0.4),
-                "exploracion": AxisConfig(media=0.3, varianza=0.1, fuerza_retorno=0.5),
-                "profundidad": AxisConfig(media=0.5, varianza=0.15, fuerza_retorno=0.3),
-                "disciplina": AxisConfig(media=0.5, varianza=0.15, fuerza_retorno=0.3),
-                "conformidad": AxisConfig(media=0.6, varianza=0.15, fuerza_retorno=0.3),
+                "caution": AxisConfig(mean=0.7, variance=0.2, return_force=0.4),
+                "exploration": AxisConfig(mean=0.3, variance=0.1, return_force=0.5),
+                "depth": AxisConfig(mean=0.5, variance=0.15, return_force=0.3),
+                "discipline": AxisConfig(mean=0.5, variance=0.15, return_force=0.3),
+                "conformity": AxisConfig(mean=0.6, variance=0.15, return_force=0.3),
             },
         )
         assert cfg.enabled is True
-        assert cfg.axes["cautela"].media == 0.7
+        assert cfg.axes["caution"].mean == 0.7
 
     def test_validation_rejects_media_out_of_range(self):
         with pytest.raises(Exception):
-            AxisConfig(media=1.5, varianza=0.15, fuerza_retorno=0.3)
+            AxisConfig(mean=1.5, variance=0.15, return_force=0.3)
 
-    def test_validation_rejects_varianza_zero(self):
+    def test_validation_rejects_variance_zero(self):
         with pytest.raises(Exception):
-            AxisConfig(media=0.5, varianza=0.0, fuerza_retorno=0.3)
+            AxisConfig(mean=0.5, variance=0.0, return_force=0.3)
 
-    def test_validation_rejects_varianza_too_large(self):
+    def test_validation_rejects_variance_too_large(self):
         with pytest.raises(Exception):
-            AxisConfig(media=0.5, varianza=0.6, fuerza_retorno=0.3)
+            AxisConfig(mean=0.5, variance=0.6, return_force=0.3)
 
-    def test_validation_rejects_fuerza_retorno_negative(self):
+    def test_validation_rejects_return_force_negative(self):
         with pytest.raises(Exception):
-            AxisConfig(media=0.5, varianza=0.15, fuerza_retorno=-0.1)
+            AxisConfig(mean=0.5, variance=0.15, return_force=-0.1)
 
 
 class TestAgentDefaultsPosture:
@@ -76,17 +76,17 @@ class TestAgentDefaultsPosture:
             "posture": {
                 "enabled": True,
                 "axes": {
-                    "cautela": {"media": 0.7, "varianza": 0.2, "fuerza_retorno": 0.4},
-                    "exploracion": {"media": 0.3, "varianza": 0.1, "fuerza_retorno": 0.5},
-                    "profundidad": {"media": 0.5, "varianza": 0.15, "fuerza_retorno": 0.3},
-                    "disciplina": {"media": 0.5, "varianza": 0.15, "fuerza_retorno": 0.3},
-                    "conformidad": {"media": 0.6, "varianza": 0.15, "fuerza_retorno": 0.3},
+                    "caution": {"mean": 0.7, "variance": 0.2, "return_force": 0.4},
+                    "exploration": {"mean": 0.3, "variance": 0.1, "return_force": 0.5},
+                    "depth": {"mean": 0.5, "variance": 0.15, "return_force": 0.3},
+                    "discipline": {"mean": 0.5, "variance": 0.15, "return_force": 0.3},
+                    "conformity": {"mean": 0.6, "variance": 0.15, "return_force": 0.3},
                 },
             },
         }
         defaults = AgentDefaults.model_validate(data)
         assert defaults.posture.enabled is True
-        assert defaults.posture.axes["cautela"].media == 0.7
+        assert defaults.posture.axes["caution"].mean == 0.7
 
     def test_camel_case_serialization(self):
         cfg = PostureConfig()

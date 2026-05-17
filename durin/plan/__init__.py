@@ -1,4 +1,4 @@
-"""Plan system — execution tiers, cycle enforcement, and bitácora."""
+"""Plan system — execution tiers, cycle enforcement, and event log."""
 
 from durin.plan.types import ExecutionTier, Phase, PlanItem, PlanState
 

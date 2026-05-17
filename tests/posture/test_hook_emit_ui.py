@@ -34,7 +34,7 @@ class TestPostureHookEmitUI:
         emit.assert_called_once()
         kind, data = emit.call_args[0]
         assert kind == "posture_update"
-        assert "cautela" in data["axes"]
+        assert "caution" in data["axes"]
         assert data["deltas"] == {}
 
     @pytest.mark.asyncio

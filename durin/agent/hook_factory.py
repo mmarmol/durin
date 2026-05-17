@@ -82,14 +82,14 @@ def _maybe_build_posture_hook(
         axis_cfg = posture_config.axes.get(name.value)
         if axis_cfg:
             axes[name] = AxisState(
-                media=axis_cfg.media,
-                varianza=axis_cfg.varianza,
-                fuerza_retorno=axis_cfg.fuerza_retorno,
-                valor_actual=axis_cfg.valor_actual if axis_cfg.valor_actual is not None else axis_cfg.media,
+                mean=axis_cfg.mean,
+                variance=axis_cfg.variance,
+                return_force=axis_cfg.return_force,
+                current_value=axis_cfg.current_value if axis_cfg.current_value is not None else axis_cfg.mean,
             )
         else:
             axes[name] = AxisState(
-                media=0.5, varianza=0.15, fuerza_retorno=0.3, valor_actual=0.5,
+                mean=0.5, variance=0.15, return_force=0.3, current_value=0.5,
             )
 
     vector = PostureVector(axes=axes)
