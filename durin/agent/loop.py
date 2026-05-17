@@ -26,7 +26,7 @@ from durin.agent.tools.file_state import FileStateStore, bind_file_states, reset
 from durin.agent.tools.message import MessageTool
 from durin.agent.tools.registry import ToolRegistry
 from durin.agent.tools.self import MyTool
-from durin.bus.events import InboundMessage, OutboundMessage
+from durin.bus.events import OUTBOUND_META_AGENT_UI, InboundMessage, OutboundMessage
 from durin.bus.queue import MessageBus
 from durin.command import CommandContext, CommandRouter, register_builtin_commands
 from durin.config.schema import AgentDefaults, ModelPresetConfig
@@ -317,6 +317,7 @@ class AgentLoop:
         allowing callers to override or extend the standard config-derived
         parameters (e.g. ``cron_service``, ``session_manager``).
         """
+        from durin.agent.hook_factory import build_hooks_from_config
         from durin.providers.factory import make_provider
 
         if bus is None:
@@ -331,6 +332,11 @@ class AgentLoop:
             config,
             provider_snapshot_loader,
         )
+
+        existing_hooks = extra.pop("hooks", None) or []
+        auto_hooks = build_hooks_from_config(config)
+        hooks = auto_hooks + list(existing_hooks)
+
         return cls(
             bus=bus,
             provider=provider,
@@ -356,6 +362,7 @@ class AgentLoop:
             model_preset=defaults.model_preset,
             provider_snapshot_loader=provider_snapshot_loader,
             preset_snapshot_loader=preset_snapshot_loader,
+            hooks=hooks or None,
             **extra,
         )
 
@@ -532,6 +539,7 @@ class AgentLoop:
             tool_events: list[dict[str, Any]] | None = None,
             reasoning: bool = False,
             reasoning_end: bool = False,
+            agent_ui: dict[str, Any] | None = None,
         ) -> None:
             meta = dict(msg.metadata or {})
             meta["_progress"] = True
@@ -542,6 +550,8 @@ class AgentLoop:
                 meta["_reasoning_end"] = True
             if tool_events:
                 meta["_tool_events"] = tool_events
+            if agent_ui is not None:
+                meta[OUTBOUND_META_AGENT_UI] = agent_ui
             await self.bus.publish_outbound(
                 OutboundMessage(
                     channel=msg.channel,
@@ -611,7 +621,57 @@ class AgentLoop:
             sender_id=msg.sender_id,
             session_summary=pending_summary,
             session_metadata=session.metadata,
+            posture_phrase=self._get_posture_phrase(),
         )
+
+    def _get_posture_phrase(self) -> str | None:
+        from durin.posture.hook import PostureHook
+
+        for hook in self._extra_hooks:
+            if isinstance(hook, PostureHook):
+                phrase = hook.current_phrase
+                return phrase if phrase else None
+        return None
+
+    def _save_posture_state(self, session: Session) -> None:
+        from durin.posture.hook import PostureHook
+        from durin.posture.persistence import save_posture
+
+        for hook in self._extra_hooks:
+            if isinstance(hook, PostureHook):
+                save_posture(session.metadata, hook.current_vector)
+                return
+
+    def _save_verdict_history(self, session: Session) -> None:
+        from durin.deliberation.hook import DeliberationHook
+        from durin.deliberation.persistence import save_verdict_history
+
+        for hook in self._extra_hooks:
+            if isinstance(hook, DeliberationHook):
+                save_verdict_history(session.metadata, hook.history)
+                return
+
+    def _restore_posture_from_session(self, session: Session) -> None:
+        from durin.posture.hook import PostureHook
+        from durin.posture.persistence import restore_posture
+
+        for hook in self._extra_hooks:
+            if isinstance(hook, PostureHook):
+                restored = restore_posture(session.metadata)
+                if restored is not None:
+                    hook._vector = restored
+                return
+
+    def _restore_verdict_history(self, session: Session) -> None:
+        from durin.deliberation.hook import DeliberationHook
+        from durin.deliberation.persistence import restore_verdict_history
+
+        for hook in self._extra_hooks:
+            if isinstance(hook, DeliberationHook):
+                restored = restore_verdict_history(session.metadata)
+                if restored is not None and len(hook.history) == 0:
+                    hook._history = restored
+                return
 
     async def _dispatch_command_inline(
         self,
@@ -1278,6 +1338,8 @@ class AgentLoop:
         if ctx.session is None:
             ctx.session = self.sessions.get_or_create(ctx.session_key)
         mark_webui_session(ctx.session, msg.metadata)
+        self._restore_posture_from_session(ctx.session)
+        self._restore_verdict_history(ctx.session)
 
         if self._restore_runtime_checkpoint(ctx.session):
             self.sessions.save(ctx.session)
@@ -1396,6 +1458,8 @@ class AgentLoop:
         if ctx.msg.channel == "websocket":
             self._pending_turn_latency_ms[ctx.session_key] = ctx.turn_latency_ms
         ctx.session.enforce_file_cap(on_archive=self.context.memory.raw_archive)
+        self._save_posture_state(ctx.session)
+        self._save_verdict_history(ctx.session)
         self._clear_pending_user_turn(ctx.session)
         self._clear_runtime_checkpoint(ctx.session)
         self.sessions.save(ctx.session)
