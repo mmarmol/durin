@@ -183,6 +183,13 @@ class PostureHook(AgentHook):
                 if all(p == "explore" for p in prev) and all(p == "implement" for p in curr):
                     events.add(StimulusEvent.PHASE_TRANSITION)
 
+        # External events injected by other hooks (e.g. PlanHook)
+        for event_name in context.external_stimulus_events:
+            try:
+                events.add(StimulusEvent(event_name))
+            except ValueError:
+                pass
+
         return events
 
     @staticmethod

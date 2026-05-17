@@ -1,0 +1,135 @@
+{
+  "run_id": "v2_delib",
+  "total_instances": 5,
+  "patches_generated": 5,
+  "errors": 0,
+  "avg_elapsed_s": 221.1,
+  "avg_tools_used": 22.8,
+  "avg_iterations": 22.8,
+  "total_tokens": 0,
+  "deliberation": true,
+  "model": "glm-5.1",
+  "max_iterations": 100,
+  "posture_events_total": 537,
+  "deliberation_events_total": 20,
+  "per_instance": [
+    {
+      "id": "astropy__astropy-12907",
+      "resolved": true,
+      "elapsed_s": 177.6,
+      "iterations": 15,
+      "tools": {
+        "long_task": 1,
+        "read_file": 3,
+        "exec": 9,
+        "edit_file": 1,
+        "complete_goal": 1
+      },
+      "tokens": 0,
+      "posture_changes": 80,
+      "delib_count": 2,
+      "delib_time_ms": 33119.9,
+      "posture_final": {
+        "cautela": 0.6077,
+        "exploracion": 0.4491,
+        "profundidad": 0.42,
+        "disciplina": 0.5,
+        "conformidad": 0.7
+      }
+    },
+    {
+      "id": "astropy__astropy-14182",
+      "resolved": true,
+      "elapsed_s": 476.9,
+      "iterations": 49,
+      "tools": {
+        "long_task": 1,
+        "read_file": 14,
+        "exec": 27,
+        "grep": 3,
+        "edit_file": 3,
+        "complete_goal": 1
+      },
+      "tokens": 0,
+      "posture_changes": 214,
+      "delib_count": 2,
+      "delib_time_ms": 29087.300000000003,
+      "posture_final": {
+        "cautela": 0.6131,
+        "exploracion": 0.7628,
+        "profundidad": 0.7246,
+        "disciplina": 0.5,
+        "conformidad": 0.7
+      }
+    },
+    {
+      "id": "astropy__astropy-14365",
+      "resolved": true,
+      "elapsed_s": 204.6,
+      "iterations": 22,
+      "tools": {
+        "grep": 2,
+        "read_file": 9,
+        "edit_file": 4,
+        "exec": 7
+      },
+      "tokens": 0,
+      "posture_changes": 94,
+      "delib_count": 2,
+      "delib_time_ms": 24732.3,
+      "posture_final": {
+        "cautela": 0.636,
+        "exploracion": 0.4514,
+        "profundidad": 0.42,
+        "disciplina": 0.5,
+        "conformidad": 0.7
+      }
+    },
+    {
+      "id": "astropy__astropy-14995",
+      "resolved": true,
+      "elapsed_s": 219.3,
+      "iterations": 26,
+      "tools": {
+        "long_task": 1,
+        "grep": 1,
+        "read_file": 5,
+        "edit_file": 1,
+        "exec": 17,
+        "complete_goal": 1
+      },
+      "tokens": 0,
+      "posture_changes": 109,
+      "delib_count": 2,
+      "delib_time_ms": 25491.1,
+      "posture_final": {
+        "cautela": 0.6148,
+        "exploracion": 0.7583,
+        "profundidad": 0.7265,
+        "disciplina": 0.5,
+        "conformidad": 0.7
+      }
+    },
+    {
+      "id": "astropy__astropy-6938",
+      "resolved": true,
+      "elapsed_s": 27.3,
+      "iterations": 2,
+      "tools": {
+        "grep": 1,
+        "edit_file": 1
+      },
+      "tokens": 0,
+      "posture_changes": 20,
+      "delib_count": 2,
+      "delib_time_ms": 26223.0,
+      "posture_final": {
+        "cautela": 0.549,
+        "exploracion": 0.4,
+        "profundidad": 0.5,
+        "disciplina": 0.5,
+        "conformidad": 0.7
+      }
+    }
+  ]
+}
