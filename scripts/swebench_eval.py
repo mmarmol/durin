@@ -109,26 +109,11 @@ def _get_diff(workspace: Path) -> str:
     return result.stdout
 
 
-def _collect_telemetry(session_key: str) -> list[dict]:
-    """Collect telemetry events for this session from the JSONL log."""
-    from pathlib import Path as P
-    import re
-    from datetime import date
-
-    telemetry_dir = P.home() / ".cache" / "durin" / "telemetry"
-    if not telemetry_dir.exists():
+def _read_jsonl(path: Path) -> list[dict]:
+    if not path.exists():
         return []
-
-    safe_key = re.sub(r"[^\w\-]", "_", session_key)[:80]
-    today = date.today().isoformat()
-    filename = f"{safe_key}_{today}.jsonl"
-    telemetry_file = telemetry_dir / filename
-
-    if not telemetry_file.exists():
-        return []
-
     events = []
-    with telemetry_file.open() as f:
+    with path.open() as f:
         for line in f:
             line = line.strip()
             if line:
@@ -137,6 +122,115 @@ def _collect_telemetry(session_key: str) -> list[dict]:
                 except json.JSONDecodeError:
                     pass
     return events
+
+
+def _collect_telemetry(session_key: str) -> list[dict]:
+    """Collect telemetry events for this session from the JSONL log."""
+    import re
+
+    telemetry_dir = Path.home() / ".cache" / "durin" / "telemetry"
+    safe_key = re.sub(r"[^\w\-]", "_", session_key)[:80]
+    today = date.today().isoformat()
+    filename = f"{safe_key}_{today}.jsonl"
+    return _read_jsonl(telemetry_dir / filename)
+
+
+def _collect_plan_events(session_key: str, workspace: Path) -> list[dict]:
+    """Collect plan events from the plan store for this session."""
+    plan_dir = workspace / "plans" / session_key
+    return _read_jsonl(plan_dir / "events.jsonl")
+
+
+def _build_feature_usage(telemetry: list[dict], plan_events: list[dict], tools_breakdown: dict) -> dict:
+    """Extract structured feature-usage summary from raw events."""
+    # --- Plan system ---
+    tier = None
+    phases_seen = []
+    confirm_results = []
+    cycle_count = 0
+    for ev in plan_events:
+        etype = ev.get("type", "")
+        if etype == "tier_set":
+            tier = ev.get("tier")
+        elif etype == "phase_transition":
+            phase = ev.get("to_phase") or ev.get("phase")
+            if phase:
+                phases_seen.append(phase)
+        elif etype == "confirm_result":
+            confirm_results.append(ev.get("result", "unknown"))
+        elif etype == "cycle_restart":
+            cycle_count += 1
+
+    plan_usage = {
+        "tier": tier,
+        "cycles": max(cycle_count + 1, 1) if tier == "full_plan" else 0,
+        "phases": phases_seen,
+        "phase_transitions": len(phases_seen),
+        "confirm_results": confirm_results,
+    }
+
+    # --- Deliberation V3 ---
+    delib_events = [e for e in telemetry if e.get("type") == "deliberation.result"]
+    deliberation_usage = {
+        "count": len(delib_events),
+        "total_ms": sum(e.get("data", {}).get("duration_ms", 0) for e in delib_events),
+        "triggers": [e.get("data", {}).get("trigger", "") for e in delib_events],
+        "perspectives": [
+            {
+                "trigger": e.get("data", {}).get("trigger", ""),
+                "cycle": e.get("data", {}).get("cycle", 1),
+                "critic": e.get("data", {}).get("perspectives", {}).get("critic", "")[:150],
+                "explorer": e.get("data", {}).get("perspectives", {}).get("explorer", "")[:150],
+                "pragmatic": e.get("data", {}).get("perspectives", {}).get("pragmatic", "")[:150],
+                "synthesis": e.get("data", {}).get("synthesis", "")[:200],
+            }
+            for e in delib_events
+        ],
+    }
+
+    # --- Posture evolution ---
+    posture_changes = [e for e in telemetry if e.get("type") == "posture.change"]
+    posture_initial_ev = [e for e in telemetry if e.get("type") == "posture.initial"]
+    all_stimulus_events = []
+    caution_values = []
+    for ev in posture_changes:
+        data = ev.get("data", {})
+        all_stimulus_events.extend(data.get("stimulus_events", []))
+        caution_val = data.get("axes", {}).get("caution")
+        if caution_val is not None:
+            caution_values.append(caution_val)
+
+    posture_usage = {
+        "initial": posture_initial_ev[0].get("data", {}).get("axes", {}) if posture_initial_ev else {},
+        "total_changes": len(posture_changes),
+        "stimulus_events_fired": list(set(all_stimulus_events)),
+        "stimulus_event_counts": _count_items(all_stimulus_events),
+        "caution_range": [round(min(caution_values), 3), round(max(caution_values), 3)] if caution_values else [],
+    }
+
+    # --- Verification ---
+    has_confirm = any(r in ("pass", "fail") for r in confirm_results)
+    verify_caught = "fail" in confirm_results
+    verification_usage = {
+        "tier_supports_verify": tier in ("execute_verify", "full_plan"),
+        "confirm_executed": has_confirm,
+        "caught_issue": verify_caught,
+    }
+
+    return {
+        "plan": plan_usage,
+        "deliberation": deliberation_usage,
+        "posture": posture_usage,
+        "verification": verification_usage,
+        "tools": tools_breakdown,
+    }
+
+
+def _count_items(items: list[str]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in items:
+        counts[item] = counts.get(item, 0) + 1
+    return counts
 
 
 def _extract_token_usage(messages: list[dict]) -> dict:
@@ -296,25 +390,31 @@ async def _run_instance(
 
     # Collect telemetry (posture + deliberation events)
     telemetry_events = _collect_telemetry(session_key)
+    plan_events = _collect_plan_events(session_key, workspace)
 
     # Extract token usage from messages
     token_stats = _extract_token_usage(messages)
 
-    logger.info("<<< {} — patch={} chars, tools={}, time={:.0f}s, tokens={}, posture_events={}",
-                instance_id, len(patch), len(tools_used), elapsed,
-                token_stats.get("total_tokens", 0), len(telemetry_events))
+    tools_breakdown = _tool_breakdown(tools_used)
+    feature_usage = _build_feature_usage(telemetry_events, plan_events, tools_breakdown)
+
+    logger.info("<<< {} — patch={} chars, tier={}, delib={}, time={:.0f}s, tokens={}",
+                instance_id, len(patch), feature_usage["plan"]["tier"],
+                feature_usage["deliberation"]["count"], elapsed,
+                token_stats.get("total_tokens", 0))
 
     return {
         "instance_id": instance_id,
         "model_patch": patch,
         "model_name_or_path": f"durin-glm51-{'delib' if deliberation else 'nodelib'}",
         "elapsed_s": round(elapsed, 1),
-        "tools_used_count": len(tools_used),
-        "tools_breakdown": _tool_breakdown(tools_used),
         "iterations": len([t for t in tools_used if t]),
+        "tools_used_count": len(tools_used),
         "token_stats": token_stats,
-        "telemetry": telemetry_events,
+        "feature_usage": feature_usage,
         "posture_final": {k: round(v, 4) for k, v in posture_final.items()},
+        "telemetry_raw": telemetry_events,
+        "plan_events_raw": plan_events,
         "error": None if patch else ("timeout" if "TIMEOUT" in content else "no_patch"),
     }
 
@@ -381,50 +481,59 @@ async def run_evaluation(
     non_empty = sum(1 for r in results if r.get("model_patch"))
     errors = sum(1 for r in results if r.get("error"))
     avg_time = sum(r.get("elapsed_s", 0) for r in results) / max(total, 1)
-    avg_tools = sum(r.get("tools_used_count", 0) for r in results) / max(total, 1)
     avg_iterations = sum(r.get("iterations", 0) for r in results) / max(total, 1)
-    total_tokens = sum(r.get("token_stats", {}).get("total_tokens", 0) for r in results)
+    total_prompt = sum(r.get("token_stats", {}).get("prompt_tokens", 0) for r in results)
+    total_completion = sum(r.get("token_stats", {}).get("completion_tokens", 0) for r in results)
+    total_cached = sum(r.get("token_stats", {}).get("cached_tokens", 0) for r in results)
+    total_tokens = total_prompt + total_completion
 
-    # Posture telemetry summary
-    posture_events = []
-    delib_events = []
-    for r in results:
-        for ev in r.get("telemetry", []):
-            if ev.get("type", "").startswith("posture."):
-                posture_events.append(ev)
-            elif ev.get("type", "").startswith("deliberation."):
-                delib_events.append(ev)
+    # Feature adoption summary across all instances
+    tiers_used = [r.get("feature_usage", {}).get("plan", {}).get("tier") for r in results]
+    delib_counts = [r.get("feature_usage", {}).get("deliberation", {}).get("count", 0) for r in results]
+    verify_caught = sum(
+        1 for r in results
+        if r.get("feature_usage", {}).get("verification", {}).get("caught_issue")
+    )
 
     stats = {
         "run_id": run_id,
-        "total_instances": total,
-        "patches_generated": non_empty,
-        "errors": errors,
-        "avg_elapsed_s": round(avg_time, 1),
-        "avg_tools_used": round(avg_tools, 1),
-        "avg_iterations": round(avg_iterations, 1),
-        "total_tokens": total_tokens,
-        "deliberation": deliberation,
-        "model": _MODEL,
-        "max_iterations": _MAX_ITERATIONS,
-        "posture_events_total": len(posture_events),
-        "deliberation_events_total": len(delib_events),
+        "config": {
+            "deliberation_enabled": deliberation,
+            "carry_posture": carry_posture,
+            "model": _MODEL,
+            "delib_model": _DELIB_MODEL,
+            "max_iterations": _MAX_ITERATIONS,
+        },
+        "summary": {
+            "total_instances": total,
+            "patches_generated": non_empty,
+            "errors": errors,
+            "avg_elapsed_s": round(avg_time, 1),
+            "avg_iterations": round(avg_iterations, 1),
+            "tokens": {
+                "total": total_tokens,
+                "prompt": total_prompt,
+                "completion": total_completion,
+                "cached": total_cached,
+            },
+        },
+        "feature_adoption": {
+            "tiers": _count_items([t for t in tiers_used if t]),
+            "deliberations_total": sum(delib_counts),
+            "instances_with_deliberation": sum(1 for c in delib_counts if c > 0),
+            "verify_caught_issues": verify_caught,
+        },
         "per_instance": [
             {
                 "id": r["instance_id"],
                 "resolved": bool(r.get("model_patch")),
                 "elapsed_s": r.get("elapsed_s"),
                 "iterations": r.get("iterations"),
-                "tools": r.get("tools_breakdown"),
-                "tokens": r.get("token_stats", {}).get("total_tokens", 0),
-                "posture_changes": len([e for e in r.get("telemetry", []) if e.get("type") == "posture.change"]),
-                "delib_count": len([e for e in r.get("telemetry", []) if e.get("type") == "deliberation.result"]),
-                "delib_time_ms": sum(
-                    e.get("data", {}).get("duration_ms", 0)
-                    for e in r.get("telemetry", [])
-                    if e.get("type") == "deliberation.result"
-                ),
+                "tools_used": r.get("tools_used_count", 0),
+                "tokens": r.get("token_stats", {}),
+                "feature_usage": r.get("feature_usage", {}),
                 "posture_final": r.get("posture_final", {}),
+                "error": r.get("error"),
             }
             for r in results
         ],
@@ -434,6 +543,8 @@ async def run_evaluation(
     logger.info("Stats written to {}", stats_path)
     logger.info("Summary: {}/{} patches, avg {:.0f}s, avg {:.0f} iters, {} tokens total",
                 non_empty, total, avg_time, avg_iterations, total_tokens)
+    logger.info("Feature adoption: tiers={}, delib={}, verify_caught={}",
+                _count_items([t for t in tiers_used if t]), sum(delib_counts), verify_caught)
 
     return predictions_path
 
