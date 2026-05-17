@@ -28,6 +28,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -40,7 +41,7 @@ _ZAI_API_BASE = "https://api.z.ai/api/coding/paas/v4"
 _MODEL = "glm-5.1"
 _DELIB_MODEL = "glm-5.1"
 _MAX_ITERATIONS = 100
-_RESULTS_DIR = Path("/tmp/swebench_durin")
+_RESULTS_DIR = Path(__file__).resolve().parent.parent / "benchmarks" / "swebench_5"
 _REPOS_CACHE = Path("/tmp/swebench_repos")
 
 _SYSTEM_PROMPT = """\
@@ -475,22 +476,23 @@ def main():
     if args.evaluate:
         if not args.predictions:
             parser.error("--predictions required with --evaluate")
-        run_swebench_evaluation(args.predictions, args.run_id)
+        run_swebench_evaluation(args.predictions, args.run_id or "eval")
         return
 
     deliberation = args.deliberation and not args.no_deliberation
+    stamped_run_id = f"{date.today().isoformat()}_{args.run_id}"
 
     predictions_path = asyncio.run(run_evaluation(
         n=args.n,
         deliberation=deliberation,
-        run_id=args.run_id,
+        run_id=stamped_run_id,
         offset=args.offset,
         instance_ids=args.instance_ids,
         carry_posture=args.carry_posture,
     ))
 
     if args.auto_eval:
-        run_swebench_evaluation(predictions_path, args.run_id)
+        run_swebench_evaluation(predictions_path, stamped_run_id)
 
 
 if __name__ == "__main__":
