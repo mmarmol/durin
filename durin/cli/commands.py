@@ -281,6 +281,17 @@ async def _maybe_print_interactive_progress(
     if not metadata.get("_progress"):
         return False
 
+    agent_ui = metadata.get("_agent_ui")
+    if agent_ui:
+        from durin.cli.agent_ui_render import render_agent_ui
+        target = renderer.console if renderer else console
+        pause = renderer.pause_spinner() if renderer else (thinking.pause() if thinking else nullcontext())
+        with pause:
+            if renderer:
+                renderer.ensure_header()
+            render_agent_ui(target, agent_ui)
+        return True
+
     is_tool_hint = metadata.get("_tool_hint", False)
     is_reasoning = metadata.get("_reasoning", False) or metadata.get("_reasoning_delta", False)
     if is_reasoning:
@@ -1107,7 +1118,16 @@ def agent(
     _thinking: ThinkingSpinner | None = None
 
     def _make_progress(renderer: StreamRenderer | None = None):
-        async def _cli_progress(content: str, *, tool_hint: bool = False, reasoning: bool = False, **_kwargs: Any) -> None:
+        async def _cli_progress(content: str, *, tool_hint: bool = False, reasoning: bool = False, agent_ui: dict[str, Any] | None = None, **_kwargs: Any) -> None:
+            if agent_ui:
+                from durin.cli.agent_ui_render import render_agent_ui
+                target = renderer.console if renderer else console
+                pause = renderer.pause_spinner() if renderer else (_thinking.pause() if _thinking else nullcontext())
+                with pause:
+                    if renderer:
+                        renderer.ensure_header()
+                    render_agent_ui(target, agent_ui)
+                return
             ch = agent_loop.channels_config
             if reasoning:
                 if ch and not ch.show_reasoning:

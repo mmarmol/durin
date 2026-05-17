@@ -53,12 +53,35 @@ export interface UIMessage {
   reasoningStreaming?: boolean;
   /** End-to-end wall time for this assistant turn (persisted ``latency_ms`` / ``turn_end``). */
   latencyMs?: number;
+  /** Structured agent UI data (posture, deliberation). */
+  agentUI?: AgentUIBlob;
 }
 
 /** Structured UI blob on ``progress`` WS frames; channels may add more ``kind`` values later. */
 export interface AgentUIBlob {
   kind: string;
   data?: unknown;
+}
+
+export interface PostureUpdateData {
+  axes: Record<string, number>;
+  deltas: Record<string, number>;
+}
+
+export interface DeliberationProposal {
+  role: string;
+  content: string;
+  score: number;
+}
+
+export interface DeliberationResultData {
+  trigger: string;
+  winner: DeliberationProposal | null;
+  proposals: DeliberationProposal[];
+  threshold: number;
+  rounds_used: number;
+  under_doubt: boolean;
+  accepted: boolean;
 }
 
 /** WebSocket snapshot for sustained goals (`goal_state` events; keyed by ``chat_id``). */

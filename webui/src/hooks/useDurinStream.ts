@@ -420,6 +420,22 @@ export function useDurinStream(
         // Attach them to the last trace row if it was the last emitted item
         // so a sequence of calls collapses into one compact trace group.
         if (ev.kind === "tool_hint" || ev.kind === "progress") {
+          // Structured agent UI events (posture, deliberation) get their own
+          // message row with the blob attached for rich rendering.
+          if (ev.agent_ui && (ev.agent_ui.kind === "posture_update" || ev.agent_ui.kind === "deliberation_result")) {
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: crypto.randomUUID(),
+                role: "tool",
+                kind: "trace",
+                content: ev.agent_ui!.kind === "posture_update" ? "Postura actualizada" : "Deliberación completada",
+                createdAt: Date.now(),
+                agentUI: ev.agent_ui,
+              },
+            ]);
+            return;
+          }
           const structuredLines = toolTraceLinesFromEvents(ev.tool_events);
           const lines = structuredLines.length > 0
             ? structuredLines
@@ -429,7 +445,7 @@ export function useDurinStream(
           if (lines.length === 0) return;
           setMessages((prev) => {
             const last = prev[prev.length - 1];
-            if (last && last.kind === "trace" && !last.isStreaming) {
+            if (last && last.kind === "trace" && !last.isStreaming && !last.agentUI) {
               const merged: UIMessage = {
                 ...last,
                 traces: [...(last.traces ?? [last.content]), ...lines],

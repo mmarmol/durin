@@ -1,0 +1,1 @@
+Del 0 al 10, si esta propuesta falla, cuan facil es volver atras? Responde SOLO el numero.
