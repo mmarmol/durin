@@ -186,7 +186,7 @@ def _maybe_build_plan_hook(
     from pathlib import Path
     from durin.plan.hook import PlanHook
 
-    workspace = Path(getattr(config, "workspace_dir", "."))
+    workspace = config.workspace_path
     hook = PlanHook(
         workspace=workspace,
         session_key=session_key or "default",

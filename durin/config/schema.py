@@ -98,16 +98,16 @@ def _default_axes() -> dict[str, AxisConfig]:
 
 
 class PostureConfig(Base):
-    """Posture vector (hilo conductor) configuration."""
+    """Posture vector (5-axis behavioral) configuration."""
 
-    enabled: bool = False
+    enabled: bool = True
     axes: dict[str, AxisConfig] = Field(default_factory=_default_axes)
 
 
 class DeliberationConfig(Base):
     """Single-call multi-perspective deliberation V3."""
 
-    enabled: bool = False
+    enabled: bool = True
     provider: str = "ollama"
     model: str = "glm-5.1"
 

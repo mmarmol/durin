@@ -1,20 +1,17 @@
 """SWE-bench evaluation adapter for Durin.
 
-Runs Durin agent against SWE-bench Lite instances and collects patches.
-Two conditions: deliberation ON vs OFF, both using GLM-5.1 via Z.ai API.
+Runs Durin agent (posture + plan + deliberation V3) against SWE-bench Lite.
+All Durin features are active by default. Use --no-* flags to disable.
 
 Usage:
-    # Run 5 instances without deliberation
-    python scripts/swebench_eval.py --n 5 --no-deliberation --run-id durin_nodelib
+    # Run 5 instances with all features (default)
+    python scripts/swebench_eval.py --n 5 --run-id durin_full --auto-eval
 
-    # Run 5 instances WITH deliberation
-    python scripts/swebench_eval.py --n 5 --deliberation --run-id durin_delib
+    # Disable deliberation for A/B comparison
+    python scripts/swebench_eval.py --n 5 --no-deliberation --run-id durin_nodelib --auto-eval
 
-    # Evaluate collected predictions
-    python scripts/swebench_eval.py --evaluate --predictions /tmp/swebench_durin/durin_nodelib.jsonl
-
-    # Full pipeline: run + evaluate
-    python scripts/swebench_eval.py --n 30 --deliberation --run-id durin_delib --auto-eval
+    # Evaluate existing predictions
+    python scripts/swebench_eval.py --evaluate --predictions benchmarks/swebench_5/run.jsonl --run-id eval_run
 """
 
 from __future__ import annotations
@@ -22,6 +19,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import fcntl
 import os
 import shutil
 import subprocess
@@ -233,23 +231,6 @@ def _count_items(items: list[str]) -> dict[str, int]:
     return counts
 
 
-def _extract_token_usage(messages: list[dict]) -> dict:
-    """Extract aggregated token usage from LLM response messages."""
-    total_prompt = 0
-    total_completion = 0
-    total_cached = 0
-    for msg in messages:
-        if "usage" in msg:
-            u = msg["usage"]
-            total_prompt += u.get("prompt_tokens", 0)
-            total_completion += u.get("completion_tokens", 0)
-            total_cached += u.get("cached_tokens", 0)
-    return {
-        "prompt_tokens": total_prompt,
-        "completion_tokens": total_completion,
-        "cached_tokens": total_cached,
-        "total_tokens": total_prompt + total_completion,
-    }
 
 
 def _tool_breakdown(tools: list[str]) -> dict[str, int]:
@@ -268,9 +249,7 @@ def _build_config(
 ) -> dict:
     """Build a Durin config dict for this evaluation run.
 
-    Posture is ALWAYS enabled for observability (tracks agent behavior).
-    Only deliberation toggles between conditions.
-    posture_override: if provided, sets initial axis values (for carry-posture mode).
+    All features (posture, plan, deliberation) active by default.
     """
     posture_cfg: dict = {"enabled": True}
     if posture_override:
@@ -325,6 +304,7 @@ async def _run_instance(
     instance: dict,
     deliberation: bool,
     workspace: Path,
+    run_id: str,
     carry_posture: dict[str, float] | None = None,
 ) -> dict:
     """Run Durin on a single SWE-bench instance. Returns prediction dict."""
@@ -356,11 +336,13 @@ async def _run_instance(
         problem_statement=instance["problem_statement"],
     )
 
-    session_key = f"swebench:{instance_id}"
+    session_key = f"swebench:{run_id}:{instance_id}"
     tools_used = []
     content = ""
     messages = []
     posture_final = {}
+
+    usage_totals: dict[str, int] = {}
 
     try:
         from durin.durin_sdk import Durin
@@ -372,6 +354,7 @@ async def _run_instance(
         tools_used = result.tools_used
         content = result.content
         messages = result.messages
+        usage_totals = result.usage or {}
         # Extract final posture state from hooks
         for hook in (bot._loop._extra_hooks or []):
             if hasattr(hook, "current_vector"):
@@ -392,8 +375,13 @@ async def _run_instance(
     telemetry_events = _collect_telemetry(session_key)
     plan_events = _collect_plan_events(session_key, workspace)
 
-    # Extract token usage from messages
-    token_stats = _extract_token_usage(messages)
+    # Token usage from runner's accumulated totals
+    token_stats = {
+        "prompt_tokens": usage_totals.get("prompt_tokens", 0),
+        "completion_tokens": usage_totals.get("completion_tokens", 0),
+        "cached_tokens": usage_totals.get("cached_tokens", 0),
+        "total_tokens": usage_totals.get("prompt_tokens", 0) + usage_totals.get("completion_tokens", 0),
+    }
 
     tools_breakdown = _tool_breakdown(tools_used)
     feature_usage = _build_feature_usage(telemetry_events, plan_events, tools_breakdown)
@@ -452,7 +440,7 @@ async def run_evaluation(
         for i, inst in enumerate(instances):
             logger.info("[{}/{}] Starting {}", i + 1, len(instances), inst["instance_id"])
             posture_input = current_posture if carry_posture else None
-            pred = await _run_instance(inst, deliberation, workspace, carry_posture=posture_input)
+            pred = await _run_instance(inst, deliberation, workspace, run_id=run_id, carry_posture=posture_input)
             results.append(pred)
 
             # Carry forward posture to next instance
@@ -526,7 +514,8 @@ async def run_evaluation(
         "per_instance": [
             {
                 "id": r["instance_id"],
-                "resolved": bool(r.get("model_patch")),
+                "patch_generated": bool(r.get("model_patch")),
+                "eval_resolved": None,
                 "elapsed_s": r.get("elapsed_s"),
                 "iterations": r.get("iterations"),
                 "tools_used": r.get("tools_used_count", 0),
@@ -541,7 +530,7 @@ async def run_evaluation(
     stats_path = _RESULTS_DIR / f"{run_id}_stats.json"
     stats_path.write_text(json.dumps(stats, indent=2, ensure_ascii=False))
     logger.info("Stats written to {}", stats_path)
-    logger.info("Summary: {}/{} patches, avg {:.0f}s, avg {:.0f} iters, {} tokens total",
+    logger.info("Summary: {}/{} patches generated (eval pending), avg {:.0f}s, avg {:.0f} iters, {} tokens",
                 non_empty, total, avg_time, avg_iterations, total_tokens)
     logger.info("Feature adoption: tiers={}, delib={}, verify_caught={}",
                 _count_items([t for t in tiers_used if t]), sum(delib_counts), verify_caught)
@@ -549,23 +538,93 @@ async def run_evaluation(
     return predictions_path
 
 
-def run_swebench_evaluation(predictions_path: Path, run_id: str):
-    """Run official swebench evaluation on collected predictions."""
-    logger.info("Running SWE-bench evaluation on {}", predictions_path)
-    cmd = [
-        sys.executable, "-m", "swebench.harness.run_evaluation",
-        "--dataset_name", "princeton-nlp/SWE-bench_Lite",
-        "--split", "test",
-        "--predictions_path", str(predictions_path),
-        "--max_workers", "2",
-        "--timeout", "300",
-        "--run_id", run_id,
-        "--cache_level", "base",
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
-    print(result.stdout)
-    if result.returncode != 0:
-        print(result.stderr[-500:], file=sys.stderr)
+def run_swebench_evaluation(predictions_path: Path, run_id: str) -> list[str]:
+    """Run official swebench evaluation and return resolved instance IDs.
+
+    Uses a file lock to prevent parallel eval runs from interfering with
+    each other (Docker/harness shared state).
+    """
+    lock_path = Path("/tmp/swebench_eval.lock")
+    logger.info("Waiting for eval lock (run_id={})...", run_id)
+    with open(lock_path, "w") as lock_fd:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        logger.info("Running SWE-bench evaluation on {}", predictions_path)
+        cmd = [
+            sys.executable, "-m", "swebench.harness.run_evaluation",
+            "--dataset_name", "princeton-nlp/SWE-bench_Lite",
+            "--split", "test",
+            "--predictions_path", str(predictions_path),
+            "--max_workers", "2",
+            "--timeout", "300",
+            "--run_id", run_id,
+            "--cache_level", "base",
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+        print(result.stdout)
+        if result.returncode != 0:
+            print(result.stderr[-500:], file=sys.stderr)
+
+    resolved_ids = _parse_eval_report(run_id)
+    _update_stats_with_eval(run_id, resolved_ids)
+    return resolved_ids
+
+
+def _parse_eval_report(run_id: str) -> list[str]:
+    """Parse SWE-bench evaluation results from per-instance report.json files.
+
+    Only reads from the exact run_id directory to avoid picking up stale
+    results from prior runs with similar names.
+    """
+    resolved_ids: list[str] = []
+
+    eval_log_dir = Path("logs/run_evaluation") / run_id
+    if not eval_log_dir.exists():
+        logger.warning("Eval log dir not found: {}", eval_log_dir)
+        return []
+
+    for model_dir in eval_log_dir.iterdir():
+        if not model_dir.is_dir():
+            continue
+        for instance_dir in model_dir.iterdir():
+            if not instance_dir.is_dir():
+                continue
+            report_file = instance_dir / "report.json"
+            if not report_file.exists():
+                continue
+            try:
+                report = json.loads(report_file.read_text())
+                instance_id = instance_dir.name
+                if report.get(instance_id, {}).get("resolved", False):
+                    resolved_ids.append(instance_id)
+            except (json.JSONDecodeError, KeyError) as e:
+                logger.warning("Failed to parse {}: {}", report_file, e)
+
+    logger.info("Eval result for {}: {}/{} resolved ({})",
+                run_id, len(resolved_ids),
+                sum(1 for _ in eval_log_dir.rglob("report.json")),
+                ", ".join(resolved_ids) or "none")
+    return resolved_ids
+
+
+def _update_stats_with_eval(run_id: str, resolved_ids: list[str]) -> None:
+    """Update the stats JSON with actual eval results."""
+    stats_path = _RESULTS_DIR / f"{run_id}_stats.json"
+    if not stats_path.exists():
+        return
+
+    stats = json.loads(stats_path.read_text())
+    total = stats.get("summary", {}).get("total_instances", 0)
+
+    for inst in stats.get("per_instance", []):
+        inst["eval_resolved"] = inst["id"] in resolved_ids
+
+    stats["summary"]["eval_resolved"] = len(resolved_ids)
+    stats["summary"]["eval_resolve_rate"] = (
+        f"{len(resolved_ids)}/{total}" if total else "0/0"
+    )
+
+    stats_path.write_text(json.dumps(stats, indent=2, ensure_ascii=False))
+    logger.info("Stats updated with eval results: {} resolved", len(resolved_ids))
 
 
 def main():
@@ -573,8 +632,8 @@ def main():
     parser.add_argument("--n", type=int, default=5, help="Number of instances to run")
     parser.add_argument("--offset", type=int, default=0, help="Start from this index")
     parser.add_argument("--instance-ids", nargs="+", help="Specific instance IDs")
-    parser.add_argument("--deliberation", action="store_true", help="Enable deliberation")
-    parser.add_argument("--no-deliberation", action="store_true", help="Disable deliberation")
+    parser.add_argument("--no-deliberation", action="store_true",
+                        help="Disable deliberation (active by default)")
     parser.add_argument("--run-id", required=True, help="Unique run identifier")
     parser.add_argument("--carry-posture", action="store_true",
                         help="Carry posture state between instances")
@@ -587,10 +646,11 @@ def main():
     if args.evaluate:
         if not args.predictions:
             parser.error("--predictions required with --evaluate")
-        run_swebench_evaluation(args.predictions, args.run_id or "eval")
+        resolved = run_swebench_evaluation(args.predictions, args.run_id or "eval")
+        logger.info("Eval complete: {} resolved", len(resolved))
         return
 
-    deliberation = args.deliberation and not args.no_deliberation
+    deliberation = not args.no_deliberation
     stamped_run_id = f"{date.today().isoformat()}_{args.run_id}"
 
     predictions_path = asyncio.run(run_evaluation(
@@ -603,7 +663,9 @@ def main():
     ))
 
     if args.auto_eval:
-        run_swebench_evaluation(predictions_path, stamped_run_id)
+        resolved = run_swebench_evaluation(predictions_path, stamped_run_id)
+        logger.info("Final result: {}/{} instances resolved by eval harness",
+                    len(resolved), args.n)
 
 
 if __name__ == "__main__":
