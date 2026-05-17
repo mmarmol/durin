@@ -32,6 +32,7 @@ class AgentHookContext:
     emit_ui: EmitUICallback | None = None
     injected_messages_count: int = 0
     external_stimulus_events: list[str] = field(default_factory=list)
+    temperature_override: float | None = None
 
 
 class AgentHook:

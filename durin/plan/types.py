@@ -9,23 +9,30 @@ from typing import Literal
 
 class ExecutionTier(StrEnum):
     DIRECT = "direct"
-    EXECUTE_VERIFY = "execute_verify"
-    FULL_PLAN = "full_plan"
+    PLAN = "plan"
 
 
 class Phase(StrEnum):
     INVESTIGATE = "investigate"
     PLAN = "plan"
     EXECUTE = "execute"
-    CONFIRM = "confirm"
+    VERIFY = "verify"
 
 
 PHASE_ORDER: tuple[Phase, ...] = (
     Phase.INVESTIGATE,
     Phase.PLAN,
     Phase.EXECUTE,
-    Phase.CONFIRM,
+    Phase.VERIFY,
 )
+
+
+PHASE_TEMPERATURE: dict[Phase, float] = {
+    Phase.INVESTIGATE: 0.5,
+    Phase.PLAN: 0.4,
+    Phase.EXECUTE: 0.15,
+    Phase.VERIFY: 0.1,
+}
 
 
 @dataclass
@@ -44,6 +51,8 @@ class PlanState:
     current_phase: Phase | None = None
     cycle_count: int = 0
     last_failure_context: str = ""
+    edit_detected: bool = False
+    verify_passed: bool = False
 
     @property
     def has_pending_items(self) -> bool:

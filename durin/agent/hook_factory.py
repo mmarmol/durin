@@ -117,7 +117,7 @@ def _maybe_build_deliberation_service(
     engine = DeliberationEngine(
         provider=provider,
         model=model,
-        temperature=0.4,
+        temperature=0.5,
         max_tokens=2048,
     )
 
@@ -193,5 +193,5 @@ def _maybe_build_plan_hook(
         deliberation=deliberation,
         posture_snapshot_fn=posture_snapshot_fn,
     )
-    logger.info("PlanHook enabled — 3-tier execution model")
+    logger.info("PlanHook enabled — 2-tier execution model (direct/plan)")
     return hook

@@ -631,6 +631,8 @@ class AgentRunner:
             messages,
             tools=spec.tools.get_definitions(),
         )
+        if context.temperature_override is not None:
+            kwargs["temperature"] = context.temperature_override
         wants_streaming = hook.wants_streaming()
         wants_progress_streaming = (
             not wants_streaming
