@@ -20,12 +20,12 @@ from durin.posture.vector import AxisName, AxisState, PostureVector
 
 
 def _make_shifted_vector(shift: float = 0.2) -> PostureVector:
-    """Create a vector where all axes have valor_actual shifted from media."""
+    """Create a vector where all axes have current_value shifted from media."""
     default = PostureVector.default()
     updates = {}
     for name, state in default.axes.items():
-        new_val = min(1.0, state.media + shift)
-        updates[name] = state.model_copy(update={"valor_actual": new_val})
+        new_val = min(1.0, state.mean + shift)
+        updates[name] = state.model_copy(update={"current_value": new_val})
     return default.with_update(updates)
 
 
@@ -35,10 +35,10 @@ class TestSerializeDeserialize:
         data = serialize(v)
         restored = deserialize(data)
         for name in AxisName:
-            assert restored.axes[name].valor_actual == pytest.approx(v.axes[name].valor_actual)
-            assert restored.axes[name].media == v.axes[name].media
-            assert restored.axes[name].varianza == v.axes[name].varianza
-            assert restored.axes[name].fuerza_retorno == v.axes[name].fuerza_retorno
+            assert restored.axes[name].current_value == pytest.approx(v.axes[name].current_value)
+            assert restored.axes[name].mean == v.axes[name].mean
+            assert restored.axes[name].variance == v.axes[name].variance
+            assert restored.axes[name].return_force == v.axes[name].return_force
 
     def test_serialize_includes_timestamp(self):
         v = PostureVector.default()
@@ -56,7 +56,7 @@ class TestSerializeDeserialize:
         data = serialize(v)
         restored = deserialize(data)
         for name in AxisName:
-            assert restored.axes[name].valor_actual == pytest.approx(v.axes[name].valor_actual)
+            assert restored.axes[name].current_value == pytest.approx(v.axes[name].current_value)
 
 
 class TestApplyTimeDecay:
@@ -64,20 +64,20 @@ class TestApplyTimeDecay:
         v = _make_shifted_vector()
         result = apply_time_decay(v, 0.0)
         for name in AxisName:
-            assert result.axes[name].valor_actual == pytest.approx(v.axes[name].valor_actual)
+            assert result.axes[name].current_value == pytest.approx(v.axes[name].current_value)
 
     def test_negative_elapsed_unchanged(self):
         v = _make_shifted_vector()
         result = apply_time_decay(v, -100.0)
         for name in AxisName:
-            assert result.axes[name].valor_actual == pytest.approx(v.axes[name].valor_actual)
+            assert result.axes[name].current_value == pytest.approx(v.axes[name].current_value)
 
     def test_large_elapsed_converges_to_media(self):
         v = _make_shifted_vector(0.3)
         result = apply_time_decay(v, 1_000_000.0, tau_hours=4.0)
         for name in AxisName:
-            assert result.axes[name].valor_actual == pytest.approx(
-                result.axes[name].media, abs=0.001,
+            assert result.axes[name].current_value == pytest.approx(
+                result.axes[name].mean, abs=0.001,
             )
 
     def test_tau_hours_63_percent_decay(self):
@@ -88,10 +88,10 @@ class TestApplyTimeDecay:
         expected_factor = 1.0 - math.exp(-1.0)
 
         for name in AxisName:
-            original = v.axes[name].valor_actual
-            media = v.axes[name].media
+            original = v.axes[name].current_value
+            media = v.axes[name].mean
             expected = original + expected_factor * (media - original)
-            assert result.axes[name].valor_actual == pytest.approx(expected)
+            assert result.axes[name].current_value == pytest.approx(expected)
 
     def test_half_tau_partial_decay(self):
         v = _make_shifted_vector(0.2)
@@ -100,12 +100,12 @@ class TestApplyTimeDecay:
         result = apply_time_decay(v, elapsed, tau_hours=tau)
 
         for name in AxisName:
-            original = v.axes[name].valor_actual
-            media = v.axes[name].media
-            assert result.axes[name].valor_actual != pytest.approx(original)
-            assert result.axes[name].valor_actual != pytest.approx(media)
+            original = v.axes[name].current_value
+            media = v.axes[name].mean
+            assert result.axes[name].current_value != pytest.approx(original)
+            assert result.axes[name].current_value != pytest.approx(media)
             distance_before = abs(original - media)
-            distance_after = abs(result.axes[name].valor_actual - media)
+            distance_after = abs(result.axes[name].current_value - media)
             assert distance_after < distance_before
 
 
@@ -122,8 +122,8 @@ class TestSaveRestorePosture:
 
         assert restored is not None
         for name in AxisName:
-            assert restored.axes[name].valor_actual == pytest.approx(
-                v.axes[name].valor_actual,
+            assert restored.axes[name].current_value == pytest.approx(
+                v.axes[name].current_value,
             )
 
     def test_restore_with_elapsed_time_applies_decay(self):
@@ -137,11 +137,11 @@ class TestSaveRestorePosture:
 
         assert restored is not None
         for name in AxisName:
-            original = v.axes[name].valor_actual
-            media = v.axes[name].media
+            original = v.axes[name].current_value
+            media = v.axes[name].mean
             if abs(original - media) > 0.01:
                 distance_before = abs(original - media)
-                distance_after = abs(restored.axes[name].valor_actual - media)
+                distance_after = abs(restored.axes[name].current_value - media)
                 assert distance_after < distance_before
 
     def test_restore_missing_metadata_returns_none(self):

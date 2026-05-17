@@ -12,18 +12,18 @@ def _make_config(posture_enabled=False, deliberation_enabled=False, provider="lo
     from unittest.mock import MagicMock
 
     axis_cfg = MagicMock()
-    axis_cfg.media = 0.5
-    axis_cfg.varianza = 0.15
-    axis_cfg.fuerza_retorno = 0.3
+    axis_cfg.mean = 0.5
+    axis_cfg.variance = 0.15
+    axis_cfg.return_force = 0.3
 
     posture = MagicMock()
     posture.enabled = posture_enabled
     posture.axes = {
-        "cautela": axis_cfg,
-        "exploracion": axis_cfg,
-        "profundidad": axis_cfg,
-        "disciplina": axis_cfg,
-        "conformidad": axis_cfg,
+        "caution": axis_cfg,
+        "exploration": axis_cfg,
+        "depth": axis_cfg,
+        "discipline": axis_cfg,
+        "conformity": axis_cfg,
     }
 
     gen_cfg = MagicMock()
@@ -42,9 +42,9 @@ def _make_config(posture_enabled=False, deliberation_enabled=False, provider="lo
     deliberation.provider = provider
     deliberation.max_rounds = 2
     deliberation.generators = {
-        "pragmatico": gen_cfg,
-        "explorador": gen_cfg,
-        "critico": gen_cfg,
+        "pragmatic": gen_cfg,
+        "explorer": gen_cfg,
+        "critic": gen_cfg,
     }
     deliberation.evaluators = {
         "avance": eval_cfg,

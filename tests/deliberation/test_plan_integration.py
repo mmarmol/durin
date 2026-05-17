@@ -16,16 +16,16 @@ from durin.providers.base import LLMResponse
 
 
 _DELIB_RESPONSE = """\
-[CRITICO]
+[CRITIC]
 Risk: rebinding vs in-place assignment.
 
-[EXPLORADOR]
+[EXPLORER]
 Could use np.copyto() instead.
 
-[PRAGMATICO]
+[PRAGMATIC]
 Use [...] = for view writes.
 
-[SINTESIS]
+[SYNTHESIS]
 Fix with in-place assignment to avoid rebinding.
 """
 
@@ -65,7 +65,7 @@ class TestPlanHookDeliberation:
 
         assert hook._deliberation_needed is False
         injected = [m for m in ctx.messages if m.get("role") == "system"]
-        assert any("Deliberación pre-análisis" in m["content"] for m in injected)
+        assert any("Pre-analysis deliberation" in m["content"] for m in injected)
 
     @pytest.mark.asyncio
     async def test_no_deliberation_without_service(self):
@@ -76,11 +76,11 @@ class TestPlanHookDeliberation:
         ctx = _make_context()
         await hook.before_iteration(ctx)
         injected = [m for m in ctx.messages if m.get("role") == "system"]
-        assert not any("Deliberación" in m.get("content", "") for m in injected)
+        assert not any("Deliberation" in m.get("content", "") for m in injected)
 
     @pytest.mark.asyncio
     async def test_deliberation_uses_posture_snapshot(self, delib_service):
-        posture_fn = lambda: {"cautela": 0.8, "exploracion": 0.3}
+        posture_fn = lambda: {"caution": 0.8, "exploration": 0.3}
         hook = PlanHook(deliberation=delib_service, posture_snapshot_fn=posture_fn)
         hook.set_tier(ExecutionTier.FULL_PLAN)
         hook.update_plan("add", "Step 1")
@@ -90,7 +90,7 @@ class TestPlanHookDeliberation:
 
         call = delib_service._engine.provider.chat.call_args
         system_msg = call.kwargs["messages"][0]["content"]
-        assert "exhaustivo" in system_msg
+        assert "exhaustive" in system_msg
 
     @pytest.mark.asyncio
     async def test_deliberation_does_not_fire_twice(self, delib_service):

@@ -10,15 +10,15 @@ from durin.deliberation.types import (
 
 class TestPerspective:
     def test_frozen(self):
-        p = Perspective(role="critico", content="risk here")
-        assert p.role == "critico"
+        p = Perspective(role="critic", content="risk here")
+        assert p.role == "critic"
         assert p.content == "risk here"
 
 
 class TestDeliberationResult:
     def test_frozen(self):
         r = DeliberationResult(
-            perspectives=(Perspective(role="critico", content="x"),),
+            perspectives=(Perspective(role="critic", content="x"),),
             synthesis="do y",
             duration_ms=123.4,
             model="glm-5.1",

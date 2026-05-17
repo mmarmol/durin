@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 class Perspective:
     """A single perspective from the multi-perspective analysis."""
 
-    role: str  # "critico" | "explorador" | "pragmatico"
+    role: str  # "critic" | "explorer" | "pragmatic"
     content: str
 
 

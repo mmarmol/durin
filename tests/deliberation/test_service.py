@@ -17,16 +17,16 @@ from durin.providers.base import LLMResponse
 
 
 _RESPONSE_TEXT = """\
-[CRITICO]
+[CRITIC]
 Risk identified.
 
-[EXPLORADOR]
+[EXPLORER]
 Alternative approach.
 
-[PRAGMATICO]
+[PRAGMATIC]
 Direct path.
 
-[SINTESIS]
+[SYNTHESIS]
 Merged recommendation.
 """
 
@@ -45,7 +45,7 @@ def context():
     return DeliberationContext(
         goal_summary="Fix the bug",
         investigation_context="Found the issue in module X",
-        posture_snapshot={"cautela": 0.6},
+        posture_snapshot={"caution": 0.6},
     )
 
 
@@ -64,7 +64,7 @@ class TestDeliberate:
         call_kwargs = service._telemetry.log_deliberation_v3.call_args.kwargs
         assert call_kwargs["trigger"] == "investigate_to_plan"
         assert call_kwargs["cycle"] == 1
-        assert "critico" in call_kwargs["perspectives"]
+        assert "critic" in call_kwargs["perspectives"]
 
     @pytest.mark.asyncio
     async def test_tracks_history(self, service, context):
@@ -76,5 +76,5 @@ class TestDeliberate:
     async def test_render(self, service, context):
         result = await service.deliberate(context)
         rendered = service.render(result)
-        assert "[Deliberación pre-análisis]" in rendered
-        assert "Riesgos identificados" in rendered
+        assert "[Pre-analysis deliberation]" in rendered
+        assert "Risks identified" in rendered

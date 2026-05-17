@@ -1,4 +1,4 @@
-"""Persistent storage for plan state and event bitácora."""
+"""Persistent storage for plan state and event event log."""
 
 from __future__ import annotations
 

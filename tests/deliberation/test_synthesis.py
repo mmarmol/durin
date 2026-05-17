@@ -8,18 +8,18 @@ class TestRenderForInjection:
     def test_renders_all_perspectives(self):
         result = DeliberationResult(
             perspectives=(
-                Perspective(role="critico", content="Risk A"),
-                Perspective(role="explorador", content="Alt B"),
-                Perspective(role="pragmatico", content="Path C"),
+                Perspective(role="critic", content="Risk A"),
+                Perspective(role="explorer", content="Alt B"),
+                Perspective(role="pragmatic", content="Path C"),
             ),
             synthesis="Do C with caution from A.",
         )
         rendered = render_for_injection(result)
-        assert "[Deliberación pre-análisis]" in rendered
-        assert "Riesgos identificados: Risk A" in rendered
-        assert "Alternativa considerada: Alt B" in rendered
-        assert "Enfoque directo: Path C" in rendered
-        assert "Síntesis: Do C with caution from A." in rendered
+        assert "[Pre-analysis deliberation]" in rendered
+        assert "Risks identified: Risk A" in rendered
+        assert "Alternative considered: Alt B" in rendered
+        assert "Direct approach: Path C" in rendered
+        assert "Synthesis: Do C with caution from A." in rendered
 
     def test_unknown_role_uses_capitalized(self):
         result = DeliberationResult(
@@ -31,8 +31,8 @@ class TestRenderForInjection:
 
     def test_empty_synthesis_omitted(self):
         result = DeliberationResult(
-            perspectives=(Perspective(role="critico", content="Issue"),),
+            perspectives=(Perspective(role="critic", content="Issue"),),
             synthesis="",
         )
         rendered = render_for_injection(result)
-        assert "Síntesis" not in rendered
+        assert "Synthesis" not in rendered

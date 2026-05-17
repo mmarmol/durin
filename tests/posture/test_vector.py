@@ -10,57 +10,57 @@ from durin.posture.vector import AxisName, AxisState, PostureVector
 
 class TestAxisState:
     def test_valid_construction(self):
-        state = AxisState(media=0.5, varianza=0.15, fuerza_retorno=0.3, valor_actual=0.6)
-        assert state.media == 0.5
-        assert state.valor_actual == 0.6
+        state = AxisState(mean=0.5, variance=0.15, return_force=0.3, current_value=0.6)
+        assert state.mean == 0.5
+        assert state.current_value == 0.6
 
     def test_rejects_media_above_one(self):
         with pytest.raises(ValidationError):
-            AxisState(media=1.1, varianza=0.15, fuerza_retorno=0.3, valor_actual=0.5)
+            AxisState(mean=1.1, variance=0.15, return_force=0.3, current_value=0.5)
 
     def test_rejects_negative_media(self):
         with pytest.raises(ValidationError):
-            AxisState(media=-0.1, varianza=0.15, fuerza_retorno=0.3, valor_actual=0.5)
+            AxisState(mean=-0.1, variance=0.15, return_force=0.3, current_value=0.5)
 
-    def test_rejects_zero_varianza(self):
+    def test_rejects_zero_variance(self):
         with pytest.raises(ValidationError):
-            AxisState(media=0.5, varianza=0.0, fuerza_retorno=0.3, valor_actual=0.5)
+            AxisState(mean=0.5, variance=0.0, return_force=0.3, current_value=0.5)
 
-    def test_rejects_varianza_above_half(self):
+    def test_rejects_variance_above_half(self):
         with pytest.raises(ValidationError):
-            AxisState(media=0.5, varianza=0.51, fuerza_retorno=0.3, valor_actual=0.5)
+            AxisState(mean=0.5, variance=0.51, return_force=0.3, current_value=0.5)
 
-    def test_rejects_negative_valor_actual(self):
+    def test_rejects_negative_current_value(self):
         with pytest.raises(ValidationError):
-            AxisState(media=0.5, varianza=0.15, fuerza_retorno=0.3, valor_actual=-0.01)
+            AxisState(mean=0.5, variance=0.15, return_force=0.3, current_value=-0.01)
 
-    def test_rejects_valor_actual_above_one(self):
+    def test_rejects_current_value_above_one(self):
         with pytest.raises(ValidationError):
-            AxisState(media=0.5, varianza=0.15, fuerza_retorno=0.3, valor_actual=1.01)
+            AxisState(mean=0.5, variance=0.15, return_force=0.3, current_value=1.01)
 
-    def test_allows_zero_fuerza_retorno(self):
-        state = AxisState(media=0.5, varianza=0.15, fuerza_retorno=0.0, valor_actual=0.5)
-        assert state.fuerza_retorno == 0.0
+    def test_allows_zero_return_force(self):
+        state = AxisState(mean=0.5, variance=0.15, return_force=0.0, current_value=0.5)
+        assert state.return_force == 0.0
 
     def test_is_immutable(self):
-        state = AxisState(media=0.5, varianza=0.15, fuerza_retorno=0.3, valor_actual=0.5)
+        state = AxisState(mean=0.5, variance=0.15, return_force=0.3, current_value=0.5)
         with pytest.raises(ValidationError):
-            state.valor_actual = 0.9  # type: ignore[misc]
+            state.current_value = 0.9  # type: ignore[misc]
 
     def test_boundary_values_accepted(self):
-        AxisState(media=0.0, varianza=0.01, fuerza_retorno=0.0, valor_actual=0.0)
-        AxisState(media=1.0, varianza=0.5, fuerza_retorno=1.0, valor_actual=1.0)
+        AxisState(mean=0.0, variance=0.01, return_force=0.0, current_value=0.0)
+        AxisState(mean=1.0, variance=0.5, return_force=1.0, current_value=1.0)
 
 
 class TestAxisName:
     def test_all_five_axes_exist(self):
         names = set(AxisName)
         assert len(names) == 5
-        assert AxisName.CAUTELA in names
-        assert AxisName.EXPLORACION in names
-        assert AxisName.PROFUNDIDAD in names
-        assert AxisName.DISCIPLINA in names
-        assert AxisName.CONFORMIDAD in names
+        assert AxisName.CAUTION in names
+        assert AxisName.EXPLORATION in names
+        assert AxisName.DEPTH in names
+        assert AxisName.DISCIPLINE in names
+        assert AxisName.CONFORMITY in names
 
     def test_values_are_lowercase_strings(self):
         for name in AxisName:
@@ -75,41 +75,41 @@ class TestPostureVector:
 
     def test_default_values_match_spec(self):
         v = PostureVector.default()
-        assert v.axes[AxisName.CAUTELA].media == 0.6
-        assert v.axes[AxisName.CAUTELA].varianza == 0.15
-        assert v.axes[AxisName.CAUTELA].fuerza_retorno == 0.3
-        assert v.axes[AxisName.EXPLORACION].media == 0.4
-        assert v.axes[AxisName.EXPLORACION].varianza == 0.20
-        assert v.axes[AxisName.PROFUNDIDAD].fuerza_retorno == 0.5
-        assert v.axes[AxisName.CONFORMIDAD].media == 0.7
+        assert v.axes[AxisName.CAUTION].mean == 0.6
+        assert v.axes[AxisName.CAUTION].variance == 0.15
+        assert v.axes[AxisName.CAUTION].return_force == 0.3
+        assert v.axes[AxisName.EXPLORATION].mean == 0.4
+        assert v.axes[AxisName.EXPLORATION].variance == 0.20
+        assert v.axes[AxisName.DEPTH].return_force == 0.5
+        assert v.axes[AxisName.CONFORMITY].mean == 0.7
 
-    def test_default_valor_actual_equals_media(self):
+    def test_default_current_value_equals_media(self):
         v = PostureVector.default()
         for state in v.axes.values():
-            assert state.valor_actual == state.media
+            assert state.current_value == state.mean
 
     def test_snapshot_returns_current_values(self):
         v = PostureVector.default()
         snap = v.snapshot()
-        assert snap[AxisName.CAUTELA] == 0.6
-        assert snap[AxisName.EXPLORACION] == 0.4
+        assert snap[AxisName.CAUTION] == 0.6
+        assert snap[AxisName.EXPLORATION] == 0.4
 
     def test_with_update_returns_new_instance(self):
         v = PostureVector.default()
-        new_state = AxisState(media=0.6, varianza=0.15, fuerza_retorno=0.3, valor_actual=0.9)
-        v2 = v.with_update({AxisName.CAUTELA: new_state})
+        new_state = AxisState(mean=0.6, variance=0.15, return_force=0.3, current_value=0.9)
+        v2 = v.with_update({AxisName.CAUTION: new_state})
 
         assert v2 is not v
-        assert v2.axes[AxisName.CAUTELA].valor_actual == 0.9
-        assert v.axes[AxisName.CAUTELA].valor_actual == 0.6  # original unchanged
+        assert v2.axes[AxisName.CAUTION].current_value == 0.9
+        assert v.axes[AxisName.CAUTION].current_value == 0.6  # original unchanged
 
     def test_with_update_preserves_other_axes(self):
         v = PostureVector.default()
-        new_state = AxisState(media=0.6, varianza=0.15, fuerza_retorno=0.3, valor_actual=0.9)
-        v2 = v.with_update({AxisName.CAUTELA: new_state})
+        new_state = AxisState(mean=0.6, variance=0.15, return_force=0.3, current_value=0.9)
+        v2 = v.with_update({AxisName.CAUTION: new_state})
 
-        assert v2.axes[AxisName.EXPLORACION] == v.axes[AxisName.EXPLORACION]
-        assert v2.axes[AxisName.PROFUNDIDAD] == v.axes[AxisName.PROFUNDIDAD]
+        assert v2.axes[AxisName.EXPLORATION] == v.axes[AxisName.EXPLORATION]
+        assert v2.axes[AxisName.DEPTH] == v.axes[AxisName.DEPTH]
 
     def test_is_immutable(self):
         v = PostureVector.default()

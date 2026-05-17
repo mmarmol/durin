@@ -77,10 +77,10 @@ class DreamConfig(Base):
 class AxisConfig(Base):
     """Per-axis posture configuration."""
 
-    media: float = Field(ge=0.0, le=1.0)
-    varianza: float = Field(gt=0.0, le=0.5)
-    fuerza_retorno: float = Field(gt=0.0, le=1.0)
-    valor_actual: float | None = Field(default=None, ge=0.0, le=1.0)
+    mean: float = Field(ge=0.0, le=1.0)
+    variance: float = Field(gt=0.0, le=0.5)
+    return_force: float = Field(gt=0.0, le=1.0)
+    current_value: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 def _default_axes() -> dict[str, AxisConfig]:
@@ -89,9 +89,9 @@ def _default_axes() -> dict[str, AxisConfig]:
     defaults = PostureVector.default()
     return {
         name.value: AxisConfig(
-            media=defaults.axes[name].media,
-            varianza=defaults.axes[name].varianza,
-            fuerza_retorno=defaults.axes[name].fuerza_retorno,
+            mean=defaults.axes[name].mean,
+            variance=defaults.axes[name].variance,
+            return_force=defaults.axes[name].return_force,
         )
         for name in AxisName
     }

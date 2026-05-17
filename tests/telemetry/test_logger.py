@@ -63,23 +63,23 @@ class TestTelemetryLogger:
 
     def test_log_posture_initial(self, log_path: Path):
         tl = TelemetryLogger(log_path)
-        tl.log_posture_initial({"cautela": 0.6, "exploracion": 0.4})
+        tl.log_posture_initial({"caution": 0.6, "exploration": 0.4})
 
         entry = json.loads(log_path.read_text().strip())
         assert entry["type"] == "posture.initial"
-        assert entry["data"]["axes"]["cautela"] == 0.6
+        assert entry["data"]["axes"]["caution"] == 0.6
 
     def test_log_posture_change(self, log_path: Path):
         tl = TelemetryLogger(log_path)
         tl.log_posture_change(
-            axes={"cautela": 0.65},
-            deltas={"cautela": 0.05},
+            axes={"caution": 0.65},
+            deltas={"caution": 0.05},
             events=["step_failed"],
         )
 
         entry = json.loads(log_path.read_text().strip())
         assert entry["type"] == "posture.change"
-        assert entry["data"]["deltas"]["cautela"] == 0.05
+        assert entry["data"]["deltas"]["caution"] == 0.05
         assert "step_failed" in entry["data"]["stimulus_events"]
 
     def test_log_deliberation_start(self, log_path: Path):
@@ -87,7 +87,7 @@ class TestTelemetryLogger:
         tl.log_deliberation_start(
             trigger="planning_moment",
             goal_summary="implement auth",
-            posture_snapshot={"cautela": 0.6},
+            posture_snapshot={"caution": 0.6},
         )
 
         entry = json.loads(log_path.read_text().strip())
@@ -97,21 +97,21 @@ class TestTelemetryLogger:
     def test_log_deliberation_result(self, log_path: Path):
         tl = TelemetryLogger(log_path)
         tl.log_deliberation_result(
-            winner_role="pragmatico",
+            winner_role="pragmatic",
             winner_score=0.75,
             threshold=0.55,
             rounds_used=1,
             under_doubt=False,
             all_scores=[
-                {"role": "pragmatico", "score": 0.75},
-                {"role": "explorador", "score": 0.6},
+                {"role": "pragmatic", "score": 0.75},
+                {"role": "explorer", "score": 0.6},
             ],
             duration_ms=5432.1,
         )
 
         entry = json.loads(log_path.read_text().strip())
         assert entry["type"] == "deliberation.result"
-        assert entry["data"]["winner"] == "pragmatico"
+        assert entry["data"]["winner"] == "pragmatic"
         assert entry["data"]["duration_ms"] == 5432.1
         assert len(entry["data"]["all_scores"]) == 2
 

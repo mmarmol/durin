@@ -45,22 +45,22 @@ class TestFullLifecycle:
         hook = PostureHook(vector)
 
         initial_phrase = hook.current_phrase
-        initial_cautela = hook.current_vector.axes[AxisName.CAUTELA].valor_actual
+        initial_cautela = hook.current_vector.axes[AxisName.CAUTION].current_value
 
         for i in range(5):
             ctx = _make_context(iteration=i, error="tool execution failed")
             await hook.after_iteration(ctx)
 
-        assert hook.current_vector.axes[AxisName.CAUTELA].valor_actual > initial_cautela
+        assert hook.current_vector.axes[AxisName.CAUTION].current_value > initial_cautela
         final_phrase = hook.current_phrase
-        assert "reversibilidad" in final_phrase
+        assert "reversibility" in final_phrase.lower()
 
     @pytest.mark.asyncio
     async def test_successes_decrease_cautela(self):
         axes = {}
         for name in AxisName:
             default_state = PostureVector.default().axes[name]
-            axes[name] = default_state.model_copy(update={"valor_actual": 0.8})
+            axes[name] = default_state.model_copy(update={"current_value": 0.8})
         vector = PostureVector(axes=axes)
         hook = PostureHook(vector)
 
@@ -72,7 +72,7 @@ class TestFullLifecycle:
             )
             await hook.after_iteration(ctx)
 
-        assert hook.current_vector.axes[AxisName.CAUTELA].valor_actual < 0.8
+        assert hook.current_vector.axes[AxisName.CAUTION].current_value < 0.8
 
     @pytest.mark.asyncio
     async def test_persistence_survives_session_restart(self):
@@ -92,8 +92,8 @@ class TestFullLifecycle:
 
         assert restored is not None
         for name in AxisName:
-            assert restored.axes[name].valor_actual == pytest.approx(
-                hook.current_vector.axes[name].valor_actual,
+            assert restored.axes[name].current_value == pytest.approx(
+                hook.current_vector.axes[name].current_value,
             )
 
     @pytest.mark.asyncio
@@ -114,9 +114,9 @@ class TestFullLifecycle:
 
         assert restored is not None
         for name in AxisName:
-            before = hook.current_vector.axes[name].valor_actual
-            after = restored.axes[name].valor_actual
-            media = restored.axes[name].media
+            before = hook.current_vector.axes[name].current_value
+            after = restored.axes[name].current_value
+            media = restored.axes[name].mean
             if abs(before - media) > 0.01:
                 assert abs(after - media) < abs(before - media)
 
@@ -129,25 +129,25 @@ class TestFullLifecycle:
         config = PostureConfig(
             enabled=True,
             axes={
-                "cautela": AxisConfig(media=0.7, varianza=0.2, fuerza_retorno=0.4),
-                "exploracion": AxisConfig(media=0.3, varianza=0.1, fuerza_retorno=0.5),
-                "profundidad": AxisConfig(media=0.5, varianza=0.15, fuerza_retorno=0.3),
-                "disciplina": AxisConfig(media=0.5, varianza=0.15, fuerza_retorno=0.3),
-                "conformidad": AxisConfig(media=0.6, varianza=0.15, fuerza_retorno=0.3),
+                "caution": AxisConfig(mean=0.7, variance=0.2, return_force=0.4),
+                "exploration": AxisConfig(mean=0.3, variance=0.1, return_force=0.5),
+                "depth": AxisConfig(mean=0.5, variance=0.15, return_force=0.3),
+                "discipline": AxisConfig(mean=0.5, variance=0.15, return_force=0.3),
+                "conformity": AxisConfig(mean=0.6, variance=0.15, return_force=0.3),
             },
         )
         axes = {}
         for name in AxisName:
             ac = config.axes[name.value]
             axes[name] = AxisState(
-                media=ac.media,
-                varianza=ac.varianza,
-                fuerza_retorno=ac.fuerza_retorno,
-                valor_actual=ac.media,
+                mean=ac.mean,
+                variance=ac.variance,
+                return_force=ac.return_force,
+                current_value=ac.mean,
             )
         vector = PostureVector(axes=axes)
-        assert vector.axes[AxisName.CAUTELA].media == 0.7
-        assert vector.axes[AxisName.EXPLORACION].media == 0.3
+        assert vector.axes[AxisName.CAUTION].mean == 0.7
+        assert vector.axes[AxisName.EXPLORATION].mean == 0.3
 
     @pytest.mark.asyncio
     async def test_composite_hook_with_posture_multiple_iterations(self):
@@ -166,8 +166,8 @@ class TestFullLifecycle:
             )
             await composite.after_iteration(ctx)
 
-        cautela_default = PostureVector.default().axes[AxisName.CAUTELA].valor_actual
-        assert hook.current_vector.axes[AxisName.CAUTELA].valor_actual != cautela_default
+        cautela_default = PostureVector.default().axes[AxisName.CAUTION].current_value
+        assert hook.current_vector.axes[AxisName.CAUTION].current_value != cautela_default
 
     @pytest.mark.asyncio
     async def test_phrase_changes_with_vector_evolution(self):
@@ -188,7 +188,7 @@ class TestFullLifecycle:
         axes = {}
         for name in AxisName:
             axes[name] = AxisState(
-                media=0.5, varianza=0.15, fuerza_retorno=0.3, valor_actual=0.5,
+                mean=0.5, variance=0.15, return_force=0.3, current_value=0.5,
             )
         vector = PostureVector(axes=axes)
         assert generate_posture_phrase(vector) == ""

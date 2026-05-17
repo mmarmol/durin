@@ -53,7 +53,7 @@ class ContextBuilder:
             parts.append(f"# Memory\n\n{memory}")
 
         if posture_phrase:
-            parts.append(f"# Postura\n\n{posture_phrase}")
+            parts.append(f"# Posture\n\n{posture_phrase}")
 
         always_skills = self.skills.get_always_skills()
         if always_skills:

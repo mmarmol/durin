@@ -101,7 +101,7 @@ async def test_message_without_media_backward_compatible() -> None:
     call = channel._handle_message.call_args
     assert call.kwargs["chat_id"] == "abc123"
     assert call.kwargs["content"] == "hello"
-    # When no media, we pass ``media=None`` so downstream treats it as absent.
+    # When no media, we pass ``mean=None`` so downstream treats it as absent.
     assert call.kwargs["media"] is None
 
 

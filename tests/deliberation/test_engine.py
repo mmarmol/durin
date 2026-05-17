@@ -26,16 +26,16 @@ def _mock_provider(content: str) -> AsyncMock:
 
 
 _WELL_FORMED = """\
-[CRITICO]
+[CRITIC]
 output_field = x rebinds the local variable, doesn't write to the array.
 
-[EXPLORADOR]
+[EXPLORER]
 Use np.copyto() for explicit memory writes without rebinding.
 
-[PRAGMATICO]
+[PRAGMATIC]
 Use output_field[...] = x to write through the view.
 
-[SINTESIS]
+[SYNTHESIS]
 The fix must use in-place assignment via [...] or copyto.
 """
 
@@ -44,40 +44,40 @@ class TestParseResponse:
     def test_parses_all_sections(self):
         result = DeliberationEngine._parse_response(_WELL_FORMED)
         assert len(result.perspectives) == 3
-        assert result.perspectives[0].role == "critico"
-        assert result.perspectives[1].role == "explorador"
-        assert result.perspectives[2].role == "pragmatico"
+        assert result.perspectives[0].role == "critic"
+        assert result.perspectives[1].role == "explorer"
+        assert result.perspectives[2].role == "pragmatic"
         assert "in-place" in result.synthesis
 
     def test_fallback_on_unstructured(self):
         result = DeliberationEngine._parse_response("Just do the obvious thing.")
         assert len(result.perspectives) == 1
-        assert result.perspectives[0].role == "pragmatico"
+        assert result.perspectives[0].role == "pragmatic"
         assert result.synthesis == "Just do the obvious thing."
 
     def test_missing_synthesis_uses_last_perspective(self):
-        text = "[CRITICO]\nRisk A.\n\n[EXPLORADOR]\nAlt B.\n\n[PRAGMATICO]\nDo C."
+        text = "[CRITIC]\nRisk A.\n\n[EXPLORER]\nAlt B.\n\n[PRAGMATIC]\nDo C."
         result = DeliberationEngine._parse_response(text)
         assert len(result.perspectives) == 3
         assert result.synthesis == "Do C."
 
     def test_partial_sections(self):
-        text = "[CRITICO]\nOnly risk here.\n\n[SINTESIS]\nJust this."
+        text = "[CRITIC]\nOnly risk here.\n\n[SYNTHESIS]\nJust this."
         result = DeliberationEngine._parse_response(text)
         assert len(result.perspectives) == 1
-        assert result.perspectives[0].role == "critico"
+        assert result.perspectives[0].role == "critic"
         assert result.synthesis == "Just this."
 
 
 class TestExtractSections:
     def test_basic(self):
-        sections = _extract_sections("[CRITICO]\nA\n[EXPLORADOR]\nB")
-        assert sections["critico"] == "A"
-        assert sections["explorador"] == "B"
+        sections = _extract_sections("[CRITIC]\nA\n[EXPLORER]\nB")
+        assert sections["critic"] == "A"
+        assert sections["explorer"] == "B"
 
     def test_case_insensitive(self):
-        sections = _extract_sections("[critico]\ntest")
-        assert "critico" in sections
+        sections = _extract_sections("[critic]\ntest")
+        assert "critic" in sections
 
     def test_empty_text(self):
         assert _extract_sections("") == {}
@@ -124,7 +124,7 @@ class TestDeliberate:
         await engine.deliberate(ctx)
         call_args = provider.chat.call_args
         user_msg = call_args.kwargs["messages"][1]["content"]
-        assert "INTENTO PREVIO FALLIDO" in user_msg
+        assert "PREVIOUS FAILED ATTEMPT" in user_msg
         assert "AttributeError" in user_msg
 
     @pytest.mark.asyncio

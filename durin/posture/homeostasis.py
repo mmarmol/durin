@@ -4,25 +4,25 @@ from __future__ import annotations
 
 from durin.posture.vector import AxisName, AxisState, PostureVector
 
-_REFERENCE_VARIANZA = 0.15
+_REFERENCE_VARIANCE = 0.15
 
 
 def apply_return_to_mean(state: AxisState) -> AxisState:
-    new_valor = state.valor_actual + state.fuerza_retorno * (state.media - state.valor_actual)
-    return state.model_copy(update={"valor_actual": new_valor})
+    new_value = state.current_value + state.return_force * (state.mean - state.current_value)
+    return state.model_copy(update={"current_value": new_value})
 
 
 def apply_stimulus(state: AxisState, delta: float) -> AxisState:
-    normalized = delta * (state.varianza / _REFERENCE_VARIANZA)
-    new_valor = state.valor_actual + normalized
-    return state.model_copy(update={"valor_actual": new_valor})
+    normalized = delta * (state.variance / _REFERENCE_VARIANCE)
+    new_value = state.current_value + normalized
+    return state.model_copy(update={"current_value": new_value})
 
 
 def apply_clamp(state: AxisState) -> AxisState:
-    lower = max(0.0, state.media - 2 * state.varianza)
-    upper = min(1.0, state.media + 2 * state.varianza)
-    clamped = max(lower, min(upper, state.valor_actual))
-    return state.model_copy(update={"valor_actual": clamped})
+    lower = max(0.0, state.mean - 2 * state.variance)
+    upper = min(1.0, state.mean + 2 * state.variance)
+    clamped = max(lower, min(upper, state.current_value))
+    return state.model_copy(update={"current_value": clamped})
 
 
 def update_axis(state: AxisState, delta: float) -> AxisState:

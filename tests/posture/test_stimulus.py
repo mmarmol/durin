@@ -33,10 +33,10 @@ class TestStimulusTable:
     def test_resolve_event_with_multiple_axis_effects(self):
         table = StimulusTable.default()
         deltas = table.resolve({StimulusEvent.STEP_FAILED})
-        assert AxisName.CAUTELA in deltas
-        assert AxisName.PROFUNDIDAD in deltas
-        assert deltas[AxisName.CAUTELA] == 0.10
-        assert deltas[AxisName.PROFUNDIDAD] == 0.05
+        assert AxisName.CAUTION in deltas
+        assert AxisName.DEPTH in deltas
+        assert deltas[AxisName.CAUTION] == 0.10
+        assert deltas[AxisName.DEPTH] == 0.05
 
     def test_resolve_multiple_events_sums_same_axis(self):
         table = StimulusTable.default()
@@ -44,7 +44,7 @@ class TestStimulusTable:
             StimulusEvent.STEP_FAILED,
             StimulusEvent.CRITICAL_ACTION,
         })
-        assert deltas[AxisName.CAUTELA] == 0.10 + 0.10
+        assert deltas[AxisName.CAUTION] == 0.10 + 0.10
 
     def test_resolve_empty_events_returns_empty(self):
         table = StimulusTable.default()
@@ -53,30 +53,30 @@ class TestStimulusTable:
 
     def test_resolve_unknown_event_not_in_table(self):
         table = StimulusTable([
-            StimulusRule(StimulusEvent.STEP_FAILED, AxisName.CAUTELA, +0.10),
+            StimulusRule(StimulusEvent.STEP_FAILED, AxisName.CAUTION, +0.10),
         ])
         deltas = table.resolve({StimulusEvent.STEP_SUCCEEDED})
         assert deltas == {}
 
     def test_with_rules_extends_table(self):
         table = StimulusTable.default()
-        extra = [StimulusRule(StimulusEvent.STEP_FAILED, AxisName.DISCIPLINA, +0.05)]
+        extra = [StimulusRule(StimulusEvent.STEP_FAILED, AxisName.DISCIPLINE, +0.05)]
         extended = table.with_rules(extra)
 
         assert len(extended.rules) == 29
         deltas = extended.resolve({StimulusEvent.STEP_FAILED})
-        assert AxisName.DISCIPLINA in deltas
+        assert AxisName.DISCIPLINE in deltas
 
     def test_with_rules_does_not_modify_original(self):
         table = StimulusTable.default()
-        table.with_rules([StimulusRule(StimulusEvent.STEP_FAILED, AxisName.DISCIPLINA, +0.05)])
+        table.with_rules([StimulusRule(StimulusEvent.STEP_FAILED, AxisName.DISCIPLINE, +0.05)])
         assert len(table.rules) == 28
 
     def test_consecutive_failures_affects_cautela_and_conformidad(self):
         table = StimulusTable.default()
         deltas = table.resolve({StimulusEvent.CONSECUTIVE_FAILURES_3})
-        assert deltas[AxisName.CAUTELA] == 0.15
-        assert deltas[AxisName.CONFORMIDAD] == -0.10
+        assert deltas[AxisName.CAUTION] == 0.15
+        assert deltas[AxisName.CONFORMITY] == -0.10
 
     def test_delta_signs_match_spec(self):
         table = StimulusTable.default()

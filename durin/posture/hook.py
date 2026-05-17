@@ -18,8 +18,7 @@ if TYPE_CHECKING:
 
 _PROTOCOL_MARKERS: frozenset[str] = frozenset({
     "## steps", "## checklist", "## protocol", "## procedure",
-    "## procedimiento", "## pasos", "paso 1", "step 1",
-    "## compliance", "## normativa",
+    "step 1", "## compliance",
 })
 
 
@@ -234,15 +233,15 @@ class PostureHook(AgentHook):
         } if deltas else {}
 
     def _apply_protocol_bias(self, context: AgentHookContext) -> dict[str, float]:
-        """Detect protocol markers at session start and apply disciplina bias."""
+        """Detect protocol markers at session start and apply discipline bias."""
         if self._protocol_detected:
             return {}
         if not self._has_protocol_markers(context):
             return {}
         self._protocol_detected = True
-        deltas = {AxisName.DISCIPLINA: 0.10}
+        deltas = {AxisName.DISCIPLINE: 0.10}
         self._vector = update_vector(self._vector, deltas)
-        return {"disciplina": 0.10}
+        return {"discipline": 0.10}
 
     @staticmethod
     def _extract_goal_text(context: AgentHookContext) -> str:

@@ -10,20 +10,20 @@ def posture_modulation(posture: dict[str, float]) -> str:
 
     parts: list[str] = []
 
-    cautela = posture.get("cautela", 0.6)
-    if cautela > 0.7:
-        parts.append("Prioridad alta en el CRITICO: sé exhaustivo con riesgos y edge cases.")
-    elif cautela < 0.4:
-        parts.append("El CRITICO puede ser breve si no hay riesgos obvios.")
+    caution = posture.get("caution", 0.6)
+    if caution > 0.7:
+        parts.append("High priority on the CRITIC: be exhaustive with risks and edge cases.")
+    elif caution < 0.4:
+        parts.append("The CRITIC can be brief if there are no obvious risks.")
 
-    exploracion = posture.get("exploracion", 0.4)
-    if exploracion > 0.6:
-        parts.append("El EXPLORADOR puede proponer approaches radicalmente diferentes.")
+    exploration = posture.get("exploration", 0.4)
+    if exploration > 0.6:
+        parts.append("The EXPLORER can propose radically different approaches.")
 
-    profundidad = posture.get("profundidad", 0.5)
-    if profundidad > 0.7:
-        parts.append("Cada perspectiva debe ser detallada (3-5 oraciones).")
+    depth = posture.get("depth", 0.5)
+    if depth > 0.7:
+        parts.append("Each perspective should be detailed (3-5 sentences).")
     else:
-        parts.append("Cada perspectiva debe ser concisa (1-3 oraciones).")
+        parts.append("Each perspective should be concise (1-3 sentences).")
 
     return "\n".join(parts)

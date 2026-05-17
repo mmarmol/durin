@@ -181,19 +181,19 @@ def _build_config(
     if posture_override:
         axes = {}
         axis_defaults = {
-            "cautela": {"media": 0.6, "varianza": 0.15, "fuerza_retorno": 0.3},
-            "exploracion": {"media": 0.4, "varianza": 0.20, "fuerza_retorno": 0.4},
-            "profundidad": {"media": 0.5, "varianza": 0.20, "fuerza_retorno": 0.5},
-            "disciplina": {"media": 0.5, "varianza": 0.15, "fuerza_retorno": 0.2},
-            "conformidad": {"media": 0.7, "varianza": 0.15, "fuerza_retorno": 0.3},
+            "caution": {"mean": 0.6, "variance": 0.15, "return_force": 0.3},
+            "exploration": {"mean": 0.4, "variance": 0.20, "return_force": 0.4},
+            "depth": {"mean": 0.5, "variance": 0.20, "return_force": 0.5},
+            "discipline": {"mean": 0.5, "variance": 0.15, "return_force": 0.2},
+            "conformity": {"mean": 0.7, "variance": 0.15, "return_force": 0.3},
         }
         for axis_name, defaults in axis_defaults.items():
-            val = posture_override.get(axis_name, defaults["media"])
+            val = posture_override.get(axis_name, defaults["mean"])
             axes[axis_name] = {
-                "media": defaults["media"],
-                "varianza": defaults["varianza"],
-                "fuerza_retorno": defaults["fuerza_retorno"],
-                "valor_actual": val,
+                "mean": defaults["mean"],
+                "variance": defaults["variance"],
+                "return_force": defaults["return_force"],
+                "current_value": val,
             }
         posture_cfg["axes"] = axes
 

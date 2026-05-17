@@ -17,10 +17,10 @@ def serialize(vector: PostureVector) -> dict[str, Any]:
         "timestamp": time.time(),
         "axes": {
             name.value: {
-                "media": state.media,
-                "varianza": state.varianza,
-                "fuerza_retorno": state.fuerza_retorno,
-                "valor_actual": state.valor_actual,
+                "mean": state.mean,
+                "variance": state.variance,
+                "return_force": state.return_force,
+                "current_value": state.current_value,
             }
             for name, state in vector.axes.items()
         },
@@ -32,10 +32,10 @@ def deserialize(data: dict[str, Any]) -> PostureVector:
     for name in AxisName:
         axis_data = data["axes"][name.value]
         axes[name] = AxisState(
-            media=axis_data["media"],
-            varianza=axis_data["varianza"],
-            fuerza_retorno=axis_data["fuerza_retorno"],
-            valor_actual=axis_data["valor_actual"],
+            mean=axis_data["mean"],
+            variance=axis_data["variance"],
+            return_force=axis_data["return_force"],
+            current_value=axis_data["current_value"],
         )
     return PostureVector(axes=axes)
 
@@ -50,8 +50,8 @@ def apply_time_decay(
     factor = 1.0 - math.exp(-elapsed_seconds / (tau_hours * 3600.0))
     updates = {}
     for name, state in vector.axes.items():
-        new_valor = state.valor_actual + factor * (state.media - state.valor_actual)
-        updates[name] = state.model_copy(update={"valor_actual": new_valor})
+        new_value = state.current_value + factor * (state.mean - state.current_value)
+        updates[name] = state.model_copy(update={"current_value": new_value})
     return vector.with_update(updates)
 
 
