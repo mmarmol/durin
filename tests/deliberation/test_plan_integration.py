@@ -53,7 +53,7 @@ class TestPlanHookDeliberation:
     @pytest.mark.asyncio
     async def test_deliberation_fires_on_investigate_to_plan(self, delib_service):
         hook = PlanHook(deliberation=delib_service)
-        hook.set_tier(ExecutionTier.FULL_PLAN)
+        hook.set_tier(ExecutionTier.PLAN)
         assert hook.state.current_phase == Phase.INVESTIGATE
 
         hook.update_plan("add", "Fix the view assignment")
@@ -70,7 +70,7 @@ class TestPlanHookDeliberation:
     @pytest.mark.asyncio
     async def test_no_deliberation_without_service(self):
         hook = PlanHook(deliberation=None)
-        hook.set_tier(ExecutionTier.FULL_PLAN)
+        hook.set_tier(ExecutionTier.PLAN)
         hook.update_plan("add", "Step 1")
 
         ctx = _make_context()
@@ -82,7 +82,7 @@ class TestPlanHookDeliberation:
     async def test_deliberation_uses_posture_snapshot(self, delib_service):
         posture_fn = lambda: {"caution": 0.8, "exploration": 0.3}
         hook = PlanHook(deliberation=delib_service, posture_snapshot_fn=posture_fn)
-        hook.set_tier(ExecutionTier.FULL_PLAN)
+        hook.set_tier(ExecutionTier.PLAN)
         hook.update_plan("add", "Step 1")
 
         ctx = _make_context()
@@ -95,7 +95,7 @@ class TestPlanHookDeliberation:
     @pytest.mark.asyncio
     async def test_deliberation_does_not_fire_twice(self, delib_service):
         hook = PlanHook(deliberation=delib_service)
-        hook.set_tier(ExecutionTier.FULL_PLAN)
+        hook.set_tier(ExecutionTier.PLAN)
         hook.update_plan("add", "Step 1")
 
         ctx = _make_context()
@@ -114,7 +114,7 @@ class TestPlanHookDeliberation:
         service = DeliberationService(engine=engine, telemetry=MagicMock())
 
         hook = PlanHook(deliberation=service)
-        hook.set_tier(ExecutionTier.FULL_PLAN)
+        hook.set_tier(ExecutionTier.PLAN)
         hook.update_plan("add", "Step 1")
 
         ctx = _make_context()

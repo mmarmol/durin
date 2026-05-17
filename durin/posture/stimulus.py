@@ -24,8 +24,8 @@ class StimulusEvent(StrEnum):
     VALIDATION_FAILURE = "validation_failure"
     STUCK_NO_PROGRESS = "stuck_no_progress"
     PHASE_TRANSITION = "phase_transition"
-    CONFIRM_PASS = "confirm_pass"
-    CONFIRM_FAIL = "confirm_fail"
+    VERIFY_PASS = "verify_pass"
+    VERIFY_FAIL = "verify_fail"
     CYCLE_RESTART = "cycle_restart"
     PLAN_COMPLEX = "plan_complex"
 
@@ -80,10 +80,10 @@ class StimulusTable:
             StimulusRule(StimulusEvent.STUCK_NO_PROGRESS, AxisName.EXPLORATION, +0.10),
             StimulusRule(StimulusEvent.STUCK_NO_PROGRESS, AxisName.DEPTH, +0.10),
             StimulusRule(StimulusEvent.PHASE_TRANSITION, AxisName.DEPTH, -0.10),
-            StimulusRule(StimulusEvent.CONFIRM_PASS, AxisName.CAUTION, -0.10),
-            StimulusRule(StimulusEvent.CONFIRM_PASS, AxisName.EXPLORATION, -0.05),
-            StimulusRule(StimulusEvent.CONFIRM_FAIL, AxisName.CAUTION, +0.15),
-            StimulusRule(StimulusEvent.CONFIRM_FAIL, AxisName.DEPTH, +0.10),
+            StimulusRule(StimulusEvent.VERIFY_PASS, AxisName.CAUTION, -0.10),
+            StimulusRule(StimulusEvent.VERIFY_PASS, AxisName.EXPLORATION, -0.05),
+            StimulusRule(StimulusEvent.VERIFY_FAIL, AxisName.CAUTION, +0.15),
+            StimulusRule(StimulusEvent.VERIFY_FAIL, AxisName.DEPTH, +0.10),
             StimulusRule(StimulusEvent.CYCLE_RESTART, AxisName.DISCIPLINE, +0.05),
             StimulusRule(StimulusEvent.CYCLE_RESTART, AxisName.EXPLORATION, +0.10),
             StimulusRule(StimulusEvent.PLAN_COMPLEX, AxisName.DEPTH, +0.10),

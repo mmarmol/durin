@@ -1,10 +1,10 @@
-"""Tests for PlanHook — tier enforcement and cycle management."""
+"""Tests for PlanHook — 2-tier execution model with forced verification."""
 
 import pytest
 
 from durin.agent.hook import AgentHookContext
 from durin.plan.hook import PlanHook
-from durin.plan.types import ExecutionTier, Phase, PlanItem
+from durin.plan.types import ExecutionTier, Phase, PlanItem, PHASE_TEMPERATURE
 from durin.providers.base import ToolCallRequest
 
 
@@ -39,10 +39,10 @@ class TestTierSelection:
         assert hook.state.tier == ExecutionTier.DIRECT
         assert hook.tier_is_set is True
 
-    def test_set_tier_full_plan_initializes_cycle(self):
+    def test_set_tier_plan_initializes_cycle(self):
         hook = PlanHook()
-        hook.set_tier(ExecutionTier.FULL_PLAN, "complex refactoring")
-        assert hook.state.tier == ExecutionTier.FULL_PLAN
+        hook.set_tier(ExecutionTier.PLAN, "complex refactoring")
+        assert hook.state.tier == ExecutionTier.PLAN
         assert hook.state.current_phase == Phase.INVESTIGATE
         assert hook.state.cycle_count == 1
 
@@ -56,40 +56,35 @@ class TestDirectTier:
         await hook.before_iteration(ctx)
         assert ctx.injected_messages_count == 0
 
-
-class TestExecuteVerifyTier:
-    @pytest.mark.asyncio
-    async def test_reminder_after_edit(self):
+    def test_can_complete_always_allowed(self):
         hook = PlanHook()
-        hook.set_tier(ExecutionTier.EXECUTE_VERIFY)
-
-        # Simulate edit detected
-        ctx = _make_context(iteration=1, tool_calls=[_tool_call("edit_file")])
-        await hook.after_iteration(ctx)
-
-        # Next iteration should get reminder
-        hook._edit_detected = True  # Carried from after_iteration
-        ctx2 = _make_context(iteration=2)
-        await hook.before_iteration(ctx2)
-        assert ctx2.injected_messages_count == 1
-        system_msgs = [m for m in ctx2.messages if m["role"] == "system"]
-        assert any("verify" in m["content"].lower() for m in system_msgs)
+        hook.set_tier(ExecutionTier.DIRECT)
+        allowed, reason = hook.can_complete()
+        assert allowed is True
 
 
-class TestFullPlanTier:
+class TestPlanTier:
     @pytest.mark.asyncio
     async def test_injects_phase_prompt(self):
         hook = PlanHook()
-        hook.set_tier(ExecutionTier.FULL_PLAN, "multi-step fix")
+        hook.set_tier(ExecutionTier.PLAN, "multi-step fix")
         ctx = _make_context(iteration=1)
         await hook.before_iteration(ctx)
         assert ctx.injected_messages_count == 1
         system_msgs = [m for m in ctx.messages if m["role"] == "system"]
         assert any("INVESTIGATE" in m["content"] for m in system_msgs)
 
+    @pytest.mark.asyncio
+    async def test_sets_temperature_override(self):
+        hook = PlanHook()
+        hook.set_tier(ExecutionTier.PLAN, "fix")
+        ctx = _make_context(iteration=1)
+        await hook.before_iteration(ctx)
+        assert ctx.temperature_override == PHASE_TEMPERATURE[Phase.INVESTIGATE]
+
     def test_update_plan_add(self):
         hook = PlanHook()
-        hook.set_tier(ExecutionTier.FULL_PLAN)
+        hook.set_tier(ExecutionTier.PLAN)
         result = hook.update_plan("add", "Read fitsrec.py")
         assert "Added" in result
         assert len(hook.state.items) == 1
@@ -97,7 +92,7 @@ class TestFullPlanTier:
 
     def test_update_plan_complete(self):
         hook = PlanHook()
-        hook.set_tier(ExecutionTier.FULL_PLAN)
+        hook.set_tier(ExecutionTier.PLAN)
         hook.update_plan("add", "Read file")
         result = hook.update_plan("complete", "Read file")
         assert "Completed" in result
@@ -105,22 +100,22 @@ class TestFullPlanTier:
 
     def test_update_plan_fail(self):
         hook = PlanHook()
-        hook.set_tier(ExecutionTier.FULL_PLAN)
+        hook.set_tier(ExecutionTier.PLAN)
         hook.update_plan("add", "Apply fix")
         result = hook.update_plan("fail", "Apply fix")
         assert "Failed" in result
         assert hook.state.items[0].status == "failed"
 
-    def test_update_plan_not_in_full_plan_mode(self):
+    def test_update_plan_not_in_plan_mode(self):
         hook = PlanHook()
         hook.set_tier(ExecutionTier.DIRECT)
         result = hook.update_plan("add", "something")
-        assert "only available in full_plan" in result
+        assert "only available in plan mode" in result
 
     @pytest.mark.asyncio
     async def test_phase_transition_plan_to_execute(self):
         hook = PlanHook()
-        hook.set_tier(ExecutionTier.FULL_PLAN)
+        hook.set_tier(ExecutionTier.PLAN)
         hook._state.current_phase = Phase.PLAN
         hook.update_plan("add", "Fix the bug")
 
@@ -129,10 +124,22 @@ class TestFullPlanTier:
         assert hook.state.current_phase == Phase.EXECUTE
 
     @pytest.mark.asyncio
-    async def test_confirm_fail_restarts_cycle(self):
+    async def test_phase_transition_execute_to_verify(self):
         hook = PlanHook()
-        hook.set_tier(ExecutionTier.FULL_PLAN)
-        hook._state.current_phase = Phase.CONFIRM
+        hook.set_tier(ExecutionTier.PLAN)
+        hook._state.current_phase = Phase.EXECUTE
+        hook._edit_detected = True
+
+        ctx = _make_context(iteration=3, tool_calls=[_tool_call("exec")])
+        await hook.after_iteration(ctx)
+        assert hook.state.current_phase == Phase.VERIFY
+
+    @pytest.mark.asyncio
+    async def test_verify_fail_restarts_cycle(self):
+        hook = PlanHook()
+        hook.set_tier(ExecutionTier.PLAN)
+        hook._state.current_phase = Phase.VERIFY
+        hook._edit_detected = True
 
         ctx = _make_context(
             iteration=5,
@@ -142,16 +149,109 @@ class TestFullPlanTier:
         await hook.after_iteration(ctx)
         assert hook.state.current_phase == Phase.INVESTIGATE
         assert hook.state.cycle_count == 2
+        assert "verify_fail" in ctx.external_stimulus_events
+
+    @pytest.mark.asyncio
+    async def test_verify_pass_allows_completion(self):
+        hook = PlanHook()
+        hook.set_tier(ExecutionTier.PLAN)
+        hook._state.current_phase = Phase.VERIFY
+        hook._edit_detected = True
+        hook._state.edit_detected = True
+
+        ctx = _make_context(
+            iteration=5,
+            tool_calls=[_tool_call("exec")],
+        )
+        await hook.after_iteration(ctx)
+        assert hook.state.verify_passed is True
+        allowed, _ = hook.can_complete()
+        assert allowed is True
+
+
+class TestForcedVerification:
+    def test_cannot_complete_after_edit_without_verify(self):
+        hook = PlanHook()
+        hook.set_tier(ExecutionTier.PLAN)
+        hook._state.edit_detected = True
+        hook._state.verify_passed = False
+
+        allowed, reason = hook.can_complete()
+        assert allowed is False
+        assert "verify" in reason.lower()
+
+    def test_can_complete_after_successful_verify(self):
+        hook = PlanHook()
+        hook.set_tier(ExecutionTier.PLAN)
+        hook._state.edit_detected = True
+        hook._state.verify_passed = True
+
+        allowed, reason = hook.can_complete()
+        assert allowed is True
+
+    def test_can_complete_if_no_edits_made(self):
+        hook = PlanHook()
+        hook.set_tier(ExecutionTier.PLAN)
+        hook._state.edit_detected = False
+
+        allowed, reason = hook.can_complete()
+        assert allowed is True
+
+
+class TestRetryEvaluation:
+    @pytest.mark.asyncio
+    async def test_injects_self_eval_on_cycle_2(self):
+        hook = PlanHook()
+        hook.set_tier(ExecutionTier.PLAN)
+        hook._state.current_phase = Phase.PLAN
+        hook._state.cycle_count = 2
+        hook._state.last_failure_context = "AssertionError: expected 1 got 2"
+
+        ctx = _make_context(iteration=10)
+        await hook.before_iteration(ctx)
+        system_msgs = [m for m in ctx.messages if m["role"] == "system"]
+        content = system_msgs[0]["content"]
+        assert "FAILED verification" in content
+        assert "AssertionError" in content
+        assert "genuinely DIFFERENT" in content
+
+
+class TestTemperature:
+    @pytest.mark.asyncio
+    async def test_investigate_temperature(self):
+        hook = PlanHook()
+        hook.set_tier(ExecutionTier.PLAN)
+        hook._state.current_phase = Phase.INVESTIGATE
+        ctx = _make_context(iteration=1)
+        await hook.before_iteration(ctx)
+        assert ctx.temperature_override == 0.5
+
+    @pytest.mark.asyncio
+    async def test_execute_temperature(self):
+        hook = PlanHook()
+        hook.set_tier(ExecutionTier.PLAN)
+        hook._state.current_phase = Phase.EXECUTE
+        ctx = _make_context(iteration=3)
+        await hook.before_iteration(ctx)
+        assert ctx.temperature_override == 0.15
+
+    @pytest.mark.asyncio
+    async def test_verify_temperature(self):
+        hook = PlanHook()
+        hook.set_tier(ExecutionTier.PLAN)
+        hook._state.current_phase = Phase.VERIFY
+        ctx = _make_context(iteration=4)
+        await hook.before_iteration(ctx)
+        assert ctx.temperature_override == 0.1
 
 
 class TestPersistence:
     @pytest.mark.asyncio
     async def test_saves_to_disk(self, tmp_path):
         hook = PlanHook(workspace=tmp_path, session_key="test_sess")
-        hook.set_tier(ExecutionTier.FULL_PLAN, "complex task")
+        hook.set_tier(ExecutionTier.PLAN, "complex task")
         hook.update_plan("add", "Step 1")
 
-        # Verify files exist
         plan_dir = tmp_path / "plans" / "test_sess"
         assert (plan_dir / "plan.json").exists()
         assert (plan_dir / "events.jsonl").exists()
@@ -159,10 +259,10 @@ class TestPersistence:
     @pytest.mark.asyncio
     async def test_loads_existing_state(self, tmp_path):
         hook1 = PlanHook(workspace=tmp_path, session_key="resume")
-        hook1.set_tier(ExecutionTier.FULL_PLAN, "task")
+        hook1.set_tier(ExecutionTier.PLAN, "task")
         hook1.update_plan("add", "Step A")
 
         hook2 = PlanHook(workspace=tmp_path, session_key="resume")
-        assert hook2.state.tier == ExecutionTier.FULL_PLAN
+        assert hook2.state.tier == ExecutionTier.PLAN
         assert len(hook2.state.items) == 1
         assert hook2.state.items[0].description == "Step A"

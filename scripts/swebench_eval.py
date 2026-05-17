@@ -154,14 +154,14 @@ def _build_feature_usage(telemetry: list[dict], plan_events: list[dict], tools_b
             phase = ev.get("to_phase") or ev.get("phase")
             if phase:
                 phases_seen.append(phase)
-        elif etype == "confirm_result":
-            confirm_results.append(ev.get("result", "unknown"))
+        elif etype in ("confirm_result", "verify_result"):
+            confirm_results.append(ev.get("outcome", ev.get("result", "unknown")))
         elif etype == "cycle_restart":
             cycle_count += 1
 
     plan_usage = {
         "tier": tier,
-        "cycles": max(cycle_count + 1, 1) if tier == "full_plan" else 0,
+        "cycles": max(cycle_count + 1, 1) if tier == "plan" else 0,
         "phases": phases_seen,
         "phase_transitions": len(phases_seen),
         "confirm_results": confirm_results,
@@ -207,11 +207,11 @@ def _build_feature_usage(telemetry: list[dict], plan_events: list[dict], tools_b
     }
 
     # --- Verification ---
-    has_confirm = any(r in ("pass", "fail") for r in confirm_results)
+    has_verify = any(r in ("pass", "fail") for r in confirm_results)
     verify_caught = "fail" in confirm_results
     verification_usage = {
-        "tier_supports_verify": tier in ("execute_verify", "full_plan"),
-        "confirm_executed": has_confirm,
+        "tier_supports_verify": tier == "plan",
+        "verify_executed": has_verify,
         "caught_issue": verify_caught,
     }
 
@@ -349,7 +349,7 @@ async def _run_instance(
         bot = Durin.from_config(config_path, workspace=workspace, session_key=session_key)
         result = await asyncio.wait_for(
             bot.run(task, session_key=session_key),
-            timeout=600,  # 10 min max per instance
+            timeout=900,  # 15 min max per instance
         )
         tools_used = result.tools_used
         content = result.content

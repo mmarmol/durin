@@ -163,7 +163,7 @@ class AgentDefaults(Base):
     max_tokens: int = 8192
     context_window_tokens: int = 65_536
     context_block_limit: int | None = None
-    temperature: float = 0.1
+    temperature: float = 0.4
     fallback_models: list[FallbackCandidate] = Field(default_factory=list)
     max_tool_iterations: int = 200
     max_concurrent_subagents: int = Field(default=1, ge=1)

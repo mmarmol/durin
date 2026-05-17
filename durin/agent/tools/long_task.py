@@ -203,6 +203,13 @@ class CompleteGoalTool(Tool, _GoalToolsMixin):
         )
 
     async def execute(self, recap: str | None = None, **kwargs: Any) -> str:
+        from durin.agent.tools.plan import get_plan_hook
+        plan_hook = get_plan_hook()
+        if plan_hook is not None:
+            allowed, reason = plan_hook.can_complete()
+            if not allowed:
+                return reason
+
         sess = self._session()
         if sess is None:
             return "Error: complete_goal requires an active chat session."

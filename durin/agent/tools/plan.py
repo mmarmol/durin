@@ -18,6 +18,10 @@ def set_plan_hook(hook: Any) -> None:
     _plan_hook = hook
 
 
+def get_plan_hook() -> Any:
+    return _plan_hook
+
+
 class SetExecutionModeTool(Tool):
     """LLM declares which execution tier to use for the current task."""
 
@@ -39,9 +43,9 @@ class SetExecutionModeTool(Tool):
     def description(self) -> str:
         return (
             "Declare the execution mode for this task. "
-            "Use 'direct' for simple answers/trivial edits, "
-            "'execute_verify' for localized changes that need test verification, "
-            "'full_plan' for complex multi-step tasks requiring investigation, planning, execution, and confirmation."
+            "Use 'direct' for simple answers/trivial edits that don't need verification. "
+            "Use 'plan' for any task that edits code — enforces the "
+            "INVESTIGATE → PLAN → EXECUTE → VERIFY cycle."
         )
 
     @property
@@ -51,7 +55,7 @@ class SetExecutionModeTool(Tool):
             "properties": {
                 "tier": {
                     "type": "string",
-                    "enum": ["direct", "execute_verify", "full_plan"],
+                    "enum": ["direct", "plan"],
                     "description": "Execution tier for this task.",
                 },
                 "reason": {
@@ -92,7 +96,7 @@ class UpdatePlanTool(Tool):
         return (
             "Update the execution plan. Use 'add' to add steps, "
             "'complete' to mark done, 'fail' to mark failed. "
-            "Only available in full_plan mode."
+            "Only available in plan mode."
         )
 
     @property
@@ -116,6 +120,6 @@ class UpdatePlanTool(Tool):
         if not _plan_hook:
             return "Plan system not active."
         from durin.plan.types import ExecutionTier
-        if _plan_hook.state.tier != ExecutionTier.FULL_PLAN:
-            return "update_plan only available in full_plan mode. Call set_execution_mode first."
+        if _plan_hook.state.tier != ExecutionTier.PLAN:
+            return "update_plan only available in plan mode. Call set_execution_mode first."
         return _plan_hook.update_plan(action, item)

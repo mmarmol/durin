@@ -12,7 +12,7 @@ class TestPlanStore:
         store = PlanStore(tmp_path, "sess1")
         state = PlanState(
             goal="fix astropy",
-            tier=ExecutionTier.FULL_PLAN,
+            tier=ExecutionTier.PLAN,
             items=[PlanItem("read file", status="done", added_at_cycle=1, completed_at_cycle=1)],
             current_phase=Phase.EXECUTE,
             cycle_count=2,
@@ -21,7 +21,7 @@ class TestPlanStore:
         loaded = store.load_state()
         assert loaded is not None
         assert loaded.goal == "fix astropy"
-        assert loaded.tier == ExecutionTier.FULL_PLAN
+        assert loaded.tier == ExecutionTier.PLAN
         assert loaded.current_phase == Phase.EXECUTE
         assert loaded.cycle_count == 2
         assert len(loaded.items) == 1
