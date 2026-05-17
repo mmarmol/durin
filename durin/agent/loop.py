@@ -644,13 +644,7 @@ class AgentLoop:
                 return
 
     def _save_verdict_history(self, session: Session) -> None:
-        from durin.deliberation.hook import DeliberationHook
-        from durin.deliberation.persistence import save_verdict_history
-
-        for hook in self._extra_hooks:
-            if isinstance(hook, DeliberationHook):
-                save_verdict_history(session.metadata, hook.history)
-                return
+        pass
 
     def _restore_posture_from_session(self, session: Session) -> None:
         from durin.posture.hook import PostureHook
@@ -664,15 +658,7 @@ class AgentLoop:
                 return
 
     def _restore_verdict_history(self, session: Session) -> None:
-        from durin.deliberation.hook import DeliberationHook
-        from durin.deliberation.persistence import restore_verdict_history
-
-        for hook in self._extra_hooks:
-            if isinstance(hook, DeliberationHook):
-                restored = restore_verdict_history(session.metadata)
-                if restored is not None and len(hook.history) == 0:
-                    hook._history = restored
-                return
+        pass
 
     async def _dispatch_command_inline(
         self,

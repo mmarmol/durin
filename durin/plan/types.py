@@ -43,6 +43,7 @@ class PlanState:
     items: list[PlanItem] = field(default_factory=list)
     current_phase: Phase | None = None
     cycle_count: int = 0
+    last_failure_context: str = ""
 
     @property
     def has_pending_items(self) -> bool:

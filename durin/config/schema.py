@@ -104,46 +104,12 @@ class PostureConfig(Base):
     axes: dict[str, AxisConfig] = Field(default_factory=_default_axes)
 
 
-class GeneratorRoleConfig(Base):
-    """Per-role deliberation generator configuration."""
-
-    model: str = "qwen2.5:7b"
-    temperature: float = 0.7
-    max_tokens: int = 512
-    enabled: bool = True
-
-
-class EvaluatorConfig(Base):
-    """Per-evaluator deliberation configuration."""
-
-    model: str = "qwen2.5:7b"
-    max_tokens: int = 64
-    temperature: float = 0.0
-
-
-def _default_generators() -> dict[str, GeneratorRoleConfig]:
-    return {
-        "pragmatico": GeneratorRoleConfig(temperature=0.3),
-        "explorador": GeneratorRoleConfig(temperature=0.8),
-        "critico": GeneratorRoleConfig(temperature=0.5),
-    }
-
-
-def _default_evaluators() -> dict[str, EvaluatorConfig]:
-    return {
-        "avance": EvaluatorConfig(),
-        "reversibilidad": EvaluatorConfig(),
-    }
-
-
 class DeliberationConfig(Base):
-    """Multi-generator deliberation system configuration."""
+    """Single-call multi-perspective deliberation V3."""
 
     enabled: bool = False
     provider: str = "ollama"
-    max_rounds: int = Field(default=3, ge=1, le=5)
-    generators: dict[str, GeneratorRoleConfig] = Field(default_factory=_default_generators)
-    evaluators: dict[str, EvaluatorConfig] = Field(default_factory=_default_evaluators)
+    model: str = "glm-5.1"
 
 
 class PlanConfig(Base):

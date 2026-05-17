@@ -97,6 +97,26 @@ class TelemetryLogger:
     def log_deliberation_error(self, error: str) -> None:
         self.log("deliberation.error", {"error": error[:500]})
 
+    def log_deliberation_v3(
+        self,
+        trigger: str,
+        cycle: int,
+        model: str,
+        duration_ms: float,
+        posture: dict[str, float],
+        perspectives: dict[str, str],
+        synthesis: str,
+    ) -> None:
+        self.log("deliberation.result", {
+            "trigger": trigger,
+            "cycle": cycle,
+            "model": model,
+            "duration_ms": round(duration_ms, 1),
+            "posture": posture,
+            "perspectives": perspectives,
+            "synthesis": synthesis,
+        })
+
 
 def get_session_logger(
     session_key: str,

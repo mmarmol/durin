@@ -15,10 +15,10 @@ Durin es un fork de [nanobot](vendor/nanobot/) (framework de agente ligero). Her
 
 **Durin agrega** sobre nanobot:
 - Sistema de postura (vector de 5 ejes)
-- Sistema de deliberación (generadores de perspectivas)
+- Sistema de deliberación V3 (single-call multi-perspectiva + merge)
 - Sistema de plan (3 tiers de ejecución + ciclo fijo + bitácora)
 - Telemetría postural
-- Hook factory que wirea postura + deliberación + plan automáticamente
+- Hook factory que wirea postura + plan (con deliberación integrada) automáticamente
 
 ---
 
@@ -33,7 +33,7 @@ Durin es un fork de [nanobot](vendor/nanobot/) (framework de agente ligero). Her
 │  2. Build AgentHookContext(iteration, messages)              │
 │  3. hook.before_iteration(context)                           │
 │     ├── PostureHook: iter 0 → goal_bias + protocol_bias     │
-│     ├── DeliberationHook: iter 0 → run deliberation         │
+│     ├── PlanHook: INVESTIGATE→PLAN triggers deliberation     │
 │     └── PlanHook: inject tier instructions / phase prompt    │
 │  4. LLM request → response                                  │
 │  5. Parse response (tool_calls, content, reasoning)          │
@@ -116,42 +116,69 @@ Durin es un fork de [nanobot](vendor/nanobot/) (framework de agente ligero). Her
 
 ---
 
-## 4. Sistema de Deliberación (V2 actual)
+## 4. Sistema de Deliberación (V3)
+
+Single-call multi-perspective deliberation. No es un hook independiente — es un servicio inyectado en PlanHook.
 
 ### Archivos clave
 | Archivo | Responsabilidad |
 |---|---|
-| `deliberation/hook.py` | `DeliberationHook` — trigger, run, inject |
-| `deliberation/engine.py` | `DeliberationEngine` — genera perspectivas |
-| `deliberation/generator.py` | LLM calls para cada generador (pragmático, explorador, crítico) |
-| `deliberation/synthesis.py` | Formatea las perspectivas para inyección |
-| `deliberation/types.py` | Dataclasses: `Proposal`, `ScoredProposal`, `Verdict`, etc. |
-| `deliberation/modulator.py` | Postura modula cantidad/params de generadores |
-| `deliberation/constants.py` | `CRITICAL_TOOLS` set |
+| `deliberation/engine.py` | `DeliberationEngine` — 1 LLM call con prompt estructurado |
+| `deliberation/service.py` | `DeliberationService` — orquesta engine + telemetría |
+| `deliberation/synthesis.py` | `render_for_injection()` — formatea para contexto del agente |
+| `deliberation/types.py` | `Perspective`, `DeliberationResult`, `DeliberationContext`, `HistoryEntry` |
+| `deliberation/modulator.py` | Postura modula intensidad del prompt por sección |
+| `deliberation/history.py` | Ring buffer de deliberaciones pasadas |
 
-### Flujo V2
+### Flujo V3
 ```
-1. DeliberationHook.before_iteration (solo iter 0)
-2. → engine.deliberate(context)
-3.   → Genera 3 perspectivas en paralelo (pragmático, explorador, crítico)
-4.   → Sin evaluadores, sin scoring real (all 0.5)
-5.   → Pragmático gana por convención
-6. → synthesis.render_synthesis() → texto formateado
-7. → Inyecta como system message antes del último user message
+1. PlanHook detecta transición INVESTIGATE → PLAN (primer update_plan)
+2. → before_iteration: PlanHook._run_deliberation(context)
+3.   → Construye DeliberationContext con investigation findings
+4.   → DeliberationService.deliberate(context)
+5.     → 1 LLM call con ordering forzado: [CRITICO] → [EXPLORADOR] → [PRAGMATICO] → [SINTESIS]
+6.     → _parse_response(): regex split por markers → Perspective tuples + synthesis
+7.   → Logs completo a telemetría (3 perspectivas + síntesis + postura + timing)
+8. → render_for_injection() → inyecta como system message
 ```
+
+### Ordering para divergencia
+- **Crítico primero**: identifica riesgos sin solución previa que defender
+- **Explorador segundo**: propone alternativa sin camino "obvio" establecido
+- **Pragmático tercero**: camino directo, incorporando riesgos del crítico
+- **Síntesis**: merge activo de las 3 perspectivas
 
 ### Formato de inyección
 ```
 [Deliberación pre-análisis]
-Perspectiva directa: {pragmático}
-Perspectiva alternativa: {explorador}
-Riesgos a considerar: {crítico}
+
+Riesgos identificados: {crítico}
+Alternativa considerada: {explorador}
+Enfoque directo: {pragmático}
+
+Síntesis: {merge de las 3 perspectivas}
 ```
 
-### Cuándo NO delibera
-- `iteration != 0` (solo al inicio)
-- Si hay goal activo (`long_task` en curso)
-- Si el provider falla
+### Modulación por postura
+- `cautela > 0.7` → crítico exhaustivo
+- `cautela < 0.4` → crítico breve
+- `exploracion > 0.6` → explorador radical
+- `profundidad > 0.7` → perspectivas detalladas (3-5 oraciones)
+- default → perspectivas concisas (1-3 oraciones)
+
+### Cuándo delibera
+- Transición INVESTIGATE → PLAN en full_plan mode
+- Se re-activa en cycle restart (CONFIRM fail → nuevo ciclo → nueva investigación → PLAN)
+- En retry: `previous_failure` enriquece el prompt con qué falló antes
+
+### Telemetría
+Cada deliberación genera evento completo en JSONL:
+```json
+{"type": "deliberation.result", "data": {"trigger": "investigate_to_plan", "cycle": 1,
+  "model": "glm-5.1", "duration_ms": 6234, "posture": {"cautela": 0.65},
+  "perspectives": {"critico": "...", "explorador": "...", "pragmatico": "..."},
+  "synthesis": "..."}}
+```
 
 ---
 
@@ -160,13 +187,13 @@ Riesgos a considerar: {crítico}
 `agent/hook_factory.py` wirea todo al construir el agente:
 
 ```python
-build_hooks_from_config(config) → [PostureHook, DeliberationHook, PlanHook]
+build_hooks_from_config(config) → [PostureHook, PlanHook]
+# DeliberationService se inyecta DENTRO de PlanHook (no es hook separado)
 ```
 
-Orden importa:
-1. **PostureHook** primero (vector inicializado antes que otros hooks lo consulten)
-2. **DeliberationHook** segundo (puede leer postura para modular generadores)
-3. **PlanHook** último (inyecta instrucciones de tier/fase, emite eventos a postura via `external_stimulus_events`)
+Orden:
+1. **PostureHook** primero (vector inicializado antes que PlanHook lo consulte)
+2. **PlanHook** segundo (tiene deliberation service + posture_snapshot_fn internos)
 
 El `CompositeHook` ejecuta todos en secuencia para cada lifecycle event.
 

@@ -38,7 +38,7 @@ from loguru import logger
 _ZAI_API_KEY = os.environ.get("ZAI_API_KEY", "")
 _ZAI_API_BASE = "https://api.z.ai/api/coding/paas/v4"
 _MODEL = "glm-5.1"
-_DELIB_MODEL = "glm-5-turbo"
+_DELIB_MODEL = "glm-5.1"
 _MAX_ITERATIONS = 100
 _RESULTS_DIR = Path("/tmp/swebench_durin")
 _REPOS_CACHE = Path("/tmp/swebench_repos")
@@ -208,19 +208,11 @@ def _build_config(
                 "max_tool_iterations": _MAX_ITERATIONS,
                 "workspace": str(workspace),
                 "posture": posture_cfg,
+                "plan": {"enabled": True},
                 "deliberation": {
                     "enabled": deliberation,
                     "provider": "custom",
-                    "max_rounds": 3,
-                    "generators": {
-                        "pragmatico": {"model": _DELIB_MODEL, "temperature": 0.3},
-                        "explorador": {"model": _DELIB_MODEL, "temperature": 0.8},
-                        "critico": {"model": _DELIB_MODEL, "temperature": 0.5},
-                    },
-                    "evaluators": {
-                        "avance": {"model": _DELIB_MODEL},
-                        "reversibilidad": {"model": _DELIB_MODEL},
-                    },
+                    "model": _DELIB_MODEL,
                 },
             }
         },
