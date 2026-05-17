@@ -29,3 +29,16 @@ Thumbs.db
 # Tools
 .claude
 .pytest_cache
+
+# Runtime state (not source)
+/logs/
+/sessions/
+/memory/
+gold.*.json
+
+# Workspace runtime files
+/AGENTS.md
+/HEARTBEAT.md
+/SOUL.md
+/TOOLS.md
+/USER.md

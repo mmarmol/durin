@@ -224,7 +224,7 @@ Archivo: JSONL append-only en `~/.cache/durin/telemetry/`.
 | 2. Generación (SLMs) | ✅ Completo | 3 generadores paralelos con posture phrase + contexto enriquecido |
 | 3. Evaluación (scores) | ✅ Completo | 2 evaluadores (avance, reversibilidad), pesos por cautela |
 | 4. Director (umbral) | ✅ Completo | Umbral por profundidad, multi-ronda (max_rounds + extra por profundidad, cap 5), under_doubt |
-| 5. Síntesis (LLM grande) | ⚡ Parcial | Dirección inyectada como texto estructurado, no hay paso explícito de síntesis del LLM |
+| 5. Síntesis (multi-perspectiva) | ✅ Completo | Enfoque recomendado + Riesgos + Alternativa + Confianza, inyectado como pre-user message |
 | 6. Ajuste post-paso | ✅ Completo | PostureHook.after_iteration detecta eventos y actualiza vector |
 
 | Aspecto transversal (doc §5-6) | Estado | Notas |
@@ -286,3 +286,5 @@ Total nuevo sobre el tema: **~300 tests dedicados al hilo conductor + deliberaci
 9. **Modulación estructural, no solo textual** — la postura cambia la arquitectura (qué generadores, cuántas rondas, qué thresholds), no solo las frases inyectadas.
 10. **Goal bias con keywords simples** — no LLM para cold-start. Heurísticas de keywords son suficientes y predecibles.
 11. **Drift threshold dinámico** — cautela modula la sensibilidad al cambio, no es un número fijo.
+12. **Deliberación como enriquecimiento, no directiva** — el output da perspectivas (enfoque + riesgos + alternativa) para que el LLM piense mejor, no le dice qué hacer.
+13. **Convergencia trimodal** — THRESHOLD (score suficiente), PLATEAU (mejora < 0.05), MAX_ROUNDS (cap). Cada caso reporta su reason en el Verdict.
