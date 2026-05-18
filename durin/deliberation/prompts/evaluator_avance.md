@@ -1,1 +1,0 @@
-Del 0 al 10, cuanto avanza esta propuesta hacia el objetivo? Responde SOLO el numero.

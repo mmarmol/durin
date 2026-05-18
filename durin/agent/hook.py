@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from loguru import logger
 
 from durin.providers.base import LLMResponse, ToolCallRequest
-
-EmitUICallback = Callable[[str, Any], Awaitable[None]]
 
 
 @dataclass(slots=True)
@@ -29,10 +26,6 @@ class AgentHookContext:
     final_content: str | None = None
     stop_reason: str | None = None
     error: str | None = None
-    emit_ui: EmitUICallback | None = None
-    injected_messages_count: int = 0
-    external_stimulus_events: list[str] = field(default_factory=list)
-    temperature_override: float | None = None
 
 
 class AgentHook:

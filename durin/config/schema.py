@@ -74,50 +74,6 @@ class DreamConfig(Base):
         return f"every {hours}h"
 
 
-class AxisConfig(Base):
-    """Per-axis posture configuration."""
-
-    mean: float = Field(ge=0.0, le=1.0)
-    variance: float = Field(gt=0.0, le=0.5)
-    return_force: float = Field(gt=0.0, le=1.0)
-    current_value: float | None = Field(default=None, ge=0.0, le=1.0)
-
-
-def _default_axes() -> dict[str, AxisConfig]:
-    from durin.posture.vector import AxisName, PostureVector
-
-    defaults = PostureVector.default()
-    return {
-        name.value: AxisConfig(
-            mean=defaults.axes[name].mean,
-            variance=defaults.axes[name].variance,
-            return_force=defaults.axes[name].return_force,
-        )
-        for name in AxisName
-    }
-
-
-class PostureConfig(Base):
-    """Posture vector (5-axis behavioral) configuration."""
-
-    enabled: bool = True
-    axes: dict[str, AxisConfig] = Field(default_factory=_default_axes)
-
-
-class DeliberationConfig(Base):
-    """Single-call multi-perspective deliberation V3."""
-
-    enabled: bool = True
-    provider: str = "ollama"
-    model: str = "glm-5.1"
-
-
-class PlanConfig(Base):
-    """Plan system — 3-tier execution model."""
-
-    enabled: bool = True
-
-
 class InlineFallbackConfig(Base):
     """One inline fallback model configuration."""
 
@@ -200,9 +156,6 @@ class AgentDefaults(Base):
         serialization_alias="consolidationRatio",
     )  # Consolidation target ratio (0.5 = 50% of budget retained after compression)
     dream: DreamConfig = Field(default_factory=DreamConfig)
-    posture: PostureConfig = Field(default_factory=PostureConfig)
-    deliberation: DeliberationConfig = Field(default_factory=lambda: DeliberationConfig())
-    plan: PlanConfig = Field(default_factory=PlanConfig)
 
 
 class AgentsConfig(Base):
