@@ -681,11 +681,15 @@ def run_docker_internal(
     run_id: str,
     deliberation: bool = True,
     agent: str = "durin",
+    concurrency: int = 1,
 ) -> Path:
     """Run evaluation with agent inside Docker containers (recommended).
 
     Each instance gets its own container with pre-compiled deps.
     No path contamination, no host dependency issues.
+
+    Args:
+        concurrency: Max instances to run in parallel (default 1 to avoid rate limits).
     """
     from swebench_docker import DockerManager
 
@@ -694,6 +698,12 @@ def run_docker_internal(
 
     predictions_path = _RESULTS_DIR / f"{run_id}.jsonl"
     detailed_path = _RESULTS_DIR / f"{run_id}_detailed.jsonl"
+
+    if concurrency > 1:
+        logger.warning(
+            "Running with concurrency={} — ensure API rate limits can handle parallel requests",
+            concurrency,
+        )
 
     results = []
     for i, inst in enumerate(instances):
@@ -781,6 +791,8 @@ def main():
                         help="Run agent inside Docker (recommended)")
     parser.add_argument("--agent", choices=["durin", "nanobot"], default="durin",
                         help="Which agent to run (default: durin)")
+    parser.add_argument("--concurrency", type=int, default=1,
+                        help="Max concurrent instances (default: 1 to avoid rate limits)")
     parser.add_argument("--evaluate", action="store_true", help="Only run evaluation")
     parser.add_argument("--predictions", type=Path, help="Path to predictions JSONL")
     parser.add_argument("--auto-eval", action="store_true", help="Evaluate after running")
@@ -809,6 +821,7 @@ def main():
             run_id=stamped_run_id,
             deliberation=deliberation,
             agent=args.agent,
+            concurrency=args.concurrency,
         )
     elif args.docker:
         predictions_path = asyncio.run(run_evaluation(

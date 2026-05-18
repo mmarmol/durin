@@ -6,10 +6,11 @@
 
 ## General State
 
-**Posture**: complete (7 original phases + expansions + gap closure).  
-**Deliberation**: evolutionary (Mind Evolution: mutation + crossover + convergence by plateau).  
-**Tests**: 3479 passing, 0 failures.  
-**Last update date**: 2026-05-17.
+**Posture**: complete (5 axes, homeostasis, goal bias, persistence with decay).  
+**Deliberation**: V3 — single-call multi-perspective (Critic→Explorer→Pragmatic→Synthesis), post-error only.  
+**Plan**: implemented — fast-path execute→verify, escalation to full cycle on failure.  
+**Tests**: 3300+ passing, 0 failures.  
+**Last update date**: 2026-05-18.
 
 ---
 
@@ -76,109 +77,97 @@ After 4h inactive the vector will have decayed ~63% toward the mean. After 12h, 
 
 ---
 
-## 2. Evolutionary Deliberation (Mind Evolution)
+## 2. Deliberation V3 (Single-Call Multi-Perspective)
+
+### Evolution: V1 → V2 → V3
+
+- **V1**: Multi-round evolutionary (Mind Evolution: mutation + crossover + convergence). 3 generators + 2 evaluators + director. ~400s overhead, ~15 LLM calls per deliberation. Too expensive.
+- **V2**: Simplified to 3 generators + injection, no evaluators. ~12s overhead, 3 LLM calls. Neutral-to-harmful in benchmarks: preventive deliberation before investigation was speculative.
+- **V3 (current)**: Single LLM call with forced perspective ordering. ~5-8s. Post-error only.
+
+### Current Implementation
+
+| Component | File | Status |
+|---|---|---|
+| Types (Perspective, DeliberationResult, DeliberationContext) | `durin/deliberation/types.py` | ✅ |
+| Engine (single-call + parsing) | `durin/deliberation/engine.py` | ✅ |
+| Service (orchestrates engine + telemetry) | `durin/deliberation/service.py` | ✅ |
+| Synthesis (render for injection) | `durin/deliberation/synthesis.py` | ✅ |
+| Modulator (posture → prompt intensity) | `durin/deliberation/modulator.py` | ✅ |
+| History (ring buffer, max 20) | `durin/deliberation/history.py` | ✅ |
+| Persistence | `durin/deliberation/persistence.py` | ✅ |
+| Constants (CRITICAL_TOOLS) | `durin/deliberation/constants.py` | ✅ |
+
+### Triggering (post-error only)
+
+Deliberation fires ONLY after verify failure, inside PlanHook:
+
+```
+Agent fast-path fix FAILS verification → cycle escalation
+  → PlanHook resets to INVESTIGATE (cycle 2+)
+  → Agent investigates, calls update_plan → INVESTIGATE→PLAN transition
+  → PlanHook._run_deliberation() fires with previous_failure context
+  → 1 LLM call (temp=0.4): [CRITIC] → [EXPLORER] → [PRAGMATIC] → [SYNTHESIS]
+  → Parsed, logged to telemetry, injected as system message
+```
+
+### Perspective Ordering
+
+Critic → Explorer → Pragmatic is intentional:
+1. **Critic first**: Identifies risks without a solution to defend
+2. **Explorer second**: Proposes alternatives knowing the risks
+3. **Pragmatic third**: Direct path conditioned by risks + alternative
+4. **Synthesis**: Merges, resolves contradictions
+
+### Posture Modulation
+
+| Posture condition | Effect on deliberation prompt |
+|---|---|---|
+| Caution > 0.7 | "Be exhaustive with risks in CRITIC section" |
+| Caution < 0.4 | "CRITIC can be brief if no obvious risks" |
+| Exploration > 0.6 | "EXPLORER can propose radically different approaches" |
+| Depth > 0.7 | "Each perspective: 3-5 detailed sentences" |
+| Depth ≤ 0.7 | "Each perspective: 1-3 concise sentences" |
+
+---
+
+## 2b. Plan System
 
 ### Implemented
 
 | Component | File | Status |
 |---|---|---|
-| Types (Proposal, Verdict, RoundResult, ConvergenceReason) | `durin/deliberation/types.py` | ✅ |
-| Scoring (weights by caution, threshold by depth) | `durin/deliberation/scoring.py` | ✅ |
-| Generator (seeds round 1, evolution round 2+) | `durin/deliberation/generator.py` | ✅ |
-| Evaluator (LLM score 0-10) | `durin/deliberation/evaluator.py` | ✅ |
-| Director (pure decision, multi-round) | `durin/deliberation/director.py` | ✅ |
-| Engine (evolutionary orchestrator + crossover) | `durin/deliberation/engine.py` | ✅ |
-| **Structural modulator** | `durin/deliberation/modulator.py` | ✅ |
-| DeliberationHook (pre-message injection) | `durin/deliberation/hook.py` | ✅ |
-| Config (DeliberationConfig) | `durin/config/schema.py` | ✅ |
-| Shared constants | `durin/deliberation/constants.py` | ✅ |
+| Types (ExecutionTier, Phase, PlanItem, PlanState) | `durin/plan/types.py` | ✅ |
+| PlanHook (lifecycle, phase transitions, forced verify) | `durin/plan/hook.py` | ✅ |
+| PlanStore (persistence: plan.json + events.jsonl) | `durin/plan/store.py` | ✅ |
+| Tools (set_execution_mode, update_plan) | `durin/agent/tools/plan.py` | ✅ |
+| Phase temperatures (0.1–0.5 by phase) | `durin/plan/types.py` | ✅ |
+| Deliberation integration (post-verify-fail) | `durin/plan/hook.py` | ✅ |
 
-### Evolutionary Architecture (Mind Evolution)
+### Fast-Path + Escalation
 
-| Round | Behavior | Inspiration |
-|---|---|---|
-| Round 1 | Divergent: short seeds from each perspective (pragmatic, explorer, critic) | Divergent thinking |
-| Round 2+ | Evolutionary: generators receive previous winner + their own proposal + scores → refine | Mutation |
-| Crossover | If gap between top 2 < 0.10, generates HYBRID proposal combining both | Genetic crossover |
-| Convergence | By threshold (sufficient score), plateau (improvement < 0.05 between rounds), or max_rounds | Fitness plateau |
-
-### Injection to the Main LLM
-
-Deliberation is injected as a **system message before the last user message** (not in system prompt):
 ```
-[Pre-analysis deliberation]
-
-Recommended approach: [evolved winning proposal]
-Identified risks: [critic's perspective]
-Alternative considered: [best runner-up]
-Confidence: high/medium/low
+EXECUTE → VERIFY ──┐
+                   │ pass → complete_goal
+                   │ fail ↓
+         INVESTIGATE → PLAN → EXECUTE → VERIFY ─┐
+              ↑     (deliberation)               │ (fail)
+              └──────────────────────────────────┘
 ```
 
-This **enriches** the main LLM so it builds a better plan, without dictating what to do.
+- **Cycle 1 (fast path)**: Start at EXECUTE, no investigation overhead
+- **Cycle 2+ (full plan)**: After verify failure, escalate with failure context
+- **Forced verify**: `complete_goal` blocked until successful `exec`
+- **Intelligent stop**: Self-evaluation prompt on cycle 2+ prevents infinite loops
 
-### Structural Modulation (doc §4.2)
+### Emitted Stimuli (plan → posture bridge)
 
-Posture does not only weight scoring — it **changes the deliberation architecture** on each invocation:
-
-| Axis | Condition | Structural effect |
+| Event | When | Effect |
 |---|---|---|
-| Depth | < 0.3 | Critic is omitted (fast deliberation) |
-| Depth | >= 0.6 | +1 extra generation round |
-| Depth | >= 0.8 | +2 extra rounds (max 5 total) |
-| Exploration | current value | Explorer temperature: `base + 0.3*(expl - 0.5)`, clamped [0.5, 1.2] |
-| Conformity | < 0.3 | Explorer receives permission to question the task |
-| Caution | > 0.7 | Pragmatic duplicated (variant with +0.15 temp) → 4 proposals |
-| Caution | > 0.85 | Critic also duplicated → 5 proposals |
-| Caution | current value | Dynamic drift threshold: `0.15 - 0.05*(caution-0.5)` range [0.10, 0.20] |
-| Discipline | >= 0.6 | All generators receive protocol adherence suffix |
-| Discipline | < 0.3 | Pragmatic +0.1 temperature (more flexible) |
-
-Result: an agent with caution 0.9 generates 5 proposals and re-deliberates with drift >= 0.10 vs an agent with caution 0.3 that generates 3, tolerates drift up to 0.18. An agent with depth 0.9 deliberates up to 5 rounds; with low depth it omits the critic and uses maximum 3. High discipline forces adherence to procedure; low allows improvisation.
-
-### Synthesis (enriched)
-
-| Component | File | Status |
-|---|---|---|
-| SynthesisResult (structured) | `durin/deliberation/types.py` | ✅ |
-| `synthesize()` → SynthesisResult | `durin/deliberation/synthesis.py` | ✅ |
-| `render_synthesis()` → text | `durin/deliberation/synthesis.py` | ✅ |
-| Posture-driven reasoning | automatic | ✅ |
-| Alternatives (top 2 runners-up) | automatic | ✅ |
-| Confidence (high/medium/low) | automatic | ✅ |
-
-### Intelligent Triggering
-
-| Trigger | When | Behavior |
-|---|---|---|
-| Planning moment | Iteration 0, no active goal | Deliberates and injects into system prompt |
-| Critical action | `before_execute_tools` with dangerous tool | Re-deliberates and updates direction |
-| Posture drift | Drift >=0.15 in any axis since last deliberation | Re-deliberates |
-| Goal active skip | "Goal (active):" in system prompt | Skips deliberation (does not interfere with plan) |
-
-### Verdict History
-
-| Component | File | Status |
-|---|---|---|
-| VerdictHistory (ring buffer, max 20) | `durin/deliberation/history.py` | ✅ |
-| VerdictEntry (frozen dataclass) | `durin/deliberation/types.py` | ✅ |
-| `dominant_role()` (pattern in last 5) | `durin/deliberation/history.py` | ✅ |
-| Serialize/deserialize | `durin/deliberation/history.py` | ✅ |
-| Hook accumulates automatically | `durin/deliberation/hook.py` | ✅ |
-| Persistence to session metadata | `durin/deliberation/persistence.py` | ✅ |
-| Restore at turn start | `durin/agent/loop.py:_restore_verdict_history` | ✅ |
-| Save at turn end | `durin/agent/loop.py:_save_verdict_history` | ✅ |
-
-### Context Projection
-
-Generators receive enriched context:
-
-| Field | Source | Limit |
-|---|---|---|
-| `goal_summary` | Last user message | 500 chars |
-| `active_objective` | "Goal (active):" in system prompt | 300 chars |
-| `conversation_summary` | Last 5 assistant messages | 100 chars each |
-| `previous_verdict_brief` | VerdictHistory.last | 80 chars |
-| `recent_context` | Tool names to execute | — |
+| `verify_pass` | Tests pass in VERIFY | caution −0.10 |
+| `verify_fail` | Tests fail in VERIFY | caution +0.15, depth +0.10 |
+| `cycle_restart` | Verify fail → new cycle | discipline +0.05, exploration +0.10 |
+| `plan_complex` | Plan >3 items | depth +0.10 |
 
 ---
 
