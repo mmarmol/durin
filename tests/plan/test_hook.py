@@ -43,7 +43,7 @@ class TestTierSelection:
         hook = PlanHook()
         hook.set_tier(ExecutionTier.PLAN, "complex refactoring")
         assert hook.state.tier == ExecutionTier.PLAN
-        assert hook.state.current_phase == Phase.INVESTIGATE
+        assert hook.state.current_phase == Phase.EXECUTE
         assert hook.state.cycle_count == 1
 
 
@@ -72,7 +72,7 @@ class TestPlanTier:
         await hook.before_iteration(ctx)
         assert ctx.injected_messages_count == 1
         system_msgs = [m for m in ctx.messages if m["role"] == "system"]
-        assert any("INVESTIGATE" in m["content"] for m in system_msgs)
+        assert any("Direct Fix" in m["content"] for m in system_msgs)
 
     @pytest.mark.asyncio
     async def test_sets_temperature_override(self):
@@ -80,7 +80,7 @@ class TestPlanTier:
         hook.set_tier(ExecutionTier.PLAN, "fix")
         ctx = _make_context(iteration=1)
         await hook.before_iteration(ctx)
-        assert ctx.temperature_override == PHASE_TEMPERATURE[Phase.INVESTIGATE]
+        assert ctx.temperature_override == PHASE_TEMPERATURE[Phase.EXECUTE]
 
     def test_update_plan_add(self):
         hook = PlanHook()

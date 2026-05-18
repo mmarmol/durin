@@ -9,7 +9,6 @@ import pytest
 from durin.agent.hook import AgentHookContext
 from durin.deliberation.service import DeliberationService
 from durin.deliberation.engine import DeliberationEngine
-from durin.deliberation.types import DeliberationResult, Perspective
 from durin.plan.hook import PlanHook
 from durin.plan.types import ExecutionTier, Phase
 from durin.providers.base import LLMResponse
@@ -30,7 +29,7 @@ Fix with in-place assignment to avoid rebinding.
 """
 
 
-def _make_context(iteration: int = 1) -> AgentHookContext:
+def _make_context(iteration: int = 1, error: str | None = None) -> AgentHookContext:
     return AgentHookContext(
         iteration=iteration,
         messages=[
@@ -38,7 +37,15 @@ def _make_context(iteration: int = 1) -> AgentHookContext:
             {"role": "assistant", "content": "I'll investigate the issue."},
             {"role": "tool", "content": "File content showing output_field = output_field.replace(...)"},
         ],
+        error=error,
     )
+
+
+def _simulate_verify_fail(hook: PlanHook) -> None:
+    """Simulate cycle 1 fast path failing: edit → exec → verify fail."""
+    hook._state.edit_detected = True
+    ctx = _make_context(error="AssertionError: expected 'D' exponent")
+    hook._on_verify_fail(ctx)
 
 
 @pytest.fixture
@@ -50,13 +57,24 @@ def delib_service():
 
 
 class TestPlanHookDeliberation:
-    @pytest.mark.asyncio
-    async def test_deliberation_fires_on_investigate_to_plan(self, delib_service):
+    def test_no_deliberation_on_cycle_1(self, delib_service):
+        """Cycle 1 is fast path — no deliberation."""
         hook = PlanHook(deliberation=delib_service)
         hook.set_tier(ExecutionTier.PLAN)
-        assert hook.state.current_phase == Phase.INVESTIGATE
+        assert hook.state.current_phase == Phase.EXECUTE
+        assert hook._deliberation_needed is False
 
-        hook.update_plan("add", "Fix the view assignment")
+    @pytest.mark.asyncio
+    async def test_deliberation_fires_after_verify_fail(self, delib_service):
+        """Deliberation fires on cycle 2+ when escalating to full plan."""
+        hook = PlanHook(deliberation=delib_service)
+        hook.set_tier(ExecutionTier.PLAN)
+
+        _simulate_verify_fail(hook)
+        assert hook.state.current_phase == Phase.INVESTIGATE
+        assert hook.state.cycle_count == 2
+
+        hook.update_plan("add", "Fix the view assignment with [:]")
         assert hook.state.current_phase == Phase.PLAN
         assert hook._deliberation_needed is True
 
@@ -71,6 +89,8 @@ class TestPlanHookDeliberation:
     async def test_no_deliberation_without_service(self):
         hook = PlanHook(deliberation=None)
         hook.set_tier(ExecutionTier.PLAN)
+
+        _simulate_verify_fail(hook)
         hook.update_plan("add", "Step 1")
 
         ctx = _make_context()
@@ -83,6 +103,8 @@ class TestPlanHookDeliberation:
         posture_fn = lambda: {"caution": 0.8, "exploration": 0.3}
         hook = PlanHook(deliberation=delib_service, posture_snapshot_fn=posture_fn)
         hook.set_tier(ExecutionTier.PLAN)
+
+        _simulate_verify_fail(hook)
         hook.update_plan("add", "Step 1")
 
         ctx = _make_context()
@@ -93,9 +115,28 @@ class TestPlanHookDeliberation:
         assert "exhaustive" in system_msg
 
     @pytest.mark.asyncio
+    async def test_deliberation_includes_failure_context(self, delib_service):
+        """Deliberation receives the previous failure context."""
+        hook = PlanHook(deliberation=delib_service)
+        hook.set_tier(ExecutionTier.PLAN)
+
+        _simulate_verify_fail(hook)
+        assert hook.state.last_failure_context == "AssertionError: expected 'D' exponent"
+
+        hook.update_plan("add", "Step 1")
+        ctx = _make_context()
+        await hook.before_iteration(ctx)
+
+        call = delib_service._engine.provider.chat.call_args
+        user_msg = call.kwargs["messages"][1]["content"]
+        assert "AssertionError" in user_msg
+
+    @pytest.mark.asyncio
     async def test_deliberation_does_not_fire_twice(self, delib_service):
         hook = PlanHook(deliberation=delib_service)
         hook.set_tier(ExecutionTier.PLAN)
+
+        _simulate_verify_fail(hook)
         hook.update_plan("add", "Step 1")
 
         ctx = _make_context()
@@ -115,6 +156,8 @@ class TestPlanHookDeliberation:
 
         hook = PlanHook(deliberation=service)
         hook.set_tier(ExecutionTier.PLAN)
+
+        _simulate_verify_fail(hook)
         hook.update_plan("add", "Step 1")
 
         ctx = _make_context()

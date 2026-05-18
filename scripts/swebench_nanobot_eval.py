@@ -210,7 +210,7 @@ async def _run_instance(
         bot = Nanobot.from_config(config_path, workspace=workspace)
         result = await asyncio.wait_for(
             bot.run(task, session_key=session_key),
-            timeout=600,  # 10 min max per instance
+            timeout=900,  # 15 min max per instance
         )
         tools_used = result.tools_used
         content = result.content

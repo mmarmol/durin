@@ -44,7 +44,8 @@ class SetExecutionModeTool(Tool):
         return (
             "Declare the execution mode for this task. "
             "Use 'direct' for simple answers/trivial edits that don't need verification. "
-            "Use 'plan' for any task that edits code — enforces the "
+            "Use 'plan' for any task that edits code — start with a direct fix attempt "
+            "(EXECUTE → VERIFY). If verification fails, escalates to a full "
             "INVESTIGATE → PLAN → EXECUTE → VERIFY cycle."
         )
 
