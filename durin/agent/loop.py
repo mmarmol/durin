@@ -317,7 +317,6 @@ class AgentLoop:
         allowing callers to override or extend the standard config-derived
         parameters (e.g. ``cron_service``, ``session_manager``).
         """
-        from durin.agent.hook_factory import build_hooks_from_config
         from durin.providers.factory import make_provider
 
         if bus is None:
@@ -335,8 +334,7 @@ class AgentLoop:
 
         existing_hooks = extra.pop("hooks", None) or []
         session_key = extra.pop("session_key", None)
-        auto_hooks = build_hooks_from_config(config, session_key=session_key)
-        hooks = auto_hooks + list(existing_hooks)
+        hooks = list(existing_hooks)
 
         if session_key and hasattr(provider, "set_telemetry"):
             from durin.telemetry.logger import get_session_logger
@@ -629,43 +627,7 @@ class AgentLoop:
             sender_id=msg.sender_id,
             session_summary=pending_summary,
             session_metadata=session.metadata,
-            posture_phrase=self._get_posture_phrase(),
         )
-
-    def _get_posture_phrase(self) -> str | None:
-        from durin.posture.hook import PostureHook
-
-        for hook in self._extra_hooks:
-            if isinstance(hook, PostureHook):
-                phrase = hook.current_phrase
-                return phrase if phrase else None
-        return None
-
-    def _save_posture_state(self, session: Session) -> None:
-        from durin.posture.hook import PostureHook
-        from durin.posture.persistence import save_posture
-
-        for hook in self._extra_hooks:
-            if isinstance(hook, PostureHook):
-                save_posture(session.metadata, hook.current_vector)
-                return
-
-    def _save_verdict_history(self, session: Session) -> None:
-        pass
-
-    def _restore_posture_from_session(self, session: Session) -> None:
-        from durin.posture.hook import PostureHook
-        from durin.posture.persistence import restore_posture
-
-        for hook in self._extra_hooks:
-            if isinstance(hook, PostureHook):
-                restored = restore_posture(session.metadata)
-                if restored is not None:
-                    hook._vector = restored
-                return
-
-    def _restore_verdict_history(self, session: Session) -> None:
-        pass
 
     async def _dispatch_command_inline(
         self,
@@ -1332,8 +1294,6 @@ class AgentLoop:
         if ctx.session is None:
             ctx.session = self.sessions.get_or_create(ctx.session_key)
         mark_webui_session(ctx.session, msg.metadata)
-        self._restore_posture_from_session(ctx.session)
-        self._restore_verdict_history(ctx.session)
 
         if self._restore_runtime_checkpoint(ctx.session):
             self.sessions.save(ctx.session)
@@ -1452,8 +1412,6 @@ class AgentLoop:
         if ctx.msg.channel == "websocket":
             self._pending_turn_latency_ms[ctx.session_key] = ctx.turn_latency_ms
         ctx.session.enforce_file_cap(on_archive=self.context.memory.raw_archive)
-        self._save_posture_state(ctx.session)
-        self._save_verdict_history(ctx.session)
         self._clear_pending_user_turn(ctx.session)
         self._clear_runtime_checkpoint(ctx.session)
         self.sessions.save(ctx.session)

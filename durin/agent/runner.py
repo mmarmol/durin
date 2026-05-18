@@ -12,7 +12,7 @@ from typing import Any
 
 from loguru import logger
 
-from durin.agent.hook import AgentHook, AgentHookContext, EmitUICallback
+from durin.agent.hook import AgentHook, AgentHookContext
 from durin.agent.tools.registry import ToolRegistry
 from durin.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from durin.utils.helpers import (
@@ -105,17 +105,6 @@ class AgentRunner:
         self.provider = provider
 
     @staticmethod
-    def _make_emit_ui(spec: "AgentRunSpec") -> "EmitUICallback | None":
-        cb = spec.progress_callback
-        if cb is None:
-            return None
-
-        async def _emit(kind: str, data: Any) -> None:
-            await cb("", agent_ui={"kind": kind, "data": data})
-
-        return _emit
-
-    @staticmethod
     def _merge_message_content(left: Any, right: Any) -> str | list[dict[str, Any]]:
         if isinstance(left, str) and isinstance(right, str):
             return f"{left}\n\n{right}" if left else right
@@ -163,7 +152,6 @@ class AgentRunner:
         *,
         phase: str = "after error",
         iteration: int | None = None,
-        hook_context: AgentHookContext | None = None,
     ) -> tuple[bool, int]:
         """Drain pending injections. Returns (should_continue, updated_cycles).
 
@@ -178,8 +166,6 @@ class AgentRunner:
         if not injections:
             return False, injection_cycles
         injection_cycles += 1
-        if hook_context is not None:
-            hook_context.injected_messages_count += len(injections)
         if assistant_message is not None:
             messages.append(assistant_message)
             if iteration is not None:
@@ -291,7 +277,6 @@ class AgentRunner:
             context = AgentHookContext(
                 iteration=iteration,
                 messages=messages,
-                emit_ui=self._make_emit_ui(spec),
             )
             await hook.before_iteration(context)
             response = await self._request_model(spec, messages_for_model, hook, context)
@@ -375,7 +360,6 @@ class AgentRunner:
                     should_continue, injection_cycles = await self._try_drain_injections(
                         spec, messages, None, injection_cycles,
                         phase="after tool error",
-                        hook_context=context,
                     )
                     if should_continue:
                         had_injections = True
@@ -398,7 +382,6 @@ class AgentRunner:
                 _drained, injection_cycles = await self._try_drain_injections(
                     spec, messages, None, injection_cycles,
                     phase="after tool execution",
-                    hook_context=context,
                 )
                 if _drained:
                     had_injections = True
@@ -480,7 +463,6 @@ class AgentRunner:
                 spec, messages, assistant_message, injection_cycles,
                 phase="after final response",
                 iteration=iteration,
-                hook_context=context,
             )
             if should_continue:
                 had_injections = True
@@ -631,8 +613,6 @@ class AgentRunner:
             messages,
             tools=spec.tools.get_definitions(),
         )
-        if context.temperature_override is not None:
-            kwargs["temperature"] = context.temperature_override
         wants_streaming = hook.wants_streaming()
         wants_progress_streaming = (
             not wants_streaming
