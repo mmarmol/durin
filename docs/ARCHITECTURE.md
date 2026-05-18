@@ -459,58 +459,11 @@ them separate avoids interleaving unrelated concerns and makes per-task analysis
 
 ---
 
-## 10. Evaluation Infrastructure
+## 10. Utilities
 
-### Scripts
 | Script | Purpose |
 |---|---|
-| `scripts/swebench_eval.py` | Benchmark orchestrator (`--docker-internal`, `--agent`, `--concurrency`) |
-| `scripts/swebench_docker.py` | Docker container lifecycle (image build, internal/external modes) |
-| `scripts/swebench_run_inside.py` | Agent runner inside Docker container (entrypoint for both agents) |
 | `scripts/simulate_posture_session.py` | Manual posture session simulation |
-
-### Docker-Internal Mode (recommended)
-
-Agent runs INSIDE the SWE-bench container. This eliminates host path contamination
-and ensures the agent sees the exact same filesystem as the test harness.
-
-**Architecture: 3-layer Docker images**
-```
-sweb.env.{platform}    ← Base: conda + Python version (shared across repos)
-  └─ sweb.eval.{instance} ← Instance: repo cloned + compiled + pip install -e .[test]
-       └─ durin.eval.{instance} ← Durin layer: conda env 'durin' with agent deps
-```
-
-**Two isolated conda environments inside each container:**
-- `testbed`: Project dependencies. Untouched by the agent. Tests run here.
-- `durin`: Agent dependencies (pydantic, httpx, tiktoken, etc.). Completely isolated.
-
-**Why two envs?** Previous external mode (agent on host, exec via docker exec) caused
-test contamination: agent's pip packages leaked into the test environment, causing false
-passes/failures. Separate conda envs guarantee the agent never modifies the test
-environment.
-
-**Volume mounts:**
-- `/opt/durin` (read-only): Agent source code from host
-- `/output` (read-write): Results written by agent (patch.diff, result.json, telemetry)
-
-```bash
-# Durin (full features: posture + plan + post-error deliberation)
-python scripts/swebench_eval.py --docker-internal --agent durin --instance-ids ...
-
-# Nanobot (base agent, no hooks — for A/B comparison)
-python scripts/swebench_eval.py --docker-internal --agent nanobot --no-deliberation --instance-ids ...
-
-# Control concurrency to avoid rate limits
-python scripts/swebench_eval.py --docker-internal --concurrency 1 --instance-ids ...
-```
-
-**Why `--concurrency` defaults to 1?** Each instance makes ~10-20 LLM API calls.
-Running N instances in parallel multiplies API load by N. With rate-limited APIs
-(especially during benchmarks), parallel execution causes 429 errors and wasted retries.
-Sequential execution is slower but reliable. Increase only when the API quota permits.
-
-Results stored in `benchmarks/swebench_5/`.
 
 ---
 

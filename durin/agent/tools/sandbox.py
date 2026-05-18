@@ -92,7 +92,7 @@ def _bwrap(command: str, workspace: str, cwd: str) -> str:
     return shlex.join(args)
 
 
-# --- Testbed sandbox (for running inside SWE-bench containers) ---
+# --- Testbed sandbox (for running inside benchmark containers) ---
 _TESTBED_PREFIX: str = ""
 
 
@@ -105,7 +105,7 @@ def register_testbed_prefix(prefix: str) -> None:
 def _testbed(command: str, workspace: str, cwd: str) -> str:
     """Wrap command to run in the testbed conda env.
 
-    Used when the agent runs INSIDE a SWE-bench container.
+    Used when the agent runs INSIDE a benchmark container.
     The agent process lives in a separate env; exec commands
     need the testbed env for running tests.
     """
