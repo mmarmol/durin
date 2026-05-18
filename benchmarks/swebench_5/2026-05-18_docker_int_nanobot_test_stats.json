@@ -1,0 +1,25 @@
+{
+  "run_id": "2026-05-18_docker_int_nanobot_test",
+  "agent": "nanobot",
+  "config": {
+    "deliberation_enabled": false,
+    "model": "glm-5.1",
+    "max_iterations": 100,
+    "docker_internal": true
+  },
+  "summary": {
+    "total_instances": 1,
+    "patches_generated": 1,
+    "errors": 0,
+    "avg_elapsed_s": 79.2
+  },
+  "per_instance": [
+    {
+      "id": "astropy__astropy-14995",
+      "patch_generated": true,
+      "elapsed_s": 79.2,
+      "iterations": 10,
+      "error": null
+    }
+  ]
+}

@@ -15,8 +15,8 @@ Durin is a fork of [nanobot](vendor/nanobot/) (lightweight agent framework). It 
 
 **Durin adds** on top of nanobot:
 - Posture system (5-axis behavioral vector)
-- Deliberation V3 (single-call multi-perspective + merge)
-- Plan system (2-tier execution with forced verification)
+- Deliberation V3 (single-call multi-perspective, post-error only)
+- Plan system (fast-path execute→verify, escalate to full plan on failure)
 - Temperature modulation per phase
 - Postural telemetry
 - Hook factory that auto-wires posture + plan (with integrated deliberation)
@@ -34,8 +34,8 @@ Durin is a fork of [nanobot](vendor/nanobot/) (lightweight agent framework). It 
 │  2. Build AgentHookContext(iteration, messages)              │
 │  3. hook.before_iteration(context)                           │
 │     ├── PostureHook: iter 0 → goal_bias + protocol_bias     │
-│     ├── PlanHook: INVESTIGATE→PLAN triggers deliberation     │
-│     ├── PlanHook: inject phase prompt                        │
+│     ├── PlanHook: inject phase prompt (fast path or full)    │
+│     ├── PlanHook: deliberation (only after verify failure)   │
 │     └── PlanHook: set temperature_override for this phase    │
 │  4. LLM request → response (with phase temperature)         │
 │  5. Parse response (tool_calls, content, reasoning)          │
@@ -108,7 +108,7 @@ Posture also influences LLM temperature via the PlanHook:
 
 ## 4. Deliberation System (V3)
 
-Single-call multi-perspective deliberation. Not a standalone hook — it's a service injected into PlanHook.
+Single-call multi-perspective deliberation. Not a standalone hook — it's a service injected into PlanHook. **Only fires after a verification failure** — not preventively.
 
 ### Key Files
 | File | Responsibility |
@@ -122,20 +122,27 @@ Single-call multi-perspective deliberation. Not a standalone hook — it's a ser
 
 ### V3 Flow
 ```
-1. PlanHook detects transition INVESTIGATE → PLAN (first update_plan call)
-2. → before_iteration: PlanHook._run_deliberation(context)
-3.   → Builds DeliberationContext with investigation findings
-4.   → DeliberationService.deliberate(context)
-5.     → 1 LLM call with forced ordering: [CRITIC] → [EXPLORER] → [PRAGMATIC] → [SYNTHESIS]
-6.     → _parse_response(): regex split by markers → Perspective tuples + synthesis
+1. Agent's fast-path fix FAILS verification → cycle escalation
+2. PlanHook resets to INVESTIGATE phase (cycle 2+)
+3. Agent investigates with failure context, calls update_plan → INVESTIGATE→PLAN
+4. PlanHook._run_deliberation(context) fires with previous_failure context
+5.   → 1 LLM call with forced ordering: [CRITIC] → [EXPLORER] → [PRAGMATIC] → [SYNTHESIS]
+6.   → _parse_response(): regex split by markers → Perspective tuples + synthesis
 7.   → Logs full result to telemetry (3 perspectives + synthesis + posture + timing)
 8. → render_for_injection() → injected as system message
 ```
 
 ### When It Deliberates
-- Transition INVESTIGATE → PLAN in plan mode
-- Re-activates on cycle restart (VERIFY fail → new cycle → new investigation → PLAN)
-- On retry: `previous_failure` enriches the prompt with what failed before
+- **Only after verify failure** — never on cycle 1 (fast path)
+- Fires on INVESTIGATE → PLAN transition in cycle 2+
+- `previous_failure` always present: enriches perspectives with concrete error context
+- Re-activates on each subsequent cycle restart
+
+### Design Rationale
+Benchmark data (SWE-bench 5-instance, May 2026) showed that preventive deliberation:
+- Added ~17-20s latency per instance with no quality improvement in 3/5 cases
+- Actively misled the agent in 1/5 cases (recommended incorrect fix approach)
+- Only added value when analyzing concrete failures, not speculating preventively
 
 ---
 
@@ -153,18 +160,27 @@ Single-call multi-perspective deliberation. Not a standalone hook — it's a ser
 | Tier | When | What the hook does |
 |---|---|---|
 | `direct` | Simple questions, trivial edits | Nothing — no overhead |
-| `plan` | Any task that edits code | Fixed cycle + forced verification + temperature modulation |
+| `plan` | Any task that edits code | Fast path + escalation + forced verification |
 
-### Fixed Cycle (plan tier)
+### Fast Path (cycle 1)
 ```
-INVESTIGATE → PLAN → EXECUTE → VERIFY ─┐
-     ↑                                  │ (fail)
-     └──────────────────────────────────┘
+EXECUTE → VERIFY ──┐
+                   │ pass → complete_goal
+                   │ fail ↓
+         INVESTIGATE → PLAN → EXECUTE → VERIFY ─┐
+              ↑     (deliberation)               │ (fail)
+              └──────────────────────────────────┘
 ```
 
+**Cycle 1 (fast path)**: Agent starts at EXECUTE — reads code, makes edit, verifies directly. No investigation overhead, no deliberation. Equivalent speed to a base agent.
+
+**Cycle 2+ (full plan)**: If verification fails, escalates to INVESTIGATE with failure context. When agent transitions to PLAN, deliberation fires (now analyzing concrete failure, not speculating). Full INVESTIGATE → PLAN → EXECUTE → VERIFY cycle.
+
+### Phases
+- **EXECUTE** (cycle 1): Direct fix attempt. Read + edit + verify. (temp: 0.15)
 - **INVESTIGATE**: Read, understand context. NO edits. (temp: 0.5)
 - **PLAN**: Define steps via `update_plan(add, ...)`. Last step must be verification. (temp: 0.4)
-- **EXECUTE**: Implement. Edit files. (temp: 0.15)
+- **EXECUTE** (cycle 2+): Implement planned step. Edit files. (temp: 0.15)
 - **VERIFY**: Run tests/commands. Must pass (exit 0) before completion allowed. (temp: 0.1)
 
 ### Forced Verification
@@ -176,10 +192,11 @@ INVESTIGATE → PLAN → EXECUTE → VERIFY ─┐
 ### Phase Transitions (inferred automatically)
 | Transition | Trigger |
 |---|---|
-| INVESTIGATE → PLAN | `update_plan("add", ...)` is called |
+| EXECUTE → VERIFY | `exec` detected after edits (cycle 1 fast path) |
+| VERIFY → INVESTIGATE | Error in exec → escalate to full plan (cycle 2+) |
+| INVESTIGATE → PLAN | `update_plan("add", ...)` is called → deliberation fires |
 | PLAN → EXECUTE | Edit tool (`edit_file` or `write_file`) detected |
-| EXECUTE → VERIFY | `exec` detected after edits |
-| VERIFY → INVESTIGATE | Error in exec → restart cycle |
+| EXECUTE → VERIFY | `exec` detected after edits (cycle 2+ planned path) |
 
 ### Intelligent Stop (cycle 2+)
 When PLAN phase is entered on cycle > 1, a self-evaluation prompt is injected:
@@ -267,9 +284,23 @@ Registered events:
 
 | Script | Purpose |
 |---|---|
-| `scripts/swebench_eval.py` | Benchmark Durin on SWE-bench Lite |
-| `scripts/swebench_nanobot_eval.py` | Benchmark base nanobot (no posture/delib) |
+| `scripts/swebench_eval.py` | Benchmark orchestrator (supports `--docker-internal`, `--agent durin\|nanobot`) |
+| `scripts/swebench_docker.py` | Docker container lifecycle (image build, internal/external modes) |
+| `scripts/swebench_run_inside.py` | Agent runner inside Docker container (entrypoint for both agents) |
 | `scripts/simulate_posture_session.py` | Manual posture session simulation |
+
+### Docker-Internal Mode (recommended)
+Agent runs INSIDE the SWE-bench container with isolated conda envs:
+- `testbed`: project deps (untouched by agent)
+- `durin`: agent deps (isolated)
+
+```bash
+# Durin (full features)
+python scripts/swebench_eval.py --docker-internal --agent durin --instance-ids ...
+
+# Nanobot (base agent, no hooks)
+python scripts/swebench_eval.py --docker-internal --agent nanobot --no-deliberation --instance-ids ...
+```
 
 Results stored in `benchmarks/swebench_5/`.
 

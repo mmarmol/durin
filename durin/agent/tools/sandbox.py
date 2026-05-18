@@ -5,10 +5,57 @@ To add a new backend, implement a function with the signature:
 and register it in _BACKENDS below.
 """
 
+from __future__ import annotations
+
 import shlex
 from pathlib import Path
 
 from durin.config.paths import get_media_dir
+
+
+# --- Docker sandbox registry ---
+# Maps workspace path (resolved) → container_id.
+# The eval harness registers a container before running the agent;
+# the _docker backend looks up the container by workspace.
+_DOCKER_CONTAINERS: dict[str, str] = {}
+
+
+def register_docker_container(workspace: str, container_id: str) -> None:
+    """Register a Docker container for a workspace path."""
+    key = str(Path(workspace).resolve())
+    _DOCKER_CONTAINERS[key] = container_id
+
+
+def unregister_docker_container(workspace: str) -> None:
+    """Remove Docker container registration for a workspace."""
+    key = str(Path(workspace).resolve())
+    _DOCKER_CONTAINERS.pop(key, None)
+
+
+def _docker(command: str, workspace: str, cwd: str) -> str:
+    """Wrap command to run inside a registered Docker container.
+
+    The container must have the workspace bind-mounted at /testbed.
+    Commands run with conda env activated.
+    """
+    key = str(Path(workspace).resolve())
+    container_id = _DOCKER_CONTAINERS.get(key)
+    if not container_id:
+        raise RuntimeError(
+            f"No Docker container registered for workspace {workspace!r}. "
+            "Call register_docker_container() first."
+        )
+
+    wrapped = (
+        "source /opt/miniconda3/bin/activate && "
+        "conda activate testbed && "
+        f"cd /testbed && {command}"
+    )
+    args = [
+        "docker", "exec", container_id,
+        "bash", "-c", wrapped,
+    ]
+    return shlex.join(args)
 
 
 def _bwrap(command: str, workspace: str, cwd: str) -> str:
@@ -45,7 +92,32 @@ def _bwrap(command: str, workspace: str, cwd: str) -> str:
     return shlex.join(args)
 
 
-_BACKENDS = {"bwrap": _bwrap}
+# --- Testbed sandbox (for running inside SWE-bench containers) ---
+_TESTBED_PREFIX: str = ""
+
+
+def register_testbed_prefix(prefix: str) -> None:
+    """Set the shell prefix for the testbed sandbox (conda activate + cd)."""
+    global _TESTBED_PREFIX
+    _TESTBED_PREFIX = prefix
+
+
+def _testbed(command: str, workspace: str, cwd: str) -> str:
+    """Wrap command to run in the testbed conda env.
+
+    Used when the agent runs INSIDE a SWE-bench container.
+    The agent process lives in a separate env; exec commands
+    need the testbed env for running tests.
+    """
+    prefix = _TESTBED_PREFIX or (
+        "source /opt/miniconda3/bin/activate && "
+        "conda activate testbed && "
+        "cd /testbed && "
+    )
+    return f"bash -c {shlex.quote(prefix + command)}"
+
+
+_BACKENDS = {"bwrap": _bwrap, "docker": _docker, "testbed": _testbed}
 
 
 def wrap_command(sandbox: str, command: str, workspace: str, cwd: str) -> str:

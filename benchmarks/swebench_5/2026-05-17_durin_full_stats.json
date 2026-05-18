@@ -1,7 +1,7 @@
 {
-  "run_id": "2026-05-17_nanobot_base",
+  "run_id": "2026-05-17_durin_full",
   "config": {
-    "deliberation_enabled": false,
+    "deliberation_enabled": true,
     "carry_posture": false,
     "model": "glm-5.1",
     "delib_model": "glm-5.1",
@@ -11,8 +11,8 @@
     "total_instances": 5,
     "patches_generated": 5,
     "errors": 0,
-    "avg_elapsed_s": 176.3,
-    "avg_iterations": 23.2,
+    "avg_elapsed_s": 244.3,
+    "avg_iterations": 15.0,
     "tokens": {
       "total": 0,
       "prompt": 0,
@@ -30,9 +30,9 @@
     {
       "id": "astropy__astropy-12907",
       "resolved": true,
-      "elapsed_s": 173.7,
-      "iterations": 22,
-      "tools_used": 22,
+      "elapsed_s": 209.8,
+      "iterations": 21,
+      "tools_used": 21,
       "tokens": {
         "prompt_tokens": 0,
         "completion_tokens": 0,
@@ -99,22 +99,22 @@
             "disciplina": 0.5,
             "conformidad": 0.7
           },
-          "total_changes": 154,
+          "total_changes": 160,
           "stimulus_events_fired": [
-            "validation_success",
-            "stuck_no_progress",
+            "user_corrected",
             "step_succeeded",
             "consecutive_successes_3",
-            "user_corrected",
-            "critical_action"
+            "critical_action",
+            "stuck_no_progress",
+            "validation_success"
           ],
           "stimulus_event_counts": {
-            "step_succeeded": 150,
-            "consecutive_successes_3": 134,
-            "critical_action": 84,
-            "stuck_no_progress": 17,
-            "validation_success": 18,
-            "user_corrected": 39
+            "step_succeeded": 155,
+            "consecutive_successes_3": 139,
+            "critical_action": 86,
+            "stuck_no_progress": 22,
+            "validation_success": 20,
+            "user_corrected": 45
           },
           "caution_range": [
             0.6,
@@ -128,18 +128,18 @@
         },
         "tools": {
           "set_execution_mode": 1,
-          "grep": 2,
-          "read_file": 3,
-          "update_plan": 4,
+          "grep": 1,
+          "read_file": 2,
+          "update_plan": 6,
           "edit_file": 1,
-          "exec": 10,
+          "exec": 9,
           "complete_goal": 1
         }
       },
       "posture_final": {
-        "caution": 0.6432,
-        "exploration": 0.7542,
-        "depth": 0.7225,
+        "caution": 0.6427,
+        "exploration": 0.7355,
+        "depth": 0.7183,
         "discipline": 0.5,
         "conformity": 0.8666
       },
@@ -148,9 +148,9 @@
     {
       "id": "astropy__astropy-14182",
       "resolved": true,
-      "elapsed_s": 299.2,
-      "iterations": 40,
-      "tools_used": 40,
+      "elapsed_s": 600.7,
+      "iterations": 0,
+      "tools_used": 0,
       "tokens": {
         "prompt_tokens": 0,
         "completion_tokens": 0,
@@ -235,26 +235,26 @@
             "disciplina": 0.5,
             "conformidad": 0.7
           },
-          "total_changes": 546,
+          "total_changes": 590,
           "stimulus_events_fired": [
-            "validation_success",
-            "step_failed",
-            "stuck_no_progress",
-            "explicit_protocol",
+            "user_corrected",
             "step_succeeded",
+            "step_failed",
+            "explicit_protocol",
             "phase_transition",
             "consecutive_successes_3",
-            "user_corrected",
-            "critical_action"
+            "critical_action",
+            "stuck_no_progress",
+            "validation_success"
           ],
           "stimulus_event_counts": {
-            "step_succeeded": 537,
-            "consecutive_successes_3": 515,
-            "critical_action": 276,
-            "stuck_no_progress": 236,
-            "validation_success": 65,
+            "step_succeeded": 581,
+            "consecutive_successes_3": 559,
+            "critical_action": 316,
+            "stuck_no_progress": 276,
+            "validation_success": 78,
             "phase_transition": 2,
-            "user_corrected": 231,
+            "user_corrected": 275,
             "explicit_protocol": 4,
             "step_failed": 1
           },
@@ -268,31 +268,17 @@
           "confirm_executed": false,
           "caught_issue": false
         },
-        "tools": {
-          "set_execution_mode": 1,
-          "grep": 2,
-          "read_file": 12,
-          "update_plan": 6,
-          "edit_file": 2,
-          "exec": 16,
-          "complete_goal": 1
-        }
+        "tools": {}
       },
-      "posture_final": {
-        "caution": 0.6816,
-        "exploration": 0.4383,
-        "depth": 0.4605,
-        "discipline": 0.5,
-        "conformity": 0.8667
-      },
+      "posture_final": {},
       "error": null
     },
     {
       "id": "astropy__astropy-14365",
       "resolved": true,
-      "elapsed_s": 202.4,
-      "iterations": 27,
-      "tools_used": 27,
+      "elapsed_s": 183.6,
+      "iterations": 26,
+      "tools_used": 26,
       "tokens": {
         "prompt_tokens": 0,
         "completion_tokens": 0,
@@ -350,24 +336,24 @@
             "disciplina": 0.5,
             "conformidad": 0.7
           },
-          "total_changes": 176,
+          "total_changes": 203,
           "stimulus_events_fired": [
-            "validation_success",
-            "stuck_no_progress",
+            "user_corrected",
             "step_succeeded",
             "phase_transition",
             "consecutive_successes_3",
-            "user_corrected",
-            "critical_action"
+            "critical_action",
+            "stuck_no_progress",
+            "validation_success"
           ],
           "stimulus_event_counts": {
-            "step_succeeded": 172,
-            "consecutive_successes_3": 158,
-            "critical_action": 79,
-            "phase_transition": 3,
-            "validation_success": 38,
-            "stuck_no_progress": 35,
-            "user_corrected": 4
+            "step_succeeded": 198,
+            "consecutive_successes_3": 182,
+            "critical_action": 91,
+            "phase_transition": 4,
+            "validation_success": 47,
+            "stuck_no_progress": 37,
+            "user_corrected": 8
           },
           "caution_range": [
             0.6,
@@ -381,27 +367,27 @@
         },
         "tools": {
           "set_execution_mode": 1,
-          "grep": 2,
-          "read_file": 7,
+          "grep": 5,
+          "read_file": 5,
           "edit_file": 3,
-          "exec": 14
+          "exec": 12
         }
       },
       "posture_final": {
-        "caution": 0.7438,
-        "exploration": 0.7154,
-        "depth": 0.7246,
+        "caution": 0.7054,
+        "exploration": 0.6403,
+        "depth": 0.66,
         "discipline": 0.5,
-        "conformity": 0.7004
+        "conformity": 0.7025
       },
       "error": null
     },
     {
       "id": "astropy__astropy-14995",
       "resolved": true,
-      "elapsed_s": 180.5,
-      "iterations": 23,
-      "tools_used": 23,
+      "elapsed_s": 167.2,
+      "iterations": 19,
+      "tools_used": 19,
       "tokens": {
         "prompt_tokens": 0,
         "completion_tokens": 0,
@@ -459,22 +445,22 @@
             "disciplina": 0.5,
             "conformidad": 0.7
           },
-          "total_changes": 182,
+          "total_changes": 202,
           "stimulus_events_fired": [
-            "validation_success",
-            "stuck_no_progress",
+            "user_corrected",
             "step_succeeded",
             "consecutive_successes_3",
-            "user_corrected",
-            "critical_action"
+            "critical_action",
+            "stuck_no_progress",
+            "validation_success"
           ],
           "stimulus_event_counts": {
-            "step_succeeded": 179,
-            "consecutive_successes_3": 165,
-            "critical_action": 98,
-            "validation_success": 21,
-            "stuck_no_progress": 36,
-            "user_corrected": 2
+            "step_succeeded": 198,
+            "consecutive_successes_3": 182,
+            "critical_action": 108,
+            "validation_success": 24,
+            "stuck_no_progress": 39,
+            "user_corrected": 4
           },
           "caution_range": [
             0.6,
@@ -488,28 +474,28 @@
         },
         "tools": {
           "set_execution_mode": 1,
-          "grep": 5,
-          "read_file": 7,
+          "grep": 3,
+          "read_file": 3,
           "edit_file": 1,
-          "exec": 8,
+          "exec": 10,
           "complete_goal": 1
         }
       },
       "posture_final": {
-        "caution": 0.7029,
-        "exploration": 0.6533,
-        "depth": 0.6601,
+        "caution": 0.7242,
+        "exploration": 0.6839,
+        "depth": 0.6933,
         "discipline": 0.5,
-        "conformity": 0.7014
+        "conformity": 0.701
       },
       "error": null
     },
     {
       "id": "astropy__astropy-6938",
       "resolved": true,
-      "elapsed_s": 25.6,
-      "iterations": 4,
-      "tools_used": 4,
+      "elapsed_s": 60.0,
+      "iterations": 9,
+      "tools_used": 9,
       "tokens": {
         "prompt_tokens": 0,
         "completion_tokens": 0,
@@ -576,26 +562,26 @@
             "disciplina": 0.5,
             "conformidad": 0.7
           },
-          "total_changes": 60,
+          "total_changes": 69,
           "stimulus_events_fired": [
-            "validation_success",
-            "step_failed",
-            "step_succeeded",
-            "consecutive_successes_3",
             "user_corrected",
-            "critical_action"
+            "step_succeeded",
+            "step_failed",
+            "consecutive_successes_3",
+            "critical_action",
+            "validation_success"
           ],
           "stimulus_event_counts": {
-            "step_succeeded": 59,
-            "consecutive_successes_3": 39,
-            "critical_action": 19,
-            "user_corrected": 9,
-            "validation_success": 15,
+            "step_succeeded": 68,
+            "consecutive_successes_3": 46,
+            "critical_action": 24,
+            "user_corrected": 11,
+            "validation_success": 19,
             "step_failed": 1
           },
           "caution_range": [
             0.6,
-            0.6
+            0.763
           ]
         },
         "verification": {
@@ -607,15 +593,16 @@
           "set_execution_mode": 1,
           "grep": 1,
           "edit_file": 1,
-          "read_file": 1
+          "read_file": 1,
+          "exec": 5
         }
       },
       "posture_final": {
-        "caution": 0.6,
-        "exploration": 0.4427,
-        "depth": 0.44,
+        "caution": 0.7632,
+        "exploration": 0.387,
+        "depth": 0.4206,
         "discipline": 0.5,
-        "conformity": 0.7671
+        "conformity": 0.7113
       },
       "error": null
     }

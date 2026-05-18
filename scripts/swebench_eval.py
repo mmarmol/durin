@@ -4,13 +4,13 @@ Runs Durin agent (posture + plan + deliberation V3) against SWE-bench Lite.
 All Durin features are active by default. Use --no-* flags to disable.
 
 Usage:
-    # Run 5 instances with all features (default)
-    python scripts/swebench_eval.py --n 5 --run-id durin_full --auto-eval
+    # Run 5 instances with Docker sandbox (recommended)
+    python scripts/swebench_eval.py --n 5 --run-id durin_full --docker
 
-    # Disable deliberation for A/B comparison
-    python scripts/swebench_eval.py --n 5 --no-deliberation --run-id durin_nodelib --auto-eval
+    # Run without Docker (agent can't run tests — legacy mode)
+    python scripts/swebench_eval.py --n 5 --run-id durin_nodelib --no-deliberation
 
-    # Evaluate existing predictions
+    # Evaluate existing predictions via official harness
     python scripts/swebench_eval.py --evaluate --predictions benchmarks/swebench_5/run.jsonl --run-id eval_run
 """
 
@@ -29,7 +29,10 @@ import time
 from datetime import date
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_SCRIPTS_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(_PROJECT_ROOT))
+sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from datasets import load_dataset
 from loguru import logger
@@ -246,10 +249,12 @@ def _build_config(
     workspace: Path,
     deliberation: bool,
     posture_override: dict[str, float] | None = None,
+    use_docker: bool = False,
 ) -> dict:
     """Build a Durin config dict for this evaluation run.
 
     All features (posture, plan, deliberation) active by default.
+    When use_docker=True, configures exec tool to route through Docker sandbox.
     """
     posture_cfg: dict = {"enabled": True}
     if posture_override:
@@ -271,6 +276,10 @@ def _build_config(
             }
         posture_cfg["axes"] = axes
 
+    exec_cfg: dict = {"enable": True, "timeout": 300}
+    if use_docker:
+        exec_cfg["sandbox"] = "docker"
+
     config = {
         "agents": {
             "defaults": {
@@ -283,6 +292,7 @@ def _build_config(
                 "workspace": str(workspace),
                 "posture": posture_cfg,
                 "plan": {"enabled": True},
+                "exec": exec_cfg,
                 "deliberation": {
                     "enabled": deliberation,
                     "provider": "custom",
@@ -306,13 +316,15 @@ async def _run_instance(
     workspace: Path,
     run_id: str,
     carry_posture: dict[str, float] | None = None,
+    use_docker: bool = False,
+    docker_mgr=None,
 ) -> dict:
     """Run Durin on a single SWE-bench instance. Returns prediction dict."""
     instance_id = instance["instance_id"]
     repo = instance["repo"]
     base_commit = instance["base_commit"]
 
-    logger.info(">>> {} (delib={})", instance_id, deliberation)
+    logger.info(">>> {} (delib={}, docker={})", instance_id, deliberation, use_docker)
     start = time.time()
 
     # Checkout repo
@@ -324,8 +336,28 @@ async def _run_instance(
             "error": "checkout_failed",
         }
 
+    # Docker container lifecycle
+    container_id = None
+    if use_docker and docker_mgr:
+        try:
+            container_id = docker_mgr.start_container(instance, workspace, run_id)
+            from durin.agent.tools.sandbox import register_docker_container
+            register_docker_container(str(workspace), container_id)
+        except Exception as e:
+            logger.error("Docker setup failed for {}: {}", instance_id, str(e)[:200])
+            return {
+                "instance_id": instance_id,
+                "model_patch": "",
+                "model_name_or_path": f"durin-glm51-{'delib' if deliberation else 'nodelib'}",
+                "error": f"docker_setup_failed: {e}",
+            }
+
     # Build config and write to temp file
-    config = _build_config(workspace, deliberation, posture_override=carry_posture)
+    config = _build_config(
+        workspace, deliberation,
+        posture_override=carry_posture,
+        use_docker=use_docker,
+    )
     config_path = workspace / ".durin_eval_config.json"
     config_path.write_text(json.dumps(config, indent=2))
 
@@ -354,7 +386,7 @@ async def _run_instance(
         tools_used = result.tools_used
         content = result.content
         messages = result.messages
-        usage_totals = result.usage or {}
+        usage_totals = getattr(result, "usage", None) or {}
         # Extract final posture state from hooks
         for hook in (bot._loop._extra_hooks or []):
             if hasattr(hook, "current_vector"):
@@ -366,6 +398,12 @@ async def _run_instance(
     except Exception as e:
         logger.error("Error on {}: {}", instance_id, str(e)[:200])
         content = f"ERROR: {e}"
+    finally:
+        # Cleanup Docker container
+        if container_id:
+            from durin.agent.tools.sandbox import unregister_docker_container
+            unregister_docker_container(str(workspace))
+            docker_mgr.stop_container(container_id)
 
     # Capture the diff
     patch = _get_diff(workspace)
@@ -414,6 +452,7 @@ async def run_evaluation(
     offset: int = 0,
     instance_ids: list[str] | None = None,
     carry_posture: bool = False,
+    use_docker: bool = False,
 ):
     """Run Durin on N SWE-bench instances."""
     _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -429,8 +468,14 @@ async def run_evaluation(
     predictions_path = _RESULTS_DIR / f"{run_id}.jsonl"
     stats_path = _RESULTS_DIR / f"{run_id}_stats.json"
 
-    logger.info("Running {} instances, deliberation={}, carry_posture={}, output={}",
-                len(instances), deliberation, carry_posture, predictions_path)
+    docker_mgr = None
+    if use_docker:
+        from swebench_docker import DockerManager
+        docker_mgr = DockerManager()
+        logger.info("Docker mode enabled — agent exec will run inside containers")
+
+    logger.info("Running {} instances, deliberation={}, carry_posture={}, docker={}, output={}",
+                len(instances), deliberation, carry_posture, use_docker, predictions_path)
 
     results = []
     workspace = Path(tempfile.mkdtemp(prefix="swebench_work_"))
@@ -440,7 +485,11 @@ async def run_evaluation(
         for i, inst in enumerate(instances):
             logger.info("[{}/{}] Starting {}", i + 1, len(instances), inst["instance_id"])
             posture_input = current_posture if carry_posture else None
-            pred = await _run_instance(inst, deliberation, workspace, run_id=run_id, carry_posture=posture_input)
+            pred = await _run_instance(
+                inst, deliberation, workspace, run_id=run_id,
+                carry_posture=posture_input,
+                use_docker=use_docker, docker_mgr=docker_mgr,
+            )
             results.append(pred)
 
             # Carry forward posture to next instance
@@ -627,6 +676,95 @@ def _update_stats_with_eval(run_id: str, resolved_ids: list[str]) -> None:
     logger.info("Stats updated with eval results: {} resolved", len(resolved_ids))
 
 
+def run_docker_internal(
+    instances: list[dict],
+    run_id: str,
+    deliberation: bool = True,
+    agent: str = "durin",
+) -> Path:
+    """Run evaluation with agent inside Docker containers (recommended).
+
+    Each instance gets its own container with pre-compiled deps.
+    No path contamination, no host dependency issues.
+    """
+    from swebench_docker import DockerManager
+
+    _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    mgr = DockerManager()
+
+    predictions_path = _RESULTS_DIR / f"{run_id}.jsonl"
+    detailed_path = _RESULTS_DIR / f"{run_id}_detailed.jsonl"
+
+    results = []
+    for i, inst in enumerate(instances):
+        logger.info("[{}/{}] {} (agent={}, delib={})",
+                    i + 1, len(instances), inst["instance_id"], agent, deliberation)
+        result = mgr.run_instance_internal(
+            instance=inst,
+            run_id=run_id,
+            api_key=_ZAI_API_KEY,
+            api_base=_ZAI_API_BASE,
+            model=_MODEL,
+            deliberation=deliberation,
+            max_iterations=_MAX_ITERATIONS,
+            agent=agent,
+        )
+        results.append(result)
+
+        with predictions_path.open("a") as f:
+            f.write(json.dumps({
+                "instance_id": result["instance_id"],
+                "model_patch": result.get("model_patch", ""),
+                "model_name_or_path": result.get("model_name_or_path", f"{agent}-{_MODEL}"),
+            }) + "\n")
+
+    with detailed_path.open("w") as f:
+        for r in results:
+            r.pop("telemetry", None)
+            r.pop("plan_events", None)
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+    total = len(results)
+    patches = sum(1 for r in results if r.get("model_patch"))
+    errors = sum(1 for r in results if r.get("error"))
+    avg_time = sum(r.get("elapsed_s", 0) for r in results) / max(total, 1)
+
+    stats = {
+        "run_id": run_id,
+        "agent": agent,
+        "config": {
+            "deliberation_enabled": deliberation,
+            "model": _MODEL,
+            "max_iterations": _MAX_ITERATIONS,
+            "docker_internal": True,
+        },
+        "summary": {
+            "total_instances": total,
+            "patches_generated": patches,
+            "errors": errors,
+            "avg_elapsed_s": round(avg_time, 1),
+        },
+        "per_instance": [
+            {
+                "id": r["instance_id"],
+                "patch_generated": bool(r.get("model_patch")),
+                "elapsed_s": r.get("elapsed_s"),
+                "iterations": r.get("iterations"),
+                "error": r.get("error"),
+            }
+            for r in results
+        ],
+    }
+
+    stats_path = _RESULTS_DIR / f"{run_id}_stats.json"
+    stats_path.write_text(json.dumps(stats, indent=2, ensure_ascii=False))
+    logger.info("Stats: {}", stats_path)
+    logger.info("Summary: {}/{} patches, avg {:.0f}s, {} errors",
+                patches, total, avg_time, errors)
+
+    return predictions_path
+
+
 def main():
     parser = argparse.ArgumentParser(description="SWE-bench evaluation for Durin")
     parser.add_argument("--n", type=int, default=5, help="Number of instances to run")
@@ -637,6 +775,12 @@ def main():
     parser.add_argument("--run-id", required=True, help="Unique run identifier")
     parser.add_argument("--carry-posture", action="store_true",
                         help="Carry posture state between instances")
+    parser.add_argument("--docker", action="store_true",
+                        help="Use Docker containers for exec (external mode)")
+    parser.add_argument("--docker-internal", action="store_true",
+                        help="Run agent inside Docker (recommended)")
+    parser.add_argument("--agent", choices=["durin", "nanobot"], default="durin",
+                        help="Which agent to run (default: durin)")
     parser.add_argument("--evaluate", action="store_true", help="Only run evaluation")
     parser.add_argument("--predictions", type=Path, help="Path to predictions JSONL")
     parser.add_argument("--auto-eval", action="store_true", help="Evaluate after running")
@@ -653,14 +797,39 @@ def main():
     deliberation = not args.no_deliberation
     stamped_run_id = f"{date.today().isoformat()}_{args.run_id}"
 
-    predictions_path = asyncio.run(run_evaluation(
-        n=args.n,
-        deliberation=deliberation,
-        run_id=stamped_run_id,
-        offset=args.offset,
-        instance_ids=args.instance_ids,
-        carry_posture=args.carry_posture,
-    ))
+    ds = load_dataset("princeton-nlp/SWE-bench_Lite", split="test")
+    if args.instance_ids:
+        instances = [r for r in ds if r["instance_id"] in args.instance_ids]
+    else:
+        instances = list(ds)[args.offset:args.offset + args.n]
+
+    if args.docker_internal:
+        predictions_path = run_docker_internal(
+            instances=instances,
+            run_id=stamped_run_id,
+            deliberation=deliberation,
+            agent=args.agent,
+        )
+    elif args.docker:
+        predictions_path = asyncio.run(run_evaluation(
+            n=args.n,
+            deliberation=deliberation,
+            run_id=stamped_run_id,
+            offset=args.offset,
+            instance_ids=args.instance_ids,
+            carry_posture=args.carry_posture,
+            use_docker=True,
+        ))
+    else:
+        predictions_path = asyncio.run(run_evaluation(
+            n=args.n,
+            deliberation=deliberation,
+            run_id=stamped_run_id,
+            offset=args.offset,
+            instance_ids=args.instance_ids,
+            carry_posture=args.carry_posture,
+            use_docker=False,
+        ))
 
     if args.auto_eval:
         resolved = run_swebench_evaluation(predictions_path, stamped_run_id)

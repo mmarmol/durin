@@ -1,0 +1,328 @@
+{
+  "run_id": "2026-05-17_durin_v4",
+  "config": {
+    "deliberation_enabled": true,
+    "carry_posture": false,
+    "model": "glm-5.1",
+    "delib_model": "glm-5.1",
+    "max_iterations": 100
+  },
+  "summary": {
+    "total_instances": 5,
+    "patches_generated": 0,
+    "errors": 5,
+    "avg_elapsed_s": 4.9,
+    "avg_iterations": 0.0,
+    "tokens": {
+      "total": 0,
+      "prompt": 0,
+      "completion": 0,
+      "cached": 0
+    },
+    "eval_resolved": 0,
+    "eval_resolve_rate": "0/5"
+  },
+  "feature_adoption": {
+    "tiers": {},
+    "deliberations_total": 0,
+    "instances_with_deliberation": 0,
+    "verify_caught_issues": 0
+  },
+  "per_instance": [
+    {
+      "id": "astropy__astropy-12907",
+      "patch_generated": false,
+      "eval_resolved": false,
+      "elapsed_s": 2.9,
+      "iterations": 0,
+      "tools_used": 0,
+      "tokens": {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "cached_tokens": 0,
+        "total_tokens": 0
+      },
+      "feature_usage": {
+        "plan": {
+          "tier": null,
+          "cycles": 0,
+          "phases": [],
+          "phase_transitions": 0,
+          "confirm_results": []
+        },
+        "deliberation": {
+          "count": 0,
+          "total_ms": 0,
+          "triggers": [],
+          "perspectives": []
+        },
+        "posture": {
+          "initial": {
+            "caution": 0.6,
+            "exploration": 0.4,
+            "depth": 0.5,
+            "discipline": 0.5,
+            "conformity": 0.7
+          },
+          "total_changes": 2,
+          "stimulus_events_fired": [
+            "user_corrected",
+            "step_failed"
+          ],
+          "stimulus_event_counts": {
+            "step_failed": 2,
+            "user_corrected": 2
+          },
+          "caution_range": [
+            0.7,
+            0.7
+          ]
+        },
+        "verification": {
+          "tier_supports_verify": false,
+          "verify_executed": false,
+          "caught_issue": false
+        },
+        "tools": {}
+      },
+      "posture_final": {},
+      "error": "no_patch"
+    },
+    {
+      "id": "astropy__astropy-14182",
+      "patch_generated": false,
+      "eval_resolved": false,
+      "elapsed_s": 2.3,
+      "iterations": 0,
+      "tools_used": 0,
+      "tokens": {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "cached_tokens": 0,
+        "total_tokens": 0
+      },
+      "feature_usage": {
+        "plan": {
+          "tier": null,
+          "cycles": 0,
+          "phases": [],
+          "phase_transitions": 0,
+          "confirm_results": []
+        },
+        "deliberation": {
+          "count": 0,
+          "total_ms": 0,
+          "triggers": [],
+          "perspectives": []
+        },
+        "posture": {
+          "initial": {
+            "caution": 0.6,
+            "exploration": 0.4,
+            "depth": 0.5,
+            "discipline": 0.5,
+            "conformity": 0.7
+          },
+          "total_changes": 2,
+          "stimulus_events_fired": [
+            "user_corrected",
+            "step_failed"
+          ],
+          "stimulus_event_counts": {
+            "step_failed": 2,
+            "user_corrected": 2
+          },
+          "caution_range": [
+            0.7,
+            0.7
+          ]
+        },
+        "verification": {
+          "tier_supports_verify": false,
+          "verify_executed": false,
+          "caught_issue": false
+        },
+        "tools": {}
+      },
+      "posture_final": {},
+      "error": "no_patch"
+    },
+    {
+      "id": "astropy__astropy-14365",
+      "patch_generated": false,
+      "eval_resolved": false,
+      "elapsed_s": 7.6,
+      "iterations": 0,
+      "tools_used": 0,
+      "tokens": {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "cached_tokens": 0,
+        "total_tokens": 0
+      },
+      "feature_usage": {
+        "plan": {
+          "tier": null,
+          "cycles": 0,
+          "phases": [],
+          "phase_transitions": 0,
+          "confirm_results": []
+        },
+        "deliberation": {
+          "count": 0,
+          "total_ms": 0,
+          "triggers": [],
+          "perspectives": []
+        },
+        "posture": {
+          "initial": {
+            "caution": 0.6,
+            "exploration": 0.4,
+            "depth": 0.5,
+            "discipline": 0.5,
+            "conformity": 0.7
+          },
+          "total_changes": 2,
+          "stimulus_events_fired": [
+            "user_corrected",
+            "step_failed"
+          ],
+          "stimulus_event_counts": {
+            "step_failed": 2,
+            "user_corrected": 2
+          },
+          "caution_range": [
+            0.7,
+            0.7
+          ]
+        },
+        "verification": {
+          "tier_supports_verify": false,
+          "verify_executed": false,
+          "caught_issue": false
+        },
+        "tools": {}
+      },
+      "posture_final": {},
+      "error": "no_patch"
+    },
+    {
+      "id": "astropy__astropy-14995",
+      "patch_generated": false,
+      "eval_resolved": false,
+      "elapsed_s": 2.0,
+      "iterations": 0,
+      "tools_used": 0,
+      "tokens": {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "cached_tokens": 0,
+        "total_tokens": 0
+      },
+      "feature_usage": {
+        "plan": {
+          "tier": null,
+          "cycles": 0,
+          "phases": [],
+          "phase_transitions": 0,
+          "confirm_results": []
+        },
+        "deliberation": {
+          "count": 0,
+          "total_ms": 0,
+          "triggers": [],
+          "perspectives": []
+        },
+        "posture": {
+          "initial": {
+            "caution": 0.6,
+            "exploration": 0.4,
+            "depth": 0.5,
+            "discipline": 0.5,
+            "conformity": 0.7
+          },
+          "total_changes": 2,
+          "stimulus_events_fired": [
+            "user_corrected",
+            "step_failed"
+          ],
+          "stimulus_event_counts": {
+            "step_failed": 2,
+            "user_corrected": 2
+          },
+          "caution_range": [
+            0.7,
+            0.7
+          ]
+        },
+        "verification": {
+          "tier_supports_verify": false,
+          "verify_executed": false,
+          "caught_issue": false
+        },
+        "tools": {}
+      },
+      "posture_final": {},
+      "error": "no_patch"
+    },
+    {
+      "id": "astropy__astropy-6938",
+      "patch_generated": false,
+      "eval_resolved": false,
+      "elapsed_s": 9.5,
+      "iterations": 0,
+      "tools_used": 0,
+      "tokens": {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "cached_tokens": 0,
+        "total_tokens": 0
+      },
+      "feature_usage": {
+        "plan": {
+          "tier": null,
+          "cycles": 0,
+          "phases": [],
+          "phase_transitions": 0,
+          "confirm_results": []
+        },
+        "deliberation": {
+          "count": 0,
+          "total_ms": 0,
+          "triggers": [],
+          "perspectives": []
+        },
+        "posture": {
+          "initial": {
+            "caution": 0.6,
+            "exploration": 0.4,
+            "depth": 0.5,
+            "discipline": 0.5,
+            "conformity": 0.7
+          },
+          "total_changes": 2,
+          "stimulus_events_fired": [
+            "user_corrected",
+            "step_failed"
+          ],
+          "stimulus_event_counts": {
+            "step_failed": 2,
+            "user_corrected": 2
+          },
+          "caution_range": [
+            0.7,
+            0.7
+          ]
+        },
+        "verification": {
+          "tier_supports_verify": false,
+          "verify_executed": false,
+          "caught_issue": false
+        },
+        "tools": {}
+      },
+      "posture_final": {},
+      "error": "no_patch"
+    }
+  ]
+}

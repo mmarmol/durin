@@ -27,12 +27,20 @@ _TIER_INSTRUCTIONS = """\
 Before starting work, declare your execution mode by calling set_execution_mode:
 
 - direct: Simple answers, trivial edits, explanations. No verification needed.
-- plan: Any task that edits code. You MUST follow the cycle:
-  INVESTIGATE → PLAN → EXECUTE → VERIFY (repeat if verify fails).
-  Use update_plan to track steps. You cannot complete without passing verification.
+- plan: Any task that edits code. Start with a direct fix attempt:
+  EXECUTE → VERIFY. If verification fails, the system escalates to a full
+  investigation cycle with multi-perspective analysis.
+  You cannot complete without passing verification.
 
 Choose the tier that matches the task."""
 
+
+_FAST_EXECUTE_PROMPT = (
+    "[Phase: EXECUTE — Direct Fix] "
+    "Attempt to fix this directly. Read the relevant code, make your edit, "
+    "then run a test or command to verify it works. "
+    "If verification fails, the system will escalate to a thorough investigation."
+)
 
 _PHASE_PROMPTS: dict[Phase, str] = {
     Phase.INVESTIGATE: (
@@ -116,7 +124,7 @@ class PlanHook(AgentHook):
         self._state.tier = tier
         self._tier_set = True
         if tier == ExecutionTier.PLAN:
-            self._state.current_phase = Phase.INVESTIGATE
+            self._state.current_phase = Phase.EXECUTE
             self._state.cycle_count = 1
         if self._store:
             self._store.append_event("tier_set", tier=tier.value, reason=reason)
@@ -293,7 +301,7 @@ class PlanHook(AgentHook):
         context.external_stimulus_events.append("verify_fail")
         context.external_stimulus_events.append("cycle_restart")
         logger.info(
-            "PlanHook: VERIFY failed, starting cycle {}",
+            "PlanHook: VERIFY failed, escalating to full plan cycle {}",
             self._state.cycle_count,
         )
 
@@ -320,8 +328,11 @@ class PlanHook(AgentHook):
 
         parts.append("")
 
+        # Cycle 1 EXECUTE: fast path — direct fix without investigation overhead
+        if phase == Phase.EXECUTE and self._state.cycle_count == 1 and not self._state.items:
+            parts.append(_FAST_EXECUTE_PROMPT)
         # Inject self-evaluation prompt on retry cycles
-        if phase == Phase.PLAN and self._state.cycle_count > 1:
+        elif phase == Phase.PLAN and self._state.cycle_count > 1:
             parts.append(_RETRY_SELF_EVAL.format(
                 failure_context=self._state.last_failure_context or "Unknown error",
             ))
