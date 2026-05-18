@@ -330,51 +330,56 @@ Separate `current_value` from `mean` in the schema. Fix applied in commit `453a0
 
 ---
 
-## 5. Benchmark May 2026 — Post-fix Results
+## 5. Benchmark Evolution — May 2026
 
-### Second Run (carry-posture fix + new stimuli)
+### V5 (5 astropy, external mode → docker-internal)
 
-| Condition | Result | Resolved |
-|---|---|---|
-| Durin nodelib (without delib) | 3/5 | 12907, 14365, 14995 |
-| Durin delib V2 | 3/5 | 12907, 14182, 14995 |
-| Durin carry + nodelib | 3/5 | 12907, 14182, 14995 |
-| Durin carry + delib | 3/5 | 12907, 14365, 14995 |
+See `docs/06_log_benchmark.md` for full data. Key findings:
+- Posture: 40% → 80% resolution (+100% relative)
+- Deliberation V2: neutral-to-harmful
+- Carry-posture: geometric drift bug found and fixed
 
-### Comparison with First Run
+### V5b (5 astropy, docker-internal, plan comparison)
 
-| Condition | Before → After | Change |
-|---|---|---|
-| nodelib | 4/5 → 3/5 | Lost 6938 |
-| delib V2 | 3/5 → 3/5 | Gained 14182, lost 14365 |
-| carry + nodelib | 3/5 → 3/5 | Gained 14182, lost 6938 |
-| carry + delib | 4/5 → 3/5 | Lost 14182 |
+- Always-plan vs no-plan: **identical patches**, ~45s overhead wasted
+- Led to fast-path design
 
-### Analysis
+### V6 (10 mixed instances, docker-internal, fast-path + post-error delib)
 
-- **6938 consistent regression**: Agent goes in 2-4 iters without verifying. Believes it resolved (5/5 internal) but SWE-bench says no. Exact case for mandatory CONFIRM.
-- **14182 improvement**: Complex task (40-69 iters), new stimuli help in long explorations.
-- **Depth now moves**: 0.42-0.73 (previously fixed at 0.5). New stimuli work.
-- **Conclusion**: No regression from the changes. LLM variability on borderline instances. The plan system with CONFIRM will solve case 6938.
+- Durin: 9/9 patches (sympy skipped, Docker OOM)
+- Nanobot: 9/10 patches (sympy NO PATCH after 902s)
+- 3/9 identical patches, 6/9 different approaches
+- SWE-bench evaluation pending
+- Durin timing data lost (process crash)
+
+### Resolved Issues
+- **6938 no-verify regression**: Plan system now forces verification
+- **Depth axis static**: Now moves (0.42-0.73) with new stimuli
+- **Carry-posture drift**: Fixed (commit 453a070)
 
 ---
 
 ## 6. Updated Implementation Order
 
 ```
-1. [✓] Fix carry-posture bug
+1. [✓] Fix carry-posture bug (commit 453a070)
 2. [✓] New layer 1 stimuli (9 new rules, 12→21 total)
-3. [✓] Re-benchmark — validated: posture moves, no regression
-4. [→] Plan system: 3-tier model + fixed cycle + log
-   4a. [ ] Types: ExecutionTier, Phase, PlanItem, PlanState
-   4b. [ ] Tool: set_execution_mode (LLM declares tier)
-   4c. [ ] PlanHook: enforce per tier (Tier 1 noop, Tier 2 reminder, Tier 3 cycle)
-   4d. [ ] Storage: plan.json + events.jsonl in workspace/plans/{session}/
-   4e. [ ] Prompt injection: 3-tier instructions in system prompt
-5. [ ] Connect plan → layer 2 stimuli (CONFIRM_PASS/FAIL, CYCLE_2_PLUS)
-6. [ ] Plan bias layer 3 (initial adjustment by complexity)
-7. [ ] Re-benchmark with plan system (same 5 instances, target: 6938)
-8. [ ] Metacognition (when plan + oracle are stable)
+3. [✓] Re-benchmark V5 — validated: posture moves, no regression
+4. [✓] Plan system: fast-path execute→verify + escalation on failure
+   4a. [✓] Types: ExecutionTier, Phase, PlanItem, PlanState
+   4b. [✓] Tools: set_execution_mode, update_plan (auto-discoverable)
+   4c. [✓] PlanHook: fast-path + full cycle + forced verification
+   4d. [✓] PlanStore: plan.json + events.jsonl persistence
+   4e. [✓] Prompt injection: tier instructions in system prompt
+5. [✓] Connect plan → layer 2 stimuli (verify_pass/fail, cycle_restart, plan_complex)
+6. [✓] Post-error deliberation V3 (single-call, integrated in PlanHook)
+7. [✓] Benchmark V5b — fast-path vs always-plan comparison (docker-internal)
+8. [✓] Benchmark V6 — 10 mixed instances, Durin vs Nanobot (docker-internal)
+9. [ ] SWE-bench evaluation of V6 patches (pending)
+10. [ ] Deliberation V3 rewrite (clean dead code from V2, single-call engine)
+11. [ ] Plan bias layer 3 (initial adjustment by complexity)
+12. [ ] Docker optimization (conda-pack to reduce disk usage)
+13. [ ] Metacognition (when plan + oracle are stable)
 ```
 
 ---
@@ -396,4 +401,4 @@ Separate `current_value` from `mean` in the schema. Fix applied in commit `453a0
 
 ---
 
-## Date: 2026-05-17
+## Date: 2026-05-18

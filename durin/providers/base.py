@@ -167,6 +167,11 @@ class LLMProvider(ABC):
         self.api_key = api_key
         self.api_base = api_base
         self.generation: GenerationSettings = GenerationSettings()
+        self._telemetry: Any = None
+
+    def set_telemetry(self, telemetry: Any) -> None:
+        """Attach a TelemetryLogger for structured rate limit tracking."""
+        self._telemetry = telemetry
 
     @staticmethod
     def _sanitize_empty_content(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -762,11 +767,17 @@ class LLMProvider(ABC):
                 return response
 
             if not persistent and attempt > len(delays):
+                exhaustion_snippet = (response.content or "")[:120].lower()
                 logger.warning(
                     "LLM request failed after {} retries, giving up: {}",
                     attempt,
-                    (response.content or "")[:120].lower(),
+                    exhaustion_snippet,
                 )
+                if self._telemetry and hasattr(self._telemetry, "log_rate_limit_exhausted"):
+                    self._telemetry.log_rate_limit_exhausted(
+                        attempts=attempt,
+                        error_snippet=exhaustion_snippet,
+                    )
                 if on_retry_wait:
                     await on_retry_wait(
                         f"Model request failed after {attempt} retries, giving up."
@@ -778,13 +789,22 @@ class LLMProvider(ABC):
             if persistent:
                 delay = min(delay, self._PERSISTENT_MAX_DELAY)
 
+            error_snippet = (response.content or "")[:120].lower()
             logger.warning(
                 "LLM transient error (attempt {}{}), retrying in {}s: {}",
                 attempt,
                 "+" if persistent and attempt > len(delays) else f"/{len(delays)}",
                 int(round(delay)),
-                (response.content or "")[:120].lower(),
+                error_snippet,
             )
+            if self._telemetry and hasattr(self._telemetry, "log_rate_limit"):
+                self._telemetry.log_rate_limit(
+                    attempt=attempt,
+                    delay_s=delay,
+                    error_snippet=error_snippet,
+                    status_code=response.error_status_code,
+                    persistent=persistent,
+                )
             await self._sleep_with_heartbeat(
                 delay,
                 attempt=attempt,

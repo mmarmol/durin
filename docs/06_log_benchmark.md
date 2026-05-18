@@ -126,9 +126,142 @@ V2 eliminated the overhead but also eliminated the value: without real evaluatio
 
 ---
 
-## Design Decisions (next steps)
+## Design Decisions (next steps from V5)
 
 See `docs/07_design_plan_and_stimuli.md` for details.
+
+---
+
+## Results V5b — 2026-05-17 (Docker-Internal Mode)
+
+### 5 astropy instances, plan-always vs no-plan
+
+Comparison of always-plan (INVESTIGATE→PLAN→EXECUTE→VERIFY) vs base agent:
+
+| Condition | Patches | Avg Time | Avg Iters |
+|---|---|---|---|
+| Durin (full plan always) | 5/5 | 139s | 16.6 |
+| Nanobot (no plan) | 5/5 | 94s | 10.4 |
+
+**Key finding**: Patches were **identical in all 5 cases**. Investigation overhead added ~45s without improving quality. Led to fast-path design (execute→verify first, escalate on failure).
+
+**Case study (astropy-6938)**: Preventive deliberation recommended wrong fix (`output_field = output_field.replace()` vs correct `output_field[:] = ...`). Agent followed bad advice → 10 extra iterations. Nanobot solved in 3.
+
+---
+
+## Results V6 — 2026-05-18 (Docker-Internal, 10 Mixed Instances)
+
+### Changes tested
+- Fast-path execute→verify (cycle 1)
+- Post-error deliberation only (fires after verify failure, not preventively)
+- Posture system active for Durin
+- 10 instances from 6 different repos (astropy, django, flask, pytest, scikit-learn, sympy)
+
+### Nanobot V6 Results (full data)
+
+| Instance | Time | Iters | Tool Calls | Patch |
+|---|---|---|---|---|
+| astropy-12907 | 127s | 10 | 10 | YES |
+| astropy-14182 | 246s | 20 | 20 | YES |
+| astropy-14365 | 175s | 14 | 14 | YES |
+| astropy-14995 | 155s | 17 | 17 | YES |
+| astropy-6938 | 32s | 3 | 3 | YES |
+| django-14999 | 172s | 17 | 17 | YES |
+| flask-4045 | 111s | 15 | 15 | YES |
+| pytest-5221 | 76s | 11 | 11 | YES |
+| scikit-learn-13497 | 131s | 14 | 14 | YES |
+| sympy-16503 | 902s | 0 | 0 | NO |
+
+**Averages (9 patched)**: 136.1s, 13.4 iters, 13.4 tool calls
+
+### Durin V6 Results (partial — timing lost due to process crash)
+
+| Instance | Patch |
+|---|---|
+| astropy-12907 | YES |
+| astropy-14182 | YES |
+| astropy-14365 | YES |
+| astropy-14995 | YES |
+| astropy-6938 | YES |
+| django-14999 | YES |
+| flask-4045 | YES |
+| pytest-5221 | YES |
+| scikit-learn-13497 | YES |
+| sympy-16503 | SKIPPED (OOM, Docker had 8GB, dual build exhausted memory) |
+
+**9/9 patches generated** (sympy not attempted due to Docker OOM during image build).
+
+**NOTE**: Durin stats.json was not written — process crashed before stats collection. Timing and tool call data lost. Only patches survived in the JSONL.
+
+### Patch Comparison (Durin vs Nanobot)
+
+| Instance | Identical? | Notes |
+|---|---|---|
+| astropy-12907 | YES | Same fix |
+| astropy-14182 | NO | Different approaches |
+| astropy-14365 | NO | Different approaches |
+| astropy-14995 | NO | Different approaches |
+| astropy-6938 | YES | Same fix |
+| django-14999 | NO | Different approaches |
+| flask-4045 | NO | Different approaches |
+| pytest-5221 | NO | Different approaches |
+| scikit-learn-13497 | YES | Same fix |
+
+**3/9 identical patches, 6/9 different approaches**.
+
+### SWE-bench Evaluation Results (V6)
+
+| Instance | Durin | Nanobot | Patch identical |
+|---|---|---|---|
+| astropy-12907 | ✅ RESOLVED | ✅ RESOLVED | YES |
+| astropy-14182 | ❌ | ❌ | NO |
+| astropy-14365 | ❌ | ❌ | NO |
+| astropy-14995 | ✅ RESOLVED | ✅ RESOLVED | YES |
+| astropy-6938 | ❌ | ❌ | YES |
+| django-14999 | ✅ RESOLVED | ✅ RESOLVED | NO |
+| flask-4045 | ❌ | ❌ | NO |
+| pytest-5221 | ❌ | ❌ | NO |
+| scikit-learn-13497 | ❌ | ❌ | YES |
+| sympy-16503 | — (OOM) | — (NO PATCH) | — |
+
+**Durin: 3/9 = 33%** | **Nanobot: 3/9 = 33%**
+
+### V6 Analysis
+
+1. **Identical resolution rate**: Both agents resolve the same 3 instances despite 6/9 different patches. The different approaches did not improve or worsen resolution.
+2. **6938 regression persists**: Both agents generate patches that fail SWE-bench evaluation. This is the case where the agent edits without verifying — the plan system's forced verification should address this, but it didn't trigger in fast-path.
+3. **django-14999 resolved with different patches**: Both solve the same bug via different code approaches. Shows the problem has multiple valid solutions.
+4. **scikit-learn-13497 identical but not resolved**: Same patch, same failure. Suggests the fix is wrong regardless of agent.
+5. **Sympy gap**: Neither agent attempted sympy (Durin OOM, Nanobot NO PATCH after 902s). Potential differentiator with Docker memory increase.
+
+### Nanobot Tool Usage Patterns (V6)
+
+| Tool | Total Calls | Avg per Instance |
+|---|---|---|
+| read_file | 39 | 4.3 |
+| exec | 34 | 3.8 |
+| grep | 20 | 2.2 |
+| edit_file | 10 | 1.1 |
+| long_task | 9 | 1.0 |
+| complete_goal | 9 | 1.0 |
+| list_dir | 2 | 0.2 |
+
+### Infrastructure Issues
+
+1. **Docker OOM**: Building 2 durin.eval images simultaneously with 8GB RAM caused OOM (exit code 137) on sympy. Fix: increase Docker memory to 12GB.
+2. **Stats crash**: Durin eval script crashed before writing stats.json. Detailed JSONL also empty. Only the SWE-bench format JSONL with patches survived.
+3. **Disk usage**: 10 instances consumed ~56GB of Docker images (~44GB base + durin layers).
+
+---
+
+## Resolved Problems (from V5 analysis)
+
+| Problem | Status | Resolution |
+|---|---|---|
+| No plan system | ✅ RESOLVED | Plan system implemented with fast-path + escalation (2026-05-17) |
+| Carry-posture mean bug | ✅ RESOLVED | Fixed: carry sets current_value only, not mean. Commit 453a070 |
+| Insufficient stimuli (dead axes) | ✅ PARTIALLY | depth now moves (0.42-0.73). discipline still static. New stimuli: VALIDATION_*, STUCK, PHASE_TRANSITION |
+| Deliberation not helping without plan | ✅ RESOLVED | V3: post-error only deliberation, fires after verify failure |
 
 ---
 
@@ -143,6 +276,15 @@ Folder: `benchmarks/swebench_5/`
 | `*_detailed.jsonl` | Per-instance: tools, iters, posture_final |
 | `eval_reports/*.json` | SWE-bench evaluation results |
 
+V6 files:
+| File | Content |
+|---|---|
+| `2026-05-18_docker_v6_durin.jsonl` | 9 Durin patches (SWE-bench format) |
+| `2026-05-18_docker_v6_nanobot.jsonl` | 10 Nanobot entries (9 patches + 1 no-patch) |
+| `2026-05-18_docker_v6_nanobot_detailed.jsonl` | Full Nanobot stats (timing, tools, posture) |
+| `2026-05-18_docker_v6_nanobot_stats.json` | Nanobot aggregated stats |
+| `2026-05-18_docker_v6_durin_stats.json` | Empty (crash before write) |
+
 ---
 
-## Date: 2026-05-17
+## Last updated: 2026-05-18

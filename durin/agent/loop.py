@@ -338,6 +338,13 @@ class AgentLoop:
         auto_hooks = build_hooks_from_config(config, session_key=session_key)
         hooks = auto_hooks + list(existing_hooks)
 
+        if session_key and hasattr(provider, "set_telemetry"):
+            from durin.telemetry.logger import get_session_logger
+            try:
+                provider.set_telemetry(get_session_logger(session_key))
+            except Exception:
+                pass
+
         return cls(
             bus=bus,
             provider=provider,
