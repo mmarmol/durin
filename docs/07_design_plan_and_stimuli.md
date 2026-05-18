@@ -349,7 +349,7 @@ See `docs/06_log_benchmark.md` for full data. Key findings:
 - Durin: 9/9 patches (sympy skipped, Docker OOM)
 - Nanobot: 9/10 patches (sympy NO PATCH after 902s)
 - 3/9 identical patches, 6/9 different approaches
-- SWE-bench evaluation pending
+- SWE-bench discontinued (see docs/06_log_benchmark.md)
 - Durin timing data lost (process crash)
 
 ### Resolved Issues
@@ -375,10 +375,10 @@ See `docs/06_log_benchmark.md` for full data. Key findings:
 6. [✓] Post-error deliberation V3 (single-call, integrated in PlanHook)
 7. [✓] Benchmark V5b — fast-path vs always-plan comparison (docker-internal)
 8. [✓] Benchmark V6 — 10 mixed instances, Durin vs Nanobot (docker-internal)
-9. [ ] SWE-bench evaluation of V6 patches (pending)
-10. [ ] Deliberation V3 rewrite (clean dead code from V2, single-call engine)
-11. [ ] Plan bias layer 3 (initial adjustment by complexity)
-12. [ ] Docker optimization (conda-pack to reduce disk usage)
+9. [✓] SWE-bench discontinued — measures model, not agent (see docs/06_log_benchmark.md)
+10. [ ] Evaluate τ-bench and GAIA as agent-specific benchmarks
+11. [ ] Deliberation V3 rewrite (clean dead code from V2, single-call engine)
+12. [ ] Plan bias layer 3 (initial adjustment by complexity)
 13. [ ] Metacognition (when plan + oracle are stable)
 ```
 
@@ -390,7 +390,7 @@ See `docs/06_log_benchmark.md` for full data. Key findings:
 |---|---|---|
 | **Hermes Agent (NousResearch)** | 2025 | Trained PLAN/EXECUTION/REFLECTION tokens, persistent goals, multi-level memory. Closest model to our design |
 | **Devin 2.0 (Cognition)** | 2025 | Live plan visible to user, iteration until success, 18% planning improvement |
-| **Agentless (UIUC)** | 2024 | MANDATORY verification is what makes it work. 32% SWE-bench |
+| **Agentless (UIUC)** | 2024 | MANDATORY verification is what makes it work |
 | **Plan-Act-Correct-Verify** | 2024 | 4 modules with explicit verifier outperforms ReAct. Validates our cycle |
 | **OpenHands** | 2025 | Event-sourced state, CodeAct. Event stream stored for replay |
 | **SWE-Agent (Princeton)** | 2024 | ReAct without plan = without mandatory verification = inferior |
