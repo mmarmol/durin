@@ -4,9 +4,11 @@ Source of truth (in priority order):
 
 1. **Explicit override** — the user can declare capabilities for a model
    in config under ``model_capabilities``. Always wins.
-2. **Vendored LiteLLM snapshot** — ``litellm_model_caps.json`` next to
-   this module. Covers ~2700 models across major providers. Refreshable
-   out-of-band (manually or via a future tool).
+2. **Vendored consensus snapshot** — ``model_capabilities.json`` next
+   to this module, built from three independent public sources
+   (LiteLLM, OpenRouter, models.dev) merged by ``scripts/
+   refresh_model_capabilities.py``. Capabilities are OR-merged across
+   sources, with each record tracking which sources confirmed it.
 3. **Heuristic by model name prefix** — last-resort for custom/local
    models the snapshot doesn't know about. Keeps zero-config working
    for "the obvious cases" (claude → vision, glm → no vision, etc.).
@@ -30,7 +32,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping
 
-_CAPS_JSON_PATH = Path(__file__).parent / "data" / "litellm_model_caps.json"
+_CAPS_JSON_PATH = Path(__file__).parent / "data" / "model_capabilities.json"
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,12 +89,30 @@ class ModelCapabilities:
 
 
 @lru_cache(maxsize=1)
-def _load_litellm_snapshot() -> dict[str, dict[str, Any]]:
-    """Read the vendored snapshot once and cache it.
+def _load_capabilities_snapshot() -> dict[str, dict[str, Any]]:
+    """Read the vendored consensus snapshot once and cache it.
 
-    The ``sample_spec`` entry (LiteLLM's own field-documentation key)
-    is stripped on load — it has string descriptions instead of real
-    values and would crash the resolver if treated as a real model.
+    Expected schema (produced by ``scripts/refresh_model_capabilities.py``)::
+
+        {
+          "schema_version": 1,
+          "generated_at": "...",
+          "sources": {...},
+          "models": {
+            "<canonical_key>": {
+              "max_input_tokens": int|null,
+              "max_output_tokens": int|null,
+              "mode": "chat",
+              "supports_*": bool,
+              "_sources": ["litellm:...", "openrouter:...", ...]
+            }
+          }
+        }
+
+    Canonical keys are lowercased bare model names (provider/gateway
+    prefix already stripped by the refresh script). Returns the
+    ``models`` dict directly — callers don't need the metadata
+    envelope. Returns ``{}`` if the file is missing or malformed.
     """
     if not _CAPS_JSON_PATH.exists():
         return {}
@@ -106,32 +126,60 @@ def _load_litellm_snapshot() -> dict[str, dict[str, Any]]:
         return {}
     if not isinstance(data, dict):
         return {}
+    models = data.get("models")
+    if isinstance(models, dict):
+        return models
+    # Backward compatibility: tolerate the older flat-dict shape.
     data.pop("sample_spec", None)
     return data
+
+
+_KNOWN_PROVIDER_DOTS = frozenset({
+    "anthropic", "amazon", "meta", "mistral", "cohere", "ai21",
+    "stability", "openai", "qwen", "deepseek", "moonshot", "zai",
+})
+
+
+def _canonical_lookup_key(model: str) -> str:
+    """Reduce a user-supplied model id to the consensus-file canonical
+    form: lowercased, no provider/gateway prefix, no bedrock dot prefix.
+
+    Mirrors the normalisation performed by
+    ``scripts/refresh_model_capabilities.py:_canonical_key`` so any
+    incoming variant lands on the same bucket the snapshot uses.
+    """
+    if not model:
+        return ""
+    key = model.strip()
+    if "/" in key:
+        key = key.rsplit("/", 1)[1]
+    if "." in key:
+        head, _, rest = key.partition(".")
+        if head.lower() in _KNOWN_PROVIDER_DOTS and rest:
+            key = rest
+    return key.lower()
 
 
 def _candidate_keys(model: str, provider: str | None) -> list[str]:
     """Ordered list of keys to try in the snapshot.
 
-    LiteLLM uses several naming conventions across providers — bare
-    names (``gpt-4o``), provider-prefixed (``anthropic/claude-...``),
-    bedrock dot-notation (``anthropic.claude-3-5-sonnet-...``), and so
-    on. We try the most-specific form first, then progressively
-    looser fallbacks.
+    The consensus file is keyed by lowercased bare names, so the
+    primary lookup uses :func:`_canonical_lookup_key`. We also keep
+    the raw / provider-qualified forms as fallbacks for compatibility
+    with external callers that pre-process model ids elsewhere.
     """
     model = (model or "").strip()
     provider = (provider or "").strip() or None
     if not model:
         return []
-    keys: list[str] = []
+    keys: list[str] = [_canonical_lookup_key(model)]
+    # Compatibility variants — only ever match the older flat-dict
+    # snapshot shape; the consensus file ignores them.
     if provider:
         keys.append(f"{provider}/{model}")
-        # Bedrock style: provider.model
         if "/" not in model:
             keys.append(f"{provider}.{model}")
     keys.append(model)
-    # Some configs include a provider prefix already (``anthropic/claude-x``).
-    # Strip it for the bare lookup.
     if "/" in model:
         keys.append(model.split("/", 1)[1])
     # De-dup while preserving order.
@@ -144,44 +192,35 @@ def _candidate_keys(model: str, provider: str | None) -> list[str]:
     return out
 
 
-def _from_litellm_entry(
+def _from_consensus_entry(
     model: str, provider: str | None, entry: Mapping[str, Any],
 ) -> ModelCapabilities:
-    """Convert one LiteLLM JSON entry into our dataclass.
+    """Convert one consensus-file entry into our dataclass.
 
-    Missing flags default to False (LiteLLM omits negative cases).
-    ``supported_modalities`` (Gemini-style explicit list) supplements
-    the individual ``supports_*_input`` flags when present.
+    The consensus file's entries are already normalised (booleans per
+    capability, ``max_input_tokens`` / ``max_output_tokens`` numbers),
+    so this is a straight field copy. ``source="litellm"`` retained
+    for backwards-compat with callers that branched on the old label;
+    the consensus file is in fact a merge of three sources.
     """
-    supported_in = entry.get("supported_modalities") or []
-    supported_out = entry.get("supported_output_modalities") or []
     return ModelCapabilities(
         model=model,
-        provider=provider or entry.get("litellm_provider"),
-        max_input_tokens=entry.get("max_input_tokens") or entry.get("max_tokens"),
-        max_output_tokens=entry.get("max_output_tokens") or entry.get("max_tokens"),
+        provider=provider,
+        max_input_tokens=entry.get("max_input_tokens"),
+        max_output_tokens=entry.get("max_output_tokens"),
         mode=entry.get("mode") or "chat",
-        supports_vision=bool(
-            entry.get("supports_vision")
-            or "image" in supported_in
-        ),
-        supports_audio_input=bool(
-            entry.get("supports_audio_input")
-            or "audio" in supported_in
-        ),
+        supports_vision=bool(entry.get("supports_vision")),
+        supports_audio_input=bool(entry.get("supports_audio_input")),
         supports_pdf_input=bool(entry.get("supports_pdf_input")),
-        supports_video_input=bool("video" in supported_in),
-        supports_audio_output=bool(
-            entry.get("supports_audio_output")
-            or "audio" in supported_out
-        ),
-        supports_image_output=bool("image" in supported_out),
+        supports_video_input=bool(entry.get("supports_video_input")),
+        supports_audio_output=bool(entry.get("supports_audio_output")),
+        supports_image_output=bool(entry.get("supports_image_output")),
         supports_function_calling=bool(entry.get("supports_function_calling")),
         supports_streaming=True,  # safe default — explicit overrides via override map
         supports_reasoning=bool(entry.get("supports_reasoning")),
         supports_prompt_caching=bool(entry.get("supports_prompt_caching")),
         supports_response_schema=bool(entry.get("supports_response_schema")),
-        source="litellm",
+        source="snapshot",
     )
 
 
@@ -312,14 +351,14 @@ def get_model_capabilities(
     if not model:
         return ModelCapabilities(model="", provider=provider, source="default")
 
-    snapshot = _load_litellm_snapshot()
+    snapshot = _load_capabilities_snapshot()
     candidates = _candidate_keys(model, provider)
 
     base: ModelCapabilities | None = None
     for key in candidates:
         entry = snapshot.get(key)
         if entry:
-            base = _from_litellm_entry(model, provider, entry)
+            base = _from_consensus_entry(model, provider, entry)
             break
     if base is None:
         base = _heuristic_capabilities(model, provider)
@@ -340,4 +379,4 @@ def known_models_count() -> int:
     Useful for diagnostics (e.g. a ``durin doctor`` command later) and
     for tests that want to assert the snapshot actually loaded.
     """
-    return len(_load_litellm_snapshot())
+    return len(_load_capabilities_snapshot())
