@@ -18,35 +18,38 @@ from durin.cron.service import CronService
 from durin.cron.types import CronJob, CronJobState, CronSchedule
 
 _CRON_PARAMETERS = tool_parameters_schema(
-    action=StringSchema("Action to perform", enum=["add", "list", "remove"]),
+    action=StringSchema("Action to perform", enum=["add", "list", "remove", "update"]),
     name=StringSchema(
         "Optional short human-readable label for the job "
-        "(e.g., 'weather-monitor', 'daily-standup'). Defaults to first 30 chars of message."
+        "(e.g., 'weather-monitor', 'daily-standup'). Defaults to first 30 chars of message. "
+        "Also used by action='update' to rename a job (omit to keep the current name)."
     ),
     message=StringSchema(
         "REQUIRED when action='add'. Instruction for the agent to execute when the job triggers "
         "(e.g., 'Send a reminder to WeChat: xxx' or 'Check system status and report'). "
+        "Also accepted by action='update' to replace the message (omit to keep the current one). "
         "Not used for action='list' or action='remove'."
     ),
-    every_seconds=IntegerSchema(0, description="Interval in seconds (for recurring tasks)"),
-    cron_expr=StringSchema("Cron expression like '0 9 * * *' (for scheduled tasks)"),
+    every_seconds=IntegerSchema(0, description="Interval in seconds (for recurring tasks). For update, providing this replaces the schedule."),
+    cron_expr=StringSchema("Cron expression like '0 9 * * *' (for scheduled tasks). For update, providing this replaces the schedule."),
     tz=StringSchema(
         "Optional IANA timezone for cron expressions (e.g. 'America/Vancouver'). "
         "When omitted with cron_expr, the tool's default timezone applies."
     ),
     at=StringSchema(
         "ISO datetime for one-time execution (e.g. '2026-02-12T10:30:00'). "
-        "Naive values use the tool's default timezone."
+        "Naive values use the tool's default timezone. For update, providing this replaces the schedule."
     ),
     deliver=BooleanSchema(
-        description="Whether to deliver the execution result to the user channel (default true)",
+        description="Whether to deliver the execution result to the user channel (default true). For update, accepted to toggle.",
         default=True,
     ),
-    job_id=StringSchema("REQUIRED when action='remove'. Job ID to remove (obtain via action='list')."),
+    job_id=StringSchema("REQUIRED when action='remove' or action='update'. Job ID to operate on (obtain via action='list')."),
     required=["action"],
     description=(
         "Action-specific parameters: add requires a non-empty message plus one schedule "
-        "(every_seconds, cron_expr, or at); remove requires job_id; list only needs action. "
+        "(every_seconds, cron_expr, or at); remove requires job_id; update requires job_id "
+        "plus at least one field to change; list only needs action. "
         "Per-action requirements are enforced at runtime (see field descriptions) so the "
         "top-level schema stays compatible with providers (e.g. OpenAI Codex/Responses) that "
         "reject oneOf/anyOf/allOf/enum/not at the root of function parameters."
@@ -129,6 +132,8 @@ class CronTool(Tool, ContextAware):
             errors.append("message is required when action='add'")
         if action == "remove" and not str(params.get("job_id") or "").strip():
             errors.append("job_id is required when action='remove'")
+        if action == "update" and not str(params.get("job_id") or "").strip():
+            errors.append("job_id is required when action='update'")
         return errors
 
     async def execute(
@@ -152,6 +157,12 @@ class CronTool(Tool, ContextAware):
             return self._list_jobs()
         elif action == "remove":
             return self._remove_job(job_id)
+        elif action == "update":
+            if self._in_cron_context.get():
+                return "Error: cannot edit jobs from within a cron job execution"
+            return self._update_job(
+                job_id, name, message, every_seconds, cron_expr, tz, at, deliver,
+            )
         return f"Unknown action: {action}"
 
     def _add_job(
@@ -273,6 +284,134 @@ class CronTool(Tool, ContextAware):
             parts.extend(self._format_state(j.state, j.schedule))
             lines.append("\n".join(parts))
         return "Scheduled jobs:\n" + "\n".join(lines)
+
+    def _update_job(
+        self,
+        job_id: str | None,
+        name: str | None,
+        message: str | None,
+        every_seconds: int | None,
+        cron_expr: str | None,
+        tz: str | None,
+        at: str | None,
+        deliver: bool | None,
+    ) -> str:
+        if not job_id:
+            return "Error: job_id is required for update"
+
+        # Determine whether a schedule change was requested. We treat
+        # every_seconds=0 as "not provided" since the schema defaults
+        # IntegerSchema-style ints to 0, and a zero-interval cron job is
+        # nonsensical anyway. The other two fields are real strings; an
+        # empty string is treated as "no change".
+        schedule_change_requested = bool(every_seconds) or bool(cron_expr) or bool(at)
+        provided = sum(1 for v in (every_seconds, cron_expr, at) if v)
+        if schedule_change_requested and provided > 1:
+            return (
+                "Error: provide at most ONE of every_seconds / cron_expr / at "
+                "when updating a job's schedule."
+            )
+        if tz and not cron_expr:
+            return "Error: tz can only be used with cron_expr"
+        if tz:
+            if err := self._validate_timezone(tz):
+                return err
+
+        new_schedule = None
+        delete_after = None
+        if schedule_change_requested:
+            if every_seconds:
+                new_schedule = CronSchedule(kind="every", every_ms=every_seconds * 1000)
+            elif cron_expr:
+                effective_tz = tz or self._default_timezone
+                if err := self._validate_timezone(effective_tz):
+                    return err
+                new_schedule = CronSchedule(kind="cron", expr=cron_expr, tz=effective_tz)
+            else:  # at
+                from zoneinfo import ZoneInfo
+
+                try:
+                    dt = datetime.fromisoformat(at)
+                except ValueError:
+                    return (
+                        f"Error: invalid ISO datetime format '{at}'. "
+                        "Expected format: YYYY-MM-DDTHH:MM:SS"
+                    )
+                if dt.tzinfo is None:
+                    if err := self._validate_timezone(self._default_timezone):
+                        return err
+                    dt = dt.replace(tzinfo=ZoneInfo(self._default_timezone))
+                at_ms = int(dt.timestamp() * 1000)
+                new_schedule = CronSchedule(kind="at", at_ms=at_ms)
+                # One-shot 'at' jobs delete themselves after running; the
+                # previous job may have been recurring (delete_after_run
+                # was False). Switch the flag to match the new shape.
+                delete_after = True
+
+        # Treat an empty-string message as "no change" to keep parity with
+        # the schema's positional defaults. The model passes "" when it
+        # omits the parameter via JSON marshalling on some providers.
+        msg_change: str | None = message if (message and message.strip()) else None
+
+        # At least one field must change — refuse a no-op call so the
+        # model gets clear feedback rather than a silent "ok".
+        any_change = any([
+            new_schedule is not None,
+            msg_change is not None,
+            name and name.strip(),
+            deliver is not None and deliver is not True,  # default True from schema = "not provided"
+        ])
+        # ``deliver`` is tricky: schema default is True, so we cannot
+        # distinguish "user wanted True" from "user did not pass it".
+        # Allow update calls that only change name/message/schedule to
+        # pass through without forcing the user to set deliver.
+        if not any_change and (deliver is None or deliver is True):
+            # Special-case: if only deliver was provided AND it's True,
+            # we still treat that as a no-op. If the user actually wanted
+            # to flip deliver to False they'd pass False, which IS a real
+            # change picked up below.
+            pass
+
+        # Compute final any_change including the False-deliver case.
+        any_change_real = (
+            new_schedule is not None
+            or msg_change is not None
+            or (name is not None and name.strip())
+            or (deliver is False)
+        )
+        if not any_change_real:
+            return (
+                "Error: update needs at least one field to change "
+                "(name, message, schedule, or deliver=false). "
+                "If you only want to inspect the job, use action='list'."
+            )
+
+        kwargs: dict[str, Any] = {}
+        if name and name.strip():
+            kwargs["name"] = name.strip()
+        if msg_change is not None:
+            kwargs["message"] = msg_change
+        if new_schedule is not None:
+            kwargs["schedule"] = new_schedule
+        if deliver is False:
+            kwargs["deliver"] = False
+        if delete_after is not None:
+            kwargs["delete_after_run"] = delete_after
+
+        result = self._cron.update_job(job_id, **kwargs)
+        if result == "not_found":
+            return f"Job {job_id} not found"
+        if result == "protected":
+            return (
+                f"Cannot update job `{job_id}`: it is a protected "
+                "system-managed cron job."
+            )
+        # ``result`` is a CronJob — render a friendly summary.
+        timing = self._format_timing(result.schedule)
+        return (
+            f"Updated job '{result.name}' (id: {result.id}). "
+            f"Timing: {timing}."
+        )
 
     def _remove_job(self, job_id: str | None) -> str:
         if not job_id:

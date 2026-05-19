@@ -105,6 +105,7 @@ PLAN_MODE_ALLOWED = frozenset({
     "subagent_status",
     "subagent_stop",
     "subagent_output",
+    "subagent_monitor",
     # Subagent spawning is allowed; subagents inherit `explore` mode (see
     # spawn integration) which is also read-only.
     "spawn",
