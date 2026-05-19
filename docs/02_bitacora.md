@@ -804,3 +804,43 @@ Ran an agent turn that called `ask_user_question("Which framework?", options=["R
 ### Lesson
 
 When a tool's value is mostly semantic (forcing a control-flow shift rather than computing a result), the schema can stay small but the result text must do the heavy lifting. "Return data" tools can be terse; "yield" tools need to spell out the contract — what the model should write next, what it should NOT do, where the user's reply will arrive. We saw the same pattern with `exit_plan_mode` and the plan-display contract — making the model's next move explicit in the tool result avoids drifting into hallucinated continuations.
+
+## session_search — item #4 of the tools roadmap (May 2026)
+
+### What shipped
+
+`session_search` tool ([durin/agent/tools/session_search.py](durin/agent/tools/session_search.py)). Searches the current session's in-memory `session.messages` list for a keyword or regex and returns matches as `[msg_index] role: snippet`. Parameters:
+
+- `query: string` (required) — substring (default) or regex
+- `regex: bool` — opt into regex; invalid patterns surface as a clear tool error
+- `case_sensitive: bool` — default false (case-insensitive)
+- `role: "user" | "assistant" | "tool" | "system"` — restrict to one role
+- `max_results: int 1..100` — default 20, returns the **last** N matches when there are more (recency bias matches the most common "what did I see recently?" use case)
+- `snippet_chars: int 50..500` — width of the context window around each match, default 200
+
+Allowed in every agent mode (read-only).
+
+### Why this exists
+
+Long sessions accumulate hundreds of messages. The model's working context (LLM history window) only carries the most recent slice; everything else is on disk in the jsonl. Without a search affordance, the model has only two options when it needs to recall something specific from earlier:
+
+1. Call `read_file` on the session jsonl — works, but the file is large and the model burns tokens scanning it
+2. Hallucinate / re-ask the user — bad UX
+
+`session_search` is the obvious middle path: keyword/regex lookup against the same in-memory list the LLM history is built from, returning compact `[msg_index] role: snippet` results that fit cheaply in the next tool result. The model can chain a follow-up read against the meta timeline if it needs the full message at `msg_index`.
+
+### Design notes worth keeping
+
+- **Live messages, not disk**. The tool reads `session.messages` (the in-memory list), not `<session>.jsonl`. The in-memory list is the source of truth that the LLM history-builder also uses, so search results stay consistent with what the model has seen. Reading from disk could lag by a turn and is unnecessary indirection.
+- **Tail bias on overflow**. When matches exceed `max_results`, we keep the **last** N chronologically. The earlier-in-session matches are usually less relevant ("what was the original ask?") than recent ones ("what error did I just see?"). If the model needs older matches it can narrow the query.
+- **Snippet via single-pass regex windowing**. A `re.search` per message + a `_make_snippet` helper that centers the window on the match position, collapses whitespace, and ellipses both ends. No fancy tokenizer; the goal is readable single-line excerpts that fit alongside the msg_index.
+- **Structured content handled**. Tool messages with `content` as a list of blocks (text, image_url, etc.) get their `text` fields concatenated before searching. The model would have seen this content rendered the same way during the original turn, so search consistency holds.
+- **Read-only with no new exposure surface**. The tool only returns content the model has already produced or seen. No new data-leak vector vs. the existing history-rendering path.
+
+### E2E verification
+
+Seeded a session with "my favorite color is electric blue, and the project codename is Mongoose-7" in turn 1. In turn 2, asked the agent to use `session_search` to recall the codename. The agent invoked the tool with `query="codename"`, got back a match at `msg_index=0` (the seed user message), and reported "Your project codename is Mongoose-7" without re-reading the whole session.
+
+### Lesson
+
+For tools that operate on session-local state, the right substrate is almost always the in-memory representation, not the persisted file. The in-memory copy is the canonical source the LLM consumes; reading the file introduces consistency lag and indirection without any benefit for tools that are scoped to the current turn. Save the on-disk path for tools that operate across sessions (memory subsystem, cross-conversation indexing) — there it's the right answer.

@@ -97,6 +97,8 @@ PLAN_MODE_ALLOWED = frozenset({
     # Asking the user for clarification mid-investigation is read-safe;
     # the tool just records the question and yields.
     "ask_user_question",
+    # Searching the current session's prior messages is read-only.
+    "session_search",
     # Subagent spawning is allowed; subagents inherit `explore` mode (see
     # spawn integration) which is also read-only.
     "spawn",
