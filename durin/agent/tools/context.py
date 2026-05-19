@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Callable, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from durin.providers.base import LLMProvider
 
 
 @dataclass(frozen=True)
@@ -21,6 +24,21 @@ class ContextAware(Protocol):
         ...
 
 
+@dataclass(frozen=True, slots=True)
+class AuxProviderHandle:
+    """Bound provider + model name for an auxiliary modality bridge.
+
+    Constructed once at startup from ``config.agents.aux_models`` and
+    handed to bridge tools (``interpret_image``, ``interpret_audio``,
+    …) via :class:`ToolContext`. The bridge tool reuses the same
+    provider instance for every call so we don't pay credentials /
+    client-setup cost per request.
+    """
+
+    provider: "LLMProvider"
+    model: str
+
+
 @dataclass
 class ToolContext:
     config: Any
@@ -33,3 +51,9 @@ class ToolContext:
     provider_snapshot_loader: Callable[[], Any] | None = None
     image_generation_provider_configs: dict[str, Any] | None = None
     timezone: str = "UTC"
+    # Auxiliary providers for capability bridges (vision / audio / …).
+    # Populated when ``config.agents.aux_models`` has the corresponding
+    # entry. Bridge tools check the relevant key in ``enabled()`` so
+    # they only appear in the LLM's tool list when a bridge target is
+    # actually available.
+    aux_providers: dict[str, AuxProviderHandle] = field(default_factory=dict)

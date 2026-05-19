@@ -21,6 +21,7 @@ from durin.agent.memory import Consolidator, Dream
 from durin.agent.progress_hook import AgentProgressHook
 from durin.agent.runner import _MAX_INJECTIONS_PER_TURN, AgentRunner, AgentRunSpec
 from durin.agent.subagent import SubagentManager
+from durin.agent.tools.context import AuxProviderHandle
 from durin.agent.tools.file_state import FileStateStore, bind_file_states, reset_file_states
 from durin.agent.tools.message import MessageTool
 from durin.agent.tools.registry import ToolRegistry
@@ -76,6 +77,56 @@ class StateTraceEntry:
     duration_ms: float
     event: str
     error: str | None = None
+
+
+def _build_aux_providers(config: Any) -> dict[str, AuxProviderHandle]:
+    """Construct one provider per configured auxiliary modality.
+
+    Called once during ``AgentLoop.from_config``. For each entry in
+    ``config.agents.aux_models`` (vision / audio / …) we resolve the
+    referenced preset or build an inline ``ModelPresetConfig`` and
+    call :func:`make_provider`. The resulting providers are reused for
+    every bridge-tool invocation — credentials and HTTP clients open
+    once at startup.
+
+    Returns an empty dict when no aux models are configured; bridge
+    tools then see no entry and stay hidden from the LLM's tool list.
+    """
+    from durin.providers.factory import make_provider
+    from durin.config.schema import ModelPresetConfig
+
+    out: dict[str, AuxProviderHandle] = {}
+    aux = getattr(getattr(config, "agents", None), "aux_models", None)
+    if aux is None:
+        return out
+    for kind in ("vision", "audio"):
+        entry = getattr(aux, kind, None)
+        if entry is None:
+            continue
+        preset: ModelPresetConfig
+        if entry.preset:
+            try:
+                preset = config.resolve_preset(entry.preset)
+            except Exception:
+                logger.exception("Failed to resolve aux preset %r for %s bridge", entry.preset, kind)
+                continue
+        elif entry.model:
+            preset = ModelPresetConfig(
+                model=entry.model,
+                provider=entry.provider or "auto",
+            )
+        else:
+            continue
+        try:
+            provider = make_provider(config, preset=preset)
+        except Exception:
+            logger.exception("Failed to build aux provider for %s bridge (model=%s, provider=%s)",
+                             kind, preset.model, preset.provider)
+            continue
+        out[kind] = AuxProviderHandle(provider=provider, model=preset.model)
+        logger.info("Aux %s bridge enabled — model=%s provider=%s",
+                    kind, preset.model, preset.provider)
+    return out
 
 
 @dataclass
@@ -178,6 +229,7 @@ class AgentLoop:
         tools_config: ToolsConfig | None = None,
         image_generation_provider_config: ProviderConfig | None = None,
         image_generation_provider_configs: dict[str, ProviderConfig] | None = None,
+        aux_providers: dict[str, "AuxProviderHandle"] | None = None,
         provider_snapshot_loader: Callable[..., ProviderSnapshot] | None = None,
         provider_signature: tuple[object, ...] | None = None,
         model_presets: dict[str, ModelPresetConfig] | None = None,
@@ -222,6 +274,11 @@ class AgentLoop:
         self.web_config = _tc.web
         self.exec_config = _tc.exec
         self._image_generation_provider_configs = dict(image_generation_provider_configs or {})
+        # Aux providers for capability bridges (vision/audio/...). Empty
+        # dict ⇒ no bridge tools register. Built upstream by
+        # ``from_config`` from ``config.agents.aux_models``; tests can
+        # inject a custom dict directly.
+        self._aux_providers: dict[str, AuxProviderHandle] = dict(aux_providers or {})
         if (
             image_generation_provider_config is not None
             and "openrouter" not in self._image_generation_provider_configs
@@ -338,6 +395,8 @@ class AgentLoop:
             except Exception:
                 pass
 
+        aux_providers = _build_aux_providers(config)
+
         return cls(
             bus=bus,
             provider=provider,
@@ -362,6 +421,7 @@ class AgentLoop:
             model_preset=defaults.model_preset,
             provider_snapshot_loader=provider_snapshot_loader,
             preset_snapshot_loader=preset_snapshot_loader,
+            aux_providers=aux_providers,
             hooks=hooks or None,
             **extra,
         )
@@ -459,6 +519,7 @@ class AgentLoop:
             provider_snapshot_loader=self._provider_snapshot_loader,
             image_generation_provider_configs=self._image_generation_provider_configs,
             timezone=self.context.timezone or "UTC",
+            aux_providers=self._aux_providers,
         )
         loader = ToolLoader()
         registered = loader.load(ctx, self.tools)

@@ -106,6 +106,9 @@ PLAN_MODE_ALLOWED = frozenset({
     "subagent_stop",
     "subagent_output",
     "subagent_monitor",
+    # Capability bridges delegate to an auxiliary model — read-only
+    # with respect to the workspace, safe to use while planning.
+    "interpret_image",
     # Subagent spawning is allowed; subagents inherit `explore` mode (see
     # spawn integration) which is also read-only.
     "spawn",
