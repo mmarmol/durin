@@ -428,3 +428,50 @@ class TestReadDescriptionUpdate:
     def test_description_no_longer_says_cannot_read(self):
         tool = ReadFileTool()
         assert "cannot read" not in tool.description.lower()
+
+
+# ---------------------------------------------------------------------------
+# T3 — Suggestion-on-miss for ReadFileTool (Sprint A)
+# ---------------------------------------------------------------------------
+
+class TestReadSuggestionOnMiss:
+    """ReadFileTool should suggest similar filenames when the path is not found.
+
+    Mirrors the helper already used by EditFileTool, lifted to _FsTool so both
+    tools share the affordance (T3 from docs/07_external_agents_review.md).
+    """
+
+    @pytest.fixture
+    def tool(self, tmp_path):
+        return ReadFileTool(workspace=tmp_path)
+
+    @pytest.mark.asyncio
+    async def test_typo_in_basename_gets_suggestion(self, tool, tmp_path):
+        (tmp_path / "report.txt").write_text("hello\n")
+        result = await tool.execute(path="reprot.txt")
+        assert "File not found" in result
+        assert "Did you mean" in result
+        assert "report.txt" in result
+
+    @pytest.mark.asyncio
+    async def test_no_similar_files_no_suggestion(self, tool, tmp_path):
+        (tmp_path / "completely_unrelated.md").write_text("x\n")
+        result = await tool.execute(path="alpha.py")
+        assert "File not found" in result
+        assert "Did you mean" not in result
+
+    @pytest.mark.asyncio
+    async def test_multiple_close_matches_top_3(self, tool, tmp_path):
+        for name in ("foo_one.py", "foo_two.py", "foo_three.py", "foo_four.py", "bar.py"):
+            (tmp_path / name).write_text("x\n")
+        result = await tool.execute(path="foo_thre.py")
+        assert "Did you mean" in result
+        # bar.py should not surface — too dissimilar
+        assert "bar.py" not in result
+
+    @pytest.mark.asyncio
+    async def test_missing_parent_directory_no_crash(self, tool, tmp_path):
+        result = await tool.execute(path="nonexistent_dir/file.py")
+        assert "File not found" in result
+        # No suggestion possible — parent doesn't exist
+        assert "Did you mean" not in result

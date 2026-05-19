@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import time
+from contextvars import ContextVar, Token
 from pathlib import Path
 from typing import Any
 
@@ -88,3 +89,27 @@ def get_session_logger(
     today = date.today().isoformat()
     filename = f"{safe_key}_{today}.jsonl"
     return TelemetryLogger(target_dir / filename)
+
+
+# Per-task telemetry binding. Mirrors the file_state ContextVar pattern so a
+# tool can resolve the active session's logger at execution time without having
+# to thread it through every constructor. AgentLoop binds the session logger
+# before invoking the runner and resets the token on exit.
+_current_logger: ContextVar[TelemetryLogger | None] = ContextVar(
+    "durin_telemetry_logger",
+    default=None,
+)
+
+
+def current_telemetry() -> TelemetryLogger | None:
+    """Return the TelemetryLogger bound to the current task, or None."""
+    return _current_logger.get()
+
+
+def bind_telemetry(logger: TelemetryLogger) -> Token[TelemetryLogger | None]:
+    """Bind a telemetry logger for the current async task."""
+    return _current_logger.set(logger)
+
+
+def reset_telemetry(token: Token[TelemetryLogger | None]) -> None:
+    _current_logger.reset(token)

@@ -54,7 +54,7 @@ class MyTool(Tool, ContextAware):
         "_runtime_vars",
         # Subsystems
         "runner", "sessions", "consolidator",
-        "dream", "auto_compact", "context", "commands",
+        "dream", "context", "commands",
         # Sensitive runtime state (credentials, message routing, task tracking)
         "_mcp_servers", "_mcp_stacks", "_pending_queues",
         "_session_locks", "_active_tasks", "_background_tasks",

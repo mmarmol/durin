@@ -49,3 +49,6 @@ gold.*.json
 /TOOLS.md
 /USER.md
 /MEMORY.md
+# Exercism dataset (clone only)
+scripts/hypothesis_test/exercism_python/
+scripts/hypothesis_test/v9_runs/

@@ -240,16 +240,26 @@ class ExecTool(Tool):
 
             result = "\n".join(output_parts) if output_parts else "(no output)"
 
-            max_len = self._MAX_OUTPUT
-            if len(result) > max_len:
-                half = max_len // 2
-                result = (
-                    result[:half]
-                    + f"\n\n... ({len(result) - max_len:,} chars truncated) ...\n\n"
-                    + result[-half:]
-                )
+            # T4 — Tool output cap with spill-to-disk for recovery.
+            # The model gets head+tail of the output plus a reference to a
+            # spill file under <workspace>/.durin/spills/ that it can read
+            # with read_file when it needs the omitted middle.
+            from durin.agent.tools.output_spill import truncate_with_spill
+            from durin.telemetry.logger import current_telemetry
 
-            return result
+            workspace_path = Path(self.working_dir) if self.working_dir else None
+            rendered, spill_meta = truncate_with_spill(
+                result,
+                tool_name="exec",
+                workspace=workspace_path,
+                max_chars=self._MAX_OUTPUT,
+            )
+            if spill_meta.get("original_chars", 0) != spill_meta.get("rendered_chars", 0):
+                logger_obj = current_telemetry()
+                if logger_obj is not None:
+                    with suppress(Exception):
+                        logger_obj.log("tool.exec.spill", spill_meta)
+            return rendered
 
         except Exception as e:
             return f"Error executing command: {str(e)}"

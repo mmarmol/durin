@@ -230,28 +230,92 @@ async def _print_interactive_response(
     await run_in_terminal(_write)
 
 
-def _print_cli_progress_line(text: str, thinking: ThinkingSpinner | None, renderer: StreamRenderer | None = None) -> None:
-    """Print a CLI progress line, pausing the spinner if needed."""
+async def _print_cli_progress_line(
+    text: str,
+    thinking: ThinkingSpinner | None,
+    renderer: StreamRenderer | None = None,
+) -> None:
+    """Print a CLI progress line. Uses ``run_in_terminal`` + ANSI capture so
+    output is coordinated with prompt_toolkit (no input/output clobbering)."""
     if not text.strip():
         return
-    target = renderer.console if renderer else console
     pause = renderer.pause_spinner() if renderer else (thinking.pause() if thinking else nullcontext())
-    with pause:
-        if renderer:
-            renderer.ensure_header()
-        target.print(f"  [dim]↳ {text}[/dim]")
+
+    def _write() -> None:
+        with pause:
+            if renderer:
+                renderer.ensure_header()
+            ansi = _render_interactive_ansi(
+                lambda c: c.print(f"  [dim]↳ {text}[/dim]")
+            )
+            print_formatted_text(ANSI(ansi), end="")
+
+    await run_in_terminal(_write)
 
 
-def _print_cli_reasoning(text: str, thinking: ThinkingSpinner | None, renderer: StreamRenderer | None = None) -> None:
-    """Print reasoning/thinking content in a distinct style."""
+# Reasoning chunks arrive token-by-token via the streaming progress hook.
+# Without buffering we'd render every chunk on its own line prefixed with
+# `✻`, producing a vertical stream of two-word lines. Buffer chunks and
+# emit one styled line per logical newline; flush whatever remains when
+# the reasoning segment ends (signalled by `reasoning_end=True`).
+#
+# All emission goes through `run_in_terminal` + `print_formatted_text` so
+# the output coordinates correctly with prompt_toolkit's input line —
+# without this, the streaming output and the "You: " prompt get
+# interleaved on the same terminal row.
+_reasoning_buf: list[str] = []
+
+
+async def _emit_reasoning_line(
+    text: str,
+    thinking: ThinkingSpinner | None,
+    renderer: StreamRenderer | None = None,
+) -> None:
+    """Render one complete reasoning line in the dim-italic ✻ style."""
     if not text.strip():
         return
-    target = renderer.console if renderer else console
     pause = renderer.pause_spinner() if renderer else (thinking.pause() if thinking else nullcontext())
-    with pause:
-        if renderer:
-            renderer.ensure_header()
-        target.print(f"[dim italic]✻ {text}[/dim italic]")
+
+    def _write() -> None:
+        with pause:
+            if renderer:
+                renderer.ensure_header()
+            ansi = _render_interactive_ansi(
+                lambda c: c.print(f"[dim italic]✻ {text}[/dim italic]")
+            )
+            print_formatted_text(ANSI(ansi), end="")
+
+    await run_in_terminal(_write)
+
+
+async def _print_cli_reasoning(
+    text: str,
+    thinking: ThinkingSpinner | None,
+    renderer: StreamRenderer | None = None,
+) -> None:
+    """Append a reasoning chunk to the buffer; emit each complete line."""
+    if not text:
+        return
+    _reasoning_buf.append(text)
+    buffered = "".join(_reasoning_buf)
+    if "\n" not in buffered:
+        return
+    lines = buffered.split("\n")
+    # Emit every fully-terminated line; keep the trailing (possibly partial) one
+    for line in lines[:-1]:
+        await _emit_reasoning_line(line, thinking, renderer)
+    _reasoning_buf[:] = [lines[-1]] if lines[-1] else []
+
+
+async def _flush_cli_reasoning(
+    thinking: ThinkingSpinner | None,
+    renderer: StreamRenderer | None = None,
+) -> None:
+    """Emit any remaining buffered reasoning text. Called on reasoning_end."""
+    text = "".join(_reasoning_buf).strip()
+    _reasoning_buf.clear()
+    if text:
+        await _emit_reasoning_line(text, thinking, renderer)
 
 
 async def _print_interactive_progress_line(text: str, thinking: ThinkingSpinner | None, renderer: StreamRenderer | None = None) -> None:
@@ -293,11 +357,17 @@ async def _maybe_print_interactive_progress(
         return True
 
     is_tool_hint = metadata.get("_tool_hint", False)
+    is_reasoning_end = metadata.get("_reasoning_end", False)
     is_reasoning = metadata.get("_reasoning", False) or metadata.get("_reasoning_delta", False)
+    if is_reasoning_end:
+        if channels_config and not channels_config.show_reasoning:
+            return True
+        await _flush_cli_reasoning(thinking, renderer)
+        return True
     if is_reasoning:
         if channels_config and not channels_config.show_reasoning:
             return True
-        _print_cli_reasoning(msg.content, thinking, renderer)
+        await _print_cli_reasoning(msg.content, thinking, renderer)
         return True
     if channels_config and is_tool_hint and not channels_config.send_tool_hints:
         return True
@@ -1118,7 +1188,7 @@ def agent(
     _thinking: ThinkingSpinner | None = None
 
     def _make_progress(renderer: StreamRenderer | None = None):
-        async def _cli_progress(content: str, *, tool_hint: bool = False, reasoning: bool = False, agent_ui: dict[str, Any] | None = None, **_kwargs: Any) -> None:
+        async def _cli_progress(content: str, *, tool_hint: bool = False, reasoning: bool = False, reasoning_end: bool = False, agent_ui: dict[str, Any] | None = None, **_kwargs: Any) -> None:
             if agent_ui:
                 from durin.cli.agent_ui_render import render_agent_ui
                 target = renderer.console if renderer else console
@@ -1129,16 +1199,21 @@ def agent(
                     render_agent_ui(target, agent_ui)
                 return
             ch = agent_loop.channels_config
+            if reasoning_end:
+                if ch and not ch.show_reasoning:
+                    return
+                await _flush_cli_reasoning(_thinking, renderer)
+                return
             if reasoning:
                 if ch and not ch.show_reasoning:
                     return
-                _print_cli_reasoning(content, _thinking, renderer)
+                await _print_cli_reasoning(content, _thinking, renderer)
                 return
             if ch and tool_hint and not ch.send_tool_hints:
                 return
             if ch and not tool_hint and not ch.send_progress:
                 return
-            _print_cli_progress_line(content, _thinking, renderer)
+            await _print_cli_progress_line(content, _thinking, renderer)
         return _cli_progress
 
     if message:
@@ -1284,22 +1359,44 @@ def agent(
 
                         await turn_done.wait()
 
-                        if turn_response:
-                            content, meta = turn_response[0]
-                            if content and not meta.get("_streamed"):
-                                if renderer:
-                                    await renderer.close()
-                                print_kwargs: dict[str, Any] = {}
-                                if renderer and renderer.header_printed:
-                                    print_kwargs["show_header"] = False
-                                _print_agent_response(
-                                    content,
-                                    render_markdown=markdown,
-                                    metadata=meta,
-                                    **print_kwargs,
-                                )
-                        elif renderer and not renderer.streamed:
-                            await renderer.close()
+                        while True:
+                            blocking = False
+                            if turn_response:
+                                content, meta = turn_response[0]
+                                blocking = bool(meta.get("_block_input_until_response"))
+                                if content and not meta.get("_streamed"):
+                                    print_kwargs: dict[str, Any] = {}
+                                    if blocking:
+                                        # Keep the existing renderer alive so its
+                                        # spinner keeps signalling background work
+                                        # after we print this synchronous reply.
+                                        with renderer.pause() if renderer else nullcontext():
+                                            if renderer and renderer.header_printed:
+                                                print_kwargs["show_header"] = False
+                                            _print_agent_response(
+                                                content,
+                                                render_markdown=markdown,
+                                                metadata=meta,
+                                                **print_kwargs,
+                                            )
+                                    else:
+                                        if renderer:
+                                            await renderer.close()
+                                        if renderer and renderer.header_printed:
+                                            print_kwargs["show_header"] = False
+                                        _print_agent_response(
+                                            content,
+                                            render_markdown=markdown,
+                                            metadata=meta,
+                                            **print_kwargs,
+                                        )
+                            elif renderer and not renderer.streamed and not blocking:
+                                await renderer.close()
+                            if not blocking:
+                                break
+                            turn_done.clear()
+                            turn_response.clear()
+                            await turn_done.wait()
                     except KeyboardInterrupt:
                         _restore_terminal()
                         console.print("\nGoodbye!")

@@ -72,7 +72,24 @@ async def test_runner_calls_hooks_in_order():
     ))
 
     assert result.final_content == "DONE"
-    assert events == [
+    # The first after_iteration event carries the tool_events dict; strip
+    # ``tool_call_id`` and ``duration_ms`` (non-deterministic) before
+    # comparison.
+    def _strip_dynamic(events_seq):
+        out = []
+        for e in events_seq:
+            if isinstance(e, tuple) and e[0] == "after_iteration" and len(e) >= 5:
+                tag, it, fc, tool_results, tool_events_list, *rest = e
+                cleaned = [
+                    {k: v for k, v in ev.items() if k not in ("tool_call_id", "duration_ms")}
+                    for ev in tool_events_list
+                ]
+                out.append((tag, it, fc, tool_results, cleaned, *rest))
+            else:
+                out.append(e)
+        return out
+
+    assert _strip_dynamic(events) == [
         ("before_iteration", 0),
         ("before_execute_tools", 0, ["list_dir"]),
         (

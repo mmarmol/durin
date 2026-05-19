@@ -29,6 +29,28 @@ LENGTH_RECOVERY_PROMPT = (
     "— no recap, no apology. Break remaining work into smaller steps if needed."
 )
 
+# 2B — Reasoning-phase truncation recovery prompt.
+#
+# Reasoning models (glm-5.1, o-series, Claude thinking) emit their internal
+# deliberation in a separate `reasoning_content` field that counts against the
+# completion-token budget but does NOT appear in `content`. When the token cap
+# strikes mid-reasoning, we observe:
+#   - finish_reason == "length"
+#   - content is blank
+#   - reasoning_content is non-empty (often very long)
+#
+# The default LENGTH_RECOVERY_PROMPT asks the model to "continue exactly where
+# you left off" — fine for content truncation but harmful here, because the
+# model would resume mid-thought without the cue that it needs to wrap up.
+# REASONING_TRUNCATION_PROMPT explicitly tells the model: finish your reasoning
+# briefly, then output the final answer or tool calls.
+REASONING_TRUNCATION_PROMPT = (
+    "Your internal reasoning was cut off by the token budget — you have not "
+    "produced any visible output or tool calls yet. Briefly conclude your "
+    "reasoning (one or two sentences max) and then output the final answer or "
+    "the tool calls you intended. Do not restart the analysis from scratch."
+)
+
 
 def empty_tool_result_message(tool_name: str) -> str:
     """Short prompt-safe marker for tools that completed without visible output."""
@@ -63,6 +85,17 @@ def build_finalization_retry_message() -> dict[str, str]:
 def build_length_recovery_message() -> dict[str, str]:
     """Prompt the model to continue after hitting output token limit."""
     return {"role": "user", "content": LENGTH_RECOVERY_PROMPT}
+
+
+def build_reasoning_truncation_message() -> dict[str, str]:
+    """2B — Prompt the model to wrap up its reasoning and emit the final answer.
+
+    Used when ``finish_reason == "length"`` strikes mid-reasoning and the
+    visible ``content`` is still empty. Distinct from the regular length
+    recovery prompt because the model isn't continuing a partial visible
+    answer — it needs to short-circuit its remaining deliberation.
+    """
+    return {"role": "user", "content": REASONING_TRUNCATION_PROMPT}
 
 
 def external_lookup_signature(tool_name: str, arguments: dict[str, Any]) -> str | None:

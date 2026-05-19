@@ -22,8 +22,8 @@ The interface between agent and environment. SWE-agent's key finding: interface 
 
 | Strategy | Who does it | Description | Status in Durin | Cost/Value |
 |---|---|---|---|---|
-| **Windowed file viewer** | SWE-agent | Read files in 100-line windows with line numbers, navigate via commands | Reads full file | Medium / Medium |
-| **Capped search results** | SWE-agent | Max 50 results, structured summary instead of dump | Returns all results | Low / Medium |
+| **Windowed file viewer** | SWE-agent | Read files in 100-line windows with line numbers, navigate via commands | ✅ Implemented (offset+limit, default 2000 lines) — **no telemetry yet** | Low / Medium |
+| **Capped search results** | SWE-agent | Max 50 results, structured summary instead of dump | ✅ Implemented (head_limit, default 250) — **no telemetry yet** | Low / Medium |
 | **Edit by line range** | SWE-agent | Edits target explicit line ranges with validation | Edit whole-file or by string match | Medium / High |
 | **Linter gate (hard reject)** | SWE-agent | Syntactically invalid edits rejected with error feedback before commit | Soft (verify runs after) | Medium / High |
 | **Model-specific edit formats** | Aider | 13 different edit formats, one per model family | Single format | High / Low (model-dependent) |
@@ -237,4 +237,17 @@ Original research synthesized from:
 
 ---
 
-## Last updated: 2026-05-18
+## Last updated: 2026-05-19
+
+---
+
+## May 2026 addendum — observations from the windowed/capped review
+
+Re-reading this catalog with a filter for "language-agnostic, production-validated, small scope" surfaced that the two SWE-agent quick-wins (windowed file viewer, capped search) **are already implemented in Durin's `read_file` and `grep` tools**, just at more permissive defaults than SWE-agent's originals (2000 vs 100 lines; 250 vs 50 results). What we don't have is **telemetry to know if those defaults are correctly sized for 1M-context frontier models** — see `02_bitacora.md` for full rationale.
+
+Three candidates per-language that we explicitly **rejected from the immediate plan** (May 2026):
+- Generate-test-repair loop (Aider) — requires per-language test runner integration
+- Linter gate hard-reject (SWE-agent) — requires per-language AST/linter
+- Edit-by-line-range with validation — validation step is per-language
+
+These remain valid quick-wins but turn into multi-language maintenance burden as Durin's tooling broadens.

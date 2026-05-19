@@ -37,14 +37,40 @@ The fork model is retained because future memory work (per `03_memory_design.md`
 │  5. Parse response (tool_calls, content, reasoning)          │
 │  6. If tool_calls:                                           │
 │     a. hook.before_execute_tools(context)                    │
-│     b. Execute tools (sequential or concurrent)              │
-│     c. Append tool results to messages                       │
-│  7. hook.after_iteration(context)                            │
-│  8. If no tool_calls → final_content → break                │
+│     b. Topological batching (1B): consecutive concurrency-   │
+│        safe tools run in parallel, mutations & exclusives    │
+│        get singleton batches in original order               │
+│     c. Per-call loop detection (1A): identical (name,args)   │
+│        signature that already failed this turn is short-     │
+│        circuited with a synthetic "BLOCKED" tool result      │
+│     d. Append tool results to messages                       │
+│  7. Reasoning-truncation recovery (2B): if finish_reason=    │
+│     length AND content blank AND reasoning_content non-empty │
+│     → inject specialized cue asking model to wrap up         │
+│  8. hook.after_iteration(context)                            │
+│  9. If no tool_calls → final_content → break                │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 The hook surface (`before_iteration`, `before_execute_tools`, `after_iteration`, plus streaming hooks) is intentionally generic. No hooks are bundled at present. New hooks (e.g. an `ExecutionTelemetryHook` for tracking iterations/tokens/tools) should attach via the standard `AgentHook` interface.
+
+### Phase 1 hardening (May 2026)
+
+After validating with V3–V9d that cognitive scaffolding adds little to no value on frontier-reasoning models (see `02_bitacora.md`), three infrastructure changes were added to the loop. These target the boundary between the model and the environment — the only place where execution-loop interventions still show empirical value:
+
+**1A — Hash-based loop detection** (`runner.py::_run_tool`).
+Frontier models occasionally fixate: they emit the same `(tool_name, arguments)` tuple in consecutive turns even after the prior call hard-failed. The fix is pure state tracking — a turn-scoped set of failed signatures (`sha256` of `tool_name + json.dumps(args, sort_keys=True)`). On a repeat hit we short-circuit with a synthetic "BLOCKED" tool result asking the model to take a different path. Per-turn scope only — we never block across turns because environment state may have changed. Pytest-style failures (tool succeeded but environment reported failure) are NOT recorded as failed signatures, so test-driven iteration loops continue to work.
+
+**1B — Topological tool ordering** (`runner.py::_partition_tool_batches`).
+The model can emit mixed tool calls like `[read_a, write_b, read_c]`. We never reorder; we walk the list and group only CONSECUTIVE `concurrency_safe` tools into a parallel batch. Mutations and exclusive tools get their own singleton batches. This prevents `[edit_file, run_tests]` race conditions while preserving the read-before-write / read-after-write semantics the model depends on. Tools default to `read_only=False` — opt-in safety.
+
+**2B — Reasoning-phase truncation recovery** (`runner.py` length-handling branch).
+Reasoning models (glm-5.1, o-series, Claude thinking) can hit `max_tokens` while still inside their `reasoning_content` deliberation, producing `finish_reason="length"` with empty `content` but a large reasoning blob. The default empty-retry path is harmful here (re-sends the same prompt). We detect this specific signature and append the partial reasoning plus a specialized cue asking the model to wrap up quickly and emit the final answer or tool calls. Preserves the chain-of-thought, avoids wasting the tokens already spent.
+
+**What we deliberately did NOT add**:
+- Forced-verification gate (refuted as PlanHook in V7/V8 — 0 hits, hurt scenario_3 by 2pp). Conditional version remains a Phase 2 candidate.
+- Semantic friction injection on errors (cognitive manipulation; contradicts the empirical pivot — see `02_bitacora.md`).
+- MCTS/tree-search wrapping the LLM (cost prohibitive for sync workflows; semantic search adds little value when the model already reasons internally).
 
 ---
 
@@ -113,8 +139,99 @@ No hooks are wired in by default after the prune. Future memory work and task-aw
 - `log(event_type, data)` — generic event emission
 - `log_rate_limit(...)` / `log_rate_limit_exhausted(...)` — provider rate-limit signal
 - `get_session_logger(session_key)` — date-suffixed per-session log files in `~/.cache/durin/telemetry/`
+- `bind_telemetry(logger)` / `current_telemetry()` / `reset_telemetry(token)` — ContextVar-based per-task binding so tools can resolve the active session's logger without explicit constructor wiring (parallels `bind_file_states`).
 
-The logger is connected to the provider layer (`provider.set_telemetry()` in `AgentLoop.from_config`) for rate-limit events. No other module emits telemetry by default. New trackers should call `logger.log(...)` with their own event type.
+Wiring points:
+- **Provider rate limits**: `provider.set_telemetry()` is called in `AgentLoop.from_config` and the provider emits `provider.rate_limit{,_exhausted}` events directly.
+- **Per-task tool events**: `AgentLoop._dispatch_message` calls `bind_telemetry(get_session_logger(session_key))` before invoking the runner and `reset_telemetry(token)` in the finally block, mirroring the `file_states` binding. Tools resolve the bound logger via `current_telemetry()`.
+
+Tool-level instrumentation (Phase 1c, May 2026):
+- `read_file` emits `tool.read_file` events with `{path, offset, limit, total_lines, returned_lines, result_chars, kind, truncated, dedup}` on the successful text-read and dedup paths.
+- `grep` emits `tool.grep` events with `{pattern_len, fixed_strings, case_insensitive, output_mode, limit, offset, glob_filter, type_filter, displayed, total_before_pagination, result_chars, truncated, size_truncated, skipped_binary, skipped_large}` on every non-error completion (including zero-match).
+- `edit_file` emits `tool.edit_file` events with `{path, match_strategy, matches, outcome, old_text_chars, new_text_chars}` for every call. `outcome` ∈ `{edited, not_found, ambiguous}`. `match_strategy` ∈ `{exact, line_trimmed, line_trimmed_quote_normalized, quote_normalized, block_anchor, null}` — lets us measure how often each cascade layer earns its keep.
+- `repo_overview` emits `tool.repo_overview` events with `{path, depth, ecosystems, package_manager, dependency_files_count, entrypoints_count, structure_lines, truncated, result_chars}`.
+- `exec` emits `tool.exec.spill` events with `{spilled, original_chars, rendered_chars, spill_path, spill_error}` when output exceeds the cap and gets spilled to disk via `truncate_with_spill`.
+- No event is emitted on error paths — by design, the goal is measuring information-loss patterns, not failure counts. Telemetry failures are silently swallowed so tool calls never break from a logging issue.
+
+The instrumentation is in service of validating SWE-agent's "tool I/O quality > loop quality" finding in our specific setup (frontier reasoning models with 1M context). The implementation does not change defaults — that decision comes after enough telemetry has been collected over real workloads. See `docs/01_roadmap.md` Phase 1c and `docs/02_bitacora.md` for rationale.
+
+### Sprint A — Tool I/O hygiene additions (May 2026)
+
+Implemented per `docs/07_external_agents_review.md` §6-§9. Four language-agnostic, validated patterns ported from OpenCode / SWE-agent:
+
+**T3 — Read suggestion-on-miss.** `ReadFileTool` now suggests close-named files in the same directory when the requested path doesn't exist. Shared helper `_file_not_found_msg` lives on `_FsTool` and is also used by `EditFileTool`. Uses `difflib.get_close_matches(cutoff=0.6, n=3)`.
+
+**T1 — `repo_overview` tool** (`durin/agent/tools/repo_overview.py`). One-shot orientation: depth-bounded directory tree (default 3, capped at 200 entries) plus detected ecosystems (Python, Node.js, Go, Rust, Ruby, Java/Kotlin, PHP), package manager (npm/pnpm/yarn/bun/poetry/cargo/etc.), dependency files, common entrypoints. No embeddings, no AST — purely structural. Lets the model orient before grep/list_dir. Inherits from `_FsTool` for telemetry + path resolution.
+
+**T4 — Tool output spill** (`durin/agent/tools/output_spill.py`). When a tool produces output larger than its budget, the FULL content is written to `<workspace>/.durin/spills/<tool>_<ts>_<hash>.txt` and the model receives head+tail of the budget plus a reference (`read_file(path=...)`) to recover the omitted middle. Wired into `ExecTool` (10K-char threshold). Spill write failures fall back to plain head/tail truncation — never breaks the tool call.
+
+**T2 — Block-anchor matcher in the edit cascade** (`filesystem.py::_find_block_anchor_matches`). Adds a fifth fallback to `EditFileTool`'s replacer chain: when `old_text` has 3+ lines, match first and last lines exactly (after strip) and use a similarity threshold on the middle. Relaxed threshold (0.5) when a single candidate exists, strict (0.85) with multiple. Handles cases where the model knows the start and end of a block but the interior shifted (reformatting, added comments, whitespace changes). Cascade order: `exact → line_trimmed → line_trimmed_quote_normalized → quote_normalized → block_anchor`. The strategy used is reported in `tool.edit_file` telemetry so we can measure how often each layer fires.
+
+### Sprint B — Permission-as-data agent modes (May 2026)
+
+Implemented per `docs/07_external_agents_review.md` §L3. Plan / Build / Explore modes selectable per session, with tool surface filtered at the LLM boundary by the active mode.
+
+**Core** (`durin/agent/agent_mode.py`). `AgentMode` is a frozen dataclass with `allowed: frozenset[str] | None`, `denied: frozenset[str]`, and optional `prompt_suffix`. Three built-ins:
+- `build` — default, no restriction
+- `plan` — read-only + `exit_plan_mode` only; the model investigates and surfaces a plan for user approval
+- `explore` — read-only for sub-agents (no exit affordance)
+
+Session state lives in `session.metadata`:
+- `agent_mode` — currently active mode name
+- `pre_plan_mode` — set when entering plan mode, restored on exit (OpenClaude's `prePlanMode` pattern)
+
+**Tool filtering in the runner** (`runner.py::_active_tool_definitions`). The runner accepts an optional `mode_provider` callable in `AgentRunSpec`; when present, it's called per iteration and the resulting mode filters the tool definitions sent to the LLM. The registry's cached definitions stay valid — filtering is a per-call slice. When the model emits a cached tool name that's no longer allowed (rare), `_run_tool` short-circuits with a clear denial: *"Tool 'X' is not available in mode 'plan'..."*. `AgentLoop._dispatch_message` wires the provider to read from `session.metadata` at call time, so mid-run mode switches take effect at the very next iteration.
+
+**LLM-facing tools** (`durin/agent/tools/plan_mode.py`):
+- `enter_plan_mode(reason?)` — switches the session into plan mode (the model may invoke this voluntarily; typically the user activates plan mode via `/plan` instead)
+- `exit_plan_mode(plan)` — **writes the plan to `<workspace>/.durin/plans/plan_<timestamp>.md`** and yields to the user for approval. Does NOT actually exit plan mode — the session remains in plan until the user runs `/build`. While in plan, the user can edit the plan file directly with any editor; `/build` picks up the file content as-edited.
+
+**File-based plan storage** (replaced an initial MVP with argument-string plan). Plans live in `<workspace>/.durin/plans/<session-slug>/plan_<timestamp>.md` — one subdirectory per session, one file per `exit_plan_mode` call inside it. The session slug is the sanitized session key (`websocket:chat42` → `websocket_chat42`), so concurrent chats don't collide and the user can locate plans for a specific conversation.
+
+Benefits over the inlined-arg approach: persistence across context compaction, edit-before-approve UX (user opens the .md and tweaks step 3), multi-turn refinement (model rewrites the file), post-mortem review via `ls .durin/plans/<session>/`, and token efficiency (plan lives on disk, not in message history).
+
+**Plan flow with compaction survival** (Claude Code parity, see `docs/07_external_agents_review.md`):
+
+| Phase | What happens to the plan |
+|---|---|
+| `/plan` activates | Mode = plan. Any prior `executing_plan_path` from a previous /build is cleared (new plan supersedes). |
+| `exit_plan_mode(plan)` | Writes the plan to `<workspace>/.durin/plans/<session>/plan_<ts>.md` and sets `session.metadata["active_plan_path"]`. Session stays in plan. |
+| `/build` approves | `active_plan_path` → `approved_plan_path` (one-shot for next-turn reminder) AND `executing_plan_path` (persistent for autocompact). Mode restored. |
+| Next turn after /build | `ContextBuilder.build_messages` injects a one-shot system reminder: *"Approved plan ready at: <path>. Start with updating your todo list using the todo_write tool if applicable…"* — then pops `approved_plan_path`. |
+| Autocompact archives messages | `autocompact._read_plan_carryover` reads `executing_plan_path` and splices the plan content into the summary block (cap: 6,000 chars). The plan survives compaction the same way Claude Code's `plan_file_reference` attachment does. |
+
+The `_PLAN_DIR = ".durin/plans"` constant is in `plan_mode.py`. Add to `.gitignore` if you don't want plans tracked. The `executing_plan_path` key persists until a new `/plan` clears it, so a single approved plan keeps being re-injected through arbitrary numbers of compactions until the user starts a new plan.
+
+**Slash commands** (`durin/command/builtin.py`):
+- `/plan` — enter plan mode for the current session
+- `/build` — exit plan mode (restores `pre_plan_mode`, defaults to `build`)
+- `/mode [name]` — show the active mode, or set one explicitly
+
+All three are registered in the `CommandRouter` and exposed via `builtin_command_palette()`, so they work in every channel automatically. Dispatch is universal; autocomplete UX varies by channel (see "Future improvements" below).
+
+**Context builder integration** (`context.py::build_system_prompt`). When a mode has a non-empty `prompt_suffix`, it's appended to the system prompt. `build_messages` reads the active mode from `session_metadata[SESSION_MODE_KEY]` and threads it through.
+
+**Telemetry** (Phase 1c — extended):
+- `agent_mode.turn_start` — emitted at the start of each `AgentRunner.run()` call with the active mode
+- `agent_mode.switch` — emitted on every mode change, with `{from, to, trigger}` (`trigger ∈ {slash_command, tool}`)
+- `agent_mode.tool_denied` — emitted when a tool call is denied by the mode (`{tool, mode}`)
+- `plan_mode.presented` — emitted when `exit_plan_mode` surfaces a plan (`{plan_chars, from_mode}`)
+
+**What we did NOT do, intentionally**:
+- No "auto-resume on exit" — the user runs `/build` explicitly. This avoids the model executing without review.
+- No mode-specific model override (OpenCode supports this; we don't see a case for it yet).
+- No "ask" permission action (OpenCode supports `ask` to pop a UI dialog; we substitute the slash-command approval gate which works in every channel).
+
+### Future improvements (Sprint B → daily-driver readiness)
+
+Tracked here so the daily-driver path is explicit. None of these are blockers for the current implementation — they're per-channel UX polish.
+
+| Channel | Status today | Future improvement |
+|---|---|---|
+| **CLI** | Dispatch works (`/plan` is typed and dispatched). | Add a `prompt_toolkit` completer in `cli/commands.py` that reads `builtin_command_palette()` for autocomplete. ~10 LOC. |
+| **WebUI** | Full autocomplete via `<SlashCommandPalette>` already wired to `/api/commands` — `/plan`, `/build`, `/mode` appear automatically because they're in `builtin_command_palette()`. | Optionally add a visual badge/pill in the composer header when mode != build. |
+| **Telegram** | Dispatch works. The native `/` menu only lists the commands explicitly registered via `BotCommand(...)` in `channels/telegram.py`. | Add `BotCommand("plan", "Enter plan mode")`, `BotCommand("build", "Exit plan mode")`, `BotCommand("mode", "Show or set agent mode")` to the existing list — ~3 LOC. |
+| **Slack / Matrix / WhatsApp / DingTalk / MoChat** | Dispatch works. Slash commands appear as plain messages, no native autocomplete (each channel's API differs). | Per-channel slash-command registration is optional; the dispatch already works. |
 
 ---
 
@@ -128,9 +245,63 @@ After the prune, `complete_goal` no longer consults any plan-tier verification g
 
 ## 7. Sessions and Persistence
 
-`durin/session/manager.py` handles session lifecycle. Each session is a JSON file containing message history, metadata, and goal state. `MemoryStore` (`durin/agent/memory.py`) handles long-lived markdown memory files (`MEMORY.md`, etc.) consumed by `ContextBuilder` into the system prompt.
+`durin/session/manager.py` handles session lifecycle. Each session is a JSON-lines file containing message history, metadata, and goal state. `MemoryStore` (`durin/agent/memory.py`) handles long-lived markdown memory files (`MEMORY.md`, etc.) consumed by `ContextBuilder` into the system prompt.
 
-`AutoCompact` (`durin/agent/autocompact.py`) and `Consolidator` (in `durin/agent/memory.py`) summarize old turns to keep context within budget.
+**Session storage is immutable**: messages append-only, never trimmed. `Consolidator.maybe_consolidate_by_tokens` (in `durin/agent/memory.py`) advances a cursor (`last_consolidated`) when the prompt exceeds the budget — it generates a narrative summary, persists it to `history.jsonl` + `session.metadata["_last_summary"]`, and advances the cursor. **The raw `session.messages` list is never modified in-place**; only the cursor advances. The LLM sees `messages[last_consolidated:]` (capped by `max_messages`) + the summary, while disk retains the complete history for post-processing and the future memory subsystem.
+
+In-memory per-turn shaping (does not touch disk):
+- `_microcompact` in `runner.py` replaces older tool-result content with `[<tool> result omitted from context]` placeholders on the copy sent to the LLM
+- `_snip_history` in `runner.py` further trims the copy from the start when it still doesn't fit the context window
+
+### Session meta (per-session lifecycle index, May 2026)
+
+Sessions are immutable but the message stream isn't enough to recover "significant events" from prior turns — plan submissions, plan approvals, mode transitions, etc. live in transient metadata that gets overwritten. The session meta file is a structured index of these events.
+
+**Module**: `durin/session/session_meta.py`. **Storage**: one file per session, `<workspace>/sessions/<safe_key>.meta.json`, sitting next to the `<safe_key>.jsonl` it indexes.
+
+**Shape**:
+
+```json
+{
+  "session_key": "websocket:chat42",
+  "events": [
+    {
+      "type": "plan",
+      "id": "plan_20260519_143022_123",
+      "title": "Refactor authentication module to use OAuth",
+      "plan_path": ".durin/plans/websocket_chat42/plan_20260519_143022_123.md",
+      "created_at": "2026-05-19T14:30:22.123",
+      "approved_at": "2026-05-19T14:35:12.456",
+      "closed_at": null,
+      "msg_index": { "approved": 240, "closed": null },
+      "outcome": "executing",
+      "recorded_at": "2026-05-19T14:30:22.124"
+    }
+  ]
+}
+```
+
+`type` is the discriminator for extensibility — today only `plan` is implemented, but the format is designed for future event kinds (review, deliberation, anything significant) to coexist without schema changes.
+
+**Plan lifecycle** (current implementation):
+- **`exit_plan_mode` tool**: appends a fresh plan event with `outcome=pending`, extracted `title` from the plan markdown's first heading, and the plan_path
+- **`/build` slash command**: looks up the executing plan event by id (matching `plan_path.stem`) and transitions it to `outcome=executing`, recording `approved_at` and `msg_index.approved = len(session.messages)`
+- **`/plan` slash command**: if there was a prior `executing_plan_path` in session metadata, closes its meta event with `outcome=superseded` and `msg_index.closed`
+
+**Atomic writes**: every mutation reads → modifies → writes a `.tmp` → `os.replace`. No partial states on disk.
+
+**Post-processing**: the memory subsystem can read the session.jsonl and the .meta.json side-by-side to know "what happened" (raw messages) plus "what mattered" (significant events). The `msg_index` ranges let it slice the raw messages by event scope (e.g. "show me everything the agent did between when plan_X was approved and when it was superseded").
+
+**Why a single file per session** (vs sidecar per event):
+- Memory subsystem reads ONE file to know everything significant in a session
+- `cat`/`jq`/`grep` friendly for debugging
+- Event count is small (planes y similares: pocos por session, no miles)
+- Future event types just append a new entry with a different `type`
+
+**What does NOT go here**:
+- Per-turn telemetry (lives in `~/.cache/durin/telemetry/`)
+- Plan contents (live in their own `.md` files, referenced by `plan_path`)
+- Anything already in `session.jsonl`
 
 ---
 
@@ -168,8 +339,8 @@ tests/
 └── telemetry/      # Generic logger (no posture/deliberation tests after prune)
 ```
 
-Total: **3,052 tests passing, 15 skipped** after the prune.
+Total: **3,097 tests passing, 15 skipped** (3,052 post-prune + 5 Phase 1 hardening + 10 Phase 1c tool telemetry + 35 Sprint A + 65 Sprint B + 27 session meta − removed: archive, autocompact).
 
 ---
 
-## Last updated: 2026-05-18
+## Last updated: 2026-05-19

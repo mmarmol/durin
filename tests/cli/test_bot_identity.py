@@ -34,13 +34,12 @@ def test_bot_icon_accepts_empty_string_to_omit() -> None:
 
 
 def test_stream_renderer_propagates_bot_name_to_spinner_text(capsys) -> None:
-    """ThinkingSpinner uses the configured bot_name in its status text."""
+    """ThinkingSpinner uses the configured bot_name in its indicator text."""
     spinner = ThinkingSpinner(bot_name="mybot")
 
-    # rich.Status keeps the renderable on its internal _renderable attribute;
-    # the spinner text is exposed via its underlying status text.
-    rendered = spinner._spinner.status
-    assert "mybot is thinking..." in rendered
+    # The static indicator stores its markup on ``_markup``; renderer
+    # callers no longer use rich.Status under the hood.
+    assert "mybot is thinking" in spinner._markup
 
 
 def test_stream_renderer_header_combines_icon_and_name() -> None:

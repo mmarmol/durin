@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 from loguru import logger
 
 from durin.agent import model_presets as preset_helpers
-from durin.agent.autocompact import AutoCompact
 from durin.agent.context import ContextBuilder
 from durin.agent.hook import AgentHook, CompositeHook
 from durin.agent.memory import Consolidator, Dream
@@ -95,6 +94,7 @@ class TurnContext:
     all_messages: list[dict[str, Any]] = field(default_factory=list)
     stop_reason: str = ""
     had_injections: bool = False
+    tool_events: list[dict[str, Any]] = field(default_factory=list)
 
     user_persisted_early: bool = False
     save_skip: int = 0
@@ -170,7 +170,6 @@ class AgentLoop:
         mcp_servers: dict | None = None,
         channels_config: ChannelsConfig | None = None,
         timezone: str | None = None,
-        session_ttl_minutes: int = 0,
         consolidation_ratio: float = 0.5,
         max_messages: int = 120,
         hooks: list[AgentHook] | None = None,
@@ -253,6 +252,7 @@ class AgentLoop:
             disabled_skills=disabled_skills,
             max_iterations=self.max_iterations,
             llm_wall_timeout_for_session=lambda sk: runner_wall_llm_timeout_s(self.sessions, sk),
+            sessions=self.sessions,
         )
         self._unified_session = unified_session
         self._max_messages = max_messages if max_messages > 0 else 120
@@ -283,11 +283,6 @@ class AgentLoop:
             get_tool_definitions=self.tools.get_definitions,
             max_completion_tokens=provider.generation.max_tokens,
             consolidation_ratio=consolidation_ratio,
-        )
-        self.auto_compact = AutoCompact(
-            sessions=self.sessions,
-            consolidator=self.consolidator,
-            session_ttl_minutes=session_ttl_minutes,
         )
         self.dream = Dream(
             store=self.context.memory,
@@ -360,7 +355,6 @@ class AgentLoop:
             timezone=defaults.timezone,
             unified_session=defaults.unified_session,
             disabled_skills=defaults.disabled_skills,
-            session_ttl_minutes=defaults.session_ttl_minutes,
             consolidation_ratio=defaults.consolidation_ratio,
             max_messages=defaults.max_messages,
             tools_config=config.tools,
@@ -690,7 +684,7 @@ class AgentLoop:
         metadata: dict[str, Any] | None = None,
         session_key: str | None = None,
         pending_queue: asyncio.Queue | None = None,
-    ) -> tuple[str | None, list[str], list[dict], str, bool]:
+    ) -> tuple[str | None, list[str], list[dict], str, bool, list[dict[str, Any]]]:
         """Run the agent iteration loop.
 
         *on_stream*: called with each content delta during streaming.
@@ -698,7 +692,11 @@ class AgentLoop:
         ``resuming=True`` means tool calls follow (spinner should restart);
         ``resuming=False`` means this is the final response.
 
-        Returns (final_content, tools_used, messages, stop_reason, had_injections).
+        Returns ``(final_content, tools_used, messages, stop_reason, had_injections, tool_events)``.
+        The trailing ``tool_events`` is the runner's per-call event log
+        (one entry per tool invocation, each with ``tool_call_id`` and
+        ``duration_ms``). ``_save_turn`` uses it to record session-meta
+        ``tool_call`` events with msg_index pointers.
         """
         self._sync_subagent_runtime_limits()
 
@@ -777,6 +775,20 @@ class AgentLoop:
 
         active_session_key = session.key if session else session_key
         file_state_token = bind_file_states(self._file_state_store.for_session(active_session_key))
+        telemetry_token = None
+        if active_session_key:
+            try:
+                from durin.telemetry.logger import bind_telemetry, get_session_logger
+                telemetry_token = bind_telemetry(get_session_logger(active_session_key))
+            except Exception:
+                telemetry_token = None
+        # Sprint B / L3 — agent-mode provider, resolved per iteration so a
+        # mid-run mode switch (via /plan or enter_plan_mode tool) takes
+        # effect at the very next iteration. See docs/07_external_agents_review.md §L3.
+        def _mode_provider():
+            from durin.agent.agent_mode import get_active_mode
+            return get_active_mode(session)
+
         try:
             result = await self.runner.run(AgentRunSpec(
                 initial_messages=initial_messages,
@@ -797,6 +809,7 @@ class AgentLoop:
                 retry_wait_callback=on_retry_wait,
                 checkpoint_callback=_checkpoint,
                 injection_callback=_drain_pending,
+                mode_provider=_mode_provider if session is not None else None,
                 # Sustained goals may legitimately exceed DURIN_LLM_TIMEOUT_S; idle stall
                 # is still capped by DURIN_STREAM_IDLE_TIMEOUT_S in streaming providers.
                 llm_timeout_s=runner_wall_llm_timeout_s(
@@ -807,6 +820,9 @@ class AgentLoop:
             ))
         finally:
             reset_file_states(file_state_token)
+            if telemetry_token is not None:
+                from durin.telemetry.logger import reset_telemetry
+                reset_telemetry(telemetry_token)
         self._last_usage = result.usage
         if result.stop_reason == "max_iterations":
             logger.warning("Max iterations ({}) reached", self.max_iterations)
@@ -817,7 +833,14 @@ class AgentLoop:
                 await on_stream_end(resuming=False)
         elif result.stop_reason == "error":
             logger.error("LLM returned error: {}", (result.final_content or "")[:200])
-        return result.final_content, result.tools_used, result.messages, result.stop_reason, result.had_injections
+        return (
+            result.final_content,
+            result.tools_used,
+            result.messages,
+            result.stop_reason,
+            result.had_injections,
+            list(result.tool_events or []),
+        )
 
     async def run(self) -> None:
         """Run the agent loop, dispatching messages as tasks to stay responsive to /stop."""
@@ -829,10 +852,6 @@ class AgentLoop:
             try:
                 msg = await asyncio.wait_for(self.bus.consume_inbound(), timeout=1.0)
             except asyncio.TimeoutError:
-                self.auto_compact.check_expired(
-                    self._schedule_background,
-                    active_session_keys=self._pending_queues.keys(),
-                )
                 continue
             except asyncio.CancelledError:
                 # Preserve real task cancellation so shutdown can complete cleanly.
@@ -1084,7 +1103,7 @@ class AgentLoop:
         if self._restore_pending_user_turn(session):
             self.sessions.save(session)
 
-        session, pending = self.auto_compact.prepare_session(session, key)
+        pending = self._format_pending_summary(session)
         if pending:
             logger.info("Memory compact triggered for session {}", key)
 
@@ -1119,7 +1138,7 @@ class AgentLoop:
             session_metadata=session.metadata,
         )
         t_wall = time.time()
-        final_content, _, all_msgs, stop_reason, _ = await self._run_agent_loop(
+        final_content, _, all_msgs, stop_reason, _, tool_events = await self._run_agent_loop(
             messages, session=session, channel=channel, chat_id=chat_id,
             message_id=msg.metadata.get("message_id"),
             metadata=msg.metadata,
@@ -1128,7 +1147,11 @@ class AgentLoop:
         )
         wall_done = time.time()
         latency_ms = max(0, int((wall_done - t_wall) * 1000))
-        self._save_turn(session, all_msgs, 1 + len(history), turn_latency_ms=latency_ms)
+        self._save_turn(
+            session, all_msgs, 1 + len(history),
+            turn_latency_ms=latency_ms,
+            tool_events=tool_events,
+        )
         if channel == "websocket":
             self._pending_turn_latency_ms[key] = latency_ms
         session.enforce_file_cap(on_archive=self.context.memory.raw_archive)
@@ -1303,8 +1326,7 @@ class AgentLoop:
         return "ok"
 
     async def _state_compact(self, ctx: TurnContext) -> str:
-        ctx.session, pending = self.auto_compact.prepare_session(ctx.session, ctx.session_key)
-        ctx.pending_summary = pending
+        ctx.pending_summary = self._format_pending_summary(ctx.session)
         return "ok"
 
     async def _state_command(self, ctx: TurnContext) -> str:
@@ -1385,12 +1407,13 @@ class AgentLoop:
             session_key=ctx.session_key,
             pending_queue=ctx.pending_queue,
         )
-        final_content, tools_used, all_msgs, stop_reason, had_injections = result
+        final_content, tools_used, all_msgs, stop_reason, had_injections, tool_events = result
         ctx.final_content = final_content
         ctx.tools_used = tools_used
         ctx.all_messages = all_msgs
         ctx.stop_reason = stop_reason
         ctx.had_injections = had_injections
+        ctx.tool_events = tool_events
         return "ok"
 
     async def _state_save(self, ctx: TurnContext) -> str:
@@ -1408,6 +1431,7 @@ class AgentLoop:
         self._save_turn(
             ctx.session, ctx.all_messages, ctx.save_skip,
             turn_latency_ms=ctx.turn_latency_ms,
+            tool_events=ctx.tool_events,
         )
         if ctx.msg.channel == "websocket":
             self._pending_turn_latency_ms[ctx.session_key] = ctx.turn_latency_ms
@@ -1483,9 +1507,31 @@ class AgentLoop:
         skip: int,
         *,
         turn_latency_ms: int | None = None,
+        tool_events: list[dict[str, Any]] | None = None,
     ) -> None:
-        """Save new-turn messages into session, truncating large tool results."""
+        """Save new-turn messages into session, truncating large tool results.
+
+        When ``tool_events`` is provided, also writes one ``type=tool_call``
+        event to the per-session meta file for each tool call emitted by
+        an assistant message that gets persisted. ``msg_index`` points to
+        the position of that assistant message in ``session.messages``
+        after this turn's append; parallel tool calls under one assistant
+        share the same ``msg_index`` but have distinct ``id`` (the LLM's
+        ``tool_call_id``).
+        """
         from datetime import datetime
+
+        # Index tool events by tool_call_id so we can correlate them with
+        # the tool_calls embedded in each assistant message we persist.
+        events_by_id: dict[str, dict[str, Any]] = {}
+        for ev in tool_events or []:
+            if not isinstance(ev, dict):
+                continue
+            tc_id = ev.get("tool_call_id")
+            if isinstance(tc_id, str) and tc_id:
+                events_by_id[tc_id] = ev
+
+        meta_events_to_write: list[dict[str, Any]] = []
 
         last_assistant_idx: int | None = None
         for m in messages[skip:]:
@@ -1517,11 +1563,48 @@ class AgentLoop:
                     entry["content"] = filtered
             entry.setdefault("timestamp", datetime.now().isoformat())
             session.messages.append(entry)
+            assistant_idx = len(session.messages) - 1
             if role == "assistant":
-                last_assistant_idx = len(session.messages) - 1
+                last_assistant_idx = assistant_idx
+                # Collect meta events for any tool_calls this message emitted.
+                tool_calls = entry.get("tool_calls") or []
+                for tc in tool_calls:
+                    if not isinstance(tc, dict):
+                        continue
+                    tc_id = tc.get("id")
+                    if not isinstance(tc_id, str):
+                        continue
+                    ev = events_by_id.get(tc_id)
+                    if ev is None:
+                        continue
+                    name = (
+                        (tc.get("function") or {}).get("name")
+                        if isinstance(tc.get("function"), dict)
+                        else None
+                    ) or ev.get("name") or "unknown"
+                    outcome = "error" if ev.get("status") == "error" else "ok"
+                    from durin.session.session_meta import make_tool_call_event
+
+                    meta_events_to_write.append(make_tool_call_event(
+                        tool_call_id=tc_id,
+                        name=str(name),
+                        outcome=outcome,
+                        msg_index=assistant_idx,
+                        duration_ms=float(ev.get("duration_ms") or 0.0),
+                        error=ev.get("detail") if outcome == "error" else None,
+                    ))
         if turn_latency_ms is not None and last_assistant_idx is not None:
             session.messages[last_assistant_idx]["latency_ms"] = int(turn_latency_ms)
         session.updated_at = datetime.now()
+
+        # Best-effort meta write — never break the agent if the meta file
+        # is unavailable. The session itself remains the source of truth.
+        if meta_events_to_write and session.key:
+            with suppress(Exception):
+                from durin.session.session_meta import append_events_batch, meta_path_for
+
+                meta_path = meta_path_for(session.key, self.sessions.sessions_dir)
+                append_events_batch(meta_path, session.key, meta_events_to_write)
 
     def _persist_subagent_followup(self, session: Session, msg: InboundMessage) -> bool:
         """Persist subagent follow-ups before prompt assembly so history stays durable.
@@ -1572,6 +1655,31 @@ class AgentLoop:
             message.get("tool_calls"),
             message.get("reasoning_content"),
             message.get("thinking_blocks"),
+        )
+
+    @staticmethod
+    def _format_pending_summary(session: Session) -> str | None:
+        """Read the consolidator's last summary from session.metadata and wrap
+        it with the archive marker so the next turn can distinguish "this is
+        a summary, not real conversation".
+
+        Returns ``None`` when no summary has been persisted yet (fresh
+        session or no consolidation rounds have run).
+        """
+        meta = session.metadata.get("_last_summary")
+        if not isinstance(meta, dict):
+            return None
+        text = meta.get("text")
+        last_active = meta.get("last_active")
+        if not isinstance(text, str) or not text:
+            return None
+        header = "consolidator"
+        if isinstance(last_active, str) and last_active:
+            header = f"consolidator, last active {last_active}"
+        return (
+            f"=== ARCHIVED SUMMARY ({header}) ===\n"
+            f"{text}\n"
+            f"=== END ARCHIVED SUMMARY ==="
         )
 
     def _restore_runtime_checkpoint(self, session: Session) -> bool:
