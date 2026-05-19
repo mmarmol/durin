@@ -11,6 +11,7 @@ from durin.agent.subagent import SubagentStatus
 from durin.agent.tools.context import RequestContext
 from durin.agent.tools.subagent_lifecycle import (
     SubagentListTool,
+    SubagentMonitorTool,
     SubagentOutputTool,
     SubagentStatusTool,
     SubagentStopTool,
@@ -107,6 +108,32 @@ class _FakeManager:
             "error": s.error,
             "stop_reason": s.stop_reason,
         }
+
+    def monitor_since(
+        self, task_id: str, session_key: str, after_event: int = 0,
+    ) -> dict | None:
+        s = self.get_status_for(task_id, session_key)
+        if s is None:
+            return None
+        all_events = list(s.tool_events or [])
+        cursor = max(0, min(int(after_event or 0), len(all_events)))
+        events_since = all_events[cursor:]
+        is_running = self._is_running(task_id)
+        out = {
+            "phase": s.phase,
+            "iteration": s.iteration,
+            "is_running": is_running,
+            "events_total": len(all_events),
+            "events_since": events_since,
+            "next_cursor": len(all_events),
+            "finished": not is_running,
+            "label": s.label,
+        }
+        if not is_running:
+            out["final_content"] = s.final_content
+            out["error"] = s.error
+            out["stop_reason"] = s.stop_reason
+        return out
 
 
 def _ctx(session_key: str = "cli:d") -> RequestContext:
@@ -329,6 +356,7 @@ def test_tools_are_in_plan_mode_allowed_set():
         "subagent_status",
         "subagent_stop",
         "subagent_output",
+        "subagent_monitor",
     ):
         assert PLAN_MODE.is_tool_allowed(name), f"{name} should be allowed in plan"
 
@@ -341,6 +369,112 @@ def test_tools_discovered_by_loader():
     assert "SubagentStatusTool" in names
     assert "SubagentStopTool" in names
     assert "SubagentOutputTool" in names
+    assert "SubagentMonitorTool" in names
+
+
+# ---------------------------------------------------------------------------
+# subagent_monitor — cursor-based incremental diff
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_monitor_returns_all_events_when_cursor_zero():
+    m = _FakeManager()
+    m.add_status(
+        "m1", "cli:d",
+        running=True,
+        tool_events=[
+            {"name": "read_file", "status": "ok", "detail": "a"},
+            {"name": "grep", "status": "ok", "detail": "b"},
+        ],
+    )
+    tool = SubagentMonitorTool(manager=m)
+    _wire(tool)
+
+    out = await tool.execute(task_id="m1", after_event=0)
+    assert "m1" in out
+    assert "events_total: 2" in out
+    assert "next_cursor:  2" in out
+    assert "read_file" in out and "grep" in out
+
+
+@pytest.mark.asyncio
+async def test_monitor_skips_events_below_cursor():
+    """The point of the cursor: don't re-deliver what was already seen."""
+    m = _FakeManager()
+    m.add_status(
+        "m1", "cli:d",
+        running=True,
+        tool_events=[
+            {"name": "first", "status": "ok", "detail": "1"},
+            {"name": "second", "status": "ok", "detail": "2"},
+            {"name": "third", "status": "ok", "detail": "3"},
+        ],
+    )
+    tool = SubagentMonitorTool(manager=m)
+    _wire(tool)
+
+    out = await tool.execute(task_id="m1", after_event=2)
+    assert "third" in out
+    assert "first" not in out
+    assert "second" not in out
+    assert "next_cursor:  3" in out
+
+
+@pytest.mark.asyncio
+async def test_monitor_clamps_out_of_range_cursor():
+    """Cursor past the end yields zero new events, not an error."""
+    m = _FakeManager()
+    m.add_status(
+        "m1", "cli:d",
+        running=True,
+        tool_events=[{"name": "x", "status": "ok", "detail": "d"}],
+    )
+    tool = SubagentMonitorTool(manager=m)
+    _wire(tool)
+
+    out = await tool.execute(task_id="m1", after_event=999)
+    assert "no new events" in out.lower()
+
+
+@pytest.mark.asyncio
+async def test_monitor_finished_subagent_includes_final_output():
+    m = _FakeManager()
+    m.add_status(
+        "done1", "cli:d",
+        running=False,
+        final_content="result text",
+        stop_reason="completed",
+        tool_events=[{"name": "ran", "status": "ok", "detail": "ok"}],
+    )
+    tool = SubagentMonitorTool(manager=m)
+    _wire(tool)
+
+    out = await tool.execute(task_id="done1", after_event=0)
+    assert "finished" in out
+    assert "stop_reason=completed" in out
+    assert "result text" in out
+
+
+@pytest.mark.asyncio
+async def test_monitor_unknown_task_returns_error():
+    m = _FakeManager()
+    tool = SubagentMonitorTool(manager=m)
+    _wire(tool)
+
+    out = await tool.execute(task_id="ghost", after_event=0)
+    assert "Error" in out
+
+
+@pytest.mark.asyncio
+async def test_monitor_cross_session_returns_error():
+    m = _FakeManager()
+    m.add_status("m1", "cli:other", running=True)
+    tool = SubagentMonitorTool(manager=m)
+    _wire(tool, sess="cli:d")
+
+    out = await tool.execute(task_id="m1", after_event=0)
+    assert "Error" in out
 
 
 # ---------------------------------------------------------------------------

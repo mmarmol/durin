@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING, Any
 
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.context import ContextAware, RequestContext
-from durin.agent.tools.schema import StringSchema, tool_parameters_schema
+from durin.agent.tools.schema import IntegerSchema, StringSchema, tool_parameters_schema
 
 if TYPE_CHECKING:
     from durin.agent.subagent import SubagentManager
@@ -287,6 +287,113 @@ class SubagentStopTool(Tool, _SubagentToolBase):
         if outcome == "not_running":
             return f"Subagent [{task_id}] had already finished — nothing to cancel."
         return f"Error: unknown task_id {task_id!r} in this session."
+
+
+@tool_parameters(
+    tool_parameters_schema(
+        task_id=StringSchema(
+            description="The id of the subagent to monitor.",
+            min_length=1,
+            max_length=64,
+        ),
+        after_event=IntegerSchema(
+            description=(
+                "Skip events at indices < this number — pass the "
+                "``next_cursor`` returned by the previous monitor call "
+                "to receive only what's new since you last polled. "
+                "Defaults to 0 (receive everything)."
+            ),
+            minimum=0,
+            nullable=True,
+        ),
+        required=["task_id"],
+    )
+)
+class SubagentMonitorTool(Tool, _SubagentToolBase):
+    """Incremental progress poll for a subagent (diff against a cursor)."""
+
+    _scopes = {"core"}
+
+    def __init__(self, manager: "SubagentManager") -> None:
+        _SubagentToolBase.__init__(self, manager)
+
+    @classmethod
+    def create(cls, ctx: Any) -> Tool:
+        return cls(manager=ctx.subagent_manager)
+
+    @classmethod
+    def enabled(cls, ctx: Any) -> bool:
+        return getattr(ctx, "subagent_manager", None) is not None
+
+    @property
+    def name(self) -> str:
+        return "subagent_monitor"
+
+    @property
+    def description(self) -> str:
+        return (
+            "Poll a subagent for progress incrementally. Returns the "
+            "current phase, iteration, and **only the tool events new "
+            "since `after_event`** (pass the prior call's `next_cursor` "
+            "to skip what you already saw). When the subagent has "
+            "finished, the response also includes its final output, so "
+            "a single follow-up call wraps things up without needing "
+            "subagent_output. Use this in a poll-sleep-poll pattern for "
+            "long background tasks; for a single snapshot, use "
+            "`subagent_status` instead."
+        )
+
+    async def execute(
+        self,
+        task_id: str | None = None,
+        after_event: int | None = None,
+        **kwargs: Any,
+    ) -> str:
+        sess_key = self._session_key()
+        if sess_key is None:
+            return "Error: no session context available."
+        if not task_id:
+            return "Error: `task_id` is required."
+        cursor = int(after_event or 0)
+        info = self._manager.monitor_since(task_id, sess_key, after_event=cursor)
+        if info is None:
+            return f"Error: unknown task_id {task_id!r} in this session."
+
+        state = "running" if info["is_running"] else "finished"
+        header = (
+            f"Subagent [{task_id}] — {info['label']}\n"
+            f"  state:        {state}\n"
+            f"  phase:        {info['phase']}\n"
+            f"  iteration:    {info['iteration']}\n"
+            f"  events_total: {info['events_total']}\n"
+            f"  next_cursor:  {info['next_cursor']}"
+        )
+        lines = [header]
+        events_since = info["events_since"] or []
+        if events_since:
+            lines.append(f"  new events since cursor={cursor} ({len(events_since)}):")
+            for ev in events_since[-_MAX_TOOL_HISTORY_PER_STATUS:]:
+                if not isinstance(ev, dict):
+                    continue
+                name = ev.get("name", "?")
+                st = ev.get("status", "?")
+                detail = (ev.get("detail") or "").replace("\n", " ").strip()
+                if len(detail) > 80:
+                    detail = detail[:77] + "..."
+                lines.append(f"    - {name} [{st}] {detail}")
+        else:
+            lines.append("  no new events since the previous cursor.")
+        if info["finished"]:
+            stop = info.get("stop_reason") or "completed"
+            lines.append(f"\n  finished (stop_reason={stop}).")
+            final = info.get("final_content") or info.get("error") or "(no output recorded)"
+            if len(final) > _MAX_FINAL_PREVIEW:
+                final = final[: _MAX_FINAL_PREVIEW - 80].rstrip() + (
+                    f"\n… (truncated; use subagent_output for the "
+                    f"complete {len(final)}-char response.)"
+                )
+            lines.append(f"  final output:\n{final}")
+        return "\n".join(lines)
 
 
 @tool_parameters(

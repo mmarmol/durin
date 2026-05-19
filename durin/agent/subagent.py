@@ -501,3 +501,48 @@ class SubagentManager:
             "error": status.error,
             "stop_reason": status.stop_reason,
         }
+
+    def monitor_since(
+        self,
+        task_id: str,
+        session_key: str,
+        after_event: int = 0,
+    ) -> dict[str, Any] | None:
+        """Diff snapshot of a subagent's progress since *after_event*.
+
+        Returns ``None`` if the task is unknown (or belongs to another
+        session). Otherwise:
+
+        ``{phase, iteration, is_running, events_total, events_since,
+          next_cursor, finished, final_content, error, stop_reason}``
+
+        ``events_since`` is the sublist of ``status.tool_events`` from
+        index ``after_event`` onward. ``next_cursor`` is the index the
+        caller should pass on the next poll to skip what it just saw.
+        ``finished`` is True when the task is no longer running, and
+        when finished we also include the final output / error / stop
+        reason so a single follow-up monitor call can wrap things up
+        without a second round-trip to ``subagent_output``.
+        """
+        status = self.get_status_for(task_id, session_key)
+        if status is None:
+            return None
+        all_events = list(status.tool_events or [])
+        cursor = max(0, min(int(after_event or 0), len(all_events)))
+        events_since = all_events[cursor:]
+        is_running = self._is_running(task_id)
+        out: dict[str, Any] = {
+            "phase": status.phase,
+            "iteration": status.iteration,
+            "is_running": is_running,
+            "events_total": len(all_events),
+            "events_since": events_since,
+            "next_cursor": len(all_events),
+            "finished": not is_running,
+            "label": status.label,
+        }
+        if not is_running:
+            out["final_content"] = status.final_content
+            out["error"] = status.error
+            out["stop_reason"] = status.stop_reason
+        return out

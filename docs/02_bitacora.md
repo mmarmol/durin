@@ -899,3 +899,53 @@ The parallel-call case is the one that matters operationally: the model wanted t
 ### Lesson
 
 For background-task lifecycle, the most valuable affordance is **retention with a bounded window**, not "kill everything that finished". Statuses cost ~200 bytes each; 100 of them is 20KB per session. That memory buys the model the ability to ask "what did task X return?" a turn or three after the announce, which is the common UX. Aggressive cleanup looked cleaner in V1 but broke the natural "fire and check later" flow that makes background work feel native.
+
+## Subagent monitor + cron update — items #6 and #7 (May 2026)
+
+### #6 subagent_monitor
+
+Fifth lifecycle tool in [durin/agent/tools/subagent_lifecycle.py](durin/agent/tools/subagent_lifecycle.py). Whereas `subagent_status` returns a full snapshot, `subagent_monitor` returns a **cursor-based diff**: the caller passes `after_event=N` (typically the `next_cursor` from the previous monitor call) and receives only the events the manager has accumulated since index N. The response also includes `next_cursor`, `phase`, `iteration`, `is_running`, and — when the task has finished in the meantime — the final output / error / stop_reason.
+
+The natural usage pattern is **poll-sleep-poll**:
+
+```
+monitor(task_id, after_event=0)  → cursor=4
+sleep(5)
+monitor(task_id, after_event=4)  → cursor=7  (+ final output if finished)
+```
+
+This is cheaper than re-fetching the whole event list on every poll, and lets the model build a running narrative of the subagent's progress without paying the same tokens twice. The "finished output bundled into the monitor response" detail removes the extra `subagent_output` round-trip when the task ends between polls.
+
+#### Manager-side support
+
+Added `SubagentManager.monitor_since(task_id, session_key, after_event)` returning the same dict shape the tool renders. Same session-scope ownership check as the other lifecycle methods. Clamps an out-of-range `after_event` to `len(events)` so the model can pass a stale cursor without getting an error.
+
+#### E2E verification
+
+Spawned a subagent that read DATA.md and returned its 3 markdown headings. Single-turn flow: `spawn → monitor(after_event=0) → sleep(8) → monitor(after_event=<cursor>)` → report headings. The meta timeline recorded all four tool calls; the model correctly threaded the cursor through both monitor invocations and reported the right headings.
+
+### #7 cron `update` action
+
+Added `action="update"` to the existing `cron` tool ([durin/agent/tools/cron.py](durin/agent/tools/cron.py)). The underlying `CronService.update_job` already supported mutation; this commit just exposes it to the model with the same per-action parameter conventions as the rest of the tool (job_id + any of name / message / schedule / deliver).
+
+Validation rules:
+
+- `job_id` required; unknown id returns `"not found"` rather than silently inventing a job
+- At most one of `every_seconds` / `cron_expr` / `at` per call (mirrors `add`)
+- `tz` only valid alongside `cron_expr`
+- ≥1 actual change required — a `cron(action="update", job_id="X")` call with no other fields errors with a clear hint instead of being a silent no-op
+- System jobs (e.g. `dream`) remain protected: update returns the same "protected" message as remove
+
+#### Why no separate `cron_update` tool?
+
+The roadmap entry framed it as "list/delete/edit". List + delete already existed as actions on the single `cron` tool; adding a separate `cron_update` tool would have fragmented the surface that the model already understands. The action-enum dispatch keeps the tool count stable while extending capability. Same pattern Hermes uses.
+
+#### E2E verification
+
+`add` → `update` (rename + swap from `every_seconds=3600` to `cron_expr="0 9 * * *"` with `tz="America/Vancouver"`) → `list`. The list confirmed both the rename and the timezone-aware cron expression. The agent reported the final state in one line: "renamed-standup — cron: 0 9 * * * (America/Vancouver)".
+
+### Lesson
+
+When a tool has multiple actions on the same resource (cron jobs), keep them under one tool with an action enum rather than splitting into N micro-tools. The model treats a single tool as one mental object — "I know cron has these operations on it" — and the enum gives it perfect discoverability without inflating the tool list visible to the LLM. The penalty is per-action validation lives in the tool itself rather than the schema layer, but that's a small fixed cost.
+
+For polling-style observability (Monitor), cursor-diff is dramatically cheaper than snapshot-everything-each-time. Even a 5-event subagent on a 10-poll loop saves 45 redundant event renderings. The cursor convention also forces the model to think incrementally rather than re-summarizing the full history each turn, which is a behavior win on top of the token win.
