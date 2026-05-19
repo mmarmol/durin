@@ -29,12 +29,16 @@ def test_snapshot_is_vendored_and_loadable():
 # ---------------------------------------------------------------------------
 
 
-def test_candidate_keys_orders_specific_before_generic():
-    keys = _candidate_keys("claude-opus-4-5", "anthropic")
-    # Provider-qualified form wins, then bedrock dot form, then bare.
-    assert keys[0] == "anthropic/claude-opus-4-5"
-    assert "anthropic.claude-opus-4-5" in keys
-    assert "claude-opus-4-5" in keys
+def test_candidate_keys_canonical_first_then_legacy_variants():
+    """The consensus file is keyed by lowercased bare names, so the
+    canonical form is what the lookup uses first. Legacy provider /
+    bedrock-prefixed forms follow as compatibility fallbacks."""
+    keys = _candidate_keys("Claude-Opus-4-5", "anthropic")
+    # Canonical (lowercase bare) is the primary key.
+    assert keys[0] == "claude-opus-4-5"
+    # Legacy variants still in the list.
+    assert "anthropic/Claude-Opus-4-5" in keys
+    assert "anthropic.Claude-Opus-4-5" in keys
 
 
 def test_candidate_keys_strips_provider_prefix_from_model():
@@ -62,35 +66,68 @@ def test_candidate_keys_empty_for_empty_model():
 
 def test_lookup_claude_opus_has_vision():
     caps = get_model_capabilities("claude-opus-4-5", "anthropic")
-    assert caps.source == "litellm"
+    assert caps.source == "snapshot"
     assert caps.supports_vision is True
     assert caps.supports_function_calling is True
     assert caps.max_input_tokens and caps.max_input_tokens > 100_000
 
 
-def test_lookup_gpt4o_has_vision_and_audio_via_modalities():
+def test_lookup_gpt4o_has_vision():
     caps = get_model_capabilities("gpt-4o", "openai")
-    assert caps.source == "litellm"
+    assert caps.source == "snapshot"
     assert caps.supports_vision is True
     assert caps.supports_function_calling is True
 
 
 def test_lookup_gemini_picks_up_full_multimodal_set():
-    """Gemini 2.0 Flash advertises supported_modalities = text/image/audio/video.
-    The resolver must surface all four input modalities."""
-    caps = get_model_capabilities("gemini/gemini-2.0-flash", None)
-    assert caps.source == "litellm"
+    """Gemini 2.0 Flash should surface vision + audio + video from the
+    consensus snapshot (Gemini publishes all three input modalities)."""
+    caps = get_model_capabilities("gemini-2.0-flash", "google")
+    assert caps.source == "snapshot"
     assert caps.supports_vision is True
     assert caps.supports_audio_input is True
     assert caps.supports_video_input is True
 
 
-def test_lookup_glm_in_snapshot_reports_no_vision():
-    """The user's primary pain point: GLM doesn't do vision. Verify
-    the snapshot agrees so the bridge tool will actually activate."""
-    caps = get_model_capabilities("fireworks_ai/glm-4p7", None)
-    assert caps.source == "litellm"
+def test_lookup_glm_primary_reports_no_vision():
+    """The user's primary pain point: regular GLM models don't do vision.
+    The consensus snapshot must confirm so callers can choose to wire
+    a vision aux model."""
+    caps = get_model_capabilities("glm-5.1", "custom")
+    assert caps.source == "snapshot"
     assert caps.supports_vision is False
+
+
+def test_lookup_glm_vision_variant_reports_vision():
+    """And the vision variant must report ``vision=True`` — that's the
+    bridge target the user configures as ``aux_models.vision``."""
+    caps = get_model_capabilities("glm-5v-turbo", "custom")
+    assert caps.source == "snapshot"
+    assert caps.supports_vision is True
+    # Also: audio remains False after aggregator filtering — historically
+    # 302ai erroneously declared audio on this model; the vendor filter
+    # excludes 302ai so we get the honest answer.
+    assert caps.supports_audio_input is False
+
+
+def test_aggregator_keys_resolve_via_underlying_model():
+    """Routing-service slugs (kilo/, vercel/, 302ai/, fireworks_ai/, …)
+    are filtered out of the snapshot as standalone entries, but the
+    canonical-key fallback strips the prefix so the underlying model
+    still resolves correctly. This means consumers don't need to
+    pre-strip aggregator prefixes themselves."""
+    caps = get_model_capabilities("kilo/z-ai/glm-5v-turbo", None)
+    # Resolves via the canonical glm-5v-turbo entry from the snapshot.
+    assert caps.source == "snapshot"
+    assert caps.supports_vision is True
+    # And the snapshot itself does NOT have the aggregator slug as a
+    # direct key — verify by querying the loader.
+    from durin.providers.capabilities import _load_capabilities_snapshot
+    snap = _load_capabilities_snapshot()
+    assert "kilo/z-ai/glm-5v-turbo" not in snap
+    assert "kilo" not in snap  # not even the top-level prefix
+    # But the canonical bare name IS there.
+    assert "glm-5v-turbo" in snap
 
 
 # ---------------------------------------------------------------------------
@@ -204,7 +241,7 @@ def test_unrelated_overrides_are_ignored():
     )
     # gpt-4o still resolved from snapshot — unrelated override does
     # not affect it.
-    assert caps.source == "litellm"
+    assert caps.source == "snapshot"
     assert caps.supports_vision is True
 
 
