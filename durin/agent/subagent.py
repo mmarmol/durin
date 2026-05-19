@@ -25,7 +25,14 @@ from durin.utils.prompt_templates import render_template
 
 @dataclass(slots=True)
 class SubagentStatus:
-    """Real-time status of a running subagent."""
+    """Real-time status of a running OR recently-completed subagent.
+
+    Lives in ``SubagentManager._task_statuses`` for the lifetime of the
+    task plus until the LRU window evicts it (default 100 statuses). The
+    ``session_key`` and ``final_content`` fields are populated so the
+    lifecycle tools can answer questions like "what did subagent X
+    return?" without having to scan ``session.messages``.
+    """
 
     task_id: str
     label: str
@@ -37,6 +44,9 @@ class SubagentStatus:
     usage: dict = field(default_factory=dict)          # token usage
     stop_reason: str | None = None
     error: str | None = None
+    session_key: str | None = None
+    final_content: str | None = None
+    ended_at: float | None = None    # time.monotonic() when the task finished
 
 
 class _SubagentHook(AgentHook):
@@ -105,7 +115,11 @@ class SubagentManager:
         self._llm_wall_timeout_for_session = llm_wall_timeout_for_session
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
         self._task_statuses: dict[str, SubagentStatus] = {}
+        # ``_session_tasks`` retains task ids for completed subagents too,
+        # so ``list_for_session`` can include recent history. Trimming
+        # happens lazily in ``_remember_finished``.
         self._session_tasks: dict[str, set[str]] = {}  # session_key -> {task_id, ...}
+        self._max_status_history = 100
 
     def _subagent_tools_config(self) -> ToolsConfig:
         """Build a ToolsConfig scoped for subagent use."""
@@ -156,6 +170,7 @@ class SubagentManager:
             label=display_label,
             task_description=task,
             started_at=time.monotonic(),
+            session_key=session_key,
         )
         self._task_statuses[task_id] = status
 
@@ -167,12 +182,12 @@ class SubagentManager:
             self._session_tasks.setdefault(session_key, set()).add(task_id)
 
         def _cleanup(_: asyncio.Task) -> None:
+            # Drop only the asyncio.Task handle. The SubagentStatus stays
+            # in ``_task_statuses`` so the lifecycle tools can still report
+            # the final phase / output. The status is trimmed lazily via
+            # ``_remember_finished`` once we exceed the history window.
             self._running_tasks.pop(task_id, None)
-            self._task_statuses.pop(task_id, None)
-            if session_key and (ids := self._session_tasks.get(session_key)):
-                ids.discard(task_id)
-                if not ids:
-                    del self._session_tasks[session_key]
+            self._remember_finished(task_id)
 
         bg_task.add_done_callback(_cleanup)
 
@@ -256,28 +271,34 @@ class SubagentManager:
             ))
             status.phase = "done"
             status.stop_reason = result.stop_reason
+            status.ended_at = time.monotonic()
 
             if result.stop_reason == "tool_error":
                 status.tool_events = list(result.tool_events)
+                partial = self._format_partial_progress(result)
+                status.final_content = partial
                 await self._announce_result(
-                    task_id, label, task,
-                    self._format_partial_progress(result),
+                    task_id, label, task, partial,
                     origin, "error", origin_message_id,
                 )
             elif result.stop_reason == "error":
+                err_text = result.error or "Error: subagent execution failed."
+                status.final_content = err_text
                 await self._announce_result(
-                    task_id, label, task,
-                    result.error or "Error: subagent execution failed.",
+                    task_id, label, task, err_text,
                     origin, "error", origin_message_id,
                 )
             else:
                 final_result = result.final_content or "Task completed but no final response was generated."
+                status.final_content = final_result
                 logger.info("Subagent [{}] completed successfully", task_id)
                 await self._announce_result(task_id, label, task, final_result, origin, "ok", origin_message_id)
 
         except Exception as e:
             status.phase = "error"
             status.error = str(e)
+            status.ended_at = time.monotonic()
+            status.final_content = f"Error: {e}"
             logger.exception("Subagent [{}] failed", task_id)
             await self._announce_result(task_id, label, task, f"Error: {e}", origin, "error", origin_message_id)
 
@@ -385,3 +406,98 @@ class SubagentManager:
             1 for tid in tids
             if tid in self._running_tasks and not self._running_tasks[tid].done()
         )
+
+    # ------------------------------------------------------------------
+    # Lifecycle inspection — surfaces used by the subagent_* tools.
+    # ------------------------------------------------------------------
+
+    def _is_running(self, task_id: str) -> bool:
+        t = self._running_tasks.get(task_id)
+        return t is not None and not t.done()
+
+    def _remember_finished(self, task_id: str) -> None:
+        """Trim ``_task_statuses`` if it grew past the LRU window.
+
+        Removes the oldest entries first (dict insertion order), and
+        cleans up their ``_session_tasks`` membership so the per-session
+        list stays consistent. The running task's status is never the
+        oldest by definition, so the running set is never affected.
+        """
+        if len(self._task_statuses) <= self._max_status_history:
+            return
+        excess = len(self._task_statuses) - self._max_status_history
+        for old in list(self._task_statuses)[:excess]:
+            old_status = self._task_statuses.pop(old, None)
+            if old_status and old_status.session_key:
+                ids = self._session_tasks.get(old_status.session_key)
+                if ids is not None:
+                    ids.discard(old)
+                    if not ids:
+                        self._session_tasks.pop(old_status.session_key, None)
+
+    def list_for_session(self, session_key: str) -> list[SubagentStatus]:
+        """All subagent statuses (running + completed) for *session_key*.
+
+        Ordered by ``started_at`` ascending so the natural read is oldest
+        → newest. The list reflects the LRU window: very old completed
+        subagents have already been trimmed.
+        """
+        ids = self._session_tasks.get(session_key) or set()
+        out = [self._task_statuses[t] for t in ids if t in self._task_statuses]
+        return sorted(out, key=lambda s: s.started_at)
+
+    def get_status_for(self, task_id: str, session_key: str) -> SubagentStatus | None:
+        """Status for *task_id* if it belongs to *session_key*, else None.
+
+        The session check is the security boundary: a session cannot
+        observe a subagent it did not spawn, even if it guesses the id.
+        """
+        status = self._task_statuses.get(task_id)
+        if status is None or status.session_key != session_key:
+            return None
+        return status
+
+    async def stop_task(self, task_id: str, session_key: str) -> str:
+        """Cancel a running subagent. Returns a human-readable result.
+
+        - ``"stopped"`` — the task was running and got cancelled
+        - ``"not_running"`` — found but already finished (no-op)
+        - ``"unknown"`` — no such task in this session (also covers the
+          cross-session case; we never reveal whether the id exists
+          elsewhere)
+        """
+        status = self.get_status_for(task_id, session_key)
+        if status is None:
+            return "unknown"
+        bg_task = self._running_tasks.get(task_id)
+        if bg_task is None or bg_task.done():
+            return "not_running"
+        bg_task.cancel()
+        try:
+            await bg_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        status.phase = "cancelled"
+        status.stop_reason = "cancelled"
+        if status.ended_at is None:
+            status.ended_at = time.monotonic()
+        return "stopped"
+
+    def get_output_for(self, task_id: str, session_key: str) -> dict[str, Any] | None:
+        """Lookup the (possibly partial) output for a completed subagent.
+
+        Returns a dict ``{phase, final_content, error, stop_reason}``
+        when the task belongs to *session_key*; otherwise ``None``. The
+        caller decides how to render — the manager just exposes raw
+        fields off the status.
+        """
+        status = self.get_status_for(task_id, session_key)
+        if status is None:
+            return None
+        return {
+            "phase": status.phase,
+            "is_running": self._is_running(task_id),
+            "final_content": status.final_content,
+            "error": status.error,
+            "stop_reason": status.stop_reason,
+        }

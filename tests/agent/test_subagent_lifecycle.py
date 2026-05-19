@@ -118,18 +118,28 @@ class TestSpawn:
         assert len(sm._running_tasks) == 0
 
     @pytest.mark.asyncio
-    async def test_creates_status(self, tmp_path):
+    async def test_creates_status_and_retains_after_completion(self, tmp_path):
+        """The status survives task completion (LRU retention) so
+        subagent_output / subagent_status can serve completed tasks for
+        a while after the announce."""
         sm = _manager(tmp_path)
         sm.runner.run = AsyncMock(return_value=AgentRunResult(
             final_content="done", messages=[], stop_reason="completed",
         ))
         await sm.spawn("my task")
         await asyncio.sleep(0.1)
-        # Status cleaned up after task completes
-        assert len(sm._task_statuses) == 0
+        # Running task entry is cleaned up...
+        assert len(sm._running_tasks) == 0
+        # ...but the status is retained with final_content populated.
+        assert len(sm._task_statuses) == 1
+        status = next(iter(sm._task_statuses.values()))
+        assert status.final_content == "done"
+        assert status.ended_at is not None
 
     @pytest.mark.asyncio
-    async def test_registers_in_session_tasks(self, tmp_path):
+    async def test_registers_in_session_tasks_and_retains_after_completion(self, tmp_path):
+        """``_session_tasks`` retains finished task ids so
+        ``list_for_session`` can include recent history."""
         sm = _manager(tmp_path)
         block = asyncio.Event()
         async def _slow_run(spec):
@@ -143,7 +153,9 @@ class TestSpawn:
 
         block.set()
         await asyncio.sleep(0.1)
-        assert "s1" not in sm._session_tasks
+        # The session entry is retained for history lookup.
+        assert "s1" in sm._session_tasks
+        assert len(sm._session_tasks["s1"]) == 1
 
     @pytest.mark.asyncio
     async def test_no_session_key_no_registration(self, tmp_path):
@@ -194,16 +206,23 @@ class TestSpawn:
         await asyncio.sleep(0.1)
 
     @pytest.mark.asyncio
-    async def test_cleanup_callback_removes_all_entries(self, tmp_path):
+    async def test_cleanup_callback_removes_only_running_handle(self, tmp_path):
+        """Cleanup drops the asyncio.Task handle but keeps the status
+        and session index — the lifecycle tools rely on the retained
+        state to answer questions about completed subagents."""
         sm = _manager(tmp_path)
         sm.runner.run = AsyncMock(return_value=AgentRunResult(
             final_content="done", messages=[], stop_reason="completed",
         ))
         await sm.spawn("task", session_key="s1")
         await asyncio.sleep(0.1)
+        # The running handle goes away once the asyncio.Task completes.
         assert len(sm._running_tasks) == 0
-        assert len(sm._task_statuses) == 0
-        assert len(sm._session_tasks) == 0
+        # The status sticks around (LRU-trimmed at _max_status_history).
+        assert len(sm._task_statuses) == 1
+        # And the session index keeps the id so list_for_session can
+        # include recent history.
+        assert "s1" in sm._session_tasks
 
 
 # ---------------------------------------------------------------------------
