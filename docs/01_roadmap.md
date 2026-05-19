@@ -142,7 +142,7 @@ Compiled from the comparative review of OpenHands / Hermes / OpenCode / OpenClau
 | 2 | **Sleep** ✅ (2026-05-19) | LOW (~2h) | Low-Medium | OpenClaude | — | Shipped as `sleep`. Bounded 0–300s; clamps over-asks; telemetry start/end. |
 | 3 | **AskUserQuestion** ✅ (2026-05-19) | LOW-MED (2d) | High | OpenClaude, Hermes (`clarify`) | — | Shipped as `ask_user_question`. V1 yield-and-resume (no in-turn block); stores `pending_question` on session metadata for channel rendering. |
 | 4 | **session_search** ✅ (2026-05-19) | LOW (2d) | Medium | Hermes | — | Shipped as `session_search`. Keyword/regex over `session.messages`, role filter, snippet around match, msg_index pointer. Allowed in plan mode. |
-| 5 | **Subagent lifecycle expansion** | MED (~1 week) | High | OpenClaude (`TaskCreate/Get/Update/List/Stop/Output`), OpenCode, OpenHands | — | Today only `spawn`. Add: list, get, get_output, stop, status. Critical for daily-driver long-running background work. |
+| 5 | **Subagent lifecycle expansion** ✅ (2026-05-19) | MED (~1 week) | High | OpenClaude (`TaskCreate/Get/Update/List/Stop/Output`), OpenCode, OpenHands | — | Shipped 4 tools: `subagent_list`, `subagent_status`, `subagent_stop`, `subagent_output`. Session-scoped security, LRU status retention, allowed in plan mode. |
 | 6 | **Monitor** | LOW-MED (2-3d) | Medium | OpenClaude | #5 | Stream output of background subagent. Natural pair with #5. |
 | 7 | **Cron extension** | LOW-MED (2-3d) | Medium | Hermes, OpenClaude | — | We have basic `cron` tool. Extend with list/delete/edit. |
 | 8 | **RemoteTrigger** | MED (3-5d) | Medium-High | OpenClaude | — | Launch agent run from external webhook. Requires HTTP endpoint + queue plumbing. |

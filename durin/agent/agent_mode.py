@@ -99,6 +99,12 @@ PLAN_MODE_ALLOWED = frozenset({
     "ask_user_question",
     # Searching the current session's prior messages is read-only.
     "session_search",
+    # Subagent lifecycle observation (and stop) is read-only with respect
+    # to the workspace — only touches the manager's in-memory state.
+    "subagent_list",
+    "subagent_status",
+    "subagent_stop",
+    "subagent_output",
     # Subagent spawning is allowed; subagents inherit `explore` mode (see
     # spawn integration) which is also read-only.
     "spawn",

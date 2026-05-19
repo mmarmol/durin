@@ -844,3 +844,58 @@ Seeded a session with "my favorite color is electric blue, and the project coden
 ### Lesson
 
 For tools that operate on session-local state, the right substrate is almost always the in-memory representation, not the persisted file. The in-memory copy is the canonical source the LLM consumes; reading the file introduces consistency lag and indirection without any benefit for tools that are scoped to the current turn. Save the on-disk path for tools that operate across sessions (memory subsystem, cross-conversation indexing) — there it's the right answer.
+
+## Subagent lifecycle tools — item #5 of the tools roadmap (May 2026)
+
+### What shipped
+
+Four new tools in [durin/agent/tools/subagent_lifecycle.py](durin/agent/tools/subagent_lifecycle.py):
+
+- `subagent_list` — task_id, label, state, iteration, age, tool-call count for every subagent the current session has spawned (running + retained history)
+- `subagent_status(task_id)` — detailed snapshot for one subagent (phase, iteration, recent tool calls, usage, error)
+- `subagent_stop(task_id)` — best-effort cancel; returns `stopped` / `not_running` / `unknown`
+- `subagent_output(task_id)` — final or partial output of a subagent (long results truncated at 4000 chars with a pointer back to the announce)
+
+All allowed in plan mode — they only touch the manager's in-memory state, not the workspace.
+
+Companion changes in [durin/agent/subagent.py](durin/agent/subagent.py):
+
+- `SubagentStatus` gained `session_key`, `final_content`, `ended_at`
+- Done-callback no longer pops `_task_statuses` or `_session_tasks`; instead `_remember_finished` LRU-trims at `_max_status_history` (default 100). Statuses stick around so `subagent_output` can serve completed tasks turns later.
+- New public methods on `SubagentManager`: `list_for_session`, `get_status_for`, `stop_task`, `get_output_for`. All accept `session_key` for ownership checks.
+
+### Session-scope security boundary
+
+Every lifecycle method takes `(task_id, session_key)`. Cross-session lookups return the same `"unknown"` response as a genuinely nonexistent id — we never confirm whether a task exists in another session. A model that guesses or fishes for ids cannot leak across conversations. The check happens inside `SubagentManager`, not in each tool, so wrappers can't accidentally bypass it.
+
+### LRU retention is the load-bearing design choice
+
+The original `_cleanup` popped both `_task_statuses` and `_session_tasks` on completion. That left `subagent_output` with nothing to serve once the asyncio.Task finished — and the asyncio.Task often finishes during a different tool call than the one that next wants to read the result. By retaining status entries (capped at 100) and only trimming when over the cap, we get a usable "ask later" affordance without unbounded memory growth.
+
+The trim order is dict-insertion order — oldest first — which matches FIFO for our purposes (a session that spawns 200 subagents drops the earliest 100). The session index (`_session_tasks`) is updated in lockstep so `list_for_session` stays consistent.
+
+### MRO gotcha (caught during E2E)
+
+First implementation put `create` and `enabled` on a `_SubagentToolBase` mixin and declared each concrete tool as `class XxxTool(Tool, _SubagentToolBase)`. The MRO walks `Tool` first, so `Tool.create` (the default `cls()` constructor) ran instead of the mixin's overload — and crashed with "missing 1 required positional argument: manager". The unit tests passed because they instantiated tools directly with `Tool(manager=...)`, bypassing `create`. The bug only surfaced under the live agent loader path.
+
+Fix: define `create` and `enabled` on each concrete class. Same pattern as `LongTaskTool`/`CompleteGoalTool`. The base class still owns shared state and helpers (`set_context`, `_session_key`), just not the constructor hooks.
+
+Lesson recorded as a comment at the top of `_SubagentToolBase` so the next person doesn't repeat the mistake.
+
+### E2E verification (the kind of observability the user asked for)
+
+Single-turn live-agent test:
+
+1. Spawn subagent: "Read NOTES.md and return its markdown headings as a bullet list"
+2. `sleep(8)` (parallel with spawn — model chose to dispatch both in one assistant message)
+3. `subagent_list`
+4. `subagent_output(task_id)`
+5. Report the headings
+
+The meta timeline recorded all four tool calls with the right msg_index pointers — `spawn` and `sleep` shared `msg_index=1` (parallel calls), `subagent_list` at `msg_index=4`, `subagent_output` at `msg_index=6`. Each with its `tool_call_id` and `duration_ms`. The agent returned the three correct headings from the workspace file.
+
+The parallel-call case is the one that matters operationally: the model wanted to start the subagent and the sleep simultaneously because the sleep doesn't depend on the spawn result. The auto-meta-event recording handled this correctly without special-casing parallel calls.
+
+### Lesson
+
+For background-task lifecycle, the most valuable affordance is **retention with a bounded window**, not "kill everything that finished". Statuses cost ~200 bytes each; 100 of them is 20KB per session. That memory buys the model the ability to ask "what did task X return?" a turn or three after the announce, which is the common UX. Aggressive cleanup looked cleaner in V1 but broke the natural "fire and check later" flow that makes background work feel native.
