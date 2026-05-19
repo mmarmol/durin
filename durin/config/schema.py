@@ -88,6 +88,41 @@ class InlineFallbackConfig(Base):
 FallbackCandidate = str | InlineFallbackConfig
 
 
+class AuxModelConfig(Base):
+    """Inline model handle for an auxiliary bridge (vision, audio, pdf, …).
+
+    Either ``preset`` (referencing a named ``model_presets`` entry) or
+    the inline ``model`` + ``provider`` pair must be supplied. The
+    bridge tools resolve this at call time, so swapping the aux model
+    takes effect immediately without a restart.
+    """
+
+    preset: str | None = None
+    model: str | None = None
+    provider: str = "auto"
+
+
+class AuxModelsConfig(Base):
+    """Optional auxiliary models for capability bridges.
+
+    The agent only uses these when the primary model lacks the relevant
+    capability AND a config entry is present. Leaving a field unset
+    disables the corresponding bridge tool.
+
+    Why no ``pdf`` field: PDF handling does not split cleanly into a
+    single auxiliary modality. Some models accept native multimodal
+    PDFs, some rasterize pages and consume them through their vision
+    path, some prefer pre-extracted text. The capability flag
+    (``supports_pdf_input``) is tracked for diagnostics, but text-level
+    extraction lives in the dedicated document tool (roadmap #10); when
+    the PDF is genuinely visual (scans, diagrams), the vision bridge
+    can be used over rasterized pages.
+    """
+
+    vision: AuxModelConfig | None = None
+    audio: AuxModelConfig | None = None
+
+
 class ModelPresetConfig(Base):
     """A named set of model + generation parameters for quick switching."""
 
@@ -105,6 +140,31 @@ class ModelPresetConfig(Base):
             max_tokens=self.max_tokens,
             reasoning_effort=self.reasoning_effort,
         )
+
+
+class ModelCapabilityOverride(Base):
+    """User-declared capability override for a specific model name.
+
+    Wins over the vendored snapshot and the heuristic fallback. Use
+    when you've added a model the snapshot doesn't know about — for
+    example a custom local fine-tune — or when the snapshot is wrong
+    for your particular deployment. Any field left as ``None`` falls
+    through to the underlying resolver.
+    """
+
+    max_input_tokens: int | None = None
+    max_output_tokens: int | None = None
+    supports_vision: bool | None = None
+    supports_audio_input: bool | None = None
+    supports_pdf_input: bool | None = None
+    supports_video_input: bool | None = None
+    supports_audio_output: bool | None = None
+    supports_image_output: bool | None = None
+    supports_function_calling: bool | None = None
+    supports_streaming: bool | None = None
+    supports_reasoning: bool | None = None
+    supports_prompt_caching: bool | None = None
+    supports_response_schema: bool | None = None
 
 
 class AgentDefaults(Base):
@@ -156,6 +216,14 @@ class AgentsConfig(Base):
     """Agent configuration."""
 
     defaults: AgentDefaults = Field(default_factory=AgentDefaults)
+    # Optional auxiliary models for capability bridges. The agent uses
+    # these only when the primary model is known to lack the relevant
+    # modality (e.g. GLM has no vision); leaving them unset disables
+    # the corresponding bridge tool.
+    aux_models: AuxModelsConfig = Field(
+        default_factory=AuxModelsConfig,
+        validation_alias=AliasChoices("auxModels", "aux_models"),
+    )
 
 
 class ProviderConfig(Base):
@@ -288,6 +356,15 @@ class Config(BaseSettings):
     model_presets: dict[str, ModelPresetConfig] = Field(
         default_factory=dict,
         validation_alias=AliasChoices("modelPresets", "model_presets"),
+    )
+    # Per-model capability overrides — keyed by either the bare model
+    # name (``glm-5-turbo``) or the provider-qualified form
+    # (``custom/glm-5-turbo``). Provider-qualified keys win over bare
+    # names when both match. Values override the vendored snapshot and
+    # the heuristic fallback for that model only.
+    model_capabilities: dict[str, ModelCapabilityOverride] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("modelCapabilities", "model_capabilities"),
     )
 
     @model_validator(mode="after")
