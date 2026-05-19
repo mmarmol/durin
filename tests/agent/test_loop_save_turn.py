@@ -436,6 +436,7 @@ async def test_process_message_does_not_duplicate_early_persisted_user_message(t
         ],
         "stop",
         False,
+        [],
     ))  # type: ignore[method-assign]
 
     result = await loop._process_message(
@@ -475,6 +476,7 @@ async def test_process_message_uses_context_chat_id_for_runtime_prompt(tmp_path:
         ],
         "stop",
         False,
+        [],
     ))
 
     result = await loop._process_message(
@@ -526,6 +528,7 @@ async def test_process_message_uses_explicit_session_metadata_for_goal_context(
         ],
         "stop",
         False,
+        [],
     ))
 
     result = await loop._process_message(
@@ -585,6 +588,7 @@ async def test_next_turn_after_crash_closes_pending_user_turn_before_new_input(t
         ],
         "stop",
         False,
+        [],
     ))  # type: ignore[method-assign]
 
     result = await loop._process_message(
@@ -683,6 +687,7 @@ async def test_stop_preserves_runtime_checkpoint_for_next_turn(tmp_path: Path) -
             [*initial_messages, {"role": "assistant", "content": "next answer"}],
             "stop",
             False,
+            [],
         )
 
     loop._run_agent_loop = resumed_run_agent_loop  # type: ignore[method-assign]
@@ -734,6 +739,7 @@ async def test_system_subagent_followup_is_persisted_before_prompt_assembly(tmp_
             [*initial_messages, {"role": "assistant", "content": "done"}],
             "stop",
             False,
+            [],
         )
 
     loop._run_agent_loop = fake_run_agent_loop  # type: ignore[method-assign]
@@ -790,6 +796,7 @@ async def test_multiple_subagent_followups_all_persist_as_standalone_history(tmp
             [*initial_messages, {"role": "assistant", "content": "ack"}],
             "stop",
             False,
+            [],
         )
 
     loop._run_agent_loop = fake_run_agent_loop  # type: ignore[method-assign]
@@ -916,6 +923,7 @@ async def test_system_subagent_followup_uses_thread_session_and_slack_metadata(t
             [*initial_messages, {"role": "assistant", "content": "done"}],
             "stop",
             False,
+            [],
         )
 
     loop._run_agent_loop = fake_run_agent_loop  # type: ignore[method-assign]

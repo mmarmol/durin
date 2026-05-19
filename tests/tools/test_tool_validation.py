@@ -603,7 +603,11 @@ async def test_exec_head_tail_truncation(tmp_path) -> None:
     else:
         command = f"{shlex.quote(sys.executable)} {shlex.quote(str(script_file))}"
     result = await tool.execute(command=command)
-    assert "chars truncated" in result
+    # T4 — spill helper renders "chars omitted" instead of the old
+    # "chars truncated" wording. Without a workspace the spill fall-back
+    # path is `/tmp/durin_spills/`; either way the truncation marker is
+    # present.
+    assert "chars omitted" in result
     # Head portion should start with As
     assert result.startswith("A")
     # Tail portion should end with the exit code which comes after Bs

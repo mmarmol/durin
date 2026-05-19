@@ -304,3 +304,226 @@ Based on this evidence + the production agent catalog (`04_agent_strategies_cata
 ---
 
 ## Last updated: 2026-05-18
+
+---
+
+## V9: Aider Exercism — first POSITIVE signal (2026-05-18)
+
+After V3–V8 refuted every "smart layer" we tried, V9 is the first
+experiment to validate a forward direction empirically. We tested whether
+system-prompt specificity (SOUL.md content) affects model performance on
+a standard coding benchmark — Aider's Exercism Python suite.
+
+### Setup
+
+- **Model**: glm-5.1 via Z.ai (temp=0)
+- **Benchmark**: 30 exercises sampled from `exercism/python` `exercises/practice/` (seed=42), the same source Aider uses for its 133-exercise benchmark
+- **Edit format**: whole-file (model returns complete file content in a fenced code block, filename on line before fence)
+- **Evaluation**: copy exercise to temp dir (excluding `.meta/`), apply model's edits, run pytest with 60s timeout, exit code 0 = pass
+- **Trials**: 1 trial per (exercise, condition) — single-shot, no retry. 90 total runs.
+- **Harness**: `scripts/hypothesis_test/run_experiment_v9_soul.py` (standalone, not using Durin's AgentLoop — clean isolation of the system-prompt variable)
+
+### Three conditions (only the system message varies)
+
+```
+A) none      — no system message at all
+B) generic   — single sentence: "You are a careful Python engineer.
+                Write clean, idiomatic Python that follows PEP 8."
+C) specific  — five-rule block focused on correctness: read carefully,
+                handle edge cases, follow spec literally, std-lib only,
+                verify against examples
+```
+
+User prompt (identical across conditions) contains the problem
+instructions, the stub file contents, and the output-format requirement.
+
+### Results
+
+| Condition | Pass rate | Passed | Errors (max-token hits) | Avg output tokens |
+|---|---|---|---|---|
+| none | 66.7% | 20/30 | 8 | 2607 |
+| generic | 80.0% | 24/30 | 5 | 2195 |
+| **specific** | **86.7%** | **26/30** | **1** | **1807** |
+
+**Pass-rate deltas**:
+- specific vs none: **+20 pp**
+- specific vs generic: +6.7 pp
+- generic vs none: +13.3 pp
+
+The +20 pp delta is in the lower half of Aider's published GPT-4 range
+(+33–41 pp), but the rank order (specific > generic > none) replicates
+their finding cleanly on a different model (glm-5.1).
+
+### Three independent signals support the same conclusion
+
+| Dimension | none | specific | Direction |
+|---|---|---|---|
+| Pass rate | 66.7% | 86.7% | +20 pp |
+| Avg output tokens | 2607 | 1807 | −31% (more concise) |
+| Max-token errors | 8/30 | 1/30 | −87% (stops rambling) |
+
+The specific-SOUL agent doesn't just pass more — it produces shorter
+code and stops looping into the max-token cap. That's quality signal
+that pass/fail alone would miss.
+
+### Divergence pattern (9/30 exercises had different outcomes)
+
+```
+crypto-square     none=F  generic=F  specific=T
+error-handling    none=F  generic=T  specific=T
+isbn-verifier     none=F  generic=T  specific=T
+luhn              none=T  generic=F  specific=T   <- non-monotone
+linked-list       none=T  generic=T  specific=F   <- only case specific lost
+perfect-numbers   none=F  generic=T  specific=T
+say               none=F  generic=T  specific=T
+word-count        none=F  generic=T  specific=T
+zipper            none=F  generic=F  specific=T
+```
+
+Seven of nine divergences follow the monotone ordering. `luhn` and
+`linked-list` are the cases to study.
+
+### Limitations of this V9
+
+- Single trial per cell — no within-condition variance estimate.
+- 30 exercises subset of 140 — sample noise possible.
+- The "specific" prompt was written by us, not by Aider. We have not yet
+  tested whether Aider's own prompts produce the same gap on glm-5.1
+  (that is V9b).
+- Single model (glm-5.1) — Claude / GPT-4 sensitivity may differ.
+- We don't capture the actual generated code in this run — only token
+  counts and pytest output. Code-quality judgments require a follow-up
+  with response capture (V9b).
+
+### Why this matters
+
+V9 is the first experiment in the V3–V9 series to produce a clear
+positive signal. The direction is now backed by:
+
+1. Our own data (+20 pp on glm-5.1, 30 exercises)
+2. Aider's published data (+33–41 pp on GPT-4, 133 exercises)
+3. PartialOrderEval academic paper (+58 pp on HumanEval, Qwen2.5)
+4. Hermes Agent's skill-loop deployment (+40% speedup)
+5. Industry convergence (Cursor `.cursorrules`, Claude Code `CLAUDE.md`)
+
+This validates Horizon 1 of the roadmap (`01_roadmap.md`). The next
+step is V9b: capture the actual code generated, compare with Aider's
+own prompts as a literal-replication anchor, and assess code-quality
+deltas beyond pass/fail.
+
+### Files
+
+- Script: `scripts/hypothesis_test/run_experiment_v9_soul.py`
+- Results: `scripts/hypothesis_test/v9_runs/results_v9_seed42.jsonl`
+- Aider's prompts (downloaded): `scripts/hypothesis_test/aider_prompts/`
+
+
+## V9e — SOUL routing closure (2026-05-19)
+
+### Goal
+
+Close the SOUL routing hypothesis (Phase 1a of `01_roadmap.md`) with statistical evidence. V9d had revealed the V9 +20pp signal was a `max_tokens=4096` artifact. V9e ran the corrected protocol (`max_tokens=131072`) on the complement of 110 exercises (the 30 from V9d already done, the remaining 110 here) to push N high enough to detect any real differential effect across conditions.
+
+### Setup
+
+- Model: glm-5.1 via Z.ai API, temp=0, `max_tokens=131072`
+- 3 conditions: `none` (empty system prompt), `specific` (the 5-rule correctness-focused prompt from V9), `generic_agent` (a short generic engineering posture)
+- 110 exercises × 3 conditions = 330 trials planned
+- Single LLM call per trial, whole-file edits, pytest exit code as ground truth
+- Resume capability, `reasoning_content` captured per trial, per-call telemetry of model output
+
+### Execution notes
+
+V9e completed 321/330 trials (107 exercises with full 3-condition data) before being terminated to wrap up the analysis. Two operational issues surfaced and were fixed mid-run:
+- Initial `subprocess.run(timeout=60)` for pytest did not kill runaway child processes when the LLM emitted infinite-loop code. One trial (rest-api / specific) hung for 6.5 hours before the SDK timeout cleared it. Fix: rewrote `run_pytest` in `scripts/hypothesis_test/run_experiment_v9_soul.py` to use `subprocess.Popen(start_new_session=True)` + `os.killpg(SIGTERM→SIGKILL)` on timeout.
+- A 20-minute LLM-side stall (legitimate, in the realistic range given some trials show >25min legitimate `llm_duration` with the 131k budget) prompted the second restart.
+
+### Results
+
+**Pass rate (N=107 complete exercises)**:
+
+| Condition | Passed | Rate |
+|---|---|---|
+| none | 74/107 | 69.2% |
+| specific | 76/107 | 71.0% |
+| generic_agent | 79/107 | 73.8% |
+
+Gap: 4.6pp top-to-bottom. Standard error for proportions at N=107 is √(0.7·0.3/107) ≈ 4.4pp. **The spread fits within ~1 standard error — empirically indistinguishable from noise.**
+
+**Outcome distribution across the 3 conditions per exercise**:
+
+- All 3 pass: 64/107 (59.8%)
+- All 3 fail: 18/107 (16.8%)
+- Divergent (some pass, some fail): 25/107 (23.4%)
+
+**Statistical tests on the 25 divergent exercises**:
+
+- **Chi-square** against uniform distribution across the 6 possible patterns (T,F,F)…(F,T,T): χ² = 1.78, df = 5, critical value at p=0.05 is 11.07. **Cannot reject H0** — pattern distribution is compatible with random.
+- **Per-condition sign tests** (wins vs losses in divergent cases):
+  - none: 10W / 13L (binomial two-sided p = 0.68)
+  - specific: 10W / 13L (p = 0.68)
+  - generic_agent: 14W / 9L (p = 0.41)
+  None significant.
+
+**Error types** (failed trials only):
+
+| Error type | none | specific | generic_agent |
+|---|---|---|---|
+| AssertionError | 28 | 30 | 25 |
+| ERROR (setup) | 1 | 1 | 2 |
+
+Conditions fail in the same way. No type-of-error differentiation.
+
+**Fail-set Jaccard similarity**:
+
+- none ∩ specific: 0.590
+- none ∩ generic_agent: 0.568
+- specific ∩ generic_agent: 0.611
+
+~59% overlap of failures — most are shared difficulty.
+
+**Asymmetric patterns** (informational, not robust):
+
+- Exercises only `none` passes (4): beer-song, food-chain, kindergarten-garden, proverb — 3 of 4 are lyrics / exact-text-format problems
+- Exercises only `specific` passes (3): book-store, camicia, robot-name
+- Exercises only `generic_agent` passes (5): grade-school, meetup, paasio, pov, satellite — most are class/data-structure problems
+
+N=4/3/5 is too small to claim a pattern. With Bernoulli noise across 23 divergent cases distributed in 6 buckets, expected counts per bucket are ~3.83 — observed values are 2-5, all within the random envelope.
+
+**Efficiency (the robust signal)**:
+
+| Condition | Avg tokens_out | Median tokens_out | Avg reasoning_chars |
+|---|---|---|---|
+| none | 4,959 | 2,285 | 17,659 |
+| specific | 2,337 | 744 | 7,595 |
+| generic_agent | 1,981 | 432 | 6,279 |
+
+Median output tokens: `none` is **5.3× larger than `generic_agent`** for the same correctness. Reasoning chars (internal CoT): `none` uses **2.84× more** than `generic_agent`.
+
+### Conclusion
+
+The SOUL routing hypothesis (Phase 1a) is closed without a positive correctness signal:
+
+1. Pass rates within noise across the 3 conditions
+2. Divergent exercises distribute as random across the 6 patterns
+3. Error types are identical
+4. Most failures are shared difficulty
+5. Anecdotal asymmetric patterns are statistically compatible with noise
+
+What survives:
+
+- Any non-empty SOUL reduces median output tokens 3-5× and reasoning chars 2.84× without correctness cost.
+- This is enough justification to ship a single default SOUL — but **not** to build a router.
+
+### Decision
+
+- Phase 1a: **closed**.
+- Set a single generic-engineering SOUL as Durin's `ContextBuilder` default.
+- Forward focus: Phase 1c (tool I/O hygiene + telemetry) and Phase 2 (memory, informed by Hermes' production design).
+
+### Files
+
+- Script: `scripts/hypothesis_test/run_experiment_v9e_complement.py`
+- Results: `scripts/hypothesis_test/v9_runs/results_v9e_seed42.jsonl` (321 trials)
+- Roadmap closure: `01_roadmap.md` §Horizon 1a
+- Bitácora entry: `02_bitacora.md` §Discarded: Role-based SOUL.md routing

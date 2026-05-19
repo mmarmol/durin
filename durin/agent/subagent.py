@@ -80,11 +80,16 @@ class SubagentManager:
         disabled_skills: list[str] | None = None,
         max_iterations: int | None = None,
         llm_wall_timeout_for_session: Callable[[str | None], float | None] | None = None,
+        sessions: Any | None = None,
     ):
         defaults = AgentDefaults()
         self.provider = provider
         self.workspace = workspace
         self.bus = bus
+        # Optional SessionManager — when provided, subagent inherits the
+        # parent session's agent_mode. Without it, falls back to a static
+        # EXPLORE_MODE (the safe-but-stricter default).
+        self._sessions = sessions
         self.model = model or provider.get_default_model()
         self.tools_config = tools_config or ToolsConfig()
         self.max_tool_result_chars = max_tool_result_chars
@@ -172,7 +177,19 @@ class SubagentManager:
         bg_task.add_done_callback(_cleanup)
 
         logger.info("Spawned subagent [{}]: {}", task_id, display_label)
-        return f"Subagent [{display_label}] started (id: {task_id}). I'll notify you when it completes."
+        return (
+            f"Subagent [{display_label}] started (id: {task_id}). "
+            "I'll notify you when it completes.\n\n"
+            "IMPORTANT: subagents always run in EXPLORE MODE (read-only). "
+            "The subagent CAN: read_file, list_dir, grep, repo_overview, "
+            "web_fetch, web_search. The subagent CANNOT: edit_file, "
+            "write_file, exec, or any state-changing tool. "
+            "If your task requires modifications, do them yourself "
+            "(when you're in build mode) or adjust the subagent's task to "
+            "investigation only. If you are in PLAN MODE, neither you nor "
+            "the subagent can modify — call exit_plan_mode(plan=...) and "
+            "wait for the user to /build."
+        )
 
     async def _run_subagent(
         self,
@@ -204,6 +221,24 @@ class SubagentManager:
                 if self._llm_wall_timeout_for_session
                 else None
             )
+            # Subagent mode = parent's mode when known, else EXPLORE.
+            # Mirrors OpenClaude's pattern: if parent is in plan mode, the
+            # subagent is also in plan — both restricted to read-only +
+            # exit_plan_mode. The model understands delegation does not
+            # escape the mode, so it doesn't fall into "spawn to work
+            # around restrictions". Without a SessionManager handle we
+            # fall back to EXPLORE — the safer-but-stricter default.
+            from durin.agent.agent_mode import EXPLORE_MODE, get_active_mode
+
+            def _subagent_mode_provider():
+                if self._sessions is not None and sess_key:
+                    try:
+                        parent_session = self._sessions.get_or_create(sess_key)
+                        return get_active_mode(parent_session)
+                    except Exception:
+                        pass
+                return EXPLORE_MODE
+
             result = await self.runner.run(AgentRunSpec(
                 initial_messages=messages,
                 tools=tools,
@@ -217,6 +252,7 @@ class SubagentManager:
                 checkpoint_callback=_on_checkpoint,
                 session_key=sess_key,
                 llm_timeout_s=llm_timeout,
+                mode_provider=_subagent_mode_provider,
             ))
             status.phase = "done"
             status.stop_reason = result.stop_reason

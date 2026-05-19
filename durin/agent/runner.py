@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
+import json
 import os
+import time
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -15,6 +18,7 @@ from loguru import logger
 from durin.agent.hook import AgentHook, AgentHookContext
 from durin.agent.tools.registry import ToolRegistry
 from durin.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from durin.telemetry.logger import current_telemetry
 from durin.utils.helpers import (
     IncrementalThinkExtractor,
     build_assistant_message,
@@ -31,6 +35,7 @@ from durin.utils.runtime import (
     EMPTY_FINAL_RESPONSE_MESSAGE,
     build_finalization_retry_message,
     build_length_recovery_message,
+    build_reasoning_truncation_message,
     ensure_nonempty_tool_result,
     is_blank_text,
     repeated_external_lookup_error,
@@ -51,6 +56,46 @@ _COMPACTABLE_TOOLS = frozenset({
     "web_search", "web_fetch", "list_dir",
 })
 _BACKFILL_CONTENT = "[Tool result unavailable — call was interrupted or lost]"
+
+
+# 1A — Loop-detection plumbing.
+#
+# Frontier-reasoning models occasionally fixate: they emit the SAME tool call
+# with the SAME arguments multiple turns in a row even after that exact call
+# already produced a hard failure (lookup error, exception, "Error: ..." string).
+# The model "sees" the failure in the message history but anchors on its plan.
+#
+# The fix is purely state tracking — not cognitive manipulation. We keep a
+# turn-scoped set of (tool_name, normalized_args) signatures that previously
+# failed. On a repeat hit we short-circuit and inject a synthetic result asking
+# the model to take a strictly different approach. This forces the agent out of
+# the local minimum WITHOUT spending another tool execution.
+#
+# Reset per turn (new run() call) — we never block calls across turns because
+# the environment state may have changed (e.g., a file the model edited will
+# now behave differently for a repeated read).
+
+def _tool_call_signature(name: str, arguments: Any) -> str:
+    """Stable signature for (tool_name, arguments).
+
+    JSON dump with sort_keys=True so dict order doesn't produce false negatives.
+    Falls back to repr() if arguments are not JSON-serializable (rare).
+    """
+    try:
+        payload = json.dumps(arguments, sort_keys=True, ensure_ascii=False, default=str)
+    except Exception:
+        payload = repr(arguments)
+    digest = hashlib.sha256(f"{name}\x1f{payload}".encode("utf-8", "replace")).hexdigest()
+    return digest[:16]  # 64 bits of collision space is plenty per-turn
+
+
+_LOOP_BLOCK_MESSAGE = (
+    "BLOCKED: this exact tool call (same name and arguments) already failed "
+    "earlier in this turn. Repeating it will not change the outcome — the "
+    "environment state for these arguments has not changed. Take a strictly "
+    "different approach: either modify the arguments, choose a different tool, "
+    "or reconsider whether this tool is the right one for the task."
+)
 
 
 
@@ -82,6 +127,12 @@ class AgentRunSpec:
     checkpoint_callback: Any | None = None
     injection_callback: Any | None = None
     llm_timeout_s: float | None = None
+    # Sprint B / L3 — Permission-as-data agent modes. When provided, the
+    # runner calls this each iteration to obtain the active mode and filters
+    # the tool definitions sent to the LLM. Returns None → no filtering
+    # (equivalent to BUILD_MODE = full access). See durin/agent/agent_mode.py
+    # and docs/07_external_agents_review.md §L3.
+    mode_provider: Any | None = None
 
 
 @dataclass(slots=True)
@@ -249,6 +300,28 @@ class AgentRunner:
         had_injections = False
         injection_cycles = 0
 
+        # 1A — Loop-detection state. Tracks signatures of tool calls that already
+        # failed in this turn. We block repeats to break model fixation. Scope is
+        # the current turn only (NOT cross-turn) — re-entry to the loop in a new
+        # turn starts fresh because environment state may have changed.
+        seen_failed_calls: set[str] = set()
+
+        # Sprint B / L3 — record the mode active at the start of this turn so
+        # we can correlate behavior + outcomes with mode. Mid-run switches are
+        # captured separately via `agent_mode.switch` telemetry from tools/CLI.
+        if spec.mode_provider is not None:
+            try:
+                _start_mode = spec.mode_provider()
+            except Exception:
+                _start_mode = None
+            if _start_mode is not None:
+                _start_logger = current_telemetry()
+                if _start_logger is not None:
+                    with suppress(Exception):
+                        _start_logger.log("agent_mode.turn_start", {
+                            "mode": _start_mode.name,
+                        })
+
         for iteration in range(spec.max_iterations):
             try:
                 # Keep the persisted conversation untouched. Context governance
@@ -329,6 +402,7 @@ class AgentRunner:
                     response.tool_calls,
                     external_lookup_counts,
                     workspace_violation_counts,
+                    seen_failed_calls,
                 )
                 tool_events.extend(new_events)
                 context.tool_results = list(results)
@@ -396,6 +470,53 @@ class AgentRunner:
                 )
 
             clean = hook.finalize_content(context, response.content)
+
+            # 2B — Reasoning-phase truncation recovery.
+            #
+            # Reasoning models (glm-5.1, o-series, Claude thinking) can hit the
+            # output-token cap WHILE STILL DELIBERATING in `reasoning_content`,
+            # never reaching the visible `content` phase. The signature is:
+            #   finish_reason == "length" AND content is blank AND
+            #   reasoning_content is non-empty.
+            #
+            # The default empty-content retry path would re-send the same prompt
+            # and likely loop. Instead, append the partial reasoning to context
+            # and inject a specific cue asking the model to wrap up its
+            # thinking quickly and emit the final answer. This keeps the
+            # model's chain-of-thought continuous and forces convergence.
+            reasoning_truncated_mid_thought = (
+                response.finish_reason == "length"
+                and is_blank_text(clean)
+                and bool(response.reasoning_content)
+                and not response.tool_calls
+            )
+            if reasoning_truncated_mid_thought:
+                length_recovery_count += 1
+                if length_recovery_count <= _MAX_LENGTH_RECOVERIES:
+                    logger.info(
+                        "Reasoning truncated mid-thought on turn {} for {} ({}/{}); "
+                        "cueing the model to wrap up.",
+                        iteration,
+                        spec.session_key or "default",
+                        length_recovery_count,
+                        _MAX_LENGTH_RECOVERIES,
+                    )
+                    if hook.wants_streaming():
+                        await hook.on_stream_end(context, resuming=True)
+                    # Preserve the partial reasoning so the model can pick up
+                    # its train of thought on the next turn — losing it would
+                    # waste the tokens already spent.
+                    messages.append(build_assistant_message(
+                        "",  # no visible content yet
+                        reasoning_content=response.reasoning_content,
+                        thinking_blocks=response.thinking_blocks,
+                    ))
+                    messages.append(build_reasoning_truncation_message())
+                    await hook.after_iteration(context)
+                    continue
+                # If we already used our recovery budget, fall through to the
+                # normal empty-content path (which terminates with an error).
+
             if response.finish_reason != "error" and is_blank_text(clean):
                 empty_content_retries += 1
                 if empty_content_retries < _MAX_EMPTY_RETRIES:
@@ -566,6 +687,32 @@ class AgentRunner:
             had_injections=had_injections,
         )
 
+    @staticmethod
+    def _active_tool_definitions(spec: AgentRunSpec) -> list[dict[str, Any]]:
+        """Sprint B / L3 — return tool definitions filtered by the active mode.
+
+        If ``spec.mode_provider`` is ``None`` (no agent-mode wiring) or the
+        mode has no restrictions (default BUILD_MODE), returns the cached
+        definitions verbatim — the fast path is identical to pre-Sprint-B
+        behavior. When a mode does restrict the surface, this returns a
+        filtered slice; the registry cache stays valid.
+        """
+        all_defs = spec.tools.get_definitions()
+        if spec.mode_provider is None:
+            return all_defs
+        try:
+            mode = spec.mode_provider()
+        except Exception:
+            return all_defs
+        if mode is None or (mode.allowed is None and not mode.denied):
+            return all_defs
+        from durin.agent.tools.registry import ToolRegistry
+
+        return [
+            d for d in all_defs
+            if mode.is_tool_allowed(ToolRegistry._schema_name(d))
+        ]
+
     def _build_request_kwargs(
         self,
         spec: AgentRunSpec,
@@ -611,7 +758,7 @@ class AgentRunner:
         kwargs = self._build_request_kwargs(
             spec,
             messages,
-            tools=spec.tools.get_definitions(),
+            tools=self._active_tool_definitions(spec),
         )
         wants_streaming = hook.wants_streaming()
         wants_progress_streaming = (
@@ -738,14 +885,16 @@ class AgentRunner:
         tool_calls: list[ToolCallRequest],
         external_lookup_counts: dict[str, int],
         workspace_violation_counts: dict[str, int],
+        seen_failed_calls: set[str],
     ) -> tuple[list[Any], list[dict[str, str]], BaseException | None]:
         batches = self._partition_tool_batches(spec, tool_calls)
-        tool_results: list[tuple[Any, dict[str, str], BaseException | None]] = []
+        tool_results: list[tuple[Any, dict[str, Any], BaseException | None]] = []
         for batch in batches:
             if spec.concurrent_tools and len(batch) > 1:
                 batch_results = await asyncio.gather(*(
-                    self._run_tool(
+                    self._run_tool_timed(
                         spec, tool_call, external_lookup_counts, workspace_violation_counts,
+                        seen_failed_calls,
                     )
                     for tool_call in batch
                 ))
@@ -753,14 +902,15 @@ class AgentRunner:
             else:
                 batch_results = []
                 for tool_call in batch:
-                    result = await self._run_tool(
+                    result = await self._run_tool_timed(
                         spec, tool_call, external_lookup_counts, workspace_violation_counts,
+                        seen_failed_calls,
                     )
                     tool_results.append(result)
                     batch_results.append(result)
 
         results: list[Any] = []
-        events: list[dict[str, str]] = []
+        events: list[dict[str, Any]] = []
         fatal_error: BaseException | None = None
         for result, event, error in tool_results:
             results.append(result)
@@ -769,20 +919,97 @@ class AgentRunner:
                 fatal_error = error
         return results, events, fatal_error
 
+    async def _run_tool_timed(
+        self,
+        spec: AgentRunSpec,
+        tool_call: ToolCallRequest,
+        external_lookup_counts: dict[str, int],
+        workspace_violation_counts: dict[str, int],
+        seen_failed_calls: set[str],
+    ) -> tuple[Any, dict[str, Any], BaseException | None]:
+        """Wrap :meth:`_run_tool` with wall-time measurement and ``tool_call_id``
+        enrichment so callers can correlate events back to the assistant
+        message that emitted the call. Keeps the underlying ``_run_tool``
+        signature untouched; the six return paths inside it do not need
+        to know about ``tool_call_id`` or ``duration_ms``.
+        """
+        started = time.monotonic()
+        try:
+            result, event, error = await self._run_tool(
+                spec, tool_call, external_lookup_counts, workspace_violation_counts,
+                seen_failed_calls,
+            )
+        finally:
+            duration_ms = (time.monotonic() - started) * 1000.0
+        if isinstance(event, dict):
+            event = dict(event)
+            event.setdefault("tool_call_id", tool_call.id)
+            event.setdefault("duration_ms", round(duration_ms, 1))
+        return result, event, error
+
     async def _run_tool(
         self,
         spec: AgentRunSpec,
         tool_call: ToolCallRequest,
         external_lookup_counts: dict[str, int],
         workspace_violation_counts: dict[str, int],
+        seen_failed_calls: set[str],
     ) -> tuple[Any, dict[str, str], BaseException | None]:
         hint = "\n\n[Analyze the error above and try a different approach.]"
+
+        # 1A — Loop-detection: if THIS exact (name, args) tuple already failed
+        # in this turn, short-circuit before re-running. We don't re-execute the
+        # tool — we just remind the model that it has tried this and it failed,
+        # so it must pick a different path. Cheap to compute (sha256 prefix),
+        # avoids the cost of a doomed second execution, and breaks the common
+        # "fixate on plan despite seeing the error" failure mode.
+        signature = _tool_call_signature(tool_call.name, tool_call.arguments)
+        if signature in seen_failed_calls:
+            event = {
+                "name": tool_call.name,
+                "status": "error",
+                "detail": "loop blocked: identical failed call repeated",
+            }
+            return _LOOP_BLOCK_MESSAGE, event, None
+
+        # Sprint B / L3 — mode-based denial. The filtered tool definitions
+        # passed to the LLM already exclude tools not allowed in the current
+        # mode, so this branch fires only when the model emits a cached
+        # tool name. The denial is informative so the model knows to switch
+        # mode (via /build approval, typically) rather than to retry blindly.
+        if spec.mode_provider is not None:
+            try:
+                active_mode = spec.mode_provider()
+            except Exception:
+                active_mode = None
+            if active_mode is not None and not active_mode.is_tool_allowed(tool_call.name):
+                msg = (
+                    f"Tool '{tool_call.name}' is not available in mode "
+                    f"'{active_mode.name}'. The user must run `/build` (or "
+                    "the active mode must change) before this tool can be "
+                    "called. Do not retry — adjust your approach."
+                )
+                event = {
+                    "name": tool_call.name,
+                    "status": "error",
+                    "detail": f"denied by mode '{active_mode.name}'",
+                }
+                logger_obj = current_telemetry()
+                if logger_obj is not None:
+                    with suppress(Exception):
+                        logger_obj.log("agent_mode.tool_denied", {
+                            "tool": tool_call.name,
+                            "mode": active_mode.name,
+                        })
+                return msg + hint, event, None
+
         lookup_error = repeated_external_lookup_error(
             tool_call.name,
             tool_call.arguments,
             external_lookup_counts,
         )
         if lookup_error:
+            seen_failed_calls.add(signature)
             event = {
                 "name": tool_call.name,
                 "status": "error",
@@ -799,6 +1026,10 @@ class AgentRunner:
                 if isinstance(prepared, tuple) and len(prepared) == 3:
                     tool, params, prep_error = prepared
         if prep_error:
+            # 1A — record this signature as failed (preparation issue is
+            # deterministic given args: repeating with same args will hit it
+            # again).
+            seen_failed_calls.add(signature)
             event = {
                 "name": tool_call.name,
                 "status": "error",
@@ -824,6 +1055,11 @@ class AgentRunner:
         except asyncio.CancelledError:
             raise
         except BaseException as exc:
+            # 1A — exceptions from the tool itself are deterministic w.r.t. args
+            # for the vast majority of tools (a bad path, missing dep, syntax
+            # error in a file edit, etc.). Mark this signature as failed so a
+            # repeat is short-circuited.
+            seen_failed_calls.add(signature)
             event = {
                 "name": tool_call.name,
                 "status": "error",
@@ -845,6 +1081,12 @@ class AgentRunner:
             return payload, event, None
 
         if isinstance(result, str) and result.startswith("Error"):
+            # 1A — the tool returned an explicit error string. Mark signature
+            # as failed. NOTE: this does NOT cover tools that return a valid
+            # payload with embedded failure (e.g., `exec("pytest")` returning
+            # the test failure output as a normal result). Pytest failures are
+            # NOT marked here, so the model can re-run pytest after editing.
+            seen_failed_calls.add(signature)
             event = {
                 "name": tool_call.name,
                 "status": "error",
@@ -1156,7 +1398,7 @@ class AgentRunner:
             self.provider,
             spec.model,
             messages,
-            spec.tools.get_definitions(),
+            self._active_tool_definitions(spec),
         )
         if estimate <= budget:
             return messages
@@ -1208,6 +1450,27 @@ class AgentRunner:
         spec: AgentRunSpec,
         tool_calls: list[ToolCallRequest],
     ) -> list[list[ToolCallRequest]]:
+        """Group tool calls into batches that are safe to execute in parallel.
+
+        1B — Topological ordering safety.
+        We never reorder the model's emitted tool calls; instead we walk them
+        in sequence and group only CONSECUTIVE `concurrency_safe` tools (read-
+        only and non-exclusive) into a parallel batch. Anything else — a
+        mutation, an exclusive tool — gets its own singleton batch.
+
+        This prevents race conditions when the model emits something like
+        `[edit_file(A), read_file(A)]` or `[write_file(A), exec("pytest")]`:
+        the mutation always completes before any read that follows it.
+        Reordering globally (all reads first, all writes after) would be
+        wrong because the model often depends on ordering — a read before a
+        write captures the pre-edit state, a read after captures the post-edit
+        state. Preserving order is the only correct default.
+
+        Tools default to ``read_only=False`` in :class:`Tool`, so any tool
+        that doesn't explicitly opt into safety is run alone. This is a safe
+        default: it costs a missed parallelism opportunity in exchange for
+        guaranteed correctness when tool metadata is missing.
+        """
         if not spec.concurrent_tools:
             return [[tool_call] for tool_call in tool_calls]
 

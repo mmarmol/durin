@@ -111,6 +111,29 @@ BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
         "shield",
         "[list|approve <code>|deny <code>|revoke <user_id>]",
     ),
+    BuiltinCommandSpec(
+        "/plan",
+        "Enter plan mode",
+        "Switch the agent into read-only planning mode. The agent will "
+        "investigate and propose a plan but not modify the workspace. "
+        "Use /build to resume execution.",
+        "lightbulb",
+    ),
+    BuiltinCommandSpec(
+        "/build",
+        "Exit plan mode",
+        "Restore the previous mode (typically build) so the agent can "
+        "execute the plan.",
+        "play",
+    ),
+    BuiltinCommandSpec(
+        "/mode",
+        "Show or set agent mode",
+        "Without arguments, shows the active mode. With one of "
+        "build/plan/explore, switches to that mode.",
+        "settings-2",
+        "[build|plan|explore]",
+    ),
 )
 
 
@@ -607,6 +630,303 @@ async def cmd_pairing(ctx: CommandContext) -> OutboundMessage:
     )
 
 
+# ---------------------------------------------------------------------------
+# Sprint B / L3 — Agent mode slash commands
+# ---------------------------------------------------------------------------
+
+
+def _emit_mode_telemetry(event_type: str, data: dict) -> None:
+    """Best-effort telemetry emit — never raises if logger unbound or broken."""
+    from contextlib import suppress
+
+    from durin.telemetry.logger import current_telemetry
+
+    logger_obj = current_telemetry()
+    if logger_obj is None:
+        return
+    with suppress(Exception):
+        logger_obj.log(event_type, data)
+
+
+def _resolve_session_meta_path(ctx: CommandContext):
+    """Locate the .meta.json file for the session in the command context."""
+    from contextlib import suppress
+
+    from durin.session.session_meta import meta_path_for
+
+    if ctx.session is None or ctx.loop is None:
+        return None
+    with suppress(Exception):
+        sessions_dir = ctx.loop.sessions.sessions_dir
+        return meta_path_for(ctx.session.key, sessions_dir)
+    return None
+
+
+def _supersede_executing_plan(ctx: CommandContext, plan_path: str) -> None:
+    """Mark the prior executing plan in session meta as superseded.
+
+    Best-effort: any failure here must not break the slash command.
+    """
+    from contextlib import suppress
+    from pathlib import Path
+
+    from durin.session.session_meta import mark_plan_superseded
+
+    mp = _resolve_session_meta_path(ctx)
+    if mp is None:
+        return
+    with suppress(Exception):
+        plan_id = Path(plan_path).stem
+        msg_index = len(ctx.session.messages)
+        mark_plan_superseded(mp, plan_id, msg_index)
+
+
+def _approve_executing_plan(ctx: CommandContext, plan_path: str) -> None:
+    """Mark the active plan in session meta as approved/executing."""
+    from contextlib import suppress
+    from pathlib import Path
+
+    from durin.session.session_meta import mark_plan_approved
+
+    mp = _resolve_session_meta_path(ctx)
+    if mp is None:
+        return
+    with suppress(Exception):
+        plan_id = Path(plan_path).stem
+        msg_index = len(ctx.session.messages)
+        mark_plan_approved(mp, plan_id, msg_index)
+
+
+async def cmd_plan(ctx: CommandContext) -> OutboundMessage:
+    """Enter plan mode for the current session.
+
+    Supports both forms:
+    - ``/plan`` (exact) — just activate the mode; user types the task in the
+      next message.
+    - ``/plan <task>`` (prefix) — activate the mode AND forward ``<task>``
+      as a regular user message so the agent processes it in plan mode in
+      the same turn. Mirrors Claude Code's UX.
+    """
+    from dataclasses import replace as dataclass_replace
+
+    from durin.agent.agent_mode import (
+        PLAN_MODE,
+        enter_plan_mode,
+        get_active_mode_name,
+    )
+
+    if ctx.session is None or ctx.session.metadata is None:
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content="Cannot enter plan mode: no active session.",
+            metadata=dict(ctx.msg.metadata or {}),
+        )
+
+    task = (ctx.args or "").strip()
+    current = get_active_mode_name(ctx.session)
+    if current == PLAN_MODE.name:
+        if task:
+            content = (
+                "🧠 Already in PLAN MODE — passing your new task to the agent. "
+                "It will refine the current plan or propose a new one.\n\n"
+                "Tip: if you want to discard the in-progress plan and start "
+                "fresh, run `/build` first, then `/plan <new task>`."
+            )
+        else:
+            content = "🧠 Already in PLAN MODE."
+    else:
+        previous = enter_plan_mode(ctx.session)
+        # Entering a new plan supersedes any prior executing plan — clear
+        # the runtime marker so prompts don't keep re-injecting stale plan
+        # content. Also close the executing-plan event in the session meta.
+        superseded = ctx.session.metadata.pop("executing_plan_path", None)
+        _emit_mode_telemetry("agent_mode.switch", {
+            "from": previous,
+            "to": PLAN_MODE.name,
+            "trigger": "slash_command",
+        })
+        if superseded:
+            _supersede_executing_plan(ctx, superseded)
+        content = (
+            f"🧠 **PLAN MODE** activated (was: {previous}).\n\n"
+            "The agent will investigate and propose a plan. Modifications "
+            "are disabled until you run `/build` to resume execution."
+        )
+
+    # If the user typed `/plan <task>`, re-publish the task as a regular
+    # inbound message so the agent processes it in plan mode in the same
+    # logical turn. The CommandRouter strips the prefix into ``ctx.args``.
+    expects_followup = False
+    if task and ctx.loop is not None and hasattr(ctx.loop, "bus"):
+        try:
+            follow_up = dataclass_replace(ctx.msg, content=task)
+            await ctx.loop.bus.publish_inbound(follow_up)
+            expects_followup = True
+        except Exception:
+            # If forwarding fails, fall back to just announcing the mode
+            # switch — the user can re-type the task manually.
+            pass
+
+    out_metadata = dict(ctx.msg.metadata or {})
+    if expects_followup:
+        out_metadata["_block_input_until_response"] = True
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content=content,
+        metadata=out_metadata,
+    )
+
+
+async def cmd_build(ctx: CommandContext) -> OutboundMessage:
+    """Exit plan mode, restoring the previous mode (typically build)."""
+    from durin.agent.agent_mode import (
+        PLAN_MODE,
+        exit_plan_mode,
+        get_active_mode_name,
+        set_mode,
+    )
+
+    if ctx.session is None or ctx.session.metadata is None:
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content="Cannot switch mode: no active session.",
+            metadata=dict(ctx.msg.metadata or {}),
+        )
+
+    current = get_active_mode_name(ctx.session)
+    expects_followup = False
+    if current == PLAN_MODE.name:
+        # Capture the active plan path BEFORE exiting so /build can
+        # surface it to the model on resume. The plan file lives in
+        # <workspace>/.durin/plans/ and was written by exit_plan_mode tool.
+        from durin.agent.tools.plan_mode import _ACTIVE_PLAN_PATH_KEY
+
+        plan_path = ctx.session.metadata.get(_ACTIVE_PLAN_PATH_KEY)
+        restored = exit_plan_mode(ctx.session)
+        _emit_mode_telemetry("agent_mode.switch", {
+            "from": current,
+            "to": restored,
+            "trigger": "slash_command",
+        })
+        if plan_path:
+            content = (
+                f"▶️ Exited plan mode → **{restored}**.\n\n"
+                f"Approved plan: `{plan_path}`. Proceeding with execution now."
+            )
+            # Stash the approved path for two purposes:
+            # 1. approved_plan_path → one-shot system reminder on the next
+            #    turn (consumed by ContextBuilder.build_messages)
+            # 2. executing_plan_path → persistent; lets us splice the plan
+            #    content into the consolidation summary so it survives
+            #    cursor advance
+            ctx.session.metadata["approved_plan_path"] = plan_path
+            ctx.session.metadata["executing_plan_path"] = plan_path
+            ctx.session.metadata.pop(_ACTIVE_PLAN_PATH_KEY, None)
+            # Update session meta: mark plan as approved (executing).
+            _approve_executing_plan(ctx, plan_path)
+            # Wake the agent: without an inbound message the runner stays
+            # idle until the user types something. Publish a synthetic
+            # "proceed" message so the model picks up the approved plan
+            # path from runtime context and executes immediately. This is
+            # the UX equivalent of /plan <task> forwarding its args.
+            from dataclasses import replace as dataclass_replace
+
+            if ctx.loop is not None and hasattr(ctx.loop, "bus"):
+                try:
+                    trigger = dataclass_replace(
+                        ctx.msg,
+                        content="Proceed with the approved plan.",
+                    )
+                    await ctx.loop.bus.publish_inbound(trigger)
+                    expects_followup = True
+                except Exception:
+                    pass
+        else:
+            content = (
+                f"▶️ Exited plan mode → **{restored}**. "
+                "No plan file was recorded — the agent will proceed based "
+                "on the conversation context."
+            )
+    elif current == "build":
+        content = "▶️ Already in **build** mode."
+    else:
+        # Coming from a non-plan mode (e.g. explore for a subagent) —
+        # explicit set to build, no restore semantics.
+        set_mode(ctx.session, "build")
+        _emit_mode_telemetry("agent_mode.switch", {
+            "from": current,
+            "to": "build",
+            "trigger": "slash_command",
+        })
+        content = f"▶️ Switched **{current}** → **build**."
+    out_metadata = dict(ctx.msg.metadata or {})
+    if expects_followup:
+        # Signals the interactive CLI to keep the spinner running and not
+        # return to the input prompt until the agent's response to the
+        # synthetic trigger published above arrives. Without this, the user
+        # sees the input prompt with no indication that work is in flight.
+        out_metadata["_block_input_until_response"] = True
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content=content,
+        metadata=out_metadata,
+    )
+
+
+async def cmd_mode(ctx: CommandContext) -> OutboundMessage:
+    """Show or set the active agent mode."""
+    from durin.agent.agent_mode import (
+        get_active_mode,
+        list_modes,
+        set_mode,
+    )
+
+    if ctx.session is None or ctx.session.metadata is None:
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content="Cannot access mode: no active session.",
+            metadata=dict(ctx.msg.metadata or {}),
+        )
+
+    target = (ctx.args or "").strip().lower()
+    if not target:
+        active = get_active_mode(ctx.session)
+        lines = [f"Active mode: **{active.name}**", "", "Available modes:"]
+        for mode in list_modes():
+            marker = "→" if mode.name == active.name else " "
+            lines.append(f"{marker} **{mode.name}** — {mode.description}")
+        content = "\n".join(lines)
+    else:
+        known = {m.name for m in list_modes()}
+        if target not in known:
+            content = (
+                f"Unknown mode: `{target}`. Available: {', '.join(sorted(known))}"
+            )
+        else:
+            previous = get_active_mode(ctx.session).name
+            if previous == target:
+                content = f"Already in **{target}** mode."
+            else:
+                set_mode(ctx.session, target)
+                _emit_mode_telemetry("agent_mode.switch", {
+                    "from": previous,
+                    "to": target,
+                    "trigger": "slash_command",
+                })
+                content = f"Mode: **{previous}** → **{target}**."
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content=content,
+        metadata=dict(ctx.msg.metadata or {}),
+    )
+
+
 async def cmd_help(ctx: CommandContext) -> OutboundMessage:
     """Return available slash commands."""
     return OutboundMessage(
@@ -649,3 +969,8 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.exact("/help", cmd_help)
     router.exact("/pairing", cmd_pairing)
     router.prefix("/pairing ", cmd_pairing)
+    router.exact("/plan", cmd_plan)
+    router.prefix("/plan ", cmd_plan)
+    router.exact("/build", cmd_build)
+    router.exact("/mode", cmd_mode)
+    router.prefix("/mode ", cmd_mode)

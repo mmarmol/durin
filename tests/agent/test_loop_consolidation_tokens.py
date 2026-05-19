@@ -187,7 +187,7 @@ async def test_consolidation_persists_summary_for_next_prepare_session(tmp_path,
     assert meta is not None
     assert meta["text"] == "User discussed project status."
 
-    reloaded, pending = loop.auto_compact.prepare_session(reloaded, "cli:test")
+    pending = loop._format_pending_summary(reloaded)
     assert pending is not None
     assert "User discussed project status." in pending
     # _last_summary persists for restart survival.
@@ -198,9 +198,11 @@ async def test_consolidation_persists_summary_for_next_prepare_session(tmp_path,
 async def test_preflight_consolidation_receives_pending_summary(tmp_path) -> None:
     loop = _make_loop(tmp_path, estimated_tokens=100, context_window_tokens=200)
     session = loop.sessions.get_or_create("cli:test")
-    loop.auto_compact.prepare_session = MagicMock(
-        return_value=(session, "Previous conversation summary: earlier context")
-    )  # type: ignore[method-assign]
+    # Inject a summary into session metadata so _format_pending_summary returns it
+    session.metadata["_last_summary"] = {
+        "text": "earlier context",
+        "last_active": "2026-05-19T10:00:00",
+    }
     loop.consolidator.maybe_consolidate_by_tokens = AsyncMock(return_value=None)  # type: ignore[method-assign]
     loop._schedule_background = lambda coro: coro.close()  # type: ignore[method-assign]
 

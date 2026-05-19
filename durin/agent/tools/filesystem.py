@@ -3,6 +3,7 @@
 import difflib
 import mimetypes
 import os
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,7 @@ from durin.agent.tools.schema import (
     StringSchema,
     tool_parameters_schema,
 )
+from durin.telemetry.logger import current_telemetry
 from durin.utils.helpers import build_image_content_blocks, detect_image_mime
 
 
@@ -68,6 +70,48 @@ class _FsTool(Tool):
             self._allowed_dir,
             self._extra_allowed_dirs,
         )
+
+    def _display_path(self, fp: Path) -> str:
+        """Workspace-relative path for telemetry; falls back to absolute."""
+        if self._workspace is not None:
+            with suppress(ValueError):
+                return fp.relative_to(self._workspace).as_posix()
+        return str(fp)
+
+    def _emit(self, event_type: str, data: dict[str, Any]) -> None:
+        """Emit a telemetry event if a logger is bound for this task.
+
+        Failures are silently swallowed — telemetry must never break a tool call.
+        """
+        logger_obj = current_telemetry()
+        if logger_obj is None:
+            return
+        try:
+            logger_obj.log(event_type, data)
+        except Exception:
+            pass
+
+    def _file_not_found_msg(self, path: str, fp: Path) -> str:
+        """Build a 'File not found' error with 'Did you mean ...?' suggestions.
+
+        Shared by ReadFileTool (T3) and EditFileTool — saves the model a turn
+        when it guesses a path wrong (typo, wrong dir, etc.). Uses fuzzy match
+        on filenames in the same directory; falls back to a plain error when
+        the parent doesn't exist or no close match is found.
+        """
+        parent = fp.parent
+        suggestions: list[str] = []
+        if parent.is_dir():
+            try:
+                siblings = [f.name for f in parent.iterdir() if f.is_file()]
+            except OSError:
+                siblings = []
+            close = difflib.get_close_matches(fp.name, siblings, n=3, cutoff=0.6)
+            suggestions = [str(parent / c) for c in close]
+        parts = [f"Error: File not found: {path}"]
+        if suggestions:
+            parts.append("Did you mean: " + ", ".join(suggestions) + "?")
+        return "\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +219,7 @@ class ReadFileTool(_FsTool):
             if _is_blocked_device(fp):
                 return f"Error: Reading {fp} is blocked (device path that could hang or produce infinite output)."
             if not fp.exists():
-                return f"Error: File not found: {path}"
+                return self._file_not_found_msg(path, fp)
             if not fp.is_file():
                 return f"Error: Not a file: {path}"
 
@@ -213,6 +257,13 @@ class ReadFileTool(_FsTool):
                     # But only if content is actually unchanged (not just mtime)
                     current_hash = _hash_file(str(fp))
                     if current_hash == entry.content_hash:
+                        self._emit("tool.read_file", {
+                            "path": self._display_path(fp),
+                            "offset": offset,
+                            "limit": limit,
+                            "kind": "text",
+                            "dedup": True,
+                        })
                         return f"[File unchanged since last read: {path}]"
                     else:
                         # Content changed despite same mtime - force full read
@@ -267,9 +318,22 @@ class ReadFileTool(_FsTool):
 
             if end < total:
                 result += f"\n\n(Showing lines {offset}-{end} of {total}. Use offset={end + 1} to continue.)"
+                truncated = True
             else:
                 result += f"\n\n(End of file — {total} lines total)"
+                truncated = False
             self._file_states.record_read(fp, offset=offset, limit=limit)
+            self._emit("tool.read_file", {
+                "path": self._display_path(fp),
+                "offset": offset,
+                "limit": limit or self._DEFAULT_LIMIT,
+                "total_lines": total,
+                "returned_lines": end - start,
+                "result_chars": len(result),
+                "kind": "text",
+                "truncated": truncated,
+                "dedup": False,
+            })
             return result
         except PermissionError as e:
             return f"Error: {e}"
@@ -580,18 +644,127 @@ def _find_quote_matches(content: str, old_text: str) -> list[_MatchSpan]:
     return matches
 
 
-def _find_matches(content: str, old_text: str) -> list[_MatchSpan]:
-    """Locate all matches using progressively looser strategies."""
-    for matcher in (
-        lambda: _find_exact_matches(content, old_text),
-        lambda: _find_trim_matches(content, old_text),
-        lambda: _find_trim_matches(content, old_text, normalize_quotes=True),
-        lambda: _find_quote_matches(content, old_text),
-    ):
+def _find_block_anchor_matches(content: str, old_text: str) -> list[_MatchSpan]:
+    """T2 — Block-anchor matcher: match first+last line exactly (after strip),
+    fuzzy-match middle lines with similarity threshold.
+
+    Ported from OpenCode's BlockAnchorReplacer ([edit.ts:284]). Applies only
+    when ``old_text`` has 3+ lines — needs anchors top and bottom plus at
+    least one middle line. Useful when the model knows the start and end of
+    a block but the interior has changed slightly (reformatted, comment added,
+    whitespace shifted). When a single candidate exists we use a relaxed
+    similarity threshold; with multiple candidates we require stricter match
+    to avoid ambiguous rewrites.
+    """
+    old_lines = old_text.splitlines()
+    if old_lines and old_lines[-1] == "":
+        old_lines = old_lines[:-1]
+    if len(old_lines) < 3:
+        return []
+
+    content_lines = content.splitlines()
+    content_lines_keepends = content.splitlines(keepends=True)
+    if len(content_lines) < len(old_lines):
+        return []
+
+    offsets: list[int] = []
+    pos = 0
+    for line in content_lines_keepends:
+        offsets.append(pos)
+        pos += len(line)
+    offsets.append(pos)
+
+    first_anchor = old_lines[0].strip()
+    last_anchor = old_lines[-1].strip()
+    if not first_anchor or not last_anchor:
+        return []
+
+    # Find every (first_anchor, last_anchor) candidate span (first match
+    # of last_anchor after each first_anchor occurrence).
+    candidates: list[tuple[int, int]] = []
+    for i in range(len(content_lines)):
+        if content_lines[i].strip() != first_anchor:
+            continue
+        for j in range(i + 2, len(content_lines)):
+            if content_lines[j].strip() == last_anchor:
+                candidates.append((i, j))
+                break
+    if not candidates:
+        return []
+
+    # Single candidate: relaxed (0.5). Multiple: strict (0.85). Avoids
+    # ambiguous rewrites when the file has many similar-looking blocks.
+    threshold = 0.5 if len(candidates) == 1 else 0.85
+    middle_old = [line.strip() for line in old_lines[1:-1]]
+
+    matches: list[_MatchSpan] = []
+    for start_line, end_line in candidates:
+        middle_actual = [content_lines[k].strip() for k in range(start_line + 1, end_line)]
+        if middle_old:
+            check_len = min(len(middle_old), len(middle_actual))
+            if check_len == 0:
+                continue
+            sim_sum = 0.0
+            for k in range(check_len):
+                a, b = middle_old[k], middle_actual[k]
+                if not a and not b:
+                    sim_sum += 1.0
+                    continue
+                sim_sum += difflib.SequenceMatcher(None, a, b).ratio()
+            similarity = sim_sum / check_len
+        else:
+            similarity = 1.0
+
+        if similarity < threshold:
+            continue
+
+        start = offsets[start_line]
+        end = offsets[end_line + 1]
+        if content_lines_keepends[end_line].endswith("\n"):
+            end -= 1
+        matches.append(
+            _MatchSpan(
+                start=start,
+                end=end,
+                text=content[start:end],
+                line=start_line + 1,
+            )
+        )
+    return matches
+
+
+# Ordered cascade — used both for matching and telemetry (we report which
+# strategy found the match so we can measure how often each layer earns its
+# keep). Keep this in sync with the cascade in `_find_matches_with_strategy`.
+_MATCH_STRATEGIES = (
+    "exact",
+    "line_trimmed",
+    "line_trimmed_quote_normalized",
+    "quote_normalized",
+    "block_anchor",
+)
+
+
+def _find_matches_with_strategy(content: str, old_text: str) -> tuple[list[_MatchSpan], str | None]:
+    """Locate all matches using the progressive cascade, return strategy used."""
+    cascade = (
+        ("exact", lambda: _find_exact_matches(content, old_text)),
+        ("line_trimmed", lambda: _find_trim_matches(content, old_text)),
+        ("line_trimmed_quote_normalized", lambda: _find_trim_matches(content, old_text, normalize_quotes=True)),
+        ("quote_normalized", lambda: _find_quote_matches(content, old_text)),
+        ("block_anchor", lambda: _find_block_anchor_matches(content, old_text)),
+    )
+    for name, matcher in cascade:
         matches = matcher()
         if matches:
-            return matches
-    return []
+            return matches, name
+    return [], None
+
+
+def _find_matches(content: str, old_text: str) -> list[_MatchSpan]:
+    """Backwards-compatible wrapper. Prefer ``_find_matches_with_strategy``."""
+    matches, _ = _find_matches_with_strategy(content, old_text)
+    return matches
 
 
 def _collapse_internal_whitespace(text: str) -> str:
@@ -738,9 +911,17 @@ class EditFileTool(_FsTool):
             uses_crlf = b"\r\n" in raw
             content = raw.decode("utf-8").replace("\r\n", "\n")
             norm_old = old_text.replace("\r\n", "\n")
-            matches = _find_matches(content, norm_old)
+            matches, strategy = _find_matches_with_strategy(content, norm_old)
 
             if not matches:
+                self._emit("tool.edit_file", {
+                    "path": self._display_path(fp),
+                    "match_strategy": None,
+                    "matches": 0,
+                    "outcome": "not_found",
+                    "old_text_chars": len(old_text),
+                    "new_text_chars": len(new_text),
+                })
                 return self._not_found_msg(old_text, content, path)
             count = len(matches)
             if count > 1 and not replace_all:
@@ -749,6 +930,14 @@ class EditFileTool(_FsTool):
                 if len(line_numbers) > 3:
                     preview += ", ..."
                 location_hint = f" at {preview}" if preview else ""
+                self._emit("tool.edit_file", {
+                    "path": self._display_path(fp),
+                    "match_strategy": strategy,
+                    "matches": count,
+                    "outcome": "ambiguous",
+                    "old_text_chars": len(old_text),
+                    "new_text_chars": len(new_text),
+                })
                 return (
                     f"Warning: old_text appears {count} times{location_hint}. "
                     "Provide more context to make it unique, or set replace_all=true."
@@ -778,6 +967,16 @@ class EditFileTool(_FsTool):
 
             fp.write_bytes(new_content.encode("utf-8"))
             self._file_states.record_write(fp)
+            self._emit("tool.edit_file", {
+                "path": self._display_path(fp),
+                "match_strategy": strategy,
+                "matches": len(matches),
+                "applied": len(selected),
+                "outcome": "edited",
+                "replace_all": replace_all,
+                "old_text_chars": len(old_text),
+                "new_text_chars": len(new_text),
+            })
             msg = f"Successfully edited {fp}"
             if warning:
                 msg = f"{warning}\n{msg}"
@@ -786,19 +985,6 @@ class EditFileTool(_FsTool):
             return f"Error: {e}"
         except Exception as e:
             return f"Error editing file: {e}"
-
-    def _file_not_found_msg(self, path: str, fp: Path) -> str:
-        """Build an error message with 'Did you mean ...?' suggestions."""
-        parent = fp.parent
-        suggestions: list[str] = []
-        if parent.is_dir():
-            siblings = [f.name for f in parent.iterdir() if f.is_file()]
-            close = difflib.get_close_matches(fp.name, siblings, n=3, cutoff=0.6)
-            suggestions = [str(parent / c) for c in close]
-        parts = [f"Error: File not found: {path}"]
-        if suggestions:
-            parts.append("Did you mean: " + ", ".join(suggestions) + "?")
-        return "\n".join(parts)
 
     @staticmethod
     def _not_found_msg(old_text: str, content: str, path: str) -> str:

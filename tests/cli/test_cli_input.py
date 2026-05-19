@@ -62,52 +62,73 @@ def test_init_prompt_session_creates_session():
         assert kwargs["enable_open_in_editor"] is False
 
 
-def test_thinking_spinner_pause_stops_and_restarts():
-    """Pause should stop the active spinner and restart it afterward."""
-    spinner = MagicMock()
-    mock_console = MagicMock()
-    mock_console.status.return_value = spinner
+def test_thinking_spinner_pause_clears_and_restores_indicator():
+    """Pause should erase the indicator and rewrite it after the block.
 
-    thinking = stream_mod.ThinkingSpinner(console=mock_console)
+    With the static indicator (no background animation thread), the
+    sequence is: enter writes, pause clears, pause exit rewrites, exit
+    clears. We track this via the underlying file's writes.
+    """
+    stream = StringIO()
+    stream.isatty = lambda: True  # type: ignore[method-assign]
+    from rich.console import Console
+    console = Console(file=stream, force_terminal=True)
+
+    thinking = stream_mod.ThinkingSpinner(console=console, bot_name="durin")
     with thinking:
         with thinking.pause():
             pass
 
-    assert spinner.method_calls == [
-        call.start(),
-        call.stop(),
-        call.start(),
-        call.stop(),
-    ]
+    out = stream.getvalue()
+    # Two clears (one for pause, one for exit) ⇒ at least two occurrences
+    # of the line-clear sequence.
+    assert out.count("\r\x1b[2K") >= 2
+    # The indicator text was written and then restored after pause.
+    assert out.count("durin is thinking") >= 2
 
 
-def test_print_cli_progress_line_pauses_spinner_before_printing():
-    """CLI progress output should pause spinner to avoid garbled lines."""
+@pytest.mark.asyncio
+async def test_print_cli_progress_line_pauses_spinner_before_printing():
+    """CLI progress output should clear the indicator around the print.
+
+    After the prompt_toolkit coordination fix, ``_print_cli_progress_line``
+    is async and routes output through ``run_in_terminal`` →
+    ``print_formatted_text``. The new static indicator clears on pause and
+    re-writes on exit; we verify both happen around the print.
+    """
     order: list[str] = []
-    spinner = MagicMock()
-    spinner.start.side_effect = lambda: order.append("start")
-    spinner.stop.side_effect = lambda: order.append("stop")
-    mock_console = MagicMock()
-    mock_console.status.return_value = spinner
+    stream = StringIO()
+    stream.isatty = lambda: True  # type: ignore[method-assign]
+    from rich.console import Console
+    console = Console(file=stream, force_terminal=True)
 
-    with patch.object(commands.console, "print", side_effect=lambda *_args, **_kwargs: order.append("print")):
-        thinking = stream_mod.ThinkingSpinner(console=mock_console)
+    async def fake_run_in_terminal(write_fn):
+        write_fn()
+
+    with patch.object(commands, "run_in_terminal", side_effect=fake_run_in_terminal), \
+         patch.object(commands, "print_formatted_text", side_effect=lambda *_a, **_k: order.append("print")):
+        thinking = stream_mod.ThinkingSpinner(console=console, bot_name="durin")
         with thinking:
-            commands._print_cli_progress_line("tool running", thinking)
+            order.append("entered")
+            await commands._print_cli_progress_line("tool running", thinking)
+            order.append("after_print")
 
-    assert order == ["start", "stop", "print", "start", "stop"]
+    # The print happened between the pause clear and the pause-exit
+    # rewrite. The exit of the outer `with` then clears again.
+    assert "print" in order
+    assert order.index("entered") < order.index("print") < order.index("after_print")
+    # Indicator was cleared at least twice (pause + exit).
+    assert stream.getvalue().count("\r\x1b[2K") >= 2
 
 
 def test_thinking_spinner_clears_status_line_when_paused():
-    """Stopping the spinner should erase its transient line before output."""
+    """Stopping the indicator should erase its line before yielding."""
     stream = StringIO()
     stream.isatty = lambda: True  # type: ignore[method-assign]
-    mock_console = MagicMock()
-    mock_console.file = stream
-    spinner = MagicMock()
-    mock_console.status.return_value = spinner
+    from rich.console import Console
+    console = Console(file=stream, force_terminal=True)
 
-    thinking = stream_mod.ThinkingSpinner(console=mock_console)
+    thinking = stream_mod.ThinkingSpinner(console=console)
     with thinking:
         with thinking.pause():
             pass
@@ -116,43 +137,54 @@ def test_thinking_spinner_clears_status_line_when_paused():
 
 
 def test_stream_renderer_stops_spinner_even_after_header_printed():
-    """A later answer delta must stop the spinner even when header already exists."""
+    """A later answer delta must clear the indicator even when header already exists."""
     stream = StringIO()
     stream.isatty = lambda: True  # type: ignore[method-assign]
-    mock_console = MagicMock()
-    mock_console.file = stream
-    spinner = MagicMock()
-    mock_console.status.return_value = spinner
+    from rich.console import Console
+    console = Console(file=stream, force_terminal=True)
 
-    with patch.object(stream_mod, "_make_console", return_value=mock_console):
+    with patch.object(stream_mod, "_make_console", return_value=console):
         renderer = stream_mod.StreamRenderer(show_spinner=True)
         renderer._header_printed = True
         renderer.ensure_header()
 
-    spinner.stop.assert_called_once()
+    # The renderer dropped the spinner reference after the stop, and the
+    # indicator's line was cleared.
+    assert renderer._spinner is None
     assert "\r\x1b[2K" in stream.getvalue()
 
 
-def test_print_cli_progress_line_opens_renderer_header_before_trace():
+@pytest.mark.asyncio
+async def test_print_cli_progress_line_opens_renderer_header_before_trace():
     """Trace lines should appear under the assistant header, not under You."""
     order: list[str] = []
     renderer = MagicMock()
-    renderer.console.print.side_effect = lambda *_args, **_kwargs: order.append("print")
     renderer.ensure_header.side_effect = lambda: order.append("header")
     renderer.pause_spinner.return_value = nullcontext()
 
-    commands._print_cli_progress_line("tool running", None, renderer)
+    async def fake_run_in_terminal(write_fn):
+        write_fn()
+
+    with patch.object(commands, "run_in_terminal", side_effect=fake_run_in_terminal), \
+         patch.object(commands, "print_formatted_text", side_effect=lambda *_a, **_k: order.append("print")):
+        await commands._print_cli_progress_line("tool running", None, renderer)
 
     assert order == ["header", "print"]
 
 
-def test_print_cli_progress_line_stops_live_before_trace():
+@pytest.mark.asyncio
+async def test_print_cli_progress_line_stops_live_before_trace():
     """A trace line should not leak the current transient Live frame."""
     mock_live = MagicMock()
     renderer = stream_mod.StreamRenderer(show_spinner=False)
     renderer._live = mock_live
 
-    commands._print_cli_progress_line("tool running", None, renderer)
+    async def fake_run_in_terminal(write_fn):
+        write_fn()
+
+    with patch.object(commands, "run_in_terminal", side_effect=fake_run_in_terminal), \
+         patch.object(commands, "print_formatted_text"):
+        await commands._print_cli_progress_line("tool running", None, renderer)
 
     mock_live.stop.assert_called_once()
     assert renderer._live is None
@@ -160,23 +192,26 @@ def test_print_cli_progress_line_stops_live_before_trace():
 
 @pytest.mark.asyncio
 async def test_print_interactive_progress_line_pauses_spinner_before_printing():
-    """Interactive progress output should also pause spinner cleanly."""
+    """Interactive progress output should clear the indicator around the print."""
     order: list[str] = []
-    spinner = MagicMock()
-    spinner.start.side_effect = lambda: order.append("start")
-    spinner.stop.side_effect = lambda: order.append("stop")
-    mock_console = MagicMock()
-    mock_console.status.return_value = spinner
+    stream = StringIO()
+    stream.isatty = lambda: True  # type: ignore[method-assign]
+    from rich.console import Console
+    console = Console(file=stream, force_terminal=True)
 
     async def fake_print(_text: str) -> None:
         order.append("print")
 
     with patch("durin.cli.commands._print_interactive_line", side_effect=fake_print):
-        thinking = stream_mod.ThinkingSpinner(console=mock_console)
+        thinking = stream_mod.ThinkingSpinner(console=console)
         with thinking:
+            order.append("entered")
             await commands._print_interactive_progress_line("tool running", thinking)
+            order.append("after_print")
 
-    assert order == ["start", "stop", "print", "start", "stop"]
+    assert order == ["entered", "print", "after_print"]
+    # Indicator cleared during pause, plus once more on context exit.
+    assert stream.getvalue().count("\r\x1b[2K") >= 2
 
 
 def test_response_renderable_uses_text_for_explicit_plain_rendering():
@@ -210,23 +245,22 @@ def test_response_renderable_without_metadata_keeps_markdown_path():
 
 
 def test_stream_renderer_stop_for_input_stops_spinner():
-    """stop_for_input should stop the active spinner to avoid prompt_toolkit conflicts."""
-    spinner = MagicMock()
-    mock_console = MagicMock()
-    mock_console.status.return_value = spinner
+    """stop_for_input should clear the indicator to avoid prompt_toolkit conflicts."""
+    stream = StringIO()
+    stream.isatty = lambda: True  # type: ignore[method-assign]
+    from rich.console import Console
+    console = Console(file=stream, force_terminal=True)
 
-    # Create renderer with mocked console
-    with patch.object(stream_mod, "_make_console", return_value=mock_console):
+    with patch.object(stream_mod, "_make_console", return_value=console):
         renderer = stream_mod.StreamRenderer(show_spinner=True)
+        # On creation, the indicator was written exactly once.
+        assert "durin is thinking" in stream.getvalue()
 
-        # Verify spinner started
-        spinner.start.assert_called_once()
-
-        # Stop for input
         renderer.stop_for_input()
 
-        # Verify spinner stopped
-        spinner.stop.assert_called_once()
+        # Indicator was cleared; the renderer's spinner handle is gone.
+        assert renderer._spinner is None
+        assert "\r\x1b[2K" in stream.getvalue()
 
 
 @pytest.mark.asyncio
@@ -257,24 +291,25 @@ async def test_on_end_writes_final_content_to_stdout_after_stopping_live():
 
 @pytest.mark.asyncio
 async def test_on_end_resuming_clears_buffer_and_restarts_spinner():
-    """on_end(resuming=True) should reset state for the next iteration."""
-    spinner = MagicMock()
-    mock_console = MagicMock()
-    mock_console.status.return_value = spinner
-    mock_console.capture.return_value.__enter__ = MagicMock(
-        return_value=MagicMock(get=lambda: "")
-    )
-    mock_console.capture.return_value.__exit__ = MagicMock(return_value=False)
+    """on_end(resuming=True) should reset buffer and re-create the indicator."""
+    stream = StringIO()
+    stream.isatty = lambda: True  # type: ignore[method-assign]
+    from rich.console import Console
+    console = Console(file=stream, force_terminal=True)
 
-    with patch.object(stream_mod, "_make_console", return_value=mock_console):
+    with patch.object(stream_mod, "_make_console", return_value=console):
         renderer = stream_mod.StreamRenderer(show_spinner=True)
         renderer._buf = "some content"
 
         await renderer.on_end(resuming=True)
 
     assert renderer._buf == ""
-    # Spinner should have been restarted (start called twice: __init__ + resuming)
-    assert spinner.start.call_count == 2
+    # The renderer should have a fresh indicator handle ready for the next
+    # streaming round (re-created in _start_spinner during resume).
+    assert renderer._spinner is not None
+    # The indicator text appears twice: once on initial __init__ and once
+    # again on the resume restart.
+    assert stream.getvalue().count("durin is thinking") >= 2
 
 
 def test_make_console_force_terminal_when_stdout_is_tty():

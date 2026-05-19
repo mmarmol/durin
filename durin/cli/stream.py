@@ -43,39 +43,76 @@ def _make_console() -> Console:
 
 
 class ThinkingSpinner:
-    """Spinner that shows '<bot_name> is thinking...' with pause support."""
+    """Static '<bot_name> is thinking...' indicator with pause support.
+
+    Originally a Rich ``Console.status`` spinner with a background refresh
+    thread that animated dots. The animation thread was unable to
+    coordinate with concurrent prints from reasoning chunks, stream deltas,
+    and progress lines: spinner frames slipped between print calls and
+    leaked into the scrollback as literal escape sequences. The
+    daily-driver symptom looked like ``?[2K?[32m⠼?[0m ?[2mdurin is thinking...?[0m``
+    interleaved with the actual streaming text.
+
+    The static variant writes a single dim line synchronously and clears
+    it on demand. No animation, no thread. Trade-off: the indicator does
+    not visibly "tick", but external output stops fighting it for the
+    terminal. Callers that need the animation back can layer it on top
+    via a Rich ``Live`` group, but the daily UX is better without.
+    """
+
+    _IDLE_TEXT_FMT = "[dim]⏳ {bot_name} is thinking…[/dim]"
 
     def __init__(self, console: Console | None = None, bot_name: str = "durin"):
         c = console or _make_console()
         self._console = c
-        self._spinner = c.status(f"[dim]{bot_name} is thinking...[/dim]", spinner="dots")
+        self._bot_name = bot_name
+        self._markup = self._IDLE_TEXT_FMT.format(bot_name=bot_name)
         self._active = False
 
+    def _write(self) -> None:
+        f = self._console.file
+        if not getattr(f, "isatty", lambda: False)():
+            return
+        with self._console.capture() as cap:
+            self._console.print(self._markup, end="")
+        f.write(cap.get())
+        f.flush()
+
+    def _clear(self) -> None:
+        _clear_current_line(self._console)
+
     def __enter__(self):
-        self._spinner.start()
-        self._active = True
+        if not self._active:
+            self._write()
+            self._active = True
         return self
 
     def __exit__(self, *exc):
-        self._active = False
-        self._spinner.stop()
-        _clear_current_line(self._console)
+        if self._active:
+            self._clear()
+            self._active = False
         return False
 
     def pause(self):
-        """Context manager: temporarily stop spinner for clean output."""
+        """Context manager: temporarily clear the indicator for clean output.
+
+        On exit, restores the indicator if it was active when paused. Safe
+        to nest with the ``with`` form, idempotent if already cleared.
+        """
         from contextlib import contextmanager
 
         @contextmanager
         def _ctx():
-            if self._spinner and self._active:
-                self._spinner.stop()
-                _clear_current_line(self._console)
+            was_active = self._active
+            if was_active:
+                self._clear()
+                self._active = False
             try:
                 yield
             finally:
-                if self._spinner and self._active:
-                    self._spinner.start()
+                if was_active:
+                    self._write()
+                    self._active = True
 
         return _ctx()
 

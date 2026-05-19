@@ -56,9 +56,17 @@ async def test_runner_preserves_reasoning_fields_and_tool_results():
 
     assert result.final_content == "done"
     assert result.tools_used == ["list_dir"]
-    assert result.tool_events == [
-        {"name": "list_dir", "status": "ok", "detail": "tool result"}
-    ]
+    # tool_events now carries ``tool_call_id`` and ``duration_ms`` in
+    # addition to the legacy ``{name, status, detail}`` triple. We assert
+    # the legacy fields are correct and that the new ones exist with
+    # plausible values.
+    assert len(result.tool_events) == 1
+    ev = result.tool_events[0]
+    assert ev["name"] == "list_dir"
+    assert ev["status"] == "ok"
+    assert ev["detail"] == "tool result"
+    assert isinstance(ev.get("tool_call_id"), str) and ev["tool_call_id"]
+    assert isinstance(ev.get("duration_ms"), (int, float)) and ev["duration_ms"] >= 0
 
     assistant_messages = [
         msg for msg in captured_second_call

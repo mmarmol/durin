@@ -11,6 +11,7 @@ from typing import Any, Mapping, Sequence
 from durin.agent.memory import MemoryStore
 from durin.agent.skills import SkillsLoader
 from durin.session.goal_state import goal_state_runtime_lines
+from durin.session.todo_state import todos_runtime_lines
 from durin.utils.helpers import (
     current_time_str,
     detect_image_mime,
@@ -39,9 +40,33 @@ class ContextBuilder:
         skill_names: list[str] | None = None,
         channel: str | None = None,
         session_summary: str | None = None,
+        agent_mode_name: str | None = None,
     ) -> str:
-        """Build the system prompt from identity, bootstrap files, memory, and skills."""
+        """Build the system prompt from identity, bootstrap files, memory, and skills.
+
+        Layout (top to bottom):
+        1. Identity
+        2. **Active mode suffix** (e.g. PLAN MODE) — placed early on purpose
+           so the model reads it before scrolling through memory/skills/etc.
+           Frontier models give heavier weight to instructions near the
+           top of the system prompt; appending at the end gets buried.
+        3. Bootstrap files (CLAUDE.md / AGENTS.md / etc.)
+        4. Memory section
+        5. Active skills
+        6. Skills catalog
+        7. Recent history
+        8. Session summary
+        """
         parts = [self._get_identity(channel=channel)]
+
+        # Sprint B / L3 — active-mode prompt suffix (placed early). Skip when
+        # the mode has no suffix (e.g. BUILD_MODE is "" by design).
+        if agent_mode_name:
+            from durin.agent.agent_mode import get_mode
+
+            mode_suffix = get_mode(agent_mode_name).prompt_suffix.strip()
+            if mode_suffix:
+                parts.append(mode_suffix)
 
         bootstrap = self._load_bootstrap_files()
         if bootstrap:
@@ -156,7 +181,39 @@ class ContextBuilder:
         session_metadata: Mapping[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Build the complete message list for an LLM call."""
+        from durin.agent.agent_mode import plan_mode_runtime_lines
+
         extra = goal_state_runtime_lines(session_metadata)
+        # Echo the agent's todo list so it survives compaction. Without
+        # this, the list lives only in session metadata and the model
+        # forgets it once the relevant tool result scrolls out.
+        extra = list(extra) + todos_runtime_lines(session_metadata)
+        # Per-turn plan-mode reminder (OpenClaude pattern). When the session
+        # is in plan mode, inject a strongly-worded reminder next to the
+        # current user message so the model can't "forget" the mode between
+        # turns the way it does when the constraint lives only in the
+        # system prompt.
+        extra = list(extra) + plan_mode_runtime_lines(session_metadata)
+        # Sprint B / file-based plans — after /build approves a plan,
+        # surface the path so the next turn can read it without the
+        # user having to copy/paste it. The session metadata is cleared
+        # after first surfacing to avoid noise on subsequent turns.
+        # Persistence across compaction is handled separately by the
+        # autocompact path (see autocompact.py — `executing_plan_path`
+        # injects the full plan content into the summary).
+        if session_metadata is not None:
+            approved_path = session_metadata.get("approved_plan_path")
+            if approved_path:
+                extra = list(extra) + [
+                    f"Approved plan ready at: {approved_path}",
+                    "Start with updating your todo list using the todo_write "
+                    "tool if applicable. The plan file is accessible via "
+                    "read_file at any time during implementation.",
+                ]
+                # One-shot: consume so we don't re-inject every turn.
+                with suppress(Exception):
+                    if isinstance(session_metadata, dict):
+                        session_metadata.pop("approved_plan_path", None)
         runtime_ctx = self._build_runtime_context(
             channel,
             chat_id,
@@ -174,8 +231,21 @@ class ContextBuilder:
             merged = f"{user_content}\n\n{runtime_ctx}"
         else:
             merged = user_content + [{"type": "text", "text": runtime_ctx}]
+        agent_mode_name = None
+        if session_metadata is not None:
+            from durin.agent.agent_mode import SESSION_MODE_KEY
+
+            agent_mode_name = session_metadata.get(SESSION_MODE_KEY)
         messages = [
-            {"role": "system", "content": self.build_system_prompt(skill_names, channel=channel, session_summary=session_summary)},
+            {
+                "role": "system",
+                "content": self.build_system_prompt(
+                    skill_names,
+                    channel=channel,
+                    session_summary=session_summary,
+                    agent_mode_name=agent_mode_name,
+                ),
+            },
             *history,
         ]
         if messages[-1].get("role") == current_role:

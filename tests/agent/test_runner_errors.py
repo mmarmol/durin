@@ -39,9 +39,13 @@ async def test_runner_returns_structured_tool_error():
 
     assert result.stop_reason == "tool_error"
     assert result.error == "Error: RuntimeError: boom"
-    assert result.tool_events == [
-        {"name": "list_dir", "status": "error", "detail": "boom"}
-    ]
+    assert len(result.tool_events) == 1
+    ev = result.tool_events[0]
+    assert ev["name"] == "list_dir"
+    assert ev["status"] == "error"
+    assert ev["detail"] == "boom"
+    assert isinstance(ev.get("tool_call_id"), str) and ev["tool_call_id"]
+    assert isinstance(ev.get("duration_ms"), (int, float)) and ev["duration_ms"] >= 0
 
 
 @pytest.mark.asyncio

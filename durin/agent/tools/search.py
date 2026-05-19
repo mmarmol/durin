@@ -357,6 +357,8 @@ class GrepTool(_SearchTool):
                 if truncated or size_truncated:
                     break
 
+            displayed_count = 0
+            total_count_before_pagination = 0
             if output_mode == "files_with_matches":
                 if not matching_files:
                     result = f"No matches found for pattern '{pattern}' in {path}"
@@ -365,7 +367,9 @@ class GrepTool(_SearchTool):
                         matching_files,
                         key=lambda name: (-file_mtimes.get(name, 0.0), name),
                     )
+                    total_count_before_pagination = len(ordered_files)
                     paged, truncated = _paginate(ordered_files, limit, offset)
+                    displayed_count = len(paged)
                     result = "\n".join(paged)
             elif output_mode == "count":
                 if not counts:
@@ -375,13 +379,17 @@ class GrepTool(_SearchTool):
                         matching_files,
                         key=lambda name: (-file_mtimes.get(name, 0.0), name),
                     )
+                    total_count_before_pagination = len(ordered_files)
                     ordered, truncated = _paginate(ordered_files, limit, offset)
+                    displayed_count = len(ordered)
                     lines = [f"{name}: {counts[name]}" for name in ordered]
                     result = "\n".join(lines)
             else:
                 if not blocks:
                     result = f"No matches found for pattern '{pattern}' in {path}"
                 else:
+                    displayed_count = len(blocks)
+                    total_count_before_pagination = seen_content_matches
                     result = "\n\n".join(blocks)
 
             notes: list[str] = []
@@ -409,6 +417,23 @@ class GrepTool(_SearchTool):
                 )
             if notes:
                 result += "\n\n" + "\n".join(notes)
+            self._emit("tool.grep", {
+                "pattern_len": len(pattern),
+                "fixed_strings": fixed_strings,
+                "case_insensitive": case_insensitive,
+                "output_mode": output_mode,
+                "limit": limit,
+                "offset": offset,
+                "glob_filter": bool(glob),
+                "type_filter": type or None,
+                "displayed": displayed_count,
+                "total_before_pagination": total_count_before_pagination,
+                "result_chars": len(result),
+                "truncated": bool(truncated),
+                "size_truncated": bool(size_truncated),
+                "skipped_binary": skipped_binary,
+                "skipped_large": skipped_large,
+            })
             return result
         except PermissionError as e:
             return f"Error: {e}"
