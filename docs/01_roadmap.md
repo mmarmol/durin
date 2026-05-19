@@ -141,7 +141,7 @@ Compiled from the comparative review of OpenHands / Hermes / OpenCode / OpenClau
 | 1 | **TodoWrite** ✅ (2026-05-19) | LOW (1d) | High | All 4 (OpenHands, Hermes, OpenCode, OpenClaude) | — | Shipped as `todo_write`. Replaces full list each call. Echoed in runtime context. Allowed in plan mode. See bitácora. |
 | 2 | **Sleep** ✅ (2026-05-19) | LOW (~2h) | Low-Medium | OpenClaude | — | Shipped as `sleep`. Bounded 0–300s; clamps over-asks; telemetry start/end. |
 | 3 | **AskUserQuestion** ✅ (2026-05-19) | LOW-MED (2d) | High | OpenClaude, Hermes (`clarify`) | — | Shipped as `ask_user_question`. V1 yield-and-resume (no in-turn block); stores `pending_question` on session metadata for channel rendering. |
-| 4 | **session_search** | LOW (2d) | Medium | Hermes | — | Search keyword/regex in own session.messages. Useful before re-reading on long sessions. Surfaced during review. |
+| 4 | **session_search** ✅ (2026-05-19) | LOW (2d) | Medium | Hermes | — | Shipped as `session_search`. Keyword/regex over `session.messages`, role filter, snippet around match, msg_index pointer. Allowed in plan mode. |
 | 5 | **Subagent lifecycle expansion** | MED (~1 week) | High | OpenClaude (`TaskCreate/Get/Update/List/Stop/Output`), OpenCode, OpenHands | — | Today only `spawn`. Add: list, get, get_output, stop, status. Critical for daily-driver long-running background work. |
 | 6 | **Monitor** | LOW-MED (2-3d) | Medium | OpenClaude | #5 | Stream output of background subagent. Natural pair with #5. |
 | 7 | **Cron extension** | LOW-MED (2-3d) | Medium | Hermes, OpenClaude | — | We have basic `cron` tool. Extend with list/delete/edit. |
