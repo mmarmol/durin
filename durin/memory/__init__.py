@@ -8,6 +8,7 @@ from durin.memory.paths import (
     memory_class_dir,
     memory_dir,
 )
+from durin.memory.consolidator_tags import parse_consolidator_response
 from durin.memory.provenance import Author, author_scope, current_author
 from durin.memory.schema import MemoryEntry
 from durin.memory.session_md import (
@@ -31,6 +32,7 @@ __all__ = [
     "load_entry",
     "memory_class_dir",
     "memory_dir",
+    "parse_consolidator_response",
     "regenerate_session_md",
     "render_session_md",
     "save_entry",

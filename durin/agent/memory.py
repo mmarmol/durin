@@ -30,6 +30,7 @@ from durin.utils.helpers import (
     truncate_text,
 )
 from durin.utils.prompt_templates import render_template
+from durin.memory.consolidator_tags import parse_consolidator_response
 
 if TYPE_CHECKING:
     from durin.providers.base import LLMProvider
@@ -632,10 +633,35 @@ class Consolidator:
             len(chunk),
             replay_max_messages,
         )
-        summary = await self.archive(chunk)
+        summary, tags = await self.archive(chunk)
+        self._merge_session_tags(session, tags)
         session.last_consolidated = end_idx
         self.sessions.save(session)
         return summary
+
+    @staticmethod
+    def _merge_session_tags(
+        session: Session,
+        new_tags: dict[str, list[str]] | None,
+    ) -> None:
+        """Merge entity/topic tags into ``session.metadata['_last_tags']``.
+
+        Tags accumulate via set union across compactions within a single
+        session — Phase 3 dream is responsible for later pruning.
+        """
+        new_entities = (new_tags or {}).get("entities") or []
+        new_topics = (new_tags or {}).get("topics") or []
+        if not new_entities and not new_topics:
+            return
+        existing = session.metadata.get("_last_tags", {})
+        if not isinstance(existing, dict):
+            existing = {}
+        existing_entities = existing.get("entities") or []
+        existing_topics = existing.get("topics") or []
+        session.metadata["_last_tags"] = {
+            "entities": sorted(set(existing_entities) | set(new_entities)),
+            "topics": sorted(set(existing_topics) | set(new_topics)),
+        }
 
     def _persist_last_summary(self, session: Session, summary: str | None) -> None:
         if summary and summary != "(nothing)":
@@ -709,13 +735,21 @@ class Consolidator:
         except Exception:
             return truncate_text(text, budget * 4)
 
-    async def archive(self, messages: list[dict]) -> str | None:
+    async def archive(
+        self, messages: list[dict]
+    ) -> tuple[str | None, dict[str, list[str]]]:
         """Summarize messages via LLM and append to history.jsonl.
 
-        Returns the summary text on success, None if nothing to archive.
+        Returns ``(summary, tags)``. ``summary`` is the bullet-list portion
+        of the LLM response (with the trailing tags YAML block stripped),
+        or ``None`` on empty input or LLM failure. ``tags`` is
+        ``{"entities": [...], "topics": [...]}`` parsed from the trailing
+        YAML block, or both empty lists when the response lacks tags or
+        parsing fails (degraded LLM output must never crash compaction).
         """
+        empty_tags: dict[str, list[str]] = {"entities": [], "topics": []}
         if not messages:
-            return None
+            return None, empty_tags
         try:
             formatted = MemoryStore._format_messages(messages)
             formatted = self._truncate_to_token_budget(formatted)
@@ -736,13 +770,14 @@ class Consolidator:
             )
             if response.finish_reason == "error":
                 raise RuntimeError(f"LLM returned error: {response.content}")
-            summary = response.content or "[no summary]"
-            self.store.append_history(summary, max_chars=_ARCHIVE_SUMMARY_MAX_CHARS)
-            return summary
+            raw = response.content or "[no summary]"
+            self.store.append_history(raw, max_chars=_ARCHIVE_SUMMARY_MAX_CHARS)
+            summary, tags = parse_consolidator_response(raw)
+            return summary, tags
         except Exception:
             logger.warning("Consolidation LLM call failed, raw-dumping to history")
             self.store.raw_archive(messages)
-            return None
+            return None, empty_tags
 
     async def maybe_consolidate_by_tokens(
         self,
@@ -885,13 +920,14 @@ class Consolidator:
                     source,
                     len(chunk),
                 )
-                summary = await self.archive(chunk)
+                summary, tags = await self.archive(chunk)
                 # Advance the cursor either way: on success the chunk was
                 # summarized; on failure archive() already raw-archived it as
                 # a breadcrumb. Re-archiving the same chunk on the next call
                 # would just emit duplicate [RAW] entries.
                 if summary:
                     last_summary = summary
+                self._merge_session_tags(session, tags)
                 session.last_consolidated = end_idx
                 self.sessions.save(session)
                 if not summary:
