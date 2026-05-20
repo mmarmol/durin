@@ -317,7 +317,7 @@ class SessionManager:
     # Add new entries here when introducing future derived state (e.g.
     # ``"session_embedding"``, ``"narrative_summary"``). Keys NOT listed
     # here flow through line 0 unchanged.
-    _DERIVED_METADATA_KEYS = frozenset({"_last_summary"})
+    _DERIVED_METADATA_KEYS = frozenset({"_last_summary", "_last_tags"})
 
     def __init__(self, workspace: Path):
         self.workspace = workspace
