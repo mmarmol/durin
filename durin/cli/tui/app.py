@@ -47,6 +47,10 @@ class DurinApp(App[None]):
 
     BINDINGS = [
         ("ctrl+q", "quit", "Quit"),
+        ("ctrl+d", "quit", "Quit"),
+        ("escape", "abort", "Abort"),
+        ("ctrl+t", "toggle_dark", "Theme"),
+        ("ctrl+l", "open_model_picker", "Model"),
     ]
 
     def __init__(
@@ -113,10 +117,27 @@ class DurinApp(App[None]):
     # ---- event handlers ---------------------------------------------------
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        value = event.value.strip()
+        # Sanitize surrogate pairs that mis-paste emoji can produce.
+        from durin.cli.commands import _sanitize_surrogates
+
+        value = _sanitize_surrogates(event.value).strip()
         if not value:
+            event.input.value = ""
             return
         event.input.value = ""
+
+        # D5.6 drag-and-drop: image/audio paths become workspace-local
+        # copies in .media/; the cleaned text + media list ride InboundMessage.
+        media: list[str] = []
+        if self._agent_loop is not None:
+            from durin.cli.dragdrop import process_dragged_paths
+
+            try:
+                value, media = process_dragged_paths(value, Path(self._agent_loop.workspace))
+            except Exception:  # noqa: BLE001
+                # Never block the turn on a dragdrop error; pass through raw.
+                media = []
+
         chat = self.query_one("#chat", ChatView)
         chat.add_message("user", value)
         # Open a fresh assistant bubble for streaming. Tokens land via
@@ -129,9 +150,9 @@ class DurinApp(App[None]):
                 "docs/10_textual_migration.md."
             )
             return
-        asyncio.create_task(self._publish_inbound(value))
+        asyncio.create_task(self._publish_inbound(value, media))
 
-    async def _publish_inbound(self, value: str) -> None:
+    async def _publish_inbound(self, value: str, media: list[str]) -> None:
         from durin.bus.events import InboundMessage
 
         await self._agent_loop.bus.publish_inbound(
@@ -140,9 +161,44 @@ class DurinApp(App[None]):
                 sender_id="user",
                 chat_id=self._cli_chat_id,
                 content=value,
+                media=media,
                 metadata={"_wants_stream": True},
             )
         )
+
+    # ---- key-binding actions (D5.7) --------------------------------------
+
+    async def action_abort(self) -> None:
+        """Esc: cancel the in-flight agent turn for this session."""
+        if self._agent_loop is None:
+            return
+        try:
+            session_key = f"{self._cli_channel}:{self._cli_chat_id}"
+            cancel = getattr(self._agent_loop, "_cancel_active_tasks", None)
+            if cancel is not None:
+                await cancel(session_key)
+        except Exception:  # noqa: BLE001
+            pass
+        # Close any open assistant bubble so the next reply starts fresh.
+        self._current_assistant_bubble = None
+
+    def action_toggle_dark(self) -> None:
+        """Ctrl+T: flip between light and dark themes."""
+        self.theme = "textual-light" if self.theme == "textual-dark" else "textual-dark"
+
+    def action_open_model_picker(self) -> None:
+        """Ctrl+L: open the model picker.
+
+        D5.5 replaces this stub with a proper ModalScreen. Today it
+        pre-fills the input with ``/model `` so the suggester surfaces
+        the configured presets.
+        """
+        try:
+            inp = self.query_one(InputArea)
+            inp.value = "/model "
+            inp.focus()
+        except Exception:  # noqa: BLE001
+            pass
 
     # ---- outbound consumer (mirrors legacy _consume_outbound) ------------
 
