@@ -776,6 +776,7 @@ the operator never has to hand-edit JSON or guess where state lives.
 | `durin config path \| show \| get \| set \| edit` | [durin/cli/config_cmd.py](../durin/cli/config_cmd.py) | Read/write single keys via dotted paths. Secrets masked by default. |
 | `durin upgrade [--check\|--migrate-only\|--ref]` | [durin/cli/upgrade.py](../durin/cli/upgrade.py) | Detects editable vs wheel install; pulls + reinstalls + replays config migration. |
 | `durin uninstall [--purge --keep-* --workspace]` | [durin/cli/uninstall.py](../durin/cli/uninstall.py) | Enumerates state under `~/.durin` + `~/.cache/durin`, prompts, deletes. `--purge` self-uninstalls in a subprocess. |
+| `durin doctor [--ping --fix --json]` | [durin/cli/doctor.py](../durin/cli/doctor.py) | Runs a battery of small checks (system / config / providers / tools / extras / state) and exits non-zero on any `fail`. |
 | `durin provider login/logout`, `durin channels login/status` | [durin/cli/commands.py](../durin/cli/commands.py) | OAuth + channel-specific auth (kept separate because they aren't single-key edits). |
 
 ### Config edit pipeline
@@ -820,8 +821,41 @@ prints the detected mode + version and exits without touching pip.
 config through the load/validate/dump pipeline, picking up any new schema
 defaults.
 
+### Doctor checks (D7)
+
+`durin doctor` runs a flat list of independent check functions, each
+returning a `CheckResult(name, status, message, fix?, category)` with
+`status ∈ {ok, warn, fail}`. The orchestrator:
+
+1. Collects results from every check.
+2. Groups them by category for rendering.
+3. Computes `worst = max(status)` and exits non-zero only when `worst ==
+   fail`. `warn` results show up with a suggested fix but don't break the
+   exit code, so the command is safe to wire into CI.
+
+Checks currently run (all in [durin/cli/doctor.py](../durin/cli/doctor.py)):
+
+- **system**: Python version (>= 3.11), durin version.
+- **config**: `~/.durin/config.json` exists / parses as JSON / validates
+  against the Pydantic schema; workspace exists + is writable; both
+  `~/.durin` and `~/.cache/durin` are writable.
+- **providers**: at least one provider is usable (api_key, OAuth token
+  file, or `api_base` for local); the active model preset resolves.
+- **tools**: `git` (warn if missing — needed for editable upgrades).
+- **extras**: `fastembed`, `lancedb`, `mcp` import successfully (warn
+  with the matching `pip install 'durin[extra]'` fix if not).
+- **state**: `~/.cache/durin` byte count (warn at > 10 GB with a
+  reference to `durin uninstall --keep-config --keep-workspace`).
+- **providers (opt-in via `--ping`)**: HTTP GET against the configured
+  provider's `api_base` with a 3-second timeout.
+
+`durin doctor --fix` applies the safe subset of automated fixes: it
+creates the workspace directory if missing and replays the config
+migration (the same one `durin upgrade --migrate-only` runs). Anything
+that involves an API key or destructive action is left for the user.
+
 ---
 
-## Last updated: 2026-05-20 (D6 lifecycle commands)
+## Last updated: 2026-05-20 (D7 doctor)
 
 > For the history of why each subsystem was added, what was replaced, and what was discarded along the way, see `docs/02_bitacora.md`. This document only describes the current state.

@@ -92,6 +92,27 @@ huérfano `~/.durin/` + `~/.cache/durin/`.
 sin abrir nano. El operador ve exactamente qué va a borrarse antes de
 consentir.
 
+### D7 — Doctor
+
+`durin doctor` ejecuta una batería de checks pequeños (system / config /
+providers / tools / extras / state), agrupa por categoría, sugiere fixes
+puntuales y devuelve exit code 0 salvo que algún check sea `fail`. Se
+puede integrar en CI con `--json`.
+
+| # | Item | Notas |
+|---|---|---|
+| D7.1 | `CheckResult` framework | Cada check devuelve `CheckResult(name, status, message, fix?, category)`. Status ∈ ok/warn/fail. Función pura, fácil de testear. |
+| D7.2 | Checks de sistema y config | Python ≥ 3.11; durin version; config exists/parses/validates; workspace writable; ~/.durin + ~/.cache/durin writable. |
+| D7.3 | Checks de provider | Al menos uno usable (api_key, OAuth token, o `api_base` local); preset.model resolvible. |
+| D7.4 | Checks de tools y extras | `git` presente (warn si falta); `fastembed/lancedb/mcp` importables (warn con `pip install 'durin[memory]'`). |
+| D7.5 | Cache size + `--ping` opt-in | Warn si `~/.cache/durin > 10 GB`; `--ping` testea reachability del `api_base` del provider activo. |
+| D7.6 | `--fix` seguro | Crea workspace si falta; replay del migrate. Nada destructivo ni que involucre claves. |
+| D7.7 | `--json` para CI | Output machine-readable; exit code refleja el peor status. |
+
+**Output entregable**: cuando algo no anda, una sola línea (`durin
+doctor`) le dice al operador qué está roto y cómo arreglarlo, en vez
+de hacerle leer logs.
+
 ### D3 — Editor avanzado (1 semana, opcional según presión)
 
 Patterns de pi que el editor actual de prompt_toolkit no expone.
