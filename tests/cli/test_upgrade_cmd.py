@@ -124,6 +124,62 @@ def test_run_upgrade_editable_pulls_and_reinstalls(tmp_path: Path) -> None:
     assert any("pip" in c and "install" in c and "-e" in c for c in flat), captured
 
 
+def test_run_upgrade_pipx_calls_pipx_upgrade(tmp_path: Path) -> None:
+    """pipx-installed durin should upgrade via `pipx upgrade durin-agent`."""
+    info = InstallInfo(mode="pipx", source_root=None, version="0.1.0a1")
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text("{}", encoding="utf-8")
+
+    captured: list[list[str]] = []
+
+    def _fake_subprocess_run(cmd, cwd=None):
+        captured.append(list(cmd))
+        class _R:
+            returncode = 0
+        return _R()
+
+    with patch("durin.cli.upgrade.detect_install_mode", return_value=info), \
+         patch("durin.cli.upgrade.get_config_path", return_value=cfg_path), \
+         patch("durin.config.loader.get_config_path", return_value=cfg_path), \
+         patch("durin.cli.upgrade.subprocess.run", side_effect=_fake_subprocess_run):
+        rc = run_upgrade()
+
+    assert rc == 0
+    flat = [" ".join(c) for c in captured]
+    assert any("pipx" in c and "upgrade" in c and "durin-agent" in c for c in flat), captured
+
+
+def test_install_hint_for_editable() -> None:
+    from durin.cli.upgrade import install_hint
+
+    assert install_hint(["memory"], mode="editable") == "pip install -e '.[memory]'"
+    assert install_hint([], mode="editable") == "pip install -e '.'"
+
+
+def test_install_hint_for_pipx() -> None:
+    from durin.cli.upgrade import install_hint
+
+    assert install_hint(["memory"], mode="pipx") == "pipx install --force 'durin-agent[memory]'"
+    assert install_hint(["memory", "mcp"], mode="pipx") == "pipx install --force 'durin-agent[memory,mcp]'"
+
+
+def test_install_hint_for_wheel() -> None:
+    from durin.cli.upgrade import install_hint
+
+    assert install_hint(["memory"], mode="wheel") == "pip install --upgrade 'durin-agent[memory]'"
+    assert install_hint([], mode="wheel") == "pip install --upgrade 'durin-agent'"
+
+
+def test_install_hint_uses_pypi_dist_name() -> None:
+    """Regression: the hint must never say `durin[...]` (that distribution is taken)."""
+    from durin.cli.upgrade import install_hint
+
+    for mode in ("pipx", "wheel"):
+        hint = install_hint(["memory"], mode=mode)  # type: ignore[arg-type]
+        assert "durin-agent" in hint
+        assert "'durin[" not in hint  # the bare name must not appear in brackets
+
+
 def test_run_upgrade_wheel_calls_pip_upgrade(tmp_path: Path) -> None:
     info = InstallInfo(mode="wheel", source_root=None, version="0.1.0")
     cfg_path = tmp_path / "config.json"
@@ -145,4 +201,6 @@ def test_run_upgrade_wheel_calls_pip_upgrade(tmp_path: Path) -> None:
 
     assert rc == 0
     flat = [" ".join(c) for c in captured]
-    assert any("pip" in c and "install" in c and "--upgrade" in c and "durin" in c for c in flat), captured
+    assert any(
+        "pip" in c and "install" in c and "--upgrade" in c and "durin-agent" in c for c in flat
+    ), captured
