@@ -424,8 +424,23 @@ def build_assistant_message(
     tool_calls: list[dict[str, Any]] | None = None,
     reasoning_content: str | None = None,
     thinking_blocks: list[dict] | None = None,
+    prompt_tokens: int | None = None,
 ) -> dict[str, Any]:
-    """Build a provider-safe assistant message with optional reasoning fields."""
+    """Build a provider-safe assistant message with optional reasoning fields.
+
+    When ``prompt_tokens`` is provided (and non-zero), it is stamped onto
+    the message as ``usage_prompt_tokens``. This is the authoritative
+    count of tokens the provider actually charged for the prompt that
+    produced this message — durin's compaction logic uses it as an
+    "anchor" to skip estimating everything up to that point, falling
+    back to tiktoken only for messages that came after. Inspired by
+    pi's ``getLastAssistantUsage`` pattern.
+
+    Providers normalise ``prompt_tokens`` across their native shapes
+    (OpenAI ``prompt_tokens``, Anthropic ``input_tokens + cache_read +
+    cache_creation``, Bedrock ``Converse.usage.inputTokens``) before
+    handing it to the runner, so callers can treat the value uniformly.
+    """
     msg: dict[str, Any] = {"role": "assistant", "content": content or ""}
     if tool_calls:
         msg["tool_calls"] = tool_calls
@@ -433,6 +448,8 @@ def build_assistant_message(
         msg["reasoning_content"] = reasoning_content if reasoning_content is not None else ""
     if thinking_blocks:
         msg["thinking_blocks"] = thinking_blocks
+    if prompt_tokens is not None and prompt_tokens > 0:
+        msg["usage_prompt_tokens"] = int(prompt_tokens)
     return msg
 
 
@@ -519,13 +536,69 @@ def estimate_message_tokens(message: dict[str, Any]) -> int:
         return max(4, len(payload) // 4 + 4)
 
 
+def latest_prompt_tokens_anchor(
+    messages: list[dict[str, Any]],
+) -> tuple[int, int] | None:
+    """Find the most recent assistant message carrying a real usage anchor.
+
+    Returns ``(index, prompt_tokens)`` of the most recent message that
+    has ``usage_prompt_tokens`` stamped — the authoritative count the
+    provider reported at that point. Returns ``None`` when no
+    persisted-usage message exists (fresh session, or all messages are
+    synthetic).
+
+    Pi-inspired: the anchor lets compaction reason about token cost
+    using REAL numbers up to the anchor and estimate only the tail —
+    instead of estimating the entire chain with tiktoken (which adds
+    up systematic error on long sessions).
+    """
+    for i in range(len(messages) - 1, -1, -1):
+        msg = messages[i]
+        if not isinstance(msg, dict):
+            continue
+        tokens = msg.get("usage_prompt_tokens")
+        if isinstance(tokens, int) and tokens > 0:
+            return i, tokens
+    return None
+
+
 def estimate_prompt_tokens_chain(
     provider: Any,
     model: str | None,
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]] | None = None,
 ) -> tuple[int, str]:
-    """Estimate prompt tokens via provider counter first, then tiktoken fallback."""
+    """Estimate prompt tokens for a chain of messages.
+
+    Resolution order:
+
+    1. **Usage anchor** — if any message carries ``usage_prompt_tokens``
+       (set by the runner when a real provider response was received),
+       use that count as the baseline for everything up to and
+       including that message, and only tiktoken-estimate the messages
+       after it. This is the cheapest AND most accurate path on long
+       sessions. Source label: ``"anchored"``.
+    2. **Provider counter** — if the provider exposes
+       ``estimate_prompt_tokens(messages, tools, model)``, call it.
+       Source label: ``"provider_counter"`` (or whatever the provider
+       returns).
+    3. **tiktoken** — global token count using ``cl100k_base``. Source
+       label: ``"tiktoken"``.
+    4. ``(0, "none")`` if all three fail.
+    """
+    anchor = latest_prompt_tokens_anchor(messages)
+    if anchor is not None:
+        anchor_idx, anchor_tokens = anchor
+        # Estimate the tail (everything after the anchor) with tiktoken.
+        # The anchor itself counts the prompt as the provider saw it,
+        # which includes everything up to AND including that message,
+        # so the tail starts at anchor_idx + 1.
+        tail = messages[anchor_idx + 1:]
+        if not tail:
+            return anchor_tokens, "anchored"
+        tail_tokens = estimate_prompt_tokens(tail, tools)
+        return anchor_tokens + tail_tokens, "anchored"
+
     provider_counter = getattr(provider, "estimate_prompt_tokens", None)
     if callable(provider_counter):
         with suppress(Exception):
