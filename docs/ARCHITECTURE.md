@@ -856,6 +856,50 @@ that involves an API key or destructive action is left for the user.
 
 ---
 
-## Last updated: 2026-05-20 (D7 doctor)
+## 15. Distribution (D8)
+
+The PyPI distribution is **`durin-agent`** (the bare `durin` name was
+already taken by an unrelated robot-control project). The import package
+stays `durin` and the CLI command stays `durin`; only the
+`pip install` / `pipx install` argument changes.
+
+Two artifacts ship per release, both produced by `python -m build`:
+
+- `durin_agent-<version>.tar.gz` — source distribution
+- `durin_agent-<version>-py3-none-any.whl` — pure-Python wheel
+
+The wheel bundles the webui under `durin/web/dist/` via
+[hatch_build.py](../hatch_build.py); editable installs skip this hook
+since `cd webui && bun run dev` is the dev loop.
+
+### Release pipeline
+
+[.github/workflows/release.yml](../.github/workflows/release.yml) fires
+on tags matching `v[0-9]+.[0-9]+.[0-9]+*`. The workflow:
+
+1. **build** — checks out the repo, installs Python 3.11 + bun, asserts
+   the tag matches `pyproject.toml`'s version, runs `python -m build`,
+   uploads artifacts as an Actions artifact.
+2. **github-release** — downloads the artifacts and creates a GitHub
+   Release with auto-generated notes. Marked as `prerelease: true` when
+   the tag carries an `aN`/`bN`/`rcN`/`devN` suffix (PEP 440).
+3. **pypi-publish** — downloads the same artifacts and publishes them
+   via `pypa/gh-action-pypi-publish` (OIDC trusted publishing — no API
+   tokens stored in the repo). Marked `continue-on-error: true` so a
+   misconfigured PyPI publisher doesn't block the GitHub Release.
+
+Tag → release is the only path. There is no manual upload step.
+Maintainer instructions live in [docs/RELEASING.md](RELEASING.md).
+
+### CI pipeline
+
+[.github/workflows/ci.yml](../.github/workflows/ci.yml) runs on every PR
+and every push to `main`. It installs durin with `[dev]` extras (skipping
+the webui bundle via `DURIN_SKIP_WEBUI_BUILD=1`) and runs the full
+`pytest` suite with `--maxfail=5`.
+
+---
+
+## Last updated: 2026-05-20 (D8 distributable)
 
 > For the history of why each subsystem was added, what was replaced, and what was discarded along the way, see `docs/02_bitacora.md`. This document only describes the current state.

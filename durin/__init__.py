@@ -17,11 +17,16 @@ def _read_pyproject_version() -> str | None:
 
 
 def _resolve_version() -> str:
-    try:
-        return _pkg_version("durin")
-    except PackageNotFoundError:
-        # Source checkouts often import durin without installed dist-info.
-        return _read_pyproject_version() or "0.2.0"
+    # Distribution name on PyPI is `durin-agent`; the import package name
+    # stays `durin`. Try the new name first, then the legacy name for
+    # backward compatibility with anyone who built from source before the
+    # rename, then fall back to reading pyproject.toml.
+    for dist_name in ("durin-agent", "durin"):
+        try:
+            return _pkg_version(dist_name)
+        except PackageNotFoundError:
+            continue
+    return _read_pyproject_version() or "0.1.0a1"
 
 
 __version__ = _resolve_version()

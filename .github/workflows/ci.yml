@@ -1,0 +1,36 @@
+name: CI
+
+# Run the test suite on every PR and on pushes to main.
+# Keep this fast and focused — the goal is "don't ship broken main";
+# heavier integration tests can live in a separate workflow if needed.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install durin + dev extras
+        run: |
+          python -m pip install --upgrade pip
+          # Skip the webui bundle — CI doesn't need it and it would force
+          # bun/npm onto the runner just for tests.
+          DURIN_SKIP_WEBUI_BUILD=1 pip install -e ".[dev]"
+
+      - name: Run unit tests
+        run: pytest tests/ -q --maxfail=5

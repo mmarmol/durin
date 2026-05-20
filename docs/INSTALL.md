@@ -23,7 +23,36 @@ Optional system dependencies, depending on what you use:
 
 ## Install
 
-### Editable (recommended for development)
+The distribution name on PyPI is **`durin-agent`** — the CLI command stays
+`durin` and the import package stays `durin`.
+
+### From PyPI (recommended for users)
+
+```bash
+# Alpha / pre-releases require --pre
+pipx install --pre durin-agent
+# or, plain pip into the current environment:
+pip install --pre durin-agent
+
+# Once we cut a stable release:
+pipx install durin-agent
+```
+
+`pipx` is preferred for CLI installs because it isolates durin's
+dependency tree from anything else on your Python.
+
+### From a GitHub Release wheel (no PyPI required)
+
+Every tag also produces a GitHub Release with the wheel + sdist
+attached:
+
+```bash
+pipx install https://github.com/mmarmol/durin/releases/latest/download/durin_agent-0.1.0a1-py3-none-any.whl
+```
+
+Replace the version in the URL with the release you want.
+
+### From a checkout (recommended for development)
 
 ```bash
 git clone git@github.com:mmarmol/durin.git
@@ -35,22 +64,26 @@ pip install -e .
 The editable install skips the webui bundle. If you need the webui dist
 locally, run `cd webui && bun run build` after installing.
 
-### From a built wheel
+### Local wheel build
 
 ```bash
-pip install durin           # once published to PyPI
-# or
-pip install ./dist/durin-*.whl
+pip install build
+DURIN_SKIP_WEBUI_BUILD=1 python -m build         # set the env var if you don't have bun/npm
+pip install ./dist/durin_agent-*.whl
 ```
 
-The wheel build calls `bun` (preferred) or `npm` to bundle `webui/` into
-`durin/web/dist/` automatically — see [hatch_build.py](../hatch_build.py).
+The wheel build normally calls `bun` (preferred) or `npm` to bundle
+`webui/` into `durin/web/dist/` — see [hatch_build.py](../hatch_build.py).
 
 ### Optional extras
 
 `pyproject.toml` exposes opt-in dependency groups. Combine with brackets:
 
 ```bash
+# Installed from PyPI
+pipx install --pre 'durin-agent[memory,mcp,web]'
+
+# Editable from a checkout
 pip install -e ".[memory,mcp,web]"
 ```
 
