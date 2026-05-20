@@ -216,15 +216,17 @@ def test_install_missing_extras_editable_prints_command_no_op() -> None:
     mock_run.assert_not_called()
 
 
-def test_install_missing_extras_pipx_runs_pipx_install_force() -> None:
+def test_install_missing_extras_pipx_does_uninstall_then_install() -> None:
+    """Workaround for the pipx+uv bug: do `uninstall` then fresh `install`
+    instead of `install --force` (which uv silently rejects)."""
     from durin.cli.doctor import install_missing_extras
     from durin.cli.upgrade import InstallInfo
 
-    info = InstallInfo(mode="pipx", source_root=None, version="0.1.0a2")
-    captured: list[list[str]] = []
+    info = InstallInfo(mode="pipx", source_root=None, version="0.1.0a3")
+    captured: list[tuple[list[str], dict | None]] = []
 
-    def _fake_run(cmd):
-        captured.append(list(cmd))
+    def _fake_run(cmd, env=None):
+        captured.append((list(cmd), env))
         class _R:
             returncode = 0
         return _R()
@@ -233,7 +235,14 @@ def test_install_missing_extras_pipx_runs_pipx_install_force() -> None:
          patch("durin.cli.doctor.subprocess.run", side_effect=_fake_run):
         rc = install_missing_extras(["memory", "mcp"], assume_yes=True)
     assert rc == 0
-    assert captured == [["pipx", "install", "--force", "durin-agent[memory,mcp]"]]
+    assert len(captured) == 2, captured
+    uninstall_cmd, uninstall_env = captured[0]
+    install_cmd, install_env = captured[1]
+    assert uninstall_cmd == ["pipx", "uninstall", "durin-agent"]
+    assert install_cmd == ["pipx", "install", "durin-agent[memory,mcp]"]
+    # Both subprocess calls must carry the uv-cache-bypass.
+    assert uninstall_env is not None and uninstall_env.get("UV_NO_CACHE") == "1"
+    assert install_env is not None and install_env.get("UV_NO_CACHE") == "1"
 
 
 def test_install_missing_extras_wheel_runs_pip_install() -> None:
@@ -243,10 +252,10 @@ def test_install_missing_extras_wheel_runs_pip_install() -> None:
     from durin.cli.upgrade import InstallInfo
 
     info = InstallInfo(mode="wheel", source_root=None, version="0.1.0a2")
-    captured: list[list[str]] = []
+    captured: list[tuple[list[str], dict | None]] = []
 
-    def _fake_run(cmd):
-        captured.append(list(cmd))
+    def _fake_run(cmd, env=None):
+        captured.append((list(cmd), env))
         class _R:
             returncode = 0
         return _R()
@@ -255,7 +264,11 @@ def test_install_missing_extras_wheel_runs_pip_install() -> None:
          patch("durin.cli.doctor.subprocess.run", side_effect=_fake_run):
         rc = install_missing_extras(["memory"], assume_yes=True)
     assert rc == 0
-    assert captured == [[sys.executable, "-m", "pip", "install", "--upgrade", "durin-agent[memory]"]]
+    assert len(captured) == 1
+    cmd, env = captured[0]
+    assert cmd == [sys.executable, "-m", "pip", "install", "--upgrade", "durin-agent[memory]"]
+    # Wheel mode doesn't need the uv-cache bypass.
+    assert env is None
 
 
 def test_install_missing_extras_unknown_mode_returns_one() -> None:
