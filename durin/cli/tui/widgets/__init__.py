@@ -3,7 +3,7 @@
 from durin.cli.tui.widgets.chat_view import ChatView, MessageBubble
 from durin.cli.tui.widgets.footer_bar import FooterBar
 from durin.cli.tui.widgets.header_bar import HeaderBar
-from durin.cli.tui.widgets.input_area import InputArea
+from durin.cli.tui.widgets.input_area import InputArea, SlashCommandSuggester
 
 __all__ = [
     "ChatView",
@@ -11,4 +11,5 @@ __all__ = [
     "HeaderBar",
     "InputArea",
     "MessageBubble",
+    "SlashCommandSuggester",
 ]
