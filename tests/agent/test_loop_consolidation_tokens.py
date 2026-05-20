@@ -9,6 +9,11 @@ from durin.providers.base import LLMResponse
 
 
 def _make_loop(tmp_path, *, estimated_tokens: int, context_window_tokens: int) -> AgentLoop:
+    """Tests in this file pre-date Tier 2 A1 and assume the legacy
+    trigger semantic (consolidate when estimated > budget, not when
+    > ratio*window). ``preemptive_compact_ratio=1.0`` pins the trigger
+    to the budget so existing test math stays valid — the A1 trigger
+    itself is covered in ``test_preemptive_compaction.py``."""
     from durin.providers.base import GenerationSettings
     provider = MagicMock()
     provider.get_default_model.return_value = "test-model"
@@ -24,6 +29,7 @@ def _make_loop(tmp_path, *, estimated_tokens: int, context_window_tokens: int) -
         workspace=tmp_path,
         model="test-model",
         context_window_tokens=context_window_tokens,
+        preemptive_compact_ratio=1.0,
     )
     loop.tools.get_definitions = MagicMock(return_value=[])
     loop.consolidator._SAFETY_BUFFER = 0

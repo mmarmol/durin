@@ -132,6 +132,19 @@ class ModelPresetConfig(Base):
     context_window_tokens: int = 65_536
     temperature: float = 0.1
     reasoning_effort: str | None = None
+    # Pre-emptive compaction trigger (OpenClaw-inspired Tier 2 A1).
+    # Fraction of ``context_window_tokens`` above which the consolidator
+    # fires BEFORE the next LLM call instead of waiting for a context
+    # overflow 400. Per-model because the right value depends on the
+    # window: 128K models can sit at 0.5 (compact at 64K); 1M models
+    # want ~0.15 (compact at 150K — you pay per token shipped, so
+    # waiting until 500K means shipping a huge prompt every turn).
+    # ``None`` inherits from ``AgentDefaults.preemptive_compact_ratio``.
+    preemptive_compact_ratio: float | None = Field(
+        default=None,
+        validation_alias=AliasChoices("preemptiveCompactRatio", "preemptive_compact_ratio"),
+        serialization_alias="preemptiveCompactRatio",
+    )
 
     def to_generation_settings(self) -> Any:
         from durin.providers.base import GenerationSettings
@@ -209,6 +222,13 @@ class AgentDefaults(Base):
         validation_alias=AliasChoices("consolidationRatio"),
         serialization_alias="consolidationRatio",
     )  # Consolidation target ratio (0.5 = 50% of budget retained after compression)
+    preemptive_compact_ratio: float = Field(
+        default=0.5,
+        ge=0.05,
+        le=0.99,
+        validation_alias=AliasChoices("preemptiveCompactRatio", "preemptive_compact_ratio"),
+        serialization_alias="preemptiveCompactRatio",
+    )  # Tier 2 A1: default trigger ratio when preset doesn't override.
     parallel_tool_calls: dict[str, bool] = Field(
         default_factory=dict,
         validation_alias=AliasChoices("parallelToolCalls", "parallel_tool_calls"),

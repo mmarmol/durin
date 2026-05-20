@@ -17,6 +17,11 @@ class ProviderSnapshot:
     model: str
     context_window_tokens: int
     signature: tuple[object, ...]
+    # Tier 2 A1: per-preset pre-emptive compaction trigger. ``None`` means
+    # "inherit the global default from AgentDefaults". Resolved here at
+    # snapshot time so a preset switch propagates the new ratio into the
+    # consolidator without the loop having to know about preset internals.
+    preemptive_compact_ratio: float | None = None
 
 
 def _resolve_model_preset(
@@ -226,6 +231,7 @@ def build_provider_snapshot(
         model=resolved.model,
         context_window_tokens=min([resolved.context_window_tokens, *fallback_windows]),
         signature=provider_signature(config, preset=resolved),
+        preemptive_compact_ratio=resolved.preemptive_compact_ratio,
     )
 
 

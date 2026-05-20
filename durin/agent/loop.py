@@ -237,6 +237,7 @@ class AgentLoop:
         channels_config: ChannelsConfig | None = None,
         timezone: str | None = None,
         consolidation_ratio: float = 0.5,
+        preemptive_compact_ratio: float = 0.5,
         max_messages: int = 120,
         hooks: list[AgentHook] | None = None,
         unified_session: bool = False,
@@ -355,6 +356,7 @@ class AgentLoop:
             get_tool_definitions=self.tools.get_definitions,
             max_completion_tokens=provider.generation.max_tokens,
             consolidation_ratio=consolidation_ratio,
+            preemptive_compact_ratio=preemptive_compact_ratio,
         )
         self.dream = Dream(
             store=self.context.memory,
@@ -430,6 +432,7 @@ class AgentLoop:
             unified_session=defaults.unified_session,
             disabled_skills=defaults.disabled_skills,
             consolidation_ratio=defaults.consolidation_ratio,
+            preemptive_compact_ratio=defaults.preemptive_compact_ratio,
             max_messages=defaults.max_messages,
             tools_config=config.tools,
             model_presets=preset_helpers.configured_model_presets(config),
@@ -462,7 +465,12 @@ class AgentLoop:
         self.context_window_tokens = context_window_tokens
         self.runner.provider = provider
         self.subagents.set_provider(provider, model)
-        self.consolidator.set_provider(provider, model, context_window_tokens)
+        self.consolidator.set_provider(
+            provider,
+            model,
+            context_window_tokens,
+            preemptive_compact_ratio=snapshot.preemptive_compact_ratio,
+        )
         self.dream.set_provider(provider, model)
         self._provider_signature = snapshot.signature
         if publish_update and self._runtime_model_publisher is not None:

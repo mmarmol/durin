@@ -91,6 +91,10 @@ Reasoning models (glm-5.1, o-series, Claude thinking) can hit `max_tokens` while
 
 **2I — Heartbeat isolated sessions** (`heartbeat/service.py::heartbeat_session_key`, wired in `cli/commands.py::on_heartbeat_execute`). OpenClaw-inspired. Default behaviour is unchanged — the heartbeat reuses one long-running session named `heartbeat` and trims via `retain_recent_legal_suffix(keep_recent_messages)` between ticks. With `heartbeat.isolatedSessions=true` each tick gets a fresh `heartbeat-<12-hex>` session that the executor deletes (cache + disk) after the run. Useful when heartbeat tasks are stateless one-shots (e.g. "did anything change since last tick?") and shouldn't drift from accumulated context.
 
+### Tier 2 — Resilience (Phase 2A)
+
+**3A — Pre-emptive compaction trigger** (`agent/memory.py::Consolidator._preemptive_trigger_tokens`). OpenClaw-inspired (`preemptive-compaction.ts`). Old behaviour: the consolidator only fired when `estimated_tokens > input_token_budget` — i.e. when we were already at the context wall. New: fires when `estimated_tokens > preemptive_compact_ratio * context_window` (default 0.5), so a turn that would have shipped ~93% of the window now compacts at ~50% instead. Per-preset via `ModelPresetConfig.preemptive_compact_ratio` — a 1M-window model wants ~0.15 (compact at 150K — paying per token shipped, you don't want to wait until 500K), a 128K model is fine at 0.5. Falls back to `AgentDefaults.preemptive_compact_ratio` when the preset doesn't override. Clamped above by the input budget so a misconfigured 0.99 still leaves a safety margin. `consolidation_ratio` was re-based off the new trigger (instead of the budget) so each compaction round still does meaningful work after the threshold drops. Emits `compaction.preemptive_trigger` telemetry when the pre-emptive threshold fires below the legacy budget ceiling.
+
 **What we deliberately did NOT add**:
 - Forced-verification gate (refuted as PlanHook in V7/V8 — 0 hits, hurt scenario_3 by 2pp). Conditional version remains a Phase 2 candidate.
 - Semantic friction injection on errors (cognitive manipulation; contradicts the empirical pivot — see `02_bitacora.md`).
