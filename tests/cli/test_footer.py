@@ -62,12 +62,16 @@ def test_footer_text_minimal(tmp_path: Path) -> None:
 
 
 def test_footer_text_with_messages(tmp_path: Path) -> None:
-    session = _FakeSession(messages=[{"role": "user"}, {"role": "assistant"}])
+    session = _FakeSession(messages=[
+        {"role": "user", "content": "hello world"},
+        {"role": "assistant", "content": "hi there"},
+    ])
     loop = _fake_loop(tmp_path, session=session)
     p = build_footer_text(loop, "cli", "direct")
     assert p["msg_count"] == 2
-    assert p["token_estimate"] == 300  # 2 × 150 heuristic
-    assert p["context_pct"] == 0  # 300 / 200_000 → 0%
+    # Real tiktoken count: both have short content; expect <50 tokens total.
+    assert 0 < p["token_estimate"] < 50
+    assert p["context_pct"] == 0  # tiny / 200_000 → 0%
 
 
 def test_footer_text_with_display_name(tmp_path: Path) -> None:
