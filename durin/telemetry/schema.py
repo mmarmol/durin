@@ -437,6 +437,25 @@ class MemoryIngestEvent(TypedDict):
     session_key: NotRequired[str | None]
 
 
+class MemoryEmbeddingLoadEvent(TypedDict):
+    """Embedding model loaded into memory. Logged once per process lifetime."""
+
+    model: str
+    duration_ms: float
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
+class MemoryEmbeddingEmbedEvent(TypedDict):
+    """Embedding call. One event per batch (not per text)."""
+
+    model: str
+    batch_size: int
+    duration_ms: float
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
 # ===========================================================================
 # Catalog — single source of truth
 # ===========================================================================
@@ -490,6 +509,9 @@ EVENTS: dict[str, type] = {
     "memory.recall": MemoryRecallEvent,
     "memory.store": MemoryStoreEvent,
     "memory.ingest": MemoryIngestEvent,
+    # Memory subsystem (Phase 2 — embedding)
+    "memory.embedding.load": MemoryEmbeddingLoadEvent,
+    "memory.embedding.embed": MemoryEmbeddingEmbedEvent,
 }
 
 
@@ -542,4 +564,6 @@ __all__ = [
     "MemoryRecallEvent",
     "MemoryStoreEvent",
     "MemoryIngestEvent",
+    "MemoryEmbeddingLoadEvent",
+    "MemoryEmbeddingEmbedEvent",
 ]
