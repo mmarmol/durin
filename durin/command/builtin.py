@@ -178,6 +178,47 @@ BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
         "List the keyboard shortcuts available in interactive mode.",
         "keyboard",
     ),
+    BuiltinCommandSpec(
+        "/memory",
+        "Memory operations",
+        "Subcommands: list [class], show <id>, search <query>, drill <uri>.",
+        "brain",
+        "<list|show|search|drill> [args]",
+    ),
+    BuiltinCommandSpec(
+        "/remember",
+        "Remember a fact",
+        "Store a fact in episodic memory tagged as user-authored (curator never touches).",
+        "bookmark-plus",
+        "<fact>",
+    ),
+    BuiltinCommandSpec(
+        "/forget",
+        "Delete a memory entry",
+        "Remove a memory entry by id (substring match). Confirm prompt.",
+        "trash-2",
+        "<id>",
+    ),
+    BuiltinCommandSpec(
+        "/sources",
+        "Ingested artifacts",
+        "List ingested documents, or ingest a new one with `/sources ingest <path>`.",
+        "files",
+        "[ingest <path>]",
+    ),
+    BuiltinCommandSpec(
+        "/audit",
+        "What the agent believes",
+        "Show the agent's stable memory entries — what it 'knows' about you.",
+        "shield-check",
+    ),
+    BuiltinCommandSpec(
+        "/why",
+        "Trace claim provenance",
+        "Search memory for a claim and surface the source links it came from.",
+        "search-check",
+        "<claim>",
+    ),
 )
 
 
@@ -1268,6 +1309,466 @@ async def cmd_hotkeys(ctx: CommandContext) -> OutboundMessage:
     )
 
 
+def _resolve_workspace(loop) -> "Path":
+    """Resolve the workspace Path for memory operations."""
+    from pathlib import Path
+
+    workspace = getattr(loop, "workspace", None)
+    if workspace is None:
+        return Path.cwd()
+    return Path(workspace) if not isinstance(workspace, Path) else workspace
+
+
+def _find_memory_entry(workspace, id_needle: str):
+    """Walk memory/<class>/*.md; return list of (class_name, path) matching the id."""
+    from pathlib import Path
+
+    from durin.memory.paths import MEMORY_CLASSES
+
+    needle = id_needle.lower().strip()
+    if not needle:
+        return []
+    memory_root = workspace / "memory"
+    if not memory_root.is_dir():
+        return []
+    matches = []
+    for class_name in MEMORY_CLASSES:
+        class_dir = memory_root / class_name
+        if not class_dir.is_dir():
+            continue
+        for path in class_dir.glob("*.md"):
+            if needle in path.stem.lower():
+                matches.append((class_name, path))
+    return matches
+
+
+async def cmd_memory(ctx: CommandContext) -> OutboundMessage:
+    """Memory operations dispatcher: list, show, search, drill."""
+    from durin.memory.paths import MEMORY_CLASSES
+    from durin.memory.search import search_memory
+    from durin.memory.drill import DrillError, drill
+    from durin.memory.storage import load_entry, FrontmatterError
+
+    loop = ctx.loop
+    workspace = _resolve_workspace(loop)
+    metadata_text = {**dict(ctx.msg.metadata or {}), "render_as": "text"}
+
+    parts = (ctx.args or "").strip().split(None, 1)
+    sub = parts[0].lower() if parts else ""
+    rest = parts[1] if len(parts) > 1 else ""
+
+    if not sub:
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content=(
+                "Usage: `/memory <list|show|search|drill> [args]`.\n"
+                "- `/memory list [class]` — list entries.\n"
+                "- `/memory show <id>` — render one entry.\n"
+                "- `/memory search <query>` — search dreamed + undreamed.\n"
+                "- `/memory drill <uri>` — fetch a specific section."
+            ),
+            metadata=metadata_text,
+        )
+
+    if sub == "list":
+        class_filter = rest.strip().lower()
+        memory_root = workspace / "memory"
+        entries: list[tuple[str, str, str]] = []  # (class, id, headline)
+        if memory_root.is_dir():
+            for class_name in MEMORY_CLASSES:
+                if class_filter and class_name != class_filter:
+                    continue
+                class_dir = memory_root / class_name
+                if not class_dir.is_dir():
+                    continue
+                for path in sorted(class_dir.glob("*.md")):
+                    try:
+                        entry = load_entry(path)
+                    except (FrontmatterError, Exception):
+                        continue
+                    entries.append((class_name, path.stem, entry.headline))
+        if not entries:
+            scope = f"`{class_filter}`" if class_filter else "any class"
+            return OutboundMessage(
+                channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+                content=f"No memory entries found in {scope}.",
+                metadata=metadata_text,
+            )
+        lines = ["## Memory entries", ""]
+        for class_name, entry_id, headline in entries:
+            lines.append(f"- `{class_name}/{entry_id}` — {headline}")
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content="\n".join(lines), metadata=metadata_text,
+        )
+
+    if sub == "show":
+        if not rest:
+            return OutboundMessage(
+                channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+                content="Usage: `/memory show <id>`.",
+                metadata=metadata_text,
+            )
+        matches = _find_memory_entry(workspace, rest)
+        if not matches:
+            return OutboundMessage(
+                channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+                content=f"No memory entry matches `{rest}`.",
+                metadata=metadata_text,
+            )
+        if len(matches) > 1:
+            listed = ", ".join(f"`{c}/{p.stem}`" for c, p in matches)
+            return OutboundMessage(
+                channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+                content=f"`{rest}` is ambiguous: {listed}. Be more specific.",
+                metadata=metadata_text,
+            )
+        class_name, path = matches[0]
+        try:
+            content = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            content = f"Cannot read entry: {exc}"
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content=content,
+            metadata=dict(ctx.msg.metadata or {}),
+        )
+
+    if sub == "search":
+        if not rest:
+            return OutboundMessage(
+                channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+                content="Usage: `/memory search <query>`.",
+                metadata=metadata_text,
+            )
+        results = search_memory(workspace, rest, scope="all", level="warm")
+        if not results:
+            return OutboundMessage(
+                channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+                content=f"No memory hits for `{rest}`.",
+                metadata=metadata_text,
+            )
+        lines = [f"## Memory search · {len(results)} hits for `{rest}`", ""]
+        for r in results[:20]:
+            lines.append(f"- [{r.source}] `{r.uri}` — {r.headline}")
+            if r.snippet:
+                lines.append(f"  > {r.snippet}")
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content="\n".join(lines), metadata=metadata_text,
+        )
+
+    if sub == "drill":
+        if not rest:
+            return OutboundMessage(
+                channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+                content="Usage: `/memory drill <uri>` (e.g. `sessions/abc.md#turn-42`).",
+                metadata=metadata_text,
+            )
+        try:
+            text = drill(workspace, rest)
+        except DrillError as exc:
+            return OutboundMessage(
+                channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+                content=f"drill error: {exc}",
+                metadata=metadata_text,
+            )
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content=text,
+            metadata=dict(ctx.msg.metadata or {}),
+        )
+
+    return OutboundMessage(
+        channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+        content=f"Unknown `/memory` subcommand `{sub}`. Try `list`, `show`, `search`, `drill`.",
+        metadata=metadata_text,
+    )
+
+
+async def cmd_remember(ctx: CommandContext) -> OutboundMessage:
+    """Store a fact in episodic memory as user_authored.
+
+    The curator + dream never touch user_authored entries (the
+    ContextVar default is user_authored, so no explicit scope needed).
+    """
+    from durin.memory.store import StoreError, store_memory
+
+    fact = (ctx.args or "").strip()
+    metadata_text = {**dict(ctx.msg.metadata or {}), "render_as": "text"}
+    if not fact:
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content="Usage: `/remember <fact>`.", metadata=metadata_text,
+        )
+    workspace = _resolve_workspace(ctx.loop)
+    try:
+        result = store_memory(workspace, content=fact, class_name="episodic")
+    except (StoreError, OSError) as exc:
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content=f"`/remember` failed: {exc}", metadata=metadata_text,
+        )
+    return OutboundMessage(
+        channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+        content=(
+            f"Remembered as `{result['class']}/{result['id']}` "
+            f"(author: {result['author']}).\n> {result['headline']}"
+        ),
+        metadata=metadata_text,
+    )
+
+
+async def cmd_forget(ctx: CommandContext) -> OutboundMessage:
+    """Delete a memory entry by id substring; also drop its vector index row."""
+    metadata_text = {**dict(ctx.msg.metadata or {}), "render_as": "text"}
+    needle = (ctx.args or "").strip()
+    if not needle:
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content="Usage: `/forget <id>`. Run `/memory list` for available ids.",
+            metadata=metadata_text,
+        )
+    workspace = _resolve_workspace(ctx.loop)
+    matches = _find_memory_entry(workspace, needle)
+    if not matches:
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content=f"No memory entry matches `{needle}`.",
+            metadata=metadata_text,
+        )
+    if len(matches) > 1:
+        listed = ", ".join(f"`{c}/{p.stem}`" for c, p in matches)
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content=f"`{needle}` is ambiguous: {listed}. Be more specific.",
+            metadata=metadata_text,
+        )
+    class_name, path = matches[0]
+    entry_id = path.stem
+    try:
+        path.unlink()
+    except OSError as exc:
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content=f"Cannot delete `{class_name}/{entry_id}`: {exc}",
+            metadata=metadata_text,
+        )
+    # Best-effort vector index cleanup.
+    try:
+        from durin.memory.vector_index import VectorIndex, vector_index_available
+
+        if vector_index_available():
+            embedding_model = None
+            try:
+                embedding_model = ctx.loop.config.memory.embedding.model  # type: ignore[attr-defined]
+            except (AttributeError, TypeError):
+                pass
+            if embedding_model:
+                from durin.memory.embedding import FastembedProvider
+
+                provider = FastembedProvider(model=embedding_model)
+                index = VectorIndex(workspace, provider)
+                try:
+                    import lancedb  # noqa: F401
+
+                    db = index._connect()  # type: ignore[attr-defined]
+                    if "memory_entries" in db.list_tables().tables:
+                        table = db.open_table("memory_entries")
+                        table.delete(f"id = '{entry_id}'")
+                except Exception:  # noqa: BLE001
+                    pass
+    except Exception:  # noqa: BLE001
+        pass
+    return OutboundMessage(
+        channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+        content=f"Forgot `{class_name}/{entry_id}`.",
+        metadata=metadata_text,
+    )
+
+
+async def cmd_sources(ctx: CommandContext) -> OutboundMessage:
+    """List ingested artifacts, or ingest a new one with `/sources ingest <path>`."""
+    import json
+    from pathlib import Path
+
+    from durin.memory.ingestion import IngestError, ingest_artifact
+
+    workspace = _resolve_workspace(ctx.loop)
+    metadata_text = {**dict(ctx.msg.metadata or {}), "render_as": "text"}
+
+    args = (ctx.args or "").strip()
+    parts = args.split(None, 1)
+    sub = parts[0].lower() if parts else ""
+    rest = parts[1] if len(parts) > 1 else ""
+
+    if sub == "ingest":
+        if not rest:
+            return OutboundMessage(
+                channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+                content="Usage: `/sources ingest <path>`.",
+                metadata=metadata_text,
+            )
+        source = Path(rest).expanduser()
+        if not source.is_absolute():
+            source = (workspace / source).resolve()
+        try:
+            result = ingest_artifact(workspace, source)
+        except IngestError as exc:
+            return OutboundMessage(
+                channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+                content=f"Ingest failed: {exc}", metadata=metadata_text,
+            )
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content=(
+                f"Ingested as `{result['id']}` ({result['size_bytes']} bytes).\n"
+                f"Source: `{result['source']}`"
+            ),
+            metadata=metadata_text,
+        )
+
+    ingested_dir = workspace / "ingested"
+    if not ingested_dir.is_dir():
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content=(
+                "No ingested artifacts yet. "
+                "Use `/sources ingest <path>` to add one."
+            ),
+            metadata=metadata_text,
+        )
+
+    entries: list[tuple[str, str, str]] = []
+    for entry_dir in sorted(ingested_dir.iterdir()):
+        if not entry_dir.is_dir():
+            continue
+        meta_path = entry_dir / "meta.json"
+        if not meta_path.is_file():
+            continue
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        derived = meta.get("derived") or {}
+        source_path = derived.get("source_path") or "?"
+        size = derived.get("size_bytes") or 0
+        entries.append((entry_dir.name, source_path, str(size)))
+
+    if not entries:
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content="No ingested artifacts yet.",
+            metadata=metadata_text,
+        )
+
+    lines = [f"## Ingested sources · {len(entries)}", ""]
+    for entry_id, source_path, size in entries:
+        lines.append(f"- `{entry_id}` ({size} bytes) ← `{source_path}`")
+    lines.append("")
+    lines.append("Use `/sources ingest <path>` to add another.")
+    return OutboundMessage(
+        channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+        content="\n".join(lines), metadata=metadata_text,
+    )
+
+
+async def cmd_audit(ctx: CommandContext) -> OutboundMessage:
+    """Show the agent's stable memory — what it 'knows' about the user."""
+    from durin.memory.storage import FrontmatterError, load_entry
+
+    workspace = _resolve_workspace(ctx.loop)
+    metadata_text = {**dict(ctx.msg.metadata or {}), "render_as": "text"}
+    stable_dir = workspace / "memory" / "stable"
+    if not stable_dir.is_dir():
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content="No stable memory yet — the agent hasn't accumulated identity-level entries.",
+            metadata=metadata_text,
+        )
+    entries = []
+    for path in sorted(stable_dir.glob("*.md")):
+        try:
+            entry = load_entry(path)
+        except (FrontmatterError, Exception):
+            continue
+        entries.append({
+            "id": path.stem,
+            "headline": entry.headline,
+            "valid_from": entry.valid_from.isoformat() if entry.valid_from else "?",
+            "author": entry.author,
+            "source_refs": len(entry.source_refs),
+        })
+    if not entries:
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content="No stable memory entries.",
+            metadata=metadata_text,
+        )
+    lines = ["## Agent's stable memory (audit)", ""]
+    for e in entries:
+        lines.append(
+            f"- `{e['id']}` · {e['valid_from']} · {e['author']} · "
+            f"{e['source_refs']} source ref(s)\n"
+            f"  > {e['headline']}"
+        )
+    lines.append("")
+    lines.append("Use `/forget <id>` to remove an entry the agent shouldn't keep.")
+    return OutboundMessage(
+        channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+        content="\n".join(lines), metadata=metadata_text,
+    )
+
+
+async def cmd_why(ctx: CommandContext) -> OutboundMessage:
+    """Search memory for a claim; surface source_refs as navigable links."""
+    from durin.memory.search import search_memory
+    from durin.memory.storage import FrontmatterError, load_entry
+
+    workspace = _resolve_workspace(ctx.loop)
+    metadata_text = {**dict(ctx.msg.metadata or {}), "render_as": "text"}
+    claim = (ctx.args or "").strip()
+    if not claim:
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content="Usage: `/why <claim>` — searches memory and shows the source links.",
+            metadata=metadata_text,
+        )
+    results = search_memory(workspace, claim, scope="dreamed", level="warm")
+    if not results:
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content=f"No memory supports `{claim}` yet.",
+            metadata=metadata_text,
+        )
+    lines = [f"## Provenance for `{claim}`", ""]
+    for r in results[:10]:
+        lines.append(f"### {r.headline}")
+        lines.append(f"*from* `{r.uri}`")
+        if r.summary:
+            lines.append("")
+            lines.append(f"> {r.summary}")
+        # If the result is a memory entry, surface its source_refs.
+        if r.source == "memory":
+            try:
+                rel = r.uri[len("memory/"):] if r.uri.startswith("memory/") else r.uri
+                path = workspace / "memory" / f"{rel}.md"
+                if path.is_file():
+                    entry = load_entry(path)
+                    if entry.source_refs:
+                        lines.append("")
+                        lines.append("**Sources:**")
+                        for ref in entry.source_refs:
+                            lines.append(f"- {ref}")
+            except (FrontmatterError, Exception):
+                pass
+        lines.append("")
+    return OutboundMessage(
+        channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+        content="\n".join(lines), metadata=metadata_text,
+    )
+
+
 async def cmd_help(ctx: CommandContext) -> OutboundMessage:
     """Return available slash commands."""
     return OutboundMessage(
@@ -1325,3 +1826,14 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.exact("/name", cmd_name)
     router.prefix("/name ", cmd_name)
     router.exact("/hotkeys", cmd_hotkeys)
+    router.exact("/memory", cmd_memory)
+    router.prefix("/memory ", cmd_memory)
+    router.exact("/remember", cmd_remember)
+    router.prefix("/remember ", cmd_remember)
+    router.exact("/forget", cmd_forget)
+    router.prefix("/forget ", cmd_forget)
+    router.exact("/sources", cmd_sources)
+    router.prefix("/sources ", cmd_sources)
+    router.exact("/audit", cmd_audit)
+    router.exact("/why", cmd_why)
+    router.prefix("/why ", cmd_why)
