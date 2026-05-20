@@ -113,6 +113,26 @@ puede integrar en CI con `--json`.
 doctor`) le dice al operador qué está roto y cómo arreglarlo, en vez
 de hacerle leer logs.
 
+### D8 — Distribuible (PyPI + GitHub Releases)
+
+Hasta D7 la única instalación válida era `git clone`. D8 cierra ese gap
+con `pipx install --pre durin-agent` como camino canónico (el nombre
+`durin` estaba ocupado en PyPI; el comando, el módulo importable y la
+configuración siguen llamándose `durin`).
+
+| # | Item | Notas |
+|---|---|---|
+| D8.1 | Rename a `durin-agent` + bump `0.1.0a1` | Distribución vs import name vs CLI: solo cambia el primero. `durin/__init__.py` consulta ambos por compat. |
+| D8.2 | `.github/workflows/release.yml` | Trigger en tags `v*`. Build (bun + python -m build), GitHub Release con notas auto, PyPI publish vía OIDC. |
+| D8.3 | `.github/workflows/ci.yml` | Tests en cada PR + push a main. Skip del webui bundle (`DURIN_SKIP_WEBUI_BUILD=1`). |
+| D8.4 | `docs/RELEASING.md` | Cómo registrar el trusted publisher en PyPI; cómo cortar un release; versionado PEP 440; yanking. |
+| D8.5 | README + INSTALL.md actualizados | `pipx install --pre durin-agent` como primera opción; checkout solo para dev. |
+
+**Output entregable**: `pipx install --pre durin-agent` instala el
+binario completo sin necesidad de clonar el repo ni tener `bun`/`npm`
+local. Cada `git tag vX.Y.Z[aN]` dispara build → Release → publish sin
+intervención manual.
+
 ### D3 — Editor avanzado (1 semana, opcional según presión)
 
 Patterns de pi que el editor actual de prompt_toolkit no expone.
