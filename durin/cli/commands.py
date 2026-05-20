@@ -1383,11 +1383,21 @@ def agent(
                             bot_icon=config.agents.defaults.bot_icon,
                         )
 
+                        # Drag-and-drop: rewrite dragged image/audio paths to
+                        # stable workspace copies and surface them via .media
+                        # so the agent's existing multimodal pipeline sees them.
+                        from durin.cli.dragdrop import process_dragged_paths
+
+                        clean_input, media_paths = process_dragged_paths(
+                            user_input, agent_loop.workspace
+                        )
+
                         await bus.publish_inbound(InboundMessage(
                             channel=cli_channel,
                             sender_id="user",
                             chat_id=cli_chat_id,
-                            content=user_input,
+                            content=clean_input,
+                            media=media_paths,
                             metadata={"_wants_stream": True},
                         ))
 
