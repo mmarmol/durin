@@ -13,6 +13,7 @@ from durin.memory.ingestion import IngestError, ingest_artifact
 from durin.memory.provenance import Author, author_scope, current_author
 from durin.memory.store import StoreError, store_memory
 from durin.memory.schema import MemoryEntry
+from durin.memory.search import Result as SearchResult, search_memory
 from durin.memory.session_md import (
     SessionMdError,
     regenerate_session_md,
@@ -40,7 +41,9 @@ __all__ = [
     "parse_consolidator_response",
     "regenerate_session_md",
     "render_session_md",
+    "SearchResult",
     "save_entry",
+    "search_memory",
     "split_frontmatter",
     "store_memory",
 ]
