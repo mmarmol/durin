@@ -64,59 +64,45 @@ The fork model is retained because future memory work (per `03_memory_design.md`
 
 The hook surface (`before_iteration`, `before_execute_tools`, `after_iteration`, plus streaming hooks) is intentionally generic. No hooks are bundled at present. New hooks (e.g. an `ExecutionTelemetryHook` for tracking iterations/tokens/tools) should attach via the standard `AgentHook` interface.
 
-### Phase 1 hardening (May 2026)
+### Runner state-tracking + guards
 
-After validating with V3–V9d that cognitive scaffolding adds little to no value on frontier-reasoning models (see `02_bitacora.md`), three infrastructure changes were added to the loop. These target the boundary between the model and the environment — the only place where execution-loop interventions still show empirical value:
+The runner carries a small set of turn-scoped guards. All are defensive — they shape behaviour only when the model misbehaves or the environment fails.
 
-**1A — Hash-based loop detection** (`runner.py::_run_tool`).
-Frontier models occasionally fixate: they emit the same `(tool_name, arguments)` tuple in consecutive turns even after the prior call hard-failed. The fix is pure state tracking — a turn-scoped set of failed signatures (`sha256` of `tool_name + json.dumps(args, sort_keys=True)`). On a repeat hit we short-circuit with a synthetic "BLOCKED" tool result asking the model to take a different path. Per-turn scope only — we never block across turns because environment state may have changed. Pytest-style failures (tool succeeded but environment reported failure) are NOT recorded as failed signatures, so test-driven iteration loops continue to work.
+**Loop detection** (`runner.py::_run_tool`). A turn-scoped set of `sha256(tool_name + sorted-args)` signatures for any tool call that returned a hard failure. A repeat hit short-circuits with a synthetic "BLOCKED" tool result. Reset between turns (environment state may have changed). Pytest-style failures (tool returned ok but the environment reported a test failure) are NOT recorded — test-driven loops keep working.
 
-**1B — Topological tool ordering** (`runner.py::_partition_tool_batches`).
-The model can emit mixed tool calls like `[read_a, write_b, read_c]`. We never reorder; we walk the list and group only CONSECUTIVE `concurrency_safe` tools into a parallel batch. Mutations and exclusive tools get their own singleton batches. This prevents `[edit_file, run_tests]` race conditions while preserving the read-before-write / read-after-write semantics the model depends on. Tools default to `read_only=False` — opt-in safety.
+**Topological tool ordering** (`runner.py::_partition_tool_batches`). Walks the model's tool-call list in order and groups only CONSECUTIVE `concurrency_safe=True` tools into a parallel batch. Mutations + exclusive tools become singleton batches. Order is preserved; read-after-write semantics survive. Tools default to `read_only=False` — opt-in safety.
 
-**2B — Reasoning-phase truncation recovery** (`runner.py` length-handling branch).
-Reasoning models (glm-5.1, o-series, Claude thinking) can hit `max_tokens` while still inside their `reasoning_content` deliberation, producing `finish_reason="length"` with empty `content` but a large reasoning blob. The default empty-retry path is harmful here (re-sends the same prompt). We detect this specific signature and append the partial reasoning plus a specialized cue asking the model to wrap up quickly and emit the final answer or tool calls. Preserves the chain-of-thought, avoids wasting the tokens already spent.
+**Reasoning-phase truncation recovery** (`runner.py` length-handling branch). When `finish_reason="length"` and `content` is blank but `reasoning_content` is non-empty (the model hit `max_tokens` mid-deliberation), the runner appends the partial reasoning plus a specific cue asking the model to wrap up. Preserves the chain-of-thought instead of re-sending the same prompt.
 
-**2C — Idle-timeout circuit breaker** (`runner.py` top of iteration loop). OpenClaw-inspired. The provider already retries individual transient timeouts; a timeout reaching the runner means those retries were exhausted. Tolerating one such event is fine — the next iteration may succeed after an injection or context repair — but multiple in a row burn tokens against a stalled endpoint. The runner counts iterations whose response is an idle/wall-clock timeout (`finish_reason="error" and error_kind="timeout"`); any iteration that produced forward progress (tool_calls or non-empty content) resets the counter. When it exceeds `DURIN_MAX_CONSECUTIVE_IDLE_TIMEOUTS` (default 1, matching OpenClaw's `MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT`), the run terminates with `stop_reason="circuit_breaker_idle_timeout"` and a `circuit_breaker.idle_timeout` telemetry event for distinct-from-error diagnostics.
+**Idle-timeout circuit breaker** (`runner.py` top of iteration loop). Counts iterations whose response is `finish_reason="error" and error_kind="timeout"`. Forward-progress iterations (tool_calls or non-empty content) reset the counter. After `DURIN_MAX_CONSECUTIVE_IDLE_TIMEOUTS` (default 1, → trips on 2nd consecutive) the run terminates with `stop_reason="circuit_breaker_idle_timeout"` and a `circuit_breaker.idle_timeout` event.
 
-**2D — Per-block tool-result validation** (`utils/tool_result_validation.py`, applied in `runner.py::_normalize_tool_result`). OpenClaw-inspired. The aggregate `max_tool_result_chars` cap + disk spillover handles textual outputs, but `stringify_text_blocks` bails out when a result list contains non-text blocks — so a tool returning a 30 MB base64 image (e.g. `image_generation`) would inject that straight into context. Per-block caps run *before* the aggregate path: text blocks > 100 KB are truncated in place (preserving sibling blocks), `image_url` data-URLs > 5 MB are replaced with a text placeholder, `input_audio` data > 10 MB likewise. HTTP/HTTPS image URLs pass through (they're references, not payloads). Unknown block types pass through untouched so provider adapters can still sort out Anthropic-style `tool_result`/`tool_use` blocks.
+**Per-block tool-result validation** (`utils/tool_result_validation.py`, applied in `runner.py::_normalize_tool_result`). Caps each block before the aggregate path: text blocks > 100 KB truncated in place; `image_url` data-URLs > 5 MB replaced with a text placeholder; `input_audio` data > 10 MB likewise. HTTP/HTTPS image URLs (references, not payloads) pass through. Unknown block types pass through untouched.
 
-**2E — Re-sanitize after `context_transform`** (`runner.py::_build_request_kwargs`). OpenClaw-inspired. The pre-call sanitize pipeline (drop_orphan_tool_results + backfill_missing_tool_results, both before AND after `_snip_history`) runs on the *untransformed* message list. A `context_transform` hook that trims for token budget can then drop a message in the middle of a `tool_use`/`tool_result` pair, producing a 400 from Anthropic/OpenAI (`tool_use_id ... was not found`). The runner now re-runs the sanitize pass on the transformed list before handing it to the provider; the re-sanitize is wrapped in `try/except` so a bug in repair never breaks the request.
+**Re-sanitize after `context_transform`** (`runner.py::_build_request_kwargs`). After the optional `context_transform` hook returns, runs `drop_orphan_tool_results` + `backfill_missing_tool_results` once more, so a transform that dropped a message mid-pair doesn't ship an invalid `tool_use`/`tool_result` mismatch to the provider.
 
-**2F — Compaction grace window** (`runner.py::_await_with_compaction_grace`, wired in `loop.py` via `Consolidator.get_lock(session_key).locked()`). OpenClaw-inspired (`run/compaction-timeout.ts::resolveRunTimeoutDuringCompaction`). The outer wall-clock LLM timeout (`DURIN_LLM_TIMEOUT_S`) is necessary to bound runaway providers, but it kills calls that are slow precisely *because* consolidation is mid-flight reshaping the context. When the base timeout fires, the runner checks the optional `is_compacting` callback on `AgentRunSpec`. If True, it extends the deadline once by `DURIN_COMPACTION_GRACE_S` (default 30 s) and emits a `compaction.grace_extended` telemetry event. If the call still doesn't return, the regular `TimeoutError` path fires. Implemented with `asyncio.wait({task}, timeout=...)` rather than `asyncio.wait_for` so the task isn't cancelled at the base timeout — allowing us to probe state and keep waiting on the same coro. Grace is one-shot per request.
+**Compaction grace window** (`runner.py::_await_with_compaction_grace`, wired in `loop.py` via `Consolidator.get_lock(session_key).locked()`). When the outer LLM wall-clock timeout (`DURIN_LLM_TIMEOUT_S`) is about to fire, the runner checks the optional `is_compacting` callback on `AgentRunSpec`. If True, the deadline is extended once by `DURIN_COMPACTION_GRACE_S` (default 30 s) and a `compaction.grace_extended` event is emitted. Grace is one-shot per request. Implemented with `asyncio.wait({task}, timeout=...)` so the task isn't cancelled at the base timeout.
 
-**2G — Per-model `parallel_tool_calls` gating** (`OpenAICompatProvider._resolve_parallel_tool_calls`, configured via `agents.defaults.parallel_tool_calls` in user config). OpenClaw-inspired. Some models misbehave when sent OpenAI's `parallel_tool_calls=true` request flag — they over-emit calls, hallucinate args, or 400. The config maps model-name substrings to True/False; first match wins. The provider injects `parallel_tool_calls` into the request kwargs only when there's a match AND `tools` is non-null (the API rejects the flag in tool-less calls). No injection by default — provider default is preserved. Emits `provider.parallel_tool_calls_injected` (`{model, value, match_needle}`) at most once per unique triple per process so dashboards can see which overrides are firing in production without per-request log spam.
+**Per-model `parallel_tool_calls` gating** (`OpenAICompatProvider._resolve_parallel_tool_calls`). `agents.defaults.parallel_tool_calls` is a substring-keyed dict mapping model names → True/False. The provider injects `parallel_tool_calls` into the request kwargs only when there's a match AND `tools` is non-null. Emits `provider.parallel_tool_calls_injected` (`{model, value, match_needle}`) at most once per unique triple per process.
 
-**2H — Per-turn aggregate tool-result budget** (`runner.py::_enforce_turn_budget`). Hermes-inspired (`tools/tool_result_storage.py::enforce_turn_budget`). The per-tool cap + disk spillover catches single huge results, but when an LLM emits N parallel calls each returning <per-tool cap, the aggregate can still overflow context. After all tool results in a turn are collected, the runner sums their sizes; if the total exceeds `DURIN_TURN_BUDGET_CHARS` (default 200 KB), the largest not-yet-persisted results are spilled to disk in priority order (largest first) until the aggregate fits. Already-persisted results (containing the `[tool output persisted]` marker) are skipped to avoid double-work. Mutates the appended tool messages in place. Emits a `turn_budget.enforced` telemetry event when triggered. `DURIN_TURN_BUDGET_CHARS=0` disables.
+**Per-turn aggregate tool-result budget** (`runner.py::_enforce_turn_budget`). After all tool results for a turn are collected, the runner sums their sizes; if the total exceeds `DURIN_TURN_BUDGET_CHARS` (default 200 KB), the largest not-yet-persisted results are spilled to disk in priority order (largest first) until the aggregate fits. Already-persisted results (containing the `[tool output persisted]` marker) are skipped. Emits `turn_budget.enforced` when triggered. `DURIN_TURN_BUDGET_CHARS=0` disables.
 
-**2I — Heartbeat isolated sessions** (`heartbeat/service.py::heartbeat_session_key`, wired in `cli/commands.py::on_heartbeat_execute`). OpenClaw-inspired. Default behaviour is unchanged — the heartbeat reuses one long-running session named `heartbeat` and trims via `retain_recent_legal_suffix(keep_recent_messages)` between ticks. With `heartbeat.isolatedSessions=true` each tick gets a fresh `heartbeat-<12-hex>` session that the executor deletes (cache + disk) after the run. Useful when heartbeat tasks are stateless one-shots (e.g. "did anything change since last tick?") and shouldn't drift from accumulated context.
+**Heartbeat session mode** (`heartbeat/service.py::heartbeat_session_key`, wired in `cli/commands.py::on_heartbeat_execute`). By default the heartbeat reuses a single long-running session named `heartbeat` (trimmed by `keep_recent_messages` between ticks). With `heartbeat.isolatedSessions=true` each tick gets a fresh `heartbeat-<12-hex>` session that the executor deletes after the run — for stateless one-shot probes.
 
-### Tier 2 — Resilience (Phase 2A)
+**Pre-emptive compaction trigger** (`agent/memory.py::Consolidator._preemptive_trigger_tokens`). Consolidator fires when `estimated_tokens > preemptive_compact_ratio * context_window` (default 0.5). Per-preset via `ModelPresetConfig.preemptive_compact_ratio` (a 1M-window model uses ~0.15; a 128K window uses ~0.5). Falls back to `AgentDefaults.preemptive_compact_ratio` when the preset doesn't override. Clamped above by the input budget. `consolidation_ratio` is relative to the trigger threshold (so each round leaves `trigger * consolidation_ratio` of context). Emits `compaction.preemptive_trigger` when the pre-emptive threshold fires below the hard budget ceiling.
 
-**3A — Pre-emptive compaction trigger** (`agent/memory.py::Consolidator._preemptive_trigger_tokens`). OpenClaw-inspired (`preemptive-compaction.ts`). Old behaviour: the consolidator only fired when `estimated_tokens > input_token_budget` — i.e. when we were already at the context wall. New: fires when `estimated_tokens > preemptive_compact_ratio * context_window` (default 0.5), so a turn that would have shipped ~93% of the window now compacts at ~50% instead. Per-preset via `ModelPresetConfig.preemptive_compact_ratio` — a 1M-window model wants ~0.15 (compact at 150K — paying per token shipped, you don't want to wait until 500K), a 128K model is fine at 0.5. Falls back to `AgentDefaults.preemptive_compact_ratio` when the preset doesn't override. Clamped above by the input budget so a misconfigured 0.99 still leaves a safety margin. `consolidation_ratio` was re-based off the new trigger (instead of the budget) so each compaction round still does meaningful work after the threshold drops. Emits `compaction.preemptive_trigger` telemetry when the pre-emptive threshold fires below the legacy budget ceiling.
+**Mid-turn precheck signal** (`agent/runner.py::_mid_turn_precheck`). After each iteration's sanitize pipeline, estimates the message + tool token cost. If it exceeds the input budget, aborts the turn with `stop_reason="mid_turn_precheck_overflow"` and emits `mid_turn_precheck.overflow` BEFORE making the LLM call. Estimator exceptions are swallowed.
 
-**3B — Mid-turn precheck signal** (`agent/runner.py::_mid_turn_precheck`). OpenClaw-inspired (`midturn-precheck.ts`). A1 covers the *start* of a turn — consolidator runs before `_run_agent_loop`. But intra-turn growth (a 60 KB tool result, an image block surviving truncation) can push the post-sanitize prompt back over budget. After each iteration's sanitize pipeline, estimate the message + tool token cost; if it exceeds the input budget, abort the turn with `stop_reason="mid_turn_precheck_overflow"` and a `mid_turn_precheck.overflow` telemetry event BEFORE making the LLM call. Saves the wasted call that would have returned a 400 anyway and gives callers a distinct stop_reason. The next turn re-runs A1, compacting first. Estimator exceptions are swallowed (best-effort gate — never block a turn on a broken counter).
+**Compaction lock aggregate timeout** (`agent/memory.py::Consolidator._lock_timeout_s`). Per-session compaction lock acquisition is bounded by `DURIN_COMPACTION_LOCK_TIMEOUT_S` (default 180 s). When the timeout expires, the call abandons the acquisition and emits `compaction.lock_timeout`. `0` disables the timeout. Acquire/release is wrapped in `try/finally` so the body releases on success and on raise.
 
-**3C — Compaction lock aggregate timeout** (`agent/memory.py::Consolidator._lock_timeout_s`). OpenClaw-inspired (`compaction-retry-aggregate-timeout.ts`). The per-session compaction lock (`asyncio.Lock`) used to be `async with`-ed unbounded. If a compaction hung mid-summarize (provider stuck, network freeze), the next call to `maybe_consolidate_by_tokens` on that session would wait on the lock indefinitely — the session lane silently dies. Now bounded by `DURIN_COMPACTION_LOCK_TIMEOUT_S` (default 180s). When the timeout expires, the call abandons the acquisition and returns without consolidating (an oversized prompt is recoverable; a hung session is not) and emits a `compaction.lock_timeout` telemetry event. `0` disables the timeout (legacy unbounded behaviour). The `async with` was rewritten as `acquire()` + `try/finally release()` so the body still releases on success and on raise — including when the body raises mid-compaction.
+**Tool-call argument repair** (`utils/tool_argument_repair.py::parse_tool_call_arguments`, wired in `openai_compat_provider` + `bedrock_provider`). Runs `html.unescape` (only when entity markers are present), strips up to 96 chars of leading garbage (allowlist regex) and up to 3 chars of trailing garbage, then hands the cleaned string to `json_repair.loads`. Bounded by a 64 KB buffer — larger inputs pass through unrepaired. Emits `tool_call.argument_repair` with the repair tokens applied and `parsed_ok`.
 
-### Tier 2 — Tool reliability (Phase 2B)
+**Unknown-tool loop guard** (`agent/runner.py` at the top of the `should_execute_tools` branch). Counts calls per unknown tool name per turn. When any name's count exceeds `DURIN_MAX_UNKNOWN_TOOL_ATTEMPTS` (default 2), the turn terminates with `stop_reason="unknown_tool_loop_guard"` and emits `unknown_tool.loop_guard`. The error surfaces the real tool names so callers can show a "did you mean X?" message. Only fires against registries that expose `tool_names` as a list / tuple / set / frozenset.
 
-**3D — Tool-call argument repair** (`utils/tool_argument_repair.py::parse_tool_call_arguments`, wired in `openai_compat_provider` + `bedrock_provider` at the tool-call parse points). OpenClaw-inspired (`attempt.tool-call-argument-repair.ts`). `json_repair.loads` already handles common JSON sins (trailing commas, unquoted keys, single quotes). Two failure modes still passed through it unchanged: (1) HTML-entity-encoded JSON — e.g. `{&quot;x&quot;:1}` — that some over-escaping models emit, and (2) leading/trailing commentary like `Here's the JSON: {"x":1}.`. New pre-processor runs `html.unescape` (only when entity markers are present, never on raw `&`), then strips up to 96 chars of leading garbage (allowlist regex) and up to 3 chars of trailing garbage, then hands the cleaned string to `json_repair.loads`. Bounded by a 64 KB buffer (larger inputs pass through unrepaired — better to surrender than over-mutate). Emits `tool_call.argument_repair` telemetry when any repair fires, including `parsed_ok` to spot models whose output is irreparably broken.
+**History image / audio prune** (`utils/history_image_prune.py::prune_processed_history_images`, wired in `runner.py`'s sanitize pipeline). Identifies completed user→assistant turns, keeps the most recent `DURIN_HISTORY_IMAGE_PRESERVE_TURNS` (default 3) intact, and in older user/tool messages replaces `image_url` / `image` / `input_image` blocks with `[image data removed - already processed by model]` and `input_audio` blocks with the audio equivalent. Assistant messages are untouched. Idempotent. `preserve_turns` is clamped to ≥ 1. Emits `history_media.pruned` only when at least one block is removed.
 
-**3E — Unknown-tool loop guard** (`agent/runner.py` at the top of the `should_execute_tools` branch). OpenClaw-inspired (`attempt.tool-call-normalization.ts::UnknownToolLoopGuardState`). 1A's hash-based loop detection blocks repeats of the EXACT `(tool_name, arguments)` pair after a known failure, but a hallucinated tool name often comes with varying args each iteration (the model is experimenting), so 1A misses it. The counter tracks calls to unknown names per-turn; when any name's count exceeds `DURIN_MAX_UNKNOWN_TOOL_ATTEMPTS` (default 2 → trips on the third call), the turn terminates with `stop_reason="unknown_tool_loop_guard"` and a `unknown_tool.loop_guard` telemetry event, surfaced with the list of real tool names so callers can show a "did you mean X?" message. Only fires against registries that expose `tool_names` as a real list/tuple/set/frozenset — mocks that don't bother to populate it naturally skip the check.
+**3-tier system prompt** (`agent/context.py::ContextBuilder._build_stable_layer` / `_build_context_layer` / `_build_volatile_layer`). The system prompt is joined from three layers with `\n\n---\n\n`: **stable** (identity → bootstrap files → active-skills content → skills catalog), **context** (active agent-mode prompt suffix), **volatile** (memory → recent history → archived session summary). The stable prefix is byte-identical across turns of one session for prompt-cache hits; the volatile layer is appended last and changes per turn.
 
-**3F — History image / audio prune** (`utils/history_image_prune.py::prune_processed_history_images`, wired in `runner.py`'s sanitize pipeline before `_microcompact`). OpenClaw-inspired (`run/history-image-prune.ts`). Tier 1 2D caps single images at write time; this is the *read-time* problem of accumulated media surviving across many turns — a 5 MB image attached in turn 1 still costs 5 MB of upload + tokens on turn 10. The pruner identifies completed user→assistant turns, keeps the most recent `DURIN_HISTORY_IMAGE_PRESERVE_TURNS` (default 3) intact, and in older user/tool messages replaces `image_url` / `image` / `input_image` blocks with `[image data removed - already processed by model]` and `input_audio` blocks with the audio equivalent. Assistant messages are untouched (durin's own output stays consistent). Idempotent — re-running over already-pruned history is a no-op (identity returned). `preserve_turns` is clamped to ≥ 1 so we never lose context for the immediately preceding exchange. Emits `history_media.pruned` (`{image_blocks_removed, audio_blocks_removed, preserve_turns, iteration, session_key}`) only when at least one block was actually removed — counts derived from a stats out-dict the runner passes into the pruner.
-
-### Tier 2 — Context engineering (Phase 2C)
-
-**3G — 3-tier system prompt for cache stability** (`agent/context.py::ContextBuilder._build_stable_layer` / `_build_context_layer` / `_build_volatile_layer`). Hermes-inspired (`agent/system_prompt.py::build_system_prompt`). Providers cache by *prefix*, so mixing volatile content (memory, recent history, session summary) with stable content (identity, bootstrap files, skills catalog) breaks the cache anchor — the dynamic blocks shift on each turn and invalidate the cached prefix. The new layout joins three layers with `\n\n---\n\n`: **stable** (identity → bootstrap files → active-skills content → skills catalog), **context** (active agent-mode prompt suffix), **volatile** (memory → recent history → archived session summary). The stable prefix is byte-identical across turns of one session; the agent-mode suffix sits between stable and volatile so it still gets model attention (above scrolling memory/history) but the stable layer can be cached even when the mode is set. The volatile layer is appended last and changes per turn — deliberately positioned so it never poisons the prefix cache for the stable layers above.
-
-**3H — Post-compaction loop guard** (`utils/post_compaction_guard.py::PostCompactionLoopGuard`, owned by `Consolidator`, observed by `AgentRunner`). OpenClaw-inspired (`post-compaction-loop-guard.ts`). 1A's loop detection blocks the EXACT `(tool_name, args)` pair only after a known FAILURE. It misses the failure mode where a tool *succeeds* but the model fixates — reading the same file, getting the same content, unable to act on what it sees. Consolidation is the natural reset event: it summarises history, frees context, and gives the model a clean slate. When the SAME `(tool_name, args_hash, result_hash)` triple repeats `DURIN_POST_COMPACTION_GUARD_WINDOW` times (default 3) within the window *after* a successful compaction, the loop is structural — the model can't escape on its own. Consolidator arms the guard after each compaction round that produced a summary; the runner observes every tool call and aborts with `stop_reason="post_compaction_loop"` and a `post_compaction_loop.tripped` telemetry event when the guard trips. The guard is per-session and auto-disarms after the window passes without a trip. Strict `is True` check on the verdict so MagicMock guards in unrelated tests don't accidentally trip via truthy attribute access.
-
-**What we deliberately did NOT add**:
-- Forced-verification gate (refuted as PlanHook in V7/V8 — 0 hits, hurt scenario_3 by 2pp). Conditional version remains a Phase 2 candidate.
-- Semantic friction injection on errors (cognitive manipulation; contradicts the empirical pivot — see `02_bitacora.md`).
-- MCTS/tree-search wrapping the LLM (cost prohibitive for sync workflows; semantic search adds little value when the model already reasons internally).
+**Post-compaction loop guard** (`utils/post_compaction_guard.py::PostCompactionLoopGuard`, owned by `Consolidator`, observed by `AgentRunner`). After a successful compaction round, the guard is armed for the next `DURIN_POST_COMPACTION_GUARD_WINDOW` (default 3) tool calls. When the SAME `(tool_name, args_hash, result_hash)` triple repeats `window_size` times within the window, the run aborts with `stop_reason="post_compaction_loop"` and emits `post_compaction_loop.tripped`. The guard is per-session and auto-disarms after the window passes without a trip.
 
 ---
 
@@ -238,7 +224,7 @@ Wiring points:
 - **Provider rate limits**: `provider.set_telemetry()` is called in `AgentLoop.from_config` and the provider emits `provider.rate_limit{,_exhausted}` events directly.
 - **Per-task tool events**: `AgentLoop._dispatch_message` calls `bind_telemetry(get_session_logger(session_key))` before invoking the runner and `reset_telemetry(token)` in the finally block, mirroring the `file_states` binding. Tools resolve the bound logger via `current_telemetry()`.
 
-Tool-level instrumentation (Phase 1c, May 2026):
+Tool-level instrumentation:
 - `read_file` emits `tool.read_file` events with `{path, offset, limit, total_lines, returned_lines, result_chars, kind, truncated, dedup}` on the successful text-read and dedup paths.
 - `grep` emits `tool.grep` events with `{pattern_len, fixed_strings, case_insensitive, output_mode, limit, offset, glob_filter, type_filter, displayed, total_before_pagination, result_chars, truncated, size_truncated, skipped_binary, skipped_large}` on every non-error completion (including zero-match).
 - `edit_file` emits `tool.edit_file` events with `{path, match_strategy, matches, outcome, old_text_chars, new_text_chars}` for every call. `outcome` ∈ `{edited, not_found, ambiguous}`. `match_strategy` ∈ `{exact, line_trimmed, line_trimmed_quote_normalized, quote_normalized, block_anchor, null}` — lets us measure how often each cascade layer earns its keep.
@@ -250,11 +236,11 @@ Tool-level instrumentation (Phase 1c, May 2026):
 - `sleep` emits `sleep.start` (`{requested_s, actual_s, clamped, reason}`), then either `sleep.cancelled` or `sleep.end` (`{elapsed_s, reason}`). Lets us see how often the model genuinely sleeps vs. cancels mid-wait.
 - No event is emitted on error paths for the core tool family (`read_file` / `edit_file` / `grep` / `repo_overview`) — by design, the goal is measuring information-loss patterns, not failure counts. Telemetry failures are silently swallowed so tool calls never break from a logging issue.
 
-The instrumentation is in service of validating SWE-agent's "tool I/O quality > loop quality" finding in our specific setup (frontier reasoning models with 1M context). The implementation does not change defaults — that decision comes after enough telemetry has been collected over real workloads. See `docs/01_roadmap.md` Phase 1c and `docs/02_bitacora.md` for rationale.
+Telemetry never changes tool defaults — the events exist for visibility, not enforcement. Telemetry failures are silently swallowed inside `emit_tool_event` / `_FsTool._emit` so tool calls never break from a logging issue.
 
-### Telemetry schema catalog (May 2026, audit follow-up P3.5)
+### Telemetry schema catalog
 
-The complete set of event types + payload shapes is centralised in `durin/telemetry/schema.py`. Each event has a `TypedDict` declaring its required + optional fields; the `EVENTS` dict at the bottom maps every event type to its TypedDict. A meta-test in `tests/telemetry/test_schema_catalog.py` scans the source tree for `_emit("…")` / `.log("…")` call sites and asserts the catalog is in sync in **both directions** — emitted-but-uncatalogued AND catalogued-but-unemitted entries fail the test.
+The complete set of event types + payload shapes is centralised in `durin/telemetry/schema.py`. Each event has a `TypedDict` declaring its required + optional fields; the `EVENTS` dict at the bottom maps every event type to its TypedDict. A meta-test in `tests/telemetry/test_schema_catalog.py` scans the source tree for `_emit("…")` / `.log("…")` / `emit_tool_event("…")` call sites and asserts the catalog is in sync in **both directions** — emitted-but-uncatalogued AND catalogued-but-unemitted entries fail the test.
 
 Conventions baked into the schema:
 
@@ -263,21 +249,19 @@ Conventions baked into the schema:
 - Numeric units in field-name suffix: ``*_chars``, ``*_tokens``, ``*_bytes``, ``*_s`` (seconds), ``*_ms`` (milliseconds).
 - ``snake_case`` everywhere; event type strings use ``namespace.action``.
 
-### Sprint A — Tool I/O hygiene additions (May 2026)
+### Tool I/O hygiene
 
-Implemented per `docs/07_external_agents_review.md` §6-§9. Four language-agnostic, validated patterns ported from OpenCode / SWE-agent:
+**Read suggestion-on-miss.** `ReadFileTool` suggests close-named files in the same directory when the requested path doesn't exist. Shared helper `_file_not_found_msg` lives on `_FsTool` and is reused by `EditFileTool`. Uses `difflib.get_close_matches(cutoff=0.6, n=3)`.
 
-**T3 — Read suggestion-on-miss.** `ReadFileTool` now suggests close-named files in the same directory when the requested path doesn't exist. Shared helper `_file_not_found_msg` lives on `_FsTool` and is also used by `EditFileTool`. Uses `difflib.get_close_matches(cutoff=0.6, n=3)`.
+**`repo_overview` tool** (`durin/agent/tools/repo_overview.py`). One-shot orientation: depth-bounded directory tree (default 3, capped at 200 entries) plus detected ecosystems (Python, Node.js, Go, Rust, Ruby, Java/Kotlin, PHP), package manager (npm/pnpm/yarn/bun/poetry/cargo/etc.), dependency files, common entrypoints. No embeddings, no AST — purely structural. Lets the model orient before grep/list_dir.
 
-**T1 — `repo_overview` tool** (`durin/agent/tools/repo_overview.py`). One-shot orientation: depth-bounded directory tree (default 3, capped at 200 entries) plus detected ecosystems (Python, Node.js, Go, Rust, Ruby, Java/Kotlin, PHP), package manager (npm/pnpm/yarn/bun/poetry/cargo/etc.), dependency files, common entrypoints. No embeddings, no AST — purely structural. Lets the model orient before grep/list_dir. Inherits from `_FsTool` for telemetry + path resolution.
+**Tool output spill** (`durin/agent/tools/output_spill.py`). When a tool produces output larger than its budget, the FULL content is written to `<workspace>/.durin/spills/<tool>_<ts>_<hash>.txt` and the model receives head+tail of the budget plus a reference (`read_file(path=...)`) to recover the omitted middle. Wired into `ExecTool` (10K-char threshold). Spill write failures fall back to plain head/tail truncation — never breaks the tool call.
 
-**T4 — Tool output spill** (`durin/agent/tools/output_spill.py`). When a tool produces output larger than its budget, the FULL content is written to `<workspace>/.durin/spills/<tool>_<ts>_<hash>.txt` and the model receives head+tail of the budget plus a reference (`read_file(path=...)`) to recover the omitted middle. Wired into `ExecTool` (10K-char threshold). Spill write failures fall back to plain head/tail truncation — never breaks the tool call.
+**Block-anchor matcher in the edit cascade** (`filesystem.py::_find_block_anchor_matches`). Fifth fallback in `EditFileTool`'s replacer chain: when `old_text` has 3+ lines, match first and last lines exactly (after strip) and apply a similarity threshold on the middle (0.5 with a single candidate, 0.85 with multiple). Handles cases where the model knows the start and end of a block but the interior shifted (reformatting, added comments, whitespace changes). Cascade order: `exact → line_trimmed → line_trimmed_quote_normalized → quote_normalized → block_anchor`. The strategy used is reported in `tool.edit_file` telemetry.
 
-**T2 — Block-anchor matcher in the edit cascade** (`filesystem.py::_find_block_anchor_matches`). Adds a fifth fallback to `EditFileTool`'s replacer chain: when `old_text` has 3+ lines, match first and last lines exactly (after strip) and use a similarity threshold on the middle. Relaxed threshold (0.5) when a single candidate exists, strict (0.85) with multiple. Handles cases where the model knows the start and end of a block but the interior shifted (reformatting, added comments, whitespace changes). Cascade order: `exact → line_trimmed → line_trimmed_quote_normalized → quote_normalized → block_anchor`. The strategy used is reported in `tool.edit_file` telemetry so we can measure how often each layer fires.
+### Permission-as-data agent modes
 
-### Sprint B — Permission-as-data agent modes (May 2026)
-
-Implemented per `docs/07_external_agents_review.md` §L3. Plan / Build / Explore modes selectable per session, with tool surface filtered at the LLM boundary by the active mode.
+Plan / Build / Explore modes selectable per session. The active mode filters the tool surface at the LLM boundary.
 
 **Core** (`durin/agent/agent_mode.py`). `AgentMode` is a frozen dataclass with `allowed: frozenset[str] | None`, `denied: frozenset[str]`, and optional `prompt_suffix`. Three built-ins:
 - `build` — default, no restriction
@@ -286,7 +270,7 @@ Implemented per `docs/07_external_agents_review.md` §L3. Plan / Build / Explore
 
 Session state lives in `session.metadata`:
 - `agent_mode` — currently active mode name
-- `pre_plan_mode` — set when entering plan mode, restored on exit (OpenClaude's `prePlanMode` pattern)
+- `pre_plan_mode` — set when entering plan mode, restored on exit
 
 **Tool filtering in the runner** (`runner.py::_active_tool_definitions`). The runner accepts an optional `mode_provider` callable in `AgentRunSpec`; when present, it's called per iteration and the resulting mode filters the tool definitions sent to the LLM. The registry's cached definitions stay valid — filtering is a per-call slice. When the model emits a cached tool name that's no longer allowed (rare), `_run_tool` short-circuits with a clear denial: *"Tool 'X' is not available in mode 'plan'..."*. `AgentLoop._dispatch_message` wires the provider to read from `session.metadata` at call time, so mid-run mode switches take effect at the very next iteration.
 
@@ -294,11 +278,9 @@ Session state lives in `session.metadata`:
 - `enter_plan_mode(reason?)` — switches the session into plan mode (the model may invoke this voluntarily; typically the user activates plan mode via `/plan` instead)
 - `exit_plan_mode(plan)` — **writes the plan to `<workspace>/.durin/plans/plan_<timestamp>.md`** and yields to the user for approval. Does NOT actually exit plan mode — the session remains in plan until the user runs `/build`. While in plan, the user can edit the plan file directly with any editor; `/build` picks up the file content as-edited.
 
-**File-based plan storage** (replaced an initial MVP with argument-string plan). Plans live in `<workspace>/.durin/plans/<session-slug>/plan_<timestamp>.md` — one subdirectory per session, one file per `exit_plan_mode` call inside it. The session slug is the sanitized session key (`websocket:chat42` → `websocket_chat42`), so concurrent chats don't collide and the user can locate plans for a specific conversation.
+**File-based plan storage**. Plans live in `<workspace>/.durin/plans/<session-slug>/plan_<timestamp>.md` — one subdirectory per session, one file per `exit_plan_mode` call. The session slug is the sanitized session key (`websocket:chat42` → `websocket_chat42`), so concurrent chats don't collide and the user can locate plans for a specific conversation. Storing on disk lets the plan survive compaction, supports edit-before-approve (user opens the .md and tweaks step 3), and keeps message history small (the plan content isn't repeated in tokens).
 
-Benefits over the inlined-arg approach: persistence across context compaction, edit-before-approve UX (user opens the .md and tweaks step 3), multi-turn refinement (model rewrites the file), post-mortem review via `ls .durin/plans/<session>/`, and token efficiency (plan lives on disk, not in message history).
-
-**Plan flow with compaction survival** (Claude Code parity, see `docs/07_external_agents_review.md`):
+**Plan flow with compaction survival**:
 
 | Phase | What happens to the plan |
 |---|---|
@@ -319,20 +301,20 @@ All three are registered in the `CommandRouter` and exposed via `builtin_command
 
 **Context builder integration** (`context.py::build_system_prompt`). When a mode has a non-empty `prompt_suffix`, it's appended to the system prompt. `build_messages` reads the active mode from `session_metadata[SESSION_MODE_KEY]` and threads it through.
 
-**Telemetry** (Phase 1c — extended):
+**Telemetry**:
 - `agent_mode.turn_start` — emitted at the start of each `AgentRunner.run()` call with the active mode
 - `agent_mode.switch` — emitted on every mode change, with `{from, to, trigger}` (`trigger ∈ {slash_command, tool}`)
 - `agent_mode.tool_denied` — emitted when a tool call is denied by the mode (`{tool, mode}`)
 - `plan_mode.presented` — emitted when `exit_plan_mode` surfaces a plan (`{plan_chars, from_mode}`)
 
-**What we did NOT do, intentionally**:
-- No "auto-resume on exit" — the user runs `/build` explicitly. This avoids the model executing without review.
-- No mode-specific model override (OpenCode supports this; we don't see a case for it yet).
-- No "ask" permission action (OpenCode supports `ask` to pop a UI dialog; we substitute the slash-command approval gate which works in every channel).
+**Constraints by design**:
+- No auto-resume on exit: the user must run `/build` to leave plan mode. The approval gate is universal across channels.
+- No mode-specific model override.
+- No native UI permission dialog — slash commands carry the approval intent.
 
-### Future improvements (Sprint B → daily-driver readiness)
+### Per-channel slash-command UX
 
-Tracked here so the daily-driver path is explicit. None of these are blockers for the current implementation — they're per-channel UX polish.
+Mode dispatch (`/plan`, `/build`, `/mode`) works in every channel. Native autocomplete varies:
 
 | Channel | Status today | Future improvement |
 |---|---|---|
@@ -353,17 +335,26 @@ After the prune, `complete_goal` no longer consults any plan-tier verification g
 
 ## 7. Sessions and Persistence
 
-`durin/session/manager.py` handles session lifecycle. Each session is a JSON-lines file containing message history, metadata, and goal state. `MemoryStore` (`durin/agent/memory.py`) handles long-lived markdown memory files (`MEMORY.md`, etc.) consumed by `ContextBuilder` into the system prompt.
+`durin/session/manager.py` handles session lifecycle. Two files per session:
 
-**Session storage is immutable**: messages append-only, never trimmed. `Consolidator.maybe_consolidate_by_tokens` (in `durin/agent/memory.py`) advances a cursor (`last_consolidated`) when the prompt exceeds the budget — it generates a narrative summary, persists it to `history.jsonl` + `session.metadata["_last_summary"]`, and advances the cursor. **The raw `session.messages` list is never modified in-place**; only the cursor advances. The LLM sees `messages[last_consolidated:]` (capped by `max_messages`) + the summary, while disk retains the complete history for post-processing and the future memory subsystem.
+| File | Content | Purpose |
+|---|---|---|
+| `<key>.jsonl` | Message history + identity metadata (mode, plan path, todos, channel, title) on line 0 | **Source of truth.** Replayable; messages append-only, never trimmed. |
+| `<key>.meta.json` | Lifecycle event timeline + a ``derived`` block (LLM-produced projections of the conversation) | **Derived state.** Regenerable from `.jsonl` + `memory/history.jsonl`. Safe to delete and rebuild. |
+
+The split rule: if losing the file means you can't reconstruct it from the other, it's source-of-truth (`.jsonl`). Otherwise it's derived (`.meta.json`). `MemoryStore` (`durin/agent/memory.py`) handles long-lived markdown memory files (`MEMORY.md`, etc.) consumed by `ContextBuilder` into the system prompt.
+
+`Consolidator.maybe_consolidate_by_tokens` (in `durin/agent/memory.py`) advances a cursor (`last_consolidated`) when the prompt exceeds the budget — it generates a narrative summary, persists it to `history.jsonl` + writes the latest summary to `.meta.json::derived._last_summary`, and advances the cursor. **The raw `session.messages` list is never modified in-place**; only the cursor advances. The LLM sees `messages[last_consolidated:]` (capped by `max_messages`) + the summary.
+
+`SessionManager._DERIVED_METADATA_KEYS` is the canonical set of `session.metadata` keys that route to the sidecar's `derived` block instead of line-0. Today only `_last_summary`; future additions (`session_embedding`, `narrative_summary`, etc.) go in this set so they don't pollute the source-of-truth file.
 
 In-memory per-turn shaping (does not touch disk):
 - `_microcompact` in `runner.py` replaces older tool-result content with `[<tool> result omitted from context]` placeholders on the copy sent to the LLM
 - `_snip_history` in `runner.py` further trims the copy from the start when it still doesn't fit the context window
 
-### Session meta (per-session lifecycle index, May 2026)
+### Session meta sidecar — lifecycle index + derived state
 
-Sessions are immutable but the message stream isn't enough to recover "significant events" from prior turns — plan submissions, plan approvals, mode transitions, etc. live in transient metadata that gets overwritten. The session meta file is a structured index of these events.
+Sessions are immutable but the message stream isn't enough to recover "significant events" from prior turns — plan submissions, plan approvals, mode transitions, etc. live in transient metadata that would otherwise be overwritten. The session meta sidecar is a structured index of these events plus the `derived` block for LLM-produced projections.
 
 **Module**: `durin/session/session_meta.py`. **Storage**: one file per session, `<workspace>/sessions/<safe_key>.meta.json`, sitting next to the `<safe_key>.jsonl` it indexes.
 
@@ -385,11 +376,20 @@ Sessions are immutable but the message stream isn't enough to recover "significa
       "outcome": "executing",
       "recorded_at": "2026-05-19T14:30:22.124"
     }
-  ]
+  ],
+  "derived": {
+    "_last_summary": {
+      "text": "Compaction summary text…",
+      "last_active": "2026-05-19T14:35:12.456"
+    }
+  }
 }
 ```
 
-`type` is the discriminator for extensibility — today only `plan` is implemented, but the format is designed for future event kinds (review, deliberation, anything significant) to coexist without schema changes.
+Two top-level blocks:
+
+- ``events`` — lifecycle index. `type` is the discriminator for extensibility — today `plan` and `tool_call`; the format accommodates future event kinds without schema changes.
+- ``derived`` — LLM-produced projections of the session content (compaction summary today, future embeddings or narrative summary). Whatever `Session.metadata` keys are listed in `SessionManager._DERIVED_METADATA_KEYS` get persisted here instead of line-0 of the `.jsonl`. On load, `SessionManager._merge_derived_from_sidecar` merges them back into the in-memory metadata dict, so consumer code keeps reading one flat dict.
 
 **Plan lifecycle** (current implementation):
 - **`exit_plan_mode` tool**: appends a fresh plan event with `outcome=pending`, extracted `title` from the plan markdown's first heading, and the plan_path
@@ -488,12 +488,4 @@ Total: **3,293 tests passing, 15 skipped**.
 
 ## Last updated: 2026-05-20
 
-> Latest pass: ARCHITECTURE refreshed for everything shipped since 2026-05-19. New / changed material:
-> - **Tools roadmap items 1–9 + skill-disclosure refinement** (TodoWrite, Sleep, AskUserQuestion, session_search, subagent lifecycle + monitor, cron update, interpret_image, interpret_audio).
-> - **Capability metadata + bridges** — full pipeline from `scripts/refresh_model_capabilities.py` consensus snapshot through `get_model_capabilities` resolver into `aux_providers` and the bridge tools.
-> - **Tool-call meta timeline** — every tool call gets a `type=tool_call` event in `<session>.meta.json` with `msg_index` pointer, written centrally in `_save_turn` (no per-tool opt-in needed).
-> - **Pi-inspired refinements** — `context_transform` hook, `disable_model_invocation` skill flag, head/tail truncation policy.
-> - **Perf C-tier** — anchored token accounting via `usage_prompt_tokens` stamps + `cache.usage` telemetry event.
-> - **Iteration flow updated** with the new steps (context_transform invocation, `_run_tool_timed` stamping, `cache.usage` emission).
-> - **Module map rewritten** to include the new tool/session/provider files (and to remove the deleted `autocompact.py`).
-> - Stale docs (`04_agent_strategies_catalog.md`, `05_log_swebench.md`, `06_log_experiments.md`) moved to `docs/archive/`.
+> For the history of why each subsystem was added, what was replaced, and what was discarded along the way, see `docs/02_bitacora.md`. This document only describes the current state.
