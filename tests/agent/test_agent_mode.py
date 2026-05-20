@@ -289,23 +289,32 @@ class TestContextBuilderPromptSuffix:
         prompt = cb.build_system_prompt()
         assert "PLAN MODE" not in prompt
 
-    def test_plan_suffix_appears_near_top_of_prompt(self, tmp_path):
-        """The plan suffix is placed early so the model gives it weight.
+    def test_plan_suffix_precedes_volatile_blocks(self, tmp_path):
+        """The plan suffix sits in the **context** tier of the 3-tier
+        prompt (Tier 2 C1) — after the stable prefix (identity, bootstrap,
+        skills catalog) but before any volatile block (archived session
+        summary, memory, recent history). This preserves model attention
+        to the suffix relative to volatile blocks while keeping the
+        stable prefix byte-identical across turns for prompt-cache hits.
 
-        It comes immediately after the identity block, before bootstrap
-        files / memory / skills catalog. We assert it lands within the
-        first third of the prompt — looser than ``// 4`` because the
-        identity block itself is non-trivially long (~2-3KB).
+        Uses ``session_summary`` as the volatile probe because its marker
+        is unambiguous; the ``# Memory`` header also appears as content
+        inside the bundled "memory" skill (in the stable Active Skills
+        block), so a plain ``"# Memory"`` search would hit a false positive.
         """
         from durin.agent.context import ContextBuilder
 
         cb = ContextBuilder(workspace=tmp_path, timezone="UTC")
-        prompt = cb.build_system_prompt(agent_mode_name="plan")
+        prompt = cb.build_system_prompt(
+            agent_mode_name="plan",
+            session_summary="Prior conversation context summarized.",
+        )
         plan_idx = prompt.find("PLAN MODE")
+        summary_idx = prompt.find("[Archived Context Summary]")
         assert plan_idx >= 0
-        assert plan_idx < len(prompt) // 3, (
-            f"PLAN MODE marker at {plan_idx} but prompt is {len(prompt)} chars; "
-            "suffix should be near the top to maximize model attention"
+        assert summary_idx >= 0
+        assert plan_idx < summary_idx, (
+            f"PLAN MODE at {plan_idx} must precede session summary at {summary_idx}"
         )
 
 
