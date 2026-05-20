@@ -297,6 +297,102 @@ def test_disabled_skills_excluded_from_build_skills_summary(tmp_path: Path) -> N
     assert "beta" in summary
 
 
+def _write_skill_with_frontmatter(base: Path, name: str, frontmatter_lines: list[str], body: str = "# X") -> Path:
+    """Variant of ``_write_skill`` that takes raw YAML frontmatter lines.
+
+    Lets us declare top-level fields like ``disable_model_invocation``
+    that ``_write_skill`` doesn't know about (it only writes a nested
+    ``metadata`` JSON blob).
+    """
+    skill_dir = base / name
+    skill_dir.mkdir(parents=True)
+    lines = ["---", *frontmatter_lines, "---", "", body]
+    path = skill_dir / "SKILL.md"
+    path.write_text("\n".join(lines), encoding="utf-8")
+    return path
+
+
+def test_disable_model_invocation_excludes_from_summary(tmp_path: Path) -> None:
+    """A skill with ``disable_model_invocation: true`` in its frontmatter
+    must NOT appear in ``build_skills_summary`` — the model should never
+    see it offered. (Inspired by pi's ``disableModelInvocation`` flag.)"""
+    workspace = tmp_path / "ws"
+    ws_skills = workspace / "skills"
+    ws_skills.mkdir(parents=True)
+    _write_skill(ws_skills, "alpha", body="# Alpha")  # visible
+    _write_skill_with_frontmatter(
+        ws_skills, "internal",
+        ["description: internal helper", "disable_model_invocation: true"],
+    )
+    builtin = tmp_path / "builtin"
+    builtin.mkdir()
+
+    loader = SkillsLoader(workspace, builtin_skills_dir=builtin)
+    summary = loader.build_skills_summary()
+    assert "alpha" in summary
+    assert "internal" not in summary
+
+
+def test_disable_model_invocation_accepts_camelcase_pi_compat(tmp_path: Path) -> None:
+    """``disableModelInvocation: true`` (pi's spelling) also works.
+
+    Useful when users port skill files from pi's coding agent."""
+    workspace = tmp_path / "ws"
+    ws_skills = workspace / "skills"
+    ws_skills.mkdir(parents=True)
+    _write_skill_with_frontmatter(
+        ws_skills, "ported",
+        ["description: from pi", "disableModelInvocation: true"],
+    )
+    builtin = tmp_path / "builtin"
+    builtin.mkdir()
+
+    loader = SkillsLoader(workspace, builtin_skills_dir=builtin)
+    summary = loader.build_skills_summary()
+    assert "ported" not in summary
+
+
+def test_disable_model_invocation_skill_still_loadable_programmatically(tmp_path: Path) -> None:
+    """Filtering from the summary only hides the skill from the LLM —
+    code paths that fetch by name still get the full content."""
+    workspace = tmp_path / "ws"
+    ws_skills = workspace / "skills"
+    ws_skills.mkdir(parents=True)
+    _write_skill_with_frontmatter(
+        ws_skills, "hidden",
+        ["description: hidden helper", "disable_model_invocation: true"],
+        body="# Hidden skill body\n\nDo the secret thing.",
+    )
+    builtin = tmp_path / "builtin"
+    builtin.mkdir()
+
+    loader = SkillsLoader(workspace, builtin_skills_dir=builtin)
+
+    # Hidden from the LLM-facing summary.
+    assert "hidden" not in loader.build_skills_summary()
+    # But fully loadable by name (the programmatic-access path).
+    content = loader.load_skill("hidden")
+    assert content is not None
+    assert "Hidden skill body" in content
+
+
+def test_disable_model_invocation_false_keeps_skill_visible(tmp_path: Path) -> None:
+    """Explicit ``disable_model_invocation: false`` is a no-op (default)."""
+    workspace = tmp_path / "ws"
+    ws_skills = workspace / "skills"
+    ws_skills.mkdir(parents=True)
+    _write_skill_with_frontmatter(
+        ws_skills, "visible",
+        ["description: visible", "disable_model_invocation: false"],
+    )
+    builtin = tmp_path / "builtin"
+    builtin.mkdir()
+
+    loader = SkillsLoader(workspace, builtin_skills_dir=builtin)
+    summary = loader.build_skills_summary()
+    assert "visible" in summary
+
+
 def test_disabled_skills_excluded_from_get_always_skills(tmp_path: Path) -> None:
     workspace = tmp_path / "ws"
     ws_skills = workspace / "skills"

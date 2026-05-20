@@ -41,6 +41,21 @@ from durin.utils.artifacts import generated_image_paths_from_messages
 from durin.utils.document import extract_documents
 from durin.utils.helpers import image_placeholder_text
 from durin.utils.helpers import truncate_text as truncate_text_fn
+
+
+# Tools whose output is error-dense at the END of the buffer (build
+# logs, shell stderr/stdout, test runners). For these we truncate from
+# the head so the model sees the tail. Everything else (file reads,
+# searches, web fetches) keeps the default head-keep behaviour because
+# the leading context is the relevant part. Inspired by pi's per-tool
+# truncation direction policy.
+_TAIL_TRUNCATION_TOOLS = frozenset({"exec", "shell"})
+
+
+def _truncate_tool_output(content: str, max_chars: int, tool_name: str | None) -> str:
+    """Truncate ``content`` choosing direction based on the tool name."""
+    direction = "tail" if (tool_name in _TAIL_TRUNCATION_TOOLS) else "head"
+    return truncate_text_fn(content, max_chars, direction=direction)
 from durin.utils.image_generation_intent import image_generation_prompt
 from durin.utils.runtime import EMPTY_FINAL_RESPONSE_MESSAGE
 from durin.utils.session_attachments import merge_turn_media_into_last_assistant
@@ -1601,8 +1616,11 @@ class AgentLoop:
             if role == "assistant" and not content and not entry.get("tool_calls"):
                 continue  # skip empty assistant messages — they poison session context
             if role == "tool":
+                tool_name = entry.get("name")
                 if isinstance(content, str) and len(content) > self.max_tool_result_chars:
-                    entry["content"] = truncate_text_fn(content, self.max_tool_result_chars)
+                    entry["content"] = _truncate_tool_output(
+                        content, self.max_tool_result_chars, tool_name,
+                    )
                 elif isinstance(content, list):
                     filtered = self._sanitize_persisted_blocks(content, should_truncate_text=True)
                     if not filtered:

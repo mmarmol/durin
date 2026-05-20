@@ -230,10 +230,29 @@ def image_placeholder_text(path: str | None, *, empty: str = "[image]") -> str:
     return f"[image: {path}]" if path else empty
 
 
-def truncate_text(text: str, max_chars: int) -> str:
-    """Truncate text with a stable suffix."""
+def truncate_text(text: str, max_chars: int, direction: str = "head") -> str:
+    """Truncate text with a stable suffix.
+
+    Args:
+        text: input to (possibly) truncate.
+        max_chars: target ceiling; ``<= 0`` disables truncation.
+        direction: ``"head"`` keeps the first ``max_chars`` characters
+            (the default, suitable for file reads, web fetches, grep
+            output — context is at the top). ``"tail"`` keeps the last
+            ``max_chars`` (suitable for shell/exec output, build logs,
+            and anything where errors arrive at the end of the buffer
+            and the head is mostly setup noise).
+
+    The truncation marker is inserted at the cut so the LLM can tell
+    that data was dropped. Pi's split-direction policy (head for reads,
+    tail for bash) is the design inspiration here — keeping the
+    semantically valuable end of shell output saved many wasted
+    re-runs in their telemetry.
+    """
     if max_chars <= 0 or len(text) <= max_chars:
         return text
+    if direction == "tail":
+        return "... (truncated) ...\n" + text[-max_chars:]
     return text[:max_chars] + "\n... (truncated)"
 
 

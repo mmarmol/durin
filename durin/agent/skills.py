@@ -115,6 +115,14 @@ class SkillsLoader:
         This is used for progressive loading - the agent can read the full
         skill content using read_file when needed.
 
+        Skills whose frontmatter declares ``disable_model_invocation: true``
+        (or the camelCase variant ``disableModelInvocation: true`` for
+        pi-compat) are filtered out of this summary so they never appear
+        in the model's tool/skill list. They remain loadable
+        programmatically via ``load_skill(name)`` — useful for internal
+        utilities, debugging skills, or skills the agent should only run
+        when invoked by code, not by the LLM choosing them itself.
+
         Args:
             exclude: Set of skill names to omit from the summary.
 
@@ -130,6 +138,14 @@ class SkillsLoader:
             skill_name = entry["name"]
             if exclude and skill_name in exclude:
                 continue
+            # ``_get_skill_meta`` returns the nested durin-specific blob
+            # (under ``metadata.durin``); the disable flag lives at the
+            # top level of the YAML frontmatter, so we fetch that
+            # separately. Two metadata reads is cheap — the underlying
+            # ``load_skill`` already memoizes the file read.
+            top_level_meta = self.get_skill_metadata(skill_name) or {}
+            if self._is_model_invocation_disabled(top_level_meta):
+                continue
             meta = self._get_skill_meta(skill_name)
             available = self._check_requirements(meta)
             desc = self._get_skill_description(skill_name)
@@ -140,6 +156,23 @@ class SkillsLoader:
                 suffix = f" (unavailable: {missing})" if missing else " (unavailable)"
                 lines.append(f"- **{skill_name}** — {desc}{suffix}  `{entry['path']}`")
         return "\n".join(lines)
+
+    @staticmethod
+    def _is_model_invocation_disabled(skill_meta: dict | None) -> bool:
+        """Return True when the skill opts out of being shown to the model.
+
+        Accepts ``disable_model_invocation`` (snake_case, durin convention)
+        or ``disableModelInvocation`` (camelCase, pi convention) — either
+        spelling works in user-written frontmatter. Truthiness is the
+        Python-standard check, so ``true``, ``"true"``, and ``1`` all
+        disable. Defaults to False (skill visible).
+        """
+        if not skill_meta:
+            return False
+        return bool(
+            skill_meta.get("disable_model_invocation")
+            or skill_meta.get("disableModelInvocation")
+        )
 
     def _get_missing_requirements(self, skill_meta: dict) -> str:
         """Get a description of missing requirements."""
