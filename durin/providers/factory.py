@@ -98,6 +98,7 @@ def _make_provider_core(
             extra_headers=p.extra_headers if p else None,
             spec=spec,
             extra_body=p.extra_body if p else None,
+            parallel_tool_calls_overrides=dict(config.agents.defaults.parallel_tool_calls),
         )
 
     provider.generation = resolved.to_generation_settings()

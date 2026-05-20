@@ -290,12 +290,24 @@ class OpenAICompatProvider(LLMProvider):
         extra_headers: dict[str, str] | None = None,
         spec: ProviderSpec | None = None,
         extra_body: dict[str, Any] | None = None,
+        parallel_tool_calls_overrides: dict[str, bool] | None = None,
     ):
         super().__init__(api_key, api_base)
         self.default_model = default_model
         self.extra_headers = extra_headers or {}
         self._spec = spec
         self._extra_body = extra_body or {}
+        # OpenClaw-inspired per-model gating for the OpenAI ``parallel_tool_calls``
+        # request parameter. Some models (e.g. certain glm/qwen builds, some
+        # Kimi configurations) misbehave when told they may emit parallel tool
+        # calls — they over-emit, hallucinate args, or return 400. The dict
+        # maps a substring of the model name to the value to inject:
+        # ``{"glm-5.1": False}`` disables it for any model whose name contains
+        # "glm-5.1". Empty / None preserves the provider's default (no
+        # injection). First match wins.
+        self._parallel_tool_calls_overrides: dict[str, bool] = (
+            parallel_tool_calls_overrides or {}
+        )
 
         if api_key and spec and spec.env_key:
             self._setup_env(api_key, api_base)
@@ -623,7 +635,32 @@ class OpenAICompatProvider(LLMProvider):
             existing = kwargs.get("extra_body", {})
             kwargs["extra_body"] = _deep_merge(existing, self._extra_body)
 
+        # Per-model gating for the OpenAI ``parallel_tool_calls`` parameter
+        # (OpenClaw-inspired Tier 1). Only injected for models that have an
+        # explicit override AND only when tools are present (the API rejects
+        # the param when tools is null).
+        resolved_parallel = self._resolve_parallel_tool_calls(model)
+        if resolved_parallel is not None and tools:
+            kwargs["parallel_tool_calls"] = resolved_parallel
+
         return kwargs
+
+    def _resolve_parallel_tool_calls(self, model: str | None) -> bool | None:
+        """Return the configured ``parallel_tool_calls`` value for *model*,
+        or ``None`` to leave the provider's default in place.
+
+        Matches by substring on the resolved model name. First match wins
+        (dict insertion order). Empty overrides → no injection.
+        """
+        if not self._parallel_tool_calls_overrides:
+            return None
+        candidate = (model or self.default_model or "").lower()
+        if not candidate:
+            return None
+        for needle, value in self._parallel_tool_calls_overrides.items():
+            if needle.lower() in candidate:
+                return bool(value)
+        return None
 
     def _should_use_responses_api(
         self,
