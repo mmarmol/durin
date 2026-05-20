@@ -25,12 +25,14 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - name: Install durin + dev extras
+      - name: Install durin + dev + mcp extras
         run: |
           python -m pip install --upgrade pip
           # Skip the webui bundle — CI doesn't need it and it would force
           # bun/npm onto the runner just for tests.
-          DURIN_SKIP_WEBUI_BUILD=1 pip install -e ".[dev]"
+          # `[mcp]` is needed for `tests/agent/test_mcp_transient_retry.py`;
+          # without it the test self-skips but we'd lose coverage.
+          DURIN_SKIP_WEBUI_BUILD=1 pip install -e ".[dev,mcp]"
 
       - name: Run unit tests
         run: pytest tests/ -q --maxfail=5
