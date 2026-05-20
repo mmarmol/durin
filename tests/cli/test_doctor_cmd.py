@@ -176,6 +176,98 @@ def test_check_optional_extra_missing_is_warn() -> None:
     r = check_optional_extra("definitely_no_such_module_zzz", extra="memory", purpose="testing")
     assert r.status == "warn"
     assert r.fix and "pip install" in r.fix
+    # The hint must reference the actual PyPI distribution name, not the legacy `durin`.
+    assert "durin-agent" in r.fix or ".[memory]" in r.fix  # editable mode uses `.[memory]`
+    assert "'durin[" not in r.fix
+    # The result must carry the extra name so `--install-missing` can group it.
+    assert r.extra == "memory"
+
+
+def test_collect_missing_extras_groups_unique() -> None:
+    from durin.cli.doctor import collect_missing_extras
+
+    report = DoctorReport()
+    report.add(CheckResult("fastembed", "warn", "", extra="memory", category="extras"))
+    report.add(CheckResult("lancedb", "warn", "", extra="memory", category="extras"))
+    report.add(CheckResult("mcp", "warn", "", extra="mcp", category="extras"))
+    # ok results don't get included
+    report.add(CheckResult("anyio", "ok", "", extra="memory", category="extras"))
+    # non-extras-category warns don't get included
+    report.add(CheckResult("git", "warn", "", category="tools"))
+    assert collect_missing_extras(report) == ["memory", "mcp"]
+
+
+def test_install_missing_extras_no_op_when_empty() -> None:
+    from durin.cli.doctor import install_missing_extras
+
+    assert install_missing_extras([], assume_yes=True) == 0
+
+
+def test_install_missing_extras_editable_prints_command_no_op() -> None:
+    """Editable mode should print the command but NOT run it."""
+    from durin.cli.doctor import install_missing_extras
+    from durin.cli.upgrade import InstallInfo
+
+    info = InstallInfo(mode="editable", source_root=Path("/tmp/x"), version="0.1.0a2")
+    with patch("durin.cli.upgrade.detect_install_mode", return_value=info), \
+         patch("durin.cli.doctor.subprocess.run") as mock_run:
+        rc = install_missing_extras(["memory"], assume_yes=True)
+    assert rc == 0
+    mock_run.assert_not_called()
+
+
+def test_install_missing_extras_pipx_runs_pipx_install_force() -> None:
+    from durin.cli.doctor import install_missing_extras
+    from durin.cli.upgrade import InstallInfo
+
+    info = InstallInfo(mode="pipx", source_root=None, version="0.1.0a2")
+    captured: list[list[str]] = []
+
+    def _fake_run(cmd):
+        captured.append(list(cmd))
+        class _R:
+            returncode = 0
+        return _R()
+
+    with patch("durin.cli.upgrade.detect_install_mode", return_value=info), \
+         patch("durin.cli.doctor.subprocess.run", side_effect=_fake_run):
+        rc = install_missing_extras(["memory", "mcp"], assume_yes=True)
+    assert rc == 0
+    assert captured == [["pipx", "install", "--force", "durin-agent[memory,mcp]"]]
+
+
+def test_install_missing_extras_wheel_runs_pip_install() -> None:
+    import sys
+
+    from durin.cli.doctor import install_missing_extras
+    from durin.cli.upgrade import InstallInfo
+
+    info = InstallInfo(mode="wheel", source_root=None, version="0.1.0a2")
+    captured: list[list[str]] = []
+
+    def _fake_run(cmd):
+        captured.append(list(cmd))
+        class _R:
+            returncode = 0
+        return _R()
+
+    with patch("durin.cli.upgrade.detect_install_mode", return_value=info), \
+         patch("durin.cli.doctor.subprocess.run", side_effect=_fake_run):
+        rc = install_missing_extras(["memory"], assume_yes=True)
+    assert rc == 0
+    assert captured == [[sys.executable, "-m", "pip", "install", "--upgrade", "durin-agent[memory]"]]
+
+
+def test_install_missing_extras_unknown_mode_returns_one() -> None:
+    from durin.cli.doctor import install_missing_extras
+    from durin.cli.upgrade import InstallInfo
+
+    info = InstallInfo(mode="unknown", source_root=None, version="0.1.0a2")
+    with patch("durin.cli.upgrade.detect_install_mode", return_value=info), \
+         patch("durin.cli.doctor.subprocess.run") as mock_run:
+        rc = install_missing_extras(["memory"], assume_yes=True)
+    assert rc == 1
+    mock_run.assert_not_called()
 
 
 def test_check_cache_size_no_cache(fake_home: Path) -> None:
