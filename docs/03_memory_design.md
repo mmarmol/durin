@@ -2,6 +2,17 @@
 
 > Operational design of the memory system: graph structure, node schema, dynamic projection to context, and maintenance mechanisms.
 
+> **Supersession note (May 2026)**: this document is the **original**
+> memory design. The implementation horizon was refined in
+> `docs/08_memory_phase2_proposal.md` after reviewing Hermes and OpenClaw.
+> Read doc 08 §0a for the two design decisions that now constrain Phase 2:
+> (1) memory is 6 distinct utility classes by access pattern, not one
+> markdown bucket with content categories; (2) the
+> `<key>.jsonl` (source) / `<key>.meta.json::derived` (projection)
+> separation principle. Doc 03 remains the canonical reference for the
+> graph + dynamic projection mental model; doc 08 is the canonical
+> reference for the implementation plan that will actually ship.
+
 ---
 
 ## 1. What we solve

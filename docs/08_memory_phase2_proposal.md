@@ -18,6 +18,87 @@ on three pre-reqs which have since shipped:
 - ✅ Real provider-usage token accounting (`usage_prompt_tokens` anchor)
 - ✅ Cache visibility (`cache.usage` telemetry event)
 - ✅ Skill progressive-disclosure infra (`disable_model_invocation` flag)
+- ✅ Session / meta split — LLM-derived projections live in
+  `<key>.meta.json::derived`, session.jsonl carries only identity
+  state (see §0a below)
+
+## 0a. Design decisions confirmed before Phase 2 starts
+
+Two decisions taken during the design discussion (May 2026) that
+constrain how Phase 2 must be built. Documented here so the
+implementation phases below land on the right architecture.
+
+### Decision 1 — Memory is 6 utility classes, not one
+
+"Memory" in everyday discussion bundles several distinct utilities. The
+implementation phases below already separate some of them (Phase 4 is
+clearly clase E — procedural skills), but Phase 1's "markdown
+categories" risk conflating clases A, B, C, D into one storage path
+because they're all markdown files. They shouldn't be — each has a
+different access pattern and a different cost profile.
+
+The six classes (with their access pattern):
+
+| Class | Example | When READ | When WRITTEN |
+|---|---|---|---|
+| **A** Identity-stable | "user prefiere terse, no emojis" | Every turn, stable layer of system prompt (cache-friendly) | Rare, manual or dream |
+| **B** Working / episodic | "yesterday we discussed compaction" | On-demand recall OR volatile layer | Each turn (post) |
+| **C** Corrections / guardrails | "don't suggest pytest fixtures; user uses unittest" | Every turn, stable layer (small, high-value) | When user corrects |
+| **D** Queryable corpus | Archived tool outputs, code patterns | Only on-demand via `memory_search` tool | When user/agent flags as worth keeping |
+| **E** Procedural skills | "when committing, message format is X" | Lazy-load when intent detected | When agent finds stable pattern |
+| **F** Prospective | "follow up next Tuesday" | Trigger-based (cron / heartbeat) | When pending item created |
+
+**Layout implication for Phase 1**: instead of `memory/{user,project,feedback,reference}.md`,
+use `memory/{stable,episodic,corpus,pending}/`. Skills (clase E) already
+live separately in `skills/`. Why this matters:
+
+- **A + C** in `stable/` → always-loaded, small, high-value. Cache stays
+  warm even as B/D update.
+- **B** in `episodic/` → volatile layer, decays over time.
+- **D** in `corpus/` + LanceDB index → NEVER in the prompt by default;
+  retrieved via tool. Lets the corpus grow unboundedly without per-turn
+  cost.
+- **F** in `pending/` → triggered, not prompt-loaded.
+
+The 3-tier prompt cache stability (validated 93-98% hit rate in
+production smoke testing) only works if stable/volatile content is
+correctly separated. Splitting memory by access pattern keeps that
+invariant healthy as memory grows.
+
+### Decision 2 — Session.jsonl is content; .meta.json is derived projection
+
+A principle confirmed in May 2026 and implemented as a refactor before
+Phase 1 starts:
+
+- `<key>.jsonl` is **source of truth**: messages exchanged + identity
+  state (mode, plan path, todos, channel ownership, title). Replayable
+  — if everything else were lost, the conversation can be reconstructed
+  from this file.
+- `<key>.meta.json` is **derived projection**: compaction summary
+  today, tool-call timeline, future embeddings or narrative summary.
+  Regenerable — if lost, can be rebuilt by re-processing the jsonl.
+
+**Test mental simple**: "if I deleted this file, could I reconstruct it
+from the other?" → if yes, it's derived (`.meta.json`). If no, it's
+source of truth (`.jsonl`).
+
+**Implications for Phase 2 memory**:
+
+- Any **session-derived memory** (embeddings of past turns, extracted
+  learnings, narrative summary, scoring metadata) writes to
+  `<key>.meta.json::derived` — not to session.jsonl, not to a new
+  separate file.
+- The **memory pipeline** (background_review, curator, dreaming) reads
+  `<key>.jsonl` as source content. It never reads from `.meta.json` to
+  derive new memory — that would be auto-referencing prior LLM output.
+- `Session.metadata` in memory continues to merge both files at load,
+  so consumer code keeps reading one flat dict. The split is a
+  persistence-layer concern only.
+
+**Implementation**: `SessionManager._DERIVED_METADATA_KEYS` is a
+frozenset of keys that get split. Today only `_last_summary`. As Phase
+2 introduces `session_embedding`, `extracted_keywords`, etc., they go
+in this set from day one.
 
 The original Phase 2 plan (`docs/03_memory_design.md`, May 2026) was
 informed primarily by reading Hermes early on. After implementing Phase
