@@ -116,7 +116,16 @@ class InputArea(Input):
 
     Default suggester is :class:`MultiModeSuggester` when a workspace
     is supplied (slash + @file), otherwise :class:`SlashCommandSuggester`.
+
+    D3.1 — Alt+Enter inserts a literal newline into the value so the
+    user can author multi-line messages. The single-line display will
+    look truncated, but the submitted value preserves the newlines.
     """
+
+    BINDINGS = [
+        ("alt+enter", "insert_newline", "Newline"),
+        ("ctrl+j", "insert_newline", "Newline"),  # most terminals send ^J on Ctrl+Enter
+    ]
 
     DEFAULT_CSS = """
     InputArea {
@@ -141,3 +150,9 @@ class InputArea(Input):
             placeholder=placeholder,
             suggester=suggester or default_suggester,
         )
+
+    def action_insert_newline(self) -> None:
+        """Inject ``\\n`` at the cursor; preserved in the submitted value."""
+        pos = self.cursor_position
+        self.value = self.value[:pos] + "\n" + self.value[pos:]
+        self.cursor_position = pos + 1

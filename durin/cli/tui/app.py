@@ -129,6 +129,21 @@ class DurinApp(App[None]):
             return
         event.input.value = ""
 
+        # D3.2 shell paste: !cmd runs and prepends output to the message;
+        # !!cmd runs silently without involving the agent.
+        from durin.cli.tui.shell_paste import process_shell_paste
+
+        shell_result = process_shell_paste(value)
+        if not shell_result.send:
+            # !!cmd path: confirm the command ran but don't publish anything.
+            chat = self.query_one("#chat", ChatView)
+            chat.add_message(
+                "system",
+                f"Ran `{shell_result.ran_command}` silently (exit {shell_result.exit_code}).",
+            )
+            return
+        value = shell_result.message
+
         # D5.6 drag-and-drop: image/audio paths become workspace-local
         # copies in .media/; the cleaned text + media list ride InboundMessage.
         media: list[str] = []
