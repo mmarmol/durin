@@ -302,6 +302,14 @@ class DurinApp(App[None]):
     # ---- outbound consumer (mirrors legacy _consume_outbound) ------------
 
     async def _consume_outbound(self) -> None:
+        """Drain outbound bus messages into the chat view.
+
+        Wrapped in a global try/except so a single message-handling failure
+        can never silently kill the task — the symptom that historically
+        looked like "the agent stopped responding".
+        """
+        from loguru import logger
+
         bus = self._agent_loop.bus
         while True:
             try:
@@ -310,49 +318,71 @@ class DurinApp(App[None]):
                 continue
             except asyncio.CancelledError:
                 break
-            except Exception:  # noqa: BLE001
-                # Bus error — keep the loop alive; lost message is acceptable.
+            except Exception as exc:  # noqa: BLE001
+                logger.bind(channel="tui").warning(
+                    f"bus.consume_outbound raised: {exc!r}; continuing"
+                )
                 continue
 
-            meta = msg.metadata or {}
+            try:
+                self._handle_outbound(msg)
+            except Exception as exc:  # noqa: BLE001
+                # Render the failure as a system bubble so the user
+                # sees SOMETHING instead of an empty assistant bubble.
+                logger.bind(channel="tui").exception(
+                    f"_handle_outbound raised on {msg.content[:60]!r}: {exc!r}"
+                )
+                try:
+                    chat = self.query_one("#chat", ChatView)
+                    chat.add_message("system", f"render error: {exc!r}")
+                except Exception:  # noqa: BLE001
+                    pass
 
-            # /resume routes here: the next inbound publish uses the new chat_id.
-            switch_to = meta.get("_switch_chat_id")
-            if switch_to and switch_to != self._cli_chat_id:
-                self._cli_chat_id = switch_to
-                self._refresh_chrome()
+    def _handle_outbound(self, msg: Any) -> None:
+        """Route one outbound message to the chat view.
 
-            if meta.get("_stream_delta"):
-                if self._current_assistant_bubble is not None:
-                    self._current_assistant_bubble.append(msg.content or "")
-                continue
+        Extracted from ``_consume_outbound`` so we can wrap it with a
+        narrow try/except without losing the typed control flow.
+        """
+        meta = msg.metadata or {}
 
-            if meta.get("_stream_end"):
-                self._current_assistant_bubble = None
-                continue
+        # /resume routes here: the next inbound publish uses the new chat_id.
+        switch_to = meta.get("_switch_chat_id")
+        if switch_to and switch_to != self._cli_chat_id:
+            self._cli_chat_id = switch_to
+            self._refresh_chrome()
 
-            if meta.get("_streamed"):
-                # End-of-turn signal; UI already streamed via deltas.
-                continue
-
-            content = msg.content or ""
-            if not content:
-                continue
-
-            chat = self.query_one("#chat", ChatView)
+        if meta.get("_stream_delta"):
             if self._current_assistant_bubble is not None:
-                # Final non-stream content lands in the open assistant bubble.
-                if self._current_assistant_bubble.body:
-                    self._current_assistant_bubble.body = (
-                        f"{self._current_assistant_bubble.body}\n\n{content}"
-                    )
-                else:
-                    self._current_assistant_bubble.body = content
-                self._current_assistant_bubble = None
+                self._current_assistant_bubble.append(msg.content or "")
+            return
+
+        if meta.get("_stream_end"):
+            self._current_assistant_bubble = None
+            return
+
+        if meta.get("_streamed"):
+            # End-of-turn signal; UI already streamed via deltas.
+            return
+
+        content = msg.content or ""
+        if not content:
+            return
+
+        chat = self.query_one("#chat", ChatView)
+        if self._current_assistant_bubble is not None:
+            # Final non-stream content lands in the open assistant bubble.
+            if self._current_assistant_bubble.body:
+                self._current_assistant_bubble.body = (
+                    f"{self._current_assistant_bubble.body}\n\n{content}"
+                )
             else:
-                # Out-of-turn payload (slash command response, system note).
-                role = "system" if meta.get("render_as") == "text" else "assistant"
-                chat.add_message(role, content)
+                self._current_assistant_bubble.body = content
+            self._current_assistant_bubble = None
+        else:
+            # Out-of-turn payload (slash command response, system note).
+            role = "system" if meta.get("render_as") == "text" else "assistant"
+            chat.add_message(role, content)
 
     # ---- helpers ----------------------------------------------------------
 
