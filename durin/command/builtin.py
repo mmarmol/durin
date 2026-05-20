@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import subprocess
 import sys
 import time
 from contextlib import suppress
@@ -133,6 +135,48 @@ BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
         "build/plan/explore, switches to that mode.",
         "settings-2",
         "[build|plan|explore]",
+    ),
+    BuiltinCommandSpec(
+        "/sessions",
+        "List sessions",
+        "List saved sessions in this workspace, sorted by most recent. "
+        "Optional substring filter.",
+        "list",
+        "[filter]",
+    ),
+    BuiltinCommandSpec(
+        "/resume",
+        "Switch to a session",
+        "Switch the active chat to a different saved session. Substring match.",
+        "log-in",
+        "<key>",
+    ),
+    BuiltinCommandSpec(
+        "/compact",
+        "Manual compaction",
+        "Force the consolidator to summarise older messages in this session. "
+        "Optional hint passed to the consolidator.",
+        "package",
+        "[hint]",
+    ),
+    BuiltinCommandSpec(
+        "/copy",
+        "Copy last response",
+        "Copy the last assistant message to the system clipboard.",
+        "copy",
+    ),
+    BuiltinCommandSpec(
+        "/name",
+        "Name this session",
+        "Set or show the display name of the current session.",
+        "tag",
+        "[name]",
+    ),
+    BuiltinCommandSpec(
+        "/hotkeys",
+        "Keyboard shortcuts",
+        "List the keyboard shortcuts available in interactive mode.",
+        "keyboard",
     ),
 )
 
@@ -927,6 +971,303 @@ async def cmd_mode(ctx: CommandContext) -> OutboundMessage:
     )
 
 
+def _read_session_metadata(path) -> dict | None:
+    """Read line 0 of a session.jsonl and return the metadata dict (or None)."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    first = text.split("\n", 1)[0] if text else ""
+    if not first:
+        return None
+    try:
+        meta = json.loads(first)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(meta, dict) or meta.get("_type") != "metadata":
+        return None
+    # Cheap msg count: total lines minus the metadata line.
+    meta["_msg_count"] = max(0, text.count("\n") - 1)
+    return meta
+
+
+async def cmd_sessions(ctx: CommandContext) -> OutboundMessage:
+    """List saved sessions, sorted by updated_at desc."""
+    loop = ctx.loop
+    needle = ctx.args.strip().lower()
+    metadata_text = {**dict(ctx.msg.metadata or {}), "render_as": "text"}
+
+    entries: list[dict] = []
+    sessions_dir = loop.sessions.sessions_dir
+    for path in sessions_dir.glob("*.jsonl"):
+        meta = _read_session_metadata(path)
+        if not meta:
+            continue
+        key = meta.get("key", path.stem)
+        if needle and needle not in key.lower():
+            identity = (meta.get("metadata") or {}).get("display_name") or ""
+            if needle not in identity.lower():
+                continue
+        entries.append({
+            "key": key,
+            "display_name": (meta.get("metadata") or {}).get("display_name") or "",
+            "updated_at": meta.get("updated_at", ""),
+            "msg_count": meta["_msg_count"],
+        })
+
+    if not entries:
+        content = (
+            f"No sessions match `{needle}`." if needle
+            else "No sessions in this workspace yet."
+        )
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content=content, metadata=metadata_text,
+        )
+
+    entries.sort(key=lambda e: e["updated_at"], reverse=True)
+    lines = ["## Sessions", ""]
+    for i, e in enumerate(entries, 1):
+        marker = " ← current" if e["key"] == ctx.key else ""
+        name_part = f" — {e['display_name']}" if e["display_name"] else ""
+        when = e["updated_at"][:16].replace("T", " ") if e["updated_at"] else ""
+        lines.append(
+            f"{i}. `{e['key']}`{name_part} · {e['msg_count']} msgs · {when}{marker}"
+        )
+    lines += ["", "Use `/resume <key>` to switch (substring match)."]
+    return OutboundMessage(
+        channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+        content="\n".join(lines), metadata=metadata_text,
+    )
+
+
+async def cmd_resume(ctx: CommandContext) -> OutboundMessage:
+    """Switch the active chat to a different saved session."""
+    loop = ctx.loop
+    needle = ctx.args.strip()
+    metadata_text = {**dict(ctx.msg.metadata or {}), "render_as": "text"}
+
+    if not needle:
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content="Usage: `/resume <key>`. Run `/sessions` to list.",
+            metadata=metadata_text,
+        )
+
+    needle_low = needle.lower()
+    candidates: list[str] = []
+    sessions_dir = loop.sessions.sessions_dir
+    for path in sessions_dir.glob("*.jsonl"):
+        meta = _read_session_metadata(path)
+        if not meta:
+            continue
+        key = meta.get("key", "")
+        if needle_low in key.lower():
+            candidates.append(key)
+
+    if not candidates:
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content=f"No session matches `{needle}`. Run `/sessions` to list.",
+            metadata=metadata_text,
+        )
+    if len(candidates) > 1:
+        listed = ", ".join(f"`{c}`" for c in candidates)
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content=f"`{needle}` is ambiguous: {listed}. Be more specific.",
+            metadata=metadata_text,
+        )
+
+    target_key = candidates[0]
+    if target_key == ctx.key:
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content=f"Already in session `{target_key}`.",
+            metadata=metadata_text,
+        )
+
+    # The CLI loop watches metadata['_switch_chat_id'] in outbound messages
+    # and updates its `cli_chat_id` for subsequent inbound publishes.
+    target_chat_id = target_key.split(":", 1)[-1] if ":" in target_key else target_key
+    return OutboundMessage(
+        channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+        content=f"Switched to session `{target_key}`.",
+        metadata={**metadata_text, "_switch_chat_id": target_chat_id},
+    )
+
+
+async def cmd_compact(ctx: CommandContext) -> OutboundMessage:
+    """Manually run the consolidator over unconsolidated messages."""
+    loop = ctx.loop
+    session = ctx.session or loop.sessions.get_or_create(ctx.key)
+    metadata_text = {**dict(ctx.msg.metadata or {}), "render_as": "text"}
+
+    chunk = session.messages[session.last_consolidated:]
+    if not chunk:
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content="Nothing to compact — session is already consolidated.",
+            metadata=metadata_text,
+        )
+
+    try:
+        summary, tags = await loop.consolidator.archive(chunk)
+    except Exception as exc:  # noqa: BLE001
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content=f"Compaction failed: {exc}",
+            metadata=metadata_text,
+        )
+
+    session.last_consolidated = len(session.messages)
+    if summary:
+        loop.consolidator._merge_session_tags(session, tags)
+        loop.consolidator._persist_last_summary(session, summary)
+    loop.sessions.save(session)
+
+    if summary:
+        content = (
+            f"Compacted {len(chunk)} messages into summary "
+            f"(total: {len(session.messages)})."
+        )
+    else:
+        content = (
+            f"Consolidation LLM degraded — raw-archived {len(chunk)} messages "
+            "as a breadcrumb. Cursor still advanced."
+        )
+    return OutboundMessage(
+        channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+        content=content, metadata=metadata_text,
+    )
+
+
+def _copy_to_clipboard(text: str) -> str:
+    """Copy text using the first available system tool. Return tool name."""
+    candidates = [
+        ("pbcopy", ["pbcopy"]),
+        ("xclip", ["xclip", "-selection", "clipboard"]),
+        ("wl-copy", ["wl-copy"]),
+        ("clip", ["clip"]),
+    ]
+    for name, cmd in candidates:
+        try:
+            subprocess.run(cmd, input=text, text=True, check=True, capture_output=True)
+            return name
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            continue
+    raise RuntimeError(
+        "no clipboard tool found — install pbcopy (macOS), xclip / wl-copy "
+        "(Linux), or run on Windows where `clip` is built in"
+    )
+
+
+def _last_assistant_content(session) -> str | None:
+    for msg in reversed(session.messages):
+        if msg.get("role") != "assistant":
+            continue
+        content = msg.get("content")
+        if not content:
+            continue
+        if isinstance(content, list):
+            content = "\n".join(
+                str(b.get("text", "")) if isinstance(b, dict) else str(b)
+                for b in content
+            ).strip()
+        text = str(content).strip()
+        if text:
+            return text
+    return None
+
+
+async def cmd_copy(ctx: CommandContext) -> OutboundMessage:
+    """Copy the last assistant message to the system clipboard."""
+    loop = ctx.loop
+    session = ctx.session or loop.sessions.get_or_create(ctx.key)
+    metadata_text = {**dict(ctx.msg.metadata or {}), "render_as": "text"}
+
+    text = _last_assistant_content(session)
+    if not text:
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content="No assistant message to copy in this session yet.",
+            metadata=metadata_text,
+        )
+
+    try:
+        tool = _copy_to_clipboard(text)
+    except RuntimeError as exc:
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content=f"{exc}. (Last response was {len(text)} chars.)",
+            metadata=metadata_text,
+        )
+
+    return OutboundMessage(
+        channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+        content=f"Copied {len(text)} chars to clipboard via `{tool}`.",
+        metadata=metadata_text,
+    )
+
+
+_DISPLAY_NAME_KEY = "display_name"
+_DISPLAY_NAME_MAX = 80
+
+
+async def cmd_name(ctx: CommandContext) -> OutboundMessage:
+    """Set or show the display name of the current session."""
+    loop = ctx.loop
+    session = ctx.session or loop.sessions.get_or_create(ctx.key)
+    metadata_text = {**dict(ctx.msg.metadata or {}), "render_as": "text"}
+
+    name = ctx.args.strip()
+    if not name:
+        current = (session.metadata or {}).get(_DISPLAY_NAME_KEY) or ""
+        if current:
+            content = f"Current display name: `{current}`. Use `/name <new>` to change."
+        else:
+            content = "No display name set. Use `/name <name>` to set one."
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content=content, metadata=metadata_text,
+        )
+
+    if len(name) > _DISPLAY_NAME_MAX:
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content=f"Name too long (max {_DISPLAY_NAME_MAX} chars).",
+            metadata=metadata_text,
+        )
+
+    session.metadata[_DISPLAY_NAME_KEY] = name
+    loop.sessions.save(session)
+    return OutboundMessage(
+        channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+        content=f"Display name set to `{name}`.",
+        metadata=metadata_text,
+    )
+
+
+async def cmd_hotkeys(ctx: CommandContext) -> OutboundMessage:
+    """List keyboard shortcuts available in interactive mode."""
+    text = (
+        "## Keyboard shortcuts (interactive CLI)\n"
+        "\n"
+        "| Key | Action |\n"
+        "|---|---|\n"
+        "| `Enter` | Send message |\n"
+        "| `Ctrl+C` | Cancel input |\n"
+        "| `Ctrl+D` / `exit` / `:q` / `/quit` | Quit |\n"
+        "\n"
+        "Slash commands: type `/help` for the full list."
+    )
+    return OutboundMessage(
+        channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+        content=text,
+        metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+    )
+
+
 async def cmd_help(ctx: CommandContext) -> OutboundMessage:
     """Return available slash commands."""
     return OutboundMessage(
@@ -974,3 +1315,13 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.exact("/build", cmd_build)
     router.exact("/mode", cmd_mode)
     router.prefix("/mode ", cmd_mode)
+    router.exact("/sessions", cmd_sessions)
+    router.prefix("/sessions ", cmd_sessions)
+    router.exact("/resume", cmd_resume)
+    router.prefix("/resume ", cmd_resume)
+    router.exact("/compact", cmd_compact)
+    router.prefix("/compact ", cmd_compact)
+    router.exact("/copy", cmd_copy)
+    router.exact("/name", cmd_name)
+    router.prefix("/name ", cmd_name)
+    router.exact("/hotkeys", cmd_hotkeys)

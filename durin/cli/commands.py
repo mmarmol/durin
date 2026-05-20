@@ -134,8 +134,19 @@ def _restore_terminal() -> None:
         termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, _SAVED_TERM_ATTRS)
 
 
-def _init_prompt_session() -> None:
-    """Create the prompt_toolkit session with persistent file history."""
+def _init_prompt_session(
+    workspace: Path | None = None,
+    presets_getter=None,
+    footer_getter=None,
+) -> None:
+    """Create the prompt_toolkit session with persistent file history.
+
+    ``workspace`` enables the ``@file`` completer (D1.9).
+    ``presets_getter`` enables the ``/model <preset>`` completer (D1.7)
+    and the Ctrl+L shortcut that pre-fills ``/model ``.
+    ``footer_getter`` enables the persistent footer (D1.6) — a callable
+    returning a prompt_toolkit-renderable that is evaluated on each redraw.
+    """
     global _PROMPT_SESSION, _SAVED_TERM_ATTRS
 
     # Save terminal state so we can restore it on exit
@@ -149,10 +160,37 @@ def _init_prompt_session() -> None:
     history_file = get_cli_history_path()
     history_file.parent.mkdir(parents=True, exist_ok=True)
 
+    from prompt_toolkit.completion import merge_completers
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.document import Document as _PtkDocument
+
+    completers = []
+    if workspace is not None:
+        from durin.cli.completers import FileReferenceCompleter
+
+        completers.append(FileReferenceCompleter(workspace))
+    if presets_getter is not None:
+        from durin.cli.completers import ModelPresetCompleter
+
+        completers.append(ModelPresetCompleter(presets_getter))
+    completer = merge_completers(completers) if completers else None
+
+    kb = KeyBindings()
+
+    @kb.add("c-l")
+    def _open_model_picker(event):
+        """Ctrl+L: replace current input with `/model ` to start picker flow."""
+        buf = event.app.current_buffer
+        buf.document = _PtkDocument("/model ", cursor_position=len("/model "))
+
     _PROMPT_SESSION = PromptSession(
         history=SafeFileHistory(str(history_file)),
         enable_open_in_editor=False,
         multiline=False,  # Enter submits (single line mode)
+        completer=completer,
+        complete_while_typing=True,
+        key_bindings=kb,
+        bottom_toolbar=footer_getter,
     )
 
 
@@ -1271,7 +1309,27 @@ def agent(
     else:
         # Interactive mode — route through bus like other channels
         from durin.bus.events import InboundMessage
-        _init_prompt_session()
+
+        def _presets_for_completer() -> list[str]:
+            names = set(agent_loop.model_presets or {})
+            names.add("default")
+            return sorted(names)
+
+        def _footer_getter():
+            from durin.cli.footer import build_footer_html, build_footer_text
+
+            try:
+                payload = build_footer_text(agent_loop, cli_channel, cli_chat_id)
+                return build_footer_html(payload)
+            except Exception:  # noqa: BLE001
+                # Never let a footer-render error block input; fall back silent.
+                return ""
+
+        _init_prompt_session(
+            workspace=Path(agent_loop.workspace),
+            presets_getter=_presets_for_completer,
+            footer_getter=_footer_getter,
+        )
         _model, _preset_tag = _model_display(config)
         console.print(f"{__logo__} Interactive mode [bold blue]({_model})[/bold blue]{_preset_tag} — type [bold]exit[/bold] or [bold]Ctrl+C[/bold] to quit\n")
 
@@ -1297,6 +1355,7 @@ def agent(
             signal.signal(signal.SIGPIPE, signal.SIG_IGN)
 
         async def run_interactive():
+            nonlocal cli_chat_id
             bus_task = asyncio.create_task(agent_loop.run())
             turn_done = asyncio.Event()
             turn_done.set()
@@ -1304,9 +1363,18 @@ def agent(
             renderer: StreamRenderer | None = None
 
             async def _consume_outbound():
+                nonlocal cli_chat_id
                 while True:
                     try:
                         msg = await asyncio.wait_for(bus.consume_outbound(), timeout=1.0)
+
+                        # /resume signals a session switch via metadata. The CLI's
+                        # cli_chat_id determines the session_key of subsequent
+                        # inbound publishes; updating it routes the next turn to
+                        # the new session without restarting the process.
+                        switch_to = (msg.metadata or {}).get("_switch_chat_id")
+                        if switch_to and switch_to != cli_chat_id:
+                            cli_chat_id = switch_to
 
                         if msg.metadata.get("_stream_delta"):
                             if renderer:
@@ -1373,11 +1441,21 @@ def agent(
                             bot_icon=config.agents.defaults.bot_icon,
                         )
 
+                        # Drag-and-drop: rewrite dragged image/audio paths to
+                        # stable workspace copies and surface them via .media
+                        # so the agent's existing multimodal pipeline sees them.
+                        from durin.cli.dragdrop import process_dragged_paths
+
+                        clean_input, media_paths = process_dragged_paths(
+                            user_input, agent_loop.workspace
+                        )
+
                         await bus.publish_inbound(InboundMessage(
                             channel=cli_channel,
                             sender_id="user",
                             chat_id=cli_chat_id,
-                            content=user_input,
+                            content=clean_input,
+                            media=media_paths,
                             metadata={"_wants_stream": True},
                         ))
 
