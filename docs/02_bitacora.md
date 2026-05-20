@@ -949,3 +949,86 @@ The roadmap entry framed it as "list/delete/edit". List + delete already existed
 When a tool has multiple actions on the same resource (cron jobs), keep them under one tool with an action enum rather than splitting into N micro-tools. The model treats a single tool as one mental object — "I know cron has these operations on it" — and the enum gives it perfect discoverability without inflating the tool list visible to the LLM. The penalty is per-action validation lives in the tool itself rather than the schema layer, but that's a small fixed cost.
 
 For polling-style observability (Monitor), cursor-diff is dramatically cheaper than snapshot-everything-each-time. Even a 5-event subagent on a 10-poll loop saves 45 redundant event renderings. The cursor convention also forces the model to think incrementally rather than re-summarizing the full history each turn, which is a behavior win on top of the token win.
+
+---
+
+## Tier 1 + Tier 2 harness hardening — OpenClaw + Hermes-inspired (May 2026)
+
+### Context
+
+After doc 07 (external-agent review) and doc 08 (Phase 2 memory synthesis), reviewing the OpenClaw and Hermes codebases surfaced a long list of **harness improvements unrelated to memory or skills**. These target the boundary between the model and the environment — the same family as Phase 1 hardening (`1A`, `1B`, `2B` above) — but covering failure modes Phase 1 didn't reach.
+
+The pattern across both source projects: defensive instrumentation in the runner / consolidator / provider layer that doesn't try to teach the model anything. It just catches predictable failure modes the model can't escape on its own and either repairs them silently or terminates the turn with a clear `stop_reason` so the caller can decide.
+
+15 items shipped in May 2026 across 15 independent commits. Each commit is a single concern with tests; each is auditable in isolation in `git log`. Final state: **1793 tests passing**.
+
+### Tier 1 — Operational resilience (7 items, all OpenClaw or Hermes)
+
+These are the low-blast-radius items: cheap defensive checks at the runner / provider layer.
+
+| # | Component | stop_reason / signal | Telemetry event | Env knob |
+|---|---|---|---|---|
+| 2C | Idle-timeout circuit breaker | `circuit_breaker_idle_timeout` | `circuit_breaker.idle_timeout` | `DURIN_MAX_CONSECUTIVE_IDLE_TIMEOUTS=1` |
+| 2D | Per-block tool-result validation | (transparent repair) | (none — caps before aggregate path) | (no knob — 100 KB text / 5 MB image / 10 MB audio) |
+| 2E | Re-sanitize after `context_transform` | (transparent repair) | (none) | (no knob) |
+| 2F | Compaction grace window | (deadline extension) | `compaction.grace_extended` | `DURIN_COMPACTION_GRACE_S=30` |
+| 2G | Per-model `parallel_tool_calls` gating | (transparent inject) | (none) | `agents.defaults.parallelToolCalls` config dict |
+| 2H | Per-turn tool-result budget | (transparent spillover) | `turn_budget.enforced` | `DURIN_TURN_BUDGET_CHARS=200000` |
+| 2I | Heartbeat isolated sessions | (per-tick fresh session) | (none) | `heartbeat.isolatedSessions=false` |
+
+**Patterns that recur across Tier 1**:
+
+- **Circuit breakers with thresholds**: idle-timeout (2C) and post-compaction (Tier 2 C2) follow the same shape — counter increments on failure signal, resets on forward progress, opens after threshold with distinct `stop_reason` and telemetry event. Adopted because it's the cheapest way to bound the cost of a stuck model without trying to diagnose *why* it's stuck.
+- **Defensive validation at the boundary**: per-block validation (2D), tool-arg repair (Tier 2 B1) — assume the model emits garbage and fix it at the receive point rather than letting downstream layers explode.
+- **Grace windows for known-slow operations**: compaction grace (2F) extends the outer timeout once when consolidation is detected in flight. Wraps `asyncio.wait({task}, timeout=...)` (which doesn't cancel) instead of `asyncio.wait_for` so the same task can be probed.
+
+### Tier 2 — Resilience + reliability + context engineering (8 items)
+
+Grouped into three blocks of independent concerns. The user explicitly approved doing C-block (context engineering) now despite its overlap with Phase 2 memory, on the reasoning that the *organization* (3-tier cache-friendly layout) is reusable regardless of what memory adds.
+
+| Block | # | Component | Telemetry / signal |
+|---|---|---|---|
+| A — Resilience | 3A | Pre-emptive compaction trigger | `compaction.preemptive_trigger` |
+| A — Resilience | 3B | Mid-turn precheck signal | `mid_turn_precheck.overflow` |
+| A — Resilience | 3C | Compaction lock aggregate timeout | `compaction.lock_timeout` |
+| B — Tool reliability | 3D | Tool-call argument repair | `tool_call.argument_repair` |
+| B — Tool reliability | 3E | Unknown-tool loop guard | `unknown_tool.loop_guard` |
+| B — Tool reliability | 3F | History image / audio prune | (transparent prune) |
+| C — Context engineering | 3G | 3-tier system prompt for cache stability | (no event — organizational) |
+| C — Context engineering | 3H | Post-compaction loop guard | `post_compaction_loop.tripped` |
+
+### Key design decisions (and where to revisit them)
+
+1. **A1 + A2 + 3H together cover the "stuck after compaction" failure mode**. A1 compacts at 50% of window (was: ~93%) → more frequent, smaller compactions. A2 catches the case where post-sanitize prompt is still oversized → distinct stop reason instead of waiting for the provider 400. 3H detects when compaction *happened* but didn't break the loop (same tool/args/result triple repeating) → abort with distinct stop reason.
+
+2. **`consolidation_ratio` semantic changed**. Previously "fraction of input budget to retain after compaction" (60K from 119K = 50%). Now "fraction of trigger threshold to retain" (32K from 64K = 50%). The change keeps the user-visible 0.5 default meaningful under the new lower trigger — without rebasing, target ≈ trigger and each compaction round would do almost no work. Two existing tests that verified the loop mechanics are pinned to `preemptive_compact_ratio=1.0` (legacy trigger) so they keep verifying what they were designed to verify.
+
+3. **Per-model `preemptive_compact_ratio` lives on `ModelPresetConfig`, not as a separate dict**. User explicitly rejected a dual ratio + max_tokens design — "lo importante es que se pueda configurar por modelo". A 1M-window model with `preemptiveCompactRatio: 0.15` compacts at 150K (sensible) instead of 500K (paying per token shipped). Falls back to `AgentDefaults.preemptive_compact_ratio` when the preset doesn't override.
+
+4. **B2 unknown-tool guard is per-tool-name, not per-(name, args)**. 1A blocks exact `(tool_name, args)` repeats; B2 fires when the same hallucinated NAME is called repeatedly even with varying args. The model is experimenting with the wrong name — once it's done that 3 times, the third try wastes tokens.
+
+5. **B3 image prune is read-time, not write-time**. Tier 1 2D caps individual oversized blocks at write time. B3 handles the orthogonal problem: a 5 MB image attached in turn 1 still rides along on turn 10 even though it's already in the model's KV cache. Replaces with `[image data removed - already processed by model]` after `preserve_turns=3` completed turns. Idempotent — re-running over already-pruned history is a no-op.
+
+6. **C1 moved the agent-mode suffix from "near top of prompt" to "between stable and volatile"**. The old test `test_plan_suffix_appears_near_top_of_prompt` was replaced with `test_plan_suffix_precedes_volatile_blocks` — same intent (mode suffix should outrank dynamic content) reformulated for the layered design. The stable prefix (identity + bootstrap + skills catalog) becomes byte-identical across all turns of one session, which is exactly what provider prompt caches need.
+
+7. **C2 (post-compaction loop guard) uses `should_abort is True` strict identity check**. Real `Verdict.should_abort` is a bool; MagicMock-wrapped guards in unrelated tests return truthy mock attributes that would have falsely tripped the abort path. The strict check makes the integration robust to test-suite shapes we don't control.
+
+### What we deliberately did NOT do in Tier 2
+
+| Item | Why skipped |
+|---|---|
+| **Compaction continuation retry attempts** (OpenClaw `compactionContinuationRetryAttempts`) | Only applies when heartbeat performs a compaction mid-turn. Durin's heartbeats are one-shot — irrelevant. |
+| **Session takeover error** (OpenClaw `EmbeddedAttemptSessionTakeoverError`) | Multi-process / multi-tab. Durin is single-process. |
+| **Assistant failover** (OpenClaw `assistant-failover.ts`) | `fallback_models` config covers our case; OpenClaw's is more sophisticated but overkill. |
+| **LanceDB + dreaming + 6-factor scoring** (OpenClaw memory subsystem) | That's Phase 2 memory — not Tier 2 harness. Doc 08 is the discussion. |
+| **HuggingFace embedded GGUF** | Doc 08 alternative; same scope deferral. |
+| **Steering queue** (pi) | Specific to pi's UX architecture; durin's CLI works differently. |
+
+### Lessons
+
+- **Defensive layers compose**: 2C (idle-timeout) + 3B (mid-turn precheck) + 3H (post-compaction loop guard) form a stack — each catches a different "stuck" mode. Together they bound the cost of an unrecoverable state without trying to teach the model anything. None of them is sufficient alone; all together are.
+- **Per-block + aggregate validation are both necessary**. 2D (per-block) handles a single huge image; 2H (per-turn aggregate) handles many medium results that sum to overflow. Neither subsumes the other. Both feed into the existing per-tool `max_tool_result_chars` cap, which handles the third dimension (per-tool char limit). Three layers, each catching a distinct shape of failure.
+- **Idempotency matters for transformations in the sanitize pipeline**. `prune_processed_history_images` returns the same object identity when nothing changed (3F); `validate_tool_result_blocks` does the same (2D). This avoids unnecessary allocation AND makes them safe to call twice in the pipeline (which we do for the orphan repair around `_snip_history`).
+- **Telemetry-first instead of behavior-first**. Many Tier 2 items emit a structured event even when they take no action (e.g. `tool_call.argument_repair` with `parsed_ok` in the payload — fires even when the cleaning didn't fully fix the JSON). This means we can ship the breaker and the configurable threshold *together*, then tune the threshold from real production data. Without the event, we'd be tuning blind.
+- **Configurable knobs default to OpenClaw / Hermes values**. Where the source project documented a default (`MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT=1`, `PRESERVE_RECENT_COMPLETED_TURNS=3`, etc.) we adopted it unchanged. The two projects already tuned these on their own evals; we don't have better numbers yet, and divergence for divergence's sake is a maintenance liability.
+- **Test pins are sometimes the right answer**. A1's semantic change broke two tests that legitimately verified the loop mechanics. Rather than rewriting them (and losing the existing coverage), we pinned them to `preemptive_compact_ratio=1.0` and called out the pin in the docstring. New A1-specific tests cover the new behavior. This is the cheaper path to keep both invariants.
