@@ -10,6 +10,7 @@ from durin.memory.paths import (
 )
 from durin.memory.consolidator_tags import parse_consolidator_response
 from durin.memory.drill import DrillError, drill
+from durin.memory.embedding import EmbeddingProvider, FastembedProvider
 from durin.memory.hot_layer import HotLayer, read_hot_layer
 from durin.memory.ingestion import IngestError, ingest_artifact
 from durin.memory.provenance import Author, author_scope, current_author
@@ -26,6 +27,8 @@ from durin.memory.storage import FrontmatterError, load_entry, save_entry, split
 __all__ = [
     "Author",
     "DrillError",
+    "EmbeddingProvider",
+    "FastembedProvider",
     "FrontmatterError",
     "HotLayer",
     "IngestError",
