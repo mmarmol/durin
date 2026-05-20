@@ -11,16 +11,27 @@ same package.
 ## Quick start
 
 ```bash
+# Install (no git checkout required)
+pipx install --pre durin-agent          # PyPI, recommended
+# or, from a GitHub release wheel:
+pipx install https://github.com/mmarmol/durin/releases/latest/download/durin_agent-0.1.0a1-py3-none-any.whl
+
+durin onboard --wizard                  # creates ~/.durin/config.json
+durin doctor                            # confirm setup is healthy
+durin agent --tui                       # launches the TUI
+```
+
+For development you can still install from a checkout:
+
+```bash
 git clone git@github.com:mmarmol/durin.git
 cd durin
 python -m venv .venv && source .venv/bin/activate
 pip install -e .
-durin onboard --wizard          # creates ~/.durin/config.json
-durin agent --tui               # launches the TUI
 ```
 
 See [docs/INSTALL.md](docs/INSTALL.md) for prerequisites, optional extras,
-and platform notes.
+and platform notes. Maintainers cutting a release: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## Lifecycle commands
 
