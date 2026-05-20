@@ -133,6 +133,16 @@ class AgentRunSpec:
     # (equivalent to BUILD_MODE = full access). See durin/agent/agent_mode.py
     # and docs/07_external_agents_review.md §L3.
     mode_provider: Any | None = None
+    # Inspired by pi's ``transformContext``: an optional callback that
+    # receives the full message list right before it is sent to the
+    # provider and returns the list to actually use. Lets callers do
+    # token-budget pruning, late-stage system reminders, or filtering
+    # without re-architecting the loop. Called once per LLM request,
+    # not once per agent.run(); receives a *copy* of the list so the
+    # callback can mutate freely. If it returns ``None`` or raises,
+    # the untransformed list is used (best-effort, never breaks the
+    # loop).
+    context_transform: Any | None = None  # Callable[[list[dict]], list[dict] | None]
 
 
 @dataclass(slots=True)
@@ -720,6 +730,23 @@ class AgentRunner:
         *,
         tools: list[dict[str, Any]] | None,
     ) -> dict[str, Any]:
+        # Apply the optional context_transform hook (pi-style). The hook
+        # gets a shallow copy of the message list so it can mutate
+        # without surprising upstream code. It can return:
+        #   - a new list to use instead
+        #   - the same list (mutated in place)
+        #   - None to signal "leave the list as-is"
+        # Any exception is swallowed and the original list is used — a
+        # broken hook must NEVER break the agent loop.
+        if spec.context_transform is not None:
+            try:
+                transformed = spec.context_transform(list(messages))
+                if isinstance(transformed, list):
+                    messages = transformed
+            except Exception:
+                logger.exception(
+                    "context_transform hook raised — falling back to original messages",
+                )
         kwargs: dict[str, Any] = {
             "messages": messages,
             "tools": tools,
