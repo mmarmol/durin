@@ -20,6 +20,7 @@ from durin.agent.tools.registry import ToolRegistry
 from durin.session.manager import Session
 from durin.telemetry.logger import current_telemetry
 from durin.utils.gitstore import GitStore
+from durin.utils.post_compaction_guard import PostCompactionLoopGuard
 from durin.utils.helpers import (
     ensure_dir,
     estimate_message_tokens,
@@ -498,6 +499,12 @@ class Consolidator:
         self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
             weakref.WeakValueDictionary()
         )
+        # Tier 2 C2: post-compaction loop guard. The consolidator arms
+        # this per-session after each successful compaction round; the
+        # runner observes tool calls within the window. Shared instance
+        # so all sessions through one Consolidator share the same window
+        # size config without each AgentRunSpec carrying its own.
+        self.post_compaction_guard = PostCompactionLoopGuard()
 
     def set_provider(
         self,
@@ -887,6 +894,12 @@ class Consolidator:
             # into the runtime context on the next prepare_session() call, aligning
             # the summary injection strategy with AutoCompact._archive().
             self._persist_last_summary(session, last_summary)
+            # Tier 2 C2: arm the post-compaction loop guard if at least
+            # one summary was produced this call. The next ``window_size``
+            # tool calls on this session will be observed; identical
+            # ``(name, args, result)`` triples trip the guard.
+            if last_summary:
+                self.post_compaction_guard.arm(session.key)
         finally:
             lock.release()
 
