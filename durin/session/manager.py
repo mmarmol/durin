@@ -13,6 +13,11 @@ from typing import Any
 from loguru import logger
 
 from durin.config.paths import get_legacy_sessions_dir
+from durin.session.session_meta import (
+    meta_path_for,
+    read_derived,
+    write_derived,
+)
 from durin.utils.helpers import (
     ensure_dir,
     estimate_message_tokens,
@@ -293,8 +298,26 @@ class SessionManager:
     """
     Manages conversation sessions.
 
-    Sessions are stored as JSONL files in the sessions directory.
+    Sessions are stored as JSONL files in the sessions directory. The
+    line-0 ``metadata`` header carries IDENTITY state (mode, plan path,
+    todos, channel ownership, …) — anything a learning pipeline should
+    treat as authoritative session content. LLM-DERIVED projections of
+    that content (compaction summary today, future embeddings or
+    narrative summaries) live in the sibling ``<key>.meta.json`` under
+    a ``derived`` block. The in-memory ``Session.metadata`` dict merges
+    both at load time so consumer code continues to see one flat dict.
     """
+
+    # Keys in ``Session.metadata`` that are LLM-DERIVED projections of
+    # the session content. At save time these get split out and written
+    # to the sibling ``.meta.json`` ``derived`` block instead of line 0.
+    # At load time they're merged back into ``Session.metadata`` so
+    # consumer code doesn't have to know about the split.
+    #
+    # Add new entries here when introducing future derived state (e.g.
+    # ``"session_embedding"``, ``"narrative_summary"``). Keys NOT listed
+    # here flow through line 0 unchanged.
+    _DERIVED_METADATA_KEYS = frozenset({"_last_summary"})
 
     def __init__(self, workspace: Path):
         self.workspace = workspace
@@ -373,6 +396,13 @@ class SessionManager:
                     else:
                         messages.append(data)
 
+            # Merge derived metadata from the sidecar into the
+            # in-memory ``metadata`` dict so consumer code keeps reading
+            # one flat dict. Sidecar wins over line-0 for derived keys
+            # (line-0 values are only present in legacy sessions written
+            # before the split; the next save will clean them out).
+            self._merge_derived_from_sidecar(key, metadata)
+
             return Session(
                 key=key,
                 messages=messages,
@@ -387,6 +417,27 @@ class SessionManager:
             if repaired is not None:
                 logger.info("Recovered session {} from corrupt file ({} messages)", key, len(repaired.messages))
             return repaired
+
+    def _merge_derived_from_sidecar(
+        self, key: str, metadata: dict[str, Any],
+    ) -> None:
+        """Layer derived state from ``<key>.meta.json`` over the
+        line-0 metadata dict.
+
+        Sidecar values WIN where both files declare the same derived
+        key — this lets the split persist correctly even when a legacy
+        session.jsonl still carries the old in-line copy. Best-effort:
+        a missing or malformed sidecar leaves ``metadata`` untouched."""
+        try:
+            sidecar = read_derived(meta_path_for(key, self.sessions_dir))
+        except Exception:
+            logger.exception(
+                "Failed to read derived sidecar for {}; using line-0 only", key,
+            )
+            return
+        for derived_key, value in sidecar.items():
+            if derived_key in self._DERIVED_METADATA_KEYS:
+                metadata[derived_key] = value
 
     def _repair(self, key: str) -> Session | None:
         """Attempt to recover a session from a corrupt JSONL file."""
@@ -431,6 +482,8 @@ class SessionManager:
             if not messages and not metadata:
                 return None
 
+            self._merge_derived_from_sidecar(key, metadata)
+
             return Session(
                 key=key,
                 messages=messages,
@@ -456,6 +509,15 @@ class SessionManager:
     def save(self, session: Session, *, fsync: bool = False) -> None:
         """Save a session to disk atomically.
 
+        Splits ``session.metadata`` into two persistence layers:
+
+        - Identity fields → ``<key>.jsonl`` line 0 (source of truth).
+        - LLM-derived projections (``_DERIVED_METADATA_KEYS``) → the
+          ``derived`` block of the sibling ``<key>.meta.json``.
+
+        Keeps ``session.metadata`` in memory unchanged so existing
+        consumer code reads it through the same dict.
+
         When *fsync* is ``True`` the final file and its parent directory are
         explicitly flushed to durable storage.  This is intentionally off by
         default (the OS page-cache is sufficient for normal operation) but
@@ -466,6 +528,16 @@ class SessionManager:
         path = self._get_session_path(session.key)
         tmp_path = path.with_suffix(".jsonl.tmp")
 
+        # Split metadata for persistence; in-memory dict stays whole.
+        identity_meta = {
+            k: v for k, v in session.metadata.items()
+            if k not in self._DERIVED_METADATA_KEYS
+        }
+        derived_meta = {
+            k: v for k, v in session.metadata.items()
+            if k in self._DERIVED_METADATA_KEYS
+        }
+
         try:
             with open(tmp_path, "w", encoding="utf-8") as f:
                 metadata_line = {
@@ -473,7 +545,7 @@ class SessionManager:
                     "key": session.key,
                     "created_at": session.created_at.isoformat(),
                     "updated_at": session.updated_at.isoformat(),
-                    "metadata": session.metadata,
+                    "metadata": identity_meta,
                     "last_consolidated": session.last_consolidated
                 }
                 f.write(json.dumps(metadata_line, ensure_ascii=False) + "\n")
@@ -500,6 +572,22 @@ class SessionManager:
             tmp_path.unlink(missing_ok=True)
             raise
 
+        # Mirror derived metadata into the .meta.json sidecar. Always
+        # invoked (even with an empty dict) so that clearing a summary
+        # via ``Session.clear()`` also wipes the persisted version.
+        # Best-effort: a meta.json write failure must not bring down the
+        # session save — the .jsonl is the durable surface.
+        try:
+            write_derived(
+                meta_path_for(session.key, self.sessions_dir),
+                session.key,
+                derived_meta,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to write derived meta for {}", session.key,
+            )
+
         self._cache[session.key] = session
 
     def flush_all(self) -> int:
@@ -525,10 +613,18 @@ class SessionManager:
     def delete_session(self, key: str) -> bool:
         """Remove a session from disk and the in-memory cache.
 
-        Returns True if a JSONL file was found and unlinked.
+        Removes both the ``<key>.jsonl`` and the sibling ``<key>.meta.json``
+        sidecar so derived state doesn't outlive its source. Returns True
+        when at least the JSONL was found and unlinked.
         """
         path = self._get_session_path(key)
+        meta_path = meta_path_for(key, self.sessions_dir)
         self.invalidate(key)
+        # Sidecar may exist even when the jsonl is already gone (orphan
+        # from a prior crash) — best-effort cleanup either way.
+        if meta_path.exists():
+            with suppress(OSError):
+                meta_path.unlink()
         if not path.exists():
             return False
         try:
@@ -566,11 +662,15 @@ class SessionManager:
                         stored_key = data.get("key")
                     else:
                         messages.append(data)
+            # Return the same merged view the live ``Session`` uses, so
+            # HTTP read endpoints stay consistent across read paths.
+            merged_metadata = dict(metadata) if isinstance(metadata, dict) else {}
+            self._merge_derived_from_sidecar(stored_key or key, merged_metadata)
             return {
                 "key": stored_key or key,
                 "created_at": created_at,
                 "updated_at": updated_at,
-                "metadata": metadata,
+                "metadata": merged_metadata,
                 "messages": messages,
             }
         except Exception as e:

@@ -61,24 +61,29 @@ def _now_iso() -> str:
 
 
 def read_meta(meta_path: Path) -> dict[str, Any]:
-    """Load the meta file, returning ``{"events": []}`` shape if missing.
+    """Load the meta file, returning ``{"events": [], "derived": {}}``
+    shape if missing.
 
     Tolerates a missing or malformed file — returns the empty default so
     callers can always treat the result uniformly.
     """
+    empty: dict[str, Any] = {"session_key": None, "events": [], "derived": {}}
     if not meta_path.exists():
-        return {"session_key": None, "events": []}
+        return empty
     try:
         text = meta_path.read_text(encoding="utf-8")
         data = json.loads(text)
         if not isinstance(data, dict):
-            return {"session_key": None, "events": []}
+            return empty
         events = data.get("events")
         if not isinstance(events, list):
             data["events"] = []
+        derived = data.get("derived")
+        if not isinstance(derived, dict):
+            data["derived"] = {}
         return data
     except (OSError, json.JSONDecodeError):
-        return {"session_key": None, "events": []}
+        return empty
 
 
 def _atomic_write(meta_path: Path, data: dict[str, Any]) -> None:
@@ -287,6 +292,48 @@ def make_tool_call_event(
     if error:
         event["error"] = str(error)[:200]
     return event
+
+
+# ---------------------------------------------------------------------------
+# Derived state — LLM-produced projections of the session content
+# ---------------------------------------------------------------------------
+#
+# The ``derived`` block holds fields that are computed from session
+# content (compaction summary, future embeddings, narrative diary, etc.).
+# Kept separate from the raw conversation so a learning / memory
+# pipeline can process ``session.jsonl`` as source-of-truth content
+# without confusing it with LLM-output projections that just live here
+# for runtime convenience.
+#
+# Rule of thumb: if you could reconstruct the value by re-running the
+# producer over ``session.jsonl`` + ``memory/history.jsonl``, it belongs
+# in ``derived``. If the value represents a USER decision or workflow
+# state (mode, todos, plan path, pending question), it stays in the
+# session's identity metadata (line 0 of session.jsonl).
+
+
+def read_derived(meta_path: Path) -> dict[str, Any]:
+    """Return the ``derived`` block of a session's meta file.
+
+    Empty dict when the meta file is missing, malformed, or hasn't
+    been populated yet. Always safe to call.
+    """
+    return read_meta(meta_path).get("derived") or {}
+
+
+def write_derived(
+    meta_path: Path, session_key: str, derived: dict[str, Any],
+) -> None:
+    """Replace the ``derived`` block atomically.
+
+    Pass an empty dict to clear it (e.g. after ``session.clear()`` pops
+    its summary). The function preserves ``events`` untouched —
+    callers don't need to read-modify-write the whole file.
+    """
+    data = read_meta(meta_path)
+    data["session_key"] = session_key
+    data["derived"] = dict(derived)
+    _atomic_write(meta_path, data)
 
 
 def append_events_batch(
