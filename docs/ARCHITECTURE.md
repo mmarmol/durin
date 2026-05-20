@@ -583,7 +583,81 @@ Aux providers are built once at startup by `loop._build_aux_providers(config)` a
 
 ---
 
-## 11. Testing
+## 11. Interactive CLI (daily driver)
+
+The interactive CLI lives in `durin/cli/`. It routes input through the
+same `MessageBus` that all channels (Slack, Telegram, etc.) use, so
+agent behaviour is identical between channels. The CLI-specific
+ergonomics that make it usable as a daily driver:
+
+### 11.1 Slash commands
+
+`durin/command/builtin.py` registers the canonical set on `CommandRouter`.
+The handler returns an `OutboundMessage`; the CLI loop renders it.
+
+| Command | Purpose |
+|---|---|
+| `/new` | Stop the current task and start a fresh conversation. |
+| `/stop`, `/restart`, `/status` | Process control + diagnostics. |
+| `/model [preset]` | Show or switch the active model preset. |
+| `/history [n]` | Print last N persisted messages. |
+| `/goal <task>` | Mark a long-running goal. |
+| `/plan`, `/build`, `/mode` | Agent-mode (plan / build / explore) control. |
+| `/dream`, `/dream-log`, `/dream-restore` | Manual memory consolidation + history. |
+| `/pairing` | Multi-device pairing flow. |
+| `/sessions [filter]` | List saved sessions, sorted by updated_at. |
+| `/resume <key>` | Switch the active chat to another saved session (in-place, no restart) via metadata directive `_switch_chat_id`. |
+| `/compact [hint]` | Manually consolidate the unconsolidated tail of the current session. |
+| `/copy` | Copy last assistant message to clipboard (`pbcopy` / `xclip` / `wl-copy` / `clip`). |
+| `/name <name>` | Set / show session display name (`session.metadata['display_name']`). |
+| `/hotkeys`, `/help`, `/quit` (alias `exit` / `:q`) | Discoverability. |
+
+### 11.2 Editor ergonomics
+
+`durin/cli/commands.py:_init_prompt_session` builds the `PromptSession`
+with three optional capabilities, each gated by what the caller passes:
+
+- `workspace` → `FileReferenceCompleter` (`durin/cli/completers.py`).
+  Type `@` after whitespace to fuzzy-substring-match workspace files.
+  Cached walk (max 1000 files) with sensible excludes
+  (`.git`, `__pycache__`, `.venv`, `node_modules`, `.durin`, …).
+- `presets_getter` → `ModelPresetCompleter` plus a Ctrl+L key binding
+  that pre-fills the buffer with `/model ` to start a picker flow.
+- `footer_getter` → `bottom_toolbar`-driven persistent footer
+  (`durin/cli/footer.py`). On every redraw renders
+  `session · model (preset) · ~tokens/window (%) · mem:N vec✓|✗`.
+  Failures in the getter are swallowed so the prompt never blocks.
+
+### 11.3 Drag-and-drop
+
+`durin/cli/dragdrop.py` pre-processes user input before the bus publish:
+
+1. Scan for absolute paths in the typed text (bash-style escaped
+   spaces handled, `~` expansion supported).
+2. For each existing file:
+   - Image (.png/.jpg/.gif/.webp/.bmp/.svg) or audio (.mp3/.wav/.m4a/
+     .flac/.ogg/.opus) → copy to `<workspace>/.media/<sha>.<ext>` (idempotent
+     by content hash), replace the path in the text with the copy
+     path, surface the workspace-relative path via `InboundMessage.media`
+     so the existing multimodal pipeline picks it up.
+   - Document (markdown / text / pdf) → leave the path untouched so
+     the agent's `read_file` tool can resolve it directly.
+3. Unsupported extensions, non-existent paths, and directories are
+   left as-is.
+
+### 11.4 Session switching mechanism
+
+`/resume <key>` returns an `OutboundMessage` whose metadata carries
+`_switch_chat_id`. `run_interactive`'s `_consume_outbound` watches
+for that key and updates `cli_chat_id` via `nonlocal`. The next
+`bus.publish_inbound` uses the new key, routing the next turn to the
+selected session — no process restart needed. The persistent footer
+sees the change on its next redraw because it closes over the same
+`cli_chat_id` binding.
+
+---
+
+## 12. Testing
 
 ```
 tests/
@@ -609,6 +683,6 @@ Total: **3,293 tests passing, 15 skipped**.
 
 ---
 
-## Last updated: 2026-05-20 (Phase 2 memory — vector retrieval)
+## Last updated: 2026-05-20 (D1 daily-driver CLI)
 
 > For the history of why each subsystem was added, what was replaced, and what was discarded along the way, see `docs/02_bitacora.md`. This document only describes the current state.
