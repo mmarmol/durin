@@ -146,10 +146,11 @@ Compiled from the comparative review of OpenHands / Hermes / OpenCode / OpenClau
 | 6 | **Monitor** ✅ (2026-05-19) | LOW-MED (2-3d) | Medium | OpenClaude | #5 | Shipped as `subagent_monitor`. Cursor-based diff polling (`after_event` → `next_cursor`); finished output bundled when task completes. |
 | 7 | **Cron extension** ✅ (2026-05-19) | LOW-MED (2-3d) | Medium | Hermes, OpenClaude | — | List + remove already existed. Added `action='update'`: rename, change message, swap schedule, toggle delivery. Requires ≥1 actual change. |
 | 8 | **RemoteTrigger** | MED (3-5d) | Medium-High | OpenClaude | — | Launch agent run from external webhook. Requires HTTP endpoint + queue plumbing. |
-| 9 | **Vision tool** (delegate to vision-capable model) | MED (~1 week) | High | Hermes (`vision_analyze`), OpenClaude (`browser_vision`), OpenHands (browser get_state) | — | Tool takes image + prompt → calls vision-capable model from preset → returns analysis. Requires multi-model provider setup. |
-| 10 | **Document extraction enriched** (PDF/Office/OCR) | MED (~1 week) | High | Partial in all 4 | #9 | Already parse PDF/Office basic in `read_file`. Extend with OCR of embedded images (via #9), structured tables, layout-aware paragraphs. |
-| 11 | **Browser minimal** (navigate + scrape + optional screenshot) | HIGH (~2 weeks) | High | Hermes (Playwright/CDP full), OpenHands (BrowserToolSet), OpenClaude (`WebBrowserTool`) | uses #9 for screenshots | Start minimal: navigate URL → text content + optional screenshot. Marcelo: "important for research". |
-| 12 | **Skill progressive disclosure** | MED-HIGH (~2 weeks) | High | All 4 | — | Foundation for Phase 2 memory. Index in system prompt + load on-demand SKILL.md bundles. Deferred per user. |
+| 9 | **Vision tool** (capability bridge to aux model) ✅ (2026-05-19) | MED (~1 week) | High | Hermes (`vision_analyze`), OpenClaude (`browser_vision`), OpenHands (browser get_state) | capabilities snapshot + aux_providers | Shipped as `interpret_image`. Config-gated (only registers when `aux_models.vision` is set); routes one-shot questions to the aux LLM with OpenAI-compat `image_url` block. Verified E2E (glm-5.1 primary → glm-5v-turbo aux). |
+| 9b | **Audio bridge** (capability bridge to aux model) ✅ (2026-05-20) | MED | High | new — out-of-scope of original 12-list | capabilities snapshot + aux_providers | Shipped as `interpret_audio`. Same pattern as `interpret_image` for audio chat-multimodal. Verified E2E via Gemini 2.5 Flash (Ollama / LM Studio do not yet expose audio encoders; transcription-only path documented as future `transcribe_audio` tool). |
+| 10 | **Document extraction enriched** (PDF/Office/OCR) | MED (~1 week) | High | Partial in all 4 | #9 | Already parse PDF/Office basic in `read_file`. Extend with OCR of embedded images (via #9), structured tables, layout-aware paragraphs. **Not started.** |
+| 11 | **Browser minimal** (navigate + scrape + optional screenshot) | HIGH (~2 weeks) | High | Hermes (Playwright/CDP full), OpenHands (BrowserToolSet), OpenClaude (`WebBrowserTool`) | uses #9 for screenshots | Start minimal: navigate URL → text content + optional screenshot. Marcelo: "important for research". **Not started.** |
+| 12 | **Skill progressive disclosure** ✅ partial (2026-05-20) | MED-HIGH (~2 weeks) | High | All 4 | — | Already partially in place: `SkillsLoader` indexes skills in summary + loads on-demand. Today's `disable_model_invocation` (pi-compat) closes the remaining gap (skills can be programmatic-only). Phase 2 memory work no longer blocked on this item. |
 
 **Estimated totals**:
 - Items 1-4 (independent UX quick wins): ~5 days
@@ -171,17 +172,29 @@ Total ~ 2.5-3 months if strictly sequential. Items 9 + 11 can parallelize, dropp
 
 **Decision rule for additions to this list**: must be either (a) language-agnostic and adopted by ≥2 of the 4 reference agents, or (b) explicitly flagged by the user for daily-driver use. Other "would be nice" tools deferred unless they meet one of those criteria.
 
+### Additions beyond the original 12-list (May 2026)
+
+Items that emerged from running the tools roadmap and turned out to be worth shipping out-of-order:
+
+| # | Addition | Date | Why |
+|---|---|---|---|
+| A | **Capability metadata + consensus snapshot** (`durin/providers/capabilities.py` + `data/model_capabilities.json` + `scripts/refresh_model_capabilities.py`) | 2026-05-19 | Pre-req for any "delegate to aux model" pattern; consolidates LiteLLM + OpenRouter + models.dev into one vendor-filtered consensus file (785 models) |
+| B | **`AuxModelConfig` + `aux_providers`** plumbing (config schema + AgentLoop + ToolContext) | 2026-05-19 | Enables config-gated capability bridges. Supports `vision`, `audio`, extensible to others |
+| C | **Mid-loop `context_transform` hook** (pi-inspired) | 2026-05-20 | One-line per-request transform of message list right before provider call. Foundation for token-budget pruning and dynamic context |
+| D | **`disable_model_invocation` skill frontmatter flag** (pi-inspired) | 2026-05-20 | Skills hidden from LLM system prompt but still loadable programmatically. Closes most of item #12 |
+| E | **Per-tool head/tail truncation** (pi-inspired) | 2026-05-20 | `shell`/`exec` output truncated from head (keep tail = errors); reads keep head. Small refinement of an old uniformity |
+| F | **Real prompt-tokens anchor** (pi-inspired, perf C.1) | 2026-05-20 | Provider's actual `prompt_tokens` stamped on assistant messages → `estimate_prompt_tokens_chain` uses real numbers instead of estimating the whole chain |
+| G | **`cache.usage` telemetry event** (pi-inspired, perf C.2) | 2026-05-20 | Per-turn structured event with `prompt_tokens`, `cached_tokens`, `cache_ratio_pct`. Surfaces existing server-side cache savings (e.g. z.ai's automatic prefix cache returns ~99% hits) |
+
 ---
 
 **Phase 1b (Per-query dynamic context)**:
 Hold until Phase 2 (memory) provides the natural substrate. Standalone implementation would duplicate work the memory system will subsume.
 
 **Phase 2 (Horizon 2 — Memory)**:
-Higher investment, higher potential differentiation. Start once Phase 1c has delivered a result. Build incrementally: start with flat skill docs (Hermes-style), then add structure as evidence warrants. **Before designing**, read `~/git_personal/hermes-agent/agent/background_review.py` + `curator.py` + `memory_manager.py` — Hermes ships an essentially-complete production implementation of the Doc 03 pattern (forked agent with tool whitelist, ContextVar-gated provenance, frozen 3-tier system prompt). See `07_external_agents_review.md` §L1, §L2.
+Higher investment, higher potential differentiation. Now unblocked: Phase 2 was waiting on Phase 1c telemetry + the perf infra (anchored tokens + cache visibility) to make compaction decisions over real data, both of which are now in place. Build incrementally: start with flat skill docs (Hermes-style), then add structure as evidence warrants. **Before designing**, read `~/git_personal/hermes-agent/agent/background_review.py` + `curator.py` + `memory_manager.py` — Hermes ships an essentially-complete production implementation of the Doc 03 pattern (forked agent with tool whitelist, ContextVar-gated provenance, frozen 3-tier system prompt). See `07_external_agents_review.md` §L1, §L2.
 
 Once Phase 2 has retrieval, Phase 1b reduces to "use the memory retriever to fetch query-relevant context" — small additional work.
-
-Phase 1c proceeds standalone; Phase 2 begins after Phase 1c delivers telemetry results.
 
 ---
 
@@ -196,6 +209,6 @@ Phase 1c proceeds standalone; Phase 2 begins after Phase 1c delivers telemetry r
 
 ---
 
-## Last updated: 2026-05-19
+## Last updated: 2026-05-20
 
-> Latest pass: 12-item tools roadmap added based on competitive review (OpenHands/Hermes/OpenCode/OpenClaude) filtered through user priorities. Pivot also recorded: archive subsystem abandoned, autocompact + TTL removed, replaced by session meta sidecar pattern.
+> Latest pass: items #1–9 of the original 12-list shipped (incl. capability bridges for vision + audio), item #12 mostly closed by today's `disable_model_invocation` flag. Capability metadata pipeline (3-source consensus snapshot) shipped as a foundation. Pi coding agent reviewed and four refinements adopted: `context_transform` hook, skill disable flag, head/tail truncation per tool, anchored token accounting, cache visibility. Stale planning docs (`04_agent_strategies_catalog`, `05_log_swebench`, `06_log_experiments`) moved to `docs/archive/`. Memory (Phase 2) is now unblocked.

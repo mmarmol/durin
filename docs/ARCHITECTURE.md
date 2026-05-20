@@ -33,9 +33,13 @@ The fork model is retained because future memory work (per `03_memory_design.md`
 │  1. Context governance (microcompact, snip, budget)          │
 │  2. Build AgentHookContext(iteration, messages)              │
 │  3. hook.before_iteration(context)                           │
-│  4. LLM request → response                                   │
-│  5. Parse response (tool_calls, content, reasoning)          │
-│  6. If tool_calls:                                           │
+│  4. _build_request_kwargs — optional context_transform hook  │
+│     mutates the message list right before the provider call  │
+│  5. LLM request → response (usage.prompt_tokens captured     │
+│     and stamped on the assistant message as the anchor for   │
+│     future token estimates)                                  │
+│  6. Parse response (tool_calls, content, reasoning)          │
+│  7. If tool_calls:                                           │
 │     a. hook.before_execute_tools(context)                    │
 │     b. Topological batching (1B): consecutive concurrency-   │
 │        safe tools run in parallel, mutations & exclusives    │
@@ -43,12 +47,18 @@ The fork model is retained because future memory work (per `03_memory_design.md`
 │     c. Per-call loop detection (1A): identical (name,args)   │
 │        signature that already failed this turn is short-     │
 │        circuited with a synthetic "BLOCKED" tool result      │
-│     d. Append tool results to messages                       │
-│  7. Reasoning-truncation recovery (2B): if finish_reason=    │
+│     d. _run_tool_timed wraps every execution: stamps         │
+│        tool_call_id + duration_ms on the event, used later   │
+│        by _save_turn to write one tool_call meta event       │
+│        per call (msg_index → session.messages position)      │
+│     e. Append tool results to messages                       │
+│  8. Reasoning-truncation recovery (2B): if finish_reason=    │
 │     length AND content blank AND reasoning_content non-empty │
 │     → inject specialized cue asking model to wrap up         │
-│  8. hook.after_iteration(context)                            │
-│  9. If no tool_calls → final_content → break                │
+│  9. hook.after_iteration(context):                           │
+│     emits cache.usage telemetry event with prompt_tokens,    │
+│     cached_tokens, completion_tokens, cache_ratio_pct        │
+│ 10. If no tool_calls → final_content → break                │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -80,33 +90,73 @@ Reasoning models (glm-5.1, o-series, Claude thinking) can hit `max_tokens` while
 durin/
 ├── agent/
 │   ├── loop.py            # AgentLoop — outer state machine, dispatch, sessions
+│   │                      #   builds aux_providers + tool-call meta timeline
 │   ├── runner.py          # AgentRunner — inner LLM/tool loop
+│   │                      #   _build_request_kwargs honors context_transform
+│   │                      #   _run_tool_timed stamps duration_ms + tool_call_id
 │   ├── hook.py            # AgentHook + AgentHookContext + CompositeHook
 │   ├── context.py         # ContextBuilder — system prompt + history + skills
 │   ├── memory.py          # MemoryStore — markdown files + dream/consolidator
-│   ├── autocompact.py     # Auto-compaction at session boundaries
-│   ├── progress_hook.py   # Streaming + tool-event progress reporting
-│   ├── subagent.py        # Spawn parallel sub-agents
+│   ├── agent_mode.py      # Plan/Build/Explore permission-as-data modes
+│   ├── progress_hook.py   # Streaming + tool-event progress + cache.usage event
+│   ├── subagent.py        # Spawn parallel sub-agents + lifecycle status retention
 │   ├── model_presets.py   # Named model + generation parameter sets
-│   ├── skills.py          # Skill discovery, on-demand loading
-│   └── tools/             # All tool implementations (filesystem, exec, web, mcp, etc.)
+│   ├── skills.py          # Skill discovery, on-demand loading,
+│   │                      #   disable_model_invocation gating
+│   └── tools/             # All tool implementations
+│       ├── filesystem.py / search.py / shell.py / web.py / mcp.py / spawn.py
+│       ├── cron.py / long_task.py / message.py / self.py / notebook.py
+│       ├── plan_mode.py            # enter_plan_mode + exit_plan_mode
+│       ├── todos.py                # todo_write (replace-list semantics)
+│       ├── sleep.py                # bounded synchronous wait
+│       ├── ask_user.py             # ask_user_question (yield-and-resume)
+│       ├── session_search.py       # keyword/regex over session.messages
+│       ├── subagent_lifecycle.py   # list / status / stop / output / monitor
+│       ├── interpret_image.py      # vision aux-model bridge
+│       ├── interpret_audio.py      # audio chat-multimodal aux-model bridge
+│       ├── repo_overview.py / output_spill.py / image_generation.py
+│       └── context.py              # ToolContext + AuxProviderHandle
 ├── api/                   # HTTP/SSE/WebSocket transport layer
 ├── bus/                   # Internal message bus (InboundMessage, OutboundMessage)
 ├── channels/              # CLI, WebUI, Slack, Telegram, etc.
 ├── cli/                   # CLI entry, prompts, command dispatch
-├── command/               # /commands router
+├── command/               # /commands router (/plan, /build, /mode, …)
 ├── config/                # Config schemas, loader, validation
+│                          #   AgentDefaults, ModelPresetConfig, AuxModelsConfig,
+│                          #   ModelCapabilityOverride
 ├── cron/                  # Scheduled task service
 ├── heartbeat/             # Background heartbeats and timers
 ├── pairing/               # Account pairing flow
-├── providers/             # LLM provider adapters
+├── providers/             # LLM provider adapters (34 registered)
+│   ├── factory.py + registry.py        # make_provider, ProviderSpec
+│   ├── capabilities.py                 # ModelCapabilities + 4-layer resolver
+│   ├── data/model_capabilities.json    # vendor-filtered consensus snapshot
+│   │                                    # (LiteLLM + OpenRouter + models.dev,
+│   │                                    #  ~785 models, regenerated by
+│   │                                    #  scripts/refresh_model_capabilities.py)
+│   ├── anthropic_provider.py / bedrock_provider.py / openai_codex_provider.py
+│   ├── openai_compat_provider.py       # cache_control ephemeral for caching
+│   ├── azure_openai_provider.py / github_copilot_provider.py
+│   ├── local_llama_provider.py / fallback_provider.py
+│   └── transcription.py / image_generation.py
 ├── security/              # Auth, secrets, permissions
-├── session/               # Session storage + goal-state tracking
+├── session/               # Session storage + state helpers
+│   ├── manager.py + Session                # in-memory + jsonl persistence
+│   ├── goal_state.py                       # sustained-goal runtime block
+│   ├── todo_state.py                       # echo todos into runtime context
+│   └── session_meta.py                     # <key>.meta.json sidecar
+│                                            # — plan events + tool_call events
+│                                            #   with msg_index pointers
 ├── skills/                # Built-in skill markdown files
 ├── telemetry/             # Generic JSONL logger
 ├── templates/             # Prompt templates
 ├── utils/                 # Helpers (no business logic)
 └── web/                   # Static web assets
+
+scripts/
+└── refresh_model_capabilities.py    # dev tool — regenerates the consensus
+                                     # snapshot from the 3 source feeds,
+                                     # filtered by TRUSTED_VENDORS whitelist
 ```
 
 ---
@@ -318,7 +368,35 @@ The agent's exec tool routes through `wrap_command(sandbox, command, workspace, 
 
 ## 9. Providers
 
-`durin/providers/` ships adapters for Anthropic, OpenAI-compat (incl. Z.ai, OpenRouter, Azure), Bedrock, GitHub Copilot, local llama-cpp, OpenAI Codex, and a fallback wrapper. `factory.make_provider(config)` resolves the active provider/model from config + presets.
+`durin/providers/` ships adapters for Anthropic, OpenAI-compat (incl. Z.ai, OpenRouter, Azure, Ollama, LM Studio, Gemini, and 25+ others — see `registry.py`), Bedrock, GitHub Copilot, local llama-cpp, OpenAI Codex, and a fallback wrapper. `factory.make_provider(config)` resolves the active provider/model from config + presets.
+
+### Capability metadata (capabilities.py + data/model_capabilities.json)
+
+`get_model_capabilities(model, provider, overrides)` resolves a `ModelCapabilities` dataclass via a four-layer fallback:
+
+1. **Explicit override** from `config.model_capabilities` — always wins. Use when adding a private/custom model the snapshot doesn't know about.
+2. **Vendored consensus snapshot** at `providers/data/model_capabilities.json`. Built by `scripts/refresh_model_capabilities.py` from LiteLLM + OpenRouter + models.dev, filtered by a TRUSTED_VENDORS whitelist (anthropic/openai/google/zai/meta/mistral/deepseek/xai/qwen/moonshot/amazon/cohere/minimax/stepfun/ai21/ibm/01-ai/databricks/nvidia/voyage/perplexity/writer/cerebras). Aggregator providers (kilo, vercel, 302ai, etc.) are deliberately filtered out so they can't pollute capability flags (one of them once labeled a Zhipu model as audio-capable; filtering eliminated the noise).
+3. **Heuristic by model prefix** — last-resort recognition for custom/local models (`claude-*` → vision, `glm-*` → text-only, etc.).
+4. **Pessimistic default** — all capabilities False; safe under-promise.
+
+The returned dataclass carries a `source` field naming the layer that produced it; consumers that need authoritative data (e.g. capability bridges deciding when to expose themselves) gate behavior on `source in {"override", "snapshot"}`.
+
+### Capability bridges (aux models)
+
+When the primary model lacks a modality (vision, audio) but the user has declared an `aux_model` in config, durin exposes a delegating tool that ships one-shot questions to the aux:
+
+- `aux_models.vision` → `interpret_image(image_path, question)` — accepts PNG/JPEG/GIF/WEBP, base64-encodes, ships to the aux as an `image_url` content block, returns the aux's text answer.
+- `aux_models.audio` → `interpret_audio(audio_path, question)` — accepts WAV/MP3/M4A/OGG/FLAC/WebM, ships as `input_audio` block. Chat-multimodal aux only (Gemini 2.5 Flash works; Whisper-style transcription-only models are a separate future `transcribe_audio` tool because their endpoint is `/v1/audio/transcriptions`, not chat completions).
+
+Aux providers are built once at startup by `loop._build_aux_providers(config)` and handed to tools through `ToolContext.aux_providers`. Tools gate themselves via their `enabled(ctx)` classmethod — without an aux configured, the tool never appears in the model's tool list. Config-driven, not runtime-detected.
+
+### Prompt caching
+
+`_apply_cache_control` stamps Anthropic-style `cache_control: {type: ephemeral}` on system + last user content + last tool definition for providers with `supports_prompt_caching=True` in the registry (Anthropic, OpenRouter). For other providers using automatic prefix caching (Zhipu/MiniMax/DeepSeek/Qwen/Mistral/xAI/StepFun/Moonshot), no markers are needed — they cache transparently as long as the prefix is stable. The `cached_tokens` field is normalized across all providers (`prompt_tokens_details.cached_tokens`, `cached_tokens`, `prompt_cache_hit_tokens`, `cache_read_input_tokens` all map to the same key), and `AgentProgressHook.after_iteration` emits a structured `cache.usage` telemetry event per turn so the savings are observable.
+
+### Token accounting
+
+`build_assistant_message(..., prompt_tokens=...)` stamps the provider-reported `prompt_tokens` onto persisted assistant messages as `usage_prompt_tokens`. `latest_prompt_tokens_anchor(messages)` walks backward to find the most recent stamp; `estimate_prompt_tokens_chain` uses that as an authoritative baseline and tiktoken-estimates only the tail. Cuts systematic over-estimation on long sessions.
 
 ---
 
@@ -326,21 +404,36 @@ The agent's exec tool routes through `wrap_command(sandbox, command, workspace, 
 
 ```
 tests/
-├── agent/          # Loop, runner, context, autocompact, tools
+├── agent/          # Loop, runner, context, hooks, modes, capability bridges,
+│                   #   tool-call meta events, context_transform, anchor
+├── agent/tools/    # Per-tool tests — todo_write, sleep, ask_user, session_search,
+│                   #   subagent_lifecycle, interpret_image/audio, sleep, …
 ├── api/            # HTTP/SSE/WebSocket
 ├── bus/            # Message bus
 ├── channels/       # Channel adapters
-├── cli/            # CLI rendering
-├── command/        # Commands
+├── cli/            # CLI rendering + truncate-direction tests
+├── command/        # Commands (/plan, /build, /mode, …)
 ├── config/         # Schema and loader
-├── providers/      # Provider adapters
-├── session/        # Session lifecycle and goal state
-├── skills/         # Skill loading
-└── telemetry/      # Generic logger (no posture/deliberation tests after prune)
+├── cron/           # Cron service + cron tool update action
+├── providers/      # Provider adapters + capabilities resolver + snapshot
+├── session/        # Session lifecycle, goal state, todo_state, session_meta,
+│                   #   tool_call meta events
+├── skills/         # Skill loading + disable_model_invocation gating
+└── telemetry/      # Generic logger + cache.usage event
 ```
 
-Total: **3,097 tests passing, 15 skipped** (3,052 post-prune + 5 Phase 1 hardening + 10 Phase 1c tool telemetry + 35 Sprint A + 65 Sprint B + 27 session meta − removed: archive, autocompact).
+Total: **3,293 tests passing, 15 skipped**.
 
 ---
 
-## Last updated: 2026-05-19
+## Last updated: 2026-05-20
+
+> Latest pass: ARCHITECTURE refreshed for everything shipped since 2026-05-19. New / changed material:
+> - **Tools roadmap items 1–9 + skill-disclosure refinement** (TodoWrite, Sleep, AskUserQuestion, session_search, subagent lifecycle + monitor, cron update, interpret_image, interpret_audio).
+> - **Capability metadata + bridges** — full pipeline from `scripts/refresh_model_capabilities.py` consensus snapshot through `get_model_capabilities` resolver into `aux_providers` and the bridge tools.
+> - **Tool-call meta timeline** — every tool call gets a `type=tool_call` event in `<session>.meta.json` with `msg_index` pointer, written centrally in `_save_turn` (no per-tool opt-in needed).
+> - **Pi-inspired refinements** — `context_transform` hook, `disable_model_invocation` skill flag, head/tail truncation policy.
+> - **Perf C-tier** — anchored token accounting via `usage_prompt_tokens` stamps + `cache.usage` telemetry event.
+> - **Iteration flow updated** with the new steps (context_transform invocation, `_run_tool_timed` stamping, `cache.usage` emission).
+> - **Module map rewritten** to include the new tool/session/provider files (and to remove the deleted `autocompact.py`).
+> - Stale docs (`04_agent_strategies_catalog.md`, `05_log_swebench.md`, `06_log_experiments.md`) moved to `docs/archive/`.
