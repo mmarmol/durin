@@ -760,10 +760,68 @@ tests/
 └── telemetry/      # Generic logger + cache.usage event
 ```
 
-Total: **3,293 tests passing, 15 skipped**.
+Total: **3,853 tests passing, 15 skipped**.
 
 ---
 
-## Last updated: 2026-05-20 (D5 Textual TUI scaffolded)
+## 14. Lifecycle commands (D6)
+
+`durin` ships dedicated commands for install/configure/upgrade/uninstall so
+the operator never has to hand-edit JSON or guess where state lives.
+
+| Command | Module | What it does |
+|---|---|---|
+| `durin onboard [--wizard]` | [durin/cli/commands.py](../durin/cli/commands.py) (`onboard`) | Creates `~/.durin/config.json` + workspace; `--wizard` runs the questionary form. |
+| `durin status` | same | High-level: paths, model, which providers are configured. |
+| `durin config path \| show \| get \| set \| edit` | [durin/cli/config_cmd.py](../durin/cli/config_cmd.py) | Read/write single keys via dotted paths. Secrets masked by default. |
+| `durin upgrade [--check\|--migrate-only\|--ref]` | [durin/cli/upgrade.py](../durin/cli/upgrade.py) | Detects editable vs wheel install; pulls + reinstalls + replays config migration. |
+| `durin uninstall [--purge --keep-* --workspace]` | [durin/cli/uninstall.py](../durin/cli/uninstall.py) | Enumerates state under `~/.durin` + `~/.cache/durin`, prompts, deletes. `--purge` self-uninstalls in a subprocess. |
+| `durin provider login/logout`, `durin channels login/status` | [durin/cli/commands.py](../durin/cli/commands.py) | OAuth + channel-specific auth (kept separate because they aren't single-key edits). |
+
+### Config edit pipeline
+
+`durin config set <dotted.path> <value>` runs:
+
+1. Read raw JSON from disk.
+2. Validate via `Config.model_validate(...)`, then re-dump with `by_alias=True`
+   to canonicalize alias form (camelCase). This guarantees the dict we mutate
+   only ever has one set of keys (avoids parallel `apiKey: null` + `api_key:
+   "sk-…"` pollution that pydantic's alias-first resolution would silently
+   drop).
+3. Normalize the user's dotted path (snake_case → camelCase per segment) so
+   `providers.zhipu.api_key` lands at `providers.zhipu.apiKey`.
+4. Apply the mutation, re-validate the whole tree. On `ValidationError`,
+   leave the file untouched and print the pydantic message.
+5. Save through `durin.config.loader.save_config`, which re-runs
+   `_apply_ssrf_whitelist` and any pending schema migrations.
+
+### State paths the uninstaller knows about
+
+Grouped by `--keep-*` flag:
+
+- **`--keep-config`**: `~/.durin/config.json`, `~/.durin/config.json.bak`, `~/.durin/pairing.json`
+- **`--keep-workspace`**: `~/.durin/workspace/`
+- **`--keep-cache`**: `~/.cache/durin/{telemetry,models,archive}/`
+- Always cleaned (no opt-out flag): `~/.durin/{sessions,history,cron,media,bridge,webui,logs}/`
+- Only when `--workspace <path>` is passed: `<path>/.durin/{plans,spills,tool-results}/`
+
+The plan table renders absolute paths + recursive byte counts before
+prompting, so the user sees the blast radius before consenting.
+
+### Install-mode detection
+
+`durin upgrade` inspects `Path(durin.__file__).parent.parent`. If that path
+contains a `pyproject.toml`, the install is treated as **editable**:
+`git pull --ff-only` (optionally preceded by `git checkout <ref>`) followed
+by `pip install -e .`. Otherwise (running from `site-packages/`), it's a
+**wheel** install and we run `pip install --upgrade durin`. `--check`
+prints the detected mode + version and exits without touching pip.
+`--migrate-only` skips the package step entirely and just re-saves the
+config through the load/validate/dump pipeline, picking up any new schema
+defaults.
+
+---
+
+## Last updated: 2026-05-20 (D6 lifecycle commands)
 
 > For the history of why each subsystem was added, what was replaced, and what was discarded along the way, see `docs/02_bitacora.md`. This document only describes the current state.
