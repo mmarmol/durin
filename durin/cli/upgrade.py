@@ -9,6 +9,7 @@ migration so any new schema defaults land in ``~/.durin/config.json``.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -85,17 +86,36 @@ def install_hint(extras: list[str], *, mode: InstallMode | None = None) -> str:
         # Editable users want to re-install from the source tree.
         return f"pip install -e '.{bracket}'"
     if mode == "pipx":
-        # `--force` is required to pick up new extras because pipx caches
-        # the venv layout on the original install command.
-        return f"pipx install --force '{spec}'"
+        # `pipx install --force` should work but it's broken when pipx uses
+        # `uv` as backend: `--force` doesn't translate to `uv venv --clear`,
+        # so uv refuses to recreate the existing venv. Workaround:
+        # uninstall first, then install fresh with the new extras.
+        return f"pipx uninstall {PYPI_DIST_NAME} && pipx install '{spec}'"
     # `wheel` and `unknown` fall back to a regular pip command.
     return f"pip install --upgrade '{spec}'"
 
 
-def _run(cmd: list[str], cwd: Path | None = None) -> int:
+def _run(cmd: list[str], cwd: Path | None = None, env: dict[str, str] | None = None) -> int:
     console.print(f"[dim]$ {' '.join(cmd)}{' (cwd=' + str(cwd) + ')' if cwd else ''}[/dim]")
-    proc = subprocess.run(cmd, cwd=cwd)
+    proc = subprocess.run(cmd, cwd=cwd, env=env)
     return proc.returncode
+
+
+def pipx_subprocess_env() -> dict[str, str]:
+    """Return the environment to use when invoking ``pipx``.
+
+    pipx uses ``uv`` as backend on most modern installs, and uv aggressively
+    caches the PyPI simple index. The cache survives ~15-30 min, so a
+    freshly published release is invisible to ``pipx upgrade`` and
+    ``pipx install`` until the cache expires (or you run ``uv cache
+    clean``). ``UV_NO_CACHE=1`` disables the cache for this single
+    subprocess call, adding ~2-3 seconds to the invocation but ensuring
+    the user always sees the latest published version.
+
+    Harmless when pipx isn't using uv (older pipx, or ``PIPX_DEFAULT_BACKEND=pip``):
+    the env var is simply ignored.
+    """
+    return {**os.environ, "UV_NO_CACHE": "1"}
 
 
 def _pull_editable(root: Path, ref: str | None) -> int:
@@ -119,8 +139,12 @@ def _upgrade_wheel() -> int:
 
 
 def _upgrade_pipx() -> int:
-    """Run `pipx upgrade durin-agent`. Pre-releases require `--pip-args="--pre"`."""
-    return _run(["pipx", "upgrade", PYPI_DIST_NAME])
+    """Run `pipx upgrade durin-agent`. Pre-releases require `--pip-args="--pre"`.
+
+    The subprocess inherits a `UV_NO_CACHE=1` env var so a freshly-published
+    release is visible even before uv's index cache expires.
+    """
+    return _run(["pipx", "upgrade", PYPI_DIST_NAME], env=pipx_subprocess_env())
 
 
 def migrate_config_file(path: Path | None = None) -> bool:

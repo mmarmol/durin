@@ -132,7 +132,7 @@ def test_run_upgrade_editable_pulls_and_reinstalls(tmp_path: Path) -> None:
 
     captured: list[list[str]] = []
 
-    def _fake_subprocess_run(cmd, cwd=None):
+    def _fake_subprocess_run(cmd, cwd=None, env=None):
         captured.append(list(cmd))
         # Return success on every call.
         class _R:
@@ -157,10 +157,10 @@ def test_run_upgrade_pipx_calls_pipx_upgrade(tmp_path: Path) -> None:
     cfg_path = tmp_path / "config.json"
     cfg_path.write_text("{}", encoding="utf-8")
 
-    captured: list[list[str]] = []
+    captured: list[tuple[list[str], dict | None]] = []
 
-    def _fake_subprocess_run(cmd, cwd=None):
-        captured.append(list(cmd))
+    def _fake_subprocess_run(cmd, cwd=None, env=None):
+        captured.append((list(cmd), env))
         class _R:
             returncode = 0
         return _R()
@@ -172,8 +172,23 @@ def test_run_upgrade_pipx_calls_pipx_upgrade(tmp_path: Path) -> None:
         rc = run_upgrade()
 
     assert rc == 0
-    flat = [" ".join(c) for c in captured]
+    flat = [" ".join(c) for c, _e in captured]
     assert any("pipx" in c and "upgrade" in c and "durin-agent" in c for c in flat), captured
+    # Regression: the pipx upgrade must run with UV_NO_CACHE=1 so a fresh
+    # release isn't masked by uv's index cache.
+    pipx_calls = [(c, e) for c, e in captured if "pipx" in " ".join(c)]
+    assert pipx_calls, captured
+    cmd, env = pipx_calls[0]
+    assert env is not None and env.get("UV_NO_CACHE") == "1", (cmd, env)
+
+
+def test_pipx_subprocess_env_sets_uv_no_cache() -> None:
+    from durin.cli.upgrade import pipx_subprocess_env
+
+    env = pipx_subprocess_env()
+    assert env["UV_NO_CACHE"] == "1"
+    # Should also carry through the rest of the parent env (PATH at minimum).
+    assert "PATH" in env
 
 
 def test_install_hint_for_editable() -> None:
@@ -186,8 +201,16 @@ def test_install_hint_for_editable() -> None:
 def test_install_hint_for_pipx() -> None:
     from durin.cli.upgrade import install_hint
 
-    assert install_hint(["memory"], mode="pipx") == "pipx install --force 'durin-agent[memory]'"
-    assert install_hint(["memory", "mcp"], mode="pipx") == "pipx install --force 'durin-agent[memory,mcp]'"
+    # pipx + uv has a bug where `pipx install --force` doesn't recreate the
+    # venv. The hint works around it with uninstall+install.
+    assert (
+        install_hint(["memory"], mode="pipx")
+        == "pipx uninstall durin-agent && pipx install 'durin-agent[memory]'"
+    )
+    assert (
+        install_hint(["memory", "mcp"], mode="pipx")
+        == "pipx uninstall durin-agent && pipx install 'durin-agent[memory,mcp]'"
+    )
 
 
 def test_install_hint_for_wheel() -> None:
@@ -214,7 +237,7 @@ def test_run_upgrade_wheel_calls_pip_upgrade(tmp_path: Path) -> None:
 
     captured: list[list[str]] = []
 
-    def _fake_subprocess_run(cmd, cwd=None):
+    def _fake_subprocess_run(cmd, cwd=None, env=None):
         captured.append(list(cmd))
         class _R:
             returncode = 0
