@@ -295,6 +295,19 @@ class HeartbeatConfig(Base):
     enabled: bool = True
     interval_s: int = 30 * 60  # 30 minutes
     keep_recent_messages: int = 8
+    # OpenClaw-inspired: when True, each heartbeat tick runs in a fresh
+    # ephemeral session that's deleted after the tick. No state carries
+    # between ticks — useful when heartbeat tasks are meant to be
+    # stateless one-shots (e.g. "did anything change?") and shouldn't
+    # drift due to accumulated context from prior runs. When False
+    # (default), the existing behaviour is preserved: one shared session
+    # named "heartbeat", trimmed by ``keep_recent_messages`` after each
+    # tick.
+    isolated_sessions: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("isolatedSessions", "isolated_sessions"),
+        serialization_alias="isolatedSessions",
+    )
 
 
 class ApiConfig(Base):
