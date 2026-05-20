@@ -455,20 +455,23 @@ def install_missing_extras(extras: list[str], *, assume_yes: bool = False) -> in
     # don't shell out and don't need to parse our own quoting.
     bracket = f"[{','.join(extras)}]" if extras else ""
     if info.mode == "pipx":
-        from durin.cli.upgrade import PYPI_DIST_NAME, pipx_subprocess_env
+        from durin.cli.upgrade import PYPI_DIST_NAME, extras_to_packages, pipx_subprocess_env
 
-        # pipx + uv backend has a known bug: `pipx install --force` doesn't
-        # translate to `uv venv --clear`, so uv refuses to recreate the
-        # existing venv. Workaround: uninstall first, then install fresh.
+        # Use `pipx inject` to add the extras' packages to the existing
+        # pipx venv. This is non-destructive (no reinstall, no data loss,
+        # no config touch) and avoids the broken `pipx install --force`
+        # path on the uv backend.
         env = pipx_subprocess_env()
-        uninstall_cmd = ["pipx", "uninstall", PYPI_DIST_NAME]
-        console.print(f"[dim]$ {' '.join(uninstall_cmd)}[/dim]")
-        # Tolerate non-zero exit (e.g. pipx says "nothing to uninstall");
-        # the subsequent install is what really matters.
-        subprocess.run(uninstall_cmd, env=env)
-        install_cmd = ["pipx", "install", f"{PYPI_DIST_NAME}{bracket}"]
-        console.print(f"[dim]$ {' '.join(install_cmd)}[/dim]")
-        proc = subprocess.run(install_cmd, env=env)
+        pkgs = extras_to_packages(extras)
+        if not pkgs:
+            console.print(
+                "[red]Could not map extras to packages from metadata; "
+                "run the install command manually.[/red]"
+            )
+            return 1
+        cmd = ["pipx", "inject", PYPI_DIST_NAME, *pkgs]
+        console.print(f"[dim]$ {' '.join(cmd)}[/dim]")
+        proc = subprocess.run(cmd, env=env)
         return proc.returncode
     cmd = [sys.executable, "-m", "pip", "install", "--upgrade", f"durin-agent{bracket}"]
     console.print(f"[dim]$ {' '.join(cmd)}[/dim]")
