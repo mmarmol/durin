@@ -89,6 +89,15 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 
+# D6 lifecycle commands: config get/set/show/edit/path, upgrade, uninstall.
+from durin.cli.config_cmd import config_app as _config_app  # noqa: E402
+from durin.cli.upgrade import register as _register_upgrade  # noqa: E402
+from durin.cli.uninstall import register as _register_uninstall  # noqa: E402
+
+app.add_typer(_config_app, name="config")
+_register_upgrade(app)
+_register_uninstall(app)
+
 console = Console()
 EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit", ":q"}
 
