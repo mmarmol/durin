@@ -588,6 +588,20 @@ class SessionManager:
                 "Failed to write derived meta for {}", session.key,
             )
 
+        # Regenerate the navigable `<key>.md` view alongside the jsonl so
+        # memory entries can reference specific turns by markdown anchor.
+        # Best-effort: a regeneration failure must not bring down the
+        # session save — jsonl is the durable surface.
+        try:
+            from durin.memory.session_md import regenerate_session_md
+
+            regenerate_session_md(path)
+        except Exception:
+            logger.warning(
+                "Failed to regenerate session markdown view for {}",
+                session.key,
+            )
+
         self._cache[session.key] = session
 
     def flush_all(self) -> int:
