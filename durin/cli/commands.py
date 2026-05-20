@@ -134,8 +134,16 @@ def _restore_terminal() -> None:
         termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, _SAVED_TERM_ATTRS)
 
 
-def _init_prompt_session() -> None:
-    """Create the prompt_toolkit session with persistent file history."""
+def _init_prompt_session(
+    workspace: Path | None = None,
+    presets_getter=None,
+) -> None:
+    """Create the prompt_toolkit session with persistent file history.
+
+    ``workspace`` enables the ``@file`` completer (D1.9).
+    ``presets_getter`` enables the ``/model <preset>`` completer (D1.7)
+    and the Ctrl+L shortcut that pre-fills ``/model ``.
+    """
     global _PROMPT_SESSION, _SAVED_TERM_ATTRS
 
     # Save terminal state so we can restore it on exit
@@ -149,10 +157,36 @@ def _init_prompt_session() -> None:
     history_file = get_cli_history_path()
     history_file.parent.mkdir(parents=True, exist_ok=True)
 
+    from prompt_toolkit.completion import merge_completers
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.document import Document as _PtkDocument
+
+    completers = []
+    if workspace is not None:
+        from durin.cli.completers import FileReferenceCompleter
+
+        completers.append(FileReferenceCompleter(workspace))
+    if presets_getter is not None:
+        from durin.cli.completers import ModelPresetCompleter
+
+        completers.append(ModelPresetCompleter(presets_getter))
+    completer = merge_completers(completers) if completers else None
+
+    kb = KeyBindings()
+
+    @kb.add("c-l")
+    def _open_model_picker(event):
+        """Ctrl+L: replace current input with `/model ` to start picker flow."""
+        buf = event.app.current_buffer
+        buf.document = _PtkDocument("/model ", cursor_position=len("/model "))
+
     _PROMPT_SESSION = PromptSession(
         history=SafeFileHistory(str(history_file)),
         enable_open_in_editor=False,
         multiline=False,  # Enter submits (single line mode)
+        completer=completer,
+        complete_while_typing=True,
+        key_bindings=kb,
     )
 
 
@@ -1271,7 +1305,16 @@ def agent(
     else:
         # Interactive mode — route through bus like other channels
         from durin.bus.events import InboundMessage
-        _init_prompt_session()
+
+        def _presets_for_completer() -> list[str]:
+            names = set(agent_loop.model_presets or {})
+            names.add("default")
+            return sorted(names)
+
+        _init_prompt_session(
+            workspace=Path(agent_loop.workspace),
+            presets_getter=_presets_for_completer,
+        )
         _model, _preset_tag = _model_display(config)
         console.print(f"{__logo__} Interactive mode [bold blue]({_model})[/bold blue]{_preset_tag} — type [bold]exit[/bold] or [bold]Ctrl+C[/bold] to quit\n")
 
