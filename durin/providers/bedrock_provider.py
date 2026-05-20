@@ -12,6 +12,8 @@ from typing import Any
 
 import json_repair
 
+from durin.utils.tool_argument_repair import parse_tool_call_arguments
+
 from durin.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 
 _IMAGE_DATA_URL = re.compile(r"^data:image/([a-zA-Z0-9.+-]+);base64,(.*)$", re.DOTALL)
@@ -616,10 +618,10 @@ class BedrockProvider(LLMProvider):
         for buf in tool_buffers.values():
             args: Any = {}
             if buf.get("input"):
-                try:
-                    args = json_repair.loads(buf["input"])
-                except Exception:
-                    args = {}
+                # Tier 2 B1: pre-process malformed JSON (HTML entities,
+                # leading commentary) before json_repair runs. Returns a
+                # dict directly.
+                args = parse_tool_call_arguments(buf["input"])
             tool_calls.append(ToolCallRequest(
                 id=buf.get("id") or "",
                 name=buf.get("name") or "",

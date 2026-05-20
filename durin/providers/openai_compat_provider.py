@@ -18,6 +18,8 @@ from urllib.parse import urlparse
 
 import httpx
 import json_repair
+
+from durin.utils.tool_argument_repair import parse_tool_call_arguments
 from loguru import logger
 
 if os.environ.get("LANGFUSE_SECRET_KEY") and importlib.util.find_spec("langfuse"):
@@ -936,7 +938,7 @@ class OpenAICompatProvider(LLMProvider):
                 fn = self._maybe_mapping(tc_map.get("function")) or {}
                 args = fn.get("arguments", {})
                 if isinstance(args, str):
-                    args = json_repair.loads(args)
+                    args = parse_tool_call_arguments(args)
                 ec, prov, fn_prov = _extract_tc_extras(tc)
                 parsed_tool_calls.append(ToolCallRequest(
                     id=_short_tool_id(),
@@ -979,7 +981,7 @@ class OpenAICompatProvider(LLMProvider):
         for tc in raw_tool_calls:
             args = tc.function.arguments
             if isinstance(args, str):
-                args = json_repair.loads(args)
+                args = parse_tool_call_arguments(args)
             ec, prov, fn_prov = _extract_tc_extras(tc)
             tool_calls.append(ToolCallRequest(
                 id=_short_tool_id(),
@@ -1093,7 +1095,7 @@ class OpenAICompatProvider(LLMProvider):
                 ToolCallRequest(
                     id=b["id"] or _short_tool_id(),
                     name=b["name"],
-                    arguments=json_repair.loads(b["arguments"]) if b["arguments"] else {},
+                    arguments=parse_tool_call_arguments(b["arguments"]) if b["arguments"] else {},
                     extra_content=b.get("extra_content"),
                     provider_specific_fields=b.get("prov"),
                     function_provider_specific_fields=b.get("fn_prov"),
