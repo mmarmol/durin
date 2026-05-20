@@ -401,6 +401,43 @@ class SleepEndEvent(TypedDict):
 
 
 # ===========================================================================
+# Memory subsystem (Phase 1)
+# ===========================================================================
+
+
+class MemoryRecallEvent(TypedDict):
+    """memory_search invocation. Logged once per call (not per result)."""
+
+    query: str
+    scope: str
+    level: str
+    result_count: int
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
+class MemoryStoreEvent(TypedDict):
+    """memory_store invocation that successfully wrote a memory entry."""
+
+    entry_id: str
+    class_name: str
+    author: str
+    headline: str
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
+class MemoryIngestEvent(TypedDict):
+    """memory_ingest invocation that copied an external artifact into ingested/."""
+
+    entry_id: str
+    size_bytes: int
+    suffix: str
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
+# ===========================================================================
 # Catalog — single source of truth
 # ===========================================================================
 
@@ -449,6 +486,10 @@ EVENTS: dict[str, type] = {
     "sleep.start": SleepStartEvent,
     "sleep.cancelled": SleepCancelledEvent,
     "sleep.end": SleepEndEvent,
+    # Memory subsystem (Phase 1)
+    "memory.recall": MemoryRecallEvent,
+    "memory.store": MemoryStoreEvent,
+    "memory.ingest": MemoryIngestEvent,
 }
 
 
@@ -497,4 +538,8 @@ __all__ = [
     "SleepStartEvent",
     "SleepCancelledEvent",
     "SleepEndEvent",
+    # Memory subsystem
+    "MemoryRecallEvent",
+    "MemoryStoreEvent",
+    "MemoryIngestEvent",
 ]

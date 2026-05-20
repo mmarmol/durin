@@ -12,6 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from durin.agent.tools._telemetry import emit_tool_event
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.schema import StringSchema, tool_parameters_schema
 from durin.memory.ingestion import IngestError, ingest_artifact
@@ -72,6 +73,14 @@ class MemoryIngestTool(Tool):
         except OSError as exc:
             return {"error": f"io error: {exc}"}
 
+        emit_tool_event(
+            "memory.ingest",
+            {
+                "entry_id": result["id"],
+                "size_bytes": result["size_bytes"],
+                "suffix": Path(result["source"]).suffix,
+            },
+        )
         return {
             "id": result["id"],
             "saved_to": result["source"],

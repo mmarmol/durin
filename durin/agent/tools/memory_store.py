@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from durin.agent.tools._telemetry import emit_tool_event
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.schema import ArraySchema, StringSchema, tool_parameters_schema
 from durin.memory.paths import MEMORY_CLASSES
@@ -105,4 +106,13 @@ class MemoryStoreTool(Tool):
         except OSError as exc:
             return {"error": f"io error: {exc}"}
 
+        emit_tool_event(
+            "memory.store",
+            {
+                "entry_id": result["id"],
+                "class_name": result["class"],
+                "author": result["author"],
+                "headline": result["headline"],
+            },
+        )
         return result
