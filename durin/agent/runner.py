@@ -41,6 +41,7 @@ from durin.utils.runtime import (
     repeated_external_lookup_error,
     repeated_workspace_violation_error,
 )
+from durin.utils.history_image_prune import prune_processed_history_images
 from durin.utils.tool_result_validation import validate_tool_result_blocks
 
 _DEFAULT_ERROR_MESSAGE = "Sorry, I encountered an error calling the AI model."
@@ -467,6 +468,11 @@ class AgentRunner:
                 # later when the caller saves only the new turn.
                 messages_for_model = self._drop_orphan_tool_results(messages)
                 messages_for_model = self._backfill_missing_tool_results(messages_for_model)
+                # Tier 2 B3: prune images/audio from completed turns older
+                # than the preservation window so accumulated media doesn't
+                # ride along forever. Runs BEFORE microcompact / snip so
+                # those steps see the reduced size.
+                messages_for_model = prune_processed_history_images(messages_for_model)
                 messages_for_model = self._microcompact(messages_for_model)
                 messages_for_model = self._apply_tool_result_budget(spec, messages_for_model)
                 messages_for_model = self._snip_history(spec, messages_for_model)
