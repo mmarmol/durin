@@ -10,6 +10,7 @@ from durin.memory.paths import (
 )
 from durin.memory.consolidator_tags import parse_consolidator_response
 from durin.memory.drill import DrillError, drill
+from durin.memory.hot_layer import HotLayer, read_hot_layer
 from durin.memory.ingestion import IngestError, ingest_artifact
 from durin.memory.provenance import Author, author_scope, current_author
 from durin.memory.store import StoreError, store_memory
@@ -26,6 +27,7 @@ __all__ = [
     "Author",
     "DrillError",
     "FrontmatterError",
+    "HotLayer",
     "IngestError",
     "MEMORY_CLASSES",
     "MemoryEntry",
@@ -42,6 +44,7 @@ __all__ = [
     "memory_class_dir",
     "memory_dir",
     "parse_consolidator_response",
+    "read_hot_layer",
     "regenerate_session_md",
     "render_session_md",
     "SearchResult",
