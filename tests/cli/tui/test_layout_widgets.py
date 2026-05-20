@@ -76,6 +76,41 @@ async def test_message_bubble_append_streams() -> None:
 
 
 @pytest.mark.asyncio
+async def test_message_bubble_renders_brackets_literally() -> None:
+    """Regression: model output that contains `[...]` (code blocks, checkboxes,
+    URLs) must NOT be parsed by Rich as markup — otherwise a malformed tag
+    in a streaming delta silently breaks the render and the bubble appears
+    empty even though `body` is set."""
+    app = DurinApp(agent_loop=None)
+    async with app.run_test():
+        chat = app.query_one(ChatView)
+        # Each of these used to produce a blank or partial render via
+        # Rich's markup interpretation. They must all round-trip the body
+        # verbatim through the rendered output.
+        cases = [
+            "[bold]not a tag[/bold]",
+            "TODO: [ ] write tests, [x] ship feature",
+            "see [this link](https://example.com)",
+            "unclosed [bracket and emoji 😄",
+            "¡Hola Marcelo! ¿Qué tal?",
+        ]
+        from rich.console import Console
+        from rich.text import Text
+
+        # Plain console (no terminal control codes) so we can read what
+        # would end up on screen after Rich's markup pass.
+        sink = Console(width=80, force_terminal=False, color_system=None, record=True)
+        for raw in cases:
+            bubble = chat.add_message("assistant", raw)
+            assert bubble.body == raw
+            # render() returns a markup string; round-trip it through Rich
+            # the same way Textual would, and assert the body text survives.
+            sink.print(Text.from_markup(str(bubble.render())))
+            output = sink.export_text(clear=True)
+            assert raw in output, f"missing body in render output: {output!r}"
+
+
+@pytest.mark.asyncio
 async def test_header_reflects_model_and_workspace(tmp_path) -> None:
     fake_loop = SimpleNamespace(
         workspace=str(tmp_path),
