@@ -25,12 +25,16 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - name: Install durin + dev extras
+      - name: Install durin + dev + all lightweight extras
         run: |
           python -m pip install --upgrade pip
           # Skip the webui bundle — CI doesn't need it and it would force
           # bun/npm onto the runner just for tests.
-          DURIN_SKIP_WEBUI_BUILD=1 pip install -e ".[dev]"
+          # Install every optional extra except `[local]` (llama-cpp-python
+          # is huge and platform-specific) and `[memory]` (fastembed
+          # downloads ~2GB models). Tests that need those self-skip via
+          # `pytest.importorskip` when they're absent.
+          DURIN_SKIP_WEBUI_BUILD=1 pip install -e ".[dev,mcp,web,oauth,slack,discord]"
 
       - name: Run unit tests
         run: pytest tests/ -q --maxfail=5

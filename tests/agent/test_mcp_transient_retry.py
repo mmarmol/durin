@@ -5,9 +5,13 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from mcp import types as mcp_types
-from mcp.shared.exceptions import McpError
-from mcp.types import ErrorData
+
+# The `mcp` package is an optional extra (`durin-agent[mcp]`). Skip the whole
+# file when it isn't installed so CI without the extra doesn't blow up at
+# collection time.
+mcp_types = pytest.importorskip("mcp.types")
+McpError = pytest.importorskip("mcp.shared.exceptions").McpError
+ErrorData = pytest.importorskip("mcp.types").ErrorData
 
 from durin.agent.tools.mcp import (
     MCPPromptWrapper,
