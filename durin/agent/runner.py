@@ -41,6 +41,7 @@ from durin.utils.runtime import (
     repeated_external_lookup_error,
     repeated_workspace_violation_error,
 )
+from durin.utils.tool_result_validation import validate_tool_result_blocks
 
 _DEFAULT_ERROR_MESSAGE = "Sorry, I encountered an error calling the AI model."
 _PERSISTED_MODEL_ERROR_PLACEHOLDER = "[Assistant reply unavailable due to model error.]"
@@ -1353,6 +1354,18 @@ class AgentRunner:
         result: Any,
     ) -> Any:
         result = ensure_nonempty_tool_result(tool_name, result)
+        # Per-block validation runs FIRST so the aggregate cap below sees a
+        # list whose blocks each fit. This caps single image/audio payloads
+        # before they distort the rest of the context, and trims runaway
+        # text blocks before they crowd out their siblings.
+        try:
+            result = validate_tool_result_blocks(result)
+        except Exception:
+            logger.exception(
+                "Tool result block validation failed for {} in {}; using raw result",
+                tool_call_id,
+                spec.session_key or "default",
+            )
         try:
             content = maybe_persist_tool_result(
                 spec.workspace,
