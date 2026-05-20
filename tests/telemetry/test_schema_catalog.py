@@ -18,13 +18,19 @@ from durin.telemetry.schema import EVENTS
 
 _DURIN_ROOT = Path(__file__).resolve().parent.parent.parent / "durin"
 
-# A literal first-arg string to ``.log(...)`` or to a ``_emit*(...)``
-# helper that wraps it. Matches single- AND double-quoted strings.
-# Tool subclasses use ``self._emit("...", {...})``; command builtins use
-# ``_emit_mode_telemetry("...", {...})``. Direct ``.log(...)`` calls
-# happen from the runner / memory / providers.
+# A literal first-arg string to a telemetry-emitting helper. Matches
+# the patterns we use across the codebase:
+#
+#   - ``.log("...")`` — direct ``TelemetryLogger.log``.
+#   - ``._emit("...")`` / ``._emit_mode_telemetry("...")`` — instance
+#     method wrappers on `_FsTool`, command builtins, plan_mode tool, etc.
+#   - ``emit_tool_event("...")`` — free-function wrapper in
+#     ``durin/agent/tools/_telemetry.py``, used by tools that don't
+#     subclass _FsTool (web_search, web_fetch, todo_write, list_dir).
+#
+# Captures the event_type string (first quoted arg) for catalog comparison.
 _LOG_CALL_RE = re.compile(
-    r"""(?:\.log|_emit\w*)\(\s*["']([a-z][a-z0-9_.]*)["']"""
+    r"""(?:\.log|_emit\w*|emit_tool_event)\(\s*["']([a-z][a-z0-9_.]*)["']"""
 )
 
 # Sites we know are NOT telemetry-event emits (e.g. structlog-style helpers,

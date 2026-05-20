@@ -1092,11 +1092,28 @@ class ListDirTool(_FsTool):
                         items.append(f"{pfx}{item.name}")
 
             if not items and total == 0:
+                self._emit("tool.list_dir", {
+                    "path": self._display_path(dp),
+                    "recursive": recursive,
+                    "max_entries": cap,
+                    "displayed": 0,
+                    "total_before_cap": 0,
+                    "truncated": False,
+                })
                 return f"Directory {path} is empty"
 
             result = "\n".join(items)
-            if total > cap:
+            truncated = total > cap
+            if truncated:
                 result += f"\n\n(truncated, showing first {cap} of {total} entries)"
+            self._emit("tool.list_dir", {
+                "path": self._display_path(dp),
+                "recursive": recursive,
+                "max_entries": cap,
+                "displayed": len(items),
+                "total_before_cap": total,
+                "truncated": truncated,
+            })
             return result
         except PermissionError as e:
             return f"Error: {e}"
