@@ -57,9 +57,15 @@ def detect_install_mode() -> InstallInfo:
     pyproject = candidate_root / "pyproject.toml"
     if pyproject.is_file():
         return InstallInfo(mode="editable", source_root=candidate_root, version=__version__)
-    exe = str(Path(sys.executable).resolve())
-    if "/pipx/venvs/" in exe or "\\pipx\\venvs\\" in exe:
-        return InstallInfo(mode="pipx", source_root=None, version=__version__)
+    # pipx detection: the venv root lives under ``~/.local/pipx/venvs/<pkg>/``
+    # (or a ``PIPX_HOME``-rooted variant). We probe ``sys.prefix`` and the raw
+    # ``sys.executable`` *without* ``.resolve()`` — resolving follows the
+    # symlink in ``<venv>/bin/python`` straight to the base interpreter
+    # (e.g. Homebrew), which loses the ``/pipx/venvs/`` segment entirely.
+    for candidate in (sys.prefix, sys.executable):
+        s = str(candidate)
+        if "/pipx/venvs/" in s or "\\pipx\\venvs\\" in s:
+            return InstallInfo(mode="pipx", source_root=None, version=__version__)
     if "site-packages" in str(pkg_path):
         return InstallInfo(mode="wheel", source_root=None, version=__version__)
     return InstallInfo(mode="unknown", source_root=None, version=__version__)
