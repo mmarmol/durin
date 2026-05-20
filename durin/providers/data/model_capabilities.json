@@ -9861,15 +9861,16 @@
       "supports_image_output": false,
       "supports_function_calling": true,
       "supports_reasoning": true,
-      "supports_prompt_caching": false,
+      "supports_prompt_caching": true,
       "supports_response_schema": true,
       "_sources": [
         "openrouter:z-ai/glm-5.1",
         "models.dev:zai/glm-5.1",
         "models.dev:nvidia/z-ai/glm-5.1",
-        "models.dev:zhipuai/glm-5.1"
+        "models.dev:zhipuai/glm-5.1",
+        "manual:zai-coding-plan-curl-verified-2026-05-20"
       ],
-      "_authority": "merge"
+      "_authority": "manual"
     },
     "gemma-4-26b-a4b-it:free": {
       "max_input_tokens": 262144,
@@ -9990,14 +9991,15 @@
       "supports_image_output": false,
       "supports_function_calling": true,
       "supports_reasoning": true,
-      "supports_prompt_caching": false,
+      "supports_prompt_caching": true,
       "supports_response_schema": true,
       "_sources": [
         "openrouter:z-ai/glm-5v-turbo",
         "models.dev:zai/glm-5v-turbo",
-        "models.dev:zhipuai/glm-5v-turbo"
+        "models.dev:zhipuai/glm-5v-turbo",
+        "manual:zai-coding-plan-curl-verified-2026-05-20"
       ],
-      "_authority": "merge"
+      "_authority": "manual"
     },
     "minimax-m2.7": {
       "max_input_tokens": 204800,
@@ -10052,13 +10054,14 @@
       "supports_image_output": false,
       "supports_function_calling": true,
       "supports_reasoning": true,
-      "supports_prompt_caching": false,
+      "supports_prompt_caching": true,
       "supports_response_schema": true,
       "_sources": [
         "openrouter:z-ai/glm-5-turbo",
-        "models.dev:zai/glm-5-turbo"
+        "models.dev:zai/glm-5-turbo",
+        "manual:zai-coding-plan-curl-verified-2026-05-20"
       ],
-      "_authority": "merge"
+      "_authority": "manual"
     },
     "nemotron-3-super-120b-a12b:free": {
       "max_input_tokens": 1000000,
