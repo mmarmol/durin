@@ -390,6 +390,7 @@ class AgentRunner:
                     tool_calls=[tc.to_openai_tool_call() for tc in response.tool_calls],
                     reasoning_content=response.reasoning_content,
                     thinking_blocks=response.thinking_blocks,
+                    prompt_tokens=raw_usage.get("prompt_tokens"),
                 )
                 messages.append(assistant_message)
                 tools_used.extend(tc.name for tc in response.tool_calls)
@@ -585,6 +586,7 @@ class AgentRunner:
                     clean,
                     reasoning_content=response.reasoning_content,
                     thinking_blocks=response.thinking_blocks,
+                    prompt_tokens=raw_usage.get("prompt_tokens"),
                 )
 
             # Check for mid-turn injections BEFORE signaling stream end.
@@ -644,6 +646,7 @@ class AgentRunner:
                 clean,
                 reasoning_content=response.reasoning_content,
                 thinking_blocks=response.thinking_blocks,
+                prompt_tokens=raw_usage.get("prompt_tokens"),
             ))
             await self._emit_checkpoint(
                 spec,
