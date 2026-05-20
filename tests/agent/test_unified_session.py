@@ -240,7 +240,7 @@ class TestCmdNewUnifiedSession:
         # and no RuntimeWarning is emitted.
         loop = SimpleNamespace(
             sessions=sessions,
-            consolidator=SimpleNamespace(archive=AsyncMock(return_value=True)),
+            consolidator=SimpleNamespace(archive=AsyncMock(return_value=("summary", {"entities": [], "topics": []}))),
             _cancel_active_tasks=AsyncMock(return_value=0),
         )
         loop._schedule_background = lambda coro: asyncio.ensure_future(coro)
@@ -274,7 +274,7 @@ class TestCmdNewUnifiedSession:
 
         loop = SimpleNamespace(
             sessions=sessions,
-            consolidator=SimpleNamespace(archive=AsyncMock(return_value=True)),
+            consolidator=SimpleNamespace(archive=AsyncMock(return_value=("summary", {"entities": [], "topics": []}))),
             _cancel_active_tasks=AsyncMock(return_value=0),
         )
         loop._schedule_background = lambda coro: asyncio.ensure_future(coro)
@@ -321,7 +321,7 @@ class TestConsolidationUnaffectedByUnifiedSession:
             get_tool_definitions=MagicMock(return_value=[]),
             max_completion_tokens=100,
         )
-        consolidator.archive = AsyncMock()
+        consolidator.archive = AsyncMock(return_value=("summary", {"entities": [], "topics": []}))
 
         session = Session(key="unified:default")
         session.messages = []
@@ -358,7 +358,7 @@ class TestConsolidationUnaffectedByUnifiedSession:
             session = Session(key=key)
             session.messages = []  # empty → exits immediately for both keys
 
-            consolidator.archive = AsyncMock()
+            consolidator.archive = AsyncMock(return_value=("summary", {"entities": [], "topics": []}))
             await consolidator.maybe_consolidate_by_tokens(session)
             archive_calls[key] = consolidator.archive.call_count
 
@@ -392,7 +392,7 @@ class TestConsolidationUnaffectedByUnifiedSession:
         consolidator.estimate_session_prompt_tokens = MagicMock(return_value=(950, "tiktoken"))
         # No valid boundary found → returns gracefully without archiving
         consolidator.pick_consolidation_boundary = MagicMock(return_value=None)
-        consolidator.archive = AsyncMock()
+        consolidator.archive = AsyncMock(return_value=("summary", {"entities": [], "topics": []}))
 
         await consolidator.maybe_consolidate_by_tokens(session)
 
