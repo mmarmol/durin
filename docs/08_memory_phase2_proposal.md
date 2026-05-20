@@ -306,6 +306,252 @@ shippable.
 
 ---
 
+## 0c. Consolidated architecture (May 2026, post external review)
+
+> **Canonical reference.** After comparing hermes-agent, openclaw,
+> cognee, mempalace, and hindsight against Marcelo's clarified vision
+> (sessions as source of truth; ingested documents as a second source;
+> daily dream as the derivation engine; markdown + anchors for
+> provenance; minimal per-turn token cost), the design consolidated to
+> the shape below. **This section supersedes the design exploration in
+> §1–§5** — those sections are preserved as the trail of "how we got
+> here" but should be read as historical context, not active design.
+
+### 0c.1 Three sources of truth
+
+The system has three kinds of canonical artifacts. Each is immutable
+once written and fully replayable.
+
+| Kind | Where | Origin |
+|---|---|---|
+| **Sessions** | `sessions/<key>.jsonl` | Conversations agent↔user. One file per session. Append-only. |
+| **Ingested docs** | `ingested/<id>/source.<ext>` | Artifacts the user explicitly hands the system via `memory_ingest(path)`. Frozen at ingest time. |
+| **Memory entries** | `memory/<class>/<id>.md` | Derived knowledge — learnings, conclusions, preferences. Created by dream or by `memory_store` tool call. **Mutable**: the user may edit them by hand. |
+
+Memory entries are the only "fuente de verdad" the user is expected to
+hand-edit. Sessions and ingested docs are never edited by hand. The
+provenance system (§0c.4) distinguishes `agent_created` from
+`user_authored` entries so the curator and dream only auto-manage the
+former.
+
+### 0c.2 Layout on disk
+
+```
+~/.durin/
+├── sessions/
+│   ├── <key>.jsonl                  ← canonical (replayable turn log)
+│   ├── <key>.meta.json              ← derived: summary + tags (entities, topics)
+│   └── <key>.md                     ← derived: navigable view with #turn-N anchors
+│
+├── ingested/<id>/
+│   ├── source.<ext>                 ← canonical (frozen artifact)
+│   ├── source.md                    ← derived (if source isn't already markdown)
+│   └── meta.json                    ← derived: summary + entities + relations
+│
+├── memory/
+│   ├── stable/<id>.md               ← classes A + C (identity, corrections)
+│   ├── episodic/<id>.md             ← class B (working / recent)
+│   ├── corpus/<id>.md               ← class D (queryable corpus)
+│   └── pending/<id>.md              ← class F (prospective items)
+│
+└── dream/
+    └── cursor.json                  ← what dream processed and up to when
+```
+
+Three structural observations:
+
+- The session/meta split (§0a Decision 2) generalises: every canonical
+  source has a sibling `.meta.json` for derived projections and a
+  sibling `.md` for human-navigable views.
+- Memory entries are markdown files in subdirectories matching the
+  utility classes from §0a Decision 1. The class is encoded in the
+  directory name, not in frontmatter.
+- Dream's progress lives in its own cursor file, not in each session's
+  meta.json. Decouples session lifecycle from dream lifecycle: resetting
+  dream doesn't dirty session metadata; deleting a session doesn't
+  break dream's bookkeeping.
+
+### 0c.3 Lifecycle — what happens on each event
+
+Six events drive every state change. Listed in order of frequency.
+
+| Event | Trigger | Who runs it | Output |
+|---|---|---|---|
+| **Turn** | User or assistant message | Existing session writer | Append to `<key>.jsonl` |
+| **Compaction** | Token threshold inside the session | Main conversation model | Summary in `meta.json::derived._last_summary` (existing). NEW: tags (`entities`, `topics`) in `meta.json::derived`. Regen of `<key>.md`. |
+| **Session close** | Inactivity timeout | Deterministic formatter | Force `<key>.md` if compaction never fired during the session. |
+| **`memory_ingest(path)`** | User invokes the tool | Main conversation model (synchronous) | Copy source to `ingested/<id>/source.*`. Generate `source.md` if the source isn't markdown. Produce summary + entities + relations in `meta.json::derived`. |
+| **`memory_store(content)`** | Agent calls the tool, typically because user asked to remember something | Main model | Direct write to `memory/<class>/<id>.md` with full frontmatter (§0c.5). |
+| **Dream** | Cron, default once per day (configurable) | Cheap model (Haiku 4.5 or local Ollama) | Read sessions and docs since `cursor.json`. Reorganise. Derive conclusions. Create or update memory entries. Refresh hot layer. Advance cursor. |
+
+**Division of labour**: compaction does local work (within one
+session); dream does global work (across sessions and docs).
+
+**Choice of model per event** is deliberate:
+
+- Compaction uses the same model that's running the conversation. It's
+  infrequent, the prompt is already loaded, and tag extraction adds
+  ~10% to the prompt — no extra LLM call.
+- Document ingestion uses the main model synchronously because the user
+  asked for it and is waiting on the result. The cost is declared and
+  scoped to that one action.
+- Dream uses a cheap model because it runs unattended over potentially
+  many candidates per night.
+- `memory_store` uses the main model because it's a single inline tool
+  call whose result the agent might use later in the same turn.
+
+### 0c.4 Provenance via markdown links
+
+Every derived artifact links to its sources using standard markdown
+links pointing to stable anchors in the `.md` views of canonical
+sources.
+
+Anchor conventions:
+
+- **Sessions** — `<key>.md#turn-N` where N is the 1-indexed turn
+  position. When a session is compacted, consolidated turns receive
+  aggregate anchors `#consolidated-M` so older links stay resolvable.
+- **Ingested docs** — native markdown headers in
+  `ingested/<id>/source.md`. If the canonical source isn't markdown,
+  the derivation step produces `source.md` with headers reflecting the
+  original document structure.
+- **Memory entries** — each is its own document, addressed by file
+  path (`memory/<class>/<id>.md`) for whole-file links.
+
+Why this matters in practice:
+
+- The user opens any `.md` in any markdown viewer, clicks a link in
+  `source_refs`, and jumps to the exact turn or section that produced
+  the learning. No special tooling required.
+- The drill-down API (§0c.6) consumes the same URI scheme.
+- Regenerating `.md` views from canonicals is deterministic, so anchor
+  stability is preserved across reformatter changes.
+
+Memory entries also carry an `author:` frontmatter field
+(`agent_created` | `user_authored`), populated via a `ContextVar`
+(`_MEMORY_AUTHOR`) at write time. The curator and dream only
+auto-manage `agent_created` entries — anything the user authored or
+edited by hand is left alone.
+
+### 0c.5 Memory entry frontmatter (multi-resolution)
+
+Each memory entry carries three resolutions in a single file:
+
+```yaml
+---
+id: mem-001
+headline: "Usuario prefiere terse, sin emojis"          # ~10 words → hot layer
+summary: "Confirmado S1, refinado S3 tras corrección"   # ~50 words → search/warm
+source_refs:
+  - "[turn 42](../sessions/abc.md#turn-42)"
+  - "[seccion 3.1](../ingested/doc-7/source.md#api-conventions)"
+related:
+  - "[refina](mem-001-prev)"
+entities: [usuario:marcelo, proyecto:durin]
+author: agent_created
+valid_from: 2026-05-20
+---
+(body: ~200-500 words — full content → search/cold or memory_drill)
+```
+
+Resolution semantics:
+
+- `headline` (~10 words) — the hot layer pulls these in bulk.
+- `summary` (~50 words) — returned by `memory_search(level="warm")`.
+- `body` (~200-500 words) — returned by `memory_search(level="cold")`
+  or by `memory_drill`.
+
+`source_refs` uses markdown links. `related` uses bare ids when
+pointing to other memory entries, or markdown links otherwise.
+
+### 0c.6 Search and drill-down API
+
+Two tools, scoped by category and resolution level.
+
+```python
+memory_search(query, scope="all", level="warm")
+  scope: "undreamed" | "dreamed" | "all" | "sessions" | "ingested"
+  level: "warm" | "cold"
+
+  # undreamed → grep over <key>.md filtered by tags in meta.json
+  # dreamed   → read over memory/<class>/*.md
+  #             (+ vector if Phase 2 active, + BM25 if Phase 2c enabled)
+
+memory_drill(uri)
+  # uri examples:
+  #   "sessions/abc.md#turn-42"
+  #   "ingested/doc-7/source.md#api-conventions"
+  #   "memory/stable/mem-001"
+  # Returns ONLY the section addressed by the anchor (plus minimal
+  # context envelope, e.g. parent header).
+```
+
+Default agent path: `kg_query` → `memory_search(level="warm")` →
+`memory_drill`. Cheapest first; only drill deeper when the warm result
+is insufficient. `kg_query` lives in Phase 3 (see §0c.9).
+
+### 0c.7 Hot layer — refreshed by dream
+
+What loads into the prompt **without any tool call**:
+
+| Component | Size | Source |
+|---|---|---|
+| Identity essentials | ~200 tokens | `memory/stable/IDENTITY.md` |
+| Top headlines | ~500 tokens | top-K memory entries by score |
+| Entity name list | ~200 tokens | distinct entities across active memory |
+
+Refreshed by **dream**, not by compaction or per-turn writes. The hot
+layer is therefore invariant across an entire day, preserving the
+stable layer of the 3-tier system prompt and keeping cache hit rates
+near 100% on the upstream provider.
+
+Between dreams the hot layer is read-only. If the user makes a
+correction during the day that the agent must remember **before** the
+next dream, the agent calls `memory_store` which writes directly to
+`memory/<class>/<id>.md`. The next `memory_search` will surface it,
+but it won't enter the hot layer until dream picks it up.
+
+### 0c.8 Relationship to the six utility classes (§0a Decision 1)
+
+The classes A–F describe **access pattern** — when and how a memory
+entry enters the prompt or is retrieved. The consolidated architecture
+adds storage structure but does not replace the taxonomy:
+
+- A (identity-stable) + C (corrections) → `memory/stable/`, in hot layer
+- B (working / episodic) → `memory/episodic/`, in hot-layer rotation
+- D (queryable corpus) → `memory/corpus/`, never hot, only via `memory_search`
+- E (procedural skills) → `skills/` (managed separately, Phase 4)
+- F (prospective) → `memory/pending/`, trigger-injected
+
+Same file format and lifecycle across A, B, C, D, F — only the
+directory and access pattern differ.
+
+### 0c.9 Phase mapping
+
+| Phase | Scope | Estimate |
+|---|---|---|
+| **1** | `<key>.md` derivation + tags during compaction + `ingested/` source path + `memory_ingest` + `memory_store` + `memory_search` (grep over markdown + tag filter) + `memory_drill` + 6-class directory layout + `_MEMORY_AUTHOR` provenance | 2–3 weeks |
+| **2** | LanceDB index over memory entry summaries. Vector retrieval inside `memory_search(level="warm")`. | 2 weeks |
+| **2c** (opt-in) | TEMPR-style multi-strategy: BM25 + temporal + RRF as user-toggleable config knobs | 1 week if activated |
+| **3** | Dream daily cron + multi-factor scoring + freshness trends + hot-layer refresh + curator for `agent_created` cleanup. SQLite KG (entities + triples with `valid_from`) for `kg_query`. | 1–2 weeks |
+| **4** | Dynamic skills — `skill_manage` tool, agent-built skills with lifecycle | 2 weeks |
+| **5** (optional) | Prospective memory beyond time triggers (entity + condition triggers) | 2 weeks |
+
+What changes versus the §5 Option C exploration:
+
+- Phase 1 is simpler than originally proposed: **no per-turn
+  `background_review` fork**. The existing session consolidator
+  handles session-local compaction work; dream handles cross-session
+  derivation. The "cognify pipeline" effectively lives inside dream.
+- Multi-resolution (`headline` / `summary` / `body`) and provenance
+  (markdown links to anchors) are concrete from Phase 1 via frontmatter.
+- The knowledge graph lives in Phase 3 and is opt-in. Phase 1
+  retrieval is grep + tag filter; Phase 2 adds vector search.
+- Hot layer is refreshed daily by dream, not per-turn. Cache stability
+  is the explicit design goal.
+
+---
+
 ## 1. The original plan (doc 03 summarised)
 
 > Full text: `docs/03_memory_design.md`. This is a condensed restatement,
@@ -636,6 +882,10 @@ both reference systems have invested in.
 
 ## 5. Three synthesis options
 
+> **Superseded by §0c.** This section is the design exploration that
+> produced the consolidated architecture. Read §0c for the active
+> design; this section explains the reasoning paths considered.
+
 ### Option A — Markdown-first minimalist (Hermes-shaped)
 
 **Scope:**
@@ -824,6 +1074,14 @@ record type, not two unrelated stores.
 
 ## 5c. Resource cost per phase
 
+> **Superseded by §0c.9 (phase mapping) and §0c.3 (model choice per
+> event).** This section's per-turn cost analysis predates the
+> consolidation that moved derivative work from per-turn
+> `background_review` to once-a-day dream. The numbers below are
+> historical; the active picture is that Phases 1 + 2 add **zero**
+> extra LLM calls per turn — only dream (daily) and user-triggered
+> `memory_ingest` cost extra calls.
+
 Concrete operational footprint so the horizon decision is informed by
 actual cost, not just feature lists. Numbers are per-turn unless noted.
 
@@ -932,4 +1190,4 @@ acceptance criteria.
 
 ---
 
-## Last updated: 2026-05-20
+## Last updated: 2026-05-20 (consolidated §0c added)
