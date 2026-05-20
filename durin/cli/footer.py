@@ -20,10 +20,9 @@ from typing import Any
 
 from prompt_toolkit.formatted_text import HTML
 
+from durin.utils.helpers import estimate_message_tokens
+
 __all__ = ["build_footer_text", "build_footer_html"]
-
-
-_TOKENS_PER_MSG_HEURISTIC = 150
 
 
 def _memory_summary(workspace: Path) -> tuple[int, bool]:
@@ -41,11 +40,32 @@ def _memory_summary(workspace: Path) -> tuple[int, bool]:
 
 
 def _token_estimate(session: Any) -> int:
-    """Cheap upper-bound estimate without invoking the consolidator."""
+    """Real per-message token count via tiktoken (no LLM call).
+
+    Uses the same ``estimate_message_tokens`` helper the consolidator uses
+    for its budget math, so the footer reflects the same number the
+    pre-emptive compaction threshold sees. tiktoken is already a durin
+    dep; ~5-10 ms total for a few hundred messages.
+    """
     if session is None:
         return 0
     msgs = getattr(session, "messages", []) or []
-    return len(msgs) * _TOKENS_PER_MSG_HEURISTIC
+    total = 0
+    try:
+        for msg in msgs:
+            if isinstance(msg, dict):
+                total += int(estimate_message_tokens(msg))
+    except Exception:  # noqa: BLE001
+        # tiktoken-free environment or unexpected content shape — fall back to
+        # a coarse character-based estimate so the footer is never blank.
+        chars = 0
+        for msg in msgs:
+            if isinstance(msg, dict):
+                content = msg.get("content")
+                if isinstance(content, str):
+                    chars += len(content)
+        return chars // 4  # ~4 chars per token
+    return total
 
 
 def build_footer_text(
