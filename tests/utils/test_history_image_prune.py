@@ -194,3 +194,55 @@ def test_env_override_garbage_falls_back(monkeypatch):
     # Should fall back to default 3, so nothing pruned.
     out = prune_processed_history_images(msgs)
     assert out is msgs
+
+
+# ---------------------------------------------------------------------------
+# Stats out-param (audit P1.2b: lets the runner emit telemetry without
+# re-walking the list to count what changed).
+# ---------------------------------------------------------------------------
+
+
+def test_stats_populated_when_pruning_occurs():
+    msgs = (
+        _turn([_image_block()])
+        + _turn([_audio_block()])
+        + _turn([])
+        + _turn([])
+        + _turn([])
+    )
+    stats: dict = {}
+    prune_processed_history_images(msgs, preserve_turns=3, stats=stats)
+    assert stats["image_blocks_removed"] == 1
+    assert stats["audio_blocks_removed"] == 1
+    assert stats["preserve_turns"] == 3
+
+
+def test_stats_zeroed_when_nothing_pruned():
+    """Caller can rely on stats keys being present (and 0) even when the
+    pruner was a no-op — avoids guarding every read with ``.get(..., 0)``."""
+    msgs = _turn([_image_block()]) + _turn([_image_block()])  # 2 turns, preserve=3
+    stats: dict = {}
+    prune_processed_history_images(msgs, preserve_turns=3, stats=stats)
+    assert stats == {"image_blocks_removed": 0, "audio_blocks_removed": 0, "preserve_turns": 3}
+
+
+def test_stats_zeroed_when_messages_empty():
+    """Empty input → all counts 0, preserve_turns reflects what was used."""
+    stats: dict = {}
+    prune_processed_history_images([], preserve_turns=3, stats=stats)
+    assert stats["image_blocks_removed"] == 0
+    assert stats["audio_blocks_removed"] == 0
+
+
+def test_stats_counts_multiple_image_blocks_per_message():
+    """One user message with multiple images → all counted."""
+    msgs = (
+        _turn([_image_block("data:image/png;base64,A"), _image_block("data:image/png;base64,B"), _image_block("data:image/png;base64,C")])
+        + _turn([])
+        + _turn([])
+        + _turn([])
+    )
+    stats: dict = {}
+    prune_processed_history_images(msgs, preserve_turns=3, stats=stats)
+    assert stats["image_blocks_removed"] == 3
+    assert stats["audio_blocks_removed"] == 0
