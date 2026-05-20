@@ -14,6 +14,7 @@ import httpx
 from loguru import logger
 from pydantic import Field
 
+from durin.agent.tools._telemetry import emit_tool_event
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.schema import IntegerSchema, StringSchema, tool_parameters_schema
 from durin.config.schema import Base
@@ -197,22 +198,33 @@ class WebSearchTool(Tool):
         provider = self.config.provider.strip().lower() or "brave"
         n = min(max(count or self.config.max_results, 1), 10)
 
-        if provider == "olostep":
-            return await self._search_olostep(query, n)
-        if provider == "duckduckgo":
-            return await self._search_duckduckgo(query, n)
-        elif provider == "tavily":
-            return await self._search_tavily(query, n)
-        elif provider == "searxng":
-            return await self._search_searxng(query, n)
-        elif provider == "jina":
-            return await self._search_jina(query, n)
-        elif provider == "brave":
-            return await self._search_brave(query, n)
-        elif provider == "kagi":
-            return await self._search_kagi(query, n)
+        dispatch = {
+            "olostep": self._search_olostep,
+            "duckduckgo": self._search_duckduckgo,
+            "tavily": self._search_tavily,
+            "searxng": self._search_searxng,
+            "jina": self._search_jina,
+            "brave": self._search_brave,
+            "kagi": self._search_kagi,
+        }
+        handler = dispatch.get(provider)
+        if handler is None:
+            result = f"Error: unknown search provider '{provider}'"
         else:
-            return f"Error: unknown search provider '{provider}'"
+            result = await handler(query, n)
+
+        # Telemetry: one event per call. ``error`` is True when the
+        # result string starts with "Error:" (the convention every
+        # provider helper uses for failures).
+        is_error = isinstance(result, str) and result.startswith("Error")
+        emit_tool_event("tool.web_search", {
+            "provider": provider,
+            "query_chars": len(query or ""),
+            "requested_count": n,
+            "result_chars": len(result) if isinstance(result, str) else 0,
+            "error": is_error,
+        })
+        return result
 
     async def _search_olostep(self, query: str, n: int) -> str:
         try:
@@ -484,7 +496,15 @@ class WebFetchTool(Tool):
         max_chars = kwargs.pop("maxChars", max_chars) or self.max_chars
         is_valid, error_msg = _validate_url_safe(url)
         if not is_valid:
-            return json.dumps({"error": f"URL validation failed: {error_msg}", "url": url}, ensure_ascii=False)
+            err = json.dumps({"error": f"URL validation failed: {error_msg}", "url": url}, ensure_ascii=False)
+            emit_tool_event("tool.web_fetch", {
+                "extractor": "validation",
+                "extract_mode": extract_mode,
+                "result_chars": len(err),
+                "error": True,
+                "is_image": False,
+            })
+            return err
 
         # Detect and fetch images directly to avoid Jina's textual image captioning
         try:
@@ -494,21 +514,47 @@ class WebFetchTool(Tool):
 
                     redir_ok, redir_err = validate_resolved_url(str(r.url))
                     if not redir_ok:
-                        return json.dumps({"error": f"Redirect blocked: {redir_err}", "url": url}, ensure_ascii=False)
+                        err = json.dumps({"error": f"Redirect blocked: {redir_err}", "url": url}, ensure_ascii=False)
+                        emit_tool_event("tool.web_fetch", {
+                            "extractor": "redirect_check",
+                            "extract_mode": extract_mode,
+                            "result_chars": len(err),
+                            "error": True,
+                            "is_image": False,
+                        })
+                        return err
 
                     ctype = r.headers.get("content-type", "")
                     if ctype.startswith("image/"):
                         r.raise_for_status()
                         raw = await r.aread()
-                        return build_image_content_blocks(raw, ctype, url, f"(Image fetched from: {url})")
+                        blocks = build_image_content_blocks(raw, ctype, url, f"(Image fetched from: {url})")
+                        emit_tool_event("tool.web_fetch", {
+                            "extractor": "image_passthrough",
+                            "extract_mode": extract_mode,
+                            "result_chars": len(raw),
+                            "error": False,
+                            "is_image": True,
+                        })
+                        return blocks
         except Exception as e:
             logger.debug("Pre-fetch image detection failed for {}: {}", url, e)
 
         result = None
+        extractor = "jina"
         if self.config.use_jina_reader:
             result = await self._fetch_jina(url, max_chars)
         if result is None:
+            extractor = "readability"
             result = await self._fetch_readability(url, extract_mode, max_chars)
+        is_error = isinstance(result, str) and '"error"' in result[:80]
+        emit_tool_event("tool.web_fetch", {
+            "extractor": extractor,
+            "extract_mode": extract_mode,
+            "result_chars": len(result) if isinstance(result, str) else 0,
+            "error": is_error,
+            "is_image": False,
+        })
         return result
 
     async def _fetch_jina(self, url: str, max_chars: int) -> str | None:

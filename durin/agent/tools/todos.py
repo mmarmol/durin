@@ -39,6 +39,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from durin.agent.tools._telemetry import emit_tool_event
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.context import ContextAware, RequestContext
 from durin.agent.tools.schema import (
@@ -181,6 +182,22 @@ class TodoWriteTool(Tool, ContextAware):
 
         session.metadata[TODOS_KEY] = normalized
         self._sessions.save(session)
+
+        # Counts let dashboards see how the todo list evolved — useful
+        # for spotting "model creates 10 todos but only marks 1 done"
+        # patterns.
+        status_counts = {
+            "pending": sum(1 for t in normalized if t["status"] == "pending"),
+            "in_progress": sum(1 for t in normalized if t["status"] == "in_progress"),
+            "completed": sum(1 for t in normalized if t["status"] == "completed"),
+        }
+        emit_tool_event("tool.todo_write", {
+            "total": len(normalized),
+            "pending": status_counts["pending"],
+            "in_progress": status_counts["in_progress"],
+            "completed": status_counts["completed"],
+            "coerced_multiple_in_progress": coerced,
+        })
 
         rendered = render_todos_markdown(normalized)
         suffix = ""

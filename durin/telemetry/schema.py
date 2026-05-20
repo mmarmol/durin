@@ -290,6 +290,53 @@ class ToolRepoOverviewEvent(TypedDict):
     result_chars: int
 
 
+class ToolListDirEvent(TypedDict):
+    """``list_dir`` directory enumeration. ``displayed`` is what the
+    model saw, ``total_before_cap`` includes the entries skipped by the
+    ``max_entries`` cap (so dashboards can spot models that habitually
+    list giant directories)."""
+    path: str
+    recursive: bool
+    max_entries: int
+    displayed: int
+    total_before_cap: int
+    truncated: bool
+
+
+class ToolWebSearchEvent(TypedDict):
+    """``web_search`` dispatch — captures which provider actually served
+    the call (brave / duckduckgo / tavily / etc.) and result size, so
+    we can spot a provider silently degrading."""
+    provider: str
+    query_chars: int
+    requested_count: int
+    result_chars: int
+    error: bool
+
+
+class ToolWebFetchEvent(TypedDict):
+    """``web_fetch`` content extraction. ``extractor`` is the layer
+    that ultimately produced the result (``jina`` / ``readability`` /
+    ``image_passthrough`` / ``validation`` / ``redirect_check``)."""
+    extractor: str
+    extract_mode: str
+    result_chars: int
+    error: bool
+    is_image: bool
+
+
+class ToolTodoWriteEvent(TypedDict):
+    """``todo_write`` list-replace operation. Counts let us see whether
+    the model is actually advancing through todos vs. accumulating
+    pending work — and whether the "at most one in_progress" coercion
+    fired."""
+    total: int
+    pending: int
+    in_progress: int
+    completed: int
+    coerced_multiple_in_progress: bool
+
+
 class AskUserQuestionAskedEvent(TypedDict):
     """``ask_user_question`` tool surfaced a structured prompt to the
     user; the turn is paused awaiting their selection."""
@@ -388,6 +435,10 @@ EVENTS: dict[str, type] = {
     "tool.grep": ToolGrepEvent,
     "tool.exec.spill": ToolExecSpillEvent,
     "tool.repo_overview": ToolRepoOverviewEvent,
+    "tool.list_dir": ToolListDirEvent,
+    "tool.web_search": ToolWebSearchEvent,
+    "tool.web_fetch": ToolWebFetchEvent,
+    "tool.todo_write": ToolTodoWriteEvent,
     "ask_user.question_asked": AskUserQuestionAskedEvent,
     "ask_vision.start": AskVisionStartEvent,
     "ask_vision.error": AskVisionErrorEvent,
@@ -432,6 +483,10 @@ __all__ = [
     "ToolGrepEvent",
     "ToolExecSpillEvent",
     "ToolRepoOverviewEvent",
+    "ToolListDirEvent",
+    "ToolWebSearchEvent",
+    "ToolWebFetchEvent",
+    "ToolTodoWriteEvent",
     "AskUserQuestionAskedEvent",
     "AskVisionStartEvent",
     "AskVisionErrorEvent",
