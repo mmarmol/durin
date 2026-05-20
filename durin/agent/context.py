@@ -42,39 +42,46 @@ class ContextBuilder:
         session_summary: str | None = None,
         agent_mode_name: str | None = None,
     ) -> str:
-        """Build the system prompt from identity, bootstrap files, memory, and skills.
+        """Build the system prompt in 3 cache-friendly tiers (Tier 2 C1,
+        Hermes-inspired).
 
-        Layout (top to bottom):
-        1. Identity
-        2. **Active mode suffix** (e.g. PLAN MODE) — placed early on purpose
-           so the model reads it before scrolling through memory/skills/etc.
-           Frontier models give heavier weight to instructions near the
-           top of the system prompt; appending at the end gets buried.
-        3. Bootstrap files (CLAUDE.md / AGENTS.md / etc.)
-        4. Memory section
-        5. Active skills
-        6. Skills catalog
-        7. Recent history
-        8. Session summary
+        Providers cache by *prefix*, so the canonical order is:
+
+        - **Stable** (rarely changes, large cache value): identity,
+          bootstrap files (CLAUDE.md / AGENTS.md), active-skills content,
+          and the skills catalog. None of these depend on the current
+          turn's memory or history state.
+        - **Context** (session-stable, may differ per session): the
+          agent-mode prompt suffix (PLAN / BUILD / EXPLORE). Switches
+          rarely within a session but isn't identical across all sessions.
+        - **Volatile** (changes per turn — never cached): memory section,
+          recent history entries, archived session summary. These are
+          the dynamic blocks that move with the conversation.
+
+        Layers are joined by ``\\n\\n---\\n\\n`` for visual separation
+        and individually skipped when empty. The agent-mode suffix was
+        previously placed near the top so the model gives it heavy
+        weight; moving it to the Context tier preserves that ordering
+        relative to volatile blocks (which would dilute its visibility
+        if placed below) while still keeping the stable prefix intact.
+        """
+        stable = self._build_stable_layer(channel=channel)
+        context = self._build_context_layer(agent_mode_name=agent_mode_name)
+        volatile = self._build_volatile_layer(session_summary=session_summary)
+        return "\n\n---\n\n".join(p for p in (stable, context, volatile) if p)
+
+    def _build_stable_layer(self, *, channel: str | None) -> str:
+        """Identity + bootstrap + skills catalog. Cache-friendly anchor.
+
+        Aside from workspace/runtime info embedded in the identity
+        template (path, OS, Python version — all stable per process),
+        this layer is byte-identical across turns of the same session.
         """
         parts = [self._get_identity(channel=channel)]
-
-        # Sprint B / L3 — active-mode prompt suffix (placed early). Skip when
-        # the mode has no suffix (e.g. BUILD_MODE is "" by design).
-        if agent_mode_name:
-            from durin.agent.agent_mode import get_mode
-
-            mode_suffix = get_mode(agent_mode_name).prompt_suffix.strip()
-            if mode_suffix:
-                parts.append(mode_suffix)
 
         bootstrap = self._load_bootstrap_files()
         if bootstrap:
             parts.append(bootstrap)
-
-        memory = self.memory.get_memory_context()
-        if memory and not self._is_template_content(self.memory.read_memory(), "memory/MEMORY.md"):
-            parts.append(f"# Memory\n\n{memory}")
 
         always_skills = self.skills.get_always_skills()
         if always_skills:
@@ -85,6 +92,39 @@ class ContextBuilder:
         skills_summary = self.skills.build_skills_summary(exclude=set(always_skills))
         if skills_summary:
             parts.append(render_template("agent/skills_section.md", skills_summary=skills_summary))
+
+        return "\n\n---\n\n".join(parts)
+
+    def _build_context_layer(self, *, agent_mode_name: str | None) -> str:
+        """Session-stable blocks that may differ between sessions.
+
+        Sprint B / L3 — the active-mode prompt suffix. It used to be
+        placed near the top of the prompt so the model would weight it
+        heavily; in the 3-tier layout it sits between the stable prefix
+        and the volatile suffix — still ABOVE the volatile blocks (so
+        model attention isn't diluted by memory/history scrolling past
+        it) and still cache-stable within a session for the common case
+        (no mid-session mode switch).
+        """
+        parts: list[str] = []
+        if agent_mode_name:
+            from durin.agent.agent_mode import get_mode
+
+            mode_suffix = get_mode(agent_mode_name).prompt_suffix.strip()
+            if mode_suffix:
+                parts.append(mode_suffix)
+        return "\n\n---\n\n".join(parts)
+
+    def _build_volatile_layer(self, *, session_summary: str | None) -> str:
+        """Memory + recent history + archived summary. Changes per turn
+        — never cached by the provider, deliberately placed last so it
+        doesn't poison the prefix cache hit rate for the stable layers.
+        """
+        parts: list[str] = []
+
+        memory = self.memory.get_memory_context()
+        if memory and not self._is_template_content(self.memory.read_memory(), "memory/MEMORY.md"):
+            parts.append(f"# Memory\n\n{memory}")
 
         entries = self.memory.read_unprocessed_history(since_cursor=self.memory.get_last_dream_cursor())
         if entries:
