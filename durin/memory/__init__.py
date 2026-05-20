@@ -9,6 +9,7 @@ from durin.memory.paths import (
     memory_dir,
 )
 from durin.memory.consolidator_tags import parse_consolidator_response
+from durin.memory.drill import DrillError, drill
 from durin.memory.ingestion import IngestError, ingest_artifact
 from durin.memory.provenance import Author, author_scope, current_author
 from durin.memory.store import StoreError, store_memory
@@ -23,6 +24,7 @@ from durin.memory.storage import FrontmatterError, load_entry, save_entry, split
 
 __all__ = [
     "Author",
+    "DrillError",
     "FrontmatterError",
     "IngestError",
     "MEMORY_CLASSES",
@@ -32,6 +34,7 @@ __all__ = [
     "author_scope",
     "current_author",
     "dream_dir",
+    "drill",
     "ingest_artifact",
     "ingested_dir",
     "ingested_entry_dir",
