@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from textual import __version__ as TEXTUAL_VERSION
+from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Vertical
 from textual.widgets import Input
@@ -129,6 +130,17 @@ class DurinApp(App[None]):
             return
         event.input.value = ""
 
+        # D5.5 — intercept the bare /sessions and /model commands and
+        # open a modal picker instead of dispatching to the bus. Args
+        # forms (e.g. `/sessions alpha`, `/model fast`) still route
+        # through the router so the inline text response is preserved.
+        if value == "/sessions":
+            self._open_session_picker()
+            return
+        if value == "/model":
+            self._open_model_picker()
+            return
+
         # D3.2 shell paste: !cmd runs and prepends output to the message;
         # !!cmd runs silently without involving the agent.
         from durin.cli.tui.shell_paste import process_shell_paste
@@ -205,18 +217,87 @@ class DurinApp(App[None]):
         self.theme = "textual-light" if self.theme == "textual-dark" else "textual-dark"
 
     def action_open_model_picker(self) -> None:
-        """Ctrl+L: open the model picker.
+        """Ctrl+L: open the model picker modal (D5.5)."""
+        self._open_model_picker()
 
-        D5.5 replaces this stub with a proper ModalScreen. Today it
-        pre-fills the input with ``/model `` so the suggester surfaces
-        the configured presets.
-        """
+    # ---- D5.5 modal pickers ----------------------------------------------
+
+    @work
+    async def _open_session_picker(self) -> None:
+        """Worker so push_screen_wait can be awaited (Textual 8.x API)."""
+        from durin.cli.tui.screens import SessionPickerScreen
+
+        entries = self._collect_sessions()
+        if not entries:
+            chat = self.query_one("#chat", ChatView)
+            chat.add_message("system", "No sessions yet in this workspace.")
+            return
+        current_key = f"{self._cli_channel}:{self._cli_chat_id}"
+        selected = await self.push_screen_wait(
+            SessionPickerScreen(entries, current_key=current_key)
+        )
+        if selected and selected != current_key:
+            await self._publish_inbound(f"/resume {selected}", [])
+
+    @work
+    async def _open_model_picker(self) -> None:
+        from durin.cli.tui.screens import ModelPickerScreen
+
+        presets = self._collect_model_presets()
+        active = self._model_label()[1]
+        if not presets:
+            chat = self.query_one("#chat", ChatView)
+            chat.add_message("system", "No model presets configured.")
+            return
+        selected = await self.push_screen_wait(
+            ModelPickerScreen(presets, active=active)
+        )
+        if selected and selected != active:
+            await self._publish_inbound(f"/model {selected}", [])
+
+    def _collect_sessions(self) -> list:
+        """Walk the sessions directory and return a list of SessionEntry."""
+        import json
+
+        from durin.cli.tui.screens.session_picker import SessionEntry
+
+        if self._agent_loop is None:
+            return []
         try:
-            inp = self.query_one(InputArea)
-            inp.value = "/model "
-            inp.focus()
-        except Exception:  # noqa: BLE001
-            pass
+            sessions_dir = self._agent_loop.sessions.sessions_dir
+        except AttributeError:
+            return []
+        out: list = []
+        for path in sessions_dir.glob("*.jsonl"):
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            first = text.split("\n", 1)[0] if text else ""
+            try:
+                meta = json.loads(first)
+            except json.JSONDecodeError:
+                continue
+            if meta.get("_type") != "metadata":
+                continue
+            out.append(
+                SessionEntry(
+                    key=meta.get("key", path.stem),
+                    display_name=(meta.get("metadata") or {}).get("display_name") or "",
+                    msg_count=max(0, text.count("\n") - 1),
+                    updated_at=meta.get("updated_at", ""),
+                )
+            )
+        out.sort(key=lambda e: e.updated_at, reverse=True)
+        return out
+
+    def _collect_model_presets(self) -> list[str]:
+        """Return the configured model preset names, plus 'default'."""
+        if self._agent_loop is None:
+            return []
+        names = set(getattr(self._agent_loop, "model_presets", None) or {})
+        names.add("default")
+        return sorted(names)
 
     # ---- outbound consumer (mirrors legacy _consume_outbound) ------------
 
