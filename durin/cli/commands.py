@@ -93,10 +93,12 @@ app = typer.Typer(
 from durin.cli.config_cmd import config_app as _config_app  # noqa: E402
 from durin.cli.upgrade import register as _register_upgrade  # noqa: E402
 from durin.cli.uninstall import register as _register_uninstall  # noqa: E402
+from durin.cli.doctor import register as _register_doctor  # noqa: E402
 
 app.add_typer(_config_app, name="config")
 _register_upgrade(app)
 _register_uninstall(app)
+_register_doctor(app)
 
 console = Console()
 EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit", ":q"}
