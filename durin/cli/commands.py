@@ -1297,6 +1297,7 @@ def agent(
             signal.signal(signal.SIGPIPE, signal.SIG_IGN)
 
         async def run_interactive():
+            nonlocal cli_chat_id
             bus_task = asyncio.create_task(agent_loop.run())
             turn_done = asyncio.Event()
             turn_done.set()
@@ -1304,9 +1305,18 @@ def agent(
             renderer: StreamRenderer | None = None
 
             async def _consume_outbound():
+                nonlocal cli_chat_id
                 while True:
                     try:
                         msg = await asyncio.wait_for(bus.consume_outbound(), timeout=1.0)
+
+                        # /resume signals a session switch via metadata. The CLI's
+                        # cli_chat_id determines the session_key of subsequent
+                        # inbound publishes; updating it routes the next turn to
+                        # the new session without restarting the process.
+                        switch_to = (msg.metadata or {}).get("_switch_chat_id")
+                        if switch_to and switch_to != cli_chat_id:
+                            cli_chat_id = switch_to
 
                         if msg.metadata.get("_stream_delta"):
                             if renderer:
