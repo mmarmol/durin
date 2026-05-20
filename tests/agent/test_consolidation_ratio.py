@@ -1,4 +1,13 @@
-"""Tests for configurable consolidation_ratio."""
+"""Tests for configurable consolidation_ratio.
+
+Tier 2 A1 changed the semantic of ``consolidation_ratio``: it now means
+"fraction of the pre-emptive trigger threshold to keep after compaction"
+rather than "fraction of the input budget to keep". With the trigger
+moved earlier (at ``preemptive_compact_ratio * context_window`` instead
+of at the budget ceiling), basing the target on the budget would compact
+almost nothing per round. The new semantic keeps each round doing
+substantial work.
+"""
 
 from unittest.mock import AsyncMock, MagicMock
 
@@ -18,7 +27,11 @@ def _make_loop(
     estimated_tokens: int = 0,
     context_window_tokens: int = 200,
     consolidation_ratio: float = 0.5,
+    preemptive_compact_ratio: float = 1.0,
 ) -> AgentLoop:
+    """``preemptive_compact_ratio`` defaults to 1.0 here so the trigger
+    equals the input budget — i.e. these tests exercise the legacy
+    trigger semantics. A1-specific tests parametrise it lower."""
     provider = MagicMock()
     provider.get_default_model.return_value = "test-model"
     provider.generation = GenerationSettings(max_tokens=0)
@@ -34,6 +47,7 @@ def _make_loop(
         model="test-model",
         context_window_tokens=context_window_tokens,
         consolidation_ratio=consolidation_ratio,
+        preemptive_compact_ratio=preemptive_compact_ratio,
     )
     loop.tools.get_definitions = MagicMock(return_value=[])
     loop.consolidator._SAFETY_BUFFER = 0

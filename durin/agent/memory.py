@@ -18,6 +18,7 @@ from loguru import logger
 from durin.agent.runner import AgentRunner, AgentRunSpec
 from durin.agent.tools.registry import ToolRegistry
 from durin.session.manager import Session
+from durin.telemetry.logger import current_telemetry
 from durin.utils.gitstore import GitStore
 from durin.utils.helpers import (
     ensure_dir,
@@ -459,6 +460,7 @@ class Consolidator:
         get_tool_definitions: Callable[[], list[dict[str, Any]]],
         max_completion_tokens: int = 4096,
         consolidation_ratio: float = 0.5,
+        preemptive_compact_ratio: float = 0.5,
     ):
         self.store = store
         self.provider = provider
@@ -466,7 +468,22 @@ class Consolidator:
         self.sessions = sessions
         self.context_window_tokens = context_window_tokens
         self.max_completion_tokens = max_completion_tokens
+        # ``consolidation_ratio`` now means: after a compaction round, how
+        # much of the *trigger threshold* should remain (default 0.5 → leave
+        # half of the trigger). Pre-emptive compaction (Tier 2 A1) raised the
+        # trigger from "near the context wall" to a much earlier point, so
+        # keeping the old "fraction of budget" semantic would compact almost
+        # nothing per round.
         self.consolidation_ratio = consolidation_ratio
+        # Pre-emptive compaction trigger ratio (OpenClaw-inspired Tier 2 A1).
+        # Fraction of ``context_window_tokens`` above which a turn forces
+        # consolidation BEFORE the LLM call (instead of waiting for a 400
+        # from context-overflow). Per-model: a 128K-window model wants ~0.5;
+        # a 1M-window model wants ~0.15 (you pay for every token shipped, so
+        # waiting until 500K means shipping a huge prompt every turn). Set
+        # in ``ModelPresetConfig.preemptive_compact_ratio`` for per-preset
+        # overrides; otherwise inherits from ``AgentDefaults``.
+        self.preemptive_compact_ratio = preemptive_compact_ratio
         self._build_messages = build_messages
         self._get_tool_definitions = get_tool_definitions
         self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
@@ -478,11 +495,19 @@ class Consolidator:
         provider: LLMProvider,
         model: str,
         context_window_tokens: int,
+        *,
+        preemptive_compact_ratio: float | None = None,
     ) -> None:
         self.provider = provider
         self.model = model
         self.context_window_tokens = context_window_tokens
         self.max_completion_tokens = provider.generation.max_tokens
+        # Per-preset ratio override (Tier 2 A1). When the model preset
+        # changes (set_model_preset → _apply_provider_snapshot), callers
+        # can supply the preset's preemptive_compact_ratio. None leaves
+        # the existing ratio untouched.
+        if preemptive_compact_ratio is not None:
+            self.preemptive_compact_ratio = preemptive_compact_ratio
 
     def get_lock(self, session_key: str) -> asyncio.Lock:
         """Return the shared consolidation lock for one session."""
@@ -618,6 +643,25 @@ class Consolidator:
         """Available input token budget for consolidation LLM."""
         return self.context_window_tokens - self.max_completion_tokens - self._SAFETY_BUFFER
 
+    @property
+    def _preemptive_trigger_tokens(self) -> int:
+        """Token count at which a turn forces consolidation before the
+        LLM call (OpenClaw-inspired Tier 2 A1).
+
+        Bounded above by the legacy ``_input_token_budget`` so a misconfigured
+        ratio (e.g. 0.99) can't disable the hard ceiling — context overflow
+        still triggers even if the ratio would have skipped.
+        """
+        if self.context_window_tokens <= 0:
+            return 0
+        ratio = self.preemptive_compact_ratio
+        if not isinstance(ratio, (int, float)) or ratio <= 0:
+            # 0 / negative / garbage → fall back to legacy behavior (trigger
+            # only at hard budget).
+            return self._input_token_budget
+        threshold = int(self.context_window_tokens * float(ratio))
+        return max(1, min(threshold, self._input_token_budget))
+
     def _truncate_to_token_budget(self, text: str) -> str:
         """Truncate text so it fits within the consolidation LLM's token budget."""
         budget = self._input_token_budget
@@ -683,8 +727,12 @@ class Consolidator:
 
         lock = self.get_lock(session.key)
         async with lock:
-            budget = self._input_token_budget
-            target = int(budget * self.consolidation_ratio)
+            # Tier 2 A1: trigger consolidation early instead of waiting for
+            # the hard budget ceiling. ``target`` is computed off the trigger
+            # so each compaction round does meaningful work (compacting down
+            # by ``consolidation_ratio`` of the trigger).
+            trigger = self._preemptive_trigger_tokens
+            target = max(1, int(trigger * self.consolidation_ratio))
             last_summary = await self._consolidate_replay_overflow(
                 session,
                 replay_max_messages,
@@ -699,18 +747,34 @@ class Consolidator:
             if estimated <= 0:
                 self._persist_last_summary(session, last_summary)
                 return
-            if estimated < budget:
+            if estimated < trigger:
                 unconsolidated_count = len(session.messages) - session.last_consolidated
                 logger.debug(
-                    "Token consolidation idle {}: {}/{} via {}, msgs={}",
+                    "Token consolidation idle {}: {}/{} via {}, trigger={}, msgs={}",
                     session.key,
                     estimated,
                     self.context_window_tokens,
                     source,
+                    trigger,
                     unconsolidated_count,
                 )
                 self._persist_last_summary(session, last_summary)
                 return
+            # Emit a one-shot telemetry event when pre-emptive trigger fires
+            # below the hard budget — visibility into how often the new
+            # threshold is doing actual work vs. legacy behavior.
+            if estimated < self._input_token_budget:
+                _logger = current_telemetry()
+                if _logger is not None:
+                    with suppress(Exception):
+                        _logger.log("compaction.preemptive_trigger", {
+                            "session_key": session.key,
+                            "estimated_tokens": estimated,
+                            "trigger_tokens": trigger,
+                            "budget_tokens": self._input_token_budget,
+                            "context_window_tokens": self.context_window_tokens,
+                            "ratio": self.preemptive_compact_ratio,
+                        })
 
             for round_num in range(self._MAX_CONSOLIDATION_ROUNDS):
                 if estimated <= target:
