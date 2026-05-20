@@ -689,7 +689,7 @@ phase boundary without leaving the system half-built.
 **Phase 1 — Markdown + provenance + background_review** (~2 weeks)
 - Filesystem markdown memory (categories: user, project, feedback, reference — same shape as the existing auto-memory pattern in `MEMORY.md`).
 - ContextVar provenance (`agent_created` vs `user_authored`).
-- background_review fork after each turn → writes go to filesystem with `agent_created=true`.
+- background_review fork after each turn — split into two sub-steps internally: (a) `extract_candidates` identifies signals worth keeping (preferences, decisions, corrections, project facts); (b) `cognify_to_memory` normalises + dedupes + writes to filesystem with `agent_created=true`. Each sub-step is independently testable, and the boundary lets us run a cheap model for extraction and a smarter one for cognify when worthwhile. Inspired by cognee's `extract → cognify → improve` pipeline structure.
 - curator (inactivity-triggered) for `agent_created` cleanup.
 - LLM-driven file selection for retrieval.
 - Tools: `memory_store`, `memory_search` (LLM-driven), `skill_manage` (Hermes-style create/edit/patch).
@@ -702,11 +702,52 @@ phase boundary without leaving the system half-built.
 - Timeout + circuit breaker + 15s cache (operational safety).
 - **Value delivered**: scales past ~50 memories. Main loop isolated from memory subsystem failures.
 
+**Phase 2c — TEMPR-style multi-strategy retrieval (user-configurable, ~1 week if activated)**
+
+Optional refinement layered on top of Phase 2b. **Off by default — user
+opt-in via config**, not gated on internal metrics. Inspired by
+Hindsight's TEMPR retrieval. Rationale: vector-only is sufficient for
+typical early corpus sizes; the user enables additional strategies when
+their workload or corpus shape calls for it.
+
+Config knob (`durin/config.json` or equivalent):
+
+```yaml
+memory:
+  retrieval:
+    strategies:
+      vector: true        # always on (Phase 2b)
+      bm25: false         # opt-in: lexical keyword match
+      temporal: false     # opt-in: time-window weighting
+      keyword_llm: false  # opt-in: LLM query rewriting (costly)
+    fusion: reciprocal_rank   # used when ≥2 strategies active
+```
+
+What each strategy contributes:
+
+- **`bm25`** — catches exact-symbol queries vector misses (`foo_bar`,
+  paths, IDs, command names). New dep (`bm25s` pure-Python or
+  `tantivy` Rust bindings); parallel index alongside the LanceDB
+  store. ~50 KB extra storage per memory.
+- **`temporal`** — time-window weighting for "what did we discuss
+  yesterday?" style queries. No new dep; cheap.
+- **`keyword_llm`** — LLM-driven query rewriting before vector search.
+  Adds one small LLM call per recall. Only enable if other strategies
+  are documented to miss recurringly.
+
+When ≥2 strategies are active, results merge via **Reciprocal Rank
+Fusion** — standard algorithm, no extra LLM call.
+
+The user can flip these toggles independently after observing in
+`memory.recall` telemetry which queries their setup misses. Defaults
+stay off to avoid charging users for capability they may never need.
+
 **Phase 3 — Dreaming with multi-factor scoring (cross-cutting over memory + skills)** (~1–2 weeks)
 - Recall metadata logging (which memory or skill, when, for which query, what score).
 - Dreaming cron: rank short-term candidates by frequency / relevance / diversity / recency / consolidation / conceptual.
 - **Cross-cutting promotion path**: the same scoring + ranking applies to BOTH memory entries (OpenClaw pattern) AND agent-created skills (Hermes pattern). One scheduled process touches both subsystems via the provenance flags introduced in Phase 1. See §5b below for why this matters.
 - Promotion / archival / patching: top-N memories promoted to durable layer; agent-created skills that became stale get archived or patched in place; pruning of unused short-term entries in both.
+- **Freshness trends as a consolidation output**: each entry touched by Dream gains a `freshness` label — `stable` / `strengthening` / `weakening` / `stale` — derived from the trajectory of its recall metadata across runs (increasing recall count + similarity → strengthening; flat → stable; decreasing → weakening; zero recalls in N runs → stale). Inspired by Hindsight. Surfaces in `memory.recall` telemetry; informs both the curator (auto-archive `stale` agent_created entries) and the user (visible signal of which memories are earning their keep).
 - Optional narrative phase (LLM-generated diary).
 - **Value delivered**: consolidation informed by actual usage across the agent's whole "self" (declarative memory + procedural skills), not separate processes per subsystem.
 
@@ -778,6 +819,55 @@ consolidation infra in Phase 3 is built **knowing that Phase 4 skills
 will plug into the same scoring**. Concretely: Phase 3's data model
 should treat `memory` and `skill` as two variants of a `consolidatable`
 record type, not two unrelated stores.
+
+---
+
+## 5c. Resource cost per phase
+
+Concrete operational footprint so the horizon decision is informed by
+actual cost, not just feature lists. Numbers are per-turn unless noted.
+
+| Phase | Extra LLM calls / turn | Extra latency (user-facing) | Storage | Extra RAM |
+|---|---|---|---|---|
+| **1** Markdown + background_review | +1 (async, non-blocking) | 0 | KB/memory | ~0 |
+| **2** LanceDB + memory sub-agent | +1 (pre-turn, blocks until result or timeout) | up to `timeout` (default 15 s, cached 15 s) | ~6 KB/memory (1536-dim embedding) + markdown | ~500 MB if local embedding model loaded; 0 if HTTP |
+| **2c** TEMPR strategies (opt-in) | 0 per added strategy, except `keyword_llm` which is +1 | < 100 ms (index reads are µs) | ~50 KB/memory for BM25; nothing for temporal | ~0 |
+| **3** Dreaming cron | 0 per turn (cron-driven) | 0 | Same as 1+2 | RAM spikes only during the dream run |
+| **4** Dynamic skills | 0 per turn (tool-driven) | 0 | KB/skill | 0 |
+| **5** Prospective memory | 0 per turn (trigger-driven) | 0 | KB/item | 0 |
+
+**Combined per-turn cost (Phases 1 + 2 active)**: ~3 LLM calls per turn
+instead of 1. Up to ~3x model cost per turn at face value, with the
+following mitigations available:
+
+- **Auxiliary calls use a cheap model.** `background_review` and the
+  `memory_sub_agent` run on Haiku 4.5 or a local model; Sonnet/Opus
+  stays on the main turn only. This alone cuts the delta from ~3x to
+  ~1.3x.
+- **Throttle `background_review`.** Skip on trivial turns (no tool
+  calls, < N tokens of response). Estimated reduction: ~50% of the
+  per-turn +1.
+- **Cache `memory_sub_agent` results 15 s** (OpenClaw pattern). Avoids
+  redundant recalls on consecutive related turns.
+- **Circuit breaker on `memory_sub_agent`.** 3 consecutive failures →
+  60 s offline. Failures never cascade into the main loop.
+
+**Local-friendly path**: if Ollama is running locally, embedding cost
+is $0 and ~10 ms per query. If the user prefers cloud (e.g.,
+`text-embedding-3-small` at $0.02 per 1M tokens), embedding cost is
+effectively free at typical conversation volumes.
+
+**Storage worst case** (100 memories, both indexes active):
+
+- Markdown source: ~50 KB
+- LanceDB embeddings: ~600 KB
+- BM25 index (if 2c enabled): ~5 MB
+- Total: ~6 MB. Negligible.
+
+**Bottom line**: the cost lives in the model bill, not in latency or
+disk. The single biggest lever is **which model runs the auxiliary
+calls**. Mitigated, the per-turn cost delta vs today is in the ~1.3x
+range. Unmitigated (auxiliaries on the main model), it's ~3x.
 
 ---
 
