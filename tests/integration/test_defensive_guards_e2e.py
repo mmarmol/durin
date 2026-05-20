@@ -487,7 +487,7 @@ async def test_preemptive_compaction_writes_event(e2e_telemetry, tmp_path, monke
     estimates = iter([500, 100])
     loop.consolidator.estimate_session_prompt_tokens = lambda _s, **_: (next(estimates), "test")
     monkeypatch.setattr(memory_module, "estimate_message_tokens", lambda _m: 100)
-    loop.consolidator.archive = AsyncMock(return_value="A summary.")
+    loop.consolidator.archive = AsyncMock(return_value=("A summary.", {"entities": [], "topics": []}))
 
     await loop.consolidator.maybe_consolidate_by_tokens(session)
 
