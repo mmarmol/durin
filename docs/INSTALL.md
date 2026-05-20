@@ -221,7 +221,22 @@ don't want durin to touch it. Pass `--workspace <path>` to opt-in.
 
 ## Sanity checks
 
-After install or upgrade, the following should all succeed:
+After install or upgrade, run the diagnostic battery:
+
+```bash
+durin doctor                  # full report; exit 0 unless something fails
+durin doctor --ping           # also test reachability of the active provider
+durin doctor --fix            # apply safe fixes (create workspace, replay migrations)
+durin doctor --json | jq      # machine-readable for CI / scripts
+```
+
+`durin doctor` is the canonical "is everything wired?" check. It groups
+results by category (system, config, providers, tools, extras, state) and
+prints a list of suggested fixes at the bottom. Exit code 0 means no
+`fail` — `warn` results don't break the exit code, so you can wire it
+into CI.
+
+Lower-level individual checks:
 
 ```bash
 durin --version

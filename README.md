@@ -28,6 +28,7 @@ and platform notes.
 |---|---|
 | First-time setup | `durin onboard --wizard` |
 | Inspect state | `durin status` |
+| Diagnose what's wrong | `durin doctor` (add `--fix` for safe auto-fixes, `--ping` for network) |
 | Show config | `durin config show` |
 | Read one key | `durin config get agents.defaults.model` |
 | Change one key | `durin config set agents.defaults.model glm-5.1` |
