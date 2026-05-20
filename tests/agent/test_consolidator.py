@@ -50,7 +50,7 @@ class TestConsolidatorSummarize:
             {"role": "user", "content": "fix the auth bug"},
             {"role": "assistant", "content": "Done, fixed the race condition."},
         ]
-        result = await consolidator.archive(messages)
+        result, _tags = await consolidator.archive(messages)
         assert result == "User fixed a bug in the auth module."
         entries = store.read_unprocessed_history(since_cursor=0)
         assert len(entries) == 1
@@ -59,14 +59,14 @@ class TestConsolidatorSummarize:
         """On LLM failure, raw-dump messages to HISTORY.md."""
         mock_provider.chat_with_retry.side_effect = Exception("API error")
         messages = [{"role": "user", "content": "hello"}]
-        result = await consolidator.archive(messages)
+        result, _tags = await consolidator.archive(messages)
         assert result is None  # no summary on raw dump fallback
         entries = store.read_unprocessed_history(since_cursor=0)
         assert len(entries) == 1
         assert "[RAW]" in entries[0]["content"]
 
     async def test_summarize_skips_empty_messages(self, consolidator):
-        result = await consolidator.archive([])
+        result, _tags = await consolidator.archive([])
         assert result is None
 
 
@@ -86,7 +86,7 @@ class TestConsolidatorArchiveErrorHandling:
             {"role": "user", "content": "fix the auth bug"},
             {"role": "assistant", "content": "Done, fixed the race condition."},
         ]
-        result = await consolidator.archive(messages)
+        result, _tags = await consolidator.archive(messages)
         assert result is None
         entries = store.read_unprocessed_history(since_cursor=0)
         assert len(entries) == 1
@@ -103,7 +103,7 @@ class TestConsolidatorArchiveErrorHandling:
             {"role": "user", "content": "fix the auth bug"},
             {"role": "assistant", "content": "Done."},
         ]
-        result = await consolidator.archive(messages)
+        result, _tags = await consolidator.archive(messages)
         assert result == "User fixed a bug in the auth module."
         entries = store.read_unprocessed_history(since_cursor=0)
         assert len(entries) == 1
@@ -118,7 +118,7 @@ class TestConsolidatorTokenBudget:
         session.messages = [{"role": "user", "content": "hi"}]
         session.key = "test:key"
         consolidator.estimate_session_prompt_tokens = MagicMock(return_value=(100, "tiktoken"))
-        consolidator.archive = AsyncMock(return_value=True)
+        consolidator.archive = AsyncMock(return_value=("summary", {"entities": [], "topics": []}))
         await consolidator.maybe_consolidate_by_tokens(session)
         consolidator.archive.assert_not_called()
 
@@ -153,7 +153,7 @@ class TestConsolidatorTokenBudget:
             session.add_message("assistant", f"a{i}")
 
         consolidator.estimate_session_prompt_tokens = MagicMock(return_value=(100, "tiktoken"))
-        consolidator.archive = AsyncMock(return_value="old conversation summary")
+        consolidator.archive = AsyncMock(return_value=("old conversation summary", {"entities": [], "topics": []}))
 
         await consolidator.maybe_consolidate_by_tokens(
             session,
@@ -185,7 +185,7 @@ class TestConsolidatorTokenBudget:
         session.add_message("assistant", "final answer")
 
         consolidator.estimate_session_prompt_tokens = MagicMock(return_value=(100, "tiktoken"))
-        consolidator.archive = AsyncMock(return_value="tool turn summary")
+        consolidator.archive = AsyncMock(return_value=("tool turn summary", {"entities": [], "topics": []}))
 
         await consolidator.maybe_consolidate_by_tokens(
             session,
@@ -215,7 +215,7 @@ class TestConsolidatorTokenBudget:
         )
         # Use real pick_consolidation_boundary — it will find boundary at idx=50
         # (user message at 50, token budget met)
-        consolidator.archive = AsyncMock(return_value=True)
+        consolidator.archive = AsyncMock(return_value=("summary", {"entities": [], "topics": []}))
 
         await consolidator.maybe_consolidate_by_tokens(session)
 
@@ -242,7 +242,7 @@ class TestConsolidatorTokenBudget:
             side_effect=[(1200, "tiktoken"), (400, "tiktoken")]
         )
         # LLM consolidation fails — archive() returns None (raw_archive fired).
-        consolidator.archive = AsyncMock(return_value=None)
+        consolidator.archive = AsyncMock(return_value=(None, {"entities": [], "topics": []}))
 
         await consolidator.maybe_consolidate_by_tokens(session)
 
@@ -267,7 +267,7 @@ class TestConsolidatorTokenBudget:
         consolidator.estimate_session_prompt_tokens = MagicMock(
             return_value=(1200, "tiktoken")
         )
-        consolidator.archive = AsyncMock(return_value=None)
+        consolidator.archive = AsyncMock(return_value=(None, {"entities": [], "topics": []}))
 
         await consolidator.maybe_consolidate_by_tokens(session)
 
@@ -290,7 +290,7 @@ class TestConsolidatorTokenBudget:
         consolidator.estimate_session_prompt_tokens = MagicMock(
             side_effect=[(1200, "tiktoken"), (400, "tiktoken")]
         )
-        consolidator.archive = AsyncMock(return_value=True)
+        consolidator.archive = AsyncMock(return_value=("summary", {"entities": [], "topics": []}))
 
         await consolidator.maybe_consolidate_by_tokens(session)
 

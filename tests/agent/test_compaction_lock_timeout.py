@@ -96,7 +96,7 @@ async def test_held_lock_times_out_and_skips_consolidation(tmp_path, monkeypatch
     _bind_telemetry(monkeypatch, telemetry)
 
     loop = _make_loop(tmp_path, context_window_tokens=200)
-    loop.consolidator.archive = AsyncMock(return_value=True)
+    loop.consolidator.archive = AsyncMock(return_value=("summary", {"entities": [], "topics": []}))
 
     session = loop.sessions.get_or_create("cli:hung")
     session.messages = [
@@ -148,7 +148,7 @@ async def test_lock_released_after_normal_compaction(tmp_path, monkeypatch):
     monkeypatch.setenv("DURIN_COMPACTION_LOCK_TIMEOUT_S", "5")
 
     loop = _make_loop(tmp_path, context_window_tokens=200)
-    loop.consolidator.archive = AsyncMock(return_value=True)
+    loop.consolidator.archive = AsyncMock(return_value=("summary", {"entities": [], "topics": []}))
     session = loop.sessions.get_or_create("cli:happy")
     session.messages = [
         {"role": "user", "content": "u1"},
