@@ -138,15 +138,18 @@ The migration is scoped against this list. Each item maps to a sub-task.
 - Slash autocomplete dropdown via `Suggester` (read from
   `BUILTIN_COMMAND_SPECS`).
 
-### D5.5 — Modal pickers (~2 days)
+### D5.5 — Modal pickers (~2 days) — DEFERRED to follow-up
 
 - `SessionPickerScreen(ModalScreen)`: SelectionList of saved sessions
   with live filter input. Enter dispatches `/resume <key>`.
 - `ModelPickerScreen(ModalScreen)`: SelectionList of `model_presets`.
   Enter dispatches `/model <preset>`.
-- Hooks: `/sessions` opens SessionPicker; Ctrl+L or `/model` opens
-  ModelPicker.
-- Cancellation closes the modal without side-effect.
+
+**Deferred** until after D5 ships and gets real use. The base TUI is
+functional without modals — `/sessions` already renders as a markdown
+list in a system bubble; Ctrl+L pre-fills `/model ` so the
+SlashCommandSuggester surfaces the configured presets. Modals are
+visual polish on top.
 
 ### D5.6 — Drag-and-drop integration (~1 day)
 
