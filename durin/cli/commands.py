@@ -137,12 +137,15 @@ def _restore_terminal() -> None:
 def _init_prompt_session(
     workspace: Path | None = None,
     presets_getter=None,
+    footer_getter=None,
 ) -> None:
     """Create the prompt_toolkit session with persistent file history.
 
     ``workspace`` enables the ``@file`` completer (D1.9).
     ``presets_getter`` enables the ``/model <preset>`` completer (D1.7)
     and the Ctrl+L shortcut that pre-fills ``/model ``.
+    ``footer_getter`` enables the persistent footer (D1.6) — a callable
+    returning a prompt_toolkit-renderable that is evaluated on each redraw.
     """
     global _PROMPT_SESSION, _SAVED_TERM_ATTRS
 
@@ -187,6 +190,7 @@ def _init_prompt_session(
         completer=completer,
         complete_while_typing=True,
         key_bindings=kb,
+        bottom_toolbar=footer_getter,
     )
 
 
@@ -1311,9 +1315,20 @@ def agent(
             names.add("default")
             return sorted(names)
 
+        def _footer_getter():
+            from durin.cli.footer import build_footer_html, build_footer_text
+
+            try:
+                payload = build_footer_text(agent_loop, cli_channel, cli_chat_id)
+                return build_footer_html(payload)
+            except Exception:  # noqa: BLE001
+                # Never let a footer-render error block input; fall back silent.
+                return ""
+
         _init_prompt_session(
             workspace=Path(agent_loop.workspace),
             presets_getter=_presets_for_completer,
+            footer_getter=_footer_getter,
         )
         _model, _preset_tag = _model_display(config)
         console.print(f"{__logo__} Interactive mode [bold blue]({_model})[/bold blue]{_preset_tag} — type [bold]exit[/bold] or [bold]Ctrl+C[/bold] to quit\n")
