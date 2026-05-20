@@ -82,7 +82,10 @@ class DurinApp(App[None]):
                 preset=preset,
             )
             yield ChatView(id="chat")
-            yield InputArea(placeholder="Type a message · Ctrl+Q to quit")
+            yield InputArea(
+                placeholder="Type a message · Ctrl+Q to quit",
+                workspace=Path(self._agent_loop.workspace) if self._agent_loop else None,
+            )
             yield FooterBar(
                 payload_getter=lambda: payload_from_loop(
                     self._agent_loop, self._cli_channel, self._cli_chat_id

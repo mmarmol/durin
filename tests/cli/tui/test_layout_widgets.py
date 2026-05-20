@@ -30,8 +30,8 @@ async def test_layout_mounts_four_chrome_widgets() -> None:
 
 
 @pytest.mark.asyncio
-async def test_input_submission_appends_user_and_system_bubbles() -> None:
-    """D5.2 placeholder behaviour: echo user + system note for D5.3."""
+async def test_input_submission_appends_user_and_assistant_bubbles() -> None:
+    """Offline submission opens a user + assistant pair (placeholder body)."""
     app = DurinApp(agent_loop=None)
     async with app.run_test() as pilot:
         chat = app.query_one(ChatView)
@@ -45,7 +45,7 @@ async def test_input_submission_appends_user_and_system_bubbles() -> None:
         assert len(bubbles) == 2
         assert bubbles[0]._role == "user"
         assert bubbles[0].body == "hola"
-        assert bubbles[1]._role == "system"
+        assert bubbles[1]._role == "assistant"
 
 
 @pytest.mark.asyncio
