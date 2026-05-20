@@ -209,6 +209,14 @@ class AgentDefaults(Base):
         validation_alias=AliasChoices("consolidationRatio"),
         serialization_alias="consolidationRatio",
     )  # Consolidation target ratio (0.5 = 50% of budget retained after compression)
+    parallel_tool_calls: dict[str, bool] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("parallelToolCalls", "parallel_tool_calls"),
+        serialization_alias="parallelToolCalls",
+    )  # Per-model gating for the OpenAI ``parallel_tool_calls`` request flag.
+    # Key is a substring of the model name (case-insensitive); value is True/False.
+    # First match wins. Empty = preserve the provider default. Use to opt models
+    # OUT when they misbehave with parallel tool calls (e.g. {"glm-5.1": false}).
     dream: DreamConfig = Field(default_factory=DreamConfig)
 
 
