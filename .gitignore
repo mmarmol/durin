@@ -11,6 +11,9 @@ __pycache__/
 env/
 venv/
 .venv/
+# Build artifacts (sdist + wheel produced by `python -m build`)
+/dist/
+/build/
 
 # Node / WebUI
 node_modules/
