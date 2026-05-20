@@ -10,6 +10,7 @@ from typing import Any, Mapping, Sequence
 
 from durin.agent.memory import MemoryStore
 from durin.agent.skills import SkillsLoader
+from durin.memory.hot_layer import read_hot_layer
 from durin.session.goal_state import goal_state_runtime_lines
 from durin.session.todo_state import todos_runtime_lines
 from durin.utils.helpers import (
@@ -92,6 +93,14 @@ class ContextBuilder:
         skills_summary = self.skills.build_skills_summary(exclude=set(always_skills))
         if skills_summary:
             parts.append(render_template("agent/skills_section.md", skills_summary=skills_summary))
+
+        # Memory hot layer (Phase 1.9). Always-loaded snapshot of identity +
+        # top headlines + known entities. Lives at the END of the stable
+        # tier so the earlier (more stable) parts stay cache-hot when the
+        # hot layer rotates daily under dream.
+        hot = read_hot_layer(self.workspace).render()
+        if hot:
+            parts.append(hot)
 
         return "\n\n---\n\n".join(parts)
 

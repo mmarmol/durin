@@ -413,7 +413,96 @@ Two top-level blocks:
 
 ---
 
-## 8. Sandboxing
+## 8. Memory Subsystem (Phase 1)
+
+`durin/memory/` provides the agent with cross-session learnings, ingested documents, and a navigable provenance trail. The canonical design lives in `docs/08_memory_phase2_proposal.md` §0c; Phase 1 (the foundation) lands the surface listed in §0c.9.
+
+### 8.1 Three sources of truth
+
+| Kind | Where | Role |
+|---|---|---|
+| Sessions | `<workspace>/sessions/<key>.jsonl` | Conversation turn log. Append-only. |
+| Ingested docs | `<workspace>/ingested/<id>/source.<ext>` | External artifacts handed to `memory_ingest`. Frozen at ingest. |
+| Memory entries | `<workspace>/memory/<class>/<id>.md` | Derived learnings — markdown + YAML frontmatter. User may edit by hand. |
+
+The 6 utility classes from §0a Decision 1 map onto the directories `memory/stable/`, `memory/episodic/`, `memory/corpus/`, `memory/pending/` (the remaining two classes — procedural skills and the prospective time-trigger half — live in `skills/` and `cron/` respectively).
+
+### 8.2 On-disk layout
+
+```
+<workspace>/
+├── sessions/<key>.jsonl         # canonical
+├── sessions/<key>.meta.json     # derived: summary + tags
+├── sessions/<key>.md            # derived: navigable view with #turn-N anchors
+├── ingested/<id>/source.*       # canonical
+├── ingested/<id>/meta.json      # derived: summary + entities + relations
+├── memory/<class>/<id>.md       # derived: memory entry, mutable
+└── dream/cursor.json            # dream cron progress (populated in Phase 3)
+```
+
+### 8.3 Memory entry schema
+
+`durin/memory/schema.py` defines a pydantic `MemoryEntry` with `extra="forbid"`. Frontmatter carries multi-resolution:
+
+- `headline` (~10 words) — pulled in bulk into the hot layer.
+- `summary` (~50 words) — returned by `memory_search(level="warm")`.
+- `body` (~200-500 words) — returned by `memory_search(level="cold")` or by `memory_drill`.
+
+Provenance lives in `author: agent_created | user_authored`, driven by the `_MEMORY_AUTHOR` ContextVar from `durin/memory/provenance.py`. Markdown links in `source_refs` point to specific session turns (`sessions/<key>.md#turn-N`) or document sections (`ingested/<id>/source.md#section`).
+
+### 8.4 Modules
+
+```
+durin/memory/
+├── provenance.py        # _MEMORY_AUTHOR ContextVar + author_scope
+├── paths.py             # workspace-scoped directory helpers + MEMORY_CLASSES
+├── schema.py            # MemoryEntry pydantic model
+├── storage.py           # split_frontmatter + save_entry + load_entry
+├── session_md.py        # <key>.jsonl → <key>.md formatter with #turn-N anchors
+├── consolidator_tags.py # parse summary / entities / topics from consolidator response
+├── ingestion.py         # ingest_artifact(workspace, source_path)
+├── store.py             # store_memory(workspace, content, class_name, ...)
+├── search.py            # grep over dreamed + undreamed sources
+├── drill.py             # resolve markdown URI to the addressed section
+└── hot_layer.py         # identity + top headlines + entity list for the stable prompt tier
+```
+
+### 8.5 Tools
+
+| Tool | Path | Purpose |
+|---|---|---|
+| `memory_ingest` | `durin/agent/tools/memory_ingest.py` | Copy a markdown/text file to `ingested/<id>/` (content-hash idempotent) and return its content. |
+| `memory_store` | `durin/agent/tools/memory_store.py` | Write a memory entry to `memory/<class>/<id>.md` with auto-headline; implicitly stamps `author=agent_created`. |
+| `memory_search` | `durin/agent/tools/memory_search.py` | Grep over dreamed + undreamed sources. `scope` ∈ {all, dreamed, undreamed}, `level` ∈ {warm, cold}. `read_only=True`. |
+| `memory_drill` | `durin/agent/tools/memory_drill.py` | Resolve `path.md#anchor` to the addressed section. `read_only=True`. |
+
+### 8.6 Hooks into existing systems
+
+- `SessionManager.save()` calls `regenerate_session_md(path)` after writing the `.jsonl` so the navigable `.md` view (with stable `#turn-N` anchors) is always current.
+- `SessionManager._DERIVED_METADATA_KEYS` now includes `_last_tags`; per-session entity/topic tags emitted by the consolidator land in `<key>.meta.json::derived`.
+- `Consolidator.archive()` returns `(summary, tags)` and `Consolidator._merge_session_tags` accumulates tags into `session.metadata["_last_tags"]` across compactions.
+- `ContextBuilder._build_stable_layer` appends `read_hot_layer(workspace).render()` at the end of the stable prompt tier. Cache-friendly: the hot layer is read-only between dreams, designed to flip once a day under Phase 3.
+
+### 8.7 Telemetry
+
+`durin/telemetry/schema.py` adds three TypedDicts and EVENTS entries:
+
+- `memory.recall` — one per `memory_search` call (`query`, `scope`, `level`, `result_count`).
+- `memory.store` — one per successful `memory_store` (`entry_id`, `class_name`, `author`, `headline`).
+- `memory.ingest` — one per successful `memory_ingest` (`entry_id`, `size_bytes`, `suffix`).
+
+The schema-catalog meta-test in `tests/telemetry/test_schema_catalog.py` confirms emit sites and catalog stay in sync.
+
+### 8.8 What Phase 1 does NOT do
+
+- No dream cron — memory entries are created only via `memory_store` or by the user editing files. Cross-session derivation lands in Phase 3.
+- No vector retrieval — search is pure grep. Phase 2 layers LanceDB on the same public entrypoint.
+- No knowledge graph — entities live as frontmatter lists; the SQLite KG with `valid_from` triples is Phase 3.
+- No automated entity extraction beyond the consolidator's per-session tags.
+
+---
+
+## 9. Sandboxing
 
 Tool execution is sandboxed via `durin/agent/tools/sandbox.py`. Three backends:
 - `bwrap` — Linux namespace sandbox (production)
@@ -424,7 +513,7 @@ The agent's exec tool routes through `wrap_command(sandbox, command, workspace, 
 
 ---
 
-## 9. Providers
+## 10. Providers
 
 `durin/providers/` ships adapters for Anthropic, OpenAI-compat (incl. Z.ai, OpenRouter, Azure, Ollama, LM Studio, Gemini, and 25+ others — see `registry.py`), Bedrock, GitHub Copilot, local llama-cpp, OpenAI Codex, and a fallback wrapper. `factory.make_provider(config)` resolves the active provider/model from config + presets.
 
@@ -460,7 +549,7 @@ Aux providers are built once at startup by `loop._build_aux_providers(config)` a
 
 ---
 
-## 10. Testing
+## 11. Testing
 
 ```
 tests/
@@ -486,6 +575,6 @@ Total: **3,293 tests passing, 15 skipped**.
 
 ---
 
-## Last updated: 2026-05-20
+## Last updated: 2026-05-20 (Phase 1 memory subsystem)
 
 > For the history of why each subsystem was added, what was replaced, and what was discarded along the way, see `docs/02_bitacora.md`. This document only describes the current state.

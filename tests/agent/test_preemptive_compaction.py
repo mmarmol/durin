@@ -137,7 +137,7 @@ async def test_preemptive_trigger_fires_below_input_budget(tmp_path, monkeypatch
         preemptive_compact_ratio=0.5,
         consolidation_ratio=0.5,
     )
-    loop.consolidator.archive = AsyncMock(return_value=True)
+    loop.consolidator.archive = AsyncMock(return_value=("summary", {"entities": [], "topics": []}))
     session = _session_with_messages(loop, count=10)
 
     estimates = [150, 40]  # 150 > trigger(100); after archive, 40 <= target(50)
@@ -168,7 +168,7 @@ async def test_below_trigger_skips_consolidation(tmp_path, monkeypatch):
         context_window_tokens=200,
         preemptive_compact_ratio=0.5,  # trigger = 100
     )
-    loop.consolidator.archive = AsyncMock(return_value=True)
+    loop.consolidator.archive = AsyncMock(return_value=("summary", {"entities": [], "topics": []}))
     session = _session_with_messages(loop, count=5)
 
     loop.consolidator.estimate_session_prompt_tokens = lambda _s, **_: (80, "test")
