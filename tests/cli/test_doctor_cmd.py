@@ -216,13 +216,13 @@ def test_install_missing_extras_editable_prints_command_no_op() -> None:
     mock_run.assert_not_called()
 
 
-def test_install_missing_extras_pipx_does_uninstall_then_install() -> None:
-    """Workaround for the pipx+uv bug: do `uninstall` then fresh `install`
-    instead of `install --force` (which uv silently rejects)."""
+def test_install_missing_extras_pipx_uses_inject() -> None:
+    """`pipx inject` is the non-destructive way to add extras to an
+    existing pipx install. No uninstall, no venv recreation."""
     from durin.cli.doctor import install_missing_extras
     from durin.cli.upgrade import InstallInfo
 
-    info = InstallInfo(mode="pipx", source_root=None, version="0.1.0a3")
+    info = InstallInfo(mode="pipx", source_root=None, version="0.1.0a4")
     captured: list[tuple[list[str], dict | None]] = []
 
     def _fake_run(cmd, env=None):
@@ -235,14 +235,17 @@ def test_install_missing_extras_pipx_does_uninstall_then_install() -> None:
          patch("durin.cli.doctor.subprocess.run", side_effect=_fake_run):
         rc = install_missing_extras(["memory", "mcp"], assume_yes=True)
     assert rc == 0
-    assert len(captured) == 2, captured
-    uninstall_cmd, uninstall_env = captured[0]
-    install_cmd, install_env = captured[1]
-    assert uninstall_cmd == ["pipx", "uninstall", "durin-agent"]
-    assert install_cmd == ["pipx", "install", "durin-agent[memory,mcp]"]
-    # Both subprocess calls must carry the uv-cache-bypass.
-    assert uninstall_env is not None and uninstall_env.get("UV_NO_CACHE") == "1"
-    assert install_env is not None and install_env.get("UV_NO_CACHE") == "1"
+    assert len(captured) == 1, captured
+    cmd, env = captured[0]
+    # Must be `pipx inject durin-agent <pkgs...>` — no uninstall step.
+    assert cmd[:3] == ["pipx", "inject", "durin-agent"]
+    # All extras' packages present.
+    pkg_args = cmd[3:]
+    assert "fastembed" in pkg_args
+    assert "lancedb" in pkg_args
+    assert "mcp" in pkg_args
+    # Bypass uv's index cache so freshly-published versions are visible.
+    assert env is not None and env.get("UV_NO_CACHE") == "1"
 
 
 def test_install_missing_extras_wheel_runs_pip_install() -> None:

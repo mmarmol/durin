@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -72,6 +73,44 @@ def detect_install_mode() -> InstallInfo:
     return InstallInfo(mode="unknown", source_root=None, version=__version__)
 
 
+def extras_to_packages(extras: list[str], *, dist_name: str = PYPI_DIST_NAME) -> list[str]:
+    """Return the bare package names that the given extras would pull in.
+
+    Reads ``durin-agent``'s installed metadata so the mapping never drifts
+    from ``pyproject.toml``. Returns an empty list when the package isn't
+    installed (e.g. someone is reading the docs without it on PATH) — the
+    caller should fall back to the bracket form in that case.
+
+    Versions are intentionally stripped from the returned specs: ``pipx
+    inject`` works most cleanly with bare names, and pip/uv will resolve
+    each one against the constraints already locked in the installed
+    ``durin-agent`` metadata.
+    """
+    from importlib.metadata import PackageNotFoundError, requires
+
+    try:
+        reqs = requires(dist_name) or []
+    except PackageNotFoundError:
+        return []
+    pkgs: list[str] = []
+    for req in reqs:
+        # Requirement entries with extra markers look like:
+        #   'fastembed>=0.4.0,<1.0.0 ; extra == "memory"'
+        if "extra ==" not in req:
+            continue
+        spec_part, _, marker = req.partition(";")
+        for extra in extras:
+            if f'extra == "{extra}"' in marker or f"extra == '{extra}'" in marker:
+                # Strip version specifier / environment markers / extras.
+                # `re.split` keeps just the first chunk before any of the
+                # spec-delimiting characters.
+                name = re.split(r"[<>=!~ ;\[]", spec_part.strip(), 1)[0]
+                if name and name not in pkgs:
+                    pkgs.append(name)
+                break
+    return pkgs
+
+
 def install_hint(extras: list[str], *, mode: InstallMode | None = None) -> str:
     """Return the right install command for the detected mode + a list of extras.
 
@@ -86,11 +125,17 @@ def install_hint(extras: list[str], *, mode: InstallMode | None = None) -> str:
         # Editable users want to re-install from the source tree.
         return f"pip install -e '.{bracket}'"
     if mode == "pipx":
-        # `pipx install --force` should work but it's broken when pipx uses
-        # `uv` as backend: `--force` doesn't translate to `uv venv --clear`,
-        # so uv refuses to recreate the existing venv. Workaround:
-        # uninstall first, then install fresh with the new extras.
-        return f"pipx uninstall {PYPI_DIST_NAME} && pipx install '{spec}'"
+        # `pipx inject` adds packages to the existing pipx venv without
+        # recreating it — exactly what we want when adding extras after
+        # the initial install. Avoids both the `pipx install --force` bug
+        # (uv refuses to recreate the venv) AND the data-destroying
+        # uninstall+install dance.
+        pkgs = extras_to_packages(extras) if extras else []
+        if pkgs:
+            return f"pipx inject {PYPI_DIST_NAME} {' '.join(pkgs)}"
+        # Metadata not readable (shouldn't happen from inside durin's own
+        # process) — fall back to the bracket form on a fresh install.
+        return f"pipx install '{spec}'"
     # `wheel` and `unknown` fall back to a regular pip command.
     return f"pip install --upgrade '{spec}'"
 

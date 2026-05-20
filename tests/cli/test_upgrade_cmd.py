@@ -198,19 +198,67 @@ def test_install_hint_for_editable() -> None:
     assert install_hint([], mode="editable") == "pip install -e '.'"
 
 
-def test_install_hint_for_pipx() -> None:
+def test_install_hint_for_pipx_uses_inject() -> None:
+    """pipx mode should suggest `pipx inject` — non-destructive, no uninstall."""
     from durin.cli.upgrade import install_hint
 
-    # pipx + uv has a bug where `pipx install --force` doesn't recreate the
-    # venv. The hint works around it with uninstall+install.
-    assert (
-        install_hint(["memory"], mode="pipx")
-        == "pipx uninstall durin-agent && pipx install 'durin-agent[memory]'"
-    )
-    assert (
-        install_hint(["memory", "mcp"], mode="pipx")
-        == "pipx uninstall durin-agent && pipx install 'durin-agent[memory,mcp]'"
-    )
+    hint = install_hint(["memory"], mode="pipx")
+    assert hint.startswith("pipx inject durin-agent "), hint
+    # The memory extra pulls in fastembed + lancedb per pyproject.toml.
+    assert "fastembed" in hint
+    assert "lancedb" in hint
+    # Combined extras both land in a single inject command.
+    combined = install_hint(["memory", "mcp"], mode="pipx")
+    assert "mcp" in combined
+    assert "fastembed" in combined
+
+
+def test_install_hint_pipx_never_uninstalls() -> None:
+    """Regression: a user reported the old uninstall+install hint as
+    'pésimo'. The new hint must not destructively reinstall the agent."""
+    from durin.cli.upgrade import install_hint
+
+    hint = install_hint(["memory", "mcp"], mode="pipx")
+    assert "uninstall" not in hint
+    assert "--force" not in hint
+
+
+def test_extras_to_packages_resolves_memory() -> None:
+    from durin.cli.upgrade import extras_to_packages
+
+    pkgs = extras_to_packages(["memory"])
+    assert "fastembed" in pkgs
+    assert "lancedb" in pkgs
+
+
+def test_extras_to_packages_resolves_mcp() -> None:
+    from durin.cli.upgrade import extras_to_packages
+
+    pkgs = extras_to_packages(["mcp"])
+    assert pkgs == ["mcp"]
+
+
+def test_extras_to_packages_combines_multiple_extras() -> None:
+    from durin.cli.upgrade import extras_to_packages
+
+    pkgs = extras_to_packages(["memory", "mcp"])
+    assert {"fastembed", "lancedb", "mcp"}.issubset(set(pkgs))
+
+
+def test_extras_to_packages_unknown_extra_returns_empty() -> None:
+    from durin.cli.upgrade import extras_to_packages
+
+    assert extras_to_packages(["definitely-not-an-extra"]) == []
+
+
+def test_extras_to_packages_strips_version_specifiers() -> None:
+    """Returned names must be bare (no `>=`, no `[...]`) so `pipx inject`
+    accepts them without per-arg shell quoting."""
+    from durin.cli.upgrade import extras_to_packages
+
+    for pkg in extras_to_packages(["memory", "mcp", "web"]):
+        for ch in "<>=!~ ;":
+            assert ch not in pkg, f"unexpected spec char {ch!r} in {pkg!r}"
 
 
 def test_install_hint_for_wheel() -> None:
