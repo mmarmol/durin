@@ -78,6 +78,29 @@ def _max_consecutive_idle_timeouts() -> int:
     except ValueError:
         return _DEFAULT_MAX_CONSECUTIVE_IDLE_TIMEOUTS
     return max(0, value)
+
+
+# Tier 1 (OpenClaw-inspired): compaction grace window.
+#
+# When the outer LLM wall-clock timeout fires while consolidation is in
+# flight for this session, extending the deadline by ``DURIN_COMPACTION_GRACE_S``
+# avoids killing the request just because compaction is rebuilding the
+# context (typically slow LLM call). Grace is used at most once per LLM
+# request — if the call still doesn't return after the grace window, we
+# fail with the regular timeout. Matches OpenClaw's ``resolveRunTimeoutDuringCompaction``
+# semantics (run/compaction-timeout.ts).
+_DEFAULT_COMPACTION_GRACE_SECONDS = 30.0
+
+
+def _compaction_grace_seconds() -> float:
+    raw = os.getenv("DURIN_COMPACTION_GRACE_S")
+    if raw is None:
+        return _DEFAULT_COMPACTION_GRACE_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        return _DEFAULT_COMPACTION_GRACE_SECONDS
+    return max(0.0, value)
 _COMPACTABLE_TOOLS = frozenset({
     "read_file", "exec", "grep",
     "web_search", "web_fetch", "list_dir",
@@ -170,6 +193,15 @@ class AgentRunSpec:
     # the untransformed list is used (best-effort, never breaks the
     # loop).
     context_transform: Any | None = None  # Callable[[list[dict]], list[dict] | None]
+    # OpenClaw-inspired compaction grace window. Optional callable that
+    # returns True iff context consolidation is currently running for the
+    # session backing this run. When the outer wall-clock LLM timeout would
+    # have fired, the runner extends the deadline once by
+    # ``DURIN_COMPACTION_GRACE_S`` seconds *if* this returns True — protecting
+    # slow LLM calls that are slow precisely BECAUSE the context still needs
+    # to be reshaped. Grace is used at most once per request; subsequent
+    # timeouts in the same call fail with the regular timeout response.
+    is_compacting: Any | None = None  # Callable[[], bool]
 
 
 @dataclass(slots=True)
@@ -862,6 +894,73 @@ class AgentRunner:
             kwargs["reasoning_effort"] = spec.reasoning_effort
         return kwargs
 
+    async def _await_with_compaction_grace(
+        self,
+        coro: Any,
+        *,
+        base_timeout: float,
+        spec: AgentRunSpec,
+    ) -> Any:
+        """Await ``coro`` with the outer LLM wall-clock timeout, but extend
+        the deadline by one grace window if compaction is in flight for
+        the session at the moment the base timeout would have fired.
+
+        Uses ``asyncio.wait({task}, timeout=...)`` (which does NOT cancel
+        the task on timeout — unlike ``asyncio.wait_for``) so we can probe
+        the compaction state and optionally keep waiting on the same task.
+        If grace is also exhausted, the task is cancelled and
+        ``asyncio.TimeoutError`` is raised so the caller's existing timeout
+        handler maps it to an LLMResponse error_kind="timeout".
+
+        Matches OpenClaw's ``resolveRunTimeoutDuringCompaction`` semantics
+        (grace used at most once, only when compaction is detected).
+        """
+        task = asyncio.ensure_future(coro)
+        try:
+            done, _pending = await asyncio.wait({task}, timeout=base_timeout)
+            if task in done:
+                return task.result()
+
+            grace_s = _compaction_grace_seconds()
+            compacting = False
+            if grace_s > 0 and spec.is_compacting is not None:
+                try:
+                    compacting = bool(spec.is_compacting())
+                except Exception:
+                    logger.exception(
+                        "is_compacting callback raised — treating as not compacting",
+                    )
+                    compacting = False
+            if compacting:
+                logger.info(
+                    "LLM wall-clock timeout fired during active compaction for {}; "
+                    "extending deadline by {}s (one-shot grace)",
+                    spec.session_key or "default",
+                    grace_s,
+                )
+                _logger = current_telemetry()
+                if _logger is not None:
+                    with suppress(Exception):
+                        _logger.log("compaction.grace_extended", {
+                            "base_timeout_s": base_timeout,
+                            "grace_s": grace_s,
+                            "session_key": spec.session_key,
+                        })
+                done, _pending = await asyncio.wait({task}, timeout=grace_s)
+                if task in done:
+                    return task.result()
+
+            task.cancel()
+            with suppress(BaseException):
+                await task
+            raise asyncio.TimeoutError()
+        except BaseException:
+            if not task.done():
+                task.cancel()
+                with suppress(BaseException):
+                    await task
+            raise
+
     async def _request_model(
         self,
         spec: AgentRunSpec,
@@ -952,10 +1051,14 @@ class AgentRunner:
         # because total elapsed time exceeded DURIN_LLM_TIMEOUT_S.
         outer_timeout_s = None if (wants_streaming or wants_progress_streaming) else timeout_s
         try:
-            response = (
-                await coro if outer_timeout_s is None
-                else await asyncio.wait_for(coro, timeout=outer_timeout_s)
-            )
+            if outer_timeout_s is None:
+                response = await coro
+            else:
+                response = await self._await_with_compaction_grace(
+                    coro,
+                    base_timeout=outer_timeout_s,
+                    spec=spec,
+                )
         except asyncio.TimeoutError:
             if outer_timeout_s is None:
                 return LLMResponse(
