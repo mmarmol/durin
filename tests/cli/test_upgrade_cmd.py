@@ -34,6 +34,33 @@ def test_detect_install_mode_returns_install_info() -> None:
     assert isinstance(info.version, str) and info.version
 
 
+def test_detect_install_mode_pipx_from_sys_prefix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: a pipx venv whose ``bin/python`` symlinks out to the base
+    interpreter must still be detected as pipx via ``sys.prefix``.
+
+    Before this test the detector ran ``Path(sys.executable).resolve()``,
+    which followed the symlink to (e.g.) the Homebrew interpreter and
+    lost the ``/pipx/venvs/`` segment entirely.
+    """
+    import sys as _sys
+
+    import durin
+    from durin.cli import upgrade as upgrade_mod
+
+    fake_venv = tmp_path / ".local" / "pipx" / "venvs" / "durin-agent"
+    fake_pkg = fake_venv / "lib" / "python3.14" / "site-packages" / "durin"
+    fake_pkg.mkdir(parents=True)
+    (fake_pkg / "__init__.py").write_text("", encoding="utf-8")
+    # Pretend durin lives inside the pipx venv (no pyproject.toml alongside).
+    monkeypatch.setattr(durin, "__file__", str(fake_pkg / "__init__.py"))
+    # `sys.executable` looks resolved (Homebrew path) — pretending the symlink
+    # got followed. `sys.prefix` still points at the pipx venv root.
+    monkeypatch.setattr(_sys, "prefix", str(fake_venv))
+    monkeypatch.setattr(_sys, "executable", "/opt/homebrew/Cellar/python@3.14/3.14.5/bin/python3.14")
+    info = upgrade_mod.detect_install_mode()
+    assert info.mode == "pipx", f"expected pipx, got {info.mode}"
+
+
 def test_cli_upgrade_check_exits_zero(tmp_path: Path) -> None:
     # --check must never run pip; we don't even need a real config path.
     result = runner.invoke(app, ["upgrade", "--check"])
