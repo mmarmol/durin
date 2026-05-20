@@ -8,7 +8,10 @@ from typing import Any, Awaitable, Callable
 
 from loguru import logger
 
+from contextlib import suppress
+
 from durin.agent.hook import AgentHook, AgentHookContext
+from durin.telemetry.logger import current_telemetry
 from durin.utils.helpers import IncrementalThinkExtractor, strip_think
 from durin.utils.progress_events import (
     build_tool_event_finish_payloads,
@@ -167,12 +170,31 @@ class AgentProgressHook(AgentHook):
                     tool_events=tool_events,
                 )
         u = context.usage or {}
+        prompt_tokens = int(u.get("prompt_tokens", 0) or 0)
+        cached_tokens = int(u.get("cached_tokens", 0) or 0)
+        completion_tokens = int(u.get("completion_tokens", 0) or 0)
         logger.debug(
             "LLM usage: prompt={} completion={} cached={}",
-            u.get("prompt_tokens", 0),
-            u.get("completion_tokens", 0),
-            u.get("cached_tokens", 0),
+            prompt_tokens, completion_tokens, cached_tokens,
         )
+        # Structured cache-savings telemetry so users can grep "how much
+        # am I saving from server-side prompt caching?". Emitted every
+        # turn — for providers without caching (or cold cache) the
+        # ``cached_tokens`` field is 0 and the ratio is 0%, which is
+        # itself useful signal (tells you the provider/model isn't
+        # caching at all).
+        if prompt_tokens > 0:
+            logger_obj = current_telemetry()
+            if logger_obj is not None:
+                ratio_pct = round(100.0 * cached_tokens / prompt_tokens, 1)
+                with suppress(Exception):
+                    logger_obj.log("cache.usage", {
+                        "iteration": context.iteration,
+                        "prompt_tokens": prompt_tokens,
+                        "cached_tokens": cached_tokens,
+                        "completion_tokens": completion_tokens,
+                        "cache_ratio_pct": ratio_pct,
+                    })
 
     def finalize_content(self, context: AgentHookContext, content: str | None) -> str | None:
         return self._strip_think(content)
