@@ -11,6 +11,7 @@ from durin.memory.paths import (
 from durin.memory.consolidator_tags import parse_consolidator_response
 from durin.memory.ingestion import IngestError, ingest_artifact
 from durin.memory.provenance import Author, author_scope, current_author
+from durin.memory.store import StoreError, store_memory
 from durin.memory.schema import MemoryEntry
 from durin.memory.session_md import (
     SessionMdError,
@@ -26,6 +27,7 @@ __all__ = [
     "MEMORY_CLASSES",
     "MemoryEntry",
     "SessionMdError",
+    "StoreError",
     "author_scope",
     "current_author",
     "dream_dir",
@@ -40,4 +42,5 @@ __all__ = [
     "render_session_md",
     "save_entry",
     "split_frontmatter",
+    "store_memory",
 ]
