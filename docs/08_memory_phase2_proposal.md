@@ -552,6 +552,102 @@ What changes versus the §5 Option C exploration:
 
 ---
 
+## 0d. Implementation breakdown by phase
+
+> Detailed sub-task list derived from §0c.9. Each sub-task is sized in
+> working days and ordered to expose dependencies. Estimates assume one
+> engineer at a steady pace; add overhead for integration testing and
+> review.
+
+### 0d.1 Phase 1 — Foundation (~17 days, 2–3 weeks)
+
+| # | Sub-task | Days | Depends on |
+|---|---|---|---|
+| 1.1 | Provenance: `_MEMORY_AUTHOR` ContextVar + frontmatter `author:` field + propagation tests across async boundaries | 1 | — |
+| 1.2 | Layout on disk: create `memory/{stable,episodic,corpus,pending}/`, `ingested/`, `dream/`. Frontmatter schema (pydantic or TypedDict). Load/save round-trip | 1 | 1.1 |
+| 1.3 | Formatter `<key>.jsonl → <key>.md` with `#turn-N` anchors. Hook into session close and compaction. Deterministic output + anchor stability under consolidation | 2 | — |
+| 1.4 | Tags in compaction: extend the consolidator prompt to emit `entities + topics` JSON alongside the summary. Persist to `meta.json::derived.tags` | 2 | 1.3 |
+| 1.5 | Tool `memory_ingest(path)`: copy source to `ingested/<id>/source.<ext>`, generate `meta.json::derived` with summary + entities + relations via main model (synchronous). V1: markdown/plain-text only (PDF deferred to Phase 2) | 3 | 1.1, 1.2 |
+| 1.6 | Tool `memory_store(content, class?)`: write `memory/<class>/<id>.md` with full frontmatter. Auto-headline if not provided. `author=agent_created` via ContextVar | 2 | 1.1, 1.2 |
+| 1.7 | Tool `memory_search(query, scope, level)`: grep over `<key>.md` with tag filter (undreamed) + grep over `memory/*/*.md` (dreamed). No vector yet | 2 | 1.3, 1.4, 1.6 |
+| 1.8 | Tool `memory_drill(uri)`: parse `<path>.md#anchor` and return only that section | 1 | 1.3 |
+| 1.9 | `ContextBuilder` hot-layer reader: identity + top headlines + entity list → injected into the stable layer of the 3-tier prompt. Budget enforcement | 2 | 1.2, 1.6 |
+| 1.10 | Telemetry: TypedDicts `memory.recall`, `memory.store`, `memory.ingest` in `schema.py`. Emit calls in tools. Schema sync test | 1 | 1.5, 1.6, 1.7 |
+| 1.11 | Update `ARCHITECTURE.md` (new memory subsystem section). Smoke test end-to-end: ingest doc, store memory, search, drill, verify hot layer | 1 | rest |
+
+**Output**: the agent can receive documents from the user, store
+explicit learnings, and query them via grep + drill — with navigable
+provenance and multi-resolution. Without dream yet, memories appear
+only when the agent explicitly stores them or the user edits them by
+hand.
+
+### 0d.2 Phase 2 — Vector retrieval (~10 days, 2 weeks)
+
+| # | Sub-task | Days |
+|---|---|---|
+| 2.1 | LanceDB local dep + embedding provider config (default local Ollama if present; fallback to HTTP) | 2 |
+| 2.2 | Index builder: walk `memory/*/*.md`, embed `summary`, persist to `memory/.index.lance`. Rebuild on memory write | 3 |
+| 2.3 | Extend `memory_search(level="warm")` to use vector top-K over summaries. Keep grep as fallback | 2 |
+| 2.4 | Telemetry `memory.recall.vector` (latency, hit count, embedding model). Smoke + benchmark vs grep | 3 |
+
+**Output**: search scales past ~200 entries.
+
+### 0d.3 Phase 2c — TEMPR multi-strategy (opt-in, ~5 days if activated)
+
+| # | Sub-task | Days |
+|---|---|---|
+| 2c.1 | `bm25s` dep + index builder (sidecar to LanceDB). Config knob `memory.retrieval.strategies.bm25: true` | 2 |
+| 2c.2 | Temporal strategy: weighting by `valid_from` recency. Config knob | 1 |
+| 2c.3 | Reciprocal Rank Fusion combining strategy ranks when ≥2 active | 2 |
+
+### 0d.4 Phase 3 — Dream + KG (~9 days, 1–2 weeks)
+
+| # | Sub-task | Days |
+|---|---|---|
+| 3.1 | Dream daemon: cron config (default `0 2 * * *`). Reads from `dream/cursor.json`. Processes undreamed sessions + new ingested docs | 2 |
+| 3.2 | Multi-factor scoring: frequency / relevance / diversity / recency / consolidation / conceptual over extracted candidates | 2 |
+| 3.3 | Freshness trends labeling (`stable` / `strengthening` / `weakening` / `stale`) on existing entries. Update `valid_from` on refinement | 1 |
+| 3.4 | Hot-layer rebuild: top-K headlines + entity list → write `memory/stable/_hot.cache` (consumed by `ContextBuilder`) | 1 |
+| 3.5 | Curator inline in dream: archive `agent_created` stale; never touch `user_authored` | 1 |
+| 3.6 | SQLite KG (entities + triples with `valid_from` and `source_ref`). Tool `kg_query(entity, as_of=None)`. Schema migration from memory entry frontmatter | 2 |
+
+**Output**: agent actually learns cross-session. Hot layer reflects
+yesterday's conclusions.
+
+### 0d.5 Phase 4 — Dynamic skills (~10 days, 2 weeks)
+
+| # | Sub-task | Days |
+|---|---|---|
+| 4.1 | Tool `skill_manage(action, name, ...)` with create / edit / patch / delete (Hermes pattern) | 4 |
+| 4.2 | Skill schema (YAML frontmatter + body) + validation. Catalog auto-inject in stable layer | 2 |
+| 4.3 | Curator extension: agent_created skills participate in dream scoring (cross-cutting per §5b) | 4 |
+
+### 0d.6 Phase 5 — Prospective memory beyond time (optional, ~10 days, 2 weeks)
+
+| # | Sub-task | Days |
+|---|---|---|
+| 5.1 | Entity-trigger in `CronService`: "when entity X appears in conversation, fire Y" | 5 |
+| 5.2 | Condition-trigger: "when file Z changes, fire W" | 5 |
+
+### 0d.7 Risks per phase
+
+- **1.4 (tags in compaction)**: if the consolidator prompt grows too
+  large, the token budget is at risk. Mitigation — emit tags as a
+  second, optional pass when the first pass exceeds a threshold.
+- **2.1 (embedding provider)**: if the user lacks Ollama, the HTTP
+  default needs an API key. Mitigation — require explicit config; fail
+  loud rather than silently degrade to TF-IDF.
+- **3.1 (dream cron)**: if the machine is off when cron fires, the run
+  is missed. Mitigation — catch-up at next agent start (already the
+  pattern in `HeartbeatService`).
+- **3.6 (KG)**: largest conceptual risk in Phase 3. Even though
+  opt-in, building it poorly contaminates the rest of Phase 3.
+  Mitigation — 1-day spike to validate the SQLite schema against a
+  realistic set of memory entries before committing to the full
+  sub-task.
+
+---
+
 ## 1. The original plan (doc 03 summarised)
 
 > Full text: `docs/03_memory_design.md`. This is a condensed restatement,
