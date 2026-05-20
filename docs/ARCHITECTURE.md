@@ -496,9 +496,43 @@ The schema-catalog meta-test in `tests/telemetry/test_schema_catalog.py` confirm
 ### 8.8 What Phase 1 does NOT do
 
 - No dream cron — memory entries are created only via `memory_store` or by the user editing files. Cross-session derivation lands in Phase 3.
-- No vector retrieval — search is pure grep. Phase 2 layers LanceDB on the same public entrypoint.
+- No vector retrieval in Phase 1 — search was pure grep. Phase 2 layered LanceDB on the same public entrypoint (see §8.9).
 - No knowledge graph — entities live as frontmatter lists; the SQLite KG with `valid_from` triples is Phase 3.
 - No automated entity extraction beyond the consolidator's per-session tags.
+
+### 8.9 Phase 2 additions — vector retrieval
+
+Phase 2 adds embedding-driven retrieval on top of the same markdown source of truth.
+
+**Modules**
+
+| Module | Role |
+|---|---|
+| `durin/memory/embedding.py` | `EmbeddingProvider` ABC + `FastembedProvider` (ONNX, in-process, lazy load). Default model `intfloat/multilingual-e5-small` (471 MB, 384-dim, polite default). `BAAI/bge-m3` available for CJK-heavy users via `memory.embedding.model` override. |
+| `durin/memory/vector_index.py` | `VectorIndex` wrapping a LanceDB table at `<workspace>/memory/.index.lance`. `upsert(entry, class, path)` for incremental writes; `rebuild_from_workspace()` for full rebuild; `search(query, top_k)` for nearest-neighbour. |
+
+**Config**
+
+`durin/config/schema.py` adds `memory.embedding.{provider, model, base_url, api_key, lazy_eviction}` under a new top-level `memory` section.
+
+**Tool wiring**
+
+- `MemoryStoreTool.execute` upserts the new entry into the vector index after the markdown write (best-effort — a vector failure logs a warning but never breaks the markdown source-of-truth write).
+- `MemorySearchTool.execute` selects a strategy by `(scope, level)`:
+  - `dreamed` + `warm` → vector only (`strategy=vector`).
+  - `all` + `warm` → vector for memory entries + grep for sessions/ingested (`strategy=hybrid`).
+  - any other shape (cold tier, undreamed-only, vector unavailable) → grep only (`strategy=grep`).
+  - Vector failures fall back to grep silently.
+
+**Telemetry events** (Phase 2)
+
+- `memory.embedding.load` — emitted once per process when the model first loads. Carries `model`, `duration_ms`.
+- `memory.embedding.embed` — emitted per batch with `model`, `batch_size`, `duration_ms`.
+- `memory.recall.vector` — emitted when the vector path runs. Carries `query`, `scope`, `embedding_model`, `hit_count`, `duration_ms`. Separate from the aggregate `memory.recall` event so dashboards can split latency / hit count by strategy.
+
+**Install footprint**
+
+Vector retrieval is opt-in via `pip install durin[memory]` (adds `fastembed` and `lancedb`). Phase 1 (grep) keeps working without the extra. On first vector call the embedding model auto-downloads (~471 MB for the default model) into `~/.cache/fastembed/` and stays resident for the process lifetime — no idle eviction in V1 per the data-driven decision recorded in `docs/08_memory_phase2_proposal.md` §0d.2.
 
 ---
 
@@ -575,6 +609,6 @@ Total: **3,293 tests passing, 15 skipped**.
 
 ---
 
-## Last updated: 2026-05-20 (Phase 1 memory subsystem)
+## Last updated: 2026-05-20 (Phase 2 memory — vector retrieval)
 
 > For the history of why each subsystem was added, what was replaced, and what was discarded along the way, see `docs/02_bitacora.md`. This document only describes the current state.
