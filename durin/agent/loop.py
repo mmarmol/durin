@@ -914,6 +914,7 @@ class AgentLoop:
                     metadata=(session.metadata if session is not None else None),
                 ),
                 is_compacting=_is_compacting,
+                post_compaction_guard=self.consolidator.post_compaction_guard,
             ))
         finally:
             reset_file_states(file_state_token)

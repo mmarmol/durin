@@ -256,6 +256,13 @@ class AgentRunSpec:
     # to be reshaped. Grace is used at most once per request; subsequent
     # timeouts in the same call fail with the regular timeout response.
     is_compacting: Any | None = None  # Callable[[], bool]
+    # Tier 2 C2: optional shared ``PostCompactionLoopGuard`` instance.
+    # The consolidator arms it per-session after a successful compaction;
+    # the runner ``observe()``s every tool execution within the window.
+    # When the guard trips, the turn terminates with
+    # ``stop_reason="post_compaction_loop"``. Leave as ``None`` to skip
+    # this layer (tests / non-loop callers don't need it).
+    post_compaction_guard: Any | None = None
 
 
 @dataclass(slots=True)
@@ -702,6 +709,7 @@ class AgentRunner:
                 context.tool_results = list(results)
                 context.tool_events = list(new_events)
                 completed_tool_results: list[dict[str, Any]] = []
+                post_compact_trip: tuple[str, int] | None = None
                 for tool_call, result in zip(response.tool_calls, results):
                     tool_message = {
                         "role": "tool",
@@ -716,6 +724,35 @@ class AgentRunner:
                     }
                     messages.append(tool_message)
                     completed_tool_results.append(tool_message)
+                    # Tier 2 C2: observe this tool call through the
+                    # post-compaction guard. Only fires if the consolidator
+                    # armed the guard recently AND the same triple is seen
+                    # window_size times within the window.
+                    if (
+                        spec.post_compaction_guard is not None
+                        and post_compact_trip is None
+                    ):
+                        try:
+                            from durin.utils.post_compaction_guard import (
+                                Observation, hash_args, hash_result,
+                            )
+                            obs = Observation(
+                                tool_name=tool_call.name,
+                                args_hash=hash_args(tool_call.arguments),
+                                result_hash=hash_result(tool_message["content"]),
+                            )
+                            verdict = spec.post_compaction_guard.observe(
+                                spec.session_key, obs,
+                            )
+                            # Strict ``is True`` so a MagicMock guard (used
+                            # in tests that don't care about C2) doesn't
+                            # accidentally trip via truthy mock attributes.
+                            if verdict.should_abort is True:
+                                post_compact_trip = (verdict.tool_name, verdict.repeat_count)
+                        except Exception:
+                            logger.exception(
+                                "Post-compaction guard observe failed; skipping",
+                            )
                 # Hermes-inspired per-turn aggregate budget: when many medium
                 # tool results combine to exceed the configured budget, spill
                 # the largest not-yet-persisted ones to disk. Mutates the
@@ -744,6 +781,39 @@ class AgentRunner:
                     if should_continue:
                         had_injections = True
                         continue
+                    break
+                if post_compact_trip is not None:
+                    pc_name, pc_count = post_compact_trip
+                    final_content = (
+                        f"Error: tool '{pc_name}' repeated {pc_count} times with "
+                        f"identical args + result post-compaction. The compaction "
+                        "did not break the loop. Aborting to prevent runaway "
+                        "resource use."
+                    )
+                    stop_reason = "post_compaction_loop"
+                    error = final_content
+                    self._append_model_error_placeholder(messages)
+                    context.final_content = final_content
+                    context.error = error
+                    context.stop_reason = stop_reason
+                    _pc_logger = current_telemetry()
+                    if _pc_logger is not None:
+                        with suppress(Exception):
+                            _pc_logger.log("post_compaction_loop.tripped", {
+                                "tool_name": pc_name,
+                                "repeat_count": pc_count,
+                                "iteration": iteration,
+                                "session_key": spec.session_key,
+                            })
+                    logger.warning(
+                        "Post-compaction loop guard tripped on turn {} for {}: "
+                        "tool='{}', repeats={}",
+                        iteration,
+                        spec.session_key or "default",
+                        pc_name,
+                        pc_count,
+                    )
+                    await hook.after_iteration(context)
                     break
                 await self._emit_checkpoint(
                     spec,
