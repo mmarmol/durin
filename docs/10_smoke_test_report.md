@@ -293,6 +293,11 @@ attributable to the C1 reorganization shipped earlier in May 2026.
 
 ## Limitations & follow-ups
 
+> **Update (May 2026)**: Three of the four limitations below were
+> addressed in follow-up commits. The fourth (model alignment too
+> strong for adversarial smoke) is a property of frontier models, not
+> something to "fix". See **Resolutions** at the bottom of this section.
+
 1. **Some Tier 1/2 triggers aren't smoke-testable without fault
    injection** (idle-timeout breaker, compaction lock timeout,
    pre-emptive trigger with realistic sessions). The unit-test suite is
@@ -316,6 +321,32 @@ attributable to the C1 reorganization shipped earlier in May 2026.
    the model refused the hallucinated tool call, which is good agent
    behavior but means B2 stayed silent. The guard's trip path is
    covered by the unit tests anyway.
+
+### Resolutions (commits, May 2026)
+
+- **#1** → ✅ Closed by `tests/integration/test_defensive_guards_e2e.py`
+  (10 tests, all passing). Each defensive guard now has a deterministic
+  end-to-end test that injects the failure, runs the real `AgentRunner`
+  (or `Consolidator`) with a real `TelemetryLogger` bound to a tmp
+  file, and reads the JSONL back from disk to verify the event landed
+  with the documented payload. Covers: idle-timeout breaker, mid-turn
+  precheck overflow, unknown-tool loop guard, turn-budget enforced,
+  post-compaction loop, history media prune, tool-call argument
+  repair, compaction lock timeout, pre-emptive compaction trigger.
+  Closes the smoke-vs-unit gap (smoke ran healthy load; unit tested
+  guard logic in isolation; E2E tests now bridge both).
+- **#2** → ✅ Closed by `feat(telemetry): instrument list_dir, web_search,
+  web_fetch, todo_write`. Each tool now emits a `tool.<name>` event
+  with a TypedDict registered in `durin/telemetry/schema.py::EVENTS`.
+  9 new unit tests cover the new emit sites.
+- **#3** → ✅ Closed by `data: regenerate model_capabilities.json with
+  vendor overlay (Gemini)`. The on-disk snapshot is now schema_version=2
+  with 35 Gemini entries tagged `_authority="vendor"` and the rest
+  (756) `_authority="merge"`.
+- **#4** → Acknowledged as inherent. Frontier models that refuse to
+  hallucinate are good agent behaviour; the guards that defend against
+  hallucinations are exercised by the new E2E suite using synthetic
+  provider responses, which is the right layer to test that path.
 
 ---
 
