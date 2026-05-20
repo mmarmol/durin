@@ -456,6 +456,22 @@ class MemoryEmbeddingEmbedEvent(TypedDict):
     session_key: NotRequired[str | None]
 
 
+class MemoryRecallVectorEvent(TypedDict):
+    """Vector retrieval path inside memory_search. Logged once per call.
+
+    Separate from ``memory.recall`` (the generic grep-or-vector summary
+    event) so dashboards can split latency / hit count by strategy.
+    """
+
+    query: str
+    scope: str
+    embedding_model: str
+    hit_count: int
+    duration_ms: float
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
 # ===========================================================================
 # Catalog — single source of truth
 # ===========================================================================
@@ -512,6 +528,7 @@ EVENTS: dict[str, type] = {
     # Memory subsystem (Phase 2 — embedding)
     "memory.embedding.load": MemoryEmbeddingLoadEvent,
     "memory.embedding.embed": MemoryEmbeddingEmbedEvent,
+    "memory.recall.vector": MemoryRecallVectorEvent,
 }
 
 
@@ -566,4 +583,5 @@ __all__ = [
     "MemoryIngestEvent",
     "MemoryEmbeddingLoadEvent",
     "MemoryEmbeddingEmbedEvent",
+    "MemoryRecallVectorEvent",
 ]
