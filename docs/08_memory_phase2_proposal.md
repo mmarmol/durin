@@ -117,6 +117,195 @@ GGUF; details in §3).
 
 ---
 
+## 0b. Connection points — hook inventory
+
+The discussion in §0a defined the **six utility classes** and the
+**source-of-truth / derived split** in abstract terms. This section
+nails them down to actual lifecycle stages of the agent loop and to
+concrete code locations. It's the bridge from "what memory IS" to
+"where in the codebase each memory operation actually fires."
+
+Two reasons this matters:
+
+1. Several classes already have READ paths wired today (A via
+   `ContextBuilder._build_stable_layer`, E via `SkillsLoader`, F via
+   `CronService`). Phase 2 should reuse these, not reinvent.
+2. The WRITE paths for B, C, D are mostly new — and they need to fire
+   at specific lifecycle stages (post-turn for B, tool-driven for D,
+   etc.). Without an explicit inventory we risk wiring the wrong hook
+   or wiring it in the wrong stage.
+
+### Agent lifecycle stages
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│ Stage 1 — Pre-turn consolidation                                │
+│   consolidator.maybe_consolidate_by_tokens(session)              │
+│   ── advances last_consolidated cursor; writes summary           │
+│      to history.jsonl + <key>.meta.json::derived._last_summary  │
+└────────────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+┌────────────────────────────────────────────────────────────────┐
+│ Stage 2 — Pre-turn context build                                │
+│   ContextBuilder.build_messages → 3-tier system prompt          │
+│   ┌──────────────────────────────────────────────┐              │
+│   │ STABLE: identity + bootstrap + skills        │ → A, C, E    │
+│   │ CONTEXT: mode suffix                         │              │
+│   │ VOLATILE: memory + history + summary         │ → B          │
+│   └──────────────────────────────────────────────┘              │
+└────────────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+┌────────────────────────────────────────────────────────────────┐
+│ Stage 3 — Inside the runner loop (N iterations)                 │
+│   AgentRunner.run                                               │
+│   • LLM call                                                    │
+│   • Tool calls                                                  │
+│     ├─ memory_search(query)        → READ corpus (D)            │
+│     ├─ memory_store(content)       → WRITE corpus (D)           │
+│     └─ on-demand skill load        → READ skill (E)             │
+│   • Mid-turn guards                                             │
+└────────────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+┌────────────────────────────────────────────────────────────────┐
+│ Stage 4 — Post-turn                                             │
+│   _save_turn + _schedule_background                             │
+│   ├─ background_review fork       → WRITE B (and maybe C)       │
+│   ├─ tool_call meta events       → sidecar                      │
+│   └─ async consolidator if due                                  │
+└────────────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+┌────────────────────────────────────────────────────────────────┐
+│ Stage 5 — Idle / inactivity                                     │
+│   Curator (Hermes-style)                                        │
+│   ── walks agent_created entries in B/C/D                       │
+│   ── promotes / archives / deletes via provenance + scoring     │
+└────────────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+┌────────────────────────────────────────────────────────────────┐
+│ Stage 6 — Scheduled / triggered                                 │
+│   CronService + HeartbeatService                                │
+│   ├─ Dream cron job (Phase 3) → ranking + promotion B→A/C, D    │
+│   └─ Prospective triggers (F)  → inject as user message         │
+└────────────────────────────────────────────────────────────────┘
+```
+
+### Class × stage × code location
+
+| Class | READ at stage | WRITE at stage | Code (today / Phase 2) |
+|---|---|---|---|
+| **A** Identity stable | Stage 2 (stable layer) | Stage 5/6 (Dream cron) | **Today**: `MemoryStore.get_memory_context()` reads `MEMORY.md` + `SOUL.md` + `USER.md`. Only Dream writes.<br>**Phase 2**: new split `memory/stable/{IDENTITY,CORRECTIONS,PROJECT}.md`. Same read path; same write authorship (Dream + explicit user). |
+| **B** Working / episodic | Stage 2 (volatile layer) OR Stage 3 (memory_search) | Stage 4 (post-turn background_review hook) | **Today**: doesn't exist. `session.jsonl` is the informal proxy.<br>**Phase 2**: `memory/episodic/recent-<window>.md`. Read in `ContextBuilder._build_volatile_layer`. Write via a new hook in `AgentLoop._dispatch_message`'s finally block: spawn a sub-agent post-turn that decides what to keep. |
+| **C** Corrections | Stage 2 (stable layer, small) | Stage 4 (background_review detecting a correction pattern) or explicit user signal | **Today**: mixed inside `MEMORY.md`.<br>**Phase 2**: separate `memory/stable/CORRECTIONS.md`. Write from the same background_review as B, branched when the LLM detects "user corrected me about X" semantics. |
+| **D** Queryable corpus | Stage 3 ONLY (tool invocation) | Stage 3 (tool invocation) | **Today**: doesn't exist. Zero connection points.<br>**Phase 2**: tools `memory_search` + `memory_store`. NEVER in the system prompt. Read = tool call. Write = tool call. LanceDB index for fast query in Phase 2b. |
+| **E** Procedural skills | Stage 2 (stable layer catalog summary) + Stage 3 (lazy-load full content) | Stage 3 (`skill_manage` tool, Phase 4) | **Today**: `SkillsLoader.build_skills_summary()` lists the catalog in the stable layer; `load_skills_for_context([name])` loads a skill when the model invokes it. **Already wired.**<br>**Phase 4**: `skill_manage` tool adds create / edit / patch. |
+| **F** Prospective | Stage 6 trigger fires → injected as user message on next turn | Stage 3 (`cron` tool) | **Today**: `CronService` + `cron` tool support time-based triggers. Delivery via `_deliver_to_channel`.<br>**Phase 2/5**: add entity-triggers ("when topic X comes up") and condition-triggers ("when file Y changes"). |
+
+### State today: what's wired vs what's missing
+
+**Wired and complete** (Phase 2 reuses):
+
+- A (identity) → `MemoryStore.get_memory_context` → stable layer of 3-tier prompt.
+- E (skills) → catalog in stable + lazy load on-demand at tool invocation.
+- F (prospective, time-based only) → `CronService`.
+
+**Wired but conflated** (Phase 2 will untangle):
+
+- C (corrections) lives inside `MEMORY.md` with A today. Same file
+  path, same load. The cost: when Dream touches `MEMORY.md` for any
+  reason it invalidates the stable-layer cache. If C lived in its own
+  file and Dream only modified it on a real correction event, the
+  cache hit rate stays higher across normal turns.
+
+**Missing entirely** (Phase 2 builds):
+
+- B (episodic):
+  - **Read hook**: a new branch in `ContextBuilder._build_volatile_layer`
+    that loads `memory/episodic/recent-<window>.md`.
+  - **Write hook**: a new method called from
+    `AgentLoop._dispatch_message`'s finally block —
+    `await self._background_review(session, last_turn_messages)`.
+    Spawns a sub-agent (using the existing `SubagentManager`) with a
+    prompt asking "anything from this turn worth keeping?" Runs in
+    background, never blocks the user-facing response.
+
+- D (corpus):
+  - **New tools** registered in `ToolRegistry`: `memory_search(query)`
+    + `memory_store(content, tags)`.
+  - **Index** in Phase 2b: LanceDB sidecar at
+    `memory/corpus/.index.lance`. The index NEVER loads into the
+    system prompt; it's read only when the model invokes
+    `memory_search`. Phase 2a can ship with LLM-driven grep over the
+    markdown files before adding the vector index.
+  - **No new runner hook** — D is 100% tool-driven.
+
+### Provenance — the cross-class thread
+
+Every write path needs to record WHO authored the entry. Mirroring
+Hermes' `ContextVar` pattern:
+
+```python
+_MEMORY_AUTHOR = ContextVar("memory_author", default="user_authored")
+
+# When background_review writes to B / C / D:
+token = _MEMORY_AUTHOR.set("agent_created")
+try:
+    await write_to_memory(...)
+finally:
+    _MEMORY_AUTHOR.reset(token)
+```
+
+Each memory file (and each corpus entry) carries an
+`author: agent_created | user_authored` frontmatter field. **The
+curator (Stage 5) and Dream (Stage 6) can only touch `agent_created`
+entries.** This is the safety mechanism that lets the agent
+self-maintain its memory without ever overwriting something the user
+edited by hand.
+
+This pattern is also what makes the
+`SessionManager._DERIVED_METADATA_KEYS` split from §0a Decision 2 work
+correctly when memory subsystem fields are added (e.g.
+`session_embedding`, `narrative_summary`): they're agent_created by
+construction, so they go to the sidecar's `derived` block without
+touching anything the user authored.
+
+### New hooks Phase 2 needs to add
+
+A summary of the additions, indexed by the phase they belong to. Each
+hook is small (≤ 100 lines including tests) and each is independently
+shippable.
+
+| Hook | Stage | Purpose | Phase |
+|---|---|---|---|
+| `ContextBuilder._build_volatile_layer` loads `memory/episodic/recent-*.md` | 2 | Read clase B | Phase 1 |
+| `AgentLoop._post_turn_background_review` | 4 | Write clases B + C | Phase 1 |
+| `Curator.run()` (cron + inactivity-triggered) | 5 | Cleanup `agent_created` entries in B/C/D | Phase 1 |
+| Tools `memory_search` + `memory_store` | 3 | Read/Write clase D | Phase 1 (LLM-grep) + Phase 2b (LanceDB) |
+| `Dream.consolidate_and_promote()` extension | 6 | Promote B → A/C/D with multi-factor scoring | Phase 3 |
+| `skill_manage` tool | 3 | Write clase E (agent-authored skills) | Phase 4 |
+| Entity-trigger + condition-trigger in `CronService` | 6 | Extend clase F beyond time | Phase 5 |
+| `_MEMORY_AUTHOR` ContextVar + frontmatter `author:` field | cross | Provenance for every write | Phase 1 — foundation of all of the above |
+
+### What does NOT change
+
+- **Runner / consolidator / 3-tier prompt**: infrastructure is in
+  place. Phase 2 does not touch the loop architecture, only adds
+  side-channels for memory reads / writes.
+- **Session / meta split** (§0a Decision 2): already implemented.
+  Future memory writes that are derived (embeddings, narrative
+  summaries) go automatically to the sidecar's `derived` block via
+  `_DERIVED_METADATA_KEYS`.
+- **Telemetry**: the schema catalog (`durin/telemetry/schema.py`) is
+  set up to absorb new events without restructuring. Phase 2 only
+  adds TypedDicts for `memory.recall`, `memory.store`, `curator.run`,
+  `dream.promote`.
+
+---
+
 ## 1. The original plan (doc 03 summarised)
 
 > Full text: `docs/03_memory_design.md`. This is a condensed restatement,
