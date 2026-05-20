@@ -12,6 +12,7 @@ from durin.memory.consolidator_tags import parse_consolidator_response
 from durin.memory.drill import DrillError, drill
 from durin.memory.embedding import EmbeddingProvider, FastembedProvider
 from durin.memory.hot_layer import HotLayer, read_hot_layer
+from durin.memory.vector_index import VectorIndex, vector_index_available
 from durin.memory.ingestion import IngestError, ingest_artifact
 from durin.memory.provenance import Author, author_scope, current_author
 from durin.memory.store import StoreError, store_memory
@@ -29,6 +30,7 @@ __all__ = [
     "DrillError",
     "EmbeddingProvider",
     "FastembedProvider",
+    "VectorIndex",
     "FrontmatterError",
     "HotLayer",
     "IngestError",
@@ -55,4 +57,5 @@ __all__ = [
     "search_memory",
     "split_frontmatter",
     "store_memory",
+    "vector_index_available",
 ]

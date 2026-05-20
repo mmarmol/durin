@@ -66,7 +66,7 @@ class FastembedProvider(EmbeddingProvider):
     ``memory.embedding.embed``) gives data to revisit the decision.
     """
 
-    DEFAULT_MODEL = "BAAI/bge-m3"
+    DEFAULT_MODEL = "intfloat/multilingual-e5-small"
 
     def __init__(self, model: str | None = None) -> None:
         self._model_name = model or self.DEFAULT_MODEL

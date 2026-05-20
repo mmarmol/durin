@@ -31,8 +31,14 @@ class _FakeTextEmbedding:
         type(self).last_init_kwargs = {"model_name": model_name, **kwargs}
 
     def embed(self, texts: list[str]) -> Iterator[list[float]]:
-        # Deterministic embeddings: dim follows the model name's expected dim.
-        dim = 1024 if "bge-m3" in (self.model_name or "") else 384
+        # Deterministic embeddings: dim matches the model name's expected dim.
+        name = self.model_name or ""
+        if "bge-m3" in name or "e5-large" in name or "bge-large" in name:
+            dim = 1024
+        elif "e5-base" in name or "bge-base" in name:
+            dim = 768
+        else:
+            dim = 384
         for i, _ in enumerate(texts):
             yield [float(i) / 10.0] * dim
 
@@ -59,9 +65,11 @@ def test_provider_is_subclass_of_abstract() -> None:
     assert issubclass(FastembedProvider, EmbeddingProvider)
 
 
-def test_default_model_is_bge_m3() -> None:
+def test_default_model_is_multilingual_e5_small() -> None:
+    """Polite default — light model, no CJK. bge-m3 opt-in via config / installer."""
     provider = FastembedProvider()
-    assert provider.model_name == "BAAI/bge-m3"
+    assert provider.model_name == "intfloat/multilingual-e5-small"
+    assert provider.dimensions == 384
 
 
 def test_known_dimensions() -> None:
@@ -91,12 +99,14 @@ def test_embed_empty_input_skips_load() -> None:
 
 def test_embed_lazy_loads_then_returns_embeddings() -> None:
     with _inject_fake_fastembed():
-        provider = FastembedProvider("BAAI/bge-m3")
+        provider = FastembedProvider()  # default = e5-small
         out = provider.embed(["hello", "world"])
 
     assert len(out) == 2
-    assert len(out[0]) == 1024
-    assert _FakeTextEmbedding.last_init_kwargs == {"model_name": "BAAI/bge-m3"}
+    assert len(out[0]) == 384  # e5-small dim
+    assert _FakeTextEmbedding.last_init_kwargs == {
+        "model_name": "intfloat/multilingual-e5-small"
+    }
 
 
 def test_embed_loads_only_once() -> None:
@@ -187,12 +197,12 @@ def test_load_event_fires_once_across_multiple_embed_calls(
 # ---------------------------------------------------------------------------
 
 
-def test_config_default_uses_bge_m3() -> None:
+def test_config_default_uses_multilingual_e5_small() -> None:
     from durin.config.schema import MemoryEmbeddingConfig
 
     cfg = MemoryEmbeddingConfig()
     assert cfg.provider == "fastembed"
-    assert cfg.model == "BAAI/bge-m3"
+    assert cfg.model == "intfloat/multilingual-e5-small"
     assert cfg.base_url is None
     assert cfg.api_key is None
     assert cfg.lazy_eviction is False
@@ -220,4 +230,4 @@ def test_config_memory_section_exposed_at_root() -> None:
     from durin.config.schema import Config
 
     cfg = Config()
-    assert cfg.memory.embedding.model == "BAAI/bge-m3"
+    assert cfg.memory.embedding.model == "intfloat/multilingual-e5-small"

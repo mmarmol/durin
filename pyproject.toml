@@ -64,6 +64,9 @@ memory = [
     # first use. Required for vector retrieval (Phase 2). Default model
     # is BAAI/bge-m3 (~2.2 GB) — see docs/08_memory_phase2_proposal.md §0d.2.
     "fastembed>=0.4.0,<1.0.0",
+    # Embedded vector DB for the memory index. Single-file storage, no
+    # daemon, optional cloud backends. Phase 2.2.
+    "lancedb>=0.30.0,<1.0.0",
 ]
 dev = [
     "pytest>=9.0.0,<10.0.0",
