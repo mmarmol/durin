@@ -18,6 +18,7 @@ import importlib
 import json
 import os
 import shutil
+import subprocess
 import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -47,6 +48,9 @@ class CheckResult:
     message: str
     fix: str | None = None
     category: str = "general"
+    # When this result is a missing optional extra, record which extra it
+    # belongs to so `--install-missing` can group + install correctly.
+    extra: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -260,13 +264,16 @@ def check_optional_extra(import_name: str, *, extra: str, purpose: str) -> Check
     """Verify an optional extra's import works. Always returns ok/warn (never fail)."""
     try:
         importlib.import_module(import_name)
-        return CheckResult(import_name, "ok", f"{import_name} importable", category="extras")
+        return CheckResult(import_name, "ok", f"{import_name} importable", category="extras", extra=extra)
     except ImportError:
+        from durin.cli.upgrade import install_hint
+
         return CheckResult(
             import_name, "warn",
             f"Not installed — needed for: {purpose}",
-            fix=f"pip install 'durin[{extra}]'",
+            fix=install_hint([extra]),
             category="extras",
+            extra=extra,
         )
 
 
@@ -404,6 +411,59 @@ def apply_safe_fixes() -> list[str]:
     return applied
 
 
+def collect_missing_extras(report: DoctorReport) -> list[str]:
+    """Return the unique list of extras whose import failed in this report."""
+    seen: list[str] = []
+    for r in report.results:
+        if r.category == "extras" and r.status == "warn" and r.extra and r.extra not in seen:
+            seen.append(r.extra)
+    return seen
+
+
+def install_missing_extras(extras: list[str], *, assume_yes: bool = False) -> int:
+    """Run the mode-aware install command for ``extras``. Returns the exit code.
+
+    pipx installs use ``--force`` to swap the venv layout, which is mildly
+    destructive (anything injected separately gets dropped). We confirm
+    before doing it unless ``assume_yes`` is set.
+    """
+    from durin.cli.upgrade import detect_install_mode, install_hint
+
+    if not extras:
+        console.print("[dim]No missing extras to install.[/dim]")
+        return 0
+    info = detect_install_mode()
+    cmd_str = install_hint(extras, mode=info.mode)
+    console.print(f"[bold]Detected install mode:[/bold] {info.mode}")
+    console.print(f"[bold]Would run:[/bold] [cyan]{cmd_str}[/cyan]")
+    if info.mode == "unknown":
+        console.print(
+            "[red]Cannot auto-install: install mode is unknown.[/red] "
+            "Run the command above manually."
+        )
+        return 1
+    if info.mode == "editable":
+        console.print(
+            "[yellow]Editable mode: run the command above from the source root yourself.[/yellow]"
+        )
+        return 0
+    if not assume_yes:
+        if not typer.confirm("Run it?", default=False):
+            console.print("[yellow]Aborted.[/yellow]")
+            return 1
+    # Re-derive the command as a list (instead of shell-quoted string) so we
+    # don't shell out and don't need to parse our own quoting.
+    if info.mode == "pipx":
+        bracket = f"[{','.join(extras)}]" if extras else ""
+        cmd = ["pipx", "install", "--force", f"durin-agent{bracket}"]
+    else:
+        bracket = f"[{','.join(extras)}]" if extras else ""
+        cmd = [sys.executable, "-m", "pip", "install", "--upgrade", f"durin-agent{bracket}"]
+    console.print(f"[dim]$ {' '.join(cmd)}[/dim]")
+    proc = subprocess.run(cmd)
+    return proc.returncode
+
+
 def render_table(report: DoctorReport) -> None:
     by_category: dict[str, list[CheckResult]] = {}
     for r in report.results:
@@ -443,7 +503,14 @@ def render_json(report: DoctorReport) -> None:
     print(json.dumps(payload, indent=2, ensure_ascii=False))
 
 
-def run_doctor(*, ping: bool = False, fix: bool = False, as_json: bool = False) -> int:
+def run_doctor(
+    *,
+    ping: bool = False,
+    fix: bool = False,
+    as_json: bool = False,
+    install_missing: bool = False,
+    assume_yes: bool = False,
+) -> int:
     if fix:
         applied = apply_safe_fixes()
         if applied and not as_json:
@@ -452,6 +519,16 @@ def run_doctor(*, ping: bool = False, fix: bool = False, as_json: bool = False) 
                 console.print(f"  [green]✓[/green] {m}")
             console.print("")
     report = run_checks(ping=ping)
+    if install_missing:
+        extras = collect_missing_extras(report)
+        if extras:
+            console.print(f"\n[bold]Missing extras:[/bold] {', '.join(extras)}")
+            rc = install_missing_extras(extras, assume_yes=assume_yes)
+            if rc != 0:
+                return rc
+            # Re-run the checks so the user sees the updated state.
+            console.print("\n[bold]Re-checking…[/bold]\n")
+            report = run_checks(ping=ping)
     if as_json:
         render_json(report)
     else:
@@ -466,9 +543,21 @@ def register(app: typer.Typer) -> None:
     def doctor(
         ping: bool = typer.Option(False, "--ping", help="Test reachability of the active provider's api_base."),
         fix: bool = typer.Option(False, "--fix", help="Apply safe fixes (create workspace, re-save config)."),
+        install_missing: bool = typer.Option(
+            False,
+            "--install-missing",
+            help="Auto-install any missing optional extras (uses the right command for the detected install mode).",
+        ),
+        yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompts."),
         as_json: bool = typer.Option(False, "--json", help="Machine-readable output."),
     ) -> None:
         """Diagnose install, config, providers, and runtime state."""
-        rc = run_doctor(ping=ping, fix=fix, as_json=as_json)
+        rc = run_doctor(
+            ping=ping,
+            fix=fix,
+            as_json=as_json,
+            install_missing=install_missing,
+            assume_yes=yes,
+        )
         if rc != 0:
             raise typer.Exit(rc)

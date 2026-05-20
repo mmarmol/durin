@@ -23,7 +23,10 @@ from durin.config.loader import get_config_path, load_config, save_config
 
 console = Console()
 
-InstallMode = Literal["editable", "wheel", "unknown"]
+InstallMode = Literal["editable", "pipx", "wheel", "unknown"]
+
+# PyPI distribution name (the import package + CLI command are still `durin`).
+PYPI_DIST_NAME = "durin-agent"
 
 
 @dataclass(frozen=True)
@@ -36,8 +39,16 @@ class InstallInfo:
 def detect_install_mode() -> InstallInfo:
     """Inspect the loaded ``durin`` package to figure out how it was installed.
 
-    Editable installs leave ``__file__`` inside the source tree (alongside a
-    ``pyproject.toml``). Regular wheel installs live under ``site-packages``.
+    Recognised modes:
+    - ``editable``: ``pip install -e .`` from a source checkout — there's a
+      ``pyproject.toml`` alongside the loaded package.
+    - ``pipx``: pipx puts the venv under ``~/.local/pipx/venvs/<pkg>/`` (or a
+      ``PIPX_HOME``-rooted path). Detected by looking for ``/pipx/venvs/``
+      anywhere on ``sys.executable``.
+    - ``wheel``: regular ``pip install`` into a venv — package lives under
+      ``site-packages/``.
+    - ``unknown``: we couldn't pattern-match the path; the caller should bail
+      with a clear message rather than guessing the upgrade command.
     """
     import durin
 
@@ -46,9 +57,33 @@ def detect_install_mode() -> InstallInfo:
     pyproject = candidate_root / "pyproject.toml"
     if pyproject.is_file():
         return InstallInfo(mode="editable", source_root=candidate_root, version=__version__)
+    exe = str(Path(sys.executable).resolve())
+    if "/pipx/venvs/" in exe or "\\pipx\\venvs\\" in exe:
+        return InstallInfo(mode="pipx", source_root=None, version=__version__)
     if "site-packages" in str(pkg_path):
         return InstallInfo(mode="wheel", source_root=None, version=__version__)
     return InstallInfo(mode="unknown", source_root=None, version=__version__)
+
+
+def install_hint(extras: list[str], *, mode: InstallMode | None = None) -> str:
+    """Return the right install command for the detected mode + a list of extras.
+
+    ``extras`` is a list like ``["memory", "mcp"]``; pass ``[]`` for the
+    bare-package command.
+    """
+    if mode is None:
+        mode = detect_install_mode().mode
+    bracket = f"[{','.join(extras)}]" if extras else ""
+    spec = f"{PYPI_DIST_NAME}{bracket}"
+    if mode == "editable":
+        # Editable users want to re-install from the source tree.
+        return f"pip install -e '.{bracket}'"
+    if mode == "pipx":
+        # `--force` is required to pick up new extras because pipx caches
+        # the venv layout on the original install command.
+        return f"pipx install --force '{spec}'"
+    # `wheel` and `unknown` fall back to a regular pip command.
+    return f"pip install --upgrade '{spec}'"
 
 
 def _run(cmd: list[str], cwd: Path | None = None) -> int:
@@ -73,7 +108,13 @@ def _pull_editable(root: Path, ref: str | None) -> int:
 
 
 def _upgrade_wheel() -> int:
-    return _run([sys.executable, "-m", "pip", "install", "--upgrade", "durin"])
+    # The distribution name on PyPI is `durin-agent` (not `durin`).
+    return _run([sys.executable, "-m", "pip", "install", "--upgrade", PYPI_DIST_NAME])
+
+
+def _upgrade_pipx() -> int:
+    """Run `pipx upgrade durin-agent`. Pre-releases require `--pip-args="--pre"`."""
+    return _run(["pipx", "upgrade", PYPI_DIST_NAME])
 
 
 def migrate_config_file(path: Path | None = None) -> bool:
@@ -126,6 +167,10 @@ def run_upgrade(
             console.print("[red]Editable mode detected but source root is unknown.[/red]")
             return 1
         rc = _pull_editable(info.source_root, ref)
+    elif info.mode == "pipx":
+        if ref:
+            console.print("[yellow]--ref is only supported for editable installs; ignoring.[/yellow]")
+        rc = _upgrade_pipx()
     elif info.mode == "wheel":
         if ref:
             console.print("[yellow]--ref is only supported for editable installs; ignoring.[/yellow]")
