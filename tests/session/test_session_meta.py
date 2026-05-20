@@ -60,15 +60,17 @@ class TestMetaPath:
 class TestReadMeta:
 
     def test_missing_file_returns_empty_skeleton(self, tmp_path: Path):
+        """Skeleton now includes a ``derived`` block (added when
+        ``_last_summary`` moved out of session.jsonl into the sidecar)."""
         p = tmp_path / "nope.meta.json"
         data = read_meta(p)
-        assert data == {"session_key": None, "events": []}
+        assert data == {"session_key": None, "events": [], "derived": {}}
 
     def test_corrupt_file_returns_empty_skeleton(self, tmp_path: Path):
         p = tmp_path / "bad.meta.json"
         p.write_text("not valid json")
         data = read_meta(p)
-        assert data == {"session_key": None, "events": []}
+        assert data == {"session_key": None, "events": [], "derived": {}}
 
     def test_missing_events_key_normalized(self, tmp_path: Path):
         p = tmp_path / "x.meta.json"
