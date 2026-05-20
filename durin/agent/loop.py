@@ -865,6 +865,18 @@ class AgentLoop:
             from durin.agent.agent_mode import get_active_mode
             return get_active_mode(session)
 
+        # OpenClaw-inspired compaction grace window. Exposed to the runner so
+        # the outer LLM wall-clock timeout can extend its deadline once when
+        # consolidation is in flight for this session — the slow call is
+        # likely slow precisely because the consolidator hasn't finished
+        # reshaping the context yet.
+        _session_key_for_compact = session.key if session is not None else session_key
+        def _is_compacting() -> bool:
+            if not _session_key_for_compact:
+                return False
+            lock = self.consolidator.get_lock(_session_key_for_compact)
+            return lock.locked()
+
         try:
             result = await self.runner.run(AgentRunSpec(
                 initial_messages=initial_messages,
@@ -893,6 +905,7 @@ class AgentLoop:
                     session.key if session is not None else session_key,
                     metadata=(session.metadata if session is not None else None),
                 ),
+                is_compacting=_is_compacting,
             ))
         finally:
             reset_file_states(file_state_token)
