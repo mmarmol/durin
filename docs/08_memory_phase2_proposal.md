@@ -585,12 +585,28 @@ hand.
 
 | # | Sub-task | Days |
 |---|---|---|
-| 2.1 | LanceDB local dep + embedding provider config (default local Ollama if present; fallback to HTTP) | 2 |
-| 2.2 | Index builder: walk `memory/*/*.md`, embed `summary`, persist to `memory/.index.lance`. Rebuild on memory write | 3 |
-| 2.3 | Extend `memory_search(level="warm")` to use vector top-K over summaries. Keep grep as fallback | 2 |
-| 2.4 | Telemetry `memory.recall.vector` (latency, hit count, embedding model). Smoke + benchmark vs grep | 3 |
+| 2.1 | Embedding provider infrastructure: `EmbeddingProvider` interface + `FastembedProvider` (ONNX, in-process, no Ollama). Config slot `memory.embedding.{provider, model, lazy_eviction}`. Telemetry events `memory.embedding.load` + `memory.embedding.embed`. | 3 |
+| 2.2 | LanceDB index: schema + builder. Walk `memory/<class>/*.md`, embed `summary`, persist to `memory/.index.lance`. Rebuild on `memory_store` write. | 3 |
+| 2.3 | Vector path inside `memory_search(level="warm")`. Top-K over summaries; keep grep as fallback when index missing/disabled. | 2 |
+| 2.4 | `memory.recall.vector` telemetry (latency, hit count, embedding model). Smoke test + grep-vs-vector recall benchmark on a synthetic 500-entry corpus. | 2 |
 
 **Output**: search scales past ~200 entries.
+
+**Embedding model decisions** (confirmed May 2026):
+
+- Default: **`intfloat/multilingual-e5-small`** — 471 MB download, ~600 MB RAM resident, 384-dim, MIT license. Strong on English and European languages; CJK retrieval is marginal. Chosen as the polite default because ~80% of users don't need CJK and the lighter footprint accelerates onboarding.
+- CJK / multilingual heavy alternative: **`BAAI/bge-m3`** — 2.2 GB download, ~2.5 GB RAM resident, 1024-dim, MIT. SOTA on Chinese / Japanese / Korean. Opt-in via the future installer wizard or by overriding `memory.embedding.model` in config.
+- Both auto-download on first use via `fastembed` (ONNX runtime, pure-Python, no Ollama dependency, no compile step).
+- Future installer wizard surfaces the choice with pros/cons.
+
+**RAM strategy (V1)**: load-once-keep-loaded. The model loads on the first
+embedding call (~1-2 s for e5-small, ~5 s for bge-m3) and stays resident
+for the life of the process. **No idle eviction in Phase 2.** The decision to add eviction is
+deferred to data — Phase 2.1 ships `memory.embedding.load` and
+`memory.embedding.embed` telemetry events with `duration_ms`. After
+observing real usage (frequency, idle gaps), revisit. Config knob
+`memory.embedding.lazy_eviction: false` (default) is reserved so the
+flip is a no-migration change later.
 
 ### 0d.3 Phase 2c — TEMPR multi-strategy (opt-in, ~5 days if activated)
 

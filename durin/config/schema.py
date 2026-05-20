@@ -102,6 +102,42 @@ class AuxModelConfig(Base):
     provider: str = "auto"
 
 
+class MemoryEmbeddingConfig(Base):
+    """Embedding model configuration for the memory subsystem (Phase 2).
+
+    ``provider`` selects the adapter (currently only ``fastembed``;
+    future: ``openai``, ``ollama``). ``model`` is the model identifier
+    understood by that provider (e.g. ``BAAI/bge-m3``).
+    ``base_url`` and ``api_key`` are passed through to HTTP providers
+    when added — fastembed ignores them.
+
+    ``lazy_eviction`` is reserved: V1 keeps the model resident for the
+    life of the process and emits load/embed telemetry so eviction can
+    be turned on later if the data warrants it.
+    """
+
+    provider: str = "fastembed"
+    model: str = "intfloat/multilingual-e5-small"
+    base_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("baseUrl", "base_url"),
+    )
+    api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("apiKey", "api_key"),
+    )
+    lazy_eviction: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("lazyEviction", "lazy_eviction"),
+    )
+
+
+class MemoryConfig(Base):
+    """Memory subsystem configuration root."""
+
+    embedding: MemoryEmbeddingConfig = Field(default_factory=MemoryEmbeddingConfig)
+
+
 class AuxModelsConfig(Base):
     """Optional auxiliary models for capability bridges.
 
@@ -390,6 +426,7 @@ class Config(BaseSettings):
 
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     api: ApiConfig = Field(default_factory=ApiConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
