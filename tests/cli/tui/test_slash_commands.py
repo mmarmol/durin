@@ -69,7 +69,12 @@ async def test_input_has_suggester_by_default() -> None:
 
 @pytest.mark.asyncio
 async def test_slash_submit_publishes_inbound_with_slash_intact(tmp_path) -> None:
-    """Slash commands flow through the same publish path as any user text."""
+    """Slash commands flow through the same publish path as any user text.
+
+    Note: bare ``/sessions`` and ``/model`` are intercepted by D5.5 modal
+    pickers. The ``/sessions <filter>`` form bypasses the modal and
+    publishes inline, which is what we assert here.
+    """
     from types import SimpleNamespace
 
     async def _idle_run() -> None:
@@ -103,9 +108,9 @@ async def test_slash_submit_publishes_inbound_with_slash_intact(tmp_path) -> Non
         inp = app.query_one(InputArea)
         inp.focus()
         await pilot.pause()
-        inp.value = "/sessions"
+        inp.value = "/sessions alpha"
         await pilot.press("enter")
         await pilot.pause()
         await _drain()
 
-    assert any(m.content == "/sessions" for m in received), [m.content for m in received]
+    assert any(m.content == "/sessions alpha" for m in received), [m.content for m in received]
