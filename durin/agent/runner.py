@@ -51,6 +51,32 @@ _MAX_INJECTION_CYCLES = 5
 _SNIP_SAFETY_BUFFER = 1024
 _MICROCOMPACT_KEEP_RECENT = 10
 _MICROCOMPACT_MIN_CHARS = 500
+
+# Tier 1 (OpenClaw-inspired): idle-timeout circuit breaker.
+#
+# Provider-level retries already absorb individual timeouts. But the runner
+# can still loop on consecutive timeout responses across iterations when
+# user injections keep continuing the run after each failure — burning
+# tokens on a clearly-stalled provider. The breaker opens after this many
+# consecutive iterations end in an idle/wall-clock timeout WITHOUT any
+# forward progress (content or tool_calls) in between, terminating the run
+# with a distinct stop_reason so callers can distinguish from generic errors.
+#
+# Default 1 matches OpenClaw (run.ts MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT):
+# tolerate one timeout, trip on the second. Override with
+# DURIN_MAX_CONSECUTIVE_IDLE_TIMEOUTS.
+_DEFAULT_MAX_CONSECUTIVE_IDLE_TIMEOUTS = 1
+
+
+def _max_consecutive_idle_timeouts() -> int:
+    raw = os.getenv("DURIN_MAX_CONSECUTIVE_IDLE_TIMEOUTS")
+    if raw is None:
+        return _DEFAULT_MAX_CONSECUTIVE_IDLE_TIMEOUTS
+    try:
+        value = int(raw)
+    except ValueError:
+        return _DEFAULT_MAX_CONSECUTIVE_IDLE_TIMEOUTS
+    return max(0, value)
 _COMPACTABLE_TOOLS = frozenset({
     "read_file", "exec", "grep",
     "web_search", "web_fetch", "list_dir",
@@ -310,6 +336,15 @@ class AgentRunner:
         had_injections = False
         injection_cycles = 0
 
+        # Idle-timeout circuit breaker state (OpenClaw-inspired Tier 1).
+        # Increments on every iteration whose response is an idle/wall-clock
+        # timeout error; resets on any iteration that produced forward
+        # progress (tool_calls or non-empty content). When it exceeds the
+        # configured threshold the loop terminates with
+        # ``stop_reason="circuit_breaker_idle_timeout"``.
+        consecutive_idle_timeouts = 0
+        max_idle_timeouts = _max_consecutive_idle_timeouts()
+
         # 1A — Loop-detection state. Tracks signatures of tool calls that already
         # failed in this turn. We block repeats to break model fixation. Scope is
         # the current turn only (NOT cross-turn) — re-entry to the loop in a new
@@ -368,6 +403,51 @@ class AgentRunner:
             context.usage = dict(raw_usage)
             context.tool_calls = list(response.tool_calls)
             self._accumulate_usage(usage, raw_usage)
+
+            # Idle-timeout circuit breaker: track consecutive timeout responses
+            # across iterations. The provider already retries internally on
+            # transient timeouts; a timeout reaching the runner means those
+            # retries were exhausted. Tolerating one such event is reasonable
+            # (next iteration may succeed after an injection or context repair)
+            # but multiple in a row burn tokens against a stalled endpoint.
+            is_idle_timeout_response = (
+                response.finish_reason == "error"
+                and (response.error_kind or "").lower() == "timeout"
+            )
+            if is_idle_timeout_response:
+                consecutive_idle_timeouts += 1
+                if consecutive_idle_timeouts > max_idle_timeouts:
+                    final_content = (
+                        f"Error: LLM stalled — {consecutive_idle_timeouts} "
+                        f"consecutive idle timeouts (threshold {max_idle_timeouts})."
+                    )
+                    stop_reason = "circuit_breaker_idle_timeout"
+                    error = final_content
+                    self._append_model_error_placeholder(messages)
+                    context.final_content = final_content
+                    context.error = error
+                    context.stop_reason = stop_reason
+                    _cb_logger = current_telemetry()
+                    if _cb_logger is not None:
+                        with suppress(Exception):
+                            _cb_logger.log("circuit_breaker.idle_timeout", {
+                                "consecutive_timeouts": consecutive_idle_timeouts,
+                                "threshold": max_idle_timeouts,
+                                "iteration": iteration,
+                                "session_key": spec.session_key,
+                            })
+                    logger.warning(
+                        "Idle-timeout circuit breaker opened on turn {} for {} "
+                        "({} consecutive timeouts, threshold {})",
+                        iteration,
+                        spec.session_key or "default",
+                        consecutive_idle_timeouts,
+                        max_idle_timeouts,
+                    )
+                    await hook.after_iteration(context)
+                    break
+            elif response.has_tool_calls or not is_blank_text(response.content):
+                consecutive_idle_timeouts = 0
 
             reasoning_text, cleaned_content = extract_reasoning(
                 response.reasoning_content,
