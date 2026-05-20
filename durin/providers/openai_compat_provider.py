@@ -18,7 +18,9 @@ from urllib.parse import urlparse
 
 import httpx
 import json_repair
+from contextlib import suppress
 
+from durin.telemetry.logger import current_telemetry
 from durin.utils.tool_argument_repair import parse_tool_call_arguments
 from loguru import logger
 
@@ -310,6 +312,11 @@ class OpenAICompatProvider(LLMProvider):
         self._parallel_tool_calls_overrides: dict[str, bool] = (
             parallel_tool_calls_overrides or {}
         )
+        # Audit follow-up P1.2a: track which (model, value, needle) triples
+        # have already been logged so we emit the injection telemetry once
+        # per unique combo per process — enough to verify the config is
+        # firing in production without per-request spam.
+        self._parallel_tool_calls_logged: set[tuple[str, bool, str]] = set()
 
         if api_key and spec and spec.env_key:
             self._setup_env(api_key, api_base)
@@ -641,18 +648,25 @@ class OpenAICompatProvider(LLMProvider):
         # (OpenClaw-inspired Tier 1). Only injected for models that have an
         # explicit override AND only when tools are present (the API rejects
         # the param when tools is null).
-        resolved_parallel = self._resolve_parallel_tool_calls(model)
-        if resolved_parallel is not None and tools:
+        match = self._resolve_parallel_tool_calls(model)
+        if match is not None and tools:
+            resolved_parallel, match_needle = match
             kwargs["parallel_tool_calls"] = resolved_parallel
+            self._maybe_log_parallel_injection(model, resolved_parallel, match_needle)
 
         return kwargs
 
-    def _resolve_parallel_tool_calls(self, model: str | None) -> bool | None:
-        """Return the configured ``parallel_tool_calls`` value for *model*,
-        or ``None`` to leave the provider's default in place.
+    def _resolve_parallel_tool_calls(
+        self, model: str | None,
+    ) -> tuple[bool, str] | None:
+        """Return the configured ``parallel_tool_calls`` ``(value, needle)``
+        pair for *model*, or ``None`` to leave the provider's default in
+        place.
 
         Matches by substring on the resolved model name. First match wins
-        (dict insertion order). Empty overrides → no injection.
+        (dict insertion order). Returning the needle as well as the value
+        lets telemetry surface WHICH config entry fired — useful when
+        several substrings could plausibly match the same model.
         """
         if not self._parallel_tool_calls_overrides:
             return None
@@ -661,8 +675,30 @@ class OpenAICompatProvider(LLMProvider):
             return None
         for needle, value in self._parallel_tool_calls_overrides.items():
             if needle.lower() in candidate:
-                return bool(value)
+                return bool(value), needle
         return None
+
+    def _maybe_log_parallel_injection(
+        self, model: str | None, value: bool, match_needle: str,
+    ) -> None:
+        """Emit ``provider.parallel_tool_calls_injected`` once per unique
+        ``(model, value, needle)`` triple per process — visibility into
+        which override entries are actually firing in production without
+        per-request spam."""
+        resolved_model = model or self.default_model or ""
+        key = (resolved_model, value, match_needle)
+        if key in self._parallel_tool_calls_logged:
+            return
+        self._parallel_tool_calls_logged.add(key)
+        logger_obj = current_telemetry()
+        if logger_obj is None:
+            return
+        with suppress(Exception):
+            logger_obj.log("provider.parallel_tool_calls_injected", {
+                "model": resolved_model,
+                "value": value,
+                "match_needle": match_needle,
+            })
 
     def _should_use_responses_api(
         self,

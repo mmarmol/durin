@@ -807,6 +807,25 @@ class Consolidator:
                 logger.exception("Token estimation failed for {}", session.key)
                 estimated, source = 0, "error"
             if estimated <= 0:
+                # Audit P2.4: distinguish "estimator failed" from "session
+                # is genuinely empty". Both legitimately skip consolidation,
+                # but they're different diagnostics — the former wants
+                # investigation, the latter is the boring no-op.
+                if source == "error":
+                    logger.debug(
+                        "Token consolidation skipped for {}: estimator raised "
+                        "(check the exception traceback above); session has {} msg(s)",
+                        session.key,
+                        len(session.messages),
+                    )
+                else:
+                    logger.debug(
+                        "Token consolidation skipped for {}: nothing to estimate "
+                        "(session has {} msg(s), last_consolidated={})",
+                        session.key,
+                        len(session.messages),
+                        session.last_consolidated,
+                    )
                 self._persist_last_summary(session, last_summary)
                 return
             if estimated < trigger:

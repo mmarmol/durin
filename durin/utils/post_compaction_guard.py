@@ -136,27 +136,33 @@ class PostCompactionLoopGuard:
         session_key: str | None,
         observation: Observation,
     ) -> Verdict:
-        if not session_key or self.window_size <= 0:
+        """Record one tool call against the active window for this
+        session. Two independent decisions happen here:
+
+        1. **Track the attempt** — decrement ``remaining_attempts`` and
+           append to history. This burns a slot in the window regardless
+           of whether the call matches.
+        2. **Check for trip** — count how many entries in the (now-
+           updated) history are identical to this observation. If the
+           count reaches ``window_size``, the guard trips.
+
+        Concretely, with ``window_size=3`` and three identical triples:
+
+        - Call 1: attempts 3→2, history=[A], matches(A)=1, no trip.
+        - Call 2: attempts 2→1, history=[A,A], matches(A)=2, no trip.
+        - Call 3: attempts 1→0, history=[A,A,A], matches(A)=3, **TRIP**.
+
+        With three *different* triples: matches stays at 1 each turn,
+        no trip, window exhausts on call 3 and auto-disarms.
+        """
+        if not self._is_armed_slot(session_key):
             return Verdict(should_abort=False, armed_after=False, remaining_attempts=0)
-        slot = self._slots.get(session_key)
-        if slot is None or slot.remaining_attempts <= 0:
-            return Verdict(should_abort=False, armed_after=False, remaining_attempts=0)
 
-        slot.remaining_attempts -= 1
-        slot.history.append(observation)
-        armed_after = slot.remaining_attempts > 0
+        slot = self._slots[session_key]  # safe: _is_armed_slot returned True
+        self._track_attempt(slot, observation)
 
-        matches = sum(
-            1 for entry in slot.history
-            if entry.tool_name == observation.tool_name
-            and entry.args_hash == observation.args_hash
-            and entry.result_hash == observation.result_hash
-        )
-
+        matches = self._count_matches(slot, observation)
         if matches >= self.window_size:
-            # Trip: clear the slot so subsequent calls don't keep observing
-            # against this already-burned arming. A fresh compaction would
-            # re-arm explicitly.
             self._slots.pop(session_key, None)
             return Verdict(
                 should_abort=True,
@@ -166,14 +172,43 @@ class PostCompactionLoopGuard:
                 tool_name=observation.tool_name,
             )
 
+        armed_after = slot.remaining_attempts > 0
         if not armed_after:
-            # Window exhausted without a trip → drop the slot.
+            # Window exhausted without a trip → drop the slot so the
+            # next ``observe`` call cleanly returns "not armed".
             self._slots.pop(session_key, None)
-
         return Verdict(
             should_abort=False,
             armed_after=armed_after,
             remaining_attempts=slot.remaining_attempts,
+        )
+
+    def _is_armed_slot(self, session_key: str | None) -> bool:
+        """Internal: True iff the guard is enabled, the key is non-empty,
+        and a slot with remaining attempts exists for this session."""
+        if not session_key or self.window_size <= 0:
+            return False
+        slot = self._slots.get(session_key)
+        return slot is not None and slot.remaining_attempts > 0
+
+    @staticmethod
+    def _track_attempt(slot: _GuardSlot, observation: Observation) -> None:
+        """Internal: burn one slot in the window. Always called when
+        ``_is_armed_slot`` returned True."""
+        slot.remaining_attempts -= 1
+        slot.history.append(observation)
+
+    @staticmethod
+    def _count_matches(slot: _GuardSlot, observation: Observation) -> int:
+        """Internal: how many entries in ``slot.history`` are identical
+        to ``observation`` (same name, args_hash, result_hash)? The
+        history was already appended by ``_track_attempt``, so a match
+        always counts at least the current observation itself."""
+        return sum(
+            1 for entry in slot.history
+            if entry.tool_name == observation.tool_name
+            and entry.args_hash == observation.args_hash
+            and entry.result_hash == observation.result_hash
         )
 
     def reset(self, session_key: str | None) -> None:

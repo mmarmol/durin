@@ -478,8 +478,24 @@ class AgentRunner:
                 # Tier 2 B3: prune images/audio from completed turns older
                 # than the preservation window so accumulated media doesn't
                 # ride along forever. Runs BEFORE microcompact / snip so
-                # those steps see the reduced size.
-                messages_for_model = prune_processed_history_images(messages_for_model)
+                # those steps see the reduced size. Stats are collected
+                # via an out-dict so we can emit telemetry only when the
+                # pruner actually removed something (audit P1.2b).
+                _prune_stats: dict[str, int] = {}
+                messages_for_model = prune_processed_history_images(
+                    messages_for_model, stats=_prune_stats,
+                )
+                if _prune_stats.get("image_blocks_removed", 0) > 0 or _prune_stats.get("audio_blocks_removed", 0) > 0:
+                    _prune_logger = current_telemetry()
+                    if _prune_logger is not None:
+                        with suppress(Exception):
+                            _prune_logger.log("history_media.pruned", {
+                                "image_blocks_removed": _prune_stats.get("image_blocks_removed", 0),
+                                "audio_blocks_removed": _prune_stats.get("audio_blocks_removed", 0),
+                                "preserve_turns": _prune_stats.get("preserve_turns", 0),
+                                "iteration": iteration,
+                                "session_key": spec.session_key,
+                            })
                 messages_for_model = self._microcompact(messages_for_model)
                 messages_for_model = self._apply_tool_result_budget(spec, messages_for_model)
                 messages_for_model = self._snip_history(spec, messages_for_model)

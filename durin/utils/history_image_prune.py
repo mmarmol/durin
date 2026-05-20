@@ -88,15 +88,17 @@ def _resolve_prune_before_index(
     return completed_turn_starts[-preserve_turns]
 
 
-def _prune_blocks(blocks: list[Any]) -> tuple[list[Any], bool]:
+def _prune_blocks(blocks: list[Any]) -> tuple[list[Any], int, int]:
     """Replace prunable media blocks with text markers.
 
-    Returns ``(new_blocks, changed)``. New list is returned only when
-    at least one block was modified — same object otherwise so callers
-    can identity-test for unchanged.
+    Returns ``(new_blocks, image_count, audio_count)``. A new list is
+    returned only when at least one block was modified — same object
+    otherwise so callers can identity-test for unchanged. The counts are
+    used by callers that want to surface prune telemetry.
     """
     out: list[Any] = []
-    changed = False
+    image_count = 0
+    audio_count = 0
     for block in blocks:
         if not isinstance(block, dict):
             out.append(block)
@@ -104,19 +106,21 @@ def _prune_blocks(blocks: list[Any]) -> tuple[list[Any], bool]:
         btype = block.get("type")
         if btype in _PRUNABLE_IMAGE_TYPES:
             out.append({"type": "text", "text": PRUNED_HISTORY_IMAGE_MARKER})
-            changed = True
+            image_count += 1
         elif btype in _PRUNABLE_AUDIO_TYPES:
             out.append({"type": "text", "text": PRUNED_HISTORY_AUDIO_MARKER})
-            changed = True
+            audio_count += 1
         else:
             out.append(block)
-    return (out, True) if changed else (blocks, False)
+    changed = image_count + audio_count > 0
+    return (out if changed else blocks, image_count, audio_count)
 
 
 def prune_processed_history_images(
     messages: list[dict[str, Any]],
     *,
     preserve_turns: int | None = None,
+    stats: dict[str, int] | None = None,
 ) -> list[dict[str, Any]]:
     """Idempotent cleanup: replace media blocks in user / tool messages
     older than ``preserve_turns`` completed turns with text markers.
@@ -127,8 +131,16 @@ def prune_processed_history_images(
 
     ``preserve_turns=None`` reads ``DURIN_HISTORY_IMAGE_PRESERVE_TURNS``
     (default 3).
+
+    ``stats`` (optional out-param): if a dict is passed, the keys
+    ``image_blocks_removed``, ``audio_blocks_removed`` and
+    ``preserve_turns`` are populated for telemetry purposes — even when
+    no blocks were pruned (counts will be 0). Lets the runner emit a
+    structured event without re-walking the list.
     """
     if not messages:
+        if stats is not None:
+            stats.update(image_blocks_removed=0, audio_blocks_removed=0, preserve_turns=0)
         return messages
     if preserve_turns is None:
         preserve_turns = _preserve_turns_setting()
@@ -139,9 +151,13 @@ def prune_processed_history_images(
     preserve_turns = max(1, preserve_turns)
     prune_before = _resolve_prune_before_index(messages, preserve_turns)
     if prune_before <= 0:
+        if stats is not None:
+            stats.update(image_blocks_removed=0, audio_blocks_removed=0, preserve_turns=preserve_turns)
         return messages
 
     pruned: list[dict[str, Any]] | None = None
+    total_image = 0
+    total_audio = 0
     for i in range(prune_before):
         msg = messages[i]
         role = msg.get("role")
@@ -150,10 +166,18 @@ def prune_processed_history_images(
         content = msg.get("content")
         if not isinstance(content, list):
             continue
-        new_content, changed = _prune_blocks(content)
-        if not changed:
+        new_content, img_count, aud_count = _prune_blocks(content)
+        total_image += img_count
+        total_audio += aud_count
+        if img_count + aud_count == 0:
             continue
         if pruned is None:
             pruned = [dict(m) for m in messages]
         pruned[i] = {**msg, "content": new_content}
+    if stats is not None:
+        stats.update(
+            image_blocks_removed=total_image,
+            audio_blocks_removed=total_audio,
+            preserve_turns=preserve_turns,
+        )
     return pruned if pruned is not None else messages
