@@ -449,6 +449,15 @@ class Consolidator:
 
     _SAFETY_BUFFER = 1024  # extra headroom for tokenizer estimation drift
 
+    # Tier 2 A3: aggregate timeout for acquiring the per-session compaction
+    # lock. If a prior compaction hung (e.g. provider call stuck
+    # mid-summarize), waiting on the lock indefinitely starves the session
+    # lane and the next user message just hangs. After this many seconds,
+    # the acquisition is abandoned and the caller proceeds without
+    # consolidating — an oversized prompt is recoverable, a hung session is
+    # not. Override with ``DURIN_COMPACTION_LOCK_TIMEOUT_S``.
+    _DEFAULT_LOCK_TIMEOUT_S = 180.0
+
     def __init__(
         self,
         store: MemoryStore,
@@ -512,6 +521,23 @@ class Consolidator:
     def get_lock(self, session_key: str) -> asyncio.Lock:
         """Return the shared consolidation lock for one session."""
         return self._locks.setdefault(session_key, asyncio.Lock())
+
+    @classmethod
+    def _lock_timeout_s(cls) -> float:
+        """Resolve the compaction-lock aggregate timeout (Tier 2 A3).
+
+        Reads ``DURIN_COMPACTION_LOCK_TIMEOUT_S`` if set, else falls back
+        to ``_DEFAULT_LOCK_TIMEOUT_S``. ``0`` or negative disables the
+        timeout (revert to legacy unbounded wait).
+        """
+        raw = os.getenv("DURIN_COMPACTION_LOCK_TIMEOUT_S")
+        if raw is None:
+            return cls._DEFAULT_LOCK_TIMEOUT_S
+        try:
+            value = float(raw)
+        except ValueError:
+            return cls._DEFAULT_LOCK_TIMEOUT_S
+        return value  # negative/0 → handled at use site as "unbounded"
 
     def pick_consolidation_boundary(
         self,
@@ -726,7 +752,36 @@ class Consolidator:
             return
 
         lock = self.get_lock(session.key)
-        async with lock:
+        # Tier 2 A3: bounded lock acquisition. A prior compaction that
+        # hung mid-summarize would have left this lock held; without a
+        # timeout, every subsequent maybe_consolidate_by_tokens call on
+        # this session would hang forever. Abandon the acquisition after
+        # ``_lock_timeout_s()`` and let the caller proceed without
+        # consolidation — the prompt may be oversized but the session
+        # lane is unblocked.
+        lock_timeout = self._lock_timeout_s()
+        try:
+            if lock_timeout > 0:
+                await asyncio.wait_for(lock.acquire(), timeout=lock_timeout)
+            else:
+                await lock.acquire()
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Compaction lock acquisition timed out after {}s for {}; "
+                "skipping consolidation this turn (a prior compaction "
+                "may be stuck)",
+                lock_timeout,
+                session.key,
+            )
+            _to_logger = current_telemetry()
+            if _to_logger is not None:
+                with suppress(Exception):
+                    _to_logger.log("compaction.lock_timeout", {
+                        "session_key": session.key,
+                        "timeout_s": lock_timeout,
+                    })
+            return
+        try:
             # Tier 2 A1: trigger consolidation early instead of waiting for
             # the hard budget ceiling. ``target`` is computed off the trigger
             # so each compaction round does meaningful work (compacting down
@@ -832,6 +887,8 @@ class Consolidator:
             # into the runtime context on the next prepare_session() call, aligning
             # the summary injection strategy with AutoCompact._archive().
             self._persist_last_summary(session, last_summary)
+        finally:
+            lock.release()
 
 
 # ---------------------------------------------------------------------------
