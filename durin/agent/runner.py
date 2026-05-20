@@ -450,6 +450,53 @@ class AgentRunner:
                     messages_for_model = self._backfill_missing_tool_results(messages_for_model)
                 except Exception:
                     messages_for_model = messages
+
+            # Mid-turn precheck (OpenClaw-inspired Tier 2 A2). After the
+            # sanitize pipeline ran, estimate whether the prompt we're
+            # about to send still fits. ``_snip_history`` trims from the
+            # head but ``find_legal_message_start`` may force-keep
+            # messages that still exceed the calculated budget; if a
+            # single tool result late in the conversation is huge, even
+            # an aggressive trim won't bring us back under the wall. Fail
+            # the turn here with a distinct stop_reason so callers can
+            # distinguish "we hit context overflow before the model even
+            # got a chance" from "model errored". A1 will re-base the
+            # context for the next turn.
+            mid_turn_decision = self._mid_turn_precheck(spec, messages_for_model)
+            if mid_turn_decision is not None:
+                estimate_tokens, budget_tokens = mid_turn_decision
+                final_content = (
+                    "Error: prompt overflow before LLM call "
+                    f"(estimated {estimate_tokens} tokens, budget {budget_tokens}). "
+                    "The next turn will retry with a freshly-compacted context."
+                )
+                stop_reason = "mid_turn_precheck_overflow"
+                error = final_content
+                self._append_model_error_placeholder(messages)
+                context = AgentHookContext(iteration=iteration, messages=messages)
+                context.final_content = final_content
+                context.error = error
+                context.stop_reason = stop_reason
+                _mt_logger = current_telemetry()
+                if _mt_logger is not None:
+                    with suppress(Exception):
+                        _mt_logger.log("mid_turn_precheck.overflow", {
+                            "iteration": iteration,
+                            "session_key": spec.session_key,
+                            "estimated_tokens": estimate_tokens,
+                            "budget_tokens": budget_tokens,
+                        })
+                logger.warning(
+                    "Mid-turn precheck overflow on turn {} for {}: "
+                    "estimated={} tokens, budget={} tokens",
+                    iteration,
+                    spec.session_key or "default",
+                    estimate_tokens,
+                    budget_tokens,
+                )
+                await hook.after_iteration(context)
+                break
+
             context = AgentHookContext(
                 iteration=iteration,
                 messages=messages,
@@ -849,6 +896,55 @@ class AgentRunner:
             tool_events=tool_events,
             had_injections=had_injections,
         )
+
+    def _mid_turn_precheck(
+        self,
+        spec: AgentRunSpec,
+        messages: list[dict[str, Any]],
+    ) -> tuple[int, int] | None:
+        """OpenClaw-inspired Tier 2 A2.
+
+        Estimate whether the post-sanitize prompt fits in the budget. Returns
+        ``(estimated_tokens, budget_tokens)`` when overflow is detected,
+        ``None`` when the prompt fits (the common case — fast path).
+
+        ``_snip_history`` already trims from the head, but
+        ``find_legal_message_start`` may force-keep messages that exceed the
+        budget (Anthropic role-alternation requirements). A single oversized
+        tool result late in the history can survive snipping. Catching this
+        here saves an LLM call that would have hit a 400 anyway and ensures
+        the caller gets a distinct ``mid_turn_precheck_overflow`` stop_reason
+        instead of a generic provider error.
+        """
+        if not spec.context_window_tokens or not messages:
+            return None
+        try:
+            provider_max = getattr(getattr(self.provider, "generation", None), "max_tokens", 4096)
+            max_output = spec.max_tokens if isinstance(spec.max_tokens, int) else (
+                provider_max if isinstance(provider_max, int) else 4096
+            )
+            budget = spec.context_block_limit or (
+                spec.context_window_tokens - max_output - _SNIP_SAFETY_BUFFER
+            )
+            if budget <= 0:
+                return None
+            estimate, _ = estimate_prompt_tokens_chain(
+                self.provider,
+                spec.model,
+                messages,
+                self._active_tool_definitions(spec),
+            )
+        except Exception:
+            # Token estimation is best-effort; never block a turn on the
+            # estimator failing. Let the provider's own 400 handle it.
+            logger.exception(
+                "Mid-turn precheck estimation failed for {}; skipping",
+                spec.session_key or "default",
+            )
+            return None
+        if estimate <= budget:
+            return None
+        return estimate, budget
 
     @staticmethod
     def _active_tool_definitions(spec: AgentRunSpec) -> list[dict[str, Any]]:
