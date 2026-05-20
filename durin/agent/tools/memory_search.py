@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from durin.agent.tools._telemetry import emit_tool_event
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.schema import StringSchema, tool_parameters_schema
 from durin.memory.search import search_memory
@@ -75,6 +76,15 @@ class MemorySearchTool(Tool):
             return {"error": f"invalid level {level!r}"}
 
         results = search_memory(self._workspace, query, scope=scope, level=level)  # type: ignore[arg-type]
+        emit_tool_event(
+            "memory.recall",
+            {
+                "query": query,
+                "scope": scope,
+                "level": level,
+                "result_count": len(results),
+            },
+        )
         return {
             "results": [r.to_dict() for r in results],
             "total": len(results),
