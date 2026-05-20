@@ -453,12 +453,24 @@ def install_missing_extras(extras: list[str], *, assume_yes: bool = False) -> in
             return 1
     # Re-derive the command as a list (instead of shell-quoted string) so we
     # don't shell out and don't need to parse our own quoting.
+    bracket = f"[{','.join(extras)}]" if extras else ""
     if info.mode == "pipx":
-        bracket = f"[{','.join(extras)}]" if extras else ""
-        cmd = ["pipx", "install", "--force", f"durin-agent{bracket}"]
-    else:
-        bracket = f"[{','.join(extras)}]" if extras else ""
-        cmd = [sys.executable, "-m", "pip", "install", "--upgrade", f"durin-agent{bracket}"]
+        from durin.cli.upgrade import PYPI_DIST_NAME, pipx_subprocess_env
+
+        # pipx + uv backend has a known bug: `pipx install --force` doesn't
+        # translate to `uv venv --clear`, so uv refuses to recreate the
+        # existing venv. Workaround: uninstall first, then install fresh.
+        env = pipx_subprocess_env()
+        uninstall_cmd = ["pipx", "uninstall", PYPI_DIST_NAME]
+        console.print(f"[dim]$ {' '.join(uninstall_cmd)}[/dim]")
+        # Tolerate non-zero exit (e.g. pipx says "nothing to uninstall");
+        # the subsequent install is what really matters.
+        subprocess.run(uninstall_cmd, env=env)
+        install_cmd = ["pipx", "install", f"{PYPI_DIST_NAME}{bracket}"]
+        console.print(f"[dim]$ {' '.join(install_cmd)}[/dim]")
+        proc = subprocess.run(install_cmd, env=env)
+        return proc.returncode
+    cmd = [sys.executable, "-m", "pip", "install", "--upgrade", f"durin-agent{bracket}"]
     console.print(f"[dim]$ {' '.join(cmd)}[/dim]")
     proc = subprocess.run(cmd)
     return proc.returncode
