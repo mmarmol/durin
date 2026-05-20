@@ -646,6 +646,24 @@ yesterday's conclusions.
   realistic set of memory entries before committing to the full
   sub-task.
 
+### 0d.8 Validation benchmarks (post Phase 3)
+
+Once Phase 3 ships, run durin's memory against external open
+benchmarks rather than relying only on smoke tests. EverOS
+(Apache 2.0) provides two relevant suites:
+
+- **EverMemBench** — `benchmarks/EverMemBench` in
+  https://github.com/EverMind-AI/EverOS. Memory quality.
+- **EvoAgentBench** — `benchmarks/EvoAgentBench` in the same repo.
+  Self-evolution / cross-session learning quality.
+- **LoCoMo** — Long Conversation Memory benchmark referenced by
+  HyperMem's ACL 2026 paper. HyperMem's SOTA: 92.73% LLM-as-judge.
+
+**Decision trigger**: if vector-only retrieval (Phase 2b) scores
+< 70% of HyperMem's SOTA on LoCoMo, default-enable Phase 2c (BM25 +
+temporal + RRF) before moving to Phase 4. Until that signal arrives,
+Phase 2c stays as user-toggleable opt-in.
+
 ---
 
 ## 1. The original plan (doc 03 summarised)
