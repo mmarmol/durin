@@ -212,3 +212,5 @@ Once Phase 2 has retrieval, Phase 1b reduces to "use the memory retriever to fet
 ## Last updated: 2026-05-20
 
 > Latest pass: items #1–9 of the original 12-list shipped (incl. capability bridges for vision + audio), item #12 mostly closed by today's `disable_model_invocation` flag. Capability metadata pipeline (3-source consensus snapshot) shipped as a foundation. Pi coding agent reviewed and four refinements adopted: `context_transform` hook, skill disable flag, head/tail truncation per tool, anchored token accounting, cache visibility. Stale planning docs (`04_agent_strategies_catalog`, `05_log_swebench`, `06_log_experiments`) moved to `docs/archive/`. Memory (Phase 2) is now unblocked.
+
+> Daily driver lifecycle (D6 in `09_daily_driver_plan.md`): `durin config`, `durin upgrade`, `durin uninstall`, plus README + INSTALL.md shipped. The install/configure/upgrade/uninstall surfaces are now complete; the operator no longer needs to hand-edit JSON or guess where state lives.

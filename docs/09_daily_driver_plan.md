@@ -74,6 +74,24 @@ que pedirle al agente.
 agente sin pedirle nada — listar, ver, buscar, recordar, olvidar,
 auditar, y rastrear procedencia.
 
+### D6 — Lifecycle commands (install / configure / upgrade / uninstall)
+
+Sin estos comandos el agente no era operable como producto. El usuario que
+clona el repo no tenía cómo modificar una clave sin editar JSON a mano,
+no había vía explícita para subir de versión, y un `pip uninstall` dejaba
+huérfano `~/.durin/` + `~/.cache/durin/`.
+
+| # | Item | Notas |
+|---|---|---|
+| D6.1 | `README.md` + `docs/INSTALL.md` | Prerequisitos, comando exacto, qué crea `onboard`, dónde vive el estado, extras opcionales. |
+| D6.2 | `durin config path \| show \| get \| set \| edit` | Dotted paths con normalización snake_case → camelCase. Secretos enmascarados por defecto; `--raw` opt-in. Validación contra el schema antes de escribir. |
+| D6.3 | `durin upgrade [--check\|--migrate-only\|--ref]` | Detecta editable vs wheel (busca `pyproject.toml` junto al paquete cargado). Editable: `git pull --ff-only` + `pip install -e .`. Wheel: `pip install --upgrade durin`. Siempre replay del migrate. |
+| D6.4 | `durin uninstall [--purge --keep-config --keep-workspace --keep-cache --workspace]` | Enumera + tabula paths + bytes antes de borrar. `--purge` lanza `pip uninstall` en subproceso para no pisarse a sí mismo. Per-workspace `<ws>/.durin/` solo opt-in. |
+
+**Output entregable**: durin es desinstalable, actualizable y editable
+sin abrir nano. El operador ve exactamente qué va a borrarse antes de
+consentir.
+
 ### D3 — Editor avanzado (1 semana, opcional según presión)
 
 Patterns de pi que el editor actual de prompt_toolkit no expone.
