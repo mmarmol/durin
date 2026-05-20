@@ -101,6 +101,31 @@ def _compaction_grace_seconds() -> float:
     except ValueError:
         return _DEFAULT_COMPACTION_GRACE_SECONDS
     return max(0.0, value)
+
+
+# Hermes-inspired Tier 1: per-turn aggregate tool-result budget.
+#
+# ``max_tool_result_chars`` already caps each individual tool result; large
+# outputs spill to disk via ``maybe_persist_tool_result``. But when an LLM
+# emits N parallel tool calls each returning <max_chars, the aggregate can
+# still overflow the context window. After all tool results are collected
+# in a turn, if the sum exceeds this budget, we spill the largest
+# not-yet-persisted results to disk in priority order until the aggregate
+# is under budget.
+_DEFAULT_TURN_BUDGET_CHARS = 200_000
+_PERSISTED_MARKER = "[tool output persisted]"
+
+
+def _turn_budget_chars() -> int:
+    raw = os.getenv("DURIN_TURN_BUDGET_CHARS")
+    if raw is None:
+        return _DEFAULT_TURN_BUDGET_CHARS
+    try:
+        value = int(raw)
+    except ValueError:
+        return _DEFAULT_TURN_BUDGET_CHARS
+    # 0 disables the budget; negative values clamp to 0.
+    return max(0, value)
 _COMPACTABLE_TOOLS = frozenset({
     "read_file", "exec", "grep",
     "web_search", "web_fetch", "list_dir",
@@ -546,6 +571,18 @@ class AgentRunner:
                     }
                     messages.append(tool_message)
                     completed_tool_results.append(tool_message)
+                # Hermes-inspired per-turn aggregate budget: when many medium
+                # tool results combine to exceed the configured budget, spill
+                # the largest not-yet-persisted ones to disk. Mutates the
+                # appended messages in place (they're the same dicts that
+                # were just added to ``messages``).
+                try:
+                    self._enforce_turn_budget(spec, completed_tool_results)
+                except Exception:
+                    logger.exception(
+                        "Turn-budget enforcement failed for {}; continuing with raw results",
+                        spec.session_key or "default",
+                    )
                 if fatal_error is not None:
                     error = f"Error: {type(fatal_error).__name__}: {fatal_error}"
                     final_content = error
@@ -1503,6 +1540,111 @@ class AgentRunner:
         if isinstance(content, str) and len(content) > spec.max_tool_result_chars:
             return truncate_text(content, spec.max_tool_result_chars)
         return content
+
+    @staticmethod
+    def _content_size(content: Any) -> int:
+        """Best-effort char-count for a tool result.
+
+        Strings → ``len``. Lists of text blocks → joined text length. Other
+        list-of-blocks (image, audio) → JSON-serialized length so a 5 MB
+        image-block isn't undercounted as zero. Falls back to ``str()`` on
+        unexpected shapes.
+        """
+        if isinstance(content, str):
+            return len(content)
+        if isinstance(content, list):
+            try:
+                return len(json.dumps(content, ensure_ascii=False, default=str))
+            except Exception:
+                return sum(len(str(b)) for b in content)
+        try:
+            return len(str(content))
+        except Exception:
+            return 0
+
+    def _enforce_turn_budget(
+        self,
+        spec: AgentRunSpec,
+        completed_tool_messages: list[dict[str, Any]],
+    ) -> None:
+        """Hermes-inspired per-turn aggregate budget enforcement.
+
+        After all tool results for a turn are collected, if their total
+        size exceeds the configured budget, persist the largest
+        not-yet-persisted ones to disk (via the existing
+        ``maybe_persist_tool_result`` path with threshold=0 to force
+        spillover) until the aggregate is back under budget.
+
+        Mutates ``completed_tool_messages[i]["content"]`` in place. Also
+        emits a single ``turn_budget.enforced`` telemetry event when the
+        budget was exceeded.
+        """
+        budget = _turn_budget_chars()
+        if budget <= 0 or not completed_tool_messages:
+            return
+        sizes: list[tuple[int, int]] = []  # (idx, size)
+        total = 0
+        for idx, msg in enumerate(completed_tool_messages):
+            size = self._content_size(msg.get("content"))
+            total += size
+            content = msg.get("content")
+            already_persisted = isinstance(content, str) and _PERSISTED_MARKER in content
+            if not already_persisted:
+                sizes.append((idx, size))
+        if total <= budget:
+            return
+        sizes.sort(key=lambda pair: pair[1], reverse=True)
+        original_total = total
+        spilled = 0
+        for idx, size in sizes:
+            if total <= budget:
+                break
+            msg = completed_tool_messages[idx]
+            try:
+                # ``maybe_persist_tool_result`` treats max_chars<=0 as "disabled".
+                # Pass 1 so it spills any content that's at least 2 chars long
+                # — effectively unconditional for the candidates we picked
+                # (the smallest realistic culprit is already several KB).
+                spilled_content = maybe_persist_tool_result(
+                    spec.workspace,
+                    spec.session_key,
+                    str(msg.get("tool_call_id") or f"tool_{idx}"),
+                    msg.get("content"),
+                    max_chars=1,
+                )
+            except Exception:
+                logger.exception(
+                    "Turn-budget spillover failed for {} in {}",
+                    msg.get("tool_call_id"),
+                    spec.session_key or "default",
+                )
+                continue
+            new_size = self._content_size(spilled_content)
+            if new_size < size:
+                msg["content"] = spilled_content
+                total = total - size + new_size
+                spilled += 1
+        if spilled > 0:
+            _logger = current_telemetry()
+            if _logger is not None:
+                with suppress(Exception):
+                    _logger.log("turn_budget.enforced", {
+                        "session_key": spec.session_key,
+                        "budget_chars": budget,
+                        "before_chars": original_total,
+                        "after_chars": total,
+                        "spilled_count": spilled,
+                        "tool_count": len(completed_tool_messages),
+                    })
+            logger.info(
+                "Turn budget exceeded for {}: {}/{} chars; spilled {} result(s) "
+                "to disk → {} chars",
+                spec.session_key or "default",
+                original_total,
+                budget,
+                spilled,
+                total,
+            )
 
     @staticmethod
     def _drop_orphan_tool_results(
