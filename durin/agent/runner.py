@@ -827,6 +827,22 @@ class AgentRunner:
                 transformed = spec.context_transform(list(messages))
                 if isinstance(transformed, list):
                     messages = transformed
+                    # Re-sanitize after the hook. A transform that drops or
+                    # trims messages for token budget can leave assistant
+                    # tool_use blocks without matching tool_result siblings
+                    # (or vice versa); Anthropic and OpenAI both reject such
+                    # mismatches with a 400. The pre-call sanitize pipeline
+                    # already ran on the untransformed list, so it can't
+                    # catch this. Repair here defensively. (OpenClaw-inspired
+                    # Tier 1 — re-sanitize after truncation.)
+                    try:
+                        messages = self._drop_orphan_tool_results(messages)
+                        messages = self._backfill_missing_tool_results(messages)
+                    except Exception:
+                        logger.exception(
+                            "post-context_transform sanitize failed; sending "
+                            "the transformed list as-is",
+                        )
             except Exception:
                 logger.exception(
                     "context_transform hook raised — falling back to original messages",

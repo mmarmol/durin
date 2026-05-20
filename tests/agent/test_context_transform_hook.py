@@ -101,3 +101,96 @@ def test_hook_receives_a_copy_not_the_caller_list():
     assert original == [{"role": "user", "content": "untouched"}]
     # And the kwargs reflect the original since hook returned None.
     assert kwargs["messages"] is original
+
+
+# ---------------------------------------------------------------------------
+# Re-sanitize after the hook (OpenClaw-inspired Tier 1).
+#
+# A transform that trims for token budget can drop messages mid-way through
+# a tool_use/tool_result pair. Anthropic and OpenAI both reject those
+# mismatches with a 400 ("tool_use_id ... was not found in `tool_use` blocks
+# of the previous assistant message"). The pre-call sanitize pipeline can't
+# catch this because it ran on the untransformed list. The runner must
+# re-pair orphans after the hook returns.
+# ---------------------------------------------------------------------------
+
+
+def test_orphan_tool_results_dropped_when_hook_strips_assistant():
+    """Transform drops the assistant tool_use, leaving an orphan tool_result.
+    Re-sanitize must drop that orphan before it reaches the LLM."""
+
+    original = [
+        {"role": "user", "content": "do it"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "list_dir", "arguments": "{}"},
+            }],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "name": "list_dir", "content": "ok"},
+        {"role": "user", "content": "follow-up"},
+    ]
+
+    # Hook drops the assistant tool_call entirely — mimics aggressive
+    # token-budget pruning that grabs the middle of the history.
+    def trim(msgs):
+        return [m for m in msgs if not (m.get("role") == "assistant" and m.get("tool_calls"))]
+
+    runner, spec = _make_runner_and_spec(trim)
+    kwargs = runner._build_request_kwargs(spec, original, tools=None)
+    result = kwargs["messages"]
+    # The orphan tool_result must be gone.
+    assert not any(m.get("role") == "tool" for m in result)
+    assert [m["role"] for m in result] == ["user", "user"]
+
+
+def test_orphan_tool_use_backfilled_when_hook_strips_tool_result():
+    """Transform drops the tool_result, leaving the assistant's tool_use
+    unmatched. Re-sanitize must insert a synthetic result so the request
+    is still well-formed."""
+
+    original = [
+        {"role": "user", "content": "do it"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "id": "call_42",
+                "type": "function",
+                "function": {"name": "read_file", "arguments": "{}"},
+            }],
+        },
+        {"role": "tool", "tool_call_id": "call_42", "name": "read_file", "content": "x"},
+        {"role": "assistant", "content": "done"},
+    ]
+
+    def drop_tool_results(msgs):
+        return [m for m in msgs if m.get("role") != "tool"]
+
+    runner, spec = _make_runner_and_spec(drop_tool_results)
+    kwargs = runner._build_request_kwargs(spec, original, tools=None)
+    result = kwargs["messages"]
+    # A synthetic tool_result for call_42 was inserted.
+    tool_messages = [m for m in result if m.get("role") == "tool"]
+    assert len(tool_messages) == 1
+    assert tool_messages[0]["tool_call_id"] == "call_42"
+
+
+def test_sanitize_failure_after_hook_is_caught(monkeypatch):
+    """If the post-hook sanitize raises, the transformed list still reaches
+    the LLM as-is — better an imperfect request than a swallowed turn."""
+    from durin.agent import runner as runner_mod
+
+    transformed = [{"role": "user", "content": "after hook"}]
+    runner, spec = _make_runner_and_spec(lambda _m: transformed)
+
+    def explode(_messages):
+        raise RuntimeError("sanitize boom")
+
+    monkeypatch.setattr(runner_mod.AgentRunner, "_drop_orphan_tool_results", staticmethod(explode))
+
+    kwargs = runner._build_request_kwargs(spec, [{"role": "user", "content": "x"}], tools=None)
+    assert kwargs["messages"] is transformed
