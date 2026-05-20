@@ -1,11 +1,31 @@
 """Refresh ``durin/providers/data/model_capabilities.json`` from public sources.
 
-Combines three independent public sources into a single consensus file
-that ships with durin. The runtime resolver reads only the consensus
-file — this script is a dev tool, not part of the agent.
+Builds a single consensus file that ships with durin. The runtime
+resolver reads only the consensus file — this script is a dev tool,
+not part of the agent.
 
-Sources
--------
+Source priority (May 2026)
+--------------------------
+**Tier 1 — Vendor APIs (authoritative)**. When the operator has set
+the corresponding API key in the environment, the script hits the
+vendor's own ``/models`` endpoint and treats the result as ground
+truth. Vendor data OVERWRITES community-merge values field by field
+(vendor wins) instead of being OR-merged. See ``scripts/_vendor_sources.py``
+for which vendors are wired and what they actually expose.
+
+Currently wired:
+
+- **Anthropic** (`ANTHROPIC_API_KEY`) → rich: per-model
+  ``capabilities.{image_input, pdf_input, structured_outputs, thinking,
+  …}`` + ``max_input_tokens`` + ``max_tokens``.
+- **Mistral** (`MISTRAL_API_KEY`) → rich: ``capabilities.{vision,
+  function_calling, …}`` + ``max_context_length`` + aliases.
+- **Google Gemini** (`GEMINI_API_KEY` or `GOOGLE_API_KEY`) → decent:
+  ``inputTokenLimit`` + ``outputTokenLimit`` + ``supportedGenerationMethods``
+  + ``thinking``.
+
+**Tier 2 — Community merge (consensus fallback)**:
+
 1. **LiteLLM** ``model_prices_and_context_window.json`` — curated by
    BerriAI; broad coverage of frontier + gateway providers.
 2. **OpenRouter** ``/api/v1/models`` — input modality taxonomy with
@@ -16,17 +36,21 @@ Sources
 Merge rules
 -----------
 - **Canonical key**: bare model name (everything after the last ``/``
-  or ``.`` provider prefix), lowercased. Multiple source entries with
-  the same canonical key merge into one record.
-- **Booleans**: OR — any source affirming a capability wins. Sources
-  rarely fabricate capabilities; the failure mode is omitting them.
-- **Numeric** (``max_input_tokens``, ``max_output_tokens``): take MAX
-  across sources. A larger window is the more permissive answer; the
-  real endpoint enforces the actual limit anyway.
-- **``mode``**: most common across sources, defaulting to ``"chat"``.
+  or ``.`` provider prefix), lowercased. Multiple entries with the
+  same canonical key merge into one record.
+- **Phase 1 — community merge**. Booleans OR (any source affirming a
+  capability wins; sources rarely fabricate, the failure mode is
+  omitting). Numerics take MAX. Mode keeps the first non-default.
+- **Phase 2 — vendor override**. For every field the vendor *explicitly*
+  asserted (sparse dict — fields the vendor doesn't mention stay
+  whatever the community merge produced), overwrite. ``_authority`` is
+  set to ``"vendor"`` for any model touched by a vendor adapter, ``"merge"``
+  otherwise.
 - **``_sources``**: list of ``<source>:<original-key>`` strings showing
-  exactly which entries from which sources fed each record. Handy for
-  debugging unexpected capability flags.
+  exactly which entries from which sources fed each record.
+- **``_vendor_sources``**: subset of ``_sources`` that came from vendor
+  APIs — handy for verifying "is this entry authoritative or just
+  community-curated".
 
 Usage
 -----
@@ -36,10 +60,15 @@ Usage
     python scripts/refresh_model_capabilities.py --dry-run
         # → fetch + merge but don't write; prints summary
 
-The script needs network access (it hits three HTTPS endpoints). If a
-source fails, it falls back to whatever cached data it has and warns
-on stderr. The output file is intentionally checked in so the runtime
+The script needs network access (it hits multiple HTTPS endpoints). If
+a source fails, it falls back to whatever data it has and warns on
+stderr. The output file is intentionally checked in so the runtime
 works offline; refresh on demand.
+
+Vendor adapters are **opt-in**: missing API keys are silent (logged in
+the summary, no failure). CI without vendor keys still produces a
+valid snapshot from community sources alone — same behaviour as before
+the vendor-adapter work.
 """
 
 from __future__ import annotations
@@ -53,6 +82,11 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import httpx
+
+# Vendor-API adapters (Tier 1 source of truth). Lives in a sibling
+# module so each vendor's HTTP / parsing concerns stay isolated.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _vendor_sources import iter_vendor_streams  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 OUTPUT_PATH = REPO_ROOT / "durin" / "providers" / "data" / "model_capabilities.json"
@@ -298,8 +332,21 @@ def consolidate(
     litellm: dict[str, Any] | None,
     openrouter: dict[str, Any] | None,
     models_dev: dict[str, Any] | None,
-) -> dict[str, Any]:
-    """Merge the three source payloads into a single consensus dict."""
+    vendor_streams: list[Iterable[tuple[str, str, dict[str, Any]]]] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Merge community sources + apply vendor-API overrides.
+
+    Phase 1 — community merge (OR for bools, MAX for numerics): same as
+    before. Phase 2 — vendor overlay: for every field a vendor adapter
+    explicitly asserted, overwrite the merged value. Vendor-sourced
+    entries are tagged ``_authority="vendor"``; everything else stays
+    ``_authority="merge"``.
+
+    ``vendor_streams`` accepts a pre-materialised list (the CLI builds
+    it via ``_vendor_sources.iter_vendor_streams``). Tests can pass
+    custom streams directly. ``None`` means "no vendor data" and the
+    function behaves identically to the pre-vendor version.
+    """
     out: dict[str, dict[str, Any]] = {}
 
     streams: list[Iterable[tuple[str, str, dict[str, Any]]]] = []
@@ -312,34 +359,67 @@ def consolidate(
 
     for stream in streams:
         for canon, src_label, caps in stream:
-            entry = out.setdefault(canon, {
-                "max_input_tokens": None,
-                "max_output_tokens": None,
-                "mode": "chat",
-                **{f: False for f in _BOOL_FIELDS},
-                "_sources": [],
-            })
+            entry = out.setdefault(canon, _empty_entry())
             _merge(entry, caps)
             entry["_sources"].append(src_label)
 
+    # Phase 2: vendor overlay. Sparse — only fields the vendor
+    # explicitly answered overwrite the merged values. New canonical
+    # keys discovered by vendors (not in any community source) are
+    # added with _authority="vendor".
+    for stream in vendor_streams or []:
+        for canon, src_label, caps in stream:
+            entry = out.setdefault(canon, _empty_entry())
+            for field, value in caps.items():
+                entry[field] = value
+            entry["_sources"].append(src_label)
+            entry.setdefault("_vendor_sources", []).append(src_label)
+            entry["_authority"] = "vendor"
+
+    # Tag the leftover (no vendor touched them) as merge-authority.
+    for entry in out.values():
+        entry.setdefault("_authority", "merge")
+
     return out
+
+
+def _empty_entry() -> dict[str, Any]:
+    """Fresh capability record with safe defaults. Booleans default to
+    False so an entry seen only as a name (e.g. vendor listed it but
+    asserted no capabilities) still has consistent shape."""
+    return {
+        "max_input_tokens": None,
+        "max_output_tokens": None,
+        "mode": "chat",
+        **{f: False for f in _BOOL_FIELDS},
+        "_sources": [],
+    }
 
 
 def build_consensus_file(
     litellm: dict[str, Any] | None,
     openrouter: dict[str, Any] | None,
     models_dev: dict[str, Any] | None,
+    vendor_streams: list[Iterable[tuple[str, str, dict[str, Any]]]] | None = None,
+    vendor_attempted: list[str] | None = None,
+    vendor_skipped: list[str] | None = None,
 ) -> dict[str, Any]:
     """Wrap the merged models dict in the on-disk schema."""
-    models = consolidate(litellm, openrouter, models_dev)
+    models = consolidate(litellm, openrouter, models_dev, vendor_streams=vendor_streams)
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     return {
-        "schema_version": 1,
+        # v2: vendor-source provenance added. Backward-compatible with
+        # the runtime resolver — extra fields are ignored.
+        "schema_version": 2,
         "generated_at": now,
         "sources": {
             "litellm": {"url": LITELLM_URL, "present": litellm is not None},
             "openrouter": {"url": OPENROUTER_URL, "present": openrouter is not None},
             "models.dev": {"url": MODELS_DEV_URL, "present": models_dev is not None},
+        },
+        "vendor_sources": {
+            "attempted": list(vendor_attempted or []),
+            "skipped": list(vendor_skipped or []),
         },
         "models": models,
     }
@@ -357,7 +437,7 @@ def main() -> int:
     args = parser.parse_args()
 
     sources: dict[str, Any] = {"litellm": None, "openrouter": None, "models.dev": None}
-    print("Fetching sources…", file=sys.stderr)
+    print("Fetching community sources…", file=sys.stderr)
     for name, url in (
         ("litellm", LITELLM_URL),
         ("openrouter", OPENROUTER_URL),
@@ -368,15 +448,35 @@ def main() -> int:
         except Exception as exc:
             print(f"  ! {name} failed: {exc}", file=sys.stderr)
 
+    print("\nFetching vendor sources (when API keys are present)…", file=sys.stderr)
+    vendor_streams, vendor_attempted, vendor_skipped = iter_vendor_streams(_canonical_key)
+    if not vendor_attempted:
+        print("  (no vendor API keys set — relying on community merge alone)",
+              file=sys.stderr)
+
     payload = build_consensus_file(
         sources["litellm"],
         sources["openrouter"],
         sources["models.dev"],
+        vendor_streams=vendor_streams,
+        vendor_attempted=vendor_attempted,
+        vendor_skipped=vendor_skipped,
     )
 
     models = payload["models"]
+    community_present = sum(1 for s in payload["sources"].values() if s["present"])
+    vendor_present = len(vendor_attempted)
     print(f"\nMerged {len(models)} canonical models from "
-          f"{sum(1 for s in payload['sources'].values() if s['present'])}/3 sources.", file=sys.stderr)
+          f"{community_present}/3 community sources + "
+          f"{vendor_present} vendor API(s).", file=sys.stderr)
+
+    # Provenance split: how many entries were vendor-authoritative vs
+    # merge-only? Lets the operator see at a glance whether the vendor
+    # adapters actually contributed.
+    by_authority = Counter(entry.get("_authority", "merge") for entry in models.values())
+    print("Authority split:", file=sys.stderr)
+    for label, count in by_authority.most_common():
+        print(f"  {label}: {count}", file=sys.stderr)
 
     # Summary: how many models advertise each modality
     counts = Counter()
@@ -394,7 +494,15 @@ def main() -> int:
         print("\nSanity sample — glm-5v-turbo:", file=sys.stderr)
         print(f"  vision={sample['supports_vision']}  audio={sample['supports_audio_input']} "
               f"pdf={sample['supports_pdf_input']}  video={sample['supports_video_input']}", file=sys.stderr)
+        print(f"  authority={sample.get('_authority')}", file=sys.stderr)
         print(f"  sources: {len(sample['_sources'])} ({sample['_sources'][:3]}…)", file=sys.stderr)
+
+    # Vendor-skipped log (lets the operator know which vendor adapters
+    # were silently disabled vs failed mid-call).
+    if vendor_skipped:
+        print("\nVendor adapters skipped:", file=sys.stderr)
+        for line in vendor_skipped:
+            print(f"  - {line}", file=sys.stderr)
 
     if args.dry_run:
         print("\n--dry-run: not writing output.", file=sys.stderr)
