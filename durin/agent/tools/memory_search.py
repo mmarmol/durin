@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import logging
+import time
 from typing import Optional
 
 from durin.agent.tools._telemetry import emit_tool_event
@@ -119,8 +120,20 @@ class MemorySearchTool(Tool):
         vi = self._get_vector_index()
         if level == "warm" and scope in ("dreamed", "all") and vi is not None:
             try:
+                t0 = time.monotonic()
                 vector_rows = vi.search(query, top_k=10)
+                duration_ms = (time.monotonic() - t0) * 1000.0
                 vector_results = [_vector_row_to_result(row) for row in vector_rows]
+                emit_tool_event(
+                    "memory.recall.vector",
+                    {
+                        "query": query,
+                        "scope": scope,
+                        "embedding_model": self._embedding_model or "",
+                        "hit_count": len(vector_results),
+                        "duration_ms": duration_ms,
+                    },
+                )
                 if scope == "dreamed":
                     results = vector_results
                     strategy = "vector"
