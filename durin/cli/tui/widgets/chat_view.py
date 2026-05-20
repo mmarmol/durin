@@ -77,12 +77,19 @@ class MessageBubble(Static):
         self._role: Role = role
         self.body = body
 
-    def render(self) -> str:  # type: ignore[override]
+    def render(self):  # type: ignore[override]
+        # Escape any `[...]` literals in the body so Rich doesn't try to
+        # interpret them as markup tags and silently fail to render.
+        # Model output regularly contains brackets (code blocks, lists,
+        # `[x]` checkboxes, urls with `[...]`) and an unclosed tag in a
+        # streaming delta would leave the bubble blank.
+        from rich.markup import escape
+
         label = self._ROLE_LABEL.get(self._role, self._role)
         body = self.body or ""
         prefix = f"[bold]{label}[/bold]"
         if body:
-            return f"{prefix}\n{body}"
+            return f"{prefix}\n{escape(body)}"
         return prefix
 
     def watch_body(self, _old: str, _new: str) -> None:
