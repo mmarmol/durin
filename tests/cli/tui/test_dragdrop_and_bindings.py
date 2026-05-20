@@ -135,12 +135,15 @@ async def test_ctrl_t_toggles_theme(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_ctrl_l_prefills_model_command(tmp_path) -> None:
+async def test_ctrl_l_opens_model_picker(tmp_path) -> None:
+    from textual.widgets import OptionList
+
     bus = MessageBus()
     loop = _fake_agent_loop(bus, tmp_path)
+    loop.model_presets = {"default": object(), "fast": object()}
     app = DurinApp(agent_loop=loop)
     async with app.run_test() as pilot:
-        inp = app.query_one(InputArea)
         await pilot.press("ctrl+l")
         await pilot.pause()
-        assert inp.value == "/model "
+        # Modal screens live on app.screen, not app itself.
+        app.screen.query_one(OptionList)
