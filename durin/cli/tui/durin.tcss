@@ -1,0 +1,13 @@
+/* durin.tcss — Textual stylesheet for the durin TUI (D5.2).
+   Widget-specific CSS lives next to each widget; this file holds
+   App-level chrome + spacing only. */
+
+Screen {
+    background: $background;
+    color: $text;
+}
+
+#main-layout {
+    height: 100%;
+    width: 100%;
+}

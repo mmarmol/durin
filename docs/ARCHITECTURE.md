@@ -657,7 +657,88 @@ sees the change on its next redraw because it closes over the same
 
 ---
 
-## 12. Testing
+## 12. Textual TUI (opt-in, D5)
+
+A second interactive surface lives under `durin/cli/tui/`. It runs
+on top of the same `MessageBus` and `AgentLoop` as the legacy CLI;
+the only thing that's different is the I/O layer. Launched via
+`durin agent --tui`.
+
+### 12.1 Layout
+
+```
+┌─ HeaderBar ────────────────────────────────────────────────────┐
+│ durin · <workspace> · <model> (<preset>)                       │
+├────────────────────────────────────────────────────────────────┤
+│                                                                │
+│  ChatView (scrollable, mouse-friendly)                         │
+│    MessageBubble role=user      "the user message"             │
+│    MessageBubble role=assistant "streamed assistant reply"     │
+│    MessageBubble role=tool      "tool call result"             │
+│    MessageBubble role=system    "command / system note"        │
+│                                                                │
+├────────────────────────────────────────────────────────────────┤
+│ InputArea  (suggester: /commands  and  @files)                 │
+├────────────────────────────────────────────────────────────────┤
+│ FooterBar  session · model · ~tokens/window (%) · mem · vec   │
+└────────────────────────────────────────────────────────────────┘
+```
+
+Each piece is a separate widget in `durin/cli/tui/widgets/`. Widget
+CSS lives next to the widget; app-level CSS in
+`durin/cli/tui/durin.tcss`.
+
+### 12.2 Bus integration
+
+`DurinApp.on_mount` spawns two background tasks:
+
+- `agent_loop.run()` — inbound dispatcher.
+- `_consume_outbound` — drains `bus.consume_outbound()`, maps
+  metadata flags to widget operations:
+
+  | metadata flag         | effect                                          |
+  |---|---|
+  | `_stream_delta`       | append to the open assistant bubble             |
+  | `_stream_end`         | close the assistant bubble                      |
+  | `_streamed`           | end-of-turn marker (no UI side-effect)          |
+  | `_switch_chat_id`     | mutate `cli_chat_id` + refresh footer / header  |
+  | `render_as="text"`    | render as a system bubble                       |
+  | (other)               | render as an assistant bubble                   |
+
+User submission goes through the same pipeline as the legacy CLI:
+surrogate-sanitize → drag-and-drop pre-processor → publish
+`InboundMessage(_wants_stream=True, media=[...])`.
+
+### 12.3 Editor ergonomics (parity with D1)
+
+- `SlashCommandSuggester` — `/` prefix surfaces a known command (palette source: `BUILTIN_COMMAND_SPECS`).
+- `AtFileSuggester` — `@<prefix>` matches workspace files (same exclude rules as `FileReferenceCompleter`).
+- `MultiModeSuggester` — dispatcher between the two.
+- Drag-and-drop pre-processor reuses `durin.cli.dragdrop.process_dragged_paths`; images / audio land in `<workspace>/.media/<sha>.<ext>` and ride `InboundMessage.media`.
+
+### 12.4 Key bindings
+
+| Binding         | Action                                               |
+|---|---|
+| `Ctrl+Q` / `Ctrl+D` | quit                                             |
+| `Escape`        | abort: calls `agent_loop._cancel_active_tasks` and clears the open assistant bubble |
+| `Ctrl+T`        | toggle dark/light theme                              |
+| `Ctrl+L`        | pre-fill input with `/model ` so the suggester surfaces presets (modal in a follow-up) |
+
+### 12.5 What ships in D5 vs deferred
+
+Shipped in D5: layout, streaming, slash commands, @file completion,
+drag-and-drop, key bindings, persistent footer, surrogate sanitisation,
+theme toggle, parity with the legacy CLI through the `MessageBus`.
+
+**Deferred** to a follow-up (per `docs/10_textual_migration.md` §D5.5):
+modal pickers for `/sessions` and `/model`. The base TUI works without
+them — `/sessions` renders as a markdown list inside a system bubble,
+Ctrl+L pre-fills `/model ` for the autocomplete.
+
+---
+
+## 13. Testing
 
 ```
 tests/
@@ -683,6 +764,6 @@ Total: **3,293 tests passing, 15 skipped**.
 
 ---
 
-## Last updated: 2026-05-20 (D1 daily-driver CLI)
+## Last updated: 2026-05-20 (D5 Textual TUI scaffolded)
 
 > For the history of why each subsystem was added, what was replaced, and what was discarded along the way, see `docs/02_bitacora.md`. This document only describes the current state.

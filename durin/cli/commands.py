@@ -1206,6 +1206,7 @@ def agent(
     config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
     markdown: bool = typer.Option(True, "--markdown/--no-markdown", help="Render assistant output as Markdown"),
     logs: bool = typer.Option(False, "--logs/--no-logs", help="Show durin runtime logs during chat"),
+    tui: bool = typer.Option(False, "--tui", help="Launch the Textual TUI (Phase D5, opt-in)"),
 ):
     """Interact with the agent directly."""
     from loguru import logger
@@ -1239,6 +1240,23 @@ def agent(
     except ValueError as exc:
         console.print(f"[red]Error: {exc}[/red]")
         raise typer.Exit(1) from exc
+
+    if tui:
+        if message is not None:
+            console.print("[yellow]--tui and --message are mutually exclusive; ignoring --message.[/yellow]")
+        from durin.cli.tui import run_durin_tui
+
+        if ":" in session_id:
+            tui_channel, tui_chat_id = session_id.split(":", 1)
+        else:
+            tui_channel, tui_chat_id = "cli", session_id
+        run_durin_tui(
+            agent_loop=agent_loop,
+            cli_channel=tui_channel,
+            cli_chat_id=tui_chat_id,
+            markdown=markdown,
+        )
+        return
     restart_notice = consume_restart_notice_from_env()
     if restart_notice and should_show_cli_restart_notice(restart_notice, session_id):
         _print_agent_response(
