@@ -952,25 +952,49 @@ def _run_gateway(
     )
 
     async def on_heartbeat_execute(tasks: str) -> str:
-        """Phase 2: execute heartbeat tasks through the full agent loop."""
+        """Phase 2: execute heartbeat tasks through the full agent loop.
+
+        Two modes:
+        - **Default (shared session)**: reuse ``session_key="heartbeat"``
+          and trim via ``retain_recent_legal_suffix`` after the tick.
+          Preserves short-term context between ticks.
+        - **Isolated** (``heartbeat.isolatedSessions=true``,
+          OpenClaw-inspired): fresh ephemeral session per tick, deleted
+          after the tick. Stateless one-shots, no drift from prior runs.
+        """
+        from durin.heartbeat.service import heartbeat_session_key
+
         channel, chat_id = _pick_heartbeat_target()
 
         async def _silent(*_args, **_kwargs):
             pass
 
+        session_key = heartbeat_session_key(isolated=hb_cfg.isolated_sessions)
+
         resp = await agent.process_direct(
             heartbeat_preamble + tasks,
-            session_key="heartbeat",
+            session_key=session_key,
             channel=channel,
             chat_id=chat_id,
             on_progress=_silent,
         )
 
-        # Keep a small tail of heartbeat history so the loop stays bounded
-        # without losing all short-term context between runs.
-        session = agent.sessions.get_or_create("heartbeat")
-        session.retain_recent_legal_suffix(hb_cfg.keep_recent_messages)
-        agent.sessions.save(session)
+        if hb_cfg.isolated_sessions:
+            # Drop the ephemeral session from cache + disk so no state
+            # carries over to the next tick.
+            try:
+                agent.sessions.delete_session(session_key)
+            except Exception:
+                logger.exception(
+                    "Failed to clean up isolated heartbeat session {}",
+                    session_key,
+                )
+        else:
+            # Keep a small tail of heartbeat history so the loop stays
+            # bounded without losing all short-term context between runs.
+            session = agent.sessions.get_or_create(session_key)
+            session.retain_recent_legal_suffix(hb_cfg.keep_recent_messages)
+            agent.sessions.save(session)
 
         return resp.content if resp else ""
 

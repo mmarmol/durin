@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Coroutine
 
@@ -10,6 +11,22 @@ from loguru import logger
 
 if TYPE_CHECKING:
     from durin.providers.base import LLMProvider
+
+
+_SHARED_HEARTBEAT_SESSION_KEY = "heartbeat"
+
+
+def heartbeat_session_key(*, isolated: bool) -> str:
+    """Return the session_key for one heartbeat tick.
+
+    OpenClaw-inspired Tier 1 isolation: when ``isolated=True`` each tick
+    gets a fresh ephemeral key (deleted after the tick by the caller) so
+    no state carries between runs. When False (default), the shared
+    long-running session is reused.
+    """
+    if not isolated:
+        return _SHARED_HEARTBEAT_SESSION_KEY
+    return f"heartbeat-{uuid.uuid4().hex[:12]}"
 
 _HEARTBEAT_TOOL = [
     {
