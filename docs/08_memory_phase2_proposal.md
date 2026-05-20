@@ -594,14 +594,14 @@ hand.
 
 **Embedding model decisions** (confirmed May 2026):
 
-- Default: **`BAAI/bge-m3`** — 2.2 GB download, ~2.5 GB RAM resident, 1024-dim, MIT license. SOTA on Chinese / Japanese / Korean and other multilingual content.
-- Light alternative: **`intfloat/multilingual-e5-small`** — 471 MB download, ~600 MB RAM resident, 384-dim, MIT. Strong on English and European languages; CJK retrieval drops noticeably.
+- Default: **`intfloat/multilingual-e5-small`** — 471 MB download, ~600 MB RAM resident, 384-dim, MIT license. Strong on English and European languages; CJK retrieval is marginal. Chosen as the polite default because ~80% of users don't need CJK and the lighter footprint accelerates onboarding.
+- CJK / multilingual heavy alternative: **`BAAI/bge-m3`** — 2.2 GB download, ~2.5 GB RAM resident, 1024-dim, MIT. SOTA on Chinese / Japanese / Korean. Opt-in via the future installer wizard or by overriding `memory.embedding.model` in config.
 - Both auto-download on first use via `fastembed` (ONNX runtime, pure-Python, no Ollama dependency, no compile step).
-- Future installer wizard surfaces the choice with pros/cons; until then, override via `memory.embedding.model` in config.
+- Future installer wizard surfaces the choice with pros/cons.
 
 **RAM strategy (V1)**: load-once-keep-loaded. The model loads on the first
-embedding call (~5 s for bge-m3) and stays resident for the life of the
-process. **No idle eviction in Phase 2.** The decision to add eviction is
+embedding call (~1-2 s for e5-small, ~5 s for bge-m3) and stays resident
+for the life of the process. **No idle eviction in Phase 2.** The decision to add eviction is
 deferred to data — Phase 2.1 ships `memory.embedding.load` and
 `memory.embedding.embed` telemetry events with `duration_ms`. After
 observing real usage (frequency, idle gaps), revisit. Config knob

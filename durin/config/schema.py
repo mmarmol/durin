@@ -117,7 +117,7 @@ class MemoryEmbeddingConfig(Base):
     """
 
     provider: str = "fastembed"
-    model: str = "BAAI/bge-m3"
+    model: str = "intfloat/multilingual-e5-small"
     base_url: str | None = Field(
         default=None,
         validation_alias=AliasChoices("baseUrl", "base_url"),
