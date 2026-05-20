@@ -80,6 +80,34 @@ def _max_consecutive_idle_timeouts() -> int:
     return max(0, value)
 
 
+# Tier 2 B2 (OpenClaw-inspired): unknown-tool loop guard.
+#
+# 1A (hash-based loop detection) blocks repeats of the exact same
+# ``(tool_name, arguments)`` pair after a known failure. But a hallucinated
+# tool name (model invents ``search_web`` when the real tool is
+# ``web_search``) often comes with DIFFERENT args each iteration as the
+# model retries with variations, so 1A doesn't catch it. This counter
+# tracks calls to unknown names per-turn; after the threshold, the turn
+# terminates with a distinct stop_reason rather than burning more
+# iterations on a name that will never resolve.
+#
+# Default 2 → third consecutive call to the same unknown name trips.
+# Counter doesn't reset within a turn — if the model has tried this
+# name twice and it's wrong, the third try wastes tokens.
+_DEFAULT_MAX_UNKNOWN_TOOL_ATTEMPTS = 2
+
+
+def _max_unknown_tool_attempts() -> int:
+    raw = os.getenv("DURIN_MAX_UNKNOWN_TOOL_ATTEMPTS")
+    if raw is None:
+        return _DEFAULT_MAX_UNKNOWN_TOOL_ATTEMPTS
+    try:
+        value = int(raw)
+    except ValueError:
+        return _DEFAULT_MAX_UNKNOWN_TOOL_ATTEMPTS
+    return max(0, value)
+
+
 # Tier 1 (OpenClaw-inspired): compaction grace window.
 #
 # When the outer LLM wall-clock timeout fires while consolidation is in
@@ -409,6 +437,12 @@ class AgentRunner:
         # turn starts fresh because environment state may have changed.
         seen_failed_calls: set[str] = set()
 
+        # Tier 2 B2: unknown-tool loop guard. Counter per hallucinated tool
+        # name across this turn. Trips when any name's count exceeds
+        # ``max_unknown_tool_attempts``.
+        unknown_tool_attempts: dict[str, int] = {}
+        max_unknown_tool_attempts = _max_unknown_tool_attempts()
+
         # Sprint B / L3 — record the mode active at the start of this turn so
         # we can correlate behavior + outcomes with mode. Mid-run switches are
         # captured separately via `agent_mode.switch` telemetry from tools/CLI.
@@ -567,6 +601,64 @@ class AgentRunner:
 
             if response.should_execute_tools:
                 context.tool_calls = list(response.tool_calls)
+
+                # B2 — Unknown-tool loop guard. Count calls to hallucinated
+                # tool names across the turn; trip when one name has been
+                # tried > threshold times. The registry would return a
+                # "Tool 'X' not found" error every time anyway — we just
+                # surface it as a distinct stop_reason instead of letting
+                # the model burn more iterations on a doomed name.
+                # Only runs against registries that expose a real
+                # ``tool_names`` list/tuple/set — tests that mock the
+                # registry without populating this naturally skip the check.
+                known_names = getattr(spec.tools, "tool_names", None)
+                unknown_offender: str | None = None
+                if isinstance(known_names, (list, tuple, set, frozenset)):
+                    for tc in response.tool_calls:
+                        if tc.name not in known_names:
+                            count = unknown_tool_attempts.get(tc.name, 0) + 1
+                            unknown_tool_attempts[tc.name] = count
+                            if count > max_unknown_tool_attempts:
+                                unknown_offender = tc.name
+                                break
+                if unknown_offender is not None:
+                    available = ", ".join(known_names) if known_names else ""
+                    final_content = (
+                        f"Error: model called unknown tool '{unknown_offender}' "
+                        f"{unknown_tool_attempts[unknown_offender]} times this turn "
+                        f"(threshold {max_unknown_tool_attempts}). "
+                        f"Available tools: {available}"
+                    )
+                    stop_reason = "unknown_tool_loop_guard"
+                    error = final_content
+                    self._append_model_error_placeholder(messages)
+                    context.final_content = final_content
+                    context.error = error
+                    context.stop_reason = stop_reason
+                    _ut_logger = current_telemetry()
+                    if _ut_logger is not None:
+                        with suppress(Exception):
+                            _ut_logger.log("unknown_tool.loop_guard", {
+                                "tool_name": unknown_offender,
+                                "attempts": unknown_tool_attempts[unknown_offender],
+                                "threshold": max_unknown_tool_attempts,
+                                "iteration": iteration,
+                                "session_key": spec.session_key,
+                            })
+                    logger.warning(
+                        "Unknown-tool loop guard tripped on turn {} for {}: "
+                        "tool='{}', attempts={}, threshold={}",
+                        iteration,
+                        spec.session_key or "default",
+                        unknown_offender,
+                        unknown_tool_attempts[unknown_offender],
+                        max_unknown_tool_attempts,
+                    )
+                    if hook.wants_streaming():
+                        await hook.on_stream_end(context, resuming=False)
+                    await hook.after_iteration(context)
+                    break
+
                 if hook.wants_streaming():
                     await hook.on_stream_end(context, resuming=True)
 
