@@ -22,8 +22,8 @@ def test_app_constructs_without_agent_loop() -> None:
 async def test_app_runs_and_quits_on_ctrl_q() -> None:
     app = DurinApp(agent_loop=None)
     async with app.run_test() as pilot:
-        # The banner mounts somewhere in the tree.
-        assert app.query_one("#banner")
+        # The main layout container mounts.
+        assert app.query_one("#main-layout")
         await pilot.press("ctrl+q")
     # If we get here the app exited cleanly under the Ctrl+Q binding.
 
