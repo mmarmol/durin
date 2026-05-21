@@ -1,0 +1,389 @@
+"""Tests for the task-oriented onboarding wizard.
+
+Drives ``run_wizard`` with a mock that mimics ``questionary``'s API:
+each call (``select``, ``text``, ``password``, ``confirm``) returns an
+object with an ``.ask()`` method that yields the next pre-scripted
+answer.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+
+from durin.cli.onboard_wizard import (
+    PROVIDER_CHOICES,
+    WizardResult,
+    run_wizard,
+)
+from durin.config.schema import Config
+
+
+class _ScriptedQuestionary:
+    """A ``questionary`` lookalike that returns scripted answers.
+
+    Each prompt-builder method (``select``, ``text``, etc.) records the
+    fact that it was called and returns a stub whose ``.ask()`` pops
+    the next scripted answer off the queue.
+    """
+
+    def __init__(self, answers: list[Any]) -> None:
+        self._answers = list(answers)
+        self.calls: list[tuple[str, tuple[Any, ...], dict[str, Any]]] = []
+
+    def _next_answer(self) -> Any:
+        if not self._answers:
+            raise AssertionError(
+                "questionary mock ran out of scripted answers — "
+                "add more or trim the wizard flow"
+            )
+        return self._answers.pop(0)
+
+    def _stub(self, kind: str, args: tuple[Any, ...], kwargs: dict[str, Any]):
+        self.calls.append((kind, args, kwargs))
+        nxt = self._next_answer()
+
+        class _Stub:
+            def ask(_self):  # noqa: ANN001
+                return nxt
+
+        return _Stub()
+
+    # Mimic questionary's public surface.
+    def select(self, *args, **kwargs):
+        return self._stub("select", args, kwargs)
+
+    def text(self, *args, **kwargs):
+        return self._stub("text", args, kwargs)
+
+    def password(self, *args, **kwargs):
+        return self._stub("password", args, kwargs)
+
+    def confirm(self, *args, **kwargs):
+        return self._stub("confirm", args, kwargs)
+
+
+def test_provider_choices_have_recommended_first() -> None:
+    """The first option should be the durin-recommended provider so
+    a user pressing Enter without thinking lands on something sane."""
+    label, name, model = PROVIDER_CHOICES[0]
+    assert "recommended" in label.lower()
+    assert name and model
+
+
+def test_wizard_returns_cancelled_when_provider_selection_is_aborted() -> None:
+    q = _ScriptedQuestionary([None])  # user pressed Ctrl+C on provider pick
+    result = run_wizard(Config(), q=q)
+    assert isinstance(result, WizardResult)
+    assert result.cancelled is True
+
+
+def test_wizard_minimal_happy_path_sets_provider_and_model() -> None:
+    """User picks Z.AI, types a key, accepts the suggested model, skips
+    everything else, and the resulting Config carries the right fields."""
+    answers = [
+        # Stage 1: required.
+        "Z.AI Coding Plan (recommended)",   # select provider
+        "sk-zhipu-test",                     # password api_key
+        "glm-5.1",                           # select default model
+        # Stage 2: skip everything.
+        "→ Continue (finish onboarding)",
+        # Stage 3: workspace — accept the default.
+        "",
+    ]
+    q = _ScriptedQuestionary(answers)
+    result = run_wizard(Config(), q=q)
+    assert result.cancelled is False
+    cfg = result.config
+    assert cfg.agents.defaults.provider == "zhipu"
+    assert cfg.agents.defaults.model == "glm-5.1"
+    assert cfg.providers.zhipu.api_key == "sk-zhipu-test"
+    assert result.extras_to_install == []
+    # Summary should mention the provider line at least.
+    assert any("zhipu" in line.lower() for line in result.summary_lines)
+
+
+def test_wizard_memory_feature_records_extra_and_writes_embedding() -> None:
+    """Configuring memory toggles the [memory] extra and sets the model."""
+    answers = [
+        # Stage 1.
+        "Z.AI Coding Plan (recommended)", "sk-x", "glm-5.1",
+        # Stage 2: enter memory submenu.
+        "[ ] 📁 Vector memory",
+        True,                                # confirm enable
+        "multilingual-e5-small (default, 130MB, 100+ languages)",
+        # Back at menu: continue.
+        "→ Continue (finish onboarding)",
+        # Stage 3.
+        "",
+    ]
+    q = _ScriptedQuestionary(answers)
+    result = run_wizard(Config(), q=q)
+    assert result.cancelled is False
+    assert "memory" in result.extras_to_install
+    assert result.config.memory.embedding.model == "intfloat/multilingual-e5-small"
+    assert any("memory" in s.lower() for s in result.summary_lines)
+
+
+def test_wizard_web_feature_records_extra() -> None:
+    answers = [
+        "Z.AI Coding Plan (recommended)", "sk-x", "glm-5.1",
+        "[ ] 🔍 Web search + fetch", True,
+        "→ Continue (finish onboarding)",
+        "",
+    ]
+    q = _ScriptedQuestionary(answers)
+    result = run_wizard(Config(), q=q)
+    assert "web" in result.extras_to_install
+
+
+def test_wizard_vision_feature_sets_aux_model() -> None:
+    answers = [
+        "Z.AI Coding Plan (recommended)", "sk-x", "glm-5.1",
+        "[ ] 👁️  Vision (interpret_image)", True,
+        "glm-5v-turbo",                     # vision model id
+        "zhipu",                             # provider
+        "→ Continue (finish onboarding)",
+        "",
+    ]
+    q = _ScriptedQuestionary(answers)
+    result = run_wizard(Config(), q=q)
+    aux = result.config.agents.aux_models
+    assert aux is not None and aux.vision is not None
+    assert aux.vision.model == "glm-5v-turbo"
+    assert aux.vision.provider == "zhipu"
+
+
+def test_wizard_skip_everything_path() -> None:
+    """`× Skip everything` exits stage 2 immediately with nothing extra."""
+    answers = [
+        "Z.AI Coding Plan (recommended)", "sk-x", "glm-5.1",
+        "× Skip everything (use defaults)",
+        "",
+    ]
+    q = _ScriptedQuestionary(answers)
+    result = run_wizard(Config(), q=q)
+    assert not result.cancelled
+    assert result.extras_to_install == []
+
+
+def test_wizard_custom_provider_path_with_typed_model() -> None:
+    """Custom OpenAI-compat provider has no model suggestions — user types one."""
+    answers = [
+        "Custom OpenAI-compatible endpoint",
+        "sk-custom",
+        "my-local-model",                    # typed model name
+        "→ Continue (finish onboarding)",
+        "",
+    ]
+    q = _ScriptedQuestionary(answers)
+    result = run_wizard(Config(), q=q)
+    assert result.config.agents.defaults.provider == "custom"
+    assert result.config.agents.defaults.model == "my-local-model"
+    assert result.config.providers.custom.api_key == "sk-custom"
+
+
+def test_wizard_empty_api_key_is_accepted_for_local_providers() -> None:
+    """A blank key shouldn't crash — useful for local OpenAI-compat endpoints."""
+    answers = [
+        "Custom OpenAI-compatible endpoint",
+        "",                                  # no key
+        "ollama-llama3",
+        "→ Continue (finish onboarding)",
+        "",
+    ]
+    q = _ScriptedQuestionary(answers)
+    result = run_wizard(Config(), q=q)
+    assert result.cancelled is False
+    # api_key stays None (left unset).
+    assert result.config.providers.custom.api_key is None
+
+
+def test_wizard_workspace_override_is_persisted() -> None:
+    answers = [
+        "Z.AI Coding Plan (recommended)", "sk-x", "glm-5.1",
+        "→ Continue (finish onboarding)",
+        "/tmp/my-custom-workspace",
+    ]
+    q = _ScriptedQuestionary(answers)
+    result = run_wizard(Config(), q=q)
+    assert result.config.agents.defaults.workspace == "/tmp/my-custom-workspace"
+
+
+def _configured_config() -> Config:
+    """A Config that already has a working provider + model set up."""
+    c = Config()
+    c.agents.defaults.provider = "zhipu"
+    c.agents.defaults.model = "glm-5.1"
+    c.providers.zhipu.api_key = "sk-existing"
+    return c
+
+
+def test_wizard_keeps_existing_provider_without_reconfiguring() -> None:
+    """Re-running onboard on a configured setup → 'Keep it and continue'
+    must NOT force the provider/key/model questions again."""
+    answers = [
+        "Keep it and continue",            # stage 1: keep existing
+        "→ Continue (finish onboarding)",  # stage 2: skip optionals
+        "",                                 # stage 3: workspace default
+    ]
+    q = _ScriptedQuestionary(answers)
+    result = run_wizard(_configured_config(), q=q)
+    assert result.cancelled is False
+    # Untouched.
+    assert result.config.agents.defaults.model == "glm-5.1"
+    assert result.config.providers.zhipu.api_key == "sk-existing"
+    # No password / provider-select prompt was issued.
+    kinds = [k for k, _a, _kw in q.calls]
+    assert "password" not in kinds
+
+
+def test_wizard_test_model_then_continue() -> None:
+    """'Test the model first' runs check_model_ping, then loops back to the
+    keep/test/change menu; the user can then keep & continue."""
+    from unittest.mock import patch
+
+    from durin.cli.doctor import CheckResult
+
+    answers = [
+        "Test the model first",            # stage 1: test
+        "Keep it and continue",            # stage 1: then keep
+        "→ Continue (finish onboarding)",
+        "",
+    ]
+    q = _ScriptedQuestionary(answers)
+    fake = CheckResult("model ping", "ok", "glm-5.1 responded.", category="providers")
+    with patch("durin.cli.doctor.check_model_ping", return_value=fake) as mock_ping:
+        result = run_wizard(_configured_config(), q=q)
+    assert result.cancelled is False
+    mock_ping.assert_called_once()
+    assert result.config.agents.defaults.model == "glm-5.1"
+
+
+def test_wizard_change_provider_falls_through_to_pick_flow() -> None:
+    """'Change provider / model' drops into the full pick flow."""
+    answers = [
+        "Change provider / model",
+        "OpenAI (GPT)", "sk-new", "gpt-5",
+        "→ Continue (finish onboarding)",
+        "",
+    ]
+    q = _ScriptedQuestionary(answers)
+    result = run_wizard(_configured_config(), q=q)
+    assert result.config.agents.defaults.provider == "openai"
+    assert result.config.agents.defaults.model == "gpt-5"
+    assert result.config.providers.openai.api_key == "sk-new"
+
+
+def test_detect_configured_features_marks_existing_setup() -> None:
+    from durin.cli.onboard_wizard import _detect_configured_features
+    from durin.config.schema import AuxModelConfig, AuxModelsConfig
+
+    c = Config()
+    c.agents.aux_models = AuxModelsConfig(
+        vision=AuxModelConfig(model="glm-5v-turbo", provider="zhipu"),
+    )
+    c.tools.web.enable = True
+    found = _detect_configured_features(c)
+    assert "vision" in found
+    assert "web" in found
+    assert "audio" not in found
+
+
+def test_wizard_summary_is_human_readable() -> None:
+    """Summary should mention provider + model in plain language."""
+    answers = [
+        "Z.AI Coding Plan (recommended)", "sk-x", "glm-5.1",
+        "→ Continue (finish onboarding)",
+        "",
+    ]
+    q = _ScriptedQuestionary(answers)
+    result = run_wizard(Config(), q=q)
+    summary = "\n".join(result.summary_lines).lower()
+    assert "zhipu" in summary or "z.ai" in summary
+    assert "glm-5.1" in summary
+
+
+def test_wizard_channels_feature_enables_daemon_and_webui() -> None:
+    """Picking the Channels feature and saying yes to daemon + webui
+    must flip both gateway.* fields on."""
+    answers = [
+        # Stage 1.
+        "Z.AI Coding Plan (recommended)", "sk-x", "glm-5.1",
+        # Stage 2: enter channels.
+        "[ ] 💬 Channels (Telegram / Slack / WhatsApp / …)",
+        True,    # daemon mode? yes
+        True,    # webui? yes
+        False,   # connect chat platforms later? no
+        # Back at menu.
+        "→ Continue (finish onboarding)",
+        # Stage 3.
+        "",
+    ]
+    q = _ScriptedQuestionary(answers)
+    result = run_wizard(Config(), q=q)
+    assert result.cancelled is False
+    assert result.config.gateway.daemon is True
+    assert result.config.gateway.webui_enabled is True
+    summary = "\n".join(result.summary_lines).lower()
+    assert "daemon" in summary
+    assert "webui" in summary
+
+
+def test_apply_model_capabilities_sets_context_window() -> None:
+    """Picking glm-5.1 should pull its real ~203K context window from the
+    capability snapshot, replacing the wrong 65536 schema default."""
+    from durin.cli.onboard_wizard import apply_model_capabilities
+
+    config = Config()
+    assert config.agents.defaults.context_window_tokens == 65_536  # schema default
+    changed = apply_model_capabilities(config, "glm-5.1", "zhipu")
+    # glm-5.1's snapshot window is far larger than 65536.
+    assert config.agents.defaults.context_window_tokens > 65_536
+    assert any("context window" in line for line in changed)
+
+
+def test_apply_model_capabilities_noop_for_unknown_model() -> None:
+    """An unknown model has no snapshot window → nothing changes."""
+    from durin.cli.onboard_wizard import apply_model_capabilities
+
+    config = Config()
+    before = config.agents.defaults.context_window_tokens
+    changed = apply_model_capabilities(config, "totally-made-up-model-zzz", "custom")
+    # Heuristic fallback may or may not produce a window; if it doesn't,
+    # the value is unchanged and `changed` is empty. Either way it
+    # must not crash and must not set a nonsense value.
+    assert isinstance(changed, list)
+    assert config.agents.defaults.context_window_tokens > 0
+    if not changed:
+        assert config.agents.defaults.context_window_tokens == before
+
+
+def test_wizard_applies_capabilities_on_model_pick() -> None:
+    """The full wizard flow should sync the context window automatically."""
+    answers = [
+        "Z.AI Coding Plan (recommended)", "sk-x", "glm-5.1",
+        "→ Continue (finish onboarding)",
+        "",
+    ]
+    q = _ScriptedQuestionary(answers)
+    result = run_wizard(Config(), q=q)
+    assert result.config.agents.defaults.context_window_tokens > 65_536
+
+
+def test_wizard_channels_feature_can_disable_webui() -> None:
+    """If the user says NO to webui, the field flips to False."""
+    answers = [
+        "Z.AI Coding Plan (recommended)", "sk-x", "glm-5.1",
+        "[ ] 💬 Channels (Telegram / Slack / WhatsApp / …)",
+        False,   # daemon? no
+        False,   # webui? no
+        False,   # chat platforms later? no
+        "→ Continue (finish onboarding)",
+        "",
+    ]
+    q = _ScriptedQuestionary(answers)
+    result = run_wizard(Config(), q=q)
+    assert result.config.gateway.daemon is False
+    assert result.config.gateway.webui_enabled is False

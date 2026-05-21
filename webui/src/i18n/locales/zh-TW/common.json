@@ -86,7 +86,7 @@
       "cancel": "取消"
     },
     "byok": {
-      "description": "自帶 provider key。Nanobot 會從目前 config 讀取這些值，只有已設定的 provider 才能在一般設定中選擇。",
+      "description": "自帶 provider key。durin 會從目前 config 讀取這些值，只有已設定的 provider 才能在一般設定中選擇。",
       "configured": "已設定",
       "notConfigured": "未設定",
       "configuredSection": "已設定",

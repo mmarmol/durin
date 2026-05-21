@@ -1,9 +1,27 @@
-"""ChatView — scrollable history of message bubbles."""
+"""ChatView — scrollable history of message bubbles.
+
+Visual style modelled on [pi-agent](https://github.com/earendil-works/pi):
+
+- User messages render inside a darker-bg box (`pi`'s ``userMsgBg``) with
+  no role prefix — the box itself differentiates user from assistant.
+- Assistant messages render as plain Markdown (code blocks, links,
+  headings, lists) with no box and no prefix.
+- System / tool / reasoning bubbles keep a small dim prefix so they're
+  recognisable; they're rare and visual clutter on them is fine.
+
+Streaming deltas flow through `MessageBubble.append()` which mutates the
+reactive `body`. The watcher then calls `Static.update()` (the canonical
+Textual pattern) with the right renderable for the role — `Markdown`
+for assistant, plain `Text` for everyone else. This is the path that
+exercises Rich's full pipeline and matches what a live terminal sees.
+"""
 
 from __future__ import annotations
 
 from typing import Literal
 
+from rich.markdown import Markdown
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.reactive import reactive
@@ -12,88 +30,104 @@ from textual.widgets import Static
 __all__ = ["ChatView", "MessageBubble"]
 
 
-Role = Literal["user", "assistant", "tool", "system", "reasoning"]
+Role = Literal["user", "assistant", "tool", "system", "reasoning", "banner"]
 
 
 class MessageBubble(Static):
     """One message in the chat history.
 
-    Role drives both the prefix label and the CSS class for styling.
-    Text is reactive so a bubble can grow as streaming deltas arrive
-    (D5.3 will exercise that path).
+    ``body`` is reactive: streaming deltas accumulate into it and the
+    watcher pushes the updated renderable through ``Static.update()``.
     """
 
     DEFAULT_CSS = """
     MessageBubble {
         width: 100%;
-        margin: 1 0 0 0;
-        padding: 0 1;
+        padding: 0;
     }
     MessageBubble.user {
-        color: $primary;
-    }
-    MessageBubble.user .role {
-        text-style: bold;
-        color: $primary;
+        background: rgb(52, 53, 65);
+        color: #d4d4d4;
+        padding: 1 2;
+        margin: 1 2 0 2;
     }
     MessageBubble.assistant {
-        color: $text;
-    }
-    MessageBubble.assistant .role {
-        text-style: bold;
-        color: $accent;
-    }
-    MessageBubble.tool {
-        color: $text-muted;
-    }
-    MessageBubble.tool .role {
-        text-style: italic;
-        color: $warning;
+        background: transparent;
+        padding: 0 2;
+        margin: 0 2 1 2;
     }
     MessageBubble.system {
         color: $text-muted;
-    }
-    MessageBubble.system .role {
         text-style: italic;
+        padding: 0 2;
+        margin: 1 2;
+    }
+    MessageBubble.tool {
+        color: $text-muted;
+        padding: 0 2;
+        margin: 1 2;
     }
     MessageBubble.reasoning {
         color: $text-muted;
         text-style: italic;
+        padding: 0 2;
+        margin: 1 2;
+    }
+    MessageBubble.banner {
+        color: $text-muted;
+        padding: 1 2;
+        margin: 0 2 1 2;
     }
     """
 
     body: reactive[str] = reactive("", init=False)
 
-    _ROLE_LABEL: dict[Role, str] = {
-        "user": "you",
-        "assistant": "durin",
-        "tool": "tool",
+    # Roles that keep a tiny prefix to stay recognisable. user + assistant
+    # are intentionally bare — the box / no-box differentiates them.
+    _PREFIXED_ROLES: dict[Role, str] = {
         "system": "system",
+        "tool": "tool",
         "reasoning": "thinking",
     }
 
     def __init__(self, role: Role, body: str = "") -> None:
-        super().__init__(classes=role)
+        super().__init__("", classes=role)
         self._role: Role = role
         self.body = body
-
-    def render(self):  # type: ignore[override]
-        # Escape any `[...]` literals in the body so Rich doesn't try to
-        # interpret them as markup tags and silently fail to render.
-        # Model output regularly contains brackets (code blocks, lists,
-        # `[x]` checkboxes, urls with `[...]`) and an unclosed tag in a
-        # streaming delta would leave the bubble blank.
-        from rich.markup import escape
-
-        label = self._ROLE_LABEL.get(self._role, self._role)
-        body = self.body or ""
-        prefix = f"[bold]{label}[/bold]"
-        if body:
-            return f"{prefix}\n{escape(body)}"
-        return prefix
+        # `init=False` on the reactive means the line above didn't fire
+        # `watch_body`. Push the initial body through the renderer so the
+        # widget is consistent before mount.
+        self._render_body()
 
     def watch_body(self, _old: str, _new: str) -> None:
-        self.refresh()
+        self._render_body()
+
+    def _render_body(self) -> None:
+        body = self.body or ""
+        if not body:
+            self.update("")
+            return
+        prefix = self._PREFIXED_ROLES.get(self._role)
+        if self._role == "assistant":
+            # Markdown handles code blocks, lists, links — and crucially
+            # treats `[...]` patterns as literals (not Rich markup tags),
+            # so streaming deltas can't accidentally truncate the body.
+            #
+            # Pre-pass: convert bare URLs / abs paths to explicit
+            # `[url](url)` markdown links so the rendered output is
+            # Cmd+click-able via OSC 8. Skips already-linked text and
+            # the inside of fenced / inline code blocks.
+            from durin.cli.tui.linkify import autolinkify_markdown
+
+            self.update(Markdown(autolinkify_markdown(body)))
+        elif prefix:
+            text = Text(f"{prefix}: ", style="dim")
+            text.append(body)
+            self.update(text)
+        else:
+            # user (or any role without a prefix): plain text, no markup
+            # interpretation.
+            self.update(Text(body))
 
     def append(self, delta: str) -> None:
         """Streaming helper — append a delta to the body."""
@@ -108,7 +142,6 @@ class ChatView(VerticalScroll):
     DEFAULT_CSS = """
     ChatView {
         height: 1fr;
-        padding: 0 1;
         scrollbar-gutter: stable;
     }
     """
@@ -130,7 +163,9 @@ class ChatView(VerticalScroll):
             self.add_message(role, body)
             return
         last = bubbles[-1]
-        last.remove_class(*MessageBubble._ROLE_LABEL.keys())
+        # Swap classes so the styling matches the new role.
+        for known in ("user", "assistant", "tool", "system", "reasoning"):
+            last.remove_class(known)
         last.add_class(role)
         last._role = role
         last.body = body

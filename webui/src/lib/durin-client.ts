@@ -78,7 +78,7 @@ interface PendingNewChat {
   timer: ReturnType<typeof setTimeout>;
 }
 
-export interface NanobotClientOptions {
+export interface DurinClientOptions {
   url: string;
   reconnect?: boolean;
   /** Called when a connection drops so the app can refresh its token. */
@@ -96,7 +96,7 @@ export interface NanobotClientOptions {
  * ``chat_id``, and this class fans those events out to handlers registered
  * per chat. Reconnects are transparent and re-attach every known chat_id.
  */
-export class NanobotClient {
+export class DurinClient {
   private socket: WebSocket | null = null;
   private statusHandlers = new Set<StatusHandler>();
   private runtimeModelHandlers = new Set<RuntimeModelHandler>();
@@ -128,7 +128,7 @@ export class NanobotClient {
   // and must not schedule a reconnect or flip status back to "reconnecting".
   private intentionallyClosed = false;
 
-  constructor(private options: NanobotClientOptions) {
+  constructor(private options: DurinClientOptions) {
     this.shouldReconnect = options.reconnect ?? true;
     this.maxBackoffMs = options.maxBackoffMs ?? 15_000;
     this.socketFactory =
@@ -402,7 +402,7 @@ export class NanobotClient {
       this.pendingInboundByChat.set(chatId, q);
     }
     q.push(ev);
-    const over = q.length - NanobotClient.PENDING_INBOUND_MAX;
+    const over = q.length - DurinClient.PENDING_INBOUND_MAX;
     if (over > 0) {
       q.splice(0, over);
     }

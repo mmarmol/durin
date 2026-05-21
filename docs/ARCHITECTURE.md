@@ -760,7 +760,7 @@ tests/
 └── telemetry/      # Generic logger + cache.usage event
 ```
 
-Total: **3,853 tests passing, 15 skipped**.
+Total: **~4,050 tests passing, 15 skipped** (Python) + **~134** (webui).
 
 ---
 
@@ -894,12 +894,60 @@ Maintainer instructions live in [docs/RELEASING.md](RELEASING.md).
 ### CI pipeline
 
 [.github/workflows/ci.yml](../.github/workflows/ci.yml) runs on every PR
-and every push to `main`. It installs durin with `[dev]` extras (skipping
-the webui bundle via `DURIN_SKIP_WEBUI_BUILD=1`) and runs the full
-`pytest` suite with `--maxfail=5`.
+and every push to `main`. It installs durin with `[dev]` + lightweight
+extras and runs the full `pytest` suite with `--maxfail=5`.
 
 ---
 
-## Last updated: 2026-05-20 (D8 distributable)
+## 16. Config layout — split files (D-config)
+
+The config lives as **per-topic files** under `~/.durin/config.json.d/`
+rather than one monolithic `config.json`:
+
+```
+~/.durin/
+    config.json          # 1-line marker: {"_layout": "split"}
+    config.json.d/       # per-topic files
+        agents.json  providers.json  channels.json  memory.json
+        gateway.json tools.json      api.json        install.json
+    config.json.legacy   # backup of the pre-split monolith
+```
+
+- **Migration is automatic**: the first `load_config` on a legacy
+  monolith splits it, backs the original up as `config.json.legacy`,
+  and rewrites `config.json` as a marker. See
+  [durin/config/loader.py](../durin/config/loader.py).
+- **`save_config` writes only non-defaults** (`exclude_defaults=True`)
+  then prunes noise: empty provider sections and disabled channels that
+  match their shipped default are dropped. *Enabled* channels keep their
+  full attribute set so every editable field stays discoverable.
+- `read_persisted_config()` is the layout-agnostic reader used by
+  tooling + tests.
+
+## 17. Status vs Doctor
+
+Two distinct surfaces, deliberately non-overlapping:
+
+- **`durin status`** — a factual snapshot. Sectioned (Model / Providers
+  / Channels / Gateway / Memory / Config), shows only what's configured
+  (no dump of all 25 registry providers), passes no judgement. The
+  `git status` of durin.
+- **`durin doctor`** — health diagnostics. Every check is ok/warn/fail
+  with an actionable fix; exit code flips on `fail`. The `flutter
+  doctor` of durin.
+
+## 18. Gateway daemon mode
+
+`durin gateway` is a Typer sub-group. With no subcommand it honours
+`config.gateway.daemon`: `false` → foreground, `true` → detach. Explicit
+lifecycle: `gateway start | stop | restart | status | logs`. PID file at
+`~/.durin/gateway.pid`, logs at `~/.durin/logs/gateway.log`. The webui
+dashboard is auto-served when `config.gateway.webui_enabled` is true
+(the websocket channel is enabled at runtime). `durin doctor` verifies
+both the daemon and webui when config requests them.
+
+---
+
+## Last updated: 2026-05-22 (v0.1.0a7 — first consistent release)
 
 > For the history of why each subsystem was added, what was replaced, and what was discarded along the way, see `docs/02_bitacora.md`. This document only describes the current state.

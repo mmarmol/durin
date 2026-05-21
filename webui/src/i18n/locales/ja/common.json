@@ -86,7 +86,7 @@
       "cancel": "キャンセル"
     },
     "byok": {
-      "description": "自分の provider キーを使います。Nanobot は現在の config から値を読み込み、設定済みの provider だけを一般設定で選択できます。",
+      "description": "自分の provider キーを使います。durin は現在の config から値を読み込み、設定済みの provider だけを一般設定で選択できます。",
       "configured": "設定済み",
       "notConfigured": "未設定",
       "configuredSection": "設定済み",

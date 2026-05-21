@@ -56,6 +56,13 @@ def valid_config(fake_home: Path) -> Path:
     # `Path.expanduser()` reads $HOME directly, ignoring our monkeypatch of
     # `Path.home()`. Force the workspace to an absolute path under fake_home.
     data["agents"]["defaults"]["workspace"] = str(fake_home / ".durin" / "workspace")
+    # The default config flips `gateway.webui_enabled=True` which makes
+    # doctor try to reach the dashboard. We're testing doctor itself
+    # here, not the gateway, so disable both service-level checks.
+    data.setdefault("gateway", {}).update({
+        "daemon": False,
+        "webuiEnabled": False,
+    })
     cfg.write_text(json.dumps(data, indent=2), encoding="utf-8")
     with patch("durin.cli.doctor.get_config_path", return_value=cfg), \
          patch("durin.config.loader.get_config_path", return_value=cfg):

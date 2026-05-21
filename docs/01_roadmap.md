@@ -209,8 +209,10 @@ Once Phase 2 has retrieval, Phase 1b reduces to "use the memory retriever to fet
 
 ---
 
-## Last updated: 2026-05-20
+## Last updated: 2026-05-22 (v0.1.0a7)
 
 > Latest pass: items #1–9 of the original 12-list shipped (incl. capability bridges for vision + audio), item #12 mostly closed by today's `disable_model_invocation` flag. Capability metadata pipeline (3-source consensus snapshot) shipped as a foundation. Pi coding agent reviewed and four refinements adopted: `context_transform` hook, skill disable flag, head/tail truncation per tool, anchored token accounting, cache visibility. Stale planning docs (`04_agent_strategies_catalog`, `05_log_swebench`, `06_log_experiments`) moved to `docs/archive/`. Memory (Phase 2) is now unblocked.
 
 > Daily driver lifecycle (D6 + D7 + D8 in `09_daily_driver_plan.md`): `durin config`, `durin upgrade`, `durin uninstall`, `durin doctor`, plus README + INSTALL.md shipped. Distribution renamed to `durin-agent` on PyPI; tag-triggered workflow builds + publishes wheel/sdist to GitHub Releases + PyPI via OIDC trusted publishing. The install/configure/upgrade/diagnose/uninstall surfaces are now complete; the operator no longer needs to hand-edit JSON or guess where state lives, and can install via `pipx install --pre durin-agent` without a checkout.
+
+> **v0.1.0a7 — first consistent release (2026-05-22)**. Beyond D6-D8: split config layout (`~/.durin/config.json.d/` per-topic files with auto-migration + noise pruning), gateway daemon mode (`durin gateway start/stop/restart/status/logs`), webui structured tool-blocks (D9.1), `status`/`doctor` split into snapshot-vs-diagnostics, task-oriented `onboard` wizard that's re-runnable (keeps configured steps), model-capability auto-sync on default-model pick, and a full rebrand from the nanobot fork (⚒️ — durin is Tolkien's dwarf-king, not a cat). All prior `daily-driver-*` and `v0.1.0aN` tags were cleared; `v0.1.0a7` is the baseline.

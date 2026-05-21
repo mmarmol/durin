@@ -7,11 +7,15 @@ from durin.config.schema import AgentDefaults, Config
 
 
 def test_bot_name_and_icon_defaults_preserve_current_branding() -> None:
-    """Default values keep the existing 'durin' name and cat icon."""
+    """Default values keep the 'durin' name and the dwarven ⚒️ icon.
+
+    durin is Tolkien's dwarf-king (Khazad-dûm), not a cat — the old
+    🐈 default was inherited from the nanobot fork and was wrong.
+    """
     defaults = AgentDefaults()
 
     assert defaults.bot_name == "durin"
-    assert defaults.bot_icon == "🐈"
+    assert defaults.bot_icon == "⚒️"
 
 
 def test_bot_name_and_icon_can_be_overridden_via_config() -> None:

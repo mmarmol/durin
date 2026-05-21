@@ -69,24 +69,44 @@ def test_cli_upgrade_check_exits_zero(tmp_path: Path) -> None:
 
 
 def test_cli_upgrade_migrate_only_runs_migration(tmp_path: Path) -> None:
-    """`--migrate-only` should re-save the config without calling pip."""
+    """`--migrate-only` should re-save the config without calling pip.
+
+    With `exclude_defaults=True` + split layout, an empty input config
+    produces an empty on-disk representation (no fields to persist).
+    The real assertion is that load_config still returns a valid
+    Config object after the migration completes.
+    """
     cfg_path = tmp_path / "config.json"
-    cfg_path.write_text(json.dumps({}, indent=2), encoding="utf-8")
+    # Seed with a non-default field so we have something to verify
+    # survives the round-trip.
+    cfg_path.write_text(
+        json.dumps({"agents": {"defaults": {"model": "glm-5.1"}}}, indent=2),
+        encoding="utf-8",
+    )
 
     with patch("durin.cli.upgrade.get_config_path", return_value=cfg_path), \
          patch("durin.config.loader.get_config_path", return_value=cfg_path):
         result = runner.invoke(app, ["upgrade", "--migrate-only"])
     assert result.exit_code == 0, result.output
 
-    # The file should now contain a valid serialized Config (round-tripped).
-    after = json.loads(cfg_path.read_text())
-    assert "agents" in after  # default Config has this section
+    # The user-set field survived migration, regardless of layout.
+    from durin.config.loader import load_config
+
+    cfg = load_config(cfg_path)
+    assert cfg.agents.defaults.model == "glm-5.1"
 
 
 def test_migrate_config_file_noop_on_already_current(tmp_path: Path) -> None:
     cfg_path = tmp_path / "config.json"
+    # Seed with what save_config WOULD write (exclude_defaults), so a
+    # round-trip is a true no-op. Previously this test wrote a full dump
+    # of every default field; that always diffed against the slimmer
+    # canonical form once `save_config` adopted `exclude_defaults=True`.
     cfg_path.write_text(
-        json.dumps(Config().model_dump(mode="json", by_alias=True), indent=2, ensure_ascii=False),
+        json.dumps(
+            Config().model_dump(mode="json", by_alias=True, exclude_defaults=True),
+            indent=2, ensure_ascii=False,
+        ),
         encoding="utf-8",
     )
     with patch("durin.config.loader.get_config_path", return_value=cfg_path):
@@ -96,7 +116,14 @@ def test_migrate_config_file_noop_on_already_current(tmp_path: Path) -> None:
 
 def test_migrate_config_file_returns_true_when_defaults_get_added(tmp_path: Path) -> None:
     cfg_path = tmp_path / "config.json"
-    cfg_path.write_text("{}", encoding="utf-8")
+    # An empty {} on disk vs an empty {} from save_config(Config()) is
+    # still a no-op now (since exclude_defaults strips everything).
+    # Seed with something the migration WILL strip — a legacy key —
+    # and assert the file changed when re-saved without it.
+    cfg_path.write_text(
+        json.dumps({"tools": {"myEnabled": True, "mySet": True}}),
+        encoding="utf-8",
+    )
     with patch("durin.config.loader.get_config_path", return_value=cfg_path):
         changed = migrate_config_file(cfg_path)
     assert changed is True

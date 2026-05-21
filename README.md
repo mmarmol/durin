@@ -1,22 +1,23 @@
-# 🐈 durin
+# ⚒️ durin
 
-Personal AI assistant with persistent posture, graph-based memory, and a daily-driver CLI.
+Personal AI assistant with graph-based memory and a daily-driver CLI.
 
 durin runs locally, stores its state under `~/.durin/`, and talks to any LLM
 backend you wire up (Z.AI, Anthropic, OpenAI, Gemini, OpenRouter, local
 llama.cpp, …). The default surface is a Textual TUI; an OpenAI-compatible API
-gateway and channel plugins (Telegram, Slack, WhatsApp, Discord) ship in the
-same package.
+server and a browser dashboard (`durin gateway`) plus channel plugins
+(Telegram, Slack, WhatsApp, Discord) ship in the same package.
+
+> durin is named for Tolkien's dwarf-king of Khazad-dûm — the ⚒️ mark is
+> the dwarven hammer-and-pick, not a logo to be mistaken for anything else.
 
 ## Quick start
 
 ```bash
 # Install (no git checkout required)
 pipx install --pre durin-agent          # PyPI, recommended
-# or, from a GitHub release wheel:
-pipx install https://github.com/mmarmol/durin/releases/latest/download/durin_agent-0.1.0a1-py3-none-any.whl
 
-durin onboard --wizard                  # creates ~/.durin/config.json
+durin onboard                           # interactive setup wizard
 durin doctor                            # confirm setup is healthy
 durin agent --tui                       # launches the TUI
 ```
@@ -37,25 +38,31 @@ and platform notes. Maintainers cutting a release: [docs/RELEASING.md](docs/RELE
 
 | Need | Command |
 |---|---|
-| First-time setup | `durin onboard --wizard` |
-| Inspect state | `durin status` |
-| Diagnose what's wrong | `durin doctor` (add `--fix` for safe auto-fixes, `--ping` for network) |
+| First-time setup | `durin onboard` (re-runnable — keeps what's configured) |
+| Snapshot of what's configured | `durin status` |
+| Diagnose what's wrong | `durin doctor` (`--fix` safe auto-fixes, `--ping-model` real round-trip) |
 | Show config | `durin config show` |
-| Read one key | `durin config get agents.defaults.model` |
 | Change one key | `durin config set agents.defaults.model glm-5.1` |
 | Edit config in `$EDITOR` | `durin config edit` |
-| Where does state live? | `durin config path` |
 | Pull the latest build | `durin upgrade` |
 | Remove durin + data | `durin uninstall --purge` |
+
+`status` = a factual snapshot; `doctor` = health checks with fixes.
 
 ## Day-to-day
 
 ```bash
-durin agent --tui        # rich TUI (default)
+durin agent              # rich TUI (default)
 durin agent -m "hola"    # one-shot
-durin gateway            # bring up channels (Telegram, Slack, …)
+durin gateway start      # background daemon: webui dashboard + channels + cron
+durin gateway status     # is it running? where's the dashboard?
+durin gateway stop
 durin serve              # OpenAI-compatible API on :8000
 ```
+
+The browser dashboard is served by `durin gateway` when
+`config.gateway.webui_enabled` is true (default). `durin gateway status`
+prints the URL.
 
 Inside the TUI:
 

@@ -6,11 +6,10 @@ from durin.providers.openai_compat_provider import OpenAICompatProvider
 
 
 def test_openai_compat_disables_sdk_retries_by_default() -> None:
-    with patch("durin.providers.openai_compat_provider.AsyncOpenAI") as mock_client:
-        OpenAICompatProvider(api_key="sk-test", default_model="gpt-4o")
-
-    kwargs = mock_client.call_args.kwargs
-    assert kwargs["max_retries"] == 0
+    # AsyncOpenAI is built lazily — inspect the stashed kwargs that the
+    # `_client` property will pass at first use.
+    provider = OpenAICompatProvider(api_key="sk-test", default_model="gpt-4o")
+    assert provider._client_kwargs["max_retries"] == 0
 
 
 def test_anthropic_disables_sdk_retries_by_default() -> None:

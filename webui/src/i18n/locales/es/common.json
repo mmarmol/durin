@@ -86,7 +86,7 @@
       "cancel": "Cancelar"
     },
     "byok": {
-      "description": "Usa tus propias claves de proveedor. Nanobot lee estos valores desde la configuración actual, y solo los proveedores configurados se pueden elegir en General.",
+      "description": "Usa tus propias claves de proveedor. durin lee estos valores desde la configuración actual, y solo los proveedores configurados se pueden elegir en General.",
       "configured": "Configurado",
       "notConfigured": "Sin configurar",
       "configuredSection": "Configurados",

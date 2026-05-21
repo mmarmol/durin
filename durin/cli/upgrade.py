@@ -195,24 +195,25 @@ def _upgrade_pipx() -> int:
 def migrate_config_file(path: Path | None = None) -> bool:
     """Re-run schema migration on the existing config file.
 
-    Returns ``True`` when the file changed on disk, ``False`` otherwise.
-    Safe to call when no config exists yet — it then does nothing.
+    Returns ``True`` when the persisted content changed, ``False``
+    otherwise. Safe to call when no config exists yet — it then does
+    nothing. Comparison is layout-aware so the monolith→split
+    migration itself doesn't trigger a false-positive "changed".
     """
+    from durin.config.loader import read_persisted_config
+
     config_path = path or get_config_path()
     if not config_path.exists():
         return False
-    before = config_path.read_text(encoding="utf-8")
+    before = read_persisted_config(config_path)
     config = load_config(config_path)
     save_config(config, config_path)
-    after = config_path.read_text(encoding="utf-8")
-    return _normalize(before) != _normalize(after)
+    after = read_persisted_config(config_path)
+    return _normalize_dict(before) != _normalize_dict(after)
 
 
-def _normalize(text: str) -> str:
-    try:
-        return json.dumps(json.loads(text), sort_keys=True)
-    except json.JSONDecodeError:
-        return text
+def _normalize_dict(data: dict) -> str:
+    return json.dumps(data, sort_keys=True)
 
 
 def run_upgrade(

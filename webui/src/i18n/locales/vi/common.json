@@ -86,7 +86,7 @@
       "cancel": "Hủy"
     },
     "byok": {
-      "description": "Dùng key provider của riêng bạn. Nanobot đọc các giá trị này từ config hiện tại, và chỉ provider đã cấu hình mới có thể chọn trong Chung.",
+      "description": "Dùng key provider của riêng bạn. durin đọc các giá trị này từ config hiện tại, và chỉ provider đã cấu hình mới có thể chọn trong Chung.",
       "configured": "Đã cấu hình",
       "notConfigured": "Chưa cấu hình",
       "configuredSection": "Đã cấu hình",
