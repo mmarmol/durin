@@ -64,10 +64,12 @@ def mock_paths():
 
 
 def test_onboard_fresh_install(mock_paths):
-    """No existing config — should create from scratch."""
+    """No existing config — `--no-wizard` should create defaults from scratch."""
     config_file, workspace_dir, mock_ws = mock_paths
 
-    result = runner.invoke(app, ["onboard"])
+    # Use `--no-wizard` for a deterministic non-interactive path; the
+    # default flow is the wizard and would block waiting on questionary.
+    result = runner.invoke(app, ["onboard", "--no-wizard"])
 
     assert result.exit_code == 0
     assert "Created config" in result.stdout
@@ -80,45 +82,44 @@ def test_onboard_fresh_install(mock_paths):
     assert mock_ws.call_args.args == (expected_workspace,)
 
 
-def test_onboard_existing_config_refresh(mock_paths):
-    """Config exists, user declines overwrite — should refresh (load-merge-save)."""
+def test_onboard_no_wizard_with_existing_config_is_noop(mock_paths):
+    """`--no-wizard` against an existing config touches nothing."""
     config_file, workspace_dir, _ = mock_paths
     config_file.write_text('{"existing": true}')
 
-    result = runner.invoke(app, ["onboard"], input="n\n")
+    result = runner.invoke(app, ["onboard", "--no-wizard"])
 
     assert result.exit_code == 0
-    assert "Config already exists" in result.stdout
-    assert "existing values preserved" in result.stdout
+    assert "Config exists" in result.stdout
+    # File content unchanged.
+    assert config_file.read_text() == '{"existing": true}'
+
+
+def test_onboard_no_wizard_with_no_config_writes_defaults(mock_paths):
+    """`--no-wizard` on a clean install writes defaults silently."""
+    config_file, workspace_dir, _ = mock_paths
+
+    result = runner.invoke(app, ["onboard", "--no-wizard"])
+
+    assert result.exit_code == 0
+    assert "Created config" in result.stdout
+    assert config_file.exists()
     assert workspace_dir.exists()
     assert (workspace_dir / "AGENTS.md").exists()
 
 
-def test_onboard_existing_config_overwrite(mock_paths):
-    """Config exists, user confirms overwrite — should reset to defaults."""
-    config_file, workspace_dir, _ = mock_paths
-    config_file.write_text('{"existing": true}')
-
-    result = runner.invoke(app, ["onboard"], input="y\n")
-
-    assert result.exit_code == 0
-    assert "Config already exists" in result.stdout
-    assert "Config reset to defaults" in result.stdout
-    assert workspace_dir.exists()
-
-
-def test_onboard_existing_workspace_safe_create(mock_paths):
-    """Workspace exists — should not recreate, but still add missing templates."""
+def test_onboard_no_wizard_with_existing_workspace_keeps_it(mock_paths):
+    """Workspace dir survives a re-run of `--no-wizard`."""
     config_file, workspace_dir, _ = mock_paths
     workspace_dir.mkdir(parents=True)
     config_file.write_text("{}")
 
-    result = runner.invoke(app, ["onboard"], input="n\n")
+    result = runner.invoke(app, ["onboard", "--no-wizard"])
 
     assert result.exit_code == 0
-    assert "Created workspace" not in result.stdout
-    assert "Created AGENTS.md" in result.stdout
-    assert (workspace_dir / "AGENTS.md").exists()
+    # An existing config short-circuits before templates run.
+    assert "Config exists" in result.stdout
+    assert workspace_dir.exists()
 
 
 def _strip_ansi(text):
@@ -136,11 +137,14 @@ def test_onboard_help_shows_workspace_and_config_options():
     assert "-w" in stripped_output
     assert "--config" in stripped_output
     assert "-c" in stripped_output
-    assert "--wizard" in stripped_output
+    # New flags after the wizard-by-default refactor.
+    assert "--no-wizard" in stripped_output
+    assert "--advanced" in stripped_output
     assert "--dir" not in stripped_output
 
 
-def test_onboard_interactive_discard_does_not_save_or_create_workspace(mock_paths, monkeypatch):
+def test_onboard_advanced_discard_does_not_save_or_create_workspace(mock_paths, monkeypatch):
+    """`--advanced` (legacy walker) returning should_save=False leaves state untouched."""
     config_file, workspace_dir, _ = mock_paths
 
     from durin.cli.onboard import OnboardResult
@@ -150,7 +154,7 @@ def test_onboard_interactive_discard_does_not_save_or_create_workspace(mock_path
         lambda initial_config: OnboardResult(config=initial_config, should_save=False),
     )
 
-    result = runner.invoke(app, ["onboard", "--wizard"])
+    result = runner.invoke(app, ["onboard", "--advanced"])
 
     assert result.exit_code == 0
     assert "No changes were saved" in result.stdout
@@ -158,7 +162,7 @@ def test_onboard_interactive_discard_does_not_save_or_create_workspace(mock_path
     assert not workspace_dir.exists()
 
 
-def test_onboard_uses_explicit_config_and_workspace_paths(tmp_path, monkeypatch):
+def test_onboard_no_wizard_uses_explicit_config_and_workspace_paths(tmp_path, monkeypatch):
     config_path = tmp_path / "instance" / "config.json"
     workspace_path = tmp_path / "workspace"
 
@@ -166,7 +170,7 @@ def test_onboard_uses_explicit_config_and_workspace_paths(tmp_path, monkeypatch)
 
     result = runner.invoke(
         app,
-        ["onboard", "--config", str(config_path), "--workspace", str(workspace_path)],
+        ["onboard", "--no-wizard", "--config", str(config_path), "--workspace", str(workspace_path)],
     )
 
     assert result.exit_code == 0
@@ -180,7 +184,7 @@ def test_onboard_uses_explicit_config_and_workspace_paths(tmp_path, monkeypatch)
     assert f"--config {resolved_config}" in compact_output
 
 
-def test_onboard_wizard_preserves_explicit_config_in_next_steps(tmp_path, monkeypatch):
+def test_onboard_advanced_preserves_explicit_config_in_next_steps(tmp_path, monkeypatch):
     config_path = tmp_path / "instance" / "config.json"
     workspace_path = tmp_path / "workspace"
 
@@ -194,7 +198,7 @@ def test_onboard_wizard_preserves_explicit_config_in_next_steps(tmp_path, monkey
 
     result = runner.invoke(
         app,
-        ["onboard", "--wizard", "--config", str(config_path), "--workspace", str(workspace_path)],
+        ["onboard", "--advanced", "--config", str(config_path), "--workspace", str(workspace_path)],
     )
 
     assert result.exit_code == 0
@@ -237,7 +241,7 @@ def test_provider_logout_openai_codex_removes_local_oauth_files(tmp_path, monkey
     lock_path.write_text("", encoding="utf-8")
     monkeypatch.setenv("OAUTH_CLI_KIT_TOKEN_PATH", str(token_path))
 
-    result = runner.invoke(app, ["provider", "logout", "openai-codex"])
+    result = runner.invoke(app, ["oauth", "logout", "openai-codex"])
 
     assert result.exit_code == 0
     assert not token_path.exists()
@@ -250,7 +254,7 @@ def test_provider_logout_openai_codex_succeeds_when_no_local_oauth_file(monkeypa
     token_path = tmp_path / "auth" / "codex.json"
     monkeypatch.setenv("OAUTH_CLI_KIT_TOKEN_PATH", str(token_path))
 
-    result = runner.invoke(app, ["provider", "logout", "openai-codex"])
+    result = runner.invoke(app, ["oauth", "logout", "openai-codex"])
 
     assert result.exit_code == 0
     assert "No local OAuth credentials found for OpenAI Codex" in result.stdout
@@ -265,7 +269,7 @@ def test_provider_logout_github_copilot_removes_local_oauth_files(tmp_path, monk
     lock_path.write_text("", encoding="utf-8")
     monkeypatch.setenv("OAUTH_CLI_KIT_TOKEN_PATH", str(token_path))
 
-    result = runner.invoke(app, ["provider", "logout", "github-copilot"])
+    result = runner.invoke(app, ["oauth", "logout", "github-copilot"])
 
     assert result.exit_code == 0
     assert not token_path.exists()
@@ -278,14 +282,14 @@ def test_provider_logout_github_copilot_succeeds_when_no_local_oauth_file(monkey
     token_path = tmp_path / "auth" / "github-copilot.json"
     monkeypatch.setenv("OAUTH_CLI_KIT_TOKEN_PATH", str(token_path))
 
-    result = runner.invoke(app, ["provider", "logout", "github-copilot"])
+    result = runner.invoke(app, ["oauth", "logout", "github-copilot"])
 
     assert result.exit_code == 0
     assert "No local OAuth credentials found for GitHub Copilot" in result.stdout
 
 
 def test_provider_logout_rejects_unknown_provider():
-    result = runner.invoke(app, ["provider", "logout", "not-a-real-provider"])
+    result = runner.invoke(app, ["oauth", "logout", "not-a-real-provider"])
 
     assert result.exit_code == 1
     assert "Unknown OAuth provider" in result.stdout
@@ -310,7 +314,7 @@ def test_provider_logout_paths_resolve_to_expected_files():
 
 
 def test_provider_login_rejects_unknown_provider():
-    result = runner.invoke(app, ["provider", "login", "not-a-real-provider"])
+    result = runner.invoke(app, ["oauth", "login", "not-a-real-provider"])
 
     assert result.exit_code == 1
     assert "Unknown OAuth provider" in result.stdout
@@ -575,22 +579,23 @@ async def test_github_copilot_provider_refreshes_client_api_key_before_chat():
         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
     })
 
+    # AsyncOpenAI is built lazily; keep the patch active across the chat
+    # call so the property returns the mocked client when first accessed.
     with patch("durin.providers.openai_compat_provider.AsyncOpenAI", return_value=mock_client):
         provider = GitHubCopilotProvider(default_model="github-copilot/gpt-4")
+        provider._get_copilot_access_token = AsyncMock(return_value="copilot-access-token")
 
-    provider._get_copilot_access_token = AsyncMock(return_value="copilot-access-token")
+        response = await provider.chat(
+            messages=[{"role": "user", "content": "hi"}],
+            model="github-copilot/gpt-4",
+            max_tokens=16,
+            temperature=0.1,
+        )
 
-    response = await provider.chat(
-        messages=[{"role": "user", "content": "hi"}],
-        model="github-copilot/gpt-4",
-        max_tokens=16,
-        temperature=0.1,
-    )
-
-    assert response.content == "ok"
-    assert provider._client.api_key == "copilot-access-token"
-    provider._get_copilot_access_token.assert_awaited_once()
-    mock_client.chat.completions.create.assert_awaited_once()
+        assert response.content == "ok"
+        assert provider._client.api_key == "copilot-access-token"
+        provider._get_copilot_access_token.assert_awaited_once()
+        mock_client.chat.completions.create.assert_awaited_once()
 
 
 def test_openai_codex_strip_prefix_supports_hyphen_and_underscore():
@@ -615,10 +620,11 @@ def test_make_provider_passes_extra_headers_to_custom_provider():
         }
     )
 
-    with patch("durin.providers.openai_compat_provider.AsyncOpenAI") as mock_async_openai:
-        make_provider(config)
+    # AsyncOpenAI is built lazily per-loop; verify the kwargs the
+    # provider will hand it at first use.
+    provider = make_provider(config)
 
-    kwargs = mock_async_openai.call_args.kwargs
+    kwargs = provider._client_kwargs
     assert kwargs["api_key"] == "test-key"
     assert kwargs["base_url"] == "https://example.com/v1"
     assert kwargs["default_headers"]["APP-Code"] == "demo-app"

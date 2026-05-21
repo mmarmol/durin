@@ -40,7 +40,7 @@ export async function fetchBootstrap(
 ): Promise<BootstrapResponse> {
   const headers: Record<string, string> = {};
   if (secret) {
-    headers["X-Nanobot-Auth"] = secret;
+    headers["X-Durin-Auth"] = secret;
   }
   const res = await fetch(`${baseUrl}/webui/bootstrap`, {
     method: "GET",

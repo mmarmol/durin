@@ -55,6 +55,11 @@ export interface UIMessage {
   latencyMs?: number;
   /** Structured agent UI data (posture, deliberation). */
   agentUI?: AgentUIBlob;
+  /** For trace rows: structured tool-call events merged by ``call_id``.
+   * Carries name / arguments / result / error so the UI can render
+   * rich blocks (code diffs, exec IN/OUT) instead of flat text traces.
+   * Mirrors the terminal TUI's ToolCallBubble. */
+  toolEvents?: ToolProgressEvent[];
 }
 
 /** Structured UI blob on ``progress`` WS frames; channels may add more ``kind`` values later. */

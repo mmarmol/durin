@@ -202,4 +202,75 @@ Cada phase actualiza `docs/ARCHITECTURE.md`:
 
 ---
 
-## Last updated: 2026-05-20
+## D9 — WebUI ↔ TUI parity (incremental, futuro)
+
+El webui (`durin gateway`) y el TUI (`durin agent --tui`) deben converger
+a la **misma experiencia de chat**. Hoy el webui es un chat funcional
+pero con feature-set parcial. Objetivo: equivalencia total. El usuario
+explícitamente aceptó que sea incremental ("puedes agregarlo a futuro").
+
+| # | Item | Estado TUI | Estado WebUI |
+|---|---|---|---|
+| D9.1 | Tool-call bloques colapsables (`[+N more]` / `[collapse]`) | ✅ ToolCallBubble | ⚠️ render propio parcial |
+| D9.2 | Slash commands (`/sessions`, `/model`, `/memory`, `/compact`, …) | ✅ | ❌ |
+| D9.3 | Reasoning stream + spinner "thinking…" | ✅ | ⚠️ parcial |
+| D9.4 | Drag-and-drop de archivos/imágenes | ✅ | ❓ verificar |
+| D9.5 | Linkify de URLs/paths (OSC 8 ↔ `<a>`) | ✅ | ❓ verificar |
+| D9.6 | Modal pickers (session/model) | ✅ | ❓ verificar |
+
+**Enfoque**: una sub-fase por release. No bloquea nada — el webui ya
+sirve para chatear; D9 lo lleva a paridad.
+
+**D9.1 — shipped (2026-05-22)**: el webui ahora renderiza tool calls
+con bloques estructurados (`ToolCallBlock`): diff `+/-` para edit_file,
+`$ comando` + output para exec, colapso `+N more`. El server ya mandaba
+`tool_events` estructurados; el gap era cliente. D9.2-D9.6 verificados
+como ya-presentes (slash commands, drag-drop, linkify, reasoning).
+
+---
+
+## D10 — Componentes visuales interactivos (evaluado, diferido)
+
+**Evaluación (2026-05-22)**: el usuario pidió evaluar si vale la pena
+hacer componentes visuales ricos para preguntas (`ask_user_question`),
+plan (`exit_plan_mode`), y checklist (`todo_write`) en las 3 superficies
+(legacy CLI, TUI, webui).
+
+**Conclusión: vale la pena, pero NO en esta release.** Razones:
+
+- Es 3 componentes × 3 superficies ≈ 9 implementaciones — feature
+  multi-sesión, no un fix.
+- `v0.1.0a7` es la primera release "medianamente consistente"; el
+  objetivo es congelar scope y shipear lo sólido, no apilar polish
+  especulativo.
+- Hoy ya funcionan: `ask_user_question` rinde como burbuja de sistema,
+  `todo_write` como bloque de tool, el plan como markdown. Es
+  funcional — el upgrade es ergonomía, no corrección.
+
+**Cuando se haga**: option-list seleccionable para preguntas, panel de
+plan con aprobación inline, checklist con checkboxes. TUI primero
+(ToolCallBubble ya da el patrón), después webui, después legacy CLI.
+
+---
+
+## Estado al cortar v0.1.0a7
+
+| Fase | Estado |
+|---|---|
+| D1 sesión/input ergonomía | ✅ shipped |
+| D2 memory surface CLI | ✅ shipped |
+| D3 editor avanzado | ✅ shipped |
+| D5 Textual TUI + modal pickers | ✅ shipped |
+| D6 lifecycle (config/upgrade/uninstall) | ✅ shipped |
+| D7 doctor | ✅ shipped |
+| D8 distribuible (PyPI + Releases) | ✅ shipped |
+| D9.1 webui tool-blocks | ✅ shipped |
+| D9.2-D9.6 webui parity | ✅ verificado presente |
+| D10 componentes visuales | 🔲 evaluado, diferido |
+
+Config split layout, noise pruning, gateway daemon mode, status/doctor
+split y rebrand (nanobot → durin ⚒️) también shipped en este corte.
+
+---
+
+## Last updated: 2026-05-22 (v0.1.0a7 — first consistent release)

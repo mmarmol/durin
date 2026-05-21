@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { NanobotClient } from "@/lib/durin-client";
+import { DurinClient } from "@/lib/durin-client";
 
 /**
- * Minimal fake WebSocket implementing the subset NanobotClient touches.
+ * Minimal fake WebSocket implementing the subset DurinClient touches.
  * Every instance is retrievable via ``FakeSocket.instances`` so tests can
  * drive open/close/message lifecycles deterministically.
  */
@@ -68,9 +68,9 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("NanobotClient", () => {
+describe("DurinClient", () => {
   it("routes events to the matching chat handler", () => {
-    const client = new NanobotClient({
+    const client = new DurinClient({
       url: "ws://test",
       reconnect: false,
       socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
@@ -90,7 +90,7 @@ describe("NanobotClient", () => {
   });
 
   it("buffers chat events while no chat handler is registered and replays on subscribe", () => {
-    const client = new NanobotClient({
+    const client = new DurinClient({
       url: "ws://test",
       reconnect: false,
       socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
@@ -110,7 +110,7 @@ describe("NanobotClient", () => {
   });
 
   it("records goal_status run strip without an onChat subscriber", () => {
-    const client = new NanobotClient({
+    const client = new DurinClient({
       url: "ws://test",
       reconnect: false,
       socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
@@ -133,7 +133,7 @@ describe("NanobotClient", () => {
   });
 
   it("records goal_state per chat_id without an onChat subscriber", () => {
-    const client = new NanobotClient({
+    const client = new DurinClient({
       url: "ws://test",
       reconnect: false,
       socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
@@ -164,7 +164,7 @@ describe("NanobotClient", () => {
   });
 
   it("records goal_state from turn_end payload when present", () => {
-    const client = new NanobotClient({
+    const client = new DurinClient({
       url: "ws://test",
       reconnect: false,
       socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
@@ -180,7 +180,7 @@ describe("NanobotClient", () => {
   });
 
   it("buffers after unsubscribe until the chat is subscribed again", () => {
-    const client = new NanobotClient({
+    const client = new DurinClient({
       url: "ws://test",
       reconnect: false,
       socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
@@ -201,7 +201,7 @@ describe("NanobotClient", () => {
   });
 
   it("dispatches runtime model updates globally", () => {
-    const client = new NanobotClient({
+    const client = new DurinClient({
       url: "ws://test",
       reconnect: false,
       socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
@@ -221,7 +221,7 @@ describe("NanobotClient", () => {
   });
 
   it("dispatches session updates globally", () => {
-    const client = new NanobotClient({
+    const client = new DurinClient({
       url: "ws://test",
       reconnect: false,
       socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
@@ -240,7 +240,7 @@ describe("NanobotClient", () => {
   });
 
   it("resolves newChat() via the server-assigned chat_id", async () => {
-    const client = new NanobotClient({
+    const client = new DurinClient({
       url: "ws://test",
       reconnect: false,
       socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
@@ -254,7 +254,7 @@ describe("NanobotClient", () => {
   });
 
   it("queues sends while connecting and flushes on open", () => {
-    const client = new NanobotClient({
+    const client = new DurinClient({
       url: "ws://test",
       reconnect: false,
       socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
@@ -271,7 +271,7 @@ describe("NanobotClient", () => {
   });
 
   it("includes image generation options in outbound messages", () => {
-    const client = new NanobotClient({
+    const client = new DurinClient({
       url: "ws://test",
       reconnect: false,
       socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
@@ -298,7 +298,7 @@ describe("NanobotClient", () => {
   });
 
   it("re-attaches known chats after a reconnect", async () => {
-    const client = new NanobotClient({
+    const client = new DurinClient({
       url: "ws://test",
       reconnect: true,
       maxBackoffMs: 10,
@@ -323,7 +323,7 @@ describe("NanobotClient", () => {
   });
 
   it("reports status transitions through onStatus", () => {
-    const client = new NanobotClient({
+    const client = new DurinClient({
       url: "ws://test",
       reconnect: false,
       socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
@@ -337,7 +337,7 @@ describe("NanobotClient", () => {
   });
 
   it("does not schedule a reconnect when close() is called explicitly", async () => {
-    const client = new NanobotClient({
+    const client = new DurinClient({
       url: "ws://test",
       reconnect: true,
       maxBackoffMs: 10,
@@ -357,7 +357,7 @@ describe("NanobotClient", () => {
   });
 
   it("passes media through into the message envelope", () => {
-    const client = new NanobotClient({
+    const client = new DurinClient({
       url: "ws://test",
       reconnect: false,
       socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
@@ -378,7 +378,7 @@ describe("NanobotClient", () => {
   });
 
   it("omits media from the envelope when no images are attached", () => {
-    const client = new NanobotClient({
+    const client = new DurinClient({
       url: "ws://test",
       reconnect: false,
       socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
@@ -397,7 +397,7 @@ describe("NanobotClient", () => {
   });
 
   it("emits a message_too_big error when the socket closes with code 1009", () => {
-    const client = new NanobotClient({
+    const client = new DurinClient({
       url: "ws://test",
       reconnect: false,
       socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
@@ -412,7 +412,7 @@ describe("NanobotClient", () => {
   });
 
   it("isolates throwing error handlers so reconnect bookkeeping still runs", async () => {
-    const client = new NanobotClient({
+    const client = new DurinClient({
       url: "ws://test",
       reconnect: true,
       maxBackoffMs: 5,
@@ -434,7 +434,7 @@ describe("NanobotClient", () => {
   });
 
   it("does not emit a stream error on a vanilla socket close", () => {
-    const client = new NanobotClient({
+    const client = new DurinClient({
       url: "ws://test",
       reconnect: false,
       socketFactory: (url) => new FakeSocket(url) as unknown as WebSocket,
@@ -448,7 +448,7 @@ describe("NanobotClient", () => {
   });
 
   it("surfaces 'reconnecting' only on an unexpected drop", async () => {
-    const client = new NanobotClient({
+    const client = new DurinClient({
       url: "ws://test",
       reconnect: true,
       maxBackoffMs: 5,

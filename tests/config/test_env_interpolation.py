@@ -78,7 +78,9 @@ class TestResolveConfig:
         raw = load_config(config_path)
         save_config(raw, config_path)
 
-        saved = json.loads(config_path.read_text(encoding="utf-8"))
+        from durin.config.loader import read_persisted_config
+
+        saved = read_persisted_config(config_path)
         assert saved["channels"]["telegram"]["token"] == "${MY_TOKEN}"
 
     def test_preserves_excluded_fields_when_no_env_refs(self, tmp_path):

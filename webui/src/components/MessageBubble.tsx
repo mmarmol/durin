@@ -13,6 +13,7 @@ import { ImageLightbox } from "@/components/ImageLightbox";
 import { MarkdownText, preloadMarkdownText } from "@/components/MarkdownText";
 import { DeliberationPanel } from "@/components/thread/DeliberationPanel";
 import { PosturePanel } from "@/components/thread/PosturePanel";
+import { ToolCallBlock } from "@/components/thread/ToolCallBlock";
 import { cn } from "@/lib/utils";
 import { formatTurnLatency } from "@/lib/format";
 import type { DeliberationResultData, PostureUpdateData, UIImage, UIMediaAttachment, UIMessage } from "@/lib/types";
@@ -617,7 +618,11 @@ interface TraceGroupProps {
 export function TraceGroup({ message, animClass }: TraceGroupProps) {
   const { t } = useTranslation();
   const lines = message.traces ?? [message.content];
-  const count = lines.length;
+  // Prefer structured tool events (rich per-tool blocks) when present;
+  // fall back to flat text traces for older payloads.
+  const toolEvents = message.toolEvents ?? [];
+  const hasStructured = toolEvents.length > 0;
+  const count = hasStructured ? toolEvents.length : lines.length;
   const [open, setOpen] = useState(false);
   return (
     <div className={cn("w-full", animClass)}>
@@ -645,21 +650,29 @@ export function TraceGroup({ message, animClass }: TraceGroupProps) {
         />
       </button>
       {open && (
-        <ul
+        <div
           className={cn(
-            "mt-1 space-y-0.5 border-l border-muted-foreground/20 pl-3",
+            "mt-1 space-y-1.5 border-l border-muted-foreground/20 pl-3",
             "animate-in fade-in-0 slide-in-from-top-1 duration-200",
           )}
         >
-          {lines.map((line, i) => (
-            <li
-              key={i}
-              className="whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed text-muted-foreground/90"
-            >
-              {line}
-            </li>
-          ))}
-        </ul>
+          {hasStructured ? (
+            toolEvents.map((ev, i) => (
+              <ToolCallBlock key={ev.call_id || i} event={ev} />
+            ))
+          ) : (
+            <ul className="space-y-0.5">
+              {lines.map((line, i) => (
+                <li
+                  key={i}
+                  className="whitespace-pre-wrap break-words font-mono text-[11.5px] leading-relaxed text-muted-foreground/90"
+                >
+                  {line}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       )}
     </div>
   );

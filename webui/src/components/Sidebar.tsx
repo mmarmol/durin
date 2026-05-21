@@ -53,15 +53,16 @@ export function Sidebar(props: SidebarProps) {
       className="flex h-full w-full min-w-0 flex-col border-r border-sidebar-border/60 bg-sidebar text-sidebar-foreground"
     >
       <div className="flex items-center justify-between px-3 pb-2.5 pt-3">
-        <picture className="block min-w-0">
-          <source srcSet="/brand/durin_logo.webp" type="image/webp" />
-          <img
-            src="/brand/durin_logo.png"
-            alt="durin"
-            className="h-6 w-auto select-none object-contain opacity-95"
-            draggable={false}
-          />
-        </picture>
+        {/* Text logo: durin's wordmark is the ⚒️ hammer-and-pick (Durin,
+            the dwarf-king of Tolkien's Khazad-dûm) + lowercase name.
+            The old PNG was nanobot's cat logo with a renamed filename. */}
+        <span
+          className="flex select-none items-center gap-1.5 text-base font-semibold tracking-tight"
+          aria-label="durin"
+        >
+          <span aria-hidden="true" className="text-lg leading-none">⚒️</span>
+          <span className="lowercase">durin</span>
+        </span>
         <Button
           variant="ghost"
           size="icon"

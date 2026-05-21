@@ -1,9 +1,9 @@
 import { createContext, useContext, type ReactNode } from "react";
 
-import type { NanobotClient } from "@/lib/durin-client";
+import type { DurinClient } from "@/lib/durin-client";
 
 interface ClientContextValue {
-  client: NanobotClient;
+  client: DurinClient;
   token: string;
   modelName: string | null;
 }
@@ -16,7 +16,7 @@ export function ClientProvider({
   modelName = null,
   children,
 }: {
-  client: NanobotClient;
+  client: DurinClient;
   token: string;
   modelName?: string | null;
   children: ReactNode;

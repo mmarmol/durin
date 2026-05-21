@@ -234,16 +234,23 @@ def test_gemma_routes_to_gemini_provider() -> None:
 
 
 def test_openrouter_sets_default_attribution_headers() -> None:
-    spec = find_by_name("openrouter")
-    with patch("durin.providers.openai_compat_provider.AsyncOpenAI") as MockClient:
-        OpenAICompatProvider(
-            api_key="sk-or-test-key",
-            api_base="https://openrouter.ai/api/v1",
-            default_model="anthropic/claude-sonnet-4-5",
-            spec=spec,
-        )
+    """Headers are now stashed in `_client_kwargs` for lazy client creation.
 
-    headers = MockClient.call_args.kwargs["default_headers"]
+    Why lazy: the AsyncOpenAI client binds to whichever event loop is
+    running at construction time. If we built it eagerly inside
+    `AgentLoop.from_config()` and then handed it to a Textual app
+    (which runs in a different loop context), every request would die
+    with `BrokenResourceError`. See `OpenAICompatProvider._client`.
+    """
+    spec = find_by_name("openrouter")
+    provider = OpenAICompatProvider(
+        api_key="sk-or-test-key",
+        api_base="https://openrouter.ai/api/v1",
+        default_model="anthropic/claude-sonnet-4-5",
+        spec=spec,
+    )
+
+    headers = provider._client_kwargs["default_headers"]
     assert headers["HTTP-Referer"] == "https://github.com/HKUDS/durin"
     assert headers["X-OpenRouter-Title"] == "durin"
     assert headers["X-OpenRouter-Categories"] == "cli-agent,personal-agent"
@@ -252,20 +259,19 @@ def test_openrouter_sets_default_attribution_headers() -> None:
 
 def test_openrouter_user_headers_override_default_attribution() -> None:
     spec = find_by_name("openrouter")
-    with patch("durin.providers.openai_compat_provider.AsyncOpenAI") as MockClient:
-        OpenAICompatProvider(
-            api_key="sk-or-test-key",
-            api_base="https://openrouter.ai/api/v1",
-            default_model="anthropic/claude-sonnet-4-5",
-            extra_headers={
-                "HTTP-Referer": "https://durin.ai",
-                "X-OpenRouter-Title": "Durin Pro",
-                "X-Custom-App": "enabled",
-            },
-            spec=spec,
-        )
+    provider = OpenAICompatProvider(
+        api_key="sk-or-test-key",
+        api_base="https://openrouter.ai/api/v1",
+        default_model="anthropic/claude-sonnet-4-5",
+        extra_headers={
+            "HTTP-Referer": "https://durin.ai",
+            "X-OpenRouter-Title": "Durin Pro",
+            "X-Custom-App": "enabled",
+        },
+        spec=spec,
+    )
 
-    headers = MockClient.call_args.kwargs["default_headers"]
+    headers = provider._client_kwargs["default_headers"]
     assert headers["HTTP-Referer"] == "https://durin.ai"
     assert headers["X-OpenRouter-Title"] == "Durin Pro"
     assert headers["X-OpenRouter-Categories"] == "cli-agent,personal-agent"

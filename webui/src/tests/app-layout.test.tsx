@@ -67,7 +67,7 @@ vi.mock("@/lib/durin-client", () => {
     updateUrl = vi.fn();
   }
 
-  return { NanobotClient: MockClient };
+  return { DurinClient: MockClient };
 });
 
 import App from "@/App";

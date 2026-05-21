@@ -22,6 +22,7 @@ and remains the default. The TUI is opt-in via ``durin agent --tui``.
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +53,7 @@ class DurinApp(App[None]):
         ("escape", "abort", "Abort"),
         ("ctrl+t", "toggle_dark", "Theme"),
         ("ctrl+l", "open_model_picker", "Model"),
+        ("ctrl+y", "copy_last_assistant", "Copy"),
     ]
 
     def __init__(
@@ -61,30 +63,42 @@ class DurinApp(App[None]):
         cli_channel: str = "cli",
         cli_chat_id: str = "direct",
         markdown: bool = True,
+        auto_resume: bool = False,
     ) -> None:
         super().__init__()
         self._agent_loop = agent_loop
         self._cli_channel = cli_channel
         self._cli_chat_id = cli_chat_id
         self._markdown = markdown
+        # When True, the session picker pops up on mount so the user
+        # explicitly chooses which session to resume.
+        self._auto_resume = auto_resume
         self._current_assistant_bubble: MessageBubble | None = None
+        # Reasoning chunks accumulate into a single dim bubble (one per
+        # turn) instead of stacking one bubble per chunk.
+        self._current_reasoning_bubble: MessageBubble | None = None
+        # Spinner that appears between user submit and first model
+        # delta. None when no turn is in flight.
+        self._working_indicator: Any = None
+        # Track active tool-call bubbles by call_id so the "end" event
+        # updates the same widget the "start" event created.
+        self._tool_bubbles: dict[str, Any] = {}
         self._bus_task: asyncio.Task | None = None
         self._consume_task: asyncio.Task | None = None
 
     # ---- composition ------------------------------------------------------
 
     def compose(self) -> ComposeResult:
-        workspace = self._workspace_path()
-        model, preset = self._model_label()
+        from durin.cli.tui.widgets import CompletionsHint
+
+        session_label = f"{self._cli_channel}:{self._cli_chat_id}"
+        session_meta = self._compute_session_meta()
         with Vertical(id="main-layout"):
-            yield HeaderBar(
-                workspace_path=workspace,
-                model=model,
-                preset=preset,
-            )
+            yield HeaderBar(session_label=session_label, session_meta=session_meta)
             yield ChatView(id="chat")
+            yield CompletionsHint()
             yield InputArea(
-                placeholder="Type a message · Ctrl+Q to quit",
+                placeholder="message durin",
                 workspace=Path(self._agent_loop.workspace) if self._agent_loop else None,
             )
             yield FooterBar(
@@ -93,10 +107,37 @@ class DurinApp(App[None]):
                 ),
             )
 
+    def _compute_session_meta(self) -> str:
+        """Return a short '47 msgs · 12h ago' string for the header.
+
+        Empty string when there's no session yet or no activity to summarise.
+        """
+        if self._agent_loop is None:
+            return ""
+        try:
+            from durin.cli.sessions import list_sessions
+
+            sessions = list_sessions(Path(self._agent_loop.workspace))
+        except Exception:  # noqa: BLE001
+            return ""
+        for info in sessions:
+            if info.channel == self._cli_channel and info.chat_id == self._cli_chat_id:
+                if info.msg_count == 0:
+                    return ""
+                return f"{info.msg_count} msgs · {info.age_label}"
+        return ""
+
     # ---- lifecycle --------------------------------------------------------
 
     def on_mount(self) -> None:
         """Boot the bus + outbound consumer once the layout is up."""
+        # Order matters in a scroll-from-top chat view: the welcome
+        # banner stays at the top (install-level info, stable across
+        # the session), the restored turns sit just above the input so
+        # the user lands directly into recent context.
+        self._render_startup_banner()
+        self._restore_recent_turns()
+
         if self._agent_loop is None:
             return
         bus = getattr(self._agent_loop, "bus", None)
@@ -106,6 +147,144 @@ class DurinApp(App[None]):
         # no agent turn fires.
         self._bus_task = asyncio.create_task(self._agent_loop.run())
         self._consume_task = asyncio.create_task(self._consume_outbound())
+        # `--resume`: pop the session picker after Textual settles so
+        # the user can pick a different session if they want.
+        if self._auto_resume:
+            self.call_later(self._open_session_picker)
+
+    def _restore_recent_turns(self, *, tail: int = 6) -> None:
+        """Replay the last ``tail`` messages of the active session as bubbles.
+
+        Resumed sessions need context — the user came back to keep
+        working, not to read a welcome screen. We show enough recent
+        history to orient (default last 6 messages ≈ 3 turns) and add
+        a dim hint when there's more above.
+        """
+        if self._agent_loop is None:
+            return
+        try:
+            sessions = self._agent_loop.sessions
+            session_key = f"{self._cli_channel}:{self._cli_chat_id}"
+            session = sessions.get_or_create(session_key)
+            messages = list(getattr(session, "messages", []) or [])
+        except Exception:  # noqa: BLE001
+            return
+        if not messages:
+            return
+        try:
+            chat = self.query_one("#chat", ChatView)
+        except Exception:  # noqa: BLE001
+            return
+
+        total = len(messages)
+        recent = messages[-tail:] if total > tail else messages
+        hidden = total - len(recent)
+
+        if hidden > 0:
+            note = chat.add_message(
+                "banner",
+                f"… {hidden} earlier message{'s' if hidden != 1 else ''} hidden "
+                f"(use `/history {total}` to see all)",
+            )
+            # Tighter margin on the hint so it doesn't dominate.
+            try:
+                note.styles.margin = (0, 2, 0, 2)
+            except Exception:  # noqa: BLE001
+                pass
+
+        # Build a map of tool_call_id → (name, args) so when we hit a
+        # tool result we can render it as a proper ToolCallBubble with
+        # clickable URLs / paths and the same truncation as live runs,
+        # rather than a plain `tool: ...` text bubble.
+        tool_call_index: dict[str, tuple[str, dict[str, Any]]] = {}
+        for msg in messages:
+            if not isinstance(msg, dict):
+                continue
+            tcs = msg.get("tool_calls") or []
+            for tc in tcs:
+                if not isinstance(tc, dict):
+                    continue
+                tc_id = str(tc.get("id") or "")
+                fn = tc.get("function") or {}
+                name = str(fn.get("name") or "")
+                raw_args = fn.get("arguments") or "{}"
+                try:
+                    args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                except (TypeError, ValueError):
+                    args = {}
+                if tc_id and name:
+                    tool_call_index[tc_id] = (name, args)
+
+        for msg in recent:
+            role = msg.get("role") if isinstance(msg, dict) else None
+            content = msg.get("content") if isinstance(msg, dict) else None
+            if not role:
+                continue
+
+            # Tool result: render as a ToolCallBubble (rich, clickable)
+            # rather than a plain text bubble.
+            if role == "tool":
+                tc_id = str(msg.get("tool_call_id") or "")
+                name, args = tool_call_index.get(tc_id, (str(msg.get("name") or "tool"), {}))
+                result_text = _content_to_text(content)
+                try:
+                    from durin.cli.tui.widgets import ToolCallBubble
+
+                    bubble = ToolCallBubble({
+                        "version": 1, "phase": "end", "call_id": tc_id,
+                        "name": name, "arguments": args,
+                        "result": result_text,
+                    })
+                    chat.mount(bubble)
+                    bubble.update_from_event({
+                        "version": 1, "phase": "end", "call_id": tc_id,
+                        "name": name, "arguments": args,
+                        "result": result_text,
+                    })
+                except Exception:  # noqa: BLE001
+                    # Fall back to the old plain rendering so the
+                    # session is at least visible if the bubble fails.
+                    chat.add_message("system", f"{name}: {result_text[:200]}")
+                continue
+
+            # Assistant message that ONLY carried tool_calls (no text).
+            # The matching tool result(s) will render as bubbles, so
+            # don't add an empty assistant bubble here.
+            if role == "assistant" and msg.get("tool_calls") and content is None:
+                continue
+
+            text = _content_to_text(content)
+            if role == "assistant" and msg.get("tool_calls") and not text.strip():
+                continue
+            if not text:
+                continue
+            if role in ("user", "assistant", "system"):
+                chat.add_message(role, text)
+            else:
+                chat.add_message("system", text)
+
+    def _render_startup_banner(self) -> None:
+        """Paint pi-style welcome bubble: version, keybindings, install summary.
+
+        Modelled on pi-agent's startup screen — version + condensed
+        keybinding line + a "[Context]" block listing what's loaded.
+        Everything here is install-level info, not per-conversation,
+        so it doesn't clutter the footer once you're typing.
+        """
+        from durin import __version__
+        from durin.cli.tui.startup import build_startup_banner
+
+        try:
+            chat = self.query_one("#chat", ChatView)
+        except Exception:  # noqa: BLE001
+            return
+
+        body = build_startup_banner(
+            version=__version__,
+            agent_loop=self._agent_loop,
+        )
+        bubble = chat.add_message("banner", "")
+        bubble.body = body
 
     async def on_unmount(self) -> None:
         """Cancel background tasks cleanly when the app exits."""
@@ -119,6 +298,29 @@ class DurinApp(App[None]):
                 pass
 
     # ---- event handlers ---------------------------------------------------
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        """Refresh the completions hint on every keystroke."""
+        from durin.cli.tui.widgets import CompletionsHint, MultiModeSuggester, SlashCommandSuggester
+
+        try:
+            hint = self.query_one(CompletionsHint)
+        except Exception:  # noqa: BLE001
+            return
+        # Only the InputArea fires hints; ignore Input.Changed from other
+        # widgets that may live in the layout (modal pickers, etc.).
+        if not isinstance(event.input, InputArea):
+            return
+        value = event.value or ""
+        if not value.startswith("/"):
+            hint.clear()
+            return
+        suggester = event.input.suggester
+        if isinstance(suggester, (MultiModeSuggester, SlashCommandSuggester)):
+            candidates = suggester.candidates(value)
+            hint.show_candidates(candidates)
+        else:
+            hint.clear()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         # Sanitize surrogate pairs that mis-paste emoji can produce.
@@ -180,7 +382,64 @@ class DurinApp(App[None]):
                 "docs/10_textual_migration.md."
             )
             return
+        # Spinner: shows "thinking…" between submit and first delta.
+        self._show_working_indicator()
         asyncio.create_task(self._publish_inbound(value, media))
+
+    def _show_working_indicator(self) -> None:
+        """Mount a 'thinking…' spinner below the assistant bubble.
+
+        The spinner is removed on the first arriving reasoning or
+        content delta — see ``_dismiss_working_indicator``.
+        """
+        if self._working_indicator is not None:
+            return
+        try:
+            from durin.cli.tui.widgets import WorkingIndicator
+
+            chat = self.query_one("#chat", ChatView)
+            indicator = WorkingIndicator()
+            chat.mount(indicator)
+            chat.scroll_end(animate=False)
+            self._working_indicator = indicator
+        except Exception:  # noqa: BLE001
+            self._working_indicator = None
+
+    def _dismiss_working_indicator(self) -> None:
+        ind = self._working_indicator
+        if ind is None:
+            return
+        try:
+            ind.remove()
+        except Exception:  # noqa: BLE001
+            pass
+        self._working_indicator = None
+
+    def _render_tool_event(self, event: dict[str, Any]) -> None:
+        """Add or update a ToolCallBubble for one tool-call lifecycle event."""
+        from durin.cli.tui.widgets import ToolCallBubble
+
+        call_id = str(event.get("call_id") or "")
+        phase = str(event.get("phase") or "")
+
+        if phase == "start" or call_id not in self._tool_bubbles:
+            try:
+                chat = self.query_one("#chat", ChatView)
+                bubble = ToolCallBubble(event)
+                chat.mount(bubble)
+                chat.scroll_end(animate=False)
+                self._tool_bubbles[call_id] = bubble
+            except Exception:  # noqa: BLE001
+                return
+            if phase == "start":
+                return
+        # phase == "end" / "error" — update the existing bubble.
+        bubble = self._tool_bubbles.get(call_id)
+        if bubble is not None:
+            try:
+                bubble.update_from_event(event)
+            except Exception:  # noqa: BLE001
+                pass
 
     async def _publish_inbound(self, value: str, media: list[str]) -> None:
         from durin.bus.events import InboundMessage
@@ -219,6 +478,33 @@ class DurinApp(App[None]):
     def action_open_model_picker(self) -> None:
         """Ctrl+L: open the model picker modal (D5.5)."""
         self._open_model_picker()
+
+    def action_copy_last_assistant(self) -> None:
+        """Ctrl+Y: copy the last assistant message body to the clipboard.
+
+        The agent's body is rendered as Markdown which Textual doesn't
+        let you select with the mouse — this gives a keyboard path that
+        always works.
+        """
+        from durin.utils.clipboard import NoClipboardError, copy_text
+
+        try:
+            chat = self.query_one("#chat", ChatView)
+        except Exception:  # noqa: BLE001
+            return
+        last_body = ""
+        for bubble in reversed(list(chat.query(MessageBubble))):
+            if bubble._role == "assistant" and bubble.body:
+                last_body = bubble.body
+                break
+        if not last_body:
+            self.notify("No assistant message to copy yet.", severity="warning")
+            return
+        try:
+            copy_text(last_body)
+            self.notify(f"Copied last reply ({len(last_body):,} chars).")
+        except NoClipboardError as e:
+            self.notify(f"Copy failed: {e}", severity="error")
 
     # ---- D5.5 modal pickers ----------------------------------------------
 
@@ -352,22 +638,83 @@ class DurinApp(App[None]):
             self._cli_chat_id = switch_to
             self._refresh_chrome()
 
+        # ---- tool calls --------------------------------------------------
+        # The agent emits one outbound per tool-call lifecycle phase
+        # (start, end, error) with a list of structured events under
+        # `_tool_events`. Render each as a `ToolCallBubble` keyed by
+        # call_id so the "end" event updates the same bubble created
+        # at "start".
+        tool_events = meta.get("_tool_events")
+        if tool_events:
+            # The hint content (msg.content) is redundant with the
+            # structured events — the bubble derives its summary line
+            # from the event's arguments. Don't double-render it.
+            self._dismiss_working_indicator()
+            for event in tool_events:
+                self._render_tool_event(event)
+            return
+
+        # ---- reasoning stream (model's internal monologue) --------------
+        # The agent emits one outbound per reasoning chunk with
+        # `_reasoning_delta=True`. Without special handling each chunk
+        # would create its own bubble — readable as gibberish (one word
+        # per line). Collapse them into a single dim "thinking" bubble
+        # that grows in place.
+        if meta.get("_reasoning_delta"):
+            # First reasoning chunk means the model is now responding —
+            # drop the spinner.
+            self._dismiss_working_indicator()
+            if self._current_reasoning_bubble is None:
+                chat = self.query_one("#chat", ChatView)
+                self._current_reasoning_bubble = chat.add_message("reasoning", "")
+            self._current_reasoning_bubble.append(msg.content or "")
+            return
+        if meta.get("_reasoning_end"):
+            # Close the reasoning bubble; the next stream goes to a
+            # fresh assistant bubble.
+            self._current_reasoning_bubble = None
+            return
+
+        # ---- retry-wait notifications ----------------------------------
+        # Transient retries (which are common because the first request
+        # after Textual boot often loses a TLS race) just add visual
+        # noise. The user perceives the ~1s delay; they don't need a
+        # bubble for it. We DO show retry messages from the FINAL
+        # attempt (the "failed after N retries, giving up" line) — those
+        # come through without `_retry_wait` so they fall through to the
+        # normal text path below.
+        if meta.get("_retry_wait"):
+            return
+
         if meta.get("_stream_delta"):
+            # Content is now flowing — drop the spinner.
+            self._dismiss_working_indicator()
             if self._current_assistant_bubble is not None:
                 self._current_assistant_bubble.append(msg.content or "")
             return
 
         if meta.get("_stream_end"):
             self._current_assistant_bubble = None
+            # Belt-and-suspenders: if a turn ends without any content
+            # (rare error path), make sure the spinner doesn't linger.
+            self._dismiss_working_indicator()
             return
 
         if meta.get("_streamed"):
             # End-of-turn signal; UI already streamed via deltas.
+            self._dismiss_working_indicator()
             return
 
         content = msg.content or ""
         if not content:
             return
+
+        # ANY arriving content means the agent / router has produced
+        # output — the spinner has served its purpose. (Slash command
+        # responses arrive here, no streaming flags, so without an
+        # explicit dismiss the indicator would spin forever — that's
+        # what the user reported on `/memory list`.)
+        self._dismiss_working_indicator()
 
         chat = self.query_one("#chat", ChatView)
         if self._current_assistant_bubble is not None:
@@ -393,6 +740,12 @@ class DurinApp(App[None]):
             footer.refresh_now()
         except Exception:  # noqa: BLE001
             pass
+        try:
+            header = self.query_one(HeaderBar)
+            header.session_label = f"{self._cli_channel}:{self._cli_chat_id}"
+            header.session_meta = self._compute_session_meta()
+        except Exception:  # noqa: BLE001
+            pass
 
     def _workspace_path(self) -> str:
         if self._agent_loop is None:
@@ -411,12 +764,35 @@ class DurinApp(App[None]):
         )
 
 
+def _content_to_text(content: Any) -> str:
+    """Coerce a session-message ``content`` into a plain text string.
+
+    Session messages can carry plain strings or a list of multimodal
+    content blocks (``{"type": "text", "text": "..."}`` etc). The
+    history-replay path needs a single string per message.
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        out = []
+        for block in content:
+            if isinstance(block, dict):
+                out.append(str(block.get("text", "")))
+            else:
+                out.append(str(block))
+        return "\n".join(out).strip()
+    return str(content).strip()
+
+
 def run_durin_tui(
     *,
     agent_loop: Any | None,
     cli_channel: str = "cli",
     cli_chat_id: str = "direct",
     markdown: bool = True,
+    auto_resume: bool = False,
 ) -> None:
     """Launch the Textual app. Blocks until the user quits."""
     app = DurinApp(
@@ -424,5 +800,6 @@ def run_durin_tui(
         cli_channel=cli_channel,
         cli_chat_id=cli_chat_id,
         markdown=markdown,
+        auto_resume=auto_resume,
     )
     app.run()

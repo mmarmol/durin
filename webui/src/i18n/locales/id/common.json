@@ -86,7 +86,7 @@
       "cancel": "Batal"
     },
     "byok": {
-      "description": "Gunakan kunci provider Anda sendiri. Nanobot membaca nilai ini dari config saat ini, dan hanya provider yang sudah dikonfigurasi yang bisa dipilih di Umum.",
+      "description": "Gunakan kunci provider Anda sendiri. durin membaca nilai ini dari config saat ini, dan hanya provider yang sudah dikonfigurasi yang bisa dipilih di Umum.",
       "configured": "Terkonfigurasi",
       "notConfigured": "Belum dikonfigurasi",
       "configuredSection": "Terkonfigurasi",

@@ -27,12 +27,34 @@ from durin.command.builtin import BUILTIN_COMMAND_SPECS
 __all__ = ["AtFileSuggester", "InputArea", "MultiModeSuggester", "SlashCommandSuggester"]
 
 
-class SlashCommandSuggester(Suggester):
-    """Suggest a known slash command when the buffer starts with ``/``.
+# Known subcommand sets for slash commands that take a verb as their first
+# argument. Used by `SlashCommandSuggester` to extend the autocomplete to
+# the second token of e.g. `/memory list`, `/mode plan`, `/pairing approve`.
+#
+# Keep this hand-curated — derived statically from `BUILTIN_COMMAND_SPECS`
+# arg_hints, but typed out so we don't parse hint strings at runtime.
+_SLASH_SUBCOMMANDS: dict[str, tuple[str, ...]] = {
+    "/memory": ("list", "show", "search", "drill", "ingest"),
+    "/mode": ("build", "plan"),
+    "/pairing": ("list", "approve", "deny", "revoke"),
+    "/sources": ("list", "ingest"),
+    "/audit": (),
+    "/why": (),
+}
 
-    Returns the *first* matching command in declaration order. Pressing
-    Right Arrow or End accepts the suggestion. Bug-for-bug-equivalent
-    to the legacy CLI's ``BUILTIN_COMMAND_SPECS`` palette.
+
+class SlashCommandSuggester(Suggester):
+    """Suggest a known slash command (or subcommand) as the user types.
+
+    Two-level autocomplete:
+    1. Buffer starts with ``/foo`` (no space) → suggest a matching top-level
+       slash command, e.g. ``/me`` → ``/memory``.
+    2. Buffer is ``/cmd `` or ``/cmd partial`` → suggest a matching
+       subcommand for that command, e.g. ``/memory l`` → ``/memory list``.
+
+    Pressing Right Arrow / End / Tab accepts the suggestion. The legacy
+    behaviour for the first-level case is unchanged; the second level is
+    additive.
     """
 
     def __init__(self) -> None:
@@ -40,14 +62,46 @@ class SlashCommandSuggester(Suggester):
         self._commands: list[str] = [spec.command for spec in BUILTIN_COMMAND_SPECS]
 
     async def get_suggestion(self, value: str) -> str | None:
-        if not value.startswith("/"):
+        if not value.startswith("/") or value == "/":
             return None
-        if not value or value == "/":
+        # Second-level: a space inside `/cmd …` means we're completing a
+        # subcommand for ``cmd``.
+        if " " in value:
+            head, _, partial = value.partition(" ")
+            subcommands = _SLASH_SUBCOMMANDS.get(head.lower())
+            if not subcommands:
+                return None
+            partial_low = partial.lower()
+            for sub in subcommands:
+                if sub.lower().startswith(partial_low) and sub != partial:
+                    return f"{head} {sub}"
             return None
+        # First-level: complete the command name itself.
         for cmd in self._commands:
             if cmd != value and cmd.lower().startswith(value.lower()):
                 return cmd
         return None
+
+    def candidates(self, value: str) -> list[str]:
+        """Return *all* matches for ``value`` (not just the first).
+
+        Used by the multi-option dropdown below the input. Returns an
+        empty list when there's no slash prefix to autocomplete.
+        """
+        if not value.startswith("/") or value == "/":
+            return []
+        if " " in value:
+            head, _, partial = value.partition(" ")
+            subcommands = _SLASH_SUBCOMMANDS.get(head.lower())
+            if not subcommands:
+                return []
+            partial_low = partial.lower()
+            return [
+                f"{head} {sub}"
+                for sub in subcommands
+                if sub.lower().startswith(partial_low)
+            ]
+        return [cmd for cmd in self._commands if cmd.lower().startswith(value.lower())]
 
 
 class AtFileSuggester(Suggester):
@@ -110,6 +164,12 @@ class MultiModeSuggester(Suggester):
             return await self._at.get_suggestion(value)
         return None
 
+    def candidates(self, value: str) -> list[str]:
+        """Return all matching candidates for the multi-option dropdown."""
+        if value.startswith("/"):
+            return self._slash.candidates(value)
+        return []
+
 
 class InputArea(Input):
     """User input widget.
@@ -125,12 +185,30 @@ class InputArea(Input):
     BINDINGS = [
         ("alt+enter", "insert_newline", "Newline"),
         ("ctrl+j", "insert_newline", "Newline"),  # most terminals send ^J on Ctrl+Enter
+        ("tab", "accept_suggestion", "Complete"),
     ]
 
     DEFAULT_CSS = """
+    /* Minimal styling. We only override:
+       - top border: thin line to visually separate input from chat
+       - height: room for top border + input line + breathing room
+       - background: surface so the input is visibly distinct from the
+         transparent chat area
+       Everything else (cursor, placeholder, value color) inherits from
+       Textual's Input defaults — that's the safest path while we're
+       still hunting the "click makes text invisible" bug. */
     InputArea {
         height: 3;
-        margin: 0 0 1 0;
+        border-top: hkey #555555;
+        border-left: none;
+        border-right: none;
+        border-bottom: none;
+        background: $surface;
+        padding: 0 2;
+        margin: 0;
+    }
+    InputArea:focus {
+        border-top: hkey #8abeb7;
     }
     """
 
@@ -156,3 +234,19 @@ class InputArea(Input):
         pos = self.cursor_position
         self.value = self.value[:pos] + "\n" + self.value[pos:]
         self.cursor_position = pos + 1
+
+    async def action_accept_suggestion(self) -> None:
+        """Tab: accept the current inline suggestion (if any).
+
+        Mirrors what Right Arrow / End does in Textual's Input, but bound
+        to Tab so the keyboard flow matches what shell users expect.
+        Falls through silently when there's no suggestion — Tab on an
+        empty buffer is a no-op rather than focusing the next widget.
+        """
+        suggester = self.suggester
+        if suggester is None:
+            return
+        suggestion = await suggester.get_suggestion(self.value)
+        if suggestion and suggestion != self.value:
+            self.value = suggestion
+            self.cursor_position = len(self.value)

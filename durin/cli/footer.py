@@ -114,6 +114,7 @@ def build_footer_text(
         "context_pct": ctx_pct,
         "mem_count": mem_count,
         "vec_index": vec_present,
+        "workspace": str(workspace),
     }
 
 

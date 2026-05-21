@@ -215,13 +215,14 @@ def check_at_least_one_provider() -> CheckResult:
 
 
 def _oauth_token_present(provider_name: str) -> bool:
-    """Best-effort check for an OAuth token file on disk."""
-    home = Path.home()
-    candidates = [
-        home / ".durin" / "oauth" / f"{provider_name}.json",
-        home / f".{provider_name}" / "auth.json",
-    ]
-    return any(c.exists() for c in candidates)
+    """Best-effort check for an OAuth token file on disk.
+
+    Delegates to the shared ``durin.utils.oauth`` helper so doctor and
+    ``durin status`` agree on whether a provider is actually logged in.
+    """
+    from durin.utils.oauth import any_token_present
+
+    return any_token_present(provider_name)
 
 
 def check_default_model_resolvable() -> CheckResult:
@@ -302,6 +303,299 @@ def check_cache_size() -> CheckResult:
     return CheckResult("cache size", "ok", f"{mb:.1f} MB at {cache}", category="state")
 
 
+# Map of extra-name → list of import names that prove the extra is present.
+# Used by `detect_installed_extras` for drift tracking.
+_EXTRAS_IMPORT_PROBES: dict[str, tuple[str, ...]] = {
+    "memory": ("fastembed", "lancedb"),
+    "mcp": ("mcp",),
+    "web": ("ddgs", "readability"),
+    "oauth": ("oauth_cli_kit",),
+    "slack": ("slack_sdk",),
+    "discord": ("discord",),
+    "local": ("llama_cpp", "huggingface_hub"),
+}
+
+
+def _module_importable(name: str) -> bool:
+    try:
+        importlib.import_module(name)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def detect_installed_extras() -> list[str]:
+    """Return the names of extras whose modules are all importable now.
+
+    "Currently installed" is approximated by import success — that's the
+    same probe ``check_optional_extra`` uses, so the two checks stay in
+    sync.
+    """
+    found: list[str] = []
+    for extra, modules in _EXTRAS_IMPORT_PROBES.items():
+        if all(_module_importable(m) for m in modules):
+            found.append(extra)
+    return found
+
+
+def update_extras_state(*, save: Callable[..., Any] | None = None) -> set[str] | None:
+    """Append any newly-detected extras to ``config.install.extras``.
+
+    *Additive* — never removes entries. That way `pipx uninstall` →
+    `pipx install` doesn't silently forget the user used to have memory
+    installed; the next `durin doctor` will surface the gap.
+
+    Returns the new union, or ``None`` if no update was needed.
+    """
+    from durin.config.loader import save_config
+
+    cfg = load_config()
+    current = set(detect_installed_extras())
+    saved = set(cfg.install.extras or [])
+    union = saved | current
+    if union == saved:
+        return None
+    cfg.install.extras = sorted(union)
+    (save or save_config)(cfg)
+    return union
+
+
+def check_extras_drift() -> CheckResult:
+    """Detect extras the user previously had but no longer does.
+
+    durin keeps a running list of optional extras (memory / mcp / etc.)
+    you've had installed at some point — in ``config.install.extras``.
+    This check compares that list against what's currently importable
+    and warns when something dropped (typically a fresh `pipx install`
+    after an uninstall, which wipes extras).
+    """
+    try:
+        cfg = load_config()
+    except Exception:  # noqa: BLE001
+        return CheckResult(
+            "previously installed extras", "warn",
+            "Could not load config.",
+            category="extras",
+        )
+    tracked = set(cfg.install.extras or [])
+    if not tracked:
+        return CheckResult(
+            "previously installed extras", "ok",
+            "none tracked yet — durin will start remembering now",
+            category="extras",
+        )
+    current = set(detect_installed_extras())
+    missing = tracked - current
+    if missing:
+        names = ", ".join(sorted(missing))
+        return CheckResult(
+            "previously installed extras", "warn",
+            f"{names} (you had it before but it's gone now)",
+            fix=f"`durin doctor --install-missing -y` to restore {names}.",
+            category="extras",
+        )
+    return CheckResult(
+        "previously installed extras", "ok",
+        f"{len(tracked)} present — {', '.join(sorted(tracked))}",
+        category="extras",
+    )
+
+
+def check_memory_summary() -> CheckResult:
+    """Quantify the installation: how much memory / history is on disk."""
+    try:
+        cfg = load_config()
+        workspace = cfg.workspace_path
+    except Exception:  # noqa: BLE001
+        return CheckResult("memory store", "warn", "Could not load config.", category="state")
+
+    from durin.cli.tui.startup import memory_summary
+
+    stats = memory_summary(workspace)
+    pieces = []
+    pieces.append(f"{stats['memory_docs']} memory docs")
+    if stats["ingested_docs"]:
+        pieces.append(f"{stats['ingested_docs']} ingested")
+    if stats["vec_present"]:
+        pieces.append("vector index present")
+    pieces.append(f"{stats['sessions']} sessions")
+    pieces.append(f"{stats['skills']} skills")
+    return CheckResult(
+        "memory store", "ok",
+        " · ".join(pieces),
+        category="state",
+    )
+
+
+def check_model_ping(*, timeout: float = 15.0) -> CheckResult:
+    """`--ping-model`: actually call the configured default model.
+
+    A 3-token round-trip via the same provider/client the agent uses.
+    Catches auth errors, model-not-found, network drops — things the
+    plain ``--ping`` (GET on the base URL) can't see.
+    """
+    try:
+        cfg = load_config()
+    except Exception as e:  # noqa: BLE001
+        return CheckResult("model ping", "fail", f"Could not load config: {e}", category="providers")
+
+    try:
+        from durin.providers.factory import make_provider
+
+        provider = make_provider(cfg)
+    except Exception as e:  # noqa: BLE001
+        return CheckResult(
+            "model ping", "fail",
+            f"Could not build provider: {e}",
+            fix="`durin config get providers` to inspect provider config.",
+            category="providers",
+        )
+
+    import asyncio
+
+    async def _ping() -> str | None:
+        try:
+            resp = await provider.chat(
+                messages=[{"role": "user", "content": "ping"}],
+                model=cfg.resolve_preset().model,
+                max_tokens=4,
+                temperature=0.0,
+            )
+        except Exception as e:  # noqa: BLE001
+            return f"{type(e).__name__}: {e}"
+        if getattr(resp, "content", None) is None and not getattr(resp, "tool_calls", None):
+            return "empty response"
+        return None  # success
+
+    try:
+        err = asyncio.run(asyncio.wait_for(_ping(), timeout=timeout))
+    except asyncio.TimeoutError:
+        return CheckResult(
+            "model ping", "fail",
+            f"Timed out after {timeout:.0f}s",
+            fix="Check network or raise `DURIN_OPENAI_COMPAT_TIMEOUT_S`.",
+            category="providers",
+        )
+    except Exception as e:  # noqa: BLE001
+        return CheckResult("model ping", "fail", f"{type(e).__name__}: {e}", category="providers")
+
+    if err:
+        return CheckResult(
+            "model ping", "fail",
+            err,
+            fix="`durin config set providers.<vendor>.apiKey ...` if auth, otherwise inspect logs.",
+            category="providers",
+        )
+    return CheckResult(
+        "model ping", "ok",
+        f"{cfg.resolve_preset().model} responded.",
+        category="providers",
+    )
+
+
+def check_gateway_daemon() -> CheckResult:
+    """When ``config.gateway.daemon=true``, the PID file should point at a live process.
+
+    Skipped (ok-message) when daemon mode isn't requested — running the
+    gateway in foreground is a totally valid choice, not a problem.
+    """
+    try:
+        cfg = load_config()
+    except Exception:  # noqa: BLE001
+        return CheckResult(
+            "gateway daemon", "warn",
+            "Could not load config to check daemon state.",
+            category="services",
+        )
+    if not getattr(cfg.gateway, "daemon", False):
+        return CheckResult(
+            "gateway daemon", "ok",
+            "daemon mode disabled (gateway.daemon=false)",
+            category="services",
+        )
+    from durin.cli.gateway_daemon import daemon_status
+
+    s = daemon_status()
+    if s.state == "running":
+        return CheckResult(
+            "gateway daemon", "ok",
+            f"running (pid {s.pid})",
+            category="services",
+        )
+    if s.state == "stale_pid":
+        return CheckResult(
+            "gateway daemon", "fail",
+            "config requests daemon mode but the PID file points at a dead process.",
+            fix="`durin gateway start` to relaunch.",
+            category="services",
+        )
+    return CheckResult(
+        "gateway daemon", "fail",
+        "config requests daemon mode but the gateway is not running.",
+        fix="`durin gateway start` to launch it.",
+        category="services",
+    )
+
+
+def check_webui_reachable(*, timeout: float = 1.5) -> CheckResult:
+    """When ``config.gateway.webui_enabled=true``, the dashboard must respond on the websocket channel's port.
+
+    Skipped when the webui isn't requested.
+    """
+    try:
+        cfg = load_config()
+    except Exception:  # noqa: BLE001
+        return CheckResult(
+            "webui dashboard", "warn",
+            "Could not load config to check webui state.",
+            category="services",
+        )
+    if not getattr(cfg.gateway, "webui_enabled", False):
+        return CheckResult(
+            "webui dashboard", "ok",
+            "webui disabled (gateway.webui_enabled=false)",
+            category="services",
+        )
+    # Figure out where the webui is served. Defaults match the
+    # websocket channel's defaults (host 127.0.0.1, port 8765); live
+    # overrides come from config.channels.websocket.
+    ws_section = getattr(cfg.channels, "websocket", None)
+    host = "127.0.0.1"
+    ws_port = 8765
+    if ws_section is not None:
+        if isinstance(ws_section, dict):
+            host = ws_section.get("host", host)
+            ws_port = ws_section.get("port", ws_port)
+        else:
+            host = getattr(ws_section, "host", host) or host
+            ws_port = getattr(ws_section, "port", ws_port) or ws_port
+    target = f"http://{host}:{ws_port}/"
+    try:
+        import httpx
+
+        with httpx.Client(timeout=timeout) as client:
+            r = client.get(target)
+            if r.status_code < 500:
+                return CheckResult(
+                    "webui dashboard", "ok",
+                    f"reachable at {target} (HTTP {r.status_code})",
+                    category="services",
+                )
+            return CheckResult(
+                "webui dashboard", "fail",
+                f"{target} → HTTP {r.status_code}",
+                fix="Check the gateway log: `durin gateway logs`",
+                category="services",
+            )
+    except Exception:  # noqa: BLE001 — any network error
+        return CheckResult(
+            "webui dashboard", "fail",
+            f"not reachable at {target}",
+            fix="`durin gateway start` (or `durin gateway` if not in daemon mode).",
+            category="services",
+        )
+
+
 def check_provider_reachable(*, timeout: float = 3.0) -> CheckResult:
     """`--ping`: HEAD/GET against the configured provider's api_base."""
     try:
@@ -371,7 +665,7 @@ class DoctorReport:
         return c
 
 
-def run_checks(*, ping: bool = False) -> DoctorReport:
+def run_checks(*, ping: bool = False, ping_model: bool = False) -> DoctorReport:
     report = DoctorReport()
     report.add(check_python_version())
     report.add(check_durin_version())
@@ -385,9 +679,26 @@ def run_checks(*, ping: bool = False) -> DoctorReport:
     report.add(check_optional_extra("fastembed", extra="memory", purpose="vector recall over memory/"))
     report.add(check_optional_extra("lancedb", extra="memory", purpose="vector index storage"))
     report.add(check_optional_extra("mcp", extra="mcp", purpose="MCP server mode"))
+    report.add(check_optional_extra("ddgs", extra="web", purpose="DuckDuckGo web_search"))
+    report.add(check_optional_extra("readability", extra="web", purpose="web_fetch article extraction"))
+    # Service-level checks: when the user opted into daemon mode or the
+    # webui dashboard, verify they're actually up.
+    report.add(check_gateway_daemon())
+    report.add(check_webui_reachable())
+    # Detect new extras and append them to the tracked set, then surface
+    # any tracked-but-missing as a warning so the user notices when a
+    # reinstall dropped them.
+    try:
+        update_extras_state()
+    except Exception:  # noqa: BLE001
+        pass
+    report.add(check_extras_drift())
+    report.add(check_memory_summary())
     report.add(check_cache_size())
     if ping:
         report.add(check_provider_reachable())
+    if ping_model:
+        report.add(check_model_ping())
     return report
 
 
@@ -521,6 +832,7 @@ def render_json(report: DoctorReport) -> None:
 def run_doctor(
     *,
     ping: bool = False,
+    ping_model: bool = False,
     fix: bool = False,
     as_json: bool = False,
     install_missing: bool = False,
@@ -533,7 +845,7 @@ def run_doctor(
             for m in applied:
                 console.print(f"  [green]✓[/green] {m}")
             console.print("")
-    report = run_checks(ping=ping)
+    report = run_checks(ping=ping, ping_model=ping_model)
     if install_missing:
         extras = collect_missing_extras(report)
         if extras:
@@ -541,9 +853,14 @@ def run_doctor(
             rc = install_missing_extras(extras, assume_yes=assume_yes)
             if rc != 0:
                 return rc
-            # Re-run the checks so the user sees the updated state.
+            # `pipx inject` writes new packages into the SAME venv we're
+            # running in, but Python has already cached the import
+            # negative-lookups for those names. Invalidating the
+            # finder caches lets the re-check see what just landed
+            # without telling the user to restart.
+            importlib.invalidate_caches()
             console.print("\n[bold]Re-checking…[/bold]\n")
-            report = run_checks(ping=ping)
+            report = run_checks(ping=ping, ping_model=ping_model)
     if as_json:
         render_json(report)
     else:
@@ -557,6 +874,11 @@ def register(app: typer.Typer) -> None:
     @app.command("doctor")
     def doctor(
         ping: bool = typer.Option(False, "--ping", help="Test reachability of the active provider's api_base."),
+        ping_model: bool = typer.Option(
+            False,
+            "--ping-model",
+            help="Make a real ~3-token call to the configured default model to verify it actually responds (auth, model name, network).",
+        ),
         fix: bool = typer.Option(False, "--fix", help="Apply safe fixes (create workspace, re-save config)."),
         install_missing: bool = typer.Option(
             False,
@@ -569,6 +891,7 @@ def register(app: typer.Typer) -> None:
         """Diagnose install, config, providers, and runtime state."""
         rc = run_doctor(
             ping=ping,
+            ping_model=ping_model,
             fix=fix,
             as_json=as_json,
             install_missing=install_missing,

@@ -16,7 +16,7 @@ import {
   loadSavedSecret,
   saveSecret,
 } from "@/lib/bootstrap";
-import { NanobotClient } from "@/lib/durin-client";
+import { DurinClient } from "@/lib/durin-client";
 import { ClientProvider, useClient } from "@/providers/ClientProvider";
 import type { ChatSummary } from "@/lib/types";
 import { Button } from "@/components/ui/button";
@@ -28,7 +28,7 @@ type BootState =
   | { status: "auth"; failed?: boolean }
   | {
       status: "ready";
-      client: NanobotClient;
+      client: DurinClient;
       token: string;
       modelName: string | null;
     };
@@ -117,7 +117,7 @@ export default function App() {
           if (cancelled) return;
           if (secret) saveSecret(secret);
           const url = deriveWsUrl(boot.ws_path, boot.token);
-          const client = new NanobotClient({
+          const client = new DurinClient({
             url,
             onReauth: async () => {
               try {

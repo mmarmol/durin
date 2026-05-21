@@ -74,7 +74,7 @@ function wrap(client: ReturnType<typeof fakeClient>["client"]) {
   return function Wrapper({ children }: { children: ReactNode }) {
     return (
       <ClientProvider
-        client={client as unknown as import("@/lib/durin-client").NanobotClient}
+        client={client as unknown as import("@/lib/durin-client").DurinClient}
         token="tok"
       >
         {children}

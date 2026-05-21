@@ -87,6 +87,11 @@ app = typer.Typer(
     context_settings={"help_option_names": ["-h", "--help"]},
     help=f"{__logo__} durin - Personal AI Assistant",
     no_args_is_help=True,
+    # Hide the auto-injected `--install-completion` / `--show-completion`
+    # flags. They're Typer boilerplate, not durin functionality —
+    # power users who want tab-completion can still set it up manually
+    # via their shell (see docs/INSTALL.md).
+    add_completion=False,
 )
 
 # D6 lifecycle commands: config get/set/show/edit/path, upgrade, uninstall.
@@ -476,9 +481,21 @@ def main(
 def onboard(
     workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
     config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
-    wizard: bool = typer.Option(False, "--wizard", help="Use interactive wizard"),
+    no_wizard: bool = typer.Option(
+        False, "--no-wizard",
+        help="Skip the interactive wizard; write defaults silently.",
+    ),
+    advanced: bool = typer.Option(
+        False, "--advanced",
+        help="Use the legacy field-by-field walker instead of the task-oriented wizard.",
+    ),
 ):
-    """Initialize durin configuration and workspace."""
+    """Initialize durin configuration and workspace.
+
+    Runs the task-oriented wizard by default (provider/key/model + an
+    opt-in menu of features). Use `--no-wizard` to just write defaults
+    or `--advanced` for the legacy walk-every-config-field mode.
+    """
     from durin.config.loader import get_config_path, load_config, save_config, set_config_path
     from durin.config.schema import Config
 
@@ -494,37 +511,25 @@ def onboard(
             loaded.agents.defaults.workspace = workspace
         return loaded
 
-    # Create or update config
+    # Default mode: task-oriented wizard. Legacy field-walker available
+    # via --advanced; silent defaults via --no-wizard.
+    wizard_mode = not no_wizard
+
+    # Load base config: existing file if present, fresh defaults otherwise.
     if config_path.exists():
-        if wizard:
-            config = _apply_workspace_override(load_config(config_path))
-        else:
-            console.print(f"[yellow]Config already exists at {config_path}[/yellow]")
-            console.print(
-                "  [bold]y[/bold] = overwrite with defaults (existing values will be lost)"
-            )
-            console.print(
-                "  [bold]N[/bold] = refresh config, keeping existing values and adding new fields"
-            )
-            if typer.confirm("Overwrite?"):
-                config = _apply_workspace_override(Config())
-                save_config(config, config_path)
-                console.print(f"[green]✓[/green] Config reset to defaults at {config_path}")
-            else:
-                config = _apply_workspace_override(load_config(config_path))
-                save_config(config, config_path)
-                console.print(
-                    f"[green]✓[/green] Config refreshed at {config_path} (existing values preserved)"
-                )
+        config = _apply_workspace_override(load_config(config_path))
+        if not wizard_mode:
+            console.print(f"[yellow]Config exists at {config_path}; nothing to do.[/yellow]")
+            console.print("[dim]Re-run without --no-wizard to update interactively.[/dim]")
+            return
     else:
         config = _apply_workspace_override(Config())
-        # In wizard mode, don't save yet - the wizard will handle saving if should_save=True
-        if not wizard:
+        if not wizard_mode:
             save_config(config, config_path)
             console.print(f"[green]✓[/green] Created config at {config_path}")
 
-    # Run interactive wizard if enabled
-    if wizard:
+    if wizard_mode and advanced:
+        # Legacy walker — exhaustive, walks every Pydantic field.
         from durin.cli.onboard import run_onboard
 
         try:
@@ -532,7 +537,6 @@ def onboard(
             if not result.should_save:
                 console.print("[yellow]Configuration discarded. No changes were saved.[/yellow]")
                 return
-
             config = result.config
             save_config(config, config_path)
             console.print(f"[green]✓[/green] Config saved at {config_path}")
@@ -540,6 +544,36 @@ def onboard(
             console.print(f"[red]✗[/red] Error during configuration: {e}")
             console.print("[yellow]Please run 'durin onboard' again to complete setup.[/yellow]")
             raise typer.Exit(1)
+    elif wizard_mode:
+        # New default: task-oriented wizard.
+        from durin.cli.onboard_wizard import run_wizard
+
+        try:
+            result = run_wizard(config)
+        except RuntimeError as e:
+            console.print(f"[red]✗[/red] {e}")
+            console.print(
+                "[yellow]Tip: re-run with `durin onboard --advanced` "
+                "for the legacy walker.[/yellow]"
+            )
+            raise typer.Exit(1)
+        if result.cancelled:
+            console.print("[yellow]Wizard cancelled; nothing was saved.[/yellow]")
+            return
+        config = result.config
+        save_config(config, config_path)
+        console.print(f"[green]✓[/green] Config saved at {config_path}")
+        # Surface the summary + the install command for missing extras.
+        if result.summary_lines:
+            console.print("\n[bold]Configured:[/bold]")
+            for line in result.summary_lines:
+                console.print(f"  • {line}")
+        if result.extras_to_install:
+            from durin.cli.upgrade import install_hint
+
+            cmd = install_hint(result.extras_to_install)
+            console.print("\n[bold]Install missing extras (copy-paste):[/bold]")
+            console.print(f"  [cyan]{cmd}[/cyan]")
     _onboard_plugins(config_path)
 
     # Create workspace, preferring the configured workspace path.
@@ -558,16 +592,13 @@ def onboard(
 
     console.print(f"\n{__logo__} durin is ready!")
     console.print("\nNext steps:")
-    if wizard:
-        console.print(f"  1. Chat: [cyan]{agent_cmd}[/cyan]")
-        console.print(f"  2. Start gateway: [cyan]{gateway_cmd}[/cyan]")
+    if wizard_mode:
+        console.print(f"  1. Verify: [cyan]durin doctor[/cyan]")
+        console.print(f"  2. Chat: [cyan]{agent_cmd}[/cyan]")
+        console.print(f"  3. (optional) Chat apps: [cyan]{gateway_cmd}[/cyan]")
     else:
         console.print(f"  1. Add your API key to [cyan]{config_path}[/cyan]")
-        console.print("     Get one at: https://openrouter.ai/keys")
         console.print(f"  2. Chat: [cyan]{agent_cmd}[/cyan]")
-    console.print(
-        "\n[dim]Want Telegram/WhatsApp? See: https://github.com/HKUDS/durin#-chat-apps[/dim]"
-    )
 
 
 def _merge_missing_defaults(existing: Any, defaults: Any) -> Any:
@@ -585,27 +616,52 @@ def _merge_missing_defaults(existing: Any, defaults: Any) -> Any:
 
 
 def _onboard_plugins(config_path: Path) -> None:
-    """Inject default config for all discovered channels (built-in + plugins)."""
-    import json
+    """Backfill the full attribute set for **enabled** channels only.
 
+    Previously this eagerly injected every discovered channel's
+    ``default_config()`` — which buried the config under a dozen
+    disabled channels' worth of noise. The user's rule: unconfigured
+    channels stay absent; an *enabled* channel gets its full attribute
+    set so every editable field is visible.
+
+    Layout-aware: reads/writes via the shared loader helpers so the
+    split-file layout and the legacy monolith both work.
+    """
     from durin.channels.registry import discover_all
+    from durin.config.loader import (
+        _is_split_layout,
+        _prune_noise_sections,
+        _write_split_layout,
+        read_persisted_config,
+    )
 
     all_channels = discover_all()
     if not all_channels:
         return
 
-    with open(config_path, encoding="utf-8") as f:
-        data = json.load(f)
+    data = read_persisted_config(config_path)
+    channels = data.get("channels")
+    if isinstance(channels, dict):
+        for name, cls in all_channels.items():
+            section = channels.get(name)
+            # Only touch channels the user has already configured AND
+            # enabled — backfill any missing attributes so the section
+            # is complete + editable. Disabled / absent channels are
+            # left alone (no noise).
+            if isinstance(section, dict) and section.get("enabled"):
+                channels[name] = _merge_missing_defaults(section, cls.default_config())
 
-    channels = data.setdefault("channels", {})
-    for name, cls in all_channels.items():
-        if name not in channels:
-            channels[name] = cls.default_config()
-        else:
-            channels[name] = _merge_missing_defaults(channels[name], cls.default_config())
+    # Strip any leftover all-default disabled channels / empty providers
+    # so an existing noisy config gets cleaned up on this pass too.
+    data = _prune_noise_sections(data)
 
-    with open(config_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    if _is_split_layout(config_path):
+        _write_split_layout(data, config_path)
+    else:
+        import json
+
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
 
 
 def _model_display(config: Config) -> tuple[str, str]:
@@ -756,30 +812,218 @@ def serve(
 # ============================================================================
 
 
-@app.command()
-def gateway(
+gateway_app = typer.Typer(
+    invoke_without_command=True,
+    no_args_is_help=False,
+    help="Run the durin gateway (webui + channels + cron).",
+)
+app.add_typer(gateway_app, name="gateway")
+
+
+def _gateway_apply_verbose() -> None:
+    """Switch the logger to DEBUG when --verbose is requested."""
+    logger.remove(_log_handler_id)
+    logger.add(
+        sys.stderr,
+        format=(
+            "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
+            "<level>{level: <5}</level> | "
+            "<cyan>{extra[channel]}</cyan> | "
+            "<level>{message}</level>"
+        ),
+        level="DEBUG",
+        colorize=None,
+        filter=lambda record: record["extra"].setdefault("channel", "-") or True,
+    )
+
+
+@gateway_app.callback()
+def gateway_root(
+    ctx: typer.Context,
     port: int | None = typer.Option(None, "--port", "-p", help="Gateway port"),
     workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
     config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
+    foreground: bool = typer.Option(
+        False, "--foreground",
+        help="Force foreground mode even if config.gateway.daemon is true. "
+             "Used internally by `gateway start` to launch the detached child.",
+    ),
 ):
-    """Start the durin gateway."""
+    """Run the gateway.
+
+    With no subcommand, follows ``config.gateway.daemon``:
+    - ``daemon=false`` (default): runs foreground, terminal locked.
+    - ``daemon=true``: detaches into the background (same as `gateway start`).
+
+    Use ``--foreground`` to force foreground regardless of config.
+    """
+    if ctx.invoked_subcommand is not None:
+        # A subcommand (start / stop / status / …) will handle the run.
+        # Stash shared opts on ctx so subcommands can read them.
+        ctx.obj = {
+            "port": port, "workspace": workspace, "verbose": verbose,
+            "config": config, "foreground": foreground,
+        }
+        return
+
     if verbose:
-        logger.remove(_log_handler_id)
-        logger.add(
-            sys.stderr,
-            format=(
-                "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | "
-                "<level>{level: <5}</level> | "
-                "<cyan>{extra[channel]}</cyan> | "
-                "<level>{message}</level>"
-            ),
-            level="DEBUG",
-            colorize=None,
-            filter=lambda record: record["extra"].setdefault("channel", "-") or True,
-        )
+        _gateway_apply_verbose()
     cfg = _load_runtime_config(config, workspace)
+    # Respect config.gateway.daemon unless --foreground forces inline.
+    if cfg.gateway.daemon and not foreground:
+        from durin.cli.gateway_daemon import AlreadyRunningError, start_daemon
+
+        try:
+            pid = start_daemon([])
+        except AlreadyRunningError as e:
+            console.print(
+                f"[yellow]Gateway already running (pid {e.pid}). "
+                "Use `durin gateway stop` first if you want a fresh start.[/yellow]"
+            )
+            raise typer.Exit(1)
+        from durin.cli.gateway_daemon import daemon_logs_path
+
+        console.print(f"[green]✓[/green] Gateway started (pid {pid}, daemon mode)")
+        url = _resolved_webui_url()
+        if url:
+            console.print(f"  Dashboard: [cyan]{url}[/cyan]")
+        console.print(f"  Logs:      [cyan]{daemon_logs_path()}[/cyan]")
+        console.print("  Stop:      [cyan]durin gateway stop[/cyan]")
+        return
     _run_gateway(cfg, port=port)
+
+
+def _resolved_webui_url() -> str | None:
+    """Return the URL where the webui dashboard would be served, if enabled."""
+    try:
+        from durin.config.loader import load_config
+
+        cfg = load_config()
+    except Exception:  # noqa: BLE001
+        return None
+    if not getattr(cfg.gateway, "webui_enabled", False):
+        return None
+    ws_section = getattr(cfg.channels, "websocket", None)
+    host = "127.0.0.1"
+    port = 8765  # websocket channel default
+    if ws_section is not None:
+        if isinstance(ws_section, dict):
+            host = ws_section.get("host", host)
+            port = ws_section.get("port", port)
+        else:
+            host = getattr(ws_section, "host", host) or host
+            port = getattr(ws_section, "port", port) or port
+    return f"http://{host}:{port}/"
+
+
+@gateway_app.command("start")
+def gateway_start(ctx: typer.Context) -> None:
+    """Detach the gateway into the background regardless of config.gateway.daemon."""
+    from durin.cli.gateway_daemon import AlreadyRunningError, daemon_logs_path, start_daemon
+
+    opts = ctx.obj or {}
+    extra: list[str] = []
+    if opts.get("port") is not None:
+        extra += ["--port", str(opts["port"])]
+    if opts.get("workspace"):
+        extra += ["--workspace", str(opts["workspace"])]
+    if opts.get("verbose"):
+        extra.append("--verbose")
+    if opts.get("config"):
+        extra += ["--config", str(opts["config"])]
+
+    try:
+        pid = start_daemon(extra)
+    except AlreadyRunningError as e:
+        console.print(
+            f"[yellow]Gateway already running (pid {e.pid}). "
+            "Run `durin gateway restart` to bounce it.[/yellow]"
+        )
+        raise typer.Exit(1)
+    console.print(f"[green]✓[/green] Gateway started in background (pid {pid})")
+    url = _resolved_webui_url()
+    if url:
+        console.print(f"  Dashboard: [cyan]{url}[/cyan]")
+    console.print(f"  Logs:      [cyan]{daemon_logs_path()}[/cyan]")
+
+
+@gateway_app.command("stop")
+def gateway_stop() -> None:
+    """Stop the background gateway daemon."""
+    from durin.cli.gateway_daemon import daemon_status, stop_daemon
+
+    before = daemon_status()
+    if before.state == "not_running":
+        console.print("[dim]Gateway is not running.[/dim]")
+        return
+    if before.state == "stale_pid":
+        console.print(
+            f"[yellow]Stale PID file at {before.pid_file} (process is gone). "
+            "Cleaning up.[/yellow]"
+        )
+        stop_daemon()
+        return
+    after = stop_daemon()
+    if after.state == "not_running":
+        console.print(f"[green]✓[/green] Gateway stopped (was pid {before.pid})")
+    else:
+        console.print(
+            f"[red]✗[/red] Gateway did not stop cleanly; state: {after.state}"
+        )
+        raise typer.Exit(1)
+
+
+@gateway_app.command("restart")
+def gateway_restart(ctx: typer.Context) -> None:
+    """Stop and start the gateway daemon."""
+    gateway_stop()
+    gateway_start(ctx)
+
+
+@gateway_app.command("status")
+def gateway_status_cmd() -> None:
+    """Show whether the gateway daemon is running."""
+    from durin.cli.gateway_daemon import daemon_status
+
+    s = daemon_status()
+    if s.state == "running":
+        console.print(f"[green]✓[/green] Gateway is running (pid {s.pid})")
+        url = _resolved_webui_url()
+        if url:
+            console.print(f"  Dashboard: [cyan]{url}[/cyan]")
+        console.print(f"  Logs:      [cyan]{s.log_file}[/cyan]")
+    elif s.state == "stale_pid":
+        console.print(
+            f"[yellow]Stale PID file at {s.pid_file} — process is gone.[/yellow]"
+        )
+        console.print("  Run `durin gateway start` to relaunch.")
+    else:
+        console.print("[dim]Gateway is not running.[/dim]")
+
+
+@gateway_app.command("logs")
+def gateway_logs_cmd(
+    follow: bool = typer.Option(False, "--follow", "-f", help="tail -f mode"),
+    lines: int = typer.Option(80, "--lines", "-n", help="How many trailing lines to show"),
+) -> None:
+    """Show the gateway daemon's log output."""
+    from durin.cli.gateway_daemon import daemon_logs_path
+
+    log_path = daemon_logs_path()
+    if not log_path.exists():
+        console.print(f"[dim]No log file yet at {log_path}.[/dim]")
+        return
+    import subprocess as _sub
+
+    cmd = ["tail", "-n", str(lines)]
+    if follow:
+        cmd.append("-f")
+    cmd.append(str(log_path))
+    try:
+        _sub.run(cmd, check=False)
+    except KeyboardInterrupt:
+        pass
 
 
 def _run_gateway(
@@ -789,6 +1033,42 @@ def _run_gateway(
     open_browser_url: str | None = None,
 ) -> None:
     """Shared gateway runtime; ``open_browser_url`` opens a tab once channels are up."""
+    # When the webui is requested via config, ensure the websocket
+    # channel (which serves the SPA static files + the WS endpoint) is
+    # turned on at RUNTIME — without mutating the persisted config.
+    # The user picked `webui_enabled=true` because they want the
+    # dashboard, not because they want to think about which channel
+    # serves it. We *also* disable the token-required handshake by
+    # default in this auto-enable path so the SPA loads in the browser
+    # without needing the user to set up auth first.
+    if getattr(config.gateway, "webui_enabled", False):
+        ws_section = getattr(config.channels, "websocket", None)
+        if ws_section is None:
+            # No `channels.websocket` section in the user's config — add
+            # one in-memory. We poke `__pydantic_extra__` because
+            # ChannelsConfig uses `extra="allow"` to store unknown
+            # channels there.
+            ws_dict = {
+                "enabled": True,
+                "websocket_requires_token": False,
+            }
+            try:
+                extra = getattr(config.channels, "__pydantic_extra__", None)
+                if isinstance(extra, dict):
+                    extra["websocket"] = ws_dict
+                else:
+                    setattr(config.channels, "websocket", ws_dict)
+            except Exception:  # noqa: BLE001
+                pass
+        else:
+            if hasattr(ws_section, "enabled"):
+                if not getattr(ws_section, "enabled", False):
+                    try:
+                        ws_section.enabled = True
+                    except Exception:  # noqa: BLE001
+                        pass
+            elif isinstance(ws_section, dict):
+                ws_section.setdefault("enabled", True)
     from durin.agent.tools.cron import CronTool
     from durin.agent.tools.message import MessageTool
     from durin.bus.queue import MessageBus
@@ -1211,15 +1491,44 @@ def _run_gateway(
 
 @app.command()
 def agent(
-    message: str = typer.Option(None, "--message", "-m", help="Message to send to the agent"),
-    session_id: str = typer.Option("cli:direct", "--session", "-s", help="Session ID"),
+    message: str = typer.Option(
+        None, "--message", "-m",
+        help="One-shot message to send to the agent and exit (skips the TUI).",
+    ),
+    session_id: str | None = typer.Option(
+        None, "--session", "-s",
+        help=(
+            "Session ID to open (e.g. `cli:work`). Without this, the TUI "
+            "opens the most recently used session, or starts fresh if none exist."
+        ),
+    ),
+    new_session: bool = typer.Option(
+        False, "--new", "-n",
+        help="Start a brand-new session with a timestamp id (`cli:YYYYMMDD_HHMMSS`).",
+    ),
+    resume: bool = typer.Option(
+        False, "--resume", "-r",
+        help="Open the session picker on launch instead of auto-selecting.",
+    ),
     workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
     config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
     markdown: bool = typer.Option(True, "--markdown/--no-markdown", help="Render assistant output as Markdown"),
     logs: bool = typer.Option(False, "--logs/--no-logs", help="Show durin runtime logs during chat"),
-    tui: bool = typer.Option(False, "--tui", help="Launch the Textual TUI (Phase D5, opt-in)"),
+    tui: bool = typer.Option(
+        True, "--tui/--legacy",
+        help=(
+            "TUI is the default; pass --legacy to fall back to the prompt_toolkit "
+            "REPL (single-line input, no streaming UI)."
+        ),
+    ),
 ):
-    """Interact with the agent directly."""
+    """Interact with the agent.
+
+    Without flags, `durin agent` opens the rich TUI on your most recently
+    used session. Use --new to start fresh, --resume to pick a session
+    interactively, --session <id> for a specific one, or --legacy for
+    the old single-line REPL.
+    """
     from loguru import logger
 
     from durin.bus.queue import MessageBus
@@ -1252,22 +1561,53 @@ def agent(
         console.print(f"[red]Error: {exc}[/red]")
         raise typer.Exit(1) from exc
 
+    # A `-m message` one-shot always falls through to the legacy
+    # synchronous path below — TUI doesn't make sense for a single
+    # message + exit.
+    if message is not None:
+        tui = False
+
     if tui:
-        if message is not None:
-            console.print("[yellow]--tui and --message are mutually exclusive; ignoring --message.[/yellow]")
+        from durin.cli.sessions import fresh_session_id, most_recent_session
         from durin.cli.tui import run_durin_tui
 
-        if ":" in session_id:
-            tui_channel, tui_chat_id = session_id.split(":", 1)
+        # Resolve which session the TUI should open.
+        # Precedence: explicit --session > --new > --resume > most-recent > fresh default.
+        auto_resume = False
+        if session_id:
+            if ":" in session_id:
+                tui_channel, tui_chat_id = session_id.split(":", 1)
+            else:
+                tui_channel, tui_chat_id = "cli", session_id
+        elif new_session:
+            tui_channel, tui_chat_id = fresh_session_id()
+        elif resume:
+            # Let the TUI pop the session picker on mount.
+            recent = most_recent_session(config.workspace_path)
+            if recent:
+                tui_channel, tui_chat_id = recent.channel, recent.chat_id
+            else:
+                tui_channel, tui_chat_id = "cli", "direct"
+            auto_resume = True
         else:
-            tui_channel, tui_chat_id = "cli", session_id
+            recent = most_recent_session(config.workspace_path)
+            if recent:
+                tui_channel, tui_chat_id = recent.channel, recent.chat_id
+            else:
+                tui_channel, tui_chat_id = "cli", "direct"
+
         run_durin_tui(
             agent_loop=agent_loop,
             cli_channel=tui_channel,
             cli_chat_id=tui_chat_id,
             markdown=markdown,
+            auto_resume=auto_resume,
         )
         return
+
+    # `--legacy` (or one-shot via -m) — fall through to the original REPL/one-shot.
+    if session_id is None:
+        session_id = "cli:direct"
     restart_notice = consume_restart_notice_from_env()
     if restart_notice and should_show_cli_restart_notice(restart_notice, session_id):
         _print_agent_response(
@@ -1558,8 +1898,8 @@ app.add_typer(channels_app, name="channels")
 def channels_status(
     config_path: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
 ):
-    """Show channel status."""
-    from durin.channels.registry import discover_all
+    """Show channel status \u2014 name, source (builtin / plugin), enabled."""
+    from durin.channels.registry import discover_all, discover_channel_names
     from durin.config.loader import load_config, set_config_path
 
     resolved_config_path = Path(config_path).expanduser().resolve() if config_path else None
@@ -1567,9 +1907,11 @@ def channels_status(
         set_config_path(resolved_config_path)
 
     config = load_config(resolved_config_path)
+    builtin_names = set(discover_channel_names())
 
-    table = Table(title="Channel Status")
+    table = Table(title="Channels")
     table.add_column("Channel", style="cyan")
+    table.add_column("Source", style="magenta")
     table.add_column("Enabled")
 
     for name, cls in sorted(discover_all().items()):
@@ -1580,8 +1922,10 @@ def channels_status(
             enabled = section.get("enabled", False)
         else:
             enabled = getattr(section, "enabled", False)
+        source = "builtin" if name in builtin_names else "plugin"
         table.add_row(
             cls.display_name,
+            source,
             "[green]\u2713[/green]" if enabled else "[dim]\u2717[/dim]",
         )
 
@@ -1627,42 +1971,9 @@ def channels_login(
 # Plugin Commands
 # ============================================================================
 
-plugins_app = typer.Typer(help="Manage channel plugins")
-app.add_typer(plugins_app, name="plugins")
-
-
-@plugins_app.command("list")
-def plugins_list():
-    """List all discovered channels (built-in and plugins)."""
-    from durin.channels.registry import discover_all, discover_channel_names
-    from durin.config.loader import load_config
-
-    config = load_config()
-    builtin_names = set(discover_channel_names())
-    all_channels = discover_all()
-
-    table = Table(title="Channel Plugins")
-    table.add_column("Name", style="cyan")
-    table.add_column("Source", style="magenta")
-    table.add_column("Enabled")
-
-    for name in sorted(all_channels):
-        cls = all_channels[name]
-        source = "builtin" if name in builtin_names else "plugin"
-        section = getattr(config.channels, name, None)
-        if section is None:
-            enabled = False
-        elif isinstance(section, dict):
-            enabled = section.get("enabled", False)
-        else:
-            enabled = getattr(section, "enabled", False)
-        table.add_row(
-            cls.display_name,
-            source,
-            "[green]yes[/green]" if enabled else "[dim]no[/dim]",
-        )
-
-    console.print(table)
+# `durin plugins list` was removed in alpha — its content (channel
+# discovery list with builtin / plugin source) was 95% duplicated by
+# `durin channels status`, which now carries the Source column too.
 
 
 # ============================================================================
@@ -1672,48 +1983,130 @@ def plugins_list():
 
 @app.command()
 def status():
-    """Show durin status."""
+    """Show durin's current configuration — a factual snapshot.
+
+    ``status`` answers "what is set up?"; ``doctor`` answers "is
+    anything broken?". status passes no judgement — it shows only the
+    sections that have content (configured providers, enabled
+    channels, …) so it stays readable instead of dumping every
+    possible provider.
+    """
     from durin.config.loader import get_config_path, load_config
 
     config_path = get_config_path()
     config = load_config()
-    workspace = config.workspace_path
 
-    console.print(f"{__logo__} durin Status\n")
+    console.print(f"{__logo__} [bold]durin[/bold] · {__version__}\n")
 
-    console.print(f"Config: {config_path} {'[green]✓[/green]' if config_path.exists() else '[red]✗[/red]'}")
-    console.print(f"Workspace: {workspace} {'[green]✓[/green]' if workspace.exists() else '[red]✗[/red]'}")
+    for label, value in _status_sections(config, config_path):
+        console.print(f"  [cyan]{label:<10}[/cyan] {value}")
 
-    if config_path.exists():
-        from durin.providers.registry import PROVIDERS
 
-        _model, _preset_tag = _model_display(config)
-        console.print(f"Model: {_model}{_preset_tag}")
+def _status_sections(config: Any, config_path: Path) -> list[tuple[str, str]]:
+    """Build the (label, value) rows for ``durin status``. Sections with
+    no content are omitted so the output stays a tight snapshot."""
+    from durin.providers.registry import PROVIDERS
+    from durin.utils.oauth import any_token_present
 
-        # Check API keys from registry
-        for spec in PROVIDERS:
-            p = getattr(config.providers, spec.name, None)
-            if p is None:
-                continue
-            if spec.is_oauth:
-                console.print(f"{spec.label}: [green]✓ (OAuth)[/green]")
-            elif spec.is_local:
-                # Local deployments show api_base instead of api_key
-                if p.api_base:
-                    console.print(f"{spec.label}: [green]✓ {p.api_base}[/green]")
-                else:
-                    console.print(f"{spec.label}: [dim]not set[/dim]")
-            else:
-                has_key = bool(p.api_key)
-                console.print(f"{spec.label}: {'[green]✓[/green]' if has_key else '[dim]not set[/dim]'}")
+    rows: list[tuple[str, str]] = []
+
+    # --- Model -------------------------------------------------------
+    model, preset_tag = _model_display(config)
+    d = config.agents.defaults
+    ctx = f"{d.context_window_tokens:,} ctx" if d.context_window_tokens else ""
+    model_line = " · ".join(p for p in (f"{model}{preset_tag}", d.provider, ctx) if p)
+    rows.append(("Model", model_line))
+    aux = getattr(config.agents, "aux_models", None)
+    aux_bits = []
+    if aux is not None:
+        if getattr(aux, "vision", None) is not None and aux.vision.model:
+            aux_bits.append(f"vision: {aux.vision.model}")
+        if getattr(aux, "audio", None) is not None and aux.audio.model:
+            aux_bits.append(f"audio: {aux.audio.model}")
+    if aux_bits:
+        rows.append(("", "[dim]" + " · ".join(aux_bits) + "[/dim]"))
+
+    # --- Providers (only the configured ones) ------------------------
+    configured: list[str] = []
+    for spec in PROVIDERS:
+        p = getattr(config.providers, spec.name, None)
+        if p is None:
+            continue
+        if spec.is_oauth:
+            if any_token_present(spec.name):
+                configured.append(f"{spec.label} (OAuth)")
+        elif spec.is_local:
+            if getattr(p, "api_base", None):
+                configured.append(spec.label)
+        elif getattr(p, "api_key", None):
+            configured.append(spec.label)
+    if configured:
+        rows.append((
+            "Providers",
+            f"{', '.join(configured)}  [dim]({len(configured)} configured)[/dim]",
+        ))
+    else:
+        rows.append(("Providers", "[dim]none configured — run `durin onboard`[/dim]"))
+
+    # --- Channels (only the enabled ones) ----------------------------
+    enabled_channels: list[str] = []
+    channels_obj = config.channels
+    extra = getattr(channels_obj, "__pydantic_extra__", None) or {}
+    for name, section in extra.items():
+        en = section.get("enabled") if isinstance(section, dict) else getattr(section, "enabled", False)
+        if en:
+            port = section.get("port") if isinstance(section, dict) else getattr(section, "port", None)
+            enabled_channels.append(f"{name}:{port}" if port else name)
+    if enabled_channels:
+        rows.append(("Channels", ", ".join(enabled_channels)))
+
+    # --- Gateway -----------------------------------------------------
+    try:
+        from durin.cli.gateway_daemon import daemon_status
+
+        gw = daemon_status()
+        if gw.state == "running":
+            url = _resolved_webui_url() or ""
+            rows.append(("Gateway", f"running (pid {gw.pid}){'  ' + url if url else ''}"))
+    except Exception:  # noqa: BLE001
+        pass
+
+    # --- Memory ------------------------------------------------------
+    try:
+        ws = config.workspace_path
+        mem_dir = ws / "memory"
+        docs = len(list(mem_dir.glob("**/*.md"))) if mem_dir.exists() else 0
+        sess_dir = ws / "sessions"
+        sessions = len(list(sess_dir.glob("*.jsonl"))) if sess_dir.exists() else 0
+        rows.append(("Memory", f"{docs} docs · {sessions} sessions"))
+    except Exception:  # noqa: BLE001
+        pass
+
+    # --- Config ------------------------------------------------------
+    from durin.config.loader import _is_split_layout
+
+    layout = "split" if _is_split_layout(config_path) else "single file"
+    rows.append((
+        "Config",
+        f"{config_path} [dim]({layout})[/dim]"
+        if config_path.exists()
+        else "[red]missing — run `durin onboard`[/red]",
+    ))
+    rows.append(("Workspace", str(config.workspace_path)))
+
+    return rows
 
 
 # ============================================================================
 # OAuth Login
 # ============================================================================
 
-provider_app = typer.Typer(help="Manage providers")
-app.add_typer(provider_app, name="provider")
+# Renamed from `provider` → `oauth` in alpha to avoid collision with
+# `config.providers` (the LLM provider list). This group is *only*
+# about OAuth-based providers (codex, copilot) — non-OAuth keys live in
+# `durin config set providers.<vendor>.api_key …`.
+oauth_app = typer.Typer(help="Sign in / out of OAuth-based providers (codex, copilot).")
+app.add_typer(oauth_app, name="oauth")
 
 
 _LOGIN_HANDLERS: dict[str, Callable[[], None]] = {}
@@ -1755,7 +2148,7 @@ def _resolve_oauth_provider(provider: str):
     return spec
 
 
-@provider_app.command("login")
+@oauth_app.command("login")
 def provider_login(
     provider: str = typer.Argument(..., help="OAuth provider (e.g. 'openai-codex', 'github-copilot')"),
 ):
@@ -1771,7 +2164,7 @@ def provider_login(
     handler()
 
 
-@provider_app.command("logout")
+@oauth_app.command("logout")
 def provider_logout(
     provider: str = typer.Argument(..., help="OAuth provider (e.g. 'openai-codex', 'github-copilot')"),
 ):

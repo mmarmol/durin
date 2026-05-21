@@ -133,7 +133,7 @@ class StreamRenderer:
         render_markdown: bool = True,
         show_spinner: bool = True,
         bot_name: str = "durin",
-        bot_icon: str = "🐈",
+        bot_icon: str = "⚒️",
     ):
         self._md = render_markdown
         self._show_spinner = show_spinner

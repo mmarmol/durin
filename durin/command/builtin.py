@@ -1184,23 +1184,10 @@ async def cmd_compact(ctx: CommandContext) -> OutboundMessage:
 
 
 def _copy_to_clipboard(text: str) -> str:
-    """Copy text using the first available system tool. Return tool name."""
-    candidates = [
-        ("pbcopy", ["pbcopy"]),
-        ("xclip", ["xclip", "-selection", "clipboard"]),
-        ("wl-copy", ["wl-copy"]),
-        ("clip", ["clip"]),
-    ]
-    for name, cmd in candidates:
-        try:
-            subprocess.run(cmd, input=text, text=True, check=True, capture_output=True)
-            return name
-        except (FileNotFoundError, subprocess.CalledProcessError):
-            continue
-    raise RuntimeError(
-        "no clipboard tool found — install pbcopy (macOS), xclip / wl-copy "
-        "(Linux), or run on Windows where `clip` is built in"
-    )
+    """Copy text via the shared clipboard helper. Returns the tool name used."""
+    from durin.utils.clipboard import copy_text
+
+    return copy_text(text)
 
 
 def _last_assistant_content(session) -> str | None:
@@ -1781,7 +1768,7 @@ async def cmd_help(ctx: CommandContext) -> OutboundMessage:
 
 def build_help_text() -> str:
     """Build canonical help text shared across channels."""
-    lines = ["🐈 durin commands:"]
+    lines = ["⚒️ durin commands:"]
     for spec in BUILTIN_COMMAND_SPECS:
         command = spec.command
         if spec.arg_hint:

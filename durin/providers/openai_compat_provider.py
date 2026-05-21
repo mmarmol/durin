@@ -339,26 +339,65 @@ class OpenAICompatProvider(LLMProvider):
         # LAN.  Cloud providers benefit from keepalive, so we leave the
         # default pool settings for them.
         timeout_s = _openai_compat_timeout_s()
-        http_client: httpx.AsyncClient | None = None
-        if _is_local_endpoint(spec, effective_base):
-            http_client = httpx.AsyncClient(
-                limits=httpx.Limits(keepalive_expiry=0),
-                timeout=timeout_s,
-            )
+        self._timeout_s = timeout_s
+        self._is_local = _is_local_endpoint(spec, effective_base)
 
-        self._client = AsyncOpenAI(
-            api_key=api_key or "no-key",
-            base_url=effective_base,
-            default_headers=default_headers,
-            max_retries=0,
-            timeout=timeout_s,
-            http_client=http_client,
-        )
+        # Lazy + per-loop client cache.
+        #
+        # `AsyncOpenAI` wraps an `httpx.AsyncClient` which, when constructed,
+        # captures the running asyncio loop (via anyio) on first request.
+        # If we eagerly create it here (during AgentLoop.from_config(),
+        # which runs in the outer event loop), and then the TUI swaps in a
+        # different loop (Textual's `app.run_async()` creates its own),
+        # the next request fails with `BrokenResourceError` because the
+        # socket transport is tied to a loop that's no longer current.
+        #
+        # Solution: stash the constructor kwargs and build one client per
+        # event loop on first use.
+        self._client_kwargs: dict[str, Any] = {
+            "api_key": api_key or "no-key",
+            "base_url": effective_base,
+            "default_headers": default_headers,
+            "max_retries": 0,
+            "timeout": timeout_s,
+        }
+        self._client_cache: dict[int, AsyncOpenAI] = {}
 
         # Responses API circuit breaker: skip after repeated failures,
         # probe again after _RESPONSES_PROBE_INTERVAL_S seconds.
         self._responses_failures: dict[str, int] = {}
         self._responses_tripped_at: dict[str, float] = {}
+
+    @property
+    def _client(self) -> AsyncOpenAI:
+        """Per-loop AsyncOpenAI client.
+
+        See the comment in ``__init__`` for why we cache by loop id instead
+        of holding a single eager client. Called only from async code, so
+        ``asyncio.get_running_loop()`` is the right primitive.
+        """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # No running loop — caller is in sync code (e.g. tests). Use
+            # the cache key 0 so we still get a stable single client.
+            loop_id = 0
+        else:
+            loop_id = id(loop)
+
+        client = self._client_cache.get(loop_id)
+        if client is not None:
+            return client
+
+        http_client: httpx.AsyncClient | None = None
+        if self._is_local:
+            http_client = httpx.AsyncClient(
+                limits=httpx.Limits(keepalive_expiry=0),
+                timeout=self._timeout_s,
+            )
+        client = AsyncOpenAI(http_client=http_client, **self._client_kwargs)
+        self._client_cache[loop_id] = client
+        return client
 
     def _setup_env(self, api_key: str, api_base: str | None) -> None:
         """Set environment variables based on provider spec."""

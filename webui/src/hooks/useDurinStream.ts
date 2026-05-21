@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useClient } from "@/providers/ClientProvider";
 import { toMediaAttachment } from "@/lib/media";
-import { toolTraceLinesFromEvents } from "@/lib/tool-traces";
+import { mergeToolEvents, toolTraceLinesFromEvents } from "@/lib/tool-traces";
 import type { StreamError } from "@/lib/durin-client";
 import type {
   InboundEvent,
@@ -442,14 +442,19 @@ export function useDurinStream(
             : ev.text
               ? [ev.text]
               : [];
-          if (lines.length === 0) return;
+          // Structured events power the rich ToolCallBlock render; the
+          // text `lines` stay as a fallback for older payloads / when
+          // a trace carries no call_id.
+          const hasStructured = Array.isArray(ev.tool_events) && ev.tool_events.length > 0;
+          if (lines.length === 0 && !hasStructured) return;
           setMessages((prev) => {
             const last = prev[prev.length - 1];
             if (last && last.kind === "trace" && !last.isStreaming && !last.agentUI) {
               const merged: UIMessage = {
                 ...last,
                 traces: [...(last.traces ?? [last.content]), ...lines],
-                content: lines[lines.length - 1],
+                toolEvents: mergeToolEvents(last.toolEvents, ev.tool_events),
+                content: lines[lines.length - 1] ?? last.content,
               };
               return [...prev.slice(0, -1), merged];
             }
@@ -459,8 +464,9 @@ export function useDurinStream(
                 id: crypto.randomUUID(),
                 role: "tool",
                 kind: "trace",
-                content: lines[lines.length - 1],
+                content: lines[lines.length - 1] ?? "",
                 traces: lines,
+                toolEvents: mergeToolEvents(undefined, ev.tool_events),
                 createdAt: Date.now(),
               },
             ];

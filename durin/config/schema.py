@@ -244,7 +244,7 @@ class AgentDefaults(Base):
     reasoning_effort: str | None = None  # low / medium / high / adaptive / none — LLM thinking effort; None preserves the provider default
     timezone: str = "UTC"  # IANA timezone, e.g. "Asia/Shanghai", "America/New_York"
     bot_name: str = "durin"  # Display name shown in CLI prompts (e.g. "{name} is thinking...")
-    bot_icon: str = "🐈"  # Short icon (emoji or text) shown next to the bot name in CLI; "" to omit
+    bot_icon: str = "⚒️"  # Short icon (emoji or text) shown next to the bot name in CLI; "" to omit
     unified_session: bool = False  # Share one session across all channels (single-user multi-device)
     disabled_skills: list[str] = Field(default_factory=list)  # Skill names to exclude from loading (e.g. ["summarize", "skill-creator"])
     max_messages: int = Field(
@@ -380,6 +380,20 @@ class GatewayConfig(Base):
     host: str = "127.0.0.1"  # Safer default: local-only bind.
     port: int = 18790
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
+    # When True, `durin gateway` runs detached (PID file + log file) so
+    # the terminal isn't locked. Opt-in because the foreground mode is
+    # easier to debug on first install. Toggle via `durin config set
+    # gateway.daemon true` or the onboard wizard.
+    daemon: bool = False
+    # When True, the gateway auto-enables the websocket channel at
+    # runtime so the embedded webui is served. Defaults to True because
+    # most users running `durin gateway` want the dashboard — toggling
+    # this off skips the auto-enable without touching channels.websocket.
+    webui_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("webuiEnabled", "webui_enabled"),
+        serialization_alias="webuiEnabled",
+    )
 
 
 class MCPServerConfig(Base):
@@ -421,6 +435,19 @@ class ToolsConfig(Base):
     ssrf_whitelist: list[str] = Field(default_factory=list)  # CIDR ranges to exempt from SSRF blocking (e.g. ["100.64.0.0/10"] for Tailscale)
 
 
+class InstallConfig(Base):
+    """Persistent install-level state.
+
+    ``extras`` is the set of optional dependency extras the user has had
+    at any point. It's *additive*: durin appends here whenever it detects
+    a new importable extra, but never removes entries automatically.
+    That way `pipx uninstall` + `pipx install` (which drops extras) gets
+    flagged by `durin doctor` instead of silently forgotten.
+    """
+
+    extras: list[str] = Field(default_factory=list)
+
+
 class Config(BaseSettings):
     """Root configuration for durin."""
 
@@ -431,6 +458,7 @@ class Config(BaseSettings):
     api: ApiConfig = Field(default_factory=ApiConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    install: InstallConfig = Field(default_factory=InstallConfig)
     model_presets: dict[str, ModelPresetConfig] = Field(
         default_factory=dict,
         validation_alias=AliasChoices("modelPresets", "model_presets"),

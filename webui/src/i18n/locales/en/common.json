@@ -105,7 +105,7 @@
       "cancel": "Cancel"
     },
     "byok": {
-      "description": "Bring your own provider keys. Nanobot reads these values from the current config and only configured providers can be selected in General.",
+      "description": "Bring your own provider keys. durin reads these values from the current config and only configured providers can be selected in General.",
       "configured": "Configured",
       "notConfigured": "Not configured",
       "configuredSection": "Configured",
