@@ -1,6 +1,8 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Check, Loader2, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
+import { useThreadActions } from "@/components/thread/ThreadActionsContext";
 import { cn } from "@/lib/utils";
 import type { ToolProgressEvent } from "@/lib/types";
 
@@ -81,7 +83,10 @@ export function ToolCallBlock({ event }: ToolCallBlockProps) {
   const name = event.name || "tool";
   const summary = summaryLine(event);
 
-  const bodyLines = renderBodyLines(event);
+  // ask_user_question gets a fully interactive answer panel instead of
+  // the static preview body.
+  const isAskUser = name === "ask_user_question";
+  const bodyLines = isAskUser ? [] : renderBodyLines(event);
   const total = bodyLines.length;
   const truncated = !expanded && total > PREVIEW_LINES;
   const visible = truncated ? bodyLines.slice(0, PREVIEW_LINES) : bodyLines;
@@ -113,14 +118,113 @@ export function ToolCallBlock({ event }: ToolCallBlockProps) {
           </button>
         )}
       </div>
-      {visible.length > 0 && (
-        <pre className="overflow-x-auto whitespace-pre-wrap break-words pb-1 font-mono text-[11px] leading-relaxed">
-          {visible.map((ln, i) => (
-            <div key={i} className={ln.className}>
-              {ln.text || " "}
+      {isAskUser ? (
+        <AskUserAnswer event={event} />
+      ) : (
+        visible.length > 0 && (
+          <pre className="overflow-x-auto whitespace-pre-wrap break-words pb-1 font-mono text-[11px] leading-relaxed">
+            {visible.map((ln, i) => (
+              <div key={i} className={ln.className}>
+                {ln.text || " "}
+              </div>
+            ))}
+          </pre>
+        )
+      )}
+    </div>
+  );
+}
+
+/**
+ * Interactive answer panel for `ask_user_question`: the question, the
+ * suggested options as chips, and an editable field. Clicking a chip
+ * loads that option into the field so the user can edit or extend it
+ * before sending; the field is also free-text for an "other" answer.
+ * Submitting routes through ThreadActions as the user's next message.
+ */
+function AskUserAnswer({ event }: { event: ToolProgressEvent }) {
+  const { t } = useTranslation();
+  const actions = useThreadActions();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const question = argString(event.arguments, "question") ?? "";
+  const options = argStringList(event.arguments, "options");
+  const [draft, setDraft] = useState("");
+  const [sent, setSent] = useState(false);
+
+  const pick = (option: string) => {
+    setDraft(option);
+    inputRef.current?.focus();
+  };
+  const submit = () => {
+    const text = draft.trim();
+    if (!text || !actions) return;
+    actions.sendUserMessage(text);
+    setSent(true);
+  };
+
+  return (
+    <div className="space-y-1.5 pb-1.5 pt-0.5">
+      {question && (
+        <div className="text-[12px] leading-snug text-foreground/90">
+          ❓ {question}
+        </div>
+      )}
+      {sent ? (
+        <div className="text-[11.5px] text-emerald-600/90 dark:text-emerald-400/90">
+          ✓ {t("message.askUser.sent")}
+        </div>
+      ) : (
+        <>
+          {options.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {options.map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  onClick={() => pick(option)}
+                  className={cn(
+                    "rounded-full border border-border/60 bg-muted/40 px-2.5 py-0.5",
+                    "text-[11.5px] text-foreground/85 transition-colors",
+                    "hover:border-primary/50 hover:bg-primary/10",
+                  )}
+                >
+                  {option}
+                </button>
+              ))}
             </div>
-          ))}
-        </pre>
+          )}
+          {actions && (
+            <div className="flex items-center gap-1.5">
+              <input
+                ref={inputRef}
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    submit();
+                  }
+                }}
+                placeholder={t("message.askUser.placeholder")}
+                className={cn(
+                  "h-7 min-w-0 flex-1 rounded-md border border-border/60 bg-background",
+                  "px-2 text-[12px] outline-none focus:border-primary/60",
+                )}
+              />
+              <button
+                type="button"
+                onClick={submit}
+                disabled={!draft.trim()}
+                className={cn(
+                  "shrink-0 rounded-md bg-primary px-2.5 py-1 text-[11.5px]",
+                  "font-medium text-primary-foreground disabled:opacity-40",
+                )}
+              >
+                {t("message.askUser.send")}
+              </button>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -163,19 +267,8 @@ function renderBodyLines(ev: ToolProgressEvent): BodyLine[] {
     return lines;
   }
 
-  // ask_user_question: the question + numbered options, built from the
-  // call arguments — the raw result is an internal YIELD instruction.
-  if (name === "ask_user_question") {
-    const question = argString(ev.arguments, "question") ?? "";
-    const lines: BodyLine[] = [];
-    if (question) {
-      lines.push({ text: `❓ ${question}`, className: "text-foreground/90" });
-    }
-    argStringList(ev.arguments, "options").forEach((opt, i) => {
-      lines.push({ text: `   ${i + 1}. ${opt}`, className: "text-cyan-500/90" });
-    });
-    return lines;
-  }
+  // ask_user_question is handled by the interactive AskUserAnswer
+  // panel (see ToolCallBlock), never as static body lines.
 
   // request_secret: what is needed + the command to store it. The
   // secret value never flows through here.

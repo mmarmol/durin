@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { ThreadActionsProvider } from "@/components/thread/ThreadActionsContext";
 import { ThreadComposer } from "@/components/thread/ThreadComposer";
 import { ThreadHeader } from "@/components/thread/ThreadHeader";
 import { StreamErrorNotice } from "@/components/thread/StreamErrorNotice";
@@ -238,6 +239,13 @@ export function ThreadShell({
     [send],
   );
 
+  // Lets an ask_user_question block deep in the transcript submit an
+  // answer without drilling a callback through viewport → list → bubble.
+  const threadActions = useMemo(
+    () => ({ sendUserMessage: (text: string) => handleThreadSend(text) }),
+    [handleThreadSend],
+  );
+
   const composer = (
     <>
       {streamError ? (
@@ -300,6 +308,7 @@ export function ThreadShell({
   );
 
   return (
+    <ThreadActionsProvider value={threadActions}>
     <section className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
       <ThreadHeader
         title={title}
@@ -318,5 +327,6 @@ export function ThreadShell({
         conversationKey={historyKey}
       />
     </section>
+    </ThreadActionsProvider>
   );
 }

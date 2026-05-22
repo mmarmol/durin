@@ -82,6 +82,25 @@ class ToolCallBubble(Vertical):
         color: $text-muted;
         padding: 0 1;
     }
+    ToolCallBubble > #tc-options {
+        height: auto;
+        padding: 0 1;
+    }
+    ToolCallBubble .tc-option {
+        height: 1;
+        color: $accent;
+        padding: 0 1;
+    }
+    ToolCallBubble .tc-option:hover {
+        background: $accent 20%;
+        text-style: bold;
+    }
+    ToolCallBubble > #tc-opt-hint {
+        height: auto;
+        color: $text-muted;
+        text-style: italic;
+        padding: 0 1;
+    }
     """
 
     # Lines of body content visible by default before truncation kicks
@@ -120,6 +139,26 @@ class ToolCallBubble(Vertical):
             yield Static("", id="tc-expand", markup=False)
             yield Static("[copy]", id="tc-copy", markup=False)
         yield Static("", id="tc-body")
+        # ask_user_question: the suggested answers render as their own
+        # clickable rows. Clicking one loads it into the input, editable,
+        # so the user can pick-and-tweak or write a free-form answer.
+        if self._name == "ask_user_question":
+            options = _option_list(
+                self._args.get("options") if isinstance(self._args, dict) else None
+            )
+            if options:
+                with Vertical(id="tc-options"):
+                    for index, option in enumerate(options):
+                        yield Static(
+                            f"▸ {option}",
+                            id=f"tc-opt-{index}",
+                            classes="tc-option",
+                            markup=False,
+                        )
+                yield Static(
+                    "click an option to load it into the input — edit, then ⏎ to send",
+                    id="tc-opt-hint",
+                )
         # Populate body from the start args; result/error replace it later.
         self._update_body(self._render_running_body())
 
@@ -138,10 +177,36 @@ class ToolCallBubble(Vertical):
             self._copy_body_to_clipboard()
         elif wid == "tc-expand":
             self._toggle_expanded()
+        elif wid.startswith("tc-opt-"):
+            try:
+                self._pick_option(int(wid.rsplit("-", 1)[-1]))
+            except ValueError:
+                pass
 
     def _toggle_expanded(self) -> None:
         self._expanded = not self._expanded
         self._rerender_body_with_truncation()
+
+    def _pick_option(self, index: int) -> None:
+        """Load an `ask_user_question` option into the input, editable.
+
+        The answer is not sent on click — the user can edit or extend
+        the suggestion (or replace it entirely) and submit on their own.
+        """
+        options = _option_list(
+            self._args.get("options") if isinstance(self._args, dict) else None
+        )
+        if not 0 <= index < len(options):
+            return
+        try:
+            from durin.cli.tui.widgets import InputArea
+
+            inp = self.app.query_one(InputArea)
+        except Exception:  # noqa: BLE001 - no input to fill (e.g. headless)
+            return
+        inp.value = options[index]
+        inp.cursor_position = len(inp.value)
+        inp.focus()
 
     # ---- lifecycle ----
 
@@ -231,9 +296,7 @@ class ToolCallBubble(Vertical):
             return _exec_renderable(str(a.get("command") or ""), output=None)
         if self._name == "ask_user_question":
             a = self._args if isinstance(self._args, dict) else {}
-            return _ask_user_renderable(
-                str(a.get("question") or ""), _option_list(a.get("options"))
-            )
+            return _ask_user_renderable(str(a.get("question") or ""))
         if self._name == "request_secret":
             a = self._args if isinstance(self._args, dict) else {}
             return _request_secret_renderable(a, None)
@@ -257,9 +320,7 @@ class ToolCallBubble(Vertical):
             )
         if self._name == "ask_user_question":
             a = self._args if isinstance(self._args, dict) else {}
-            return _ask_user_renderable(
-                str(a.get("question") or ""), _option_list(a.get("options"))
-            )
+            return _ask_user_renderable(str(a.get("question") or ""))
         if self._name == "request_secret":
             a = self._args if isinstance(self._args, dict) else {}
             return _request_secret_renderable(a, result_text)
@@ -477,18 +538,17 @@ def _option_list(options: Any) -> list[str]:
     return [str(o).strip() for o in options if str(o).strip()]
 
 
-def _ask_user_renderable(question: str, options: list[str]) -> Text:
-    """Render ``ask_user_question``: the question, then numbered options.
+def _ask_user_renderable(question: str) -> Text:
+    """Render the question line for ``ask_user_question``.
 
     Built from the call arguments — the raw tool result is an internal
-    ``YIELD TO USER`` instruction the user should never see.
+    ``YIELD TO USER`` instruction the user should never see. The options
+    render as separate clickable widgets below the body (see
+    :meth:`ToolCallBubble.compose`).
     """
     text = Text()
     text.append("❓ ", style="bold yellow")
     text.append(question or "(no question)", style="default")
-    for index, option in enumerate(options, start=1):
-        text.append(f"\n   {index}. ", style="cyan")
-        text.append(option, style="default")
     return text
 
 
