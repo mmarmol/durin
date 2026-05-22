@@ -121,3 +121,49 @@ async def test_runner_truncates_oversized_text_block_in_tool_result(tmp_path):
     assert content[0]["text"] == "small"
     assert content[1]["text"].startswith("x" * MAX_BLOCK_TEXT_CHARS)
     assert "block truncated" in content[1]["text"]
+
+
+# ---------------------------------------------------------------------------
+# _coerce_tool_content — a dict result must not become an untyped block
+# (regression: z.ai 1214 `content[0].type: cannot be empty`).
+# ---------------------------------------------------------------------------
+
+
+def test_coerce_tool_content_json_encodes_a_dict_result() -> None:
+    from durin.agent.runner import AgentRunner
+
+    out = AgentRunner._coerce_tool_content({"results": [], "total": 0})
+    assert isinstance(out, str)
+    assert '"total": 0' in out
+
+
+def test_coerce_tool_content_passes_strings_and_typed_blocks() -> None:
+    from durin.agent.runner import AgentRunner
+
+    assert AgentRunner._coerce_tool_content("plain text") == "plain text"
+    blocks = [{"type": "text", "text": "a"}, {"type": "image_url", "image_url": {}}]
+    assert AgentRunner._coerce_tool_content(blocks) is blocks
+
+
+def test_coerce_tool_content_json_encodes_an_untyped_list() -> None:
+    from durin.agent.runner import AgentRunner
+
+    # A list whose items are not typed blocks is not a valid blocks list.
+    out = AgentRunner._coerce_tool_content([{"results": []}, {"total": 0}])
+    assert isinstance(out, str)
+
+
+def test_sanitize_empty_content_stringifies_an_untyped_dict() -> None:
+    """A tool message whose content is a raw dict must become text, not
+    a one-element block list with no `type`."""
+    from durin.providers.base import LLMProvider
+
+    msgs = [{"role": "tool", "tool_call_id": "x", "content": {"results": [], "total": 0}}]
+    out = LLMProvider._sanitize_empty_content(msgs)
+    assert isinstance(out[0]["content"], str)
+    assert '"total": 0' in out[0]["content"]
+
+    # A genuine typed block dict is still wrapped into a blocks list.
+    msgs2 = [{"role": "user", "content": {"type": "text", "text": "hi"}}]
+    out2 = LLMProvider._sanitize_empty_content(msgs2)
+    assert out2[0]["content"] == [{"type": "text", "text": "hi"}]
