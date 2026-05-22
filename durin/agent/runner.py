@@ -1825,9 +1825,33 @@ class AgentRunner:
             content = redact_secrets(content)
         except Exception:  # noqa: BLE001
             logger.exception("Secret redaction failed for {}; using raw result", tool_call_id)
+        content = self._coerce_tool_content(content)
         if isinstance(content, str) and len(content) > spec.max_tool_result_chars:
             return truncate_text(content, spec.max_tool_result_chars)
         return content
+
+    @staticmethod
+    def _coerce_tool_content(content: Any) -> Any:
+        """Force a tool result into a provider-safe shape.
+
+        A result must be a string or a list of typed content blocks.
+        A tool that returns a raw dict (e.g. ``memory_search`` →
+        ``{"results": [...], ...}``) would otherwise be wrapped into a
+        single content block with no ``type``, which strict provider
+        APIs reject (z.ai 1214: ``content[0].type: cannot be empty``).
+        Anything that is not a string or a clean block-list is
+        JSON-encoded.
+        """
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list) and content and all(
+            isinstance(block, dict) and block.get("type") for block in content
+        ):
+            return content
+        try:
+            return json.dumps(content, ensure_ascii=False, default=str)
+        except Exception:  # noqa: BLE001
+            return str(content)
 
     @staticmethod
     def _content_size(content: Any) -> int:

@@ -215,7 +215,17 @@ class LLMProvider(ABC):
 
             if isinstance(content, dict):
                 clean = dict(msg)
-                clean["content"] = [content]
+                # Only a typed content block may be wrapped into a
+                # blocks list; a raw data dict has no `type` and would
+                # be rejected (`content[0].type: cannot be empty`), so
+                # serialize it to text instead.
+                if content.get("type"):
+                    clean["content"] = [content]
+                else:
+                    try:
+                        clean["content"] = json.dumps(content, ensure_ascii=False, default=str)
+                    except Exception:  # noqa: BLE001
+                        clean["content"] = str(content)
                 result.append(clean)
                 continue
 
