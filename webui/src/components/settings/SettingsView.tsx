@@ -48,15 +48,21 @@ import { Input } from "@/components/ui/input";
 import {
   deleteSecret,
   fetchSettings,
+  getConfig,
+  getModelCapabilities,
   listSecrets,
+  setConfigValue,
   setSecret,
+  testModel,
   updateProviderSettings,
   updateSettings,
   updateWebSearchSettings,
+  type ModelCapabilities,
+  type ModelTestResult,
 } from "@/lib/api";
 import { ChannelsSettings } from "@/components/settings/ChannelsSettings";
 import { ConfigSettings } from "@/components/settings/ConfigSettings";
-import { ModelExtras } from "@/components/settings/ModelExtras";
+import { ModelPicker } from "@/components/settings/ModelPicker";
 import { cn } from "@/lib/utils";
 import { useClient } from "@/providers/ClientProvider";
 import type { SecretEntry, SettingsPayload, WebSearchSettingsUpdate } from "@/lib/types";
@@ -367,22 +373,20 @@ export function SettingsView({
                 </div>
               ) : null}
               {activeSection === "general" ? (
-                <div className="space-y-5">
-                  <GeneralSettings
-                    theme={theme}
-                    onToggleTheme={onToggleTheme}
-                    form={form}
-                    setForm={setForm}
-                    settings={settings}
-                    dirty={dirty}
-                    saving={saving}
-                    onSave={save}
-                    onRestart={onRestart}
-                    isRestarting={isRestarting}
-                    onOpenByok={() => setActiveSection("providers")}
-                  />
-                  <ModelExtras token={token} />
-                </div>
+                <GeneralSettings
+                  theme={theme}
+                  onToggleTheme={onToggleTheme}
+                  form={form}
+                  setForm={setForm}
+                  settings={settings}
+                  dirty={dirty}
+                  saving={saving}
+                  onSave={save}
+                  onRestart={onRestart}
+                  isRestarting={isRestarting}
+                  onOpenByok={() => setActiveSection("providers")}
+                  token={token}
+                />
               ) : activeSection === "channels" ? (
                 <ChannelsSettings token={token} />
               ) : activeSection === "secrets" ? (
@@ -526,6 +530,7 @@ function GeneralSettings({
   onRestart,
   isRestarting,
   onOpenByok,
+  token,
 }: {
   theme: "light" | "dark";
   onToggleTheme: () => void;
@@ -544,6 +549,7 @@ function GeneralSettings({
   onRestart?: () => void;
   isRestarting?: boolean;
   onOpenByok: () => void;
+  token: string;
 }) {
   const { t } = useTranslation();
   const configuredProviders = settings.providers.filter((provider) => provider.configured);
@@ -611,12 +617,19 @@ function GeneralSettings({
             title={t("settings.rows.model")}
             description={t("settings.help.model")}
           >
-            <Input
+            <ModelPicker
+              token={token}
+              provider={form.provider}
               value={form.model}
-              onChange={(event) => setForm((prev) => ({ ...prev, model: event.target.value }))}
-              className="h-8 w-[280px] rounded-full text-[13px]"
+              onChange={(model) => setForm((prev) => ({ ...prev, model }))}
             />
           </SettingsRow>
+
+          <ModelBlockRows
+            token={token}
+            model={form.model}
+            provider={form.provider}
+          />
 
           {(dirty || saving || settings.requires_restart) ? (
             <SettingsFooter
@@ -671,6 +684,222 @@ function GeneralSettings({
         </section>
       )}
     </div>
+  );
+}
+
+interface AuxModel {
+  model: string;
+  provider: string;
+}
+
+function readAux(config: Record<string, unknown> | null, kind: string): AuxModel | null {
+  const agents = config?.agents as Record<string, unknown> | undefined;
+  const aux = agents?.auxModels as Record<string, unknown> | undefined;
+  const entry = aux?.[kind] as Record<string, unknown> | undefined;
+  if (!entry || typeof entry.model !== "string") return null;
+  return {
+    model: entry.model,
+    provider: typeof entry.provider === "string" ? entry.provider : "auto",
+  };
+}
+
+function modelCapsSummary(
+  caps: ModelCapabilities | null,
+  t: (key: string, opts?: Record<string, unknown>) => string,
+): string {
+  if (!caps) return t("settings.models.capsUnknown");
+  const parts = [t("settings.models.capsText")];
+  parts.push(`${t("settings.models.capsVision")} ${caps.supports_vision ? "✓" : "✗"}`);
+  parts.push(`${t("settings.models.capsAudio")} ${caps.supports_audio_input ? "✓" : "✗"}`);
+  if (caps.max_input_tokens && caps.max_input_tokens > 0) {
+    const k = Math.round(caps.max_input_tokens / 1000);
+    parts.push(t("settings.models.capsContext", { tokens: `${k}K` }));
+  }
+  return parts.join(" · ");
+}
+
+/** Compact vision/audio aux-model editor — model + provider + save. */
+function AuxControl({
+  current,
+  busy,
+  onSave,
+  onClear,
+}: {
+  current: AuxModel | null;
+  busy: boolean;
+  onSave: (value: AuxModel) => void;
+  onClear: () => void;
+}) {
+  const { t } = useTranslation();
+  const [model, setModel] = useState(current?.model ?? "");
+  const [prov, setProv] = useState(current?.provider ?? "auto");
+  useEffect(() => {
+    setModel(current?.model ?? "");
+    setProv(current?.provider ?? "auto");
+  }, [current]);
+  const dirty =
+    model.trim() !== (current?.model ?? "") ||
+    prov.trim() !== (current?.provider ?? (current ? "auto" : ""));
+  return (
+    <div className="flex items-center gap-2">
+      <Input
+        value={model}
+        onChange={(e) => setModel(e.target.value)}
+        placeholder={t("settings.models.modelPlaceholder")}
+        className="h-8 w-[150px] rounded-full text-[13px]"
+      />
+      <Input
+        value={prov}
+        onChange={(e) => setProv(e.target.value)}
+        placeholder={t("settings.models.providerPlaceholder")}
+        className="h-8 w-[96px] rounded-full text-[13px]"
+      />
+      <Button
+        size="sm"
+        variant="outline"
+        disabled={!dirty || busy || !model.trim()}
+        onClick={() => onSave({ model: model.trim(), provider: prov.trim() || "auto" })}
+        className="rounded-full"
+      >
+        {t("settings.models.save")}
+      </Button>
+      {current ? (
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={busy}
+          onClick={onClear}
+          className="rounded-full text-muted-foreground"
+        >
+          {t("settings.models.clear")}
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+/** The model rows of the AI block: capabilities, vision/audio aux
+ *  models, and a real round-trip test. Rendered as plain SettingsRows
+ *  so it sits inside the AI SettingsGroup with consistent styling. */
+function ModelBlockRows({
+  token,
+  model,
+  provider,
+}: {
+  token: string;
+  model: string;
+  provider: string;
+}) {
+  const { t } = useTranslation();
+  const [caps, setCaps] = useState<ModelCapabilities | null>(null);
+  const [config, setConfig] = useState<Record<string, unknown> | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [test, setTest] = useState<ModelTestResult | null>(null);
+  const [testing, setTesting] = useState(false);
+
+  useEffect(() => {
+    if (!model) {
+      setCaps(null);
+      return;
+    }
+    let cancelled = false;
+    getModelCapabilities(token, model, provider)
+      .then((c) => {
+        if (!cancelled) setCaps(c);
+      })
+      .catch(() => {
+        if (!cancelled) setCaps(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token, model, provider]);
+
+  const loadConfig = useCallback(async () => {
+    try {
+      setConfig((await getConfig(token)).config);
+    } catch {
+      // leave aux rows empty on failure
+    }
+  }, [token]);
+  useEffect(() => {
+    void loadConfig();
+  }, [loadConfig]);
+
+  const saveAux = useCallback(
+    async (kind: string, value: AuxModel | null) => {
+      setBusy(kind);
+      try {
+        setConfig(await setConfigValue(token, `agents.auxModels.${kind}`, value));
+      } catch {
+        // ignore — the row keeps its previous value
+      } finally {
+        setBusy(null);
+      }
+    },
+    [token],
+  );
+
+  const runTest = useCallback(async () => {
+    setTesting(true);
+    setTest(null);
+    try {
+      setTest(await testModel(token));
+    } catch {
+      setTest({ status: "fail", message: t("settings.models.testError"), fix: "" });
+    } finally {
+      setTesting(false);
+    }
+  }, [token, t]);
+
+  return (
+    <>
+      <SettingsRow title={t("settings.models.capabilities")}>
+        <span className="text-[12px] text-muted-foreground">
+          {modelCapsSummary(caps, t)}
+        </span>
+      </SettingsRow>
+      <SettingsRow
+        title={t("settings.models.vision")}
+        description={t("settings.models.visionHint")}
+      >
+        <AuxControl
+          current={readAux(config, "vision")}
+          busy={busy === "vision"}
+          onSave={(v) => void saveAux("vision", v)}
+          onClear={() => void saveAux("vision", null)}
+        />
+      </SettingsRow>
+      <SettingsRow
+        title={t("settings.models.audio")}
+        description={t("settings.models.audioHint")}
+      >
+        <AuxControl
+          current={readAux(config, "audio")}
+          busy={busy === "audio"}
+          onSave={(v) => void saveAux("audio", v)}
+          onClear={() => void saveAux("audio", null)}
+        />
+      </SettingsRow>
+      <SettingsRow
+        title={t("settings.models.testTitle")}
+        description={
+          test
+            ? `${test.status === "ok" ? "✓" : "✗"} ${test.message}`
+            : t("settings.models.testHint")
+        }
+      >
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={testing}
+          onClick={() => void runTest()}
+          className="rounded-full"
+        >
+          {testing ? t("settings.models.testing") : t("settings.models.testButton")}
+        </Button>
+      </SettingsRow>
+    </>
   );
 }
 
