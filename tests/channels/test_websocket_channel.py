@@ -1151,6 +1151,43 @@ async def test_channels_api_lists_discovered_channels(
 
 
 @pytest.mark.asyncio
+async def test_models_and_capabilities_api(
+    bus: MagicMock, monkeypatch, tmp_path
+) -> None:
+    """`/api/models` lists a catalog; `/api/model/capabilities` resolves caps."""
+    port = 29896
+    config_path = tmp_path / "config.json"
+    save_config(Config(), config_path)
+    monkeypatch.setattr("durin.config.loader._current_config_path", config_path)
+
+    channel = _ch(bus, port=port)
+    channel._api_tokens["tok"] = time.monotonic() + 300
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+    base = f"http://127.0.0.1:{port}"
+    hdr = {"Authorization": "Bearer tok"}
+    try:
+        models = await _http_get(f"{base}/api/models?provider=zhipu", headers=hdr)
+        assert models.status_code == 200
+        body = models.json()
+        assert "suggested" in body and "models" in body
+        assert any("glm" in m for m in body["suggested"])  # curated zhipu shortlist
+
+        caps = await _http_get(
+            f"{base}/api/model/capabilities?model=glm-5.1&provider=zhipu", headers=hdr
+        )
+        assert caps.status_code == 200
+        cb = caps.json()
+        assert cb["model"] == "glm-5.1"
+        assert "supports_vision" in cb and "max_input_tokens" in cb
+
+        assert (await _http_get(f"{base}/api/models")).status_code == 401
+    finally:
+        await channel.stop()
+        await server_task
+
+
+@pytest.mark.asyncio
 async def test_commands_api_returns_slash_command_metadata(bus: MagicMock) -> None:
     port = 29892
     channel = _ch(bus, port=port)
