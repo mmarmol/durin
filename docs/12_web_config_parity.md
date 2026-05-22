@@ -207,3 +207,12 @@ into General.
 4. **Channels** section (UI over the shipped `/api/channels`).
 
 Deploy once at the end; the user validates the visual design.
+
+### Note — guided third-party setup (future)
+
+The **Providers** and **Channels** sections are also the future home
+of *guided* third-party configuration: OAuth / device-code login
+flows, walking the user through obtaining an API key from a vendor's
+site, channel QR pairing. Not in this pass — but the section layout
+should leave room for a per-provider / per-channel guided step, not
+just a flat credential field.
