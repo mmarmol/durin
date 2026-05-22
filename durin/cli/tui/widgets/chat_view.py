@@ -30,7 +30,7 @@ from textual.widgets import Static
 __all__ = ["ChatView", "MessageBubble"]
 
 
-Role = Literal["user", "assistant", "tool", "system", "reasoning", "banner"]
+Role = Literal["user", "assistant", "tool", "system", "reasoning", "banner", "logo"]
 
 
 class MessageBubble(Static):
@@ -75,8 +75,13 @@ class MessageBubble(Static):
     }
     MessageBubble.banner {
         color: $text-muted;
+        border: round $primary;
         padding: 1 2;
         margin: 0 2 1 2;
+    }
+    MessageBubble.logo {
+        padding: 1 2 0 4;
+        margin: 0 2;
     }
     """
 
@@ -120,6 +125,11 @@ class MessageBubble(Static):
             from durin.cli.tui.linkify import autolinkify_markdown
 
             self.update(Markdown(autolinkify_markdown(body)))
+        elif self._role == "logo":
+            # The durin logo — pre-built ASCII art carrying its own
+            # Rich colour markup. Fully controlled string, so from_markup
+            # is safe here (unlike streamed bodies).
+            self.update(Text.from_markup(body))
         elif prefix:
             text = Text(f"{prefix}: ", style="dim")
             text.append(body)

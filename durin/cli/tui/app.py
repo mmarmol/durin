@@ -320,12 +320,15 @@ class DurinApp(App[None]):
         so it doesn't clutter the footer once you're typing.
         """
         from durin import __version__
-        from durin.cli.tui.startup import build_startup_banner
+        from durin.cli.tui.startup import build_durin_logo, build_startup_banner
 
         try:
             chat = self.query_one("#chat", ChatView)
         except Exception:  # noqa: BLE001
             return
+
+        logo = chat.add_message("logo", "")
+        logo.body = build_durin_logo()
 
         body = build_startup_banner(
             version=__version__,
