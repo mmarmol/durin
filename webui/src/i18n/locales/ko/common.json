@@ -50,7 +50,8 @@
       "providers": "Model providers",
       "web-search": "Web search",
       "secrets": "Secrets",
-      "advanced": "All settings"
+      "advanced": "All settings",
+      "channels": "Channels"
     },
     "sections": {
       "interface": "인터페이스",

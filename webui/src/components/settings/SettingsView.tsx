@@ -20,6 +20,7 @@ import {
   LogOut,
   KeyRound,
   Layers,
+  MessagesSquare,
   Plus,
   Trash2,
   Moon,
@@ -53,6 +54,7 @@ import {
   updateSettings,
   updateWebSearchSettings,
 } from "@/lib/api";
+import { ChannelsSettings } from "@/components/settings/ChannelsSettings";
 import { ConfigSettings } from "@/components/settings/ConfigSettings";
 import { ModelExtras } from "@/components/settings/ModelExtras";
 import { cn } from "@/lib/utils";
@@ -63,6 +65,7 @@ type SettingsSectionKey =
   | "general"
   | "providers"
   | "web-search"
+  | "channels"
   | "secrets"
   | "advanced";
 type ByokPaneKey = "llm" | "web-search";
@@ -380,6 +383,8 @@ export function SettingsView({
                   />
                   <ModelExtras token={token} />
                 </div>
+              ) : activeSection === "channels" ? (
+                <ChannelsSettings token={token} />
               ) : activeSection === "secrets" ? (
                 <SecretsSettings token={token} />
               ) : activeSection === "advanced" ? (
@@ -436,6 +441,7 @@ const SETTINGS_NAV_ITEMS = [
   { key: "general", icon: Settings },
   { key: "providers", icon: KeyRound },
   { key: "web-search", icon: Globe },
+  { key: "channels", icon: MessagesSquare },
   { key: "secrets", icon: Lock },
   { key: "advanced", icon: Sliders },
 ] as const;

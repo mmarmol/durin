@@ -69,7 +69,8 @@
       "secrets": "Secrets",
       "advanced": "All settings",
       "providers": "Model providers",
-      "web-search": "Web search"
+      "web-search": "Web search",
+      "channels": "Channels"
     },
     "sections": {
       "interface": "Interface",
@@ -199,6 +200,19 @@
       "loadError": "Could not load the model configuration.",
       "saveError": "Could not save the model.",
       "testError": "The test could not run."
+    },
+    "channels": {
+      "description": "Bridge durin to chat platforms. Enable a channel and set its credential — the token goes to the secret store, not config.json.",
+      "enabled": "Enabled",
+      "disabled": "Not enabled",
+      "enable": "Enable",
+      "disable": "Disable",
+      "reconfigure": "Reconfigure",
+      "save": "Save",
+      "credentialPlaceholder": "{{field}}",
+      "noCredential": "No credential needed.",
+      "loadError": "Could not load channels.",
+      "saveError": "Could not save the channel."
     }
   },
   "chat": {
