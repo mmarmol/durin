@@ -346,7 +346,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         name="minimax_anthropic",
         keywords=("minimax_anthropic",),
         env_key="MINIMAX_API_KEY",
-        display_name="MiniMax (Anthropic)",
+        display_name="MiniMax (Anthropic-compatible API)",
         backend="anthropic",
         default_api_base="https://api.minimax.io/anthropic",
     ),

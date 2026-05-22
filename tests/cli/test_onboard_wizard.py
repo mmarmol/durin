@@ -206,21 +206,29 @@ def test_wizard_web_feature_brave_backend_prompts_for_key() -> None:
     assert result.config.tools.web.search.api_key == "brave-key-xyz"
 
 
-def test_wizard_vision_feature_sets_aux_model() -> None:
-    answers = [
-        "Zhipu AI", "sk-x", "glm-5.1",
-        "[ ] 👁️  Vision (interpret_image)", True,
-        "glm-5v-turbo",                     # vision model id
-        "zhipu",                             # provider
-        "→ Continue (finish onboarding)",
-        "",
-    ]
+def test_run_section_vision_sets_aux_model() -> None:
+    """`durin onboard vision` configures an auxiliary vision model.
+
+    Vision is no longer a Stage-2 menu item — it's an aux-model
+    fallback offered by the capability screen and reachable as its
+    own section."""
+    answers = [True, "glm-5v-turbo", "zhipu"]
     q = _ScriptedQuestionary(answers)
-    result = run_wizard(Config(), q=q)
+    result = run_section(Config(), "vision", q=q)
     aux = result.config.agents.aux_models
     assert aux is not None and aux.vision is not None
     assert aux.vision.model == "glm-5v-turbo"
     assert aux.vision.provider == "zhipu"
+
+
+def test_optional_menu_does_not_list_vision_or_audio() -> None:
+    """Vision/audio are aux-model fallbacks, not standalone features —
+    they must not clutter the Stage-2 opt-in menu."""
+    from durin.cli.onboard_wizard import _OPTIONAL_FEATURES
+
+    keys = {k for k, _label, _desc in _OPTIONAL_FEATURES}
+    assert "vision" not in keys
+    assert "audio" not in keys
 
 
 def test_wizard_skip_everything_path() -> None:
@@ -468,6 +476,46 @@ def test_wizard_channels_feature_lists_and_enables_a_channel() -> None:
     assert tg is not None and tg.get("enabled") is True
 
 
+def test_wizard_channels_feature_can_disable_an_enabled_channel() -> None:
+    """Picking an already-enabled channel toggles it OFF — the channels
+    picker is a two-way switch, not enable-only."""
+    cfg = Config()
+    cfg.channels.__pydantic_extra__ = {"telegram": {"enabled": True, "token": "x"}}
+    answers = [
+        "Zhipu AI", "sk-x", "glm-5.1",
+        "💬 Chat channels",
+        "Telegram",                  # currently enabled → toggles off
+        "→ Done with channels",
+        "→ Continue (finish onboarding)",
+        "",
+    ]
+    q = _ScriptedQuestionary(answers)
+    result = run_wizard(cfg, q=q)
+    tg = (result.config.channels.__pydantic_extra__ or {}).get("telegram")
+    assert tg is not None and tg.get("enabled") is False
+
+
+def test_wizard_channels_feature_omits_the_dashboard_websocket() -> None:
+    """The websocket channel is the dashboard's transport — it must not
+    show up in the chat-channels picker."""
+    answers = [
+        "Zhipu AI", "sk-x", "glm-5.1",
+        "💬 Chat channels",
+        "→ Done with channels",
+        "→ Continue (finish onboarding)",
+        "",
+    ]
+    q = _ScriptedQuestionary(answers)
+    run_wizard(Config(), q=q)
+    channel_call = next(
+        (a, kw) for k, a, kw in q.calls
+        if k == "select" and "channel" in str(a).lower()
+    )
+    choices = channel_call[1].get("choices") or []
+    assert choices, "channels picker had no choices"
+    assert not any("websocket" in str(c).lower() for c in choices)
+
+
 def test_wizard_result_carries_availability_matrix() -> None:
     """A finished wizard returns a capability matrix — chat model is
     always ✓; un-configured optional features show ✗ with a fix hint."""
@@ -540,6 +588,50 @@ def test_run_section_web_enables_search_and_records_extra() -> None:
     assert result.cancelled is False
     assert result.config.tools.web.enable is True
     assert "web" in result.extras_to_install
+
+
+def test_wizard_model_picker_back_returns_to_provider_list() -> None:
+    """Choosing '← Back' in the model picker bounces to the provider
+    list instead of dead-ending — the user can pick a different one."""
+    answers = [
+        "Zhipu AI", "sk-x",
+        "← Back",                 # model picker → back to providers
+        "OpenAI", "sk-y", "gpt-5",  # second time around
+        "→ Continue (finish onboarding)",
+        "",
+    ]
+    q = _ScriptedQuestionary(answers)
+    result = run_wizard(Config(), q=q)
+    assert result.cancelled is False
+    assert result.config.agents.defaults.provider == "openai"
+    assert result.config.agents.defaults.model == "gpt-5"
+
+
+def test_wizard_provider_back_returns_to_keep_menu_when_configured() -> None:
+    """On a configured setup, '← Back' out of the provider list returns
+    to the keep/test/change menu — it does NOT cancel the wizard."""
+    answers = [
+        "Change provider / model",   # keep menu → change
+        "← Back",                     # provider list → back
+        "Keep it and continue",       # keep menu again → keep
+        "→ Continue (finish onboarding)",
+        "",
+    ]
+    q = _ScriptedQuestionary(answers)
+    result = run_wizard(_configured_config(), q=q)
+    assert result.cancelled is False
+    # Untouched — backing out kept the original provider.
+    assert result.config.agents.defaults.provider == "zhipu"
+    assert result.config.providers.zhipu.api_key == "sk-existing"
+
+
+def test_wizard_cancel_row_on_fresh_provider_list_cancels() -> None:
+    """A fresh install has nothing to keep, so the provider list's top
+    row is an explicit cancel that ends the wizard."""
+    answers = ["✗ Cancel onboarding"]
+    q = _ScriptedQuestionary(answers)
+    result = run_wizard(Config(), q=q)
+    assert result.cancelled is True
 
 
 def test_sections_constant_covers_every_optional_feature() -> None:

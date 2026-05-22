@@ -282,16 +282,101 @@ def _test_model(config: Config) -> None:
             print(f"    {result.fix}")
 
 
+# Sentinel returned by pickers when the user chose "go back" rather
+# than a real value or an outright cancel.
+_BACK = object()
+
+# Visible, labelled escape hatches — pinned to the TOP of every long
+# list so the user never has to scroll a 30-item menu to find the exit.
+_BACK_CHOICE = "← Back"
+_CANCEL_CHOICE = "✗ Cancel onboarding"
+
+
+def _pick_provider(
+    config: Config, q: Any,
+) -> tuple[str, str] | None:
+    """Provider picker. Returns ``(name, recommended_model)`` or ``None``.
+
+    Lists every provider durin supports, sorted default → configured →
+    rest. A back/cancel row is pinned to the top so the exit is always
+    one keypress away, even though the list is ~30 items long. The
+    cursor still starts on the ★ default, not on the back row.
+    """
+    label_to_choice: dict[str, tuple[str, str]] = {}
+    rows: list[str] = []
+    default_display: str | None = None
+    for name, label, configured, is_default in _all_provider_rows(config):
+        recommended = next(
+            (m for lbl, n, m in PROVIDER_CHOICES if n == name), ""
+        )
+        tag = "✓ configured" if configured else "— not set"
+        if is_default:
+            tag = "★ default · " + tag
+        display = f"{label:<26} {tag}"
+        label_to_choice[display] = (name, recommended)
+        rows.append(display)
+        if is_default:
+            default_display = display
+
+    # When a working provider already exists, backing out returns to
+    # the keep/test/change menu; on a fresh install it cancels.
+    exit_row = _BACK_CHOICE if _provider_is_configured(config) else _CANCEL_CHOICE
+    choices = [exit_row, *rows]
+    chosen = q.select(
+        "Pick a provider (← top row goes back):",
+        choices=choices,
+        default=default_display or (rows[0] if rows else exit_row),
+    ).ask()
+    if chosen is None or chosen == exit_row:
+        return None
+    return label_to_choice[chosen]
+
+
+def _pick_model(provider_name: str, recommended_model: str, q: Any) -> Any:
+    """Default-model picker. Returns the model id, :data:`_BACK`, or None.
+
+    A back row sits at the top so the user can bounce to the provider
+    list instead of being trapped once they've opened the model menu.
+    """
+    suggestions = list(DEFAULT_MODELS.get(provider_name, ()))
+    if recommended_model and recommended_model not in suggestions:
+        suggestions.insert(0, recommended_model)
+    suggestions = list(dict.fromkeys(suggestions))  # de-dupe, keep order
+
+    other = "Other (type below)"
+    if suggestions:
+        choices = [_BACK_CHOICE, *suggestions, other]
+        pick = q.select(
+            "Default model (← top row goes back):",
+            choices=choices,
+            default=suggestions[0],
+        ).ask()
+        if pick is None or pick == _BACK_CHOICE:
+            return _BACK
+        if pick == other:
+            typed = q.text("Model name (blank to go back):").ask()
+            return typed or _BACK
+        return pick
+
+    # No known suggestions (e.g. a custom endpoint) — free-text entry.
+    typed = q.text(
+        "Model name (blank to pick a different provider):"
+    ).ask()
+    return typed or _BACK
+
+
 def _stage_provider_and_model(config: Config, q: Any, summary: list[str]) -> bool:
     """Configure provider + API key + default model. Returns False on cancel.
 
-    If a working setup already exists, the user is NOT forced to
-    reconfigure — they can test the model and continue, or choose to
-    change it.
+    The whole stage is one loop so every step has a working "back":
+    the model picker bounces to the provider list, the provider list
+    bounces to the keep/test/change menu (when a setup already
+    exists), and only an explicit cancel ends the wizard. No dead ends.
     """
-    if _provider_is_configured(config):
-        d = config.agents.defaults
-        while True:
+    while True:
+        # ── Keep / test / change menu (only when already configured) ──
+        if _provider_is_configured(config):
+            d = config.agents.defaults
             action = q.select(
                 f"Provider already configured: {d.provider} · {d.model}. "
                 "What do you want to do?",
@@ -308,80 +393,53 @@ def _stage_provider_and_model(config: Config, q: Any, summary: list[str]) -> boo
                 return True
             if action.startswith("Test"):
                 _test_model(config)
-                continue  # loop back to the keep/test/change menu
-            # "Change …" → fall through to the full pick flow below.
-            break
+                continue  # back to this menu
+            # "Change …" → fall through to the pick flow.
 
-    # Show EVERY provider durin supports (not just the curated 6),
-    # sorted so the current default is first, then already-configured
-    # ones, then the rest alphabetically. A settings-list, not a blind
-    # first-run pick.
-    label_to_choice: dict[str, tuple[str, str]] = {}
-    choices: list[str] = []
-    for name, label, configured, is_default in _all_provider_rows(config):
-        recommended = next(
-            (m for lbl, n, m in PROVIDER_CHOICES if n == name), ""
-        )
-        tag = "✓ configured" if configured else "— not set"
-        if is_default:
-            tag = "★ default · " + tag
-        display = f"{label:<26} {tag}"
-        label_to_choice[display] = (name, recommended)
-        choices.append(display)
-    chosen_label = q.select(
-        "Pick a provider to set up or change (default ★ is at the top):",
-        choices=choices,
-    ).ask()
-    if chosen_label is None:
-        return False
-    provider_name, recommended_model = label_to_choice[chosen_label]
+        # ── Provider ──
+        picked = _pick_provider(config, q)
+        if picked is None:
+            # Backed out of the provider list. Loop again: if a setup
+            # exists the keep/test/change menu reappears; otherwise
+            # there's nothing to keep, so cancel the wizard.
+            if _provider_is_configured(config):
+                continue
+            return False
+        provider_name, recommended_model = picked
 
-    # API key (some providers — local custom endpoints — may not need one).
-    api_key = q.password(
-        f"Paste your {provider_name} API key (leave blank if not required):"
-    ).ask()
-    if api_key is None:
-        return False
-    if api_key:
-        _set_provider_api_key(config, provider_name, api_key)
+        # ── API key (local/custom endpoints may not need one) ──
+        api_key = q.password(
+            f"Paste your {provider_name} API key "
+            "(blank if not required, Esc to go back):"
+        ).ask()
+        if api_key is None:
+            continue  # Esc → back to the provider list
+        if api_key:
+            _set_provider_api_key(config, provider_name, api_key)
 
-    # Default model — suggestions per provider, plus free-form fallback.
-    suggestions = list(DEFAULT_MODELS.get(provider_name, ()))
-    if recommended_model and recommended_model not in suggestions:
-        suggestions.insert(0, recommended_model)
-    if suggestions:
-        suggestions = list(dict.fromkeys(suggestions))  # de-dupe, preserve order
-        suggestions.append("Other (type below)")
-        model_pick = q.select("Default model:", choices=suggestions).ask()
+        # ── Default model ──
+        model_pick = _pick_model(provider_name, recommended_model, q)
+        if model_pick is _BACK:
+            continue  # back to the provider list
         if model_pick is None:
             return False
-        if model_pick == "Other (type below)":
-            model_pick = q.text("Model name:").ask()
-            if not model_pick:
-                return False
-    else:
-        model_pick = q.text("Model name:").ask()
-        if not model_pick:
-            return False
 
-    config.agents.defaults.provider = provider_name
-    config.agents.defaults.model = model_pick
+        # ── Commit ──
+        config.agents.defaults.provider = provider_name
+        config.agents.defaults.model = model_pick
+        summary.append(f"Provider: {provider_name} ({model_pick})")
 
-    summary.append(f"Provider: {provider_name} ({model_pick})")
+        # Sync the context window from the model's capability snapshot.
+        for line in apply_model_capabilities(config, model_pick, provider_name):
+            summary.append(line)
 
-    # Sync the context window (and any other runtime-relevant caps) from
-    # the model's known capability snapshot.
-    for line in apply_model_capabilities(config, model_pick, provider_name):
-        summary.append(line)
-
-    # Verify the just-picked model with a real round-trip before the
-    # user moves on — catches a typo'd model id or a bad key now,
-    # instead of at the first real prompt.
-    if q.confirm(
-        "Test this model now? (a real round-trip)", default=True,
-    ).ask():
-        _test_model(config)
-    return True
+        # Verify the just-picked model with a real round-trip — catches
+        # a typo'd model id or a bad key now, not at the first prompt.
+        if q.confirm(
+            "Test this model now? (a real round-trip)", default=True,
+        ).ask():
+            _test_model(config)
+        return True
 
 
 def _set_provider_api_key(config: Config, provider_name: str, api_key: str) -> None:
@@ -458,6 +516,18 @@ def _stage_model_capabilities(config: Config, q: Any, summary: list[str]) -> Non
     print(f"\n  Default model: {d.model} ({d.provider})")
     print(f"    text {_mark(True)}   vision {_mark(has_vision)}   audio {_mark(has_audio)}")
 
+    # Only offer aux models for gaps. If the main model already does
+    # everything, say so and move on — no questions.
+    if has_vision and has_audio:
+        print("  This model handles text, images and audio on its own — "
+              "no auxiliary models needed.")
+        return
+    print(
+        "  An auxiliary model covers a modality the main model lacks "
+        "(above). It is\n  used ONLY for that modality — never for normal "
+        "chat. Skip if unsure."
+    )
+
     # Vision: offer an aux model only if the main model lacks it and
     # none is configured yet.
     if not has_vision and not aux_vision:
@@ -493,13 +563,15 @@ def _stage_model_capabilities(config: Config, q: Any, summary: list[str]) -> Non
 # ---------------------------------------------------------------------------
 
 
+# Features the user actively opts into from the Stage-2 menu. Vision
+# and audio are deliberately NOT here: they're auxiliary-model
+# fallbacks tied to the main model's gaps, so they're offered in
+# context by Stage 1b (the capability screen) — not as standalone
+# menu items. They still appear in the end-of-wizard matrix and as
+# `durin onboard vision|audio` sections.
 _OPTIONAL_FEATURES: tuple[tuple[str, str, str], ...] = (
     ("memory", "📁 Vector memory",
      "Semantic recall across sessions. ~130 MB embedding model on first use."),
-    ("vision", "👁️  Vision (interpret_image)",
-     "Lets the agent describe images / read screenshots."),
-    ("audio", "🎤 Audio transcription (interpret_audio)",
-     "Lets the agent transcribe and summarise audio clips."),
     ("image_gen", "🎨 Image generation",
      "DALL-E / generate_image tool."),
     ("web", "🔍 Web search + fetch",
@@ -563,9 +635,9 @@ def _build_availability(config: Config) -> list[str]:
 
     One line per capability with ``✓`` (works) or ``✗`` (not set up)
     and, for the gaps, the exact `durin onboard <section>` command that
-    fills them. The chat model is always ``✓`` — the required stage
-    won't let the wizard finish without it. Vision/audio also count the
-    main model's *native* modality support, not just an aux model.
+    fills them. The chat model is always ``✓``. Vision/audio show *how*
+    they're covered — native to the main model, or via which aux model
+    — so the user sees what each configured model actually does.
     """
     configured = _detect_configured_features(config)
     d = config.agents.defaults
@@ -581,13 +653,24 @@ def _build_availability(config: Config) -> list[str]:
         pass
 
     lines = [f"✓ Chat model — {d.provider} · {d.model}"]
+
+    # Vision / audio: covered natively by the main model, or by an aux
+    # model, or not at all.
+    aux = getattr(config.agents, "aux_models", None)
+    for kind, native, label in (
+        ("vision", native_vision, "Vision (image understanding)"),
+        ("audio", native_audio, "Audio (transcription)"),
+    ):
+        aux_model = getattr(getattr(aux, kind, None), "model", None) if aux else None
+        if native:
+            lines.append(f"✓ {label} — native to {d.model}")
+        elif aux_model:
+            lines.append(f"✓ {label} — aux model {aux_model}")
+        else:
+            lines.append(f"✗ {label} — add with `durin onboard {kind}`")
+
     for key, label, _desc in _OPTIONAL_FEATURES:
-        ok = key in configured
-        if key == "vision" and native_vision:
-            ok = True
-        if key == "audio" and native_audio:
-            ok = True
-        if ok:
+        if key in configured:
             lines.append(f"✓ {label}")
         else:
             section = key.replace("_", "-")
@@ -805,13 +888,26 @@ def _configure_dashboard(config: Config, q: Any, summary: list[str]) -> bool:
     return True
 
 
-def _configure_channels(config: Config, q: Any, summary: list[str]) -> bool:
-    """List the available chat channels and let the user enable one.
+# The websocket channel is the web dashboard's transport — `durin
+# gateway` enables it automatically when the dashboard is on. It's
+# owned by the Dashboard feature, so it's not a "chat channel" the
+# user toggles here.
+_DASHBOARD_CHANNEL = "websocket"
 
-    Channels are discovered from the registry. The user picks a
-    channel; we flip ``enabled`` on and prompt for the obvious key
-    field (token / app id). Fine-grained per-channel config still
-    lives in `durin config` — this just gets a channel off the ground.
+# Per-channel field that holds the primary credential. Checked in
+# order; the first one present in the channel's config is the one we
+# prompt for and warn about when left blank.
+_CHANNEL_CRED_FIELDS = ("token", "bot_token", "app_id", "appId", "api_key")
+
+
+def _configure_channels(config: Config, q: Any, summary: list[str]) -> bool:
+    """Toggle chat channels on/off — a real two-way switch.
+
+    Channels are discovered from the registry (minus the dashboard's
+    websocket transport). Picking an *off* channel turns it on and
+    prompts for its primary credential; picking an *on* channel turns
+    it off. An enabled channel with a blank credential is flagged so
+    the user knows it won't actually connect.
     """
     try:
         from durin.channels.registry import discover_all
@@ -819,7 +915,9 @@ def _configure_channels(config: Config, q: Any, summary: list[str]) -> bool:
         summary.append("Channels: registry unavailable — configure via `durin config`")
         return False
 
-    channels = sorted(discover_all().items())
+    channels = sorted(
+        (n, c) for n, c in discover_all().items() if n != _DASHBOARD_CHANNEL
+    )
     if not channels:
         summary.append("Channels: none discovered")
         return False
@@ -842,7 +940,7 @@ def _configure_channels(config: Config, q: Any, summary: list[str]) -> bool:
             row_to_name[row] = name
         rows.append("→ Done with channels")
         pick = q.select(
-            "Pick a channel to enable / configure (→ Done to finish):",
+            "Toggle a channel on/off (→ Done to finish):",
             choices=rows,
         ).ask()
         if pick is None or pick.startswith("→"):
@@ -854,14 +952,27 @@ def _configure_channels(config: Config, q: Any, summary: list[str]) -> bool:
         section = extra.get(name)
         if not isinstance(section, dict):
             section = cls.default_config() if hasattr(cls, "default_config") else {}
+
+        if section.get("enabled"):
+            # Currently on → turn it off.
+            section["enabled"] = False
+            extra[name] = section
+            summary.append(f"Channel disabled: {name}")
+            touched = True
+            continue
+
+        # Currently off → turn it on and ask for the primary credential.
         section["enabled"] = True
-        # Prompt for the channel's primary credential field, if any.
-        for field in ("token", "app_id", "appId", "bot_token", "api_key"):
-            if field in section:
-                val = q.password(f"{name} {field} (blank to skip):").ask()
-                if val:
-                    section[field] = val
-                break
+        cred_field = next((f for f in _CHANNEL_CRED_FIELDS if f in section), None)
+        if cred_field is not None:
+            val = q.password(f"{name} {cred_field} (blank to skip):").ask()
+            if val:
+                section[cred_field] = val
+            if not section.get(cred_field):
+                summary.append(
+                    f"⚠ Channel {name}: enabled but {cred_field} is empty — "
+                    f"set it with `durin config set channels.{name}.{cred_field} …`"
+                )
         extra[name] = section
         summary.append(f"Channel enabled: {name}")
         touched = True

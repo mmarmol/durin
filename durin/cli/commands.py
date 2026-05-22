@@ -82,10 +82,29 @@ from durin.utils.restart import (
     should_show_cli_restart_notice,
 )
 
+# Shown at the bottom of `durin --help`. The top-level listing only
+# gives one line per command and never reveals what lives *inside* the
+# command groups (`config`, `gateway`, …) — so spell those out here.
+_HELP_EPILOG = (
+    "Command groups (run `durin GROUP --help` for the full list):\n\n"
+    "[bold]config[/bold] — path, show, get, set, edit\n\n"
+    "[bold]gateway[/bold] — start, stop, restart, status, logs\n\n"
+    "[bold]channels[/bold] — status, login\n\n"
+    "[bold]oauth[/bold] — login, logout\n\n"
+    "First run: `durin onboard`  ·  Health check: `durin doctor`  ·  "
+    "Chat: `durin agent`"
+)
+
 app = typer.Typer(
     name="durin",
     context_settings={"help_option_names": ["-h", "--help"]},
-    help=f"{__logo__} durin - Personal AI Assistant",
+    help=(
+        f"{__logo__} durin — your personal AI agent.\n\n"
+        "Daily-driver CLI and modal TUI, an OpenAI-compatible API server, "
+        "and a gateway that bridges chat channels (Telegram / Slack / "
+        "Discord) with cron jobs and a web dashboard."
+    ),
+    epilog=_HELP_EPILOG,
     no_args_is_help=True,
     # Hide the auto-injected `--install-completion` / `--show-completion`
     # flags. They're Typer boilerplate, not durin functionality —
@@ -95,15 +114,13 @@ app = typer.Typer(
 )
 
 # D6 lifecycle commands: config get/set/show/edit/path, upgrade, uninstall.
+# Registered at the end of the module (see bottom of file) so the
+# everyday commands (onboard, agent, gateway, …) sort above the
+# lifecycle/diagnostic ones in `durin --help`.
 from durin.cli.config_cmd import config_app as _config_app  # noqa: E402
 from durin.cli.upgrade import register as _register_upgrade  # noqa: E402
 from durin.cli.uninstall import register as _register_uninstall  # noqa: E402
 from durin.cli.doctor import register as _register_doctor  # noqa: E402
-
-app.add_typer(_config_app, name="config")
-_register_upgrade(app)
-_register_uninstall(app)
-_register_doctor(app)
 
 console = Console()
 EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit", ":q"}
@@ -2372,6 +2389,14 @@ def _login_github_copilot() -> None:
     except Exception as e:
         console.print(f"[red]Authentication error: {e}[/red]")
         raise typer.Exit(1)
+
+
+# Register lifecycle / diagnostic commands last so they sort below the
+# everyday commands (onboard, agent, gateway, …) in `durin --help`.
+app.add_typer(_config_app, name="config")
+_register_upgrade(app)
+_register_uninstall(app)
+_register_doctor(app)
 
 
 if __name__ == "__main__":
