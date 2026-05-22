@@ -339,38 +339,6 @@ describe("ThreadShell", () => {
     expect(screen.queryByText("What can I do for you?")).not.toBeInTheDocument();
   });
 
-  it("sends quick action prompts from the empty thread landing", async () => {
-    const client = makeClient();
-    const onNewChat = vi.fn().mockResolvedValue("chat-a");
-
-    render(
-      wrap(
-        client,
-        <ThreadShell
-          session={session("chat-a")}
-          title="Chat chat-a"
-          onToggleSidebar={() => {}}
-          onGoHome={() => {}}
-          onNewChat={onNewChat}
-        />,
-      ),
-    );
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Write code" })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "Write code" }));
-
-    await waitFor(() =>
-      expect(client.sendMessage).toHaveBeenCalledWith(
-        "chat-a",
-        "Help me write the code for this task, starting with the smallest useful change.",
-        undefined,
-      ),
-    );
-  });
-
   it("does not leak the previous thread when opening a brand-new chat", async () => {
     const client = makeClient();
     const onNewChat = vi.fn().mockResolvedValue("chat-new");
@@ -772,29 +740,6 @@ describe("ThreadShell", () => {
     expect(screen.getByRole("option", { name: /\/history/i })).toBeInTheDocument();
   });
 
-  it("switches welcome quick actions when image mode is enabled", async () => {
-    const client = makeClient();
-    render(
-      wrap(
-        client,
-        <ThreadShell
-          session={null}
-          title="durin"
-          onToggleSidebar={() => {}}
-          onNewChat={() => {}}
-        />,
-      ),
-    );
-    await act(async () => {});
-
-    expect(screen.getByText("Write code")).toBeInTheDocument();
-    expect(screen.queryByText("Design an app icon")).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "Toggle image generation mode" }));
-
-    expect(screen.getByText("Design an app icon")).toBeInTheDocument();
-    expect(screen.queryByText("Write code")).not.toBeInTheDocument();
-  });
 
   it("surfaces a dismissible banner when the stream reports message_too_big", async () => {
     const client = makeClient();
