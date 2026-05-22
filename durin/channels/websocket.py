@@ -671,8 +671,14 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/channels":
             return self._handle_channels_list(request)
 
+        if got == "/api/models":
+            return self._handle_models_list(request)
+
         if got == "/api/model/test":
             return await self._handle_model_test(request)
+
+        if got == "/api/model/capabilities":
+            return self._handle_model_capabilities(request)
 
         m = re.match(r"^/api/sessions/([^/]+)/messages$", got)
         if m:
@@ -1166,6 +1172,60 @@ class WebSocketChannel(BaseChannel):
                 "ok": True,
                 "config": mask_secrets(
                     config.model_dump(mode="json", by_alias=True)
+                ),
+            }
+        )
+
+    def _handle_models_list(self, request: WsRequest) -> Response:
+        """`GET /api/models?provider=X` — model catalog for the picker.
+
+        ``suggested`` is the curated per-provider shortlist; ``models``
+        is the full known-model set for free search.
+        """
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from durin.cli.onboard_wizard import DEFAULT_MODELS
+
+        provider = (_query_first(_parse_query(request.path), "provider") or "").strip()
+        suggested = list(DEFAULT_MODELS.get(provider, ()))
+        catalog: list[str] = []
+        try:
+            from durin.providers.capabilities import _load_capabilities_snapshot
+
+            models = (_load_capabilities_snapshot() or {}).get("models") or {}
+            catalog = sorted(
+                mid
+                for mid, info in models.items()
+                if isinstance(mid, str)
+                and (not isinstance(info, dict) or info.get("mode") != "image_generation")
+            )
+        except Exception:  # noqa: BLE001
+            catalog = []
+        return _http_json_response({"suggested": suggested, "models": catalog})
+
+    def _handle_model_capabilities(self, request: WsRequest) -> Response:
+        """`GET /api/model/capabilities?model=&provider=` — what a model supports."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        query = _parse_query(request.path)
+        model = (_query_first(query, "model") or "").strip()
+        provider = (_query_first(query, "provider") or "").strip() or None
+        if not model:
+            return _http_error(400, "model is required")
+        try:
+            from durin.providers.capabilities import get_model_capabilities
+
+            caps = get_model_capabilities(model, provider)
+        except Exception as e:  # noqa: BLE001
+            return _http_error(400, f"could not resolve capabilities: {e}")
+        return _http_json_response(
+            {
+                "model": model,
+                "max_input_tokens": getattr(caps, "max_input_tokens", None),
+                "supports_vision": bool(getattr(caps, "supports_vision", False)),
+                "supports_audio_input": bool(getattr(caps, "supports_audio_input", False)),
+                "supports_function_calling": bool(
+                    getattr(caps, "supports_function_calling", False)
                 ),
             }
         )
