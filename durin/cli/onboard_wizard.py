@@ -352,44 +352,51 @@ def _all_provider_rows(config: Config) -> list[tuple[str, str, bool, bool]]:
     return rows
 
 
-def _set_provider_api_key(config: Config, provider_name: str, api_key: str) -> None:
-    """Store the API key in the secret store; put a ``${secret:}`` ref in config.
+def _store_as_secret(
+    *, name: str, value: str, service: str, scope: list[str], description: str = "",
+) -> str:
+    """Store *value* in the secret store; return its ``${secret:}`` reference.
 
-    The plaintext never lands in ``config.json`` — it goes to
-    ``secrets.json`` (mode 0600) and the provider's ``api_key`` field
-    holds a reference. See ``docs/11_secrets_design.md``.
+    The plaintext lands only in ``secrets.json`` (mode 0600), never in
+    ``config.json``. Used by every wizard credential prompt. See
+    ``docs/11_secrets_design.md``.
     """
     import re
 
-    from durin.security.secrets import (
-        SecretStore,
-        get_secret_store,
-        make_ref,
-    )
+    from durin.security.secrets import SecretStore, get_secret_store, make_ref
 
+    secret_name = re.sub(r"[^A-Z0-9_]", "_", name.upper())
+    if not secret_name or not secret_name[0].isalpha():
+        secret_name = "S_" + secret_name
+
+    store = SecretStore().load()
+    store.put(
+        secret_name,
+        value=value,
+        service=service,
+        description=description,
+        scope=scope,
+        origin="wizard",
+    )
+    store.save()
+    get_secret_store(reload=True)  # refresh the cache so a model test resolves
+    return make_ref(secret_name)
+
+
+def _set_provider_api_key(config: Config, provider_name: str, api_key: str) -> None:
+    """Store the provider API key and put a ``${secret:}`` ref in config."""
     provider_obj = getattr(config.providers, provider_name, None)
     target = provider_name
     if provider_obj is None:
         provider_obj = config.providers.custom
         target = "custom"
-
-    base = re.sub(r"[^A-Z0-9_]", "_", target.upper())
-    if not base or not base[0].isalpha():
-        base = "P_" + base
-    secret_name = f"{base}_API_KEY"
-
-    store = SecretStore().load()
-    store.put(
-        secret_name,
+    provider_obj.api_key = _store_as_secret(
+        name=f"{target}_API_KEY",
         value=api_key,
         service=f"provider:{target}",
         description=f"{target} API key",
         scope=[f"provider:{target}"],
-        origin="wizard",
     )
-    store.save()
-    get_secret_store(reload=True)  # refresh the cache so a model test resolves
-    provider_obj.api_key = make_ref(secret_name)
 
 
 def _pick_provider(config: Config, q: Any) -> tuple[str, str] | None:
@@ -902,7 +909,13 @@ def _configure_web(
         else:
             key = q.password(f"{backend_id} API key:").ask()
             if key and hasattr(search_cfg, "api_key"):
-                search_cfg.api_key = key
+                search_cfg.api_key = _store_as_secret(
+                    name=f"{backend_id}_API_KEY",
+                    value=key,
+                    service="web-search",
+                    description=f"{backend_id} web-search API key",
+                    scope=["web-search"],
+                )
     summary.append(f"Web search: {backend_id}")
     return True
 
@@ -991,7 +1004,13 @@ def _configure_channels(config: Config, q: Any, summary: list[str]) -> bool:
         if cred_field is not None:
             val = q.password(f"{name} {cred_field} (blank to skip):").ask()
             if val:
-                section[cred_field] = val
+                section[cred_field] = _store_as_secret(
+                    name=f"{name}_{cred_field}",
+                    value=val,
+                    service=f"channel:{name}",
+                    description=f"{name} {cred_field}",
+                    scope=[f"channel:{name}"],
+                )
             if not section.get(cred_field):
                 summary.append(
                     f"⚠ Channel {name}: enabled but {cred_field} is empty — "

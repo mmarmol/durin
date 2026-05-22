@@ -40,6 +40,24 @@ _BOOL_CAMEL_ALIASES: dict[str, str] = {
     "show_reasoning": "showReasoning",
 }
 
+def _resolve_section_secrets(section: Any) -> Any:
+    """Deep-copy a channel config section, resolving ``${secret:}`` refs.
+
+    Channel credentials (tokens, keys) are stored as references; this
+    resolves them into a copy passed to the channel, so the plaintext
+    never lives in the shared ``Config`` object.
+    """
+    from durin.security.secrets import resolve_secret
+
+    if isinstance(section, dict):
+        return {k: _resolve_section_secrets(v) for k, v in section.items()}
+    if isinstance(section, list):
+        return [_resolve_section_secrets(v) for v in section]
+    if isinstance(section, str):
+        return resolve_secret(section)
+    return section
+
+
 class ChannelManager:
     """
     Manages chat channels and coordinates message routing.
@@ -100,7 +118,7 @@ class ChannelManager:
                             kwargs["static_dist_path"] = static_path
                     if self._webui_runtime_model_name is not None:
                         kwargs["runtime_model_name"] = self._webui_runtime_model_name
-                channel = cls(section, self.bus, **kwargs)
+                channel = cls(_resolve_section_secrets(section), self.bus, **kwargs)
                 channel.transcription_provider = transcription_provider
                 channel.transcription_api_key = transcription_key
                 channel.transcription_api_base = transcription_base
