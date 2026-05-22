@@ -175,6 +175,26 @@ export interface WebSearchSettingsUpdate {
   baseUrl?: string;
 }
 
+export interface SecretEntry {
+  name: string;
+  service: string;
+  account: string;
+  description: string;
+  scope: string[];
+  origin: string;
+  created_at: string;
+  value_hint: string | null;
+}
+
+export interface SecretSetInput {
+  name: string;
+  service: string;
+  account?: string;
+  description?: string;
+  scope?: string[];
+  value?: string;
+}
+
 export interface SlashCommand {
   command: string;
   title: string;

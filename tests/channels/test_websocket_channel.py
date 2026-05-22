@@ -994,11 +994,83 @@ async def test_settings_api_returns_safe_subset_and_updates_whitelist(
         saved = load_config(config_path)
         assert saved.agents.defaults.model == "openrouter/test"
         assert saved.agents.defaults.provider == "openrouter"
-        assert saved.providers.openrouter.api_key == "sk-or-test"
+        # The dashboard stores the key in the secret store and keeps a
+        # ${secret:} reference in config — never plaintext.
+        from durin.security.secrets import SecretStore, is_secret_ref
+
+        assert is_secret_ref(saved.providers.openrouter.api_key)
+        store_entry = SecretStore(
+            path=config_path.parent / "secrets.json"
+        ).load().get("OPENROUTER_API_KEY")
+        assert store_entry is not None and store_entry.value == "sk-or-test"
         assert saved.providers.openrouter.api_base == "https://openrouter.ai/api/v1"
         assert saved.tools.web.search.provider == "searxng"
         assert saved.tools.web.search.api_key == ""
         assert saved.tools.web.search.base_url == "https://search.example.com"
+    finally:
+        await channel.stop()
+        await server_task
+
+
+@pytest.mark.asyncio
+async def test_secrets_api_crud(bus: MagicMock, monkeypatch, tmp_path) -> None:
+    """`/api/secrets` list/set/delete — values never returned."""
+    port = 29893
+    config_path = tmp_path / "config.json"
+    save_config(Config(), config_path)
+    monkeypatch.setattr("durin.config.loader._current_config_path", config_path)
+
+    channel = _ch(bus, port=port)
+    channel._api_tokens["tok"] = time.monotonic() + 300
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+    base = f"http://127.0.0.1:{port}"
+    hdr = {"Authorization": "Bearer tok"}
+    try:
+        # Empty to start.
+        listed = await _http_get(f"{base}/api/secrets", headers=hdr)
+        assert listed.status_code == 200
+        assert listed.json()["secrets"] == []
+
+        # Create.
+        created = await _http_get(
+            f"{base}/api/secrets/set?name=ATLASSIAN_WORK&service=atlassian"
+            "&value=tok-plaintext-secret&scope=exec",
+            headers=hdr,
+        )
+        assert created.status_code == 200
+
+        listed = await _http_get(f"{base}/api/secrets", headers=hdr)
+        rows = listed.json()["secrets"]
+        assert len(rows) == 1 and rows[0]["name"] == "ATLASSIAN_WORK"
+        assert rows[0]["service"] == "atlassian" and rows[0]["scope"] == ["exec"]
+        # The value is never in the response.
+        assert "tok-plaintext-secret" not in listed.text
+
+        from durin.security.secrets import SecretStore
+
+        entry = SecretStore(path=tmp_path / "secrets.json").load().get("ATLASSIAN_WORK")
+        assert entry is not None and entry.value == "tok-plaintext-secret"
+
+        # Metadata-only edit (no value) keeps the stored value.
+        await _http_get(
+            f"{base}/api/secrets/set?name=ATLASSIAN_WORK&service=atlassian&scope=exec,skill:*",
+            headers=hdr,
+        )
+        entry = SecretStore(path=tmp_path / "secrets.json").load().get("ATLASSIAN_WORK")
+        assert entry.value == "tok-plaintext-secret"
+        assert entry.scope == ["exec", "skill:*"]
+
+        # Delete.
+        deleted = await _http_get(
+            f"{base}/api/secrets/delete?name=ATLASSIAN_WORK", headers=hdr
+        )
+        assert deleted.status_code == 200
+        listed = await _http_get(f"{base}/api/secrets", headers=hdr)
+        assert listed.json()["secrets"] == []
+
+        # Unauthorized without a token.
+        assert (await _http_get(f"{base}/api/secrets")).status_code == 401
     finally:
         await channel.stop()
         await server_task

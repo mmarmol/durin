@@ -38,6 +38,7 @@ __all__ = [
     "is_valid_secret_name",
     "get_secret_store",
     "resolve_secret",
+    "store_secret",
     "SecretRedactor",
     "redact_secrets",
 ]
@@ -313,6 +314,41 @@ def resolve_secret(value: Any) -> Any:
     if not is_secret_ref(value):
         return value
     return get_secret_store().resolve(value)
+
+
+def store_secret(
+    name: str,
+    value: str,
+    *,
+    service: str,
+    scope: list[str],
+    description: str = "",
+    origin: str = "user",
+) -> str:
+    """Store *value* in the secret store; return its ``${secret:}`` reference.
+
+    *name* is sanitized to an env-var-safe secret name. The plaintext
+    lands only in ``secrets.json`` (mode 0600). Shared by the onboard
+    wizard and the web dashboard so both write references, never
+    plaintext, into config.
+    """
+    import re
+
+    secret_name = re.sub(r"[^A-Z0-9_]", "_", name.upper())
+    if not secret_name or not secret_name[0].isalpha():
+        secret_name = "S_" + secret_name
+    store = SecretStore().load()
+    store.put(
+        secret_name,
+        value=value,
+        service=service,
+        description=description,
+        scope=list(scope),
+        origin=origin,
+    )
+    store.save()
+    get_secret_store(reload=True)
+    return make_ref(secret_name)
 
 
 class SecretRedactor:
