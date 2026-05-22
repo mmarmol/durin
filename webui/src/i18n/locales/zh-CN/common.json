@@ -57,7 +57,8 @@
       "providers": "Model providers",
       "web-search": "Web search",
       "secrets": "Secrets",
-      "advanced": "All settings"
+      "advanced": "All settings",
+      "channels": "Channels"
     },
     "sections": {
       "interface": "界面",

@@ -264,3 +264,21 @@ export async function testModel(
     token,
   );
 }
+
+export interface ChannelInfo {
+  name: string;
+  display_name: string;
+  enabled: boolean;
+  credential_field: string | null;
+}
+
+export async function listChannels(
+  token: string,
+  base: string = "",
+): Promise<ChannelInfo[]> {
+  const res = await request<{ channels: ChannelInfo[] }>(
+    `${base}/api/channels`,
+    token,
+  );
+  return res.channels;
+}
