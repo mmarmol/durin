@@ -243,3 +243,24 @@ export async function setConfigValue(
   );
   return res.config;
 }
+
+export interface ModelTestResult {
+  status: "ok" | "warn" | "fail";
+  message: string;
+  fix: string;
+}
+
+export async function testModel(
+  token: string,
+  opts: { model?: string; provider?: string } = {},
+  base: string = "",
+): Promise<ModelTestResult> {
+  const query = new URLSearchParams();
+  if (opts.model) query.set("model", opts.model);
+  if (opts.provider) query.set("provider", opts.provider);
+  const qs = query.toString();
+  return request<ModelTestResult>(
+    `${base}/api/model/test${qs ? `?${qs}` : ""}`,
+    token,
+  );
+}

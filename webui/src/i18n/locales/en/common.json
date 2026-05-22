@@ -180,6 +180,25 @@
       "save": "Save",
       "on": "On",
       "off": "Off"
+    },
+    "models": {
+      "auxTitle": "Vision & audio models",
+      "auxDescription": "durin uses these only when the main model can't handle images or audio itself.",
+      "vision": "Vision model",
+      "visionHint": "Used by the interpret_image tool.",
+      "audio": "Audio model",
+      "audioHint": "Used by the interpret_audio tool.",
+      "modelPlaceholder": "model id",
+      "providerPlaceholder": "provider",
+      "save": "Save",
+      "clear": "Clear",
+      "testTitle": "Test",
+      "testHint": "Run a real round-trip against the configured model.",
+      "testButton": "Test the model",
+      "testing": "Testing…",
+      "loadError": "Could not load the model configuration.",
+      "saveError": "Could not save the model.",
+      "testError": "The test could not run."
     }
   },
   "chat": {
