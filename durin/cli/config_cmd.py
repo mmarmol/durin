@@ -109,15 +109,36 @@ def set_at(data: dict[str, Any], dotted: str, value: Any) -> dict[str, Any]:
 
 
 def mask_secrets(data: Any) -> Any:
-    """Return a deep copy with any value whose key matches a secret pattern masked."""
+    """Return a deep copy with secret-keyed values masked.
+
+    A ``${secret:NAME}`` reference is shown verbatim — it is not a
+    secret, it is a pointer into the secret store, and the whole point
+    of the design is that config (with references) is safe to share.
+    Only literal secret values are masked.
+    """
     if isinstance(data, dict):
-        return {
-            k: ("***" if isinstance(v, str) and v and _SECRET_KEY_PATTERN.search(k) else mask_secrets(v))
-            for k, v in data.items()
-        }
+        out: dict[str, Any] = {}
+        for k, v in data.items():
+            if (
+                isinstance(v, str)
+                and v
+                and _SECRET_KEY_PATTERN.search(k)
+                and not _is_secret_ref(v)
+            ):
+                out[k] = "***"
+            else:
+                out[k] = mask_secrets(v)
+        return out
     if isinstance(data, list):
         return [mask_secrets(v) for v in data]
     return data
+
+
+def _is_secret_ref(value: str) -> bool:
+    """True when *value* is a ``${secret:NAME}`` store reference."""
+    from durin.security.secrets import is_secret_ref
+
+    return is_secret_ref(value)
 
 
 def validate_dict(data: dict[str, Any]) -> Config:
@@ -197,12 +218,15 @@ def cmd_set(
     key: str = typer.Argument(..., help="Dotted path through the config."),
     value: str = typer.Argument(..., help="New value (JSON-decoded when possible)."),
 ) -> None:
-    """Set one value. Validated against the schema before writing."""
+    """Set one value. Validated against the schema before writing.
+
+    Bootstraps a default config when none exists yet, so a fresh
+    install can be configured purely from the command line without
+    running the wizard first.
+    """
     path = get_config_path()
-    if not path.exists():
-        console.print(f"[red]No config at {path}.[/red] Run [cyan]durin onboard[/cyan].")
-        raise typer.Exit(1)
-    raw = load_raw_config(path)
+    bootstrapped = not path.exists()
+    raw = load_raw_config(path)  # {} when the file is absent
     # Canonicalize the dict to alias-form (camelCase) before mutating so
     # we don't end up with parallel snake_case + camelCase keys that
     # pydantic's alias-first resolution would silently drop.
@@ -220,6 +244,8 @@ def cmd_set(
         console.print(str(e))
         raise typer.Exit(1)
     save_config(config, path)
+    if bootstrapped:
+        console.print(f"[green]✓[/green] Created config at {path}")
     console.print(f"[green]✓[/green] {key} updated.")
 
 
@@ -239,6 +265,57 @@ def _normalize_dotted_path(dotted: str) -> str:
         return head + "".join(p[:1].upper() + p[1:] for p in rest)
 
     return ".".join(_camel(s) for s in dotted.split("."))
+
+
+@config_app.command("import")
+def cmd_import(
+    source: str = typer.Argument(
+        ..., help="An old config.json, config.json.d/ dir, or a ~/.durin directory."
+    ),
+) -> None:
+    """Import an existing config and migrate its plaintext secrets.
+
+    Copies the config from SOURCE into place, then moves any plaintext
+    provider API keys it carried into the secret store. Use it to
+    replicate a setup on a fresh install without re-running the wizard
+    (e.g. `durin config import ~/.durin_backup`).
+    """
+    from durin.config.loader import backup_config, load_config, save_config
+    from durin.security.secrets import migrate_plaintext_provider_keys
+
+    src = Path(source).expanduser()
+    if src.is_dir():
+        src_config = src / "config.json"
+        if not src_config.exists() and src.name == "config.json.d":
+            src_config = src.parent / "config.json"
+    else:
+        src_config = src
+    if not src_config.exists():
+        console.print(f"[red]No config found at {source}.[/red]")
+        raise typer.Exit(1)
+
+    try:
+        imported = load_config(src_config)
+    except Exception as e:  # noqa: BLE001
+        console.print(f"[red]Could not read config from {source}: {e}[/red]")
+        raise typer.Exit(1)
+
+    dest = get_config_path()
+    backup = backup_config(dest)
+    if backup is not None:
+        console.print(f"[dim]Existing config backed up to {backup}[/dim]")
+    save_config(imported, dest)
+    created = migrate_plaintext_provider_keys(dest)
+
+    console.print(f"[green]✓[/green] Imported config from {source}.")
+    if created:
+        console.print(
+            f"[green]✓[/green] Moved {len(created)} plaintext key(s) into the "
+            f"secret store: {', '.join(created)}"
+        )
+    console.print(
+        "[dim]Review with `durin config show` and `durin secret list`.[/dim]"
+    )
 
 
 @config_app.command("edit")

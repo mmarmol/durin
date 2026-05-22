@@ -85,14 +85,21 @@ from durin.utils.restart import (
 # Shown at the bottom of `durin --help`. The top-level listing only
 # gives one line per command and never reveals what lives *inside* the
 # command groups (`config`, `gateway`, …) — so spell those out here.
+_HELP_FOOTER = (
+    "First run: `durin onboard`  ·  Health check: `durin doctor`  ·  "
+    "Chat: `durin agent`"
+)
+# Static fallback; the real epilog is regenerated from the registered
+# groups by `_refresh_help_epilog()` at the end of this module so it can
+# never go stale when a group or subcommand is added.
 _HELP_EPILOG = (
     "Command groups (run `durin GROUP --help` for the full list):\n\n"
-    "[bold]config[/bold] — path, show, get, set, edit\n\n"
+    "[bold]config[/bold] — path, show, get, set, edit, import\n\n"
+    "[bold]secret[/bold] — set, list, show, rm, grant, revoke, migrate\n\n"
     "[bold]gateway[/bold] — start, stop, restart, status, logs\n\n"
     "[bold]channels[/bold] — status, login\n\n"
     "[bold]oauth[/bold] — login, logout\n\n"
-    "First run: `durin onboard`  ·  Health check: `durin doctor`  ·  "
-    "Chat: `durin agent`"
+    + _HELP_FOOTER
 )
 
 app = typer.Typer(
@@ -715,8 +722,21 @@ def onboard(
         console.print(f"  2. Chat: [cyan]{agent_cmd}[/cyan]")
         console.print(f"  3. (optional) Chat apps: [cyan]{gateway_cmd}[/cyan]")
     else:
-        console.print(f"  1. Add your API key to [cyan]{config_path}[/cyan]")
-        console.print(f"  2. Chat: [cyan]{agent_cmd}[/cyan]")
+        console.print("  1. Configure a provider — either run the wizard:")
+        console.print("       [cyan]durin onboard[/cyan]")
+        console.print("     or set it from the command line:")
+        console.print(
+            "       [cyan]durin secret set ZHIPU_API_KEY --service provider:zhipu[/cyan]"
+        )
+        console.print(
+            "       [cyan]durin config set providers.zhipu.apiKey "
+            "'${secret:ZHIPU_API_KEY}'[/cyan]"
+        )
+        console.print(
+            "       [cyan]durin config set agents.defaults.provider zhipu[/cyan]"
+        )
+        console.print("  2. Verify: [cyan]durin doctor[/cyan]")
+        console.print(f"  3. Chat: [cyan]{agent_cmd}[/cyan]")
 
 
 def _merge_missing_defaults(existing: Any, defaults: Any) -> Any:
@@ -2401,6 +2421,39 @@ _register_doctor(app)
 from durin.cli.secret_cmd import secret_app as _secret_app  # noqa: E402
 
 app.add_typer(_secret_app, name="secret")
+
+
+def _refresh_help_epilog() -> None:
+    """Regenerate `durin --help`'s group listing from the live registry.
+
+    Keeps the epilog honest: every command group and its subcommands
+    are listed automatically, so adding a group never leaves the help
+    stale. Falls back to the static `_HELP_EPILOG` on any introspection
+    error (Typer internals differ across versions).
+    """
+    try:
+        lines: list[str] = []
+        for group in app.registered_groups:
+            sub = group.typer_instance
+            if sub is None or not group.name:
+                continue
+            names = sorted(
+                (cmd.name or (cmd.callback.__name__ if cmd.callback else ""))
+                for cmd in sub.registered_commands
+            )
+            names = [n for n in names if n]
+            if names:
+                lines.append(f"[bold]{group.name}[/bold] — {', '.join(names)}")
+        if lines:
+            app.info.epilog = (
+                "Command groups (run `durin GROUP --help` for the full list):"
+                "\n\n" + "\n\n".join(lines) + "\n\n" + _HELP_FOOTER
+            )
+    except Exception:  # noqa: BLE001
+        pass  # keep the static _HELP_EPILOG
+
+
+_refresh_help_epilog()
 
 
 if __name__ == "__main__":

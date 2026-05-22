@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -89,6 +88,60 @@ def test_mask_secrets_passes_empty_strings() -> None:
 def test_mask_secrets_handles_lists_and_nesting() -> None:
     masked = mask_secrets({"auths": [{"token": "abc"}, {"token": "def"}]})
     assert masked == {"auths": [{"token": "***"}, {"token": "***"}]}
+
+
+def test_mask_secrets_keeps_secret_references_visible() -> None:
+    """A ${secret:} reference is a pointer, not a secret — show it verbatim."""
+    masked = mask_secrets(
+        {"providers": {"zhipu": {"api_key": "${secret:ZHIPU_API_KEY}"}}}
+    )
+    assert masked["providers"]["zhipu"]["api_key"] == "${secret:ZHIPU_API_KEY}"
+    # A literal value is still masked.
+    masked2 = mask_secrets({"providers": {"zhipu": {"api_key": "sk-literal"}}})
+    assert masked2["providers"]["zhipu"]["api_key"] == "***"
+
+
+def test_cli_config_set_bootstraps_when_no_config(tmp_path: Path) -> None:
+    """`config set` on a fresh install creates the config instead of erroring."""
+    cfg_path = tmp_path / "config.json"
+    assert not cfg_path.exists()
+    with patch("durin.cli.config_cmd.get_config_path", return_value=cfg_path), \
+         patch("durin.config.loader.get_config_path", return_value=cfg_path):
+        result = runner.invoke(
+            app, ["config", "set", "agents.defaults.provider", "zhipu"]
+        )
+    assert result.exit_code == 0, result.output
+    assert "Created config" in result.output
+    from durin.config.loader import load_config
+
+    assert load_config(cfg_path).agents.defaults.provider == "zhipu"
+
+
+def test_cli_config_import_moves_plaintext_key_to_store(tmp_path: Path) -> None:
+    """`config import` copies an old config and migrates its plaintext keys."""
+    old = tmp_path / "old.json"
+    old.write_text(
+        json.dumps({"providers": {"zhipu": {"apiKey": "sk-old-plaintext"}},
+                    "agents": {"defaults": {"model": "glm-5.1"}}}),
+        encoding="utf-8",
+    )
+    cfg_path = tmp_path / "config.json"
+    with patch("durin.cli.config_cmd.get_config_path", return_value=cfg_path), \
+         patch("durin.config.loader.get_config_path", return_value=cfg_path):
+        import durin.security.secrets as _secrets
+
+        _secrets._STORE = None
+        result = runner.invoke(app, ["config", "import", str(old)])
+        assert result.exit_code == 0, result.output
+        from durin.config.loader import load_config
+        from durin.security.secrets import SecretStore, is_secret_ref
+
+        cfg = load_config(cfg_path)
+        assert cfg.agents.defaults.model == "glm-5.1"
+        assert is_secret_ref(cfg.providers.zhipu.api_key)
+        store = SecretStore(path=tmp_path / "secrets.json").load()
+        assert store.get("ZHIPU_API_KEY").value == "sk-old-plaintext"
+        _secrets._STORE = None
 
 
 def test_validate_dict_accepts_default_config() -> None:
