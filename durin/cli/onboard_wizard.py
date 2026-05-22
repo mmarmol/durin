@@ -1,25 +1,19 @@
 """Task-oriented onboarding wizard.
 
-The legacy ``onboard.py`` walks the Pydantic schema field-by-field.
-That's exhaustive but exhausting — users get drowned in choices for
-settings they don't care about, while the *important* questions
-(provider, key, default model, which optional features) are buried.
+The flow is a small **state machine**, not a linear questionnaire:
 
-This wizard flips that:
+1. **Direct setup** — when no working provider exists yet, the user is
+   walked through provider → API key → model (the minimum durin needs
+   to talk to an LLM). Every step has a real "← Back".
+2. **Hub** — a re-entrant main menu. Each row is a section (model,
+   vision/audio, memory, web, dashboard, channels, workspace) showing
+   its current state; opening one drops into a submenu that always
+   returns to the hub. No dead ends — the only way out is "Finish".
 
-1. **Required stage** — Provider, API key, default model. Without
-   these, durin can't talk to any LLM, so we don't let the user out
-   of the wizard until they're set.
-2. **Optional menu** — Checklist of capabilities (memory, vision,
-   audio, image gen, web search, channels). User picks what to
-   configure now; everything else can be added later via
-   `durin config set ...` or a future `durin onboard --add <feature>`.
-3. **Review** — Summary of what got configured + the exact
-   ``pipx inject …`` (or ``pip install``) command to add any extras
-   that need separate installation.
+`durin onboard <section>` jumps straight to one submenu.
 
-Anything beyond that is power-user territory and lives in the legacy
-field-walking wizard (kept around as ``onboard --advanced``).
+The legacy field-by-field walker still lives in ``onboard.py`` and is
+reachable via ``durin onboard --advanced``.
 """
 
 from __future__ import annotations
@@ -43,12 +37,10 @@ __all__ = [
     "apply_model_capabilities",
 ]
 
-# Sections the user can jump straight into via `durin onboard <section>`.
-# "model" re-runs provider/key/model + the capability screen; the rest
-# map to the optional-feature sub-wizards.
+# Sections reachable directly via `durin onboard <section>`.
 SECTIONS: tuple[str, ...] = (
-    "model", "memory", "vision", "audio", "image-gen", "web",
-    "dashboard", "channels",
+    "model", "vision", "audio", "memory", "web",
+    "dashboard", "channels", "workspace",
 )
 
 
@@ -88,9 +80,8 @@ def apply_model_capabilities(config: Config, model: str, provider: str) -> list[
 # ---------------------------------------------------------------------------
 
 
-# (label, internal provider name, recommended default model)
-# The order is the order the user sees in the menu — top entries are
-# what we'd recommend for someone who has no preference yet.
+# (label, internal provider name, recommended default model). Used only
+# to pick a sensible default model when the user lands on a provider.
 PROVIDER_CHOICES: tuple[tuple[str, str, str], ...] = (
     ("Z.AI Coding Plan (recommended)", "zhipu", "glm-5.1"),
     ("Anthropic (Claude)", "anthropic", "claude-opus-4-7"),
@@ -100,18 +91,29 @@ PROVIDER_CHOICES: tuple[tuple[str, str, str], ...] = (
     ("Custom OpenAI-compatible endpoint", "custom", ""),
 )
 
-# Suggestions shown after the user picks a provider. Plain list — not
-# enforced. The user can always type a model name we don't know.
+# Per-provider model shortlist shown after a provider is picked. Not
+# exhaustive and not enforced — every picker has an "Other (type)"
+# escape hatch. Wrong/stale ids only cost an inaccurate capability
+# hint; they never block the user.
 DEFAULT_MODELS: dict[str, tuple[str, ...]] = {
-    "zhipu": ("glm-5.1", "glm-5-turbo", "glm-5v-turbo"),
+    "zhipu": ("glm-5.1", "glm-4.6", "glm-5-turbo", "glm-4.5v"),
     "anthropic": ("claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"),
-    "openai": ("gpt-5", "gpt-5-mini", "gpt-4.1"),
-    "gemini": ("gemini-2.5-pro", "gemini-2.5-flash"),
+    "openai": ("gpt-5", "gpt-5-mini", "gpt-4.1", "gpt-4o", "gpt-4o-mini"),
+    "gemini": ("gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"),
     "openrouter": (
         "anthropic/claude-opus-4.7",
         "openai/gpt-5",
         "google/gemini-2.5-pro",
     ),
+    "deepseek": ("deepseek-chat", "deepseek-reasoner"),
+    "moonshot": ("kimi-k2-0905-preview", "moonshot-v1-128k", "moonshot-v1-32k"),
+    "minimax": ("MiniMax-M2", "MiniMax-Text-01"),
+    "minimax_anthropic": ("MiniMax-M2",),
+    "mistral": ("mistral-large-latest", "mistral-small-latest", "pixtral-large-latest"),
+    "groq": ("llama-3.3-70b-versatile", "llama-3.1-8b-instant"),
+    "dashscope": ("qwen-max", "qwen-plus", "qwen-vl-max"),
+    "xiaomi_mimo": ("mimo-v2",),
+    "stepfun": ("step-2-16k", "step-1v-8k"),
     "custom": (),
 }
 
@@ -125,9 +127,32 @@ _EMBEDDING_CHOICES: tuple[tuple[str, str, str, str], ...] = (
      "fastembed", "sentence-transformers/all-MiniLM-L6-v2", "90 MB"),
 )
 
+# Web-search backends durin supports (see durin/agent/tools/web.py).
+# (label, provider-id, needs-api-key)
+_SEARCH_BACKENDS: tuple[tuple[str, str, bool], ...] = (
+    ("DuckDuckGo — no API key, default", "duckduckgo", False),
+    ("Brave Search — needs an API key", "brave", True),
+    ("Tavily — needs an API key", "tavily", True),
+    ("SearXNG — self-hosted, needs a base URL", "searxng", True),
+    ("Jina — needs an API key", "jina", True),
+)
+
+# The websocket channel is the dashboard's transport — `durin gateway`
+# turns it on automatically when the dashboard is enabled, so it is not
+# a "chat channel" the user toggles in the channels submenu.
+_DASHBOARD_CHANNEL = "websocket"
+
+# Per-channel field that holds the primary credential, checked in order.
+_CHANNEL_CRED_FIELDS = ("token", "bot_token", "app_id", "appId", "api_key")
+
+# Sentinel returned by pickers when the user chose "go back".
+_BACK = object()
+_BACK_CHOICE = "← Back"
+_CANCEL_CHOICE = "✗ Cancel onboarding"
+
 
 # ---------------------------------------------------------------------------
-# Result + entry point
+# Result + entry points
 # ---------------------------------------------------------------------------
 
 
@@ -158,33 +183,25 @@ def _load_questionary(q: Any | None) -> Any:
 
 
 def run_wizard(initial_config: Config, *, q: Any | None = None) -> WizardResult:
-    """Run the wizard against ``initial_config`` and return the result.
+    """Run the full wizard: direct setup (if needed) then the hub.
 
     ``q`` is an injection point for tests: pass a mock with the same
     surface as :mod:`questionary` to drive the wizard programmatically.
-    When unset we import questionary lazily (it's an optional dep).
     """
     q = _load_questionary(q)
-
     config = initial_config.model_copy(deep=True)
     extras: set[str] = set()
     summary: list[str] = []
 
-    # ---- Stage 1: required — provider + default model ---------------
-    if not _stage_provider_and_model(config, q, summary):
-        return WizardResult(
-            config=initial_config, extras_to_install=[],
-            cancelled=True, summary_lines=summary,
-        )
+    # A working provider is the one hard requirement — without it durin
+    # can't talk to any LLM. Force the direct setup until it's there.
+    if not _provider_is_configured(config):
+        if not _direct_setup(config, q, summary):
+            return WizardResult(
+                config=initial_config, cancelled=True, summary_lines=summary,
+            )
 
-    # ---- Stage 1b: model capabilities — offer aux models ------------
-    _stage_model_capabilities(config, q, summary)
-
-    # ---- Stage 2: optional menu -------------------------------------
-    _stage_optional_menu(config, extras, q, summary)
-
-    # ---- Stage 3: workspace (one quick question) --------------------
-    _stage_workspace(config, q, summary)
+    _run_hub(config, extras, q, summary)
 
     return WizardResult(
         config=config,
@@ -198,12 +215,7 @@ def run_wizard(initial_config: Config, *, q: Any | None = None) -> WizardResult:
 def run_section(
     initial_config: Config, section: str, *, q: Any | None = None,
 ) -> WizardResult:
-    """Run a single onboarding section — `durin onboard <section>`.
-
-    Lets a user re-tune one thing (the model, channels, memory, …)
-    without walking the whole wizard. ``section`` must be one of
-    :data:`SECTIONS`.
-    """
+    """Open a single hub section directly — `durin onboard <section>`."""
     q = _load_questionary(q)
     if section not in SECTIONS:
         raise ValueError(
@@ -215,14 +227,24 @@ def run_section(
     summary: list[str] = []
 
     if section == "model":
-        if not _stage_provider_and_model(config, q, summary):
+        if _provider_is_configured(config):
+            _submenu_model(config, q, summary)
+        elif not _direct_setup(config, q, summary):
             return WizardResult(
                 config=initial_config, cancelled=True, summary_lines=summary,
             )
-        _stage_model_capabilities(config, q, summary)
-    else:
-        feature_key = section.replace("-", "_")
-        _configure_feature(feature_key, config, extras, q, summary)
+    elif section in ("vision", "audio"):
+        _submenu_vision_audio(config, q, summary)
+    elif section == "memory":
+        _configure_memory(config, extras, q, summary)
+    elif section == "web":
+        _configure_web(config, extras, q, summary)
+    elif section == "dashboard":
+        _configure_dashboard(config, q, summary)
+    elif section == "channels":
+        _configure_channels(config, q, summary)
+    elif section == "workspace":
+        _submenu_workspace(config, q, summary)
 
     return WizardResult(
         config=config,
@@ -234,26 +256,18 @@ def run_section(
 
 
 # ---------------------------------------------------------------------------
-# Stage 1 — Provider + model (required)
+# Capability helpers
 # ---------------------------------------------------------------------------
 
 
 def _provider_is_configured(config: Config) -> bool:
-    """True when provider + model + (key or local/oauth) are already set.
-
-    This is the gate for "you don't have to reconfigure" — a re-run of
-    `durin onboard` against an existing setup should let the user keep
-    what works instead of forcing the whole flow again.
-    """
+    """True when provider + model + (key or local/oauth) are already set."""
     d = config.agents.defaults
     if d.provider == "auto" or not d.model:
         return False
     provider_obj = getattr(config.providers, d.provider, None)
     if provider_obj is None:
         return False
-    # A configured provider has an api_key OR an api_base (local
-    # endpoints) — OAuth providers are treated as configured too since
-    # their tokens live outside config.json.
     return bool(
         getattr(provider_obj, "api_key", None)
         or getattr(provider_obj, "api_base", None)
@@ -261,12 +275,32 @@ def _provider_is_configured(config: Config) -> bool:
     )
 
 
-def _test_model(config: Config) -> None:
-    """Run a real round-trip against ``config``'s default model + print the result.
+def _mark(ok: bool) -> str:
+    return "✓" if ok else "✗"
 
-    Pings the *in-memory* config so a model the user just picked (but
-    hasn't saved yet) can be verified before the wizard finishes.
-    """
+
+def _model_caps(model: str, provider: str) -> tuple[bool, bool]:
+    """Return ``(supports_vision, supports_audio_input)`` for a model."""
+    try:
+        from durin.providers.capabilities import get_model_capabilities
+
+        caps = get_model_capabilities(model, provider or None)
+        return (
+            bool(getattr(caps, "supports_vision", False)),
+            bool(getattr(caps, "supports_audio_input", False)),
+        )
+    except Exception:  # noqa: BLE001
+        return (False, False)
+
+
+def _caps_marks(model: str, provider: str) -> str:
+    """A compact ``text✓ vision✗ audio✗`` capability string."""
+    vision, audio = _model_caps(model, provider)
+    return f"text✓ vision{_mark(vision)} audio{_mark(audio)}"
+
+
+def _test_model(config: Config) -> None:
+    """Run a real round-trip against ``config``'s default model."""
     try:
         from durin.cli.doctor import check_model_ping
     except Exception as e:  # noqa: BLE001
@@ -282,182 +316,15 @@ def _test_model(config: Config) -> None:
             print(f"    {result.fix}")
 
 
-# Sentinel returned by pickers when the user chose "go back" rather
-# than a real value or an outright cancel.
-_BACK = object()
-
-# Visible, labelled escape hatches — pinned to the TOP of every long
-# list so the user never has to scroll a 30-item menu to find the exit.
-_BACK_CHOICE = "← Back"
-_CANCEL_CHOICE = "✗ Cancel onboarding"
-
-
-def _pick_provider(
-    config: Config, q: Any,
-) -> tuple[str, str] | None:
-    """Provider picker. Returns ``(name, recommended_model)`` or ``None``.
-
-    Lists every provider durin supports, sorted default → configured →
-    rest. A back/cancel row is pinned to the top so the exit is always
-    one keypress away, even though the list is ~30 items long. The
-    cursor still starts on the ★ default, not on the back row.
-    """
-    label_to_choice: dict[str, tuple[str, str]] = {}
-    rows: list[str] = []
-    default_display: str | None = None
-    for name, label, configured, is_default in _all_provider_rows(config):
-        recommended = next(
-            (m for lbl, n, m in PROVIDER_CHOICES if n == name), ""
-        )
-        tag = "✓ configured" if configured else "— not set"
-        if is_default:
-            tag = "★ default · " + tag
-        display = f"{label:<26} {tag}"
-        label_to_choice[display] = (name, recommended)
-        rows.append(display)
-        if is_default:
-            default_display = display
-
-    # When a working provider already exists, backing out returns to
-    # the keep/test/change menu; on a fresh install it cancels.
-    exit_row = _BACK_CHOICE if _provider_is_configured(config) else _CANCEL_CHOICE
-    choices = [exit_row, *rows]
-    chosen = q.select(
-        "Pick a provider (← top row goes back):",
-        choices=choices,
-        default=default_display or (rows[0] if rows else exit_row),
-    ).ask()
-    if chosen is None or chosen == exit_row:
-        return None
-    return label_to_choice[chosen]
-
-
-def _pick_model(provider_name: str, recommended_model: str, q: Any) -> Any:
-    """Default-model picker. Returns the model id, :data:`_BACK`, or None.
-
-    A back row sits at the top so the user can bounce to the provider
-    list instead of being trapped once they've opened the model menu.
-    """
-    suggestions = list(DEFAULT_MODELS.get(provider_name, ()))
-    if recommended_model and recommended_model not in suggestions:
-        suggestions.insert(0, recommended_model)
-    suggestions = list(dict.fromkeys(suggestions))  # de-dupe, keep order
-
-    other = "Other (type below)"
-    if suggestions:
-        choices = [_BACK_CHOICE, *suggestions, other]
-        pick = q.select(
-            "Default model (← top row goes back):",
-            choices=choices,
-            default=suggestions[0],
-        ).ask()
-        if pick is None or pick == _BACK_CHOICE:
-            return _BACK
-        if pick == other:
-            typed = q.text("Model name (blank to go back):").ask()
-            return typed or _BACK
-        return pick
-
-    # No known suggestions (e.g. a custom endpoint) — free-text entry.
-    typed = q.text(
-        "Model name (blank to pick a different provider):"
-    ).ask()
-    return typed or _BACK
-
-
-def _stage_provider_and_model(config: Config, q: Any, summary: list[str]) -> bool:
-    """Configure provider + API key + default model. Returns False on cancel.
-
-    The whole stage is one loop so every step has a working "back":
-    the model picker bounces to the provider list, the provider list
-    bounces to the keep/test/change menu (when a setup already
-    exists), and only an explicit cancel ends the wizard. No dead ends.
-    """
-    while True:
-        # ── Keep / test / change menu (only when already configured) ──
-        if _provider_is_configured(config):
-            d = config.agents.defaults
-            action = q.select(
-                f"Provider already configured: {d.provider} · {d.model}. "
-                "What do you want to do?",
-                choices=[
-                    "Keep it and continue",
-                    "Test the model first",
-                    "Change provider / model",
-                ],
-            ).ask()
-            if action is None:
-                return False
-            if action.startswith("Keep"):
-                summary.append(f"Provider: {d.provider} ({d.model}) — kept")
-                return True
-            if action.startswith("Test"):
-                _test_model(config)
-                continue  # back to this menu
-            # "Change …" → fall through to the pick flow.
-
-        # ── Provider ──
-        picked = _pick_provider(config, q)
-        if picked is None:
-            # Backed out of the provider list. Loop again: if a setup
-            # exists the keep/test/change menu reappears; otherwise
-            # there's nothing to keep, so cancel the wizard.
-            if _provider_is_configured(config):
-                continue
-            return False
-        provider_name, recommended_model = picked
-
-        # ── API key (local/custom endpoints may not need one) ──
-        api_key = q.password(
-            f"Paste your {provider_name} API key "
-            "(blank if not required, Esc to go back):"
-        ).ask()
-        if api_key is None:
-            continue  # Esc → back to the provider list
-        if api_key:
-            _set_provider_api_key(config, provider_name, api_key)
-
-        # ── Default model ──
-        model_pick = _pick_model(provider_name, recommended_model, q)
-        if model_pick is _BACK:
-            continue  # back to the provider list
-        if model_pick is None:
-            return False
-
-        # ── Commit ──
-        config.agents.defaults.provider = provider_name
-        config.agents.defaults.model = model_pick
-        summary.append(f"Provider: {provider_name} ({model_pick})")
-
-        # Sync the context window from the model's capability snapshot.
-        for line in apply_model_capabilities(config, model_pick, provider_name):
-            summary.append(line)
-
-        # Verify the just-picked model with a real round-trip — catches
-        # a typo'd model id or a bad key now, not at the first prompt.
-        if q.confirm(
-            "Test this model now? (a real round-trip)", default=True,
-        ).ask():
-            _test_model(config)
-        return True
-
-
-def _set_provider_api_key(config: Config, provider_name: str, api_key: str) -> None:
-    """Write the API key into the right ``providers.<name>.api_key`` slot."""
-    providers = config.providers
-    provider_obj = getattr(providers, provider_name, None)
-    if provider_obj is None:
-        # Unknown name — treat as `custom` so the key isn't lost.
-        provider_obj = providers.custom
-    provider_obj.api_key = api_key
+# ---------------------------------------------------------------------------
+# Provider / model pickers
+# ---------------------------------------------------------------------------
 
 
 def _all_provider_rows(config: Config) -> list[tuple[str, str, bool, bool]]:
     """Every provider durin supports, sorted default → configured → rest.
 
-    Returns ``(name, label, configured, is_default)`` tuples. ``durin``
-    supports ~30 providers via the registry — the wizard surfaces all
-    of them, not a curated handful, so nothing is hidden.
+    Returns ``(name, label, configured, is_default)`` tuples.
     """
     from durin.providers.registry import PROVIDERS
     from durin.utils.oauth import any_token_present
@@ -473,280 +340,427 @@ def _all_provider_rows(config: Config) -> list[tuple[str, str, bool, bool]]:
         else:
             configured = bool(p and getattr(p, "api_key", None))
         rows.append((spec.name, spec.label, configured, spec.name == default_name))
-    # Sort: the default first, then configured ones, then the rest A-Z.
     rows.sort(key=lambda r: (not r[3], not r[2], r[1].lower()))
     return rows
 
 
-# ---------------------------------------------------------------------------
-# Stage 1b — Model capabilities + aux models
-# ---------------------------------------------------------------------------
+def _set_provider_api_key(config: Config, provider_name: str, api_key: str) -> None:
+    """Write the API key into the right ``providers.<name>.api_key`` slot."""
+    provider_obj = getattr(config.providers, provider_name, None)
+    if provider_obj is None:
+        provider_obj = config.providers.custom
+    provider_obj.api_key = api_key
 
 
-def _stage_model_capabilities(config: Config, q: Any, summary: list[str]) -> None:
-    """Show the default model's modality support and offer aux models.
+def _pick_provider(config: Config, q: Any) -> tuple[str, str] | None:
+    """Provider picker. Returns ``(name, recommended_model)`` or ``None``.
 
-    durin's main model handles text. Vision (interpret_image) and audio
-    (interpret_audio) are handled by *auxiliary* models — used only
-    when the main model lacks that modality. This screen surfaces what
-    the default model supports and, for any gap, offers to configure
-    the corresponding aux model. All optional.
-
-    Note: there is no separate "subagent model" — subagents inherit the
-    main model. (If durin grows one, it'd be offered here too.)
+    A back/cancel row is pinned to the top so the exit is always one
+    keypress away even though the list is ~30 items long; the cursor
+    still starts on the ★ default.
     """
-    d = config.agents.defaults
-    try:
-        from durin.providers.capabilities import get_model_capabilities
+    label_to_choice: dict[str, tuple[str, str]] = {}
+    rows: list[str] = []
+    default_display: str | None = None
+    for name, label, configured, is_default in _all_provider_rows(config):
+        recommended = next((m for _l, n, m in PROVIDER_CHOICES if n == name), "")
+        tag = "✓ configured" if configured else "— not set"
+        if is_default:
+            tag = "★ default · " + tag
+        display = f"{label:<26} {tag}"
+        label_to_choice[display] = (name, recommended)
+        rows.append(display)
+        if is_default:
+            default_display = display
 
-        caps = get_model_capabilities(d.model, d.provider or None)
-    except Exception:  # noqa: BLE001
-        return
+    exit_row = _BACK_CHOICE if _provider_is_configured(config) else _CANCEL_CHOICE
+    choices = [exit_row, *rows]
+    chosen = q.select(
+        "Pick a provider (← top row goes back):",
+        choices=choices,
+        default=default_display or (rows[0] if rows else exit_row),
+    ).ask()
+    if chosen is None or chosen == exit_row:
+        return None
+    return label_to_choice[chosen]
 
-    has_vision = bool(getattr(caps, "supports_vision", False))
-    has_audio = bool(getattr(caps, "supports_audio_input", False))
-    aux = getattr(config.agents, "aux_models", None)
-    aux_vision = aux is not None and getattr(aux, "vision", None) is not None
-    aux_audio = aux is not None and getattr(aux, "audio", None) is not None
 
-    # Show the capability snapshot.
-    def _mark(ok: bool) -> str:
-        return "✓" if ok else "✗"
+def _pick_model(provider_name: str, recommended_model: str, q: Any) -> Any:
+    """Default-model picker. Returns the model id, :data:`_BACK`, or None.
 
-    print(f"\n  Default model: {d.model} ({d.provider})")
-    print(f"    text {_mark(True)}   vision {_mark(has_vision)}   audio {_mark(has_audio)}")
+    Each suggestion is shown with its capability marks (text/vision/
+    audio) so the user can see what a model does before picking it.
+    """
+    suggestions = list(DEFAULT_MODELS.get(provider_name, ()))
+    if recommended_model and recommended_model not in suggestions:
+        suggestions.insert(0, recommended_model)
+    suggestions = list(dict.fromkeys(suggestions))  # de-dupe, keep order
 
-    # Only offer aux models for gaps. If the main model already does
-    # everything, say so and move on — no questions.
-    if has_vision and has_audio:
-        print("  This model handles text, images and audio on its own — "
-              "no auxiliary models needed.")
-        return
-    print(
-        "  An auxiliary model covers a modality the main model lacks "
-        "(above). It is\n  used ONLY for that modality — never for normal "
-        "chat. Skip if unsure."
-    )
+    other = "Other (type a model id)"
+    if suggestions:
+        row_to_model: dict[str, str] = {}
+        rows: list[str] = []
+        for model in suggestions:
+            row = f"{model:<30} {_caps_marks(model, provider_name)}"
+            row_to_model[row] = model
+            rows.append(row)
+        choices = [_BACK_CHOICE, *rows, other]
+        pick = q.select(
+            "Pick the default model (← top row goes back):",
+            choices=choices,
+            default=rows[0],
+        ).ask()
+        if pick is None or pick == _BACK_CHOICE:
+            return _BACK
+        if pick == other:
+            typed = q.text("Model id (blank to go back):").ask()
+            return typed or _BACK
+        return row_to_model.get(pick, pick)
 
-    # Vision: offer an aux model only if the main model lacks it and
-    # none is configured yet.
-    if not has_vision and not aux_vision:
+    # No known suggestions (e.g. a custom endpoint) — free-text entry.
+    typed = q.text("Model id (blank to pick a different provider):").ask()
+    return typed or _BACK
+
+
+def _commit_model(
+    config: Config, provider: str, model: str, summary: list[str],
+) -> None:
+    """Set provider + model on the config and sync capability-derived knobs."""
+    config.agents.defaults.provider = provider
+    config.agents.defaults.model = model
+    summary.append(f"Provider: {provider} ({model})")
+    for line in apply_model_capabilities(config, model, provider):
+        summary.append(line)
+
+
+def _direct_setup(config: Config, q: Any, summary: list[str]) -> bool:
+    """Provider → API key → model, as one loop. Returns False on cancel.
+
+    Used both for the first-run forced setup and for "Change provider"
+    in the model submenu. Every step has a working back: the model
+    picker bounces to the provider list; the provider list cancels.
+    """
+    while True:
+        picked = _pick_provider(config, q)
+        if picked is None:
+            return False
+        provider_name, recommended = picked
+
+        api_key = q.password(
+            f"Paste your {provider_name} API key "
+            "(blank if not required, Esc to go back):"
+        ).ask()
+        if api_key is None:
+            continue  # Esc → back to the provider list
+        if api_key:
+            _set_provider_api_key(config, provider_name, api_key)
+
+        model = _pick_model(provider_name, recommended, q)
+        if model is _BACK:
+            continue
+        if model is None:
+            return False
+
+        _commit_model(config, provider_name, model, summary)
         if q.confirm(
-            f"{d.model} can't see images. Configure a vision model "
-            "(for the interpret_image tool)?",
-            default=False,
+            "Test this model now? (a real round-trip)", default=True,
         ).ask():
-            _ask_aux_model(
-                config, q, summary, kind="vision",
-                examples="e.g. glm-5v-turbo, gpt-4o-mini, claude-haiku-4-5",
-            )
-    elif aux_vision:
-        summary.append(f"Vision: aux model {config.agents.aux_models.vision.model}")
-
-    # Audio: same logic.
-    if not has_audio and not aux_audio:
-        if q.confirm(
-            f"{d.model} can't hear audio. Configure an audio model "
-            "(for the interpret_audio tool)?",
-            default=False,
-        ).ask():
-            _ask_aux_model(
-                config, q, summary, kind="audio",
-                examples="e.g. gemini-2.5-flash, whisper-1",
-            )
-    elif aux_audio:
-        summary.append(f"Audio: aux model {config.agents.aux_models.audio.model}")
+            _test_model(config)
+        return True
 
 
 # ---------------------------------------------------------------------------
-# Stage 2 — Optional features menu
+# The hub
 # ---------------------------------------------------------------------------
 
 
-# Features the user actively opts into from the Stage-2 menu. Vision
-# and audio are deliberately NOT here: they're auxiliary-model
-# fallbacks tied to the main model's gaps, so they're offered in
-# context by Stage 1b (the capability screen) — not as standalone
-# menu items. They still appear in the end-of-wizard matrix and as
-# `durin onboard vision|audio` sections.
-_OPTIONAL_FEATURES: tuple[tuple[str, str, str], ...] = (
-    ("memory", "📁 Vector memory",
-     "Semantic recall across sessions. ~130 MB embedding model on first use."),
-    ("image_gen", "🎨 Image generation",
-     "DALL-E / generate_image tool."),
-    ("web", "🔍 Web search + fetch",
-     "web_search and web_fetch tools. Pick a search backend."),
-    ("dashboard", "🖥️  Web dashboard",
-     "Browser chat UI served by `durin gateway`. Independent of channels."),
-    ("channels", "💬 Chat channels",
-     "Telegram / Slack / Discord / … — bridge the agent to chat platforms."),
+# (key, label) for each hub row, in display order.
+_HUB_ROWS: tuple[tuple[str, str], ...] = (
+    ("model", "Model & provider"),
+    ("vision-audio", "Vision / audio"),
+    ("memory", "Vector memory"),
+    ("web", "Web search"),
+    ("dashboard", "Web dashboard"),
+    ("channels", "Chat channels"),
+    ("workspace", "Workspace"),
 )
 
 
-# Web-search backends durin supports (see durin/agent/tools/web.py).
-# (label, provider-id, needs-api-key)
-_SEARCH_BACKENDS: tuple[tuple[str, str, bool], ...] = (
-    ("DuckDuckGo — no API key, default", "duckduckgo", False),
-    ("Brave Search — needs an API key", "brave", True),
-    ("Tavily — needs an API key", "tavily", True),
-    ("SearXNG — self-hosted, needs a base URL", "searxng", True),
-    ("Jina — needs an API key", "jina", True),
-)
-
-
-def _detect_configured_features(config: Config) -> set[str]:
-    """Return the optional-feature keys that already look configured.
-
-    Lets the menu show ``[✓]`` for things the user set up on a previous
-    run, so re-running `durin onboard` doesn't pretend it's a clean
-    install.
-    """
-    found: set[str] = set()
-    aux = getattr(config.agents, "aux_models", None)
-    if aux is not None:
-        if getattr(aux, "vision", None) is not None:
-            found.add("vision")
-        if getattr(aux, "audio", None) is not None:
-            found.add("audio")
-    # memory: a non-default embedding model means the user picked one.
-    try:
-        from durin.config.schema import MemoryEmbeddingConfig
-
-        if config.memory.embedding.model != MemoryEmbeddingConfig().model:
-            found.add("memory")
-    except Exception:  # noqa: BLE001
-        pass
-    if getattr(config.tools.web, "enable", False):
-        found.add("web")
-    if getattr(config.gateway, "webui_enabled", False):
-        found.add("dashboard")
-    # channels: any channel section with enabled=true.
-    extra = getattr(config.channels, "__pydantic_extra__", None) or {}
-    for section in extra.values():
-        en = section.get("enabled") if isinstance(section, dict) else getattr(section, "enabled", False)
-        if en:
-            found.add("channels")
-            break
-    return found
-
-
-def _build_availability(config: Config) -> list[str]:
-    """Build the end-of-wizard capability matrix.
-
-    One line per capability with ``✓`` (works) or ``✗`` (not set up)
-    and, for the gaps, the exact `durin onboard <section>` command that
-    fills them. The chat model is always ``✓``. Vision/audio show *how*
-    they're covered — native to the main model, or via which aux model
-    — so the user sees what each configured model actually does.
-    """
-    configured = _detect_configured_features(config)
+def _native_modalities(config: Config) -> tuple[bool, bool]:
+    """``(vision, audio)`` support of the main default model."""
     d = config.agents.defaults
+    return _model_caps(d.model, d.provider)
 
-    native_vision = native_audio = False
-    try:
-        from durin.providers.capabilities import get_model_capabilities
 
-        caps = get_model_capabilities(d.model, d.provider or None)
-        native_vision = bool(getattr(caps, "supports_vision", False))
-        native_audio = bool(getattr(caps, "supports_audio_input", False))
-    except Exception:  # noqa: BLE001
-        pass
-
-    lines = [f"✓ Chat model — {d.provider} · {d.model}"]
-
-    # Vision / audio: covered natively by the main model, or by an aux
-    # model, or not at all.
+def _modality_covered(config: Config, kind: str, native: bool) -> bool:
+    """True when *kind* is handled — natively or by an aux model."""
+    if native:
+        return True
     aux = getattr(config.agents, "aux_models", None)
-    for kind, native, label in (
-        ("vision", native_vision, "Vision (image understanding)"),
-        ("audio", native_audio, "Audio (transcription)"),
-    ):
-        aux_model = getattr(getattr(aux, kind, None), "model", None) if aux else None
-        if native:
-            lines.append(f"✓ {label} — native to {d.model}")
-        elif aux_model:
-            lines.append(f"✓ {label} — aux model {aux_model}")
-        else:
-            lines.append(f"✗ {label} — add with `durin onboard {kind}`")
-
-    for key, label, _desc in _OPTIONAL_FEATURES:
-        if key in configured:
-            lines.append(f"✓ {label}")
-        else:
-            section = key.replace("_", "-")
-            lines.append(f"✗ {label} — add with `durin onboard {section}`")
-    return lines
+    return aux is not None and getattr(aux, kind, None) is not None
 
 
-def _stage_optional_menu(
+def _hub_state(key: str, config: Config) -> str:
+    """Short status string shown on a hub row."""
+    d = config.agents.defaults
+    if key == "model":
+        return f"{d.provider} · {d.model}"
+    if key == "vision-audio":
+        nv, na = _native_modalities(config)
+        v = _mark(_modality_covered(config, "vision", nv))
+        a = _mark(_modality_covered(config, "audio", na))
+        return f"vision {v}  audio {a}"
+    if key == "memory":
+        return "on" if "memory" in _detect_configured_features(config) else "off"
+    if key == "web":
+        if getattr(config.tools.web, "enable", False):
+            backend = getattr(config.tools.web.search, "provider", "") or "duckduckgo"
+            return f"on ({backend})"
+        return "off"
+    if key == "dashboard":
+        return "on" if getattr(config.gateway, "webui_enabled", False) else "off"
+    if key == "channels":
+        extra = getattr(config.channels, "__pydantic_extra__", None) or {}
+        on = [
+            n for n, s in extra.items()
+            if isinstance(s, dict) and s.get("enabled")
+        ]
+        return ", ".join(sorted(on)) if on else "none"
+    if key == "workspace":
+        return d.workspace
+    return ""
+
+
+def _run_hub(
     config: Config, extras: set[str], q: Any, summary: list[str],
 ) -> None:
-    """Show the optional-features menu in a loop until the user continues.
-
-    Features already configured (detected from the existing config)
-    start marked ``[✓]`` — re-running onboard shows the real state
-    instead of forcing reconfiguration.
-    """
-    configured: set[str] = _detect_configured_features(config)
+    """The re-entrant main menu. Loops until the user finishes."""
     while True:
-        choices = [
-            _feature_menu_label(key, label, key in configured)
-            for key, label, _desc in _OPTIONAL_FEATURES
-        ]
-        choices.append("→ Continue (finish onboarding)")
-        choices.append("× Skip everything (use defaults)")
+        row_to_key: dict[str, str] = {}
+        choices: list[str] = []
+        for key, label in _HUB_ROWS:
+            row = f"{label:<18} ▸ {_hub_state(key, config)}"
+            row_to_key[row] = key
+            choices.append(row)
+        choices.append("Test the model")
+        choices.append("✓ Finish onboarding")
+
         pick = q.select(
-            "Optional features — enter to configure, → to finish:",
+            "durin onboard — what do you want to set up?",
             choices=choices,
         ).ask()
-        if pick is None or pick.startswith("×"):
+        if pick is None or pick.startswith("✓ Finish"):
             return
-        if pick.startswith("→"):
-            return
-
-        # Decode which feature key was clicked.
-        feature_key = _decode_feature_key(pick)
-        if feature_key is None:
+        if pick == "Test the model":
+            _test_model(config)
             continue
-        did_configure = _configure_feature(feature_key, config, extras, q, summary)
-        if did_configure:
-            configured.add(feature_key)
+        key = row_to_key.get(pick)
+        if key is None:
+            continue
+        _open_section(key, config, extras, q, summary)
 
 
-def _feature_menu_label(key: str, label: str, configured: bool) -> str:
-    mark = "[✓]" if configured else "[ ]"
-    return f"{mark} {label}"
-
-
-def _decode_feature_key(pick: str) -> str | None:
-    for key, label, _ in _OPTIONAL_FEATURES:
-        if label in pick:
-            return key
-    return None
-
-
-def _configure_feature(
+def _open_section(
     key: str, config: Config, extras: set[str], q: Any, summary: list[str],
-) -> bool:
-    """Dispatch into the per-feature sub-wizard."""
-    if key == "memory":
-        return _configure_memory(config, extras, q, summary)
-    if key == "vision":
-        return _configure_vision(config, q, summary)
-    if key == "audio":
-        return _configure_audio(config, q, summary)
-    if key == "image_gen":
-        return _configure_image_gen(config, q, summary)
-    if key == "web":
-        return _configure_web(config, extras, q, summary)
-    if key == "dashboard":
-        return _configure_dashboard(config, q, summary)
-    if key == "channels":
-        return _configure_channels(config, q, summary)
-    return False
+) -> None:
+    """Dispatch a hub row into its submenu."""
+    if key == "model":
+        _submenu_model(config, q, summary)
+    elif key == "vision-audio":
+        _submenu_vision_audio(config, q, summary)
+    elif key == "memory":
+        _configure_memory(config, extras, q, summary)
+    elif key == "web":
+        _configure_web(config, extras, q, summary)
+    elif key == "dashboard":
+        _configure_dashboard(config, q, summary)
+    elif key == "channels":
+        _configure_channels(config, q, summary)
+    elif key == "workspace":
+        _submenu_workspace(config, q, summary)
 
 
-# ---- Per-feature sub-wizards ---------------------------------------------
+# ---------------------------------------------------------------------------
+# Submenu: model & provider
+# ---------------------------------------------------------------------------
+
+
+def _submenu_model(config: Config, q: Any, summary: list[str]) -> None:
+    """Change the model (keeping the provider), the provider, or test."""
+    while True:
+        d = config.agents.defaults
+        pick = q.select(
+            f"Model & provider — {d.provider} · {d.model} "
+            f"({_caps_marks(d.model, d.provider)}):",
+            choices=[
+                "Change model only",
+                "Change provider",
+                "Test the model",
+                _BACK_CHOICE,
+            ],
+        ).ask()
+        if pick is None or pick == _BACK_CHOICE:
+            return
+        if pick == "Test the model":
+            _test_model(config)
+            continue
+        if pick == "Change model only":
+            recommended = next(
+                (m for _l, n, m in PROVIDER_CHOICES if n == d.provider), ""
+            )
+            model = _pick_model(d.provider, recommended, q)
+            if model is _BACK or model is None:
+                continue
+            _commit_model(config, d.provider, model, summary)
+            continue
+        if pick == "Change provider":
+            _direct_setup(config, q, summary)
+            continue
+
+
+# ---------------------------------------------------------------------------
+# Submenu: vision / audio aux models
+# ---------------------------------------------------------------------------
+
+
+def _capable_aux_models(config: Config, kind: str) -> list[tuple[str, str]]:
+    """``(model, provider)`` pairs that support *kind*, from configured providers.
+
+    The user can only authenticate to a provider they've set up, so the
+    vision/audio picker is scoped to configured providers (plus the
+    current default provider). Models are matched against durin's
+    capability snapshot.
+    """
+    pairs: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for name, _label, configured, is_default in _all_provider_rows(config):
+        if not configured and not is_default:
+            continue
+        for model in DEFAULT_MODELS.get(name, ()):
+            if model in seen:
+                continue
+            vision, audio = _model_caps(model, name)
+            if (kind == "vision" and vision) or (kind == "audio" and audio):
+                pairs.append((model, name))
+                seen.add(model)
+    return pairs
+
+
+def _aux_state(config: Config, kind: str, native: bool) -> str:
+    """Status string for a vision/audio row in the submenu."""
+    if native:
+        return "covered by the main model"
+    aux = getattr(config.agents, "aux_models", None)
+    entry = getattr(aux, kind, None) if aux else None
+    if entry is not None:
+        return f"{entry.model} ({entry.provider})"
+    return "not set"
+
+
+def _empty_aux() -> Any:
+    from durin.config.schema import AuxModelsConfig
+
+    return AuxModelsConfig()
+
+
+def _submenu_vision_audio(config: Config, q: Any, summary: list[str]) -> None:
+    """Configure auxiliary vision / audio models — used only when the
+    main model lacks that modality."""
+    while True:
+        d = config.agents.defaults
+        nv, na = _native_modalities(config)
+        print(
+            f"\n  Main model {d.model}: "
+            f"text ✓  vision {_mark(nv)}  audio {_mark(na)}"
+        )
+        print(
+            "  An auxiliary model covers a modality the main model lacks. "
+            "It is used\n  ONLY for that modality (interpret_image / "
+            "interpret_audio) — never for chat."
+        )
+        pick = q.select(
+            "Vision / audio:",
+            choices=[
+                f"Vision  ▸ {_aux_state(config, 'vision', nv)}",
+                f"Audio   ▸ {_aux_state(config, 'audio', na)}",
+                _BACK_CHOICE,
+            ],
+        ).ask()
+        if pick is None or pick == _BACK_CHOICE:
+            return
+        kind = "vision" if pick.startswith("Vision") else "audio"
+        native = nv if kind == "vision" else na
+        _configure_aux_model(config, q, summary, kind=kind, native=native)
+
+
+def _configure_aux_model(
+    config: Config, q: Any, summary: list[str], *, kind: str, native: bool,
+) -> None:
+    """Pick / change / remove the aux model for *kind* (vision|audio)."""
+    aux = getattr(config.agents, "aux_models", None)
+    current = getattr(aux, kind, None) if aux else None
+
+    if native and current is None:
+        print(f"  The main model already handles {kind} — no aux model needed.")
+        return
+
+    pairs = _capable_aux_models(config, kind)
+    row_to_pair: dict[str, tuple[str, str]] = {}
+    rows: list[str] = []
+    for model, prov in pairs:
+        row = f"{model:<28} ({prov})"
+        row_to_pair[row] = (model, prov)
+        rows.append(row)
+
+    other = "Other (type a model id)"
+    choices = [_BACK_CHOICE, *rows, other]
+    if current is not None:
+        choices.append("Remove this aux model")
+
+    pick = q.select(
+        f"{kind.capitalize()} model "
+        "(from your configured providers, ← Back keeps current):",
+        choices=choices,
+    ).ask()
+    if pick is None or pick == _BACK_CHOICE:
+        return
+    if pick == "Remove this aux model":
+        if aux is not None:
+            setattr(aux, kind, None)
+        summary.append(f"{kind.capitalize()} aux model removed")
+        return
+    if pick == other:
+        model = q.text(f"{kind.capitalize()} model id (blank to cancel):").ask()
+        if not model:
+            return
+        prov = q.text("Provider for that model (or 'auto'):", default="auto").ask() or "auto"
+    else:
+        model, prov = row_to_pair[pick]
+
+    config.agents.aux_models = config.agents.aux_models or _empty_aux()
+    setattr(
+        config.agents.aux_models, kind,
+        AuxModelConfig(model=model, provider=prov),
+    )
+    summary.append(f"{kind.capitalize()} aux model: {model} ({prov})")
+
+
+# ---------------------------------------------------------------------------
+# Submenu: workspace
+# ---------------------------------------------------------------------------
+
+
+def _submenu_workspace(config: Config, q: Any, summary: list[str]) -> None:
+    current = config.agents.defaults.workspace
+    new = q.text("Workspace path:", default=current).ask()
+    if new and new != current:
+        config.agents.defaults.workspace = new
+        summary.append(f"Workspace: {config.agents.defaults.workspace}")
+
+
+# ---------------------------------------------------------------------------
+# Submenu: memory / web / dashboard / channels
+# ---------------------------------------------------------------------------
 
 
 def _configure_memory(
@@ -770,62 +784,10 @@ def _configure_memory(
     return True
 
 
-def _ask_aux_model(
-    config: Config, q: Any, summary: list[str], *, kind: str, examples: str,
+def _configure_web(
+    config: Config, extras: set[str], q: Any, summary: list[str],
 ) -> bool:
-    """Prompt for an aux model id + provider and store it. ``kind`` is
-    'vision' or 'audio'. No confirm gate — the caller already asked."""
-    inline_model = q.text(f"{kind.capitalize()} model id ({examples}):").ask()
-    if not inline_model:
-        return False
-    provider = q.text("Provider for that model (or 'auto'):", default="auto").ask() or "auto"
-    config.agents.aux_models = config.agents.aux_models or _empty_aux()
-    setattr(
-        config.agents.aux_models, kind,
-        AuxModelConfig(model=inline_model, provider=provider),
-    )
-    summary.append(f"{kind.capitalize()} model: {inline_model} ({provider})")
-    return True
-
-
-def _configure_vision(config: Config, q: Any, summary: list[str]) -> bool:
-    if not q.confirm("Configure a dedicated vision model?", default=False).ask():
-        return False
-    return _ask_aux_model(
-        config, q, summary, kind="vision",
-        examples="e.g. glm-5v-turbo, gpt-4o-mini, claude-haiku-4-5",
-    )
-
-
-def _configure_audio(config: Config, q: Any, summary: list[str]) -> bool:
-    if not q.confirm("Configure a dedicated audio transcription model?", default=False).ask():
-        return False
-    return _ask_aux_model(
-        config, q, summary, kind="audio",
-        examples="e.g. gemini-2.5-flash, whisper-1",
-    )
-
-
-def _configure_image_gen(config: Config, q: Any, summary: list[str]) -> bool:
-    if not q.confirm(
-        "Enable image generation tool? (Requires a provider that supports it.)",
-        default=False,
-    ).ask():
-        return False
-    summary.append(
-        "Image generation: enabled (configure provider with `durin config set ...`)"
-    )
-    return True
-
-
-def _configure_web(config: Config, extras: set[str], q: Any, summary: list[str]) -> bool:
-    """Enable web search/fetch and let the user pick + key the backend.
-
-    Web search has several backends (durin/agent/tools/web.py):
-    DuckDuckGo needs no key; Brave / Tavily / Jina need an API key;
-    SearXNG needs a self-hosted base URL. The wizard surfaces the
-    choice instead of silently defaulting.
-    """
+    """Enable web search/fetch and let the user pick + key the backend."""
     if not q.confirm(
         "Enable web search + fetch? `web_search` lets the agent query "
         "the web, `web_fetch` reads a page. Adds the `[web]` extra.",
@@ -861,22 +823,14 @@ def _configure_web(config: Config, extras: set[str], q: Any, summary: list[str])
 
 
 def _configure_dashboard(config: Config, q: Any, summary: list[str]) -> bool:
-    """Configure the browser dashboard — independent of chat channels.
-
-    The webui is its own surface: `durin gateway` serves it whenever
-    `gateway.webui_enabled` is true, regardless of whether any chat
-    channel is enabled. Daemon mode (detached gateway) is asked here
-    too since it's the same `durin gateway` runtime.
-    """
+    """Configure the browser dashboard — independent of chat channels."""
     enable = q.confirm(
         "Enable the web dashboard? (chat with durin in a browser — "
         "served by `durin gateway`, no chat channel needed)",
         default=True,
     ).ask()
     config.gateway.webui_enabled = bool(enable)
-    summary.append(
-        "Web dashboard: enabled" if enable else "Web dashboard: disabled"
-    )
+    summary.append("Web dashboard: enabled" if enable else "Web dashboard: disabled")
 
     if q.confirm(
         "Run `durin gateway` as a background daemon? "
@@ -888,26 +842,13 @@ def _configure_dashboard(config: Config, q: Any, summary: list[str]) -> bool:
     return True
 
 
-# The websocket channel is the web dashboard's transport — `durin
-# gateway` enables it automatically when the dashboard is on. It's
-# owned by the Dashboard feature, so it's not a "chat channel" the
-# user toggles here.
-_DASHBOARD_CHANNEL = "websocket"
-
-# Per-channel field that holds the primary credential. Checked in
-# order; the first one present in the channel's config is the one we
-# prompt for and warn about when left blank.
-_CHANNEL_CRED_FIELDS = ("token", "bot_token", "app_id", "appId", "api_key")
-
-
 def _configure_channels(config: Config, q: Any, summary: list[str]) -> bool:
     """Toggle chat channels on/off — a real two-way switch.
 
     Channels are discovered from the registry (minus the dashboard's
     websocket transport). Picking an *off* channel turns it on and
     prompts for its primary credential; picking an *on* channel turns
-    it off. An enabled channel with a blank credential is flagged so
-    the user knows it won't actually connect.
+    it off. An enabled channel left without its credential is flagged.
     """
     try:
         from durin.channels.registry import discover_all
@@ -954,14 +895,12 @@ def _configure_channels(config: Config, q: Any, summary: list[str]) -> bool:
             section = cls.default_config() if hasattr(cls, "default_config") else {}
 
         if section.get("enabled"):
-            # Currently on → turn it off.
             section["enabled"] = False
             extra[name] = section
             summary.append(f"Channel disabled: {name}")
             touched = True
             continue
 
-        # Currently off → turn it on and ask for the primary credential.
         section["enabled"] = True
         cred_field = next((f for f in _CHANNEL_CRED_FIELDS if f in section), None)
         if cred_field is not None:
@@ -978,20 +917,79 @@ def _configure_channels(config: Config, q: Any, summary: list[str]) -> bool:
         touched = True
 
 
-def _empty_aux() -> Any:
-    from durin.config.schema import AuxModelsConfig
-
-    return AuxModelsConfig()
-
-
 # ---------------------------------------------------------------------------
-# Stage 3 — Workspace
+# Detection + end-of-wizard capability matrix
 # ---------------------------------------------------------------------------
 
 
-def _stage_workspace(config: Config, q: Any, summary: list[str]) -> None:
-    current = config.agents.defaults.workspace
-    new = q.text("Workspace path:", default=current).ask()
-    if new and new != current:
-        config.agents.defaults.workspace = new
-    summary.append(f"Workspace: {config.agents.defaults.workspace}")
+def _detect_configured_features(config: Config) -> set[str]:
+    """Return the feature keys that already look configured."""
+    found: set[str] = set()
+    aux = getattr(config.agents, "aux_models", None)
+    if aux is not None:
+        if getattr(aux, "vision", None) is not None:
+            found.add("vision")
+        if getattr(aux, "audio", None) is not None:
+            found.add("audio")
+    try:
+        if config.memory.embedding.model != MemoryEmbeddingConfig().model:
+            found.add("memory")
+    except Exception:  # noqa: BLE001
+        pass
+    if getattr(config.tools.web, "enable", False):
+        found.add("web")
+    if getattr(config.gateway, "webui_enabled", False):
+        found.add("dashboard")
+    extra = getattr(config.channels, "__pydantic_extra__", None) or {}
+    for section in extra.values():
+        en = (
+            section.get("enabled") if isinstance(section, dict)
+            else getattr(section, "enabled", False)
+        )
+        if en:
+            found.add("channels")
+            break
+    return found
+
+
+# (feature key, label) rows for the end-of-wizard matrix.
+_MATRIX_FEATURES: tuple[tuple[str, str], ...] = (
+    ("memory", "Vector memory"),
+    ("web", "Web search + fetch"),
+    ("dashboard", "Web dashboard"),
+    ("channels", "Chat channels"),
+)
+
+
+def _build_availability(config: Config) -> list[str]:
+    """Build the end-of-wizard capability matrix.
+
+    One line per capability with ``✓`` (works) or ``✗`` (not set up).
+    Vision/audio show *how* they're covered — native to the main model
+    or via which aux model.
+    """
+    configured = _detect_configured_features(config)
+    d = config.agents.defaults
+    native_vision, native_audio = _native_modalities(config)
+
+    lines = [f"✓ Chat model — {d.provider} · {d.model}"]
+
+    aux = getattr(config.agents, "aux_models", None)
+    for kind, native, label in (
+        ("vision", native_vision, "Vision (image understanding)"),
+        ("audio", native_audio, "Audio (transcription)"),
+    ):
+        aux_model = getattr(getattr(aux, kind, None), "model", None) if aux else None
+        if native:
+            lines.append(f"✓ {label} — native to {d.model}")
+        elif aux_model:
+            lines.append(f"✓ {label} — aux model {aux_model}")
+        else:
+            lines.append(f"✗ {label} — add with `durin onboard {kind}`")
+
+    for key, label in _MATRIX_FEATURES:
+        if key in configured:
+            lines.append(f"✓ {label}")
+        else:
+            lines.append(f"✗ {label} — add with `durin onboard {key}`")
+    return lines

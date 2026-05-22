@@ -511,8 +511,8 @@ def _stdin_is_interactive() -> bool:
 def onboard(
     section: str | None = typer.Argument(
         None,
-        help="Jump straight to one section: model, memory, vision, audio, "
-        "image-gen, web, dashboard, channels.",
+        help="Jump straight to one section: model, vision, audio, memory, "
+        "web, dashboard, channels, workspace.",
     ),
     workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
     config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
