@@ -1121,6 +1121,36 @@ async def test_config_api_get_and_set(bus: MagicMock, monkeypatch, tmp_path) -> 
 
 
 @pytest.mark.asyncio
+async def test_channels_api_lists_discovered_channels(
+    bus: MagicMock, monkeypatch, tmp_path
+) -> None:
+    """`GET /api/channels` lists channels with enabled state + cred field."""
+    port = 29895
+    config_path = tmp_path / "config.json"
+    save_config(Config(), config_path)
+    monkeypatch.setattr("durin.config.loader._current_config_path", config_path)
+
+    channel = _ch(bus, port=port)
+    channel._api_tokens["tok"] = time.monotonic() + 300
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+    base = f"http://127.0.0.1:{port}"
+    try:
+        got = await _http_get(f"{base}/api/channels", headers={"Authorization": "Bearer tok"})
+        assert got.status_code == 200
+        channels = {c["name"]: c for c in got.json()["channels"]}
+        assert "telegram" in channels
+        tg = channels["telegram"]
+        assert tg["enabled"] is False
+        assert "display_name" in tg and "credential_field" in tg
+
+        assert (await _http_get(f"{base}/api/channels")).status_code == 401
+    finally:
+        await channel.stop()
+        await server_task
+
+
+@pytest.mark.asyncio
 async def test_commands_api_returns_slash_command_metadata(bus: MagicMock) -> None:
     port = 29892
     channel = _ch(bus, port=port)

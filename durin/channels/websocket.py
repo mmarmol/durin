@@ -668,6 +668,9 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/config/set":
             return self._handle_config_set(request)
 
+        if got == "/api/channels":
+            return self._handle_channels_list(request)
+
         m = re.match(r"^/api/sessions/([^/]+)/messages$", got)
         if m:
             return self._handle_session_messages(request, m.group(1))
@@ -1163,6 +1166,49 @@ class WebSocketChannel(BaseChannel):
                 ),
             }
         )
+
+    def _handle_channels_list(self, request: WsRequest) -> Response:
+        """`GET /api/channels` — discovered channels + enabled state.
+
+        Lets the dashboard's curated Channels section enable a channel
+        and know which credential field it needs — config the generic
+        `/api/config` form can't create from scratch.
+        """
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from durin.channels.registry import discover_all
+        from durin.config.loader import load_config
+
+        # First match wins — channels expose exactly one primary credential.
+        cred_fields = (
+            "token", "bot_token", "app_token", "appId", "app_id",
+            "api_key", "claw_token", "access_token",
+        )
+        config = load_config()
+        extra = getattr(config.channels, "__pydantic_extra__", None) or {}
+        items: list[dict[str, Any]] = []
+        for name, cls in sorted(discover_all().items()):
+            section = extra.get(name)
+            enabled = (
+                bool(section.get("enabled")) if isinstance(section, dict) else False
+            )
+            credential_field = None
+            try:
+                defaults = cls.default_config() if hasattr(cls, "default_config") else {}
+                credential_field = next(
+                    (f for f in cred_fields if f in defaults), None
+                )
+            except Exception:  # noqa: BLE001
+                credential_field = None
+            items.append(
+                {
+                    "name": name,
+                    "display_name": getattr(cls, "display_name", name),
+                    "enabled": enabled,
+                    "credential_field": credential_field,
+                }
+            )
+        return _http_json_response({"channels": items})
 
     @staticmethod
     def _is_websocket_channel_session_key(key: str) -> bool:
