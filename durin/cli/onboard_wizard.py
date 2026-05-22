@@ -248,10 +248,25 @@ def _stage_provider_and_model(config: Config, q: Any, summary: list[str]) -> boo
             # "Change …" → fall through to the full pick flow below.
             break
 
-    label_to_choice = {label: (name, model) for label, name, model in PROVIDER_CHOICES}
+    # Show every provider with its current state — configured providers
+    # are marked, so the user sees what they have and edits any of them
+    # (a settings-list, not a blind first-run pick).
+    label_to_choice: dict[str, tuple[str, str]] = {}
+    choices: list[str] = []
+    for base_label, name, model in PROVIDER_CHOICES:
+        provider_obj = getattr(config.providers, name, None)
+        configured = bool(provider_obj and getattr(provider_obj, "api_key", None))
+        is_default = config.agents.defaults.provider == name
+        tag = "✓ configured" if configured else "— not set"
+        if is_default:
+            tag += ", current default"
+        short = base_label.split(" (")[0]
+        display = f"{short:<34} {tag}"
+        label_to_choice[display] = (name, model)
+        choices.append(display)
     chosen_label = q.select(
-        "Which LLM provider do you want to use?",
-        choices=list(label_to_choice.keys()),
+        "Pick a provider to set up or edit:",
+        choices=choices,
     ).ask()
     if chosen_label is None:
         return False
@@ -322,9 +337,22 @@ _OPTIONAL_FEATURES: tuple[tuple[str, str, str], ...] = (
     ("image_gen", "🎨 Image generation",
      "DALL-E / generate_image tool."),
     ("web", "🔍 Web search + fetch",
-     "web_search and web_fetch tools. Adds the `[web]` extra."),
-    ("channels", "💬 Channels (Telegram / Slack / WhatsApp / …)",
-     "Run `durin gateway` to bridge with chat platforms."),
+     "web_search and web_fetch tools. Pick a search backend."),
+    ("dashboard", "🖥️  Web dashboard",
+     "Browser chat UI served by `durin gateway`. Independent of channels."),
+    ("channels", "💬 Chat channels",
+     "Telegram / Slack / Discord / … — bridge the agent to chat platforms."),
+)
+
+
+# Web-search backends durin supports (see durin/agent/tools/web.py).
+# (label, provider-id, needs-api-key)
+_SEARCH_BACKENDS: tuple[tuple[str, str, bool], ...] = (
+    ("DuckDuckGo — no API key, default", "duckduckgo", False),
+    ("Brave Search — needs an API key", "brave", True),
+    ("Tavily — needs an API key", "tavily", True),
+    ("SearXNG — self-hosted, needs a base URL", "searxng", True),
+    ("Jina — needs an API key", "jina", True),
 )
 
 
@@ -352,10 +380,15 @@ def _detect_configured_features(config: Config) -> set[str]:
         pass
     if getattr(config.tools.web, "enable", False):
         found.add("web")
-    if getattr(config.gateway, "webui_enabled", False) or getattr(
-        config.gateway, "daemon", False
-    ):
-        found.add("channels")
+    if getattr(config.gateway, "webui_enabled", False):
+        found.add("dashboard")
+    # channels: any channel section with enabled=true.
+    extra = getattr(config.channels, "__pydantic_extra__", None) or {}
+    for section in extra.values():
+        en = section.get("enabled") if isinstance(section, dict) else getattr(section, "enabled", False)
+        if en:
+            found.add("channels")
+            break
     return found
 
 
@@ -420,6 +453,8 @@ def _configure_feature(
         return _configure_image_gen(config, q, summary)
     if key == "web":
         return _configure_web(config, extras, q, summary)
+    if key == "dashboard":
+        return _configure_dashboard(config, q, summary)
     if key == "channels":
         return _configure_channels(config, q, summary)
     return False
@@ -492,59 +527,135 @@ def _configure_image_gen(config: Config, q: Any, summary: list[str]) -> bool:
 
 
 def _configure_web(config: Config, extras: set[str], q: Any, summary: list[str]) -> bool:
+    """Enable web search/fetch and let the user pick + key the backend.
+
+    Web search has several backends (durin/agent/tools/web.py):
+    DuckDuckGo needs no key; Brave / Tavily / Jina need an API key;
+    SearXNG needs a self-hosted base URL. The wizard surfaces the
+    choice instead of silently defaulting.
+    """
     if not q.confirm(
-        "Enable web search + fetch tools? Adds the `[web]` extra.",
+        "Enable web search + fetch? `web_search` lets the agent query "
+        "the web, `web_fetch` reads a page. Adds the `[web]` extra.",
         default=True,
     ).ask():
         return False
     config.tools.web.enable = True
     extras.add("web")
-    summary.append("Web search + fetch: enabled")
+
+    labels = [b[0] for b in _SEARCH_BACKENDS]
+    pick = q.select("Search backend:", choices=labels).ask()
+    if pick is None:
+        summary.append("Web search: enabled (DuckDuckGo default)")
+        return True
+    backend_id, needs_key = next(
+        ((bid, nk) for label, bid, nk in _SEARCH_BACKENDS if label == pick),
+        ("duckduckgo", False),
+    )
+    search_cfg = config.tools.web.search
+    if hasattr(search_cfg, "provider"):
+        search_cfg.provider = backend_id
+    if needs_key:
+        if backend_id == "searxng":
+            base = q.text(f"{backend_id} base URL:").ask()
+            if base and hasattr(search_cfg, "base_url"):
+                search_cfg.base_url = base
+        else:
+            key = q.password(f"{backend_id} API key:").ask()
+            if key and hasattr(search_cfg, "api_key"):
+                search_cfg.api_key = key
+    summary.append(f"Web search: {backend_id}")
+    return True
+
+
+def _configure_dashboard(config: Config, q: Any, summary: list[str]) -> bool:
+    """Configure the browser dashboard — independent of chat channels.
+
+    The webui is its own surface: `durin gateway` serves it whenever
+    `gateway.webui_enabled` is true, regardless of whether any chat
+    channel is enabled. Daemon mode (detached gateway) is asked here
+    too since it's the same `durin gateway` runtime.
+    """
+    enable = q.confirm(
+        "Enable the web dashboard? (chat with durin in a browser — "
+        "served by `durin gateway`, no chat channel needed)",
+        default=True,
+    ).ask()
+    config.gateway.webui_enabled = bool(enable)
+    summary.append(
+        "Web dashboard: enabled" if enable else "Web dashboard: disabled"
+    )
+
+    if q.confirm(
+        "Run `durin gateway` as a background daemon? "
+        "(detached terminal; manage with `durin gateway start/stop`)",
+        default=False,
+    ).ask():
+        config.gateway.daemon = True
+        summary.append("Gateway daemon: enabled")
     return True
 
 
 def _configure_channels(config: Config, q: Any, summary: list[str]) -> bool:
-    """Configure the gateway's user-facing surfaces.
+    """List the available chat channels and let the user enable one.
 
-    Three sub-questions, each opt-in:
-    - Daemon mode (run gateway detached so the terminal isn't locked).
-    - WebUI dashboard (browser SPA served on the websocket channel).
-    - Chat-platform channels (Telegram / Slack / WhatsApp / ...) —
-      pointer only; they need per-channel keys we can't ask for here.
+    Channels are discovered from the registry. The user picks a
+    channel; we flip ``enabled`` on and prompt for the obvious key
+    field (token / app id). Fine-grained per-channel config still
+    lives in `durin config` — this just gets a channel off the ground.
     """
-    touched_anything = False
+    try:
+        from durin.channels.registry import discover_all
+    except Exception:  # noqa: BLE001
+        summary.append("Channels: registry unavailable — configure via `durin config`")
+        return False
 
-    if q.confirm(
-        "Run the gateway as a background daemon? "
-        "(detached from the terminal; manage with `durin gateway start/stop`)",
-        default=False,
-    ).ask():
-        config.gateway.daemon = True
-        summary.append("Gateway daemon: enabled (run with `durin gateway start`)")
-        touched_anything = True
+    channels = sorted(discover_all().items())
+    if not channels:
+        summary.append("Channels: none discovered")
+        return False
 
-    if q.confirm(
-        "Enable the WebUI dashboard? (chat in a browser, served by `durin gateway`)",
-        default=True,
-    ).ask():
-        config.gateway.webui_enabled = True
-        summary.append("WebUI dashboard: enabled (`durin gateway` will serve it)")
-        touched_anything = True
-    else:
-        config.gateway.webui_enabled = False
-        summary.append("WebUI dashboard: disabled")
-        touched_anything = True
+    extra = config.channels.__pydantic_extra__
+    if extra is None:
+        config.channels.__pydantic_extra__ = extra = {}
 
-    if q.confirm(
-        "Want to connect chat platforms later (Telegram / Slack / WhatsApp / …)?",
-        default=False,
-    ).ask():
-        summary.append(
-            "Chat-platform channels: configure later — see `durin channels status`"
-        )
-        touched_anything = True
-
-    return touched_anything
+    touched = False
+    while True:
+        rows: list[str] = []
+        row_to_name: dict[str, str] = {}
+        for name, cls in channels:
+            section = extra.get(name)
+            en = section.get("enabled") if isinstance(section, dict) else False
+            mark = "[green]✓ enabled[/green]" if en else "[dim]— off[/dim]"
+            display = cls.display_name if hasattr(cls, "display_name") else name
+            row = f"{display:<20} {mark}"
+            rows.append(row)
+            row_to_name[row] = name
+        rows.append("→ Done with channels")
+        pick = q.select(
+            "Pick a channel to enable / configure (→ Done to finish):",
+            choices=rows,
+        ).ask()
+        if pick is None or pick.startswith("→"):
+            return touched
+        name = row_to_name.get(pick)
+        if name is None:
+            continue
+        cls = dict(channels)[name]
+        section = extra.get(name)
+        if not isinstance(section, dict):
+            section = cls.default_config() if hasattr(cls, "default_config") else {}
+        section["enabled"] = True
+        # Prompt for the channel's primary credential field, if any.
+        for field in ("token", "app_id", "appId", "bot_token", "api_key"):
+            if field in section:
+                val = q.password(f"{name} {field} (blank to skip):").ask()
+                if val:
+                    section[field] = val
+                break
+        extra[name] = section
+        summary.append(f"Channel enabled: {name}")
+        touched = True
 
 
 def _empty_aux() -> Any:
