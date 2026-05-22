@@ -15,6 +15,14 @@ permissions:
   contents: write   # for creating the GitHub Release + attaching artifacts
   id-token: write   # for PyPI OIDC trusted publishing
 
+# Opt every JavaScript action into the Node.js 24 runtime. Node 20 is
+# deprecated and forced off on 2026-06-02; this env var is GitHub's
+# documented way to migrate early — version-agnostic, so it covers
+# both first-party (`actions/*`) and third-party actions without
+# pinning each to a Node-24 major.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
