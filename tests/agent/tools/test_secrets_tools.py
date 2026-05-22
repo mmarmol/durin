@@ -1,0 +1,94 @@
+"""Tests for the agent-facing secret tools — list_secrets, request_secret."""
+
+from __future__ import annotations
+
+from unittest.mock import patch
+
+import pytest
+
+from durin.agent.tools.secrets import ListSecretsTool, RequestSecretTool
+from durin.security.secrets import SecretStore
+
+
+@pytest.fixture
+def store_at(tmp_path):
+    config_path = tmp_path / "config.json"
+    import durin.security.secrets as _secrets
+
+    _secrets._STORE = None
+    with patch("durin.config.loader.get_config_path", return_value=config_path):
+        yield tmp_path / "secrets.json"
+    _secrets._STORE = None
+
+
+async def test_list_secrets_empty(store_at) -> None:
+    out = await ListSecretsTool().execute()
+    assert "No secrets" in out
+
+
+async def test_list_secrets_shows_metadata_never_values(store_at) -> None:
+    store = SecretStore(path=store_at)
+    store.put("ATLASSIAN_WORK", value="tok-supersecret-value", service="atlassian",
+              account="work", scope=["exec"], description="work jira")
+    store.save()
+
+    out = await ListSecretsTool().execute()
+    assert "ATLASSIAN_WORK" in out
+    assert "atlassian" in out
+    assert "work jira" in out
+    assert "$ATLASSIAN_WORK" in out  # exec-usable hint
+    assert "tok-supersecret-value" not in out  # value never shown
+
+
+async def test_request_secret_existing_exec_scoped(store_at) -> None:
+    store = SecretStore(path=store_at)
+    store.put("GH", value="ghp-secret", service="github", scope=["exec"])
+    store.save()
+
+    out = await RequestSecretTool().execute(name="GH", service="github")
+    assert "already exists" in out
+    assert "$GH" in out
+    assert "ghp-secret" not in out
+
+
+async def test_request_secret_existing_not_exec_scoped(store_at) -> None:
+    store = SecretStore(path=store_at)
+    store.put("GH", value="ghp-secret", service="github", scope=["provider:x"])
+    store.save()
+
+    out = await RequestSecretTool().execute(name="GH", service="github")
+    assert "already exists" in out
+    assert "grant GH --to exec" in out
+
+
+async def test_request_secret_same_service_other_name(store_at) -> None:
+    store = SecretStore(path=store_at)
+    store.put("GH_PERSONAL", value="ghp-1", service="github", scope=["exec"])
+    store.save()
+
+    out = await RequestSecretTool().execute(name="GH_WORK", service="github")
+    assert "GH_PERSONAL" in out
+    assert "github" in out
+
+
+async def test_request_secret_new_yields_with_command(store_at) -> None:
+    out = await RequestSecretTool().execute(
+        name="STRIPE_KEY", service="stripe", purpose="charge a card"
+    )
+    assert "YIELD TO USER" in out
+    assert "durin secret set STRIPE_KEY --service stripe --scope exec" in out
+    assert "charge a card" in out
+
+
+async def test_request_secret_rejects_bad_name(store_at) -> None:
+    out = await RequestSecretTool().execute(name="bad-name", service="x")
+    assert "not a valid secret name" in out
+
+
+async def test_secret_tools_are_discovered_by_the_loader() -> None:
+    """Both tools must be picked up by the package-scanning loader."""
+    from durin.agent.tools.loader import ToolLoader
+
+    discovered = {cls.__name__ for cls in ToolLoader().discover()}
+    assert "ListSecretsTool" in discovered
+    assert "RequestSecretTool" in discovered

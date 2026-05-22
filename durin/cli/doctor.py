@@ -22,7 +22,7 @@ import subprocess
 import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Literal
+from typing import TYPE_CHECKING, Any, Callable, Literal
 
 import typer
 from rich.console import Console
@@ -254,6 +254,58 @@ def check_default_model_resolvable() -> CheckResult:
             category="providers",
         )
     return CheckResult("default model", "ok", f"{model} (preset: {cfg.agents.defaults.model_preset!r})", category="providers")
+
+
+def check_secret_refs() -> CheckResult:
+    """Verify every ``${secret:}`` reference in config resolves to a secret.
+
+    A dangling reference (config points at a name the store lacks) would
+    otherwise surface as a confusing provider/channel failure mid-task.
+    """
+    from durin.config.loader import read_persisted_config
+    from durin.security.secrets import SecretStore, is_secret_ref, parse_secret_ref
+
+    try:
+        data = read_persisted_config()
+    except Exception as e:  # noqa: BLE001
+        return CheckResult(
+            "secret refs", "warn", f"Could not read config: {e}", category="config"
+        )
+
+    refs: list[str] = []
+
+    def _walk(node: Any) -> None:
+        if isinstance(node, dict):
+            for value in node.values():
+                _walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                _walk(value)
+        elif is_secret_ref(node):
+            name = parse_secret_ref(node)
+            if name:
+                refs.append(name)
+
+    _walk(data)
+    if not refs:
+        return CheckResult(
+            "secret refs", "ok", "no ${secret:} references", category="config"
+        )
+
+    store = SecretStore().load()
+    dangling = sorted({name for name in refs if store.get(name) is None})
+    if dangling:
+        return CheckResult(
+            "secret refs", "fail",
+            f"{len(dangling)} dangling reference(s): {', '.join(dangling)}",
+            fix="Add the missing secret(s): `durin secret set <NAME> --service <S>`.",
+            category="config",
+        )
+    return CheckResult(
+        "secret refs", "ok",
+        f"{len(refs)} reference(s), all resolve",
+        category="config",
+    )
 
 
 def check_executable(name: str, *, required: bool, hint: str) -> CheckResult:
@@ -695,6 +747,7 @@ def run_checks(*, ping: bool = False, ping_model: bool = False) -> DoctorReport:
     report.add(check_state_dirs_writable())
     report.add(check_at_least_one_provider())
     report.add(check_default_model_resolvable())
+    report.add(check_secret_refs())
     report.add(check_executable("git", required=False, hint="Install git so `durin upgrade` can pull editable installs."))
     report.add(check_optional_extra("fastembed", extra="memory", purpose="vector recall over memory/"))
     report.add(check_optional_extra("lancedb", extra="memory", purpose="vector index storage"))
