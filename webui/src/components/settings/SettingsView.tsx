@@ -63,6 +63,11 @@ import {
 import { ChannelsSettings } from "@/components/settings/ChannelsSettings";
 import { ConfigSettings } from "@/components/settings/ConfigSettings";
 import { ModelPicker } from "@/components/settings/ModelPicker";
+import {
+  SettingsGroup,
+  SettingsRow,
+  SettingsSectionTitle,
+} from "@/components/settings/primitives";
 import { cn } from "@/lib/utils";
 import { useClient } from "@/providers/ClientProvider";
 import type { SecretEntry, SettingsPayload, WebSearchSettingsUpdate } from "@/lib/types";
@@ -1712,46 +1717,6 @@ function SecretsSettings({ token }: { token: string }) {
           </div>
         </SettingsGroup>
       </section>
-    </div>
-  );
-}
-
-function SettingsSectionTitle({ children }: { children: ReactNode }) {
-  return (
-    <h2 className="mb-2 px-1 text-[13px] font-semibold tracking-[-0.01em] text-foreground/85">
-      {children}
-    </h2>
-  );
-}
-
-function SettingsGroup({ children }: { children: ReactNode }) {
-  return (
-    <div className="overflow-hidden rounded-[22px] border border-border/45 bg-card/86 shadow-[0_18px_65px_rgba(15,23,42,0.075)] backdrop-blur-xl dark:border-white/10 dark:shadow-[0_18px_65px_rgba(0,0,0,0.24)]">
-      <div className="divide-y divide-border/45">{children}</div>
-    </div>
-  );
-}
-
-function SettingsRow({
-  title,
-  description,
-  children,
-}: {
-  title: string;
-  description?: string;
-  children?: ReactNode;
-}) {
-  return (
-    <div className="flex min-h-[62px] flex-col gap-3 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between sm:px-5">
-      <div className="min-w-0">
-        <div className="text-[14px] font-medium leading-5 text-foreground">{title}</div>
-        {description ? (
-          <div className="mt-0.5 max-w-[28rem] text-[12px] leading-5 text-muted-foreground">
-            {description}
-          </div>
-        ) : null}
-      </div>
-      {children ? <div className="shrink-0 sm:ml-6">{children}</div> : null}
     </div>
   );
 }
