@@ -33,9 +33,13 @@ vi.mock("@/hooks/useSessions", async (importOriginal) => {
 });
 
 vi.mock("@/hooks/useTheme", () => ({
+  PALETTES: ["ithildin", "forge", "mithril"] as const,
   useTheme: () => ({
     theme: "light" as const,
     toggle: toggleThemeSpy,
+    setTheme: () => {},
+    palette: "ithildin" as const,
+    setPalette: () => {},
   }),
 }));
 

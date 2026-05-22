@@ -67,6 +67,7 @@ import {
   SettingsRow,
   SettingsSectionTitle,
 } from "@/components/settings/primitives";
+import { PALETTES, type Palette } from "@/hooks/useTheme";
 import { cn } from "@/lib/utils";
 import { useClient } from "@/providers/ClientProvider";
 import type { SecretEntry, SettingsPayload, WebSearchSettingsUpdate } from "@/lib/types";
@@ -83,6 +84,8 @@ type ByokPaneKey = "llm" | "web-search";
 interface SettingsViewProps {
   theme: "light" | "dark";
   onToggleTheme: () => void;
+  palette: Palette;
+  onSelectPalette: (palette: Palette) => void;
   onBackToChat: () => void;
   onModelNameChange: (modelName: string | null) => void;
   onLogout?: () => void;
@@ -93,6 +96,8 @@ interface SettingsViewProps {
 export function SettingsView({
   theme,
   onToggleTheme,
+  palette,
+  onSelectPalette,
   onBackToChat,
   onModelNameChange,
   onLogout,
@@ -380,6 +385,8 @@ export function SettingsView({
                 <GeneralSettings
                   theme={theme}
                   onToggleTheme={onToggleTheme}
+                  palette={palette}
+                  onSelectPalette={onSelectPalette}
                   form={form}
                   setForm={setForm}
                   settings={settings}
@@ -525,6 +532,8 @@ function SettingsSidebar({
 function GeneralSettings({
   theme,
   onToggleTheme,
+  palette,
+  onSelectPalette,
   form,
   setForm,
   settings,
@@ -538,6 +547,8 @@ function GeneralSettings({
 }: {
   theme: "light" | "dark";
   onToggleTheme: () => void;
+  palette: Palette;
+  onSelectPalette: (palette: Palette) => void;
   form: {
     model: string;
     provider: string;
@@ -591,6 +602,28 @@ function GeneralSettings({
                 {t("settings.values.dark")}
               </span>
             </button>
+          </SettingsRow>
+
+          <SettingsRow
+            title={t("settings.rows.palette")}
+            description={t("settings.help.palette")}
+          >
+            <div className="inline-flex h-8 items-center rounded-full bg-muted p-0.5 text-[12px] font-medium text-muted-foreground">
+              {PALETTES.map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  onClick={() => onSelectPalette(option)}
+                  className={cn(
+                    "rounded-full px-3 py-1 capitalize transition-colors",
+                    palette === option &&
+                      "bg-background text-foreground shadow-sm",
+                  )}
+                >
+                  {option}
+                </button>
+              ))}
+            </div>
           </SettingsRow>
 
           <SettingsRow

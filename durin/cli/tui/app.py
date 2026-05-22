@@ -85,6 +85,48 @@ class DurinApp(App[None]):
         self._tool_bubbles: dict[str, Any] = {}
         self._bus_task: asyncio.Task | None = None
         self._consume_task: asyncio.Task | None = None
+        self._palette = "ithildin"
+        self._mode = "dark"
+        self._apply_durin_theme()
+
+    # ---- theme ------------------------------------------------------------
+
+    def _apply_durin_theme(self) -> None:
+        """Register durin's six palettes and apply the configured one.
+
+        Palette + mode come from ``config.appearance``; ``mode = "auto"``
+        is resolved against the terminal (``COLORFGBG``).
+        """
+        from durin.cli.theme import PALETTE_NAMES, detect_mode, textual_theme
+
+        palette, mode = "ithildin", "auto"
+        try:
+            from durin.config.loader import load_config
+
+            appearance = load_config().appearance
+            palette, mode = appearance.palette, appearance.mode
+        except Exception:  # noqa: BLE001 - never let config break boot
+            pass
+        self._palette = palette if palette in PALETTE_NAMES else "ithildin"
+        self._mode = detect_mode() if mode == "auto" else (
+            mode if mode in ("light", "dark") else detect_mode()
+        )
+        for name in PALETTE_NAMES:
+            for theme_mode in ("light", "dark"):
+                self.register_theme(textual_theme(name, theme_mode))
+        self.theme = f"durin-{self._palette}-{self._mode}"
+
+    def _persist_appearance(self) -> None:
+        """Write the current palette/mode back to config."""
+        try:
+            from durin.config.loader import load_config, save_config
+
+            cfg = load_config()
+            cfg.appearance.palette = self._palette
+            cfg.appearance.mode = self._mode
+            save_config(cfg)
+        except Exception:  # noqa: BLE001 - a theme toggle must not crash
+            pass
 
     # ---- composition ------------------------------------------------------
 
@@ -348,6 +390,12 @@ class DurinApp(App[None]):
         if value == "/model":
             self._open_model_picker()
             return
+        if value == "/theme":
+            self._open_theme_picker()
+            return
+        if value.startswith("/theme "):
+            self._set_palette(value[len("/theme ") :].strip())
+            return
 
         # D3.2 shell paste: !cmd runs and prepends output to the message;
         # !!cmd runs silently without involving the agent.
@@ -478,8 +526,10 @@ class DurinApp(App[None]):
         self._current_assistant_bubble = None
 
     def action_toggle_dark(self) -> None:
-        """Ctrl+T: flip between light and dark themes."""
-        self.theme = "textual-light" if self.theme == "textual-dark" else "textual-dark"
+        """Ctrl+T: flip light/dark within the current durin palette."""
+        self._mode = "light" if self._mode == "dark" else "dark"
+        self.theme = f"durin-{self._palette}-{self._mode}"
+        self._persist_appearance()
 
     def action_open_model_picker(self) -> None:
         """Ctrl+L: open the model picker modal (D5.5)."""
@@ -546,6 +596,34 @@ class DurinApp(App[None]):
         )
         if selected and selected != active:
             await self._publish_inbound(f"/model {selected}", [])
+
+    @work
+    async def _open_theme_picker(self) -> None:
+        """`/theme` — pick the colour palette; Ctrl+T still toggles mode."""
+        from durin.cli.tui.screens import ThemePickerScreen
+
+        selected = await self.push_screen_wait(
+            ThemePickerScreen(active=self._palette)
+        )
+        if selected and selected != self._palette:
+            self._set_palette(selected)
+
+    def _set_palette(self, name: str) -> None:
+        """Switch the colour palette (the `/theme <name>` form)."""
+        from durin.cli.theme import PALETTE_NAMES
+
+        chat = self.query_one("#chat", ChatView)
+        if name not in PALETTE_NAMES:
+            chat.add_message(
+                "system",
+                f"Unknown palette '{name}'. Try: {', '.join(PALETTE_NAMES)}.",
+            )
+            return
+        if name != self._palette:
+            self._palette = name
+            self.theme = f"durin-{self._palette}-{self._mode}"
+            self._persist_appearance()
+        chat.add_message("system", f"Palette → {name}.")
 
     def _collect_sessions(self) -> list:
         """Walk the sessions directory and return a list of SessionEntry."""

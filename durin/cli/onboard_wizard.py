@@ -167,8 +167,64 @@ class WizardResult:
     availability_lines: list[str] = field(default_factory=list)
 
 
+def _durin_questionary_style(questionary: Any) -> Any:
+    """A questionary style carrying durin's accent (Ithildin palette).
+
+    The wizard prints onto the user's terminal, so it can't own the
+    background — body text stays terminal-default and only the prompts
+    (pointer, selection, marker) take durin's accent. See design/DESIGN.md.
+    """
+    from durin.cli.theme import detect_mode, get_palette
+
+    accent = get_palette("ithildin", detect_mode()).accent
+    return questionary.Style(
+        [
+            ("qmark", f"fg:{accent} bold"),
+            ("pointer", f"fg:{accent} bold"),
+            ("highlighted", f"fg:{accent} bold"),
+            ("selected", f"fg:{accent}"),
+            ("answer", f"fg:{accent} bold"),
+            ("question", "bold"),
+            ("instruction", "fg:ansibrightblack"),
+        ]
+    )
+
+
+class _StyledQuestionary:
+    """Proxies the questionary module, defaulting durin's style on prompts.
+
+    Themes the whole wizard from one place: every ``select``/``text``/etc.
+    call gets ``style=`` injected unless the caller passed its own.
+    """
+
+    _PROMPTS = frozenset(
+        {"select", "rawselect", "text", "confirm", "checkbox",
+         "path", "autocomplete", "password"}
+    )
+
+    def __init__(self, module: Any, style: Any) -> None:
+        self._module = module
+        self._style = style
+
+    def __getattr__(self, name: str) -> Any:
+        attr = getattr(self._module, name)
+        if name in self._PROMPTS and callable(attr):
+            style = self._style
+
+            def _styled(*args: Any, **kwargs: Any) -> Any:
+                kwargs.setdefault("style", style)
+                return attr(*args, **kwargs)
+
+            return _styled
+        return attr
+
+
 def _load_questionary(q: Any | None) -> Any:
-    """Return the questionary module (or the injected mock for tests)."""
+    """Return the questionary surface (or the injected mock for tests).
+
+    The real module is wrapped so every prompt picks up durin's accent;
+    an injected test mock is returned untouched.
+    """
     if q is not None:
         return q
     try:
@@ -179,7 +235,7 @@ def _load_questionary(q: Any | None) -> Any:
             "Run `pip install questionary` or use `durin onboard --no-wizard` "
             "to just write defaults."
         ) from exc
-    return questionary
+    return _StyledQuestionary(questionary, _durin_questionary_style(questionary))
 
 
 def run_wizard(initial_config: Config, *, q: Any | None = None) -> WizardResult:

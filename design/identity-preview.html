@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>durin — identidad visual (3 direcciones)</title>
+<style>
+  /* ── stage ─────────────────────────────────────────────────────── */
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #0b0b0c;
+    color: #c9cacc;
+    font: 14px/1.5 -apple-system, system-ui, "Segoe UI", sans-serif;
+    padding: 32px 24px 64px;
+  }
+  .page-head { max-width: 1240px; margin: 0 auto 26px; }
+  .page-head h1 { font-size: 22px; font-weight: 600; color: #f0f0f1; letter-spacing: -0.01em; }
+  .page-head p { margin-top: 6px; color: #7d7e80; font-size: 13px; }
+
+  .grid {
+    max-width: 1240px; margin: 0 auto;
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px;
+  }
+  @media (max-width: 1080px) { .grid { grid-template-columns: 1fr; } }
+
+  /* ── panel: themed by .ds-* providing the token vars ───────────── */
+  .panel { display: flex; flex-direction: column; gap: 12px; }
+  .panel-head h2 {
+    font-size: 17px; font-weight: 600; letter-spacing: -0.01em;
+    color: #f0f0f1;
+  }
+  .panel-head .tag { color: #9a9b9d; font-size: 12.5px; margin-top: 3px; }
+  .panel-head .story { color: #66676a; font-size: 11.5px; margin-top: 4px; font-style: italic; }
+
+  /* ── app frame (uses the panel's token vars) ───────────────────── */
+  .app {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    overflow: hidden;
+  }
+  .topbar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 9px 13px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    font-size: 11.5px; color: var(--muted);
+  }
+  .topbar .name { color: var(--text); font-weight: 600; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+  .topbar .sess { margin-left: auto; font-family: ui-monospace, Menlo, monospace; }
+
+  .chat { padding: 13px; display: flex; flex-direction: column; gap: 9px; }
+  .msg { font-size: 12.5px; line-height: 1.5; }
+  .msg.user {
+    align-self: flex-end; max-width: 82%;
+    background: var(--surface2); color: var(--text);
+    padding: 7px 10px; border-radius: 11px;
+  }
+  .msg.bot { color: var(--text); }
+  .msg.bot b { color: var(--accent); font-weight: 600; }
+
+  .tool {
+    display: flex; align-items: center; gap: 7px;
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 9px; padding: 6px 9px;
+    font: 11px ui-monospace, Menlo, monospace; color: var(--muted);
+  }
+  .tool .car { color: var(--accent); }
+  .tool code { color: var(--text); }
+  .tool .ok { margin-left: auto; color: var(--ok); }
+
+  .askpanel {
+    background: var(--surface2);
+    border: 1px solid var(--accent-soft);
+    border-radius: 11px; padding: 9px 10px;
+    display: flex; flex-direction: column; gap: 7px;
+  }
+  .askpanel .q { font-size: 12px; color: var(--text); }
+  .chips { display: flex; flex-wrap: wrap; gap: 5px; }
+  .chip {
+    border: 1px solid var(--border); background: transparent;
+    color: var(--text); border-radius: 999px;
+    padding: 2.5px 9px; font-size: 11px; cursor: default;
+  }
+  .chip.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-ink); }
+  .answer { display: flex; gap: 6px; }
+  .field {
+    flex: 1; min-width: 0;
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 7px; padding: 5px 8px;
+    font-size: 11.5px; color: var(--text);
+  }
+  .field::placeholder { color: var(--muted); }
+  .btn {
+    border: none; border-radius: 7px;
+    background: var(--accent); color: var(--accent-text);
+    padding: 5px 12px; font-size: 11px; font-weight: 600; cursor: default;
+  }
+  .btn.ghost {
+    background: transparent; border: 1px solid var(--border); color: var(--muted);
+    font-weight: 500;
+  }
+
+  .composer {
+    display: flex; gap: 7px; padding: 10px 12px;
+    border-top: 1px solid var(--border);
+  }
+
+  /* ── faux TUI ──────────────────────────────────────────────────── */
+  .term {
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 10px; padding: 10px 12px;
+    font: 11px/1.7 ui-monospace, Menlo, monospace;
+    white-space: pre; overflow: hidden;
+  }
+  .term .dim { color: var(--muted); }
+  .term .acc { color: var(--accent); }
+  .term .txt { color: var(--text); }
+  .term .rule { color: var(--border-vis); }
+
+  /* ── light mini ────────────────────────────────────────────────── */
+  .light-row { display: flex; align-items: stretch; gap: 8px; }
+  .light-tag {
+    writing-mode: vertical-rl; text-orientation: mixed;
+    font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: #66676a; display: flex; align-items: center; justify-content: center;
+  }
+  .light-mini { flex: 1; }
+
+  /* ── swatches ──────────────────────────────────────────────────── */
+  .swatches { display: flex; flex-wrap: wrap; gap: 6px; }
+  .sw {
+    display: flex; align-items: center; gap: 5px;
+    font: 10px ui-monospace, Menlo, monospace; color: #8a8b8d;
+  }
+  .sw i { width: 13px; height: 13px; border-radius: 4px; border: 1px solid #2a2a2c; }
+
+  /* ════════════════════════════════════════════════════════════════
+     ITHILDIN — cool slate + sky-cyan
+     ════════════════════════════════════════════════════════════════ */
+  .ds-ithildin {
+    --bg: #0e1011; --surface: #17191b; --surface2: #212325;
+    --text: #e7e9ec; --muted: #888d93; --border: #282b2e; --border-vis: #34383c;
+    --accent: #57b6e6; --accent-text: #06222f;
+    --accent-soft: rgba(87,182,230,0.16); --accent-ink: #9bd4f1;
+    --ok: #5ec88a;
+  }
+  .ds-ithildin .light {
+    --bg: #ffffff; --surface: #ffffff; --surface2: #f4f5f6;
+    --text: #16181a; --muted: #6b7075; --border: #e5e6e8; --border-vis: #d4d6d8;
+    --accent: #2b9fd4; --accent-text: #ffffff;
+    --accent-soft: rgba(43,159,212,0.12); --accent-ink: #1b7aa8;
+    --ok: #1f9d57;
+  }
+
+  /* ════════════════════════════════════════════════════════════════
+     FORGE — warm near-black + ember
+     ════════════════════════════════════════════════════════════════ */
+  .ds-forge {
+    --bg: #14110e; --surface: #1d1916; --surface2: #272118;
+    --text: #f0ebe3; --muted: #95897b; --border: #2e2924; --border-vis: #3b352e;
+    --accent: #e0843f; --accent-text: #1c1006;
+    --accent-soft: rgba(224,132,63,0.16); --accent-ink: #efab74;
+    --ok: #9fbd5a;
+  }
+  .ds-forge .light {
+    --bg: #faf8f4; --surface: #ffffff; --surface2: #f3efe9;
+    --text: #1a1612; --muted: #6f6557; --border: #e8e3da; --border-vis: #d8d1c4;
+    --accent: #c26a2a; --accent-text: #ffffff;
+    --accent-soft: rgba(194,106,42,0.12); --accent-ink: #9a5420;
+    --ok: #6f8a2e;
+  }
+
+  /* ════════════════════════════════════════════════════════════════
+     MITHRIL — achromatic silver, light-as-accent
+     ════════════════════════════════════════════════════════════════ */
+  .ds-mithril {
+    --bg: #101113; --surface: #191a1c; --surface2: #232527;
+    --text: #e9eaec; --muted: #8a8d92; --border: #2a2b2e; --border-vis: #36373a;
+    --accent: #cfd3d8; --accent-text: #16181a;
+    --accent-soft: rgba(207,211,216,0.13); --accent-ink: #eef0f2;
+    --ok: #b9bdc2;
+  }
+  .ds-mithril .light {
+    --bg: #fbfbfc; --surface: #ffffff; --surface2: #f1f2f3;
+    --text: #18191b; --muted: #6c6f74; --border: #e6e7e9; --border-vis: #d5d6d8;
+    --accent: #3f4247; --accent-text: #ffffff;
+    --accent-soft: rgba(63,66,71,0.10); --accent-ink: #3f4247;
+    --ok: #5b5e63;
+  }
+</style>
+</head>
+<body>
+
+<div class="page-head">
+  <h1>durin — tres direcciones de identidad</h1>
+  <p>Mismo contenido, mismos componentes — solo cambia la paleta. Cada columna: mock web oscuro · TUI · mini en claro · paleta.</p>
+</div>
+
+<div class="grid">
+
+  <!-- ░░░░░░░░░░░░░░░░░░░░ ITHILDIN ░░░░░░░░░░░░░░░░░░░░ -->
+  <section class="panel ds-ithildin">
+    <div class="panel-head">
+      <h2>Ithildin</h2>
+      <p class="tag">Neutros fríos pizarra + acento cian cielo · oscuro-nativo</p>
+      <p class="story">Las Puertas de Durin brillan plata-azul a la luz de la luna.</p>
+    </div>
+
+    <div class="app">
+      <div class="topbar"><span class="dot"></span><span class="name">durin</span><span class="sess">cli:direct</span></div>
+      <div class="chat">
+        <div class="msg user">¿Qué base de datos usamos?</div>
+        <div class="msg bot">Depende del perfil de carga. Te dejo opciones con <b>una recomendación</b>.</div>
+        <div class="tool"><span class="car">▸</span> exec · <code>psql --version</code><span class="ok">✓</span></div>
+        <div class="askpanel">
+          <div class="q">❓ ¿Qué base de datos usamos?</div>
+          <div class="chips">
+            <button class="chip on">Postgres</button>
+            <button class="chip">SQLite</button>
+            <button class="chip">DuckDB</button>
+          </div>
+          <div class="answer">
+            <input class="field" placeholder="Escribí tu respuesta…" />
+            <button class="btn">Enviar</button>
+          </div>
+        </div>
+      </div>
+      <div class="composer">
+        <input class="field" placeholder="message durin" />
+        <button class="btn ghost">↑</button>
+      </div>
+    </div>
+
+    <div class="term"><span class="dim">durin · cli:direct                       </span><span class="acc">○</span>
+<span class="txt">  Available skills</span>
+<span class="dim">  clawhub, cron, github, memory, weather</span>
+<span class="acc">  esc cancel · ^q quit · / commands</span>
+<span class="rule">  ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔</span>
+<span class="dim">  message durin</span></div>
+
+    <div class="light-row">
+      <div class="light-tag">claro</div>
+      <div class="app light light-mini">
+        <div class="topbar"><span class="dot"></span><span class="name">durin</span><span class="sess">cli:direct</span></div>
+        <div class="chat">
+          <div class="msg user">¿Qué base de datos usamos?</div>
+          <div class="msg bot">Te dejo opciones con <b>una recomendación</b>.</div>
+          <div class="answer">
+            <input class="field" placeholder="Escribí tu respuesta…" />
+            <button class="btn">Enviar</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="swatches">
+      <span class="sw"><i style="background:#0e1011"></i>bg</span>
+      <span class="sw"><i style="background:#17191b"></i>surface</span>
+      <span class="sw"><i style="background:#e7e9ec"></i>text</span>
+      <span class="sw"><i style="background:#888d93"></i>muted</span>
+      <span class="sw"><i style="background:#57b6e6"></i>#57b6e6</span>
+    </div>
+  </section>
+
+  <!-- ░░░░░░░░░░░░░░░░░░░░ FORGE ░░░░░░░░░░░░░░░░░░░░ -->
+  <section class="panel ds-forge">
+    <div class="panel-head">
+      <h2>Forge</h2>
+      <p class="tag">Oscuro cálido tostado + acento ámbar/ascua</p>
+      <p class="story">La forja enana: piedra caliente, fuego, restraint.</p>
+    </div>
+
+    <div class="app">
+      <div class="topbar"><span class="dot"></span><span class="name">durin</span><span class="sess">cli:direct</span></div>
+      <div class="chat">
+        <div class="msg user">¿Qué base de datos usamos?</div>
+        <div class="msg bot">Depende del perfil de carga. Te dejo opciones con <b>una recomendación</b>.</div>
+        <div class="tool"><span class="car">▸</span> exec · <code>psql --version</code><span class="ok">✓</span></div>
+        <div class="askpanel">
+          <div class="q">❓ ¿Qué base de datos usamos?</div>
+          <div class="chips">
+            <button class="chip on">Postgres</button>
+            <button class="chip">SQLite</button>
+            <button class="chip">DuckDB</button>
+          </div>
+          <div class="answer">
+            <input class="field" placeholder="Escribí tu respuesta…" />
+            <button class="btn">Enviar</button>
+          </div>
+        </div>
+      </div>
+      <div class="composer">
+        <input class="field" placeholder="message durin" />
+        <button class="btn ghost">↑</button>
+      </div>
+    </div>
+
+    <div class="term"><span class="dim">durin · cli:direct                       </span><span class="acc">○</span>
+<span class="txt">  Available skills</span>
+<span class="dim">  clawhub, cron, github, memory, weather</span>
+<span class="acc">  esc cancel · ^q quit · / commands</span>
+<span class="rule">  ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔</span>
+<span class="dim">  message durin</span></div>
+
+    <div class="light-row">
+      <div class="light-tag">claro</div>
+      <div class="app light light-mini">
+        <div class="topbar"><span class="dot"></span><span class="name">durin</span><span class="sess">cli:direct</span></div>
+        <div class="chat">
+          <div class="msg user">¿Qué base de datos usamos?</div>
+          <div class="msg bot">Te dejo opciones con <b>una recomendación</b>.</div>
+          <div class="answer">
+            <input class="field" placeholder="Escribí tu respuesta…" />
+            <button class="btn">Enviar</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="swatches">
+      <span class="sw"><i style="background:#14110e"></i>bg</span>
+      <span class="sw"><i style="background:#1d1916"></i>surface</span>
+      <span class="sw"><i style="background:#f0ebe3"></i>text</span>
+      <span class="sw"><i style="background:#95897b"></i>muted</span>
+      <span class="sw"><i style="background:#e0843f"></i>#e0843f</span>
+    </div>
+  </section>
+
+  <!-- ░░░░░░░░░░░░░░░░░░░░ MITHRIL ░░░░░░░░░░░░░░░░░░░░ -->
+  <section class="panel ds-mithril">
+    <div class="panel-head">
+      <h2>Mithril</h2>
+      <p class="tag">Casi acromático · plata sobre oscuro, la luz es el acento</p>
+      <p class="story">Mithril: plata preciosa, sobria, sin color que distraiga.</p>
+    </div>
+
+    <div class="app">
+      <div class="topbar"><span class="dot"></span><span class="name">durin</span><span class="sess">cli:direct</span></div>
+      <div class="chat">
+        <div class="msg user">¿Qué base de datos usamos?</div>
+        <div class="msg bot">Depende del perfil de carga. Te dejo opciones con <b>una recomendación</b>.</div>
+        <div class="tool"><span class="car">▸</span> exec · <code>psql --version</code><span class="ok">✓</span></div>
+        <div class="askpanel">
+          <div class="q">❓ ¿Qué base de datos usamos?</div>
+          <div class="chips">
+            <button class="chip on">Postgres</button>
+            <button class="chip">SQLite</button>
+            <button class="chip">DuckDB</button>
+          </div>
+          <div class="answer">
+            <input class="field" placeholder="Escribí tu respuesta…" />
+            <button class="btn">Enviar</button>
+          </div>
+        </div>
+      </div>
+      <div class="composer">
+        <input class="field" placeholder="message durin" />
+        <button class="btn ghost">↑</button>
+      </div>
+    </div>
+
+    <div class="term"><span class="dim">durin · cli:direct                       </span><span class="acc">○</span>
+<span class="txt">  Available skills</span>
+<span class="dim">  clawhub, cron, github, memory, weather</span>
+<span class="acc">  esc cancel · ^q quit · / commands</span>
+<span class="rule">  ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔</span>
+<span class="dim">  message durin</span></div>
+
+    <div class="light-row">
+      <div class="light-tag">claro</div>
+      <div class="app light light-mini">
+        <div class="topbar"><span class="dot"></span><span class="name">durin</span><span class="sess">cli:direct</span></div>
+        <div class="chat">
+          <div class="msg user">¿Qué base de datos usamos?</div>
+          <div class="msg bot">Te dejo opciones con <b>una recomendación</b>.</div>
+          <div class="answer">
+            <input class="field" placeholder="Escribí tu respuesta…" />
+            <button class="btn">Enviar</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="swatches">
+      <span class="sw"><i style="background:#101113"></i>bg</span>
+      <span class="sw"><i style="background:#191a1c"></i>surface</span>
+      <span class="sw"><i style="background:#e9eaec"></i>text</span>
+      <span class="sw"><i style="background:#8a8d92"></i>muted</span>
+      <span class="sw"><i style="background:#cfd3d8"></i>#cfd3d8</span>
+    </div>
+  </section>
+
+</div>
+</body>
+</html>

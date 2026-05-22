@@ -59,7 +59,14 @@ class SlashCommandSuggester(Suggester):
 
     def __init__(self) -> None:
         super().__init__(use_cache=False, case_sensitive=False)
-        self._commands: list[str] = [spec.command for spec in BUILTIN_COMMAND_SPECS]
+        # `/theme` is handled inside the TUI (palette picker), not the
+        # command router, so it isn't in BUILTIN_COMMAND_SPECS — add it
+        # here so the autocomplete still surfaces it.
+        self._commands: list[str] = [
+            spec.command for spec in BUILTIN_COMMAND_SPECS
+        ]
+        if "/theme" not in self._commands:
+            self._commands.append("/theme")
 
     async def get_suggestion(self, value: str) -> str | None:
         if not value.startswith("/") or value == "/":
