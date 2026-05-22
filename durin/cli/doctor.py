@@ -511,22 +511,24 @@ def check_memory_summary() -> CheckResult:
     )
 
 
-def check_model_ping(*, timeout: float = 15.0, cfg: "Config | None" = None) -> CheckResult:
-    """`--ping-model`: actually call the configured default model.
+async def check_model_ping_async(
+    *, timeout: float = 15.0, cfg: "Config | None" = None
+) -> CheckResult:
+    """Async core of :func:`check_model_ping`.
 
     A 3-token round-trip via the same provider/client the agent uses.
-    Catches auth errors, model-not-found, network drops — things the
-    plain ``--ping`` (GET on the base URL) can't see.
-
-    Pass ``cfg`` to ping an in-memory config (e.g. a model the
-    onboarding wizard just picked but hasn't saved yet); otherwise the
-    on-disk config is loaded.
+    Safe to ``await`` from inside a running event loop (the gateway's
+    HTTP handlers need this). Pass ``cfg`` to ping an in-memory config.
     """
+    import asyncio
+
     if cfg is None:
         try:
             cfg = load_config()
         except Exception as e:  # noqa: BLE001
-            return CheckResult("model ping", "fail", f"Could not load config: {e}", category="providers")
+            return CheckResult(
+                "model ping", "fail", f"Could not load config: {e}", category="providers"
+            )
 
     try:
         from durin.providers.factory import make_provider
@@ -539,8 +541,6 @@ def check_model_ping(*, timeout: float = 15.0, cfg: "Config | None" = None) -> C
             fix="`durin config get providers` to inspect provider config.",
             category="providers",
         )
-
-    import asyncio
 
     async def _ping() -> str | None:
         try:
@@ -557,7 +557,7 @@ def check_model_ping(*, timeout: float = 15.0, cfg: "Config | None" = None) -> C
         return None  # success
 
     try:
-        err = asyncio.run(asyncio.wait_for(_ping(), timeout=timeout))
+        err = await asyncio.wait_for(_ping(), timeout=timeout)
     except asyncio.TimeoutError:
         return CheckResult(
             "model ping", "fail",
@@ -580,6 +580,17 @@ def check_model_ping(*, timeout: float = 15.0, cfg: "Config | None" = None) -> C
         f"{cfg.resolve_preset().model} responded.",
         category="providers",
     )
+
+
+def check_model_ping(*, timeout: float = 15.0, cfg: "Config | None" = None) -> CheckResult:
+    """`--ping-model`: a real round-trip to the configured default model.
+
+    Sync wrapper over :func:`check_model_ping_async`. Must NOT be called
+    from inside a running event loop — use the async form there.
+    """
+    import asyncio
+
+    return asyncio.run(check_model_ping_async(timeout=timeout, cfg=cfg))
 
 
 def check_gateway_daemon() -> CheckResult:

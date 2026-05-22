@@ -671,6 +671,9 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/channels":
             return self._handle_channels_list(request)
 
+        if got == "/api/model/test":
+            return await self._handle_model_test(request)
+
         m = re.match(r"^/api/sessions/([^/]+)/messages$", got)
         if m:
             return self._handle_session_messages(request, m.group(1))
@@ -1209,6 +1212,40 @@ class WebSocketChannel(BaseChannel):
                 }
             )
         return _http_json_response({"channels": items})
+
+    async def _handle_model_test(self, request: WsRequest) -> Response:
+        """`GET /api/model/test` — a real round-trip to a model.
+
+        Tests the given ``model``/``provider`` (defaults to the
+        configured ones) so the dashboard can verify a pick before the
+        user commits it. Async so the ping doesn't block the gateway
+        event loop.
+        """
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from durin.cli.doctor import check_model_ping_async
+        from durin.config.loader import load_config
+
+        query = _parse_query(request.path)
+        model = (_query_first(query, "model") or "").strip()
+        provider = (_query_first(query, "provider") or "").strip()
+        try:
+            cfg = load_config()
+        except Exception as e:  # noqa: BLE001
+            return _http_error(400, f"could not load config: {e}")
+        if model:
+            cfg.agents.defaults.model = model
+            cfg.agents.defaults.model_preset = None  # honor the override
+        if provider:
+            cfg.agents.defaults.provider = provider
+        result = await check_model_ping_async(cfg=cfg)
+        return _http_json_response(
+            {
+                "status": result.status,
+                "message": result.message,
+                "fix": result.fix or "",
+            }
+        )
 
     @staticmethod
     def _is_websocket_channel_session_key(key: str) -> bool:

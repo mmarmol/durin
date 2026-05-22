@@ -54,6 +54,7 @@ import {
   updateWebSearchSettings,
 } from "@/lib/api";
 import { ConfigSettings } from "@/components/settings/ConfigSettings";
+import { ModelExtras } from "@/components/settings/ModelExtras";
 import { cn } from "@/lib/utils";
 import { useClient } from "@/providers/ClientProvider";
 import type { SecretEntry, SettingsPayload, WebSearchSettingsUpdate } from "@/lib/types";
@@ -363,19 +364,22 @@ export function SettingsView({
                 </div>
               ) : null}
               {activeSection === "general" ? (
-                <GeneralSettings
-                  theme={theme}
-                  onToggleTheme={onToggleTheme}
-                  form={form}
-                  setForm={setForm}
-                  settings={settings}
-                  dirty={dirty}
-                  saving={saving}
-                  onSave={save}
-                  onRestart={onRestart}
-                  isRestarting={isRestarting}
-                  onOpenByok={() => setActiveSection("providers")}
-                />
+                <div className="space-y-5">
+                  <GeneralSettings
+                    theme={theme}
+                    onToggleTheme={onToggleTheme}
+                    form={form}
+                    setForm={setForm}
+                    settings={settings}
+                    dirty={dirty}
+                    saving={saving}
+                    onSave={save}
+                    onRestart={onRestart}
+                    isRestarting={isRestarting}
+                    onOpenByok={() => setActiveSection("providers")}
+                  />
+                  <ModelExtras token={token} />
+                </div>
               ) : activeSection === "secrets" ? (
                 <SecretsSettings token={token} />
               ) : activeSection === "advanced" ? (
