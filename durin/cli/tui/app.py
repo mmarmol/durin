@@ -138,6 +138,12 @@ class DurinApp(App[None]):
         self._render_startup_banner()
         self._restore_recent_turns()
 
+        # A chat surface must be ready to type into the moment it opens.
+        # Textual otherwise parks focus on the first focusable widget —
+        # the scrollable history — and silently swallows keystrokes
+        # until the user tabs or clicks into the input.
+        self.query_one(InputArea).focus()
+
         if self._agent_loop is None:
             return
         bus = getattr(self._agent_loop, "bus", None)
