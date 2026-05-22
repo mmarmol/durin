@@ -12,6 +12,7 @@ import {
   EyeOff,
   Pencil,
   Gem,
+  Globe,
   Grid3X3,
   Hexagon,
   Loader2,
@@ -57,7 +58,12 @@ import { cn } from "@/lib/utils";
 import { useClient } from "@/providers/ClientProvider";
 import type { SecretEntry, SettingsPayload, WebSearchSettingsUpdate } from "@/lib/types";
 
-type SettingsSectionKey = "general" | "byok" | "secrets" | "advanced";
+type SettingsSectionKey =
+  | "general"
+  | "providers"
+  | "web-search"
+  | "secrets"
+  | "advanced";
 type ByokPaneKey = "llm" | "web-search";
 
 interface SettingsViewProps {
@@ -368,7 +374,7 @@ export function SettingsView({
                   onSave={save}
                   onRestart={onRestart}
                   isRestarting={isRestarting}
-                  onOpenByok={() => setActiveSection("byok")}
+                  onOpenByok={() => setActiveSection("providers")}
                 />
               ) : activeSection === "secrets" ? (
                 <SecretsSettings token={token} />
@@ -376,6 +382,7 @@ export function SettingsView({
                 <ConfigSettings token={token} />
               ) : (
                 <ByokSettings
+                  forcePane={activeSection === "web-search" ? "web-search" : "llm"}
                   settings={settings}
                   expandedProvider={expandedProvider}
                   providerForms={providerForms}
@@ -423,7 +430,8 @@ export function SettingsView({
 
 const SETTINGS_NAV_ITEMS = [
   { key: "general", icon: Settings },
-  { key: "byok", icon: KeyRound },
+  { key: "providers", icon: KeyRound },
+  { key: "web-search", icon: Globe },
   { key: "secrets", icon: Lock },
   { key: "advanced", icon: Sliders },
 ] as const;
@@ -903,8 +911,10 @@ function ByokSettings({
   onResetProviderDraft,
   onResetWebSearchDraft,
   onSaveWebSearch,
+  forcePane,
 }: {
   settings: SettingsPayload;
+  forcePane?: ByokPaneKey;
   expandedProvider: string | null;
   providerForms: Record<string, { apiKey: string; apiBase: string }>;
   visibleProviderKeys: Record<string, boolean>;
@@ -928,7 +938,10 @@ function ByokSettings({
   onSaveWebSearch: () => void;
 }) {
   const { t } = useTranslation();
-  const [activePane, setActivePane] = useState<ByokPaneKey>("llm");
+  const [activePane, setActivePane] = useState<ByokPaneKey>(forcePane ?? "llm");
+  // When the parent pins a pane (the section *is* the pane), follow the
+  // prop — the internal tab state is only for the un-pinned, tabbed case.
+  const pane = forcePane ?? activePane;
   const [showAllUnconfigured, setShowAllUnconfigured] = useState(false);
   const configuredProviders = settings.providers.filter((provider) => provider.configured);
   const unconfiguredProviders = settings.providers.filter((provider) => !provider.configured);
@@ -1082,7 +1095,10 @@ function ByokSettings({
       <div
         role="tablist"
         aria-label={t("settings.byok.tabs.ariaLabel")}
-        className="grid rounded-[22px] border border-border/35 bg-muted/35 p-1 shadow-[inset_0_1px_2px_rgba(15,23,42,0.04)] backdrop-blur-xl sm:grid-cols-2"
+        className={cn(
+          "grid rounded-[22px] border border-border/35 bg-muted/35 p-1 shadow-[inset_0_1px_2px_rgba(15,23,42,0.04)] backdrop-blur-xl sm:grid-cols-2",
+          forcePane && "hidden",
+        )}
       >
         {panes.map((pane) => {
           const selected = activePane === pane.key;
@@ -1114,7 +1130,7 @@ function ByokSettings({
           );
         })}
       </div>
-      {activePane === "llm" ? (
+      {pane === "llm" ? (
         <div className="space-y-8">
           <section className="space-y-3">
             <ByokSectionHeader

@@ -230,13 +230,15 @@ describe("App layout", () => {
       "aria-current",
       "page",
     );
-    expect(within(settingsNav).getByRole("button", { name: "API Keys" })).toBeInTheDocument();
+    expect(
+      within(settingsNav).getByRole("button", { name: "Model providers" }),
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Sign out" })).toBeInTheDocument();
     expect(screen.getByText("AI")).toBeInTheDocument();
     expect(screen.getByDisplayValue("openai/gpt-4o")).toBeInTheDocument();
-    fireEvent.click(within(settingsNav).getByRole("button", { name: "API Keys" }));
-    expect(screen.getByRole("tab", { name: "LLM" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("tab", { name: "Web Search" })).toBeInTheDocument();
+
+    // Model providers is its own section now (no LLM/Web-Search tabs).
+    fireEvent.click(within(settingsNav).getByRole("button", { name: "Model providers" }));
     expect(screen.getByText("OpenRouter")).toBeInTheDocument();
     expect(screen.getAllByText("Not configured").length).toBeGreaterThan(0);
     fireEvent.click(screen.getByText("OpenAI"));
@@ -249,7 +251,8 @@ describe("App layout", () => {
     expect(screen.getByText("open••••-key")).toBeInTheDocument();
     expect(screen.queryByDisplayValue("unsaved-openai-key")).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("tab", { name: "Web Search" }));
+    // Web search is its own section.
+    fireEvent.click(within(settingsNav).getByRole("button", { name: "Web search" }));
     expect(screen.getByText("Search provider")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Brave Search/ })).toBeInTheDocument();
     expect(screen.getByText("BSAo••••ew20")).toBeInTheDocument();

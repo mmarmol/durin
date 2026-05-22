@@ -46,7 +46,11 @@
     },
     "nav": {
       "general": "Général",
-      "byok": "Clés API"
+      "byok": "Clés API",
+      "providers": "Fournisseurs",
+      "web-search": "Recherche web",
+      "secrets": "Secrets",
+      "advanced": "All settings"
     },
     "sections": {
       "interface": "Interface",
