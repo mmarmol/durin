@@ -1588,6 +1588,29 @@ def _run_gateway(
             console.print(f"[yellow]Could not open browser ({e}); visit {open_browser_url}[/yellow]")
 
     async def run():
+        # Without an explicit SIGTERM handler, Python's default action
+        # terminates the process instantly — the `finally` block below
+        # never runs, so `durin gateway stop` (which sends SIGTERM) would
+        # skip the session flush and lose unsaved work, and the daemon
+        # would die with nothing in the log. Install async signal
+        # handlers so SIGTERM/SIGINT/SIGHUP all trigger a logged,
+        # graceful shutdown.
+        loop = asyncio.get_running_loop()
+        gathered: asyncio.Future | None = None
+
+        def _request_shutdown(signame: str) -> None:
+            logger.info("Gateway received {}; shutting down gracefully.", signame)
+            if gathered is not None and not gathered.done():
+                gathered.cancel()
+
+        for _sig in (signal.SIGTERM, signal.SIGINT, getattr(signal, "SIGHUP", None)):
+            if _sig is None:
+                continue
+            try:
+                loop.add_signal_handler(_sig, _request_shutdown, _sig.name)
+            except (NotImplementedError, RuntimeError):
+                pass  # add_signal_handler is unsupported on Windows
+
         try:
             await cron.start()
             await heartbeat.start()
@@ -1598,14 +1621,16 @@ def _run_gateway(
             ]
             if open_browser_url:
                 tasks.append(_open_browser_when_ready())
-            await asyncio.gather(*tasks)
-        except KeyboardInterrupt:
+            gathered = asyncio.gather(*tasks)
+            await gathered
+        except (KeyboardInterrupt, asyncio.CancelledError):
             console.print("\nShutting down...")
         except Exception:
             import traceback
 
             console.print("\n[red]Error: Gateway crashed unexpectedly[/red]")
             console.print(traceback.format_exc())
+            logger.error("Gateway crashed unexpectedly:\n{}", traceback.format_exc())
         finally:
             await agent.close_mcp()
             heartbeat.stop()
