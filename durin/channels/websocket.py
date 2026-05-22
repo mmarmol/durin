@@ -653,6 +653,15 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/settings/web-search/update":
             return self._handle_settings_web_search_update(request)
 
+        if got == "/api/secrets":
+            return self._handle_secrets_list(request)
+
+        if got == "/api/secrets/set":
+            return self._handle_secret_set(request)
+
+        if got == "/api/secrets/delete":
+            return self._handle_secret_delete(request)
+
         m = re.match(r"^/api/sessions/([^/]+)/messages$", got)
         if m:
             return self._handle_session_messages(request, m.group(1))
@@ -899,6 +908,20 @@ class WebSocketChannel(BaseChannel):
             if api_key is None:
                 api_key = _query_first(query, "apiKey")
             api_key = (api_key or "").strip() or None
+            # Store the key in the secret store and keep only a
+            # ${secret:} reference in config — the dashboard must not
+            # write plaintext (see docs/11_secrets_design.md).
+            from durin.security.secrets import is_secret_ref, store_secret
+
+            if api_key and not is_secret_ref(api_key):
+                api_key = store_secret(
+                    f"{spec.name}_API_KEY",
+                    api_key,
+                    service=f"provider:{spec.name}",
+                    scope=[f"provider:{spec.name}"],
+                    description=f"{spec.name} API key",
+                    origin="webui",
+                )
             if provider_config.api_key != api_key:
                 provider_config.api_key = api_key
                 changed = True
@@ -973,6 +996,90 @@ class WebSocketChannel(BaseChannel):
         if changed:
             save_config(config)
         return _http_json_response(self._settings_payload(requires_restart=False))
+
+    # -- secret store --------------------------------------------------------
+
+    def _handle_secrets_list(self, request: WsRequest) -> Response:
+        """`GET /api/secrets` — entries' metadata. Never returns a value."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from durin.security.secrets import SecretStore
+
+        store = SecretStore().load()
+        items = [
+            {
+                "name": name,
+                "service": entry.service,
+                "account": entry.account or "",
+                "description": entry.description,
+                "scope": list(entry.scope),
+                "origin": entry.origin,
+                "created_at": entry.created_at,
+                "value_hint": _mask_secret_hint(entry.value),
+            }
+            for name, entry in sorted(store.all().items())
+        ]
+        return _http_json_response({"secrets": items})
+
+    def _handle_secret_set(self, request: WsRequest) -> Response:
+        """`GET /api/secrets/set` — create or update a secret.
+
+        With no ``value`` it edits metadata only (the stored value is
+        kept) so scope / description can be changed without re-entering
+        the credential.
+        """
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from durin.security.secrets import (
+            SecretStore,
+            get_secret_store,
+            is_valid_secret_name,
+        )
+
+        query = _parse_query(request.path)
+        name = (_query_first(query, "name") or "").strip()
+        if not is_valid_secret_name(name):
+            return _http_error(400, "invalid secret name (use UPPER_SNAKE)")
+        service = (_query_first(query, "service") or "").strip()
+        if not service:
+            return _http_error(400, "service is required")
+
+        store = SecretStore().load()
+        existing = store.get(name)
+        value = _query_first(query, "value")
+        if not value:
+            if existing is None:
+                return _http_error(400, "value is required for a new secret")
+            value = existing.value  # metadata-only edit
+
+        scope_raw = _query_first(query, "scope") or ""
+        scope = [tag.strip() for tag in scope_raw.split(",") if tag.strip()]
+        store.put(
+            name,
+            value=value,
+            service=service,
+            account=(_query_first(query, "account") or "").strip() or None,
+            description=(_query_first(query, "description") or "").strip(),
+            scope=scope,
+            origin=existing.origin if existing else "webui",
+        )
+        store.save()
+        get_secret_store(reload=True)
+        return _http_json_response({"ok": True, "name": name})
+
+    def _handle_secret_delete(self, request: WsRequest) -> Response:
+        """`GET /api/secrets/delete` — remove a secret."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from durin.security.secrets import SecretStore, get_secret_store
+
+        name = (_query_first(_parse_query(request.path), "name") or "").strip()
+        store = SecretStore().load()
+        if not store.remove(name):
+            return _http_error(404, "no such secret")
+        store.save()
+        get_secret_store(reload=True)
+        return _http_json_response({"ok": True})
 
     @staticmethod
     def _is_websocket_channel_session_key(key: str) -> bool:

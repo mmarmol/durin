@@ -65,7 +65,8 @@
     },
     "nav": {
       "general": "General",
-      "byok": "BYOK"
+      "byok": "BYOK",
+      "secrets": "Secrets"
     },
     "sections": {
       "interface": "Interface",
@@ -145,6 +146,29 @@
         "missingCredential": "Add the required credential before saving.",
         "saveHint": "Changes apply to new web search requests."
       }
+    },
+    "secrets": {
+      "title": "Secrets",
+      "description": "API keys and tokens, stored in ~/.durin/secrets.json (mode 0600), outside config.json. Values are never shown here.",
+      "empty": "No secrets stored yet.",
+      "loadError": "Could not load secrets.",
+      "addTitle": "Add a secret",
+      "stored": "Stored secrets",
+      "fieldName": "Name",
+      "fieldService": "Service",
+      "fieldAccount": "Account",
+      "fieldDescription": "Description",
+      "fieldScope": "Scope",
+      "fieldValue": "Value",
+      "hintName": "UPPER_SNAKE — also the environment variable name in exec.",
+      "hintService": "What the secret is for, e.g. atlassian or provider:openai.",
+      "hintScope": "Comma-separated consumer tags: exec, skill:*, channel:telegram.",
+      "hintValue": "Leave blank when editing to keep the stored value.",
+      "optional": "optional",
+      "save": "Save secret",
+      "saving": "Saving…",
+      "delete": "Delete",
+      "confirmDelete": "Delete this secret?"
     }
   },
   "chat": {

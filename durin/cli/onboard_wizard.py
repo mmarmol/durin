@@ -355,32 +355,17 @@ def _all_provider_rows(config: Config) -> list[tuple[str, str, bool, bool]]:
 def _store_as_secret(
     *, name: str, value: str, service: str, scope: list[str], description: str = "",
 ) -> str:
-    """Store *value* in the secret store; return its ``${secret:}`` reference.
+    """Store a wizard credential in the secret store; return its reference.
 
-    The plaintext lands only in ``secrets.json`` (mode 0600), never in
-    ``config.json``. Used by every wizard credential prompt. See
-    ``docs/11_secrets_design.md``.
+    Thin wrapper over :func:`durin.security.secrets.store_secret` — the
+    plaintext lands only in ``secrets.json`` (0600), never in config.
     """
-    import re
+    from durin.security.secrets import store_secret
 
-    from durin.security.secrets import SecretStore, get_secret_store, make_ref
-
-    secret_name = re.sub(r"[^A-Z0-9_]", "_", name.upper())
-    if not secret_name or not secret_name[0].isalpha():
-        secret_name = "S_" + secret_name
-
-    store = SecretStore().load()
-    store.put(
-        secret_name,
-        value=value,
-        service=service,
-        description=description,
-        scope=scope,
-        origin="wizard",
+    return store_secret(
+        name, value, service=service, scope=scope,
+        description=description, origin="wizard",
     )
-    store.save()
-    get_secret_store(reload=True)  # refresh the cache so a model test resolves
-    return make_ref(secret_name)
 
 
 def _set_provider_api_key(config: Config, provider_name: str, api_key: str) -> None:

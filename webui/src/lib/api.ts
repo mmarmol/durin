@@ -1,6 +1,8 @@
 import type {
   ChatSummary,
   ProviderSettingsUpdate,
+  SecretEntry,
+  SecretSetInput,
   SettingsPayload,
   SettingsUpdate,
   SlashCommand,
@@ -164,4 +166,39 @@ export async function updateWebSearchSettings(
     `${base}/api/settings/web-search/update?${query}`,
     token,
   );
+}
+
+export async function listSecrets(
+  token: string,
+  base: string = "",
+): Promise<SecretEntry[]> {
+  const res = await request<{ secrets: SecretEntry[] }>(
+    `${base}/api/secrets`,
+    token,
+  );
+  return res.secrets;
+}
+
+export async function setSecret(
+  token: string,
+  input: SecretSetInput,
+  base: string = "",
+): Promise<void> {
+  const query = new URLSearchParams();
+  query.set("name", input.name);
+  query.set("service", input.service);
+  if (input.account !== undefined) query.set("account", input.account);
+  if (input.description !== undefined) query.set("description", input.description);
+  if (input.scope !== undefined) query.set("scope", input.scope.join(","));
+  if (input.value !== undefined && input.value !== "") query.set("value", input.value);
+  await request<{ ok: boolean }>(`${base}/api/secrets/set?${query}`, token);
+}
+
+export async function deleteSecret(
+  token: string,
+  name: string,
+  base: string = "",
+): Promise<void> {
+  const query = new URLSearchParams({ name });
+  await request<{ ok: boolean }>(`${base}/api/secrets/delete?${query}`, token);
 }

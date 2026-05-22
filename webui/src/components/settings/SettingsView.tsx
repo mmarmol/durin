@@ -15,9 +15,12 @@ import {
   Grid3X3,
   Hexagon,
   Loader2,
+  Lock,
   LogOut,
   KeyRound,
   Layers,
+  Plus,
+  Trash2,
   Moon,
   Orbit,
   RotateCcw,
@@ -40,16 +43,19 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import {
+  deleteSecret,
   fetchSettings,
+  listSecrets,
+  setSecret,
   updateProviderSettings,
   updateSettings,
   updateWebSearchSettings,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useClient } from "@/providers/ClientProvider";
-import type { SettingsPayload, WebSearchSettingsUpdate } from "@/lib/types";
+import type { SecretEntry, SettingsPayload, WebSearchSettingsUpdate } from "@/lib/types";
 
-type SettingsSectionKey = "general" | "byok";
+type SettingsSectionKey = "general" | "byok" | "secrets";
 type ByokPaneKey = "llm" | "web-search";
 
 interface SettingsViewProps {
@@ -362,6 +368,8 @@ export function SettingsView({
                   isRestarting={isRestarting}
                   onOpenByok={() => setActiveSection("byok")}
                 />
+              ) : activeSection === "secrets" ? (
+                <SecretsSettings token={token} />
               ) : (
                 <ByokSettings
                   settings={settings}
@@ -412,6 +420,7 @@ export function SettingsView({
 const SETTINGS_NAV_ITEMS = [
   { key: "general", icon: Settings },
   { key: "byok", icon: KeyRound },
+  { key: "secrets", icon: Lock },
 ] as const;
 
 function SettingsSidebar({
@@ -1220,6 +1229,230 @@ function ProviderIcon({ provider }: { provider: string }) {
     <span className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-muted text-foreground/82 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.025)] dark:bg-muted/70">
       <Icon className="h-5 w-5" strokeWidth={2} aria-hidden />
     </span>
+  );
+}
+
+interface SecretFormState {
+  name: string;
+  service: string;
+  account: string;
+  description: string;
+  scope: string;
+  value: string;
+}
+
+const EMPTY_SECRET_FORM: SecretFormState = {
+  name: "",
+  service: "",
+  account: "",
+  description: "",
+  scope: "",
+  value: "",
+};
+
+function SecretsSettings({ token }: { token: string }) {
+  const { t } = useTranslation();
+  const [secrets, setSecrets] = useState<SecretEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [form, setForm] = useState<SecretFormState>(EMPTY_SECRET_FORM);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      setSecrets(await listSecrets(token));
+    } catch {
+      setError(t("settings.secrets.loadError"));
+    } finally {
+      setLoading(false);
+    }
+  }, [token, t]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const canSave =
+    form.name.trim() !== "" && form.service.trim() !== "" && !busy;
+
+  const onAdd = useCallback(async () => {
+    if (!canSave) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await setSecret(token, {
+        name: form.name.trim(),
+        service: form.service.trim(),
+        account: form.account.trim(),
+        description: form.description.trim(),
+        scope: form.scope
+          .split(",")
+          .map((tag) => tag.trim())
+          .filter(Boolean),
+        value: form.value,
+      });
+      setForm(EMPTY_SECRET_FORM);
+      await load();
+    } catch {
+      setError(t("settings.secrets.loadError"));
+    } finally {
+      setBusy(false);
+    }
+  }, [canSave, token, form, load, t]);
+
+  const onDelete = useCallback(
+    async (name: string) => {
+      if (!window.confirm(t("settings.secrets.confirmDelete"))) return;
+      setBusy(true);
+      setError(null);
+      try {
+        await deleteSecret(token, name);
+        await load();
+      } catch {
+        setError(t("settings.secrets.loadError"));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [token, load, t],
+  );
+
+  const field = (key: keyof SecretFormState) => (
+    e: React.ChangeEvent<HTMLInputElement>,
+  ) => setForm((prev) => ({ ...prev, [key]: e.target.value }));
+
+  return (
+    <div className="space-y-5">
+      <p className="px-1 text-[13px] leading-5 text-muted-foreground">
+        {t("settings.secrets.description")}
+      </p>
+
+      {error ? (
+        <div className="rounded-[18px] border border-destructive/20 bg-destructive/5 px-4 py-3 text-[13px] text-destructive">
+          {error}
+        </div>
+      ) : null}
+
+      <section>
+        <SettingsSectionTitle>{t("settings.secrets.stored")}</SettingsSectionTitle>
+        <SettingsGroup>
+          {loading ? (
+            <SettingsRow title={t("settings.status.loading")} />
+          ) : secrets.length === 0 ? (
+            <SettingsRow title={t("settings.secrets.empty")} />
+          ) : (
+            secrets.map((secret) => (
+              <SettingsRow
+                key={secret.name}
+                title={secret.name}
+                description={[
+                  secret.service,
+                  secret.account ? `· ${secret.account}` : "",
+                  secret.scope.length ? `· ${secret.scope.join(", ")}` : "",
+                  secret.description ? `— ${secret.description}` : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+              >
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={busy}
+                  onClick={() => onDelete(secret.name)}
+                  className="rounded-full text-destructive hover:text-destructive"
+                >
+                  <Trash2 className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+                  {t("settings.secrets.delete")}
+                </Button>
+              </SettingsRow>
+            ))
+          )}
+        </SettingsGroup>
+      </section>
+
+      <section>
+        <SettingsSectionTitle>{t("settings.secrets.addTitle")}</SettingsSectionTitle>
+        <SettingsGroup>
+          <SettingsRow
+            title={t("settings.secrets.fieldName")}
+            description={t("settings.secrets.hintName")}
+          >
+            <Input
+              value={form.name}
+              onChange={field("name")}
+              placeholder="ATLASSIAN_API_TOKEN"
+              className="w-[260px]"
+            />
+          </SettingsRow>
+          <SettingsRow
+            title={t("settings.secrets.fieldService")}
+            description={t("settings.secrets.hintService")}
+          >
+            <Input
+              value={form.service}
+              onChange={field("service")}
+              placeholder="atlassian"
+              className="w-[260px]"
+            />
+          </SettingsRow>
+          <SettingsRow
+            title={`${t("settings.secrets.fieldAccount")} (${t("settings.secrets.optional")})`}
+          >
+            <Input
+              value={form.account}
+              onChange={field("account")}
+              placeholder="work"
+              className="w-[260px]"
+            />
+          </SettingsRow>
+          <SettingsRow
+            title={`${t("settings.secrets.fieldDescription")} (${t("settings.secrets.optional")})`}
+          >
+            <Input
+              value={form.description}
+              onChange={field("description")}
+              className="w-[260px]"
+            />
+          </SettingsRow>
+          <SettingsRow
+            title={t("settings.secrets.fieldScope")}
+            description={t("settings.secrets.hintScope")}
+          >
+            <Input
+              value={form.scope}
+              onChange={field("scope")}
+              placeholder="exec, skill:*"
+              className="w-[260px]"
+            />
+          </SettingsRow>
+          <SettingsRow
+            title={t("settings.secrets.fieldValue")}
+            description={t("settings.secrets.hintValue")}
+          >
+            <Input
+              type="password"
+              value={form.value}
+              onChange={field("value")}
+              className="w-[260px]"
+            />
+          </SettingsRow>
+          <div className="flex items-center justify-end px-4 py-3 sm:px-5">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => void onAdd()}
+              disabled={!canSave}
+              className="rounded-full"
+            >
+              <Plus className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+              {busy ? t("settings.secrets.saving") : t("settings.secrets.save")}
+            </Button>
+          </div>
+        </SettingsGroup>
+      </section>
+    </div>
   );
 }
 
