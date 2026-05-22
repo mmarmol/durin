@@ -304,6 +304,21 @@ class ExecTool(Tool):
                 except (ProcessLookupError, ChildProcessError) as e:
                     logger.debug("Process already reaped or not found: {}", e)
 
+    @staticmethod
+    def _exec_scoped_secrets() -> dict[str, str]:
+        """Stored secrets whose ``scope`` authorizes the ``exec`` consumer.
+
+        These are injected into the subprocess env so scripts can read
+        them — the agent issues the command but never sees the values.
+        See ``docs/11_secrets_design.md`` §6.
+        """
+        try:
+            from durin.security.secrets import get_secret_store
+
+            return get_secret_store().collect_for("exec")
+        except Exception:  # noqa: BLE001
+            return {}
+
     def _build_env(self) -> dict[str, str]:
         """Build a minimal environment for subprocess execution.
 
@@ -311,8 +326,10 @@ class ExecTool(Tool):
         user's profile which sets PATH and other essentials.
 
         On Windows, ``cmd.exe`` has no login-profile mechanism, so a curated
-        set of system variables (including PATH) is forwarded.  API keys and
-        other secrets are still excluded.
+        set of system variables (including PATH) is forwarded.
+
+        Ambient API keys are NOT inherited. The only credentials present
+        are stored secrets explicitly granted the ``exec`` scope.
         """
         if _IS_WINDOWS:
             sr = os.environ.get("SYSTEMROOT", r"C:\Windows")
@@ -338,6 +355,7 @@ class ExecTool(Tool):
                 val = os.environ.get(key)
                 if val is not None:
                     env[key] = val
+            env.update(self._exec_scoped_secrets())
             return env
         home = os.environ.get("HOME", "/tmp")
         env = {
@@ -350,6 +368,7 @@ class ExecTool(Tool):
             val = os.environ.get(key)
             if val is not None:
                 env[key] = val
+        env.update(self._exec_scoped_secrets())
         return env
 
     def _guard_command(self, command: str, cwd: str) -> str | None:

@@ -38,7 +38,13 @@ __all__ = [
     "is_valid_secret_name",
     "get_secret_store",
     "resolve_secret",
+    "SecretRedactor",
+    "redact_secrets",
 ]
+
+# Secret values shorter than this are not redacted — too likely to
+# collide with innocuous substrings of normal output.
+_MIN_REDACTABLE_LEN = 8
 
 # Secret names double as environment variable names during `exec`
 # injection, so they must be env-var-safe.
@@ -307,6 +313,73 @@ def resolve_secret(value: Any) -> Any:
     if not is_secret_ref(value):
         return value
     return get_secret_store().resolve(value)
+
+
+class SecretRedactor:
+    """Replaces stored secret values with ``«redacted:NAME»`` markers.
+
+    Built from the store; used to keep secret values out of anything
+    the model or the user sees (tool results, output). Values shorter
+    than :data:`_MIN_REDACTABLE_LEN` are ignored.
+    """
+
+    def __init__(self, secrets: dict[str, str]) -> None:
+        # Longest values first so a value that is a substring of another
+        # is not masked prematurely.
+        self._items: list[tuple[str, str]] = sorted(
+            (
+                (value, name)
+                for name, value in secrets.items()
+                if isinstance(value, str) and len(value) >= _MIN_REDACTABLE_LEN
+            ),
+            key=lambda pair: len(pair[0]),
+            reverse=True,
+        )
+
+    @property
+    def active(self) -> bool:
+        return bool(self._items)
+
+    def redact_text(self, text: str) -> str:
+        for value, name in self._items:
+            if value in text:
+                text = text.replace(value, f"«redacted:{name}»")
+        return text
+
+    def redact(self, content: Any) -> Any:
+        """Redact a tool-result content — a string or a list of blocks."""
+        if not self._items:
+            return content
+        if isinstance(content, str):
+            return self.redact_text(content)
+        if isinstance(content, list):
+            out: list[Any] = []
+            for block in content:
+                if isinstance(block, dict):
+                    b = dict(block)
+                    for key in ("text", "content"):
+                        if isinstance(b.get(key), str):
+                            b[key] = self.redact_text(b[key])
+                    out.append(b)
+                elif isinstance(block, str):
+                    out.append(self.redact_text(block))
+                else:
+                    out.append(block)
+            return out
+        return content
+
+
+def build_redactor() -> SecretRedactor:
+    """Build a redactor from every value in the process-wide store."""
+    store = get_secret_store()
+    return SecretRedactor(
+        {name: entry.value for name, entry in store.all().items()}
+    )
+
+
+def redact_secrets(content: Any) -> Any:
+    """Convenience: redact *content* against the current store."""
+    return build_redactor().redact(content)
 
 
 def migrate_plaintext_provider_keys(config_path: Path | None = None) -> list[str]:
