@@ -9,6 +9,7 @@ import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { useSessions } from "@/hooks/useSessions";
 import { useTheme } from "@/hooks/useTheme";
 import { cn } from "@/lib/utils";
+import { setApiReauthHandler } from "@/lib/api";
 import {
   clearSavedSecret,
   deriveWsUrl,
@@ -156,6 +157,22 @@ export default function App() {
     const saved = loadSavedSecret();
     return bootstrapWithSecret(saved);
   }, [bootstrapWithSecret]);
+
+  // Recover REST calls after a gateway restart: a restart wipes the
+  // in-memory token pool, so the cached token 401s. On a 401, `request`
+  // calls this to mint a fresh token and retry — no page reload needed.
+  useEffect(() => {
+    setApiReauthHandler(async () => {
+      try {
+        const boot = await fetchBootstrap("", loadSavedSecret());
+        setState((s) => (s.status === "ready" ? { ...s, token: boot.token } : s));
+        return boot.token;
+      } catch {
+        return null;
+      }
+    });
+    return () => setApiReauthHandler(null);
+  }, []);
 
   if (state.status === "loading") {
     return (
