@@ -303,6 +303,39 @@ def save_config(config: Config, config_path: Path | None = None) -> None:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 
+def backup_config(config_path: Path | None = None) -> Path | None:
+    """Snapshot the current on-disk config before a tool rewrites it.
+
+    Copies the split directory (or the legacy monolith) to a
+    timestamped sibling so a botched `durin onboard` re-run can be
+    reverted. Returns the backup path, or ``None`` when there is
+    nothing on disk to back up.
+    """
+    import shutil
+    from datetime import datetime
+
+    path = config_path or get_config_path()
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    if _is_split_layout(path):
+        src = _split_dir(path)
+        dest = src.with_name(src.name + f".bak.{stamp}")
+        try:
+            shutil.copytree(src, dest)
+        except OSError as e:
+            logger.warning("Could not back up config dir: {}", e)
+            return None
+        return dest
+    if path.exists():
+        dest = path.with_suffix(path.suffix + f".bak.{stamp}")
+        try:
+            shutil.copy2(path, dest)
+        except OSError as e:
+            logger.warning("Could not back up config file: {}", e)
+            return None
+        return dest
+    return None
+
+
 def _all_values_empty(section: dict) -> bool:
     """True when every value in ``section`` is null / empty string / empty list/dict."""
     for v in section.values():

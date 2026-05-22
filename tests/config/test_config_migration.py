@@ -152,6 +152,7 @@ def test_onboard_refresh_backfills_missing_channel_fields(tmp_path, monkeypatch)
         "durin.cli.onboard.run_onboard",
         lambda initial_config: OnboardResult(config=initial_config, should_save=True),
     )
+    monkeypatch.setattr("durin.cli.commands._stdin_is_interactive", lambda: True)
     result = runner.invoke(app, ["onboard", "--advanced"])
 
     assert result.exit_code == 0

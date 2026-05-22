@@ -36,10 +36,20 @@ from durin.config.schema import (
 __all__ = [
     "WizardResult",
     "run_wizard",
+    "run_section",
+    "SECTIONS",
     "PROVIDER_CHOICES",
     "DEFAULT_MODELS",
     "apply_model_capabilities",
 ]
+
+# Sections the user can jump straight into via `durin onboard <section>`.
+# "model" re-runs provider/key/model + the capability screen; the rest
+# map to the optional-feature sub-wizards.
+SECTIONS: tuple[str, ...] = (
+    "model", "memory", "vision", "audio", "image-gen", "web",
+    "dashboard", "channels",
+)
 
 
 def apply_model_capabilities(config: Config, model: str, provider: str) -> list[str]:
@@ -129,6 +139,22 @@ class WizardResult:
     extras_to_install: list[str] = field(default_factory=list)
     cancelled: bool = False
     summary_lines: list[str] = field(default_factory=list)
+    availability_lines: list[str] = field(default_factory=list)
+
+
+def _load_questionary(q: Any | None) -> Any:
+    """Return the questionary module (or the injected mock for tests)."""
+    if q is not None:
+        return q
+    try:
+        import questionary  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise RuntimeError(
+            "The onboarding wizard needs the 'questionary' package. "
+            "Run `pip install questionary` or use `durin onboard --no-wizard` "
+            "to just write defaults."
+        ) from exc
+    return questionary
 
 
 def run_wizard(initial_config: Config, *, q: Any | None = None) -> WizardResult:
@@ -138,26 +164,21 @@ def run_wizard(initial_config: Config, *, q: Any | None = None) -> WizardResult:
     surface as :mod:`questionary` to drive the wizard programmatically.
     When unset we import questionary lazily (it's an optional dep).
     """
-    if q is None:
-        try:
-            import questionary as q  # type: ignore[no-redef]
-        except ImportError as exc:
-            raise RuntimeError(
-                "The onboarding wizard needs the 'questionary' package. "
-                "Run `pip install questionary` or use `durin onboard --no-wizard` "
-                "to just write defaults."
-            ) from exc
+    q = _load_questionary(q)
 
     config = initial_config.model_copy(deep=True)
     extras: set[str] = set()
     summary: list[str] = []
 
-    # ---- Stage 1: required ------------------------------------------
+    # ---- Stage 1: required — provider + default model ---------------
     if not _stage_provider_and_model(config, q, summary):
         return WizardResult(
             config=initial_config, extras_to_install=[],
             cancelled=True, summary_lines=summary,
         )
+
+    # ---- Stage 1b: model capabilities — offer aux models ------------
+    _stage_model_capabilities(config, q, summary)
 
     # ---- Stage 2: optional menu -------------------------------------
     _stage_optional_menu(config, extras, q, summary)
@@ -170,6 +191,45 @@ def run_wizard(initial_config: Config, *, q: Any | None = None) -> WizardResult:
         extras_to_install=sorted(extras),
         cancelled=False,
         summary_lines=summary,
+        availability_lines=_build_availability(config),
+    )
+
+
+def run_section(
+    initial_config: Config, section: str, *, q: Any | None = None,
+) -> WizardResult:
+    """Run a single onboarding section — `durin onboard <section>`.
+
+    Lets a user re-tune one thing (the model, channels, memory, …)
+    without walking the whole wizard. ``section`` must be one of
+    :data:`SECTIONS`.
+    """
+    q = _load_questionary(q)
+    if section not in SECTIONS:
+        raise ValueError(
+            f"Unknown section '{section}'. Valid: {', '.join(SECTIONS)}"
+        )
+
+    config = initial_config.model_copy(deep=True)
+    extras: set[str] = set()
+    summary: list[str] = []
+
+    if section == "model":
+        if not _stage_provider_and_model(config, q, summary):
+            return WizardResult(
+                config=initial_config, cancelled=True, summary_lines=summary,
+            )
+        _stage_model_capabilities(config, q, summary)
+    else:
+        feature_key = section.replace("-", "_")
+        _configure_feature(feature_key, config, extras, q, summary)
+
+    return WizardResult(
+        config=config,
+        extras_to_install=sorted(extras),
+        cancelled=False,
+        summary_lines=summary,
+        availability_lines=_build_availability(config),
     )
 
 
@@ -201,15 +261,19 @@ def _provider_is_configured(config: Config) -> bool:
     )
 
 
-def _test_configured_model(q: Any) -> None:
-    """Run a real round-trip against the on-disk default model + print the result."""
+def _test_model(config: Config) -> None:
+    """Run a real round-trip against ``config``'s default model + print the result.
+
+    Pings the *in-memory* config so a model the user just picked (but
+    hasn't saved yet) can be verified before the wizard finishes.
+    """
     try:
         from durin.cli.doctor import check_model_ping
     except Exception as e:  # noqa: BLE001
         print(f"  Could not run the model test: {e}")
         return
     print("  Testing the model (a real round-trip)…")
-    result = check_model_ping()
+    result = check_model_ping(cfg=config)
     if result.status == "ok":
         print(f"  ✓ {result.message}")
     else:
@@ -243,29 +307,29 @@ def _stage_provider_and_model(config: Config, q: Any, summary: list[str]) -> boo
                 summary.append(f"Provider: {d.provider} ({d.model}) — kept")
                 return True
             if action.startswith("Test"):
-                _test_configured_model(q)
+                _test_model(config)
                 continue  # loop back to the keep/test/change menu
             # "Change …" → fall through to the full pick flow below.
             break
 
-    # Show every provider with its current state — configured providers
-    # are marked, so the user sees what they have and edits any of them
-    # (a settings-list, not a blind first-run pick).
+    # Show EVERY provider durin supports (not just the curated 6),
+    # sorted so the current default is first, then already-configured
+    # ones, then the rest alphabetically. A settings-list, not a blind
+    # first-run pick.
     label_to_choice: dict[str, tuple[str, str]] = {}
     choices: list[str] = []
-    for base_label, name, model in PROVIDER_CHOICES:
-        provider_obj = getattr(config.providers, name, None)
-        configured = bool(provider_obj and getattr(provider_obj, "api_key", None))
-        is_default = config.agents.defaults.provider == name
+    for name, label, configured, is_default in _all_provider_rows(config):
+        recommended = next(
+            (m for lbl, n, m in PROVIDER_CHOICES if n == name), ""
+        )
         tag = "✓ configured" if configured else "— not set"
         if is_default:
-            tag += ", current default"
-        short = base_label.split(" (")[0]
-        display = f"{short:<34} {tag}"
-        label_to_choice[display] = (name, model)
+            tag = "★ default · " + tag
+        display = f"{label:<26} {tag}"
+        label_to_choice[display] = (name, recommended)
         choices.append(display)
     chosen_label = q.select(
-        "Pick a provider to set up or edit:",
+        "Pick a provider to set up or change (default ★ is at the top):",
         choices=choices,
     ).ask()
     if chosen_label is None:
@@ -309,6 +373,14 @@ def _stage_provider_and_model(config: Config, q: Any, summary: list[str]) -> boo
     # the model's known capability snapshot.
     for line in apply_model_capabilities(config, model_pick, provider_name):
         summary.append(line)
+
+    # Verify the just-picked model with a real round-trip before the
+    # user moves on — catches a typo'd model id or a bad key now,
+    # instead of at the first real prompt.
+    if q.confirm(
+        "Test this model now? (a real round-trip)", default=True,
+    ).ask():
+        _test_model(config)
     return True
 
 
@@ -320,6 +392,100 @@ def _set_provider_api_key(config: Config, provider_name: str, api_key: str) -> N
         # Unknown name — treat as `custom` so the key isn't lost.
         provider_obj = providers.custom
     provider_obj.api_key = api_key
+
+
+def _all_provider_rows(config: Config) -> list[tuple[str, str, bool, bool]]:
+    """Every provider durin supports, sorted default → configured → rest.
+
+    Returns ``(name, label, configured, is_default)`` tuples. ``durin``
+    supports ~30 providers via the registry — the wizard surfaces all
+    of them, not a curated handful, so nothing is hidden.
+    """
+    from durin.providers.registry import PROVIDERS
+    from durin.utils.oauth import any_token_present
+
+    rows: list[tuple[str, str, bool, bool]] = []
+    default_name = config.agents.defaults.provider
+    for spec in PROVIDERS:
+        p = getattr(config.providers, spec.name, None)
+        if getattr(spec, "is_oauth", False):
+            configured = any_token_present(spec.name)
+        elif getattr(spec, "is_local", False):
+            configured = bool(p and getattr(p, "api_base", None))
+        else:
+            configured = bool(p and getattr(p, "api_key", None))
+        rows.append((spec.name, spec.label, configured, spec.name == default_name))
+    # Sort: the default first, then configured ones, then the rest A-Z.
+    rows.sort(key=lambda r: (not r[3], not r[2], r[1].lower()))
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# Stage 1b — Model capabilities + aux models
+# ---------------------------------------------------------------------------
+
+
+def _stage_model_capabilities(config: Config, q: Any, summary: list[str]) -> None:
+    """Show the default model's modality support and offer aux models.
+
+    durin's main model handles text. Vision (interpret_image) and audio
+    (interpret_audio) are handled by *auxiliary* models — used only
+    when the main model lacks that modality. This screen surfaces what
+    the default model supports and, for any gap, offers to configure
+    the corresponding aux model. All optional.
+
+    Note: there is no separate "subagent model" — subagents inherit the
+    main model. (If durin grows one, it'd be offered here too.)
+    """
+    d = config.agents.defaults
+    try:
+        from durin.providers.capabilities import get_model_capabilities
+
+        caps = get_model_capabilities(d.model, d.provider or None)
+    except Exception:  # noqa: BLE001
+        return
+
+    has_vision = bool(getattr(caps, "supports_vision", False))
+    has_audio = bool(getattr(caps, "supports_audio_input", False))
+    aux = getattr(config.agents, "aux_models", None)
+    aux_vision = aux is not None and getattr(aux, "vision", None) is not None
+    aux_audio = aux is not None and getattr(aux, "audio", None) is not None
+
+    # Show the capability snapshot.
+    def _mark(ok: bool) -> str:
+        return "✓" if ok else "✗"
+
+    print(f"\n  Default model: {d.model} ({d.provider})")
+    print(f"    text {_mark(True)}   vision {_mark(has_vision)}   audio {_mark(has_audio)}")
+
+    # Vision: offer an aux model only if the main model lacks it and
+    # none is configured yet.
+    if not has_vision and not aux_vision:
+        if q.confirm(
+            f"{d.model} can't see images. Configure a vision model "
+            "(for the interpret_image tool)?",
+            default=False,
+        ).ask():
+            _ask_aux_model(
+                config, q, summary, kind="vision",
+                examples="e.g. glm-5v-turbo, gpt-4o-mini, claude-haiku-4-5",
+            )
+    elif aux_vision:
+        summary.append(f"Vision: aux model {config.agents.aux_models.vision.model}")
+
+    # Audio: same logic.
+    if not has_audio and not aux_audio:
+        if q.confirm(
+            f"{d.model} can't hear audio. Configure an audio model "
+            "(for the interpret_audio tool)?",
+            default=False,
+        ).ask():
+            _ask_aux_model(
+                config, q, summary, kind="audio",
+                examples="e.g. gemini-2.5-flash, whisper-1",
+            )
+    elif aux_audio:
+        summary.append(f"Audio: aux model {config.agents.aux_models.audio.model}")
 
 
 # ---------------------------------------------------------------------------
@@ -390,6 +556,43 @@ def _detect_configured_features(config: Config) -> set[str]:
             found.add("channels")
             break
     return found
+
+
+def _build_availability(config: Config) -> list[str]:
+    """Build the end-of-wizard capability matrix.
+
+    One line per capability with ``✓`` (works) or ``✗`` (not set up)
+    and, for the gaps, the exact `durin onboard <section>` command that
+    fills them. The chat model is always ``✓`` — the required stage
+    won't let the wizard finish without it. Vision/audio also count the
+    main model's *native* modality support, not just an aux model.
+    """
+    configured = _detect_configured_features(config)
+    d = config.agents.defaults
+
+    native_vision = native_audio = False
+    try:
+        from durin.providers.capabilities import get_model_capabilities
+
+        caps = get_model_capabilities(d.model, d.provider or None)
+        native_vision = bool(getattr(caps, "supports_vision", False))
+        native_audio = bool(getattr(caps, "supports_audio_input", False))
+    except Exception:  # noqa: BLE001
+        pass
+
+    lines = [f"✓ Chat model — {d.provider} · {d.model}"]
+    for key, label, _desc in _OPTIONAL_FEATURES:
+        ok = key in configured
+        if key == "vision" and native_vision:
+            ok = True
+        if key == "audio" and native_audio:
+            ok = True
+        if ok:
+            lines.append(f"✓ {label}")
+        else:
+            section = key.replace("_", "-")
+            lines.append(f"✗ {label} — add with `durin onboard {section}`")
+    return lines
 
 
 def _stage_optional_menu(
@@ -484,34 +687,40 @@ def _configure_memory(
     return True
 
 
-def _configure_vision(config: Config, q: Any, summary: list[str]) -> bool:
-    if not q.confirm("Configure a dedicated vision model?", default=False).ask():
-        return False
-    inline_model = q.text(
-        "Vision model id (e.g. glm-5v-turbo, gpt-4o-mini, claude-haiku-4-5):"
-    ).ask()
+def _ask_aux_model(
+    config: Config, q: Any, summary: list[str], *, kind: str, examples: str,
+) -> bool:
+    """Prompt for an aux model id + provider and store it. ``kind`` is
+    'vision' or 'audio'. No confirm gate — the caller already asked."""
+    inline_model = q.text(f"{kind.capitalize()} model id ({examples}):").ask()
     if not inline_model:
         return False
     provider = q.text("Provider for that model (or 'auto'):", default="auto").ask() or "auto"
     config.agents.aux_models = config.agents.aux_models or _empty_aux()
-    config.agents.aux_models.vision = AuxModelConfig(model=inline_model, provider=provider)
-    summary.append(f"Vision model: {inline_model} ({provider})")
+    setattr(
+        config.agents.aux_models, kind,
+        AuxModelConfig(model=inline_model, provider=provider),
+    )
+    summary.append(f"{kind.capitalize()} model: {inline_model} ({provider})")
     return True
+
+
+def _configure_vision(config: Config, q: Any, summary: list[str]) -> bool:
+    if not q.confirm("Configure a dedicated vision model?", default=False).ask():
+        return False
+    return _ask_aux_model(
+        config, q, summary, kind="vision",
+        examples="e.g. glm-5v-turbo, gpt-4o-mini, claude-haiku-4-5",
+    )
 
 
 def _configure_audio(config: Config, q: Any, summary: list[str]) -> bool:
     if not q.confirm("Configure a dedicated audio transcription model?", default=False).ask():
         return False
-    inline_model = q.text(
-        "Audio model id (e.g. gemini-2.5-flash, whisper-1):"
-    ).ask()
-    if not inline_model:
-        return False
-    provider = q.text("Provider for that model (or 'auto'):", default="auto").ask() or "auto"
-    config.agents.aux_models = config.agents.aux_models or _empty_aux()
-    config.agents.aux_models.audio = AuxModelConfig(model=inline_model, provider=provider)
-    summary.append(f"Audio model: {inline_model} ({provider})")
-    return True
+    return _ask_aux_model(
+        config, q, summary, kind="audio",
+        examples="e.g. gemini-2.5-flash, whisper-1",
+    )
 
 
 def _configure_image_gen(config: Config, q: Any, summary: list[str]) -> bool:

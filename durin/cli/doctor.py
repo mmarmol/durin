@@ -22,7 +22,7 @@ import subprocess
 import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Callable, Literal
+from typing import TYPE_CHECKING, Callable, Literal
 
 import typer
 from rich.console import Console
@@ -30,6 +30,9 @@ from rich.table import Table
 
 from durin import __version__
 from durin.config.loader import get_config_path, load_config
+
+if TYPE_CHECKING:
+    from durin.config.schema import Config
 
 console = Console()
 
@@ -427,17 +430,22 @@ def check_memory_summary() -> CheckResult:
     )
 
 
-def check_model_ping(*, timeout: float = 15.0) -> CheckResult:
+def check_model_ping(*, timeout: float = 15.0, cfg: "Config | None" = None) -> CheckResult:
     """`--ping-model`: actually call the configured default model.
 
     A 3-token round-trip via the same provider/client the agent uses.
     Catches auth errors, model-not-found, network drops — things the
     plain ``--ping`` (GET on the base URL) can't see.
+
+    Pass ``cfg`` to ping an in-memory config (e.g. a model the
+    onboarding wizard just picked but hasn't saved yet); otherwise the
+    on-disk config is loaded.
     """
-    try:
-        cfg = load_config()
-    except Exception as e:  # noqa: BLE001
-        return CheckResult("model ping", "fail", f"Could not load config: {e}", category="providers")
+    if cfg is None:
+        try:
+            cfg = load_config()
+        except Exception as e:  # noqa: BLE001
+            return CheckResult("model ping", "fail", f"Could not load config: {e}", category="providers")
 
     try:
         from durin.providers.factory import make_provider
