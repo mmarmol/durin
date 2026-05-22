@@ -177,7 +177,10 @@ class ToolCallBubble(Vertical):
     def _summary_line(self) -> str:
         """One-line summary of what this call is operating on."""
         a = self._args if isinstance(self._args, dict) else {}
-        for key in ("path", "file_path", "filename", "url", "query", "command", "pattern"):
+        for key in (
+            "path", "file_path", "filename", "url", "query",
+            "command", "pattern", "question", "name",
+        ):
             value = a.get(key)
             if isinstance(value, str) and value:
                 return value if len(value) <= 80 else value[:77] + "…"
@@ -226,6 +229,14 @@ class ToolCallBubble(Vertical):
         if self._name == "exec":
             a = self._args if isinstance(self._args, dict) else {}
             return _exec_renderable(str(a.get("command") or ""), output=None)
+        if self._name == "ask_user_question":
+            a = self._args if isinstance(self._args, dict) else {}
+            return _ask_user_renderable(
+                str(a.get("question") or ""), _option_list(a.get("options"))
+            )
+        if self._name == "request_secret":
+            a = self._args if isinstance(self._args, dict) else {}
+            return _request_secret_renderable(a, None)
         # Default: show the args as JSON-ish.
         return _args_text(self._args)
 
@@ -244,6 +255,14 @@ class ToolCallBubble(Vertical):
                 str(a.get("command") or ""),
                 output=result_text,
             )
+        if self._name == "ask_user_question":
+            a = self._args if isinstance(self._args, dict) else {}
+            return _ask_user_renderable(
+                str(a.get("question") or ""), _option_list(a.get("options"))
+            )
+        if self._name == "request_secret":
+            a = self._args if isinstance(self._args, dict) else {}
+            return _request_secret_renderable(a, result_text)
         if self._name in ("read_file", "list_dir", "grep"):
             text = _stringify_result(result, limit=800)
             return _linkify(text) if text else _args_text(self._args)
@@ -448,6 +467,57 @@ def _exec_renderable(command: str, *, output: str | None) -> Text:
         return text
     text.append("\n")
     text.append(_linkify(output))
+    return text
+
+
+def _option_list(options: Any) -> list[str]:
+    """Normalise an `ask_user_question` ``options`` argument to a clean list."""
+    if not isinstance(options, (list, tuple)):
+        return []
+    return [str(o).strip() for o in options if str(o).strip()]
+
+
+def _ask_user_renderable(question: str, options: list[str]) -> Text:
+    """Render ``ask_user_question``: the question, then numbered options.
+
+    Built from the call arguments — the raw tool result is an internal
+    ``YIELD TO USER`` instruction the user should never see.
+    """
+    text = Text()
+    text.append("❓ ", style="bold yellow")
+    text.append(question or "(no question)", style="default")
+    for index, option in enumerate(options, start=1):
+        text.append(f"\n   {index}. ", style="cyan")
+        text.append(option, style="default")
+    return text
+
+
+def _request_secret_renderable(args: Any, result: str | None) -> Text:
+    """Render ``request_secret``: what is needed and the command to store it.
+
+    The secret value never flows through here — only the request and,
+    when the credential is still missing, the exact ``durin secret set``
+    command the user runs in their own terminal.
+    """
+    a = args if isinstance(args, dict) else {}
+    name = str(a.get("name") or "").strip()
+    service = str(a.get("service") or "").strip()
+    purpose = str(a.get("purpose") or "").strip()
+    text = Text()
+    text.append("🔑 ", style="bold yellow")
+    text.append(name or "(unnamed secret)", style="bold")
+    if service:
+        text.append(f"  · {service}", style="dim")
+    if purpose:
+        text.append(f"\n   {purpose}", style="default")
+    if result and "already exists" in result:
+        text.append("\n   already stored — nothing to do", style="green")
+    elif name and service:
+        text.append("\n   $ ", style="bold cyan")
+        text.append(
+            f"durin secret set {name} --service {service} --scope exec",
+            style="default",
+        )
     return text
 
 

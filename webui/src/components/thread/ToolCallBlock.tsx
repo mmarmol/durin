@@ -35,10 +35,21 @@ function argString(args: unknown, key: string): string | null {
   return typeof v === "string" && v ? v : null;
 }
 
+/** Read an argument expected to be a list of strings (e.g. ask_user options). */
+function argStringList(args: unknown, key: string): string[] {
+  if (!args || typeof args !== "object") return [];
+  const v = (args as Record<string, unknown>)[key];
+  if (!Array.isArray(v)) return [];
+  return v.map((o) => String(o).trim()).filter(Boolean);
+}
+
 /** One-line summary of what the call operates on (path / command / url / query). */
 function summaryLine(ev: ToolProgressEvent): string {
   const a = ev.arguments;
-  for (const key of ["path", "file_path", "filename", "command", "url", "query", "pattern"]) {
+  for (const key of [
+    "path", "file_path", "filename", "command",
+    "url", "query", "pattern", "question", "name",
+  ]) {
     const v = argString(a, key);
     if (v) return v.length <= 90 ? v : v.slice(0, 87) + "…";
   }
@@ -148,6 +159,49 @@ function renderBodyLines(ev: ToolProgressEvent): BodyLine[] {
       for (const l of out.split("\n")) {
         lines.push({ text: l, className: "text-muted-foreground/90" });
       }
+    }
+    return lines;
+  }
+
+  // ask_user_question: the question + numbered options, built from the
+  // call arguments — the raw result is an internal YIELD instruction.
+  if (name === "ask_user_question") {
+    const question = argString(ev.arguments, "question") ?? "";
+    const lines: BodyLine[] = [];
+    if (question) {
+      lines.push({ text: `❓ ${question}`, className: "text-foreground/90" });
+    }
+    argStringList(ev.arguments, "options").forEach((opt, i) => {
+      lines.push({ text: `   ${i + 1}. ${opt}`, className: "text-cyan-500/90" });
+    });
+    return lines;
+  }
+
+  // request_secret: what is needed + the command to store it. The
+  // secret value never flows through here.
+  if (name === "request_secret") {
+    const secretName = argString(ev.arguments, "name") ?? "";
+    const service = argString(ev.arguments, "service") ?? "";
+    const purpose = argString(ev.arguments, "purpose") ?? "";
+    const lines: BodyLine[] = [
+      {
+        text: `🔑 ${secretName || "(unnamed secret)"}${service ? `  · ${service}` : ""}`,
+        className: "text-foreground/90",
+      },
+    ];
+    if (purpose) {
+      lines.push({ text: `   ${purpose}`, className: "text-muted-foreground/90" });
+    }
+    if (resultText(ev.result).includes("already exists")) {
+      lines.push({
+        text: "   already stored — nothing to do",
+        className: "text-emerald-500/90",
+      });
+    } else if (secretName && service) {
+      lines.push({
+        text: `   $ durin secret set ${secretName} --service ${service} --scope exec`,
+        className: "text-cyan-500/90",
+      });
     }
     return lines;
   }
