@@ -1110,3 +1110,28 @@ fragile (prompt_toolkit terminal state; no TTY under gateway/channels).
 The yield form is bulletproof and keeps the value maximally isolated —
 the user types it straight into the CLI store, it never reaches the
 agent process at all.
+
+### Secrets — install walkthrough findings (2026-05-22)
+
+Did a full uninstall → clean pipx install → reconfigure walkthrough.
+Verified end to end: agent CLI (`durin agent -m`), and a real web
+session (HTTP bootstrap → ws token → streaming reply). Seven UX/bug
+fixes came out of it:
+
+1. `config set` now bootstraps a default config instead of demanding
+   `onboard` first.
+2. `config show` shows `${secret:}` references verbatim — only literal
+   secrets are masked (a reference is not a secret).
+3. `durin uninstall` stops the gateway daemon first (was orphaning it).
+4. `onboard --no-wizard` next-steps no longer points at the wrong file.
+5. New `durin config import <path>` — replicate a setup without the
+   wizard; migrates plaintext keys on the way in.
+6. `durin doctor` warns on multiple `durin` on PATH (venv + pipx).
+7. **Critical**: `config show/get/set/edit` were broken on the split
+   layout — `load_raw_config` read the `{"_layout":"split"}` marker, so
+   `config set` validated that to an all-defaults Config and saved it,
+   silently wiping every other value. `load_raw_config` now delegates
+   to the layout-aware `read_persisted_config`.
+
+`durin --help`'s command-group epilog is regenerated from the live
+registry so it can't go stale.
