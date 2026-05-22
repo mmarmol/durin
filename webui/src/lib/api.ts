@@ -20,10 +20,23 @@ export class ApiError extends Error {
   }
 }
 
+let reauthHandler: (() => Promise<string | null>) | null = null;
+
+/** Register a callback that mints a fresh token. When a REST call gets
+ *  a 401 — the gateway restarted and wiped its in-memory token pool, so
+ *  the cached token is now stale — `request` calls this, then retries
+ *  once. Without it, every REST call stays broken until a page reload. */
+export function setApiReauthHandler(
+  handler: (() => Promise<string | null>) | null,
+): void {
+  reauthHandler = handler;
+}
+
 async function request<T>(
   url: string,
   token: string,
   init?: RequestInit,
+  retryOn401 = true,
 ): Promise<T> {
   const res = await fetch(url, {
     ...(init ?? {}),
@@ -33,6 +46,12 @@ async function request<T>(
     },
     credentials: "same-origin",
   });
+  if (res.status === 401 && retryOn401 && reauthHandler) {
+    const fresh = await reauthHandler();
+    if (fresh && fresh !== token) {
+      return request<T>(url, fresh, init, false);
+    }
+  }
   if (!res.ok) {
     throw new ApiError(res.status, `HTTP ${res.status}`);
   }

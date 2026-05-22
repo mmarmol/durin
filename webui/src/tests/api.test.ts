@@ -2,9 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   deleteSession,
+  fetchSettings,
   fetchWebuiThread,
   listSessions,
   listSlashCommands,
+  setApiReauthHandler,
   updateProviderSettings,
   updateSettings,
   updateWebSearchSettings,
@@ -154,5 +156,38 @@ describe("webui API helpers", () => {
         headers: { Authorization: "Bearer tok" },
       }),
     );
+  });
+
+  it("re-bootstraps and retries once when a request gets 401", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 401 } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ agent: { model: "glm-5.1" } }),
+      } as Response);
+    vi.stubGlobal("fetch", fetchMock);
+    setApiReauthHandler(async () => "fresh-token");
+
+    await fetchSettings("stale-token");
+
+    // First call used the stale token, the retry used the fresh one.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe("Bearer stale-token");
+    expect(fetchMock.mock.calls[1][1].headers.Authorization).toBe("Bearer fresh-token");
+    setApiReauthHandler(null);
+  });
+
+  it("does not loop when the retry also 401s", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({ ok: false, status: 401 } as Response);
+    vi.stubGlobal("fetch", fetchMock);
+    setApiReauthHandler(async () => "fresh-token");
+
+    await expect(fetchSettings("stale-token")).rejects.toMatchObject({ status: 401 });
+    expect(fetchMock).toHaveBeenCalledTimes(2); // original + one retry, no loop
+    setApiReauthHandler(null);
   });
 });
