@@ -1192,7 +1192,8 @@ class WebSocketChannel(BaseChannel):
         try:
             from durin.providers.capabilities import _load_capabilities_snapshot
 
-            models = (_load_capabilities_snapshot() or {}).get("models") or {}
+            # _load_capabilities_snapshot returns the models dict directly.
+            models = _load_capabilities_snapshot() or {}
             catalog = sorted(
                 mid
                 for mid, info in models.items()
