@@ -44,6 +44,27 @@ class _ScriptedQuestionary:
         self.calls.append((kind, args, kwargs))
         nxt = self._next_answer()
 
+        # For `select`, choice labels carry dynamic state text (e.g.
+        # "Z.AI ...  — not set"). Tests script a substring; resolve it
+        # to the real choice so they survive label-format changes.
+        if kind == "select" and isinstance(nxt, str):
+            choices = kwargs.get("choices")
+            if not choices and len(args) >= 2:
+                choices = args[1]
+            if choices:
+                exact = [c for c in choices if c == nxt]
+                if not exact:
+                    # Prefer a prefix match (unambiguous — "OpenAI" is a
+                    # prefix of the OpenAI row but not of "Custom
+                    # OpenAI-…"); fall back to a unique substring match.
+                    pref = [c for c in choices if isinstance(c, str) and c.startswith(nxt)]
+                    if len(pref) == 1:
+                        nxt = pref[0]
+                    else:
+                        subs = [c for c in choices if isinstance(c, str) and nxt in c]
+                        if len(subs) == 1:
+                            nxt = subs[0]
+
         class _Stub:
             def ask(_self):  # noqa: ANN001
                 return nxt
@@ -84,7 +105,7 @@ def test_wizard_minimal_happy_path_sets_provider_and_model() -> None:
     everything else, and the resulting Config carries the right fields."""
     answers = [
         # Stage 1: required.
-        "Z.AI Coding Plan (recommended)",   # select provider
+        "Z.AI Coding Plan",   # select provider
         "sk-zhipu-test",                     # password api_key
         "glm-5.1",                           # select default model
         # Stage 2: skip everything.
@@ -108,7 +129,7 @@ def test_wizard_memory_feature_records_extra_and_writes_embedding() -> None:
     """Configuring memory toggles the [memory] extra and sets the model."""
     answers = [
         # Stage 1.
-        "Z.AI Coding Plan (recommended)", "sk-x", "glm-5.1",
+        "Z.AI Coding Plan", "sk-x", "glm-5.1",
         # Stage 2: enter memory submenu.
         "[ ] 📁 Vector memory",
         True,                                # confirm enable
@@ -126,21 +147,41 @@ def test_wizard_memory_feature_records_extra_and_writes_embedding() -> None:
     assert any("memory" in s.lower() for s in result.summary_lines)
 
 
-def test_wizard_web_feature_records_extra() -> None:
+def test_wizard_web_feature_records_extra_and_default_backend() -> None:
     answers = [
-        "Z.AI Coding Plan (recommended)", "sk-x", "glm-5.1",
-        "[ ] 🔍 Web search + fetch", True,
+        "Z.AI Coding Plan", "sk-x", "glm-5.1",
+        "🔍 Web search + fetch",   # enter web feature
+        True,                       # confirm enable
+        "DuckDuckGo",               # search backend (no key needed)
         "→ Continue (finish onboarding)",
         "",
     ]
     q = _ScriptedQuestionary(answers)
     result = run_wizard(Config(), q=q)
     assert "web" in result.extras_to_install
+    assert result.config.tools.web.search.provider == "duckduckgo"
+
+
+def test_wizard_web_feature_brave_backend_prompts_for_key() -> None:
+    """Picking Brave (needs a key) must prompt for and store the API key."""
+    answers = [
+        "Z.AI Coding Plan", "sk-x", "glm-5.1",
+        "🔍 Web search + fetch",
+        True,
+        "Brave Search",             # needs API key
+        "brave-key-xyz",            # password prompt
+        "→ Continue (finish onboarding)",
+        "",
+    ]
+    q = _ScriptedQuestionary(answers)
+    result = run_wizard(Config(), q=q)
+    assert result.config.tools.web.search.provider == "brave"
+    assert result.config.tools.web.search.api_key == "brave-key-xyz"
 
 
 def test_wizard_vision_feature_sets_aux_model() -> None:
     answers = [
-        "Z.AI Coding Plan (recommended)", "sk-x", "glm-5.1",
+        "Z.AI Coding Plan", "sk-x", "glm-5.1",
         "[ ] 👁️  Vision (interpret_image)", True,
         "glm-5v-turbo",                     # vision model id
         "zhipu",                             # provider
@@ -158,7 +199,7 @@ def test_wizard_vision_feature_sets_aux_model() -> None:
 def test_wizard_skip_everything_path() -> None:
     """`× Skip everything` exits stage 2 immediately with nothing extra."""
     answers = [
-        "Z.AI Coding Plan (recommended)", "sk-x", "glm-5.1",
+        "Z.AI Coding Plan", "sk-x", "glm-5.1",
         "× Skip everything (use defaults)",
         "",
     ]
@@ -202,7 +243,7 @@ def test_wizard_empty_api_key_is_accepted_for_local_providers() -> None:
 
 def test_wizard_workspace_override_is_persisted() -> None:
     answers = [
-        "Z.AI Coding Plan (recommended)", "sk-x", "glm-5.1",
+        "Z.AI Coding Plan", "sk-x", "glm-5.1",
         "→ Continue (finish onboarding)",
         "/tmp/my-custom-workspace",
     ]
@@ -265,7 +306,7 @@ def test_wizard_change_provider_falls_through_to_pick_flow() -> None:
     """'Change provider / model' drops into the full pick flow."""
     answers = [
         "Change provider / model",
-        "OpenAI (GPT)", "sk-new", "gpt-5",
+        "OpenAI", "sk-new", "gpt-5",
         "→ Continue (finish onboarding)",
         "",
     ]
@@ -294,7 +335,7 @@ def test_detect_configured_features_marks_existing_setup() -> None:
 def test_wizard_summary_is_human_readable() -> None:
     """Summary should mention provider + model in plain language."""
     answers = [
-        "Z.AI Coding Plan (recommended)", "sk-x", "glm-5.1",
+        "Z.AI Coding Plan", "sk-x", "glm-5.1",
         "→ Continue (finish onboarding)",
         "",
     ]
@@ -305,30 +346,22 @@ def test_wizard_summary_is_human_readable() -> None:
     assert "glm-5.1" in summary
 
 
-def test_wizard_channels_feature_enables_daemon_and_webui() -> None:
-    """Picking the Channels feature and saying yes to daemon + webui
-    must flip both gateway.* fields on."""
+def test_wizard_dashboard_feature_enables_webui_and_daemon() -> None:
+    """The Dashboard feature (decoupled from channels) flips
+    gateway.webui_enabled + gateway.daemon."""
     answers = [
-        # Stage 1.
-        "Z.AI Coding Plan (recommended)", "sk-x", "glm-5.1",
-        # Stage 2: enter channels.
-        "[ ] 💬 Channels (Telegram / Slack / WhatsApp / …)",
-        True,    # daemon mode? yes
-        True,    # webui? yes
-        False,   # connect chat platforms later? no
-        # Back at menu.
+        "Z.AI Coding Plan", "sk-x", "glm-5.1",
+        "🖥️  Web dashboard",   # enter dashboard feature
+        True,                   # enable webui? yes
+        True,                   # daemon mode? yes
         "→ Continue (finish onboarding)",
-        # Stage 3.
         "",
     ]
     q = _ScriptedQuestionary(answers)
     result = run_wizard(Config(), q=q)
     assert result.cancelled is False
-    assert result.config.gateway.daemon is True
     assert result.config.gateway.webui_enabled is True
-    summary = "\n".join(result.summary_lines).lower()
-    assert "daemon" in summary
-    assert "webui" in summary
+    assert result.config.gateway.daemon is True
 
 
 def test_apply_model_capabilities_sets_context_window() -> None:
@@ -363,7 +396,7 @@ def test_apply_model_capabilities_noop_for_unknown_model() -> None:
 def test_wizard_applies_capabilities_on_model_pick() -> None:
     """The full wizard flow should sync the context window automatically."""
     answers = [
-        "Z.AI Coding Plan (recommended)", "sk-x", "glm-5.1",
+        "Z.AI Coding Plan", "sk-x", "glm-5.1",
         "→ Continue (finish onboarding)",
         "",
     ]
@@ -372,18 +405,37 @@ def test_wizard_applies_capabilities_on_model_pick() -> None:
     assert result.config.agents.defaults.context_window_tokens > 65_536
 
 
-def test_wizard_channels_feature_can_disable_webui() -> None:
-    """If the user says NO to webui, the field flips to False."""
+def test_wizard_dashboard_feature_can_disable_webui() -> None:
+    """Saying NO to the webui in the Dashboard feature sets it False."""
     answers = [
-        "Z.AI Coding Plan (recommended)", "sk-x", "glm-5.1",
-        "[ ] 💬 Channels (Telegram / Slack / WhatsApp / …)",
+        "Z.AI Coding Plan", "sk-x", "glm-5.1",
+        "🖥️  Web dashboard",
+        False,   # enable webui? no
         False,   # daemon? no
-        False,   # webui? no
-        False,   # chat platforms later? no
         "→ Continue (finish onboarding)",
         "",
     ]
     q = _ScriptedQuestionary(answers)
     result = run_wizard(Config(), q=q)
-    assert result.config.gateway.daemon is False
     assert result.config.gateway.webui_enabled is False
+    assert result.config.gateway.daemon is False
+
+
+def test_wizard_channels_feature_lists_and_enables_a_channel() -> None:
+    """The Channels feature lists real channels; enabling one flips its
+    `enabled` flag on in the config."""
+    answers = [
+        "Z.AI Coding Plan", "sk-x", "glm-5.1",
+        "💬 Chat channels",   # enter channels feature
+        "Telegram",            # pick a channel to enable
+        "tg-bot-token",        # its credential prompt
+        "→ Done with channels",
+        "→ Continue (finish onboarding)",
+        "",
+    ]
+    q = _ScriptedQuestionary(answers)
+    result = run_wizard(Config(), q=q)
+    assert result.cancelled is False
+    extra = result.config.channels.__pydantic_extra__ or {}
+    tg = extra.get("telegram")
+    assert tg is not None and tg.get("enabled") is True
