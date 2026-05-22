@@ -201,6 +201,42 @@ def test_read_persisted_config_empty_when_no_file(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# backup_config — snapshot before a tool rewrites the config
+# ---------------------------------------------------------------------------
+
+
+def test_backup_config_copies_split_layout(tmp_path: Path) -> None:
+    from durin.config.loader import backup_config
+
+    cfg = tmp_path / "config.json"
+    _split_dir(cfg).mkdir(parents=True)
+    config = Config()
+    config.agents.defaults.model = "glm-5.1"
+    save_config(config, cfg)  # writes the split layout
+
+    backup = backup_config(cfg)
+    assert backup is not None and backup.is_dir()
+    assert (backup / "agents.json").exists()
+
+
+def test_backup_config_copies_monolith(tmp_path: Path) -> None:
+    from durin.config.loader import backup_config
+
+    cfg = tmp_path / "config.json"
+    _seed_monolith(cfg, {"agents": {"defaults": {"model": "glm-5.1"}}})
+
+    backup = backup_config(cfg)
+    assert backup is not None and backup.is_file()
+    assert json.loads(backup.read_text(encoding="utf-8"))["agents"]["defaults"]["model"] == "glm-5.1"
+
+
+def test_backup_config_returns_none_when_nothing_on_disk(tmp_path: Path) -> None:
+    from durin.config.loader import backup_config
+
+    assert backup_config(tmp_path / "config.json") is None
+
+
+# ---------------------------------------------------------------------------
 # Noise pruning — enabled sections keep full attrs, disabled/empty are dropped
 # ---------------------------------------------------------------------------
 

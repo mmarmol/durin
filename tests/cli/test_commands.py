@@ -153,6 +153,7 @@ def test_onboard_advanced_discard_does_not_save_or_create_workspace(mock_paths, 
         "durin.cli.onboard.run_onboard",
         lambda initial_config: OnboardResult(config=initial_config, should_save=False),
     )
+    monkeypatch.setattr("durin.cli.commands._stdin_is_interactive", lambda: True)
 
     result = runner.invoke(app, ["onboard", "--advanced"])
 
@@ -195,6 +196,7 @@ def test_onboard_advanced_preserves_explicit_config_in_next_steps(tmp_path, monk
         lambda initial_config: OnboardResult(config=initial_config, should_save=True),
     )
     monkeypatch.setattr("durin.channels.registry.discover_all", lambda: {})
+    monkeypatch.setattr("durin.cli.commands._stdin_is_interactive", lambda: True)
 
     result = runner.invoke(
         app,
@@ -229,6 +231,7 @@ def test_onboard_wizard_offers_to_install_missing_extras(tmp_path, monkeypatch):
         ),
     )
     monkeypatch.setattr("durin.channels.registry.discover_all", lambda: {})
+    monkeypatch.setattr("durin.cli.commands._stdin_is_interactive", lambda: True)
     # `memory` is not installed → it counts as missing.
     monkeypatch.setattr("durin.cli.doctor.detect_installed_extras", lambda: [])
     installed: list[list[str]] = []
@@ -246,6 +249,81 @@ def test_onboard_wizard_offers_to_install_missing_extras(tmp_path, monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert installed == [["memory"]], "expected install_missing_extras(['memory'])"
+
+
+def test_onboard_non_interactive_writes_defaults_and_prints_guidance(mock_paths):
+    """With no TTY the wizard is skipped: defaults are written and the
+    user is shown how to configure via `durin config set`."""
+    config_file, _workspace_dir, _ = mock_paths
+
+    # CliRunner's stdin is not a TTY, so the non-interactive guard fires
+    # without any extra patching.
+    result = runner.invoke(app, ["onboard"])
+
+    assert result.exit_code == 0, result.output
+    stripped = _strip_ansi(result.stdout)
+    assert "No interactive terminal" in stripped
+    assert "durin config set" in stripped
+    assert config_file.exists()
+
+
+def test_onboard_unknown_section_errors(mock_paths):
+    """An unrecognised section name fails fast with the valid list."""
+    result = runner.invoke(app, ["onboard", "bogus-section"])
+
+    assert result.exit_code == 1
+    stripped = _strip_ansi(result.stdout)
+    assert "Unknown section" in stripped
+
+
+def test_onboard_section_runs_only_that_section(mock_paths, monkeypatch):
+    """`durin onboard model` dispatches to run_section, not the full wizard."""
+    from durin.cli.onboard_wizard import WizardResult
+
+    config_file, _workspace_dir, _ = mock_paths
+
+    seen: dict[str, str] = {}
+
+    def _fake_run_section(initial_config, section):
+        seen["section"] = section
+        return WizardResult(config=initial_config, cancelled=False)
+
+    monkeypatch.setattr("durin.cli.onboard_wizard.run_section", _fake_run_section)
+    monkeypatch.setattr("durin.cli.onboard_wizard.run_wizard", _unexpected_run_wizard)
+    monkeypatch.setattr("durin.channels.registry.discover_all", lambda: {})
+    monkeypatch.setattr("durin.cli.commands._stdin_is_interactive", lambda: True)
+
+    result = runner.invoke(app, ["onboard", "model"])
+
+    assert result.exit_code == 0, result.output
+    assert seen.get("section") == "model"
+
+
+def test_onboard_backs_up_existing_config_before_rewrite(mock_paths, monkeypatch):
+    """Re-running the wizard on an existing config snapshots it first."""
+    from durin.cli.onboard_wizard import WizardResult
+
+    config_file, _workspace_dir, _ = mock_paths
+    config_file.write_text('{"agents": {}}', encoding="utf-8")
+
+    monkeypatch.setattr(
+        "durin.cli.onboard_wizard.run_wizard",
+        lambda initial_config: WizardResult(config=initial_config, cancelled=False),
+    )
+    monkeypatch.setattr("durin.channels.registry.discover_all", lambda: {})
+    monkeypatch.setattr("durin.cli.commands._stdin_is_interactive", lambda: True)
+
+    result = runner.invoke(app, ["onboard"])
+
+    assert result.exit_code == 0, result.output
+    stripped = _strip_ansi(result.stdout)
+    assert "backed up" in stripped
+    backups = list(config_file.parent.glob("config.json.bak.*"))
+    assert backups, "expected a timestamped config backup"
+
+
+def _unexpected_run_wizard(initial_config):  # pragma: no cover - guard
+    raise AssertionError("run_wizard should not be called for a section run")
 
 
 def test_config_matches_github_copilot_codex_with_hyphen_prefix():

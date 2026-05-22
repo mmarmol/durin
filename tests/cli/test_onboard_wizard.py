@@ -14,7 +14,9 @@ import pytest
 
 from durin.cli.onboard_wizard import (
     PROVIDER_CHOICES,
+    SECTIONS,
     WizardResult,
+    run_section,
     run_wizard,
 )
 from durin.config.schema import Config
@@ -42,6 +44,19 @@ class _ScriptedQuestionary:
 
     def _stub(self, kind: str, args: tuple[Any, ...], kwargs: dict[str, Any]):
         self.calls.append((kind, args, kwargs))
+
+        # A `confirm` prompt expects a bool. If the next scripted answer
+        # isn't a bool, it was meant for a later prompt — so this
+        # confirm wasn't scripted: treat it as declined (False) and DON'T
+        # consume the answer. This keeps tests robust when new optional
+        # confirm prompts are inserted into the flow.
+        if kind == "confirm":
+            if not self._answers or not isinstance(self._answers[0], bool):
+                class _DeclinedStub:
+                    def ask(_self):  # noqa: ANN001
+                        return False
+                return _DeclinedStub()
+
         nxt = self._next_answer()
 
         # For `select`, choice labels carry dynamic state text (e.g.
@@ -54,16 +69,28 @@ class _ScriptedQuestionary:
             if choices:
                 exact = [c for c in choices if c == nxt]
                 if not exact:
-                    # Prefer a prefix match (unambiguous — "OpenAI" is a
-                    # prefix of the OpenAI row but not of "Custom
-                    # OpenAI-…"); fall back to a unique substring match.
-                    pref = [c for c in choices if isinstance(c, str) and c.startswith(nxt)]
-                    if len(pref) == 1:
-                        nxt = pref[0]
+                    # Choice rows are `f"{label:<26} {tag}"` — the label
+                    # is everything before the run of padding spaces.
+                    # Match `nxt` against that stripped label exactly
+                    # first (unambiguous: "OpenAI" ≠ "OpenAI Codex");
+                    # then prefix; then a unique substring.
+                    def _label_of(c: str) -> str:
+                        return c.split("  ")[0].strip()
+
+                    by_label = [
+                        c for c in choices
+                        if isinstance(c, str) and _label_of(c) == nxt
+                    ]
+                    if len(by_label) == 1:
+                        nxt = by_label[0]
                     else:
-                        subs = [c for c in choices if isinstance(c, str) and nxt in c]
-                        if len(subs) == 1:
-                            nxt = subs[0]
+                        pref = [c for c in choices if isinstance(c, str) and c.startswith(nxt)]
+                        if len(pref) == 1:
+                            nxt = pref[0]
+                        else:
+                            subs = [c for c in choices if isinstance(c, str) and nxt in c]
+                            if len(subs) == 1:
+                                nxt = subs[0]
 
         class _Stub:
             def ask(_self):  # noqa: ANN001
@@ -105,7 +132,7 @@ def test_wizard_minimal_happy_path_sets_provider_and_model() -> None:
     everything else, and the resulting Config carries the right fields."""
     answers = [
         # Stage 1: required.
-        "Z.AI Coding Plan",   # select provider
+        "Zhipu AI",   # select provider
         "sk-zhipu-test",                     # password api_key
         "glm-5.1",                           # select default model
         # Stage 2: skip everything.
@@ -129,7 +156,7 @@ def test_wizard_memory_feature_records_extra_and_writes_embedding() -> None:
     """Configuring memory toggles the [memory] extra and sets the model."""
     answers = [
         # Stage 1.
-        "Z.AI Coding Plan", "sk-x", "glm-5.1",
+        "Zhipu AI", "sk-x", "glm-5.1",
         # Stage 2: enter memory submenu.
         "[ ] 📁 Vector memory",
         True,                                # confirm enable
@@ -149,7 +176,7 @@ def test_wizard_memory_feature_records_extra_and_writes_embedding() -> None:
 
 def test_wizard_web_feature_records_extra_and_default_backend() -> None:
     answers = [
-        "Z.AI Coding Plan", "sk-x", "glm-5.1",
+        "Zhipu AI", "sk-x", "glm-5.1",
         "🔍 Web search + fetch",   # enter web feature
         True,                       # confirm enable
         "DuckDuckGo",               # search backend (no key needed)
@@ -165,7 +192,7 @@ def test_wizard_web_feature_records_extra_and_default_backend() -> None:
 def test_wizard_web_feature_brave_backend_prompts_for_key() -> None:
     """Picking Brave (needs a key) must prompt for and store the API key."""
     answers = [
-        "Z.AI Coding Plan", "sk-x", "glm-5.1",
+        "Zhipu AI", "sk-x", "glm-5.1",
         "🔍 Web search + fetch",
         True,
         "Brave Search",             # needs API key
@@ -181,7 +208,7 @@ def test_wizard_web_feature_brave_backend_prompts_for_key() -> None:
 
 def test_wizard_vision_feature_sets_aux_model() -> None:
     answers = [
-        "Z.AI Coding Plan", "sk-x", "glm-5.1",
+        "Zhipu AI", "sk-x", "glm-5.1",
         "[ ] 👁️  Vision (interpret_image)", True,
         "glm-5v-turbo",                     # vision model id
         "zhipu",                             # provider
@@ -199,7 +226,7 @@ def test_wizard_vision_feature_sets_aux_model() -> None:
 def test_wizard_skip_everything_path() -> None:
     """`× Skip everything` exits stage 2 immediately with nothing extra."""
     answers = [
-        "Z.AI Coding Plan", "sk-x", "glm-5.1",
+        "Zhipu AI", "sk-x", "glm-5.1",
         "× Skip everything (use defaults)",
         "",
     ]
@@ -212,7 +239,7 @@ def test_wizard_skip_everything_path() -> None:
 def test_wizard_custom_provider_path_with_typed_model() -> None:
     """Custom OpenAI-compat provider has no model suggestions — user types one."""
     answers = [
-        "Custom OpenAI-compatible endpoint",
+        "Custom",
         "sk-custom",
         "my-local-model",                    # typed model name
         "→ Continue (finish onboarding)",
@@ -228,7 +255,7 @@ def test_wizard_custom_provider_path_with_typed_model() -> None:
 def test_wizard_empty_api_key_is_accepted_for_local_providers() -> None:
     """A blank key shouldn't crash — useful for local OpenAI-compat endpoints."""
     answers = [
-        "Custom OpenAI-compatible endpoint",
+        "Custom",
         "",                                  # no key
         "ollama-llama3",
         "→ Continue (finish onboarding)",
@@ -243,7 +270,7 @@ def test_wizard_empty_api_key_is_accepted_for_local_providers() -> None:
 
 def test_wizard_workspace_override_is_persisted() -> None:
     answers = [
-        "Z.AI Coding Plan", "sk-x", "glm-5.1",
+        "Zhipu AI", "sk-x", "glm-5.1",
         "→ Continue (finish onboarding)",
         "/tmp/my-custom-workspace",
     ]
@@ -335,7 +362,7 @@ def test_detect_configured_features_marks_existing_setup() -> None:
 def test_wizard_summary_is_human_readable() -> None:
     """Summary should mention provider + model in plain language."""
     answers = [
-        "Z.AI Coding Plan", "sk-x", "glm-5.1",
+        "Zhipu AI", "sk-x", "glm-5.1",
         "→ Continue (finish onboarding)",
         "",
     ]
@@ -350,7 +377,7 @@ def test_wizard_dashboard_feature_enables_webui_and_daemon() -> None:
     """The Dashboard feature (decoupled from channels) flips
     gateway.webui_enabled + gateway.daemon."""
     answers = [
-        "Z.AI Coding Plan", "sk-x", "glm-5.1",
+        "Zhipu AI", "sk-x", "glm-5.1",
         "🖥️  Web dashboard",   # enter dashboard feature
         True,                   # enable webui? yes
         True,                   # daemon mode? yes
@@ -396,7 +423,7 @@ def test_apply_model_capabilities_noop_for_unknown_model() -> None:
 def test_wizard_applies_capabilities_on_model_pick() -> None:
     """The full wizard flow should sync the context window automatically."""
     answers = [
-        "Z.AI Coding Plan", "sk-x", "glm-5.1",
+        "Zhipu AI", "sk-x", "glm-5.1",
         "→ Continue (finish onboarding)",
         "",
     ]
@@ -408,7 +435,7 @@ def test_wizard_applies_capabilities_on_model_pick() -> None:
 def test_wizard_dashboard_feature_can_disable_webui() -> None:
     """Saying NO to the webui in the Dashboard feature sets it False."""
     answers = [
-        "Z.AI Coding Plan", "sk-x", "glm-5.1",
+        "Zhipu AI", "sk-x", "glm-5.1",
         "🖥️  Web dashboard",
         False,   # enable webui? no
         False,   # daemon? no
@@ -425,7 +452,7 @@ def test_wizard_channels_feature_lists_and_enables_a_channel() -> None:
     """The Channels feature lists real channels; enabling one flips its
     `enabled` flag on in the config."""
     answers = [
-        "Z.AI Coding Plan", "sk-x", "glm-5.1",
+        "Zhipu AI", "sk-x", "glm-5.1",
         "💬 Chat channels",   # enter channels feature
         "Telegram",            # pick a channel to enable
         "tg-bot-token",        # its credential prompt
@@ -439,3 +466,87 @@ def test_wizard_channels_feature_lists_and_enables_a_channel() -> None:
     extra = result.config.channels.__pydantic_extra__ or {}
     tg = extra.get("telegram")
     assert tg is not None and tg.get("enabled") is True
+
+
+def test_wizard_result_carries_availability_matrix() -> None:
+    """A finished wizard returns a capability matrix — chat model is
+    always ✓; un-configured optional features show ✗ with a fix hint."""
+    answers = [
+        "Zhipu AI", "sk-x", "glm-5.1",
+        "→ Continue (finish onboarding)",
+        "",
+    ]
+    q = _ScriptedQuestionary(answers)
+    result = run_wizard(Config(), q=q)
+    assert result.availability_lines
+    assert result.availability_lines[0].startswith("✓ Chat model")
+    # A feature nobody configured should be ✗ and point at its section.
+    memory_line = next(
+        ln for ln in result.availability_lines if "memory" in ln.lower()
+    )
+    assert memory_line.startswith("✗")
+    assert "durin onboard memory" in memory_line
+
+
+def test_wizard_tests_model_after_a_new_pick() -> None:
+    """After picking a brand-new model the wizard offers a round-trip
+    test; confirming runs check_model_ping against the in-memory config."""
+    from unittest.mock import patch
+
+    from durin.cli.doctor import CheckResult
+
+    answers = [
+        "Zhipu AI", "sk-x", "glm-5.1",
+        True,                              # "Test this model now?" → yes
+        "→ Continue (finish onboarding)",
+        "",
+    ]
+    q = _ScriptedQuestionary(answers)
+    fake = CheckResult("model ping", "ok", "glm-5.1 responded.", category="providers")
+    with patch("durin.cli.doctor.check_model_ping", return_value=fake) as mock_ping:
+        result = run_wizard(Config(), q=q)
+    assert result.cancelled is False
+    mock_ping.assert_called_once()
+    # The ping must target the in-memory config the wizard just built.
+    assert mock_ping.call_args.kwargs.get("cfg") is not None
+
+
+def test_run_section_rejects_unknown_section() -> None:
+    q = _ScriptedQuestionary([])
+    with pytest.raises(ValueError, match="Unknown section"):
+        run_section(Config(), "bogus", q=q)
+
+
+def test_run_section_model_reconfigures_provider_only() -> None:
+    """`durin onboard model` re-runs just provider/key/model — no
+    optional-feature menu, no workspace prompt."""
+    answers = ["OpenAI", "sk-new", "gpt-5"]
+    q = _ScriptedQuestionary(answers)
+    result = run_section(Config(), "model", q=q)
+    assert result.cancelled is False
+    assert result.config.agents.defaults.provider == "openai"
+    assert result.config.agents.defaults.model == "gpt-5"
+    # No workspace text prompt was issued (that stage belongs to the
+    # full wizard, not a section run).
+    text_prompts = [a for k, a, _kw in q.calls if k == "text"]
+    assert all("Workspace" not in str(a) for a in text_prompts)
+
+
+def test_run_section_web_enables_search_and_records_extra() -> None:
+    """`durin onboard web` runs only the web sub-wizard."""
+    answers = [True, "DuckDuckGo — no API key, default"]
+    q = _ScriptedQuestionary(answers)
+    result = run_section(Config(), "web", q=q)
+    assert result.cancelled is False
+    assert result.config.tools.web.enable is True
+    assert "web" in result.extras_to_install
+
+
+def test_sections_constant_covers_every_optional_feature() -> None:
+    """Every optional-feature key must be reachable as a section so the
+    `✗ … durin onboard <section>` hints in the matrix are never dead."""
+    from durin.cli.onboard_wizard import _OPTIONAL_FEATURES
+
+    section_keys = {s.replace("-", "_") for s in SECTIONS}
+    for key, _label, _desc in _OPTIONAL_FEATURES:
+        assert key in section_keys, f"feature '{key}' has no onboard section"

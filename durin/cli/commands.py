@@ -477,8 +477,26 @@ def main(
 # ============================================================================
 
 
+def _stdin_is_interactive() -> bool:
+    """True when stdin is a usable interactive TTY.
+
+    The wizard's prompts (questionary) need a real terminal. Factored
+    out as a module function so tests of the interactive path can
+    monkeypatch it instead of fighting the test runner's piped stdin.
+    """
+    try:
+        return bool(sys.stdin.isatty())
+    except Exception:  # noqa: BLE001
+        return False
+
+
 @app.command()
 def onboard(
+    section: str | None = typer.Argument(
+        None,
+        help="Jump straight to one section: model, memory, vision, audio, "
+        "image-gen, web, dashboard, channels.",
+    ),
     workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
     config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
     no_wizard: bool = typer.Option(
@@ -493,10 +511,17 @@ def onboard(
     """Initialize durin configuration and workspace.
 
     Runs the task-oriented wizard by default (provider/key/model + an
-    opt-in menu of features). Use `--no-wizard` to just write defaults
-    or `--advanced` for the legacy walk-every-config-field mode.
+    opt-in menu of features). Pass a SECTION to re-tune just one thing
+    (e.g. `durin onboard model`). Use `--no-wizard` to just write
+    defaults or `--advanced` for the legacy walk-every-config-field mode.
     """
-    from durin.config.loader import get_config_path, load_config, save_config, set_config_path
+    from durin.config.loader import (
+        backup_config,
+        get_config_path,
+        load_config,
+        save_config,
+        set_config_path,
+    )
     from durin.config.schema import Config
 
     if config:
@@ -514,6 +539,38 @@ def onboard(
     # Default mode: task-oriented wizard. Legacy field-walker available
     # via --advanced; silent defaults via --no-wizard.
     wizard_mode = not no_wizard
+
+    # A section ("durin onboard model") must be valid and is wizard-only.
+    if section is not None:
+        from durin.cli.onboard_wizard import SECTIONS
+
+        if section not in SECTIONS:
+            console.print(f"[red]✗[/red] Unknown section '{section}'.")
+            console.print(f"[dim]Valid sections: {', '.join(SECTIONS)}[/dim]")
+            raise typer.Exit(1)
+        if no_wizard or advanced:
+            console.print(
+                "[red]✗[/red] A section can't be combined with "
+                "--no-wizard / --advanced."
+            )
+            raise typer.Exit(1)
+
+    # Non-interactive guard: the wizard needs a TTY for questionary.
+    # Without one, write defaults (if missing) and show how to configure
+    # via `durin config set` instead of crashing on a blind prompt.
+    if wizard_mode and not _stdin_is_interactive():
+        console.print(
+            "[yellow]No interactive terminal detected — skipping the wizard.[/yellow]"
+        )
+        if not config_path.exists():
+            save_config(_apply_workspace_override(Config()), config_path)
+            console.print(f"[green]✓[/green] Wrote default config to {config_path}")
+        console.print("[dim]Configure non-interactively, e.g.:[/dim]")
+        console.print("  [cyan]durin config set agents.defaults.provider zhipu[/cyan]")
+        console.print("  [cyan]durin config set providers.zhipu.apiKey sk-...[/cyan]")
+        console.print("  [cyan]durin config set agents.defaults.model glm-5.1[/cyan]")
+        console.print("[dim]Or re-run `durin onboard` in an interactive shell.[/dim]")
+        return
 
     # Load base config: existing file if present, fresh defaults otherwise.
     if config_path.exists():
@@ -545,11 +602,17 @@ def onboard(
             console.print("[yellow]Please run 'durin onboard' again to complete setup.[/yellow]")
             raise typer.Exit(1)
     elif wizard_mode:
-        # New default: task-oriented wizard.
-        from durin.cli.onboard_wizard import run_wizard
+        # New default: task-oriented wizard. A section runs just one part.
+        from durin.cli.onboard_wizard import run_section, run_wizard
+
+        # Snapshot the existing config so a botched re-run can be reverted.
+        backup = backup_config(config_path) if config_path.exists() else None
 
         try:
-            result = run_wizard(config)
+            if section is not None:
+                result = run_section(config, section)
+            else:
+                result = run_wizard(config)
         except RuntimeError as e:
             console.print(f"[red]✗[/red] {e}")
             console.print(
@@ -563,6 +626,8 @@ def onboard(
         config = result.config
         save_config(config, config_path)
         console.print(f"[green]✓[/green] Config saved at {config_path}")
+        if backup is not None:
+            console.print(f"[dim]Previous config backed up to {backup}[/dim]")
         # Surface the summary + the install command for missing extras.
         if result.summary_lines:
             console.print("\n[bold]Configured:[/bold]")
@@ -603,6 +668,13 @@ def onboard(
                 else:
                     console.print("[dim]Skipped. Install later with:[/dim]")
                     console.print(f"  [cyan]{install_hint(missing)}[/cyan]")
+        # Capability matrix: what works now, and the exact command to
+        # fill each gap.
+        if result.availability_lines:
+            console.print("\n[bold]Capabilities:[/bold]")
+            for line in result.availability_lines:
+                style = "green" if line.startswith("✓") else "dim"
+                console.print(f"  [{style}]{line}[/{style}]")
     _onboard_plugins(config_path)
 
     # Create workspace, preferring the configured workspace path.
