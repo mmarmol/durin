@@ -1817,6 +1817,14 @@ class AgentRunner:
                 spec.session_key or "default",
             )
             content = result
+        # Redact stored secret values before the result enters the
+        # model context — see docs/11_secrets_design.md §5.
+        try:
+            from durin.security.secrets import redact_secrets
+
+            content = redact_secrets(content)
+        except Exception:  # noqa: BLE001
+            logger.exception("Secret redaction failed for {}; using raw result", tool_call_id)
         if isinstance(content, str) and len(content) > spec.max_tool_result_chars:
             return truncate_text(content, spec.max_tool_result_chars)
         return content
