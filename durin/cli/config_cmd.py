@@ -42,11 +42,15 @@ _SECRET_KEY_PATTERN = re.compile(
 
 
 def load_raw_config(path: Path) -> dict[str, Any]:
-    """Return the on-disk JSON dict, or an empty default if the file is missing."""
-    if not path.exists():
-        return {}
-    with path.open(encoding="utf-8") as f:
-        return json.load(f)
+    """Return the on-disk config dict, transparent to the storage layout.
+
+    Delegates to :func:`read_persisted_config` so it returns the merged
+    view whether the config is a single monolith or the split per-topic
+    directory. A missing file (or a bare split marker) yields ``{}``.
+    """
+    from durin.config.loader import read_persisted_config
+
+    return read_persisted_config(path)
 
 
 def parse_value(raw: str) -> Any:
@@ -329,7 +333,9 @@ def cmd_edit() -> None:
     if shutil.which(editor) is None:
         console.print(f"[red]Editor {editor!r} not found on PATH.[/red] Set $EDITOR.")
         raise typer.Exit(1)
-    original = path.read_text(encoding="utf-8")
+    # Edit the merged view (works for both monolith and split layouts);
+    # the write goes back through save_config, which re-splits as needed.
+    original = json.dumps(load_raw_config(path), indent=2, ensure_ascii=False)
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as tmp:
         tmp.write(original)
         tmp_path = Path(tmp.name)
@@ -341,12 +347,12 @@ def cmd_edit() -> None:
             return
         try:
             data = json.loads(edited)
-            validate_dict(data)
+            config = validate_dict(data)
         except (json.JSONDecodeError, pydantic.ValidationError) as e:
-            console.print(f"[red]Edit rejected; config left untouched.[/red]")
+            console.print("[red]Edit rejected; config left untouched.[/red]")
             console.print(str(e))
             raise typer.Exit(1)
-        path.write_text(edited, encoding="utf-8")
+        save_config(config, path)
         console.print(f"[green]✓[/green] Config updated at {path}.")
     finally:
         with __import__("contextlib").suppress(FileNotFoundError):
