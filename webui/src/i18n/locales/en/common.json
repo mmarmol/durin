@@ -180,7 +180,9 @@
       "saveError": "Could not save {{path}}.",
       "save": "Save",
       "on": "On",
-      "off": "Off"
+      "off": "Off",
+      "managed": "Managed secret",
+      "empty": "No settings in this section."
     },
     "models": {
       "auxTitle": "Vision & audio models",

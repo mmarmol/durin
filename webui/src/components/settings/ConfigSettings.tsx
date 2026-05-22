@@ -5,103 +5,70 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { getConfig, setConfigValue } from "@/lib/api";
-import { cn } from "@/lib/utils";
+import { SettingsRow, settingsCardClass } from "./primitives";
 
 type Json = unknown;
 
-/** A leaf the form can edit inline. Objects recurse; arrays/null are
- *  shown read-only (edit those with `durin config` for now). */
-function isEditableScalar(value: Json): value is string | number | boolean {
-  return (
-    typeof value === "string" ||
-    typeof value === "number" ||
-    typeof value === "boolean"
-  );
+/** One flattened, addressable config value. `path` is the full dotted
+ *  key the API writes to; `display` is the path relative to its group. */
+interface Leaf {
+  display: string;
+  path: string;
+  value: Json;
 }
 
 function isMaskedSecret(value: Json): boolean {
   return value === "***";
 }
 
-/** One editable scalar field. Local draft state; saves on demand. */
-function ConfigField({
-  path,
-  value,
-  saving,
-  onSave,
-}: {
-  path: string;
-  value: string | number | boolean;
-  saving: boolean;
-  onSave: (path: string, value: Json) => void;
-}) {
-  const { t } = useTranslation();
-  const label = path.split(".").slice(-1)[0];
-
-  if (typeof value === "boolean") {
-    return (
-      <div className="flex min-h-[52px] items-center justify-between gap-3 px-4 py-2.5 sm:px-5">
-        <code className="min-w-0 truncate text-[13px] text-foreground/85">{label}</code>
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={saving}
-          onClick={() => onSave(path, !value)}
-          className="w-[68px] rounded-full"
-        >
-          {value ? t("settings.config.on") : t("settings.config.off")}
-        </Button>
-      </div>
-    );
+/** Walk a config subtree into editable leaves. Plain objects recurse so
+ *  every scalar gets its own row; arrays and null stay whole (read-only). */
+function flatten(value: Json, path: string, display: string, out: Leaf[]): void {
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    const entries = Object.entries(value as Record<string, Json>);
+    for (const [key, child] of entries) {
+      flatten(child, `${path}.${key}`, display ? `${display}.${key}` : key, out);
+    }
+    return;
   }
-
-  return (
-    <ConfigTextField
-      path={path}
-      label={label}
-      value={value}
-      numeric={typeof value === "number"}
-      saving={saving}
-      onSave={onSave}
-    />
-  );
+  out.push({
+    display: display || path.split(".").slice(-1)[0],
+    path,
+    value,
+  });
 }
 
-function ConfigTextField({
-  path,
-  label,
-  value,
+/** A scalar (string/number) editor row. Local draft; saves on demand. */
+function ConfigTextRow({
+  leaf,
   numeric,
-  saving,
+  busy,
   onSave,
 }: {
-  path: string;
-  label: string;
-  value: string | number;
+  leaf: Leaf;
   numeric: boolean;
-  saving: boolean;
+  busy: boolean;
   onSave: (path: string, value: Json) => void;
 }) {
   const { t } = useTranslation();
-  const [draft, setDraft] = useState(String(value));
-  useEffect(() => setDraft(String(value)), [value]);
-  const dirty = draft !== String(value);
+  const [draft, setDraft] = useState(String(leaf.value));
+  useEffect(() => setDraft(String(leaf.value)), [leaf.value]);
+  const dirty = draft !== String(leaf.value);
 
   const commit = () => {
     if (!dirty) return;
     if (numeric) {
       const n = Number(draft);
       if (!Number.isFinite(n)) return;
-      onSave(path, n);
+      onSave(leaf.path, n);
     } else {
-      onSave(path, draft);
+      onSave(leaf.path, draft);
     }
   };
 
   return (
-    <div className="flex min-h-[52px] items-center justify-between gap-3 px-4 py-2.5 sm:px-5">
-      <code className="min-w-0 truncate text-[13px] text-foreground/85">{label}</code>
-      <div className="flex shrink-0 items-center gap-2">
+    <SettingsRow title={leaf.display}>
+      <div className="flex items-center gap-2">
         <Input
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -109,85 +76,85 @@ function ConfigTextField({
             if (e.key === "Enter") commit();
           }}
           inputMode={numeric ? "numeric" : undefined}
-          className="w-[220px]"
+          className="h-8 w-[220px] rounded-full text-[13px]"
         />
         <Button
           size="sm"
           variant="outline"
-          disabled={!dirty || saving}
+          disabled={!dirty || busy}
           onClick={commit}
           className="rounded-full"
         >
           {t("settings.config.save")}
         </Button>
       </div>
-    </div>
+    </SettingsRow>
   );
 }
 
-/** Recursively render a config subtree. */
-function ConfigNode({
-  path,
-  value,
+/** One config leaf, picking the right control for its type. */
+function LeafRow({
+  leaf,
   saving,
   onSave,
 }: {
-  path: string;
-  value: Json;
+  leaf: Leaf;
   saving: string | null;
   onSave: (path: string, value: Json) => void;
 }) {
-  const label = path.split(".").slice(-1)[0];
+  const { t } = useTranslation();
+  const busy = saving === leaf.path;
+  const { value } = leaf;
 
   if (isMaskedSecret(value)) {
     return (
-      <div className="flex min-h-[52px] items-center justify-between gap-3 px-4 py-2.5 sm:px-5">
-        <code className="truncate text-[13px] text-foreground/85">{label}</code>
-        <span className="text-[12px] text-muted-foreground">•••• (managed)</span>
-      </div>
-    );
-  }
-
-  if (isEditableScalar(value)) {
-    return (
-      <ConfigField path={path} value={value} saving={saving === path} onSave={onSave} />
-    );
-  }
-
-  if (Array.isArray(value) || value === null) {
-    return (
-      <div className="flex min-h-[52px] items-start justify-between gap-3 px-4 py-2.5 sm:px-5">
-        <code className="truncate text-[13px] text-foreground/85">{label}</code>
-        <span className="max-w-[60%] truncate text-right text-[12px] text-muted-foreground">
-          {value === null ? "—" : JSON.stringify(value)}
+      <SettingsRow title={leaf.display}>
+        <span className="text-[12px] text-muted-foreground">
+          {t("settings.config.managed")}
         </span>
-      </div>
+      </SettingsRow>
     );
   }
 
-  // Nested object — render its entries indented.
-  const entries = Object.entries(value as Record<string, Json>);
+  if (typeof value === "boolean") {
+    return (
+      <SettingsRow title={leaf.display}>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={busy}
+          onClick={() => onSave(leaf.path, !value)}
+          className="w-[68px] rounded-full"
+        >
+          {value ? t("settings.config.on") : t("settings.config.off")}
+        </Button>
+      </SettingsRow>
+    );
+  }
+
+  if (typeof value === "string" || typeof value === "number") {
+    return (
+      <ConfigTextRow
+        leaf={leaf}
+        numeric={typeof value === "number"}
+        busy={busy}
+        onSave={onSave}
+      />
+    );
+  }
+
+  // Array or null — shown read-only; edit those with `durin config`.
   return (
-    <div>
-      <div className="px-4 pt-2.5 text-[12px] font-medium uppercase tracking-wide text-muted-foreground/70 sm:px-5">
-        {label}
-      </div>
-      <div className="pl-3">
-        {entries.map(([key, child]) => (
-          <ConfigNode
-            key={key}
-            path={`${path}.${key}`}
-            value={child}
-            saving={saving}
-            onSave={onSave}
-          />
-        ))}
-      </div>
-    </div>
+    <SettingsRow title={leaf.display}>
+      <span className="max-w-[280px] truncate text-right text-[12px] text-muted-foreground">
+        {value === null ? "—" : JSON.stringify(value)}
+      </span>
+    </SettingsRow>
   );
 }
 
-/** Collapsible top-level config section. */
+/** A collapsible top-level config section. Uses the shared settings card
+ *  chrome so it reads the same as every other settings group. */
 function ConfigGroup({
   name,
   value,
@@ -199,48 +166,56 @@ function ConfigGroup({
   saving: string | null;
   onSave: (path: string, value: Json) => void;
 }) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
-  const entries =
-    value && typeof value === "object" && !Array.isArray(value)
-      ? Object.entries(value as Record<string, Json>)
-      : [];
+  const leaves = useMemo(() => {
+    const out: Leaf[] = [];
+    flatten(value, name, "", out);
+    return out;
+  }, [value, name]);
+
   return (
-    <div className="overflow-hidden rounded-[18px] border border-border/45 bg-card/86">
+    <div className={settingsCardClass}>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-2 px-4 py-3 text-left sm:px-5"
+        className="flex min-h-[56px] w-full items-center gap-2.5 px-4 py-3.5 text-left sm:px-5"
       >
         {open ? (
-          <ChevronDown className="h-4 w-4 text-muted-foreground" aria-hidden />
+          <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
         ) : (
-          <ChevronRight className="h-4 w-4 text-muted-foreground" aria-hidden />
+          <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
         )}
-        <span className="text-[14px] font-semibold text-foreground">{name}</span>
-        <span className="ml-auto text-[12px] text-muted-foreground">
-          {entries.length}
+        <span className="text-[14px] font-medium text-foreground">{name}</span>
+        <span className="ml-auto text-[12px] tabular-nums text-muted-foreground">
+          {leaves.length}
         </span>
       </button>
       {open ? (
-        <div className="divide-y divide-border/40 border-t border-border/40">
-          {entries.map(([key, child]) => (
-            <ConfigNode
-              key={key}
-              path={`${name}.${key}`}
-              value={child}
-              saving={saving}
-              onSave={onSave}
-            />
-          ))}
+        <div className="divide-y divide-border/45 border-t border-border/45">
+          {leaves.length === 0 ? (
+            <div className="px-4 py-3.5 text-[13px] text-muted-foreground sm:px-5">
+              {t("settings.config.empty")}
+            </div>
+          ) : (
+            leaves.map((leaf) => (
+              <LeafRow
+                key={leaf.path}
+                leaf={leaf}
+                saving={saving}
+                onSave={onSave}
+              />
+            ))
+          )}
         </div>
       ) : null}
     </div>
   );
 }
 
-/** Phase C: the generic, schema-driven "All settings" section.
- *  Renders every config field from `GET /api/config` and writes single
- *  values through `POST /api/config/set`. */
+/** The generic, schema-driven "All settings" section. Renders every
+ *  config field from `GET /api/config` and writes single values through
+ *  `POST /api/config/set`. */
 export function ConfigSettings({ token }: { token: string }) {
   const { t } = useTranslation();
   const [config, setConfig] = useState<Record<string, Json> | null>(null);
@@ -297,7 +272,7 @@ export function ConfigSettings({ token }: { token: string }) {
 
   return (
     <div className="space-y-3">
-      <p className={cn("px-1 text-[13px] leading-5 text-muted-foreground")}>
+      <p className="px-1 text-[13px] leading-5 text-muted-foreground">
         {t("settings.config.description")}
       </p>
       {error ? (
