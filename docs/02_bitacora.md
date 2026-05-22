@@ -1036,7 +1036,7 @@ Grouped into three blocks of independent concerns. The user explicitly approved 
 ## Secrets subsystem — Phase 1 + 2 (2026-05-22)
 
 API keys used to live as plaintext inline in `config.json.d/providers.json`.
-Built a secrets subsystem (full design: `docs/11_secrets_design.md`).
+Built a secrets subsystem (full design: `docs/archive/11_secrets_design.md`).
 
 ### What shipped
 
@@ -1135,3 +1135,46 @@ fixes came out of it:
 
 `durin --help`'s command-group epilog is regenerated from the live
 registry so it can't go stale.
+
+## Post-a7: secrets Phase 3, web parity, interactive renders, design system (2026-05-22)
+
+After v0.1.0a7, a run of delivery plus a few design decisions worth recording.
+
+### Interactive `request_secret` — the two-channel rule
+
+The agent needs to *ask* for a credential, but the secret value must never
+enter the agent's context. The decision: **two separate transport channels**.
+The agent channel carries the `request_secret` tool call and, later, a
+metadata-only "stored" note — never the value. The secret channel carries
+only the value: a masked input → client code → `SecretStore`. The widget is
+co-located with the chat, but its submit calls a different pipe.
+
+Concretely the value rides the **websocket** as a dedicated frame, not the
+old `/api/secrets/set` GET — which put the value in a URL query, a real leak
+vector (browser history, proxies, logs). The TUI uses a masked modal straight
+to `SecretStore`. The LLM is told only `name` / `service` / `scope`.
+
+### Why a design system, and its scope
+
+durin had three visual surfaces that had drifted apart — the web had a
+deliberate palette, the TUI used stock Textual themes, the wizard had almost
+no colour. Rather than patch each, we established one source of truth:
+`design/DESIGN.md` + `design/tokens.css`, mirrored into `durin/cli/theme.py`
+for the non-CSS surfaces, with a test pinning the mirror to the CSS.
+
+Three palettes (Ithildin default, Forge, Mithril) × light/dark. Reference
+study: Pi (single-source theming, done well) and Hermes (three surfaces, no
+shared source → visible drift — the cautionary case the anti-drift test
+guards against).
+
+Deliberate **scope** decision: the one-shot CLI commands (`status`, `doctor`,
+`config`) are *not* themed — they're tools, not spaces, and use semantic
+colour only. The design system governs the surfaces you inhabit (web, TUI)
+and the guided flow (wizard); nothing else.
+
+### Web config parity
+
+The dashboard can now configure all of durin without the CLI: a generic
+`/api/config` plus a schema-driven "All settings" view, a Secrets section,
+and a refined Settings IA. The principle: anything in the config schema is
+reachable from the web; curated sections sit on top for the common paths.

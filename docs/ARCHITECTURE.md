@@ -761,7 +761,14 @@ tests/
 └── telemetry/      # Generic logger + cache.usage event
 ```
 
-Total: **~4,050 tests passing, 15 skipped** (Python) + **~134** (webui).
+Total: **~4,050 tests passing, 15 skipped** (Python) + **~140** (webui).
+
+**TUI Pilot harness.** `durin/cli/tui/probe.py` adds `screen_text()` — a
+plain-text capture of what the Textual TUI actually paints (via the
+compositor strips) — plus `type_text()` / `run_step()` scripted-input
+helpers. `scripts/tui_smoke.py` wraps them into a CLI so the TUI can be
+driven headlessly and *seen* without a real terminal; `tests/cli/tui/`
+asserts on the rendered output through the same path.
 
 ---
 
@@ -949,7 +956,7 @@ both the daemon and webui when config requests them.
 
 ## 19. Secrets subsystem
 
-Full design: `docs/11_secrets_design.md`. API keys are no longer stored
+Full design: `docs/archive/11_secrets_design.md`. API keys are no longer stored
 inline in `config.json`. The store is `~/.durin/secrets.json` (mode
 `0600`, outside the config tree). Each entry has two axes — `service`
 (classification, non-unique) and `scope` (consumer authorization) —
@@ -974,12 +981,53 @@ them without the agent ever seeing the values.
 
 Agent tools (`agent/tools/secrets.py`): `list_secrets` lets the agent
 discover available credentials (metadata only); `request_secret`
-yields with the exact `durin secret set` command when the agent needs
-one it lacks — the user runs it, the value never passes through the
-agent. `durin doctor` flags dangling `${secret:}` references.
+declares one the agent needs. `durin doctor` flags dangling
+`${secret:}` references.
+
+### 19.1 Phase 3 — interactive `request_secret`
+
+When the agent calls `request_secret`, the TUI and web render a
+purpose-built panel (not the generic tool block) so the user can supply
+the value **without it ever entering the conversation**. The rule is
+two transport channels:
+
+- **Agent channel** — the `request_secret` tool call, and afterwards a
+  metadata-only "stored" note. Never the value.
+- **Secret channel** — a masked input → client code → `SecretStore`.
+  Only the value, and it stops at the store.
+
+The web sends the value over the authenticated **websocket** as a
+`secret_store` frame (never a URL query — a GET query string leaks into
+history, proxies and logs); the gateway writes the store and replies
+with an ack. The TUI opens a masked `ModalScreen` and writes
+`SecretStore` directly. After a successful store the agent receives a
+metadata note (`name` / `service` / `scope`) so it knows the secret is
+available — as `$NAME` to `exec` — but is never told the value.
+
+## 20. Design system
+
+durin's three visual surfaces share one palette system. Source of truth:
+`design/DESIGN.md` (the 9-section spec) + `design/tokens.css` (the token
+values). Two axes — palette (`ithildin` default, `forge`, `mithril`) ×
+mode (`light`/`dark`), six token sets.
+
+- **Web** — `webui/src/globals.css` carries all six sets, generated from
+  `theme.py` by `scripts/gen_webui_tokens.py`. `useTheme` applies the
+  `data-palette` attribute + `.dark` class; a selector lives in Settings.
+- **TUI** — `durin/cli/theme.py` mirrors `tokens.css` and builds six
+  Textual themes. `Ctrl+T` toggles light/dark, `/theme` picks the
+  palette; `COLORFGBG` auto-detects the mode at boot.
+- **Wizard** — borrows the accent for every `questionary` prompt; it
+  prints onto the terminal so it never owns the background.
+
+`config.appearance` (palette + mode) is the shared, persisted choice.
+`tests/cli/test_theme_tokens.py` pins `theme.py` to `tokens.css` so the
+Python mirror cannot drift from the CSS. One-shot CLI commands
+(`status`, `doctor`, `config`) are intentionally **not** themed — they
+use rich's defaults; the system governs the surfaces you inhabit.
 
 ---
 
-## Last updated: 2026-05-22 (secrets subsystem Phase 1+2)
+## Last updated: 2026-05-22 (post-a7 — secrets Phase 3, design system §20)
 
 > For the history of why each subsystem was added, what was replaced, and what was discarded along the way, see `docs/02_bitacora.md`. This document only describes the current state.
