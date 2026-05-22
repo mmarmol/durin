@@ -79,6 +79,7 @@
     },
     "rows": {
       "theme": "Theme",
+      "palette": "Palette",
       "language": "Language",
       "provider": "Provider",
       "model": "Model",
@@ -87,6 +88,7 @@
     },
     "help": {
       "theme": "Switch between light and dark appearance.",
+      "palette": "durin's colour identity — Ithildin, Forge, or Mithril.",
       "language": "Choose the language used by the WebUI.",
       "provider": "Select the provider that should serve new model requests.",
       "model": "Set the default model name used by durin.",

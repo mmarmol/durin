@@ -1,0 +1,163 @@
+/* ============================================================================
+ * durin design tokens — single source of truth
+ *
+ * Two axes:
+ *   palette  →  ithildin (default) · forge · mithril
+ *   mode     →  light (default) · dark  (`.dark` class)
+ *
+ * Selection model (web):
+ *   <html class="dark" data-palette="forge">  →  Forge, dark
+ *   no attributes                             →  Ithildin, light
+ *
+ * `webui/src/globals.css` mirrors these values. The TUI Textual themes and
+ * the install wizard read the same hexes from `durin/cli/theme.py`. An
+ * anti-drift test pins `theme.py` to this file — keep them identical.
+ *
+ * Token roles (palette-specific):
+ *   --bg            page background — the deepest surface
+ *   --surface       cards, panels, bars
+ *   --surface-2     elevated surface — message bubbles, tool blocks, inputs
+ *   --text          primary text
+ *   --muted         secondary text, metadata, placeholders
+ *   --border        standard hairline border
+ *   --border-strong dividers and emphasized containment
+ *   --accent        the one brand colour — CTAs, focus, selection, the dot
+ *   --accent-text   text/icon ON an accent fill
+ *   --accent-soft   translucent accent — chip/selection backgrounds
+ *   --accent-ink    accent tuned for text on a normal surface
+ *   --ok --warn --danger   status colours
+ * ========================================================================== */
+
+:root {
+  /* ---- shared, palette-agnostic ------------------------------------------ */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 22px;
+  --radius-pill: 9999px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  --shadow-soft: 0 18px 65px rgba(15, 23, 42, 0.075);
+  --shadow-soft-dark: 0 18px 65px rgba(0, 0, 0, 0.24);
+
+  --motion-fast: 150ms;
+  --motion-base: 200ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+}
+
+/* ===== Ithildin — cool slate + sky-cyan (default) ==========================
+ * The Doors of Durin: silver-blue, lit by moonlight. durin's calm, precise,
+ * engineered default. The sky-cyan is the existing goal-halo colour, promoted
+ * to the brand accent. */
+:root,
+[data-palette="ithildin"] {
+  --bg: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #f4f5f6;
+  --text: #16181a;
+  --muted: #6b7075;
+  --border: #e5e6e8;
+  --border-strong: #d4d6d8;
+  --accent: #2b9fd4;
+  --accent-text: #ffffff;
+  --accent-soft: rgba(43, 159, 212, 0.12);
+  --accent-ink: #1b7aa8;
+  --ok: #1f9d57;
+  --warn: #b07d1e;
+  --danger: #c8453b;
+}
+.dark,
+[data-palette="ithildin"].dark {
+  --bg: #0e1011;
+  --surface: #17191b;
+  --surface-2: #212325;
+  --text: #e7e9ec;
+  --muted: #888d93;
+  --border: #282b2e;
+  --border-strong: #34383c;
+  --accent: #57b6e6;
+  --accent-text: #06222f;
+  --accent-soft: rgba(87, 182, 230, 0.16);
+  --accent-ink: #9bd4f1;
+  --ok: #5ec88a;
+  --warn: #d9a441;
+  --danger: #e5736b;
+}
+
+/* ===== Forge — warm near-black + ember =====================================
+ * The dwarven forge: warm stone, fire, restraint. */
+[data-palette="forge"] {
+  --bg: #faf8f4;
+  --surface: #ffffff;
+  --surface-2: #f3efe9;
+  --text: #1a1612;
+  --muted: #6f6557;
+  --border: #e8e3da;
+  --border-strong: #d8d1c4;
+  --accent: #c26a2a;
+  --accent-text: #ffffff;
+  --accent-soft: rgba(194, 106, 42, 0.12);
+  --accent-ink: #9a5420;
+  --ok: #6f8a2e;
+  --warn: #b07d1e;
+  --danger: #c8453b;
+}
+[data-palette="forge"].dark {
+  --bg: #14110e;
+  --surface: #1d1916;
+  --surface-2: #272118;
+  --text: #f0ebe3;
+  --muted: #95897b;
+  --border: #2e2924;
+  --border-strong: #3b352e;
+  --accent: #e0843f;
+  --accent-text: #1c1006;
+  --accent-soft: rgba(224, 132, 63, 0.16);
+  --accent-ink: #efab74;
+  --ok: #9fbd5a;
+  --warn: #d9a441;
+  --danger: #e5736b;
+}
+
+/* ===== Mithril — achromatic silver =========================================
+ * Precious, sober metal: silver on dark, no chromatic accent — light and
+ * contrast carry emphasis. */
+[data-palette="mithril"] {
+  --bg: #fbfbfc;
+  --surface: #ffffff;
+  --surface-2: #f1f2f3;
+  --text: #18191b;
+  --muted: #6c6f74;
+  --border: #e6e7e9;
+  --border-strong: #d5d6d8;
+  --accent: #3f4247;
+  --accent-text: #ffffff;
+  --accent-soft: rgba(63, 66, 71, 0.10);
+  --accent-ink: #3f4247;
+  --ok: #5b5e63;
+  --warn: #b07d1e;
+  --danger: #c8453b;
+}
+[data-palette="mithril"].dark {
+  --bg: #101113;
+  --surface: #191a1c;
+  --surface-2: #232527;
+  --text: #e9eaec;
+  --muted: #8a8d92;
+  --border: #2a2b2e;
+  --border-strong: #36373a;
+  --accent: #cfd3d8;
+  --accent-text: #16181a;
+  --accent-soft: rgba(207, 211, 216, 0.13);
+  --accent-ink: #eef0f2;
+  --ok: #b9bdc2;
+  --warn: #d9a441;
+  --danger: #e5736b;
+}

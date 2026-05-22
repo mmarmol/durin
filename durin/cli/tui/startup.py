@@ -210,7 +210,7 @@ def build_startup_banner(*, version: str, agent_loop: Any | None) -> str:
 
     keys = (
         "esc cancel · ctrl+q quit · / commands · ! shell · "
-        "ctrl+l model · ctrl+y copy reply · ctrl+t theme"
+        "ctrl+l model · ctrl+y copy reply · ctrl+t light/dark · /theme palette"
     )
 
     lines: list[str] = []

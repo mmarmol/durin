@@ -239,7 +239,7 @@ export default function App() {
 function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName: string | null) => void; onLogout: () => void }) {
   const { t, i18n } = useTranslation();
   const { client } = useClient();
-  const { theme, toggle } = useTheme();
+  const { theme, toggle, palette, setPalette } = useTheme();
   const { sessions, loading, refresh, createChat, deleteChat } = useSessions();
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [view, setView] = useState<ShellView>("chat");
@@ -495,6 +495,8 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
             <SettingsView
               theme={theme}
               onToggleTheme={toggle}
+              palette={palette}
+              onSelectPalette={setPalette}
               onBackToChat={onBackToChat}
               onModelNameChange={onModelNameChange}
               onLogout={onLogout}

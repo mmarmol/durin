@@ -455,10 +455,23 @@ class InstallConfig(Base):
     extras: list[str] = Field(default_factory=list)
 
 
+class AppearanceConfig(Base):
+    """Visual theme — shared by the TUI and the web dashboard.
+
+    Two axes (see ``design/DESIGN.md``): ``palette`` is the colour
+    identity, ``mode`` is light/dark. ``mode = "auto"`` detects the
+    terminal (``COLORFGBG``) or the browser's ``prefers-color-scheme``.
+    """
+
+    palette: str = "ithildin"  # ithildin | forge | mithril
+    mode: str = "auto"  # auto | light | dark
+
+
 class Config(BaseSettings):
     """Root configuration for durin."""
 
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
+    appearance: AppearanceConfig = Field(default_factory=AppearanceConfig)
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
