@@ -575,10 +575,22 @@ def check_webui_reachable(*, timeout: float = 1.5) -> CheckResult:
 
         with httpx.Client(timeout=timeout) as client:
             r = client.get(target)
-            if r.status_code < 500:
+            # The dashboard root must serve the SPA's index.html — a 2xx.
+            # A 404 means the webui bundle is missing from the install
+            # (durin/web/dist/ wasn't shipped); that is NOT healthy even
+            # though the port is listening.
+            if 200 <= r.status_code < 300:
                 return CheckResult(
                     "webui dashboard", "ok",
-                    f"reachable at {target} (HTTP {r.status_code})",
+                    f"serving at {target}",
+                    category="services",
+                )
+            if r.status_code == 404:
+                return CheckResult(
+                    "webui dashboard", "fail",
+                    f"{target} → 404 — the webui bundle isn't installed.",
+                    fix="Reinstall a build that bundles durin/web/dist/ "
+                        "(the wheel must include the SPA).",
                     category="services",
                 )
             return CheckResult(

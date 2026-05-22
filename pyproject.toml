@@ -1,6 +1,6 @@
 [project]
 name = "durin-agent"
-version = "0.1.0a7"
+version = "0.1.0a8"
 description = "Personal AI agent with daily-driver CLI, modal TUI, and graph-based memory"
 requires-python = ">=3.11"
 license = {text = "MIT"}
@@ -90,6 +90,11 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["durin"]
+# The built webui SPA lives at durin/web/dist/ — it's VCS-ignored
+# (it's a build artifact) but MUST ship inside the wheel so the
+# `durin gateway` dashboard works. `artifacts` force-includes paths
+# that would otherwise be excluded by the .gitignore.
+artifacts = ["durin/web/dist/**/*"]
 
 [tool.ruff]
 line-length = 100

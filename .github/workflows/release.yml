@@ -38,8 +38,20 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install bun (needed for the webui build hook)
-        uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Build the webui SPA
+        # Build the SPA explicitly with npm so durin/web/dist/ is
+        # populated BEFORE the wheel build. We use npm, not bun: bun's
+        # rollup optional-deps resolution is flaky on CI. The wheel's
+        # `artifacts` config force-includes the resulting dist even
+        # though it's VCS-ignored.
+        run: |
+          cd webui
+          npm install
+          npm run build
 
       - name: Install build dependencies
         run: |
@@ -66,7 +78,11 @@ jobs:
           fi
 
       - name: Build sdist + wheel
-        run: python -m build
+        # `--sdist --wheel` builds each from the source tree directly
+        # (not sdist→wheel), so the freshly-built durin/web/dist/ is
+        # present for the wheel. DURIN_SKIP_WEBUI_BUILD=1 stops the
+        # hatch hook from rebuilding it (we already did, with npm).
+        run: DURIN_SKIP_WEBUI_BUILD=1 python -m build --sdist --wheel
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
