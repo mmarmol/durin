@@ -195,6 +195,13 @@ export interface SecretSetInput {
   value?: string;
 }
 
+/** Full effective config (secret-masked) + its JSON schema, for the
+ *  schema-driven settings form. */
+export interface ConfigSnapshot {
+  config: Record<string, unknown>;
+  schema: Record<string, unknown>;
+}
+
 export interface SlashCommand {
   command: string;
   title: string;

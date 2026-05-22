@@ -46,7 +46,7 @@
     },
     "nav": {
       "general": "일반",
-      "byok": "BYOK"
+      "byok": "API Keys"
     },
     "sections": {
       "interface": "인터페이스",

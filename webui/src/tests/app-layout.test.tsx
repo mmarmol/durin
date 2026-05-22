@@ -230,11 +230,11 @@ describe("App layout", () => {
       "aria-current",
       "page",
     );
-    expect(within(settingsNav).getByRole("button", { name: "BYOK" })).toBeInTheDocument();
+    expect(within(settingsNav).getByRole("button", { name: "API Keys" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Sign out" })).toBeInTheDocument();
     expect(screen.getByText("AI")).toBeInTheDocument();
     expect(screen.getByDisplayValue("openai/gpt-4o")).toBeInTheDocument();
-    fireEvent.click(within(settingsNav).getByRole("button", { name: "BYOK" }));
+    fireEvent.click(within(settingsNav).getByRole("button", { name: "API Keys" }));
     expect(screen.getByRole("tab", { name: "LLM" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "Web Search" })).toBeInTheDocument();
     expect(screen.getByText("OpenRouter")).toBeInTheDocument();
