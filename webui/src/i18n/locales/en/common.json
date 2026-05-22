@@ -422,6 +422,14 @@
       "send": "Send",
       "sent": "Answer sent"
     },
+    "reqSecret": {
+      "placeholder": "Paste the secret value",
+      "save": "Save",
+      "saving": "Saving…",
+      "stored": "Saved — the value never reached the model",
+      "alreadyStored": "Already stored — nothing to do",
+      "hint": "Stored straight to durin's secret store; the value never reaches the model or the chat."
+    },
     "toolSingle": "Using a tool",
     "toolMany": "Used {{count}} tools",
     "toolSummary": "{{count}} tool",

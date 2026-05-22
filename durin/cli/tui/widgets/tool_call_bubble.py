@@ -159,6 +159,16 @@ class ToolCallBubble(Vertical):
                     "click an option to load it into the input — edit, then ⏎ to send",
                     id="tc-opt-hint",
                 )
+        # request_secret: a clickable row opens a masked prompt. The
+        # value goes straight to the secret store, never the chat.
+        if self._name == "request_secret":
+            a = self._args if isinstance(self._args, dict) else {}
+            if str(a.get("name") or "").strip() and str(a.get("service") or "").strip():
+                yield Static(
+                    "▸ enter the secret securely",
+                    id="tc-secret-provide",
+                    classes="tc-option",
+                )
         # Populate body from the start args; result/error replace it later.
         self._update_body(self._render_running_body())
 
@@ -182,6 +192,8 @@ class ToolCallBubble(Vertical):
                 self._pick_option(int(wid.rsplit("-", 1)[-1]))
             except ValueError:
                 pass
+        elif wid == "tc-secret-provide":
+            self._open_secret_prompt()
 
     def _toggle_expanded(self) -> None:
         self._expanded = not self._expanded
@@ -207,6 +219,46 @@ class ToolCallBubble(Vertical):
         inp.value = options[index]
         inp.cursor_position = len(inp.value)
         inp.focus()
+
+    def _open_secret_prompt(self) -> None:
+        """Open the masked prompt for a `request_secret` credential."""
+        a = self._args if isinstance(self._args, dict) else {}
+        name = str(a.get("name") or "").strip()
+        service = str(a.get("service") or "").strip()
+        if not name or not service:
+            return
+        from durin.cli.tui.screens.secret_prompt import SecretPromptScreen
+
+        self.app.push_screen(
+            SecretPromptScreen(
+                name=name,
+                service=service,
+                purpose=str(a.get("purpose") or "").strip(),
+            ),
+            self._on_secret_prompt_done,
+        )
+
+    def _on_secret_prompt_done(self, stored: bool | None) -> None:
+        """After the masked prompt: tell the agent the secret exists.
+
+        Metadata only — the value never leaves the secret store.
+        """
+        if not stored:
+            return
+        a = self._args if isinstance(self._args, dict) else {}
+        name = str(a.get("name") or "").strip()
+        service = str(a.get("service") or "").strip()
+        note = (
+            f"The user stored the secret '{name}' (service={service}, "
+            f"scope=exec). It is available to your shell commands as "
+            f"${name}. Please continue the task."
+        )
+        publish = getattr(self.app, "_publish_inbound", None)
+        if publish is None:
+            return
+        import asyncio
+
+        asyncio.create_task(publish(note, []))
 
     # ---- lifecycle ----
 

@@ -554,3 +554,23 @@ async def test_request_secret_body_reports_already_stored() -> None:
         body = _body_plain(bubble)
         assert "already stored" in body
         assert "durin secret set" not in body
+
+
+@pytest.mark.asyncio
+async def test_request_secret_bubble_has_provide_row() -> None:
+    """request_secret offers a clickable row to open the masked prompt."""
+    app = DurinApp(agent_loop=None)
+    async with app.run_test() as pilot:
+        from textual.widgets import Static
+
+        chat = app.query_one(ChatView)
+        event = {
+            "version": 1, "phase": "end", "call_id": "rs9",
+            "name": "request_secret",
+            "arguments": {"name": "STRIPE_KEY", "service": "stripe"},
+        }
+        bubble = ToolCallBubble(event)
+        chat.mount(bubble)
+        await pilot.pause()
+        row = bubble.query_one("#tc-secret-provide", Static)
+        assert "secret" in _static_plain(row).lower()

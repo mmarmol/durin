@@ -2,14 +2,25 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { ToolCallBlock } from "@/components/thread/ToolCallBlock";
-import { ThreadActionsProvider } from "@/components/thread/ThreadActionsContext";
+import {
+  ThreadActionsProvider,
+  type ThreadActions,
+} from "@/components/thread/ThreadActionsContext";
 import type { ToolProgressEvent } from "@/lib/types";
+
+/** A ThreadActions stub — pass per-test spies for the parts under test. */
+function actions(overrides: Partial<ThreadActions> = {}): ThreadActions {
+  return {
+    sendUserMessage: vi.fn(),
+    storeSecret: vi.fn().mockResolvedValue(undefined),
+    ...overrides,
+  };
+}
 
 /**
  * ToolCallBlock gives the interactive tools a render of their own —
  * built from the call arguments, never leaking the internal "YIELD TO
- * USER" instruction the raw tool result carries. ask_user_question is
- * fully interactive: option chips load into an editable answer field.
+ * USER" instruction the raw tool result carries.
  */
 describe("ToolCallBlock — ask_user_question", () => {
   const askEvent: ToolProgressEvent = {
@@ -29,9 +40,8 @@ describe("ToolCallBlock — ask_user_question", () => {
   });
 
   it("picking an option loads it into the editable field", () => {
-    const sendUserMessage = vi.fn();
     render(
-      <ThreadActionsProvider value={{ sendUserMessage }}>
+      <ThreadActionsProvider value={actions()}>
         <ToolCallBlock event={askEvent} />
       </ThreadActionsProvider>,
     );
@@ -43,7 +53,7 @@ describe("ToolCallBlock — ask_user_question", () => {
   it("submitting an (edited) answer routes through ThreadActions", () => {
     const sendUserMessage = vi.fn();
     render(
-      <ThreadActionsProvider value={{ sendUserMessage }}>
+      <ThreadActionsProvider value={actions({ sendUserMessage })}>
         <ToolCallBlock event={askEvent} />
       </ThreadActionsProvider>,
     );
@@ -57,15 +67,16 @@ describe("ToolCallBlock — ask_user_question", () => {
 });
 
 describe("ToolCallBlock — request_secret", () => {
-  it("shows the durin secret set command", () => {
-    const event: ToolProgressEvent = {
-      phase: "end",
-      call_id: "rs1",
-      name: "request_secret",
-      arguments: { name: "GH_TOKEN", service: "github", purpose: "open PRs" },
-      result: "Secret 'GH_TOKEN' is not stored. YIELD TO USER. Present...",
-    };
-    render(<ToolCallBlock event={event} />);
+  const reqEvent: ToolProgressEvent = {
+    phase: "end",
+    call_id: "rs1",
+    name: "request_secret",
+    arguments: { name: "GH_TOKEN", service: "github", purpose: "open PRs" },
+    result: "Secret 'GH_TOKEN' is not stored. YIELD TO USER. Present...",
+  };
+
+  it("without thread actions, falls back to the CLI command", () => {
+    render(<ToolCallBlock event={reqEvent} />);
     expect(screen.getByText(/open PRs/)).toBeInTheDocument();
     expect(
       screen.getByText(/durin secret set GH_TOKEN --service github --scope exec/),
@@ -74,15 +85,35 @@ describe("ToolCallBlock — request_secret", () => {
   });
 
   it("reports an already-stored credential", () => {
-    const event: ToolProgressEvent = {
-      phase: "end",
-      call_id: "rs2",
-      name: "request_secret",
-      arguments: { name: "GH_TOKEN", service: "github" },
-      result: "Secret 'GH_TOKEN' already exists (service=github, scope=exec).",
-    };
-    render(<ToolCallBlock event={event} />);
-    expect(screen.getByText(/already stored/)).toBeInTheDocument();
+    render(
+      <ToolCallBlock
+        event={{
+          ...reqEvent,
+          result: "Secret 'GH_TOKEN' already exists (service=github, scope=exec).",
+        }}
+      />,
+    );
+    expect(screen.getByText(/already stored/i)).toBeInTheDocument();
     expect(screen.queryByText(/durin secret set/)).not.toBeInTheDocument();
+  });
+
+  it("the masked field stores the secret through ThreadActions", async () => {
+    const storeSecret = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ThreadActionsProvider value={actions({ storeSecret })}>
+        <ToolCallBlock event={reqEvent} />
+      </ThreadActionsProvider>,
+    );
+    const field = screen.getByPlaceholderText(/Paste the secret value/);
+    expect((field as HTMLInputElement).type).toBe("password");
+    fireEvent.change(field, { target: { value: "ghp_supersecret" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(storeSecret).toHaveBeenCalledWith({
+      name: "GH_TOKEN",
+      service: "github",
+      value: "ghp_supersecret",
+      scope: ["exec"],
+    });
+    expect(await screen.findByText(/Saved/)).toBeInTheDocument();
   });
 });

@@ -2,10 +2,20 @@ import { createContext, useContext } from "react";
 
 /** Actions a deeply-nested message component can take on the active
  *  thread without prop-drilling through the viewport → list → bubble
- *  chain. Currently just answering an `ask_user_question` inline. */
+ *  chain: answering an `ask_user_question`, satisfying a
+ *  `request_secret`. */
 export interface ThreadActions {
   /** Submit `text` as the user's next message in the current thread. */
   sendUserMessage: (text: string) => void;
+  /** Store a credential the agent requested. The chat is bound to this
+   *  thread; the value never enters the conversation. Resolves on the
+   *  server ack. */
+  storeSecret: (input: {
+    name: string;
+    service: string;
+    value: string;
+    scope?: string[];
+  }) => Promise<void>;
 }
 
 const ThreadActionsContext = createContext<ThreadActions | null>(null);

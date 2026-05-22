@@ -1032,13 +1032,31 @@ async def test_secrets_api_crud(bus: MagicMock, monkeypatch, tmp_path) -> None:
         assert listed.status_code == 200
         assert listed.json()["secrets"] == []
 
-        # Create.
-        created = await _http_get(
-            f"{base}/api/secrets/set?name=ATLASSIAN_WORK&service=atlassian"
-            "&value=tok-plaintext-secret&scope=exec",
-            headers=hdr,
+        # Create — via the `secret_store` websocket envelope. The value
+        # rides a JSON frame, never a URL query.
+        class _Conn:
+            def __init__(self) -> None:
+                self.sent: list[str] = []
+                self.remote_address = ("127.0.0.1", 0)
+
+            async def send(self, raw: str) -> None:
+                self.sent.append(raw)
+
+        conn = _Conn()
+        await channel._handle_secret_store_envelope(
+            conn,
+            "client-x",
+            {
+                "type": "secret_store",
+                "request_id": "r1",
+                "name": "ATLASSIAN_WORK",
+                "service": "atlassian",
+                "value": "tok-plaintext-secret",
+                "scope": ["exec"],
+            },
         )
-        assert created.status_code == 200
+        acks = [json.loads(raw) for raw in conn.sent]
+        assert any(a.get("event") == "secret_stored" and a.get("ok") for a in acks)
 
         listed = await _http_get(f"{base}/api/secrets", headers=hdr)
         rows = listed.json()["secrets"]
@@ -1053,9 +1071,16 @@ async def test_secrets_api_crud(bus: MagicMock, monkeypatch, tmp_path) -> None:
         assert entry is not None and entry.value == "tok-plaintext-secret"
 
         # Metadata-only edit (no value) keeps the stored value.
-        await _http_get(
-            f"{base}/api/secrets/set?name=ATLASSIAN_WORK&service=atlassian&scope=exec,skill:*",
-            headers=hdr,
+        await channel._handle_secret_store_envelope(
+            _Conn(),
+            "client-x",
+            {
+                "type": "secret_store",
+                "request_id": "r2",
+                "name": "ATLASSIAN_WORK",
+                "service": "atlassian",
+                "scope": ["exec", "skill:*"],
+            },
         )
         entry = SecretStore(path=tmp_path / "secrets.json").load().get("ATLASSIAN_WORK")
         assert entry.value == "tok-plaintext-secret"

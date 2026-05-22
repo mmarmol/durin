@@ -3,7 +3,6 @@ import type {
   ProviderSettingsUpdate,
   ConfigSnapshot,
   SecretEntry,
-  SecretSetInput,
   SettingsPayload,
   SettingsUpdate,
   SlashCommand,
@@ -199,20 +198,8 @@ export async function listSecrets(
   return res.secrets;
 }
 
-export async function setSecret(
-  token: string,
-  input: SecretSetInput,
-  base: string = "",
-): Promise<void> {
-  const query = new URLSearchParams();
-  query.set("name", input.name);
-  query.set("service", input.service);
-  if (input.account !== undefined) query.set("account", input.account);
-  if (input.description !== undefined) query.set("description", input.description);
-  if (input.scope !== undefined) query.set("scope", input.scope.join(","));
-  if (input.value !== undefined && input.value !== "") query.set("value", input.value);
-  await request<{ ok: boolean }>(`${base}/api/secrets/set?${query}`, token);
-}
+// A secret's value is written over the websocket (`DurinClient.storeSecret`),
+// never an HTTP query string — see durin-client.ts.
 
 export async function deleteSecret(
   token: string,

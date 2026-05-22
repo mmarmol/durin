@@ -78,6 +78,24 @@ interface PendingNewChat {
   timer: ReturnType<typeof setTimeout>;
 }
 
+interface PendingSecretStore {
+  resolve: () => void;
+  reject: (err: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+/** A credential to write into durin's secret store over the socket. */
+export interface SecretStoreInput {
+  name: string;
+  service: string;
+  value: string;
+  scope?: string[];
+  account?: string;
+  description?: string;
+  /** Chat whose agent should be told (metadata only) the secret is ready. */
+  chatId?: string;
+}
+
 export interface DurinClientOptions {
   url: string;
   reconnect?: boolean;
@@ -106,6 +124,8 @@ export class DurinClient {
   private chatHandlers = new Map<string, Set<EventHandler>>();
   /** Inbound frames received while no subscriber is registered (e.g. user switched away). */
   private pendingInboundByChat = new Map<string, InboundEvent[]>();
+  /** In-flight `storeSecret` calls, keyed by request_id, awaiting their ack. */
+  private pendingSecretStores = new Map<string, PendingSecretStore>();
   private static readonly PENDING_INBOUND_MAX = 2000;
   // chat_ids we've attached to since connect; re-attached after reconnects
   private knownChats = new Set<string>();
@@ -302,6 +322,36 @@ export class DurinClient {
     this.queueSend(frame);
   }
 
+  /**
+   * Write a credential into durin's secret store. The value rides the
+   * authenticated socket as a JSON field — it never appears in a URL
+   * query and never enters the agent conversation. Resolves once the
+   * server acks, rejects on a server error or timeout.
+   */
+  storeSecret(input: SecretStoreInput): Promise<void> {
+    const requestId =
+      globalThis.crypto?.randomUUID?.() ??
+      `sec-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingSecretStores.delete(requestId);
+        reject(new Error("secret store timed out"));
+      }, 12_000);
+      this.pendingSecretStores.set(requestId, { resolve, reject, timer });
+      this.queueSend({
+        type: "secret_store",
+        request_id: requestId,
+        name: input.name,
+        service: input.service,
+        value: input.value,
+        ...(input.scope ? { scope: input.scope } : {}),
+        ...(input.account ? { account: input.account } : {}),
+        ...(input.description ? { description: input.description } : {}),
+        ...(input.chatId ? { chat_id: input.chatId } : {}),
+      });
+    });
+  }
+
   // -- internals ---------------------------------------------------------
 
   private setStatus(status: ConnectionStatus): void {
@@ -365,6 +415,17 @@ export class DurinClient {
 
     if (parsed.event === "session_updated") {
       this.emitSessionUpdate(parsed.chat_id);
+      return;
+    }
+
+    if (parsed.event === "secret_stored") {
+      const pending = this.pendingSecretStores.get(parsed.request_id);
+      if (pending) {
+        clearTimeout(pending.timer);
+        this.pendingSecretStores.delete(parsed.request_id);
+        if (parsed.ok) pending.resolve();
+        else pending.reject(new Error(parsed.detail || "secret store failed"));
+      }
       return;
     }
 
