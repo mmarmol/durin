@@ -662,6 +662,12 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/secrets/delete":
             return self._handle_secret_delete(request)
 
+        if got == "/api/config":
+            return self._handle_config_get(request)
+
+        if got == "/api/config/set":
+            return self._handle_config_set(request)
+
         m = re.match(r"^/api/sessions/([^/]+)/messages$", got)
         if m:
             return self._handle_session_messages(request, m.group(1))
@@ -1080,6 +1086,83 @@ class WebSocketChannel(BaseChannel):
         store.save()
         get_secret_store(reload=True)
         return _http_json_response({"ok": True})
+
+    # -- generic config API (web parity Phase B) ---------------------------
+
+    def _handle_config_get(self, request: WsRequest) -> Response:
+        """`GET /api/config` — full effective config (secret-masked) + schema.
+
+        The web equivalent of `durin config show`. Returns every field
+        with its current value (defaults filled in) so the dashboard can
+        render a settings form, plus the JSON schema for that form.
+        """
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from durin.cli.config_cmd import load_raw_config, mask_secrets, validate_dict
+        from durin.config.loader import get_config_path
+        from durin.config.schema import Config
+
+        raw = load_raw_config(get_config_path())
+        try:
+            effective = validate_dict(raw).model_dump(mode="json", by_alias=True)
+        except Exception:  # noqa: BLE001
+            effective = raw
+        return _http_json_response(
+            {
+                "config": mask_secrets(effective),
+                "schema": Config.model_json_schema(by_alias=True),
+            }
+        )
+
+    def _handle_config_set(self, request: WsRequest) -> Response:
+        """`GET /api/config/set` — set one dotted key, schema-validated.
+
+        The web equivalent of `durin config set`. ``value`` is JSON-
+        decoded when possible (so booleans / numbers / objects work),
+        else kept as a string. A schema-invalid value is rejected
+        without writing.
+        """
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from durin.cli.config_cmd import (
+            _normalize_dotted_path,
+            load_raw_config,
+            mask_secrets,
+            parse_value,
+            set_at,
+            validate_dict,
+        )
+        from durin.config.loader import get_config_path, save_config
+
+        query = _parse_query(request.path)
+        key = (_query_first(query, "key") or "").strip()
+        if not key:
+            return _http_error(400, "key is required")
+        raw_value = _query_first(query, "value")
+        if raw_value is None:
+            return _http_error(400, "value is required")
+
+        path = get_config_path()
+        try:
+            canonical = validate_dict(load_raw_config(path)).model_dump(
+                mode="json", by_alias=True
+            )
+        except Exception as e:  # noqa: BLE001
+            return _http_error(400, f"on-disk config is invalid: {e}")
+        new_data = set_at(canonical, _normalize_dotted_path(key), parse_value(raw_value))
+        try:
+            config = validate_dict(new_data)
+        except Exception as e:  # noqa: BLE001
+            return _http_error(400, f"validation failed: {e}")
+        save_config(config, path)
+        return _http_json_response(
+            {
+                "ok": True,
+                "config": mask_secrets(
+                    config.model_dump(mode="json", by_alias=True)
+                ),
+            }
+        )
 
     @staticmethod
     def _is_websocket_channel_session_key(key: str) -> bool:

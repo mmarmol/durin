@@ -1,6 +1,7 @@
 import type {
   ChatSummary,
   ProviderSettingsUpdate,
+  ConfigSnapshot,
   SecretEntry,
   SecretSetInput,
   SettingsPayload,
@@ -201,4 +202,25 @@ export async function deleteSecret(
 ): Promise<void> {
   const query = new URLSearchParams({ name });
   await request<{ ok: boolean }>(`${base}/api/secrets/delete?${query}`, token);
+}
+
+export async function getConfig(
+  token: string,
+  base: string = "",
+): Promise<ConfigSnapshot> {
+  return request<ConfigSnapshot>(`${base}/api/config`, token);
+}
+
+export async function setConfigValue(
+  token: string,
+  key: string,
+  value: unknown,
+  base: string = "",
+): Promise<Record<string, unknown>> {
+  const query = new URLSearchParams({ key, value: JSON.stringify(value) });
+  const res = await request<{ ok: boolean; config: Record<string, unknown> }>(
+    `${base}/api/config/set?${query}`,
+    token,
+  );
+  return res.config;
 }

@@ -1077,6 +1077,50 @@ async def test_secrets_api_crud(bus: MagicMock, monkeypatch, tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_config_api_get_and_set(bus: MagicMock, monkeypatch, tmp_path) -> None:
+    """`/api/config` returns the effective config + schema; `/set` writes one key."""
+    port = 29894
+    config_path = tmp_path / "config.json"
+    save_config(Config(), config_path)
+    monkeypatch.setattr("durin.config.loader._current_config_path", config_path)
+
+    channel = _ch(bus, port=port)
+    channel._api_tokens["tok"] = time.monotonic() + 300
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+    base = f"http://127.0.0.1:{port}"
+    hdr = {"Authorization": "Bearer tok"}
+    try:
+        got = await _http_get(f"{base}/api/config", headers=hdr)
+        assert got.status_code == 200
+        body = got.json()
+        assert "config" in body and "schema" in body
+        assert body["config"]["agents"]["defaults"]["model"]  # full, defaults filled
+
+        # Set one value (JSON-decoded).
+        updated = await _http_get(
+            f"{base}/api/config/set?key=agents.defaults.temperature&value=0.25",
+            headers=hdr,
+        )
+        assert updated.status_code == 200
+        assert load_config(config_path).agents.defaults.temperature == 0.25
+
+        # A schema-invalid value is rejected without writing.
+        bad = await _http_get(
+            f"{base}/api/config/set?key=agents.defaults.maxTokens&value=%22nope%22",
+            headers=hdr,
+        )
+        assert bad.status_code == 400
+        assert load_config(config_path).agents.defaults.max_tokens == 8192  # unchanged
+
+        # Token required.
+        assert (await _http_get(f"{base}/api/config")).status_code == 401
+    finally:
+        await channel.stop()
+        await server_task
+
+
+@pytest.mark.asyncio
 async def test_commands_api_returns_slash_command_metadata(bus: MagicMock) -> None:
     port = 29892
     channel = _ch(bus, port=port)

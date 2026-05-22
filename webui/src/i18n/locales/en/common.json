@@ -65,7 +65,7 @@
     },
     "nav": {
       "general": "General",
-      "byok": "BYOK",
+      "byok": "API Keys",
       "secrets": "Secrets"
     },
     "sections": {
