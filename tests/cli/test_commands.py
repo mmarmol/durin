@@ -209,6 +209,45 @@ def test_onboard_advanced_preserves_explicit_config_in_next_steps(tmp_path, monk
     assert f"durin gateway --config {resolved_config}" in compact_output
 
 
+def test_onboard_wizard_offers_to_install_missing_extras(tmp_path, monkeypatch):
+    """When the wizard picked features needing extras, onboard should
+    detect the missing ones and (on confirm) actually install them —
+    not just print a copy-paste command."""
+    from durin.cli.onboard_wizard import WizardResult
+
+    config_path = tmp_path / "config.json"
+    workspace_path = tmp_path / "workspace"
+
+    # Wizard returns a config that wants the `memory` extra.
+    monkeypatch.setattr(
+        "durin.cli.onboard_wizard.run_wizard",
+        lambda initial_config: WizardResult(
+            config=initial_config,
+            extras_to_install=["memory"],
+            cancelled=False,
+            summary_lines=["Provider: zhipu (glm-5.1)"],
+        ),
+    )
+    monkeypatch.setattr("durin.channels.registry.discover_all", lambda: {})
+    # `memory` is not installed → it counts as missing.
+    monkeypatch.setattr("durin.cli.doctor.detect_installed_extras", lambda: [])
+    installed: list[list[str]] = []
+    monkeypatch.setattr(
+        "durin.cli.doctor.install_missing_extras",
+        lambda extras, assume_yes=False: installed.append(list(extras)) or 0,
+    )
+
+    # `input="y\n"` answers the "Install them now?" confirm.
+    result = runner.invoke(
+        app,
+        ["onboard", "--config", str(config_path), "--workspace", str(workspace_path)],
+        input="y\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert installed == [["memory"]], "expected install_missing_extras(['memory'])"
+
+
 def test_config_matches_github_copilot_codex_with_hyphen_prefix():
     config = Config()
     config.agents.defaults.model = "github-copilot/gpt-5.3-codex"

@@ -569,11 +569,40 @@ def onboard(
             for line in result.summary_lines:
                 console.print(f"  • {line}")
         if result.extras_to_install:
+            # The wizard chose features (memory / web / …) that need
+            # extra Python packages. Detect which are actually missing
+            # and offer to install them now instead of leaving the user
+            # a command to copy-paste.
+            from durin.cli.doctor import detect_installed_extras, install_missing_extras
             from durin.cli.upgrade import install_hint
 
-            cmd = install_hint(result.extras_to_install)
-            console.print("\n[bold]Install missing extras (copy-paste):[/bold]")
-            console.print(f"  [cyan]{cmd}[/cyan]")
+            already = set(detect_installed_extras())
+            missing = sorted(set(result.extras_to_install) - already)
+            if not missing:
+                console.print(
+                    "\n[green]✓[/green] All chosen extras are already installed."
+                )
+            else:
+                console.print(
+                    f"\n[bold]These features need extra packages:[/bold] "
+                    f"{', '.join(missing)}"
+                )
+                if typer.confirm("Install them now?", default=True):
+                    rc = install_missing_extras(missing, assume_yes=True)
+                    if rc == 0:
+                        console.print(
+                            "[green]✓[/green] Extras installed — "
+                            "restart durin to pick them up."
+                        )
+                    else:
+                        console.print(
+                            "[yellow]Install did not complete cleanly. "
+                            "Run it manually:[/yellow]"
+                        )
+                        console.print(f"  [cyan]{install_hint(missing)}[/cyan]")
+                else:
+                    console.print("[dim]Skipped. Install later with:[/dim]")
+                    console.print(f"  [cyan]{install_hint(missing)}[/cyan]")
     _onboard_plugins(config_path)
 
     # Create workspace, preferring the configured workspace path.
