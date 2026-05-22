@@ -14,7 +14,65 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-__all__ = ["build_startup_banner", "memory_summary", "categorize_tools"]
+__all__ = [
+    "build_startup_banner",
+    "build_durin_logo",
+    "memory_summary",
+    "categorize_tools",
+]
+
+
+# The DURIN wordmark — figlet `banner3`, solid blocks. The TUI paints it
+# with a vertical gradient in the palette's accent; see build_durin_logo().
+_DURIN_WORDMARK = (
+    "████████  ██     ██ ████████  ████ ██    ██\n"
+    "██     ██ ██     ██ ██     ██  ██  ███   ██\n"
+    "██     ██ ██     ██ ██     ██  ██  ████  ██\n"
+    "██     ██ ██     ██ ████████   ██  ██ ██ ██\n"
+    "██     ██ ██     ██ ██   ██    ██  ██  ████\n"
+    "██     ██ ██     ██ ██    ██   ██  ██   ███\n"
+    "████████   ███████  ██     ██ ████ ██    ██"
+)
+
+
+def _hex_to_rgb(value: str) -> tuple[int, int, int]:
+    h = value.lstrip("#")
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def _mix(a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> str:
+    return "#%02x%02x%02x" % tuple(round(x + (y - x) * t) for x, y in zip(a, b))
+
+
+def _gradient(accent: str, steps: int) -> list[str]:
+    """A light→dark vertical ramp around ``accent`` — the ithildin glow."""
+    rgb = _hex_to_rgb(accent)
+    top = _hex_to_rgb(_mix(rgb, (255, 255, 255), 0.55))
+    bottom = _hex_to_rgb(_mix(rgb, (0, 0, 0), 0.30))
+    if steps <= 1:
+        return [accent]
+    return [_mix(top, bottom, i / (steps - 1)) for i in range(steps)]
+
+
+def build_durin_logo() -> str:
+    """Return the DURIN wordmark with a per-row gradient (Rich markup).
+
+    Rendered by the TUI's ``logo`` MessageBubble role. The gradient is
+    derived from the configured palette's accent, so it tracks the theme.
+    """
+    accent = "#57b6e6"  # Ithildin dark — the fallback
+    try:
+        from durin.cli.theme import detect_mode, get_palette
+        from durin.config.loader import load_config
+
+        appearance = load_config().appearance
+        mode = detect_mode() if appearance.mode == "auto" else appearance.mode
+        accent = get_palette(appearance.palette, mode).accent
+    except Exception:  # noqa: BLE001 - the logo must never break boot
+        pass
+    rows = _DURIN_WORDMARK.split("\n")
+    colors = _gradient(accent, len(rows))
+    return "\n".join(f"[{c}]{row}[/]" for c, row in zip(colors, rows))
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +272,9 @@ def build_startup_banner(*, version: str, agent_loop: Any | None) -> str:
     )
 
     lines: list[str] = []
-    lines.append(f"durin v{version}    ·    {model} ({preset})    ·    {ws_line}")
+    # The durin logo bubble (rendered separately) carries the name; this
+    # line just states the version, model and workspace.
+    lines.append(f"v{version}    ·    {model} ({preset})    ·    {ws_line}")
     lines.append(keys)
     lines.append("")
 

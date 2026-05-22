@@ -8,9 +8,9 @@ and paste the output over the token block in globals.css.
 
     python scripts/gen_webui_tokens.py
 
-durin's accent is the brand colour; it maps to `--ring` (focus). `--primary`
-stays neutral (inverted text/bg) so most buttons read calm — the accent is
-an accent, used sparingly.
+durin's accent is the brand colour; it maps to `--primary` (the CTA fill)
+and `--ring` (focus). Outline/ghost buttons stay neutral, so the accent
+lands on genuine primary actions without flooding the UI.
 """
 
 from __future__ import annotations
@@ -40,8 +40,8 @@ MAP: list[tuple[str, str]] = [
     ("card-foreground", "text"),
     ("popover", "surface"),
     ("popover-foreground", "text"),
-    ("primary", "text"),
-    ("primary-foreground", "bg"),
+    ("primary", "accent"),
+    ("primary-foreground", "accent_text"),
     ("secondary", "surface_2"),
     ("secondary-foreground", "text"),
     ("muted", "surface_2"),

@@ -33,8 +33,8 @@ async def test_layout_mounts_four_chrome_widgets() -> None:
 async def test_input_submission_appends_user_and_assistant_bubbles() -> None:
     """Offline submission opens a user + assistant pair (placeholder body).
 
-    The startup banner counts as bubble #0 (role=banner); the actual
-    conversation bubbles come after it.
+    The startup logo + info banner are bubbles #0-#1 (roles logo +
+    banner); the actual conversation bubbles come after them.
     """
     app = DurinApp(agent_loop=None)
     async with app.run_test() as pilot:
@@ -45,8 +45,11 @@ async def test_input_submission_appends_user_and_assistant_bubbles() -> None:
         inp.value = "hola"
         await pilot.press("enter")
         await pilot.pause()
-        # Skip the startup banner — count only conversation bubbles.
-        bubbles = [b for b in chat.query(MessageBubble) if b._role != "banner"]
+        # Skip the startup logo + banner — count only conversation bubbles.
+        bubbles = [
+            b for b in chat.query(MessageBubble)
+            if b._role not in ("banner", "logo")
+        ]
         assert len(bubbles) == 2
         assert bubbles[0]._role == "user"
         assert bubbles[0].body == "hola"
@@ -64,8 +67,11 @@ async def test_empty_input_does_not_create_bubble() -> None:
         inp.value = "   "
         await pilot.press("enter")
         await pilot.pause()
-        # Banner stays; nothing else gets added.
-        non_banner = [b for b in chat.query(MessageBubble) if b._role != "banner"]
+        # Logo + banner stay; nothing else gets added.
+        non_banner = [
+            b for b in chat.query(MessageBubble)
+            if b._role not in ("banner", "logo")
+        ]
         assert non_banner == []
 
 
