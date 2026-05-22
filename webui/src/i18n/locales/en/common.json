@@ -417,6 +417,11 @@
   "message": {
     "streaming": "streaming",
     "assistantTyping": "Assistant is typing",
+    "askUser": {
+      "placeholder": "Type your answer, or pick an option to edit",
+      "send": "Send",
+      "sent": "Answer sent"
+    },
     "toolSingle": "Using a tool",
     "toolMany": "Used {{count}} tools",
     "toolSummary": "{{count}} tool",

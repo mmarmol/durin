@@ -1,34 +1,63 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 
 import { ToolCallBlock } from "@/components/thread/ToolCallBlock";
+import { ThreadActionsProvider } from "@/components/thread/ThreadActionsContext";
 import type { ToolProgressEvent } from "@/lib/types";
 
 /**
- * ToolCallBlock gives the interactive tools (ask_user_question,
- * request_secret) a render of their own — built from the call
- * arguments, never leaking the internal "YIELD TO USER" instruction the
- * raw tool result carries.
+ * ToolCallBlock gives the interactive tools a render of their own —
+ * built from the call arguments, never leaking the internal "YIELD TO
+ * USER" instruction the raw tool result carries. ask_user_question is
+ * fully interactive: option chips load into an editable answer field.
  */
-describe("ToolCallBlock — interactive tools", () => {
-  it("ask_user_question shows the question and numbered options", () => {
-    const event: ToolProgressEvent = {
-      phase: "end",
-      call_id: "aq1",
-      name: "ask_user_question",
-      arguments: { question: "Which database?", options: ["Postgres", "SQLite"] },
-      result: "Question registered (id=abc). YIELD TO USER. Present this...",
-    };
-    render(<ToolCallBlock event={event} />);
-    // The ❓ prefix is unique to the body line (the header summary also
-    // echoes the bare question text).
+describe("ToolCallBlock — ask_user_question", () => {
+  const askEvent: ToolProgressEvent = {
+    phase: "end",
+    call_id: "aq1",
+    name: "ask_user_question",
+    arguments: { question: "Which database?", options: ["Postgres", "SQLite"] },
+    result: "Question registered (id=abc). YIELD TO USER. Present this...",
+  };
+
+  it("shows the question and the options as chips", () => {
+    render(<ToolCallBlock event={askEvent} />);
     expect(screen.getByText(/❓ Which database\?/)).toBeInTheDocument();
-    expect(screen.getByText(/1\. Postgres/)).toBeInTheDocument();
-    expect(screen.getByText(/2\. SQLite/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Postgres" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "SQLite" })).toBeInTheDocument();
     expect(screen.queryByText(/YIELD TO USER/)).not.toBeInTheDocument();
   });
 
-  it("request_secret shows the durin secret set command", () => {
+  it("picking an option loads it into the editable field", () => {
+    const sendUserMessage = vi.fn();
+    render(
+      <ThreadActionsProvider value={{ sendUserMessage }}>
+        <ToolCallBlock event={askEvent} />
+      </ThreadActionsProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Postgres" }));
+    const field = screen.getByPlaceholderText(/Type your answer/);
+    expect((field as HTMLInputElement).value).toBe("Postgres");
+  });
+
+  it("submitting an (edited) answer routes through ThreadActions", () => {
+    const sendUserMessage = vi.fn();
+    render(
+      <ThreadActionsProvider value={{ sendUserMessage }}>
+        <ToolCallBlock event={askEvent} />
+      </ThreadActionsProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Postgres" }));
+    const field = screen.getByPlaceholderText(/Type your answer/);
+    fireEvent.change(field, { target: { value: "Postgres 16, read replicas" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(sendUserMessage).toHaveBeenCalledWith("Postgres 16, read replicas");
+    expect(screen.getByText(/Answer sent/)).toBeInTheDocument();
+  });
+});
+
+describe("ToolCallBlock — request_secret", () => {
+  it("shows the durin secret set command", () => {
     const event: ToolProgressEvent = {
       phase: "end",
       call_id: "rs1",
@@ -44,7 +73,7 @@ describe("ToolCallBlock — interactive tools", () => {
     expect(screen.queryByText(/YIELD TO USER/)).not.toBeInTheDocument();
   });
 
-  it("request_secret reports an already-stored credential", () => {
+  it("reports an already-stored credential", () => {
     const event: ToolProgressEvent = {
       phase: "end",
       call_id: "rs2",

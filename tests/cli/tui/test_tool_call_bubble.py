@@ -288,15 +288,19 @@ async def test_copy_strips_decorations_from_list_dir() -> None:
         assert "SOUL.md" in copied
 
 
+def _static_plain(static: object) -> str:
+    """Extract the plain text a Static widget would render."""
+    content = static._Static__content  # type: ignore[attr-defined]
+    if hasattr(content, "plain"):
+        return content.plain  # type: ignore[no-any-return]
+    return str(content)
+
+
 def _body_plain(bubble: ToolCallBubble) -> str:
     """Extract the plain text Textual would render in the body Static."""
     from textual.widgets import Static
 
-    body = bubble.query_one("#tc-body", Static)
-    content = body._Static__content  # type: ignore[attr-defined]
-    if hasattr(content, "plain"):
-        return content.plain  # type: ignore[no-any-return]
-    return str(content)
+    return _static_plain(bubble.query_one("#tc-body", Static))
 
 
 def _expand_toggle_text(bubble) -> str:
@@ -436,11 +440,13 @@ async def test_short_output_has_no_expand_toggle() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ask_user_question_body_shows_question_and_options() -> None:
-    """ask_user_question renders the question + numbered options, never
-    the internal YIELD instruction the raw tool result carries."""
+async def test_ask_user_question_renders_question_and_clickable_options() -> None:
+    """ask_user_question shows the question (never the internal YIELD
+    instruction) and its options as their own clickable rows."""
     app = DurinApp(agent_loop=None)
     async with app.run_test() as pilot:
+        from textual.widgets import Static
+
         chat = app.query_one(ChatView)
         event = {
             "version": 1, "phase": "end", "call_id": "aq1",
@@ -450,21 +456,44 @@ async def test_ask_user_question_body_shows_question_and_options() -> None:
                 "options": ["Postgres", "SQLite", "DuckDB"],
             },
             "result": (
-                "Question registered (id=abc): 'Which database should we use?'.\n"
-                "YIELD TO USER. Present this exact question..."
+                "Question registered (id=abc). YIELD TO USER. Present..."
             ),
         }
         bubble = ToolCallBubble(event)
         chat.mount(bubble)
         await pilot.pause()
         bubble.update_from_event(event)
-        bubble._expanded = True
-        bubble._rerender_body_with_truncation()
         await pilot.pause()
         body = _body_plain(bubble)
         assert "Which database should we use?" in body
-        assert "Postgres" in body and "DuckDB" in body
         assert "YIELD TO USER" not in body
+        opt_texts = [
+            _static_plain(bubble.query_one(f"#tc-opt-{i}", Static)) for i in range(3)
+        ]
+        assert any("Postgres" in text for text in opt_texts)
+        assert any("DuckDB" in text for text in opt_texts)
+
+
+@pytest.mark.asyncio
+async def test_ask_user_question_option_click_prefills_input() -> None:
+    """Picking an option loads it into the InputArea, editable — the
+    answer is not sent on click."""
+    app = DurinApp(agent_loop=None)
+    async with app.run_test() as pilot:
+        from durin.cli.tui.widgets import InputArea
+
+        chat = app.query_one(ChatView)
+        event = {
+            "version": 1, "phase": "end", "call_id": "aq2",
+            "name": "ask_user_question",
+            "arguments": {"question": "Pick one", "options": ["alpha", "beta"]},
+        }
+        bubble = ToolCallBubble(event)
+        chat.mount(bubble)
+        await pilot.pause()
+        bubble._pick_option(1)
+        await pilot.pause()
+        assert app.query_one(InputArea).value == "beta"
 
 
 @pytest.mark.asyncio

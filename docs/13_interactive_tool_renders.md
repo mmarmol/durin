@@ -60,18 +60,29 @@ Además, en web el `TraceGroup` (colapsado por defecto) se abre solo
 cuando contiene una tool interactiva: la pregunta o la petición de
 credencial no deben quedar enterradas en "🔧 1 tool".
 
-### Fase 2 — interactividad (propuesto)
+### Fase 2 — `ask_user_question` interactivo (hecho)
 
-- **`ask_user_question`** — opciones como botones; al hacer click se
-  manda esa opción como mensaje del usuario (usa `client.sendMessage`,
-  ya existe). Necesita bajar `chatId` por props
-  `ThreadShell → MessageBubble → TraceGroup → ToolCallBlock`. En TUI,
-  quick-pick numérico desde el `InputArea`.
-- **`request_secret`** — input enmascarado + "Guardar"; en web llama a
-  `setSecret` (`/api/secrets/set`, ya existe) con `scope=['exec']`; en
-  TUI un modal de input enmascarado que escribe en `SecretStore`. Tras
-  guardar, hint "ya podés reintentar". El valor nunca toca el chat.
+Cada opción sugerida es **editable**: se selecciona y se puede ajustar
+o reemplazar antes de mandar (idea del usuario; patrón Hermes/Claude).
 
-No requiere el round-trip con `Future` (la "V2" del docstring de
-`ask_user`): el modelo de durin —"la respuesta es el próximo mensaje"—
-alcanza, y guardar el secret es un side-effect fuera de la conversación.
+- **Web** — `ToolCallBlock` renderiza el panel `AskUserAnswer`: la
+  pregunta, las opciones como chips, y un campo editable. Click en un
+  chip → carga esa opción en el campo (editable); el campo acepta texto
+  libre para una respuesta "otra". Enviar va por `ThreadActions`, un
+  context que expone `sendUserMessage` — evita drillear `chatId` por
+  `ThreadShell → viewport → list → bubble`.
+- **TUI** — `ToolCallBubble` renderiza las opciones como filas
+  clickeables; click carga la opción en el `InputArea`, editable, y le
+  da foco. El usuario ajusta y manda con ⏎.
+
+### Fase 2b — `request_secret` interactivo (propuesto)
+
+- Input enmascarado + "Guardar"; en web llama a `setSecret`
+  (`/api/secrets/set`, ya existe) con `scope=['exec']`; en TUI un modal
+  de input enmascarado que escribe en `SecretStore`. Tras guardar, hint
+  "ya podés reintentar". El valor nunca toca el chat.
+
+Nada de esto requiere el round-trip con `Future` (la "V2" del docstring
+de `ask_user`): el modelo de durin —"la respuesta es el próximo
+mensaje"— alcanza, y guardar el secret es un side-effect fuera de la
+conversación.
