@@ -964,10 +964,19 @@ re-enters the `Config` object, logs, or telemetry. Wired into
 pre-existing plaintext provider keys in. The onboard wizard writes new
 keys straight to the store as references.
 
+Resolution is wired into providers, the web-search tool, and channel
+construction — secrets work everywhere config expects a credential.
+
 Phase 2: the agent runner redacts stored secret values out of every
 tool result before it reaches the model (`SecretRedactor`); `ExecTool`
 injects `exec`-scoped secrets into the subprocess env so scripts use
 them without the agent ever seeing the values.
+
+Agent tools (`agent/tools/secrets.py`): `list_secrets` lets the agent
+discover available credentials (metadata only); `request_secret`
+yields with the exact `durin secret set` command when the agent needs
+one it lacks — the user runs it, the value never passes through the
+agent. `durin doctor` flags dangling `${secret:}` references.
 
 ---
 

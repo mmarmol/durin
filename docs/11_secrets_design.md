@@ -260,26 +260,33 @@ store (creating the entry with the right `service` + `scope`) and put a
 
 ## 13. As-built status (2026-05-22)
 
-**Delivered (Phase 1 + Phase 2):**
+**Delivered (Phase 1 + Phase 2 + agent tools):**
 
 - `durin/security/secrets.py` — `SecretStore`, `SecretEntry`,
   `${secret:}` grammar, `resolve_secret`, `SecretRedactor`,
   `migrate_plaintext_provider_keys`.
 - `durin secret set/list/show/rm/grant/revoke/migrate`.
-- Resolution wired into `Config.get_api_key()` and the provider
-  factory — provider API keys work as references.
-- Onboard wizard writes provider keys to the store as references.
+- Resolution wired into `Config.get_api_key()` + the provider factory,
+  the web-search tool, and channel construction — secrets work in
+  every place config expects a credential.
+- Onboard wizard writes provider keys, web-search keys, and channel
+  tokens to the store as references (`_store_as_secret`).
 - Redaction of every tool result before it enters the model context.
 - `exec`-scoped secret injection into the `ExecTool` subprocess env.
+- Agent tools `list_secrets` (discovery, metadata only) and
+  `request_secret` (yields with the `durin secret set` command for
+  the user) — `durin/agent/tools/secrets.py`.
+- `durin doctor` `secret refs` check — flags dangling `${secret:}`.
 
 **Remaining follow-ups:**
 
-- Resolution + migration for non-provider slots: `tools.web.search`
-  keys and channel tokens still hold plaintext. Phase 1 landed
-  provider-first; these need their own resolution sites wired.
+- Migration covers provider keys only; web/channel plaintext on an old
+  config isn't auto-migrated (fresh onboard writes references). A
+  full-config migration sweep could be added if needed.
 - `skill:<name>`-scoped `exec` injection — needs the running-skill
   context threaded into `ExecTool` (only `exec` scope is honored now).
 - Multi-agent `agent:` scope enforcement — data model only.
-- `durin doctor` check for dangling `${secret:}` references.
 - Log-sink redaction (tool-result redaction is done; logs are not).
-- **Phase 3** — `need_secret` / `request_secret` agent tools.
+- `request_secret` yields a CLI command rather than prompting inline —
+  robust across CLI/gateway/channels; an interactive in-loop prompt
+  could be a later refinement.

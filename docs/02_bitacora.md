@@ -1085,3 +1085,28 @@ Built a secrets subsystem (full design: `docs/11_secrets_design.md`).
 - Multi-agent `agent:` scope enforcement (data model only).
 - `durin doctor` dangling-reference check; log-sink redaction.
 - Phase 3: `need_secret` / `request_secret` agent tools.
+
+### Secrets — follow-up same day (2026-05-22)
+
+After the provider-first Phase 1+2 landed, extended in the same session:
+
+- Resolution wired for **web-search keys and channel tokens** too —
+  `WebSearchTool._resolved_api_key()` and a single `${secret:}`-resolving
+  chokepoint in `ChannelManager` before each channel is constructed. The
+  wizard writes those credentials as references as well. Secrets now work
+  in every place config expects a credential, not just providers.
+- **Agent tools** `list_secrets` + `request_secret` (`agent/tools/secrets.py`).
+  `request_secret` reuses the `ask_user_question` yield pattern: rather
+  than prompting inside the agent loop (fragile across CLI/gateway/
+  channels), it returns the exact `durin secret set` command for the user
+  to run — the value goes to the store via the CLI, never through the
+  agent. With Phase-2 exec injection this closes the loop: discover →
+  request → use as `$NAME` in shell commands, agent never sees a value.
+- `durin doctor` gained a `secret refs` check (dangling `${secret:}`).
+
+Decision recorded: `request_secret` yields a command instead of an
+interactive prompt. An in-loop hidden prompt would be more magical but
+fragile (prompt_toolkit terminal state; no TTY under gateway/channels).
+The yield form is bulletproof and keeps the value maximally isolated —
+the user types it straight into the CLI store, it never reaches the
+agent process at all.
