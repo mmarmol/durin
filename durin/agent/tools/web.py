@@ -158,6 +158,12 @@ class WebSearchTool(Tool):
         except Exception:
             logger.exception("Failed to refresh web search config")
 
+    def _resolved_api_key(self) -> str:
+        """The configured search key, with a ``${secret:}`` reference resolved."""
+        from durin.security.secrets import resolve_secret
+
+        return resolve_secret(self.config.api_key) or ""
+
     def _effective_provider(self) -> str:
         """Resolve the backend that execute() will actually use."""
         self._refresh_config()
@@ -165,22 +171,22 @@ class WebSearchTool(Tool):
         if provider == "duckduckgo":
             return "duckduckgo"
         if provider == "brave":
-            api_key = self.config.api_key or os.environ.get("BRAVE_API_KEY", "")
+            api_key = self._resolved_api_key() or os.environ.get("BRAVE_API_KEY", "")
             return "brave" if api_key else "duckduckgo"
         if provider == "tavily":
-            api_key = self.config.api_key or os.environ.get("TAVILY_API_KEY", "")
+            api_key = self._resolved_api_key() or os.environ.get("TAVILY_API_KEY", "")
             return "tavily" if api_key else "duckduckgo"
         if provider == "searxng":
             base_url = (self.config.base_url or os.environ.get("SEARXNG_BASE_URL", "")).strip()
             return "searxng" if base_url else "duckduckgo"
         if provider == "jina":
-            api_key = self.config.api_key or os.environ.get("JINA_API_KEY", "")
+            api_key = self._resolved_api_key() or os.environ.get("JINA_API_KEY", "")
             return "jina" if api_key else "duckduckgo"
         if provider == "kagi":
-            api_key = self.config.api_key or os.environ.get("KAGI_API_KEY", "")
+            api_key = self._resolved_api_key() or os.environ.get("KAGI_API_KEY", "")
             return "kagi" if api_key else "duckduckgo"
         if provider == "olostep":
-            api_key = self.config.api_key or os.environ.get("OLOSTEP_API_KEY", "")
+            api_key = self._resolved_api_key() or os.environ.get("OLOSTEP_API_KEY", "")
             return "olostep" if api_key else "duckduckgo"
         return provider
 
@@ -231,7 +237,7 @@ class WebSearchTool(Tool):
             from olostep import AsyncOlostep, Olostep_BaseError
         except ImportError:
             return "Error: olostep package not installed. Run: pip install olostep"
-        api_key = self.config.api_key or os.environ.get("OLOSTEP_API_KEY", "")
+        api_key = self._resolved_api_key() or os.environ.get("OLOSTEP_API_KEY", "")
         if not api_key:
             logger.warning("OLOSTEP_API_KEY not set, falling back to DuckDuckGo")
             return await self._search_duckduckgo(query, n)
@@ -279,7 +285,7 @@ class WebSearchTool(Tool):
             return f"Olostep search error: {type(e).__name__}: {e}"
 
     async def _search_brave(self, query: str, n: int) -> str:
-        api_key = self.config.api_key or os.environ.get("BRAVE_API_KEY", "")
+        api_key = self._resolved_api_key() or os.environ.get("BRAVE_API_KEY", "")
         if not api_key:
             logger.warning("BRAVE_API_KEY not set, falling back to DuckDuckGo")
             return await self._search_duckduckgo(query, n)
@@ -319,7 +325,7 @@ class WebSearchTool(Tool):
             return f"Error: {e}"
 
     async def _search_tavily(self, query: str, n: int) -> str:
-        api_key = self.config.api_key or os.environ.get("TAVILY_API_KEY", "")
+        api_key = self._resolved_api_key() or os.environ.get("TAVILY_API_KEY", "")
         if not api_key:
             logger.warning("TAVILY_API_KEY not set, falling back to DuckDuckGo")
             return await self._search_duckduckgo(query, n)
@@ -359,7 +365,7 @@ class WebSearchTool(Tool):
             return f"Error: {e}"
 
     async def _search_jina(self, query: str, n: int) -> str:
-        api_key = self.config.api_key or os.environ.get("JINA_API_KEY", "")
+        api_key = self._resolved_api_key() or os.environ.get("JINA_API_KEY", "")
         if not api_key:
             logger.warning("JINA_API_KEY not set, falling back to DuckDuckGo")
             return await self._search_duckduckgo(query, n)
@@ -388,7 +394,7 @@ class WebSearchTool(Tool):
             return await self._search_duckduckgo(query, n)
 
     async def _search_kagi(self, query: str, n: int) -> str:
-        api_key = self.config.api_key or os.environ.get("KAGI_API_KEY", "")
+        api_key = self._resolved_api_key() or os.environ.get("KAGI_API_KEY", "")
         if not api_key:
             logger.warning("KAGI_API_KEY not set, falling back to DuckDuckGo")
             return await self._search_duckduckgo(query, n)
