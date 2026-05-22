@@ -1,0 +1,292 @@
+"""Secret store — see ``docs/11_secrets_design.md``.
+
+Secrets live in ``~/.durin/secrets.json`` (mode ``0600``), separate
+from the config tree so config files stay shareable. Config fields
+hold a reference (``${secret:NAME}``); the value is resolved lazily at
+the point of use and never enters the in-memory ``Config`` object.
+
+Two axes, kept separate:
+
+* ``service`` — *what* the secret is (classification; non-unique).
+* ``scope``   — *who* may auto-receive it (``exec`` / ``skill:*`` / …).
+
+Authorization model: the presence of a ``${secret:NAME}`` reference in
+config **is** the grant for that field — config-field resolution does
+not check ``scope``. ``scope`` gates *auto-injection* (the ``exec``
+subprocess env, Phase 2) and the agent ``need_secret`` flow (Phase 3).
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+__all__ = [
+    "SecretEntry",
+    "SecretStore",
+    "SecretError",
+    "SecretNotFoundError",
+    "is_secret_ref",
+    "parse_secret_ref",
+    "make_ref",
+    "is_valid_secret_name",
+    "get_secret_store",
+]
+
+# Secret names double as environment variable names during `exec`
+# injection, so they must be env-var-safe.
+_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+# A reference is the WHOLE field value — no partial interpolation.
+_REF_RE = re.compile(r"^\$\{secret:([A-Z][A-Z0-9_]*)\}$")
+
+
+class SecretError(Exception):
+    """Base class for secret-store errors."""
+
+
+class SecretNotFoundError(SecretError):
+    """A ``${secret:NAME}`` reference points at a name not in the store."""
+
+
+class SecretScopeError(SecretError):
+    """A consumer requested a secret its ``scope`` does not authorize.
+
+    Reserved for Phase 2/3 (auto-injection, agent flow). Config-field
+    resolution never raises this — the reference itself is the grant.
+    """
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+class SecretEntry(BaseModel):
+    """One stored secret. The ``name`` is the store's map key."""
+
+    value: str
+    service: str
+    account: str | None = None
+    description: str = ""
+    scope: list[str] = Field(default_factory=list)
+    origin: str = "user"  # user | wizard | migration | agent
+    created_at: str = Field(default_factory=_now)
+
+
+def is_valid_secret_name(name: str) -> bool:
+    """True when *name* is a valid (env-var-safe) secret name."""
+    return bool(isinstance(name, str) and _NAME_RE.match(name))
+
+
+def is_secret_ref(value: Any) -> bool:
+    """True when *value* is exactly a ``${secret:NAME}`` reference."""
+    return isinstance(value, str) and _REF_RE.match(value.strip()) is not None
+
+
+def parse_secret_ref(value: Any) -> str | None:
+    """Return the referenced name, or ``None`` when *value* isn't a ref."""
+    if not isinstance(value, str):
+        return None
+    m = _REF_RE.match(value.strip())
+    return m.group(1) if m else None
+
+
+def make_ref(name: str) -> str:
+    """Build the ``${secret:NAME}`` reference string for *name*."""
+    return f"${{secret:{name}}}"
+
+
+def scope_allows(scope: list[str], consumer: str) -> bool:
+    """True when *consumer* is permitted by *scope*.
+
+    Exact match, or a ``family:*`` wildcard (``skill:*`` covers
+    ``skill:deploy``). Used by Phase-2 auto-injection — NOT by
+    config-field resolution.
+    """
+    if consumer in scope:
+        return True
+    if ":" in consumer:
+        family = consumer.split(":", 1)[0]
+        if f"{family}:*" in scope:
+            return True
+    return False
+
+
+def _default_secrets_path() -> Path:
+    """``secrets.json`` sits next to the active config (testable)."""
+    from durin.config.loader import get_config_path
+
+    return get_config_path().parent / "secrets.json"
+
+
+class SecretStore:
+    """Load / mutate / persist ``secrets.json``."""
+
+    def __init__(self, path: Path | None = None) -> None:
+        self._path = path or _default_secrets_path()
+        self._entries: dict[str, SecretEntry] = {}
+        self._loaded = False
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
+    def load(self) -> SecretStore:
+        """(Re)read the store from disk. Malformed entries are skipped."""
+        self._entries = {}
+        if self._path.exists():
+            try:
+                raw = json.loads(self._path.read_text(encoding="utf-8") or "{}")
+            except (OSError, json.JSONDecodeError):
+                raw = {}
+            for name, data in (raw.get("secrets") or {}).items():
+                if not is_valid_secret_name(name) or not isinstance(data, dict):
+                    continue
+                try:
+                    self._entries[name] = SecretEntry.model_validate(data)
+                except Exception:  # noqa: BLE001
+                    continue
+        self._loaded = True
+        return self
+
+    def _ensure(self) -> None:
+        if not self._loaded:
+            self.load()
+
+    def save(self) -> None:
+        """Persist the store, always with mode ``0600`` (plaintext)."""
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "_version": 1,
+            "secrets": {
+                name: entry.model_dump()
+                for name, entry in sorted(self._entries.items())
+            },
+        }
+        # O_CREAT with 0600 so the file is never briefly world-readable.
+        fd = os.open(self._path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, ensure_ascii=False)
+        # Re-assert mode in case the file pre-existed with looser perms.
+        os.chmod(self._path, 0o600)
+
+    # -- queries ----------------------------------------------------------
+    def get(self, name: str) -> SecretEntry | None:
+        self._ensure()
+        return self._entries.get(name)
+
+    def names(self) -> list[str]:
+        self._ensure()
+        return sorted(self._entries)
+
+    def all(self) -> dict[str, SecretEntry]:
+        self._ensure()
+        return dict(self._entries)
+
+    def find_by_service(
+        self, service: str, account: str | None = None
+    ) -> list[str]:
+        """Names of secrets matching *service* (and *account* if given)."""
+        self._ensure()
+        return [
+            name
+            for name, entry in sorted(self._entries.items())
+            if entry.service == service
+            and (account is None or entry.account == account)
+        ]
+
+    # -- mutations --------------------------------------------------------
+    def put(
+        self,
+        name: str,
+        *,
+        value: str,
+        service: str,
+        account: str | None = None,
+        description: str = "",
+        scope: list[str] | None = None,
+        origin: str = "user",
+    ) -> None:
+        """Create or replace a secret. ``created_at`` survives a replace."""
+        if not is_valid_secret_name(name):
+            raise SecretError(
+                f"Invalid secret name '{name}' — must match [A-Z][A-Z0-9_]*"
+            )
+        self._ensure()
+        existing = self._entries.get(name)
+        self._entries[name] = SecretEntry(
+            value=value,
+            service=service,
+            account=account,
+            description=description,
+            scope=list(scope or []),
+            origin=origin,
+            created_at=existing.created_at if existing else _now(),
+        )
+
+    def remove(self, name: str) -> bool:
+        """Delete a secret. Returns True when something was removed."""
+        self._ensure()
+        return self._entries.pop(name, None) is not None
+
+    def set_scope(self, name: str, scope: list[str]) -> bool:
+        """Replace a secret's ``scope``. Returns False when unknown."""
+        self._ensure()
+        entry = self._entries.get(name)
+        if entry is None:
+            return False
+        entry.scope = list(scope)
+        return True
+
+    # -- resolution -------------------------------------------------------
+    def resolve(self, value: Any) -> Any:
+        """Resolve a config value to plaintext.
+
+        ``${secret:NAME}`` → the stored value; anything else (literal,
+        ``None``) is returned unchanged. Does NOT check ``scope`` — a
+        reference written into config is itself the authorization.
+        """
+        name = parse_secret_ref(value)
+        if name is None:
+            return value
+        self._ensure()
+        entry = self._entries.get(name)
+        if entry is None:
+            raise SecretNotFoundError(
+                f"Config references secret '{name}' but it is not in "
+                f"the store ({self._path}). Add it with `durin secret set {name}`."
+            )
+        return entry.value
+
+    def collect_for(self, consumer: str) -> dict[str, str]:
+        """All ``{name: value}`` whose ``scope`` authorizes *consumer*.
+
+        Used by Phase-2 auto-injection (e.g. the ``exec`` subprocess
+        env). Config-field resolution uses :meth:`resolve` instead.
+        """
+        self._ensure()
+        return {
+            name: entry.value
+            for name, entry in self._entries.items()
+            if scope_allows(entry.scope, consumer)
+        }
+
+
+_STORE: SecretStore | None = None
+
+
+def get_secret_store(*, reload: bool = False) -> SecretStore:
+    """Return the process-wide store (cached).
+
+    Pass ``reload=True`` after a mutation, or when the active config
+    path changed (tests), to rebuild from disk.
+    """
+    global _STORE
+    if _STORE is None or reload:
+        _STORE = SecretStore().load()
+    return _STORE
