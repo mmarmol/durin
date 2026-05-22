@@ -75,9 +75,11 @@ class MemorySearchTool(Tool):
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
+        # Vector retrieval is opt-in (memory.enabled); see memory_store.
         model = None
         try:
-            model = ctx.config.memory.embedding.model
+            if ctx.config.memory.enabled:
+                model = ctx.config.memory.embedding.model
         except (AttributeError, TypeError):
             model = None
         return cls(workspace=ctx.workspace, embedding_model=model)

@@ -299,21 +299,29 @@ def _caps_marks(model: str, provider: str) -> str:
     return f"text✓ vision{_mark(vision)} audio{_mark(audio)}"
 
 
-def _test_model(config: Config) -> None:
-    """Run a real round-trip against ``config``'s default model."""
+def _test_model(config: Config) -> str:
+    """Run a real round-trip against ``config``'s default model.
+
+    Returns a one-line result string. Callers inside a menu loop keep
+    that line on screen in the next prompt — a bare ``print`` would be
+    scrolled away by questionary's redraw.
+    """
     try:
         from durin.cli.doctor import check_model_ping
     except Exception as e:  # noqa: BLE001
-        print(f"  Could not run the model test: {e}")
-        return
+        line = f"could not run the model test: {e}"
+        print(f"  {line}")
+        return line
     print("  Testing the model (a real round-trip)…")
     result = check_model_ping(cfg=config)
     if result.status == "ok":
-        print(f"  ✓ {result.message}")
+        line = f"✓ {result.message}"
     else:
-        print(f"  ✗ {result.message}")
+        line = f"✗ {result.message}"
         if result.fix:
-            print(f"    {result.fix}")
+            line += f"  ({result.fix})"
+    print(f"  {line}")
+    return line
 
 
 # ---------------------------------------------------------------------------
@@ -511,7 +519,9 @@ def _hub_state(key: str, config: Config) -> str:
         a = _mark(_modality_covered(config, "audio", na))
         return f"vision {v}  audio {a}"
     if key == "memory":
-        return "on" if "memory" in _detect_configured_features(config) else "off"
+        if getattr(config.memory, "enabled", False):
+            return f"on ({config.memory.embedding.model})"
+        return "off"
     if key == "web":
         if getattr(config.tools.web, "enable", False):
             backend = getattr(config.tools.web.search, "provider", "") or "duckduckgo"
@@ -535,6 +545,7 @@ def _run_hub(
     config: Config, extras: set[str], q: Any, summary: list[str],
 ) -> None:
     """The re-entrant main menu. Loops until the user finishes."""
+    last_test = ""
     while True:
         row_to_key: dict[str, str] = {}
         choices: list[str] = []
@@ -545,14 +556,17 @@ def _run_hub(
         choices.append("Test the model")
         choices.append("✓ Finish onboarding")
 
-        pick = q.select(
-            "durin onboard — what do you want to set up?",
-            choices=choices,
-        ).ask()
+        message = "durin onboard — what do you want to set up?"
+        if last_test:
+            # Keep the last test result visible — questionary would
+            # otherwise scroll a bare print off-screen.
+            message = f"Last model test: {last_test}\n{message}"
+
+        pick = q.select(message, choices=choices).ask()
         if pick is None or pick.startswith("✓ Finish"):
             return
         if pick == "Test the model":
-            _test_model(config)
+            last_test = _test_model(config)
             continue
         key = row_to_key.get(pick)
         if key is None:
@@ -587,11 +601,17 @@ def _open_section(
 
 def _submenu_model(config: Config, q: Any, summary: list[str]) -> None:
     """Change the model (keeping the provider), the provider, or test."""
+    last_test = ""
     while True:
         d = config.agents.defaults
-        pick = q.select(
+        message = (
             f"Model & provider — {d.provider} · {d.model} "
-            f"({_caps_marks(d.model, d.provider)}):",
+            f"({_caps_marks(d.model, d.provider)}):"
+        )
+        if last_test:
+            message = f"Last model test: {last_test}\n{message}"
+        pick = q.select(
+            message,
             choices=[
                 "Change model only",
                 "Change provider",
@@ -602,7 +622,7 @@ def _submenu_model(config: Config, q: Any, summary: list[str]) -> None:
         if pick is None or pick == _BACK_CHOICE:
             return
         if pick == "Test the model":
-            _test_model(config)
+            last_test = _test_model(config)
             continue
         if pick == "Change model only":
             recommended = next(
@@ -763,25 +783,58 @@ def _submenu_workspace(config: Config, q: Any, summary: list[str]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _configure_memory(
-    config: Config, extras: set[str], q: Any, summary: list[str],
-) -> bool:
-    if not q.confirm(
-        "Enable vector memory? Adds the `[memory]` extra.",
-        default=True,
-    ).ask():
-        return False
+def _pick_embedding(config: Config, q: Any, summary: list[str]) -> None:
+    """Pick the local embedding model. Skippable — ← Back keeps current.
+
+    Only fastembed (local, auto-downloaded) models are offered: that's
+    the only embedding backend durin's runtime wires today. Provider-
+    hosted embeddings are scaffolded in the schema but not implemented.
+    """
     labels = [c[0] for c in _EMBEDDING_CHOICES]
-    pick = q.select("Embedding model:", choices=labels).ask()
-    if pick is None:
-        return False
+    pick = q.select(
+        "Embedding model (← Back keeps the current one):",
+        choices=[_BACK_CHOICE, *labels],
+    ).ask()
+    if pick is None or pick == _BACK_CHOICE:
+        return
     for label, prov, model, _size in _EMBEDDING_CHOICES:
         if label == pick:
             config.memory.embedding = MemoryEmbeddingConfig(provider=prov, model=model)
+            summary.append(f"Embedding model: {label.split(' (')[0]}")
             break
-    extras.add("memory")
-    summary.append(f"Vector memory: {pick.split(' (')[0]}")
-    return True
+
+
+def _configure_memory(
+    config: Config, extras: set[str], q: Any, summary: list[str],
+) -> None:
+    """Vector-memory submenu: toggle it on/off, choose the embedding.
+
+    Re-entrant — every option returns here, and ← Back leaves without
+    forcing any choice. Enabling adds the `[memory]` extra; the
+    embedding keeps its default unless the user changes it.
+    """
+    while True:
+        on = bool(getattr(config.memory, "enabled", False))
+        emb = config.memory.embedding.model
+        toggle = "Disable vector memory" if on else "Enable vector memory"
+        pick = q.select(
+            f"Vector memory — {'ON' if on else 'off'}  (embedding: {emb}):",
+            choices=[toggle, "Change embedding model", _BACK_CHOICE],
+        ).ask()
+        if pick is None or pick == _BACK_CHOICE:
+            return
+        if pick == toggle:
+            config.memory.enabled = not on
+            if config.memory.enabled:
+                extras.add("memory")
+                summary.append("Vector memory: enabled")
+            else:
+                extras.discard("memory")
+                summary.append("Vector memory: disabled")
+            continue
+        if pick == "Change embedding model":
+            _pick_embedding(config, q, summary)
+            continue
 
 
 def _configure_web(
@@ -931,11 +984,8 @@ def _detect_configured_features(config: Config) -> set[str]:
             found.add("vision")
         if getattr(aux, "audio", None) is not None:
             found.add("audio")
-    try:
-        if config.memory.embedding.model != MemoryEmbeddingConfig().model:
-            found.add("memory")
-    except Exception:  # noqa: BLE001
-        pass
+    if getattr(config.memory, "enabled", False):
+        found.add("memory")
     if getattr(config.tools.web, "enable", False):
         found.add("web")
     if getattr(config.gateway, "webui_enabled", False):

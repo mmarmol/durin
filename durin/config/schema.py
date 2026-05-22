@@ -133,8 +133,15 @@ class MemoryEmbeddingConfig(Base):
 
 
 class MemoryConfig(Base):
-    """Memory subsystem configuration root."""
+    """Memory subsystem configuration root.
 
+    ``enabled`` gates vector retrieval. When false the memory tools
+    still work over the markdown files (grep-level recall) but skip the
+    vector index entirely — no embedding model is loaded. It's opt-in
+    because the embedding model is a multi-hundred-MB download.
+    """
+
+    enabled: bool = False
     embedding: MemoryEmbeddingConfig = Field(default_factory=MemoryEmbeddingConfig)
 
 
