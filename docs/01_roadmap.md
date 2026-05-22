@@ -185,7 +185,12 @@ Items that emerged from running the tools roadmap and turned out to be worth shi
 | E | **Per-tool head/tail truncation** (pi-inspired) | 2026-05-20 | `shell`/`exec` output truncated from head (keep tail = errors); reads keep head. Small refinement of an old uniformity |
 | F | **Real prompt-tokens anchor** (pi-inspired, perf C.1) | 2026-05-20 | Provider's actual `prompt_tokens` stamped on assistant messages → `estimate_prompt_tokens_chain` uses real numbers instead of estimating the whole chain |
 | G | **`cache.usage` telemetry event** (pi-inspired, perf C.2) | 2026-05-20 | Per-turn structured event with `prompt_tokens`, `cached_tokens`, `cache_ratio_pct`. Surfaces existing server-side cache savings (e.g. z.ai's automatic prefix cache returns ~99% hits) |
-| H | **Secrets subsystem — Phase 1+2** (`durin/security/secrets.py`, `durin secret` CLI) | 2026-05-22 | API keys out of plaintext config: a `~/.durin/secrets.json` store (0600), `${secret:}` references, `service`/`scope` axes, migration, redaction of secret values from tool results, `exec`-scoped subprocess injection. Design: `docs/11_secrets_design.md`. Phase 3 (`need_secret`/`request_secret` agent tools) deferred |
+| H | **Secrets subsystem — Phase 1+2** (`durin/security/secrets.py`, `durin secret` CLI) | 2026-05-22 | API keys out of plaintext config: a `~/.durin/secrets.json` store (0600), `${secret:}` references, `service`/`scope` axes, migration, redaction of secret values from tool results, `exec`-scoped subprocess injection. Design: `docs/archive/11_secrets_design.md`. Phase 3 → row I |
+| I | **Secrets Phase 3 — interactive `request_secret`** | 2026-05-22 | The agent *requests* a credential; the user types it into a masked TUI modal / web panel; the value rides the websocket (never a URL query, never the chat) straight to the store. The LLM only learns the metadata. Closes the secrets subsystem |
+| J | **Web config parity** | 2026-05-22 | The dashboard configures all of durin without the CLI: generic `/api/config` + schema-driven "All settings", a Secrets section, refined Settings IA (Providers / Web search / Channels / General model hub) |
+| K | **Interactive tool renders** | 2026-05-22 | Purpose-built TUI + web renders for `ask_user_question` (option chips + editable answer) and `request_secret` (masked input), replacing the generic tool-call block |
+| L | **TUI Pilot harness** (`durin/cli/tui/probe.py`, `scripts/tui_smoke.py`) | 2026-05-22 | Headless screen-text capture of the Textual TUI — the agent and tests can see what's painted without a real terminal |
+| M | **Unified design system** (`design/DESIGN.md`, `design/tokens.css`, `durin/cli/theme.py`) | 2026-05-22 | One palette system (Ithildin / Forge / Mithril × light/dark) across web, TUI and wizard; an anti-drift test pins the Python mirror to the CSS |
 
 ---
 
@@ -210,10 +215,21 @@ Once Phase 2 has retrieval, Phase 1b reduces to "use the memory retriever to fet
 
 ---
 
-## Last updated: 2026-05-22 (secrets subsystem Phase 1+2)
+## Last updated: 2026-05-22 (post-a7 — see additions I–M)
 
-> Latest pass: items #1–9 of the original 12-list shipped (incl. capability bridges for vision + audio), item #12 mostly closed by today's `disable_model_invocation` flag. Capability metadata pipeline (3-source consensus snapshot) shipped as a foundation. Pi coding agent reviewed and four refinements adopted: `context_transform` hook, skill disable flag, head/tail truncation per tool, anchored token accounting, cache visibility. Stale planning docs (`04_agent_strategies_catalog`, `05_log_swebench`, `06_log_experiments`) moved to `docs/archive/`. Memory (Phase 2) is now unblocked.
+> Post-v0.1.0a7 pass (2026-05-22): closed the secrets subsystem with the
+> interactive `request_secret` flow (Phase 3); shipped full **web config
+> parity** (the dashboard configures all of durin, no CLI needed);
+> **interactive tool renders** for `ask_user_question` / `request_secret`;
+> a headless **TUI Pilot harness**; and a **unified design system**
+> (`design/DESIGN.md`) — one palette across web, TUI and wizard. Stale
+> plan/report docs (code audit, daily-driver plan, smoke test, Textual
+> migration, secrets/web-parity/interactive-render designs) moved to
+> `docs/archive/`. **Next major direction: Memory Phase 2** — see
+> `08_memory_phase2_proposal.md` §0d.
 
-> Daily driver lifecycle (D6 + D7 + D8 in `09_daily_driver_plan.md`): `durin config`, `durin upgrade`, `durin uninstall`, `durin doctor`, plus README + INSTALL.md shipped. Distribution renamed to `durin-agent` on PyPI; tag-triggered workflow builds + publishes wheel/sdist to GitHub Releases + PyPI via OIDC trusted publishing. The install/configure/upgrade/diagnose/uninstall surfaces are now complete; the operator no longer needs to hand-edit JSON or guess where state lives, and can install via `pipx install --pre durin-agent` without a checkout.
+> Earlier pass: items #1–9 of the original 12-list shipped (incl. capability bridges for vision + audio), item #12 mostly closed by the `disable_model_invocation` flag. Capability metadata pipeline (3-source consensus snapshot) shipped as a foundation. Pi coding agent reviewed and four refinements adopted: `context_transform` hook, skill disable flag, head/tail truncation per tool, anchored token accounting, cache visibility. Stale planning docs (`04_agent_strategies_catalog`, `05_log_swebench`, `06_log_experiments`) moved to `docs/archive/`. Memory (Phase 2) is now unblocked.
+
+> Daily driver lifecycle (D6 + D7 + D8 in `archive/09_daily_driver_plan.md`): `durin config`, `durin upgrade`, `durin uninstall`, `durin doctor`, plus README + INSTALL.md shipped. Distribution renamed to `durin-agent` on PyPI; tag-triggered workflow builds + publishes wheel/sdist to GitHub Releases + PyPI via OIDC trusted publishing. The install/configure/upgrade/diagnose/uninstall surfaces are now complete; the operator no longer needs to hand-edit JSON or guess where state lives, and can install via `pipx install --pre durin-agent` without a checkout.
 
 > **v0.1.0a7 — first consistent release (2026-05-22)**. Beyond D6-D8: split config layout (`~/.durin/config.json.d/` per-topic files with auto-migration + noise pruning), gateway daemon mode (`durin gateway start/stop/restart/status/logs`), webui structured tool-blocks (D9.1), `status`/`doctor` split into snapshot-vs-diagnostics, task-oriented `onboard` wizard that's re-runnable (keeps configured steps), model-capability auto-sync on default-model pick, and a full rebrand from the nanobot fork (⚒️ — durin is Tolkien's dwarf-king, not a cat). All prior `daily-driver-*` and `v0.1.0aN` tags were cleared; `v0.1.0a7` is the baseline.
