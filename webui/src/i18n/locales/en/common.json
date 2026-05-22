@@ -67,7 +67,9 @@
       "general": "General",
       "byok": "API Keys",
       "secrets": "Secrets",
-      "advanced": "All settings"
+      "advanced": "All settings",
+      "providers": "Model providers",
+      "web-search": "Web search"
     },
     "sections": {
       "interface": "Interface",

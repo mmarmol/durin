@@ -46,7 +46,11 @@
     },
     "nav": {
       "general": "一般",
-      "byok": "API Keys"
+      "byok": "API Keys",
+      "providers": "Model providers",
+      "web-search": "Web search",
+      "secrets": "Secrets",
+      "advanced": "All settings"
     },
     "sections": {
       "interface": "インターフェース",

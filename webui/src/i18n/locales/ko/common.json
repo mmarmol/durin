@@ -46,7 +46,11 @@
     },
     "nav": {
       "general": "일반",
-      "byok": "API Keys"
+      "byok": "API Keys",
+      "providers": "Model providers",
+      "web-search": "Web search",
+      "secrets": "Secrets",
+      "advanced": "All settings"
     },
     "sections": {
       "interface": "인터페이스",
