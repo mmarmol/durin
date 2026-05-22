@@ -83,10 +83,11 @@ export function ToolCallBlock({ event }: ToolCallBlockProps) {
   const name = event.name || "tool";
   const summary = summaryLine(event);
 
-  // ask_user_question gets a fully interactive answer panel instead of
-  // the static preview body.
+  // The interactive tools get a panel of their own instead of the
+  // static preview body.
   const isAskUser = name === "ask_user_question";
-  const bodyLines = isAskUser ? [] : renderBodyLines(event);
+  const isReqSecret = name === "request_secret";
+  const bodyLines = isAskUser || isReqSecret ? [] : renderBodyLines(event);
   const total = bodyLines.length;
   const truncated = !expanded && total > PREVIEW_LINES;
   const visible = truncated ? bodyLines.slice(0, PREVIEW_LINES) : bodyLines;
@@ -120,6 +121,8 @@ export function ToolCallBlock({ event }: ToolCallBlockProps) {
       </div>
       {isAskUser ? (
         <AskUserAnswer event={event} />
+      ) : isReqSecret ? (
+        <RequestSecretPanel event={event} />
       ) : (
         visible.length > 0 && (
           <pre className="overflow-x-auto whitespace-pre-wrap break-words pb-1 font-mono text-[11px] leading-relaxed">
@@ -230,6 +233,106 @@ function AskUserAnswer({ event }: { event: ToolProgressEvent }) {
   );
 }
 
+/**
+ * Interactive panel for `request_secret`: shows what credential the
+ * agent needs and a masked field to provide it. Saving sends the value
+ * over the socket straight to durin's secret store (`storeSecret`) — it
+ * never enters the conversation or a URL. The agent is told only that
+ * the secret now exists.
+ */
+function RequestSecretPanel({ event }: { event: ToolProgressEvent }) {
+  const { t } = useTranslation();
+  const actions = useThreadActions();
+  const name = argString(event.arguments, "name") ?? "";
+  const service = argString(event.arguments, "service") ?? "";
+  const purpose = argString(event.arguments, "purpose") ?? "";
+  const alreadyStored = resultText(event.result).includes("already exists");
+
+  const [value, setValue] = useState("");
+  const [state, setState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [error, setError] = useState("");
+
+  const save = async () => {
+    if (!value || !actions) return;
+    setState("saving");
+    setError("");
+    try {
+      await actions.storeSecret({ name, service, value, scope: ["exec"] });
+      setValue("");
+      setState("saved");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "failed");
+      setState("error");
+    }
+  };
+
+  return (
+    <div className="space-y-1.5 pb-1.5 pt-0.5">
+      <div className="text-[12px] text-foreground/90">
+        🔑 {name || "(unnamed secret)"}
+        {service ? ` · ${service}` : ""}
+      </div>
+      {purpose && (
+        <div className="text-[11.5px] text-muted-foreground">{purpose}</div>
+      )}
+      {alreadyStored ? (
+        <div className="text-[11.5px] text-emerald-600/90 dark:text-emerald-400/90">
+          ✓ {t("message.reqSecret.alreadyStored")}
+        </div>
+      ) : state === "saved" ? (
+        <div className="text-[11.5px] text-emerald-600/90 dark:text-emerald-400/90">
+          ✓ {t("message.reqSecret.stored")}
+        </div>
+      ) : actions ? (
+        <>
+          <div className="flex items-center gap-1.5">
+            <input
+              type="password"
+              autoComplete="off"
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  void save();
+                }
+              }}
+              placeholder={t("message.reqSecret.placeholder")}
+              className={cn(
+                "h-7 min-w-0 flex-1 rounded-md border border-border/60 bg-background",
+                "px-2 text-[12px] outline-none focus:border-primary/60",
+              )}
+            />
+            <button
+              type="button"
+              onClick={() => void save()}
+              disabled={!value || state === "saving"}
+              className={cn(
+                "shrink-0 rounded-md bg-primary px-2.5 py-1 text-[11.5px]",
+                "font-medium text-primary-foreground disabled:opacity-40",
+              )}
+            >
+              {state === "saving"
+                ? t("message.reqSecret.saving")
+                : t("message.reqSecret.save")}
+            </button>
+          </div>
+          <div className="text-[10.5px] text-muted-foreground">
+            {t("message.reqSecret.hint")}
+          </div>
+          {state === "error" && (
+            <div className="text-[11px] text-red-500">{error}</div>
+          )}
+        </>
+      ) : (
+        <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px] text-cyan-500/90">
+          $ durin secret set {name} --service {service} --scope exec
+        </pre>
+      )}
+    </div>
+  );
+}
+
 interface BodyLine {
   text: string;
   className?: string;
@@ -267,37 +370,8 @@ function renderBodyLines(ev: ToolProgressEvent): BodyLine[] {
     return lines;
   }
 
-  // ask_user_question is handled by the interactive AskUserAnswer
-  // panel (see ToolCallBlock), never as static body lines.
-
-  // request_secret: what is needed + the command to store it. The
-  // secret value never flows through here.
-  if (name === "request_secret") {
-    const secretName = argString(ev.arguments, "name") ?? "";
-    const service = argString(ev.arguments, "service") ?? "";
-    const purpose = argString(ev.arguments, "purpose") ?? "";
-    const lines: BodyLine[] = [
-      {
-        text: `🔑 ${secretName || "(unnamed secret)"}${service ? `  · ${service}` : ""}`,
-        className: "text-foreground/90",
-      },
-    ];
-    if (purpose) {
-      lines.push({ text: `   ${purpose}`, className: "text-muted-foreground/90" });
-    }
-    if (resultText(ev.result).includes("already exists")) {
-      lines.push({
-        text: "   already stored — nothing to do",
-        className: "text-emerald-500/90",
-      });
-    } else if (secretName && service) {
-      lines.push({
-        text: `   $ durin secret set ${secretName} --service ${service} --scope exec`,
-        className: "text-cyan-500/90",
-      });
-    }
-    return lines;
-  }
+  // ask_user_question and request_secret are handled by their own
+  // interactive panels (see ToolCallBlock), never as static body lines.
 
   // Generic / read_file / list_dir / grep: just the result (or error).
   if (ev.error) {

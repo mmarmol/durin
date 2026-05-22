@@ -186,15 +186,6 @@ export interface SecretEntry {
   value_hint: string | null;
 }
 
-export interface SecretSetInput {
-  name: string;
-  service: string;
-  account?: string;
-  description?: string;
-  scope?: string[];
-  value?: string;
-}
-
 /** Full effective config (secret-masked) + its JSON schema, for the
  *  schema-driven settings form. */
 export interface ConfigSnapshot {
@@ -285,6 +276,15 @@ export type InboundEvent =
       goal_state: GoalStateWsPayload;
     }
   | { event: "session_updated"; chat_id: string }
+  | {
+      /** Ack for a `secret_store` frame — the credential was written to
+       * the local secret store (or rejected). Carries no secret value. */
+      event: "secret_stored";
+      request_id: string;
+      ok: boolean;
+      name?: string;
+      detail?: string;
+    }
   | { event: "error"; chat_id?: string; detail?: string };
 
 /** Base64-encoded image attached to an outbound ``message`` envelope.
@@ -325,4 +325,20 @@ export type Outbound =
       /** Marks messages sent by the embedded WebUI, without changing the
        * generic websocket protocol for other clients. */
       webui?: true;
+    }
+  | {
+      /** Store a credential straight into durin's secret store. The
+       * value rides the (already-authenticated) socket as a JSON field —
+       * never a URL query — and never enters the agent conversation. */
+      type: "secret_store";
+      request_id: string;
+      name: string;
+      service: string;
+      value: string;
+      scope?: string[];
+      account?: string;
+      description?: string;
+      /** When set, the agent on this chat is told (metadata only, no
+       * value) that the secret is now available. */
+      chat_id?: string;
     };

@@ -656,9 +656,6 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/secrets":
             return self._handle_secrets_list(request)
 
-        if got == "/api/secrets/set":
-            return self._handle_secret_set(request)
-
         if got == "/api/secrets/delete":
             return self._handle_secret_delete(request)
 
@@ -1039,51 +1036,9 @@ class WebSocketChannel(BaseChannel):
         ]
         return _http_json_response({"secrets": items})
 
-    def _handle_secret_set(self, request: WsRequest) -> Response:
-        """`GET /api/secrets/set` — create or update a secret.
-
-        With no ``value`` it edits metadata only (the stored value is
-        kept) so scope / description can be changed without re-entering
-        the credential.
-        """
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        from durin.security.secrets import (
-            SecretStore,
-            get_secret_store,
-            is_valid_secret_name,
-        )
-
-        query = _parse_query(request.path)
-        name = (_query_first(query, "name") or "").strip()
-        if not is_valid_secret_name(name):
-            return _http_error(400, "invalid secret name (use UPPER_SNAKE)")
-        service = (_query_first(query, "service") or "").strip()
-        if not service:
-            return _http_error(400, "service is required")
-
-        store = SecretStore().load()
-        existing = store.get(name)
-        value = _query_first(query, "value")
-        if not value:
-            if existing is None:
-                return _http_error(400, "value is required for a new secret")
-            value = existing.value  # metadata-only edit
-
-        scope_raw = _query_first(query, "scope") or ""
-        scope = [tag.strip() for tag in scope_raw.split(",") if tag.strip()]
-        store.put(
-            name,
-            value=value,
-            service=service,
-            account=(_query_first(query, "account") or "").strip() or None,
-            description=(_query_first(query, "description") or "").strip(),
-            scope=scope,
-            origin=existing.origin if existing else "webui",
-        )
-        store.save()
-        get_secret_store(reload=True)
-        return _http_json_response({"ok": True, "name": name})
+    # A secret is created/updated over the websocket — see the
+    # ``secret_store`` envelope in ``_handle_secret_store_envelope``.
+    # The value rides a JSON frame, never a URL query.
 
     def _handle_secret_delete(self, request: WsRequest) -> Response:
         """`GET /api/secrets/delete` — remove a secret."""
@@ -1871,7 +1826,103 @@ class WebSocketChannel(BaseChannel):
                 is_dm=False,
             )
             return
+        if t == "secret_store":
+            await self._handle_secret_store_envelope(connection, client_id, envelope)
+            return
         await self._send_event(connection, "error", detail=f"unknown type: {t!r}")
+
+    async def _handle_secret_store_envelope(
+        self,
+        connection: Any,
+        client_id: str,
+        envelope: dict[str, Any],
+    ) -> None:
+        """Write a credential to the secret store from a ``secret_store`` frame.
+
+        The value rides the JSON frame — never a URL query — and is never
+        placed into the agent conversation. On success the agent on
+        ``chat_id`` is told the secret exists (metadata only, no value)
+        so it can resume.
+        """
+        from durin.security.secrets import (
+            SecretStore,
+            get_secret_store,
+            is_valid_secret_name,
+        )
+
+        request_id = str(envelope.get("request_id") or "")
+
+        async def _fail(detail: str) -> None:
+            await self._send_event(
+                connection, "secret_stored", request_id=request_id, ok=False, detail=detail
+            )
+
+        name = str(envelope.get("name") or "").strip()
+        service = str(envelope.get("service") or "").strip()
+        if not is_valid_secret_name(name):
+            await _fail("invalid secret name (use UPPER_SNAKE)")
+            return
+        if not service:
+            await _fail("service is required")
+            return
+
+        raw_scope = envelope.get("scope")
+        scope = (
+            [str(s).strip() for s in raw_scope if str(s).strip()]
+            if isinstance(raw_scope, list)
+            else []
+        )
+        try:
+            store = SecretStore().load()
+            existing = store.get(name)
+            # An empty value on an existing secret is a metadata-only
+            # edit — keep the stored credential, change scope/etc.
+            value = envelope.get("value")
+            if not isinstance(value, str) or not value:
+                if existing is None:
+                    await _fail("value is required for a new secret")
+                    return
+                value = existing.value
+            store.put(
+                name,
+                value=value,
+                service=service,
+                account=(str(envelope.get("account") or "").strip() or None),
+                description=str(envelope.get("description") or "").strip(),
+                scope=scope,
+                origin=existing.origin if existing else "webui",
+            )
+            store.save()
+            get_secret_store(reload=True)
+        except Exception as exc:  # noqa: BLE001
+            await _fail(f"could not store secret: {exc}")
+            return
+
+        await self._send_event(
+            connection, "secret_stored", request_id=request_id, ok=True, name=name
+        )
+
+        # Tell the agent — metadata only, never the value — so it resumes.
+        cid = envelope.get("chat_id")
+        if _is_valid_chat_id(cid):
+            scope_label = ", ".join(scope) or "none"
+            usable = (
+                f" It is available to your shell commands as ${name}."
+                if "exec" in scope
+                else ""
+            )
+            note = (
+                f"The user stored the secret '{name}' (service={service}, "
+                f"scope={scope_label}).{usable} Please continue the task."
+            )
+            self._attach(connection, cid)
+            await self._handle_message(
+                sender_id=client_id,
+                chat_id=cid,
+                content=note,
+                metadata={"webui": True},
+                is_dm=False,
+            )
 
     async def stop(self) -> None:
         if not self._running:

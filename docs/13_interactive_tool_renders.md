@@ -75,14 +75,28 @@ o reemplazar antes de mandar (idea del usuario; patrón Hermes/Claude).
   clickeables; click carga la opción en el `InputArea`, editable, y le
   da foco. El usuario ajusta y manda con ⏎.
 
-### Fase 2b — `request_secret` interactivo (propuesto)
+### Fase 2b — `request_secret` interactivo (hecho)
 
-- Input enmascarado + "Guardar"; en web llama a `setSecret`
-  (`/api/secrets/set`, ya existe) con `scope=['exec']`; en TUI un modal
-  de input enmascarado que escribe en `SecretStore`. Tras guardar, hint
-  "ya podés reintentar". El valor nunca toca el chat.
+El LLM **pide** el secret (`request_secret`), el humano aporta el
+**valor**, el **código cliente** ejecuta el guardado, y el LLM solo se
+entera de la metadata. El valor viaja por un canal separado del chat.
 
-Nada de esto requiere el round-trip con `Future` (la "V2" del docstring
-de `ask_user`): el modelo de durin —"la respuesta es el próximo
-mensaje"— alcanza, y guardar el secret es un side-effect fuera de la
-conversación.
+- **Canal seguro** — el valor viaja como frame websocket `secret_store`
+  (JSON, autenticado), nunca en un query string. La vieja ruta
+  `GET /api/secrets/set` (valor en la URL — fuga a historial/proxies/
+  logs) se eliminó; `Settings → Secrets` y `Channels` migraron al mismo
+  frame.
+- **Web** — `ToolCallBlock` renderiza `RequestSecretPanel`: metadata +
+  campo `type=password` + "Guardar". Guardar llama
+  `client.storeSecret` → frame `secret_store` → el gateway escribe el
+  `SecretStore` y responde un ack `secret_stored`.
+- **TUI** — la burbuja `request_secret` ofrece una fila clickeable que
+  abre `SecretPromptScreen`, un modal con `Input(password=True)` que
+  escribe directo al `SecretStore`.
+- **Notificación** — al guardar OK, el cliente (gateway en web, app en
+  TUI) inyecta un mensaje de **metadata** ("se guardó NAME, scope exec,
+  disponible como $NAME") para que el agente retome. Sin el valor.
+
+No requiere el round-trip con `Future` (la "V2" del docstring de
+`ask_user`): el modelo de durin —"la respuesta es el próximo mensaje"—
+alcanza, y guardar el secret es un side-effect fuera de la conversación.

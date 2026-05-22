@@ -52,7 +52,6 @@ import {
   getModelCapabilities,
   listSecrets,
   setConfigValue,
-  setSecret,
   testModel,
   updateProviderSettings,
   updateSettings,
@@ -1517,6 +1516,7 @@ const EMPTY_SECRET_FORM: SecretFormState = {
 
 function SecretsSettings({ token }: { token: string }) {
   const { t } = useTranslation();
+  const { client } = useClient();
   const [secrets, setSecrets] = useState<SecretEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1547,7 +1547,7 @@ function SecretsSettings({ token }: { token: string }) {
     setBusy(true);
     setError(null);
     try {
-      await setSecret(token, {
+      await client.storeSecret({
         name: form.name.trim(),
         service: form.service.trim(),
         account: form.account.trim(),
@@ -1565,7 +1565,7 @@ function SecretsSettings({ token }: { token: string }) {
     } finally {
       setBusy(false);
     }
-  }, [canSave, token, form, load, t]);
+  }, [canSave, client, form, load, t]);
 
   const onDelete = useCallback(
     async (name: string) => {

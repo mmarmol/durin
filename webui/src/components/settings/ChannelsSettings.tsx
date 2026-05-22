@@ -4,12 +4,8 @@ import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  listChannels,
-  setConfigValue,
-  setSecret,
-  type ChannelInfo,
-} from "@/lib/api";
+import { listChannels, setConfigValue, type ChannelInfo } from "@/lib/api";
+import { useClient } from "@/providers/ClientProvider";
 
 /** Build an env-var-safe secret name for a channel credential. */
 function secretName(channel: string, field: string): string {
@@ -110,6 +106,7 @@ function ChannelRow({
  *  Enabling from scratch is config the generic form can't create. */
 export function ChannelsSettings({ token }: { token: string }) {
   const { t } = useTranslation();
+  const { client } = useClient();
   const [channels, setChannels] = useState<ChannelInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -138,7 +135,7 @@ export function ChannelsSettings({ token }: { token: string }) {
       try {
         if (channel.credential_field && credential.trim()) {
           const name = secretName(channel.name, channel.credential_field);
-          await setSecret(token, {
+          await client.storeSecret({
             name,
             value: credential.trim(),
             service: `channel:${channel.name}`,
@@ -158,7 +155,7 @@ export function ChannelsSettings({ token }: { token: string }) {
         setBusy(null);
       }
     },
-    [token, load, t],
+    [token, client, load, t],
   );
 
   const disable = useCallback(

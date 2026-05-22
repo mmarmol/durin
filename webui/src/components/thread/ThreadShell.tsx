@@ -239,11 +239,20 @@ export function ThreadShell({
     [send],
   );
 
-  // Lets an ask_user_question block deep in the transcript submit an
-  // answer without drilling a callback through viewport → list → bubble.
+  // Lets an interaction block deep in the transcript answer a question
+  // or store a requested secret without drilling callbacks through
+  // viewport → list → bubble.
   const threadActions = useMemo(
-    () => ({ sendUserMessage: (text: string) => handleThreadSend(text) }),
-    [handleThreadSend],
+    () => ({
+      sendUserMessage: (text: string) => handleThreadSend(text),
+      storeSecret: (input: {
+        name: string;
+        service: string;
+        value: string;
+        scope?: string[];
+      }) => client.storeSecret({ ...input, chatId: chatId ?? undefined }),
+    }),
+    [handleThreadSend, client, chatId],
   );
 
   const composer = (
