@@ -166,6 +166,32 @@ def cmd_grant(
     console.print(f"[green]✓[/green] {name} now grants [bold]{consumer}[/bold].")
 
 
+@secret_app.command("migrate")
+def cmd_migrate() -> None:
+    """Move plaintext provider API keys from config into the store.
+
+    One-shot and idempotent. The config keeps `${secret:…}` references
+    afterwards; the values live in `secrets.json` (mode 0600).
+    """
+    from durin.security.secrets import migrate_plaintext_provider_keys
+
+    created = migrate_plaintext_provider_keys()
+    if not created:
+        console.print(
+            "[dim]Nothing to migrate — no plaintext provider keys in config.[/dim]"
+        )
+        return
+    console.print(
+        f"[green]✓[/green] Migrated {len(created)} key(s) into the secret store:"
+    )
+    for name in created:
+        console.print(f"  • {name}")
+    console.print(
+        "[dim]Config now holds ${secret:…} references; the config backup is "
+        "alongside it.[/dim]"
+    )
+
+
 @secret_app.command("revoke")
 def cmd_revoke(
     name: str = typer.Argument(..., help="Secret name."),

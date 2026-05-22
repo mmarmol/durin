@@ -609,9 +609,17 @@ class Config(BaseSettings):
         *,
         preset: ModelPresetConfig | None = None,
     ) -> str | None:
-        """Get API key for the given model. Falls back to first available key."""
+        """Get API key for the given model. Falls back to first available key.
+
+        A ``${secret:NAME}`` reference is resolved through the secret
+        store; a literal value passes through unchanged.
+        """
         p = self.get_provider(model, preset=preset)
-        return p.api_key if p else None
+        if not p or not p.api_key:
+            return None
+        from durin.security.secrets import resolve_secret
+
+        return resolve_secret(p.api_key)
 
     def get_api_base(
         self,

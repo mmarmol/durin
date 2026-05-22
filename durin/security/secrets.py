@@ -37,6 +37,7 @@ __all__ = [
     "make_ref",
     "is_valid_secret_name",
     "get_secret_store",
+    "resolve_secret",
 ]
 
 # Secret names double as environment variable names during `exec`
@@ -290,3 +291,116 @@ def get_secret_store(*, reload: bool = False) -> SecretStore:
     if _STORE is None or reload:
         _STORE = SecretStore().load()
     return _STORE
+
+
+def resolve_secret(value: Any) -> Any:
+    """Resolve a config value via the process-wide store.
+
+    A ``${secret:NAME}`` reference becomes the stored plaintext; a
+    literal (or ``None``) is returned untouched. Raises
+    :class:`SecretNotFoundError` for a dangling reference.
+
+    This is the function every config consumer calls right before
+    using a credential — keeping the resolved plaintext out of the
+    ``Config`` object, logs, and telemetry.
+    """
+    if not is_secret_ref(value):
+        return value
+    return get_secret_store().resolve(value)
+
+
+def migrate_plaintext_provider_keys(config_path: Path | None = None) -> list[str]:
+    """Move plaintext provider ``apiKey`` values on disk into the store.
+
+    For each ``providers.<name>.apiKey`` that is a non-empty literal
+    (not already a ``${secret:…}`` reference): a store entry is created
+    (``service``/``scope`` = ``provider:<name>``, ``origin=migration``)
+    and the config field is rewritten to the reference.
+
+    Idempotent — values already shaped as references are skipped.
+    Backs the config up first. Returns the secret names created.
+    """
+    import json as _json
+    import re as _re
+
+    from durin.config.loader import (
+        _is_split_layout,
+        _split_dir,
+        backup_config,
+        get_config_path,
+    )
+
+    path = config_path or get_config_path()
+
+    providers_file: Path | None
+    mono: dict[str, Any] | None
+    if _is_split_layout(path):
+        providers_file = _split_dir(path) / "providers.json"
+        if not providers_file.exists():
+            return []
+        try:
+            providers = _json.loads(providers_file.read_text(encoding="utf-8") or "{}")
+        except (OSError, _json.JSONDecodeError):
+            return []
+        mono = None
+    elif path.exists():
+        try:
+            mono = _json.loads(path.read_text(encoding="utf-8") or "{}")
+        except (OSError, _json.JSONDecodeError):
+            return []
+        if not isinstance(mono, dict) or mono.get("_layout") == "split":
+            return []
+        providers = mono.get("providers")
+        providers_file = None
+    else:
+        return []
+
+    if not isinstance(providers, dict):
+        return []
+
+    # (provider_name, field_name, plaintext_value)
+    pending: list[tuple[str, str, str]] = []
+    for pname, pcfg in providers.items():
+        if not isinstance(pcfg, dict):
+            continue
+        for field in ("apiKey", "api_key"):
+            val = pcfg.get(field)
+            if isinstance(val, str) and val.strip() and not is_secret_ref(val):
+                pending.append((pname, field, val))
+                break
+
+    if not pending:
+        return []
+
+    backup_config(path)
+    store = SecretStore().load()
+    created: list[str] = []
+    for pname, field, val in pending:
+        base = _re.sub(r"[^A-Z0-9_]", "_", pname.upper())
+        if not base or not base[0].isalpha():
+            base = "P_" + base
+        sec_name = f"{base}_API_KEY"
+        store.put(
+            sec_name,
+            value=val,
+            service=f"provider:{pname}",
+            description=f"{pname} API key",
+            scope=[f"provider:{pname}"],
+            origin="migration",
+        )
+        providers[pname][field] = make_ref(sec_name)
+        created.append(sec_name)
+    store.save()
+
+    if providers_file is not None:
+        providers_file.write_text(
+            _json.dumps(providers, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+    elif mono is not None:
+        mono["providers"] = providers
+        path.write_text(
+            _json.dumps(mono, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+
+    get_secret_store(reload=True)
+    return created
