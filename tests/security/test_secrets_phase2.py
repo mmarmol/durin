@@ -96,3 +96,42 @@ def test_build_env_includes_exec_secrets_excludes_provider(store_at) -> None:
     env = ExecTool()._build_env()
     assert env.get("DEPLOY_TOKEN") == "deploy-secret-1"
     assert "OPENAI_KEY" not in env  # provider-scoped never reaches exec
+
+
+# -- doctor dangling-reference check -----------------------------------------
+
+
+def _write_config(store_at, body: dict) -> None:
+    import json
+
+    (store_at.parent / "config.json").write_text(json.dumps(body), encoding="utf-8")
+
+
+def test_doctor_secret_refs_ok_when_no_references(store_at) -> None:
+    from durin.cli.doctor import check_secret_refs
+
+    _write_config(store_at, {"agents": {"defaults": {"model": "glm-5.1"}}})
+    result = check_secret_refs()
+    assert result.status == "ok"
+    assert "no ${secret:}" in result.message
+
+
+def test_doctor_secret_refs_ok_when_reference_resolves(store_at) -> None:
+    from durin.cli.doctor import check_secret_refs
+
+    store = SecretStore(path=store_at)
+    store.put("OPENAI_KEY", value="sk-real", service="provider:openai")
+    store.save()
+    _write_config(store_at, {"providers": {"openai": {"apiKey": "${secret:OPENAI_KEY}"}}})
+
+    result = check_secret_refs()
+    assert result.status == "ok"
+
+
+def test_doctor_secret_refs_fails_on_dangling_reference(store_at) -> None:
+    from durin.cli.doctor import check_secret_refs
+
+    _write_config(store_at, {"providers": {"openai": {"apiKey": "${secret:GHOST}"}}})
+    result = check_secret_refs()
+    assert result.status == "fail"
+    assert "GHOST" in result.message
