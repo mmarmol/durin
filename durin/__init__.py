@@ -26,7 +26,7 @@ def _resolve_version() -> str:
             return _pkg_version(dist_name)
         except PackageNotFoundError:
             continue
-    return _read_pyproject_version() or "0.1.0a7"
+    return _read_pyproject_version() or "0.1.0a8"
 
 
 __version__ = _resolve_version()
