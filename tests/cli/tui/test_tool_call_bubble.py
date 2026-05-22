@@ -428,3 +428,100 @@ async def test_short_output_has_no_expand_toggle() -> None:
         await pilot.pause()
         # Toggle is empty when nothing was truncated.
         assert _expand_toggle_text(bubble).strip() == ""
+
+
+# ---------------------------------------------------------------------------
+# Interactive tools — ask_user_question, request_secret
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ask_user_question_body_shows_question_and_options() -> None:
+    """ask_user_question renders the question + numbered options, never
+    the internal YIELD instruction the raw tool result carries."""
+    app = DurinApp(agent_loop=None)
+    async with app.run_test() as pilot:
+        chat = app.query_one(ChatView)
+        event = {
+            "version": 1, "phase": "end", "call_id": "aq1",
+            "name": "ask_user_question",
+            "arguments": {
+                "question": "Which database should we use?",
+                "options": ["Postgres", "SQLite", "DuckDB"],
+            },
+            "result": (
+                "Question registered (id=abc): 'Which database should we use?'.\n"
+                "YIELD TO USER. Present this exact question..."
+            ),
+        }
+        bubble = ToolCallBubble(event)
+        chat.mount(bubble)
+        await pilot.pause()
+        bubble.update_from_event(event)
+        bubble._expanded = True
+        bubble._rerender_body_with_truncation()
+        await pilot.pause()
+        body = _body_plain(bubble)
+        assert "Which database should we use?" in body
+        assert "Postgres" in body and "DuckDB" in body
+        assert "YIELD TO USER" not in body
+
+
+@pytest.mark.asyncio
+async def test_request_secret_body_shows_set_command() -> None:
+    """request_secret renders the set command, not the YIELD blob."""
+    app = DurinApp(agent_loop=None)
+    async with app.run_test() as pilot:
+        chat = app.query_one(ChatView)
+        event = {
+            "version": 1, "phase": "end", "call_id": "rs1",
+            "name": "request_secret",
+            "arguments": {
+                "name": "ATLASSIAN_API_TOKEN",
+                "service": "atlassian",
+                "purpose": "create Jira issues",
+            },
+            "result": (
+                "Secret 'ATLASSIAN_API_TOKEN' is not stored.\n"
+                "YIELD TO USER. Present this exact instruction..."
+            ),
+        }
+        bubble = ToolCallBubble(event)
+        chat.mount(bubble)
+        await pilot.pause()
+        bubble.update_from_event(event)
+        bubble._expanded = True
+        bubble._rerender_body_with_truncation()
+        await pilot.pause()
+        body = _body_plain(bubble)
+        assert "ATLASSIAN_API_TOKEN" in body
+        assert "create Jira issues" in body
+        assert (
+            "durin secret set ATLASSIAN_API_TOKEN --service atlassian --scope exec"
+            in body
+        )
+        assert "YIELD TO USER" not in body
+
+
+@pytest.mark.asyncio
+async def test_request_secret_body_reports_already_stored() -> None:
+    """When the credential already exists, say so instead of the command."""
+    app = DurinApp(agent_loop=None)
+    async with app.run_test() as pilot:
+        chat = app.query_one(ChatView)
+        event = {
+            "version": 1, "phase": "end", "call_id": "rs2",
+            "name": "request_secret",
+            "arguments": {"name": "GITHUB_TOKEN", "service": "github"},
+            "result": "Secret 'GITHUB_TOKEN' already exists (service=github, scope=exec).",
+        }
+        bubble = ToolCallBubble(event)
+        chat.mount(bubble)
+        await pilot.pause()
+        bubble.update_from_event(event)
+        bubble._expanded = True
+        bubble._rerender_body_with_truncation()
+        await pilot.pause()
+        body = _body_plain(bubble)
+        assert "already stored" in body
+        assert "durin secret set" not in body
