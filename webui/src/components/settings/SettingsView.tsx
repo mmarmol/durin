@@ -25,6 +25,7 @@ import {
   Orbit,
   RotateCcw,
   Settings,
+  Sliders,
   Sparkles,
   Triangle,
   Waves,
@@ -51,11 +52,12 @@ import {
   updateSettings,
   updateWebSearchSettings,
 } from "@/lib/api";
+import { ConfigSettings } from "@/components/settings/ConfigSettings";
 import { cn } from "@/lib/utils";
 import { useClient } from "@/providers/ClientProvider";
 import type { SecretEntry, SettingsPayload, WebSearchSettingsUpdate } from "@/lib/types";
 
-type SettingsSectionKey = "general" | "byok" | "secrets";
+type SettingsSectionKey = "general" | "byok" | "secrets" | "advanced";
 type ByokPaneKey = "llm" | "web-search";
 
 interface SettingsViewProps {
@@ -370,6 +372,8 @@ export function SettingsView({
                 />
               ) : activeSection === "secrets" ? (
                 <SecretsSettings token={token} />
+              ) : activeSection === "advanced" ? (
+                <ConfigSettings token={token} />
               ) : (
                 <ByokSettings
                   settings={settings}
@@ -421,6 +425,7 @@ const SETTINGS_NAV_ITEMS = [
   { key: "general", icon: Settings },
   { key: "byok", icon: KeyRound },
   { key: "secrets", icon: Lock },
+  { key: "advanced", icon: Sliders },
 ] as const;
 
 function SettingsSidebar({

@@ -66,7 +66,8 @@
     "nav": {
       "general": "General",
       "byok": "API Keys",
-      "secrets": "Secrets"
+      "secrets": "Secrets",
+      "advanced": "All settings"
     },
     "sections": {
       "interface": "Interface",
@@ -169,6 +170,14 @@
       "saving": "Saving…",
       "delete": "Delete",
       "confirmDelete": "Delete this secret?"
+    },
+    "config": {
+      "description": "Every durin setting, grouped by section. Editing a value writes it straight to the config — the same as durin config set. Lists and managed secrets are read-only here.",
+      "loadError": "Could not load the configuration.",
+      "saveError": "Could not save {{path}}.",
+      "save": "Save",
+      "on": "On",
+      "off": "Off"
     }
   },
   "chat": {
