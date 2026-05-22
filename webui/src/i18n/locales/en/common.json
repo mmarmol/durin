@@ -199,7 +199,14 @@
       "testing": "Testing…",
       "loadError": "Could not load the model configuration.",
       "saveError": "Could not save the model.",
-      "testError": "The test could not run."
+      "testError": "The test could not run.",
+      "suggested": "suggested",
+      "capabilities": "Capabilities",
+      "capsText": "text",
+      "capsVision": "vision",
+      "capsAudio": "audio",
+      "capsContext": "{{tokens}} context",
+      "capsUnknown": "Pick a model to see what it supports."
     },
     "channels": {
       "description": "Bridge durin to chat platforms. Enable a channel and set its credential — the token goes to the secret store, not config.json.",

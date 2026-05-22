@@ -282,3 +282,39 @@ export async function listChannels(
   );
   return res.channels;
 }
+
+export interface ModelCatalog {
+  suggested: string[];
+  models: string[];
+}
+
+export async function listModels(
+  token: string,
+  provider: string,
+  base: string = "",
+): Promise<ModelCatalog> {
+  const qs = provider ? `?provider=${encodeURIComponent(provider)}` : "";
+  return request<ModelCatalog>(`${base}/api/models${qs}`, token);
+}
+
+export interface ModelCapabilities {
+  model: string;
+  max_input_tokens: number | null;
+  supports_vision: boolean;
+  supports_audio_input: boolean;
+  supports_function_calling: boolean;
+}
+
+export async function getModelCapabilities(
+  token: string,
+  model: string,
+  provider: string,
+  base: string = "",
+): Promise<ModelCapabilities> {
+  const query = new URLSearchParams({ model });
+  if (provider) query.set("provider", provider);
+  return request<ModelCapabilities>(
+    `${base}/api/model/capabilities?${query}`,
+    token,
+  );
+}
