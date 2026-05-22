@@ -2398,6 +2398,10 @@ _register_upgrade(app)
 _register_uninstall(app)
 _register_doctor(app)
 
+from durin.cli.secret_cmd import secret_app as _secret_app  # noqa: E402
+
+app.add_typer(_secret_app, name="secret")
+
 
 if __name__ == "__main__":
     app()

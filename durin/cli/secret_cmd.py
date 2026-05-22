@@ -1,0 +1,185 @@
+"""`durin secret` — manage the secret store.
+
+Thin CLI over :class:`durin.security.secrets.SecretStore`. Values are
+entered through a hidden prompt and never printed back (``list`` and
+``show`` mask them; ``show --reveal`` is the one explicit exception).
+
+See ``docs/11_secrets_design.md``.
+"""
+
+from __future__ import annotations
+
+import typer
+from rich.console import Console
+from rich.table import Table
+
+from durin.security.secrets import SecretStore, is_valid_secret_name
+
+console = Console()
+
+secret_app = typer.Typer(
+    help="Manage stored secrets (API keys, tokens) — see `docs/11_secrets_design.md`.",
+    no_args_is_help=True,
+)
+
+
+def _mask(value: str) -> str:
+    """Mask a secret value for display — last 4 chars at most."""
+    if len(value) <= 4:
+        return "••••"
+    return "••••" + value[-4:]
+
+
+def _parse_scope(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    return [tag.strip() for tag in raw.split(",") if tag.strip()]
+
+
+@secret_app.command("set")
+def cmd_set(
+    name: str = typer.Argument(..., help="Secret name (UPPER_SNAKE, env-var-safe)."),
+    service: str = typer.Option(
+        ..., "--service", "-s",
+        help="What the secret is for, e.g. 'atlassian' or 'provider:openai'.",
+    ),
+    account: str | None = typer.Option(
+        None, "--account", "-a", help="Distinguisher within a service (e.g. 'work')."
+    ),
+    description: str = typer.Option("", "--description", "-d", help="Human description."),
+    scope: str | None = typer.Option(
+        None, "--scope",
+        help="Comma-separated consumer tags: exec, skill:*, channel:telegram, …",
+    ),
+) -> None:
+    """Store a secret. The value is read from a hidden prompt."""
+    if not is_valid_secret_name(name):
+        console.print(
+            f"[red]✗[/red] Invalid name '{name}' — use UPPER_SNAKE "
+            "(matches [A-Z][A-Z0-9_]*)."
+        )
+        raise typer.Exit(1)
+    value = typer.prompt(f"Value for {name}", hide_input=True)
+    if not value:
+        console.print("[yellow]Empty value — nothing stored.[/yellow]")
+        raise typer.Exit(1)
+    store = SecretStore().load()
+    existed = store.get(name) is not None
+    store.put(
+        name,
+        value=value,
+        service=service,
+        account=account,
+        description=description,
+        scope=_parse_scope(scope),
+        origin="user",
+    )
+    store.save()
+    verb = "Updated" if existed else "Stored"
+    console.print(f"[green]✓[/green] {verb} secret [bold]{name}[/bold] ({service}).")
+
+
+@secret_app.command("list")
+def cmd_list() -> None:
+    """List stored secrets — names and metadata only, never values."""
+    store = SecretStore().load()
+    entries = store.all()
+    if not entries:
+        console.print("[dim]No secrets stored. Add one with `durin secret set`.[/dim]")
+        return
+    table = Table(title="Stored secrets")
+    table.add_column("Name", style="bold")
+    table.add_column("Service")
+    table.add_column("Account")
+    table.add_column("Scope")
+    table.add_column("Value")
+    table.add_column("Origin", style="dim")
+    for name, entry in sorted(entries.items()):
+        table.add_row(
+            name,
+            entry.service,
+            entry.account or "[dim]—[/dim]",
+            ", ".join(entry.scope) or "[dim]—[/dim]",
+            _mask(entry.value),
+            entry.origin,
+        )
+    console.print(table)
+
+
+@secret_app.command("show")
+def cmd_show(
+    name: str = typer.Argument(..., help="Secret name."),
+    reveal: bool = typer.Option(
+        False, "--reveal", help="Print the secret value in clear (use with care)."
+    ),
+) -> None:
+    """Show one secret's metadata. `--reveal` prints the value."""
+    store = SecretStore().load()
+    entry = store.get(name)
+    if entry is None:
+        console.print(f"[red]✗[/red] No secret named '{name}'.")
+        raise typer.Exit(1)
+    console.print(f"[bold]{name}[/bold]")
+    console.print(f"  service:     {entry.service}")
+    console.print(f"  account:     {entry.account or '—'}")
+    console.print(f"  description: {entry.description or '—'}")
+    console.print(f"  scope:       {', '.join(entry.scope) or '—'}")
+    console.print(f"  origin:      {entry.origin}")
+    console.print(f"  created:     {entry.created_at}")
+    if reveal:
+        console.print(f"  [yellow]value:       {entry.value}[/yellow]")
+    else:
+        console.print(f"  value:       {_mask(entry.value)}  [dim](--reveal to show)[/dim]")
+
+
+@secret_app.command("rm")
+def cmd_rm(
+    name: str = typer.Argument(..., help="Secret name to delete."),
+) -> None:
+    """Delete a secret from the store."""
+    store = SecretStore().load()
+    if not store.remove(name):
+        console.print(f"[red]✗[/red] No secret named '{name}'.")
+        raise typer.Exit(1)
+    store.save()
+    console.print(f"[green]✓[/green] Removed secret [bold]{name}[/bold].")
+
+
+@secret_app.command("grant")
+def cmd_grant(
+    name: str = typer.Argument(..., help="Secret name."),
+    consumer: str = typer.Option(
+        ..., "--to", help="Consumer tag to add (exec, skill:*, channel:telegram, …)."
+    ),
+) -> None:
+    """Add a consumer tag to a secret's scope."""
+    store = SecretStore().load()
+    entry = store.get(name)
+    if entry is None:
+        console.print(f"[red]✗[/red] No secret named '{name}'.")
+        raise typer.Exit(1)
+    if consumer in entry.scope:
+        console.print(f"[dim]{name} already grants '{consumer}'.[/dim]")
+        return
+    store.set_scope(name, [*entry.scope, consumer])
+    store.save()
+    console.print(f"[green]✓[/green] {name} now grants [bold]{consumer}[/bold].")
+
+
+@secret_app.command("revoke")
+def cmd_revoke(
+    name: str = typer.Argument(..., help="Secret name."),
+    consumer: str = typer.Option(..., "--from", help="Consumer tag to remove."),
+) -> None:
+    """Remove a consumer tag from a secret's scope."""
+    store = SecretStore().load()
+    entry = store.get(name)
+    if entry is None:
+        console.print(f"[red]✗[/red] No secret named '{name}'.")
+        raise typer.Exit(1)
+    if consumer not in entry.scope:
+        console.print(f"[dim]{name} does not grant '{consumer}'.[/dim]")
+        return
+    store.set_scope(name, [tag for tag in entry.scope if tag != consumer])
+    store.save()
+    console.print(f"[green]✓[/green] {name} no longer grants [bold]{consumer}[/bold].")
