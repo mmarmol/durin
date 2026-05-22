@@ -353,11 +353,43 @@ def _all_provider_rows(config: Config) -> list[tuple[str, str, bool, bool]]:
 
 
 def _set_provider_api_key(config: Config, provider_name: str, api_key: str) -> None:
-    """Write the API key into the right ``providers.<name>.api_key`` slot."""
+    """Store the API key in the secret store; put a ``${secret:}`` ref in config.
+
+    The plaintext never lands in ``config.json`` — it goes to
+    ``secrets.json`` (mode 0600) and the provider's ``api_key`` field
+    holds a reference. See ``docs/11_secrets_design.md``.
+    """
+    import re
+
+    from durin.security.secrets import (
+        SecretStore,
+        get_secret_store,
+        make_ref,
+    )
+
     provider_obj = getattr(config.providers, provider_name, None)
+    target = provider_name
     if provider_obj is None:
         provider_obj = config.providers.custom
-    provider_obj.api_key = api_key
+        target = "custom"
+
+    base = re.sub(r"[^A-Z0-9_]", "_", target.upper())
+    if not base or not base[0].isalpha():
+        base = "P_" + base
+    secret_name = f"{base}_API_KEY"
+
+    store = SecretStore().load()
+    store.put(
+        secret_name,
+        value=api_key,
+        service=f"provider:{target}",
+        description=f"{target} API key",
+        scope=[f"provider:{target}"],
+        origin="wizard",
+    )
+    store.save()
+    get_secret_store(reload=True)  # refresh the cache so a model test resolves
+    provider_obj.api_key = make_ref(secret_name)
 
 
 def _pick_provider(config: Config, q: Any) -> tuple[str, str] | None:

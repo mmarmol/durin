@@ -24,6 +24,21 @@ from durin.cli.onboard_wizard import (
     run_wizard,
 )
 from durin.config.schema import Config
+from durin.security.secrets import SecretStore, is_secret_ref
+
+
+@pytest.fixture(autouse=True)
+def _isolate_secret_store(tmp_path, monkeypatch):
+    """The wizard writes provider keys to the secret store — redirect it
+    to a temp path so tests never touch the real ~/.durin/."""
+    monkeypatch.setattr(
+        "durin.config.loader.get_config_path",
+        lambda: tmp_path / "config.json",
+    )
+    from durin.security import secrets as _secrets
+
+    monkeypatch.setattr(_secrets, "_STORE", None)
+    return tmp_path / "secrets.json"
 
 
 class _ScriptedQuestionary:
@@ -138,7 +153,9 @@ def test_provider_choices_have_recommended_first() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_wizard_minimal_happy_path_sets_provider_and_model() -> None:
+def test_wizard_minimal_happy_path_sets_provider_and_model(
+    _isolate_secret_store,
+) -> None:
     """Fresh install: provider → key → model, then finish at the hub."""
     answers = ["Zhipu AI", "sk-zhipu-test", "glm-5.1", _FINISH]
     q = _ScriptedQuestionary(answers)
@@ -147,7 +164,11 @@ def test_wizard_minimal_happy_path_sets_provider_and_model() -> None:
     cfg = result.config
     assert cfg.agents.defaults.provider == "zhipu"
     assert cfg.agents.defaults.model == "glm-5.1"
-    assert cfg.providers.zhipu.api_key == "sk-zhipu-test"
+    # The key goes to the secret store; config holds only a reference.
+    assert is_secret_ref(cfg.providers.zhipu.api_key)
+    entry = SecretStore(path=_isolate_secret_store).load().get("ZHIPU_API_KEY")
+    assert entry is not None and entry.value == "sk-zhipu-test"
+    assert entry.scope == ["provider:zhipu"]
     assert any("zhipu" in line.lower() for line in result.summary_lines)
 
 
@@ -256,7 +277,7 @@ def test_hub_change_provider() -> None:
     result = run_wizard(_configured_config(), q=q)
     assert result.config.agents.defaults.provider == "openai"
     assert result.config.agents.defaults.model == "gpt-5"
-    assert result.config.providers.openai.api_key == "sk-new"
+    assert is_secret_ref(result.config.providers.openai.api_key)
 
 
 def test_hub_memory_enable_and_change_embedding() -> None:
