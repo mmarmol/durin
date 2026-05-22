@@ -89,9 +89,13 @@ class MemoryStoreTool(Tool):
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
+        # Vector retrieval is opt-in (memory.enabled). When off, pass no
+        # embedding model so `_get_vector_index` stays None and the tool
+        # degrades to markdown-only memory.
         model = None
         try:
-            model = ctx.config.memory.embedding.model
+            if ctx.config.memory.enabled:
+                model = ctx.config.memory.embedding.model
         except (AttributeError, TypeError):
             model = None
         return cls(workspace=ctx.workspace, embedding_model=model)

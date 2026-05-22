@@ -259,17 +259,42 @@ def test_hub_change_provider() -> None:
     assert result.config.providers.openai.api_key == "sk-new"
 
 
-def test_hub_memory_records_extra_and_embedding() -> None:
+def test_hub_memory_enable_and_change_embedding() -> None:
     answers = [
         "Vector memory",
-        True,
+        "Enable vector memory",
+        "Change embedding model",
         "BGE-M3",
+        "← Back",
         _FINISH,
     ]
     q = _ScriptedQuestionary(answers)
     result = run_wizard(_configured_config(), q=q)
     assert "memory" in result.extras_to_install
+    assert result.config.memory.enabled is True
     assert result.config.memory.embedding.model == "BAAI/bge-m3"
+
+
+def test_hub_memory_enable_with_default_embedding_reports_on() -> None:
+    """Regression: enabling memory WITHOUT changing the embedding must
+    still register as on — the hub state read the wrong signal before."""
+    from durin.cli.onboard_wizard import _detect_configured_features, _hub_state
+
+    answers = ["Vector memory", "Enable vector memory", "← Back", _FINISH]
+    q = _ScriptedQuestionary(answers)
+    result = run_wizard(_configured_config(), q=q)
+    assert result.config.memory.enabled is True
+    assert _hub_state("memory", result.config).startswith("on")
+    assert "memory" in _detect_configured_features(result.config)
+
+
+def test_hub_memory_can_be_disabled_again() -> None:
+    cfg = _configured_config()
+    cfg.memory.enabled = True
+    answers = ["Vector memory", "Disable vector memory", "← Back", _FINISH]
+    q = _ScriptedQuestionary(answers)
+    result = run_wizard(cfg, q=q)
+    assert result.config.memory.enabled is False
 
 
 def test_hub_web_enables_search_and_records_extra() -> None:
