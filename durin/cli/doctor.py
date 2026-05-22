@@ -256,6 +256,35 @@ def check_default_model_resolvable() -> CheckResult:
     return CheckResult("default model", "ok", f"{model} (preset: {cfg.agents.defaults.model_preset!r})", category="providers")
 
 
+def check_durin_on_path() -> CheckResult:
+    """Detect multiple ``durin`` executables on PATH (install shadowing).
+
+    A dev venv install plus a pipx install both on PATH means `durin`
+    silently runs whichever sorts first — a confusing split. Surface it.
+    """
+    seen: list[str] = []
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        if not entry:
+            continue
+        cand = Path(entry) / "durin"
+        if cand.exists() and os.access(cand, os.X_OK) and str(cand) not in seen:
+            seen.append(str(cand))
+    if len(seen) <= 1:
+        return CheckResult(
+            "durin on PATH", "ok", seen[0] if seen else "not on PATH",
+            category="system",
+        )
+    return CheckResult(
+        "durin on PATH", "warn",
+        f"{len(seen)} durin executables on PATH — '{seen[0]}' wins",
+        fix=(
+            "Multiple installs (e.g. a dev venv + pipx). Remove the stale "
+            f"one or fix PATH order. Also found: {', '.join(seen[1:])}"
+        ),
+        category="system",
+    )
+
+
 def check_secret_refs() -> CheckResult:
     """Verify every ``${secret:}`` reference in config resolves to a secret.
 
@@ -741,6 +770,7 @@ def run_checks(*, ping: bool = False, ping_model: bool = False) -> DoctorReport:
     report = DoctorReport()
     report.add(check_python_version())
     report.add(check_durin_version())
+    report.add(check_durin_on_path())
     report.add(check_config_file())
     report.add(check_config_parses())
     report.add(check_workspace())

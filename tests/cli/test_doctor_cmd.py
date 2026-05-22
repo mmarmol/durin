@@ -80,6 +80,25 @@ def test_check_python_version_ok() -> None:
     assert "Python" in r.message
 
 
+def test_check_durin_on_path_warns_on_multiple(tmp_path, monkeypatch) -> None:
+    from durin.cli.doctor import check_durin_on_path
+
+    # Two PATH dirs each holding an executable `durin`.
+    one, two = tmp_path / "a", tmp_path / "b"
+    for d in (one, two):
+        d.mkdir()
+        exe = d / "durin"
+        exe.write_text("#!/bin/sh\n")
+        exe.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{one}:{two}")
+    r = check_durin_on_path()
+    assert r.status == "warn"
+    assert "2 durin executables" in r.message
+
+    monkeypatch.setenv("PATH", str(one))
+    assert check_durin_on_path().status == "ok"
+
+
 def test_check_config_file_missing(fake_home: Path) -> None:
     cfg = fake_home / ".durin" / "config.json"
     with patch("durin.cli.doctor.get_config_path", return_value=cfg):

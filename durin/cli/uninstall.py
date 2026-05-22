@@ -178,6 +178,18 @@ def _pip_uninstall_spawn() -> None:
     )
 
 
+def _stop_gateway_daemon() -> None:
+    """Stop a running gateway daemon so uninstall doesn't orphan it."""
+    try:
+        from durin.cli.gateway_daemon import daemon_status, stop_daemon
+
+        if daemon_status().state == "running":
+            stop_daemon()
+            console.print("[green]✓[/green] Stopped the running gateway daemon.")
+    except Exception as e:  # noqa: BLE001
+        console.print(f"[yellow]Could not stop the gateway daemon: {e}[/yellow]")
+
+
 def run_uninstall(
     *,
     assume_yes: bool,
@@ -204,6 +216,9 @@ def run_uninstall(
         if not typer.confirm(confirm_msg, default=False):
             console.print("[yellow]Aborted.[/yellow]")
             return 1
+    # Stop the gateway daemon first — otherwise it survives the uninstall
+    # as an orphan still holding its port and PID file.
+    _stop_gateway_daemon()
     failures: list[Path] = []
     for _group, path, _size in targets:
         if not _delete(path):
