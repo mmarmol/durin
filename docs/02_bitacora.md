@@ -1032,3 +1032,56 @@ Grouped into three blocks of independent concerns. The user explicitly approved 
 - **Telemetry-first instead of behavior-first**. Many Tier 2 items emit a structured event even when they take no action (e.g. `tool_call.argument_repair` with `parsed_ok` in the payload — fires even when the cleaning didn't fully fix the JSON). This means we can ship the breaker and the configurable threshold *together*, then tune the threshold from real production data. Without the event, we'd be tuning blind.
 - **Configurable knobs default to OpenClaw / Hermes values**. Where the source project documented a default (`MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT=1`, `PRESERVE_RECENT_COMPLETED_TURNS=3`, etc.) we adopted it unchanged. The two projects already tuned these on their own evals; we don't have better numbers yet, and divergence for divergence's sake is a maintenance liability.
 - **Test pins are sometimes the right answer**. A1's semantic change broke two tests that legitimately verified the loop mechanics. Rather than rewriting them (and losing the existing coverage), we pinned them to `preemptive_compact_ratio=1.0` and called out the pin in the docstring. New A1-specific tests cover the new behavior. This is the cheaper path to keep both invariants.
+
+## Secrets subsystem — Phase 1 + 2 (2026-05-22)
+
+API keys used to live as plaintext inline in `config.json.d/providers.json`.
+Built a secrets subsystem (full design: `docs/11_secrets_design.md`).
+
+### What shipped
+
+- `durin/security/secrets.py` — `SecretStore` over `~/.durin/secrets.json`
+  (mode 0600, outside the config tree). Entries carry two orthogonal axes:
+  `service` (classification, non-unique — many secrets may share one) and
+  `scope` (consumer authorization: `exec`, `skill:*`, `provider:<n>`, …).
+- `${secret:NAME}` reference grammar — whole-field only, no partial
+  interpolation. Config holds the reference; `resolve_secret()` resolves
+  lazily at the point of use so plaintext never re-enters the `Config`
+  object, logs, or telemetry.
+- `durin secret set/list/show/rm/grant/revoke/migrate`.
+- Resolution wired into `Config.get_api_key()` + the provider factory.
+- `migrate_plaintext_provider_keys` — explicit (`durin secret migrate`),
+  idempotent, backs up config first.
+- Onboard wizard writes provider keys to the store as references.
+- Phase 2: `SecretRedactor` — the agent runner redacts stored secret
+  values out of every tool result before it reaches the model;
+  `ExecTool` injects `exec`-scoped secrets into the subprocess env.
+
+### Decisions
+
+- **Isolation > encryption.** A 0600 file is barely more secure than the
+  old config — both are user-readable plaintext, and the agent process
+  needs the value in clear anyway. The real wins are: value never in
+  config / never in model context / never in chat, and only reaching the
+  exec that needs it. Encryption-at-rest was explicitly de-scoped.
+- **`service` is not a unique key.** Two Atlassian tokens (work/personal),
+  several keys per provider — all valid. `name` is the unique id;
+  `service` classifies; `account` distinguishes within a service.
+- **Migration is explicit, not auto-on-load.** Silently rewriting config
+  under tooling and tests is worse than an opt-in `durin secret migrate`.
+- **Config reference = authorization.** `resolve()` does not check `scope`
+  for a config-field reference — writing the reference into config is the
+  grant. `scope` gates auto-injection (`exec`) and the future agent flow.
+- Validated against hermes (`.env` + static curated registry +
+  `redact_secrets`), openclaw (`SecretRef` indirection, no semantic
+  purpose), pi-agent (`!command` inline resolution, no store). None did
+  cross-skill reuse or per-agent scoping; the two-axis model is durin's.
+
+### Not done (follow-ups, see docs/11 §13)
+
+- Resolution + migration for `tools.web.search` keys and channel tokens —
+  Phase 1 landed provider-first.
+- `skill:<name>`-scoped exec injection (needs skill context in `ExecTool`).
+- Multi-agent `agent:` scope enforcement (data model only).
+- `durin doctor` dangling-reference check; log-sink redaction.
+- Phase 3: `need_secret` / `request_secret` agent tools.

@@ -185,6 +185,7 @@ Items that emerged from running the tools roadmap and turned out to be worth shi
 | E | **Per-tool head/tail truncation** (pi-inspired) | 2026-05-20 | `shell`/`exec` output truncated from head (keep tail = errors); reads keep head. Small refinement of an old uniformity |
 | F | **Real prompt-tokens anchor** (pi-inspired, perf C.1) | 2026-05-20 | Provider's actual `prompt_tokens` stamped on assistant messages → `estimate_prompt_tokens_chain` uses real numbers instead of estimating the whole chain |
 | G | **`cache.usage` telemetry event** (pi-inspired, perf C.2) | 2026-05-20 | Per-turn structured event with `prompt_tokens`, `cached_tokens`, `cache_ratio_pct`. Surfaces existing server-side cache savings (e.g. z.ai's automatic prefix cache returns ~99% hits) |
+| H | **Secrets subsystem — Phase 1+2** (`durin/security/secrets.py`, `durin secret` CLI) | 2026-05-22 | API keys out of plaintext config: a `~/.durin/secrets.json` store (0600), `${secret:}` references, `service`/`scope` axes, migration, redaction of secret values from tool results, `exec`-scoped subprocess injection. Design: `docs/11_secrets_design.md`. Phase 3 (`need_secret`/`request_secret` agent tools) deferred |
 
 ---
 
@@ -209,7 +210,7 @@ Once Phase 2 has retrieval, Phase 1b reduces to "use the memory retriever to fet
 
 ---
 
-## Last updated: 2026-05-22 (v0.1.0a7)
+## Last updated: 2026-05-22 (secrets subsystem Phase 1+2)
 
 > Latest pass: items #1–9 of the original 12-list shipped (incl. capability bridges for vision + audio), item #12 mostly closed by today's `disable_model_invocation` flag. Capability metadata pipeline (3-source consensus snapshot) shipped as a foundation. Pi coding agent reviewed and four refinements adopted: `context_transform` hook, skill disable flag, head/tail truncation per tool, anchored token accounting, cache visibility. Stale planning docs (`04_agent_strategies_catalog`, `05_log_swebench`, `06_log_experiments`) moved to `docs/archive/`. Memory (Phase 2) is now unblocked.
 

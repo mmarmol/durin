@@ -1,7 +1,7 @@
 # Secrets subsystem — design
 
-> Status: approved design, implementation starting 2026-05-22.
-> Scope of first delivery: Phase 1 + Phase 2. Phase 3 deferred.
+> Status: Phase 1 + Phase 2 delivered 2026-05-22. Phase 3 deferred.
+> See §13 for the as-built state and remaining follow-ups.
 
 ## 1. Problem
 
@@ -212,10 +212,10 @@ designing for a hypothetical.
 
 ## 8. Migration
 
-One-shot, on config load, idempotent. Detect plaintext secrets in known
-slots — `providers.<n>.api_key`, `tools.web.search.api_key`,
-`memory.embedding.api_key`, channel tokens — that are non-empty and not
-already a `${secret:}` reference. For each:
+Explicit (`durin secret migrate`), not auto-run on config load —
+silently rewriting config under tooling/tests is worse than an opt-in
+step. Idempotent. Detects plaintext secrets in known slots that are
+non-empty and not already a `${secret:}` reference. For each:
 
 1. Back up the config first (`loader.backup_config`).
 2. Create a store entry: `name` derived (`OPENAI_MAIN`, `TELEGRAM_BOT`,
@@ -257,3 +257,29 @@ store (creating the entry with the right `service` + `scope`) and put a
   raises; `durin doctor` gets a check for dangling refs.
 - `secrets.json` backup/sync is the user's responsibility — out of
   scope.
+
+## 13. As-built status (2026-05-22)
+
+**Delivered (Phase 1 + Phase 2):**
+
+- `durin/security/secrets.py` — `SecretStore`, `SecretEntry`,
+  `${secret:}` grammar, `resolve_secret`, `SecretRedactor`,
+  `migrate_plaintext_provider_keys`.
+- `durin secret set/list/show/rm/grant/revoke/migrate`.
+- Resolution wired into `Config.get_api_key()` and the provider
+  factory — provider API keys work as references.
+- Onboard wizard writes provider keys to the store as references.
+- Redaction of every tool result before it enters the model context.
+- `exec`-scoped secret injection into the `ExecTool` subprocess env.
+
+**Remaining follow-ups:**
+
+- Resolution + migration for non-provider slots: `tools.web.search`
+  keys and channel tokens still hold plaintext. Phase 1 landed
+  provider-first; these need their own resolution sites wired.
+- `skill:<name>`-scoped `exec` injection — needs the running-skill
+  context threaded into `ExecTool` (only `exec` scope is honored now).
+- Multi-agent `agent:` scope enforcement — data model only.
+- `durin doctor` check for dangling `${secret:}` references.
+- Log-sink redaction (tool-result redaction is done; logs are not).
+- **Phase 3** — `need_secret` / `request_secret` agent tools.

@@ -161,7 +161,8 @@ durin/
 │   ├── azure_openai_provider.py / github_copilot_provider.py
 │   ├── local_llama_provider.py / fallback_provider.py
 │   └── transcription.py / image_generation.py
-├── security/              # Auth, secrets, permissions
+├── security/              # Auth, permissions, network SSRF guard
+│   └── secrets.py                         # secret store + ${secret:} refs + redaction
 ├── session/               # Session storage + state helpers
 │   ├── manager.py + Session                # in-memory + jsonl persistence
 │   ├── goal_state.py                       # sustained-goal runtime block
@@ -946,8 +947,30 @@ dashboard is auto-served when `config.gateway.webui_enabled` is true
 (the websocket channel is enabled at runtime). `durin doctor` verifies
 both the daemon and webui when config requests them.
 
+## 19. Secrets subsystem
+
+Full design: `docs/11_secrets_design.md`. API keys are no longer stored
+inline in `config.json`. The store is `~/.durin/secrets.json` (mode
+`0600`, outside the config tree). Each entry has two axes — `service`
+(classification, non-unique) and `scope` (consumer authorization) —
+plus account/description/origin.
+
+Config fields hold a `${secret:NAME}` reference; `resolve_secret()`
+turns it into plaintext lazily at the point of use, so the value never
+re-enters the `Config` object, logs, or telemetry. Wired into
+`Config.get_api_key()` and the provider factory.
+
+`durin secret` manages the store; `durin secret migrate` moves
+pre-existing plaintext provider keys in. The onboard wizard writes new
+keys straight to the store as references.
+
+Phase 2: the agent runner redacts stored secret values out of every
+tool result before it reaches the model (`SecretRedactor`); `ExecTool`
+injects `exec`-scoped secrets into the subprocess env so scripts use
+them without the agent ever seeing the values.
+
 ---
 
-## Last updated: 2026-05-22 (v0.1.0a7 — first consistent release)
+## Last updated: 2026-05-22 (secrets subsystem Phase 1+2)
 
 > For the history of why each subsystem was added, what was replaced, and what was discarded along the way, see `docs/02_bitacora.md`. This document only describes the current state.
