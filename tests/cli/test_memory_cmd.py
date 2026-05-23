@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,6 +15,16 @@ from durin.memory.dream import ConsolidationResult, DreamConsolidator, EntryRef
 
 
 runner = CliRunner()
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _plain(text: str) -> str:
+    """Strip ANSI escapes. Needed when CI runs with FORCE_COLOR=1 and
+    rich/typer styles substrings like ``<type>`` and ``<slug>`` separately,
+    breaking naive ``in`` checks against the rendered output.
+    """
+    return _ANSI_RE.sub("", text)
 
 
 @pytest.fixture
@@ -373,7 +384,7 @@ def test_absorb_rejects_same_ref(tmp_path: Path) -> None:
             ["absorb", "person:marcelo", "person:marcelo", "--yes"],
         )
     assert result.exit_code != 0
-    assert "must differ" in result.output
+    assert "must differ" in _plain(result.output)
 
 
 def test_absorb_rejects_bad_format(tmp_path: Path) -> None:
@@ -384,7 +395,7 @@ def test_absorb_rejects_bad_format(tmp_path: Path) -> None:
             ["absorb", "no-colon", "person:marcelo", "--yes"],
         )
     assert result.exit_code != 0
-    assert "<type>:<slug>" in result.output
+    assert "<type>:<slug>" in _plain(result.output)
 
 
 def test_absorb_merges_pages_and_archives(tmp_path: Path) -> None:

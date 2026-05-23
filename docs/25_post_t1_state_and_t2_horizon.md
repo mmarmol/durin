@@ -2,13 +2,19 @@
 
 > Cierre de T1 (entity-centric memory shipped + wired + verified, mayo 2026) y
 > horizon T2 sin compromiso de implementación. Este doc captura el estado
-> verificado, los ítems explícitamente diferidos durante T1, y el backlog
-> ortogonal de UX para que la próxima decisión de qué construir se tome
-> con la evidencia delante.
+> verificado, los ítems candidatos a T2 con su origen archivado + razón de
+> deferral citada, y el backlog ortogonal de UX para que la próxima decisión
+> de qué construir se tome con evidencia.
 >
 > No es un plan ejecutable. Cuando se elija un ítem se abre doc 26 (o el que
 > corresponda) con plan detallado por clusters de riesgo (mismo patrón que
-> docs 23 + 24).
+> archived docs 23 + 24).
+>
+> **§2 fue reescrito 2026-05-23** verificando cada claim contra código
+> (no contra la versión anterior del doc): T2.B descartado (ya
+> implementado), T2.C re-scoped, T2.F y T2.G agregados desde archived doc
+> 21 §3 + doc 22 N1. §2.E identificado como prerequisite estructural
+> de los demás.
 
 ---
 
@@ -48,115 +54,212 @@ Explícito, no entra a T2 sin disparador:
 
 ---
 
-## §2 — Ítems diferidos a T2 durante T1
+## §2 — Ítems candidatos a T2 (verificados contra código)
 
-Capturados durante T1 con razón explícita de por qué no entraron. Esta es
-la lista que un eventual plan T2 puede priorizar.
+Lista revisada el 2026-05-23 grep-validando cada claim. Los ítems
+verificados se citan con su origen archivado y el motivo de deferral.
+T2.B fue descartado (ya está implementado). T2.C fue re-scoped.
 
-### T2.A — Auto-trigger del DreamConsolidator post-write
+### §2.0 — Orden lógico (gate central)
 
-**Contexto**: hoy el dream corre solo manualmente vía `durin memory dream`.
-Doc 18 §6 prevé un trigger automático (post-session, post-N-entries,
-threshold-based).
+**T2.E es prerequisite estructural** de §2.A, §2.D y §2.F. Las gates
+escritas en archived doc 21 §4 son métricas observables — sin
+agregación, no podemos justificar abrir los otros:
 
-**Por qué se difirió** (doc 24 §7): auto-trigger sin LLM-judge + confirm
-flow tiene riesgo silencioso (consolida cuando no debe → drift). Decisión
-en T1: "v1 = manual command, NO auto-absorb".
+> "T1 telemetría muestra >50 entries acumuladas con tags. Manual dreams
+> funcionan bien (output coherente, 0 hallucinations detectadas en
+> sample de 10)."  — archived doc 21 §4
 
-**Diseño necesario antes de implementar**:
-- Disparador (post-N-entries, post-time, post-session-close).
-- LLM-judge: ¿esta entrada deserves consolidation now? (opcional).
-- Confirmation flow: ¿auto o silent? Para qué clases de entries.
-- Telemetría: cost del dream automático (cost-per-day).
+Si se va a abrir T2, empezar por §2.E.
+
+### §2.A — Auto-trigger del DreamConsolidator post-write
+
+**Estado verificado**: `grep -rn "DreamConsolidator(" durin/ --include="*.py"`
+devuelve solo `durin/cli/memory_cmd.py:241` (cmd_dream). Sin cron, sin
+hook, sin trigger automático. El `agent.dream.Dream` cron-scheduled es
+el sistema legacy sobre MEMORY.md, no es entity-centric.
+
+**Origen**: archived doc 21 §3 T2.1.
+
+**Por qué se difirió** (archived doc 21 §2 C1):
+
+> "Cold start letal. Sin entity pages, alias_index está vacío... Hasta
+> que dream corra ≥1 vez, ningún componente nuevo aporta."
+
+Ship manual primero, ver fallar lo complejo en uso real, luego medir.
+
+**Gate para abrir**: §2.E activo + >50 entries acumuladas tageadas +
+sample de 10 manual dreams sin hallucination.
+
+**Diseño necesario**:
+- Disparador: post-N-entries por entidad / post-time / post-session-close.
+- ¿LLM-judge antes de consolidar? Probablemente no para v1 — primero
+  manual confirm via CLI con queue de pending.
+- Telemetría: cost-per-day del dream automático.
 
 **Costo estimado**: medio. ~80 LOC + plan de validación contra corpus
 durin real (no sintético).
 
-### T2.B — Identifier-based extraction en query
+### §2.D — Auto-absorb post-dream
 
-**Contexto**: `extract_query_entities` busca por alias (nombre, abreviación).
-Si query trae `mmarmol@mxhero.com`, no resuelve a `person:marcelo` por
-identifier — porque el matching es contra `aliases:`, no contra
-`identifiers:` del frontmatter.
+**Estado verificado**: `dream.apply()` NO invoca `find_candidates` ni
+`EntityAbsorption`. Solo `cli/memory_cmd.py:594` (cmd_absorb_suggest) y
+`cli/memory_cmd.py:574` (cmd_absorb) lo usan.
 
-**Por qué se difirió**: no apareció como blocker en doc 19 §3.1 ni en
-T1.x. La extracción por alias cubre el caso dominante (queries naturales
-mencionan nombres, no IDs).
+**Origen**: archived doc 21 §3 T3.1 (tier 3, no T2) + reabierto en
+archived doc 24 §7. archived doc 22 §1 A5 matizó:
 
-**Diseño necesario**:
-- ¿AliasIndex extiende a identifier (un solo índice case-insensitive con
-  alias + identifier merged)? ¿O índice separado?
-- Regex/heuristic vs LLM-judge para detectar identifiers en query.
-- Test cases: emails, slack IDs, github handles, phone, etc.
+> "OpenClaude (analog cercano) NO implementó absorption. Eligió
+> prevención (prompt teaching) en lugar de cura (merge)."
 
-**Costo estimado**: bajo si el approach es extender AliasIndex (~30 LOC +
-tests). Alto si requiere LLM-judge.
+**Mitigación que SÍ está en T1**: archived doc 22 §3 propuso "vector
+similarity check al write-time en memory_store (patrón OpenClaw)" —
+shipped como T1.7 en archived doc 23. Reduce duplicates antes de
+crearlos, sin necesidad de auto-merge.
 
-### T2.C — Shared AliasIndex via ctx
-
-**Contexto**: hoy `memory_search` construye su propio AliasIndex (lazy,
-sub-segundo), y `memory_store` construye otro independiente. Ambos
-parsean el mismo set de entity pages.
-
-**Por qué se difirió** (doc 24 W2): "different responsibility; upgrade
-to shared via ctx is T2 if perf needs". No es bloqueante porque el build
-es sub-segundo para corpora <100 pages.
-
-**Diseño necesario**:
-- ¿ctx-scoped (per agent run) o process-scoped (singleton)?
-- Invalidación cuando entity pages cambian (post-dream, post-absorb).
-- ¿Refresh lazy o eager?
-
-**Costo estimado**: bajo. ~40 LOC + invalidation hooks.
-
-### T2.D — Auto-absorb post-dream
-
-**Contexto**: hoy `durin memory absorb` es manual. El dream detecta
-candidatos vía `find_candidates()` pero no actúa.
-
-**Por qué se difirió** (doc 24 §7): "auto-absorb async tras CADA dream
-tiene riesgo silencioso". Necesita LLM-judge + confirmation.
+**Gate para abrir**: §2.E activo + >5 duplicates/mes observados en
+producción (archived doc 21 §4).
 
 **Diseño necesario**:
 - Trigger: dentro del dream pass o async post-dream.
-- LLM-judge: ¿estos dos refs son la misma entidad? (con context).
-- Confirmation: ¿silent merge, queue-for-user-review, o no auto?
+- LLM-judge: ¿estos dos refs son la misma entidad?
+- Confirmation: silent merge | queue-for-review | no auto.
 
-**Costo estimado**: alto. Toca el path crítico del dream + UX nueva.
+**Costo estimado**: alto. Toca path crítico + UX nueva.
 
-### T2.E — Persistir telemetría agregada para tuning
+### §2.E — Telemetry aggregation (PREREQUISITE)
 
-**Contexto**: hoy `memory.recall.vector` event lleva `ranking`,
-`query_entities_count`, `reordered`, `top_1_id_before/after`. Se
-emite a JSONL pero no se agrega.
+**Estado verificado**: `memory.recall.vector` se emite en
+`agent/tools/memory_search.py:223` con `{ranking, query_entities_count,
+reordered, top_1_id_before, top_1_id_after, duration_ms, hit_count}`.
+Nada consume esos JSONL — `grep -rn "memory.recall" durin/cli/` vacío.
 
-**Por qué se difirió**: agregación es post-hoc, no operativa. Sirve
-solo si vamos a tunear el ranker.
+**Origen**: archived doc 17 §3.5 ítems 9-10 (Medición direccional) +
+archived doc 21 §4 (T2 gate criteria).
 
-**Diseño necesario** (solo si se va a tunear):
-- Dashboard local sobre los JSONL existentes.
-- Trigger de re-tune (frecuencia de `reordered=true`, etc.).
+**Por qué hoy**: las gates de §2.A, §2.D, §2.F son métricas observables.
+Sin agregación, abrir esos items es un acto de fe, no de evidencia.
 
-**Costo estimado**: bajo si se hace como query CLI sobre JSONL. Alto
-si se necesita UI.
+**Diseño necesario**:
+- CLI: `durin memory stats [--days N]` sobre `~/.cache/durin/telemetry/`.
+- Métricas mínimas:
+  - Entries acumuladas tageadas (gate §2.A)
+  - Duplicates detectados (gate §2.D)
+  - Frecuencia de tool-call memory_search vs eager-inject candidate (gate §2.F)
+  - `reordered` ratio (validación del ranker)
+- Output: tabla rich + opcional JSON para downstream.
+
+**Costo estimado**: bajo (~80 LOC). Es read-only, no toca el write path.
+
+### §2.F — Eager-inject context block (vs lazy tool-driven actual)
+
+**Estado verificado**: durin hoy es lazy — el modelo debe invocar
+`memory_search` explícitamente. Reference systems hacen lo opuesto:
+
+- Hermes Agent: skill-doc retrieval automático al inicio del turn
+- OpenClaw: memoria inyectada al system prompt
+- OpenClaude: similar pattern
+
+**Origen**: archived doc 22 §2 N1 (new finding). Patrón **3/3** en
+reference systems revisados.
+
+**Por qué se difirió**: cambio arquitectónico mayor. archived doc 21
+no lo capturó como T1; emergió de doc 22 verification.
+
+**Gate para abrir**: §2.E activo + métrica de "tool-call frequency"
+muestra que el modelo no busca cuando debería (silent retrieval miss).
+
+**Diseño necesario**:
+- ¿ContextBuilder lee memoria por turn y la inyecta? ¿Cuánto cabe?
+- ¿Eager-search heurística o LLM-driven?
+- ¿Coexiste con `memory_search` como fallback o lo reemplaza?
+- Persistencia: archived doc 22 §2 N4 sugiere SQLite si eager — pero
+  esto agrega complejidad. Evaluar lazy-eager híbrido primero.
+
+**Costo estimado**: alto. Toca ContextBuilder + posiblemente
+nueva persistencia.
+
+### §2.G — Eviction/compresión de memory_search results
+
+**Estado verificado**: hoy `memory_search` retorna top_k=10 sin
+compresión adicional. Sin telemetría, no sabemos si esto es problema.
+
+**Origen**: archived doc 21 §3 T2.3.
+
+**Por qué se difirió**: archived doc 21 §4 lo deja sujeto a "data real
+lo justifica". Sin telemetría, no hay decisión.
+
+**Gate para abrir**: §2.E activo + corpus >N entries (~500+) + métrica
+de "results al modelo / results útiles" muestra ratio bajo.
+
+**Diseño necesario** (solo si telemetría justifica):
+- Threshold de distancia para cortar antes de top_k.
+- Compresión de body en results (warm tier truncation).
+- Re-rank con cross-encoder (L2 retrieval — fuera de scope hoy).
+
+**Costo estimado**: bajo si solo es threshold + truncation. Alto si
+implica L2.
+
+### §2.C — Shared AliasIndex via ctx (re-scoped)
+
+**Estado verificado**: `grep -n "AliasIndex" durin/`:
+
+| Consumer | Construcción | Línea |
+|---|---|---|
+| `memory_search` | `_get_alias_index()` lazy | tools/memory_search.py:156 |
+| `DreamConsolidator` | `_get_alias_index()` | memory/dream.py:507 |
+| `EntityAbsorption` | `_get_alias_index()` | memory/absorption.py:247 |
+
+3 builders independientes en runtime (no 2 como afirmaba la versión
+previa de este doc — `memory_store` NO usa AliasIndex). El build es
+sub-segundo per docstring de aliases_index.py:24.
+
+**Origen**: archived doc 24 W2 ("upgrade to shared via ctx is T2 if
+perf needs"). Pero la afirmación de doc 24 sobre "memory_store has its
+own" era incorrecta — pasa lo mismo con doc 25 v1.
+
+**Por qué se difirió**: no es bloqueante. Build sub-segundo + los 3
+consumers raramente corren en el mismo `durin agent` run (search es
+normal usage, dream + absorb son comandos CLI dedicados).
+
+**Gate para abrir**: §2.E activo + métrica muestra que el mismo
+proceso construye AliasIndex >1 vez (e.g. agent que invoca search +
+algún flow que también lance dream/absorb).
+
+**Costo estimado**: bajo (~40 LOC + invalidation hooks post-dream/absorb).
+
+### §2.B — Identifier extraction (descartado — ya implementado)
+
+**Por qué se descarta**:
+
+- `EntityPage.identifying_strings()` (entity_page.py:198-247) recorre
+  `extra` un nivel deep, incluyendo dicts → identifiers en frontmatter
+  (`identifiers: {email: [...], slack: [...]}`) entran al índice.
+- `AliasIndex.build()` (aliases_index.py:93) llama
+  `page.identifying_strings()`.
+- `_tokenize` (entity_ranker.py:121-134) preserva `@.-_+:/`, así que
+  `mmarmol@mxhero.com` queda como token único.
+- E2E test: `tests/memory/test_phase3_retrieval_e2e.py::test_alias_via_identifier_finds_page`.
+- Unit test: `tests/memory/test_aliases_index.py::test_emergent_identifiers_indexed`.
+- Dream prompt (`durin/templates/dream/consolidator.md:38`) instruye al
+  LLM proactivamente: "ser proactivo extrayendo identifiers (emails,
+  phones, slack IDs, github users, etc.)".
+
+Cerrado.
 
 ---
 
 ## §3 — Backlog ortogonal (doc 20 — UX)
 
-Capturado durante uso real, no son evoluciones del sistema de memoria
-per se. Listado completo y rationale en [20_pendings.md](20_pendings.md):
+Items UX/UI capturados durante uso real, **no son evoluciones del
+sistema de memoria** per se. Viven con su rationale completo (contexto,
+problema, propuesta tentativa, estado) en **[20_pendings.md](20_pendings.md)**.
 
-| ID | Tema | Donde |
-|---|---|---|
-| P1 | Edición campos password/key en web (secrets) | web settings |
-| P2 | Edición de nombres de sesiones | web + TUI |
-| P3 | Comando `/model` con autocompletion progresivo | TUI + web |
-| P4 | UI de gestión de entidades (entity cards) | web |
-| P5 | Tracing de tool calls de memoria en session viewer | web + TUI |
-
-P4 y P5 son los más relacionados al sistema de memoria nuevo — surface
-visual sobre lo que ya existe en disco.
+De los items actuales, **P4** (entity cards web) y **P5** (memory ops
+trace en session viewer) son los más relacionados al sistema entity-
+centric — ambos visualizan lo que ya existe en disco/JSONL, sin tocar
+el motor. P5 además se beneficiaría del aggregator de §2.E si se
+construye primero.
 
 ---
 
@@ -167,12 +270,16 @@ T2 no se abre por defecto. Para justificar un plan, debería darse
 
 1. **Uso real revela bottleneck**: un par de semanas usando durin como
    daily-driver + dream manual + búsquedas reales muestra que el caso
-   crítico es uno específico (e.g. "queries por email no resuelven" →
-   T2.B sube de prioridad).
+   crítico es uno específico.
 2. **Caso explícito de stakeholder**: un workflow concreto que falla hoy
    y T2.X lo resolvería.
-3. **Métrica observable**: telemetría agregada (T2.E primero) muestra
-   un patrón que un ítem T2 atacaría.
+3. **Métrica observable**: telemetría agregada (§2.E) muestra un patrón
+   que un ítem T2 atacaría.
+
+**El criterio 3 es el más defensible** y es el que las gates escritas
+en archived doc 21 §4 asumen (>50 entries, >5 duplicates/mes, etc.).
+Por eso §2.E es prerequisite estructural: sin agregación, los demás
+items T2 se abren con asunción, no con evidencia.
 
 Sin alguno de estos, **el orden por valor incremental es difícil de
 defender** y el riesgo de over-engineering es real (doc 02 bitácora
@@ -184,23 +291,34 @@ lecciones).
 
 Tres caminos plausibles, en orden de costo creciente:
 
-### Opción 1: Daily-driving + medir
+### Opción 1: Daily-driving sin instrumentar
 
 - Mantener T1 como está.
 - Usar durin con memory.enabled en uso real.
 - Pasar dream manual cuando convenga.
 - Capturar nuevos pendings en doc 20.
-- Re-evaluar en 2-4 semanas si algún ítem T2 emerge como obvio.
+- **Limitación**: sin §2.E, las gates de §2.A / §2.D / §2.F siguen
+  siendo "feeling-based" cuando se quiera abrir T2.
 
-### Opción 2: UX ítem específico de doc 20
+### Opción 2: §2.E primero — Telemetry aggregation
 
-P4 (entity cards web) o P5 (memory ops session viewer) — ambos visualizan
-lo que ya existe en disco/JSONL, sin tocar el sistema de memoria.
+- Costo bajo (~80 LOC, read-only).
+- Destraba decisiones empíricas sobre §2.A, §2.D, §2.F, §2.G.
+- Output: `durin memory stats` con métricas concretas.
+- **Recomendado si** el plan es escalar usage o eventualmente
+  abrir otro T2 con evidencia.
 
-### Opción 3: T2 plan detallado
+### Opción 3: UX ítem específico de doc 20
 
-Solo si §4 criterios se cumplen. Doc 26 con clusters de riesgo (mismo
-patrón que 23/24).
+P4 (entity cards web) o P5 (memory ops session viewer) — ambos
+visualizan lo que ya existe en disco/JSONL, sin tocar el sistema de
+memoria. P5 además se beneficia indirectamente de §2.E (compartiría
+el aggregator).
+
+### Opción 4: T2 plan detallado de algún item específico
+
+Solo si §4 criterios 1 o 2 se cumplen para ese item concreto. Doc 26
+con clusters de riesgo (mismo patrón que archived 23/24).
 
 ---
 

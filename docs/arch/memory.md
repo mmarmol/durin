@@ -5,7 +5,7 @@
 >
 > Design source of truth: [../18_entity_centric_plan.md](../18_entity_centric_plan.md)
 > (principles + schema + retrieval) and
-> [../19_implementation_plan.md](../19_implementation_plan.md) (phases).
+> [../archive/19_implementation_plan.md](../archive/19_implementation_plan.md) (phases, ejecutado).
 > Forward-looking deferred items in
 > [../25_post_t1_state_and_t2_horizon.md](../25_post_t1_state_and_t2_horizon.md).
 

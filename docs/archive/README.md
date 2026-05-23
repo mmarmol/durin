@@ -33,6 +33,7 @@ For current direction, read these instead:
 | `22_critiques_validated_against_real_systems.md` | Validation of doc 21 critiques against 8 reference memory systems | Cumplió rol — fed doc 23's T1.x consolidated list. Kept as the record of which critiques survived contact with real implementations (Hermes, OpenClaw, OpenClaude, Cognee, Graphiti, Mem0, MemPalace, HippoRAG, A-Mem) |
 | `23_t1_implementation_plan.md` | T1.1–T1.7 implementation by risk clusters (A mechanical, B algorithmic, C write/parse, D CLI) + glm peer review with G1-G13 fixes | Executed — clusters A through D shipped + verified live with glm-5.1. Final commit `31c9634` (phase T1 cluster D) closes it |
 | `24_t1_wiring_e2e_tests.md` | T1 wiring gaps W1-W4 + E2E test plan + glm peer review (B1-M2) | Executed — W1+W2+W3+W4 shipped, 4 hermetic E2E tests added (`tests/memory/test_t1_wiring_e2e.py`), live-caught `_workspace_root` property bug fixed |
+| `19_implementation_plan.md` | Phase 0–6 step-by-step implementation plan for the entity-centric memory model (foundations, dream, retrieval, drill-down, absorption, outcomes) | Executed — Phase 0-6 shipped + verified post-T1 wiring. §8 operational outcomes survive as `tests/integration/test_phase6_outcomes.py` (6 tests passing). §14 out-of-scope list mirrored in `25_post_t1_state_and_t2_horizon.md` §1. Kept here as the historical record of the construction-phase decisions |
 
 ## Policy
 
