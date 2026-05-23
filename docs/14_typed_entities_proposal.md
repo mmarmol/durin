@@ -9,6 +9,25 @@
 > de 9 tipos contra esa evidencia y cierra con una lista
 > recomendada y el plan de encaje en el código actual de Phase 1 +
 > Phase 2.
+>
+> **Nota de supersession (2026-05-23)**:
+>
+> - §3.1 Formato (`type:value`) y §3.2 Validación (forma, no
+>   vocabulario) **siguen vigentes** y son la mecánica que se
+>   implementa.
+> - §3.3 Tipos recomendados (lista de 9 prescriptivos) **fue
+>   superseded por doc 18 §4**: el set sugerido pasó a 8 tipos
+>   amplios cross-profession (`person, place, project, topic, event,
+>   artifact, stance, practice`), con vocabulario abierto + tipos
+>   sugeridos (no enforced). Doc 14 §3.3 queda como traza histórica
+>   del proceso.
+> - §3.4 Mecanismo de extensión: la frase "Tipos fuera del set
+>   recomendado son legales pero indeseables" se invierte — bajo
+>   doc 18, tipos fuera del set son **bienvenidos** y emergen
+>   naturalmente (Phase 0.3 lo confirmó: el LLM extendió con `agent:`,
+>   `org:` sin pedirlo).
+> - §3.5 Backward compatibility, §3.6 Helpers, §4 Encaje con código
+>   **siguen vigentes** y guían la implementación de Phase 1.1.
 
 ---
 
