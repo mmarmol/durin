@@ -260,8 +260,16 @@ class MemorySearchTool(Tool):
                 "result_count": len(results),
             },
         )
+        # §2.H: rendered block carries explicit `=== CANONICAL/FRAGMENT
+        # ===` markers so the LLM can distinguish the main answer from
+        # recent post-cursor context at parse time. Same convention as
+        # the compaction `=== ARCHIVED SUMMARY ===` block. Raw fields
+        # remain in to_dict() for callers that prefer structured access.
         return {
-            "results": [r.to_dict() for r in results],
+            "results": [
+                {**r.to_dict(), "rendered": r.render_block()}
+                for r in results
+            ],
             "total": len(results),
             "strategy": strategy,
             # S1 (doc 24): separate `ranking` field from `strategy` so
@@ -272,11 +280,22 @@ class MemorySearchTool(Tool):
 
 
 def _vector_row_to_result(row: dict) -> Result:
-    """Shape a LanceDB row to match the grep Result schema."""
+    """Shape a LanceDB row to match the grep Result schema.
+
+    Per doc 25 §2.H: preserve ``class_name`` / ``valid_from`` /
+    ``entities`` so the LLM-facing :meth:`Result.to_dict` and
+    :meth:`Result.render_block` can mark the row as canonical vs
+    fragment. Earlier versions dropped these fields, breaking the
+    contract that doc 18 §6 ("LLM reconcilia con timestamps y
+    contexto") implied.
+    """
     class_name = row.get("class_name", "")
     entry_id = row.get("id", "")
     summary = row.get("summary", "") or ""
     headline = row.get("headline", "") or ""
+    valid_from = row.get("valid_from", "") or ""
+    raw_entities = row.get("entities") or []
+    entities = tuple(str(e) for e in raw_entities)
     return Result(
         source="memory",
         uri=f"memory/{class_name}/{entry_id}",
@@ -284,4 +303,7 @@ def _vector_row_to_result(row: dict) -> Result:
         snippet=(summary[:160] if summary else headline)[:160],
         summary=summary,
         body="",
+        class_name=class_name,
+        valid_from=valid_from,
+        entities=entities,
     )
