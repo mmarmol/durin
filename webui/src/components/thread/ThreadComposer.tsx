@@ -471,23 +471,27 @@ export function ThreadComposer({
 
   const filteredSlashCommands = useMemo(() => {
     if (slashQuery === null) return [];
-    return slashCommands
-      .filter((command) => {
-        const haystack = [
-          command.command,
-          command.title,
-          command.description,
-          command.argHint ?? "",
-          t(`thread.composer.slash.commands.${slashCommandI18nKey(command.command)}.title`, {
-            defaultValue: "",
-          }),
-          t(`thread.composer.slash.commands.${slashCommandI18nKey(command.command)}.description`, {
-            defaultValue: "",
-          }),
-        ].join(" ").toLowerCase();
-        return haystack.includes(slashQuery);
-      })
-      .slice(0, 8);
+    // No hard cap — the palette container already scrolls (overflow-y-auto)
+    // and the per-item ref + scrollIntoView keeps keyboard selection visible.
+    // The previous `.slice(0, 8)` truncated the list to 8 even though the
+    // backend exposes ~25 commands; the user couldn't reach anything past
+    // /dream-log and ↑/↓ wrapped around at 8 making it look like the picker
+    // had nothing more.
+    return slashCommands.filter((command) => {
+      const haystack = [
+        command.command,
+        command.title,
+        command.description,
+        command.argHint ?? "",
+        t(`thread.composer.slash.commands.${slashCommandI18nKey(command.command)}.title`, {
+          defaultValue: "",
+        }),
+        t(`thread.composer.slash.commands.${slashCommandI18nKey(command.command)}.description`, {
+          defaultValue: "",
+        }),
+      ].join(" ").toLowerCase();
+      return haystack.includes(slashQuery);
+    });
   }, [slashCommands, slashQuery, t]);
 
   const showSlashMenu = filteredSlashCommands.length > 0;
@@ -1037,6 +1041,17 @@ function SlashCommandPalette({
     0,
     layout.maxHeight - SLASH_PALETTE_CHROME_PX,
   );
+  // Per-row refs let the listbox keep the keyboard-selected row
+  // visible. Mouse hover doesn't need this — the user is already
+  // looking at the row they're over — but ↑/↓ keys would otherwise
+  // walk off the visible window and the user can't see the cursor.
+  const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  useEffect(() => {
+    const target = itemRefs.current[selectedIndex];
+    if (target) {
+      target.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+  }, [selectedIndex]);
   return (
     <div
       role="listbox"
@@ -1067,6 +1082,9 @@ function SlashCommandPalette({
           return (
             <button
               key={command.command}
+              ref={(el) => {
+                itemRefs.current[index] = el;
+              }}
               type="button"
               role="option"
               aria-selected={selected}
