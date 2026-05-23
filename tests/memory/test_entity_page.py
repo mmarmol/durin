@@ -255,18 +255,62 @@ class TestDerived:
         ids = page.identifying_strings()
         assert ids.count("Marcelo") == 1
 
-    def test_identifying_strings_ignores_non_flat_extras(self) -> None:
+    def test_identifying_strings_handles_dict_one_level(self) -> None:
+        """Per phase 0.3 + phase 2 e2e: LLM emits identifiers sometimes
+        as dict ({email: foo, slack: bar}). identifying_strings extracts
+        VALUES one level deep — keys are field names, values are identity."""
         page = EntityPage(
             type="person",
             name="X",
             extra={
-                "nested": {"foo": "bar"},  # dict — not a flat list, ignore
-                "tags": ["a", "b"],
+                "identifiers": {
+                    "email": "mmarmol@mxhero.com",
+                    "slack": "UM7TCSZRN",
+                    "phones": ["+5491234567", "+5499876543"],  # list value
+                },
+                "tags": ["topic-a", "topic-b"],
             },
         )
         ids = page.identifying_strings()
         assert "X" in ids
-        assert "a" in ids and "b" in ids
-        # The dict shouldn't contribute strings.
+        # Dict VALUES become identifiers
+        assert "mmarmol@mxhero.com" in ids
+        assert "UM7TCSZRN" in ids
+        # List values within a dict are also expanded
+        assert "+5491234567" in ids
+        assert "+5499876543" in ids
+        # Keys are NOT identifiers
+        assert "email" not in ids
+        assert "slack" not in ids
+        # Flat list still works
+        assert "topic-a" in ids and "topic-b" in ids
+
+    def test_identifying_strings_skips_nested_dicts(self) -> None:
+        """Two-level nesting is intentionally skipped to avoid pulling
+        metadata into the alias_index."""
+        page = EntityPage(
+            type="person",
+            name="X",
+            extra={
+                "metadata": {
+                    "deeply_nested": {"foo": "bar"},  # dict-of-dict
+                },
+            },
+        )
+        ids = page.identifying_strings()
+        assert "X" in ids
+        # The deeply nested dict is skipped — neither key nor value contribute
         assert "foo" not in ids
         assert "bar" not in ids
+        assert "deeply_nested" not in ids
+
+    def test_identifying_strings_scalar_string_extra(self) -> None:
+        """A bare string in extra is also identity-relevant (e.g.,
+        ``canonical_id: "marcelo-2026"``)."""
+        page = EntityPage(
+            type="person",
+            name="X",
+            extra={"canonical_id": "marcelo-2026"},
+        )
+        ids = page.identifying_strings()
+        assert "marcelo-2026" in ids

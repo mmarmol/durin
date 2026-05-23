@@ -98,6 +98,98 @@ class VectorIndex:
         else:
             db.create_table(_TABLE_NAME, data=[record])
 
+    def upsert_entity_page(
+        self,
+        *,
+        entity_ref: str,
+        name: str,
+        aliases: list[str],
+        body: str,
+        path: Path,
+    ) -> None:
+        """Index a consolidated entity page (``memory/entities/<type>/<slug>.md``).
+
+        Per ``docs/18_entity_centric_plan.md`` §7 + Phase 0.1 finding:
+        the embedded text composes ``name + aliases + body`` **without**
+        the ``<type>:`` prefix (which Phase 0.1 measured at cosine 0.517
+        against ``durin``, vs 0.755 for ``durin``/``durin-agent`` — the
+        prefix introduces token noise).
+
+        Stored as ``class_name="entity_page"`` so search consumers can
+        distinguish from memory entries via the same field that already
+        carries the memory class for ``memory/<class>/*.md`` entries.
+        """
+        text = self._compose_entity_page_text(name=name, aliases=aliases, body=body)
+        [vec] = self._provider.embed([text])
+        try:
+            rel_path = path.relative_to(self._workspace)
+        except ValueError:
+            rel_path = path
+        # Synthesize a record that shares the table schema with memory
+        # entries — `id` carries the entity_ref (with colon), `summary`
+        # carries the display name + aliases for at-a-glance results.
+        summary = name + (f" ({', '.join(aliases)})" if aliases else "")
+        record: dict[str, Any] = {
+            "id": entity_ref,
+            "class_name": "entity_page",
+            "summary": summary,
+            "headline": name,
+            "vector": vec,
+            "valid_from": "",
+            "path": str(rel_path),
+        }
+        db = self._connect()
+        names = db.list_tables().tables
+        if _TABLE_NAME in names:
+            table = db.open_table(_TABLE_NAME)
+            self._guard_dim_match(table, len(vec))
+            table.delete(f"id = '{_escape(entity_ref)}'")
+            table.add([record])
+        else:
+            db.create_table(_TABLE_NAME, data=[record])
+
+    _PAGE_EMBED_BUDGET_CHARS = 1500
+
+    @classmethod
+    def _compose_entity_page_text(
+        cls,
+        *,
+        name: str,
+        aliases: list[str],
+        body: str,
+    ) -> str:
+        """Compose embedding text for an entity page.
+
+        Layout: ``name`` (most distilled), then ``aliases`` joined,
+        then ``body`` (longest, most truncatable). NO ``type:`` prefix.
+        """
+        budget = cls._PAGE_EMBED_BUDGET_CHARS
+        parts: list[str] = []
+        used = 0
+        joiner_len = len("\n\n")
+
+        def _add(piece: str) -> None:
+            nonlocal used
+            piece = piece.strip()
+            if not piece:
+                return
+            remaining = budget - used
+            if remaining <= 0:
+                return
+            extra = joiner_len if parts else 0
+            allowed = remaining - extra
+            if allowed <= 0:
+                return
+            chunk = piece[:allowed]
+            parts.append(chunk)
+            used += len(chunk) + extra
+
+        _add(name)
+        if aliases:
+            _add("Aliases: " + ", ".join(a for a in aliases if a))
+        _add(body)
+        return "\n\n".join(parts) or name or "entity page"
+
     def rebuild_from_workspace(self) -> int:
         """Re-embed every ``memory/<class>/*.md`` entry; returns count rebuilt.
 

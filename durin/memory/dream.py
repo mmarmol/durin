@@ -148,6 +148,7 @@ class DreamConsolidator:
         llm_invoke: LLMInvoke | None = None,
         alias_index: AliasIndex | None = None,
         git_repo: GitRepo | None = None,
+        vector_index: object | None = None,
     ) -> None:
         self.workspace = Path(workspace)
         self.memory_root = self.workspace / "memory"
@@ -157,6 +158,11 @@ class DreamConsolidator:
         # Lazily constructed; tests can inject.
         self._alias_index = alias_index
         self._git_repo = git_repo
+        # Vector index is optional — None means "don't try to index pages",
+        # which is fine for tests that don't need vector search. Production
+        # passes a real VectorIndex; the consolidator updates the index
+        # after each successful apply() so pages become searchable.
+        self._vector_index = vector_index
 
     # ------------------------------------------------------------------
     # public API
@@ -234,6 +240,24 @@ class DreamConsolidator:
         if page is not None:
             idx.refresh_for(page, slug=slug)
             idx.save()
+            # Vector index: only upsert if a real index was provided. We
+            # don't auto-construct one because that pulls in fastembed
+            # (heavy dep) — the caller decides whether vector retrieval
+            # is enabled, same as memory.enabled in config.
+            if self._vector_index is not None:
+                try:
+                    self._vector_index.upsert_entity_page(
+                        entity_ref=entity_ref,
+                        name=page.name,
+                        aliases=list(page.aliases),
+                        body=page.body,
+                        path=page_path,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "dream apply: vector index upsert failed for %s: %s",
+                        entity_ref, exc,
+                    )
         else:
             logger.warning(
                 "dream apply: wrote unparseable page for %s — alias_index not updated",

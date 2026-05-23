@@ -77,6 +77,55 @@ def test_upsert_creates_table_and_returns_via_search(
     assert hits[0]["headline"] == "alpha"
 
 
+def test_upsert_entity_page_indexes_without_type_prefix(
+    tmp_path: Path, provider: _FakeEmbeddingProvider
+) -> None:
+    """Entity page indexed via name+aliases+body. Phase 0.1 found that
+    embedding ``project:durin`` literally hurts recall vs ``durin``."""
+    workspace = tmp_path
+    page_path = workspace / "memory" / "entities" / "person" / "marcelo.md"
+    page_path.parent.mkdir(parents=True, exist_ok=True)
+    page_path.write_text("not embedded directly", encoding="utf-8")
+
+    index = VectorIndex(workspace, provider)
+    index.upsert_entity_page(
+        entity_ref="person:marcelo",
+        name="Marcelo Marmol",
+        aliases=["Marcelo", "marcelo"],
+        body="## Current State\nWorks on durin and mxhero.\n",
+        path=page_path,
+    )
+
+    hits = index.search("Marcelo", top_k=5)
+    assert hits, "page should be findable by name"
+    # Entity pages are tagged with class_name="entity_page" so consumers
+    # (Phase 3 ranker) can distinguish.
+    assert hits[0]["class_name"] == "entity_page"
+    assert hits[0]["id"] == "person:marcelo"
+
+
+def test_upsert_entity_page_idempotent(
+    tmp_path: Path, provider: _FakeEmbeddingProvider
+) -> None:
+    workspace = tmp_path
+    page_path = workspace / "memory" / "entities" / "person" / "marcelo.md"
+    page_path.parent.mkdir(parents=True, exist_ok=True)
+    page_path.write_text("body", encoding="utf-8")
+
+    index = VectorIndex(workspace, provider)
+    for _ in range(3):
+        index.upsert_entity_page(
+            entity_ref="person:marcelo",
+            name="Marcelo",
+            aliases=[],
+            body="body",
+            path=page_path,
+        )
+    hits = index.search("Marcelo", top_k=20)
+    matches = [h for h in hits if h["id"] == "person:marcelo"]
+    assert len(matches) == 1, "re-upsert should replace, not duplicate"
+
+
 def test_upsert_is_idempotent_on_id(
     tmp_path: Path, provider: _FakeEmbeddingProvider
 ) -> None:
