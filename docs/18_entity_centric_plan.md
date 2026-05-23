@@ -158,11 +158,46 @@ memory/
 ```yaml
 type: person
 name: Marcelo Marmol
-aliases: [Marcelo, mmarmol@mxhero.com]
+aliases: [Marcelo, marcelo, Marcelo M.]
 dream_processed_through: 4892
 created_at: 2026-03-15T...
 updated_at: 2026-05-23T...
 ```
+
+Estos campos son los **únicos requeridos** para que el sistema funcione
+(parser, alias_index, indexer). El dream puede agregar campos adicionales
+según lo que extraiga del contenido — en Phase 0.3 emergió un campo
+`identifiers` para Marcelo (slack_sender_id, etc.) sin que se le hubiera
+pedido específicamente. Ese tipo de emergencia es **esperada y bienvenida**;
+el shape se valida en Phase 2.3 vertical slice antes de comprometer
+schema canónico.
+
+**Distinción aliases vs identifiers (si emergen)**:
+
+- **Aliases**: variantes textuales del mismo nombre semántico
+  (`Marcelo`/`marcelo`/`Marcelo M.`). Cubren identidad por nombre.
+- Otros campos que el dream pueda agregar (identifiers, emails,
+  identidades cross-system) son útiles para el alias_index — al
+  desempatar entidades, el indexer puede tratar AMBOS arrays como
+  searchable strings.
+
+**Constraints forward-looking**:
+
+1. **Phase 5 absorción — merge semantics**: cuando el dream fusiona dos
+   entidades (e.g., `person:marcelo-m` absorbido en `person:marcelo`),
+   la lógica de merge debe **unionar todos los arrays y listas del
+   frontmatter**, no descartar campos del absorbido. Cualquier campo
+   emergente (`aliases`, `identifiers`, futuros) se fusiona como union
+   de sus values.
+
+2. **UI futura — entity cards**: cuando exista UI de gestión de
+   entidades, los campos estructurados del frontmatter (especialmente
+   `identifiers` si emerge) serán binding points naturales para vistas
+   de "contact card". Esto sugiere que cuando un identifier emerja en
+   prosa repetidamente, vale promoverlo a frontmatter estructurado para
+   que la UI futura pueda mostrarlo sin parsing markdown libre. El
+   dream prompt debería pedir extracción explícita a frontmatter cuando
+   los identifiers son obvios.
 
 Sub-paging futuro para mega-hub mitigation reutiliza la misma carpeta
 `<slug>/` (ej: `marcelo/preferences.md`, `marcelo/projects.md`).
@@ -351,10 +386,16 @@ Por lo tanto, **alias_index es bloqueante crítico día 1**, no opcional.
 3. `entities: [type:slug, ...]` en frontmatter de cada entry episódica
    (requiere propuesta A del doc 14 — ver §12).
 4. **Aliases index sidecar** (`memory/.aliases.json`):
-   `alias_string → entity_slug`. Regenerable parseando frontmatters al
-   boot. **Crítico**: incluye lowercase variants automáticamente
-   (e.g. si una página tiene `name: Marcelo`, el index también tiene
-   `marcelo → person:marcelo`).
+   `alias_string → list[entity_slug]`. Lookup **siempre devuelve lista**
+   (puede ser tamaño 1 o N). Regenerable parseando frontmatters al boot.
+   Incluye lowercase variants automáticamente. Incluye también campos
+   emergentes tipo `identifiers` cuando existen — todos los strings que
+   identifiquen entidad se indexan.
+
+   **Por qué lista, no map 1:1**: aliases comunes son ambiguos por
+   naturaleza (`marcelo` puede ser >1 persona). En lugar de evitar
+   colisiones en write-time (frágil), el index las **expone** y deja
+   que el consumer disambigüe con contexto. Ver §8 R6.
 5. **Embedding del page para vector index NO incluye el prefijo `type:`**.
    El indexer compone `name + aliases + body` sin el `type:slug`
    literal — el tipo va como metadata estructural, no como tokens.
@@ -363,12 +404,19 @@ Por lo tanto, **alias_index es bloqueante crítico día 1**, no opcional.
 **Read-time:**
 
 6. Extracción de entidades del query: regex/string match contra aliases
-   index (case-insensitive). NO LLM call.
-7. Boost a entries post-cursor con tag matcheado.
+   index (case-insensitive). NO LLM call. **Puede devolver N candidatos
+   por alias ambiguo** (e.g. "marcelo" matchea `person:marcelo-marmol`
+   y `person:marcelo-other`).
+7. Boost a entries post-cursor con tag matcheado — aplicado a TODOS los
+   candidatos del alias (no se asume single entity match).
 8. Demote a entries pre-cursor con tag matcheado (su info está
    consolidada en la página).
 9. La página canónica surface naturalmente vía vector search (con el
    embedding compuesto que NO lleva el prefijo `type:`).
+10. Cuando un alias retorna N>1 candidates, el LLM consumiendo los
+    results desambigua por contexto del query (qué otras entidades se
+    mencionan, qué sesión está activa, etc.). Si todavía es ambiguo,
+    el LLM puede preguntar al user.
 
 ### Multi-factor ranking
 
@@ -529,6 +577,43 @@ una unificación.
 
 **Mitigación**: pipeline dedup en cascada — regla determinista primero
 (exact match contra slug + aliases), LLM solo en zona gris.
+
+### R6 — Colisión de aliases comunes (multiple entities con mismo alias)
+
+**Evidencia**: nombres comunes (`marcelo`, `María`, `juan`) son ambiguos
+por naturaleza. En un corpus que crezca, es probable que aparezcan ≥2
+personas con el mismo first name. El alias_index simple (alias → 1
+entity) los confundiría.
+
+**Implicación**: `alias_string → entity_slug` no es one-to-one cuando
+emergen colisiones.
+
+**Mitigación — dos capas combinadas**:
+
+1. **Write-time (consolidator)**: el dream LLM al crear/actualizar una
+   page es conservador con aliases ambiguos. Si sabe que solo hay un
+   `Marcelo` en el corpus, agrega `marcelo` como alias. Si más tarde
+   detecta segundo `Marcelo`, el dream **revisa los aliases existentes
+   de ambas pages** (durante Phase 5 absorción / re-consolidation) y
+   elimina los ambiguos que ahora aplican a >1 entidad. Slug del
+   filename también se ajusta: `person:marcelo` puede renombrarse a
+   `person:marcelo-marmol` cuando emerge la colisión.
+
+2. **Read-time (alias_index)**: el index **siempre devuelve lista**
+   (puede ser tamaño 1 o N — ver §7 L1 light read-time paso 6).
+   Cuando alias retorna N candidatos:
+   - **Write-time tagger** (propuesta A): cuando una entry menciona
+     "marcelo" y el lookup devuelve N candidatos, el LLM de ingesta
+     decide cuál basado en contexto. Si no logra decidir, marca como
+     ambiguous (tag con `?` o ambos slugs); el dream lo resuelve
+     después con más contexto.
+   - **Read-time ranker** (Phase 3): boost/demote aplicado a TODOS
+     los candidatos. El LLM consumiendo results desambigua por
+     contexto del query (otras entidades mencionadas, sesión activa,
+     etc.). Si sigue ambiguo, puede preguntar al user.
+
+Esto difiere de R5 (LLM resolution puede equivocarse) — R6 es sobre
+ambiguity estructural inherente, no error LLM.
 
 ---
 

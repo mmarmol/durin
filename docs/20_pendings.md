@@ -103,7 +103,32 @@ Implementación posible:
 
 ## §2 — Backlog (sin priorizar)
 
-(Vacío por ahora — items futuros van acá hasta que se priorizan.)
+### P4 — UI de gestión de entidades (entity cards)
+
+**Contexto**: doc 18 §4 (post-Phase-2 entity-centric memory). Cuando
+el dream genere páginas `entities/<type>/<slug>.md` con frontmatter
+estructurado (aliases, identifiers, etc.), una UI futura puede
+renderizar "entity cards" tipo contact book.
+
+**Caso de uso**: user abre la web → ve listado de personas con cards
+mostrando email/phone/slack ID; click → ve la página completa (current
+state + history + sources).
+
+**Propuesta tentativa**:
+
+- Nueva sección en webui `/entities` que liste pages bajo
+  `entities/<type>/`.
+- Card render binding al frontmatter:
+  - `name` + `aliases`
+  - Campos emergentes (`identifiers`) renderizados como pills/badges
+  - Link "View page" abre el markdown rendered
+  - Search box que busca contra aliases + identifiers (alias_index ya
+    expuesto via endpoint)
+- Search global: query `mmarmol@mxhero.com` debería surface marcelo
+  card.
+
+**Estado**: pendiente, post-Phase 5 (cuando la pipeline entity-centric
+esté implementada).
 
 ---
 
