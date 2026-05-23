@@ -247,6 +247,197 @@ class TestApply:
 
 
 # ---------------------------------------------------------------------------
+# C.2 safety nets: retry, context budget, cursor force, body shrink check
+# ---------------------------------------------------------------------------
+
+
+class TestSafetyNets:
+    def test_retry_on_parse_failure_then_succeeds(self, tmp_path: Path) -> None:
+        """G10: parse failure → retry; second attempt succeeds."""
+        responses = [
+            "garbage not a valid response",  # first attempt fails
+            _well_formed_response(),         # second succeeds
+        ]
+        call_count = [0]
+
+        def stub(prompt: str, *, model: str) -> str:
+            i = call_count[0]
+            call_count[0] += 1
+            return responses[i] if i < len(responses) else responses[-1]
+
+        c = DreamConsolidator(workspace=tmp_path, llm_invoke=stub)
+        result = c.consolidate_entity(
+            "person:marcelo",
+            [EntryRef(id="e1", timestamp="2026-04-10", text="x")],
+        )
+        assert result.page_text
+        assert call_count[0] == 2  # one failure + one success
+
+    def test_retry_exhausts_after_max_attempts(self, tmp_path: Path) -> None:
+        """After MAX_RETRIES (3) failed attempts, raise DreamError."""
+        def always_fail(prompt: str, *, model: str) -> str:
+            return "no valid response ever"
+
+        c = DreamConsolidator(workspace=tmp_path, llm_invoke=always_fail)
+        with pytest.raises(DreamError, match="3 attempts"):
+            c.consolidate_entity(
+                "person:marcelo",
+                [EntryRef(id="e1", timestamp="2026-04-10", text="x")],
+            )
+
+    def test_context_budget_caps_entries(self, tmp_path: Path) -> None:
+        """G11: when N > MAX_ENTRIES_PER_CALL, take newest by timestamp."""
+        captured_prompt = []
+
+        def capturing(prompt: str, *, model: str) -> str:
+            captured_prompt.append(prompt)
+            return _well_formed_response()
+
+        c = DreamConsolidator(workspace=tmp_path, llm_invoke=capturing)
+        # Build 60 entries with zero-padded ids so substring match is reliable.
+        # Newest first by timestamp — e59 is the latest.
+        entries = [
+            EntryRef(id=f"entry-{i:03d}", timestamp=f"2026-04-{(i%28)+1:02d}",
+                     text=f"obs {i}")
+            for i in range(60)
+        ]
+        c.consolidate_entity("person:marcelo", entries)
+        prompt = captured_prompt[0]
+        ids_in_prompt = [f"entry-{i:03d}" for i in range(60)
+                         if f"entry-{i:03d}" in prompt]
+        assert len(ids_in_prompt) == DreamConsolidator.MAX_ENTRIES_PER_CALL
+
+    def test_cursor_force_set_overrides_llm(self, tmp_path: Path) -> None:
+        """G2: apply() forces cursor to batch_last_ts regardless of LLM output."""
+        # LLM puts Cursor-after: 999 in trailers, but our batch ends at 100.
+        # apply() should override to 100.
+        response_with_high_cursor = (
+            "===PAGE===\n"
+            "---\n"
+            "type: person\n"
+            "name: Marcelo\n"
+            "aliases: [marcelo]\n"
+            "dream_processed_through: 999\n"
+            "---\n"
+            "# Marcelo\n"
+            "body\n"
+            "===COMMIT===\n"
+            "Consolidate person:marcelo (rev 1)\n"
+            "\n"
+            "body\n"
+            "\n"
+            "Sources: e1\n"
+            "Entities-touched: person:marcelo\n"
+            "Cursor-after: 999\n"
+            "===END===\n"
+        )
+        c = DreamConsolidator(
+            workspace=tmp_path,
+            llm_invoke=lambda p, *, model: response_with_high_cursor,
+        )
+        result = c.consolidate_entity(
+            "person:marcelo",
+            [EntryRef(id="e1", timestamp="2026-04-10", text="x")],
+        )
+        assert result.batch_last_ts == "2026-04-10"
+        c.apply("person:marcelo", result)
+        # The on-disk page must have the batch ts as cursor, NOT 999.
+        page = EntityPage.from_file(
+            tmp_path / "memory" / "entities" / "person" / "marcelo.md"
+        )
+        assert page.dream_processed_through == "2026-04-10"
+
+    def test_body_shrink_rejected(self, tmp_path: Path) -> None:
+        """G7: if new body shrinks >50% vs current page, raise DreamError."""
+        # Create a page with substantial body.
+        existing = EntityPage(
+            type="person",
+            name="Marcelo",
+            aliases=["marcelo"],
+            body=(
+                "## Background\n" + "x" * 500 + "\n\n"
+                "## Notes\n" + "y" * 500
+            ),
+        )
+        existing.save(tmp_path / "memory" / "entities" / "person" / "marcelo.md")
+
+        # LLM returns a tiny body (shrunk way more than 50%).
+        shrunk_response = (
+            "===PAGE===\n"
+            "---\n"
+            "type: person\n"
+            "name: Marcelo\n"
+            "aliases: [marcelo]\n"
+            "---\n"
+            "# Marcelo\n"
+            "tiny\n"
+            "===COMMIT===\n"
+            "Consolidate (rev 2)\n\nbody\n\nSources: e1\n"
+            "Entities-touched: person:marcelo\nCursor-after: 100\n"
+            "===END===\n"
+        )
+
+        c = DreamConsolidator(
+            workspace=tmp_path,
+            llm_invoke=lambda p, *, model: shrunk_response,
+        )
+        with pytest.raises(DreamError, match="shrank"):
+            c.consolidate_entity(
+                "person:marcelo",
+                [EntryRef(id="e1", timestamp="2026-04-10", text="x")],
+            )
+
+    def test_oversized_page_rejected(self, tmp_path: Path) -> None:
+        """Page exceeding PAGE_MAX_BYTES raises DreamError."""
+        huge_body = "x" * (DreamConsolidator.PAGE_MAX_BYTES + 100)
+        oversized = (
+            "===PAGE===\n"
+            "---\n"
+            "type: person\n"
+            "name: Marcelo\n"
+            "aliases: []\n"
+            "---\n"
+            f"# Marcelo\n{huge_body}\n"
+            "===COMMIT===\n"
+            "Consolidate (rev 1)\n\nbody\n\nSources: e1\n"
+            "Entities-touched: person:marcelo\n"
+            "===END===\n"
+        )
+        c = DreamConsolidator(
+            workspace=tmp_path,
+            llm_invoke=lambda p, *, model: oversized,
+        )
+        with pytest.raises(DreamError, match="exceeds"):
+            c.consolidate_entity(
+                "person:marcelo",
+                [EntryRef(id="e1", timestamp="2026-04-10", text="x")],
+            )
+
+    def test_invalid_yaml_rejected(self, tmp_path: Path) -> None:
+        """Page that doesn't parse as EntityPage raises DreamError after retries."""
+        invalid_yaml = (
+            "===PAGE===\n"
+            "---\n"
+            "type: not-a-valid-page  # no name field\n"
+            "---\n"
+            "body\n"
+            "===COMMIT===\n"
+            "Consolidate (rev 1)\n\nbody\n\nSources: e1\n"
+            "Entities-touched: person:marcelo\n"
+            "===END===\n"
+        )
+        c = DreamConsolidator(
+            workspace=tmp_path,
+            llm_invoke=lambda p, *, model: invalid_yaml,
+        )
+        with pytest.raises(DreamError):
+            c.consolidate_entity(
+                "person:marcelo",
+                [EntryRef(id="e1", timestamp="2026-04-10", text="x")],
+            )
+
+
+# ---------------------------------------------------------------------------
 # Real end-to-end with glm-5.1 (skipped unless ZHIPU key configured)
 # ---------------------------------------------------------------------------
 

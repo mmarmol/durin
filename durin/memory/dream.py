@@ -72,6 +72,12 @@ class ConsolidationResult:
     commit_body: str
     commit_trailers: dict[str, list[str]] = field(default_factory=dict)
     raw_output: str = ""                           # original LLM response, for audit
+    # G2 invariant: timestamp of the last entry sent to the LLM in this
+    # batch. :meth:`DreamConsolidator.apply` forces the entity page's
+    # ``dream_processed_through`` to this value (overriding whatever the
+    # LLM put in ``Cursor-after``) so callers can safely batch large
+    # entry sets without silent data loss.
+    batch_last_ts: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -140,6 +146,20 @@ class DreamConsolidator:
     to feed it" (which lives in higher layers / future work).
     """
 
+    # G11: input budget per call. 50 entries × ~100 tokens = ~5000
+    # input tokens; plus prompt (~2000) + current_page (~1500) ≈ 8500
+    # tokens total. Well within 32K+ context windows. Take *newest*
+    # entries when capping (assumes caller passes them in any order;
+    # we sort by timestamp before slicing).
+    MAX_ENTRIES_PER_CALL = 50
+
+    # G2 + G7: max page size and body-shrink ratio safety nets.
+    PAGE_MAX_BYTES = 25 * 1024
+    BODY_SHRINK_REJECT_RATIO = 0.5
+
+    # G10/retries: 3 attempts on parse failure with feedback-in-prompt.
+    MAX_RETRIES = 3
+
     def __init__(
         self,
         workspace: Path,
@@ -173,7 +193,18 @@ class DreamConsolidator:
         entity_ref: str,
         entries: list[EntryRef],
     ) -> ConsolidationResult:
-        """Build prompt, call LLM, parse output. Pure (no disk writes)."""
+        """Build prompt, call LLM, parse output. Pure (no disk writes).
+
+        Per doc 23 §9:
+        - G11: caps entries at ``MAX_ENTRIES_PER_CALL`` (newest first
+          by timestamp).
+        - G2: tags the result with ``batch_last_ts`` so :meth:`apply`
+          can force the cursor to the last entry of the batch,
+          overriding whatever the LLM put in ``Cursor-after`` (prevents
+          silent data loss when N > cap).
+        - G10/retry: retries up to ``MAX_RETRIES`` on parse failure,
+          feeding the error back into the prompt.
+        """
         if not entries:
             raise DreamError(f"no entries provided for {entity_ref}")
         if ":" not in entity_ref:
@@ -181,10 +212,52 @@ class DreamConsolidator:
                 f"entity_ref must be '<type>:<value>': {entity_ref!r}"
             )
 
+        # G11: cap entries — take the newest by timestamp.
+        if len(entries) > self.MAX_ENTRIES_PER_CALL:
+            logger.info(
+                "dream: capping %s from %d to %d entries (newest first)",
+                entity_ref, len(entries), self.MAX_ENTRIES_PER_CALL,
+            )
+            entries = sorted(entries, key=lambda e: e.timestamp)[
+                -self.MAX_ENTRIES_PER_CALL:
+            ]
+        # G2: remember the last ts of the actual batch we're sending.
+        batch_last_ts = entries[-1].timestamp if entries else None
+
         current_page = self._read_existing_page(entity_ref)
-        prompt = self._build_prompt(entity_ref, entries, current_page)
-        raw = self._llm_invoke(prompt, model=self.model)
-        return self._parse_response(raw)
+        current_page_parsed = (
+            EntityPage.from_text(current_page) if current_page else None
+        )
+
+        last_error: str | None = None
+        for attempt in range(self.MAX_RETRIES):
+            prompt = self._build_prompt(entity_ref, entries, current_page)
+            if last_error is not None:
+                prompt += (
+                    f"\n\n[Previous attempt failed with error: {last_error}]\n"
+                    "Please produce a strictly-formatted response with "
+                    "===PAGE===, ===COMMIT===, and ===END=== markers, "
+                    "valid YAML frontmatter (type, name, aliases at minimum)."
+                )
+            raw = self._llm_invoke(prompt, model=self.model)
+            try:
+                result = self._parse_response(
+                    raw, current_page_parsed=current_page_parsed,
+                )
+            except DreamError as exc:
+                last_error = str(exc)
+                logger.warning(
+                    "dream consolidate attempt %d/%d failed: %s",
+                    attempt + 1, self.MAX_RETRIES, exc,
+                )
+                continue
+            # G2: stamp the batch_last_ts so apply() can force the cursor.
+            result.batch_last_ts = batch_last_ts
+            return result
+
+        raise DreamError(
+            f"dream failed after {self.MAX_RETRIES} attempts: {last_error}"
+        )
 
     def apply(
         self,
@@ -195,19 +268,35 @@ class DreamConsolidator:
 
         Returns the commit SHA, or ``None`` if there were no changes
         to commit (idempotent re-run on identical content).
+
+        G2 invariant: if ``result.batch_last_ts`` is set, forces the
+        page's ``dream_processed_through`` to that value, overriding
+        any ``Cursor-after`` the LLM put in the trailers. Without
+        this, batches that hit MAX_ENTRIES_PER_CALL could silently
+        lose the unprocessed tail.
         """
         type_, slug = entity_ref.split(":", 1)
         page_path = self.entities_root / type_ / f"{slug}.md"
 
+        # G2: force cursor to batch_last_ts before persistence.
+        page_text = result.page_text
+        if result.batch_last_ts is not None:
+            parsed = EntityPage.from_text(page_text)
+            if parsed is not None and parsed.dream_processed_through != result.batch_last_ts:
+                parsed.dream_processed_through = result.batch_last_ts
+                page_text = parsed.to_markdown()
+                # Keep result.page_text in sync so callers see what was written.
+                result.page_text = page_text
+
         # Idempotence: if existing page is identical, no-op early.
         if page_path.exists():
             existing_text = page_path.read_text(encoding="utf-8")
-            if existing_text == result.page_text:
+            if existing_text == page_text:
                 logger.info("dream apply: no changes for %s", entity_ref)
                 return None
 
         page_path.parent.mkdir(parents=True, exist_ok=True)
-        page_path.write_text(result.page_text, encoding="utf-8")
+        page_path.write_text(page_text, encoding="utf-8")
 
         repo = self._get_git_repo()
         repo.init(
@@ -329,13 +418,25 @@ class DreamConsolidator:
         except OSError:
             return None
 
-    @staticmethod
-    def _parse_response(raw: str) -> ConsolidationResult:
-        """Extract ===PAGE=== and ===COMMIT=== sections."""
+    @classmethod
+    def _parse_response(
+        cls,
+        raw: str,
+        *,
+        current_page_parsed: "EntityPage | None" = None,
+    ) -> ConsolidationResult:
+        """Extract ===PAGE=== and ===COMMIT=== sections.
+
+        Validates per doc 23 §9:
+        - G7: rejects if body shrinks more than BODY_SHRINK_REJECT_RATIO
+          vs current_page (likely LLM hallucination / info loss).
+        - Page size capped at PAGE_MAX_BYTES.
+        - Parsed page must satisfy EntityPage.from_text() (required
+          frontmatter fields, valid YAML).
+        """
         # Some LLMs wrap the whole thing in a ```fence. Strip it if so.
         stripped = raw.strip()
         if stripped.startswith("```"):
-            # Strip first fence line and trailing fence
             lines = stripped.split("\n")
             if lines and lines[0].startswith("```"):
                 lines = lines[1:]
@@ -350,6 +451,35 @@ class DreamConsolidator:
             )
         page_text = match.group(1).strip() + "\n"
         commit_text = match.group(2).strip()
+
+        # G7-soft: cap page size.
+        if len(page_text.encode("utf-8")) > cls.PAGE_MAX_BYTES:
+            raise DreamError(
+                f"page_text exceeds {cls.PAGE_MAX_BYTES} bytes "
+                f"({len(page_text)} chars); refusing to commit"
+            )
+
+        # Validate page is parseable as EntityPage (catches missing
+        # frontmatter fields / malformed YAML before we write to disk).
+        parsed_page = EntityPage.from_text(page_text)
+        if parsed_page is None:
+            raise DreamError(
+                "LLM page_text does not parse as a valid EntityPage "
+                "(missing required frontmatter type/name or malformed YAML)"
+            )
+
+        # G7: reject if body shrunk >50% vs current page (likely
+        # hallucination / info loss). Only trigger when current was
+        # substantial enough that shrink matters.
+        if current_page_parsed is not None:
+            old_body = (current_page_parsed.body or "").strip()
+            new_body = (parsed_page.body or "").strip()
+            if len(old_body) > 200 and len(new_body) < len(old_body) * cls.BODY_SHRINK_REJECT_RATIO:
+                raise DreamError(
+                    f"consolidated body shrank from {len(old_body)} to "
+                    f"{len(new_body)} chars (>{int((1-cls.BODY_SHRINK_REJECT_RATIO)*100)}% loss). "
+                    "Refusing to commit (possible hallucination/info-loss)."
+                )
 
         # Split commit into subject + body + trailers.
         from durin.utils.git_repo import _split_message

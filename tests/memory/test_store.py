@@ -152,3 +152,156 @@ async def test_tool_threads_optional_metadata(tmp_path: Path) -> None:
     assert loaded.summary == "s"
     assert loaded.source_refs == ["[t1](../sessions/x.md#turn-1)"]
     assert loaded.entities == ["topic:e1", "topic:e2"]
+
+
+# ---------------------------------------------------------------------------
+# Dedup pre-persist (T1.7 + G1 threshold + G5 cached embed + G6 force)
+# ---------------------------------------------------------------------------
+
+
+class _StubVectorIndex:
+    """Minimal stub of VectorIndex for dedup tests — no LanceDB needed.
+
+    Stores (id, vector, headline) tuples. embed_text returns a vector
+    based on content hash (deterministic). search_by_vector returns
+    the existing entries with computed L2 distances.
+    """
+
+    def __init__(self):
+        self.entries: list[tuple[str, list[float], str]] = []
+        self.upsert_calls = 0
+        self.upsert_with_vector_calls = 0
+
+    def embed_text(self, text: str) -> list[float]:
+        # Deterministic embedding by character bucketing into 8 dims.
+        vec = [0.0] * 8
+        for ch in text.lower():
+            if ch.isalpha():
+                vec[(ord(ch) - ord("a")) % 8] += 1.0
+        # Normalize to unit (so L2² = 2(1-cos))
+        norm = sum(v * v for v in vec) ** 0.5 or 1.0
+        return [v / norm for v in vec]
+
+    def search_by_vector(self, vec, *, top_k=10):
+        results = []
+        for id_, ev, hl in self.entries:
+            # L2 squared distance
+            d = sum((a - b) ** 2 for a, b in zip(vec, ev))
+            results.append({"id": id_, "_distance": d, "headline": hl})
+        results.sort(key=lambda r: r["_distance"])
+        return results[:top_k]
+
+    def upsert(self, entry, class_name, path):
+        self.upsert_calls += 1
+        v = self.embed_text(entry.body)
+        self.entries.append((entry.id, v, entry.headline))
+
+    def upsert_with_vector(self, entry, class_name, path, *, precomputed_vector):
+        self.upsert_with_vector_calls += 1
+        self.entries.append((entry.id, precomputed_vector, entry.headline))
+
+
+@pytest.mark.asyncio
+async def test_dedup_warning_on_near_duplicate(tmp_path: Path) -> None:
+    """Second write of nearly-identical content returns warning, not result."""
+    from durin.agent.tools.memory_store import MemoryStoreTool
+
+    tool = MemoryStoreTool(workspace=tmp_path)
+    stub = _StubVectorIndex()
+    tool._vector_index = stub
+    tool._vector_index_attempted = True
+
+    # First write succeeds
+    first = await tool.execute(content="Marcelo prefers pytest over unittest.")
+    assert "error" not in first
+    assert "warning" not in first
+    assert first["id"]
+
+    # Second write with identical content → warning
+    second = await tool.execute(content="Marcelo prefers pytest over unittest.")
+    assert second.get("warning") == "near-duplicate"
+    assert second["nearest_id"] == first["id"]
+    assert "force=true" in second["hint"]
+
+
+@pytest.mark.asyncio
+async def test_dedup_force_overrides(tmp_path: Path) -> None:
+    """force=true skips the dedup check and writes anyway."""
+    from durin.agent.tools.memory_store import MemoryStoreTool
+
+    tool = MemoryStoreTool(workspace=tmp_path)
+    stub = _StubVectorIndex()
+    tool._vector_index = stub
+    tool._vector_index_attempted = True
+
+    first = await tool.execute(content="duplicate content")
+    second = await tool.execute(content="duplicate content", force=True)
+    # Second should NOT be a warning — force bypasses dedup
+    assert "warning" not in second
+    assert second["id"]
+
+
+@pytest.mark.asyncio
+async def test_dedup_allows_distinct_content(tmp_path: Path) -> None:
+    """Different content does NOT trigger warning."""
+    from durin.agent.tools.memory_store import MemoryStoreTool
+
+    tool = MemoryStoreTool(workspace=tmp_path)
+    stub = _StubVectorIndex()
+    tool._vector_index = stub
+    tool._vector_index_attempted = True
+
+    await tool.execute(content="qqqqqqqqqq qqqqqq qqq qqq")
+    second = await tool.execute(content="zzzzzzz fff bbbb")
+    assert "warning" not in second
+    assert second["id"]
+
+
+@pytest.mark.asyncio
+async def test_dedup_cached_embedding_avoids_double_compute(tmp_path: Path) -> None:
+    """G5: same embedding used for dedup check AND upsert (no recompute).
+
+    Verifies that when dedup runs (vi is enabled, force=false), the
+    upsert path uses upsert_with_vector (which takes precomputed
+    vector) instead of upsert (which would recompute internally).
+    """
+    from durin.agent.tools.memory_store import MemoryStoreTool
+
+    tool = MemoryStoreTool(workspace=tmp_path)
+    stub = _StubVectorIndex()
+    tool._vector_index = stub
+    tool._vector_index_attempted = True
+
+    await tool.execute(content="fresh content for dedup path")
+    # First write: should use the cached-vector path
+    assert stub.upsert_with_vector_calls == 1
+    assert stub.upsert_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_dedup_check_failure_does_not_block_write(tmp_path: Path) -> None:
+    """If the vector index raises during dedup, the write still proceeds."""
+    from durin.agent.tools.memory_store import MemoryStoreTool
+
+    class _RaisingVectorIndex:
+        def embed_text(self, text):
+            raise RuntimeError("simulated embedding failure")
+
+        def search_by_vector(self, *args, **kwargs):
+            raise RuntimeError("should not be called")
+
+        def upsert(self, *args, **kwargs):
+            pass
+
+        def upsert_with_vector(self, *args, **kwargs):
+            pass
+
+    tool = MemoryStoreTool(workspace=tmp_path)
+    tool._vector_index = _RaisingVectorIndex()
+    tool._vector_index_attempted = True
+
+    out = await tool.execute(content="content despite failure")
+    # Write should succeed (markdown is source of truth)
+    assert "error" not in out
+    assert "warning" not in out
+    assert out["id"]
