@@ -592,12 +592,13 @@ hand.
 
 **Output**: search scales past ~200 entries.
 
-**Embedding model decisions** (confirmed May 2026):
+**Embedding model decisions** (confirmed May 2026, revised post-audit):
 
-- Default: **`intfloat/multilingual-e5-small`** — 471 MB download, ~600 MB RAM resident, 384-dim, MIT license. Strong on English and European languages; CJK retrieval is marginal. Chosen as the polite default because ~80% of users don't need CJK and the lighter footprint accelerates onboarding.
-- CJK / multilingual heavy alternative: **`BAAI/bge-m3`** — 2.2 GB download, ~2.5 GB RAM resident, 1024-dim, MIT. SOTA on Chinese / Japanese / Korean. Opt-in via the future installer wizard or by overriding `memory.embedding.model` in config.
-- Both auto-download on first use via `fastembed` (ONNX runtime, pure-Python, no Ollama dependency, no compile step).
-- Future installer wizard surfaces the choice with pros/cons.
+- Default: **`sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`** — 220 MB download, ~400 MB RAM resident, 384-dim, Apache 2.0. Multilingual (50+ languages, Latin scripts strong, CJK marginal). Chosen as the polite default because ~80% of users don't need CJK and the lighter footprint accelerates onboarding.
+- CJK / multilingual heavy alternative: **`intfloat/multilingual-e5-large`** — 2.24 GB download, ~2.8 GB RAM resident, 1024-dim, MIT. Strong on Chinese / Japanese / Korean. Opt-in via the installer wizard or by overriding `memory.embedding.model` in config.
+- English-only minimal: **`sentence-transformers/all-MiniLM-L6-v2`** — 90 MB download, 384-dim, Apache 2.0. Lightest viable option for English-only daily-driver use.
+- All auto-download on first use via `fastembed` (ONNX runtime, pure-Python, no Ollama dependency, no compile step).
+- Model identifiers are validated against fastembed's live catalog at `FastembedProvider` construction time (see `durin/memory/embedding.py::list_supported_models`). Catalog drift between fastembed versions caused the original defaults (`intfloat/multilingual-e5-small`, `BAAI/bge-m3`) to silently disappear from fastembed 0.6+; the validation surfaces this at the config boundary instead of at first `embed()` call. The fastembed pin in `pyproject.toml` was tightened to `>=0.7,<0.9` to keep the catalog stable inside one release window.
 
 **RAM strategy (V1)**: load-once-keep-loaded. The model loads on the first
 embedding call (~1-2 s for e5-small, ~5 s for bge-m3) and stays resident
