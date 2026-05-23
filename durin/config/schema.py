@@ -106,10 +106,11 @@ class MemoryEmbeddingConfig(Base):
     """Embedding model configuration for the memory subsystem (Phase 2).
 
     ``provider`` selects the adapter (currently only ``fastembed``;
-    future: ``openai``, ``ollama``). ``model`` is the model identifier
-    understood by that provider (e.g. ``BAAI/bge-m3``).
-    ``base_url`` and ``api_key`` are passed through to HTTP providers
-    when added — fastembed ignores them.
+    future: ``openai``, ``ollama``). ``model`` must exist in fastembed's
+    catalog for the installed version (validated at
+    ``FastembedProvider`` construction time). ``base_url`` and
+    ``api_key`` are passed through to HTTP providers when added —
+    fastembed ignores them.
 
     ``lazy_eviction`` is reserved: V1 keeps the model resident for the
     life of the process and emits load/embed telemetry so eviction can
@@ -117,7 +118,7 @@ class MemoryEmbeddingConfig(Base):
     """
 
     provider: str = "fastembed"
-    model: str = "intfloat/multilingual-e5-small"
+    model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     base_url: str | None = Field(
         default=None,
         validation_alias=AliasChoices("baseUrl", "base_url"),

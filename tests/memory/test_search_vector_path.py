@@ -28,8 +28,19 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+_TEST_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+
+# What the fake fastembed pretends its catalog says. The model id
+# matches durin's real default; the stub dim (8) is small for speed.
+_STUB_CATALOG = [{"model": _TEST_MODEL, "dim": 8, "size_in_GB": 0.22}]
+
+
 class _FakeTextEmbedding:
     """Deterministic stub for fastembed.TextEmbedding."""
+
+    @staticmethod
+    def list_supported_models():
+        return list(_STUB_CATALOG)
 
     def __init__(self, model_name=None, **_):
         self.model_name = model_name
@@ -43,6 +54,9 @@ class _FakeTextEmbedding:
 
 @contextmanager
 def _stub_fastembed():
+    import durin.memory.embedding as embedding_module
+
+    embedding_module._CATALOG_CACHE = None
     fake = types.ModuleType("fastembed")
     fake.TextEmbedding = _FakeTextEmbedding  # type: ignore[attr-defined]
     sys.modules["fastembed"] = fake
@@ -50,17 +64,7 @@ def _stub_fastembed():
         yield
     finally:
         sys.modules.pop("fastembed", None)
-
-
-def _override_dims(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Register the stub embedder's 8-dim output for the test model."""
-    from durin.memory import embedding
-
-    monkeypatch.setitem(
-        embedding._FASTEMBED_DIMS,
-        "intfloat/multilingual-e5-small",
-        8,
-    )
+        embedding_module._CATALOG_CACHE = None
 
 
 # ---------------------------------------------------------------------------
@@ -76,12 +80,10 @@ async def test_store_upserts_into_vector_index(
     from durin.memory.vector_index import VectorIndex
     from durin.memory.embedding import FastembedProvider
 
-    _override_dims(monkeypatch)
-
     with _stub_fastembed():
         tool = MemoryStoreTool(
             workspace=tmp_path,
-            embedding_model="intfloat/multilingual-e5-small",
+            embedding_model=_TEST_MODEL,
         )
         out = await tool.execute(
             content="cache must be flushed when payload version changes",
@@ -89,7 +91,7 @@ async def test_store_upserts_into_vector_index(
         )
 
         # Index contains the entry
-        vi = VectorIndex(tmp_path, FastembedProvider("intfloat/multilingual-e5-small"))
+        vi = VectorIndex(tmp_path, FastembedProvider(_TEST_MODEL))
         hits = vi.search("cache", top_k=5)
 
     assert "error" not in out
@@ -122,7 +124,7 @@ async def test_store_vector_failure_does_not_break_write(
     monkeypatch.setitem(sys.modules, "fastembed", None)
     tool = MemoryStoreTool(
         workspace=tmp_path,
-        embedding_model="intfloat/multilingual-e5-small",
+        embedding_model=_TEST_MODEL,
     )
     out = await tool.execute(content="content", headline="h")
     assert "error" not in out
@@ -143,19 +145,17 @@ async def test_search_uses_vector_for_dreamed_warm(
     from durin.agent.tools.memory_search import MemorySearchTool
     from durin.agent.tools.memory_store import MemoryStoreTool
 
-    _override_dims(monkeypatch)
-
     with _stub_fastembed():
         store = MemoryStoreTool(
             workspace=tmp_path,
-            embedding_model="intfloat/multilingual-e5-small",
+            embedding_model=_TEST_MODEL,
         )
         await store.execute(content="alpha content", headline="alpha")
         await store.execute(content="beta content", headline="beta")
 
         search = MemorySearchTool(
             workspace=tmp_path,
-            embedding_model="intfloat/multilingual-e5-small",
+            embedding_model=_TEST_MODEL,
         )
         out = await search.execute(query="alpha", scope="dreamed", level="warm")
 
@@ -189,8 +189,6 @@ async def test_search_scope_all_combines_vector_and_grep(
     from durin.agent.tools.memory_search import MemorySearchTool
     from durin.agent.tools.memory_store import MemoryStoreTool
 
-    _override_dims(monkeypatch)
-
     # Prep: one stored memory entry (will be in vector index) + one
     # session.md grep-able for the same query token.
     sessions_dir = tmp_path / "sessions"
@@ -202,12 +200,12 @@ async def test_search_scope_all_combines_vector_and_grep(
     with _stub_fastembed():
         await MemoryStoreTool(
             workspace=tmp_path,
-            embedding_model="intfloat/multilingual-e5-small",
+            embedding_model=_TEST_MODEL,
         ).execute(content="alpha memory body", headline="alpha-memory")
 
         search = MemorySearchTool(
             workspace=tmp_path,
-            embedding_model="intfloat/multilingual-e5-small",
+            embedding_model=_TEST_MODEL,
         )
         out = await search.execute(query="alpha", scope="all", level="warm")
 
@@ -225,17 +223,15 @@ async def test_search_cold_level_uses_grep_only(
     from durin.agent.tools.memory_search import MemorySearchTool
     from durin.agent.tools.memory_store import MemoryStoreTool
 
-    _override_dims(monkeypatch)
-
     with _stub_fastembed():
         await MemoryStoreTool(
             workspace=tmp_path,
-            embedding_model="intfloat/multilingual-e5-small",
+            embedding_model=_TEST_MODEL,
         ).execute(content="alpha cold body", headline="alpha")
 
         search = MemorySearchTool(
             workspace=tmp_path,
-            embedding_model="intfloat/multilingual-e5-small",
+            embedding_model=_TEST_MODEL,
         )
         out = await search.execute(query="alpha", scope="dreamed", level="cold")
 

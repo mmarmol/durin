@@ -280,12 +280,23 @@ def test_hub_change_provider() -> None:
     assert is_secret_ref(result.config.providers.openai.api_key)
 
 
-def test_hub_memory_enable_and_change_embedding() -> None:
+def test_hub_memory_enable_and_change_embedding(monkeypatch) -> None:
+    # Pick the heavy multilingual option (CJK-strong) — its menu label
+    # starts with "multilingual-e5-large" so the scripted selector
+    # matches on substring. Stub the warmup so the test doesn't pull
+    # 2.24 GB on machines that happen to have fastembed installed.
+    from durin.cli import onboard_wizard
+
+    monkeypatch.setattr(
+        onboard_wizard, "_maybe_warm_embedding_model",
+        lambda model, size_label: None,
+    )
+
     answers = [
         "Vector memory",
         "Enable vector memory",
         "Change embedding model",
-        "BGE-M3",
+        "multilingual-e5-large",
         "← Back",
         _FINISH,
     ]
@@ -293,7 +304,7 @@ def test_hub_memory_enable_and_change_embedding() -> None:
     result = run_wizard(_configured_config(), q=q)
     assert "memory" in result.extras_to_install
     assert result.config.memory.enabled is True
-    assert result.config.memory.embedding.model == "BAAI/bge-m3"
+    assert result.config.memory.embedding.model == "intfloat/multilingual-e5-large"
 
 
 def test_hub_memory_enable_with_default_embedding_reports_on() -> None:

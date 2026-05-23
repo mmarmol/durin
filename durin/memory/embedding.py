@@ -2,14 +2,18 @@
 
 Phase 2.1 ships :class:`FastembedProvider`, a load-once-keep-loaded
 adapter over fastembed (ONNX runtime, in-process, no Ollama required).
-Default model is ``BAAI/bge-m3`` — see ``docs/08_memory_phase2_proposal.md``
-§0d.2 for the model decision and the lighter ``multilingual-e5-small``
-alternative.
+Default model is ``sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2``
+(220 MB, 384-dim, multilingual). For CJK-heavy users,
+``intfloat/multilingual-e5-large`` (2.24 GB, 1024-dim) is the
+recommended override; for English-only workloads,
+``sentence-transformers/all-MiniLM-L6-v2`` (90 MB, 384-dim) is the
+lightest viable option. See ``docs/08_memory_phase2_proposal.md`` §0d.2.
 
-The interface is intentionally minimal so future providers (HTTP-based
-OpenAI / Ollama / Voyage) can plug in without churn. The vector index
-and ``memory_search`` paths in later sub-tasks of Phase 2 depend only
-on :class:`EmbeddingProvider`.
+Model identifiers are validated against fastembed's live catalog at
+construction time. ``ValueError`` with an actionable message lists the
+supported models if an unknown identifier is supplied — surfacing
+catalog drift (fastembed retires or renames models between versions)
+at the config boundary instead of at first ``embed()`` call.
 
 Telemetry: every load and every embed call emits a structured event
 (``memory.embedding.load`` / ``memory.embedding.embed`` with
@@ -25,7 +29,71 @@ from typing import Any
 
 from durin.agent.tools._telemetry import emit_tool_event
 
-__all__ = ["EmbeddingProvider", "FastembedProvider"]
+__all__ = [
+    "EmbeddingProvider",
+    "FastembedProvider",
+    "list_supported_models",
+    "model_dimensions",
+]
+
+
+# Cached catalog from fastembed.TextEmbedding.list_supported_models().
+# Populated lazily on first lookup and never invalidated for the process
+# lifetime — fastembed's catalog is a build-time constant.
+_CATALOG_CACHE: dict[str, dict[str, Any]] | None = None
+
+
+def list_supported_models() -> dict[str, dict[str, Any]]:
+    """Return fastembed's supported models keyed by model name.
+
+    Raises ``RuntimeError`` if fastembed is not installed (the
+    ``[memory]`` extra is missing). The cache is process-lifetime; the
+    catalog never changes inside one fastembed version.
+    """
+    global _CATALOG_CACHE
+    if _CATALOG_CACHE is not None:
+        return _CATALOG_CACHE
+    try:
+        from fastembed import TextEmbedding  # type: ignore[import-not-found]
+    except ImportError as exc:
+        raise RuntimeError(
+            "fastembed is required for vector retrieval. "
+            "Install the memory extra: pip install durin-agent[memory]"
+        ) from exc
+    _CATALOG_CACHE = {m["model"]: m for m in TextEmbedding.list_supported_models()}
+    return _CATALOG_CACHE
+
+
+def model_dimensions(model_name: str) -> int:
+    """Return the embedding output dim for ``model_name`` per fastembed.
+
+    Raises ``ValueError`` if the model is not in the catalog.
+    """
+    catalog = list_supported_models()
+    entry = catalog.get(model_name)
+    if entry is None:
+        raise ValueError(_unknown_model_error(model_name, catalog))
+    dim = entry.get("dim")
+    if not isinstance(dim, int) or dim <= 0:
+        raise ValueError(
+            f"fastembed catalog entry for {model_name!r} lacks a usable 'dim' "
+            f"field (got {dim!r})."
+        )
+    return dim
+
+
+def _unknown_model_error(model_name: str, catalog: dict[str, dict[str, Any]]) -> str:
+    """Compose the actionable error message for an unknown model id."""
+    available = sorted(catalog.keys())
+    sample = "\n".join(f"  - {n}" for n in available[:10])
+    more = "" if len(available) <= 10 else f"\n  ... ({len(available) - 10} more)"
+    return (
+        f"Embedding model {model_name!r} is not in fastembed's catalog. "
+        f"Either fastembed was upgraded and retired this model, or the "
+        f"identifier has a typo. Available models in this fastembed "
+        f"version:\n{sample}{more}\n"
+        f"Update memory.embedding.model in your config to one of the above."
+    )
 
 
 class EmbeddingProvider(ABC):
@@ -43,33 +111,26 @@ class EmbeddingProvider(ABC):
     def embed(self, texts: list[str]) -> list[list[float]]: ...
 
 
-# Known fastembed model output dimensions. Used so callers can size the
-# LanceDB vector column without instantiating the model. Update when
-# adding a model the project intends to support out of the box.
-_FASTEMBED_DIMS: dict[str, int] = {
-    "BAAI/bge-m3": 1024,
-    "intfloat/multilingual-e5-small": 384,
-    "intfloat/multilingual-e5-base": 768,
-    "intfloat/multilingual-e5-large": 1024,
-    "BAAI/bge-small-en-v1.5": 384,
-    "BAAI/bge-base-en-v1.5": 768,
-    "BAAI/bge-large-en-v1.5": 1024,
-}
-
-
 class FastembedProvider(EmbeddingProvider):
     """In-process ONNX embedding via fastembed.
 
-    Lazy load: the model is constructed on the first :meth:`embed` call
-    and kept resident for the life of the process. No idle eviction in
-    V1 — telemetry (``memory.embedding.load``,
+    The model identifier is validated against fastembed's live catalog
+    at construction time so config errors surface immediately, not on
+    the first ``embed()`` call. The model itself loads lazily on first
+    :meth:`embed` and stays resident for the life of the process. No
+    idle eviction in V1 — telemetry (``memory.embedding.load``,
     ``memory.embedding.embed``) gives data to revisit the decision.
     """
 
-    DEFAULT_MODEL = "intfloat/multilingual-e5-small"
+    DEFAULT_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 
     def __init__(self, model: str | None = None) -> None:
         self._model_name = model or self.DEFAULT_MODEL
+        # Validate at construction time — surface unknown models at the
+        # config boundary instead of at the first embed() call.
+        catalog = list_supported_models()
+        if self._model_name not in catalog:
+            raise ValueError(_unknown_model_error(self._model_name, catalog))
         self._model: Any = None
 
     @property
@@ -78,14 +139,25 @@ class FastembedProvider(EmbeddingProvider):
 
     @property
     def dimensions(self) -> int:
-        d = _FASTEMBED_DIMS.get(self._model_name)
-        if d is None:
-            raise ValueError(
-                f"unknown fastembed model {self._model_name!r}; "
-                f"register its output dimensions in _FASTEMBED_DIMS or "
-                f"pick one of {sorted(_FASTEMBED_DIMS)}"
-            )
-        return d
+        return model_dimensions(self._model_name)
+
+    @classmethod
+    def warmup(cls, model: str | None = None) -> float:
+        """Download (if missing) and load the model; return load duration ms.
+
+        Intended for the onboard wizard and for `AgentLoop` boot when
+        the user has just enabled memory: paying the ~18 s first-time
+        download here, while the user is actively waiting, is better
+        than paying it on the first tool call mid-conversation.
+
+        The loaded model is discarded — this is a side-effect call to
+        populate the on-disk model cache. The next FastembedProvider
+        instance will reload from disk in ~230 ms.
+        """
+        provider = cls(model=model)
+        t0 = time.monotonic()
+        provider._load()
+        return (time.monotonic() - t0) * 1000.0
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:
@@ -112,7 +184,7 @@ class FastembedProvider(EmbeddingProvider):
         except ImportError as exc:
             raise RuntimeError(
                 "fastembed is required for vector retrieval. "
-                "Install the memory extra: pip install durin[memory]"
+                "Install the memory extra: pip install durin-agent[memory]"
             ) from exc
         t0 = time.monotonic()
         self._model = TextEmbedding(model_name=self._model_name)

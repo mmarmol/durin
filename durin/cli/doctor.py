@@ -485,6 +485,75 @@ def check_extras_drift() -> CheckResult:
     )
 
 
+def check_embedding_model() -> CheckResult:
+    """Validate ``config.memory.embedding.model`` against fastembed's catalog.
+
+    Three outcomes, with actionable messages:
+
+    - ``memory.enabled = False`` → ``ok``, "not enabled, vector retrieval off".
+    - memory enabled but fastembed not importable → ``warn``, points to
+      ``check_optional_extra`` which already flags the missing extra.
+    - fastembed present and model in catalog → ``ok`` with model + dim.
+    - fastembed present but model NOT in catalog → ``fail`` with the
+      list of supported models (the same actionable message
+      ``FastembedProvider.__init__`` would emit).
+    """
+    try:
+        cfg = load_config()
+    except Exception:  # noqa: BLE001
+        return CheckResult(
+            "embedding model", "warn",
+            "Could not load config.",
+            category="state",
+        )
+    if not getattr(cfg.memory, "enabled", False):
+        return CheckResult(
+            "embedding model", "ok",
+            "vector memory off (set memory.enabled=true to use it)",
+            category="state",
+        )
+    model_name = cfg.memory.embedding.model
+    try:
+        from durin.memory.embedding import list_supported_models
+    except Exception as exc:  # noqa: BLE001
+        return CheckResult(
+            "embedding model", "warn",
+            f"could not load fastembed catalog: {exc}",
+            fix="`durin doctor --install-missing -y` to install [memory] extra.",
+            category="state",
+        )
+    try:
+        catalog = list_supported_models()
+    except RuntimeError:
+        # fastembed not installed — the dedicated extras checks already
+        # cover this; we don't double-fail.
+        return CheckResult(
+            "embedding model", "ok",
+            f"configured as {model_name} ([memory] extra not installed)",
+            category="state",
+        )
+    if model_name in catalog:
+        dim = catalog[model_name].get("dim", "?")
+        size = catalog[model_name].get("size_in_GB")
+        size_str = f", ~{size:.2f} GB" if isinstance(size, (int, float)) else ""
+        return CheckResult(
+            "embedding model", "ok",
+            f"{model_name} ({dim}-dim{size_str})",
+            category="state",
+        )
+    available_sample = ", ".join(sorted(catalog)[:5])
+    return CheckResult(
+        "embedding model", "fail",
+        f"{model_name!r} is not in fastembed's catalog (got {len(catalog)} models, "
+        f"e.g. {available_sample}…)",
+        fix=(
+            "Set memory.embedding.model to one of the wizard options, or "
+            "rerun `durin onboard` and pick a model from the menu."
+        ),
+        category="state",
+    )
+
+
 def check_memory_summary() -> CheckResult:
     """Quantify the installation: how much memory / history is on disk."""
     try:
@@ -807,6 +876,7 @@ def run_checks(*, ping: bool = False, ping_model: bool = False) -> DoctorReport:
     except Exception:  # noqa: BLE001
         pass
     report.add(check_extras_drift())
+    report.add(check_embedding_model())
     report.add(check_memory_summary())
     report.add(check_cache_size())
     if ping:

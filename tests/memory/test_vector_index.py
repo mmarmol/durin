@@ -219,18 +219,62 @@ def test_rebuild_skips_malformed_files(
 
 
 # ---------------------------------------------------------------------------
-# embed_text selection rule
+# embed_text composition rule
 # ---------------------------------------------------------------------------
 
 
-def test_embed_text_prefers_summary_then_headline_then_body() -> None:
+def test_embed_text_composes_all_fields_in_order() -> None:
     from durin.memory.schema import MemoryEntry
 
-    full = MemoryEntry(id="x", headline="hed", summary="sum", body="bod")
-    assert VectorIndex._embed_text(full) == "sum"
+    entry = MemoryEntry(
+        id="x",
+        headline="hed",
+        summary="sum",
+        entities=["person:marcelo", "project:durin"],
+        body="bod",
+    )
+    text = VectorIndex._embed_text(entry)
+    # Order matters: headline first so the embedder sees the most
+    # distilled signal up front; body last as the longest, most
+    # truncatable component.
+    assert text.index("hed") < text.index("sum")
+    assert text.index("sum") < text.index("Entities:")
+    assert text.index("Entities:") < text.index("bod")
+    assert "person:marcelo" in text
+    assert "project:durin" in text
 
-    no_summary = MemoryEntry(id="x", headline="hed", body="bod")
-    assert VectorIndex._embed_text(no_summary) == "hed"
 
-    body_only = MemoryEntry(id="x", headline=" ", body="bod")
-    assert VectorIndex._embed_text(body_only) == "bod"
+def test_embed_text_skips_empty_fields() -> None:
+    from durin.memory.schema import MemoryEntry
+
+    only_body = MemoryEntry(id="x", headline=" ", body="bod")
+    assert VectorIndex._embed_text(only_body) == "bod"
+
+    no_entities = MemoryEntry(id="x", headline="hed", summary="sum", body="bod")
+    text = VectorIndex._embed_text(no_entities)
+    assert "Entities:" not in text
+    assert text == "hed\n\nsum\n\nbod"
+
+
+def test_embed_text_fallbacks_when_all_empty() -> None:
+    from durin.memory.schema import MemoryEntry
+
+    empty = MemoryEntry(id="x", headline="")
+    assert VectorIndex._embed_text(empty) == "memory entry"
+
+
+def test_embed_text_respects_char_budget() -> None:
+    from durin.memory.schema import MemoryEntry
+
+    entry = MemoryEntry(
+        id="x",
+        headline="H" * 100,
+        summary="S" * 500,
+        body="B" * 5000,
+    )
+    text = VectorIndex._embed_text(entry, budget_chars=200)
+    # Budget is a hard cap on the composed text length (joiners count).
+    assert len(text) <= 200
+    # Headline survives (was 100 chars, fits comfortably) and a portion
+    # of the next field appears before the budget is hit.
+    assert text.startswith("H" * 100)

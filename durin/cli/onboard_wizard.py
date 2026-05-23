@@ -117,14 +117,27 @@ DEFAULT_MODELS: dict[str, tuple[str, ...]] = {
     "custom": (),
 }
 
-# (label, embedding-provider, embedding-model id, approx download size)
+# (label, embedding-provider, embedding-model id, approx download size).
+# Every model listed here MUST exist in the fastembed version pinned in
+# pyproject.toml. See durin/memory/embedding.py::list_supported_models for
+# the live catalog and `tests/memory/test_embedding_catalog.py` for the
+# coherence test that pins this list against the runtime catalog.
 _EMBEDDING_CHOICES: tuple[tuple[str, str, str, str], ...] = (
-    ("multilingual-e5-small (default, 130MB, 100+ languages)",
-     "fastembed", "intfloat/multilingual-e5-small", "130 MB"),
-    ("BGE-M3 (large, 2.2GB, multilingual, strongest)",
-     "fastembed", "BAAI/bge-m3", "2.2 GB"),
-    ("all-MiniLM-L6-v2 (90MB, English-only, fastest)",
-     "fastembed", "sentence-transformers/all-MiniLM-L6-v2", "90 MB"),
+    ("multilingual-MiniLM-L12 · 220 MB · default — Western languages "
+     "(English/Spanish/French/...) — fast install, ~1 ms per embed",
+     "fastembed",
+     "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+     "220 MB"),
+    ("multilingual-e5-large · 2.24 GB · pick if your notes mix in "
+     "Chinese / Japanese / Korean — slower install, better CJK recall",
+     "fastembed",
+     "intfloat/multilingual-e5-large",
+     "2.24 GB"),
+    ("all-MiniLM-L6 · 90 MB · pick only if everything you write is in "
+     "English — smallest install",
+     "fastembed",
+     "sentence-transformers/all-MiniLM-L6-v2",
+     "90 MB"),
 )
 
 # Web-search backends durin supports (see durin/agent/tools/web.py).
@@ -877,11 +890,39 @@ def _pick_embedding(config: Config, q: Any, summary: list[str]) -> None:
     ).ask()
     if pick is None or pick == _BACK_CHOICE:
         return
-    for label, prov, model, _size in _EMBEDDING_CHOICES:
+    for label, prov, model, size in _EMBEDDING_CHOICES:
         if label == pick:
             config.memory.embedding = MemoryEmbeddingConfig(provider=prov, model=model)
             summary.append(f"Embedding model: {label.split(' (')[0]}")
+            _maybe_warm_embedding_model(model, size)
             break
+
+
+def _maybe_warm_embedding_model(model: str, size_label: str) -> None:
+    """Pre-download the embedding model now, while the user is attentive.
+
+    Skips silently if fastembed isn't installed yet (the user is still
+    in first-onboard with extras not yet present; boot warmup in
+    ``AgentLoop`` will handle this case on next start). When fastembed
+    is available, runs a synchronous warmup so the user sees the cost
+    here — far better than the first ``memory_store`` blocking for ~18
+    seconds mid-conversation.
+    """
+    try:
+        from durin.memory.embedding import FastembedProvider, list_supported_models
+        list_supported_models()  # raises if fastembed missing
+    except (ImportError, RuntimeError):
+        print(
+            f"  · Model {model} will be downloaded ({size_label}) on first "
+            "use, after the [memory] extra is installed."
+        )
+        return
+    print(f"  · Downloading {model} ({size_label}) — first time only...")
+    try:
+        duration_ms = FastembedProvider.warmup(model=model)
+        print(f"    done in {duration_ms / 1000:.1f} s.")
+    except Exception as exc:  # noqa: BLE001
+        print(f"    warmup failed ({exc}); model will be retried at first use.")
 
 
 def _configure_memory(
