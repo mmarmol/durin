@@ -235,11 +235,12 @@ class DreamConsolidator:
 
         # Refresh alias index — even on no-commit (alias_index might be
         # stale relative to file). Parse the just-written page.
+        # In-memory only (per doc 23 T1.4): no save() to disk; the next
+        # process boot rebuilds from disk.
         idx = self._get_alias_index()
         page = EntityPage.from_text(result.page_text)
         if page is not None:
             idx.refresh_for(page, slug=slug)
-            idx.save()
             # Vector index: only upsert if a real index was provided. We
             # don't auto-construct one because that pulls in fastembed
             # (heavy dep) — the caller decides whether vector retrieval
@@ -374,9 +375,9 @@ class DreamConsolidator:
     def _get_alias_index(self) -> AliasIndex:
         if self._alias_index is None:
             self._alias_index = AliasIndex(self.memory_root)
-            # Load existing sidecar if present; otherwise start empty.
-            if not self._alias_index.load():
-                self._alias_index.build()
+            # Rebuild from disk each boot (per doc 23 T1.4 + G14: no
+            # persistent sidecar). Sub-second for typical corpus sizes.
+            self._alias_index.build()
         return self._alias_index
 
 

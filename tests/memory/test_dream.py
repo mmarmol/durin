@@ -227,9 +227,10 @@ class TestApply:
             [EntryRef(id="e1", timestamp="2026-04-10", text="x")],
         )
         consolidator.apply("person:marcelo", result)
-        # Alias index should now contain marcelo's aliases mapping to the ref
+        # Alias index should now contain marcelo's aliases mapping to the ref.
+        # Rebuild from disk (per doc 23 T1.4: no persistent sidecar).
         idx = AliasIndex(tmp_path / "memory")
-        idx.load()
+        idx.build()
         assert idx.lookup("Marcelo") == ["person:marcelo"]
         assert idx.lookup("marcelo") == ["person:marcelo"]
         assert idx.lookup("Marcelo Marmol") == ["person:marcelo"]
@@ -314,9 +315,9 @@ def test_end_to_end_with_real_llm(tmp_path: Path) -> None:
     assert "Sources" in latest.trailers
     assert "Entities-touched" in latest.trailers
 
-    # Alias index populated
+    # Alias index populated (rebuild from disk per doc 23 T1.4)
     idx = AliasIndex(tmp_path / "memory")
-    idx.load()
+    idx.build()
     candidates = idx.lookup("Marcelo")
     assert "person:marcelo" in candidates
 

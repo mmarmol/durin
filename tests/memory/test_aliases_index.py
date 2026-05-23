@@ -135,35 +135,10 @@ class TestBuild:
 
 
 # ---------------------------------------------------------------------------
-# load / save round-trip
+# (no persistence — per doc 23 T1.4 + G14, AliasIndex is rebuild-only.
+# Tests for `save()` and `load()` removed; `build()` is the only way to
+# populate the index from disk.)
 # ---------------------------------------------------------------------------
-
-
-class TestPersistence:
-    def test_save_then_load_round_trip(self, tmp_path: Path) -> None:
-        _write_page(
-            tmp_path, "person", "marcelo",
-            name="Marcelo", aliases=["marcelo"],
-        )
-        idx = AliasIndex(tmp_path)
-        idx.build()
-        idx.save()
-        assert idx.sidecar_path().exists()
-
-        idx2 = AliasIndex(tmp_path)
-        loaded = idx2.load()
-        assert loaded is True
-        assert idx2.lookup("marcelo") == ["person:marcelo"]
-
-    def test_load_missing_returns_false(self, tmp_path: Path) -> None:
-        idx = AliasIndex(tmp_path)
-        assert idx.load() is False
-
-    def test_load_corrupt_returns_false(self, tmp_path: Path) -> None:
-        sidecar = tmp_path / ".aliases.json"
-        sidecar.write_text("not valid json {", encoding="utf-8")
-        idx = AliasIndex(tmp_path)
-        assert idx.load() is False
 
 
 # ---------------------------------------------------------------------------
