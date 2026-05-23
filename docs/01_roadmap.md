@@ -228,7 +228,7 @@ Once Phase 2 has retrieval, Phase 1b reduces to "use the memory retriever to fet
 
 > Post-T1 pass (2026-05-23): Phases 0-6 of the entity-centric memory plan
 > ([18_entity_centric_plan.md](18_entity_centric_plan.md) +
-> [19_implementation_plan.md](19_implementation_plan.md)) shipped, and
+> [archive/19_implementation_plan.md](archive/19_implementation_plan.md)) shipped, and
 > the T1 wiring sweep (W1-W4 in archived doc 24) closed the runtime
 > integration gap — `memory_search` now invokes the entity-aware ranker,
 > `durin memory dream` upserts consolidated entity pages into LanceDB,
