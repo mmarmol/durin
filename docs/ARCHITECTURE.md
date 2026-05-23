@@ -510,7 +510,7 @@ Phase 2 adds embedding-driven retrieval on top of the same markdown source of tr
 | Module | Role |
 |---|---|
 | `durin/memory/embedding.py` | `EmbeddingProvider` ABC + `FastembedProvider` (ONNX, in-process, lazy load). Default model `intfloat/multilingual-e5-small` (471 MB, 384-dim, polite default). `BAAI/bge-m3` available for CJK-heavy users via `memory.embedding.model` override. |
-| `durin/memory/vector_index.py` | `VectorIndex` wrapping a LanceDB table at `<workspace>/memory/.index.lance`. `upsert(entry, class, path)` for incremental writes; `rebuild_from_workspace()` for full rebuild; `search(query, top_k)` for nearest-neighbour. |
+| `durin/memory/vector_index.py` | `VectorIndex` wrapping a LanceDB table at `<workspace>/memory/.index.lance`. `upsert(entry, class, path)` for incremental writes; `rebuild_from_workspace()` for full rebuild; `search(query, top_k)` for nearest-neighbour. `_embed_text` composes `headline → summary → entities → body` (budget 1500 chars) so corpus entries with empty `summary` still get recalled by body content. |
 
 **Config**
 

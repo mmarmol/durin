@@ -1178,3 +1178,226 @@ The dashboard can now configure all of durin without the CLI: a generic
 `/api/config` plus a schema-driven "All settings" view, a Secrets section,
 and a refined Settings IA. The principle: anything in the config schema is
 reachable from the web; curated sections sit on top for the common paths.
+
+## Memory audit gap D — what the vector embeds (2026-05-23)
+
+While auditing the memory subsystem (Phase 1 + 2 landed; Phase 3 not yet
+started) we surfaced ten gaps. The most clear-cut one — gap D — was that
+`VectorIndex._embed_text` only fed the embedder `summary > headline > body`
+as a fallback chain. For a corpus entry written via `memory_store(content=...)`
+with no explicit summary, the embedder only saw the auto-generated
+~10-word headline. That makes vector recall over class D (queryable
+corpus) approximately useless for any query that doesn't match the
+headline literally — the body content carrying the actual information
+never enters the embedding.
+
+Fix: compose `headline → summary → entities → body` in that order, into a
+1500-char budget (≈ 375 tokens, well under e5-small's 512 max). Order
+chosen so the embedder sees the most distilled signal first (headline,
+summary), the typed entities next (a high-signal-per-char block once gap
+A lands), and the body last as the longest, most truncatable piece.
+
+The change is one method on `VectorIndex` plus its tests. No migration
+needed — entries already in the LanceDB index keep working; new writes
+and any `rebuild_from_workspace()` call pick up the new composition.
+
+**Lesson** worth stating: when you introduce optional fields to a schema
+(summary on `MemoryEntry`) the behavioural assumption that "the caller
+will fill them" doesn't hold, especially for an LLM-driven write path
+where the model defaults to minimal-cost arguments. Either make the
+field mandatory at the construction site, or make the consumer (here:
+the embedder) tolerant of the field being empty. The previous fallback
+chain was the second strategy but it stopped too early — fell back to
+headline, never reached body — so the consumer wasn't tolerant enough.
+
+## Memory embedding hardening — F1+F2+F3 (2026-05-23)
+
+The vector-retrieval pillar of Phase 2 had ten gaps that surfaced in a
+direct audit. The most consequential ones grouped into three families
+("catalog lies", "indexing incomplete", "load cost at the wrong time")
+were closed in one pass and end-to-end-verified against real fastembed
++ LanceDB.
+
+### Family 1 — fastembed catalog lies
+
+The config schema defaulted to `intfloat/multilingual-e5-small`, the
+`MemoryEmbeddingConfig` listed `BAAI/bge-m3` as the heavy alternative,
+and `_FASTEMBED_DIMS` carried seven model identifiers — but fastembed
+0.6+ silently retired both. Any installation with `memory.enabled=true`
+crashed on the first `memory_store` with `ValueError: Model not supported`.
+
+The fix dropped the static `_FASTEMBED_DIMS` dict and consults
+`TextEmbedding.list_supported_models()` at construction time — the
+fastembed catalog is build-time-constant, so caching it in
+`durin/memory/embedding.py::_CATALOG_CACHE` after the first access is
+safe and cheap. `FastembedProvider.__init__` now raises `ValueError`
+with an actionable message listing the available models when given an
+unknown id — surfaces the problem at the config boundary, not three
+layers deep in a tool call.
+
+Defaults revised after auditing the 30 models the current fastembed
+ships:
+
+- `paraphrase-multilingual-MiniLM-L12-v2` (220 MB, 384-dim) — default.
+- `intfloat/multilingual-e5-large` (2.24 GB, 1024-dim) — recommended
+  for Chinese/Japanese/Korean.
+- `all-MiniLM-L6-v2` (90 MB, 384-dim) — English-only minimal.
+
+The fastembed pin tightened from `>=0.4.0,<1.0.0` to `>=0.7,<0.9` so
+the catalog stays inside one release window. A new test
+(`tests/memory/test_embedding_catalog.py`) pins every wizard option +
+the schema default against the live catalog so a future fastembed bump
+fails CI before it ships to users.
+
+`durin doctor` got a dedicated `check_embedding_model` row that prints
+the model + dim when memory is on, "vector memory off" when not, and a
+clear failure with `fix:` text when the configured model isn't in the
+catalog. `durin status` was extended to show `vector on (<model>)` or
+`vector off` so the user can confirm at a glance what they're paying
+the ~220 MB / ~2.24 GB for.
+
+### Family 2 — indexing incomplete
+
+Three structural holes:
+
+1. **`memory_ingest` never touched the vector index**. The user uploads
+   a doc, it sits in `ingested/<id>/source.*`, and vector search can't
+   see it until a hypothetical dream runs. `MemoryIngestTool.execute`
+   now derives a `memory/corpus/<id>.md` entry pointing back to the
+   ingested source via `source_refs`, with the first 1500 chars of the
+   body in the entry. The same upsert path as `memory_store` indexes
+   it immediately. Full content stays in `ingested/<id>/source.*` for
+   `memory_drill`.
+2. **Manual edits to memory entries left vectors stale**. There was no
+   way to tell the index "this file changed". A new
+   `/memory reindex` subcommand calls
+   `VectorIndex.rebuild_from_workspace()` — full re-embed in ~1.3 s
+   per 1000 entries with MiniLM-L12. Same code path covers users who
+   change `memory.embedding.model` and end up with a dim-mismatched
+   table.
+3. **No dim-mismatch detection**. `VectorIndex.upsert` and `.search`
+   now compare the on-disk vector column's dim against the current
+   provider's `.dimensions` and raise `VectorIndexDimensionMismatch`
+   with an actionable message naming `/memory reindex` as the fix.
+
+### Family 3 — load cost at the wrong time
+
+The first call to `FastembedProvider.embed()` paid ~18 s for the model
+download. By default, that first call landed in the middle of a real
+turn the user was waiting on. Two cheap fixes:
+
+1. `FastembedProvider.warmup(model)` classmethod — loads the model and
+   returns. The onboard wizard calls it transparently after the user
+   picks a model (when fastembed is installed in the current venv —
+   re-onboard flows), so the download happens while the user is
+   actively waiting in the wizard, not mid-conversation.
+2. `AgentLoop._warmup_memory_embedding` is scheduled in the background
+   from `AgentLoop.run` when `memory.enabled` — covers the boot of a
+   fresh process where the user just enabled memory and is about to
+   start chatting. Uses `asyncio.to_thread` so the fastembed sync
+   download doesn't block the event loop. Failures are logged but
+   never surface to the user; the next `memory_store`/`memory_search`
+   will retry the load.
+
+### Verification
+
+Real end-to-end against fastembed + LanceDB in a temp workspace,
+covering 10 cases: unknown-model rejection, default-model load,
+`memory_store` + vector upsert, `memory_search` via vector,
+`memory_ingest` derivation + vector indexing, vector-recallability of
+ingested docs, manual-edit + rebuild flow, dim-mismatch detection +
+rebuild fix, hot-layer read, and `doctor`'s check. All ten passed.
+CLI surfaces (`durin status`, `durin doctor`, `durin config set`)
+verified by direct invocation.
+
+### Pre-existing bug noted (not fixed in this pass)
+
+`durin config get memory.embedding.*` returns `No such key` for
+deeply-nested paths inside `MemoryEmbeddingConfig`, while `set` of the
+same paths works. Confirmed pre-existing (reproduces before this
+change) — it's a split-layout config code defect, not embedding-related.
+Filed for a follow-up pass.
+
+### Follow-up — fixed in same pass
+
+The `durin config get` defect noted above turned out to be one line.
+`cmd_get` read `load_raw_config(path)` (the as-on-disk dict, which
+omits anything the user never wrote). Switched to `load_config(path)`
++ `model_dump(by_alias=False, mode="json")` so schema defaults
+populate paths the user never touched. Verified:
+
+```
+$ durin config get memory.embedding.model
+sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+$ durin config get memory.embedding
+{ "api_key": null, "base_url": null, "lazy_eviction": false,
+  "model": "...", "provider": "fastembed" }
+```
+
+`No such key` still fires for genuinely-absent paths (`config get
+nonexistent.key`). The fallback to `load_raw_config` is kept for the
+case where the on-disk config fails schema validation — better to show
+a value than refuse all queries while the user fixes the typo.
+
+## Context composition telemetry (2026-05-23)
+
+Phase 2 of the memory work added embedding telemetry (load duration,
+embed duration, recall latency) but not visibility into how the
+context budget is spent across tiers. Without that we can't answer
+"how much of my 200 K context is just the system prompt today?" or
+"of the cached tokens this provider reports, which component is
+actually getting cached?".
+
+The fix is a new `context.composition` event emitted from
+`ContextBuilder.build_messages` once per turn-build, carrying a
+tiktoken-estimated breakdown by tier:
+
+- **stable** — identity / bootstrap / skills_active / skills_catalog
+  / memory_hot. The cache-friendly prefix that providers like
+  Anthropic and OpenAI's prefix cache reuse across turns.
+- **context** — mode suffix (PLAN / BUILD / EXPLORE), if active.
+- **volatile** — memory_long_term (MEMORY.md) / recent_history
+  (history.jsonl) / session_summary. The per-turn block that breaks
+  the cache.
+- **history_msg_tokens** — prior turns in the message list.
+- **current_msg_tokens** — the user message + runtime context for
+  this turn.
+- **tools_tokens** — JSON of every tool definition sent to the LLM.
+- **estimated_total** — the sum, what we expect provider's
+  `prompt_tokens` to approximate modulo tokenizer differences.
+
+Sanity check from a real workspace probe:
+
+```
+  stable (cache-friendly)        2916    63.3%
+     · skills_active              953    20.7%
+     · bootstrap                  921    20.0%
+     · skills_catalog             550    11.9%
+     · identity                   492    10.7%
+  tool definitions               1221    26.5%
+  history (prior turns)           418     9.1%
+  current message                  55     1.2%
+  ──────────────────────────── ──────
+  estimated total                4610
+```
+
+This is exactly what we wanted: in this turn the stable prefix is 63%
+of the input, so when `cache.usage.cache_ratio_pct` is around that
+number we know caching is working as expected on the stable layer. If
+it's much lower, something in stable rotated (skills loaded, bootstrap
+edited, hot layer flipped under dream). If higher, tools are getting
+cached too — depends on the provider's reach.
+
+**Implementation cost**: ~150 lines on top of `ContextBuilder` (three
+layer methods now also populate a sibling dict with sub-blocks per
+component, so `_emit_composition_event` can measure each sub-block
+without re-rendering). New helper `estimate_text_tokens(str)` wraps
+tiktoken on a string for these per-component counts.
+`TypedDict ContextCompositionEvent` registered in
+`durin/telemetry/schema.py`.
+
+**Reflected in TUI / web**: deferred. Once we have a few sessions of
+telemetry data, we'll add a composition panel that shows the current
+breakdown and a sparkline of `cache_ratio_pct` over recent turns.
+Measuring comes first; visualisation follows the data.
+
