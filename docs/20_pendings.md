@@ -103,6 +103,48 @@ Implementación posible:
 
 ## §2 — Backlog (sin priorizar)
 
+### P5 — Tracing de tool calls de memoria en la session viewer
+
+**Contexto**: cuando el agente usa `memory_store` / `memory_search` /
+`memory_dream` / `memory_expand` durante una sesión, hoy queda en el
+log pero sin presentación visual integrada al historial de la sesión.
+
+**Idea (Marcelo)**: en la session viewer (web especialmente, también
+TUI si se puede):
+
+- En cada turn que el agente invoque una memory tool, destacar
+  visualmente cuál se procesó (ej: badge `📝 memory_store` al lado del
+  turno, o highlighted background).
+- Click en el badge → expande para mostrar la memoria exacta que
+  escribió/leyó, los argumentos, y el resultado (entry id, results
+  retornados, etc.).
+- En la misma vista, listar el resto de calls a memoria de la sesión
+  para ver el flujo completo: "esta sesión hizo 3 stores, 5 searches,
+  1 dream".
+- En web: el visualizador de memorias integrado (P4) puede linkearse
+  desde acá — click en una memoria → abre su entry card.
+
+**Casos de uso**:
+- Debugging: entender por qué el agente respondió X — ¿qué memorias
+  recuperó?
+- Auditing: revisar que el agente está taggeando entities bien.
+- Aprendizaje: ver qué patterns de uso emergen tras N sesiones.
+
+**Propuesta tentativa para web**:
+- Backend: el log JSONL ya tiene los tool calls. Agregar endpoint
+  `/api/sessions/<key>/memory-ops` que devuelva los memory_*
+  invocations parseados.
+- Frontend: badge inline en cada turn + side panel "Memory operations"
+  con timeline. Click expande a JSON pretty + link al entry/page.
+
+**Propuesta tentativa para TUI**:
+- Más constrained por superficie. Quizás un comando `/memory-ops` que
+  liste las operaciones de la sesión actual con drill-down (similar
+  al `durin memory expand`).
+
+**Estado**: idea, sin priorizar. Probablemente post-P4 (entity cards
+UI) porque comparte infrastructure del visualizador.
+
 ### P4 — UI de gestión de entidades (entity cards)
 
 **Contexto**: doc 18 §4 (post-Phase-2 entity-centric memory). Cuando
