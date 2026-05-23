@@ -205,34 +205,31 @@ class GitRepo:
         porcelain.init(str(self.root))
 
         # Drop a .gitignore if patterns given and no file exists.
+        # If init runs in a dir that already has content, the existing
+        # files stay untracked — they'll be picked up by the next
+        # explicit commit, not bundled into the init commit.
         if gitignore_patterns:
             gi = self.root / ".gitignore"
             if not gi.exists():
                 gi.write_text("\n".join(gitignore_patterns) + "\n",
                               encoding="utf-8")
 
-        # Initial empty commit so log/status are non-degenerate.
-        # We need at least one file staged for dulwich's first commit;
-        # the .gitignore (if written) suffices. Otherwise add an empty
-        # .gitkeep.
-        try:
-            self.commit(
-                subject="Initialize repository",
-                paths=None,
-                author=self.default_author,
-                author_email=self.default_email,
-            )
-        except NothingToCommitError:
-            # No .gitignore and no other content — create .gitkeep so we
-            # have something to commit. Subsystems should always provide
-            # gitignore_patterns or write content before init in practice.
-            (self.root / ".gitkeep").write_text("", encoding="utf-8")
-            self.commit(
-                subject="Initialize repository",
-                paths=[self.root / ".gitkeep"],
-                author=self.default_author,
-                author_email=self.default_email,
-            )
+        # Initial commit. We stage ONLY the marker file we control
+        # (.gitignore if just written; .gitkeep otherwise) — never
+        # `git add -A` — so any pre-existing content in the directory
+        # stays untracked until the subsystem explicitly commits it.
+        marker_path: Path
+        if (self.root / ".gitignore").exists() and gitignore_patterns:
+            marker_path = self.root / ".gitignore"
+        else:
+            marker_path = self.root / ".gitkeep"
+            marker_path.write_text("", encoding="utf-8")
+        self.commit(
+            subject="Initialize repository",
+            paths=[marker_path],
+            author=self.default_author,
+            author_email=self.default_email,
+        )
         return True
 
     def is_initialized(self) -> bool:

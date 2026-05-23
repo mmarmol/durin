@@ -62,6 +62,10 @@ Output FORMATO ESTRICTO:
 
 ENTIDAD A CONSOLIDAR: `{entity_id}`
 
+PÁGINA ACTUAL (si existe — usar como base, NO duplicar facts ya presentes):
+
+{current_page}
+
 OBSERVACIONES EPISÓDICAS ({n_entries} entries):
 
 {entries_text}
