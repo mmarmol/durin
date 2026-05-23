@@ -494,6 +494,11 @@ class MemoryRecallVectorEvent(TypedDict):
 
     Separate from ``memory.recall`` (the generic grep-or-vector summary
     event) so dashboards can split latency / hit count by strategy.
+
+    Entity-aware ranking telemetry (S2 per archived doc 24) piggy-backs
+    on this event instead of duplicating into ``memory.recall.entity_aware``
+    so consumers can correlate distance-based vs entity-boosted retrieval
+    on a single record.
     """
 
     query: str
@@ -501,6 +506,31 @@ class MemoryRecallVectorEvent(TypedDict):
     embedding_model: str
     hit_count: int
     duration_ms: float
+    # Entity-aware ranking fields (S2 doc 24). NotRequired so the schema
+    # accepts older events that pre-date W1 wiring.
+    ranking: NotRequired[str]                 # "default" | "entity_aware"
+    query_entities_count: NotRequired[int]
+    reordered: NotRequired[bool]              # True if top-1 changed pre/post rerank
+    top_1_id_before: NotRequired[str]
+    top_1_id_after: NotRequired[str]
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
+class MemoryStoreBlockedNearDuplicateEvent(TypedDict):
+    """memory_store dedup pre-persist (T1.7 per archived doc 23) refused
+    a write because the embedding distance to an existing entry fell
+    below the configured threshold. The model receives a warning and may
+    re-call with ``force=True`` to bypass; this event records the
+    underlying decision so the §2.D gate can be measured ("duplicates
+    detected per month").
+    """
+
+    candidate_class_name: str
+    existing_id: str
+    existing_class_name: str
+    distance: float
+    threshold: float
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
 
@@ -563,6 +593,7 @@ EVENTS: dict[str, type] = {
     "memory.embedding.load": MemoryEmbeddingLoadEvent,
     "memory.embedding.embed": MemoryEmbeddingEmbedEvent,
     "memory.recall.vector": MemoryRecallVectorEvent,
+    "memory.store.blocked_near_duplicate": MemoryStoreBlockedNearDuplicateEvent,
 }
 
 

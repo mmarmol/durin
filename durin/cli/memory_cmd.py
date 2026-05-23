@@ -585,6 +585,134 @@ def cmd_absorb(
         )
 
 
+@memory_app.command("stats")
+def cmd_stats(
+    days: int = typer.Option(
+        None,
+        "--days",
+        "-d",
+        help="Only consider telemetry events from the last N days.",
+    ),
+    json_out: bool = typer.Option(
+        False,
+        "--json",
+        help="Print the full stats as JSON instead of a rich table.",
+    ),
+) -> None:
+    """Aggregate memory telemetry + filesystem counts.
+
+    Reads JSONL events from ``~/.cache/durin/telemetry/`` and walks the
+    workspace's ``memory/`` tree for ground-truth counters. Used to
+    measure the gates for the T2 horizon items (see doc 25 §2.E).
+
+    Filesystem counts are point-in-time (what exists now). Event counts
+    are over the requested window. Empty workspace + no telemetry yields
+    all-zero metrics — no error.
+    """
+    import json as _json
+
+    from durin.memory.stats import compute_stats
+
+    workspace = _workspace_root()
+    stats = compute_stats(workspace, days=days)
+
+    if json_out:
+        console.print(_json.dumps(stats.to_dict(), indent=2, default=str))
+        return
+
+    # Rich table render — grouped by section so consumers can find the
+    # gate-relevant metric at a glance.
+    window = f"last {days} days" if days else "all-time"
+
+    fs_table = Table(
+        title=f"Filesystem (current snapshot)",
+        show_header=True,
+        header_style="bold cyan",
+    )
+    fs_table.add_column("Metric")
+    fs_table.add_column("Value", justify="right")
+    fs_table.add_row("Episodic entries on disk", str(stats.episodic_entries_on_disk))
+    fs_table.add_row(
+        "  tagged with entities (gate §2.A)",
+        str(stats.episodic_entries_tagged),
+    )
+    fs_table.add_row("Entity pages on disk", str(stats.entity_pages_on_disk))
+    fs_table.add_row("Entity pages archived (post-absorb)",
+                     str(stats.entity_pages_archived))
+    console.print(fs_table)
+
+    recall_table = Table(
+        title=f"Recall events ({window})",
+        show_header=True,
+        header_style="bold cyan",
+    )
+    recall_table.add_column("Metric")
+    recall_table.add_column("Value", justify="right")
+    recall_table.add_row("Total recalls", str(stats.recall_total))
+    recall_table.add_row("  vector path", str(stats.recall_vector_total))
+    recall_table.add_row("  grep path", str(stats.recall_grep_total))
+    recall_table.add_row(
+        "Vector entity-aware activations",
+        f"{stats.recall_vector_entity_aware} "
+        f"({stats.entity_aware_ratio*100:.1f}%)",
+    )
+    recall_table.add_row(
+        "Vector reordered (ranker fired effectively)",
+        f"{stats.recall_vector_reordered} "
+        f"({stats.reordered_ratio*100:.1f}%)",
+    )
+    if stats.recall_vector_total > 0:
+        avg_ms = (
+            stats.recall_vector_duration_ms_total / stats.recall_vector_total
+        )
+        recall_table.add_row("Avg vector duration", f"{avg_ms:.1f} ms")
+        avg_hits = (
+            stats.recall_vector_hit_count_total / stats.recall_vector_total
+        )
+        recall_table.add_row("Avg vector hits/call", f"{avg_hits:.1f}")
+    console.print(recall_table)
+
+    write_table = Table(
+        title=f"Store + ingest events ({window})",
+        show_header=True,
+        header_style="bold cyan",
+    )
+    write_table.add_column("Metric")
+    write_table.add_column("Value", justify="right")
+    write_table.add_row("Store writes (successful)", str(stats.store_total))
+    write_table.add_row(
+        "Store blocked as near-duplicate (gate §2.D)",
+        str(stats.store_blocked_near_duplicate),
+    )
+    write_table.add_row("Ingest events", str(stats.ingest_total))
+    write_table.add_row("Ingest bytes total", f"{stats.ingest_bytes_total:,}")
+    console.print(write_table)
+
+    embed_table = Table(
+        title=f"Embedding events ({window})",
+        show_header=True,
+        header_style="bold cyan",
+    )
+    embed_table.add_column("Metric")
+    embed_table.add_column("Value", justify="right")
+    embed_table.add_row("Embedding loads", str(stats.embedding_load_count))
+    embed_table.add_row(
+        "Embedding load duration total",
+        f"{stats.embedding_load_duration_ms_total:.0f} ms",
+    )
+    embed_table.add_row("Embed batch calls", str(stats.embedding_embed_count))
+    embed_table.add_row(
+        "Embed batches sum size",
+        str(stats.embedding_embed_batch_size_total),
+    )
+    console.print(embed_table)
+
+    console.print(
+        f"\n[dim]Scanned {stats.telemetry_files_scanned} telemetry files, "
+        f"{stats.telemetry_events_scanned} memory.* events.[/dim]"
+    )
+
+
 @memory_app.command("absorb-suggest")
 def cmd_absorb_suggest() -> None:
     """List candidate pairs that share at least one alias (merge hints)."""
