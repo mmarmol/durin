@@ -209,11 +209,18 @@ def test_retrieval_l1_light_end_to_end(
     )
 
     # ASSERT 3: ranking annotated which signals fired.
+    # Under RRF (doc 23 T1.3): page gets vector_rank + entity_page_rank;
+    # pre-cursor entries are EXCLUDED from the entity-match list so they
+    # carry ONLY vector_rank (no post_cursor / pre_cursor annotation —
+    # the absence of an entity signal IS the demotion).
     page_result = next(r for r in ranked if r.record["id"] == "person:marcelo")
-    assert any("entity_page" in s for s in page_result.signals)
+    assert any("entity_page_rank" in s for s in page_result.signals)
 
     pre_result = next(r for r in ranked if r.record["id"] == pre["id"])
-    assert any("pre_cursor" in s for s in pre_result.signals)
+    assert not any(
+        "post_cursor_rank" in s or "entity_page_rank" in s
+        for s in pre_result.signals
+    ), "pre-cursor entries must be excluded from entity-match list"
 
 
 def test_alias_via_identifier_finds_page(
