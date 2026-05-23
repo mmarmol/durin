@@ -1,0 +1,116 @@
+# 20 — Pendings observados durante uso
+
+> Bitácora viva de items de UX / features que aparecen mientras uso durin
+> pero que NO bloquean el trabajo actual (entity-centric memory, doc 18 y
+> doc 19). Cada item se anota con: contexto, problema, propuesta tentativa
+> (si la hay), y estado.
+>
+> Cuando un item se aborda, se mueve a "Resueltos" al final con la fecha
+> y el commit/PR de referencia.
+
+---
+
+## §1 — Pendientes activos
+
+### P1 — Edición de campos password/key en la web (secrets system)
+
+**Contexto**: web settings, sección de providers o channels que usan el
+sistema KEY/PASSWORD privado (`${secret:...}` refs).
+
+**Problema**: cuando se edita un campo password que tiene un secret ref
+(`${secret:openai_api_key}` o similar), el editor muestra **la variable
+literal** al editar. No queda claro qué hace si el user:
+- Escribe encima → ¿reemplaza el valor del secret o crea un nuevo secret?
+- Borra el contenido → ¿deja vacío o desconecta el ref?
+- Confirma sin cambios → ¿re-escribe lo mismo o no-op?
+
+El comportamiento actual probablemente es correcto en código pero la UI
+no comunica intención.
+
+**Propuesta tentativa**:
+
+- Mostrar dos representaciones distintas:
+  - Si el campo es un secret ref: badge tipo `🔒 secret:openai_api_key`
+    (no editable directamente). Click para "rotar" o "desconectar".
+  - Si es plaintext: input normal.
+- Botón "Edit secret value" abre un dialog separado que aclara: "Esto
+  reemplazará el valor almacenado para `openai_api_key`. Todas las refs
+  a `${secret:openai_api_key}` lo usarán."
+- Botón "Disconnect secret" reemplaza el ref por input plaintext.
+- Onboarding wizard ya tiene patrones para esto — alinear con esa UX.
+
+**Estado**: pendiente.
+
+---
+
+### P2 — Edición de nombres de sesiones
+
+**Contexto**: web (y posiblemente TUI). Cada sesión tiene un nombre
+auto-generado (timestamp o title-inferred del primer mensaje).
+
+**Problema**: no se puede renombrar la sesión. Al acumular muchas, se
+vuelve difícil distinguir cuál era cuál.
+
+**Propuesta tentativa**:
+
+- Web: click en el nombre de la sesión en el sidebar → inline edit (similar
+  a renombrar archivos en file explorer).
+- Endpoint: `PATCH /api/sessions/<key>` con `{title: "new name"}`.
+- Persistir el override en `<key>.meta.json` (campo `display_title`); si
+  no existe, fallback al auto-generated.
+- TUI: comando `/rename <new name>` para la sesión actual, o `/sessions
+  rename <key> <new name>`.
+
+**Estado**: pendiente.
+
+---
+
+### P3 — Comando para cambiar modelo es precario — autocompletion progresivo
+
+**Contexto**: TUI/web, comando `/model` (o equivalente) para cambiar el
+modelo activo.
+
+**Problema**: la UX actual no autocompleta progresivamente. El user tiene
+que conocer la sintaxis exacta (`<provider>:<model>` o similar) o
+recordar los modelos disponibles.
+
+**Propuesta tentativa**:
+
+Autocompletion en cascada:
+
+1. Tipear `/model` + space → mostrar opciones:
+   - Modelos configurados actualmente (los que están en `agents.defaults`,
+     `auxModels`, etc. — los conocidos).
+   - Lista de providers disponibles.
+2. Si el user elige un **modelo configurado** → set y done.
+3. Si elige un **provider** (ej: `openai`, `anthropic`, `zhipu`) →
+   próximo step muestra todos los modelos disponibles del provider
+   (catalog refresh per `refresh_model_capabilities.py` o cache).
+4. Si el provider está sin configurar → ofrece configurar primero
+   (link/comando para setup).
+
+Implementación posible:
+
+- Reusar la slash command palette infrastructure de la web (el slash
+  picker que recién arreglamos).
+- En CLI/TUI: rich autocompletion via prompt_toolkit (ya está en deps).
+- Backend: endpoint `/api/models?provider=<x>` ya existe (commit
+  `de4143e feat(web): GET /api/models + /api/model/capabilities`).
+
+**Estado**: pendiente — requiere proposal más detallada antes de implementar.
+
+---
+
+## §2 — Backlog (sin priorizar)
+
+(Vacío por ahora — items futuros van acá hasta que se priorizan.)
+
+---
+
+## §3 — Resueltos
+
+(Vacío por ahora — items se mueven acá con fecha + commit al cerrarse.)
+
+---
+
+## Last updated: 2026-05-23 (creado durante Phase 0 de implementación entity-centric)
