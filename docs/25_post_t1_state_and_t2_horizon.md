@@ -14,7 +14,7 @@
 > (no contra la versión anterior del doc): T2.B descartado (ya
 > implementado), T2.C re-scoped, T2.F y T2.G agregados desde archived doc
 > 21 §3 + doc 22 N1. §2.E identificado como prerequisite estructural
-> de los demás.
+> de los demás — **shipped el mismo día** vía `durin memory stats`.
 
 ---
 
@@ -127,29 +127,50 @@ producción (archived doc 21 §4).
 
 **Costo estimado**: alto. Toca path crítico + UX nueva.
 
-### §2.E — Telemetry aggregation (PREREQUISITE)
+### §2.E — Telemetry aggregation (SHIPPED 2026-05-23)
 
-**Estado verificado**: `memory.recall.vector` se emite en
-`agent/tools/memory_search.py:223` con `{ranking, query_entities_count,
-reordered, top_1_id_before, top_1_id_after, duration_ms, hit_count}`.
-Nada consume esos JSONL — `grep -rn "memory.recall" durin/cli/` vacío.
+**Estado**: implementado. CLI `durin memory stats [--days N] [--json]`
+en `durin/cli/memory_cmd.py`; aggregator en `durin/memory/stats.py`
+(read-only). Schema fixes paralelos:
 
-**Origen**: archived doc 17 §3.5 ítems 9-10 (Medición direccional) +
-archived doc 21 §4 (T2 gate criteria).
+- `MemoryRecallVectorEvent` ahora declara los 5 fields que el emit site
+  ya producía: `ranking`, `query_entities_count`, `reordered`,
+  `top_1_id_before`, `top_1_id_after` (NotRequired para compat con
+  eventos pre-W1).
+- Nuevo `memory.store.blocked_near_duplicate` event registrado y
+  emitido desde el dedup path de `memory_store.py` (T1.7) cuando el
+  embedding cae bajo el threshold y bloquea el write — esto cierra el
+  data gap del gate §2.D ("duplicates detectados").
 
-**Por qué hoy**: las gates de §2.A, §2.D, §2.F son métricas observables.
-Sin agregación, abrir esos items es un acto de fe, no de evidencia.
+**Métricas disponibles**:
 
-**Diseño necesario**:
-- CLI: `durin memory stats [--days N]` sobre `~/.cache/durin/telemetry/`.
-- Métricas mínimas:
-  - Entries acumuladas tageadas (gate §2.A)
-  - Duplicates detectados (gate §2.D)
-  - Frecuencia de tool-call memory_search vs eager-inject candidate (gate §2.F)
-  - `reordered` ratio (validación del ranker)
-- Output: tabla rich + opcional JSON para downstream.
+Ground truth de disco (no event-derived):
+- Episodic entries on disk + cuántas están tageadas (gate §2.A)
+- Entity pages on disk + archived post-absorb
 
-**Costo estimado**: bajo (~80 LOC). Es read-only, no toca el write path.
+Eventos (con filtro `--days N`):
+- Total recalls + split vector vs grep
+- Vector entity-aware activations (gate §2.F)
+- Vector reordered ratio (validación del ranker)
+- Store writes + blocked-as-near-duplicate (gate §2.D)
+- Ingest events + bytes total
+- Embedding loads + cumulative duration
+
+Output: rich tables agrupadas por sección + `--json` para downstream
+scripting.
+
+**Costo real**: ~280 LOC (vs estimación previa de ~80) — incluye
+schema fixes, emit nuevo, aggregator + CLI + 13 unit tests + 3 CLI
+tests. Verificado live contra 88 telemetry files reales.
+
+**Gates ahora medibles**:
+
+| Item | Gate | Cómo leer |
+|---|---|---|
+| §2.A auto-trigger dream | >50 entries tagged | `durin memory stats` → row "tagged with entities" |
+| §2.D auto-absorb | >5 dup/mes | `durin memory stats --days 30` → row "blocked as near-duplicate" |
+| §2.F eager-inject | tool-call freq | `durin memory stats --days 7` → "Total recalls" |
+| §2.G eviction | corpus size | "Episodic entries on disk" + "Avg vector hits/call" |
 
 ### §2.F — Eager-inject context block (vs lazy tool-driven actual)
 
@@ -289,35 +310,27 @@ lecciones).
 
 ## §5 — Próximos pasos sugeridos (no decididos)
 
-Tres caminos plausibles, en orden de costo creciente:
+Con §2.E ya shipped, los caminos quedan:
 
-### Opción 1: Daily-driving sin instrumentar
+### Opción 1: Daily-driving + medir
 
-- Mantener T1 como está.
 - Usar durin con memory.enabled en uso real.
 - Pasar dream manual cuando convenga.
+- Correr `durin memory stats --days 30` periódicamente.
+- Re-evaluar en 2-4 semanas si algún ítem T2 cruza su gate.
 - Capturar nuevos pendings en doc 20.
-- **Limitación**: sin §2.E, las gates de §2.A / §2.D / §2.F siguen
-  siendo "feeling-based" cuando se quiera abrir T2.
 
-### Opción 2: §2.E primero — Telemetry aggregation
-
-- Costo bajo (~80 LOC, read-only).
-- Destraba decisiones empíricas sobre §2.A, §2.D, §2.F, §2.G.
-- Output: `durin memory stats` con métricas concretas.
-- **Recomendado si** el plan es escalar usage o eventualmente
-  abrir otro T2 con evidencia.
-
-### Opción 3: UX ítem específico de doc 20
+### Opción 2: UX ítem específico de doc 20
 
 P4 (entity cards web) o P5 (memory ops session viewer) — ambos
 visualizan lo que ya existe en disco/JSONL, sin tocar el sistema de
-memoria. P5 además se beneficia indirectamente de §2.E (compartiría
-el aggregator).
+memoria. P5 además puede consumir el aggregator de §2.E directamente
+(reusar `compute_stats` en el endpoint).
 
-### Opción 4: T2 plan detallado de algún item específico
+### Opción 3: T2 plan detallado de algún item específico
 
-Solo si §4 criterios 1 o 2 se cumplen para ese item concreto. Doc 26
+Solo si §4 criterios se cumplen para ese item concreto (incluyendo
+ahora **criterio 3** con datos reales de `durin memory stats`). Doc 26
 con clusters de riesgo (mismo patrón que archived 23/24).
 
 ---

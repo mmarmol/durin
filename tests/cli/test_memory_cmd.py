@@ -440,6 +440,76 @@ def test_absorb_merges_pages_and_archives(tmp_path: Path) -> None:
     assert archived.exists()
 
 
+def test_stats_empty_workspace_clean_output(tmp_path: Path) -> None:
+    """Empty workspace + no telemetry directory: command exits 0 with
+    all-zero tables (no error)."""
+    with _patch_workspace(tmp_path), patch(
+        "durin.memory.stats.DEFAULT_TELEMETRY_DIR",
+        tmp_path / "nope",
+    ):
+        result = runner.invoke(memory_app, ["stats"])
+    assert result.exit_code == 0, result.output
+    plain = _plain(result.output)
+    assert "Episodic entries on disk" in plain
+    assert "Store writes" in plain
+    assert "0" in plain  # at least one zero metric rendered
+
+
+def test_stats_json_output(tmp_path: Path) -> None:
+    """--json mode prints serialisable JSON instead of the rich tables."""
+    with _patch_workspace(tmp_path), patch(
+        "durin.memory.stats.DEFAULT_TELEMETRY_DIR",
+        tmp_path / "nope",
+    ):
+        result = runner.invoke(memory_app, ["stats", "--json"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(_plain(result.output))
+    assert "filesystem" in payload
+    assert "recall" in payload
+    assert "store" in payload
+    assert payload["filesystem"]["episodic_entries_on_disk"] == 0
+
+
+def test_stats_aggregates_telemetry_from_real_jsonl(tmp_path: Path) -> None:
+    """End-to-end: synthetic JSONL events + filesystem entries → stats table
+    surfaces the gate-relevant counters."""
+    # Workspace with one tagged episodic entry on disk.
+    episodic = tmp_path / "memory" / "episodic"
+    episodic.mkdir(parents=True)
+    (episodic / "e1.md").write_text(
+        "---\nid: e1\nclass_name: episodic\n"
+        "entities: [person:marcelo]\n---\n\nbody\n",
+        encoding="utf-8",
+    )
+    # Synthetic telemetry directory with a couple of memory.* events.
+    tel = tmp_path / "tel"
+    tel.mkdir()
+    import time as _t
+    now = _t.time()
+    (tel / "s.jsonl").write_text(
+        json.dumps({"ts": now, "type": "memory.store",
+                    "data": {"entry_id": "e1", "class_name": "stable",
+                             "author": "agent_created", "headline": ""}}) + "\n"
+        + json.dumps({"ts": now, "type": "memory.store.blocked_near_duplicate",
+                      "data": {"candidate_class_name": "stable",
+                               "existing_id": "e1",
+                               "existing_class_name": "stable",
+                               "distance": 0.05, "threshold": 0.10}}) + "\n",
+        encoding="utf-8",
+    )
+
+    with _patch_workspace(tmp_path), patch(
+        "durin.memory.stats.DEFAULT_TELEMETRY_DIR", tel,
+    ):
+        result = runner.invoke(memory_app, ["stats", "--json"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(_plain(result.output))
+    assert payload["filesystem"]["episodic_entries_on_disk"] == 1
+    assert payload["filesystem"]["episodic_entries_tagged"] == 1
+    assert payload["store"]["total"] == 1
+    assert payload["store"]["blocked_near_duplicate"] == 1
+
+
 def test_absorb_idempotent_on_already_archived(tmp_path: Path) -> None:
     """Re-running absorb when the absorbed page is already gone is a clean no-op."""
     _write_entity_page(

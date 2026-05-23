@@ -173,6 +173,16 @@ class MemoryStoreTool(Tool):
                     if near_dist < self._DEDUP_DISTANCE_THRESHOLD:
                         # G6: block by default; the model can re-call with
                         # force=true if it genuinely wants the duplicate.
+                        emit_tool_event(
+                            "memory.store.blocked_near_duplicate",
+                            {
+                                "candidate_class_name": class_name,
+                                "existing_id": str(near.get("id", "")),
+                                "existing_class_name": str(near.get("class_name", "")),
+                                "distance": near_dist,
+                                "threshold": self._DEDUP_DISTANCE_THRESHOLD,
+                            },
+                        )
                         return {
                             "warning": "near-duplicate",
                             "nearest_id": near.get("id", ""),
