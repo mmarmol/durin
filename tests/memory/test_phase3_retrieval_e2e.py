@@ -134,9 +134,9 @@ def test_retrieval_l1_light_end_to_end(
     page.save(page_path)
 
     # --- Phase 1.4: build alias_index from the page -------------------
+    # (rebuild-only — no persistent sidecar per doc 23 T1.4)
     alias_idx = AliasIndex(workspace / "memory")
     alias_idx.build()
-    alias_idx.save()
 
     # --- Phase 3.0: vector index entries + the entity page ------------
     vector_idx = VectorIndex(workspace, provider)

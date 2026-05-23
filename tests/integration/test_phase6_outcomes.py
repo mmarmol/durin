@@ -151,8 +151,9 @@ def test_o1_project_decisions_consolidated(tmp_path: Path) -> None:
     assert "dulwich" in page.body
 
     # Alias index now resolves "durin" to the canonical entity
+    # (rebuild from disk per doc 23 T1.4 — no persistent sidecar)
     idx = AliasIndex(tmp_path / "memory")
-    idx.load()
+    idx.build()
     query_entities = extract_query_entities("¿qué decisiones tomamos sobre durin?", idx)
     assert "project:durin" in query_entities
 

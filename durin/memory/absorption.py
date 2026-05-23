@@ -220,10 +220,10 @@ class EntityAbsorption:
             sha = None
 
         # 7: alias_index — refresh canonical, drop absorbed entity_ref
+        # In-memory only (per doc 23 T1.4): no save() to disk.
         idx = self._get_alias_index()
         idx.refresh_for(merged, slug=canonical_slug)
         idx.remove(absorbed)
-        idx.save()
 
         # 8: vector_index — drop absorbed page row (archived pages are
         # de-indexed by design per doc 18 §3 + R6)
@@ -245,8 +245,9 @@ class EntityAbsorption:
     def _get_alias_index(self) -> AliasIndex:
         if self._alias_index is None:
             self._alias_index = AliasIndex(self.memory_root)
-            if not self._alias_index.load():
-                self._alias_index.build()
+            # Rebuild from disk each boot (per doc 23 T1.4): no persistent
+            # sidecar. Sub-second for typical corpus sizes.
+            self._alias_index.build()
         return self._alias_index
 
     def _get_git_repo(self) -> GitRepo:

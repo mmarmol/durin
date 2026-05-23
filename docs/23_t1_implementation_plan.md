@@ -1128,30 +1128,56 @@ Documentar en docstring de `rank_with_entities`.
 Tras eliminar save/load (A.2), verificar que ningún test fixture queda
 referencing esos métodos. Grep + cleanup en CI.
 
-### Acciones consolidadas
+### Tracking table — todos los findings G1-G14 mapeados
 
-Antes de Cluster A (mecánico):
-- ✓ Doc 23 actualizado con findings G1-G14
-- ✓ Calibración threshold C.1 documentada (G1)
-- ✓ Cursor force-set diseñado para C.2 (G2)
+Cada finding tiene: severidad, cluster al que pertenece, acción concreta, estado.
+**Esta tabla es la fuente de verdad para no olvidar ningún fix durante implementación.**
 
-Durante Cluster B (RRF):
-- Implementar `_require_id` (G4)
-- Documentar list-length normalization (G9)
+| # | Sev | Cluster(s) | Acción | Estado |
+|---|---|---|---|---|
+| G1 | 🔴 | C.1 | Documentar fórmula `L2² = 2(1-cos)` + verificar fastembed produce unit vectors. Threshold 0.10 sigue válido | Pendiente C |
+| G2 | 🔴 | C.2 | Forzar cursor al timestamp del último entry del batch pasado (invariante). Override LLM's `Cursor-after:` | Pendiente C |
+| G3 | 🟠 | **B.1 + D.1** | Usar `datetime.fromisoformat()` para comparar entry_ts vs cursor. **Reemplazar EN AMBOS**: `entity_ranker.rank_with_entities` (línea ~205) Y `_discover_pending_consolidations` (D.1) | Pendiente B + D |
+| G4 | 🟠 | B.1 | Requerir `id` obligatorio en candidatos. `_require_id` helper. Fail-fast si missing | Pendiente B |
+| G5 | 🟠 | C.1 | Cachear embedding entre dedup check y upsert. Requiere `VectorIndex._search_by_vector(vec)` + `upsert_with_vector(precomputed_vec)` | Pendiente C |
+| G6 | 🟠 | C.1 | UX: **bloquear** por default + agregar `force` param al schema del tool | Pendiente C |
+| G7 | 🟠 | C.2 | Sanity check en `_parse_response`: si body shrink >50% → DreamError | Pendiente C |
+| G8 | 🟠 | C.2 | Agregar `===END===` literal a `_INLINE_TEMPLATE_FALLBACK` en dream.py | Pendiente C |
+| G9 | 🟡 | B.1 | Documentar en docstring de `rank_with_entities`: "entity list es proporcionalmente menor → señal es nudge no override" | Pendiente B |
+| G10 | 🟡 | C.2 (optional) | Bumpear temperature en retries (0.1 → 0.25 → 0.4). Requiere `temperature` en `LLMInvoke` protocol | Optional |
+| G11 | 🟡 | C.2 | Justificar `MAX_ENTRIES_PER_CALL=50` en docstring con cálculo de tokens (~8500 total) | Pendiente C |
+| G12 | 🟡 | (defer) | Documentar race condition de parallel tool calls; diferir mitigation | Documentar |
+| G13 | 🟡 | B.1 | Documentar en docstring que `pages_for_query` no tiene orden interno garantizado | Pendiente B |
+| G14 | 🟡 | A.2 | Tras drop save/load, grep tests por referencias a `idx.save()`, `idx.load()`, `sidecar_path` y cleanup | Pendiente A |
 
-Durante Cluster C (write path):
-- Implementar cached embedding (G5)
-- Implementar force=True override (G6)
-- Implementar sanity check body shrink (G7)
-- Fix `_INLINE_TEMPLATE_FALLBACK` (G8)
-- Implementar cursor force-set (G2)
-- Justificar MAX_ENTRIES_PER_CALL con números (G11)
+### Resumen por cluster (qué resolver durante cada uno)
 
-Durante Cluster D (CLI):
-- Usar datetime parse para cursor compare (G3)
+**Cluster A (mecánico)** — A.1 + A.2:
+- A.1: implementar tool desc shrink (no es G-finding)
+- A.2: implementar drop save/load
+- **G14**: tras A.2, grep tests por save/load references, cleanup
 
-Optional:
-- Bumpear temperature en retries (G10)
+**Cluster B (algorítmico)** — B.1 RRF:
+- Implementar RRF replacement (no es G-finding directo)
+- **G3** (parte 1): usar datetime parse en `rank_with_entities` cursor compare
+- **G4**: `_require_id` helper
+- **G9**: docstring list-length asymmetry
+- **G13**: docstring pages_for_query order
+
+**Cluster C (write/parse)** — C.1 + C.2:
+- C.1 dedup base + **G1** threshold doc + **G5** cached embedding + **G6** force param
+- C.2 dream base + **G2** cursor force-set + **G7** body sanity + **G8** fallback fix + **G11** docstring
+- **G10** optional: temperature bump
+- **G12**: docstring note sobre race
+
+**Cluster D (CLI)** — D.1:
+- D.1: implementar `durin memory dream` (no es G-finding directo)
+- **G3** (parte 2): usar datetime parse en `_discover_pending_consolidations`
+
+### Pre-flight checklist antes de cada cluster
+
+Antes de comenzar Cluster X, **revisar esta tabla y marcar lo que aplica a X**.
+Al cerrar Cluster X, **verificar que todos los G items de su columna están "Done"**.
 
 ---
 

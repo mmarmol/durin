@@ -1,4 +1,4 @@
-"""Alias index sidecar: ``memory/.aliases.json``.
+"""Alias index — **in-memory only**, rebuilt from disk on demand.
 
 Maps every identifying string (name + aliases + emergent identifiers)
 to the **list of entity references** that own it. Per doc 18 §7 +
@@ -7,7 +7,7 @@ nature (`marcelo` could refer to >1 person). Disambiguation happens at
 the consumer (write-time tagger and read-time ranker), not by hiding
 the collision.
 
-Storage shape (JSON):
+Shape::
 
     {
       "marcelo": ["person:marcelo_marmol", "person:marcelo_diaz"],
@@ -20,9 +20,12 @@ Keys are lowercase-folded so lookup is case-insensitive (per doc 18
 §7 paso 6). Values are full entity refs (``<type>:<slug>``), where
 *slug* is the filename — the authoritative identifier.
 
-Regenerable from disk: parsing all entity pages should be sub-second
-for typical corpora. Cache to disk for boot speed; rebuild when
-mtime of any page is newer than the sidecar.
+**No disk persistence** (doc 23 T1.4 + glm A3): for typical durin
+corpus (cientos de entidades), `build()` is sub-second. Persisting a
+JSON sidecar to disk introduces drift risk if a `.md` is edited
+outside the tool (vim, git merge), so callers always rebuild on boot.
+Mutations during runtime (via :meth:`add`, :meth:`remove`,
+:meth:`refresh_for`) update the in-memory map only.
 
 Archive subfolders (``<slug>/archive/``) are skipped — those entries
 are intentionally de-indexed per doc 18 §3 + §10 R6.
@@ -30,7 +33,6 @@ are intentionally de-indexed per doc 18 §3 + §10 R6.
 
 from __future__ import annotations
 
-import json
 import logging
 from collections import defaultdict
 from pathlib import Path
@@ -46,12 +48,13 @@ _ARCHIVE_MARKER = "/archive/"
 
 
 class AliasIndex:
-    """In-memory alias map with disk-backed sidecar.
+    """In-memory alias map.
 
     Lifecycle:
     - ``build()`` — walk ``memory/entities/``, parse every page, populate.
-    - ``save()`` / ``load()`` — round-trip to ``memory/.aliases.json``.
-    - ``add(page, slug)`` / ``remove(entity_ref)`` — incremental updates.
+      Always called at boot to rebuild from disk (no persistent sidecar).
+    - ``add(page, slug)`` / ``remove(entity_ref)`` — incremental updates
+      in memory (callers do not persist).
     - ``lookup(query)`` — return ordered list of candidate entity refs.
     """
 
@@ -60,7 +63,7 @@ class AliasIndex:
         self._map: dict[str, list[str]] = defaultdict(list)
 
     # ------------------------------------------------------------------
-    # build / load / save
+    # build (rebuild-only — no disk persistence)
     # ------------------------------------------------------------------
 
     def build(self) -> None:
@@ -88,43 +91,6 @@ class AliasIndex:
             slug = EntityPage.slug_from_path(md_file)
             entity_ref = f"{page.type}:{slug}"
             self._populate(page.identifying_strings(), entity_ref)
-
-    def load(self) -> bool:
-        """Read sidecar from disk. Returns True if loaded, False if missing."""
-        sidecar = self.sidecar_path()
-        if not sidecar.exists():
-            return False
-        try:
-            raw = json.loads(sidecar.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError) as exc:
-            logger.warning("aliases_index: corrupt sidecar %s: %s",
-                           sidecar, exc)
-            return False
-        if not isinstance(raw, dict):
-            logger.warning("aliases_index: sidecar %s wrong shape", sidecar)
-            return False
-        self._map.clear()
-        for key, values in raw.items():
-            if isinstance(key, str) and isinstance(values, list):
-                clean = [v for v in values if isinstance(v, str)]
-                if clean:
-                    self._map[key] = list(dict.fromkeys(clean))  # dedup order
-        return True
-
-    def save(self) -> None:
-        """Write sidecar atomically. Parent dirs created as needed."""
-        sidecar = self.sidecar_path()
-        sidecar.parent.mkdir(parents=True, exist_ok=True)
-        tmp = sidecar.with_suffix(sidecar.suffix + ".tmp")
-        tmp.write_text(
-            json.dumps(dict(self._map), ensure_ascii=False, indent=2,
-                       sort_keys=True),
-            encoding="utf-8",
-        )
-        tmp.replace(sidecar)
-
-    def sidecar_path(self) -> Path:
-        return self.memory_root / ".aliases.json"
 
     # ------------------------------------------------------------------
     # lookup (case-insensitive, returns LIST per doc 18 §7 + R6)
