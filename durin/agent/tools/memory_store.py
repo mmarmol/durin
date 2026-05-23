@@ -10,7 +10,9 @@ from typing import Optional
 
 from durin.agent.tools._telemetry import emit_tool_event
 from durin.agent.tools.base import Tool, tool_parameters
-from durin.agent.tools.schema import ArraySchema, StringSchema, tool_parameters_schema
+from durin.agent.tools.schema import (
+    ArraySchema, BooleanSchema, StringSchema, tool_parameters_schema,
+)
 from durin.memory.paths import MEMORY_CLASSES
 from durin.memory.provenance import author_scope
 from durin.memory.store import StoreError, store_memory
@@ -53,11 +55,22 @@ _PARAMETERS = tool_parameters_schema(
             "are common but not exhaustive)."
         ),
     ),
+    force=BooleanSchema(
+        description=(
+            "Set true to skip the near-duplicate similarity check. "
+            "Default false. Use when you intentionally want to store "
+            "near-identical content (e.g. reaffirming a fact)."
+        ),
+        default=False,
+    ),
     required=["content"],
     description=(
         "Persist a memory entry under memory/<class>/<id>.md. Author is "
         "stamped automatically from the agent's current write-origin "
-        "(agent_created when called by the agent, user_authored otherwise)."
+        "(agent_created when called by the agent, user_authored otherwise). "
+        "By default, content that's a near-duplicate of an existing entry "
+        "(cosine sim >= 0.95) returns a warning instead of writing; pass "
+        "force=true to override."
     ),
 )
 
@@ -123,6 +136,16 @@ class MemoryStoreTool(Tool):
             self._vector_index = None
         return self._vector_index
 
+    # Near-duplicate threshold. LanceDB L2 distance for unit-normalized
+    # vectors satisfies L2² = 2(1 - cosine); fastembed paraphrase-
+    # multilingual-MiniLM-L12-v2 emits unit vectors (validated by
+    # scripts/test_embedding_name_variations.py). So:
+    #   distance 0.10 ≈ cosine 0.95   (this threshold)
+    #   distance 0.05 ≈ cosine 0.975
+    #   distance 0.20 ≈ cosine 0.90
+    # Matches OpenClaw's 0.95 cosine dedup convention (doc 22 N3 + G1).
+    _DEDUP_DISTANCE_THRESHOLD = 0.10
+
     async def execute(self, **kwargs: Any) -> Any:
         content = str(kwargs.get("content", "")).strip()
         if not content:
@@ -133,6 +156,39 @@ class MemoryStoreTool(Tool):
         summary = str(kwargs.get("summary") or "")
         source_refs = kwargs.get("source_refs") or []
         entities = kwargs.get("entities") or []
+        force = bool(kwargs.get("force", False))
+
+        # Vector index dedup pre-check (per doc 23 T1.7 + OpenClaw N3).
+        # Compute the embedding ONCE and reuse for both the dedup search
+        # AND the post-write upsert (G5: avoid double-embedding cost).
+        vi = self._get_vector_index()
+        cached_vector: list[float] | None = None
+        if vi is not None and not force:
+            try:
+                cached_vector = vi.embed_text(content)
+                hits = vi.search_by_vector(cached_vector, top_k=1)
+                if hits:
+                    near = hits[0]
+                    near_dist = float(near.get("_distance", 1.0))
+                    if near_dist < self._DEDUP_DISTANCE_THRESHOLD:
+                        # G6: block by default; the model can re-call with
+                        # force=true if it genuinely wants the duplicate.
+                        return {
+                            "warning": "near-duplicate",
+                            "nearest_id": near.get("id", ""),
+                            "nearest_headline": near.get("headline", ""),
+                            "nearest_distance": near_dist,
+                            "hint": (
+                                "Content is nearly identical to an existing "
+                                "entry (cosine ≈ 0.95+). To store anyway, "
+                                "re-call with force=true."
+                            ),
+                        }
+            except Exception as exc:
+                # Dedup check failure must NOT block the write — markdown
+                # is the source of truth, vectors are derivable.
+                logger.warning("memory_store dedup check failed: %s", exc)
+                cached_vector = None  # fall through to recompute on upsert
 
         # The agent invoking this tool is the author — mark it explicitly so
         # the curator and dream can later distinguish agent-created entries
@@ -166,12 +222,18 @@ class MemoryStoreTool(Tool):
         # Best-effort vector upsert. A failure here must not break the
         # write path — the markdown file is the source of truth and the
         # index can always be rebuilt from it.
-        vi = self._get_vector_index()
         if vi is not None:
             try:
                 entry_path = Path(result["path"])
                 entry = load_entry(entry_path)
-                vi.upsert(entry, result["class"], entry_path)
+                if cached_vector is not None:
+                    # G5: reuse the embedding from the dedup check.
+                    vi.upsert_with_vector(
+                        entry, result["class"], entry_path,
+                        precomputed_vector=cached_vector,
+                    )
+                else:
+                    vi.upsert(entry, result["class"], entry_path)
             except Exception as exc:
                 logger.warning("vector upsert failed for %s: %s", result["id"], exc)
 

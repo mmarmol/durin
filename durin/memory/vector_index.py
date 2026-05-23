@@ -190,6 +190,68 @@ class VectorIndex:
         _add(body)
         return "\n\n".join(parts) or name or "entity page"
 
+    def embed_text(self, text: str) -> list[float]:
+        """Compute the embedding vector for *text* using this index's provider.
+
+        Convenience for callers (e.g. ``memory_store`` dedup check) that
+        need to reuse the same embedding for both search and upsert
+        (G5). Returns a single vector. ``text`` must be non-empty.
+        """
+        if not text:
+            raise ValueError("embed_text: text must be non-empty")
+        return self._provider.embed([text])[0]
+
+    def search_by_vector(
+        self,
+        vector: list[float],
+        *,
+        top_k: int = 10,
+    ) -> list[dict[str, Any]]:
+        """Same as :meth:`search` but skips the embedding step.
+
+        Used by callers (e.g. ``memory_store`` dedup check per doc 23
+        T1.7 + G5) that have already computed the query embedding and
+        want to reuse it for both dedup search AND upsert.
+        """
+        if top_k <= 0:
+            return []
+        db = self._connect()
+        if _TABLE_NAME not in db.list_tables().tables:
+            return []
+        table = db.open_table(_TABLE_NAME)
+        self._guard_dim_match(table, len(vector))
+        rows = table.search(vector).limit(top_k).to_list()
+        for row in rows:
+            row.pop("vector", None)
+        return rows
+
+    def upsert_with_vector(
+        self,
+        entry: MemoryEntry,
+        class_name: str,
+        path: Path,
+        *,
+        precomputed_vector: list[float],
+    ) -> None:
+        """Variant of :meth:`upsert` that reuses a precomputed embedding.
+
+        Per doc 23 T1.7 + G5: the write path is
+        ``compute_embedding → search (dedup) → upsert``. Without this
+        method, ``upsert`` would recompute the embedding internally,
+        doubling the embed cost per write. Pass the same vector that
+        was used for the dedup check.
+        """
+        record = self._record_with_vector(entry, class_name, path, precomputed_vector)
+        db = self._connect()
+        names = db.list_tables().tables
+        if _TABLE_NAME in names:
+            table = db.open_table(_TABLE_NAME)
+            self._guard_dim_match(table, len(precomputed_vector))
+            table.delete(f"id = '{_escape(entry.id)}'")
+            table.add([record])
+        else:
+            db.create_table(_TABLE_NAME, data=[record])
+
     def delete_by_id(self, record_id: str) -> bool:
         """Drop a single row by ``id``. Returns True if the table existed.
 
