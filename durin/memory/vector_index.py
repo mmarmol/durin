@@ -136,6 +136,11 @@ class VectorIndex:
             "headline": name,
             "vector": vec,
             "valid_from": "",
+            # B1: keep schema consistent with memory entries; entity pages
+            # don't reference other entities (they ARE the entity), so the
+            # list stays empty. The ranker treats class_name=="entity_page"
+            # separately from tag-overlap logic.
+            "entities": [],
             "path": str(rel_path),
         }
         db = self._connect()
@@ -360,6 +365,11 @@ class VectorIndex:
             "headline": entry.headline,
             "vector": vector,
             "valid_from": entry.valid_from.isoformat() if entry.valid_from else "",
+            # B1 (doc 24 §7): persist entity tags so entity_ranker's
+            # post-cursor boost can match c.get("entities", []) against
+            # query entities. Without this column, the ranker can never
+            # boost tagged entries — W1 would be inoperative.
+            "entities": list(entry.entities),
             "path": str(rel_path),
         }
 
@@ -437,6 +447,10 @@ class VectorIndex:
         incompatible vectors silently. Better to fail loudly with an
         actionable message pointing at ``rebuild_from_workspace`` /
         the ``/memory reindex`` CLI command.
+
+        Also checks for the ``entities`` column (B1 per doc 24): tables
+        created before the ranker-aware schema lack this field. Without
+        it, entity_ranker can never boost tagged entries → W1 inoperative.
         """
         try:
             schema = table.schema
@@ -453,6 +467,15 @@ class VectorIndex:
                 f"(or `durin memory reindex` from the CLI) to rebuild the "
                 f"index, or revert memory.embedding.model to the previous "
                 f"value to keep the existing index."
+            )
+        # B1: detect tables missing the entities column.
+        try:
+            schema.field("entities")
+        except Exception:  # noqa: BLE001
+            raise VectorIndexDimensionMismatch(
+                "On-disk vector index is missing the 'entities' column "
+                "(table schema predates the ranker integration). Run "
+                "`durin memory reindex` to rebuild from markdown sources."
             )
 
 

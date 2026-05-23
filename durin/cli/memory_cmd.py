@@ -215,10 +215,30 @@ def cmd_dream(
 
     # Real consolidation
     from durin.memory.dream import DreamConsolidator, DreamError
+    from durin.memory.vector_index import VectorIndex, vector_index_available
 
     cfg = load_config()
-    model = getattr(cfg.memory.embedding, "model", None)  # for embedder; LLM model is fixed
-    consolidator = DreamConsolidator(workspace=workspace)
+
+    # W3 (doc 24): pass a VectorIndex so the dream's apply() upserts the
+    # consolidated entity_page into the index. Without this, entity pages
+    # exist on disk but never enter LanceDB and memory_search can't find
+    # them. Best-effort: if memory.enabled=false or fastembed missing,
+    # fall through to dream without indexing (markdown remains source of
+    # truth).
+    vi: VectorIndex | None = None
+    try:
+        if cfg.memory.enabled and vector_index_available():
+            from durin.memory.embedding import FastembedProvider
+
+            provider = FastembedProvider(model=cfg.memory.embedding.model)
+            vi = VectorIndex(workspace, provider)
+    except Exception as exc:  # noqa: BLE001
+        console.print(
+            f"[yellow]vector index unavailable ({exc}); "
+            "entity pages will not be indexed[/yellow]"
+        )
+
+    consolidator = DreamConsolidator(workspace=workspace, vector_index=vi)
 
     for ent_ref, entries in pending.items():
         console.print(f"\n[bold]{ent_ref}[/bold]: {len(entries)} entries")
