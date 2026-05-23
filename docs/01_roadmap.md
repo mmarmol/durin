@@ -224,7 +224,7 @@ Once Phase 2 has retrieval, Phase 1b reduces to "use the memory retriever to fet
 
 ---
 
-## Last updated: 2026-05-24 00:15 (§2.C shared AliasIndex shipped)
+## Last updated: 2026-05-24 01:30 (§2.H fragment/canonical retrieval contract shipped)
 
 > Post-T1 pass (2026-05-23): Phases 0-6 of the entity-centric memory plan
 > ([18_entity_centric_plan.md](18_entity_centric_plan.md) +
@@ -240,6 +240,19 @@ Once Phase 2 has retrieval, Phase 1b reduces to "use the memory retriever to fet
 > without commitment. Six docs moved to archive (the Phase 2 proposal,
 > the typed-entities proposal, doc 21 integration plan, doc 22 critique
 > validation, doc 23 T1 implementation plan, doc 24 wiring + e2e plan).
+
+> §2.H shipped (2026-05-24 01:30): fragment/canonical retrieval
+> contract — closes the doc 18 §6 promise ("LLM reconcilia con
+> timestamps y contexto") on both delivery paths. `Result` carries
+> `kind` / `class_name` / `valid_from` / `entities`; `render_block()`
+> wraps results in `=== CANONICAL/FRAGMENT: ... ===` blocks (same
+> marker convention as compaction's `=== ARCHIVED SUMMARY ===`).
+> `memory_search` tool exposes `rendered` per result. `search_dreamed`
+> grep path now also surfaces entity pages (previously vector-only).
+> `hot_layer` adds two new sections — Canonical pages (top N entity
+> pages) + Recent fragments (post-cursor episodic entries that tag
+> entities and post-date the cursor), both with markers. 21 new tests,
+> suite at 4417 passing. See bitácora 2026-05-24.
 
 > §2.C shipped (2026-05-24 00:15): shared AliasIndex via
 > `durin.memory.aliases_cache` — process-wide cache keyed by

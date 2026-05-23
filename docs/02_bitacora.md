@@ -1548,3 +1548,91 @@ invalidation hooks" — underestimated because the test coverage was
 non-trivial (concurrency, per-consumer wiring, injection escape
 hatch). Source itself was roughly on target.
 
+## Fragment/canonical retrieval contract — §2.H (2026-05-24)
+
+**Context**: doc 18 §6 (vigente) promised that "la página consolidada
+y los entries post-cursor coexisten en los resultados de retrieval;
+el LLM reconcilia en read-time con timestamps y contexto". Verifying
+that promise against code on 2026-05-23 showed it was broken at the
+delivery boundary on **both** retrieval paths:
+
+| Path | Gap |
+|---|---|
+| Lazy (`memory_search` tool result) | `Result.to_dict()` dropped `valid_from` / `entities` / `class_name`. No textual marker. The LLM had to infer canonical-vs-fragment from the URI prefix, which is brittle. |
+| Eager (`hot_layer` in system prompt) | Read from the 4 legacy classes (`memory/<class>/*.md`), not from `memory/entities/<type>/<slug>.md` — the new canonical pages never made it into the prompt at all. |
+
+Captured as §2.H in doc 25 and tagged complete-T1 (closes a wiring gap,
+not a new feature). Marker convention follows the existing compaction
+pattern (`=== ARCHIVED SUMMARY ===`, bitácora 2026-05-19): an explicit
+ASCII delimiter the LLM can pattern-match without relying on field
+structure.
+
+**Lazy path — `Result` + tool boundary**:
+
+- `Result` dataclass extended with `class_name`, `valid_from`,
+  `entities` (all default-empty so existing callers keep working).
+- `Result.kind` computes one of `canonical | fragment | session |
+  ingested` — `"canonical"` iff `class_name == "entity_page"`, else
+  follows `source`. Normalises `"sessions"` → `"session"` so the LLM
+  sees singular kind labels everywhere.
+- `Result.render_block()` produces
+  `=== KIND: <uri> (ts: ...) === ... === END KIND ===` per result.
+  Header carries ts for fragments and `(canonical entity page)` for
+  canonical (which have no single valid_from — temporal claims live
+  in prose per doc 18 §6 protocol α).
+- `to_dict()` adds `kind` always and the new fields when non-empty.
+- `MemorySearchTool.execute()` augments each result with a `rendered`
+  field carrying the marker block. Raw fields stay alongside for
+  callers that prefer structured access.
+- `search_dreamed` now also walks `memory/entities/<type>/*.md`
+  (excluding `<slug>/archive/` — those are absorbed records reachable
+  only via `durin memory expand`). Previously canonical pages were
+  vector-only; the grep fallback missed them entirely.
+- `_vector_row_to_result` preserves `valid_from` / `entities` from
+  LanceDB rows (previously dropped — confirmed earlier in B1 doc 24).
+
+**Eager path — `hot_layer`**:
+
+- New "Canonical pages" section renders top N entity pages as
+  `=== CANONICAL ===` blocks. Sorted by `extra.updated_at` desc with
+  mtime fallback. Caps per-page body at 600 chars so a single huge
+  page can't consume the whole canonical budget.
+- New "Recent fragments (post-cursor)" section renders top N
+  episodic entries that tag at least one entity and whose
+  `valid_from` is strictly newer than every relevant entity page's
+  `dream_processed_through` cursor. Wrapped as
+  `=== FRAGMENT ===`. Pre-cursor entries are filtered — they're
+  already absorbed, surfacing them again defeats the consolidation.
+- Section order: identity → canonical → fragments → legacy headlines
+  → entity list. Total budget grew from ~1000 to ~1900 tokens —
+  still cache-friendly between dreams.
+- Identifiers from page frontmatter (`extra.identifiers.{email,
+  slack, github, ...}`) flatten into a single "Identifiers — ..."
+  line per canonical block.
+
+**Tests**: 21 new in `tests/memory/test_fragment_canonical_contract.py`
+covering Result.kind (4 kinds), to_dict() with/without new fields,
+render_block header+footer for canonical+fragment, search_dreamed
+surfacing both canonical and fragment, archive exclusion in grep and
+hot_layer, tool boundary `rendered` field, hot_layer canonical/
+fragment sections with pre-cursor filtering, cold-workspace graceful
+fallback (no entities dir → no canonical/fragment sections, identity
++ legacy still work).
+
+**Suite**: 4417 passing (+21 vs §2.H pre-state). Live verify:
+`durin memory absorb-suggest` + `durin memory dream --dry-run` both
+clean on the real workspace.
+
+**LOC actual vs estimated**: ~250 LOC source (search.py + hot_layer.py
++ memory_search.py) + ~330 LOC tests + ~80 LOC docs. Estimate in
+doc 25 was "~300 LOC source + ~120 LOC tests" — source was on
+target; tests overshot because the contract has many edge cases
+(archive exclusion in two surfaces, pre-cursor filter, cold
+workspace, 4 kinds × 2 surfaces).
+
+**Why this matters**: after §2.H, the rest of the deferred items
+(§2.A.1 auto-trigger, §2.D auto-absorb, §2.F eager-inject-fetch)
+build on a correct delivery contract. Without §2.H, automating the
+dream would have produced output the LLM couldn't use — silent
+quality loss compounding with every auto-dream tick.
+

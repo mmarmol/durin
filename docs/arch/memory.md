@@ -271,16 +271,41 @@ Pre-cursor entries (timestamp ≤ page's `dream_processed_through`) get a small 
 
 RRF replaces an earlier score-multiplier design that mishandled the negative-distance regime (cluster B). Score normalization is not needed with rank-based fusion.
 
-### Tool response shape
+### Tool response shape (§2.H fragment/canonical contract)
 
 ```json
 {
-  "results": [...],
+  "results": [
+    {
+      "source": "memory",
+      "uri": "memory/entity_page/person:marcelo",
+      "headline": "Marcelo Marmol",
+      "snippet": "...",
+      "summary": "...",
+      "kind": "canonical",
+      "class_name": "entity_page",
+      "entities": ["person:marcelo"],
+      "rendered": "=== CANONICAL: memory/entity_page/person:marcelo (canonical entity page) ===\n...\n=== END CANONICAL ==="
+    },
+    {
+      "source": "memory",
+      "uri": "memory/episodic/e1f23a",
+      "headline": "...",
+      "snippet": "...",
+      "kind": "fragment",
+      "class_name": "episodic",
+      "valid_from": "2026-05-23",
+      "entities": ["person:marcelo"],
+      "rendered": "=== FRAGMENT: memory/episodic/e1f23a (ts: 2026-05-23) ===\n...\nEntities: person:marcelo\n=== END FRAGMENT ==="
+    }
+  ],
   "total": 12,
   "strategy": "vector",
   "ranking": "entity_aware"
 }
 ```
+
+Per doc 25 §2.H: every result carries `kind ∈ {canonical, fragment, session, ingested}` and (when applicable) `class_name`, `valid_from`, `entities`. The `rendered` field wraps the content in an explicit `=== KIND: ... ===` block — same marker convention as the compaction `=== ARCHIVED SUMMARY ===` (bitácora 2026-05-19). The LLM can either parse the structured fields or pattern-match on the markers; either path tells it whether this is the authoritative "main memory" or a recent post-cursor amendment with a timestamp.
 
 `strategy` and `ranking` are independent: downstream pattern-matches on `strategy=="vector"` don't break when the ranker activates.
 
@@ -355,7 +380,25 @@ Idempotent — re-running when the absorbed page is already archived returns `No
 
 ---
 
-## 13. Hooks into existing systems
+## 13. Hot layer — eager delivery in the system prompt (§2.H)
+
+`durin/memory/hot_layer.py` is the always-loaded memory block of the stable prompt tier, wired in `agent/context.py::_build_stable_layer`. It runs every turn (no tool call required) and is meant to change at most once per dream cycle so the upstream provider's prompt cache stays warm between consolidations.
+
+Per doc 25 §2.H, the hot layer surfaces five sections in this order:
+
+1. **Identity** — body of `memory/stable/IDENTITY.md` (~200 tokens).
+2. **Canonical pages** — top N entity pages from `memory/entities/<type>/*.md`, each wrapped as `=== CANONICAL: <ref> (aliases: ...) === ... === END CANONICAL ===`. Sorted by `updated_at` desc (mtime fallback). Excludes anything under `<slug>/archive/`. ~600 tokens.
+3. **Recent fragments (post-cursor)** — episodic entries that tag at least one entity and whose `valid_from` is strictly newer than every relevant entity page's `dream_processed_through`. Wrapped as `=== FRAGMENT: <refs> (ts: ...) === ... === END FRAGMENT ===`. ~300 tokens.
+4. **Key Points** — legacy headline bullets from `memory/<class>/*.md`. ~300 tokens.
+5. **Known Entities** — comma-separated entity refs deduped + alphabetised. ~150 tokens.
+
+Total budget ≈ 1900 tokens. Markers match the `memory_search` `rendered` block convention so the LLM sees one delivery contract across both paths.
+
+The pre-cursor filter is critical: if an episodic entry is already absorbed in a canonical page, surfacing it again as a fragment defeats the consolidation. The filter uses the same `_is_at_or_before` datetime parsing as `entity_ranker._is_pre_cursor` so a date-only cursor doesn't reject a same-day ISO-timestamp entry by string comparison.
+
+---
+
+## 14. Hooks into existing systems
 
 - `SessionManager.save()` calls `regenerate_session_md(path)` after writing `.jsonl` so the navigable `.md` view (with stable `#turn-N` anchors) is always current.
 - `SessionManager._DERIVED_METADATA_KEYS` includes `_last_tags`; per-session entity/topic tags emitted by the consolidator land in `<key>.meta.json::derived`.
@@ -364,7 +407,7 @@ Idempotent — re-running when the absorbed page is already archived returns `No
 
 ---
 
-## 14. Telemetry events
+## 15. Telemetry events
 
 | Event | Emitted by | Carries |
 |---|---|---|
@@ -379,7 +422,7 @@ The schema-catalog meta-test in `tests/telemetry/test_schema_catalog.py` confirm
 
 ---
 
-## 15. What we explicitly do NOT do (in T1)
+## 16. What we explicitly do NOT do (in T1)
 
 Per doc 19 §14, deferred until evidence justifies:
 
@@ -397,7 +440,7 @@ Roadmap for these items: [doc 25 §2](../25_post_t1_state_and_t2_horizon.md).
 
 ---
 
-## 16. The "other" Dream (legacy MEMORY.md / SOUL.md)
+## 17. The "other" Dream (legacy MEMORY.md / SOUL.md)
 
 `durin/agent/memory.py` carries a separate `Dream` class predating the entity-centric system. It processes `history.jsonl` and edits `MEMORY.md` / `SOUL.md` via an inner `AgentRunner` with read/edit tools. Cron-scheduled via `agent.dream.Dream` and registered as a system job by `cli/commands.py:1559`.
 

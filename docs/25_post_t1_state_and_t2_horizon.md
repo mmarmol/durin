@@ -64,27 +64,28 @@ T2.B fue descartado (ya está implementado). T2.C fue re-scoped.
 
 Dos lecturas posibles del horizon, no excluyentes:
 
-**Foundational (complete-T1)** — cerrar gaps que doc 18 prometía pero
-el wiring T1 no terminó. Silent quality loss si no se cierran:
+**Foundational (complete-T1)** — todos shipped:
 
-- **§2.H** Fragment/canonical retrieval contract (doc 18 §6 read-time
-  reconciliation prometido, no entregado en delivery al LLM).
+- §2.H Fragment/canonical retrieval contract — **SHIPPED** (2026-05-24).
+  Cierra la promesa de doc 18 §6 ("LLM reconcilia con timestamps y
+  contexto") en ambos paths de delivery (lazy `memory_search` y eager
+  `hot_layer`).
 
 **Automatización + features T2**:
 
 - §2.E telemetry aggregation — **SHIPPED**.
 - §2.C shared AliasIndex via ctx — **SHIPPED** (2026-05-24).
-- §2.A.1 per-entity dispatcher (4 triggers).
+- §2.A.1 per-entity dispatcher (4 triggers) — next en serie α+β.
 - §2.A.2 cross-session learning — diferido (requiere doc 26).
 - §2.D auto-absorb.
-- §2.F eager-inject context block (asume §2.H primero).
+- §2.F eager-inject context block — parcialmente cubierto por §2.H
+  hot_layer; eager-fetch on-demand de contenido completo (no solo
+  hot layer) sigue pending.
 - §2.G eviction/compresión results.
 
-§2.H es el más urgente porque la promesa de doc 18 §6 ("LLM reconcilia
-con timestamps y contexto") está rota en la frontera de delivery — el
-LLM no recibe los timestamps ni los markers que necesita para
-reconciliar. Hasta cerrar §2.H, el valor de dream automático (§2.A.1)
-se pierde en el delivery.
+Con §2.H + §2.E + §2.C cerrados, queda §2.A.1 para terminar el flujo
+end-to-end auto: dream se dispara solo, los resultados ya llegan al
+LLM en formato canonical/fragment correcto.
 
 ### §2.A — Auto-trigger del DreamConsolidator (split por scope)
 
@@ -152,7 +153,19 @@ capability.
 **Costo estimado**: ~400+ LOC + diseño previo en doc 26. **No entra
 en el MVP de §2.A**.
 
-### §2.H — Fragment/canonical retrieval contract
+### §2.H — Fragment/canonical retrieval contract (SHIPPED 2026-05-24 01:30)
+
+**Estado**: `Result` lleva `class_name` / `valid_from` / `entities` / `kind`; `render_block()` produce `=== CANONICAL/FRAGMENT: ... ===` markers (mismo patrón que el `=== ARCHIVED SUMMARY ===` de compaction). El tool `memory_search` agrega `rendered` por result. `search_dreamed` también walkea `memory/entities/<type>/*.md` (no solo las 4 clases viejas), excluyendo `<slug>/archive/`. `hot_layer` agrega dos nuevas secciones — **Canonical pages** (top N entity pages) y **Recent fragments (post-cursor)** (episodic entries que tag entidades + post-cursor), ambos con markers.
+
+**Tests** (21 nuevos en `tests/memory/test_fragment_canonical_contract.py`): cubre `Result.kind` para los 4 valores, `to_dict()` con/sin nuevos fields, `render_block()` header+footer, grep path surface de canonical+fragment, archive exclusion en grep y hot_layer, tool boundary include rendered, hot_layer canonical/fragment sections + pre-cursor filtering, cold-workspace graceful fallback.
+
+**Suite**: 4417 passing (+21), 16 skipped. Live verify CLI OK.
+
+**Commit**: ver bitácora 2026-05-24.
+
+---
+
+### §2.H — Diseño original (referencia histórica)
 
 **Estado verificado** (2026-05-23 22:50): el patrón "memoria principal
 + fragmentos recientes marcados con timestamp + pointer al canonical"
@@ -438,22 +451,17 @@ entity-centric funcione end-to-end antes de adoptar uso intensivo.
 **No** modo "use it, measure, decide later" — modo "build the minimum
 viable feature set, then adopt".
 
-### Opción α — §2.H primero (recomendado por consecuencias técnicas)
+### Opción α — §2.H (SHIPPED 2026-05-24 01:30)
 
-Cierra el gap de delivery al LLM. Sin esto, dream auto/manual produce
-salida que el LLM no usa correctamente — silent quality loss.
+Contrato de delivery al LLM cerrado: `Result.kind` + `render_block` +
+`rendered` en tool boundary + hot_layer canonical/fragment sections.
+21 tests, suite 4417 passing.
 
-- Sub-step α.1: extender `Result.to_dict()` + markers textuales (lazy).
-- Sub-step α.2: hot_layer lee de entity pages (eager).
-- Sub-step α.3: documentar el contrato en arch/memory.md.
+### Opción β — §2.A.1 (en curso siguiente)
 
-Después podemos shipear §2.A.1 con el delivery ya correcto.
-
-### Opción β — §2.A.1 primero
-
-Auto-trigger con los 4 disparadores. Acelera la automatización pero
-deja el gap de §2.H sin cerrar — el dream corre solo pero el LLM ve
-sus outputs sin markers/timestamps.
+Auto-trigger con los 4 disparadores (cron diario / post-compaction /
+session-close / threshold). Diseño en doc 25 §2.A.1; ya partido del
+§2.A.2 deferido (cross-session learning). Costo estimado ~420 LOC.
 
 ### Opción γ — §2.C (SHIPPED 2026-05-24)
 
@@ -471,4 +479,4 @@ caros y dependen al menos de α.
 
 ---
 
-## Last updated: 2026-05-24 00:15 (§2.C shared AliasIndex shipped — 15 tests, suite 4396 passing)
+## Last updated: 2026-05-24 01:30 (§2.H fragment/canonical contract shipped — 21 tests, suite 4417 passing)

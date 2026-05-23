@@ -42,7 +42,26 @@ _SNIPPET_RADIUS = 80
 
 @dataclass(frozen=True)
 class Result:
-    """One match returned by search."""
+    """One match returned by search.
+
+    Per doc 25 §2.H (fragment/canonical retrieval contract): each result
+    carries enough metadata for the LLM to distinguish a canonical
+    entity page from a recent post-cursor fragment, and to know when
+    the data was valid. The model can drill into the canonical via the
+    ``entities`` pointer.
+
+    Fields beyond the original `source / uri / headline / snippet /
+    summary / body` set:
+
+    - ``class_name``: ``"entity_page"`` for canonical pages,
+      ``"episodic"|"stable"|"corpus"|"pending"`` for entries, ``""``
+      for session/ingested matches.
+    - ``valid_from``: ISO timestamp the entry observed (empty for
+      entity pages, sessions, ingested).
+    - ``entities``: ``type:value`` refs this result pertains to. For a
+      canonical page it is the page's own ref; for a fragment it's the
+      list of entities the entry tagged.
+    """
 
     source: Literal["memory", "sessions", "ingested"]
     uri: str
@@ -50,6 +69,28 @@ class Result:
     snippet: str
     summary: str = ""
     body: str = ""
+    # §2.H fragment/canonical contract fields. All optional with safe
+    # defaults so existing callers (and grep paths that don't have the
+    # info yet) keep working.
+    class_name: str = ""
+    valid_from: str = ""
+    entities: tuple[str, ...] = ()
+
+    @property
+    def kind(self) -> str:
+        """Marker label for the §2.H contract. One of:
+
+        - ``"canonical"`` — entity_page row
+        - ``"fragment"`` — episodic/stable/corpus/pending entry
+        - ``"session"`` — session view match (singular, normalised from
+          the plural ``source="sessions"`` for cleaner LLM consumption)
+        - ``"ingested"`` — ingested artifact match
+        """
+        if self.source == "sessions":
+            return "session"
+        if self.source != "memory":
+            return self.source
+        return "canonical" if self.class_name == "entity_page" else "fragment"
 
     def to_dict(self) -> dict:
         d: dict = {
@@ -57,12 +98,55 @@ class Result:
             "uri": self.uri,
             "headline": self.headline,
             "snippet": self.snippet,
+            # §2.H: kind is the marker the LLM uses to decide whether
+            # to treat this as the main answer or as recent context.
+            "kind": self.kind,
         }
         if self.summary:
             d["summary"] = self.summary
         if self.body:
             d["body"] = self.body
+        if self.class_name:
+            d["class_name"] = self.class_name
+        if self.valid_from:
+            d["valid_from"] = self.valid_from
+        if self.entities:
+            d["entities"] = list(self.entities)
         return d
+
+    def render_block(self) -> str:
+        """Wrap the result in a `=== KIND: ... ===` block (§2.H).
+
+        Mirrors the compaction summary marker convention
+        (``=== ARCHIVED SUMMARY ===``): an explicit ASCII delimiter the
+        LLM can pattern-match without relying on field structure. The
+        header line carries the kind, ref/uri, and a time hint when
+        available.
+
+        The body inside the block prefers ``summary`` over ``body``
+        over ``snippet`` so the rendered block stays compact in warm-
+        tier responses; cold-tier consumers can read ``body`` directly
+        off ``to_dict()`` if they need the full text.
+        """
+        kind = self.kind.upper()
+        header = f"=== {kind}: {self.uri}"
+        if self.valid_from:
+            header += f" (ts: {self.valid_from})"
+        elif kind == "CANONICAL":
+            # Pages don't carry valid_from; mark them as authoritative.
+            header += " (canonical entity page)"
+        header += " ==="
+
+        body = self.summary or self.body or self.snippet or ""
+        tail_bits: list[str] = []
+        if self.entities and kind != "CANONICAL":
+            tail_bits.append(f"Entities: {', '.join(self.entities)}")
+        tail = "\n".join(tail_bits)
+        parts = [header, body]
+        if tail:
+            parts.append(tail)
+        parts.append(f"=== END {kind} ===")
+        return "\n".join(parts)
 
 
 def search_memory(
@@ -97,7 +181,14 @@ def search_dreamed(
     *,
     level: Level = "warm",
 ) -> list[Result]:
-    """Grep over ``memory/<class>/*.md`` (Phase-1 retrieval)."""
+    """Grep over ``memory/<class>/*.md`` plus ``memory/entities/<type>/*.md``.
+
+    Per doc 25 §2.H: canonical entity pages and per-entry fragments
+    must both be reachable from the lazy retrieval path so the LLM can
+    receive them with the right marker. Previously this function only
+    walked the four legacy classes (stable/episodic/corpus/pending) —
+    canonical pages were vector-only, breaking the fallback contract.
+    """
     needle_low = needle.lower()
     results: list[Result] = []
     memory_root = workspace / "memory"
@@ -124,9 +215,79 @@ def search_dreamed(
                     snippet=snippet,
                     summary=entry.summary if level == "warm" else "",
                     body=entry.body if level == "cold" else "",
+                    # §2.H: carry the fields the LLM needs to tell a
+                    # fragment from a canonical and to know its time
+                    # reference + which entity it pertains to.
+                    class_name=class_name,
+                    valid_from=(
+                        entry.valid_from.isoformat() if entry.valid_from else ""
+                    ),
+                    entities=tuple(entry.entities),
                 )
             )
+
+    # §2.H: also walk canonical entity pages — these are the "main
+    # memory" that fragments above amend. Skip the `archive/`
+    # subfolders (absorbed pages stay reachable via expand only).
+    results.extend(_search_entity_pages(memory_root, needle_low, level))
     return results
+
+
+def _search_entity_pages(
+    memory_root: Path,
+    needle_low: str,
+    level: Level,
+) -> list[Result]:
+    """Grep over ``memory/entities/<type>/<slug>.md`` (canonical pages).
+
+    Returns results with ``class_name="entity_page"`` so the §2.H
+    contract surfaces them as CANONICAL when rendered.
+    """
+    from durin.memory.entity_page import EntityPage
+
+    entities_root = memory_root / "entities"
+    if not entities_root.is_dir():
+        return []
+
+    out: list[Result] = []
+    for type_dir in sorted(entities_root.iterdir()):
+        if not type_dir.is_dir():
+            continue
+        for page_path in sorted(type_dir.glob("*.md")):
+            page = EntityPage.from_file(page_path)
+            if page is None:
+                continue
+            haystack_parts = [
+                page.name,
+                " ".join(page.aliases or []),
+                page.body or "",
+            ]
+            haystack = " ".join(haystack_parts).lower()
+            if needle_low not in haystack:
+                continue
+            slug = page_path.stem
+            ref = f"{page.type}:{slug}"
+            summary = (
+                f"{page.name}"
+                + (f" — aliases: {', '.join(page.aliases)}" if page.aliases else "")
+            )
+            out.append(
+                Result(
+                    source="memory",
+                    uri=f"memory/entity_page/{ref}",
+                    headline=page.name,
+                    snippet=summary[:160],
+                    summary=summary if level == "warm" else "",
+                    body=page.body if level == "cold" else "",
+                    class_name="entity_page",
+                    # Entity pages don't carry a single valid_from; the
+                    # body uses prose ("since 2026-03-15...") for
+                    # temporal claims, per doc 18 §6 protocol α.
+                    valid_from="",
+                    entities=(ref,),
+                )
+            )
+    return out
 
 
 def _entry_matches(entry: MemoryEntry, needle_low: str) -> bool:
