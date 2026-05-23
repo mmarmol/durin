@@ -488,3 +488,124 @@ def cmd_expand(
             for path in archived:
                 console.print(f"  • {path.relative_to(workspace)}")
             console.print()
+
+
+# ---------------------------------------------------------------------------
+# absorb — W4 (doc 24): expose EntityAbsorption via CLI
+# ---------------------------------------------------------------------------
+
+
+def _build_vector_index_optional() -> Any:
+    """Construct a VectorIndex if memory.enabled + fastembed available.
+
+    Returns None if disabled or unavailable so callers can pass it through
+    to EntityAbsorption (which skips the vector delete step on None).
+    """
+    from durin.memory.vector_index import VectorIndex, vector_index_available
+
+    cfg = load_config()
+    try:
+        if cfg.memory.enabled and vector_index_available():
+            from durin.memory.embedding import FastembedProvider
+
+            provider = FastembedProvider(model=cfg.memory.embedding.model)
+            return VectorIndex(_workspace_root(), provider)
+    except Exception as exc:  # noqa: BLE001
+        console.print(
+            f"[yellow]vector index unavailable ({exc}); "
+            "absorbed entity row will not be removed from index[/yellow]"
+        )
+    return None
+
+
+@memory_app.command("absorb")
+def cmd_absorb(
+    canonical: str = typer.Argument(
+        ...,
+        help="Canonical entity ref (the one that survives), e.g. person:marcelo",
+    ),
+    absorbed: str = typer.Argument(
+        ...,
+        help="Entity ref to merge into canonical, e.g. person:marcelo-m",
+    ),
+    reason: str = typer.Option(
+        "",
+        "--reason",
+        "-r",
+        help="Free-text reason recorded in the commit trailer.",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip confirmation prompt.",
+    ),
+) -> None:
+    """Merge two entity pages into one canonical (W4 per doc 24).
+
+    Aliases and identifiers are merged into ``canonical``. The absorbed
+    page moves to ``<canonical_slug>/archive/<absorbed_slug>.md`` with
+    a frontmatter pointer. Alias index drops the absorbed ref; vector
+    index removes its row. A single git commit covers all changes.
+
+    Idempotent: re-running when the absorbed page is already archived
+    is a safe no-op.
+    """
+    from durin.memory.absorption import AbsorptionError, EntityAbsorption
+
+    if ":" not in canonical or ":" not in absorbed:
+        raise typer.BadParameter(
+            "both args must be '<type>:<slug>' (e.g. person:marcelo)"
+        )
+    if canonical == absorbed:
+        raise typer.BadParameter("canonical and absorbed must differ")
+
+    workspace = _workspace_root()
+    if not yes:
+        ok = typer.confirm(
+            f"Absorb {absorbed} into {canonical}? "
+            f"The absorbed page will move to archive."
+        )
+        if not ok:
+            console.print("[yellow]Cancelled[/yellow]")
+            raise typer.Exit(code=1)
+
+    vi = _build_vector_index_optional()
+    absorber = EntityAbsorption(workspace=workspace, vector_index=vi)
+    try:
+        sha = absorber.absorb(canonical, absorbed, reason=reason)
+    except AbsorptionError as exc:
+        console.print(f"[red]✗[/red] {exc}")
+        raise typer.Exit(code=1) from None
+    if sha:
+        console.print(f"[green]✓[/green] Absorbed {absorbed} → {canonical} ({sha[:8]})")
+    else:
+        console.print(
+            f"[dim]= No-op (absorbed page already archived or nothing to commit)[/dim]"
+        )
+
+
+@memory_app.command("absorb-suggest")
+def cmd_absorb_suggest() -> None:
+    """List candidate pairs that share at least one alias (merge hints)."""
+    from durin.memory.absorption import EntityAbsorption
+
+    workspace = _workspace_root()
+    absorber = EntityAbsorption(workspace=workspace)
+    candidates = absorber.find_candidates()
+    if not candidates:
+        console.print("[green]No merge candidates — no aliases overlap across pages.[/green]")
+        return
+
+    table = Table(title="Merge candidates", show_lines=False)
+    table.add_column("Entity A", style="cyan", no_wrap=True)
+    table.add_column("Entity B", style="cyan", no_wrap=True)
+    table.add_column("Shared aliases", style="yellow")
+    for c in candidates:
+        a, b = c.refs
+        table.add_row(a, b, ", ".join(c.shared_aliases))
+    console.print(table)
+    console.print(
+        "\n[dim]To merge: durin memory absorb <canonical> <absorbed> "
+        "--reason <why>[/dim]"
+    )

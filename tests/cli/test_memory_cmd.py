@@ -315,3 +315,142 @@ def test_dream_g3_datetime_cursor_filters_correctly(tmp_path: Path) -> None:
     assert "1 entries" in result.output
     assert "fresh observation" in result.output
     assert "old observation" not in result.output
+
+
+# ---------------------------------------------------------------------------
+# absorb — W4 (doc 24): expose EntityAbsorption via CLI
+# ---------------------------------------------------------------------------
+
+
+def _write_entity_page(
+    workspace: Path,
+    type_: str,
+    slug: str,
+    *,
+    aliases: list[str],
+    name: str | None = None,
+) -> Path:
+    from durin.memory.entity_page import EntityPage
+
+    page = EntityPage(type=type_, name=name or slug, aliases=aliases)
+    path = workspace / "memory" / "entities" / type_ / f"{slug}.md"
+    page.save(path)
+    return path
+
+
+def test_absorb_suggest_empty_when_no_overlap(tmp_path: Path) -> None:
+    """No shared aliases across pages → no candidates reported."""
+    _write_entity_page(tmp_path, "person", "marcelo", aliases=["Marcelo"])
+    _write_entity_page(tmp_path, "project", "durin", aliases=["Durin"])
+    with _patch_workspace(tmp_path):
+        result = runner.invoke(memory_app, ["absorb-suggest"])
+    assert result.exit_code == 0
+    assert "No merge candidates" in result.output
+
+
+def test_absorb_suggest_lists_overlapping_pairs(tmp_path: Path) -> None:
+    """Pages sharing aliases appear as candidates."""
+    _write_entity_page(
+        tmp_path, "person", "marcelo_a",
+        name="Marcelo A", aliases=["Marcelo"],
+    )
+    _write_entity_page(
+        tmp_path, "person", "marcelo_b",
+        name="Marcelo B", aliases=["Marcelo"],
+    )
+    with _patch_workspace(tmp_path):
+        result = runner.invoke(memory_app, ["absorb-suggest"])
+    assert result.exit_code == 0
+    assert "person:marcelo_a" in result.output
+    assert "person:marcelo_b" in result.output
+
+
+def test_absorb_rejects_same_ref(tmp_path: Path) -> None:
+    """canonical == absorbed must fail before touching disk."""
+    with _patch_workspace(tmp_path):
+        result = runner.invoke(
+            memory_app,
+            ["absorb", "person:marcelo", "person:marcelo", "--yes"],
+        )
+    assert result.exit_code != 0
+    assert "must differ" in result.output
+
+
+def test_absorb_rejects_bad_format(tmp_path: Path) -> None:
+    """Missing ':' rejected by validation, no side effects."""
+    with _patch_workspace(tmp_path):
+        result = runner.invoke(
+            memory_app,
+            ["absorb", "no-colon", "person:marcelo", "--yes"],
+        )
+    assert result.exit_code != 0
+    assert "<type>:<slug>" in result.output
+
+
+def test_absorb_merges_pages_and_archives(tmp_path: Path) -> None:
+    """End-to-end: canonical keeps merged aliases, absorbed moves to archive."""
+    _write_entity_page(
+        tmp_path, "person", "marcelo",
+        name="Marcelo Marmol", aliases=["Marcelo", "mm"],
+    )
+    _write_entity_page(
+        tmp_path, "person", "marcelo_m",
+        name="Marcelo M", aliases=["Marcelo", "mmarmol"],
+    )
+    # Disable vector index to keep test hermetic (no fastembed model needed).
+    with _patch_workspace(tmp_path), patch(
+        "durin.cli.memory_cmd._build_vector_index_optional",
+        return_value=None,
+    ):
+        result = runner.invoke(
+            memory_app,
+            ["absorb", "person:marcelo", "person:marcelo_m",
+             "--reason", "same person", "--yes"],
+        )
+    assert result.exit_code == 0, result.output
+    assert "Absorbed" in result.output
+
+    # Canonical should still exist with merged aliases.
+    from durin.memory.entity_page import EntityPage
+
+    canonical_path = tmp_path / "memory" / "entities" / "person" / "marcelo.md"
+    assert canonical_path.exists()
+    merged = EntityPage.from_file(canonical_path)
+    assert merged is not None
+    assert "mmarmol" in merged.aliases  # unique alias from absorbed
+
+    # Absorbed moved to archive.
+    absorbed_orig = tmp_path / "memory" / "entities" / "person" / "marcelo_m.md"
+    assert not absorbed_orig.exists()
+    archived = (
+        tmp_path / "memory" / "entities" / "person" / "marcelo"
+        / "archive" / "marcelo_m.md"
+    )
+    assert archived.exists()
+
+
+def test_absorb_idempotent_on_already_archived(tmp_path: Path) -> None:
+    """Re-running absorb when the absorbed page is already gone is a clean no-op."""
+    _write_entity_page(
+        tmp_path, "person", "marcelo",
+        name="Marcelo", aliases=["Marcelo"],
+    )
+    _write_entity_page(
+        tmp_path, "person", "marcelo_m",
+        name="Marcelo M", aliases=["Marcelo"],
+    )
+    with _patch_workspace(tmp_path), patch(
+        "durin.cli.memory_cmd._build_vector_index_optional",
+        return_value=None,
+    ):
+        first = runner.invoke(
+            memory_app,
+            ["absorb", "person:marcelo", "person:marcelo_m", "--yes"],
+        )
+        assert first.exit_code == 0
+        second = runner.invoke(
+            memory_app,
+            ["absorb", "person:marcelo", "person:marcelo_m", "--yes"],
+        )
+    assert second.exit_code == 0
+    assert "No-op" in second.output or "already archived" in second.output
