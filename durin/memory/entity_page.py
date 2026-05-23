@@ -198,27 +198,55 @@ class EntityPage:
     def identifying_strings(self) -> list[str]:
         """Return all strings that identify this entity (for alias_index).
 
-        Combines ``name``, ``aliases``, and any emergent flat-list fields
-        whose values look like identifiers (e.g., ``identifiers``).
-        Returns deduplicated, order-preserving.
+        Combines ``name``, ``aliases``, and emergent fields. For each
+        ``extra`` field we extract identifying strings one level deep:
+
+        - Scalar string → include verbatim.
+        - List of strings → include each item.
+        - Dict with scalar / list-of-string values → include the values
+          (NOT the keys, NOT nested dicts).
+
+        This matches the shapes the dream LLM emits in practice (see
+        ``docs/research/phase0_results.md``): some times ``identifiers``
+        comes as a flat list, sometimes as a typed dict ``{email: ...,
+        slack: ...}``. Both surface here without prescribing the shape.
+
+        Deduplicates while preserving insertion order.
         """
         out: list[str] = []
         seen: set[str] = set()
 
-        def push(value: str) -> None:
-            if value and value not in seen:
-                out.append(value)
-                seen.add(value)
+        def push(value: object) -> None:
+            if not isinstance(value, str):
+                return
+            value = value.strip()
+            if not value or value in seen:
+                return
+            out.append(value)
+            seen.add(value)
 
         push(self.name)
         for alias in self.aliases:
             push(alias)
-        # Conventional emergent fields: scan flat lists of strings.
+
         for key, value in self.extra.items():
-            if isinstance(value, list):
+            if isinstance(value, str):
+                push(value)
+            elif isinstance(value, list):
                 for item in value:
-                    if isinstance(item, str):
-                        push(item)
+                    push(item)
+            elif isinstance(value, dict):
+                # One level deep: values can be scalars or lists of scalars.
+                for sub_value in value.values():
+                    if isinstance(sub_value, str):
+                        push(sub_value)
+                    elif isinstance(sub_value, list):
+                        for item in sub_value:
+                            push(item)
+                    # Nested dicts (dict-of-dict) are intentionally skipped:
+                    # at that depth the values are more likely metadata
+                    # than identity strings. If a future shape demands it,
+                    # we'll add tests + extend, not blindly recurse.
         return out
 
     # ------------------------------------------------------------------
