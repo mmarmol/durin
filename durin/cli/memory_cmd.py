@@ -43,7 +43,7 @@ memory_app = typer.Typer(
 
 def _workspace_root() -> Path:
     cfg = load_config()
-    return cfg.workspace_path()
+    return cfg.workspace_path
 
 
 def _resolve_entity_path(entity_ref: str) -> Path:
