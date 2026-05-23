@@ -2453,6 +2453,10 @@ from durin.cli.secret_cmd import secret_app as _secret_app  # noqa: E402
 
 app.add_typer(_secret_app, name="secret")
 
+from durin.cli.memory_cmd import memory_app as _memory_app  # noqa: E402
+
+app.add_typer(_memory_app, name="memory")
+
 
 def _refresh_help_epilog() -> None:
     """Regenerate `durin --help`'s group listing from the live registry.
