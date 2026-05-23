@@ -333,24 +333,42 @@ Si dream crashea, hangs, o no corre por días:
 Sin esto, los casos básicos (alias, identidad ambigua, contexto stale)
 se rompen.
 
+**Evidencia empírica (Phase 0.1, ver `docs/research/phase0_results.md`)**:
+el embedding model actual NO resuelve por sí solo las variaciones de
+identidad. Específicamente:
+
+- `Marcelo`/`marcelo` da cosine sim 0.719 (insuficiente para confiar).
+- `Marcelo Marmol`/`mmarmol@mxhero.com` da 0.271 (zero confianza).
+- `project:durin`/`durin` da 0.517 (el prefijo `type:` introduce token
+  noise).
+
+Por lo tanto, **alias_index es bloqueante crítico día 1**, no opcional.
+
 **Write-time:**
 
 1. `aliases: [...]` en frontmatter de cada `entities/<type>/<slug>.md`.
 2. `dream_processed_through: <msg_idx|timestamp>` cursor por entidad.
 3. `entities: [type:slug, ...]` en frontmatter de cada entry episódica
    (requiere propuesta A del doc 14 — ver §12).
-4. Aliases index sidecar (`memory/.aliases.json`):
+4. **Aliases index sidecar** (`memory/.aliases.json`):
    `alias_string → entity_slug`. Regenerable parseando frontmatters al
-   boot.
+   boot. **Crítico**: incluye lowercase variants automáticamente
+   (e.g. si una página tiene `name: Marcelo`, el index también tiene
+   `marcelo → person:marcelo`).
+5. **Embedding del page para vector index NO incluye el prefijo `type:`**.
+   El indexer compone `name + aliases + body` sin el `type:slug`
+   literal — el tipo va como metadata estructural, no como tokens.
+   Esto evita el problema "`project:durin` vs `durin` cosine 0.517".
 
 **Read-time:**
 
-5. Extracción de entidades del query: regex/string match contra aliases
-   index. NO LLM call.
-6. Boost a entries post-cursor con tag matcheado.
-7. Demote a entries pre-cursor con tag matcheado (su info está
+6. Extracción de entidades del query: regex/string match contra aliases
+   index (case-insensitive). NO LLM call.
+7. Boost a entries post-cursor con tag matcheado.
+8. Demote a entries pre-cursor con tag matcheado (su info está
    consolidada en la página).
-8. La página canónica surface naturalmente vía vector search.
+9. La página canónica surface naturalmente vía vector search (con el
+   embedding compuesto que NO lleva el prefijo `type:`).
 
 ### Multi-factor ranking
 
