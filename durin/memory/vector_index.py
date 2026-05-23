@@ -190,6 +190,20 @@ class VectorIndex:
         _add(body)
         return "\n\n".join(parts) or name or "entity page"
 
+    def delete_by_id(self, record_id: str) -> bool:
+        """Drop a single row by ``id``. Returns True if the table existed.
+
+        Used by Phase 5 absorption — when a page is archived, the
+        ``entity_page`` row keyed to its entity_ref must come out of the
+        searchable index. No-op when the table is absent.
+        """
+        db = self._connect()
+        if _TABLE_NAME not in db.list_tables().tables:
+            return False
+        table = db.open_table(_TABLE_NAME)
+        table.delete(f"id = '{_escape(record_id)}'")
+        return True
+
     def rebuild_from_workspace(self) -> int:
         """Re-embed every ``memory/<class>/*.md`` entry; returns count rebuilt.
 
