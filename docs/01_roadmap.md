@@ -224,7 +224,7 @@ Once Phase 2 has retrieval, Phase 1b reduces to "use the memory retriever to fet
 
 ---
 
-## Last updated: 2026-05-23 (post-T1 entity-centric memory)
+## Last updated: 2026-05-24 00:15 (§2.C shared AliasIndex shipped)
 
 > Post-T1 pass (2026-05-23): Phases 0-6 of the entity-centric memory plan
 > ([18_entity_centric_plan.md](18_entity_centric_plan.md) +
@@ -240,6 +240,32 @@ Once Phase 2 has retrieval, Phase 1b reduces to "use the memory retriever to fet
 > without commitment. Six docs moved to archive (the Phase 2 proposal,
 > the typed-entities proposal, doc 21 integration plan, doc 22 critique
 > validation, doc 23 T1 implementation plan, doc 24 wiring + e2e plan).
+
+> §2.C shipped (2026-05-24 00:15): shared AliasIndex via
+> `durin.memory.aliases_cache` — process-wide cache keyed by
+> `memory_root`, double-checked locking, mutation API
+> (`refresh_for` / `remove`) propagates writes across consumers
+> in-place so no explicit invalidation is needed in the common flow.
+> 15 new tests, suite at 4396 passing. Closes the §2.C item from doc
+> 25 — see bitácora 2026-05-24 for the rationale on choosing module-
+> level over `ToolContext`-scoped (CLI subcommands don't have a
+> ToolContext).
+
+> Post-T1 design review (2026-05-23 22:55): identified that doc 18 §6
+> ("LLM reconcilia con timestamps y contexto" + "página consolidada y
+> entries post-cursor coexisten en los resultados") was a design intent
+> that did NOT survive into the LLM delivery contract.
+> `Result.to_dict()` drops `valid_from` / `entities` / `class_name`
+> before the LLM sees them, and `hot_layer` reads from the legacy
+> memory classes (`memory/<class>/*.md`) instead of the new entity
+> pages (`memory/entities/<type>/<slug>.md`). Captured as **§2.H** in
+> doc 25: fragment/canonical retrieval contract — treated as complete-
+> T1, not T2, because it closes a wiring gap, not a new feature. §2.A
+> (auto-trigger dream) split into **A.1** (per-entity dispatcher with 4
+> triggers: cron daily, post-compaction, session-close, threshold) and
+> **A.2** (daily cross-session learning — pattern detection across
+> entities, trend tracking — deferred to a separate design doc since
+> the current consolidator prompt is single-entity only).
 
 > Post-v0.1.0a7 pass (2026-05-22): closed the secrets subsystem with the
 > interactive `request_secret` flow (Phase 3); shipped full **web config

@@ -92,6 +92,7 @@ durin/
 │   ├── vector_index.py    # LanceDB-backed VectorIndex
 │   ├── entity_page.py     # EntityPage parser (open-vocab frontmatter)
 │   ├── aliases_index.py   # AliasIndex (rebuild-only, lazy)
+│   ├── aliases_cache.py   # process-wide shared cache (doc 25 §2.C)
 │   ├── entity_ranker.py   # RRF entity-aware reranker
 │   ├── dream.py           # DreamConsolidator (LLM + pydantic + retry)
 │   ├── absorption.py      # EntityAbsorption (merge + archive + deindex)

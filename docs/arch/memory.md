@@ -193,11 +193,16 @@ Trailers are machine-readable and surfaced by `durin memory history` / `expand`.
 
 ## 7. Aliases index
 
-`durin/memory/aliases_index.py`. **Rebuild-only** per doc 23 T1.4 — no `.aliases.json` sidecar, no save/load. Built in-memory on first call (sub-second for typical <100-page corpora).
+`durin/memory/aliases_index.py`. **Rebuild-only** per archived doc 23 T1.4 — no `.aliases.json` sidecar, no save/load. Built in-memory on first call (sub-second for typical <100-page corpora).
 
-Case-insensitive lookup keyed on `name` + `aliases` from each entity page's frontmatter. Returns a `list[str]` of entity refs (not a single ref) so alias collisions (R6 in doc 18 §10) are surfaced rather than masked.
+Case-insensitive lookup keyed on `name` + `aliases` + identifying strings from each entity page's frontmatter (identifiers like email/slack/github included). Returns a `list[str]` of entity refs (not a single ref) so alias collisions (R6 in doc 18 §10) are surfaced rather than masked.
 
-Lazy build is invoked by `MemorySearchTool._get_alias_index()`; each tool instance builds its own. Sharing across tools via `ctx` is deferred to T2 ([doc 25](../25_post_t1_state_and_t2_horizon.md) §2.C).
+**Shared across consumers** via `durin/memory/aliases_cache.py` (doc 25 §2.C, shipped 2026-05-24). `MemorySearchTool`, `DreamConsolidator` and `EntityAbsorption` all resolve the same workspace-keyed instance through `get_shared_alias_index(memory_root)`:
+
+- Double-checked locking guarantees one build under contention.
+- Cold workspaces (no `entities/` subdir) get an empty index — still usable; callers check `idx.size() == 0` to skip downstream work.
+- Mutation API (`refresh_for` / `remove`) updates the shared map in place, so a `DreamConsolidator.apply()` write becomes visible to the next `memory_search` call without any explicit invalidation step. `invalidate_alias_index(memory_root)` exists as a defensive escape hatch for out-of-band edits or tests.
+- Tests inject their own `AliasIndex` via the consumer's `alias_index=` constructor parameter to bypass the cache entirely.
 
 ---
 
