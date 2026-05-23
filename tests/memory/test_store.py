@@ -69,14 +69,14 @@ def test_store_records_full_frontmatter(tmp_path: Path) -> None:
         headline="explicit headline",
         summary="explicit summary",
         source_refs=["[turn 42](../sessions/abc.md#turn-42)"],
-        entities=["marcelo", "durin"],
+        entities=["person:marcelo", "project:durin"],
         valid_from=date(2026, 5, 20),
     )
     loaded = load_entry(Path(result["path"]))
     assert loaded.headline == "explicit headline"
     assert loaded.summary == "explicit summary"
     assert loaded.source_refs == ["[turn 42](../sessions/abc.md#turn-42)"]
-    assert loaded.entities == ["marcelo", "durin"]
+    assert loaded.entities == ["person:marcelo", "project:durin"]
     assert loaded.valid_from == date(2026, 5, 20)
     assert loaded.body == "Body of the entry."
 
@@ -145,10 +145,10 @@ async def test_tool_threads_optional_metadata(tmp_path: Path) -> None:
         headline="explicit",
         summary="s",
         source_refs=["[t1](../sessions/x.md#turn-1)"],
-        entities=["e1", "e2"],
+        entities=["topic:e1", "topic:e2"],
     )
     loaded = load_entry(Path(out["path"]))
     assert loaded.headline == "explicit"
     assert loaded.summary == "s"
     assert loaded.source_refs == ["[t1](../sessions/x.md#turn-1)"]
-    assert loaded.entities == ["e1", "e2"]
+    assert loaded.entities == ["topic:e1", "topic:e2"]

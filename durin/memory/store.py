@@ -59,6 +59,22 @@ def store_memory(
             f"unknown class {class_name!r}; expected one of {MEMORY_CLASSES}"
         )
 
+    # Strict entity validation on the write path (per doc 14 §3.2 +
+    # doc 18 §4 vocabulario abierto): every entity ref must match
+    # the <type>:<value> shape. The vocabulary of types is open;
+    # only the form is checked.
+    entities_list = list(entities or [])
+    if entities_list:
+        from durin.memory.entities import is_valid_entity_ref
+
+        bad = [e for e in entities_list if not is_valid_entity_ref(e)]
+        if bad:
+            raise StoreError(
+                f"invalid entity reference(s): {bad}. "
+                f"Format: '<type>:<value>' where type is lowercase "
+                f"[a-z][a-z0-9_]* (e.g. person:marcelo, project:durin)."
+            )
+
     if headline is None:
         headline = _auto_headline(content)
 
@@ -69,7 +85,7 @@ def store_memory(
         summary=summary,
         source_refs=list(source_refs or []),
         related=list(related or []),
-        entities=list(entities or []),
+        entities=entities_list,
         author=current_author(),
         valid_from=valid_from or date.today(),
         body=content,

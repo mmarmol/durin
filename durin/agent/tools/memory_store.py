@@ -44,8 +44,16 @@ _PARAMETERS = tool_parameters_schema(
         ),
     ),
     entities=ArraySchema(
-        StringSchema("entity name"),
-        description="Optional list of named entities this memory references.",
+        StringSchema("entity reference in '<type>:<value>' form"),
+        description=(
+            "Optional list of typed entity references this memory mentions. "
+            "Each item MUST follow the form '<type>:<value>' where type is "
+            "lowercase [a-z][a-z0-9_]* and value is non-empty. Suggested "
+            "types (open vocabulary — new types welcome when content "
+            "demands): person, place, project, topic, event, artifact, "
+            "stance, practice. Examples: 'person:marcelo', "
+            "'project:durin', 'topic:embeddings', 'artifact:settings.py'."
+        ),
     ),
     required=["content"],
     description=(
