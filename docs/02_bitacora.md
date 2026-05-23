@@ -1401,3 +1401,85 @@ telemetry data, we'll add a composition panel that shows the current
 breakdown and a sparkline of `cache_ratio_pct` over recent turns.
 Measuring comes first; visualisation follows the data.
 
+## Entity-centric memory shipped + wired (T1 closure, 2026-05-23)
+
+**Context**: doc 03 Phase 2 (flat skill docs) was the original memory
+horizon. After reviewing Hermes Agent, OpenClaw, OpenClaude, Cognee,
+Graphiti, Mem0, MemPalace, HippoRAG and A-Mem (archived doc 22), we
+pivoted to an **entity-centric** model: episodic entries tag entities
+as `type:value`; a periodic LLM "dream" pass consolidates them into
+`memory/entities/<type>/<slug>.md` pages backed by git for history.
+
+The plan went through several iterations as it survived contact with
+real implementations:
+
+- **Doc 08** (Phase 2 proposal, three synthesis paths) — archived.
+- **Doc 14** (typed entities `type:value` proposal A) — implemented;
+  the closed 9-type list it suggested was superseded by doc 18 §4's
+  open vocabulary (8 broad cross-profession types, suggestion not
+  enforced). Archived.
+- **Doc 18** (entity-centric plan, vigente) — principles, schema,
+  storage, retrieval design.
+- **Doc 19** (implementation plan, executed Phases 0-6) — vigente.
+- **Doc 21** (integration plan) — superseded by 23+24. Archived.
+- **Doc 22** (critiques validated against 9 reference systems) —
+  fed doc 23's consolidated T1.x list. Archived.
+- **Doc 23** (T1 implementation by risk clusters A-D, executed) —
+  archived after closure.
+- **Doc 24** (T1 wiring gaps W1-W4 + E2E test plan, executed) —
+  archived after closure.
+- **Doc 25** (post-T1 state + T2 horizon, no commitment) — vigente.
+
+**What was built**:
+
+| Layer | Module | File |
+|---|---|---|
+| Entry typing | `MemoryEntry.entities: list[str]` validated as `<type>:<value>` | `durin/memory/schema.py` |
+| Git substrate | `GitRepo` over `memory/.git/` via dulwich | `durin/utils/git_repo.py` |
+| Entity pages | Markdown + open-vocab frontmatter parser | `durin/memory/entity_page.py` |
+| Aliases | `AliasIndex` (rebuild-only on first use, sub-second) | `durin/memory/aliases_index.py` |
+| Dream | `DreamConsolidator` with pydantic + retry + context budget | `durin/memory/dream.py` |
+| Retrieval | RRF-based entity-aware reranker | `durin/memory/entity_ranker.py` |
+| Vector index | `VectorIndex` (LanceDB) with `entities` field + entity_page rows | `durin/memory/vector_index.py` |
+| Absorption | `EntityAbsorption` (merge + archive + deindex) | `durin/memory/absorption.py` |
+| CLI | `durin memory dream/history/show/diff/revert/expand/absorb/absorb-suggest` | `durin/cli/memory_cmd.py` |
+
+**What was wired at runtime (T1, W1-W4)**:
+
+- W1: `memory_search` invokes the entity-aware ranker on raw LanceDB
+  rows when the query mentions a known entity, separating `ranking`
+  from `strategy` in the response.
+- W2: AliasIndex builds lazily on first `memory_search` call (no
+  persistent sidecar per doc 23 T1.4).
+- W3: `durin memory dream` constructs a `VectorIndex` and passes it
+  to the consolidator so the resulting entity page lands in LanceDB.
+- W4: `EntityAbsorption` exposed via `durin memory absorb` +
+  `absorb-suggest`. Vector index deletes the absorbed row; alias
+  index drops the absorbed ref.
+
+**What was explicitly NOT built / deferred to T2** (doc 25):
+
+- Auto-trigger of `DreamConsolidator` (today: manual `durin memory
+  dream`). Auto-trigger needs LLM-judge + confirmation design.
+- Identifier-based extraction in queries (today: alias-only).
+- Shared `AliasIndex` via `ctx` (today: lazy per-tool instance).
+- Auto-absorb post-dream (today: manual `durin memory absorb`).
+
+**Verification**:
+
+- 4365 tests pass, 16 skipped.
+- 6 outcome tests in `tests/integration/test_phase6_outcomes.py`
+  cover the doc 19 §8 operational outcomes (decisions consolidated,
+  aliases unified, recurring incident, drill-down, anti-fragility).
+- 4 hermetic E2E tests in `tests/memory/test_t1_wiring_e2e.py`
+  exercise the full wired path (W1+W2+W3+W4).
+- Live verification with real glm-5.1 + fastembed during cluster C/D
+  of the original doc 23 execution.
+
+**Bug caught by live verification, not by tests**: `_workspace_root`
+in `durin/cli/memory_cmd.py` called the `workspace_path` property as
+a method (`cfg.workspace_path()`). Every `durin memory <cmd>` crashed
+in production. Tests didn't catch it because they patched
+`_workspace_root` directly — illustrating the `feedback-verify-live`
+principle: green unit tests are not feature verification.
+
