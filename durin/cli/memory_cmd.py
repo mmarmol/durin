@@ -17,7 +17,9 @@ Subcommands:
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import typer
 from rich.console import Console
@@ -68,6 +70,169 @@ def _open_repo():
         )
         raise typer.Exit(code=1)
     return repo
+
+
+# ---------------------------------------------------------------------------
+# G3 helper: parse cursor + entry timestamps as datetime, never string compare
+# ---------------------------------------------------------------------------
+
+
+def _is_at_or_before(entry_ts: str, cursor: Any) -> bool:
+    """True iff entry_ts <= cursor in real time (datetime semantics).
+
+    Mirrors :func:`durin.memory.entity_ranker._is_pre_cursor` per G3.
+    Numeric cursors (msg_idx) return False — not comparable to ISO ts.
+    """
+    if not entry_ts or cursor is None:
+        return False
+    if isinstance(cursor, (int, float)):
+        return False
+    try:
+        et = datetime.fromisoformat(str(entry_ts).replace("Z", "+00:00"))
+        ct = datetime.fromisoformat(str(cursor).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return False
+    return et <= ct
+
+
+# ---------------------------------------------------------------------------
+# dream — manual consolidation trigger
+# ---------------------------------------------------------------------------
+
+
+def _discover_pending_consolidations(
+    memory_root: Path,
+    *,
+    entity_filter: str | None = None,
+) -> dict[str, list]:
+    """Walk memory/episodic, group entries by entity tag, filter by cursor.
+
+    Returns ``{entity_ref → [EntryRef, ...]}`` sorted by timestamp
+    ascending per entity. Pre-cursor entries (those with timestamp at
+    or before the entity page's ``dream_processed_through``) are
+    excluded — their info is already consolidated.
+
+    G3: cursor comparison uses datetime parsing, not string comparison.
+    """
+    from durin.memory.dream import EntryRef
+    from durin.memory.entity_page import EntityPage
+    from durin.memory.storage import load_entry
+
+    pending: dict[str, list] = {}
+    episodic_dir = memory_root / "episodic"
+    if not episodic_dir.exists():
+        return pending
+
+    # Load existing pages to know cursors per entity.
+    cursors: dict[str, Any] = {}
+    pages_dir = memory_root / "entities"
+    if pages_dir.exists():
+        for page_path in pages_dir.rglob("*.md"):
+            if "/archive/" in str(page_path):
+                continue
+            page = EntityPage.from_file(page_path)
+            if page is None:
+                continue
+            slug = EntityPage.slug_from_path(page_path)
+            ref = f"{page.type}:{slug}"
+            if page.dream_processed_through is not None:
+                cursors[ref] = page.dream_processed_through
+
+    # Walk episodic entries, group by entity, filter by cursor.
+    for entry_path in sorted(episodic_dir.glob("*.md")):
+        try:
+            entry = load_entry(entry_path)
+        except Exception:  # noqa: BLE001
+            continue
+        ts = entry.valid_from.isoformat() if entry.valid_from else ""
+        for ent_ref in entry.entities:
+            if entity_filter and ent_ref != entity_filter:
+                continue
+            if _is_at_or_before(ts, cursors.get(ent_ref)):
+                continue  # pre-cursor; already consolidated
+            pending.setdefault(ent_ref, []).append(
+                EntryRef(
+                    id=entry.id,
+                    timestamp=ts,
+                    text=entry.body,
+                    entities=list(entry.entities),
+                )
+            )
+
+    # Sort each entity's entries by timestamp ascending (oldest first;
+    # consolidator caps at MAX_ENTRIES_PER_CALL by taking newest).
+    for ref in pending:
+        pending[ref].sort(key=lambda e: e.timestamp)
+    return pending
+
+
+@memory_app.command("dream")
+def cmd_dream(
+    entity: str = typer.Argument(
+        None,
+        help="Specific entity (e.g. person:marcelo) to consolidate. "
+             "If omitted, consolidates all entities with pending entries.",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Print what would be consolidated without writing.",
+    ),
+) -> None:
+    """Manually trigger memory consolidation (dream pass).
+
+    Walks memory/episodic for entries with entity tags newer than each
+    entity page's cursor, groups them by entity, and invokes the LLM
+    consolidator. Writes the resulting entity pages + git commits.
+
+    Use ``--dry-run`` to inspect what would be consolidated.
+    """
+    workspace = _workspace_root()
+    memory_root = workspace / "memory"
+
+    if not (memory_root / "episodic").exists():
+        console.print("[yellow]No episodic memory yet — nothing to dream.[/yellow]")
+        return
+
+    pending = _discover_pending_consolidations(memory_root, entity_filter=entity)
+    if not pending:
+        if entity:
+            console.print(f"[green]No pending consolidations for {entity}.[/green]")
+        else:
+            console.print("[green]No pending consolidations.[/green]")
+        return
+
+    if dry_run:
+        console.print("[bold]Dry run — would consolidate:[/bold]\n")
+        for ent_ref, entries in pending.items():
+            console.print(f"  [cyan]{ent_ref}[/cyan]: {len(entries)} entries")
+            for er in entries[:3]:
+                preview = er.text[:80].replace("\n", " ")
+                console.print(f"    - {er.id}: {preview}")
+            if len(entries) > 3:
+                console.print(f"    ... +{len(entries) - 3} more")
+        return
+
+    # Real consolidation
+    from durin.memory.dream import DreamConsolidator, DreamError
+
+    cfg = load_config()
+    model = getattr(cfg.memory.embedding, "model", None)  # for embedder; LLM model is fixed
+    consolidator = DreamConsolidator(workspace=workspace)
+
+    for ent_ref, entries in pending.items():
+        console.print(f"\n[bold]{ent_ref}[/bold]: {len(entries)} entries")
+        try:
+            result = consolidator.consolidate_entity(ent_ref, entries)
+            sha = consolidator.apply(ent_ref, result)
+            if sha:
+                console.print(f"  [green]✓[/green] Consolidated → {sha[:8]}")
+            else:
+                console.print(f"  [dim]= No changes (idempotent)[/dim]")
+        except DreamError as exc:
+            console.print(f"  [red]✗[/red] {exc}")
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"  [red]✗[/red] unexpected: {exc}")
 
 
 # ---------------------------------------------------------------------------
