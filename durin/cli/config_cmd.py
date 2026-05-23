@@ -198,12 +198,29 @@ def cmd_show(
 def cmd_get(
     key: str = typer.Argument(..., help="Dotted path through the config (e.g. agents.defaults.model)."),
 ) -> None:
-    """Print one value. JSON-encoded when the value is a dict/list."""
+    """Print one value. JSON-encoded when the value is a dict/list.
+
+    Returns the **effective** value: schema defaults are applied, so
+    keys the user never wrote to disk still resolve. For an as-on-disk
+    view use ``durin config show``.
+    """
+    from durin.config.loader import load_config
+
     path = get_config_path()
     if not path.exists():
         console.print(f"[red]No config at {path}.[/red] Run [cyan]durin onboard[/cyan].")
         raise typer.Exit(1)
-    data = load_raw_config(path)
+    # Load with defaults applied so keys with schema defaults resolve
+    # even when the user never wrote them to disk (e.g.
+    # `memory.embedding.model` before the first onboard pass through
+    # the memory section). Fall back to the raw on-disk dict if the
+    # schema rejects the config — better to surface a value than refuse
+    # all queries.
+    try:
+        cfg = load_config(path)
+        data = cfg.model_dump(by_alias=False, mode="json")
+    except Exception:  # noqa: BLE001
+        data = load_raw_config(path)
     try:
         value = get_at(data, _normalize_dotted_path(key))
     except KeyError:
