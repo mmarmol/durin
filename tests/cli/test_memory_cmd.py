@@ -209,3 +209,109 @@ def test_history_on_uninitialized_repo(tmp_path: Path) -> None:
         result = runner.invoke(memory_app, ["history", "person:marcelo"])
     assert result.exit_code != 0
     assert "not been initialized" in result.output
+
+
+# ---------------------------------------------------------------------------
+# dream — manual consolidation (Cluster D + G3 datetime cursor compare)
+# ---------------------------------------------------------------------------
+
+
+def test_dream_no_episodic_yet_clean_exit(tmp_path: Path) -> None:
+    """Empty workspace: dream exits cleanly with informative message."""
+    with _patch_workspace(tmp_path):
+        result = runner.invoke(memory_app, ["dream"])
+    assert result.exit_code == 0
+    assert "nothing to dream" in result.output.lower()
+
+
+def test_dream_no_pending_when_no_tags(tmp_path: Path) -> None:
+    """Entries with no entity tags: nothing to consolidate."""
+    from durin.memory.store import store_memory
+
+    store_memory(tmp_path, content="untagged content", entities=[])
+    with _patch_workspace(tmp_path):
+        result = runner.invoke(memory_app, ["dream"])
+    assert result.exit_code == 0
+    assert "no pending" in result.output.lower()
+
+
+def test_dream_dry_run_lists_pending(tmp_path: Path) -> None:
+    """--dry-run shows what would be consolidated without writing."""
+    from durin.memory.store import store_memory
+
+    for i in range(3):
+        store_memory(
+            tmp_path,
+            content=f"observation about marcelo #{i}",
+            entities=["person:marcelo"],
+        )
+
+    with _patch_workspace(tmp_path):
+        result = runner.invoke(memory_app, ["dream", "--dry-run"])
+    assert result.exit_code == 0
+    assert "person:marcelo" in result.output
+    assert "3 entries" in result.output
+    # Verify nothing was actually consolidated (no entity page on disk)
+    page_path = tmp_path / "memory" / "entities" / "person" / "marcelo.md"
+    assert not page_path.exists()
+
+
+def test_dream_filters_by_entity(tmp_path: Path) -> None:
+    """Passing an entity argument filters discovery to that one entity."""
+    from durin.memory.store import store_memory
+
+    store_memory(tmp_path, content="about marcelo",
+                 entities=["person:marcelo"])
+    store_memory(tmp_path, content="about durin",
+                 entities=["project:durin"])
+
+    with _patch_workspace(tmp_path):
+        result = runner.invoke(
+            memory_app, ["dream", "person:marcelo", "--dry-run"],
+        )
+    assert result.exit_code == 0
+    assert "person:marcelo" in result.output
+    assert "project:durin" not in result.output
+
+
+def test_dream_g3_datetime_cursor_filters_correctly(tmp_path: Path) -> None:
+    """G3: pre-cursor entries (timestamp <= cursor) are excluded.
+
+    Mixes date-only and datetime cursors to ensure datetime parsing
+    is used, not string comparison.
+    """
+    from datetime import date
+    from durin.memory.entity_page import EntityPage
+    from durin.memory.store import store_memory
+
+    # Build an existing page with cursor at 2026-04-15.
+    page = EntityPage(
+        type="person",
+        name="Marcelo",
+        aliases=["marcelo"],
+        dream_processed_through="2026-04-15",
+    )
+    page.save(tmp_path / "memory" / "entities" / "person" / "marcelo.md")
+
+    # Entry on 2026-04-10 — BEFORE cursor → should be excluded.
+    store_memory(
+        tmp_path,
+        content="old observation pre-cursor",
+        entities=["person:marcelo"],
+        valid_from=date(2026, 4, 10),
+    )
+    # Entry on 2026-04-20 — AFTER cursor → should be included.
+    store_memory(
+        tmp_path,
+        content="fresh observation post-cursor",
+        entities=["person:marcelo"],
+        valid_from=date(2026, 4, 20),
+    )
+
+    with _patch_workspace(tmp_path):
+        result = runner.invoke(memory_app, ["dream", "--dry-run"])
+    assert result.exit_code == 0
+    # Only the post-cursor (1 entry) should be pending.
+    assert "1 entries" in result.output
+    assert "fresh observation" in result.output
+    assert "old observation" not in result.output
