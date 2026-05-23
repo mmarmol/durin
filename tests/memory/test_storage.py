@@ -135,13 +135,13 @@ def test_round_trip_preserves_list_order(tmp_path: Path) -> None:
         id="mem-001",
         headline="h",
         source_refs=["[a](a.md)", "[b](b.md)", "[c](c.md)"],
-        entities=["z-entity", "a-entity", "m-entity"],
+        entities=["topic:z_entity", "topic:a_entity", "topic:m_entity"],
     )
     path = tmp_path / "mem-001.md"
     save_entry(entry, path)
     loaded = load_entry(path)
     assert loaded.source_refs == ["[a](a.md)", "[b](b.md)", "[c](c.md)"]
-    assert loaded.entities == ["z-entity", "a-entity", "m-entity"]
+    assert loaded.entities == ["topic:z_entity", "topic:a_entity", "topic:m_entity"]
 
 
 # ---------------------------------------------------------------------------

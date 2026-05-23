@@ -95,7 +95,7 @@ def corpus(tmp_path: Path) -> Path:
                 content=f"{topic} entry {i} — {theme} discussion notes",
                 headline=f"{topic} {theme} #{i}",
                 class_name=class_name,
-                entities=[topic, theme.replace(" ", "_")],
+                entities=[f"topic:{topic}", f"topic:{theme.replace(' ', '_')}"],
             )
     return workspace
 

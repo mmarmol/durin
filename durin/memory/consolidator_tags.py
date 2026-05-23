@@ -59,8 +59,17 @@ def parse_consolidator_response(raw: str) -> tuple[str, dict[str, list[str]]]:
     if not isinstance(parsed, dict):
         return summary_text, empty_tags
 
+    # Lenient entity validation on the read path (per doc 14 §3.2):
+    # drop malformed refs silently — a degraded LLM output should never
+    # break consolidation. Valid refs flow through; invalid ones are
+    # dropped on the floor.
+    entities = _coerce_string_list(parsed.get("entities"))
+    from durin.memory.entities import is_valid_entity_ref
+
+    entities = [e for e in entities if is_valid_entity_ref(e)]
+
     return summary_text, {
-        "entities": _coerce_string_list(parsed.get("entities")),
+        "entities": entities,
         "topics": _coerce_string_list(parsed.get("topics")),
     }
 

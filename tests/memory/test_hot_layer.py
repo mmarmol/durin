@@ -73,10 +73,10 @@ def test_identity_md_excluded_from_headlines(tmp_path: Path) -> None:
 
 
 def test_entities_aggregated_dedup_and_sorted(tmp_path: Path) -> None:
-    store_memory(tmp_path, content="x", entities=["zoo", "alpha"])
-    store_memory(tmp_path, content="y", entities=["alpha", "beta"])
+    store_memory(tmp_path, content="x", entities=["topic:zoo", "topic:alpha"])
+    store_memory(tmp_path, content="y", entities=["topic:alpha", "topic:beta"])
     layer = read_hot_layer(tmp_path)
-    assert layer.entities == ["alpha", "beta", "zoo"]
+    assert layer.entities == ["topic:alpha", "topic:beta", "topic:zoo"]
 
 
 def test_render_produces_three_sections(tmp_path: Path) -> None:
@@ -86,7 +86,7 @@ def test_render_produces_three_sections(tmp_path: Path) -> None:
         "---\nid: IDENTITY\nheadline: id\n---\n\nuser is X\n",
         encoding="utf-8",
     )
-    store_memory(tmp_path, content="body", headline="h", entities=["e1"])
+    store_memory(tmp_path, content="body", headline="h", entities=["topic:e1"])
     rendered = read_hot_layer(tmp_path).render()
     assert "## Memory: Identity" in rendered
     assert "## Memory: Key Points" in rendered

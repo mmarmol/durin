@@ -18,15 +18,28 @@ def test_parses_valid_response_with_both_keys() -> None:
         "- user prefers terse\n"
         "- decided to drop cache\n"
         "---\n"
-        "entities: [marcelo, durin]\n"
+        "entities: [person:marcelo, project:durin]\n"
         "topics: [communication, architecture]\n"
     )
     summary, tags = parse_consolidator_response(raw)
     assert summary == "- user prefers terse\n- decided to drop cache"
     assert tags == {
-        "entities": ["marcelo", "durin"],
+        "entities": ["person:marcelo", "project:durin"],
         "topics": ["communication", "architecture"],
     }
+
+
+def test_lenient_drops_malformed_entity_refs() -> None:
+    """Per doc 14 §3.2: malformed entity refs are dropped silently on the
+    read path; only well-formed `<type>:<value>` strings survive."""
+    raw = (
+        "- bullet\n"
+        "---\n"
+        "entities: [person:marcelo, just-name, project:durin, BadCase:Upper]\n"
+    )
+    summary, tags = parse_consolidator_response(raw)
+    # 'just-name' (no type) and 'BadCase:Upper' (uppercase type) drop.
+    assert tags["entities"] == ["person:marcelo", "project:durin"]
 
 
 def test_handles_nothing_response() -> None:
@@ -57,9 +70,9 @@ def test_non_dict_yaml_falls_back() -> None:
 
 
 def test_only_entities_present() -> None:
-    raw = "- bullet\n---\nentities: [a, b]\n"
+    raw = "- bullet\n---\nentities: [topic:a, topic:b]\n"
     summary, tags = parse_consolidator_response(raw)
-    assert tags == {"entities": ["a", "b"], "topics": []}
+    assert tags == {"entities": ["topic:a", "topic:b"], "topics": []}
 
 
 def test_only_topics_present() -> None:
@@ -82,9 +95,13 @@ def test_non_list_values_are_coerced_to_empty() -> None:
 
 
 def test_drops_empty_and_none_items() -> None:
-    raw = "- bullet\n---\nentities: [a, '', null, b]\ntopics: [' ', x]\n"
+    raw = (
+        "- bullet\n---\n"
+        "entities: [topic:a, '', null, topic:b]\n"
+        "topics: [' ', x]\n"
+    )
     summary, tags = parse_consolidator_response(raw)
-    assert tags == {"entities": ["a", "b"], "topics": ["x"]}
+    assert tags == {"entities": ["topic:a", "topic:b"], "topics": ["x"]}
 
 
 def test_empty_string_input() -> None:
@@ -98,13 +115,13 @@ def test_block_style_yaml_works() -> None:
         "- bullet\n"
         "---\n"
         "entities:\n"
-        "  - a\n"
-        "  - b\n"
+        "  - topic:a\n"
+        "  - topic:b\n"
         "topics:\n"
         "  - x\n"
     )
     summary, tags = parse_consolidator_response(raw)
-    assert tags == {"entities": ["a", "b"], "topics": ["x"]}
+    assert tags == {"entities": ["topic:a", "topic:b"], "topics": ["x"]}
 
 
 def test_multiple_separators_uses_last_one() -> None:
@@ -114,13 +131,13 @@ def test_multiple_separators_uses_last_one() -> None:
         "---\n"
         "- bullet two pasted yaml above\n"
         "---\n"
-        "entities: [marcelo]\n"
+        "entities: [person:marcelo]\n"
         "topics: []\n"
     )
     summary, tags = parse_consolidator_response(raw)
     assert "bullet one" in summary
     assert "bullet two pasted yaml above" in summary
-    assert tags == {"entities": ["marcelo"], "topics": []}
+    assert tags == {"entities": ["person:marcelo"], "topics": []}
 
 
 # ---------------------------------------------------------------------------

@@ -63,8 +63,8 @@ def test_search_dreamed_matches_body(tmp_path: Path) -> None:
 
 
 def test_search_dreamed_matches_entity(tmp_path: Path) -> None:
-    store_memory(tmp_path, content="body", entities=["marcelo", "durin"])
-    results = search_memory(tmp_path, "durin", scope="dreamed")
+    store_memory(tmp_path, content="body", entities=["person:marcelo", "project:durin"])
+    results = search_memory(tmp_path, "project:durin", scope="dreamed")
     assert len(results) == 1
 
 

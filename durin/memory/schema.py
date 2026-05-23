@@ -18,7 +18,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from durin.memory.provenance import Author
 
@@ -39,3 +39,21 @@ class MemoryEntry(BaseModel):
     author: Author = "user_authored"
     valid_from: Optional[date] = None
     body: str = ""
+
+    @field_validator("entities")
+    @classmethod
+    def _validate_entities_format(cls, value: list[str]) -> list[str]:
+        # Strict <type>:<value> validation per doc 14 §3.2 + doc 18 §4.
+        # Vocabulary of types is open; only the shape is enforced.
+        # Lenient read paths (e.g. consolidator_tags) should drop bad
+        # refs before MemoryEntry construction.
+        from durin.memory.entities import is_valid_entity_ref
+
+        bad = [e for e in value if not is_valid_entity_ref(e)]
+        if bad:
+            raise ValueError(
+                f"invalid entity reference(s): {bad}. "
+                f"Format: '<type>:<value>' where type is lowercase "
+                f"[a-z][a-z0-9_]*"
+            )
+        return value

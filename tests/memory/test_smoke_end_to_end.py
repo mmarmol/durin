@@ -66,7 +66,7 @@ def test_phase_1_pure_function_chain(tmp_path: Path) -> None:
             source_refs=[
                 f"[section-a](../ingested/{ingest['id']}/source.md#section-a)"
             ],
-            entities=["cache", "payload"],
+            entities=["topic:cache", "topic:payload"],
         )
     assert stored["author"] == "agent_created"
 
@@ -78,7 +78,7 @@ def test_phase_1_pure_function_chain(tmp_path: Path) -> None:
     # 5) The hot layer carries the headline + entity into the stable prompt tier.
     hot = read_hot_layer(workspace)
     assert "Cache flush rule" in hot.headlines
-    assert "cache" in hot.entities
+    assert "topic:cache" in hot.entities
     rendered = hot.render()
     assert "## Memory: Key Points" in rendered
     assert "Cache flush rule" in rendered
@@ -115,7 +115,7 @@ async def test_phase_1_tool_chain(tmp_path: Path) -> None:
         content="User prefers pytest over unittest.",
         class_name="stable",
         headline="Testing preference",
-        entities=["pytest", "unittest"],
+        entities=["topic:pytest", "topic:unittest"],
     )
     assert store_out["author"] == "agent_created"
 
