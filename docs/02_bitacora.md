@@ -1636,3 +1636,87 @@ build on a correct delivery contract. Without §2.H, automating the
 dream would have produced output the LLM couldn't use — silent
 quality loss compounding with every auto-dream tick.
 
+## §2.A.1 dispatcher β.1 — cron daily auto-trigger (2026-05-24)
+
+**Context**: doc 18 §6 listed four scenarios for triggering the
+entity-centric dream (cron, post-compaction, session-close, threshold
+per-entity). T1 shipped manual-only via `durin memory dream`. The user
+asked specifically for the daily cron as non-optional plus the other
+three as "scenarios we had planned" — implementing them as one
+coherent dispatcher.
+
+Decided to split β into two commits to keep each reviewable:
+
+- **β.1** (this commit): `MemoryDreamConfig` + `DreamRunner` + lock
+  + cron diario + telemetry events.
+- **β.2** (next): post-compaction hook, session-close hook,
+  threshold-per-entity hook in the `memory_store` write path.
+
+**β.1 shipped**:
+
+- `MemoryDreamConfig` (`config/schema.py`): seven knobs covering all
+  four triggers + throttle + master switch. Defaults: enabled True,
+  cron `0 3 * * *` (3am local — chosen to avoid the legacy `dream`
+  cron's every-2h schedule), threshold 5 entries, post-compaction
+  + session-close on, throttle 300s. Extended `MemoryConfig` with
+  `dream: MemoryDreamConfig`.
+- `DreamRunner` (`durin/memory/dream_runner.py`): synchronous runner
+  wrapping `DreamConsolidator` with three production concerns:
+  - **Atomic lock**: `memory/.dream.lock` via `os.open(O_CREAT|O_EXCL)`.
+    Lock file carries `{pid, started_at, trigger}` JSON for diagnostics.
+    Stale recovery: locks older than 10min are treated as crashed and
+    removed.
+  - **Throttle**: `memory/.dream.last_run` mtime gates re-runs within
+    `min_seconds_between_runs`. Cheap path: stat one file, no parse.
+  - **Telemetry**: three new events
+    (`memory.dream.start` / `.end` / `.skipped`) with `trigger` label
+    so the §2.E aggregator can split usage by source.
+  Returns `DreamRunResult(ran, reason, entities_consolidated,
+  entities_failed, duration_s)` so callers (CLI, future hooks, tests)
+  see the same shape.
+- Cron registration in `cli/commands.py` startup mirrors the legacy
+  `dream` job pattern — registers `memory_dream` system job with
+  the configured cron expression. `on_cron_job` dispatch routes
+  `name == "memory_dream"` to `asyncio.to_thread(runner.run, trigger="cron_daily")`
+  so the cron loop stays responsive during the LLM calls.
+
+**Tests** (14 new in `tests/memory/test_dream_runner.py`):
+- Cold workspace shortcuts before lock acquisition.
+- Untagged-only entries → no_pending.
+- Full successful pass: returns ok, page lands on disk, lock released.
+- Existing fresh lock blocks; pre-existing lock is left intact (we
+  don't own it).
+- Stale lock (>10min) is removed and the new run proceeds.
+- Throttle blocks immediate rerun; throttle=0 never blocks.
+- entity_filter narrows the pass to one entity ref.
+- Telemetry emits start+end on success, skipped on throttle/
+  concurrent_lock, and NEVER start/end when there's no pending work
+  (only skipped(no_pending)).
+
+**Suite**: 4431 passing (+14 vs §2.A.1 β.1 pre-state). Live verify:
+`durin status` shows config loads cleanly; `cfg.memory.dream.*`
+reflects all new fields with the documented defaults.
+
+**LOC actual**: ~280 source (dream_runner.py + schema additions +
+cron wire) + ~290 tests + ~60 telemetry schema. Total ~630.
+Estimate in doc 25 was ~420 for the full β (all 4 triggers); β.1
+alone is roughly half because the post-compaction / session-close /
+threshold wiring is the remaining work — pure plumbing into existing
+hooks.
+
+**Why split β**: the dispatcher + cron is self-contained and gives
+the user the explicitly-requested "always on" daily pass. The other
+3 triggers all reuse `DreamRunner.run()` — adding them is plumbing,
+not new mechanism — so they can ship in β.2 without re-opening the
+lock/throttle/telemetry design.
+
+**Trigger label vocabulary** (for §2.E aggregator parsing):
+- `cron_daily` — fired by the system cron job.
+- `post_compaction` — fired after `Consolidator` archives a chunk.
+- `session_close` — fired on `/quit` or idle timeout.
+- `threshold` — fired by memory_store when per-entity count crosses
+  `threshold_entries`.
+- `manual` — fired by `durin memory dream` CLI (β.2 will refactor
+  the CLI to route through `DreamRunner` so manual runs also pick up
+  the lock/throttle).
+

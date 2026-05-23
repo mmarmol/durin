@@ -517,6 +517,57 @@ class MemoryRecallVectorEvent(TypedDict):
     session_key: NotRequired[str | None]
 
 
+class MemoryDreamStartEvent(TypedDict):
+    """Entity-centric dream pass began (doc 25 §2.A.1).
+
+    Emitted only when the runner actually acquired the lock and is
+    about to execute. Skipped passes get :class:`MemoryDreamSkippedEvent`
+    instead so dashboards can split "ran" from "didn't run".
+    """
+
+    trigger: str  # "cron_daily" | "post_compaction" | "session_close" | "threshold" | "manual"
+    entity_filter: str  # entity ref when narrowed, "" otherwise
+    entities_pending: int
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
+class MemoryDreamEndEvent(TypedDict):
+    """Entity-centric dream pass completed (doc 25 §2.A.1).
+
+    Mirrors :class:`MemoryDreamStartEvent` with the outcome counters
+    and wall-clock duration. ``entities_failed`` counts entities whose
+    consolidate_entity raised — the rest of the pass still runs, so a
+    non-zero failed value is a soft signal, not a stop condition.
+    """
+
+    trigger: str
+    entity_filter: str
+    entities_consolidated: int
+    entities_failed: int
+    duration_s: float
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
+class MemoryDreamSkippedEvent(TypedDict):
+    """Entity-centric dream trigger fired but no work was done.
+
+    Reasons:
+
+    - ``"throttle"``: ``min_seconds_between_runs`` not elapsed yet.
+    - ``"no_pending"``: no entities have post-cursor entries.
+    - ``"concurrent_lock"``: another process is dreaming right now.
+    - ``"disabled"``: ``memory.dream.enabled`` is False.
+    """
+
+    trigger: str
+    reason: str
+    entity_filter: str
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
 class MemoryStoreBlockedNearDuplicateEvent(TypedDict):
     """memory_store dedup pre-persist (T1.7 per archived doc 23) refused
     a write because the embedding distance to an existing entry fell
@@ -594,6 +645,9 @@ EVENTS: dict[str, type] = {
     "memory.embedding.embed": MemoryEmbeddingEmbedEvent,
     "memory.recall.vector": MemoryRecallVectorEvent,
     "memory.store.blocked_near_duplicate": MemoryStoreBlockedNearDuplicateEvent,
+    "memory.dream.start": MemoryDreamStartEvent,
+    "memory.dream.end": MemoryDreamEndEvent,
+    "memory.dream.skipped": MemoryDreamSkippedEvent,
 }
 
 

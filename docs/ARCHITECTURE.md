@@ -93,6 +93,7 @@ durin/
 │   ├── entity_page.py     # EntityPage parser (open-vocab frontmatter)
 │   ├── aliases_index.py   # AliasIndex (rebuild-only, lazy)
 │   ├── aliases_cache.py   # process-wide shared cache (doc 25 §2.C)
+│   ├── dream_runner.py    # auto-trigger runner + lock (doc 25 §2.A.1)
 │   ├── entity_ranker.py   # RRF entity-aware reranker
 │   ├── dream.py           # DreamConsolidator (LLM + pydantic + retry)
 │   ├── absorption.py      # EntityAbsorption (merge + archive + deindex)

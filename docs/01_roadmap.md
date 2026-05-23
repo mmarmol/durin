@@ -224,7 +224,7 @@ Once Phase 2 has retrieval, Phase 1b reduces to "use the memory retriever to fet
 
 ---
 
-## Last updated: 2026-05-24 01:30 (§2.H fragment/canonical retrieval contract shipped)
+## Last updated: 2026-05-24 01:50 (§2.A.1 β.1 cron daily + DreamRunner shipped)
 
 > Post-T1 pass (2026-05-23): Phases 0-6 of the entity-centric memory plan
 > ([18_entity_centric_plan.md](18_entity_centric_plan.md) +
@@ -240,6 +240,18 @@ Once Phase 2 has retrieval, Phase 1b reduces to "use the memory retriever to fet
 > without commitment. Six docs moved to archive (the Phase 2 proposal,
 > the typed-entities proposal, doc 21 integration plan, doc 22 critique
 > validation, doc 23 T1 implementation plan, doc 24 wiring + e2e plan).
+
+> §2.A.1 β.1 shipped (2026-05-24 01:50): entity-centric dream
+> auto-trigger — first half of the per-entity dispatcher. New
+> `memory.dream` config block (cron, threshold_entries, post_compaction,
+> on_session_close, min_seconds_between_runs). `DreamRunner` with
+> atomic lock (`memory/.dream.lock`), stale-lock recovery, throttle,
+> and three telemetry events (`memory.dream.start` / `.end` /
+> `.skipped`). Cron daily registered as system job `memory_dream`
+> (default `0 3 * * *`); routed via `asyncio.to_thread` so the cron
+> loop stays responsive. 14 new tests, suite 4431. β.2 (post-compaction
+> + session-close + threshold-per-entity hooks) pending — they all
+> reuse the same `DreamRunner.run()` entry point.
 
 > §2.H shipped (2026-05-24 01:30): fragment/canonical retrieval
 > contract — closes the doc 18 §6 promise ("LLM reconcilia con
