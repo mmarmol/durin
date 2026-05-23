@@ -126,7 +126,19 @@ export function MessageBubble({
         <TypingDots />
       ) : empty && message.isStreaming ? null : (
         <>
-          <MarkdownText>{message.content}</MarkdownText>
+          {message.renderAs === "text" ? (
+            <pre
+              className={cn(
+                "whitespace-pre-wrap break-words font-mono",
+                "rounded-[14px] border border-border/60 bg-muted/35 px-4 py-3",
+                "text-[13px] leading-relaxed text-foreground/90",
+              )}
+            >
+              {message.content}
+            </pre>
+          ) : (
+            <MarkdownText>{message.content}</MarkdownText>
+          )}
           {media.length > 0 ? <MessageMedia media={media} align="left" /> : null}
           {showAssistantFooterRow ? (
             <div className="mt-2 flex min-h-8 flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">

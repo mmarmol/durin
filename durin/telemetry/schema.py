@@ -186,6 +186,39 @@ class HistoryMediaPrunedEvent(TypedDict):
     session_key: NotRequired[str | None]
 
 
+class ContextCompositionEvent(TypedDict):
+    """Per-turn breakdown of the prompt we send to the LLM.
+
+    Emitted from ``ContextBuilder.build_messages`` *before* the call,
+    so we can correlate with the post-call ``cache.usage`` event and
+    answer questions like "of the cached tokens, which tier is doing
+    the caching?" or "how much of our context is memory vs history
+    today?".
+
+    All counts are tiktoken-estimated (cl100k_base) over the rendered
+    text — they're indicative, not byte-exact for every provider's
+    tokenizer.
+    """
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+    # Three-tier system prompt (cache-friendly layout).
+    stable_tokens: int
+    stable_breakdown: dict[str, int]      # identity / bootstrap / skills_active /
+                                          # skills_catalog / memory_hot
+    context_tokens: int
+    volatile_tokens: int
+    volatile_breakdown: dict[str, int]    # memory_long_term / recent_history /
+                                          # session_summary
+    # Messages portion.
+    history_msg_tokens: int               # prior turns we pass back
+    current_msg_tokens: int               # current user message + runtime ctx
+    # Tool definitions JSON.
+    tools_tokens: int
+    # Sum of all the above (what we expect provider's prompt_tokens to
+    # approximate, modulo tokenizer differences).
+    estimated_total: int
+
+
 # ===========================================================================
 # Agent mode (Sprint B / L3)
 # ===========================================================================
@@ -495,6 +528,7 @@ EVENTS: dict[str, type] = {
     "provider.rate_limit_exhausted": ProviderRateLimitExhaustedEvent,
     # Cache / context engineering
     "cache.usage": CacheUsageEvent,
+    "context.composition": ContextCompositionEvent,
     "history_media.pruned": HistoryMediaPrunedEvent,
     # Agent mode (Sprint B / L3)
     "agent_mode.turn_start": AgentModeTurnStartEvent,

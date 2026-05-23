@@ -177,6 +177,37 @@ describe("MessageBubble", () => {
     expect(screen.getByText("Body line.")).toBeInTheDocument();
   });
 
+  it("renders text-flagged assistant content verbatim, preserving newlines", async () => {
+    // /status output: pre-formatted plain text with explicit \n separators.
+    // Without renderAs='text' the Markdown pipeline would collapse the \n
+    // into spaces and the column layout would become a single long line.
+    const message: UIMessage = {
+      id: "status-1",
+      role: "assistant",
+      content: "🧠 Model: glm-5.1\n📊 Tokens: 4610 in / 320 out\n📚 Context: 8k/202k",
+      createdAt: Date.now(),
+      renderAs: "text",
+    };
+    const { container } = render(<MessageBubble message={message} />);
+    const pre = container.querySelector("pre");
+    expect(pre).not.toBeNull();
+    expect(pre).toHaveClass("whitespace-pre-wrap", "font-mono");
+    // The actual content should be present verbatim (newlines preserved).
+    expect(pre?.textContent).toBe(message.content);
+  });
+
+  it("defaults to markdown rendering when renderAs is not set", () => {
+    const message: UIMessage = {
+      id: "md-1",
+      role: "assistant",
+      content: "hello world",
+      createdAt: Date.now(),
+    };
+    const { container } = render(<MessageBubble message={message} />);
+    // No <pre> wrapper when not text-mode.
+    expect(container.querySelector("pre")).toBeNull();
+  });
+
   it("renders assistant image media as a larger generated result", () => {
     const message: UIMessage = {
       id: "a-image",

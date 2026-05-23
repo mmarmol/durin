@@ -2006,6 +2006,14 @@ class WebSocketChannel(BaseChannel):
             "chat_id": msg.chat_id,
             "text": text,
         }
+        # `render_as: "text"` is set by command handlers (e.g. /status,
+        # /memory show, /sessions) that produce pre-formatted plain
+        # text with explicit newlines. Without this hint, the WebUI
+        # would feed the content to its Markdown renderer which collapses
+        # single newlines into spaces and drops the table-like layout.
+        render_as = msg.metadata.get("render_as")
+        if render_as in ("text", "markdown"):
+            payload["render_as"] = render_as
         if msg.media:
             payload["media"] = msg.media
             urls: list[dict[str, str]] = []

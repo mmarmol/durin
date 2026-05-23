@@ -2241,7 +2241,13 @@ def _status_sections(config: Any, config_path: Path) -> list[tuple[str, str]]:
         docs = len(list(mem_dir.glob("**/*.md"))) if mem_dir.exists() else 0
         sess_dir = ws / "sessions"
         sessions = len(list(sess_dir.glob("*.jsonl"))) if sess_dir.exists() else 0
-        rows.append(("Memory", f"{docs} docs · {sessions} sessions"))
+        memory_enabled = bool(getattr(config.memory, "enabled", False))
+        if memory_enabled:
+            short_model = config.memory.embedding.model.rsplit("/", 1)[-1]
+            mem_line = f"{docs} docs · {sessions} sessions · vector on ({short_model})"
+        else:
+            mem_line = f"{docs} docs · {sessions} sessions · vector off"
+        rows.append(("Memory", mem_line))
     except Exception:  # noqa: BLE001
         pass
 

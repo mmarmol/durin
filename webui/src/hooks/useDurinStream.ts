@@ -492,10 +492,17 @@ export function useDurinStream(
             typeof ev.latency_ms === "number" && ev.latency_ms >= 0
               ? Math.round(ev.latency_ms)
               : undefined;
+          // `render_as` ('text') signals the message body is
+          // pre-formatted plain text (slash-command output). Carry it
+          // onto the UIMessage so MessageBubble bypasses Markdown.
+          const renderAs = ev.render_as === "text" || ev.render_as === "markdown"
+            ? ev.render_as
+            : undefined;
           return absorbCompleteAssistantMessage(filtered, {
             content,
             ...(hasMedia ? { media } : {}),
             ...(lat !== undefined ? { latencyMs: lat } : {}),
+            ...(renderAs ? { renderAs } : {}),
           });
         });
         if (hasMedia) {

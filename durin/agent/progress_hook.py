@@ -39,6 +39,7 @@ class AgentProgressHook(AgentHook):
         tool_hint_max_length: int = 40,
         set_tool_context: Callable[..., None] | None = None,
         on_iteration: Callable[[int], None] | None = None,
+        on_cache_usage: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         super().__init__(reraise=True)
         self._on_progress = on_progress
@@ -52,6 +53,7 @@ class AgentProgressHook(AgentHook):
         self._tool_hint_max_length = tool_hint_max_length
         self._set_tool_context = set_tool_context
         self._on_iteration = on_iteration
+        self._on_cache_usage = on_cache_usage
         self._stream_buf = ""
         self._think_extractor = IncrementalThinkExtractor()
         self._reasoning_open = False
@@ -184,17 +186,21 @@ class AgentProgressHook(AgentHook):
         # itself useful signal (tells you the provider/model isn't
         # caching at all).
         if prompt_tokens > 0:
+            ratio_pct = round(100.0 * cached_tokens / prompt_tokens, 1)
+            payload = {
+                "iteration": context.iteration,
+                "prompt_tokens": prompt_tokens,
+                "cached_tokens": cached_tokens,
+                "completion_tokens": completion_tokens,
+                "cache_ratio_pct": ratio_pct,
+            }
             logger_obj = current_telemetry()
             if logger_obj is not None:
-                ratio_pct = round(100.0 * cached_tokens / prompt_tokens, 1)
                 with suppress(Exception):
-                    logger_obj.log("cache.usage", {
-                        "iteration": context.iteration,
-                        "prompt_tokens": prompt_tokens,
-                        "cached_tokens": cached_tokens,
-                        "completion_tokens": completion_tokens,
-                        "cache_ratio_pct": ratio_pct,
-                    })
+                    logger_obj.log("cache.usage", payload)
+            if self._on_cache_usage is not None:
+                with suppress(Exception):
+                    self._on_cache_usage(payload)
 
     def finalize_content(self, context: AgentHookContext, content: str | None) -> str | None:
         return self._strip_think(content)
