@@ -162,9 +162,19 @@ flowchart LR
     E --> G["VectorIndex.upsert_entity_page<br/>(LanceDB row)"]
 ```
 
-**Manual trigger only**: `durin memory dream [entity] [--dry-run]` in [durin/cli/memory_cmd.py](../../durin/cli/memory_cmd.py). Walks `memory/episodic/` for entries with entity tags newer than each entity page's `dream_processed_through` cursor, groups by entity, invokes the consolidator.
+**Manual trigger**: `durin memory dream [entity] [--dry-run]` in [durin/cli/memory_cmd.py](../../durin/cli/memory_cmd.py). Walks `memory/episodic/` for entries with entity tags newer than each entity page's `dream_processed_through` cursor, groups by entity, invokes the consolidator.
 
-**Auto-trigger deferred** to T2 (see [doc 25](../25_post_t1_state_and_t2_horizon.md) §2.A): scheduling without LLM-judge + confirmation flow has silent-drift risk.
+**Auto-trigger (doc 25 §2.A.1)**: `durin/memory/dream_runner.py` wraps the consolidator with an atomic lock (`memory/.dream.lock` via `O_CREAT|O_EXCL`, stale-recovery at 10min), a throttle (`memory/.dream.last_run` mtime + `min_seconds_between_runs`), and three telemetry events (`memory.dream.start` / `.end` / `.skipped`).
+
+Trigger surface (`memory.dream.*` config block):
+
+| Trigger | Status | Source |
+|---|---|---|
+| `cron_daily` | SHIPPED β.1 (2026-05-24) | system job `memory_dream` registered at `cli/commands.py` startup; default cron `0 3 * * *`. Routed via `asyncio.to_thread` in `on_cron_job` so the cron loop stays responsive during LLM calls. |
+| `post_compaction` | PENDING β.2 | hook in `Consolidator.maybe_consolidate_by_tokens` finalize step. |
+| `session_close` | PENDING β.2 | hook in `/quit` and idle timeout. |
+| `threshold` | PENDING β.2 | per-entity counter in `memory_store` write path. |
+| `manual` | works (CLI) | `durin memory dream`. Will be refactored to route through `DreamRunner` so it picks up the lock/throttle too. |
 
 **Consolidator** ([durin/memory/dream.py](../../durin/memory/dream.py)) :
 

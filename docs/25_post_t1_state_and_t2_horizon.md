@@ -75,7 +75,7 @@ Dos lecturas posibles del horizon, no excluyentes:
 
 - §2.E telemetry aggregation — **SHIPPED**.
 - §2.C shared AliasIndex via ctx — **SHIPPED** (2026-05-24).
-- §2.A.1 per-entity dispatcher (4 triggers) — next en serie α+β.
+- §2.A.1 per-entity dispatcher — **PARCIAL** (cron diario + runner + lock SHIPPED 2026-05-24 01:50; post-compaction / session-close / threshold hooks pending β.2).
 - §2.A.2 cross-session learning — diferido (requiere doc 26).
 - §2.D auto-absorb.
 - §2.F eager-inject context block — parcialmente cubierto por §2.H
@@ -98,7 +98,33 @@ Doc 18 §6 lista 4 triggers posibles. Verificación contra código (2026-05-23
 Hay que separar dos cosas que se mezclaban en versiones previas de este
 doc:
 
-#### §2.A.1 — Per-entity dispatcher (4 triggers que comparten runtime)
+#### §2.A.1 — Per-entity dispatcher (PARCIAL — cron diario SHIPPED 2026-05-24 01:50)
+
+**Shipped en β.1**:
+- `MemoryDreamConfig` en `config/schema.py` (memory.dream.{enabled, cron,
+  threshold_entries, post_compaction, on_session_close, model_override,
+  min_seconds_between_runs}).
+- `DreamRunner` en `durin/memory/dream_runner.py` con lock atómico
+  (`memory/.dream.lock`, O_CREAT|O_EXCL, stale recovery a 10min) +
+  throttle (`min_seconds_between_runs` cooldown vía
+  `.dream.last_run` mtime).
+- 3 telemetry events: `memory.dream.start` / `.end` / `.skipped`
+  (con `trigger`, `entity_filter`, `entities_consolidated/failed`,
+  `duration_s`, `reason`).
+- Cron diario registrado en `cli/commands.py` startup como system job
+  `memory_dream` (default `0 3 * * *`); `on_cron_job` lo dispatch a
+  `DreamRunner.run(trigger="cron_daily")` via `asyncio.to_thread`.
+- 14 tests cubren no_pending / concurrent_lock / stale lock recovery /
+  throttle / entity_filter / telemetry. Suite: 4431 passing.
+
+**Pending en β.2** (próximo commit):
+- Hook post-compaction (en `Consolidator` finalize step).
+- Hook session-close (en `/quit` y idle timeout).
+- Threshold per-entity en write path de `memory_store`.
+
+---
+
+#### §2.A.1 — Diseño original (referencia histórica)
 
 **Qué hace**: corre `consolidate_entity(ref, entries)` sobre entidades
 con entries post-cursor pending. Es la **automatización** de lo que
@@ -479,4 +505,4 @@ caros y dependen al menos de α.
 
 ---
 
-## Last updated: 2026-05-24 01:30 (§2.H fragment/canonical contract shipped — 21 tests, suite 4417 passing)
+## Last updated: 2026-05-24 01:50 (§2.A.1 β.1 shipped — DreamRunner + cron diario, 14 tests, suite 4431 passing; β.2 post-compaction / session-close / threshold pending)

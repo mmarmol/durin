@@ -133,6 +133,63 @@ class MemoryEmbeddingConfig(Base):
     )
 
 
+class MemoryDreamConfig(Base):
+    """Entity-centric dream auto-trigger config (doc 25 §2.A.1).
+
+    Distinct from ``agents.defaults.dream`` which schedules the legacy
+    ``MEMORY.md`` / ``SOUL.md`` consolidator. This block governs when
+    the entity-centric :class:`DreamConsolidator` runs automatically
+    over pending post-cursor entries.
+
+    Four triggers (any combination):
+
+    - **cron**: daily schedule (predictable, OpenClaw-style).
+    - **post_compaction**: dream after the conversation consolidator
+      compacts a session — the context is already in memory so the
+      cost is amortised.
+    - **on_session_close**: dream when a session ends (``/quit`` or
+      idle timeout).
+    - **threshold_entries**: dream when an entity accumulates this
+      many post-cursor entries (per-entity granularity).
+
+    ``min_seconds_between_runs`` throttles the per-entity triggers so
+    fast-firing events (e.g. a flurry of memory_store calls) don't
+    cause thrashing.
+    """
+
+    # Master switch — false disables all four triggers; manual
+    # ``durin memory dream`` still works.
+    enabled: bool = True
+
+    # Cron expression for the daily pass. 3am local to avoid the
+    # legacy ``dream`` job's every-2h schedule.
+    cron: str = "0 3 * * *"
+
+    # Per-entity threshold. 0 disables the threshold trigger.
+    threshold_entries: int = Field(default=5, ge=0)
+
+    # Hook into the session compaction lifecycle.
+    post_compaction: bool = True
+
+    # Hook into session-close events.
+    on_session_close: bool = True
+
+    # Override the dream model (None → falls through to
+    # agents.defaults.model used by ``durin memory dream``).
+    model_override: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("modelOverride", "model_override"),
+    )
+
+    # Cooldown between auto-runs per workspace to prevent thrashing
+    # when multiple triggers fire fast.
+    min_seconds_between_runs: int = Field(
+        default=300,
+        ge=0,
+        validation_alias=AliasChoices("minSecondsBetweenRuns", "min_seconds_between_runs"),
+    )
+
+
 class MemoryConfig(Base):
     """Memory subsystem configuration root.
 
@@ -140,10 +197,15 @@ class MemoryConfig(Base):
     still work over the markdown files (grep-level recall) but skip the
     vector index entirely — no embedding model is loaded. It's opt-in
     because the embedding model is a multi-hundred-MB download.
+
+    ``dream`` configures auto-trigger of the entity-centric
+    :class:`DreamConsolidator` (doc 25 §2.A.1). Independent of
+    ``enabled`` — manual ``durin memory dream`` works either way.
     """
 
     enabled: bool = False
     embedding: MemoryEmbeddingConfig = Field(default_factory=MemoryEmbeddingConfig)
+    dream: MemoryDreamConfig = Field(default_factory=MemoryDreamConfig)
 
 
 class AuxModelsConfig(Base):

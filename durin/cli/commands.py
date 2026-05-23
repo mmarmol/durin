@@ -1316,6 +1316,46 @@ def _run_gateway(
             except Exception:
                 logger.exception("Dream cron job failed")
             return None
+        # Entity-centric dream (doc 25 §2.A.1). Separate from the
+        # legacy ``dream`` job above: this one runs DreamConsolidator
+        # over post-cursor entries in memory/entities/. Sync runner
+        # offloaded to a thread so the cron loop stays responsive
+        # during the LLM calls.
+        if job.name == "memory_dream":
+            import asyncio as _asyncio
+
+            from durin.memory.dream_runner import DreamRunner
+            from durin.memory.vector_index import VectorIndex, vector_index_available
+
+            mem_dream_cfg = config.memory.dream
+            workspace = config.workspace_path
+            vi = None
+            if config.memory.enabled and vector_index_available():
+                try:
+                    from durin.memory.embedding import FastembedProvider
+
+                    provider = FastembedProvider(model=config.memory.embedding.model)
+                    vi = VectorIndex(workspace, provider)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "memory_dream cron: vector index unavailable (%s); "
+                        "pages will not be indexed", exc,
+                    )
+            runner = DreamRunner(
+                workspace=workspace,
+                min_seconds_between_runs=mem_dream_cfg.min_seconds_between_runs,
+                model=mem_dream_cfg.model_override,
+                vector_index=vi,
+            )
+            try:
+                result = await _asyncio.to_thread(runner.run, trigger="cron_daily")
+                logger.info(
+                    "memory_dream cron: %s (consolidated=%d failed=%d)",
+                    result.reason, result.entities_consolidated, result.entities_failed,
+                )
+            except Exception:
+                logger.exception("memory_dream cron failed")
+            return None
 
         from durin.utils.evaluator import evaluate_response
 
@@ -1555,7 +1595,7 @@ def _run_gateway(
     agent.dream.max_batch_size = dream_cfg.max_batch_size
     agent.dream.max_iterations = dream_cfg.max_iterations
     agent.dream.annotate_line_ages = dream_cfg.annotate_line_ages
-    from durin.cron.types import CronJob, CronPayload
+    from durin.cron.types import CronJob, CronPayload, CronSchedule
     cron.register_system_job(CronJob(
         id="dream",
         name="dream",
@@ -1563,6 +1603,26 @@ def _run_gateway(
         payload=CronPayload(kind="system_event"),
     ))
     console.print(f"[green]✓[/green] Dream: {dream_cfg.describe_schedule()}")
+
+    # Register entity-centric dream system job (doc 25 §2.A.1). Separate
+    # from the legacy `dream` above — this one consolidates post-cursor
+    # episodic entries into memory/entities/<type>/<slug>.md pages.
+    mem_dream_cfg = config.memory.dream
+    if mem_dream_cfg.enabled:
+        cron.register_system_job(CronJob(
+            id="memory_dream",
+            name="memory_dream",
+            schedule=CronSchedule(
+                kind="cron",
+                expr=mem_dream_cfg.cron,
+                tz=config.agents.defaults.timezone,
+            ),
+            payload=CronPayload(kind="system_event"),
+        ))
+        console.print(
+            f"[green]✓[/green] Memory dream (entity-centric): "
+            f"cron {mem_dream_cfg.cron}"
+        )
 
     async def _open_browser_when_ready() -> None:
         """Wait for the gateway to bind, then point the user's browser at the webui."""
