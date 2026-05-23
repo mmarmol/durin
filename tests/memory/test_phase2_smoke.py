@@ -34,8 +34,19 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+_TEST_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+
+# Stub catalog the tests pretend fastembed exposes. The single entry is
+# the real-world default for durin so the stub stays representative.
+_STUB_CATALOG = [{"model": _TEST_MODEL, "dim": 8, "size_in_GB": 0.22}]
+
+
 class _FakeTextEmbedding:
     """First-char + length seeded stub for fastembed."""
+
+    @staticmethod
+    def list_supported_models():
+        return list(_STUB_CATALOG)
 
     def __init__(self, model_name=None, **_):
         self.model_name = model_name
@@ -49,6 +60,9 @@ class _FakeTextEmbedding:
 
 @contextmanager
 def _stub_fastembed():
+    import durin.memory.embedding as embedding_module
+
+    embedding_module._CATALOG_CACHE = None
     fake = types.ModuleType("fastembed")
     fake.TextEmbedding = _FakeTextEmbedding  # type: ignore[attr-defined]
     sys.modules["fastembed"] = fake
@@ -56,6 +70,7 @@ def _stub_fastembed():
         yield
     finally:
         sys.modules.pop("fastembed", None)
+        embedding_module._CATALOG_CACHE = None
 
 
 @pytest.fixture
@@ -96,25 +111,18 @@ async def test_vector_path_runs_end_to_end(
 ) -> None:
     from durin.agent.tools.memory_search import MemorySearchTool
     from durin.agent.tools.memory_store import MemoryStoreTool
-    from durin.memory import embedding
-
-    monkeypatch.setitem(
-        embedding._FASTEMBED_DIMS,
-        "intfloat/multilingual-e5-small",
-        8,
-    )
 
     with _stub_fastembed():
         # Index the existing corpus so the vector path has content.
         from durin.memory.embedding import FastembedProvider
         from durin.memory.vector_index import VectorIndex
 
-        provider = FastembedProvider("intfloat/multilingual-e5-small")
+        provider = FastembedProvider(_TEST_MODEL)
         VectorIndex(corpus, provider).rebuild_from_workspace()
 
         search = MemorySearchTool(
             workspace=corpus,
-            embedding_model="intfloat/multilingual-e5-small",
+            embedding_model=_TEST_MODEL,
         )
         out = await search.execute(query="alpha", scope="dreamed", level="warm")
 
@@ -127,30 +135,23 @@ async def test_recall_vector_telemetry_fires(
     corpus: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from durin.agent.tools.memory_search import MemorySearchTool
-    from durin.memory import embedding
 
     events: list[tuple[str, dict]] = []
     monkeypatch.setattr(
         "durin.agent.tools.memory_search.emit_tool_event",
         lambda t, d: events.append((t, d)),
     )
-    monkeypatch.setitem(
-        embedding._FASTEMBED_DIMS,
-        "intfloat/multilingual-e5-small",
-        8,
-    )
-
     with _stub_fastembed():
         from durin.memory.embedding import FastembedProvider
         from durin.memory.vector_index import VectorIndex
 
         VectorIndex(
-            corpus, FastembedProvider("intfloat/multilingual-e5-small")
+            corpus, FastembedProvider(_TEST_MODEL)
         ).rebuild_from_workspace()
 
         search = MemorySearchTool(
             workspace=corpus,
-            embedding_model="intfloat/multilingual-e5-small",
+            embedding_model=_TEST_MODEL,
         )
         await search.execute(query="alpha", scope="dreamed", level="warm")
 
@@ -160,7 +161,7 @@ async def test_recall_vector_telemetry_fires(
     payload = vector_events[0][1]
     assert payload["query"] == "alpha"
     assert payload["scope"] == "dreamed"
-    assert payload["embedding_model"] == "intfloat/multilingual-e5-small"
+    assert payload["embedding_model"] == _TEST_MODEL
     assert payload["hit_count"] > 0
     assert payload["duration_ms"] >= 0
     # The aggregate memory.recall event always fires too.
@@ -191,25 +192,18 @@ async def test_vector_recall_does_not_regress_against_grep(
     LoCoMo / EverMemBench post-Phase-3 per docs/08 §0d.8.
     """
     from durin.agent.tools.memory_search import MemorySearchTool
-    from durin.memory import embedding
-
-    monkeypatch.setitem(
-        embedding._FASTEMBED_DIMS,
-        "intfloat/multilingual-e5-small",
-        8,
-    )
 
     with _stub_fastembed():
         from durin.memory.embedding import FastembedProvider
         from durin.memory.vector_index import VectorIndex
 
         VectorIndex(
-            corpus, FastembedProvider("intfloat/multilingual-e5-small")
+            corpus, FastembedProvider(_TEST_MODEL)
         ).rebuild_from_workspace()
 
         vector_tool = MemorySearchTool(
             workspace=corpus,
-            embedding_model="intfloat/multilingual-e5-small",
+            embedding_model=_TEST_MODEL,
         )
         grep_tool = MemorySearchTool(workspace=corpus)
 

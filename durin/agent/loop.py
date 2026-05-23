@@ -334,6 +334,12 @@ class AgentLoop:
         self._mcp_stacks: dict[str, AsyncExitStack] = {}
         self._mcp_connected = False
         self._mcp_connecting = False
+        # Last-known telemetry snapshots, cached in-memory so /status
+        # and the persistent footer can read them without going to the
+        # JSONL file. Both are the most recent payload of their event;
+        # ``None`` until the first event of that kind fires.
+        self._last_context_composition: dict[str, Any] | None = None
+        self._last_cache_usage: dict[str, Any] | None = None
         self._active_tasks: dict[str, list[asyncio.Task]] = {}  # session_key -> tasks
         self._background_tasks: list[asyncio.Task] = []
         self._session_locks: dict[str, asyncio.Lock] = {}
@@ -578,6 +584,31 @@ class AgentLoop:
         finally:
             self._mcp_connecting = False
 
+    async def _warmup_memory_embedding(self) -> None:
+        """Pre-load the embedding model in background so the first
+        ``memory_store`` / ``memory_search`` doesn't pay ~18s download
+        (first install) or ~230ms reload (subsequent boots) inline.
+
+        Skipped silently when memory is disabled, fastembed isn't
+        installed, or the model identifier is unknown — the existing
+        tool-side fallback to grep keeps everything functional.
+        """
+        try:
+            if not getattr(self.config.memory, "enabled", False):
+                return
+        except AttributeError:
+            return
+        model_name = self.config.memory.embedding.model
+        try:
+            from durin.memory.embedding import FastembedProvider
+            await asyncio.to_thread(FastembedProvider.warmup, model_name)
+            logger.info("Memory embedding model warmed: {}", model_name)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Memory embedding warmup skipped ({}): {}",
+                model_name, exc,
+            )
+
     def _set_tool_context(
         self, channel: str, chat_id: str,
         message_id: str | None = None, metadata: dict | None = None,
@@ -705,6 +736,9 @@ class AgentLoop:
             sender_id=msg.sender_id,
             session_summary=pending_summary,
             session_metadata=session.metadata,
+            session_key=session.key,
+            tools=self.tools.get_definitions() if self.tools else None,
+            iteration=0,
         )
 
     async def _dispatch_command_inline(
@@ -796,6 +830,7 @@ class AgentLoop:
             tool_hint_max_length=self.tool_hint_max_length,
             set_tool_context=self._set_tool_context,
             on_iteration=lambda iteration: setattr(self, "_current_iteration", iteration),
+            on_cache_usage=lambda payload: setattr(self, "_last_cache_usage", payload),
         )
         hook: AgentHook = (
             CompositeHook([loop_hook] + self._extra_hooks) if self._extra_hooks else loop_hook
@@ -944,6 +979,7 @@ class AgentLoop:
         """Run the agent loop, dispatching messages as tasks to stay responsive to /stop."""
         self._running = True
         await self._connect_mcp()
+        self._schedule_background(self._warmup_memory_embedding())
         logger.info("Agent loop started")
 
         while self._running:
@@ -1234,6 +1270,9 @@ class AgentLoop:
             sender_id=msg.sender_id,
             session_summary=pending,
             session_metadata=session.metadata,
+            session_key=key,
+            tools=self.tools.get_definitions() if self.tools else None,
+            iteration=0,
         )
         t_wall = time.time()
         final_content, _, all_msgs, stop_reason, _, tool_events = await self._run_agent_loop(

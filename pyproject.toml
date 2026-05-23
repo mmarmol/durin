@@ -68,8 +68,15 @@ local = [
 memory = [
     # Pure-Python ONNX embedding runtime; auto-downloads model files on
     # first use. Required for vector retrieval (Phase 2). Default model
-    # is BAAI/bge-m3 (~2.2 GB) — see docs/08_memory_phase2_proposal.md §0d.2.
-    "fastembed>=0.4.0,<1.0.0",
+    # is paraphrase-multilingual-MiniLM-L12-v2 (~220 MB) — see
+    # docs/08_memory_phase2_proposal.md §0d.2.
+    #
+    # Pinned narrowly: fastembed retires/renames models between minor
+    # releases (e5-small was dropped in 0.6, MiniLM-L12 changed pooling
+    # 0.5→0.6). Stay inside one stable catalog window. Bump deliberately
+    # after re-validating the wizard's model list against the new catalog
+    # (see tests/memory/test_embedding_catalog.py).
+    "fastembed>=0.7,<0.9",
     # Embedded vector DB for the memory index. Single-file storage, no
     # daemon, optional cloud backends. Phase 2.2.
     "lancedb>=0.30.0,<1.0.0",

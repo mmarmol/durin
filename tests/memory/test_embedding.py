@@ -1,11 +1,11 @@
 """Tests for the embedding provider abstraction.
 
-fastembed is an optional install (``pip install durin[memory]``) and
-the default model is 2.2 GB — pulling it on every CI run is wasteful.
-The tests inject a fake ``fastembed`` module into ``sys.modules`` so
-the lazy import inside :meth:`FastembedProvider._load` resolves to a
-controlled stub. This exercises the load/embed paths plus the
-telemetry contracts without any network or disk activity.
+fastembed is an optional install (``pip install durin-agent[memory]``)
+and the smallest valid model is 90 MB — pulling it on every CI run is
+wasteful. The tests inject a fake ``fastembed`` module into ``sys.modules``
+that exposes both ``TextEmbedding`` (for the load/embed path) and
+``TextEmbedding.list_supported_models`` (for the catalog validation that
+runs at ``FastembedProvider.__init__``).
 """
 
 from __future__ import annotations
@@ -14,11 +14,32 @@ import sys
 import types
 from contextlib import contextmanager
 from typing import Iterator
-from unittest.mock import MagicMock
 
 import pytest
 
+import durin.memory.embedding as embedding_module
 from durin.memory.embedding import EmbeddingProvider, FastembedProvider
+
+
+# Catalog snapshot used across tests; matches the real fastembed 0.8.0
+# catalog for the models the wizard offers.
+_FAKE_CATALOG = [
+    {
+        "model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+        "dim": 384,
+        "size_in_GB": 0.22,
+    },
+    {
+        "model": "intfloat/multilingual-e5-large",
+        "dim": 1024,
+        "size_in_GB": 2.24,
+    },
+    {
+        "model": "sentence-transformers/all-MiniLM-L6-v2",
+        "dim": 384,
+        "size_in_GB": 0.09,
+    },
+]
 
 
 class _FakeTextEmbedding:
@@ -26,19 +47,20 @@ class _FakeTextEmbedding:
 
     last_init_kwargs: dict | None = None
 
+    @staticmethod
+    def list_supported_models() -> list[dict]:
+        return list(_FAKE_CATALOG)
+
     def __init__(self, model_name: str | None = None, **kwargs) -> None:
         self.model_name = model_name
         type(self).last_init_kwargs = {"model_name": model_name, **kwargs}
 
     def embed(self, texts: list[str]) -> Iterator[list[float]]:
-        # Deterministic embeddings: dim matches the model name's expected dim.
-        name = self.model_name or ""
-        if "bge-m3" in name or "e5-large" in name or "bge-large" in name:
-            dim = 1024
-        elif "e5-base" in name or "bge-base" in name:
-            dim = 768
-        else:
-            dim = 384
+        # Deterministic embeddings: dim derived from the fake catalog so
+        # the load/embed path stays consistent with what list_supported_models
+        # would have advertised.
+        catalog = {m["model"]: m["dim"] for m in _FAKE_CATALOG}
+        dim = catalog.get(self.model_name or "", 384)
         for i, _ in enumerate(texts):
             yield [float(i) / 10.0] * dim
 
@@ -47,6 +69,8 @@ class _FakeTextEmbedding:
 def _inject_fake_fastembed():
     """Insert a stub ``fastembed`` module into sys.modules for the duration."""
     _FakeTextEmbedding.last_init_kwargs = None
+    # Reset the module-level catalog cache so the fake is consulted.
+    embedding_module._CATALOG_CACHE = None
     fake_module = types.ModuleType("fastembed")
     fake_module.TextEmbedding = _FakeTextEmbedding  # type: ignore[attr-defined]
     sys.modules["fastembed"] = fake_module
@@ -54,10 +78,11 @@ def _inject_fake_fastembed():
         yield fake_module
     finally:
         sys.modules.pop("fastembed", None)
+        embedding_module._CATALOG_CACHE = None
 
 
 # ---------------------------------------------------------------------------
-# Interface + dimensions
+# Interface + catalog validation
 # ---------------------------------------------------------------------------
 
 
@@ -65,23 +90,53 @@ def test_provider_is_subclass_of_abstract() -> None:
     assert issubclass(FastembedProvider, EmbeddingProvider)
 
 
-def test_default_model_is_multilingual_e5_small() -> None:
-    """Polite default — light model, no CJK. bge-m3 opt-in via config / installer."""
-    provider = FastembedProvider()
-    assert provider.model_name == "intfloat/multilingual-e5-small"
-    assert provider.dimensions == 384
+def test_default_model_is_minilm_l12_multilingual() -> None:
+    """Polite default: 220 MB multilingual; e5-large opt-in for CJK heavy."""
+    with _inject_fake_fastembed():
+        provider = FastembedProvider()
+    assert provider.model_name == "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 
 
 def test_known_dimensions() -> None:
-    assert FastembedProvider("BAAI/bge-m3").dimensions == 1024
-    assert FastembedProvider("intfloat/multilingual-e5-small").dimensions == 384
-    assert FastembedProvider("intfloat/multilingual-e5-base").dimensions == 768
+    with _inject_fake_fastembed():
+        assert FastembedProvider("intfloat/multilingual-e5-large").dimensions == 1024
+        assert (
+            FastembedProvider("sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2").dimensions
+            == 384
+        )
+        assert (
+            FastembedProvider("sentence-transformers/all-MiniLM-L6-v2").dimensions == 384
+        )
 
 
-def test_unknown_model_raises_on_dimensions() -> None:
-    provider = FastembedProvider("vendor/unknown-model")
-    with pytest.raises(ValueError, match="unknown fastembed model"):
-        _ = provider.dimensions
+def test_unknown_model_raises_at_construction() -> None:
+    """Unknown identifier surfaces at __init__, not at first embed."""
+    with _inject_fake_fastembed():
+        with pytest.raises(ValueError, match="is not in fastembed's catalog"):
+            FastembedProvider("vendor/unknown-model")
+
+
+def test_unknown_model_error_lists_available_models() -> None:
+    """The error message must guide the user — list real options."""
+    with _inject_fake_fastembed():
+        with pytest.raises(ValueError) as exc_info:
+            FastembedProvider("vendor/unknown-model")
+    msg = str(exc_info.value)
+    assert "Available models" in msg
+    assert "paraphrase-multilingual-MiniLM-L12-v2" in msg
+    assert "memory.embedding.model" in msg
+
+
+def test_retired_model_names_now_raise() -> None:
+    """Catalog drift: models the old config defaulted to no longer exist."""
+    with _inject_fake_fastembed():
+        for retired in (
+            "intfloat/multilingual-e5-small",
+            "BAAI/bge-m3",
+            "intfloat/multilingual-e5-base",
+        ):
+            with pytest.raises(ValueError, match="not in fastembed's catalog"):
+                FastembedProvider(retired)
 
 
 # ---------------------------------------------------------------------------
@@ -91,27 +146,26 @@ def test_unknown_model_raises_on_dimensions() -> None:
 
 def test_embed_empty_input_skips_load() -> None:
     """Empty input must not trigger the model load."""
-    provider = FastembedProvider("BAAI/bge-m3")
-    # Don't inject the fake — if load is attempted, the real (missing)
-    # fastembed import would raise.
-    assert provider.embed([]) == []
+    with _inject_fake_fastembed():
+        provider = FastembedProvider("intfloat/multilingual-e5-large")
+        assert provider.embed([]) == []
 
 
 def test_embed_lazy_loads_then_returns_embeddings() -> None:
     with _inject_fake_fastembed():
-        provider = FastembedProvider()  # default = e5-small
+        provider = FastembedProvider()  # default
         out = provider.embed(["hello", "world"])
 
     assert len(out) == 2
-    assert len(out[0]) == 384  # e5-small dim
+    assert len(out[0]) == 384  # MiniLM-L12 dim
     assert _FakeTextEmbedding.last_init_kwargs == {
-        "model_name": "intfloat/multilingual-e5-small"
+        "model_name": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     }
 
 
 def test_embed_loads_only_once() -> None:
     with _inject_fake_fastembed():
-        provider = FastembedProvider("BAAI/bge-m3")
+        provider = FastembedProvider("intfloat/multilingual-e5-large")
         provider.embed(["one"])
         first_model = provider._model
         provider.embed(["two"])
@@ -119,11 +173,22 @@ def test_embed_loads_only_once() -> None:
     assert first_model is second_model
 
 
-def test_missing_fastembed_raises_clear_error(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_warmup_loads_and_returns_duration() -> None:
+    """`warmup()` is what the wizard and AgentLoop boot call so the
+    first user-facing tool call doesn't pay the ~18s download."""
+    with _inject_fake_fastembed():
+        duration_ms = FastembedProvider.warmup()
+    assert duration_ms >= 0
+
+
+def test_missing_fastembed_raises_clear_error_at_init(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If fastembed isn't installed, construction fails with a fixable message."""
     monkeypatch.setitem(sys.modules, "fastembed", None)
-    provider = FastembedProvider("BAAI/bge-m3")
+    embedding_module._CATALOG_CACHE = None
     with pytest.raises(RuntimeError, match="fastembed is required"):
-        provider.embed(["x"])
+        FastembedProvider("sentence-transformers/all-MiniLM-L6-v2")
 
 
 # ---------------------------------------------------------------------------
@@ -134,22 +199,19 @@ def test_missing_fastembed_raises_clear_error(monkeypatch: pytest.MonkeyPatch) -
 def test_emits_load_event_on_first_use(monkeypatch: pytest.MonkeyPatch) -> None:
     events: list[tuple[str, dict]] = []
 
-    def capture(event_type: str, data: dict) -> None:
-        events.append((event_type, data))
-
     monkeypatch.setattr(
         "durin.memory.embedding.emit_tool_event",
-        capture,
+        lambda event_type, data: events.append((event_type, data)),
     )
 
     with _inject_fake_fastembed():
-        provider = FastembedProvider("BAAI/bge-m3")
+        provider = FastembedProvider("intfloat/multilingual-e5-large")
         provider.embed(["hello"])
 
     load_events = [e for e in events if e[0] == "memory.embedding.load"]
     assert len(load_events) == 1
     payload = load_events[0][1]
-    assert payload["model"] == "BAAI/bge-m3"
+    assert payload["model"] == "intfloat/multilingual-e5-large"
     assert payload["duration_ms"] >= 0
 
 
@@ -161,7 +223,7 @@ def test_emits_embed_event_per_batch(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     with _inject_fake_fastembed():
-        provider = FastembedProvider("BAAI/bge-m3")
+        provider = FastembedProvider("intfloat/multilingual-e5-large")
         provider.embed(["a", "b", "c"])
         provider.embed(["d"])
 
@@ -169,7 +231,7 @@ def test_emits_embed_event_per_batch(monkeypatch: pytest.MonkeyPatch) -> None:
     assert len(embed_events) == 2
     assert embed_events[0][1]["batch_size"] == 3
     assert embed_events[1][1]["batch_size"] == 1
-    assert all(e[1]["model"] == "BAAI/bge-m3" for e in embed_events)
+    assert all(e[1]["model"] == "intfloat/multilingual-e5-large" for e in embed_events)
     assert all(e[1]["duration_ms"] >= 0 for e in embed_events)
 
 
@@ -183,7 +245,7 @@ def test_load_event_fires_once_across_multiple_embed_calls(
     )
 
     with _inject_fake_fastembed():
-        provider = FastembedProvider("BAAI/bge-m3")
+        provider = FastembedProvider("intfloat/multilingual-e5-large")
         provider.embed(["a"])
         provider.embed(["b"])
         provider.embed(["c"])
@@ -197,12 +259,12 @@ def test_load_event_fires_once_across_multiple_embed_calls(
 # ---------------------------------------------------------------------------
 
 
-def test_config_default_uses_multilingual_e5_small() -> None:
+def test_config_default_uses_minilm_l12_multilingual() -> None:
     from durin.config.schema import MemoryEmbeddingConfig
 
     cfg = MemoryEmbeddingConfig()
     assert cfg.provider == "fastembed"
-    assert cfg.model == "intfloat/multilingual-e5-small"
+    assert cfg.model == "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     assert cfg.base_url is None
     assert cfg.api_key is None
     assert cfg.lazy_eviction is False
@@ -230,4 +292,7 @@ def test_config_memory_section_exposed_at_root() -> None:
     from durin.config.schema import Config
 
     cfg = Config()
-    assert cfg.memory.embedding.model == "intfloat/multilingual-e5-small"
+    assert (
+        cfg.memory.embedding.model
+        == "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    )

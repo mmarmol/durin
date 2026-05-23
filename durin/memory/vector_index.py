@@ -38,11 +38,22 @@ from durin.memory.storage import load_entry
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["VectorIndex", "vector_index_available"]
+__all__ = [
+    "VectorIndex",
+    "VectorIndexDimensionMismatch",
+    "vector_index_available",
+]
 
 
 _TABLE_NAME = "memory_entries"
 _INDEX_DIR = ".index.lance"
+
+
+class VectorIndexDimensionMismatch(RuntimeError):
+    """The on-disk index has a vector dimension that disagrees with the
+    embedding provider currently configured. Caller must rebuild via
+    :meth:`VectorIndex.rebuild_from_workspace` or pick a model that
+    matches the existing dimension."""
 
 
 def vector_index_available() -> bool:
@@ -70,13 +81,18 @@ class VectorIndex:
         """Add or replace one memory entry in the index.
 
         Idempotent on ``entry.id``: a prior row with the same id is
-        deleted before the new one is inserted.
+        deleted before the new one is inserted. Raises
+        :class:`VectorIndexDimensionMismatch` if the on-disk table
+        carries a different vector dim than the current provider —
+        caller should rebuild via :meth:`rebuild_from_workspace` or
+        revert the model change.
         """
         db = self._connect()
         record = self._record_for(entry, class_name, path)
         names = db.list_tables().tables
         if _TABLE_NAME in names:
             table = db.open_table(_TABLE_NAME)
+            self._guard_dim_match(table, len(record["vector"]))
             table.delete(f"id = '{_escape(entry.id)}'")
             table.add([record])
         else:
@@ -124,7 +140,12 @@ class VectorIndex:
     # ------------------------------------------------------------------
 
     def search(self, query: str, *, top_k: int = 10) -> list[dict[str, Any]]:
-        """Return the top-K nearest records to ``query`` (warm-tier shape)."""
+        """Return the top-K nearest records to ``query`` (warm-tier shape).
+
+        Raises :class:`VectorIndexDimensionMismatch` if the on-disk
+        table's vector dim doesn't match the current provider — the
+        ``memory_search`` tool catches this and falls back to grep.
+        """
         if not query.strip() or top_k <= 0:
             return []
         db = self._connect()
@@ -132,6 +153,7 @@ class VectorIndex:
             return []
         [vec] = self._provider.embed([query])
         table = db.open_table(_TABLE_NAME)
+        self._guard_dim_match(table, len(vec))
         rows = table.search(vec).limit(top_k).to_list()
         # Drop the raw vector from the payload — callers don't need it,
         # and 1024 floats per row is wasted bandwidth back to the agent.
@@ -173,14 +195,49 @@ class VectorIndex:
             "path": str(rel_path),
         }
 
+    _EMBED_BUDGET_CHARS = 1500  # ~375 tokens; e5-small max_seq is 512.
+
     @staticmethod
-    def _embed_text(entry: MemoryEntry) -> str:
-        """What we actually feed the embedder. Summary > headline > body."""
-        if entry.summary.strip():
-            return entry.summary
-        if entry.headline.strip():
-            return entry.headline
-        return entry.body
+    def _embed_text(entry: MemoryEntry, *, budget_chars: int | None = None) -> str:
+        """Build the text fed to the embedder.
+
+        Composes ``headline → summary → entities → body`` in that order
+        until the char budget is filled. Most distilled signal first
+        (headline / summary), then named entities, then the longest and
+        most truncatable part (body). Previously only ``summary`` (or
+        headline / body as fallback) was embedded, which gave poor recall
+        for corpus entries where the body carries the information and
+        summary is empty.
+        """
+        budget = budget_chars if budget_chars is not None else VectorIndex._EMBED_BUDGET_CHARS
+        parts: list[str] = []
+        used = 0
+        joiner_len = len("\n\n")
+
+        def _add(piece: str) -> None:
+            nonlocal used
+            piece = piece.strip()
+            if not piece:
+                return
+            remaining = budget - used
+            if remaining <= 0:
+                return
+            extra = joiner_len if parts else 0
+            allowed = remaining - extra
+            if allowed <= 0:
+                return
+            chunk = piece[:allowed]
+            parts.append(chunk)
+            used += len(chunk) + extra
+
+        _add(entry.headline)
+        _add(entry.summary)
+        if entry.entities:
+            _add("Entities: " + ", ".join(entry.entities))
+        _add(entry.body)
+
+        text = "\n\n".join(parts)
+        return text or entry.headline or "memory entry"
 
     def _connect(self):
         try:
@@ -201,6 +258,34 @@ class VectorIndex:
                 return
         if _TABLE_NAME in db.list_tables().tables:
             db.drop_table(_TABLE_NAME)
+
+    @staticmethod
+    def _guard_dim_match(table: Any, expected_dim: int) -> None:
+        """Raise if the table's vector column dim differs from ``expected_dim``.
+
+        Detects model-swap drift: a user changes ``memory.embedding.model``
+        from 384-dim to 1024-dim, the existing LanceDB table still has
+        384-dim vectors, and the next upsert/search would mix
+        incompatible vectors silently. Better to fail loudly with an
+        actionable message pointing at ``rebuild_from_workspace`` /
+        the ``/memory reindex`` CLI command.
+        """
+        try:
+            schema = table.schema
+            field = schema.field("vector")
+            actual_dim = field.type.list_size
+        except Exception:  # noqa: BLE001
+            # Unknown schema shape — let downstream LanceDB raise.
+            return
+        if actual_dim != expected_dim:
+            raise VectorIndexDimensionMismatch(
+                f"On-disk vector index uses {actual_dim}-dim vectors but the "
+                f"current embedding model produces {expected_dim}-dim. The "
+                f"model was probably changed in config. Run `/memory reindex` "
+                f"(or `durin memory reindex` from the CLI) to rebuild the "
+                f"index, or revert memory.embedding.model to the previous "
+                f"value to keep the existing index."
+            )
 
 
 def _escape(value: str) -> str:
