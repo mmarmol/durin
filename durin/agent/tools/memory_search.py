@@ -91,12 +91,10 @@ class MemorySearchTool(Tool):
         self._embedding_model = embedding_model
         self._vector_index: Optional[VectorIndex] = None
         self._vector_index_attempted = False
-        # W1+W2 (doc 24): lazy AliasIndex per tool instance, built once
-        # on first query. Sub-second for typical corpora. NOT shared
-        # across tools today (memory_store has its own — different
-        # responsibility); upgrade to shared via ctx is T2 if perf needs.
-        self._alias_index: Optional[AliasIndex] = None
-        self._alias_index_attempted = False
+        # Per doc 25 §2.C: alias index is shared process-wide via
+        # durin.memory.aliases_cache, so DreamConsolidator and
+        # EntityAbsorption see updates as soon as we (or they) call
+        # refresh_for / remove on it. No per-instance state needed.
 
     @property
     def name(self) -> str:
@@ -140,28 +138,26 @@ class MemorySearchTool(Tool):
         return self._vector_index
 
     def _get_alias_index(self) -> Optional[AliasIndex]:
-        """Lazy build the AliasIndex from disk on first invocation.
+        """Resolve the workspace-shared AliasIndex (doc 25 §2.C).
 
-        Per doc 24 W2: rebuild-only (no persistent sidecar). Sub-second
-        for typical corpora (<100 entity pages). Returns None if the
-        ``memory/entities/`` tree doesn't exist yet (cold workspace).
+        Built lazily on first call across the whole process via
+        :func:`durin.memory.aliases_cache.get_shared_alias_index`;
+        ``DreamConsolidator`` and ``EntityAbsorption`` consult the same
+        instance so a single workspace builds the index once even when
+        multiple consumers hit it in the same ``durin agent`` run.
+
+        Returns ``None`` when the index is empty — entity-aware
+        reranking is a no-op against an empty alias map, so surfacing
+        ``None`` lets the upstream code skip the rerank step entirely.
         """
-        if self._alias_index_attempted:
-            return self._alias_index
-        self._alias_index_attempted = True
-        entities_dir = self._workspace / "memory" / "entities"
-        if not entities_dir.exists():
-            return None
         try:
-            idx = AliasIndex(self._workspace / "memory")
-            idx.build()
-            if idx.size() == 0:
-                return None
-            self._alias_index = idx
+            from durin.memory.aliases_cache import get_shared_alias_index
+
+            idx = get_shared_alias_index(self._workspace / "memory")
         except Exception as exc:  # noqa: BLE001
-            logger.warning("alias_index build failed: %s", exc)
-            self._alias_index = None
-        return self._alias_index
+            logger.warning("alias_index resolve failed: %s", exc)
+            return None
+        return idx if idx.size() > 0 else None
 
     async def execute(self, **kwargs: Any) -> Any:
         query = str(kwargs.get("query") or "").strip()

@@ -274,16 +274,18 @@ async def test_e2e3_memory_search_rebuilds_alias_index_lazily(
 ) -> None:
     """First call to memory_search with no .aliases.json sidecar.
 
-    Setup: 2 entity pages on disk. No alias index cache. Tool is a fresh
-    instance (simulates cold start).
+    Setup: 2 entity pages on disk. Process-wide alias cache cleared
+    (doc 25 §2.C). Tool is a fresh instance (simulates cold start).
     Action: query that mentions a known alias.
-    Assert: tool internally builds the index, ranker activates.
+    Assert: shared cache builds on first execute, ranker activates.
     """
     from durin.agent.tools.memory_search import MemorySearchTool
+    from durin.memory.aliases_cache import _cache_size, _clear_all
     from durin.memory.embedding import FastembedProvider
     from durin.memory.entity_page import EntityPage
     from durin.memory.vector_index import VectorIndex
 
+    _clear_all()
     with _stub_fastembed():
         for slug, alias in [("marcelo", "Marcelo"), ("durin", "Durin")]:
             type_ = "person" if slug == "marcelo" else "project"
@@ -307,21 +309,21 @@ async def test_e2e3_memory_search_rebuilds_alias_index_lazily(
                 path=page_path,
             )
 
-        # Confirm cold start: no persisted alias index sidecar exists.
+        # Confirm cold start: no persisted alias index sidecar exists
+        # and the process-wide shared cache holds nothing yet.
         assert not (tmp_path / "memory" / ".aliases.json").exists()
+        assert _cache_size() == 0
 
         tool = MemorySearchTool(workspace=tmp_path, embedding_model=_TEST_MODEL)
-        # _get_alias_index() is called inside execute() on first invocation.
-        assert tool._alias_index is None
         out = await tool.execute(
             query="ask Marcelo about the design", scope="dreamed",
         )
 
-    # Lazy build happened.
-    assert tool._alias_index is not None
-    assert tool._alias_index_attempted is True
+    # The shared cache built the workspace's index lazily on first execute.
+    assert _cache_size() == 1
     # Query matched the alias, ranker activated.
     assert out["ranking"] == "entity_aware"
+    _clear_all()
 
 
 # ---------------------------------------------------------------------------

@@ -60,45 +60,159 @@ Lista revisada el 2026-05-23 grep-validando cada claim. Los ítems
 verificados se citan con su origen archivado y el motivo de deferral.
 T2.B fue descartado (ya está implementado). T2.C fue re-scoped.
 
-### §2.0 — Orden lógico (gate central)
+### §2.0 — Orden lógico
 
-**T2.E es prerequisite estructural** de §2.A, §2.D y §2.F. Las gates
-escritas en archived doc 21 §4 son métricas observables — sin
-agregación, no podemos justificar abrir los otros:
+Dos lecturas posibles del horizon, no excluyentes:
 
-> "T1 telemetría muestra >50 entries acumuladas con tags. Manual dreams
-> funcionan bien (output coherente, 0 hallucinations detectadas en
-> sample de 10)."  — archived doc 21 §4
+**Foundational (complete-T1)** — cerrar gaps que doc 18 prometía pero
+el wiring T1 no terminó. Silent quality loss si no se cierran:
 
-Si se va a abrir T2, empezar por §2.E.
+- **§2.H** Fragment/canonical retrieval contract (doc 18 §6 read-time
+  reconciliation prometido, no entregado en delivery al LLM).
 
-### §2.A — Auto-trigger del DreamConsolidator post-write
+**Automatización + features T2**:
 
-**Estado verificado**: `grep -rn "DreamConsolidator(" durin/ --include="*.py"`
-devuelve solo `durin/cli/memory_cmd.py:241` (cmd_dream). Sin cron, sin
-hook, sin trigger automático. El `agent.dream.Dream` cron-scheduled es
-el sistema legacy sobre MEMORY.md, no es entity-centric.
+- §2.E telemetry aggregation — **SHIPPED**.
+- §2.C shared AliasIndex via ctx — **SHIPPED** (2026-05-24).
+- §2.A.1 per-entity dispatcher (4 triggers).
+- §2.A.2 cross-session learning — diferido (requiere doc 26).
+- §2.D auto-absorb.
+- §2.F eager-inject context block (asume §2.H primero).
+- §2.G eviction/compresión results.
 
-**Origen**: archived doc 21 §3 T2.1.
+§2.H es el más urgente porque la promesa de doc 18 §6 ("LLM reconcilia
+con timestamps y contexto") está rota en la frontera de delivery — el
+LLM no recibe los timestamps ni los markers que necesita para
+reconciliar. Hasta cerrar §2.H, el valor de dream automático (§2.A.1)
+se pierde en el delivery.
 
-**Por qué se difirió** (archived doc 21 §2 C1):
+### §2.A — Auto-trigger del DreamConsolidator (split por scope)
 
-> "Cold start letal. Sin entity pages, alias_index está vacío... Hasta
-> que dream corra ≥1 vez, ningún componente nuevo aporta."
+Doc 18 §6 lista 4 triggers posibles. Verificación contra código (2026-05-23
+20:30): solo `cmd_dream` (`durin/cli/memory_cmd.py:241`) invoca
+`DreamConsolidator`. El cron-scheduled `agent.dream.Dream` (system job
+"dream" en `cli/commands.py:1559`) es el sistema **legacy** sobre
+`MEMORY.md`/`SOUL.md`, NO el entity-centric.
 
-Ship manual primero, ver fallar lo complejo en uso real, luego medir.
+Hay que separar dos cosas que se mezclaban en versiones previas de este
+doc:
 
-**Gate para abrir**: §2.E activo + >50 entries acumuladas tageadas +
-sample de 10 manual dreams sin hallucination.
+#### §2.A.1 — Per-entity dispatcher (4 triggers que comparten runtime)
+
+**Qué hace**: corre `consolidate_entity(ref, entries)` sobre entidades
+con entries post-cursor pending. Es la **automatización** de lo que
+hoy es manual via `durin memory dream`. NO produce aprendizajes cross-
+sesión nuevos — solo procesa entries acumuladas en disco.
+
+Triggers (doc 18 §6, no opcionales):
+
+1. **Cron diario**: como OpenClaw (`0 7 * * *` o equivalente). Predecible.
+2. **Post-compaction**: hook en `Consolidator.maybe_consolidate_by_tokens`
+   — el contexto ya está siendo procesado, costo amortizado.
+3. **Session-close**: idle timer + `/quit`. Como OpenClaude (turn-end
+   hook con gates).
+4. **Threshold per-entity**: cuando una entidad acumula N entries
+   post-cursor. Como Hermes per-N-turns (pero a nivel entidad).
+
+Todos comparten:
+- Forked async (daemon thread o asyncio task) — nunca bloquea el main loop.
+- Lock file `memory/.dream.lock` para prevenir runs concurrentes
+  (ya gitignored por `EntityAbsorption`).
+- Catch-up en next start si la máquina estaba off (patrón
+  `HeartbeatService`).
+- Telemetry: `memory.dream.start`, `memory.dream.end`,
+  `memory.dream.skipped` (con razón).
+
+**Costo estimado**: ~150 LOC (cron + lock + dispatch + 4 entry points)
++ ~250 LOC tests + ~20 LOC telemetry. Total ~420 LOC.
+
+#### §2.A.2 — Daily cross-session learning (deferido)
+
+**Qué hace** (lo que el cron diario debería SER eventualmente, no lo
+que va a ser en MVP): un pass distinto que ve **múltiples entidades a
+la vez** y busca patterns emergentes que no son visibles per-entidad:
+
+- Cross-entity pattern detection ("Marcelo + project:X siempre juntos")
+- Trend tracking ("user shifted preference A→B en 5 sesiones")
+- Meta-learning ("session quality degrades en sesiones largas")
+- Ontology evolution semántica ("topic:auth ≈ topic:authn → merge?")
+
+**Estado verificado**: el prompt actual del consolidator
+(`durin/templates/dream/consolidator.md:24`) le pide al LLM
+"tomar N observaciones sobre **una sola entidad**". No hay path
+cross-entity en código ni en prompt.
+
+**Por qué se difiere**: requiere diseño nuevo — no es trivial.
+Preguntas abiertas: ¿formato del meta-insight (¿nuevo tipo de page?
+¿skill? ¿meta-entity?), ¿cómo se consume en retrieval, frecuencia,
+costo en tokens. Doc 18 §6 lo menciona como "Detección de patterns
+cross-day" en la sección "v1" del prompt como future work, no como
+capability.
+
+**Costo estimado**: ~400+ LOC + diseño previo en doc 26. **No entra
+en el MVP de §2.A**.
+
+### §2.H — Fragment/canonical retrieval contract
+
+**Estado verificado** (2026-05-23 22:50): el patrón "memoria principal
++ fragmentos recientes marcados con timestamp + pointer al canonical"
+**está diseñado en docs pero NO en el contrato de delivery al LLM**.
+
+Doc 18 §6 línea 303 dice:
+
+> "La página consolidada y los entries post-cursor coexisten en los
+> resultados de retrieval; el LLM reconcilia en read-time con
+> timestamps y contexto."
+
+Y doc 18 §11 outcome A5:
+
+> "Read-time reconciliation funciona: el LLM lee página consolidada +
+> entries post-cursor coexistentes y reconcilia correctamente"
+
+**Lo que falta en código** (los dos paths de delivery):
+
+| Path | Cómo entrega | Gap |
+|---|---|---|
+| **Eager** (system prompt) | `read_hot_layer().render()` en `agent/context.py:200` | Lee de `memory/<class>/*.md` (las 4 clases viejas), NO de `memory/entities/<type>/<slug>.md`. Las páginas canónicas nuevas no aparecen en el system prompt. |
+| **Lazy** (tool result) | `memory_search` → `Result.to_dict()` | Descarta `valid_from`, `entities`, `class_name`. Sin marker textual estilo `=== FRAGMENT (post-cursor, ts=...) ===` o `=== CANONICAL (rev N) ===`. El LLM tiene que inferir del URI prefix, brittle. |
+
+Precedente: el patrón `=== ARCHIVED SUMMARY (source, last active TS,
+N msgs condensed) ===` para compaction (bitácora 02 línea 417) muestra
+que durin **ya sabe** hacer markers explícitos para distinguir
+narrativa de real. Aplicar la misma idea a memory retrieval.
+
+**Por qué importa**: sin §2.H, incluso después de que dream consolida
+correctamente, **el LLM no puede usar la distinción canonical vs
+fragment**. La promesa de doc 18 §6 ("read-time reconciliation") está
+rota en la frontera de delivery — silent quality loss.
 
 **Diseño necesario**:
-- Disparador: post-N-entries por entidad / post-time / post-session-close.
-- ¿LLM-judge antes de consolidar? Probablemente no para v1 — primero
-  manual confirm via CLI con queue de pending.
-- Telemetría: cost-per-day del dream automático.
 
-**Costo estimado**: medio. ~80 LOC + plan de validación contra corpus
-durin real (no sintético).
+1. **Lazy path**: extender `Result.to_dict()` a incluir
+   `valid_from`, `entities`, `class_name`. Agregar markers textuales
+   al output:
+   - `class_name=="entity_page"` → `=== CANONICAL: <ref> (updated <date>) ===\n<body>\n=== END CANONICAL ===`
+   - `class_name=="episodic"` → `=== FRAGMENT: <ref?>, ts=<valid_from> (post-cursor) ===\n<body>\n=== END FRAGMENT ===`
+
+2. **Eager path**: `hot_layer` lee de `memory/entities/<type>/*.md`
+   en lugar de (o junto a) las 4 clases viejas. Misma convención de
+   markers.
+
+3. **Documentar el contrato** en `docs/arch/memory.md` para que future
+   tools (eager-inject §2.F, eviction §2.G) lo respeten.
+
+**Costo estimado**: ~150 LOC (extender Result + marker rendering +
+hot_layer source switch) + ~120 LOC tests + ~30 LOC doc update. Total
+~300 LOC.
+
+**Relación con otros items**:
+- §2.F (eager-inject) construye sobre §2.H — eager-inject sin
+  fragment/canonical contract reproduce el mismo gap a otra escala.
+- §2.A.1 puede shipear sin §2.H, pero su valor compounding es menor:
+  el dream produce páginas que el LLM no usa correctamente.
+
+Considerar §2.H como **complete-T1**, no T2 — cierra un gap que doc 18
+§6 prometía pero el wiring T1 (doc 24) no terminó.
 
 ### §2.D — Auto-absorb post-dream
 
@@ -221,33 +335,42 @@ de "results al modelo / results útiles" muestra ratio bajo.
 **Costo estimado**: bajo si solo es threshold + truncation. Alto si
 implica L2.
 
-### §2.C — Shared AliasIndex via ctx (re-scoped)
+### §2.C — Shared AliasIndex via ctx (SHIPPED 2026-05-24 00:15)
 
-**Estado verificado**: `grep -n "AliasIndex" durin/`:
-
-| Consumer | Construcción | Línea |
-|---|---|---|
-| `memory_search` | `_get_alias_index()` lazy | tools/memory_search.py:156 |
-| `DreamConsolidator` | `_get_alias_index()` | memory/dream.py:507 |
-| `EntityAbsorption` | `_get_alias_index()` | memory/absorption.py:247 |
-
-3 builders independientes en runtime (no 2 como afirmaba la versión
-previa de este doc — `memory_store` NO usa AliasIndex). El build es
-sub-segundo per docstring de aliases_index.py:24.
+**Estado pre-fix**: 3 builders independientes en runtime
+(`memory_search`, `DreamConsolidator`, `EntityAbsorption`), cada uno
+con su `_get_alias_index()` que parseaba `memory/entities/<type>/*.md`
+de cero. Sub-segundo per build pero redundante cuando >1 consumer corre
+en el mismo proceso.
 
 **Origen**: archived doc 24 W2 ("upgrade to shared via ctx is T2 if
-perf needs"). Pero la afirmación de doc 24 sobre "memory_store has its
-own" era incorrecta — pasa lo mismo con doc 25 v1.
+perf needs"). Implementado en doc 25 como §2.C.
 
-**Por qué se difirió**: no es bloqueante. Build sub-segundo + los 3
-consumers raramente corren en el mismo `durin agent` run (search es
-normal usage, dream + absorb son comandos CLI dedicados).
+**Solución**: `durin/memory/aliases_cache.py` — process-wide singleton
+keyed por `memory_root`:
 
-**Gate para abrir**: §2.E activo + métrica muestra que el mismo
-proceso construye AliasIndex >1 vez (e.g. agent que invoca search +
-algún flow que también lance dream/absorb).
+- `get_shared_alias_index(memory_root) -> AliasIndex`: lazy build con
+  double-checked locking. Workspace cold → empty index (no excepción).
+- `invalidate_alias_index(memory_root)`: drop defensivo para edits
+  out-of-band o tests.
+- `_clear_all()` / `_cache_size()`: helpers de test.
 
-**Costo estimado**: bajo (~40 LOC + invalidation hooks post-dream/absorb).
+**Propagación de mutaciones sin invalidación**: el contrato existente
+de `AliasIndex.refresh_for()` / `remove()` muta el map in-place. Como
+los 3 consumers ahora comparten la **misma instancia**, las
+escrituras de uno se ven inmediatamente en los otros — no hay
+necesidad de invalidate post-dream/post-absorb (la opción defensiva
+está ahí por si futuras paths bypass el contrato).
+
+**Wiring**: cada `_get_alias_index()` consulta el cache excepto si
+recibió `alias_index=...` por constructor (inyección de tests).
+
+**Tests**: 15 nuevos en `tests/memory/test_aliases_cache.py` cubren
+sharing, propagación de refresh/remove, invalidate, concurrencia (8
+threads race-build → 1 instancia), wiring de los 3 consumers. Suite
+total: 4396 passing (+15).
+
+**Commit**: ver bitácora 2026-05-24.
 
 ### §2.B — Identifier extraction (descartado — ya implementado)
 
@@ -308,31 +431,44 @@ lecciones).
 
 ---
 
-## §5 — Próximos pasos sugeridos (no decididos)
+## §5 — Próximos pasos (modo MVP completion)
 
-Con §2.E ya shipped, los caminos quedan:
+Estrategia: completar las piezas necesarias para que el modelo
+entity-centric funcione end-to-end antes de adoptar uso intensivo.
+**No** modo "use it, measure, decide later" — modo "build the minimum
+viable feature set, then adopt".
 
-### Opción 1: Daily-driving + medir
+### Opción α — §2.H primero (recomendado por consecuencias técnicas)
 
-- Usar durin con memory.enabled en uso real.
-- Pasar dream manual cuando convenga.
-- Correr `durin memory stats --days 30` periódicamente.
-- Re-evaluar en 2-4 semanas si algún ítem T2 cruza su gate.
-- Capturar nuevos pendings en doc 20.
+Cierra el gap de delivery al LLM. Sin esto, dream auto/manual produce
+salida que el LLM no usa correctamente — silent quality loss.
 
-### Opción 2: UX ítem específico de doc 20
+- Sub-step α.1: extender `Result.to_dict()` + markers textuales (lazy).
+- Sub-step α.2: hot_layer lee de entity pages (eager).
+- Sub-step α.3: documentar el contrato en arch/memory.md.
 
-P4 (entity cards web) o P5 (memory ops session viewer) — ambos
-visualizan lo que ya existe en disco/JSONL, sin tocar el sistema de
-memoria. P5 además puede consumir el aggregator de §2.E directamente
-(reusar `compute_stats` en el endpoint).
+Después podemos shipear §2.A.1 con el delivery ya correcto.
 
-### Opción 3: T2 plan detallado de algún item específico
+### Opción β — §2.A.1 primero
 
-Solo si §4 criterios se cumplen para ese item concreto (incluyendo
-ahora **criterio 3** con datos reales de `durin memory stats`). Doc 26
-con clusters de riesgo (mismo patrón que archived 23/24).
+Auto-trigger con los 4 disparadores. Acelera la automatización pero
+deja el gap de §2.H sin cerrar — el dream corre solo pero el LLM ve
+sus outputs sin markers/timestamps.
+
+### Opción γ — §2.C (SHIPPED 2026-05-24)
+
+Limpieza arquitectónica entregada como warmup antes de los items
+mayores. Sin dependencias hacia α/β; los 3 consumers ahora comparten
+una `AliasIndex` por workspace via `durin.memory.aliases_cache`.
+
+### Otras combinaciones
+
+- α + β en serie: cierra primero el contrato (§2.H), después
+  automatiza dream (§2.A.1). Total ~720 LOC.
+
+§2.D (auto-absorb), §2.F (eager-inject), §2.G (eviction) son más
+caros y dependen al menos de α.
 
 ---
 
-## Last updated: 2026-05-23 (post T1 wiring + e2e tests doc 24 closure)
+## Last updated: 2026-05-24 00:15 (§2.C shared AliasIndex shipped — 15 tests, suite 4396 passing)

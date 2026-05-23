@@ -503,12 +503,17 @@ class DreamConsolidator:
         return self._git_repo
 
     def _get_alias_index(self) -> AliasIndex:
-        if self._alias_index is None:
-            self._alias_index = AliasIndex(self.memory_root)
-            # Rebuild from disk each boot (per doc 23 T1.4 + G14: no
-            # persistent sidecar). Sub-second for typical corpus sizes.
-            self._alias_index.build()
-        return self._alias_index
+        # Injected index (tests) takes precedence; otherwise resolve the
+        # workspace-shared instance from durin.memory.aliases_cache
+        # (doc 25 §2.C). The shared map is mutated in place by
+        # refresh_for / remove during apply(), so memory_search and
+        # EntityAbsorption see this dream's writes immediately without
+        # explicit invalidation.
+        if self._alias_index is not None:
+            return self._alias_index
+        from durin.memory.aliases_cache import get_shared_alias_index
+
+        return get_shared_alias_index(self.memory_root)
 
 
 # Fallback used when durin/templates/dream/consolidator.md is missing.

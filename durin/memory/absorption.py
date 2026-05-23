@@ -243,12 +243,16 @@ class EntityAbsorption:
     # ------------------------------------------------------------------
 
     def _get_alias_index(self) -> AliasIndex:
-        if self._alias_index is None:
-            self._alias_index = AliasIndex(self.memory_root)
-            # Rebuild from disk each boot (per doc 23 T1.4): no persistent
-            # sidecar. Sub-second for typical corpus sizes.
-            self._alias_index.build()
-        return self._alias_index
+        # Injected index (tests) takes precedence; otherwise resolve the
+        # workspace-shared instance from durin.memory.aliases_cache
+        # (doc 25 §2.C). The shared map is mutated in place by refresh_for
+        # and remove during absorb(), so memory_search and DreamConsolidator
+        # see those writes immediately.
+        if self._alias_index is not None:
+            return self._alias_index
+        from durin.memory.aliases_cache import get_shared_alias_index
+
+        return get_shared_alias_index(self.memory_root)
 
     def _get_git_repo(self) -> GitRepo:
         if self._git_repo is None:

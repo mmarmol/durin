@@ -1483,3 +1483,68 @@ in production. Tests didn't catch it because they patched
 `_workspace_root` directly — illustrating the `feedback-verify-live`
 principle: green unit tests are not feature verification.
 
+## Shared AliasIndex via process cache — §2.C (2026-05-24)
+
+**Context**: After T1 shipped (entity-centric memory + 4 wiring W1-W4),
+three runtime consumers each built their own `AliasIndex` on first use:
+
+| Consumer | Where |
+|---|---|
+| `MemorySearchTool` | `agent/tools/memory_search.py` |
+| `DreamConsolidator` | `memory/dream.py` |
+| `EntityAbsorption` | `memory/absorption.py` |
+
+Each rebuild parses every `memory/entities/<type>/*.md` page. Sub-second
+per build but redundant when more than one consumer hits the workspace
+in the same process. Archived doc 24 W2 flagged this for T2 ("upgrade
+to shared via ctx is T2 if perf needs"); doc 25 §2.C captured the
+re-scoped item (3 builders, not 2 as the original archived doc
+incorrectly assumed).
+
+**Decision: process-wide cache, not `ToolContext`-scoped**. `ToolContext`
+is per-tool-call inside the agent loop, but `DreamConsolidator` and
+`EntityAbsorption` are invoked from `cli/memory_cmd.py` (CLI subcommands)
+where there is no `ToolContext`. A module-level cache keyed by
+`memory_root` covers all three call sites uniformly.
+
+**Module**: `durin/memory/aliases_cache.py`.
+
+- `get_shared_alias_index(memory_root) -> AliasIndex`: lazy build with
+  double-checked locking, returns an empty index for cold workspaces
+  (callers check `size() == 0` if they need that signal).
+- `invalidate_alias_index(memory_root)`: defensive drop for out-of-band
+  edits and tests. Not called from production code paths in v1 because
+  the existing `refresh_for` / `remove` API mutates the shared instance
+  in place — writes by dream or absorb become visible to search
+  immediately without explicit invalidation.
+- `_clear_all()` / `_cache_size()`: test helpers (production never
+  calls these).
+
+**Refactor surface**: each `_get_alias_index()` in the three consumers
+now falls through to `get_shared_alias_index()` unless `alias_index=...`
+was injected via constructor (tests). The per-instance `_alias_index`
+flag in `MemorySearchTool` is gone — superseded by the shared cache.
+
+**Tests** (15 new in `tests/memory/test_aliases_cache.py`):
+- Basic sharing: same root → same instance, different roots → independent.
+- Cold workspace → empty index (no exception).
+- Refresh + remove propagate across consumers without invalidation.
+- Concurrent first-call: 8 threads race, exactly one build runs.
+- Each of the 3 real consumers resolves to the shared cache.
+- Injected `alias_index` bypasses the shared cache (test escape hatch).
+
+The pre-existing E2E test `test_e2e3_memory_search_rebuilds_alias_index_lazily`
+was updated: it asserted on the removed per-instance flags
+(`tool._alias_index`, `tool._alias_index_attempted`); now it asserts
+on `aliases_cache._cache_size()` directly.
+
+**Suite**: 4396 passing, 16 skipped (+15 vs pre-§2.C). Live verify
+against the real binary still works (`durin memory absorb-suggest` on a
+real workspace returns clean output).
+
+**LOC actual vs estimated**: ~110 LOC source (cache module) + ~250 LOC
+tests + 3 small consumer refactors. Estimate in doc 25 was "~40 LOC +
+invalidation hooks" — underestimated because the test coverage was
+non-trivial (concurrency, per-consumer wiring, injection escape
+hatch). Source itself was roughly on target.
+
