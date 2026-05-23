@@ -213,18 +213,20 @@ def cmd_dream(
                 console.print(f"    ... +{len(entries) - 3} more")
         return
 
-    # Real consolidation
-    from durin.memory.dream import DreamConsolidator, DreamError
+    # Real consolidation routes through DreamRunner (doc 25 §2.A.1 β.2)
+    # so manual runs share the same lock + telemetry surface as the
+    # auto-triggers — prevents a user `durin memory dream` from racing
+    # the cron tick that fires at 3am. Throttle is disabled for the
+    # manual path: the user explicitly asked, respect that.
+    from durin.memory.dream_runner import DreamRunner
     from durin.memory.vector_index import VectorIndex, vector_index_available
 
     cfg = load_config()
 
-    # W3 (doc 24): pass a VectorIndex so the dream's apply() upserts the
-    # consolidated entity_page into the index. Without this, entity pages
-    # exist on disk but never enter LanceDB and memory_search can't find
-    # them. Best-effort: if memory.enabled=false or fastembed missing,
-    # fall through to dream without indexing (markdown remains source of
-    # truth).
+    # W3 (doc 24): pass a VectorIndex so dream.apply() upserts the
+    # consolidated entity_page into LanceDB. Best-effort: if
+    # memory.enabled=false or fastembed missing, fall through without
+    # indexing (markdown remains source of truth).
     vi: VectorIndex | None = None
     try:
         if cfg.memory.enabled and vector_index_available():
@@ -238,21 +240,41 @@ def cmd_dream(
             "entity pages will not be indexed[/yellow]"
         )
 
-    consolidator = DreamConsolidator(workspace=workspace, vector_index=vi)
+    runner = DreamRunner(
+        workspace=workspace,
+        min_seconds_between_runs=0,
+        model=cfg.memory.dream.model_override,
+        vector_index=vi,
+    )
 
-    for ent_ref, entries in pending.items():
-        console.print(f"\n[bold]{ent_ref}[/bold]: {len(entries)} entries")
-        try:
-            result = consolidator.consolidate_entity(ent_ref, entries)
-            sha = consolidator.apply(ent_ref, result)
-            if sha:
-                console.print(f"  [green]✓[/green] Consolidated → {sha[:8]}")
-            else:
-                console.print(f"  [dim]= No changes (idempotent)[/dim]")
-        except DreamError as exc:
-            console.print(f"  [red]✗[/red] {exc}")
-        except Exception as exc:  # noqa: BLE001
-            console.print(f"  [red]✗[/red] unexpected: {exc}")
+    def _on_progress(ent_ref: str, msg: str) -> None:
+        console.print(f"  [bold]{ent_ref}[/bold] {msg}")
+
+    result = runner.run(
+        trigger="manual",
+        entity_filter=entity,
+        on_progress=_on_progress,
+    )
+    if result.ran:
+        ok = result.entities_consolidated
+        bad = result.entities_failed
+        console.print(
+            f"\n[green]✓[/green] Consolidated {ok} entit{'y' if ok == 1 else 'ies'} "
+            f"in {result.duration_s:.1f}s"
+        )
+        if bad:
+            console.print(f"[red]✗[/red] {bad} failed (see logs)")
+    elif result.reason == "concurrent_lock":
+        console.print(
+            "[yellow]Another dream pass is already running "
+            f"({(workspace / 'memory' / '.dream.lock').name}); skipped.[/yellow]"
+        )
+    elif result.reason == "no_pending":
+        # Should not happen — we filtered above — but cover the race
+        # where another process consumed everything between checks.
+        console.print("[green]No pending consolidations (just absorbed).[/green]")
+    else:
+        console.print(f"[yellow]Skipped: {result.reason}[/yellow]")
 
 
 # ---------------------------------------------------------------------------

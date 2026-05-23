@@ -1624,6 +1624,53 @@ def _run_gateway(
             f"cron {mem_dream_cfg.cron}"
         )
 
+    # Doc 25 §2.A.1 β.2: wire the post-compaction + session-close
+    # hooks so dream picks up consolidated context while the signal
+    # is fresh. Background daemon threads keep the agent loop
+    # responsive. DreamRunner's own lock + throttle absorbs collisions
+    # with the daily cron. `hasattr` checks keep test scaffolds
+    # (_FakeAgentLoop without consolidator / on_session_close) working
+    # — production AgentLoop always has both attributes.
+    if mem_dream_cfg.enabled and (
+        mem_dream_cfg.post_compaction or mem_dream_cfg.on_session_close
+    ):
+        import threading as _threading_dream
+
+        from durin.memory.dream_runner import DreamRunner as _DreamRunner_h
+
+        def _spawn_dream(trigger: str, session_key: str) -> None:
+            ws = config.workspace_path
+
+            def _run() -> None:
+                try:
+                    runner = _DreamRunner_h(
+                        workspace=ws,
+                        min_seconds_between_runs=mem_dream_cfg.min_seconds_between_runs,
+                        model=mem_dream_cfg.model_override,
+                    )
+                    runner.run(trigger=trigger)
+                except Exception:
+                    logger.exception("%s dream failed (%s)", trigger, session_key)
+
+            _threading_dream.Thread(
+                target=_run, daemon=True, name=f"dream-{trigger}",
+            ).start()
+
+        if mem_dream_cfg.post_compaction and hasattr(agent, "consolidator"):
+            agent.consolidator.on_post_compaction = (
+                lambda k: _spawn_dream("post_compaction", k)
+            )
+            console.print(
+                "[green]✓[/green] Memory dream: post-compaction trigger armed"
+            )
+        if mem_dream_cfg.on_session_close and hasattr(agent, "on_session_close"):
+            agent.on_session_close = (
+                lambda k: _spawn_dream("session_close", k)
+            )
+            console.print(
+                "[green]✓[/green] Memory dream: session-close trigger armed"
+            )
+
     async def _open_browser_when_ready() -> None:
         """Wait for the gateway to bind, then point the user's browser at the webui."""
         if not open_browser_url:

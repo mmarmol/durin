@@ -506,6 +506,14 @@ class Consolidator:
         # so all sessions through one Consolidator share the same window
         # size config without each AgentRunSpec carrying its own.
         self.post_compaction_guard = PostCompactionLoopGuard()
+        # Doc 25 §2.A.1 β.2: optional callback fired once per
+        # ``maybe_consolidate_by_tokens`` call that produced at least
+        # one summary. Wiring layer (``cli/commands.py``) sets this to
+        # a thunk that dispatches a background DreamRunner pass so
+        # consolidated context turns into entity-page updates while the
+        # signal is fresh. Sync callable — must not block; the
+        # callback owns its own threading if needed.
+        self.on_post_compaction: Callable[[str], None] | None = None
 
     def set_provider(
         self,
@@ -955,6 +963,19 @@ class Consolidator:
             # ``(name, args, result)`` triples trip the guard.
             if last_summary:
                 self.post_compaction_guard.arm(session.key)
+                # Doc 25 §2.A.1 β.2: notify the post-compaction hook so
+                # the entity-centric dream can pick up freshly-archived
+                # episodic context while the signal is hot. Best-effort:
+                # callback failures must NOT break consolidation —
+                # markdown remains the source of truth.
+                if self.on_post_compaction is not None:
+                    try:
+                        self.on_post_compaction(session.key)
+                    except Exception:
+                        logger.exception(
+                            "post-compaction hook raised for %s",
+                            session.key,
+                        )
         finally:
             lock.release()
 
