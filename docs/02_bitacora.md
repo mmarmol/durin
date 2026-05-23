@@ -1720,3 +1720,95 @@ lock/throttle/telemetry design.
   the CLI to route through `DreamRunner` so manual runs also pick up
   the lock/throttle).
 
+## §2.A.1 dispatcher β.2 — 3 sub-daily triggers + manual route refactor (2026-05-24)
+
+**Context**: β.1 shipped the runner + cron daily. β.2 wires the
+remaining three triggers from doc 18 §6 plus refactors the manual
+CLI command to go through `DreamRunner` so all five entry points
+share the same lock / throttle / telemetry surface.
+
+**Manual route refactor — `cli/memory_cmd.py:cmd_dream`**:
+The dry-run preview stays in the CLI (cosmetic). The real path
+constructs `DreamRunner(min_seconds_between_runs=0)` so the user's
+explicit invocation skips the throttle, and calls `runner.run(
+trigger="manual", entity_filter=entity, on_progress=...)`. Progress
+callback feeds rich-printed lines per entity. Concurrent-lock case
+prints a friendly notice instead of silently no-op-ing.
+
+**Threshold trigger — `MemoryStoreTool._maybe_dispatch_threshold_dream`**:
+After every successful write that tagged at least one entity, the
+tool:
+1. Reads `dream_config` (injected via `create(ctx)` from
+   `ctx.config.memory.dream`).
+2. Returns early if config is missing / disabled / threshold ≤ 0.
+3. Calls `_discover_pending_consolidations(memory_root, entity_filter=None)`
+   once to count post-cursor entries per entity.
+4. For each entity that crossed `threshold_entries`, spawns a daemon
+   thread named `dream-threshold-<ref>` that calls
+   `DreamRunner.run(trigger="threshold", entity_filter=ref)`.
+
+Daemon threads (not asyncio tasks) keep the implementation simple —
+`memory_store.execute` is already async, but the DreamRunner is sync
+and we'd need `to_thread` anyway. Threads daemon so process shutdown
+doesn't wait on them. The runner's own lock + throttle absorbs bursts
+when many threshold-crossings happen in quick succession.
+
+**Post-compaction hook — `Consolidator.on_post_compaction`**:
+New attribute on `Consolidator` (default `None`). Fires inside the
+`maybe_consolidate_by_tokens` finally block, right after
+`post_compaction_guard.arm(...)`, when `last_summary` is truthy.
+Wrapped in try/except so a buggy hook never breaks consolidation —
+markdown is the source of truth.
+
+Wired in `cli/commands.py` startup: when `memory.dream.post_compaction`
+is True, set `agent.consolidator.on_post_compaction` to a thunk that
+spawns a daemon thread (same pattern as the threshold trigger)
+calling `DreamRunner.run(trigger="post_compaction")`.
+
+**Session-close hook — `AgentLoop.on_session_close` + `cmd_new`**:
+New attribute on `AgentLoop` (default `None`). `cmd_new` calls it
+after archiving the prior session, with the same try/except defense.
+`getattr(loop, "on_session_close", None)` keeps test scaffolds
+(SimpleNamespace loops) working without the attribute.
+
+Wired similarly: when `memory.dream.on_session_close` is True, set
+`agent.on_session_close` to a thunk spawning a daemon thread with
+`trigger="session_close"`. Independent of `post_compaction` — a user
+may want one on and the other off.
+
+**`hasattr(agent, ...)` defense in wiring**: the cli/commands.py
+startup also handles fake `_FakeAgentLoop` test scaffolds that don't
+have `consolidator` / `on_session_close` attributes. Both wiring
+branches gate on `hasattr` before assigning.
+
+**Tests** (11 new in `tests/memory/test_dream_triggers_beta2.py`):
+- Consolidator source declares `on_post_compaction` + call site
+  exists (source-level pin to avoid spinning up the full deps tree).
+- Hook delivery semantics: callback invoked with session key.
+- `cmd_new` invokes `loop.on_session_close` when set, handles missing
+  attribute, swallows hook exceptions.
+- `AgentLoop` source declares `on_session_close` attribute.
+- Threshold: does not dispatch below count, dispatches when crossed,
+  disabled when config None, disabled when threshold=0, dispatches
+  per-entity when multiple cross.
+
+Plus pre-existing fixes:
+- `cmd_new` now uses `getattr(loop, "on_session_close", None)` so the
+  tests in `tests/agent/test_unified_session.py` (which build
+  SimpleNamespace loops without the attribute) keep passing.
+
+**Suite**: 4442 passing (+11 vs β.1 close). Live verify: `durin status`
++ `durin memory dream --dry-run` both clean on real workspace.
+Smoke e2e exercised all 4 triggers end-to-end (cron_daily via real
+runner, threshold via real memory_store hook, post_compaction +
+session_close via direct hook invocation pattern).
+
+**LOC actual**: ~150 source (runner refactor + 3 hook integrations
++ wiring) + ~370 tests. Estimate in doc 25 β was "alto" for D
+(post-compaction) and the user said "los 4 tiene sentido" — split
+β into β.1 + β.2 to keep each commit reviewable kept the change set
+manageable (β.1 ~990 LOC commit; β.2 ~520 LOC).
+
+**Trigger label vocabulary in production** (`telemetry.MemoryDreamStartEvent.trigger`):
+`cron_daily` | `post_compaction` | `session_close` | `threshold` | `manual`.
+

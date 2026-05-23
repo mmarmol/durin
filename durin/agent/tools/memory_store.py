@@ -85,12 +85,19 @@ class MemoryStoreTool(Tool):
         self,
         workspace: str | Path,
         embedding_model: str | None = None,
+        dream_config: Any | None = None,
     ) -> None:
         self._workspace = Path(workspace).expanduser()
         self._embedding_model = embedding_model
         # Lazily constructed once on first use; None means "disabled".
         self._vector_index: Optional[VectorIndex] = None
         self._vector_index_attempted = False
+        # Doc 25 §2.A.1 β.2 — per-entity threshold trigger config. When
+        # set + enabled + threshold_entries > 0, a successful write
+        # checks the per-entity post-cursor count and may dispatch a
+        # background dream pass. None disables the trigger entirely
+        # (tests, environments without the config).
+        self._dream_config = dream_config
 
     @property
     def name(self) -> str:
@@ -117,7 +124,16 @@ class MemoryStoreTool(Tool):
                 model = ctx.config.memory.embedding.model
         except (AttributeError, TypeError):
             model = None
-        return cls(workspace=ctx.workspace, embedding_model=model)
+        dream_cfg = None
+        try:
+            dream_cfg = ctx.config.memory.dream
+        except (AttributeError, TypeError):
+            dream_cfg = None
+        return cls(
+            workspace=ctx.workspace,
+            embedding_model=model,
+            dream_config=dream_cfg,
+        )
 
     def _get_vector_index(self) -> Optional[VectorIndex]:
         """Lazy construct the VectorIndex once; returns None if disabled."""
@@ -247,4 +263,83 @@ class MemoryStoreTool(Tool):
             except Exception as exc:
                 logger.warning("vector upsert failed for %s: %s", result["id"], exc)
 
+        # Doc 25 §2.A.1 β.2: threshold trigger. After a successful write
+        # that tagged at least one entity, check whether any of those
+        # entities crossed the per-entity post-cursor threshold. If yes,
+        # dispatch a background dream pass (throttled by DreamRunner).
+        # Fire-and-forget — must NOT block the tool response. Failures
+        # are logged, never propagated.
+        if entities:
+            self._maybe_dispatch_threshold_dream(list(entities), vi)
+
         return result
+
+    def _maybe_dispatch_threshold_dream(
+        self,
+        entities: list[str],
+        vector_index: Optional[VectorIndex],
+    ) -> None:
+        """Per-entity threshold check + background dispatch (§2.A.1 β.2).
+
+        For each entity ref in the just-written entry, count the
+        post-cursor entries (reusing the same discovery helper the CLI
+        and runner use). When any entity crosses ``threshold_entries``,
+        spawn a daemon thread that invokes
+        :meth:`DreamRunner.run` with ``trigger="threshold"`` and
+        ``entity_filter=ref``. The runner's own throttle prevents
+        thrashing when multiple thresholds fire in quick succession.
+        """
+        cfg = self._dream_config
+        if cfg is None or not getattr(cfg, "enabled", False):
+            return
+        threshold = getattr(cfg, "threshold_entries", 0) or 0
+        if threshold <= 0:
+            return
+
+        try:
+            from durin.cli.memory_cmd import _discover_pending_consolidations
+
+            memory_root = self._workspace / "memory"
+            pending = _discover_pending_consolidations(
+                memory_root, entity_filter=None,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("threshold dream: discover failed: %s", exc)
+            return
+
+        triggered_for: list[str] = []
+        for ref in entities:
+            entries = pending.get(ref) or []
+            if len(entries) >= threshold:
+                triggered_for.append(ref)
+
+        if not triggered_for:
+            return
+
+        # Spawn one daemon thread per triggered entity. The runner
+        # serialises with its own lock so two threads can't double-
+        # consolidate the same workspace.
+        import threading
+
+        from durin.memory.dream_runner import DreamRunner
+
+        for ref in triggered_for:
+            def _run(entity_ref: str = ref) -> None:
+                try:
+                    runner = DreamRunner(
+                        workspace=self._workspace,
+                        min_seconds_between_runs=getattr(
+                            cfg, "min_seconds_between_runs", 300,
+                        ),
+                        model=getattr(cfg, "model_override", None),
+                        vector_index=vector_index,
+                    )
+                    runner.run(trigger="threshold", entity_filter=entity_ref)
+                except Exception:
+                    logger.exception(
+                        "threshold dream for %s failed", entity_ref,
+                    )
+
+            t = threading.Thread(target=_run, daemon=True,
+                                 name=f"dream-threshold-{ref}")
+            t.start()

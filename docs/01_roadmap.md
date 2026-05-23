@@ -224,7 +224,7 @@ Once Phase 2 has retrieval, Phase 1b reduces to "use the memory retriever to fet
 
 ---
 
-## Last updated: 2026-05-24 01:50 (§2.A.1 β.1 cron daily + DreamRunner shipped)
+## Last updated: 2026-05-24 02:10 (§2.A.1 β.2 — 4/4 dream triggers shipped)
 
 > Post-T1 pass (2026-05-23): Phases 0-6 of the entity-centric memory plan
 > ([18_entity_centric_plan.md](18_entity_centric_plan.md) +
@@ -240,6 +240,19 @@ Once Phase 2 has retrieval, Phase 1b reduces to "use the memory retriever to fet
 > without commitment. Six docs moved to archive (the Phase 2 proposal,
 > the typed-entities proposal, doc 21 integration plan, doc 22 critique
 > validation, doc 23 T1 implementation plan, doc 24 wiring + e2e plan).
+
+> §2.A.1 β.2 shipped (2026-05-24 02:10): the remaining 3 sub-daily
+> triggers + manual route refactor. `MemoryStoreTool` now counts
+> per-entity post-cursor entries after each write and spawns a daemon
+> thread with `DreamRunner.run(trigger="threshold", entity_filter=ref)`
+> when `threshold_entries` is crossed. `Consolidator.on_post_compaction`
+> + `AgentLoop.on_session_close` callback attributes added; `cmd_new`
+> invokes the session-close hook; both wired in `cli/commands.py`
+> startup to spawn daemon threads when enabled in config. `cmd_dream`
+> refactored to route through `DreamRunner` (manual now shares the
+> lock with auto-triggers). 11 new tests + smoke e2e covering all 4
+> triggers end-to-end. Suite at 4442 passing. §2.A.1 is now SHIPPED
+> in full: 4/4 triggers in production.
 
 > §2.A.1 β.1 shipped (2026-05-24 01:50): entity-centric dream
 > auto-trigger — first half of the per-entity dispatcher. New

@@ -378,6 +378,15 @@ class AgentLoop:
         self._current_iteration: int = 0
         self.commands = CommandRouter()
         register_builtin_commands(self.commands)
+        # Doc 25 §2.A.1 β.2: session-close trigger hook. The wiring
+        # layer (``cli/commands.py``) sets this when
+        # ``memory.dream.on_session_close`` is enabled — fires the
+        # entity-centric dream once per session-close event (``/new``
+        # archives the prior session before starting a fresh one).
+        # Independent of ``Consolidator.on_post_compaction``: a user
+        # may want post-compaction off (too aggressive) but
+        # session-close on (low frequency, safe).
+        self.on_session_close: Callable[[str], None] | None = None
 
     @classmethod
     def from_config(

@@ -171,10 +171,10 @@ Trigger surface (`memory.dream.*` config block):
 | Trigger | Status | Source |
 |---|---|---|
 | `cron_daily` | SHIPPED β.1 (2026-05-24) | system job `memory_dream` registered at `cli/commands.py` startup; default cron `0 3 * * *`. Routed via `asyncio.to_thread` in `on_cron_job` so the cron loop stays responsive during LLM calls. |
-| `post_compaction` | PENDING β.2 | hook in `Consolidator.maybe_consolidate_by_tokens` finalize step. |
-| `session_close` | PENDING β.2 | hook in `/quit` and idle timeout. |
-| `threshold` | PENDING β.2 | per-entity counter in `memory_store` write path. |
-| `manual` | works (CLI) | `durin memory dream`. Will be refactored to route through `DreamRunner` so it picks up the lock/throttle too. |
+| `post_compaction` | SHIPPED β.2 (2026-05-24) | `Consolidator.on_post_compaction` callback. Fires when `maybe_consolidate_by_tokens` produces ≥1 summary. Wired in startup to a daemon thread spawning `DreamRunner.run(trigger="post_compaction")`. Gated by `memory.dream.post_compaction` (default True). |
+| `session_close` | SHIPPED β.2 (2026-05-24) | `AgentLoop.on_session_close` callback. `cmd_new` (/new) invokes it after archiving the prior session. Wired in startup to a daemon thread spawning `DreamRunner.run(trigger="session_close")`. Gated by `memory.dream.on_session_close` (default True). Independent of `post_compaction` knob. |
+| `threshold` | SHIPPED β.2 (2026-05-24) | `MemoryStoreTool._maybe_dispatch_threshold_dream` counts per-entity post-cursor entries after each successful write; spawns one daemon thread per entity that crosses `memory.dream.threshold_entries` (default 5) with `entity_filter=ref`. |
+| `manual` | SHIPPED β.2 (2026-05-24) | `durin memory dream` CLI now routes through `DreamRunner` (`min_seconds_between_runs=0` so the user is never throttled). Manual + auto share the same lock, so concurrent runs cannot race. |
 
 **Consolidator** ([durin/memory/dream.py](../../durin/memory/dream.py)) :
 

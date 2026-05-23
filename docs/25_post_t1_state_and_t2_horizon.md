@@ -75,7 +75,7 @@ Dos lecturas posibles del horizon, no excluyentes:
 
 - §2.E telemetry aggregation — **SHIPPED**.
 - §2.C shared AliasIndex via ctx — **SHIPPED** (2026-05-24).
-- §2.A.1 per-entity dispatcher — **PARCIAL** (cron diario + runner + lock SHIPPED 2026-05-24 01:50; post-compaction / session-close / threshold hooks pending β.2).
+- §2.A.1 per-entity dispatcher — **SHIPPED** (4/4 triggers: cron_daily / post_compaction / session_close / threshold; β.1 + β.2 complete 2026-05-24).
 - §2.A.2 cross-session learning — diferido (requiere doc 26).
 - §2.D auto-absorb.
 - §2.F eager-inject context block — parcialmente cubierto por §2.H
@@ -98,29 +98,45 @@ Doc 18 §6 lista 4 triggers posibles. Verificación contra código (2026-05-23
 Hay que separar dos cosas que se mezclaban en versiones previas de este
 doc:
 
-#### §2.A.1 — Per-entity dispatcher (PARCIAL — cron diario SHIPPED 2026-05-24 01:50)
+#### §2.A.1 — Per-entity dispatcher (SHIPPED 2026-05-24 — 4/4 triggers)
 
-**Shipped en β.1**:
-- `MemoryDreamConfig` en `config/schema.py` (memory.dream.{enabled, cron,
-  threshold_entries, post_compaction, on_session_close, model_override,
+**β.1 (shipped 01:50)**: cron diario + DreamRunner core.
+- `MemoryDreamConfig` (memory.dream.{enabled, cron, threshold_entries,
+  post_compaction, on_session_close, model_override,
   min_seconds_between_runs}).
-- `DreamRunner` en `durin/memory/dream_runner.py` con lock atómico
-  (`memory/.dream.lock`, O_CREAT|O_EXCL, stale recovery a 10min) +
-  throttle (`min_seconds_between_runs` cooldown vía
-  `.dream.last_run` mtime).
-- 3 telemetry events: `memory.dream.start` / `.end` / `.skipped`
-  (con `trigger`, `entity_filter`, `entities_consolidated/failed`,
-  `duration_s`, `reason`).
-- Cron diario registrado en `cli/commands.py` startup como system job
-  `memory_dream` (default `0 3 * * *`); `on_cron_job` lo dispatch a
-  `DreamRunner.run(trigger="cron_daily")` via `asyncio.to_thread`.
-- 14 tests cubren no_pending / concurrent_lock / stale lock recovery /
-  throttle / entity_filter / telemetry. Suite: 4431 passing.
+- `DreamRunner` con lock atómico (`memory/.dream.lock`, O_CREAT|O_EXCL,
+  stale recovery a 10min) + throttle (`.dream.last_run` mtime).
+- 3 telemetry events: `memory.dream.start` / `.end` / `.skipped`.
+- Cron diario registrado como system job `memory_dream` (default
+  `0 3 * * *`); dispatch via `asyncio.to_thread`.
 
-**Pending en β.2** (próximo commit):
-- Hook post-compaction (en `Consolidator` finalize step).
-- Hook session-close (en `/quit` y idle timeout).
-- Threshold per-entity en write path de `memory_store`.
+**β.2 (shipped 01:30)**: 3 sub-daily triggers + manual route refactor.
+- `cmd_dream` (CLI manual) refactored para usar `DreamRunner` —
+  manual runs ahora comparten lock con auto-triggers
+  (`min_seconds_between_runs=0` para no throttle al usuario).
+- `MemoryStoreTool` agrega `_maybe_dispatch_threshold_dream()`:
+  cuenta post-cursor entries por entidad después de cada write,
+  spawns daemon thread con `DreamRunner.run(trigger="threshold",
+  entity_filter=ref)` cuando crossea `threshold_entries`.
+- `Consolidator.on_post_compaction: Callable[[str], None] | None`
+  attribute. Fires después del loop cuando `last_summary` es truthy.
+  Wired en `cli/commands.py` startup a spawn de daemon thread con
+  `trigger="post_compaction"`.
+- `AgentLoop.on_session_close: Callable[[str], None] | None`
+  attribute. `cmd_new` (/new fresh session) invoca el hook. Wired
+  en startup a spawn de daemon thread con `trigger="session_close"`.
+
+**Tests**: 14 (β.1) + 11 (β.2) = **25 nuevos**. Suite: 4442 passing.
+Smoke e2e (4 scenarios + 4 triggers) PASS.
+
+**Triggers en producción**:
+| Trigger | Source code | Config knob |
+|---|---|---|
+| `cron_daily` | `cli/commands.py` startup `register_system_job("memory_dream")` + `on_cron_job` dispatch | `memory.dream.cron` (default `0 3 * * *`) |
+| `post_compaction` | `Consolidator.maybe_consolidate_by_tokens` → `on_post_compaction(session.key)` | `memory.dream.post_compaction` (default True) |
+| `session_close` | `cmd_new` (/new) → `loop.on_session_close(ctx.key)` | `memory.dream.on_session_close` (default True) |
+| `threshold` | `MemoryStoreTool._maybe_dispatch_threshold_dream` (post-write) | `memory.dream.threshold_entries` (default 5) |
+| `manual` | `cmd_dream` (`durin memory dream`) | always works (no config gate) |
 
 ---
 
@@ -483,11 +499,12 @@ Contrato de delivery al LLM cerrado: `Result.kind` + `render_block` +
 `rendered` en tool boundary + hot_layer canonical/fragment sections.
 21 tests, suite 4417 passing.
 
-### Opción β — §2.A.1 (en curso siguiente)
+### Opción β — §2.A.1 (SHIPPED 2026-05-24)
 
-Auto-trigger con los 4 disparadores (cron diario / post-compaction /
-session-close / threshold). Diseño en doc 25 §2.A.1; ya partido del
-§2.A.2 deferido (cross-session learning). Costo estimado ~420 LOC.
+4/4 triggers en producción. β.1 = cron diario + DreamRunner core; β.2
+= post-compaction + session-close + threshold-per-entity + refactor
+manual CLI route through DreamRunner. 25 nuevos tests + smoke e2e
+de los 4 triggers. Suite 4442 passing.
 
 ### Opción γ — §2.C (SHIPPED 2026-05-24)
 
@@ -505,4 +522,4 @@ caros y dependen al menos de α.
 
 ---
 
-## Last updated: 2026-05-24 01:50 (§2.A.1 β.1 shipped — DreamRunner + cron diario, 14 tests, suite 4431 passing; β.2 post-compaction / session-close / threshold pending)
+## Last updated: 2026-05-24 02:10 (§2.A.1 β.2 shipped — 4/4 triggers in production, 11 new tests, suite 4442 passing)

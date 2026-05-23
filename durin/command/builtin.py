@@ -319,6 +319,20 @@ async def cmd_new(ctx: CommandContext) -> OutboundMessage:
     loop.sessions.invalidate(session.key)
     if snapshot:
         loop._schedule_background(loop.consolidator.archive(snapshot))
+    # Doc 25 §2.A.1 β.2 — session-close trigger fires once per /new
+    # regardless of whether the snapshot above triggered compaction.
+    # Independent config knob (memory.dream.on_session_close).
+    # getattr keeps test scaffolds (SimpleNamespace loops) working —
+    # production AgentLoop always has the attribute.
+    _on_close = getattr(loop, "on_session_close", None)
+    if _on_close is not None:
+        try:
+            _on_close(ctx.key)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception(
+                "session_close hook raised for %s", ctx.key,
+            )
     return OutboundMessage(
         channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
         content="New session started.",
