@@ -4,14 +4,23 @@
 
 ---
 
-## Current state (post-prune, 2026-05-18)
+## Current state (post-T1, 2026-05-23)
 
-Durin is essentially a clean Nanobot baseline plus:
+Durin is a clean Nanobot baseline + plumbing + the now-shipped **entity-centric memory system** (Phases 0-6 of doc 19 + T1 wiring W1-W4 of archived doc 24):
+
 - Plumbing additions (`local_llama_provider`, multi-channel work, generic telemetry skeleton)
 - Empirically validated execution: basic ReAct loop + tools + sandbox + sessions
 - No active "smart layer" (posture, plan tiers, deliberation V3 all removed)
+- **Entity-centric memory** shipped + wired + verified:
+  - Typed entities `type:value` in episodic entries
+  - LLM dream consolidator that produces `memory/entities/<type>/<slug>.md` pages with git history
+  - AliasIndex (rebuild-only, lazy)
+  - Vector index (LanceDB) with entity_page rows + `entities` field
+  - `memory_search` invokes entity-aware RRF ranker when query matches a known alias
+  - `durin memory` CLI: dream, history, show, diff, revert, expand, absorb, absorb-suggest
+  - 4365 tests passing, 16 skipped
 
-The codebase is ~2,500 lines lighter and 3,052 tests pass.
+Forward planning and deferred items: see [25_post_t1_state_and_t2_horizon.md](25_post_t1_state_and_t2_horizon.md).
 
 ---
 
@@ -215,7 +224,22 @@ Once Phase 2 has retrieval, Phase 1b reduces to "use the memory retriever to fet
 
 ---
 
-## Last updated: 2026-05-22 (post-a7 — see additions I–M)
+## Last updated: 2026-05-23 (post-T1 entity-centric memory)
+
+> Post-T1 pass (2026-05-23): Phases 0-6 of the entity-centric memory plan
+> ([18_entity_centric_plan.md](18_entity_centric_plan.md) +
+> [19_implementation_plan.md](19_implementation_plan.md)) shipped, and
+> the T1 wiring sweep (W1-W4 in archived doc 24) closed the runtime
+> integration gap — `memory_search` now invokes the entity-aware ranker,
+> `durin memory dream` upserts consolidated entity pages into LanceDB,
+> AliasIndex builds lazily on first call, and `durin memory absorb` plus
+> `absorb-suggest` are exposed in the CLI. 4 hermetic E2E tests cover
+> the wired path; 4365 tests pass. Deferred T2 items (auto-trigger dream,
+> identifier-based extraction, shared AliasIndex, auto-absorb) captured
+> in [25_post_t1_state_and_t2_horizon.md](25_post_t1_state_and_t2_horizon.md)
+> without commitment. Six docs moved to archive (the Phase 2 proposal,
+> the typed-entities proposal, doc 21 integration plan, doc 22 critique
+> validation, doc 23 T1 implementation plan, doc 24 wiring + e2e plan).
 
 > Post-v0.1.0a7 pass (2026-05-22): closed the secrets subsystem with the
 > interactive `request_secret` flow (Phase 3); shipped full **web config
@@ -226,7 +250,8 @@ Once Phase 2 has retrieval, Phase 1b reduces to "use the memory retriever to fet
 > plan/report docs (code audit, daily-driver plan, smoke test, Textual
 > migration, secrets/web-parity/interactive-render designs) moved to
 > `docs/archive/`. **Next major direction: Memory Phase 2** — see
-> `08_memory_phase2_proposal.md` §0d.
+> `archive/08_memory_phase2_proposal.md` §0d (now superseded by the
+> entity-centric path documented in 18+19).
 
 > Earlier pass: items #1–9 of the original 12-list shipped (incl. capability bridges for vision + audio), item #12 mostly closed by the `disable_model_invocation` flag. Capability metadata pipeline (3-source consensus snapshot) shipped as a foundation. Pi coding agent reviewed and four refinements adopted: `context_transform` hook, skill disable flag, head/tail truncation per tool, anchored token accounting, cache visibility. Stale planning docs (`04_agent_strategies_catalog`, `05_log_swebench`, `06_log_experiments`) moved to `docs/archive/`. Memory (Phase 2) is now unblocked.
 
