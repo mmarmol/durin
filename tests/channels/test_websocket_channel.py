@@ -371,6 +371,51 @@ async def test_send_progress_includes_structured_tool_events() -> None:
 
 
 @pytest.mark.asyncio
+async def test_send_message_propagates_render_as_text_metadata() -> None:
+    """Slash-command output (/status, /memory, /sessions, …) carries
+    ``metadata['render_as'] = 'text'`` so the receiver knows the body
+    is pre-formatted plain text. The WS channel must forward that hint
+    on the wire — otherwise the webui feeds it to its Markdown pipeline
+    and the column layout collapses into a single line."""
+    bus = MagicMock()
+    channel = WebSocketChannel({"enabled": True, "allowFrom": ["*"]}, bus)
+    mock_ws = AsyncMock()
+    channel._attach(mock_ws, "chat-1")
+
+    await channel.send(OutboundMessage(
+        channel="websocket",
+        chat_id="chat-1",
+        content="📊 Tokens: 4610 in / 320 out\n📚 Context: 8k/202k",
+        metadata={"render_as": "text"},
+    ))
+
+    payload = json.loads(mock_ws.send.await_args.args[0])
+    assert payload["event"] == "message"
+    assert payload["render_as"] == "text"
+
+
+@pytest.mark.asyncio
+async def test_send_message_without_render_as_omits_field() -> None:
+    """A conversational reply (no ``render_as``) must NOT carry the field
+    — receivers default to Markdown rendering when absent."""
+    bus = MagicMock()
+    channel = WebSocketChannel({"enabled": True, "allowFrom": ["*"]}, bus)
+    mock_ws = AsyncMock()
+    channel._attach(mock_ws, "chat-1")
+
+    await channel.send(OutboundMessage(
+        channel="websocket",
+        chat_id="chat-1",
+        content="hello",
+        metadata={},
+    ))
+
+    payload = json.loads(mock_ws.send.await_args.args[0])
+    assert payload["event"] == "message"
+    assert "render_as" not in payload
+
+
+@pytest.mark.asyncio
 async def test_send_progress_includes_agent_ui_blob() -> None:
     bus = MagicMock()
     channel = WebSocketChannel({"enabled": True, "allowFrom": ["*"]}, bus)

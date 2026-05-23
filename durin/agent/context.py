@@ -21,6 +21,81 @@ from durin.utils.helpers import (
 from durin.utils.prompt_templates import render_template
 
 
+def summarize_composition(payload: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Roll a ``context.composition`` payload into 2 user-facing buckets.
+
+    Returns a dict with ``conversation_tokens`` / ``infra_tokens`` (the
+    rollups the user actually thinks in) plus ``conversation_breakdown``
+    / ``infra_breakdown`` (sub-components, for the verbose ``/status``
+    view).
+
+    - **Conversation** = the user's growing footprint in this session:
+      the prior turns (history_msg), the current user message, plus any
+      per-turn volatile blocks (long-term memory active in the prompt,
+      recent history snippets, archived session summary).
+    - **Infrastructure** = everything fixed by configuration: identity,
+      bootstrap files, skills (catalog + active), the memory hot layer,
+      the agent mode suffix, and tool definitions. The user changes
+      these by configuring durin, not by talking.
+
+    Returns zeros when ``payload`` is None or empty so callers can blindly
+    format the result.
+    """
+    if not payload:
+        return {
+            "conversation_tokens": 0,
+            "infra_tokens": 0,
+            "conversation_breakdown": {},
+            "infra_breakdown": {},
+            "total": 0,
+        }
+
+    conv: dict[str, int] = {}
+    for key, label in (
+        ("memory_long_term", "Memory (active)"),
+        ("recent_history", "Recent history"),
+        ("session_summary", "Session summary"),
+    ):
+        n = int(payload.get("volatile_breakdown", {}).get(key, 0) or 0)
+        if n:
+            conv[label] = n
+    history_n = int(payload.get("history_msg_tokens", 0) or 0)
+    current_n = int(payload.get("current_msg_tokens", 0) or 0)
+    if history_n:
+        conv["Prior turns"] = history_n
+    if current_n:
+        conv["Current message"] = current_n
+
+    infra: dict[str, int] = {}
+    stable_labels = (
+        ("identity", "Identity"),
+        ("bootstrap", "Bootstrap files"),
+        ("skills_active", "Skills (active)"),
+        ("skills_catalog", "Skills catalog"),
+        ("memory_hot", "Memory hot layer"),
+    )
+    for key, label in stable_labels:
+        n = int(payload.get("stable_breakdown", {}).get(key, 0) or 0)
+        if n:
+            infra[label] = n
+    ctx_n = int(payload.get("context_tokens", 0) or 0)
+    if ctx_n:
+        infra["Agent mode"] = ctx_n
+    tools_n = int(payload.get("tools_tokens", 0) or 0)
+    if tools_n:
+        infra["Tool definitions"] = tools_n
+
+    conversation_tokens = sum(conv.values())
+    infra_tokens = sum(infra.values())
+    return {
+        "conversation_tokens": conversation_tokens,
+        "infra_tokens": infra_tokens,
+        "conversation_breakdown": conv,
+        "infra_breakdown": infra,
+        "total": conversation_tokens + infra_tokens,
+    }
+
+
 class ContextBuilder:
     """Builds the context (system prompt + messages) for the agent."""
 
@@ -35,6 +110,19 @@ class ContextBuilder:
         self.timezone = timezone
         self.memory = MemoryStore(workspace)
         self.skills = SkillsLoader(workspace, disabled_skills=set(disabled_skills) if disabled_skills else None)
+        # Per-call breakdown of the rendered system-prompt sections, in
+        # raw text. Each system-prompt build clears and re-fills it.
+        # Read by ``build_messages`` to emit ``context.composition``
+        # telemetry and by tests; safe to ignore elsewhere.
+        self._last_layer_breakdown: dict[str, dict[str, str]] = {
+            "stable": {},
+            "context": {},
+            "volatile": {},
+        }
+        # Last composition payload (most-recent ``context.composition``
+        # event data). Exposed so AgentLoop / footer / /status can read
+        # the current breakdown without touching the JSONL log.
+        self.last_composition: dict[str, Any] | None = None
 
     def build_system_prompt(
         self,
@@ -66,6 +154,8 @@ class ContextBuilder:
         relative to volatile blocks (which would dilute its visibility
         if placed below) while still keeping the stable prefix intact.
         """
+        # Reset the per-call breakdown — each layer fills its slot.
+        self._last_layer_breakdown = {"stable": {}, "context": {}, "volatile": {}}
         stable = self._build_stable_layer(channel=channel)
         context = self._build_context_layer(agent_mode_name=agent_mode_name)
         volatile = self._build_volatile_layer(session_summary=session_summary)
@@ -78,21 +168,30 @@ class ContextBuilder:
         template (path, OS, Python version — all stable per process),
         this layer is byte-identical across turns of the same session.
         """
-        parts = [self._get_identity(channel=channel)]
+        breakdown: dict[str, str] = {}
+
+        identity = self._get_identity(channel=channel)
+        breakdown["identity"] = identity
+        parts = [identity]
 
         bootstrap = self._load_bootstrap_files()
         if bootstrap:
+            breakdown["bootstrap"] = bootstrap
             parts.append(bootstrap)
 
         always_skills = self.skills.get_always_skills()
         if always_skills:
             always_content = self.skills.load_skills_for_context(always_skills)
             if always_content:
-                parts.append(f"# Active Skills\n\n{always_content}")
+                block = f"# Active Skills\n\n{always_content}"
+                breakdown["skills_active"] = block
+                parts.append(block)
 
         skills_summary = self.skills.build_skills_summary(exclude=set(always_skills))
         if skills_summary:
-            parts.append(render_template("agent/skills_section.md", skills_summary=skills_summary))
+            block = render_template("agent/skills_section.md", skills_summary=skills_summary)
+            breakdown["skills_catalog"] = block
+            parts.append(block)
 
         # Memory hot layer (Phase 1.9). Always-loaded snapshot of identity +
         # top headlines + known entities. Lives at the END of the stable
@@ -100,8 +199,10 @@ class ContextBuilder:
         # hot layer rotates daily under dream.
         hot = read_hot_layer(self.workspace).render()
         if hot:
+            breakdown["memory_hot"] = hot
             parts.append(hot)
 
+        self._last_layer_breakdown["stable"] = breakdown
         return "\n\n---\n\n".join(parts)
 
     def _build_context_layer(self, *, agent_mode_name: str | None) -> str:
@@ -115,13 +216,16 @@ class ContextBuilder:
         it) and still cache-stable within a session for the common case
         (no mid-session mode switch).
         """
+        breakdown: dict[str, str] = {}
         parts: list[str] = []
         if agent_mode_name:
             from durin.agent.agent_mode import get_mode
 
             mode_suffix = get_mode(agent_mode_name).prompt_suffix.strip()
             if mode_suffix:
+                breakdown["mode_suffix"] = mode_suffix
                 parts.append(mode_suffix)
+        self._last_layer_breakdown["context"] = breakdown
         return "\n\n---\n\n".join(parts)
 
     def _build_volatile_layer(self, *, session_summary: str | None) -> str:
@@ -129,11 +233,14 @@ class ContextBuilder:
         — never cached by the provider, deliberately placed last so it
         doesn't poison the prefix cache hit rate for the stable layers.
         """
+        breakdown: dict[str, str] = {}
         parts: list[str] = []
 
         memory = self.memory.get_memory_context()
         if memory and not self._is_template_content(self.memory.read_memory(), "memory/MEMORY.md"):
-            parts.append(f"# Memory\n\n{memory}")
+            block = f"# Memory\n\n{memory}"
+            breakdown["memory_long_term"] = block
+            parts.append(block)
 
         entries = self.memory.read_unprocessed_history(since_cursor=self.memory.get_last_dream_cursor())
         if entries:
@@ -142,11 +249,16 @@ class ContextBuilder:
                 f"- [{e['timestamp']}] {e['content']}" for e in capped
             )
             history_text = truncate_text(history_text, self._MAX_HISTORY_CHARS)
-            parts.append("# Recent History\n\n" + history_text)
+            block = "# Recent History\n\n" + history_text
+            breakdown["recent_history"] = block
+            parts.append(block)
 
         if session_summary:
-            parts.append(f"[Archived Context Summary]\n\n{session_summary}")
+            block = f"[Archived Context Summary]\n\n{session_summary}"
+            breakdown["session_summary"] = block
+            parts.append(block)
 
+        self._last_layer_breakdown["volatile"] = breakdown
         return "\n\n---\n\n".join(parts)
 
     def _get_identity(self, channel: str | None = None) -> str:
@@ -228,6 +340,9 @@ class ContextBuilder:
         sender_id: str | None = None,
         session_summary: str | None = None,
         session_metadata: Mapping[str, Any] | None = None,
+        session_key: str | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        iteration: int | None = None,
     ) -> list[dict[str, Any]]:
         """Build the complete message list for an LLM call."""
         from durin.agent.agent_mode import plan_mode_runtime_lines
@@ -301,9 +416,116 @@ class ContextBuilder:
             last = dict(messages[-1])
             last["content"] = self._merge_message_content(last.get("content"), merged)
             messages[-1] = last
+            self._emit_composition_event(
+                history=history,
+                current_user_content=merged,
+                tools=tools,
+                iteration=iteration,
+                session_key=session_key,
+            )
             return messages
         messages.append({"role": current_role, "content": merged})
+        self._emit_composition_event(
+            history=history,
+            current_user_content=merged,
+            tools=tools,
+            iteration=iteration,
+            session_key=session_key,
+        )
         return messages
+
+    def _emit_composition_event(
+        self,
+        *,
+        history: list[dict[str, Any]],
+        current_user_content: Any,
+        tools: list[dict[str, Any]] | None,
+        iteration: int | None,
+        session_key: str | None,
+    ) -> None:
+        """Emit ``context.composition`` with a per-tier token breakdown.
+
+        Best-effort: any failure is silently swallowed — telemetry must
+        never affect the user-facing turn.
+        """
+        try:
+            from durin.telemetry.logger import current_telemetry
+            from durin.utils.helpers import (
+                estimate_message_tokens,
+                estimate_text_tokens,
+            )
+            import json
+
+            logger_obj = current_telemetry()
+            if logger_obj is None:
+                return
+
+            stable = self._last_layer_breakdown.get("stable", {})
+            volatile = self._last_layer_breakdown.get("volatile", {})
+            context_break = self._last_layer_breakdown.get("context", {})
+
+            stable_breakdown = {
+                name: estimate_text_tokens(text) for name, text in stable.items()
+            }
+            volatile_breakdown = {
+                name: estimate_text_tokens(text) for name, text in volatile.items()
+            }
+            stable_tokens = sum(stable_breakdown.values())
+            volatile_tokens = sum(volatile_breakdown.values())
+            context_tokens = sum(
+                estimate_text_tokens(t) for t in context_break.values()
+            )
+
+            history_msg_tokens = sum(
+                estimate_message_tokens(m) for m in history
+            )
+            # The current user message is either a str or a list of
+            # content blocks; build a synthetic message dict so
+            # estimate_message_tokens does the right thing.
+            current_msg_tokens = estimate_message_tokens(
+                {"role": "user", "content": current_user_content}
+            )
+
+            tools_tokens = (
+                estimate_text_tokens(json.dumps(tools, ensure_ascii=False))
+                if tools else 0
+            )
+
+            estimated_total = (
+                stable_tokens
+                + context_tokens
+                + volatile_tokens
+                + history_msg_tokens
+                + current_msg_tokens
+                + tools_tokens
+            )
+
+            payload: dict[str, Any] = {
+                "stable_tokens": stable_tokens,
+                "stable_breakdown": stable_breakdown,
+                "context_tokens": context_tokens,
+                "volatile_tokens": volatile_tokens,
+                "volatile_breakdown": volatile_breakdown,
+                "history_msg_tokens": history_msg_tokens,
+                "current_msg_tokens": current_msg_tokens,
+                "tools_tokens": tools_tokens,
+                "estimated_total": estimated_total,
+            }
+            if iteration is not None:
+                payload["iteration"] = iteration
+            if session_key is not None:
+                payload["session_key"] = session_key
+
+            # Cache the most recent payload so the footer and /status
+            # can read it directly (no JSONL round-trip).
+            self.last_composition = payload
+
+            from contextlib import suppress
+            with suppress(Exception):
+                logger_obj.log("context.composition", payload)
+        except Exception:  # noqa: BLE001
+            # Telemetry failure must never break the turn build.
+            return
 
     def _build_user_content(self, text: str, media: list[str] | None) -> str | list[dict[str, Any]]:
         """Build user message content with optional base64-encoded images."""

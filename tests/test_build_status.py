@@ -90,3 +90,70 @@ def test_status_context_pct_capped_at_999():
         max_completion_tokens=4096,
     )
     assert "(999% of input budget)" in content
+
+
+def test_status_composition_section_breakdown():
+    """When composition_payload is passed, /status renders the two-bucket breakdown."""
+    payload = {
+        "stable_tokens": 2916,
+        "stable_breakdown": {
+            "identity": 492, "bootstrap": 921,
+            "skills_active": 953, "skills_catalog": 550,
+        },
+        "context_tokens": 0,
+        "volatile_tokens": 0,
+        "volatile_breakdown": {},
+        "history_msg_tokens": 418,
+        "current_msg_tokens": 55,
+        "tools_tokens": 1221,
+        "estimated_total": 4610,
+    }
+    content = build_status_content(
+        version="0.1.0",
+        model="m",
+        start_time=1000000.0,
+        last_usage={"prompt_tokens": 0, "completion_tokens": 0},
+        context_window_tokens=128000,
+        session_msg_count=2,
+        context_tokens_estimate=0,
+        composition_payload=payload,
+    )
+    assert "Last turn — composition" in content
+    assert "Prompt tokens" in content
+    assert "4610" in content
+    assert "From this conversation" in content
+    assert "From infrastructure" in content
+    # Sub-components appear inside their bucket.
+    assert "Prior turns" in content
+    assert "Identity" in content
+    assert "Tool definitions" in content
+
+
+def test_status_composition_section_omitted_when_no_payload():
+    """No composition_payload → no composition section (default behaviour)."""
+    content = build_status_content(
+        version="0.1.0",
+        model="m",
+        start_time=1000000.0,
+        last_usage={"prompt_tokens": 0, "completion_tokens": 0},
+        context_window_tokens=128000,
+        session_msg_count=2,
+        context_tokens_estimate=0,
+    )
+    assert "Last turn — composition" not in content
+
+
+def test_status_composition_section_handles_empty_payload():
+    """An empty (zero-token) payload yields no composition section
+    rather than '0%' rows for everything."""
+    content = build_status_content(
+        version="0.1.0",
+        model="m",
+        start_time=1000000.0,
+        last_usage={"prompt_tokens": 0, "completion_tokens": 0},
+        context_window_tokens=128000,
+        session_msg_count=2,
+        context_tokens_estimate=0,
+        composition_payload={"estimated_total": 0},
+    )
+    assert "Last turn — composition" not in content

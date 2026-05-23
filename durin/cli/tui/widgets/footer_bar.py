@@ -128,6 +128,21 @@ def _render(p: dict[str, Any]) -> str:
 
     model = p.get("model", "?")
 
+    # Optional turn-level snippets. Only rendered once data exists
+    # (post first LLM round-trip / first prompt build) so the footer
+    # stays compact on cold start. Sourced from the cached
+    # ``cache.usage`` and ``context.composition`` payloads on the loop.
+    extras: list[str] = []
+    cache_pct = p.get("cache_pct")
+    if cache_pct is not None:
+        extras.append(f"[dim]cache:[/dim]{cache_pct}%")
+    conv_pct = p.get("conv_pct")
+    infra_pct = p.get("infra_pct")
+    if conv_pct is not None and infra_pct is not None:
+        extras.append(f"[dim]conv:[/dim]{conv_pct}%")
+        extras.append(f"[dim]infra:[/dim]{infra_pct}%")
+    extras_part = (" · " + " · ".join(extras)) if extras else ""
+
     # Footer is for *current-conversation* state. Memory totals & vector
     # availability are install-level info — they belong in the startup
     # banner, not in a per-tick status line.
@@ -137,6 +152,7 @@ def _render(p: dict[str, Any]) -> str:
         f"{ctx_part} · "
         f"[green]{model}[/green] · "
         f"[dim]{session_label}[/dim]"
+        f"{extras_part}"
     )
 
 

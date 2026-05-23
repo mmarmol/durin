@@ -453,6 +453,21 @@ def build_assistant_message(
     return msg
 
 
+def estimate_text_tokens(text: str) -> int:
+    """Estimate tokens for a single string via tiktoken (cl100k_base).
+
+    Returns 0 on encoding failure so callers (telemetry, breakdowns)
+    can always do arithmetic without guarding for None.
+    """
+    if not text:
+        return 0
+    try:
+        enc = tiktoken.get_encoding("cl100k_base")
+        return len(enc.encode(text))
+    except Exception:
+        return 0
+
+
 def estimate_prompt_tokens(
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]] | None = None,
@@ -623,6 +638,7 @@ def build_status_content(
     search_usage_text: str | None = None,
     active_task_count: int = 0,
     max_completion_tokens: int = 8192,
+    composition_payload: dict[str, Any] | None = None,
 ) -> str:
     """Build a human-readable runtime status snapshot.
 
@@ -630,6 +646,11 @@ def build_status_content(
         search_usage_text: Optional pre-formatted web search usage string
                            (produced by SearchUsageInfo.format()). When provided
                            it is appended as an extra section.
+        composition_payload: Optional last ``context.composition`` event
+                             data (as cached by ``AgentLoop.context.last_composition``).
+                             When provided, a "Last turn \u2014 composition"
+                             breakdown is appended showing where the
+                             prompt tokens are going.
     """
     uptime_s = int(time.time() - start_time)
     uptime = (
@@ -664,7 +685,51 @@ def build_status_content(
     ]
     if search_usage_text:
         lines.append(search_usage_text)
+    if composition_payload:
+        lines.extend(_format_composition_section(composition_payload))
     return "\n".join(lines)
+
+
+def _format_composition_section(payload: dict[str, Any]) -> list[str]:
+    """Render the last-turn composition breakdown for ``/status``.
+
+    Two buckets: conversation (what your messages + memory contribute)
+    vs infrastructure (identity + bootstrap + skills + tools \u2014 the
+    fixed cost of the configuration). Tools are part of infrastructure
+    but not highlighted as their own bucket: their share matters in
+    small contexts but disappears as sessions grow.
+    """
+    from durin.agent.context import summarize_composition
+
+    summary = summarize_composition(payload)
+    total = summary["total"]
+    if total <= 0:
+        return []
+
+    def _row(label: str, n: int, indent: int = 2) -> str:
+        return f"{' ' * indent}{label:<24} {n:>6}"
+
+    def _pct(n: int) -> str:
+        return f"{(100 * n // total) if total else 0}%"
+
+    out: list[str] = ["", "\U0001f9ee Last turn \u2014 composition"]
+    out.append(f"  Prompt tokens          {total:>6}")
+
+    conv_n = summary["conversation_tokens"]
+    infra_n = summary["infra_tokens"]
+    out.append("")
+    out.append(f"  From this conversation: {conv_n:>5} ({_pct(conv_n)})")
+    for label, n in sorted(
+        summary["conversation_breakdown"].items(), key=lambda kv: -kv[1]
+    ):
+        out.append(_row(label, n, indent=4))
+    out.append("")
+    out.append(f"  From infrastructure:    {infra_n:>5} ({_pct(infra_n)})")
+    for label, n in sorted(
+        summary["infra_breakdown"].items(), key=lambda kv: -kv[1]
+    ):
+        out.append(_row(label, n, indent=4))
+    return out
 
 
 def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]:

@@ -60,6 +60,12 @@ export interface UIMessage {
    * rich blocks (code diffs, exec IN/OUT) instead of flat text traces.
    * Mirrors the terminal TUI's ToolCallBubble. */
   toolEvents?: ToolProgressEvent[];
+  /** When 'text', the content is pre-formatted plain text (output of a
+   * slash command like /status or /memory show) and should be rendered
+   * verbatim with whitespace preserved — NOT through the Markdown
+   * pipeline (which collapses single newlines and treats tables as text).
+   * Default 'markdown' replicates the legacy behaviour. */
+  renderAs?: "text" | "markdown";
 }
 
 /** Structured UI blob on ``progress`` WS frames; channels may add more ``kind`` values later. */
@@ -227,6 +233,11 @@ export type InboundEvent =
       latency_ms?: number;
       /** Optional structured payload on progress frames (channel-specific). */
       agent_ui?: AgentUIBlob;
+      /** When 'text', the agent emitted pre-formatted plain text (slash
+       * command output). The client should render verbatim with
+       * whitespace preserved instead of feeding the body to Markdown.
+       * Set by command handlers via OutboundMessage.metadata.render_as. */
+      render_as?: "text" | "markdown";
     }
   | {
       event: "delta";

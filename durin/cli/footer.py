@@ -103,6 +103,31 @@ def build_footer_text(
         except Exception:  # noqa: BLE001
             display_name = ""
 
+    # Composition + cache snapshots — populated after the first turn.
+    # Format: conv/infra pcts of the last prompt build; cache pct of
+    # the last LLM call. None when no turn has run yet.
+    cache_pct: int | None = None
+    conv_pct: int | None = None
+    infra_pct: int | None = None
+    try:
+        cache_payload = getattr(agent_loop, "_last_cache_usage", None)
+        if cache_payload:
+            cache_pct = int(cache_payload.get("cache_ratio_pct", 0))
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        comp_payload = getattr(getattr(agent_loop, "context", None), "last_composition", None)
+        if comp_payload:
+            from durin.agent.context import summarize_composition
+
+            summary = summarize_composition(comp_payload)
+            total = summary["total"]
+            if total > 0:
+                conv_pct = 100 * summary["conversation_tokens"] // total
+                infra_pct = 100 * summary["infra_tokens"] // total
+    except Exception:  # noqa: BLE001
+        pass
+
     return {
         "session_key": session_key,
         "display_name": display_name,
@@ -115,6 +140,9 @@ def build_footer_text(
         "mem_count": mem_count,
         "vec_index": vec_present,
         "workspace": str(workspace),
+        "cache_pct": cache_pct,
+        "conv_pct": conv_pct,
+        "infra_pct": infra_pct,
     }
 
 
@@ -135,10 +163,21 @@ def build_footer_html(payload: dict[str, Any]) -> HTML:
 
     vec_glyph = "vec✓" if payload["vec_index"] else "vec✗"
 
+    # Optional composition + cache snippets — only shown once we have
+    # the data (post first turn). Keeps the footer terse on session boot.
+    extras: list[str] = []
+    if payload.get("cache_pct") is not None:
+        extras.append(f"cache:{payload['cache_pct']}%")
+    if payload.get("conv_pct") is not None and payload.get("infra_pct") is not None:
+        extras.append(f"conv:{payload['conv_pct']}%")
+        extras.append(f"infra:{payload['infra_pct']}%")
+    extras_str = (" · " + " · ".join(extras)) if extras else ""
+
     return HTML(
         f"<ansicyan>{session_label}</ansicyan>"
         f" · <ansigreen>{payload['model']}</ansigreen>"
         f" ({payload['preset']})"
         f" · {token_part}"
         f" · mem:{payload['mem_count']} {vec_glyph}"
+        f"{extras_str}"
     )

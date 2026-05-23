@@ -285,6 +285,9 @@ async def cmd_status(ctx: CommandContext) -> OutboundMessage:
     task_count = sum(1 for t in active_tasks if not t.done())
     with suppress(Exception):
         task_count += loop.subagents.get_running_count_by_session(ctx.key)
+    composition_payload = None
+    with suppress(Exception):
+        composition_payload = getattr(loop.context, "last_composition", None)
     return OutboundMessage(
         channel=ctx.msg.channel,
         chat_id=ctx.msg.chat_id,
@@ -299,6 +302,7 @@ async def cmd_status(ctx: CommandContext) -> OutboundMessage:
             max_completion_tokens=getattr(
                 getattr(loop.provider, "generation", None), "max_tokens", 8192
             ),
+            composition_payload=composition_payload,
         ),
         metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
     )
@@ -1348,11 +1352,12 @@ async def cmd_memory(ctx: CommandContext) -> OutboundMessage:
         return OutboundMessage(
             channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
             content=(
-                "Usage: `/memory <list|show|search|drill> [args]`.\n"
+                "Usage: `/memory <list|show|search|drill|reindex> [args]`.\n"
                 "- `/memory list [class]` — list entries.\n"
                 "- `/memory show <id>` — render one entry.\n"
                 "- `/memory search <query>` — search dreamed + undreamed.\n"
-                "- `/memory drill <uri>` — fetch a specific section."
+                "- `/memory drill <uri>` — fetch a specific section.\n"
+                "- `/memory reindex` — rebuild the vector index from disk."
             ),
             metadata=metadata_text,
         )
@@ -1466,9 +1471,79 @@ async def cmd_memory(ctx: CommandContext) -> OutboundMessage:
             metadata=dict(ctx.msg.metadata or {}),
         )
 
+    if sub == "reindex":
+        return await _memory_reindex(ctx, workspace, metadata_text)
+
     return OutboundMessage(
         channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
-        content=f"Unknown `/memory` subcommand `{sub}`. Try `list`, `show`, `search`, `drill`.",
+        content=(
+            f"Unknown `/memory` subcommand `{sub}`. "
+            f"Try `list`, `show`, `search`, `drill`, `reindex`."
+        ),
+        metadata=metadata_text,
+    )
+
+
+async def _memory_reindex(
+    ctx: CommandContext, workspace: "Path", metadata_text: dict
+) -> OutboundMessage:
+    """Rebuild the vector index from the markdown source of truth.
+
+    Covers three real-world cases:
+
+    1. The user changed ``memory.embedding.model`` and the on-disk
+       table has a stale dim. ``rebuild_from_workspace`` drops the
+       table and creates a new one with the current provider's dim.
+    2. The user edited memory entries by hand — those edits aren't
+       seen by the index until a rebuild.
+    3. The on-disk index got corrupted somehow and the user wants a
+       clean slate without losing the markdown.
+    """
+    cfg = ctx.loop.config
+    if not getattr(cfg.memory, "enabled", False):
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content=(
+                "Vector memory is off. Enable it first with "
+                "`durin onboard memory` or by setting `memory.enabled=true`."
+            ),
+            metadata=metadata_text,
+        )
+    from durin.memory.vector_index import VectorIndex, vector_index_available
+    if not vector_index_available():
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content=(
+                "Vector backend (lancedb) is not installed. "
+                "Install with `pip install durin-agent[memory]` or "
+                "`durin doctor --install-missing -y`."
+            ),
+            metadata=metadata_text,
+        )
+    from durin.memory.embedding import FastembedProvider
+    try:
+        provider = FastembedProvider(model=cfg.memory.embedding.model)
+    except Exception as exc:  # noqa: BLE001
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content=f"Could not load embedding model: {exc}",
+            metadata=metadata_text,
+        )
+    index = VectorIndex(workspace, provider)
+    try:
+        count = index.rebuild_from_workspace()
+    except Exception as exc:  # noqa: BLE001
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content=f"Rebuild failed: {exc}",
+            metadata=metadata_text,
+        )
+    return OutboundMessage(
+        channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+        content=(
+            f"Vector index rebuilt — {count} entries indexed with "
+            f"{provider.model_name} ({provider.dimensions}-dim)."
+        ),
         metadata=metadata_text,
     )
 
