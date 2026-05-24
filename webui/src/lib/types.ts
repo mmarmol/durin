@@ -215,6 +215,19 @@ export type ConnectionStatus =
   | "closed"
   | "error";
 
+/** Provider-retry banner payload. ``final=true`` means retries are
+ * exhausted — the next assistant message will be the error response.
+ * ``delay_s=0`` on a non-final event means the heartbeat is firing
+ * at chunk boundary (no actual wait left). */
+export interface ApiRetryStatus {
+  kind: "retry_wait" | "giving_up" | "exhausted_persistent";
+  attempt: number;
+  max_attempts: number | null;
+  delay_s: number;
+  persistent: boolean;
+  final: boolean;
+}
+
 export type InboundEvent =
   | { event: "ready"; chat_id: string; client_id: string }
   | { event: "attached"; chat_id: string }
@@ -285,6 +298,16 @@ export type InboundEvent =
       event: "goal_state";
       chat_id: string;
       goal_state: GoalStateWsPayload;
+    }
+  | {
+      /** Transient banner for provider retries / give-up. Never enters
+       * the transcript. Carries the structured ``status`` payload the
+       * provider's retry path emits (kind, attempt, max_attempts,
+       * delay_s, persistent, final). */
+      event: "api_status";
+      chat_id: string;
+      status: ApiRetryStatus;
+      message?: string;
     }
   | { event: "session_updated"; chat_id: string }
   | {

@@ -94,7 +94,12 @@ class LLMProvider(ABC):
 
     supports_progress_deltas = False
 
-    _CHAT_RETRY_DELAYS = (1, 2, 4)
+    # Standard-mode backoff. 6 retries (7 attempts total) with capped delays
+    # — total worst-case wait ~60s. Covers transient blips (DNS, brief
+    # provider overload, flaky residential network) without unbounded hangs.
+    # Persistent mode caps each delay at ``_PERSISTENT_MAX_DELAY`` and keeps
+    # retrying as long as errors are distinct.
+    _CHAT_RETRY_DELAYS = (1, 2, 4, 8, 15, 30)
     _PERSISTENT_MAX_DELAY = 60
     _PERSISTENT_IDENTICAL_ERROR_LIMIT = 10
     _RETRY_HEARTBEAT_CHUNK = 30
@@ -559,7 +564,7 @@ class LLMProvider(ABC):
         on_content_delta: Callable[[str], Awaitable[None]] | None = None,
         on_thinking_delta: Callable[[str], Awaitable[None]] | None = None,
         retry_mode: str = "standard",
-        on_retry_wait: Callable[[str], Awaitable[None]] | None = None,
+        on_retry_wait: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
     ) -> LLMResponse:
         """Call chat_stream() with retry on transient provider failures."""
         if max_tokens is self._SENTINEL or max_tokens is None:
@@ -594,7 +599,7 @@ class LLMProvider(ABC):
         reasoning_effort: object = _SENTINEL,
         tool_choice: str | dict[str, Any] | None = None,
         retry_mode: str = "standard",
-        on_retry_wait: Callable[[str], Awaitable[None]] | None = None,
+        on_retry_wait: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
     ) -> LLMResponse:
         """Call chat() with retry on transient provider failures.
 
@@ -705,16 +710,26 @@ class LLMProvider(ABC):
         delay: float,
         *,
         attempt: int,
+        max_attempts: int | None,
         persistent: bool,
-        on_retry_wait: Callable[[str], Awaitable[None]] | None = None,
+        on_retry_wait: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
     ) -> None:
         remaining = max(0.0, delay)
         while remaining > 0:
             if on_retry_wait:
                 kind = "persistent retry" if persistent else "retry"
+                remaining_s = max(1, int(round(remaining)))
                 await on_retry_wait(
-                    f"Model request failed, {kind} in {max(1, int(round(remaining)))}s "
-                    f"(attempt {attempt})."
+                    f"Model request failed, {kind} in {remaining_s}s "
+                    f"(attempt {attempt}).",
+                    {
+                        "kind": "retry_wait",
+                        "attempt": attempt,
+                        "max_attempts": max_attempts,
+                        "delay_s": remaining_s,
+                        "persistent": persistent,
+                        "final": False,
+                    },
                 )
             chunk = min(remaining, self._RETRY_HEARTBEAT_CHUNK)
             await asyncio.sleep(chunk)
@@ -727,11 +742,12 @@ class LLMProvider(ABC):
         original_messages: list[dict[str, Any]],
         *,
         retry_mode: str,
-        on_retry_wait: Callable[[str], Awaitable[None]] | None,
+        on_retry_wait: Callable[[str, dict[str, Any]], Awaitable[None]] | None,
     ) -> LLMResponse:
         attempt = 0
         delays = list(self._CHAT_RETRY_DELAYS)
         persistent = retry_mode == "persistent"
+        max_attempts = None if persistent else len(delays) + 1
         last_response: LLMResponse | None = None
         last_error_key: str | None = None
         identical_error_count = 0
@@ -772,7 +788,15 @@ class LLMProvider(ABC):
                 )
                 if on_retry_wait:
                     await on_retry_wait(
-                        f"Persistent retry stopped after {identical_error_count} identical errors."
+                        f"Persistent retry stopped after {identical_error_count} identical errors.",
+                        {
+                            "kind": "exhausted_persistent",
+                            "attempt": attempt,
+                            "max_attempts": None,
+                            "delay_s": 0,
+                            "persistent": True,
+                            "final": True,
+                        },
                     )
                 return response
 
@@ -790,7 +814,15 @@ class LLMProvider(ABC):
                     )
                 if on_retry_wait:
                     await on_retry_wait(
-                        f"Model request failed after {attempt} retries, giving up."
+                        f"Model request failed after {attempt} retries, giving up.",
+                        {
+                            "kind": "giving_up",
+                            "attempt": attempt,
+                            "max_attempts": max_attempts,
+                            "delay_s": 0,
+                            "persistent": False,
+                            "final": True,
+                        },
                     )
                 break
 
@@ -818,6 +850,7 @@ class LLMProvider(ABC):
             await self._sleep_with_heartbeat(
                 delay,
                 attempt=attempt,
+                max_attempts=max_attempts,
                 persistent=persistent,
                 on_retry_wait=on_retry_wait,
             )

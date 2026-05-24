@@ -5,6 +5,7 @@ import { toMediaAttachment } from "@/lib/media";
 import { mergeToolEvents, toolTraceLinesFromEvents } from "@/lib/tool-traces";
 import type { StreamError } from "@/lib/durin-client";
 import type {
+  ApiRetryStatus,
   InboundEvent,
   OutboundImageGeneration,
   OutboundMedia,
@@ -224,6 +225,11 @@ export function useDurinStream(
   /** Clear the current ``streamError`` (e.g. after the user dismisses the
    * notification or starts a fresh action). */
   dismissStreamError: () => void;
+  /** Latest provider-retry banner ``status`` (heartbeat or terminal). Cleared
+   * on ``turn_end``, on a successful assistant ``message``, or via
+   * ``dismissApiStatus``. */
+  apiStatus: ApiRetryStatus | null;
+  dismissApiStatus: () => void;
 } {
   const { client } = useClient();
   const [messages, setMessages] = useState<UIMessage[]>(initialMessages);
@@ -238,6 +244,7 @@ export function useDurinStream(
   const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
   const [goalState, setGoalState] = useState<GoalStateWsPayload | undefined>(undefined);
   const [streamError, setStreamError] = useState<StreamError | null>(null);
+  const [apiStatus, setApiStatus] = useState<ApiRetryStatus | null>(null);
   const buffer = useRef<StreamBuffer | null>(null);
   const suppressStreamUntilTurnEndRef = useRef(false);
   /** Timer that defers ``isStreaming = false`` after ``stream_end``.
@@ -254,6 +261,7 @@ export function useDurinStream(
   }, [client]);
 
   const dismissStreamError = useCallback(() => setStreamError(null), []);
+  const dismissApiStatus = useCallback(() => setApiStatus(null), []);
 
   // Reset local state when switching chats. Do not reset on every
   // ``initialMessages`` update: a brand-new chat can receive an empty/404
@@ -266,6 +274,7 @@ export function useDurinStream(
         : false) || hasPendingToolCalls,
     );
     setStreamError(null);
+    setApiStatus(null);
     setRunStartedAt(chatId ? client.getRunStartedAt(chatId) : null);
     setGoalState(chatId ? client.getGoalState(chatId) : undefined);
     buffer.current = null;
@@ -367,6 +376,11 @@ export function useDurinStream(
         return;
       }
 
+      if (ev.event === "api_status") {
+        setApiStatus(ev.status);
+        return;
+      }
+
       if (ev.event === "goal_status") {
         if (ev.status === "running" && typeof ev.started_at === "number") {
           setRunStartedAt(ev.started_at);
@@ -387,6 +401,11 @@ export function useDurinStream(
           streamEndTimerRef.current = null;
         }
         setIsStreaming(false);
+        // Once the turn ends the banner is stale either way: a terminal
+        // ``final=true`` status was followed by the error response (now
+        // in the transcript); a non-terminal status means retries
+        // succeeded.  Either way the user no longer needs the banner.
+        setApiStatus(null);
         setMessages((prev) => {
           let finalized = prev.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m));
           finalized = pruneReasoningOnlyPlaceholders(finalized);
@@ -577,5 +596,7 @@ export function useDurinStream(
     setMessages,
     streamError,
     dismissStreamError,
+    apiStatus,
+    dismissApiStatus,
   };
 }

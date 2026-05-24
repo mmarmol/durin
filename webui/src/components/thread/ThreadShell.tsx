@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { ThreadActionsProvider } from "@/components/thread/ThreadActionsContext";
 import { ThreadComposer } from "@/components/thread/ThreadComposer";
 import { ThreadHeader } from "@/components/thread/ThreadHeader";
+import { ApiStatusBanner } from "@/components/thread/ApiStatusBanner";
 import { StreamErrorNotice } from "@/components/thread/StreamErrorNotice";
 import { ThreadViewport } from "@/components/thread/ThreadViewport";
 import { useDurinStream, type SendImage, type SendOptions } from "@/hooks/useDurinStream";
@@ -97,6 +98,8 @@ export function ThreadShell({
     setMessages,
     streamError,
     dismissStreamError,
+    apiStatus,
+    dismissApiStatus,
   } = useDurinStream(chatId, initial, hasPendingToolCalls, handleTurnEnd);
 
   useEffect(() => {
@@ -261,6 +264,12 @@ export function ThreadShell({
         <StreamErrorNotice
           error={streamError}
           onDismiss={dismissStreamError}
+        />
+      ) : null}
+      {apiStatus ? (
+        <ApiStatusBanner
+          status={apiStatus}
+          onDismiss={dismissApiStatus}
         />
       ) : null}
       {session ? (

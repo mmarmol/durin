@@ -67,10 +67,14 @@ async def test_chat_with_retry_does_not_retry_non_transient_error(monkeypatch) -
 
 @pytest.mark.asyncio
 async def test_chat_with_retry_returns_final_error_after_retries(monkeypatch) -> None:
+    # 6 transient + 1 final = 7 calls (matches len(_CHAT_RETRY_DELAYS)+1).
     provider = ScriptedProvider([
         LLMResponse(content="429 rate limit a", finish_reason="error"),
         LLMResponse(content="429 rate limit b", finish_reason="error"),
         LLMResponse(content="429 rate limit c", finish_reason="error"),
+        LLMResponse(content="429 rate limit d", finish_reason="error"),
+        LLMResponse(content="429 rate limit e", finish_reason="error"),
+        LLMResponse(content="429 rate limit f", finish_reason="error"),
         LLMResponse(content="503 final server error", finish_reason="error"),
     ])
     delays: list[int] = []
@@ -83,8 +87,8 @@ async def test_chat_with_retry_returns_final_error_after_retries(monkeypatch) ->
     response = await provider.chat_with_retry(messages=[{"role": "user", "content": "hello"}])
 
     assert response.content == "503 final server error"
-    assert provider.calls == 4
-    assert delays == [1, 2, 4]
+    assert provider.calls == 7
+    assert delays == [1, 2, 4, 8, 15, 30]
 
 
 @pytest.mark.asyncio
@@ -93,15 +97,18 @@ async def test_chat_with_retry_emits_terminal_progress_when_standard_retries_exh
         LLMResponse(content="429 rate limit a", finish_reason="error"),
         LLMResponse(content="429 rate limit b", finish_reason="error"),
         LLMResponse(content="429 rate limit c", finish_reason="error"),
+        LLMResponse(content="429 rate limit d", finish_reason="error"),
+        LLMResponse(content="429 rate limit e", finish_reason="error"),
+        LLMResponse(content="429 rate limit f", finish_reason="error"),
         LLMResponse(content="503 final server error", finish_reason="error"),
     ])
-    progress: list[str] = []
+    progress: list[tuple[str, dict]] = []
 
     async def _fake_sleep(delay: int) -> None:
         return None
 
-    async def _progress(msg: str) -> None:
-        progress.append(msg)
+    async def _progress(msg: str, status: dict) -> None:
+        progress.append((msg, status))
 
     monkeypatch.setattr("durin.providers.base.asyncio.sleep", _fake_sleep)
 
@@ -111,7 +118,11 @@ async def test_chat_with_retry_emits_terminal_progress_when_standard_retries_exh
     )
 
     assert response.content == "503 final server error"
-    assert progress[-1] == "Model request failed after 4 retries, giving up."
+    last_msg, last_status = progress[-1]
+    assert last_msg == "Model request failed after 7 retries, giving up."
+    assert last_status["kind"] == "giving_up"
+    assert last_status["final"] is True
+    assert last_status["attempt"] == 7
 
 
 @pytest.mark.asyncio
@@ -266,13 +277,13 @@ async def test_chat_with_retry_uses_retry_after_and_emits_wait_progress(monkeypa
         LLMResponse(content="ok"),
     ])
     delays: list[float] = []
-    progress: list[str] = []
+    progress: list[tuple[str, dict]] = []
 
     async def _fake_sleep(delay: float) -> None:
         delays.append(delay)
 
-    async def _progress(msg: str) -> None:
-        progress.append(msg)
+    async def _progress(msg: str, status: dict) -> None:
+        progress.append((msg, status))
 
     monkeypatch.setattr("durin.providers.base.asyncio.sleep", _fake_sleep)
 
@@ -283,7 +294,13 @@ async def test_chat_with_retry_uses_retry_after_and_emits_wait_progress(monkeypa
 
     assert response.content == "ok"
     assert delays == [7.0]
-    assert progress and "7s" in progress[0]
+    assert progress and "7s" in progress[0][0]
+    first_status = progress[0][1]
+    assert first_status["kind"] == "retry_wait"
+    assert first_status["attempt"] == 1
+    assert first_status["delay_s"] == 7
+    assert first_status["max_attempts"] == 7
+    assert first_status["final"] is False
 
 
 def test_extract_retry_after_supports_common_provider_formats() -> None:
@@ -495,7 +512,10 @@ async def test_persistent_retry_aborts_after_ten_identical_transient_errors(monk
     assert response.finish_reason == "error"
     assert response.content == "429 rate limit"
     assert provider.calls == 10
-    assert delays == [1, 2, 4, 4, 4, 4, 4, 4, 4]
+    # New _CHAT_RETRY_DELAYS = (1, 2, 4, 8, 15, 30); persistent mode caps at
+    # _PERSISTENT_MAX_DELAY (60) and keeps replaying the last delay once we
+    # walk off the end of the tuple. 10 calls → 9 sleeps.
+    assert delays == [1, 2, 4, 8, 15, 30, 30, 30, 30]
 
 
 @pytest.mark.asyncio
@@ -503,13 +523,13 @@ async def test_persistent_retry_emits_terminal_progress_on_identical_error_limit
     provider = ScriptedProvider([
         *[LLMResponse(content="429 rate limit", finish_reason="error") for _ in range(10)],
     ])
-    progress: list[str] = []
+    progress: list[tuple[str, dict]] = []
 
     async def _fake_sleep(delay: float) -> None:
         return None
 
-    async def _progress(msg: str) -> None:
-        progress.append(msg)
+    async def _progress(msg: str, status: dict) -> None:
+        progress.append((msg, status))
 
     monkeypatch.setattr("durin.providers.base.asyncio.sleep", _fake_sleep)
 
@@ -520,7 +540,11 @@ async def test_persistent_retry_emits_terminal_progress_on_identical_error_limit
     )
 
     assert response.finish_reason == "error"
-    assert progress[-1] == "Persistent retry stopped after 10 identical errors."
+    last_msg, last_status = progress[-1]
+    assert last_msg == "Persistent retry stopped after 10 identical errors."
+    assert last_status["kind"] == "exhausted_persistent"
+    assert last_status["persistent"] is True
+    assert last_status["final"] is True
 
 
 @pytest.mark.asyncio

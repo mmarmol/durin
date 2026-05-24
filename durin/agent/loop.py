@@ -171,7 +171,7 @@ class TurnContext:
     on_progress: Callable[..., Awaitable[None]] | None = None
     on_stream: Callable[[str], Awaitable[None]] | None = None
     on_stream_end: Callable[..., Awaitable[None]] | None = None
-    on_retry_wait: Callable[[str], Awaitable[None]] | None = None
+    on_retry_wait: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None
 
     pending_queue: asyncio.Queue | None = None
     pending_summary: str | None = None
@@ -689,12 +689,19 @@ class AgentLoop:
 
     async def _build_retry_wait_callback(
         self, msg: InboundMessage
-    ) -> Callable[[str], Awaitable[None]]:
-        """Build a retry-wait callback that publishes to the message bus."""
+    ) -> Callable[[str, dict[str, Any]], Awaitable[None]]:
+        """Build a retry-wait callback that publishes to the message bus.
 
-        async def _on_retry_wait(content: str) -> None:
+        The channel sees two flags: ``_retry_wait`` to identify the
+        message kind, and ``retry_status`` carrying the structured
+        payload (attempt / delay_s / kind / persistent / final) the UI
+        needs to render the banner.
+        """
+
+        async def _on_retry_wait(content: str, status: dict[str, Any]) -> None:
             meta = dict(msg.metadata or {})
             meta["_retry_wait"] = True
+            meta["retry_status"] = status
             await self.bus.publish_outbound(
                 OutboundMessage(
                     channel=msg.channel,
@@ -802,7 +809,7 @@ class AgentLoop:
         on_progress: Callable[..., Awaitable[None]] | None = None,
         on_stream: Callable[[str], Awaitable[None]] | None = None,
         on_stream_end: Callable[..., Awaitable[None]] | None = None,
-        on_retry_wait: Callable[[str], Awaitable[None]] | None = None,
+        on_retry_wait: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
         *,
         session: Session | None = None,
         channel: str = "cli",
