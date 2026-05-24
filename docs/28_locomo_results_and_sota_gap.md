@@ -15,9 +15,14 @@
 - **Score: 57.8% (59/102), glm-5.1**, vector retrieval active end-to-end.
 - **5.8× over no-memory baseline** (10% on 10-QA ablation).
 - **Far from SOTA** (HyperMem 92.73%, Mem0 92.5%). Gap is **~35pp**.
-- **Highest-ROI lever is synthesis discipline / cite-only output**
-  (closes ~30% of fails — agent over-generates from correct retrieval).
-  Nearly free, pure prompt + render change.
+- **Pre-everything: ~5-8pp of the gap is harness/infra**, not durin.
+  3 fails were LLM connection errors / max-iter (retriable). 2-3 more
+  reference data the harness drops (image captions, event summaries —
+  see §4.5). Realistic clean-score: **~61-63%** before any architectural
+  change. Step -1 in §7.
+- **Highest-ROI architectural lever is synthesis discipline / cite-only
+  output** (closes ~30% of fails — agent over-generates from correct
+  retrieval). Nearly free, pure prompt + render change.
 - **Second is list-aware retrieval expansion** (~26% of fails are
   list-shape questions where top-10 misses items).
 - **Atomic fact extraction is NOT the top lever** despite being the
@@ -29,6 +34,9 @@
   Durin's entity-centric bet optimizes for cross-session coherence —
   a use case LoCoMo doesn't measure. The entity layer isn't what's
   hurting us on LoCoMo, but it isn't what would close the gap either.
+- **Honesty note**: 2 versions of §4 were wrong before being corrected
+  via user pushback. The doc keeps the audit trail (§4 preface) so a
+  reader sees the iterations, not just the final claim.
 
 ---
 
@@ -110,12 +118,17 @@ but doesn't filter retrieval by it.
 
 ## §4 — Failure attribution: per-trace, per-category (EMPIRICAL)
 
-> **First draft note (kept for honesty)**: a prior version of this
-> section attributed fails to SOTA techniques cross-category (e.g.
-> "BM25 closes 10 fails", "atomic facts close 17"). That was
-> hand-wavy: counts mixed categories and didn't survive per-trace
-> verification. This section is the rewritten version after manually
-> reading every trace's `tool_calls` + `verdict.reasoning`.
+> **Two drafts kept for honesty**:
+> 1. **v1 mistake (cross-category gap counting)**: attributed fails to
+>    SOTA techniques across categories ("BM25 closes 10", "atomic facts
+>    close 17"). Didn't survive per-trace verification.
+> 2. **v2 mistake (assumed harness was correct)**: ran per-trace audit
+>    classifying every fail as agent/memory/synthesis issue. Missed that
+>    **the harness silently drops data**. After user pushed on a specific
+>    case (`conv-2-q19` windshield), found that ~20% of seeded turns lose
+>    image context and ~5-10% of fails reference data only in non-turn
+>    fields the harness ignores. The §4 attribution below stands for the
+>    fails where data IS reachable; see §4.6 for the harness-gap subset.
 
 ### §4.1 — Causes per category (single-attribution, dominant cause)
 
@@ -177,7 +190,82 @@ disambiguation is needed (`conv-7-q43` neighbor name never resolved).
 Vector's "neighborhood of fragments" coverage helps multi-hop more
 than single-hop's atomic-noun retrieval.
 
-### §4.5 — What the telemetry confirms across the whole run
+### §4.5 — Harness data-seeding audit (discovered after v2)
+
+Triggered by user request to verify `conv-2-q19` ("What damages have
+happened to John's car?" → expected "Broken windshield, Car broke
+down"). The agent only retrieved the broke-down fact. Investigation
+revealed:
+
+**"windshield" does not appear in conv-2's seeded turn transcript at
+all.** It exists in 3 places in the raw LoCoMo JSON:
+1. `event_summary.events_session_4.John[0]` — "John suffers from an
+   accident where his car's windshield is shattered"
+2. `conversation.session_4[1].blip_caption` — "a photo of a car with
+   a broken windshield"
+3. `conversation.session_4[1].query` — "shattered windshield"
+
+The harness only seeds `turn.text`. It drops 4 fields:
+
+| Field | Counts (across 1542 QAs, 10 conversations) | Currently seeded? |
+|---|---|---|
+| `turn.text` | 5882 turns | ✅ |
+| `turn.blip_caption` (visual description) | 1226 turns (20.8%) | ❌ |
+| `turn.query` (image search context) | 888 turns (15.1%) | ❌ |
+| `turn.img_url` | 910 turns | ❌ (probably not needed) |
+| `event_summary` (per-session events) | 1 per session × 288 sessions | ❌ |
+| `observation` | top-level summary | ❌ |
+| `session_summary` | per-session high-level | ❌ |
+
+**Of the 43 fails, with refined keyword matching:**
+
+| Category | Count | Meaning |
+|---|---|---|
+| **Infra error** (LLM connection / max_iter) | 3 | Should be retried, not counted as real fails |
+| **Data fully in seeded turns** | 18 | Real fail — agent had access |
+| **Critical keyword only in non-turn fields** | 10 | **Possible harness gap** — needs per-case verification |
+| **Expected keywords nowhere by regex** | 12 | Either paraphrase, compound concept, or judge-only reference |
+
+The "10 critical-keyword-only-in-non-turn" needs care. Several are
+**not** real harness gaps:
+
+- `conv-2-q48` "july" — the date IS seeded as `valid_from: 2023-07-02`,
+  but the agent doesn't translate ISO dates to month names. **Agent gap
+  (date arithmetic), not harness gap.**
+- `conv-5-q55`, `conv-7-q43` (november, april) — same date-format issue.
+- `conv-3-q66`, `conv-3-q84`, `conv-8-q46` — paraphrase issues; the
+  concept is in turns but expressed with different words.
+
+**Verified harness gaps (manual check)**: 2-3 fails, including
+`conv-2-q19` (windshield in blip_caption + event_summary only),
+`conv-3-q16` (purple hair color likely in blip_caption), `conv-6-q19`
+("creatures that gave him joy" possibly in event_summary).
+
+**Infra fails** (should-be-retried):
+- `conv-6-q11`: hit max-iterations searching for emotional state
+- `conv-9-q65`: LLM connection error after retries exhausted
+- `conv-4-q27`: same — LLM connection error
+
+### §4.6 — What this means for the 57.8% score
+
+Adjusted reading: of 43 fails,
+- ~3 are infra (should be retried before counting → +2-3pp ceiling)
+- ~2-3 are harness data-seeding gaps (could be fixed → +2-3pp)
+- ~37-38 are real (agent / memory / synthesis / ranking)
+
+**Realistic clean-score after infra retry + harness data-seed fix:
+~61-63%.** Not the ~65% suggested by the original "5 harness gap fails"
+estimate. The harness gap is real but smaller than first reported.
+
+The bigger finding from this audit is **methodology**: the per-trace
+agent classification in §4.1 over-attributed some fails (e.g.
+`conv-2-q19` was classified as "coverage_gap_list" — agent only got
+1 of 2 damages — but reality was "answer not seeded"; agent did its
+best). Estimate **3-5 fails in §4.1 are misclassified** from this
+cause. The category-level dominant patterns still hold (synthesis ~30%,
+coverage gap ~26%) but the exact counts should be read ±3.
+
+### §4.7 — What the telemetry confirms across the whole run
 
 - `memory.recall.vector` fires when memory_search is called: vector path
   active in ~7/10 calls per QA (was 0/10 pre-fix). The retrieval **API**
@@ -266,9 +354,44 @@ valuable in both regimes).
 
 ## §7 — Recommended next steps (revised, empirical)
 
-**Re-ordered by ROI/effort after §4 audit.** Pick from top — each row
-is independently shippable. Re-bench after each to measure delta in
-isolation. Same 102-QA seed for comparability.
+**Re-ordered by ROI/effort after §4 audit (including §4.5 harness
+discovery).** Pick from top — each row is independently shippable.
+Re-bench after each to measure delta in isolation. Same 102-QA seed
+for comparability.
+
+### Step -1 — Fix harness data-seeding gaps (~3-5pp ceiling)
+
+**Discovered in §4.5.** The harness drops 4 fields per turn/conversation
+that contain answer-relevant info for some QAs.
+
+**What to change in [`scripts/benchmark/locomo_harness.py::_seed_memory_from_conversation`](../scripts/benchmark/locomo_harness.py):**
+
+1. **When a turn has `blip_caption`, append it to the seeded `text`**
+   with a marker like `[image: <caption>]` (or store as a separate
+   episodic entry so it's independently retrievable). Same for `query`.
+2. **Seed `event_summary` per session** as one episodic entry per
+   session — gives the agent access to the LoCoMo curator's session-
+   level event summary. Should match conv's `session_N_date_time` for
+   temporal anchoring.
+3. **Optionally seed `observation` and `session_summary`** at the
+   conversation level.
+
+**Also fix in [`run_qa`](../scripts/benchmark/locomo_harness.py)**:
+retry on `LLM Connection error` and `max_iter` stop_reasons — 3 fails
+in current run were pure infra. Either:
+- Add a `--retry-on-infra-error N` flag to `locomo_run.py` that
+  re-invokes `run_qa` for those QAs after the main pass.
+- Or just bump per-QA retries via the existing `provider.base.py`
+  `_CHAT_RETRY_DELAYS` extension we already did.
+
+**Effort**: ~80-150 LOC across `locomo_harness.py::_seed_memory_from_conversation`
++ a small retry wrapper in `locomo_run.py`.
+
+**Risk**: Low. Changes only the bench, not durin. Adds more content
+to seeded memory; might slightly increase per-QA wall-clock (more
+embeddings to compute) but the index already builds in seconds.
+
+**Expected impact**: +3-5pp ceiling. Score 57.8% → ~61-63%.
 
 ### Step 0 — Cheap signal (do first, ~30-60 min, zero code)
 
@@ -442,4 +565,4 @@ These came out of running the 102-QA pass:
 
 ---
 
-## Last updated: 2026-05-24 (first real run + per-trace audit; §4-§7 rewritten after cross-category attribution was found unreliable)
+## Last updated: 2026-05-24 (first run + 2× corrections — see §4 preface for audit trail; v1 had cross-category over-attribution, v2 missed harness data-seed gaps found in §4.5)
