@@ -118,17 +118,21 @@ class MemoryStoreTool(Tool):
         # Vector retrieval is opt-in (memory.enabled). When off, pass no
         # embedding model so `_get_vector_index` stays None and the tool
         # degrades to markdown-only memory.
+        # Read from ``ctx.app_config`` (full DurinConfig) — ``ctx.config``
+        # only carries ``cfg.tools`` and has no memory section.
         model = None
-        try:
-            if ctx.config.memory.enabled:
-                model = ctx.config.memory.embedding.model
-        except (AttributeError, TypeError):
-            model = None
         dream_cfg = None
-        try:
-            dream_cfg = ctx.config.memory.dream
-        except (AttributeError, TypeError):
-            dream_cfg = None
+        app = getattr(ctx, "app_config", None)
+        if app is not None:
+            try:
+                if app.memory.enabled:
+                    model = app.memory.embedding.model
+            except (AttributeError, TypeError):
+                model = None
+            try:
+                dream_cfg = app.memory.dream
+            except (AttributeError, TypeError):
+                dream_cfg = None
         return cls(
             workspace=ctx.workspace,
             embedding_model=model,

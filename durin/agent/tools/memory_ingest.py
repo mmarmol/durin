@@ -86,12 +86,16 @@ class MemoryIngestTool(Tool):
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
+        # Read memory.* from the full DurinConfig on ctx.app_config —
+        # ctx.config (= cfg.tools) does not carry a memory section.
         model = None
-        try:
-            if ctx.config.memory.enabled:
-                model = ctx.config.memory.embedding.model
-        except (AttributeError, TypeError):
-            model = None
+        app = getattr(ctx, "app_config", None)
+        if app is not None:
+            try:
+                if app.memory.enabled:
+                    model = app.memory.embedding.model
+            except (AttributeError, TypeError):
+                model = None
         return cls(workspace=ctx.workspace, embedding_model=model)
 
     def _get_vector_index(self) -> Optional[VectorIndex]:

@@ -57,3 +57,10 @@ class ToolContext:
     # they only appear in the LLM's tool list when a bridge target is
     # actually available.
     aux_providers: dict[str, AuxProviderHandle] = field(default_factory=dict)
+    # Full :class:`DurinConfig` for tools that need cross-section access
+    # (e.g. ``memory_search`` reading ``memory.enabled``+ ``memory.embedding``
+    # while ``config`` only carries ``cfg.tools``). Optional so ad-hoc
+    # test constructions don't have to thread the whole config — tools
+    # treat ``None`` the same as a missing section and fall back to grep
+    # / disabled behaviour.
+    app_config: Any | None = None

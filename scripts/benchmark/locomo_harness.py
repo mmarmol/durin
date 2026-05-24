@@ -113,6 +113,12 @@ async def run_qa(
     # much the memory layer actually contributes vs. answering cold).
     if enable_memory and qa.conversation is not None:
         _seed_memory_from_conversation(workspace_root, qa.conversation)
+        # Build the vector index over the seeded files. Without this
+        # `memory_search` falls to substring grep over the full natural-
+        # language query and returns 0 for queries like "Calvin Japan
+        # stay" (verified in 12cc1897 run). The bench is not a clean
+        # install — we want the full retrieval stack active.
+        _build_vector_index(workspace_root)
 
     # Bind per-QA telemetry. Every memory.recall / memory.store /
     # tool.* / cache.usage / compaction.* event durin emits while
@@ -204,6 +210,41 @@ def _seed_memory_from_conversation(
                                   conv.conv_id, session.index)
 
 
+def _build_vector_index(workspace: Path) -> None:
+    """Embed every seeded ``memory/<class>/*.md`` so vector search works.
+
+    Bulk-seeded entries (`store_memory`) skip the index by design —
+    only the tool path (`memory_store`) embeds at write time. For the
+    bench we want vector retrieval active, so we rebuild over the whole
+    workspace once after the seed.
+
+    Silent no-op when ``lancedb`` is unavailable in the env — the agent
+    still has the grep fallback. The first call triggers the embedding
+    model download (~400 MB, cached at ``~/.cache/fastembed``).
+    """
+    from durin.config.loader import load_config
+    from durin.memory.vector_index import VectorIndex, vector_index_available
+
+    if not vector_index_available():
+        logger.warning(
+            "vector index unavailable (lancedb not installed); bench will "
+            "fall back to grep retrieval"
+        )
+        return
+    cfg = load_config()
+    try:
+        from durin.memory.embedding import FastembedProvider
+
+        provider = FastembedProvider(model=cfg.memory.embedding.model)
+        vi = VectorIndex(workspace, provider)
+        n = vi.rebuild_from_workspace()
+        logger.info("vector index built: %d entries in %s", n, workspace)
+    except Exception:  # noqa: BLE001
+        # Single bad index build must NOT kill the QA — agent still has
+        # grep + filesystem grep as fallbacks.
+        logger.exception("vector index build failed for %s", workspace)
+
+
 def _slug(name: str) -> str:
     """Lowercase + non-alphanum → underscore. Stable across runs."""
     out: list[str] = []
@@ -272,6 +313,12 @@ async def _ask_agent(
     if model:
         cfg.agents.defaults.model = model
     cfg.agents.defaults.max_tool_iterations = max_iterations
+    # Activate vector retrieval for the bench. The durin default is opt-in
+    # (the embedding model is ~400 MB) but the bench is not a clean
+    # install — we want the full retrieval stack so memory_search uses
+    # semantic similarity instead of literal substring match.
+    if enable_memory:
+        cfg.memory.enabled = True
 
     bus = MessageBus()
     loop_agent = AgentLoop.from_config(cfg, bus=bus)
