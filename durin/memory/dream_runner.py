@@ -32,6 +32,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -84,6 +85,10 @@ class DreamRunner:
         model: str | None = None,
         vector_index: object | None = None,
         llm_invoke: Callable[..., str] | None = None,
+        auto_absorb_enabled: bool = False,
+        auto_absorb_threshold: int = 95,
+        auto_absorb_min_age_hours: int = 24,
+        auto_absorb_judge_model: str | None = None,
     ) -> None:
         self.workspace = Path(workspace)
         self.memory_root = self.workspace / "memory"
@@ -91,6 +96,15 @@ class DreamRunner:
         self.model = model
         self._vector_index = vector_index
         self._llm_invoke = llm_invoke
+        # §2.D auto-absorb config. Default disabled — blast radius of a
+        # silent false-positive merge is high enough that opt-in is the
+        # right ergonomics. Threshold 95 favours precision; 24h
+        # quarantine prevents the runner from judging pages it just
+        # created (glm peer review C3, 2026-05-24).
+        self._auto_absorb_enabled = bool(auto_absorb_enabled)
+        self._auto_absorb_threshold = max(0, min(100, int(auto_absorb_threshold)))
+        self._auto_absorb_min_age_hours = max(0, int(auto_absorb_min_age_hours))
+        self._auto_absorb_judge_model = auto_absorb_judge_model
 
     # ------------------------------------------------------------------
     # public entry
@@ -164,6 +178,18 @@ class DreamRunner:
 
         duration = time.monotonic() - start
         self._emit_end(trigger, entity_filter, consolidated, failed, duration)
+
+        # §2.D: auto-absorb post-dream. Runs only when at least one
+        # entity was consolidated (no point re-judging pairs that
+        # haven't changed since the last pass) AND the feature is
+        # explicitly enabled. Wrapped in try/except so a judge or
+        # absorb failure NEVER masks a successful consolidate.
+        if self._auto_absorb_enabled and consolidated > 0:
+            try:
+                self._maybe_auto_absorb()
+            except Exception:
+                logger.exception("auto_absorb pass raised; consolidate already done")
+
         return DreamRunResult(
             ran=True, reason="ok",
             entities_consolidated=consolidated,
@@ -334,5 +360,311 @@ class DreamRunner:
                 "trigger": trigger,
                 "reason": reason,
                 "entity_filter": entity_filter or "",
+            },
+        )
+
+    # ------------------------------------------------------------------
+    # §2.D auto-absorb post-dream
+    # ------------------------------------------------------------------
+
+    def _maybe_auto_absorb(self) -> None:
+        """Find alias-overlap candidates, judge, and auto-merge.
+
+        Implements §2.D end-to-end:
+
+        1. ``EntityAbsorption.find_candidates()`` — pairs sharing ≥1 alias.
+        2. Cross-type filter — skip ``person:x`` vs ``project:x`` pairs.
+        3. 24h quarantine — skip pairs where either page was created or
+           last dreamed within ``min_age_hours`` (mitigates the
+           premature-consolidation loop where the dream that just wrote
+           two near-identical pages immediately judges them).
+        4. LLM-judge via :func:`durin.memory.absorb_judge.judge_pair`.
+        5. Merge only when ``verdict == "same"`` AND
+           ``confidence >= threshold``.
+
+        Telemetry covers every decision (judged / skipped / auto_merged)
+        so §2.E aggregator can compute false-positive rate from the
+        eventual ``memory.absorb.reverted`` signal.
+        """
+        from durin.memory.absorb_judge import JudgeError, judge_pair
+        from durin.memory.absorption import EntityAbsorption
+
+        absorber = EntityAbsorption(
+            workspace=self.workspace, vector_index=self._vector_index,
+        )
+        candidates = absorber.find_candidates()
+        if not candidates:
+            return
+
+        llm_invoke = self._llm_invoke_for_judge()
+        judge_model = self._auto_absorb_judge_model or self.model or "glm-5.1"
+
+        for cand in candidates:
+            ref_a, ref_b = cand.refs
+            type_a = ref_a.split(":", 1)[0] if ":" in ref_a else ""
+            type_b = ref_b.split(":", 1)[0] if ":" in ref_b else ""
+
+            # 2. Cross-type — different kinds of entity can legitimately
+            # share a casual alias (admin / user). Drop without judging.
+            if type_a != type_b:
+                self._emit_absorb_skipped(ref_a, ref_b, 0, "cross_type")
+                continue
+
+            # Load pages with mtime for quarantine check + judge context.
+            page_a, mtime_a = self._load_page_with_mtime(ref_a)
+            page_b, mtime_b = self._load_page_with_mtime(ref_b)
+            if page_a is None or page_b is None:
+                self._emit_absorb_skipped(ref_a, ref_b, 0, "page_load_failed")
+                continue
+
+            # 3. Quarantine — both pages must be older than the window.
+            if self._is_quarantined(mtime_a, mtime_b):
+                self._emit_absorb_skipped(ref_a, ref_b, 0, "quarantine")
+                continue
+
+            # 4. LLM-judge.
+            judge_start = time.monotonic()
+            try:
+                judged = judge_pair(
+                    canonical=page_a, absorbed=page_b,
+                    shared_aliases=list(cand.shared_aliases),
+                    llm_invoke=llm_invoke,
+                    model=judge_model,
+                    canonical_ref=ref_a, absorbed_ref=ref_b,
+                    canonical_mtime=mtime_a, absorbed_mtime=mtime_b,
+                )
+            except JudgeError as exc:
+                logger.warning(
+                    "absorb_judge failed for %s vs %s: %s", ref_a, ref_b, exc,
+                )
+                self._emit_absorb_skipped(ref_a, ref_b, 0, "judge_failed")
+                continue
+            duration_ms = (time.monotonic() - judge_start) * 1000.0
+
+            # Always emit judged for telemetry/tuning.
+            self._emit_absorb_judged(ref_a, ref_b, judged, duration_ms)
+
+            # 5. Decision.
+            if judged.verdict != "same":
+                self._emit_absorb_skipped(
+                    ref_a, ref_b, judged.confidence,
+                    f"verdict_{judged.verdict}",
+                )
+                continue
+            if judged.confidence < self._auto_absorb_threshold:
+                self._emit_absorb_skipped(
+                    ref_a, ref_b, judged.confidence, "below_threshold",
+                )
+                continue
+
+            # Pick canonical slug (D6) then absorb. Content from BOTH
+            # pages is preserved via _merge_pages — the canonical slug
+            # only decides which URL wins.
+            canonical, absorbed = self._pick_canonical(
+                ref_a, page_a, ref_b, page_b,
+            )
+            try:
+                sha = absorber.absorb(
+                    canonical, absorbed,
+                    reason="auto",
+                    judge_reasoning=judged.reasoning,
+                    judge_confidence=judged.confidence,
+                )
+            except Exception:
+                logger.exception(
+                    "auto-absorb merge failed for %s ← %s", canonical, absorbed,
+                )
+                self._emit_absorb_skipped(
+                    canonical, absorbed, judged.confidence, "absorb_failed",
+                )
+                continue
+            self._emit_absorb_auto_merged(
+                canonical, absorbed, judged.confidence, sha or "",
+            )
+
+    def _llm_invoke_for_judge(self) -> Callable[..., str]:
+        """Resolve the LLM invoker for the judge call.
+
+        Falls through to :func:`durin.memory.dream.default_llm_invoke`
+        when the runner wasn't given an explicit one. Tests inject
+        their own via ``llm_invoke=...`` in the constructor.
+        """
+        if self._llm_invoke is not None:
+            return self._llm_invoke
+        from durin.memory.dream import default_llm_invoke
+
+        return default_llm_invoke
+
+    def _load_page_with_mtime(
+        self, ref: str,
+    ) -> tuple[Optional[object], Optional[datetime]]:
+        """Load an EntityPage + its file mtime. Returns (None, None) on miss.
+
+        Type/slug split must succeed; archived pages live under a slug
+        subfolder so we filter them out by checking that the resolved
+        path is the top-level page (not a child of ``.../<slug>/...``).
+        """
+        from durin.memory.entity_page import EntityPage
+
+        if ":" not in ref:
+            return None, None
+        type_, slug = ref.split(":", 1)
+        path = self.memory_root / "entities" / type_ / f"{slug}.md"
+        if not path.is_file():
+            return None, None
+        try:
+            page = EntityPage.from_file(path)
+        except Exception:  # noqa: BLE001
+            return None, None
+        if page is None:
+            return None, None
+        try:
+            mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+        except OSError:
+            mtime = None
+        return page, mtime
+
+    def _is_quarantined(
+        self,
+        mtime_a: Optional[datetime],
+        mtime_b: Optional[datetime],
+    ) -> bool:
+        """True iff either page is younger than the quarantine window.
+
+        ``min_age_hours <= 0`` disables the gate entirely. Missing
+        mtimes are treated as too-new (cautious default) so a page
+        that lost its file metadata doesn't accidentally bypass the
+        quarantine.
+        """
+        if self._auto_absorb_min_age_hours <= 0:
+            return False
+        if mtime_a is None or mtime_b is None:
+            return True
+        threshold = datetime.now(timezone.utc) - timedelta(
+            hours=self._auto_absorb_min_age_hours,
+        )
+        return mtime_a > threshold or mtime_b > threshold
+
+    def _pick_canonical(
+        self,
+        ref_a: str, page_a: object,
+        ref_b: str, page_b: object,
+    ) -> tuple[str, str]:
+        """Return (canonical_ref, absorbed_ref) per doc 25 §2.D D6.
+
+        Selection ladder (first signal that breaks the tie wins):
+
+        1. Page with newer ``dream_processed_through`` cursor —
+           "more recently consolidated" proxies "more active".
+        2. Page with more episodic entries referencing it — light
+           centrality signal (more downstream weight).
+        3. Alphabetically smaller ref — deterministic last resort,
+           matches Hermes' tiebreaker pattern.
+
+        Content from BOTH pages is preserved by
+        :func:`EntityAbsorption._merge_pages`; this only decides which
+        slug becomes the merged page's URL.
+        """
+        a_cursor = self._parse_cursor(getattr(page_a, "dream_processed_through", None))
+        b_cursor = self._parse_cursor(getattr(page_b, "dream_processed_through", None))
+        if a_cursor and b_cursor:
+            if a_cursor > b_cursor:
+                return ref_a, ref_b
+            if b_cursor > a_cursor:
+                return ref_b, ref_a
+        elif a_cursor and not b_cursor:
+            return ref_a, ref_b
+        elif b_cursor and not a_cursor:
+            return ref_b, ref_a
+
+        a_refs = self._count_references(ref_a)
+        b_refs = self._count_references(ref_b)
+        if a_refs > b_refs:
+            return ref_a, ref_b
+        if b_refs > a_refs:
+            return ref_b, ref_a
+
+        return (ref_a, ref_b) if ref_a <= ref_b else (ref_b, ref_a)
+
+    @staticmethod
+    def _parse_cursor(value: object) -> Optional[datetime]:
+        """Parse ``dream_processed_through`` to a UTC datetime or None.
+
+        Numeric cursors (legacy ``msg_idx``) return None — not
+        comparable to ISO timestamps; falls through to the next
+        tiebreaker in :meth:`_pick_canonical`.
+        """
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return None
+        try:
+            dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+
+    def _count_references(self, ref: str) -> int:
+        """Count episodic entries that reference this entity ref.
+
+        Light centrality signal for :meth:`_pick_canonical`. O(N) per
+        call where N is the episodic entry count — acceptable because
+        this only fires when we're already about to commit a merge
+        (rare, plus the dream pass just walked these entries anyway).
+        """
+        episodic_dir = self.memory_root / "episodic"
+        if not episodic_dir.is_dir():
+            return 0
+        from durin.memory.storage import load_entry
+
+        count = 0
+        for path in episodic_dir.glob("*.md"):
+            try:
+                entry = load_entry(path)
+            except Exception:  # noqa: BLE001
+                continue
+            if ref in entry.entities:
+                count += 1
+        return count
+
+    def _emit_absorb_judged(
+        self, canonical: str, absorbed: str, judged, duration_ms: float,
+    ) -> None:
+        emit_tool_event(
+            "memory.absorb.judged",
+            {
+                "canonical": canonical,
+                "absorbed": absorbed,
+                "verdict": judged.verdict,
+                "confidence": int(judged.confidence),
+                "duration_ms": duration_ms,
+            },
+        )
+
+    def _emit_absorb_auto_merged(
+        self, canonical: str, absorbed: str, confidence: int, sha: str,
+    ) -> None:
+        emit_tool_event(
+            "memory.absorb.auto_merged",
+            {
+                "canonical": canonical,
+                "absorbed": absorbed,
+                "confidence": int(confidence),
+                "sha": sha,
+            },
+        )
+
+    def _emit_absorb_skipped(
+        self, canonical: str, absorbed: str, confidence: int, reason: str,
+    ) -> None:
+        emit_tool_event(
+            "memory.absorb.skipped",
+            {
+                "canonical": canonical,
+                "absorbed": absorbed,
+                "confidence": int(confidence),
+                "reason": reason,
             },
         )

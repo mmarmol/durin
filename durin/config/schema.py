@@ -189,6 +189,70 @@ class MemoryDreamConfig(Base):
         validation_alias=AliasChoices("minSecondsBetweenRuns", "min_seconds_between_runs"),
     )
 
+    # §2.D auto-absorb config nested under dream.
+    auto_absorb: "AutoAbsorbConfig" = Field(
+        default_factory=lambda: AutoAbsorbConfig(),
+        validation_alias=AliasChoices("autoAbsorb", "auto_absorb"),
+    )
+
+
+class AutoAbsorbConfig(Base):
+    """Auto-absorb post-dream config (doc 25 §2.D).
+
+    After a successful dream pass, optionally run an LLM-judge over
+    alias-overlap candidates and auto-merge those above the confidence
+    threshold. Designed to close the loop between dream consolidation
+    and manual ``durin memory absorb`` without destructive false-merges
+    (see archived doc 24 §7 for the risk analysis).
+
+    Defaults are opt-in conservative: disabled by default, threshold
+    high enough that only obvious matches pass, quarantine window so
+    a dream pass that just created two entities can't re-judge them
+    on the same run.
+
+    The merge itself reuses :meth:`EntityAbsorption.absorb` (which
+    preserves content from both pages via ``_merge_pages``, archives
+    the absorbed page under ``entities/<type>/<canonical>/archive/``,
+    and records the action in a git commit with full reasoning in the
+    trailers). Recovery: ``cd memory && git revert <sha>``.
+    """
+
+    # Master switch — keep OFF by default; the blast radius of a
+    # silent bad merge is high enough that opt-in is the right
+    # ergonomics.
+    enabled: bool = False
+
+    # LLM-judge confidence floor (0-100). Default 95 favours
+    # precision over recall: most pairs that warrant a merge will
+    # also warrant manual review at this threshold. Tune down with
+    # data from ``memory.absorb.judged`` telemetry.
+    confidence_threshold: int = Field(
+        default=95,
+        ge=0,
+        le=100,
+        validation_alias=AliasChoices("confidenceThreshold", "confidence_threshold"),
+    )
+
+    # Quarantine: a candidate is only judged if BOTH pages were
+    # created (or last dreamed) at least this many hours ago. Blocks
+    # the "premature consolidation" loop where a dream pass that
+    # alucinated two near-identical pages immediately merges its own
+    # output (glm peer review C3, 2026-05-24).
+    min_age_hours: int = Field(
+        default=24,
+        ge=0,
+        validation_alias=AliasChoices("minAgeHours", "min_age_hours"),
+    )
+
+    # Override the judge model (None → use the dream model, which is
+    # the runner's ``model`` field). Setting a different model
+    # mitigates the self-consistency bias where the same model
+    # judges its own output.
+    judge_model: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("judgeModel", "judge_model"),
+    )
+
 
 class MemoryConfig(Base):
     """Memory subsystem configuration root.

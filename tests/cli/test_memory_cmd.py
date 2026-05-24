@@ -198,15 +198,19 @@ def test_expand_missing_page_fails(populated_workspace: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_revert_with_yes_prints_guidance(populated_workspace: Path) -> None:
-    """Revert is partially-implemented; v1 prints guidance to use git directly."""
+def test_revert_with_yes_runs_git_revert(populated_workspace: Path) -> None:
+    """Doc 25 §2.D: revert now actually invokes `git revert` via
+    subprocess instead of printing guidance. The system `git` binary
+    is required (durin doctor warns when missing); skip the test if
+    not present rather than expanding scope of the test fixture."""
+    import shutil
+    if shutil.which("git") is None:
+        pytest.skip("git binary not in PATH")
     sha = _commit_sha_for(populated_workspace, "rev 2")
     with _patch_workspace(populated_workspace):
         result = runner.invoke(memory_app, ["revert", sha, "--yes"])
-    assert result.exit_code == 0
-    # rich may wrap "git revert" across lines; assert both words present.
-    assert "git" in result.output
-    assert "revert" in result.output
+    assert result.exit_code == 0, result.output
+    assert "Reverted" in result.output
 
 
 # ---------------------------------------------------------------------------

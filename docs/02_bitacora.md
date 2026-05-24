@@ -1812,3 +1812,121 @@ manageable (β.1 ~990 LOC commit; β.2 ~520 LOC).
 **Trigger label vocabulary in production** (`telemetry.MemoryDreamStartEvent.trigger`):
 `cron_daily` | `post_compaction` | `session_close` | `threshold` | `manual`.
 
+## §2.D auto-absorb post-dream — LLM-judge + threshold + git-audit (2026-05-24)
+
+**Context**: after §2.A.1 shipped (4 dream triggers automated), the
+loop between dream and absorption was still manual: `find_candidates`
+existed and `absorb()` worked, but nothing wired them together. User
+had to remember to run `durin memory absorb-suggest`. Doc 25 §2.D
+captured the gap.
+
+**Research before deciding** (3 reference systems compared):
+
+| System | Auto-merge? | Detection | Trust |
+|---|---|---|---|
+| OpenClaude | NO | LLM-driven prevention at write-time | model self-judgement |
+| OpenClaw | NO | exact ID lint error | forces manual review |
+| Hermes curator | YES | LLM content-semantic, NO embeddings, NO threshold | trust LLM declaration + rich audit |
+
+2/3 systems explicitly REFUSE auto-merge (silent false positive risk).
+Hermes does it but trusts the LLM completely with per-run REPORT.md.
+Our design ended up a hybrid neither system uses: threshold-gated LLM
+judge + per-dream-pass trigger + reuses our existing git substrate for
+audit + 24h quarantine to block premature consolidation. Defensible
+because the user has explicit threshold preference + opt-in default OFF
+mitigates blast radius.
+
+**glm-4.6 peer review** (same pattern as T1) found 1 BUG + 5 substantive
+critiques. All 6 adopted:
+
+- **C4 (BUG)**: `absorb()` deleted absorbed entity from vector index
+  but never re-upserted the canonical after the body merge. Pre-
+  existing bug — manual path also affected. **Fixed**: after the git
+  commit, re-call `vector_index.upsert_entity_page` with merged body
+  so semantic search picks up the new content.
+- **C3 (risk grave)**: premature consolidation loop where the dream
+  pass that just wrote two near-identical pages immediately judges
+  them as "same" (same-model bias). **Mitigation**: 24h quarantine
+  gate — auto-absorb only considers pages where both file mtimes are
+  older than `min_age_hours`. Forces decisions on stable, observed
+  state rather than fresh dream output.
+- **C2 (bias)**: judge prompt is blind to temporal context — can't
+  distinguish "Marcelo 2022" from "Marcelo 2026". **Fix**: prompt now
+  includes file mtime + `dream_processed_through` cursor + identifiers
+  per page so judge can reason about temporal separation.
+- **C5 (telemetry)**: need a "regret" signal for §2.E tuning.
+  **Added**: `memory.absorb.reverted` event, emitted from `cmd_revert`
+  when target commit has `Reason: auto` trailer.
+- **D6 (slug-picker frágil)**: "more git commits wins" rewarded old
+  zombies over fresh canonical pages. **Replaced** with: newer
+  `dream_processed_through` cursor wins → tiebreak by episodic
+  entries referencing the ref (centrality light) → alfa final.
+  Content from BOTH pages is preserved via existing `_merge_pages()`
+  regardless of which slug wins — the picker only decides which URL
+  is the merged page's home.
+- **C6 (threshold)**: kept at 95 per user preference. glm argued
+  85-90 because LLMs commonly assign 80-90 for "obviously same";
+  user explicitly said 95 is fine. Tunable from config without code
+  change as data arrives via `memory.absorb.judged`.
+
+**Defer with rationale** (glm C7-A, C7-B, C7-C):
+- Re-synthesis body merge instead of append (avoids zombie growth):
+  real improvement, also applies to manual path; not blocking MVP,
+  ship if telemetry shows body bloat hurting LLM signal quality.
+- Type hierarchy (`person` ↔ `agent` could be the same): no schema
+  for inheritance today; over-design preventive.
+- Judge sees relational context (A→ProjectX vs B→ProjectY = different):
+  requires building entity graph formally; T3+.
+
+**Components shipped** (~485 LOC source + ~480 LOC tests):
+
+| Layer | File | Function |
+|---|---|---|
+| Judge LLM | `durin/memory/absorb_judge.py` | `judge_pair()` + `JudgeResult` + adversarial prompt + markdown-marker parser with retry |
+| Prompt | `durin/templates/dream/absorb_judge.md` | "alias overlap necessary but NOT sufficient", default to "different" on weak evidence |
+| Dispatcher | `dream_runner.py::_maybe_auto_absorb` | post-`_consolidate` (only if `consolidated > 0`): cross-type filter → 24h quarantine → judge → threshold gate → picker → absorb |
+| Picker | `dream_runner.py::_pick_canonical` | recency-first per D6 (revised) |
+| C4 fix | `absorption.py::absorb()` | re-upsertea canonical post-merge |
+| Audit enrichment | `absorption.py::absorb()` | new kwargs `judge_reasoning` + `judge_confidence` → commit body + `Judge-Confidence` trailer |
+| Revert (real) | `cli/memory_cmd.py::cmd_revert` | implementación via `subprocess.run(["git", "revert", "--no-edit", sha])` — antes era stub print |
+| Config | `config/schema.py::AutoAbsorbConfig` | enabled / confidence_threshold / min_age_hours / judge_model |
+| Telemetry | `telemetry/schema.py` | 4 new events: `judged` / `auto_merged` / `skipped` / `reverted` |
+| Wiring | `cli/commands.py` + `cli/memory_cmd.py` + `memory_store.py` | 3 DreamRunner construction sites pass the 4 `auto_absorb_*` kwargs |
+
+**Tests** (~480 LOC, 31 new across 2 files):
+- `tests/memory/test_absorb_judge.py` (18): template placeholders,
+  parser happy path + every malformed shape, prompt rendering with
+  identifiers + timestamps, judge_pair retry + LLM exception wrapping.
+- `tests/memory/test_auto_absorb_dispatcher.py` (13): cross-type
+  filter, 24h quarantine + zero-disables, threshold gating, verdict
+  gating (different/unclear), judge failure handling, happy-path
+  absorb with metadata, picker (cursor / centrality / alfa), C4 fix
+  (vector re-upsert verified), commit trailer enrichment.
+
+Pre-existing test fix: `test_revert_with_yes_prints_guidance` renamed
+to `_runs_git_revert` and updated for the new actual-revert behaviour
+(skips when `git` binary missing).
+
+**Suite**: 4457 passing (+31 vs §2.A.1 β.2 close), 16 skipped + 1
+deselected (pre-existing env failure in
+`test_check_executable_returns_ok_for_known_binary` that fails on main
+without these changes — `python` not in PATH issue unrelated to §2.D).
+
+**Live verify**: `durin memory absorb-suggest` + `durin memory dream
+--dry-run` both clean. Smoke e2e: dream pass with stub LLM
+(consolidator + judge) end-to-end produces auto-merge commit with
+`Judge-Confidence: 97` trailer + full reasoning in body + page
+archived correctly. Quarantine gate verified by observing that the
+same smoke with `min_age_hours=24` blocks the merge (intentional —
+dream just wrote both pages, mtime=now).
+
+**Activación en producción**: `durin config set
+memory.dream.auto_absorb.enabled true`. Default OFF — user explicitly
+must opt in. Threshold 95 / quarantine 24h / model=dream model.
+
+**Event vocabulary for §2.E aggregator**:
+- `memory.absorb.judged`: every LLM call (verdict + confidence + duration).
+- `memory.absorb.auto_merged`: actual merge (canonical/absorbed/sha).
+- `memory.absorb.skipped`: every non-merge decision with reason.
+- `memory.absorb.reverted`: user undid an auto-merge (regret signal).
+

@@ -224,7 +224,7 @@ Once Phase 2 has retrieval, Phase 1b reduces to "use the memory retriever to fet
 
 ---
 
-## Last updated: 2026-05-24 02:10 (§2.A.1 β.2 — 4/4 dream triggers shipped)
+## Last updated: 2026-05-24 08:40 (§2.D auto-absorb shipped)
 
 > Post-T1 pass (2026-05-23): Phases 0-6 of the entity-centric memory plan
 > ([18_entity_centric_plan.md](18_entity_centric_plan.md) +
@@ -240,6 +240,22 @@ Once Phase 2 has retrieval, Phase 1b reduces to "use the memory retriever to fet
 > without commitment. Six docs moved to archive (the Phase 2 proposal,
 > the typed-entities proposal, doc 21 integration plan, doc 22 critique
 > validation, doc 23 T1 implementation plan, doc 24 wiring + e2e plan).
+
+> §2.D auto-absorb post-dream shipped (2026-05-24 08:40): closes the
+> loop between dream consolidation and entity absorption. After every
+> dream pass that consolidated ≥1 entity, an LLM-judge evaluates
+> alias-overlap candidates (skipping cross-type and pages younger
+> than 24h to block premature consolidation), and auto-merges those
+> at confidence ≥95. Reuses our existing git substrate for evidence
+> + restore: commit body carries full judge reasoning, trailer
+> `Judge-Confidence: N` distinguishes auto from manual, archived
+> page survives at `entities/<type>/<canonical>/archive/`. `cmd_revert`
+> upgraded from stub-with-guidance to actual `git revert` subprocess +
+> emits `memory.absorb.reverted` for §2.E regret-rate tracking.
+> Pre-existing bug in `absorb()` fixed at the same time: canonical
+> wasn't re-upserted to vector index after merge (glm peer review C4).
+> Opt-in default OFF — `durin config set memory.dream.auto_absorb.enabled true`.
+> 31 new tests + smoke e2e; suite 4457 passing.
 
 > §2.A.1 β.2 shipped (2026-05-24 02:10): the remaining 3 sub-daily
 > triggers + manual route refactor. `MemoryStoreTool` now counts

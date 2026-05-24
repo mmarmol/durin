@@ -245,6 +245,14 @@ def cmd_dream(
         min_seconds_between_runs=0,
         model=cfg.memory.dream.model_override,
         vector_index=vi,
+        # §2.D: opt-in auto-absorb post-dream. Manual `durin memory dream`
+        # respects the same config as the auto-triggers — if the user
+        # has it enabled, manual runs also auto-merge alias-overlap
+        # candidates above threshold.
+        auto_absorb_enabled=cfg.memory.dream.auto_absorb.enabled,
+        auto_absorb_threshold=cfg.memory.dream.auto_absorb.confidence_threshold,
+        auto_absorb_min_age_hours=cfg.memory.dream.auto_absorb.min_age_hours,
+        auto_absorb_judge_model=cfg.memory.dream.auto_absorb.judge_model,
     )
 
     def _on_progress(ent_ref: str, msg: str) -> None:
@@ -399,38 +407,94 @@ def cmd_revert(
         help="Skip confirmation prompt.",
     ),
 ) -> None:
-    """Revert a memory consolidation. Creates a new commit, doesn't lose history."""
+    """Revert a memory consolidation. Creates a new commit, doesn't lose history.
+
+    Runs ``git revert --no-edit <sha>`` inside ``memory/.git`` via
+    subprocess (dulwich has no porcelain ``revert``; the system ``git``
+    binary is required for editable installs anyway and ``durin
+    doctor`` warns when it's missing).
+
+    When the target commit was an auto-absorb (``Reason: auto`` trailer)
+    a :class:`MemoryAbsorbRevertedEvent` is emitted so doc 25 §2.E
+    aggregator can track the regret rate — the only real-world signal
+    for tuning ``memory.dream.auto_absorb.confidence_threshold``.
+    """
+    import subprocess
+
+    from durin.agent.tools._telemetry import emit_tool_event
+
     repo = _open_repo()
+    workspace = _workspace_root()
+    memory_root = workspace / "memory"
+
+    commits = repo.log(max_count=200)
+    target = next((c for c in commits if c.sha.startswith(commit)), None)
+    if target is None:
+        console.print(
+            f"[red]Commit {commit} not found in last 200 history entries[/red]"
+        )
+        raise typer.Exit(code=1)
+
+    is_auto_absorb = "auto" in [
+        v.strip() for v in target.trailers.get("Reason", [])
+    ]
+    label = "auto-absorb" if is_auto_absorb else "consolidation"
+
     if not yes:
         ok = typer.confirm(
-            f"Revert commit {commit[:8]}? This creates a new commit that undoes it."
+            f"Revert {label} {target.sha[:8]} ({target.subject})? "
+            f"This creates a new commit that undoes it."
         )
         if not ok:
             console.print("[yellow]Cancelled[/yellow]")
             raise typer.Exit(code=1)
 
-    # dulwich doesn't have a porcelain `revert` we can lean on directly,
-    # so build the reverse change manually: re-apply the parent content
-    # of the target file via a new commit.
+    # Run git revert via subprocess. memory/ is its own repo, so the
+    # subprocess runs scoped to that directory.
     try:
-        from durin.utils.git_repo import GitRepo
-
-        commits = repo.log(max_count=50)
-        target = next((c for c in commits if c.sha.startswith(commit)), None)
-        if target is None:
-            console.print(f"[red]Commit {commit} not found in last 50 history[/red]")
-            raise typer.Exit(code=1)
-        # For Phase 4 simplicity: print guidance instead of mutating.
-        # Full revert requires reverse-applying the diff; users with
-        # critical needs can `git revert <sha>` directly inside memory/.
-        console.print(
-            f"[yellow]revert is partially implemented in v1[/yellow]: "
-            f"run `cd ~/.durin/workspace/memory && git revert {commit}` "
-            f"to undo the consolidation safely."
+        result = subprocess.run(
+            ["git", "revert", "--no-edit", target.sha],
+            cwd=str(memory_root),
+            capture_output=True,
+            text=True,
+            check=False,
         )
-    except Exception as exc:  # noqa: BLE001
-        console.print(f"[red]Revert preparation failed: {exc}[/red]")
+    except FileNotFoundError:
+        console.print(
+            "[red]git binary not found in PATH[/red]; install git or run "
+            f"`cd {memory_root} && git revert {target.sha}` from a shell with git available."
+        )
         raise typer.Exit(code=1) from None
+
+    if result.returncode != 0:
+        console.print(f"[red]git revert failed:[/red]\n{result.stderr or result.stdout}")
+        raise typer.Exit(code=1)
+
+    console.print(
+        f"[green]✓[/green] Reverted {target.sha[:8]} — new commit created."
+    )
+    if result.stdout.strip():
+        console.print(f"[dim]{result.stdout.strip()}[/dim]")
+
+    # §2.D + glm peer review C5: emit reverted event ONLY for auto-absorb
+    # targets (manual consolidations don't need the regret signal).
+    if is_auto_absorb:
+        canonical = (target.trailers.get("Into") or [""])[0].strip()
+        absorbed = (target.trailers.get("Absorbed") or [""])[0].strip()
+        confidence_raw = (target.trailers.get("Judge-Confidence") or ["0"])[0].strip()
+        try:
+            confidence = int(confidence_raw)
+        except ValueError:
+            confidence = 0
+        emit_tool_event(
+            "memory.absorb.reverted",
+            {
+                "canonical": canonical,
+                "absorbed": absorbed,
+                "original_sha": target.sha,
+                "confidence": confidence,
+            },
+        )
 
 
 # ---------------------------------------------------------------------------

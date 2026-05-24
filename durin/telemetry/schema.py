@@ -568,6 +568,81 @@ class MemoryDreamSkippedEvent(TypedDict):
     session_key: NotRequired[str | None]
 
 
+class MemoryAbsorbJudgedEvent(TypedDict):
+    """LLM-judge ran on an alias-overlap candidate pair (doc 25 §2.D).
+
+    Emitted for every candidate that survived the cross-type filter
+    and the 24h quarantine — i.e. every pair that actually reached
+    the LLM. Use for tuning ``confidence_threshold`` against the
+    empirical distribution of confidences.
+    """
+
+    canonical: str  # ref of the page picked as canonical (slug winner)
+    absorbed: str   # ref of the page that would be absorbed
+    verdict: str    # "same" | "different" | "unclear"
+    confidence: int  # 0-100
+    duration_ms: float
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
+class MemoryAbsorbAutoMergedEvent(TypedDict):
+    """Auto-absorb actually ran a merge (doc 25 §2.D).
+
+    Emitted after :meth:`EntityAbsorption.absorb` succeeds via the
+    auto-trigger path. ``sha`` points to the merge commit (empty
+    when the absorb was a no-op because the absorbed page was already
+    archived — rare, only happens under racy concurrent triggers).
+    """
+
+    canonical: str
+    absorbed: str
+    confidence: int
+    sha: str  # empty when absorb returned None (idempotent no-op)
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
+class MemoryAbsorbSkippedEvent(TypedDict):
+    """Auto-absorb considered a candidate but did not merge (doc 25 §2.D).
+
+    Reasons:
+
+    - ``"cross_type"``: candidate refs span different entity types
+      (e.g. person:marcelo vs project:marcelo) — filtered before judge.
+    - ``"quarantine"``: at least one page is younger than ``min_age_hours``
+      (mitigates premature consolidation per glm peer review C3).
+    - ``"below_threshold"``: judge said "same" but confidence < floor.
+    - ``"verdict_different"`` / ``"verdict_unclear"``: judge declined.
+    - ``"judge_failed"``: LLM call or parse failure after all retries.
+    - ``"page_load_failed"``: one of the two pages couldn't be loaded.
+    """
+
+    canonical: str
+    absorbed: str
+    confidence: int  # 0 if reason is cross_type / quarantine / judge_failed / page_load_failed
+    reason: str
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
+class MemoryAbsorbRevertedEvent(TypedDict):
+    """A previously auto-absorbed merge was reverted (doc 25 §2.D + glm C5).
+
+    Emitted from ``durin memory revert`` when the target commit's
+    trailers include ``Reason: auto``. This is the "regret rate"
+    signal — high revert rate suggests the threshold is too low or
+    the judge is too permissive for this workspace's content.
+    """
+
+    canonical: str
+    absorbed: str
+    original_sha: str  # the auto-merge commit being undone
+    confidence: int  # confidence the original auto-merge recorded
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
 class MemoryStoreBlockedNearDuplicateEvent(TypedDict):
     """memory_store dedup pre-persist (T1.7 per archived doc 23) refused
     a write because the embedding distance to an existing entry fell
@@ -648,6 +723,10 @@ EVENTS: dict[str, type] = {
     "memory.dream.start": MemoryDreamStartEvent,
     "memory.dream.end": MemoryDreamEndEvent,
     "memory.dream.skipped": MemoryDreamSkippedEvent,
+    "memory.absorb.judged": MemoryAbsorbJudgedEvent,
+    "memory.absorb.auto_merged": MemoryAbsorbAutoMergedEvent,
+    "memory.absorb.skipped": MemoryAbsorbSkippedEvent,
+    "memory.absorb.reverted": MemoryAbsorbRevertedEvent,
 }
 
 
