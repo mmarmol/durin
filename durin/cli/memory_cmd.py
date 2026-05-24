@@ -450,7 +450,18 @@ def cmd_revert(
             raise typer.Exit(code=1)
 
     # Run git revert via subprocess. memory/ is its own repo, so the
-    # subprocess runs scoped to that directory.
+    # subprocess runs scoped to that directory. Pass the durin-dream
+    # identity via env vars so the command works even when the system
+    # git has no user.name / user.email configured (CI runners,
+    # freshly-provisioned machines). Matches the convention GitRepo
+    # uses for its own commits (durin-dream / dream@durin.local).
+    import os as _os
+
+    env = {**_os.environ,
+           "GIT_AUTHOR_NAME": "durin-dream",
+           "GIT_AUTHOR_EMAIL": "dream@durin.local",
+           "GIT_COMMITTER_NAME": "durin-dream",
+           "GIT_COMMITTER_EMAIL": "dream@durin.local"}
     try:
         result = subprocess.run(
             ["git", "revert", "--no-edit", target.sha],
@@ -458,6 +469,7 @@ def cmd_revert(
             capture_output=True,
             text=True,
             check=False,
+            env=env,
         )
     except FileNotFoundError:
         console.print(
