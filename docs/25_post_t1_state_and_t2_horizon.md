@@ -77,7 +77,7 @@ Dos lecturas posibles del horizon, no excluyentes:
 - §2.C shared AliasIndex via ctx — **SHIPPED** (2026-05-24).
 - §2.A.1 per-entity dispatcher — **SHIPPED** (4/4 triggers: cron_daily / post_compaction / session_close / threshold; β.1 + β.2 complete 2026-05-24).
 - §2.A.2 cross-session learning — diferido (requiere doc 26).
-- §2.D auto-absorb.
+- §2.D auto-absorb post-dream — **SHIPPED** 2026-05-24 (LLM-judge + threshold 95 + quarantine 24h + git-audit; opt-in default OFF).
 - §2.F eager-inject context block — parcialmente cubierto por §2.H
   hot_layer; eager-fetch on-demand de contenido completo (no solo
   hot layer) sigue pending.
@@ -269,7 +269,62 @@ hot_layer source switch) + ~120 LOC tests + ~30 LOC doc update. Total
 Considerar §2.H como **complete-T1**, no T2 — cierra un gap que doc 18
 §6 prometía pero el wiring T1 (doc 24) no terminó.
 
-### §2.D — Auto-absorb post-dream
+### §2.D — Auto-absorb post-dream (SHIPPED 2026-05-24)
+
+**Estado**: shipped tras peer review glm-4.6 (research previo de 3
+sistemas: OpenClaude / OpenClaw / Hermes) y adopción de 6 ajustes
+críticos (C2 temporal context, C3 quarantine 24h, C4 re-embed canonical,
+C5 reverted event, D6 picker recency+centrality, C6 threshold 95).
+
+**Componentes** (~485 LOC source + ~480 LOC tests):
+
+| Componente | Path | Función |
+|---|---|---|
+| Judge LLM | `durin/memory/absorb_judge.py` | `judge_pair()` + `JudgeResult`; pydantic-style markers parser con retry |
+| Prompt | `durin/templates/dream/absorb_judge.md` | Adversarial: alias overlap necesario PERO no suficiente; default a "different" si evidencia débil; incluye timestamps para mitigar self-consistency bias |
+| Dispatcher | `durin/memory/dream_runner.py::_maybe_auto_absorb` | post-`_consolidate`: cross-type filter → 24h quarantine → judge → threshold → `_pick_canonical` (D6) → absorb |
+| Picker D6 | `dream_runner._pick_canonical` | newer `dream_processed_through` wins → episodic centrality tiebreak → alfa final |
+| C4 fix | `absorption.py::absorb()` | re-upsertea canonical al vector index post-merge (también fixea path manual) |
+| Audit | `absorption.py::absorb()` | nuevos kwargs `judge_reasoning` + `judge_confidence` → commit body + `Judge-Confidence` trailer |
+| Revert | `cli/memory_cmd.py::cmd_revert` | implementación real via `git revert` subprocess (antes era stub); emite `memory.absorb.reverted` cuando target tiene `Reason: auto` |
+| Config | `config/schema.py::AutoAbsorbConfig` | `enabled` (default False), `confidence_threshold` (95), `min_age_hours` (24), `judge_model` (None=dream model) |
+| Telemetry | `telemetry/schema.py` | 4 events: `memory.absorb.judged` / `.auto_merged` / `.skipped` / `.reverted` |
+
+**Wiring**: 3 sitios construyen `DreamRunner` (cmd_dream manual,
+cli/commands.py cron+hooks, memory_store threshold trigger) — los 4
+ahora pasan los 4 kwargs `auto_absorb_*` desde la config.
+
+**Activación**: opt-in. `durin config set memory.dream.auto_absorb.enabled true`.
+
+**Evidencia + restore**: reusa el sistema git existente sin código nuevo.
+`durin memory history <entity>` muestra el auto-merge commit con
+`Judge-Confidence` trailer y full `Judge reasoning:` en el body.
+`durin memory revert <sha>` ahora funciona (subprocess `git revert`) y
+emite `memory.absorb.reverted` con el confidence original — input para
+medir tasa de arrepentimiento desde §2.E.
+
+**Critique glm aplicadas** (todas)
+- C2 timestamps en prompt
+- C3 24h quarantine
+- C4 re-embed canonical (también pre-existing bug en manual)
+- C5 reverted event
+- D6 picker recency+centrality
+- C6 threshold default 95 (mantuvimos)
+
+**Defer explícito** (glm C7-A, C7-B, C7-C):
+- Re-synthesis del body (vs append): mejora real, no bloquea MVP; ver
+  como §2.D.1 si telemetría muestra zombie growth
+- Type hierarchy / aliases entre types: no tenemos schema de herencia
+- Judge ve grafo de relaciones: requiere construir entity graph formal
+
+**Defaults sensatos** (sin data real)
+- threshold=95: precision sobre recall
+- min_age_hours=24: blockea premature consolidation
+- judge_model=None: usa dream model (cost; trade-off bias loop mitigado por prompt adversarial)
+
+(spec original abajo — preservada por traza histórica)
+
+#### Spec original (pre-implementación)
 
 **Estado verificado**: `dream.apply()` NO invoca `find_candidates` ni
 `EntityAbsorption`. Solo `cli/memory_cmd.py:594` (cmd_absorb_suggest) y
@@ -522,4 +577,4 @@ caros y dependen al menos de α.
 
 ---
 
-## Last updated: 2026-05-24 02:10 (§2.A.1 β.2 shipped — 4/4 triggers in production, 11 new tests, suite 4442 passing)
+## Last updated: 2026-05-24 08:40 (§2.D auto-absorb shipped — judge + 24h quarantine + git audit; 31 new tests, suite 4457 passing)

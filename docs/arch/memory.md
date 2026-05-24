@@ -366,14 +366,56 @@ flowchart LR
     M --> D["canonical/archive/absorbed.md<br/>+ absorbed_into: ../../canonical.md"]
     M --> E["AliasIndex.remove(absorbed_ref)"]
     M --> F["VectorIndex.delete_by_id(absorbed_ref)"]
-    M --> G["git commit: Absorb absorbed into canonical"]
+    M --> F2["VectorIndex.upsert_entity_page(canonical, merged_body)"]
+    M --> G["git commit: Absorb + Judge-Confidence trailer"]
 ```
 
-[durin/memory/absorption.py](../../durin/memory/absorption.py). One git commit covers canonical update + absorbed deletion + archive create.
+[durin/memory/absorption.py](../../durin/memory/absorption.py). One git commit covers canonical update + absorbed deletion + archive create. Per doc 25 §2.D + glm peer review C4 (2026-05-24): vector index now does BOTH `delete_by_id(absorbed)` AND `upsert_entity_page(canonical, ...)` with the merged body — without the re-upsert the canonical's embedding stayed on its pre-merge content and semantic search returned stale results.
 
-Idempotent — re-running when the absorbed page is already archived returns `None`. Auto-trigger post-dream is deferred to T2 (see [doc 25](../25_post_t1_state_and_t2_horizon.md) §2.D).
+Idempotent — re-running when the absorbed page is already archived returns `None`.
 
 `find_candidates()` returns pairs that share at least one alias in the current `AliasIndex`. Stronger overlap (more shared aliases) sorts first. Surface via `durin memory absorb-suggest`.
+
+### 11.1 Auto-absorb post-dream (§2.D, SHIPPED 2026-05-24)
+
+When `memory.dream.auto_absorb.enabled = true`, every dream pass that consolidated ≥1 entity invokes `_maybe_auto_absorb` afterwards:
+
+```mermaid
+flowchart TD
+    D[DreamRunner._consolidate ok] --> F[EntityAbsorption.find_candidates]
+    F --> P{cross-type?}
+    P -- yes --> SK1[skipped: cross_type]
+    P -- no --> Q{both pages older than min_age_hours?}
+    Q -- no --> SK2[skipped: quarantine]
+    Q -- yes --> J[absorb_judge.judge_pair LLM]
+    J --> JE{verdict == 'same'?}
+    JE -- no --> SK3[skipped: verdict_*]
+    JE -- yes --> T{confidence >= threshold?}
+    T -- no --> SK4[skipped: below_threshold]
+    T -- yes --> PK[_pick_canonical D6 recency+centrality]
+    PK --> AB[EntityAbsorption.absorb with judge_reasoning + judge_confidence]
+    AB --> GIT[git commit Reason: auto, Judge-Confidence: N]
+    AB --> AM[memory.absorb.auto_merged]
+```
+
+Trigger details:
+
+- **LLM judge** (`durin/memory/absorb_judge.py`): adversarial prompt — alias overlap is necessary but NOT sufficient. Default to "different" when content evidence is thin. Includes temporal context (file mtime + cursor) per page to mitigate self-consistency bias when `judge_model == dream_model`.
+- **24h quarantine** (`min_age_hours` default 24): blocks the "premature consolidation" loop where a dream pass that just wrote two near-identical pages immediately judges them as same. Forces decisions on stable, observed state.
+- **Threshold default 95** (`confidence_threshold`): favours precision over recall. Tunable from config as data arrives via `memory.absorb.judged` telemetry.
+- **Canonical-slug picker D6**: newer `dream_processed_through` → episodic centrality count → alfa. Content from BOTH pages preserved via existing `_merge_pages()`; the picker only decides which URL wins.
+- **Audit + restore**: reuses existing git substrate. Commit body carries `Judge reasoning: ...` + trailer `Judge-Confidence: N` so `durin memory history <entity>` shows the auto-merge with its rationale. Archived page on disk at `entities/<type>/<canonical>/archive/`. `durin memory revert <sha>` runs `git revert` + emits `memory.absorb.reverted` (the regret signal for §2.E).
+
+Config (all under `memory.dream.auto_absorb`):
+
+| Field | Default | Meaning |
+|---|---|---|
+| `enabled` | False | opt-in master switch |
+| `confidence_threshold` | 95 | minimum LLM confidence for auto-merge |
+| `min_age_hours` | 24 | quarantine window (0 disables) |
+| `judge_model` | null | falls through to dream model |
+
+Telemetry events (all under `memory.absorb.*`): `judged` (every LLM call), `auto_merged` (actual merge), `skipped` (with reason: `cross_type` / `quarantine` / `verdict_*` / `below_threshold` / `judge_failed` / `page_load_failed` / `absorb_failed`), `reverted` (user undid via `cmd_revert`).
 
 ---
 

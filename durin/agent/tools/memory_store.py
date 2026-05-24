@@ -326,6 +326,7 @@ class MemoryStoreTool(Tool):
         for ref in triggered_for:
             def _run(entity_ref: str = ref) -> None:
                 try:
+                    auto_cfg = getattr(cfg, "auto_absorb", None)
                     runner = DreamRunner(
                         workspace=self._workspace,
                         min_seconds_between_runs=getattr(
@@ -333,6 +334,18 @@ class MemoryStoreTool(Tool):
                         ),
                         model=getattr(cfg, "model_override", None),
                         vector_index=vector_index,
+                        auto_absorb_enabled=bool(
+                            getattr(auto_cfg, "enabled", False),
+                        ),
+                        auto_absorb_threshold=int(
+                            getattr(auto_cfg, "confidence_threshold", 95),
+                        ),
+                        auto_absorb_min_age_hours=int(
+                            getattr(auto_cfg, "min_age_hours", 24),
+                        ),
+                        auto_absorb_judge_model=getattr(
+                            auto_cfg, "judge_model", None,
+                        ),
                     )
                     runner.run(trigger="threshold", entity_filter=entity_ref)
                 except Exception:

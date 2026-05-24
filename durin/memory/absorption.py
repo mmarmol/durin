@@ -115,6 +115,8 @@ class EntityAbsorption:
         absorbed: str,
         *,
         reason: str = "",
+        judge_reasoning: str | None = None,
+        judge_confidence: int | None = None,
     ) -> str | None:
         """Merge ``absorbed`` into ``canonical``. Returns commit SHA or None.
 
@@ -128,6 +130,17 @@ class EntityAbsorption:
         6. Commit both changes in one git operation.
         7. Refresh alias_index (canonical) and remove absorbed entity_ref.
         8. Remove absorbed from vector_index (if provided).
+        9. Re-upsert canonical to vector_index with the merged body
+           (doc 25 §2.D + glm peer review C4: without this the
+           canonical's embedding still corresponds to its pre-merge
+           body, so semantic search returns stale results).
+
+        ``judge_reasoning`` and ``judge_confidence`` are optional metadata
+        from the auto-absorb path (doc 25 §2.D). When provided they are
+        recorded in the commit body + trailers so
+        ``durin memory history`` shows why the merge happened. The
+        ``reason`` field stays short (e.g. ``"auto"``) for the trailer;
+        ``judge_reasoning`` carries the full LLM justification.
 
         Idempotent: if absorbed file already lives in archive, return None.
         """
@@ -196,21 +209,27 @@ class EntityAbsorption:
                 ".dream.lock", ".locks/",
             ]
         )
+        body_text = (
+            f"Merged {absorbed} into {canonical}. "
+            f"Reason: {reason or '(unspecified)'}.\n"
+            f"Absorbed page moved to "
+            f"entities/{canonical_type}/{canonical_slug}/archive/"
+            f"{absorbed_slug}.md."
+        )
+        if judge_reasoning:
+            body_text += f"\n\nJudge reasoning:\n{judge_reasoning.strip()}"
+        trailers: dict[str, str] = {
+            "Absorbed": absorbed,
+            "Into": canonical,
+            "Reason": reason or "alias overlap",
+        }
+        if judge_confidence is not None:
+            trailers["Judge-Confidence"] = str(int(judge_confidence))
         try:
             sha = repo.commit(
                 subject=f"Absorb {absorbed} into {canonical}",
-                body=(
-                    f"Merged {absorbed} into {canonical}. "
-                    f"Reason: {reason or '(unspecified)'}.\n"
-                    f"Absorbed page moved to "
-                    f"entities/{canonical_type}/{canonical_slug}/archive/"
-                    f"{absorbed_slug}.md."
-                ),
-                trailers={
-                    "Absorbed": absorbed,
-                    "Into": canonical,
-                    "Reason": reason or "alias overlap",
-                },
+                body=body_text,
+                trailers=trailers,
                 paths=None,  # all three changes (canonical, deletion, archive)
                 author="durin-dream",
                 author_email="dream@durin.local",
@@ -225,8 +244,12 @@ class EntityAbsorption:
         idx.refresh_for(merged, slug=canonical_slug)
         idx.remove(absorbed)
 
-        # 8: vector_index — drop absorbed page row (archived pages are
-        # de-indexed by design per doc 18 §3 + R6)
+        # 8 + 9: vector_index — drop absorbed page row AND re-upsert
+        # canonical with the merged body (glm peer review C4 fix). The
+        # canonical's content changed in step 2-3; without re-upsert the
+        # embedding still corresponds to the pre-merge body and
+        # `memory_search` returns stale results. Both ops best-effort:
+        # markdown is the source of truth, vectors are derivable.
         if self._vector_index is not None:
             try:
                 self._vector_index.delete_by_id(absorbed)
@@ -234,6 +257,19 @@ class EntityAbsorption:
                 logger.warning(
                     "absorb: vector index delete failed for %s: %s",
                     absorbed, exc,
+                )
+            try:
+                self._vector_index.upsert_entity_page(
+                    entity_ref=canonical,
+                    name=merged.name,
+                    aliases=list(merged.aliases),
+                    body=merged.body,
+                    path=canonical_path,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "absorb: vector index canonical re-upsert failed for %s: %s",
+                    canonical, exc,
                 )
 
         return sha

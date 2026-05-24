@@ -1346,6 +1346,10 @@ def _run_gateway(
                 min_seconds_between_runs=mem_dream_cfg.min_seconds_between_runs,
                 model=mem_dream_cfg.model_override,
                 vector_index=vi,
+                auto_absorb_enabled=mem_dream_cfg.auto_absorb.enabled,
+                auto_absorb_threshold=mem_dream_cfg.auto_absorb.confidence_threshold,
+                auto_absorb_min_age_hours=mem_dream_cfg.auto_absorb.min_age_hours,
+                auto_absorb_judge_model=mem_dream_cfg.auto_absorb.judge_model,
             )
             try:
                 result = await _asyncio.to_thread(runner.run, trigger="cron_daily")
@@ -1647,6 +1651,10 @@ def _run_gateway(
                         workspace=ws,
                         min_seconds_between_runs=mem_dream_cfg.min_seconds_between_runs,
                         model=mem_dream_cfg.model_override,
+                        auto_absorb_enabled=mem_dream_cfg.auto_absorb.enabled,
+                        auto_absorb_threshold=mem_dream_cfg.auto_absorb.confidence_threshold,
+                        auto_absorb_min_age_hours=mem_dream_cfg.auto_absorb.min_age_hours,
+                        auto_absorb_judge_model=mem_dream_cfg.auto_absorb.judge_model,
                     )
                     runner.run(trigger=trigger)
                 except Exception:
