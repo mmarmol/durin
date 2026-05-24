@@ -337,6 +337,15 @@ class ChannelManager:
                         continue
 
                 if msg.metadata.get("_retry_wait"):
+                    # WebUI users have no other signal that the model is being
+                    # retried — surface it as a dedicated channel event there.
+                    # CLI/TUI keep the historical silence; the spinner already
+                    # tells the user "still working" and a retry bubble would
+                    # be noise.
+                    if msg.channel == "websocket":
+                        channel = self.channels.get(msg.channel)
+                        if channel is not None:
+                            await self._send_with_retry(channel, msg)
                     continue
 
                 if (

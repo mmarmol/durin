@@ -394,11 +394,14 @@ class TestProgressFiltering:
 
 
 class TestRetryWaitFiltering:
-    """Internal provider retry heartbeats must never reach channels."""
+    """Internal provider retry heartbeats are dropped for CLI/TUI but
+    forwarded to the websocket channel as ``api_status`` events so the
+    WebUI can render a banner ("retrying in 4s, attempt 2 of 7")."""
 
     @pytest.mark.asyncio
     async def test_retry_wait_message_dropped(self, manager, bus):
-        """A ``_retry_wait`` message must be filtered before channel dispatch.
+        """A ``_retry_wait`` message must be filtered before channel dispatch
+        for non-websocket channels.
 
         Regression: provider retry diagnostics like
         ``Model request failed, retry in 1s (attempt 1).`` were being
@@ -438,3 +441,65 @@ class TestRetryWaitFiltering:
         sent = send_mock.await_args_list[0].args[0]
         assert sent.content == "final answer"
         assert not sent.metadata.get("_retry_wait")
+
+    @pytest.mark.asyncio
+    async def test_retry_wait_forwarded_to_websocket(self, config, bus):
+        """A ``_retry_wait`` message targeting the websocket channel must
+        reach the channel so the WebUI can render a "retrying…" banner."""
+        manager = ChannelManager(config, bus)
+
+        class WebsocketLike(BaseChannel):
+            name = "websocket"
+            display_name = "Websocket"
+
+            def __init__(self, cfg, bus_):
+                super().__init__(cfg, bus_)
+                self._send_mock = AsyncMock()
+
+            async def start(self):
+                pass
+
+            async def stop(self):
+                pass
+
+            async def send(self, msg):
+                await self._send_mock(msg)
+
+        manager.channels["websocket"] = WebsocketLike({}, bus)
+
+        retry_msg = OutboundMessage(
+            channel="websocket",
+            chat_id="chat1",
+            content="Model request failed, retry in 2s (attempt 1).",
+            metadata={
+                "_retry_wait": True,
+                "retry_status": {
+                    "kind": "retry_wait",
+                    "attempt": 1,
+                    "max_attempts": 7,
+                    "delay_s": 2,
+                    "persistent": False,
+                    "final": False,
+                },
+            },
+        )
+        await bus.publish_outbound(retry_msg)
+
+        task = asyncio.create_task(manager._dispatch_outbound())
+        try:
+            for _ in range(30):
+                if manager.channels["websocket"]._send_mock.await_count >= 1:
+                    break
+                await asyncio.sleep(0.05)
+        finally:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        send_mock = manager.channels["websocket"]._send_mock
+        assert send_mock.await_count == 1
+        sent = send_mock.await_args_list[0].args[0]
+        assert sent.metadata["_retry_wait"] is True
+        assert sent.metadata["retry_status"]["delay_s"] == 2

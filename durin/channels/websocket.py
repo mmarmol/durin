@@ -2113,6 +2113,16 @@ class WebSocketChannel(BaseChannel):
             )
             return
 
+        # Provider retry heartbeat — surface as a dedicated WS event so the
+        # UI can render a transient banner ("retrying in 4s, attempt 2 of 7")
+        # instead of letting the error become the assistant's reply.
+        if msg.metadata.get("_retry_wait"):
+            status = msg.metadata.get("retry_status") or {}
+            await self.send_api_status(
+                msg.chat_id, status, message=msg.content,
+            )
+            return
+
         # Snapshot the subscriber set so ConnectionClosed cleanups mid-iteration are safe.
         conns = list(self._subs.get(msg.chat_id, ()))
         if not conns:
@@ -2324,6 +2334,34 @@ class WebSocketChannel(BaseChannel):
         raw = json.dumps(body, ensure_ascii=False)
         for connection in conns:
             await self._safe_send_to(connection, raw, label=" goal_status ")
+
+    async def send_api_status(
+        self,
+        chat_id: str,
+        status: dict[str, Any],
+        *,
+        message: str | None = None,
+    ) -> None:
+        """Push a transient API status (retrying, giving up) for *chat_id*.
+
+        The frontend renders this as a banner; it never enters the
+        chat transcript. ``status`` carries ``kind`` (retry_wait /
+        giving_up / exhausted_persistent), ``attempt``,
+        ``max_attempts``, ``delay_s``, ``persistent``, ``final``.
+        """
+        conns = list(self._subs.get(chat_id, ()))
+        if not conns:
+            return
+        body: dict[str, Any] = {
+            "event": "api_status",
+            "chat_id": chat_id,
+            "status": status,
+        }
+        if message:
+            body["message"] = message
+        raw = json.dumps(body, ensure_ascii=False)
+        for connection in conns:
+            await self._safe_send_to(connection, raw, label=" api_status ")
 
     async def send_session_updated(self, chat_id: str) -> None:
         """Notify clients that session metadata changed outside the main turn."""
