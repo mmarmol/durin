@@ -223,6 +223,7 @@ def stratified_subset(
     *,
     seed: int = 42,
     categories: Iterable[str] = CATEGORIES,
+    allow_undersupplied: bool = False,
 ) -> list[QA]:
     """Pick ``per_category`` QAs from each category, deterministically.
 
@@ -230,9 +231,15 @@ def stratified_subset(
     re-run with the same seed produces the same subset (essential for
     reproducible comparisons across commits).
 
-    Raises :class:`LoCoMoDatasetError` if any category has fewer than
-    ``per_category`` samples — we'd rather fail loudly than silently
-    skew the report toward over-represented categories.
+    When ``allow_undersupplied=False`` (default), raises
+    :class:`LoCoMoDatasetError` if any category has fewer than
+    ``per_category`` samples — fail loudly so reports aren't silently
+    skewed toward over-represented categories.
+
+    When ``allow_undersupplied=True``, takes ``min(per_category, len)``
+    from each category and logs which ones were short. Useful for
+    larger samples where ``adversarial`` (only 2 QAs in locomo10) would
+    otherwise cap the whole run at 2/category.
     """
     rng = random.Random(seed)
     by_cat: dict[str, list[QA]] = {c: [] for c in categories}
@@ -244,14 +251,20 @@ def stratified_subset(
     short: list[str] = []
     for cat in categories:
         bucket = by_cat[cat]
+        take = min(per_category, len(bucket))
         if len(bucket) < per_category:
             short.append(f"{cat} has only {len(bucket)} (asked {per_category})")
+            if not allow_undersupplied:
+                continue
+        if take == 0:
             continue
-        sampled = sorted(rng.sample(bucket, per_category), key=lambda q: q.qa_id)
+        sampled = sorted(rng.sample(bucket, take), key=lambda q: q.qa_id)
         out.extend(sampled)
-    if short:
+    if short and not allow_undersupplied:
         raise LoCoMoDatasetError(
             "stratified_subset: under-supplied categories — "
             + "; ".join(short)
+            + ". Use allow_undersupplied=True (CLI: --allow-undersupplied) "
+              "to take min(per_category, available) instead."
         )
     return out
