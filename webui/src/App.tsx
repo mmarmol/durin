@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { DeleteConfirm } from "@/components/DeleteConfirm";
 import { Sidebar } from "@/components/Sidebar";
+import { MemoryGraphView } from "@/components/MemoryGraphView";
 import { SettingsView } from "@/components/settings/SettingsView";
 import { ThreadShell } from "@/components/thread/ThreadShell";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
@@ -37,7 +38,7 @@ type BootState =
 const SIDEBAR_STORAGE_KEY = "durin-webui.sidebar";
 const RESTART_STARTED_KEY = "durin-webui.restartStartedAt";
 const SIDEBAR_WIDTH = 272;
-type ShellView = "chat" | "settings";
+type ShellView = "chat" | "settings" | "memory_graph";
 
 function AuthForm({
   failed,
@@ -324,6 +325,11 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
     setMobileSidebarOpen(false);
   }, []);
 
+  const onOpenMemoryGraph = useCallback(() => {
+    setView("memory_graph");
+    setMobileSidebarOpen(false);
+  }, []);
+
   const onBackToChat = useCallback(() => {
     setView("chat");
     setMobileSidebarOpen(false);
@@ -428,6 +434,8 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
     onRequestDelete: (key: string, label: string) =>
       setPendingDelete({ key, label }),
     onOpenSettings,
+    onOpenMemoryGraph,
+    memoryGraphActive: view === "memory_graph",
   };
   const showMainSidebar = view !== "settings";
 
@@ -475,7 +483,7 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
         <div
           className={cn(
             "absolute inset-0 flex flex-col",
-            view === "settings" && "invisible pointer-events-none",
+            view !== "chat" && "invisible pointer-events-none",
           )}
         >
           <ThreadShell
@@ -502,6 +510,15 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
               onLogout={onLogout}
               onRestart={onRestart}
               isRestarting={isRestarting}
+            />
+          </div>
+        )}
+        {view === "memory_graph" && (
+          <div className="absolute inset-0 flex flex-col">
+            <MemoryGraphView
+              active={view === "memory_graph"}
+              onToggleSidebar={toggleSidebar}
+              hideSidebarToggleOnDesktop={desktopSidebarOpen}
             />
           </div>
         )}
