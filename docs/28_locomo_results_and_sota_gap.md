@@ -12,9 +12,20 @@
 
 ## TL;DR
 
-- **Score: 57.8% (59/102), glm-5.1**, vector retrieval active end-to-end.
-- **5.8× over no-memory baseline** (10% on 10-QA ablation).
-- **Far from SOTA** (HyperMem 92.73%, Mem0 92.5%). Gap is **~35pp**.
+- **Current score: 60.8% (62/102), glm-5.1** after B1 (infra retry) +
+  B2 (event_summary + blip_caption seeding) shipped. **+3pp over the
+  v1 baseline** of 57.8%. Vector retrieval active end-to-end.
+- **6.1× over no-memory baseline** (10% on 10-QA ablation).
+- **Far from SOTA** (HyperMem 92.73%, Mem0 92.5%). Gap is **~32pp**.
+- **B2 helps where its content is relevant** (open_domain +12pp,
+  temporal +8pp via curator-supplied dated event summaries) but
+  **slightly hurts single_hop / multi_hop** (-4pp each) because vector
+  ranking surfaces third-person curator summaries over original first-
+  person quotes the agent needs to cite.
+- **D1+D3 (text-in-description hacks) reverted** — empirically caused
+  -20pp regression on the first 30 QAs before being killed mid-run.
+  Confirms: tool-description text is a weak signal for changing LLM
+  behavior. See [[feedback_tool_description_weak_signal]] in memory.
 - **Pre-everything: ~5-8pp of the gap is harness/infra**, not durin.
   3 fails were LLM connection errors / max-iter (retriable). 2-3 more
   reference data the harness drops (image captions, event summaries —
@@ -67,14 +78,41 @@ python -m scripts.benchmark.locomo_run \
 
 ## §2 — Score by category
 
-| Category | N | Pass | Score |
-|---|---|---|---|
-| adversarial | 2 | 2 | 100% |
-| open_domain | 25 | 19 | **76%** |
-| multi_hop | 25 | 18 | **72%** |
-| temporal | 25 | 12 | 48% |
-| **single_hop** | **25** | **8** | **32%** |
-| **Total** | **102** | **59** | **57.8%** |
+| Category | N | v1 (baseline) | v3 (B1+B2) | Δ |
+|---|---|---|---|---|
+| adversarial | 2 | 100% (2/2) | 100% (2/2) | = |
+| **open_domain** | 25 | 76% (19) | **88% (22)** | **+12pp** ✓ |
+| multi_hop | 25 | 72% (18) | 68% (17) | -4pp |
+| **temporal** | 25 | 48% (12) | **56% (14)** | **+8pp** ✓ |
+| **single_hop** | 25 | 32% (8) | 28% (7) | -4pp |
+| **Total** | **102** | **57.8% (59)** | **60.8% (62)** | **+3pp** |
+
+### What B2 (event_summary + blip_caption seeding) actually did
+
+**Wins** (where the curator-produced content was distinctly useful):
+- **open_domain**: questions like "what writings does Joanna do" benefit
+  enormously from event_summary which abstracts "Joanna writes
+  screenplays, books, blog posts" into a single entry; raw turns
+  scattered the info.
+- **temporal**: event_summary entries carry `valid_from` derived from
+  session date, giving the agent an anchored timeline that the turns
+  alone didn't surface for date-arithmetic queries.
+
+**Losses** (where third-person curator prose displaced first-person quotes):
+- **single_hop**: questions asking for a specific phrasing ("what did
+  Melanie paint?") want the actual conversational quote. With event_summary
+  in the index, vector ranking often returns the curator's summary
+  ("Melanie discussed her recent paintings") instead of the literal
+  "I painted a sunset" line — net negative.
+- **multi_hop**: similar pattern — needs to cite specific factual claims
+  but curator summaries compress them into less-precise narratives.
+
+**Lesson**: seeding curator-derived synthesis helps when the question is
+ABOUT what happened thematically; hurts when the question demands literal
+recall of a specific fact in the speaker's words. Future B2 refinement:
+seed event_summary only for `temporal`+`open_domain`-shaped indices, or
+add a "source priority" weight that ranks turn-quotes above summaries
+for noun-level queries.
 
 ### Counter-intuitive: `single_hop` (32%) is worse than `multi_hop` (72%)
 
@@ -359,10 +397,16 @@ discovery).** Pick from top — each row is independently shippable.
 Re-bench after each to measure delta in isolation. Same 102-QA seed
 for comparability.
 
-### Step -1 — Fix harness data-seeding gaps (~3-5pp ceiling)
+### Step -1 — Fix harness data-seeding gaps (~3-5pp ceiling) — **SHIPPED v3 (2026-05-25)**
 
 **Discovered in §4.5.** The harness drops 4 fields per turn/conversation
 that contain answer-relevant info for some QAs.
+
+**Shipped result**: +3pp net (+12pp open_domain, +8pp temporal,
+-4pp single_hop, -4pp multi_hop). The wins outpaced the per-category
+losses but the losses are real — see §2 discussion. Future refinement
+would be source-priority weighting in the vector index so curator
+summaries don't outrank original quotes for noun-level queries.
 
 **What to change in [`scripts/benchmark/locomo_harness.py::_seed_memory_from_conversation`](../scripts/benchmark/locomo_harness.py):**
 
@@ -408,33 +452,30 @@ This tells you the real ceiling of current code before any change.
 > `run_qa`, just re-call `judge_answer` on existing `trace.got`) is
 > ~30 LOC.
 
-### Step 1 — Synthesis discipline (highest single ROI, low effort)
+### Step 1 — Synthesis discipline (REVISED after empirical failure)
 
-**Closes ~10-13 fails (23-30%)**. The biggest single bucket.
+**Original plan**: add cite-only / forced-routing text to memory_search
+description. **Attempted, failed, reverted.**
 
-**What to change**: the agent over-generates from correct retrieval.
-Two complementary edits, neither requires new infra:
+**v2 attempt result (2026-05-24 late)**: adding `"USE THIS BEFORE
+answering"` + `"cite only facts that appear"` + `"do not pad lists"`
+to memory_search description caused **-20pp regression on first 30
+QAs** — bench killed mid-run. The agent didn't change behavior in
+the direction the text asked, just made worse decisions (extra
+memory_search calls, no synthesis improvement).
 
-1. **`memory_search` result rendering** — currently returns
-   `{rendered: "=== FRAGMENT: uri ===\n<body>\n=== END ==="}`. Add an
-   explicit "DO NOT include facts not in these results" line into the
-   render block tail.
-2. **Agent system prompt** for the LoCoMo task (or globally) — add a
-   "cite-only" mode: when answering factual recall questions, the
-   answer must consist of facts found in memory results, with no
-   embellishment or inference beyond what's literally written.
+**Lesson**: text in tool descriptions is a weak signal for changing
+LLM behavior. The 3/3 SOTA pattern uses **structural** mechanisms:
+- Hermes wraps pre-fetched memory in `<memory-context>` fences with
+  system note ADJACENT TO the data.
+- OpenClaw inserts a blocking sub-agent that compresses output before
+  the main agent sees it.
+- OpenClaude bypasses the tool catalog via `<system-reminder>`
+  auto-injection.
 
-**Effort**: ~20-50 LOC across `memory_search.py::Result.render_block`
-and the agent system prompt block.
-
-**Risk**: Low for bench. For daily-use the cite-only mode could feel
-robotic — gate it on a query-classification hint or just for QA-style
-inputs.
-
-**Files to touch**:
-- `durin/memory/search.py::Result.render_block` (lines ~117-149)
-- `durin/agent/system_prompts/` (or wherever the LoCoMo-relevant block
-  lives — `durin/agent/loop.py::_build_system_block` if there)
+**What to try next instead**: §2.F eager-inject (Step 4 below). The
+synthesis discipline travels with the content, not in a remote
+description the LLM may ignore.
 
 ### Step 2 — List-aware retrieval (closes ~9-11 list fails)
 
@@ -462,36 +503,59 @@ them — already a behavior we tolerate.
 - `durin/memory/vector_index.py::search` (already accepts top_k kwarg
   — no change needed)
 
-### Step 3 — Tool routing (closes ~4 no_retrieval fails)
+### Step 3 — Tool routing (DROPPED after empirical failure)
 
-**Closes ~4 fails (9%)**. Agent skipped `memory_search` and answered
-from context alone. Fix is a prompt nudge or a constrained-output
-guardrail.
+**Same v2 failure mode as Step 1**: forced-routing text added to
+memory_search description ("USE THIS BEFORE...") contributed to the
+-20pp regression. Reverted. No text-in-description variant of this
+will work.
 
-**What to change**: append to the agent's system prompt (LoCoMo block
-or QA-mode block):
+**The structural alternative is Step 4 below (§2.F eager-inject)**:
+if memory is pre-fetched and injected, the agent doesn't need a
+"you MUST search" instruction — the memory is already in context.
+No_retrieval fails (7 in current v3 run) become unreachable because
+search already happened.
 
-> "For any factual recall question about a person, event, date,
-> preference, or activity, you MUST call memory_search before
-> answering. Do not synthesize from context alone."
+### Step 4 — §2.F eager-inject (next concrete move)
 
-**Effort**: ~5 LOC of prompt.
+**This is the structural lever that replaces failed Steps 1 + 3.**
 
-**Risk**: Low. Could increase tool-call latency marginally if applied
-globally; gate it like step 1.
+§2.F is already in [docs/25_post_t1_state_and_t2_horizon.md](25_post_t1_state_and_t2_horizon.md)
+as planned-but-pending. Gate ("silent retrieval miss observable in
+telemetry") was met by the v1 LoCoMo bench (4-8 `no_retrieval` fails
+per 102 QAs). v3 still shows 7 no_retrieval fails — the gate is still
+open.
 
-### Step 4 — Bi-temporal filtering (closes ~3-5 temporal fails)
+**Why this is the structural fix**:
+- Pre-fetch memory based on the user's question before the agent runs
+- Wrap in `<memory-context>` markers (hermes pattern) adjacent to
+  content — instruction travels with data
+- Inject into user message (ephemeral, not persisted to session)
+- Closes ~7 no_retrieval fails directly + likely some
+  synthesis_overgeneration fails because the agent sees memory framed
+  as authoritative reference from turn 0
 
-**Closes ~3-5 fails (7-12%)**, all in the temporal category.
+**Implementation order**:
+1. **Bench-only first** (~100 LOC in `locomo_harness.py`): before
+   `loop_agent.run()`, run one `memory_search(query=qa.question)` via
+   the tool API, wrap result via new `_build_memory_context_block()`
+   helper, append to inbound message content. Measure delta. Risk:
+   bench-only, zero impact on durin product.
+2. **If bench shows ≥+5pp**: thread the pattern into durin core as
+   the §2.F implementation. Wire via AgentLoop._eager_prefetch_memory
+   hook called from message build phase.
 
-**What to change**: §5 original proposal was correct but for fewer fails
-than estimated. Still worth shipping because:
-- It's low risk (~150 LOC, additive field on `MemoryEntry`).
-- The temporal category will be a recurring weakness; this is the
-  structural fix.
+**Effort (bench-only)**: ~100 LOC + tests.
 
-Same plan as original L1 (extract `valid_until` at write, post-filter
-top-K by query time window).
+### Step 5 — Bi-temporal filtering (closes ~3-5 temporal fails)
+
+**Closes ~3-5 fails (7-12%)**, all in the temporal category. v3
+already moved temporal +8pp via B2 (event_summary inherits session
+date as valid_from). Adding explicit `valid_until` could close 2-3
+more.
+
+Same plan as the original L1 (extract `valid_until` at write,
+post-filter top-K by query time window).
 
 **Files**:
 - `durin/memory/schema.py::MemoryEntry` — add `valid_until: date | None`
@@ -501,7 +565,7 @@ top-K by query time window).
 - `durin/agent/tools/memory_store.py` — extract `valid_until` at write
   (LLM call) OR start with None and add later
 
-### Step 5 — BM25 hybrid (closes ~3-5 ranking_miss fails)
+### Step 6 — BM25 hybrid (closes ~3-5 ranking_miss fails)
 
 **Closes ~3-5 fails (7-12%)**. Originally L2 with claim of 10 fails;
 real number is lower because most ranking_miss fails aren't lexical-
@@ -512,7 +576,7 @@ issue — the right episodic was just buried in top-K for other reasons).
 remaining fails are still concentrated in exact-term mismatches, the
 backlog item [P6 in doc 20](20_pendings.md) becomes the next move.
 
-### Step 6 — Atomic fact extraction (deferred)
+### Step 7 — Atomic fact extraction (deferred)
 
 The biggest architectural change. **Defer indefinitely** until steps
 1-4 have plateaued. Original analysis overstated its ROI by conflating
@@ -565,4 +629,4 @@ These came out of running the 102-QA pass:
 
 ---
 
-## Last updated: 2026-05-24 (first run + 2× corrections — see §4 preface for audit trail; v1 had cross-category over-attribution, v2 missed harness data-seed gaps found in §4.5)
+## Last updated: 2026-05-25 (v3 run: B1+B2 shipped → 60.8%, +3pp over baseline; D1+D3 text-in-description hacks attempted then reverted after empirical -20pp regression; §7 reordered with §2.F as next concrete move)

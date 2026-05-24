@@ -97,6 +97,12 @@ class Conversation:
     speaker_a: str
     speaker_b: str
     sessions: list[Session]
+    # Sample-level fields from the LoCoMo JSON that sit OUTSIDE the
+    # ``conversation`` block but carry answer-relevant info for some QAs
+    # (verified in doc 28 §4.5). Empty dict / list when absent.
+    event_summary: dict[str, Any] = field(default_factory=dict)
+    observation: dict[str, Any] = field(default_factory=dict)
+    session_summary: dict[str, Any] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +144,13 @@ def load_dataset(path: str | Path) -> list[QA]:
     skipped = 0
     for conv_idx, sample in enumerate(raw):
         try:
-            conv = _parse_conversation(conv_idx, sample.get("conversation") or {})
+            conv = _parse_conversation(
+                conv_idx,
+                sample.get("conversation") or {},
+                event_summary=sample.get("event_summary") or {},
+                observation=sample.get("observation") or {},
+                session_summary=sample.get("session_summary") or {},
+            )
         except Exception as exc:  # noqa: BLE001
             logger.warning("skipping malformed conversation %s: %s", conv_idx, exc)
             continue
@@ -177,7 +189,14 @@ def load_dataset(path: str | Path) -> list[QA]:
     return qas
 
 
-def _parse_conversation(idx: int, raw: dict[str, Any]) -> Conversation:
+def _parse_conversation(
+    idx: int,
+    raw: dict[str, Any],
+    *,
+    event_summary: dict[str, Any] | None = None,
+    observation: dict[str, Any] | None = None,
+    session_summary: dict[str, Any] | None = None,
+) -> Conversation:
     """Normalise the per-sample ``conversation`` block.
 
     Session keys in the on-disk JSON are ``session_1``, ``session_2``,
@@ -209,6 +228,9 @@ def _parse_conversation(idx: int, raw: dict[str, Any]) -> Conversation:
         speaker_a=str(speaker_a),
         speaker_b=str(speaker_b),
         sessions=sessions,
+        event_summary=event_summary or {},
+        observation=observation or {},
+        session_summary=session_summary or {},
     )
 
 

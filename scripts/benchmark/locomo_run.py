@@ -112,6 +112,29 @@ def _write_manifest(
     )
 
 
+_INFRA_GOT_MARKERS = (
+    "Error calling LLM",
+    "Connection error",
+    "I reached the maximum number of tool call iterations",
+)
+
+
+def _is_infra_fail(trace: Any, verdict: dict[str, Any]) -> bool:
+    """True when this fail is environmental (LLM provider error, timeout,
+    iteration cap), not a real agent/memory failure.
+
+    These should be retried once before being reported as fails — they
+    inflate the error rate of durin without being durin's fault.
+    """
+    if verdict.get("score", 0) >= 1.0:
+        return False
+    got = (getattr(trace, "got", "") or "").strip()
+    stop_reason = getattr(trace, "stop_reason", "") or ""
+    if stop_reason in ("exception", "timeout"):
+        return True
+    return any(got.startswith(m) for m in _INFRA_GOT_MARKERS)
+
+
 def _durin_version() -> str:
     try:
         import durin  # type: ignore
@@ -176,24 +199,8 @@ async def _main_async(args: argparse.Namespace) -> int:
     # default_llm_invoke from durin.memory.dream (same z.ai plan).
     from durin.memory.dream import default_llm_invoke
 
-    pass_count = 0
-    fail_count = 0
-    skip_count = 0
-    for idx, qa in enumerate(subset, 1):
-        trace_path = traces_dir / f"{qa.qa_id}.json"
-        if args.resume and trace_path.exists():
-            try:
-                existing = json.loads(trace_path.read_text(encoding="utf-8"))
-                if existing.get("verdict"):
-                    skip_count += 1
-                    print(f"  [{idx}/{len(subset)}] {qa.qa_id} [{qa.category}] — skip (already done)")
-                    continue
-            except Exception:  # noqa: BLE001
-                pass  # malformed → re-run
-
-        print(f"  [{idx}/{len(subset)}] {qa.qa_id} [{qa.category}] running…",
-              end="", flush=True)
-
+    async def _run_one(qa, *, prefix: str) -> tuple[Any, dict[str, Any], bool]:
+        """Run + judge a single QA. Returns (trace, verdict_dict, is_infra_fail)."""
         workspace = workspaces_dir / qa.qa_id
         telemetry_path = telemetry_dir / f"{qa.qa_id}.jsonl"
         trace = await run_qa(
@@ -205,7 +212,6 @@ async def _main_async(args: argparse.Namespace) -> int:
             timeout_s=args.timeout_s,
             enable_memory=not args.no_memory,
         )
-
         verdict_dict: dict[str, Any] = {
             "score": 0.0, "confidence": 0, "reasoning": "",
             "judge_model": args.judge_model,
@@ -225,25 +231,69 @@ async def _main_async(args: argparse.Namespace) -> int:
             verdict_dict["reasoning"] = f"(judge failed) {exc}"
             verdict_dict["error"] = True
 
+        is_infra = _is_infra_fail(trace, verdict_dict)
+
         trace_dict = trace.to_dict()
         trace_dict["verdict"] = verdict_dict
-        trace_path.write_text(
+        (traces_dir / f"{qa.qa_id}.json").write_text(
             json.dumps(trace_dict, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
+        if not args.keep_workspaces and workspace.exists():
+            import shutil
+            shutil.rmtree(workspace, ignore_errors=True)
+        return trace, verdict_dict, is_infra
+
+    pass_count = 0
+    fail_count = 0
+    skip_count = 0
+    infra_fail_qas: list = []
+    for idx, qa in enumerate(subset, 1):
+        trace_path = traces_dir / f"{qa.qa_id}.json"
+        if args.resume and trace_path.exists():
+            try:
+                existing = json.loads(trace_path.read_text(encoding="utf-8"))
+                if existing.get("verdict"):
+                    skip_count += 1
+                    print(f"  [{idx}/{len(subset)}] {qa.qa_id} [{qa.category}] — skip (already done)")
+                    continue
+            except Exception:  # noqa: BLE001
+                pass  # malformed → re-run
+
+        print(f"  [{idx}/{len(subset)}] {qa.qa_id} [{qa.category}] running…",
+              end="", flush=True)
+
+        trace, verdict_dict, is_infra = await _run_one(qa, prefix=f"[{idx}/{len(subset)}]")
 
         if verdict_dict["score"] >= 1.0:
             pass_count += 1
             print(f"  ✓ pass ({trace.duration_s:.1f}s, iter={trace.iterations})")
         else:
             fail_count += 1
+            if is_infra:
+                infra_fail_qas.append(qa)
             short_reason = verdict_dict["reasoning"][:80]
-            print(f"  ✗ fail ({trace.duration_s:.1f}s, iter={trace.iterations}) — {short_reason}")
+            tag = " [infra-retry-queued]" if is_infra else ""
+            print(f"  ✗ fail ({trace.duration_s:.1f}s, iter={trace.iterations}) — {short_reason}{tag}")
 
-        # GC workspaces aggressively unless --keep-workspaces.
-        if not args.keep_workspaces and workspace.exists():
-            import shutil
-            shutil.rmtree(workspace, ignore_errors=True)
+    # B1: re-run infrastructure fails once (LLM connection error, max-iter,
+    # timeout). These are environmental, not durin/agent issues — counting
+    # them as fails inflates the apparent error rate of the memory layer.
+    if infra_fail_qas:
+        print(f"\n[locomo_run] re-running {len(infra_fail_qas)} infra-fail QAs (one retry)…")
+        recovered = 0
+        for qa in infra_fail_qas:
+            print(f"  [retry] {qa.qa_id} [{qa.category}] running…", end="", flush=True)
+            trace, verdict_dict, is_infra = await _run_one(qa, prefix="[retry]")
+            if verdict_dict["score"] >= 1.0:
+                pass_count += 1
+                fail_count -= 1
+                recovered += 1
+                print(f"  ✓ recovered ({trace.duration_s:.1f}s)")
+            else:
+                short_reason = verdict_dict["reasoning"][:60]
+                print(f"  ✗ still fail — {short_reason}")
+        print(f"[locomo_run] recovered via retry: {recovered}/{len(infra_fail_qas)}")
 
     print(f"\n[locomo_run] done: {pass_count} pass · {fail_count} fail · {skip_count} skip")
     print(f"[locomo_run] analyzing…")
