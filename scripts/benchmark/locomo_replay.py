@@ -91,6 +91,7 @@ async def _replay_async(args: argparse.Namespace) -> int:
         model=args.model,
         max_iterations=args.max_iterations,
         timeout_s=args.timeout_s,
+        enable_memory=not args.no_memory,
     )
 
     verdict_dict: dict[str, Any] = {
@@ -135,10 +136,12 @@ def main() -> int:
     parser.add_argument("trace_path", help="Path to a trace .json from a prior run.")
     parser.add_argument("--data-path", required=True,
                         help="LoCoMo JSON dataset path.")
-    parser.add_argument("--model", default="glm-5.1")
-    parser.add_argument("--judge-model", default="glm-5.1")
+    parser.add_argument("--model", default="glm-5-turbo")
+    parser.add_argument("--judge-model", default="glm-5-turbo")
     parser.add_argument("--max-iterations", type=int, default=8)
     parser.add_argument("--timeout-s", type=float, default=90.0)
+    parser.add_argument("--no-memory", action="store_true",
+                        help="Replay without memory seeding (ablation baseline).")
     parser.add_argument("--log-level", default="WARNING")
     args = parser.parse_args()
     logging.basicConfig(

@@ -62,13 +62,17 @@ def _git_commit_sha() -> str:
         return "unknown"
 
 
-def _new_run_dir(model: str) -> Path:
-    """``bench-results/locomo/<YYYY-MM-DD>_<commit8>/`` — date for human
-    sort + commit for traceability."""
+def _new_run_dir(model: str, *, no_memory: bool = False) -> Path:
+    """``bench-results/locomo/<YYYY-MM-DD>_<commit8>[_nomem]/``.
+
+    ``_nomem`` suffix distinguishes ablation runs from memory-enabled
+    runs so the two can coexist in the same directory without confusion.
+    """
     sha = _git_commit_sha()
     sha_short = sha[:8] if sha != "unknown" else "nogit"
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H%M%S")
-    rel = f"bench-results/locomo/{stamp}_{sha_short}"
+    suffix = "_nomem" if no_memory else ""
+    rel = f"bench-results/locomo/{stamp}_{sha_short}{suffix}"
     out = _project_root() / rel
     out.mkdir(parents=True, exist_ok=True)
     return out
@@ -152,7 +156,7 @@ async def _main_async(args: argparse.Namespace) -> int:
             print(f"[locomo_run] --resume-into {run_dir} doesn't exist", file=sys.stderr)
             return 2
     else:
-        run_dir = _new_run_dir(args.model)
+        run_dir = _new_run_dir(args.model, no_memory=args.no_memory)
         _write_manifest(run_dir, args=args, subset_size=len(subset))
 
     traces_dir = run_dir / "traces"
@@ -198,6 +202,7 @@ async def _main_async(args: argparse.Namespace) -> int:
             model=args.model,
             max_iterations=args.max_iterations,
             timeout_s=args.timeout_s,
+            enable_memory=not args.no_memory,
         )
 
         verdict_dict: dict[str, Any] = {
@@ -269,11 +274,11 @@ def main() -> int:
              "to evaluate variance, keep to compare across commits).",
     )
     parser.add_argument(
-        "--model", default="glm-5.1",
-        help="Agent model. Default glm-5.1 via durin's z.ai provider.",
+        "--model", default="glm-5-turbo",
+        help="Agent model. Default glm-5-turbo via durin's z.ai provider.",
     )
     parser.add_argument(
-        "--judge-model", default="glm-5.1",
+        "--judge-model", default="glm-5-turbo",
         help="LLM-as-judge model. Same z.ai plan.",
     )
     parser.add_argument(
@@ -302,6 +307,12 @@ def main() -> int:
         "--keep-workspaces", action="store_true",
         help="Don't delete the per-QA workspace after the run finishes "
              "(default: GC). Helpful for forensic inspection.",
+    )
+    parser.add_argument(
+        "--no-memory", action="store_true",
+        help="Ablation baseline: skip memory seeding. The agent answers "
+             "cold (no conversation context injected). Run dir gets a "
+             "_nomem suffix so results don't mix with memory-enabled runs.",
     )
     parser.add_argument(
         "--log-level", default="WARNING",

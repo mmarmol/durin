@@ -82,9 +82,10 @@ async def run_qa(
     *,
     workspace_root: Path,
     telemetry_path: Path,
-    model: str = "glm-5.1",
+    model: str = "glm-5-turbo",
     max_iterations: int = DEFAULT_MAX_ITERATIONS,
     timeout_s: float = DEFAULT_PER_QA_TIMEOUT_S,
+    enable_memory: bool = True,
     log_path: Path | None = None,
 ) -> QATrace:
     """Run one QA end-to-end and return its trace.
@@ -108,7 +109,9 @@ async def run_qa(
     telemetry_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Seed memory with the conversation transcript before asking the QA.
-    if qa.conversation is not None:
+    # Skipped when enable_memory=False (ablation baseline — measures how
+    # much the memory layer actually contributes vs. answering cold).
+    if enable_memory and qa.conversation is not None:
         _seed_memory_from_conversation(workspace_root, qa.conversation)
 
     # Bind per-QA telemetry. Every memory.recall / memory.store /
