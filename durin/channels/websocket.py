@@ -671,6 +671,9 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/models":
             return self._handle_models_list(request)
 
+        if got == "/api/memory/graph":
+            return self._handle_memory_graph(request)
+
         if got == "/api/model/test":
             return await self._handle_model_test(request)
 
@@ -779,6 +782,27 @@ class WebSocketChannel(BaseChannel):
                 "model_name": _resolve_bootstrap_model_name(self._runtime_model_name),
             }
         )
+
+    def _handle_memory_graph(self, request: WsRequest) -> Response:
+        """GET /api/memory/graph — entity-centric memory as nodes + edges.
+
+        Read-only over ``memory/entities/<type>/*.md`` + episodic
+        co-occurrence. Powers the Obsidian-style graph view in the
+        webui. No LLM call, no mutation. See
+        :func:`durin.memory.graph.build_memory_graph` for the shape.
+        """
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from durin.config.loader import load_config
+        from durin.memory.graph import build_memory_graph
+
+        try:
+            workspace = load_config().workspace_path
+            payload = build_memory_graph(workspace)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("memory graph build failed")
+            return _http_error(500, f"memory graph build failed: {exc}")
+        return _http_json_response(payload)
 
     def _handle_sessions_list(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):

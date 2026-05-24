@@ -305,3 +305,42 @@ export async function getModelCapabilities(
     token,
   );
 }
+
+// ---------------------------------------------------------------------------
+// Memory graph (Obsidian-style view)
+// ---------------------------------------------------------------------------
+
+export interface MemoryGraphNode {
+  id: string;          // entity ref `<type>:<slug>`
+  type: string;        // person | project | topic | …
+  name: string;        // display name (frontmatter `name`)
+  aliases: string[];
+  weight: number;      // episodic entry count referencing this ref
+  phantom?: boolean;   // tagged in entries but no consolidated page yet
+}
+
+export interface MemoryGraphEdge {
+  source: string;      // node id
+  target: string;      // node id
+  weight: number;      // co-occurrence count in episodic entries
+}
+
+export interface MemoryGraphPayload {
+  nodes: MemoryGraphNode[];
+  edges: MemoryGraphEdge[];
+  stats: {
+    node_count: number;
+    edge_count: number;
+    phantom_count: number;
+    truncated_nodes: boolean;
+    truncated_edges: boolean;
+    types: string[];
+  };
+}
+
+export async function fetchMemoryGraph(
+  token: string,
+  base: string = "",
+): Promise<MemoryGraphPayload> {
+  return request<MemoryGraphPayload>(`${base}/api/memory/graph`, token);
+}

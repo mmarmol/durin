@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import {
   Menu,
+  Network,
   Search,
   Settings,
   SquarePen,
@@ -22,6 +23,8 @@ interface SidebarProps {
   onSelect: (key: string) => void;
   onRequestDelete: (key: string, label: string) => void;
   onOpenSettings: () => void;
+  onOpenMemoryGraph?: () => void;
+  memoryGraphActive?: boolean;
   onCollapse: () => void;
 }
 
@@ -117,6 +120,31 @@ export function Sidebar(props: SidebarProps) {
           onRequestDelete={props.onRequestDelete}
         />
       </div>
+      {/* Below the sessions list: entry into the entity-centric memory
+          Obsidian-style graph view. Click takes the main pane (sessions
+          stay listed in this sidebar so the user can swap back). */}
+      {props.onOpenMemoryGraph ? (
+        <>
+          <Separator className="bg-sidebar-border/50" />
+          <div className="px-2.5 py-2">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={props.onOpenMemoryGraph}
+              className={cn(
+                "h-8 w-full justify-start gap-2 rounded-full px-2.5 text-[12.5px] font-medium",
+                props.memoryGraphActive
+                  ? "bg-sidebar-accent/80 text-sidebar-foreground"
+                  : "text-sidebar-foreground/85 hover:bg-sidebar-accent/75 hover:text-sidebar-foreground",
+              )}
+              aria-pressed={!!props.memoryGraphActive}
+            >
+              <Network className="h-3.5 w-3.5" aria-hidden />
+              Memory graph
+            </Button>
+          </div>
+        </>
+      ) : null}
       <Separator className="bg-sidebar-border/50" />
       <div className="space-y-1 px-2.5 py-2.5 text-xs">
         <Button
