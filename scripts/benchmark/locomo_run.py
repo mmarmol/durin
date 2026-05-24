@@ -145,6 +145,7 @@ async def _main_async(args: argparse.Namespace) -> int:
         try:
             subset = stratified_subset(
                 all_qas, per_category=args.per_category, seed=args.seed,
+                allow_undersupplied=args.allow_undersupplied,
             )
         except LoCoMoDatasetError as exc:
             print(f"[locomo_run] {exc}", file=sys.stderr)
@@ -313,6 +314,13 @@ def main() -> int:
         help="Ablation baseline: skip memory seeding. The agent answers "
              "cold (no conversation context injected). Run dir gets a "
              "_nomem suffix so results don't mix with memory-enabled runs.",
+    )
+    parser.add_argument(
+        "--allow-undersupplied", action="store_true",
+        help="Let stratified sampling take min(per_category, available) "
+             "instead of failing. Needed for larger samples where some "
+             "categories (e.g. adversarial in locomo10 has only 2) would "
+             "otherwise cap the whole run.",
     )
     parser.add_argument(
         "--log-level", default="WARNING",
