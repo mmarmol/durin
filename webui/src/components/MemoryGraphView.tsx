@@ -17,11 +17,13 @@ import {
   ApiError,
   fetchMemoryEdge,
   fetchMemoryEntity,
+  fetchMemorySession,
   searchMemoryApi,
   type MemoryEdgeDetail,
   type MemoryEntityDetail,
   type MemoryGraphNode,
   type MemorySearchPayload,
+  type MemorySessionDetail,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -54,6 +56,9 @@ const TYPE_PALETTE: Record<string, string> = {
   artifact: "#8B5CF6",
   stance: "#EC4899",
   practice: "#14B8A6",
+  // Sessions are deliberately grey-ish so they read as scaffolding
+  // around the semantic entities, not as entities themselves.
+  session: "#64748B",
 };
 const FALLBACK_HUES = [200, 25, 145, 285, 60, 320, 95];
 
@@ -128,6 +133,7 @@ function tickForces(
 }
 
 type TabName = "info" | "body" | "history" | "sources" | "archive";
+type SessionTabName = "info" | "messages" | "events" | "memory_ops" | "entries";
 
 export function MemoryGraphView(_props: MemoryGraphViewProps) {
   const { data, loading, error, refresh } = useMemoryGraph(_props.active);
@@ -144,13 +150,19 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
   const draggingRef = useRef<SimNode | null>(null);
   const hoverRef = useRef<SimNode | null>(null);
 
-  // Side panel state
+  // Side panel state — branches by selected.type:
+  //   - "session" → fetch MemorySessionDetail, render session tabs
+  //   - everything else → fetch MemoryEntityDetail, render entity tabs
   const [selected, setSelected] = useState<MemoryGraphNode | null>(null);
   const [detail, setDetail] = useState<MemoryEntityDetail | null>(null);
+  const [sessionDetail, setSessionDetail] =
+    useState<MemorySessionDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabName>("info");
+  const [sessionTab, setSessionTab] = useState<SessionTabName>("info");
   const [focusRef, setFocusRef] = useState<string | null>(null);
+  const isSessionSelected = selected?.type === "session";
 
   // Search panel state
   const [search, setSearch] = useState("");
@@ -467,10 +479,11 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
     [],
   );
 
-  // Fetch entity detail whenever the selection changes
+  // Fetch detail whenever the selection changes — branch by type.
   useEffect(() => {
     if (!selected) {
       setDetail(null);
+      setSessionDetail(null);
       setDetailError(null);
       return;
     }
@@ -478,11 +491,19 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
     setDetailLoading(true);
     setDetailError(null);
     setDetail(null);
+    setSessionDetail(null);
     (async () => {
       if (!tokenRef.current) return;
       try {
-        const d = await fetchMemoryEntity(tokenRef.current, selected.id);
-        if (!cancelled) setDetail(d);
+        if (selected.type === "session") {
+          // session:<stem> → strip prefix, fetch session detail.
+          const stem = selected.id.replace(/^session:/, "");
+          const d = await fetchMemorySession(tokenRef.current, stem);
+          if (!cancelled) setSessionDetail(d);
+        } else {
+          const d = await fetchMemoryEntity(tokenRef.current, selected.id);
+          if (!cancelled) setDetail(d);
+        }
       } catch (e) {
         if (!cancelled) {
           const msg = e instanceof ApiError ? `HTTP ${e.status}` : (e as Error).message;
@@ -842,30 +863,54 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
               </Button>
             </header>
 
-            <div className="flex shrink-0 gap-1 border-b border-border/30 px-2 py-1.5 text-[11px]">
-              {(
-                [
-                  { id: "info", label: "Info" },
-                  { id: "body", label: "Body" },
-                  { id: "history", label: `History${detail?.history.length ? ` (${detail.history.length})` : ""}` },
-                  { id: "sources", label: `Sources${detail?.entries.length ? ` (${detail.entries.length})` : ""}` },
-                  { id: "archive", label: `Archive${detail?.archive.length ? ` (${detail.archive.length})` : ""}` },
-                ] as const
-              ).map((t) => (
-                <button
-                  key={t.id}
-                  type="button"
-                  onClick={() => setActiveTab(t.id as TabName)}
-                  className={cn(
-                    "rounded px-2 py-1 font-medium transition-colors",
-                    activeTab === t.id
-                      ? "bg-primary/10 text-primary"
-                      : "text-muted-foreground hover:bg-muted",
-                  )}
-                >
-                  {t.label}
-                </button>
-              ))}
+            <div className="flex shrink-0 flex-wrap gap-1 border-b border-border/30 px-2 py-1.5 text-[11px]">
+              {isSessionSelected
+                ? (
+                    [
+                      { id: "info", label: "Info" },
+                      { id: "messages", label: `Messages${sessionDetail?.recent_messages.length ? ` (${sessionDetail.recent_messages.length})` : ""}` },
+                      { id: "events", label: `Events${sessionDetail?.events.length ? ` (${sessionDetail.events.length})` : ""}` },
+                      { id: "memory_ops", label: `Memory ops${sessionDetail?.memory_ops.length ? ` (${sessionDetail.memory_ops.length})` : ""}` },
+                      { id: "entries", label: `Entries${sessionDetail?.entries_linked.length ? ` (${sessionDetail.entries_linked.length})` : ""}` },
+                    ] as const
+                  ).map((t) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => setSessionTab(t.id as SessionTabName)}
+                      className={cn(
+                        "rounded px-2 py-1 font-medium transition-colors",
+                        sessionTab === t.id
+                          ? "bg-primary/10 text-primary"
+                          : "text-muted-foreground hover:bg-muted",
+                      )}
+                    >
+                      {t.label}
+                    </button>
+                  ))
+                : (
+                    [
+                      { id: "info", label: "Info" },
+                      { id: "body", label: "Body" },
+                      { id: "history", label: `History${detail?.history.length ? ` (${detail.history.length})` : ""}` },
+                      { id: "sources", label: `Sources${detail?.entries.length ? ` (${detail.entries.length})` : ""}` },
+                      { id: "archive", label: `Archive${detail?.archive.length ? ` (${detail.archive.length})` : ""}` },
+                    ] as const
+                  ).map((t) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => setActiveTab(t.id as TabName)}
+                      className={cn(
+                        "rounded px-2 py-1 font-medium transition-colors",
+                        activeTab === t.id
+                          ? "bg-primary/10 text-primary"
+                          : "text-muted-foreground hover:bg-muted",
+                      )}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
             </div>
 
             <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2 text-xs">
@@ -875,12 +920,18 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
               {detailError ? (
                 <div className="text-destructive">{detailError}</div>
               ) : null}
-              {!detail && !detailLoading && selected.phantom ? (
+              {!detail && !sessionDetail && !detailLoading && selected.phantom ? (
                 <p className="text-[11px] text-muted-foreground">
                   Tagged in episodic entries but no consolidated page yet. Run{" "}
                   <code className="rounded bg-muted px-1">durin memory dream</code>{" "}
                   to create one.
                 </p>
+              ) : null}
+              {sessionDetail ? (
+                <SessionTabs
+                  detail={sessionDetail}
+                  tab={sessionTab}
+                />
               ) : null}
               {detail ? (
                 <>
@@ -1048,6 +1099,234 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
 // ---------------------------------------------------------------------------
 // Sub-component for collapsible commit details (history tab)
 // ---------------------------------------------------------------------------
+
+
+function SessionTabs({
+  detail,
+  tab,
+}: {
+  detail: MemorySessionDetail;
+  tab: SessionTabName;
+}) {
+  if (tab === "info") {
+    const info = detail.info;
+    const metaEnts = detail.entities_tagged.from_meta;
+    const refEnts = detail.entities_tagged.from_source_refs;
+    return (
+      <dl className="space-y-2">
+        <div className="flex justify-between gap-2">
+          <dt className="text-muted-foreground">Session key</dt>
+          <dd className="font-mono">{detail.session_key ?? detail.session_ref}</dd>
+        </div>
+        {info.channel ? (
+          <div className="flex justify-between gap-2">
+            <dt className="text-muted-foreground">Channel</dt>
+            <dd className="font-mono">{info.channel}</dd>
+          </div>
+        ) : null}
+        {info.model ? (
+          <div className="flex justify-between gap-2">
+            <dt className="text-muted-foreground">Model</dt>
+            <dd className="font-mono">{info.model}</dd>
+          </div>
+        ) : null}
+        <div className="flex justify-between gap-2">
+          <dt className="text-muted-foreground">Messages</dt>
+          <dd className="font-mono">{info.message_count}</dd>
+        </div>
+        {info.created_at ? (
+          <div className="flex justify-between gap-2">
+            <dt className="text-muted-foreground">Created</dt>
+            <dd className="font-mono text-[11px]">{info.created_at.slice(0, 19)}</dd>
+          </div>
+        ) : null}
+        {info.updated_at ? (
+          <div className="flex justify-between gap-2">
+            <dt className="text-muted-foreground">Updated</dt>
+            <dd className="font-mono text-[11px]">{info.updated_at.slice(0, 19)}</dd>
+          </div>
+        ) : null}
+        {metaEnts.length > 0 ? (
+          <div>
+            <dt className="text-muted-foreground">Entities (from meta tags)</dt>
+            <dd className="mt-0.5 flex flex-wrap gap-1">
+              {metaEnts.map((e) => (
+                <span
+                  key={e}
+                  className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10.5px]"
+                >
+                  {e}
+                </span>
+              ))}
+            </dd>
+          </div>
+        ) : null}
+        {refEnts.length > 0 ? (
+          <div>
+            <dt className="text-muted-foreground">Entities (from entry source_refs)</dt>
+            <dd className="mt-0.5 flex flex-wrap gap-1">
+              {refEnts.map((e) => (
+                <span
+                  key={e}
+                  className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10.5px]"
+                >
+                  {e}
+                </span>
+              ))}
+            </dd>
+          </div>
+        ) : null}
+      </dl>
+    );
+  }
+
+  if (tab === "messages") {
+    if (detail.recent_messages.length === 0) {
+      return <p className="text-muted-foreground">No recent messages.</p>;
+    }
+    return (
+      <ul className="space-y-2">
+        {detail.recent_messages.map((m, i) => (
+          <li
+            key={i}
+            className="rounded border border-border/40 bg-background/60 p-2"
+          >
+            <div className="flex items-center justify-between text-[10.5px] text-muted-foreground">
+              <span className="font-mono uppercase">{m.role}</span>
+              {m.ts ? (
+                <span className="font-mono">
+                  {typeof m.ts === "number" ? new Date(m.ts * 1000).toISOString().slice(0, 19) : String(m.ts).slice(0, 19)}
+                </span>
+              ) : null}
+            </div>
+            <p className="mt-1 whitespace-pre-wrap text-[11px] leading-relaxed">
+              {m.preview}
+            </p>
+          </li>
+        ))}
+      </ul>
+    );
+  }
+
+  if (tab === "events") {
+    if (detail.events.length === 0) {
+      return <p className="text-muted-foreground">No lifecycle events recorded.</p>;
+    }
+    return (
+      <ul className="space-y-1.5">
+        {detail.events.map((ev, i) => (
+          <li
+            key={i}
+            className="rounded border border-border/40 bg-background/60 p-2 text-[11px]"
+          >
+            <div className="flex items-center justify-between">
+              <span className="font-mono uppercase text-muted-foreground">
+                {String((ev as Record<string, unknown>).type ?? "event")}
+              </span>
+              <span className="font-mono text-[10px] text-muted-foreground">
+                {String((ev as Record<string, unknown>).ts ?? (ev as Record<string, unknown>).created_at ?? "").slice(0, 19)}
+              </span>
+            </div>
+            <pre className="mt-1 max-h-32 overflow-y-auto whitespace-pre-wrap break-all text-[10.5px]">
+              {JSON.stringify(ev, null, 2)}
+            </pre>
+          </li>
+        ))}
+      </ul>
+    );
+  }
+
+  if (tab === "memory_ops") {
+    if (detail.memory_ops.length === 0) {
+      return (
+        <p className="text-muted-foreground">
+          No memory_* tool calls recorded in this session's events.
+        </p>
+      );
+    }
+    return (
+      <ul className="space-y-2">
+        {detail.memory_ops.map((op, i) => (
+          <li
+            key={i}
+            className="rounded border border-border/40 bg-background/60 p-2 text-[11px]"
+          >
+            <div className="flex items-center justify-between">
+              <span className="font-mono font-semibold">{op.tool}</span>
+              {op.ts ? (
+                <span className="font-mono text-[10px] text-muted-foreground">
+                  {String(op.ts).slice(0, 19)}
+                </span>
+              ) : null}
+            </div>
+            {op.args_preview ? (
+              <details className="mt-1">
+                <summary className="cursor-pointer text-[10.5px] text-muted-foreground">
+                  args
+                </summary>
+                <pre className="mt-1 whitespace-pre-wrap text-[10.5px]">
+                  {op.args_preview}
+                </pre>
+              </details>
+            ) : null}
+            {op.result_preview ? (
+              <details className="mt-1">
+                <summary className="cursor-pointer text-[10.5px] text-muted-foreground">
+                  result
+                </summary>
+                <pre className="mt-1 whitespace-pre-wrap text-[10.5px]">
+                  {op.result_preview}
+                </pre>
+              </details>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+    );
+  }
+
+  // tab === "entries"
+  if (detail.entries_linked.length === 0) {
+    return (
+      <p className="text-muted-foreground">
+        No episodic entries linked back to this session via source_refs.
+      </p>
+    );
+  }
+  return (
+    <ul className="space-y-2">
+      {detail.entries_linked.map((e) => (
+        <li
+          key={e.id}
+          className="rounded border border-border/40 bg-background/60 p-2"
+        >
+          <div className="flex items-center justify-between text-[10.5px] text-muted-foreground">
+            <span className="font-mono">{e.id.slice(0, 8)}</span>
+            <span>{e.valid_from.slice(0, 10)}</span>
+          </div>
+          {e.headline ? (
+            <div className="mt-0.5 font-medium">{e.headline}</div>
+          ) : null}
+          {e.snippet ? (
+            <p className="mt-0.5 line-clamp-3 text-[11px]">{e.snippet}</p>
+          ) : null}
+          {e.entities.length > 0 ? (
+            <div className="mt-1 flex flex-wrap gap-1">
+              {e.entities.map((ent) => (
+                <span
+                  key={ent}
+                  className="rounded bg-muted px-1 py-0.5 font-mono text-[10px]"
+                >
+                  {ent}
+                </span>
+              ))}
+            </div>
+          ) : null}
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 
 function CommitItem({

@@ -32,6 +32,7 @@ from durin.memory.storage import load_entry
 __all__ = [
     "get_edge_detail",
     "get_entity_detail",
+    "get_session_detail",
     "search_memory_api",
 ]
 
@@ -293,6 +294,242 @@ async def search_memory_api(
 # ---------------------------------------------------------------------------
 # edge detail — entries co-mentioning two refs
 # ---------------------------------------------------------------------------
+
+
+def get_session_detail(
+    workspace: Path,
+    session_stem: str,
+    *,
+    recent_messages: int = 10,
+    entries_limit: int = 50,
+    tool_call_limit: int = 40,
+) -> dict[str, Any] | None:
+    """Read-only summary of one session for the graph view side panel.
+
+    ``session_stem`` is the filename stem (``websocket_<uuid>`` or
+    ``cli_direct``), NOT the full session key with the channel prefix.
+    Returns None when the corresponding ``.jsonl`` doesn't exist.
+
+    Shape:
+
+    ::
+
+        {
+            "session_ref": "session:cli_direct",
+            "session_key": "cli:cli_direct",   # from meta or inferred
+            "info": {
+                "title": "...",
+                "message_count": 39,
+                "channel": "cli",
+                "model": "glm-5.1",
+                "created_at": "...",
+                "updated_at": "...",
+            },
+            "entities_tagged": {
+                "from_meta": [...],            # derived._last_tags.entities
+                "from_source_refs": [...],     # entities in entries that link to this session
+            },
+            "events": [                        # meta.json::events list
+                {"type": "plan", "title": "...", "created_at": "...", ...},
+                {"type": "tool_call", "tool": "memory_search", ...},
+            ],
+            "memory_ops": [                    # subset of events filtered to memory_* tools
+                {"tool": "memory_store", "args": "...", "result_id": "..."},
+            ],
+            "recent_messages": [               # last N message preview from jsonl
+                {"role": "user", "content": "...", "ts": ...},
+            ],
+            "entries_linked": [...],           # episodic entries with source_refs pointing here
+        }
+    """
+    workspace = Path(workspace)
+    sessions_dir = workspace / "sessions"
+    jsonl_path = sessions_dir / f"{session_stem}.jsonl"
+    if not jsonl_path.is_file():
+        return None
+    meta_path = sessions_dir / f"{session_stem}.meta.json"
+
+    # Identity (line 0) + recent messages
+    info, recent = _read_session_info_and_tail(jsonl_path, recent_messages)
+    # Meta events + derived
+    meta_payload = _read_session_meta(meta_path)
+    events = meta_payload.get("events", []) if meta_payload else []
+    memory_ops = _filter_memory_ops(events, limit=tool_call_limit)
+    derived = meta_payload.get("derived", {}) if meta_payload else {}
+    last_tags = (derived.get("_last_tags") or {}) if isinstance(derived, dict) else {}
+    meta_entities = [
+        e for e in (last_tags.get("entities") or []) if isinstance(e, str) and ":" in e
+    ]
+
+    # Entries authored from this session (source_refs link back)
+    entries_linked = _entries_linked_to_session(
+        workspace / "memory" / "episodic",
+        session_stem,
+        limit=entries_limit,
+    )
+    entries_from_refs = sorted(
+        {ent for e in entries_linked for ent in (e.get("entities") or [])}
+    )
+
+    return {
+        "session_ref": f"session:{session_stem}",
+        "session_key": meta_payload.get("session_key") if meta_payload else None,
+        "info": info,
+        "entities_tagged": {
+            "from_meta": meta_entities,
+            "from_source_refs": entries_from_refs,
+        },
+        "events": events,
+        "memory_ops": memory_ops,
+        "recent_messages": recent,
+        "entries_linked": entries_linked,
+    }
+
+
+def _read_session_info_and_tail(
+    jsonl_path: Path, n: int,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Parse line 0 (identity) and return up to ``n`` last messages."""
+    import json
+
+    info: dict[str, Any] = {"title": None, "message_count": 0, "channel": None,
+                             "model": None, "created_at": None, "updated_at": None}
+    tail: list[dict[str, Any]] = []
+    try:
+        with jsonl_path.open("r", encoding="utf-8") as fh:
+            lines = fh.readlines()
+    except OSError:
+        return info, tail
+    for i, raw in enumerate(lines):
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            obj = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if i == 0 and isinstance(obj, dict) and "role" not in obj:
+            # Identity block
+            info.update({
+                "title": obj.get("title") or obj.get("display_name") or obj.get("name"),
+                "channel": obj.get("channel"),
+                "model": obj.get("model"),
+                "created_at": obj.get("created_at"),
+                "updated_at": obj.get("updated_at"),
+            })
+            continue
+        info["message_count"] += 1
+    # Tail: parse from end, keep last n message-shaped objects
+    for raw in reversed(lines):
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            obj = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(obj, dict) or "role" not in obj:
+            continue
+        # Reduce to a compact preview to keep payload small.
+        content = obj.get("content")
+        if isinstance(content, list):
+            # Multimodal: take first text part if any.
+            text = next(
+                (p.get("text", "") for p in content
+                 if isinstance(p, dict) and p.get("type") == "text"),
+                "",
+            )
+        else:
+            text = str(content or "")
+        tail.append({
+            "role": obj.get("role"),
+            "ts": obj.get("ts") or obj.get("timestamp"),
+            "preview": text[:280],
+        })
+        if len(tail) >= n:
+            break
+    tail.reverse()
+    return info, tail
+
+
+def _read_session_meta(meta_path: Path) -> dict[str, Any] | None:
+    if not meta_path.is_file():
+        return None
+    try:
+        with meta_path.open("r", encoding="utf-8") as fh:
+            import json
+
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
+
+
+def _filter_memory_ops(
+    events: list[Any], *, limit: int,
+) -> list[dict[str, Any]]:
+    """Subset of events for memory_* tool calls (doc 20 §P5 view)."""
+    ops: list[dict[str, Any]] = []
+    for ev in events:
+        if not isinstance(ev, dict):
+            continue
+        if ev.get("type") != "tool_call":
+            continue
+        tool = ev.get("tool") or ev.get("name") or ""
+        if not isinstance(tool, str) or not tool.startswith("memory_"):
+            continue
+        ops.append({
+            "tool": tool,
+            "ts": ev.get("ts") or ev.get("created_at"),
+            "args_preview": _truncate(ev.get("args"), 200),
+            "result_preview": _truncate(ev.get("result"), 200),
+            "msg_index": ev.get("msg_index"),
+        })
+        if len(ops) >= limit:
+            break
+    return ops
+
+
+def _truncate(value: Any, n: int) -> str:
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        try:
+            import json
+
+            value = json.dumps(value, ensure_ascii=False)
+        except (TypeError, ValueError):
+            value = repr(value)
+    return value if len(value) <= n else value[:n] + "…"
+
+
+def _entries_linked_to_session(
+    episodic_dir: Path, session_stem: str, *, limit: int,
+) -> list[dict[str, Any]]:
+    """Entries whose source_refs include ``sessions/<session_stem>.md``."""
+    if not episodic_dir.is_dir():
+        return []
+    import re
+
+    pat = re.compile(rf"sessions/{re.escape(session_stem)}\.md(?:#turn-\d+)?")
+    rows: list[tuple[str, dict[str, Any]]] = []
+    for path in episodic_dir.glob("*.md"):
+        try:
+            entry = load_entry(path)
+        except Exception:  # noqa: BLE001
+            continue
+        if not any(pat.search(str(r)) for r in (entry.source_refs or [])):
+            continue
+        ts = entry.valid_from.isoformat() if entry.valid_from else ""
+        rows.append((ts, {
+            "id": entry.id,
+            "valid_from": ts,
+            "headline": entry.headline,
+            "summary": entry.summary,
+            "snippet": (entry.body or "")[:240],
+            "entities": list(entry.entities or []),
+        }))
+    rows.sort(key=lambda kv: kv[0], reverse=True)
+    return [r[1] for r in rows[:limit]]
 
 
 def get_edge_detail(

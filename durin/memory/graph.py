@@ -4,30 +4,39 @@ Produces a JSON-serialisable ``{"nodes": [...], "edges": [...]}`` shape
 the frontend force-directed canvas renders. Read-only over the on-disk
 state — no LLM call, no mutation.
 
-**Nodes** are entity pages under ``memory/entities/<type>/<slug>.md``
-(excluding ``archive/`` subfolders since those are absorbed-and-de-
-indexed by design). Each carries the entity ref, display name, type,
-aliases, and a ``weight`` proportional to how many episodic entries
-mention it (size hint for the renderer).
+**Node kinds**:
 
-**Edges** come from episodic-entry co-occurrence: every entry that
-tags ≥2 entities contributes a +1 weight to each unordered pair. The
-result is an undirected weighted graph where stronger ties mean "these
-two entities appear together more often in raw memory".
+- *Entity pages* under ``memory/entities/<type>/<slug>.md`` (excluding
+  ``archive/`` subfolders since those are absorbed-and-de-indexed by
+  design). Carry the entity ref, display name, type, aliases.
+- *Phantom entities* — refs that appear in entries but have no
+  consolidated page yet. Rendered with a flag so the frontend can
+  style differently (dashed border).
+- *Sessions* (optional, default ON) — one per ``sessions/<key>.jsonl``.
+  Type ``"session"``. Lets the user see conversation → entity flow
+  alongside entity ↔ entity flow.
 
-Future evolutions (kept as comments in the code):
+**Edges**:
+
+- *Entity ↔ entity*: episodic-entry co-occurrence — every entry that
+  tags ≥2 entities contributes +1 to each unordered pair.
+- *Session → entity*: derived from session ``meta.json::derived._last_tags``
+  AND from episodic-entry ``source_refs`` that link back to
+  ``sessions/<key>.md``. Weight = count of evidence per (session, ref).
+
+Future evolutions:
 
 - Edges from entity-page body cross-references (when the consolidator
-  emits explicit ``[other-ref]`` markdown links — not in V1 prompt).
-- Edges from absorption history (archived → canonical chain) so
-  drill-down can show the merge ancestry visually.
-- Edges from same-session co-occurrence (entries written in the same
-  session.jsonl, regardless of entity tag overlap).
+  emits explicit ``[other-ref]`` markdown links).
+- Edges from absorption history (archived → canonical chain).
+- Session ↔ session edges via shared entities (deferred — risk noisy).
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 from collections import defaultdict
 from itertools import combinations
 from pathlib import Path
@@ -40,23 +49,33 @@ __all__ = ["build_memory_graph"]
 
 logger = logging.getLogger(__name__)
 
+_SESSION_REF_RE = re.compile(r"sessions/([^/.#]+)\.md")
+
 
 def build_memory_graph(
     workspace: Path,
     *,
     max_nodes: int = 500,
     max_edges: int = 2000,
+    include_sessions: bool = True,
 ) -> dict[str, Any]:
     """Return ``{"nodes": [...], "edges": [...], "stats": {...}}``.
 
     Walks the on-disk memory tree once for pages, once for episodic
-    entries. Caps node + edge counts so a runaway workspace doesn't
-    ship a 50 MB JSON payload over the websocket channel — callers
-    can request finer-grained slices later if needed.
+    entries; optionally walks ``sessions/`` and links each session to
+    the entities it tagged. Caps node + edge counts so a runaway
+    workspace doesn't ship a 50 MB JSON payload — callers can request
+    finer-grained slices later if needed.
+
+    ``include_sessions=False`` skips the sessions/ walk entirely —
+    useful for tests that want to assert the entity-only invariants
+    or for callers that already know they don't have a sessions/ tree.
     """
-    memory_root = Path(workspace) / "memory"
+    workspace = Path(workspace)
+    memory_root = workspace / "memory"
     entities_root = memory_root / "entities"
     episodic_root = memory_root / "episodic"
+    sessions_root = workspace / "sessions"
 
     # 1. Walk entity pages (skip archived).
     nodes_by_ref: dict[str, dict[str, Any]] = {}
@@ -90,8 +109,17 @@ def build_memory_graph(
     # co-occurrence counts. Skip refs not present as an entity page (the
     # entry tagged a type:value that nobody has consolidated yet — show
     # those as "phantom" nodes so the user sees coverage gaps).
+    # Also harvest session refs from each entry's source_refs so we can
+    # later draw session→entity edges from "this entry was authored
+    # during conversation X" evidence.
     edge_counts: dict[tuple[str, str], int] = defaultdict(int)
     phantom_refs: dict[str, int] = defaultdict(int)
+    # session_entity_evidence[session_ref][entity_ref] = count of entries
+    # that tag entity_ref AND were sourced from session_ref. Used to
+    # build weighted session→entity edges.
+    session_entity_evidence: dict[str, dict[str, int]] = defaultdict(
+        lambda: defaultdict(int),
+    )
     if episodic_root.is_dir():
         for entry_path in episodic_root.glob("*.md"):
             try:
@@ -109,6 +137,17 @@ def build_memory_graph(
             for a, b in combinations(refs, 2):
                 key = (a, b) if a < b else (b, a)
                 edge_counts[key] += 1
+            # Session evidence: parse source_refs for sessions/<key>.md
+            # (doc 18 §5.3 link format). Tracks per-(session,entity)
+            # co-mentions so the resulting edge weight is meaningful.
+            if include_sessions:
+                for src in (entry.source_refs or []):
+                    m = _SESSION_REF_RE.search(str(src))
+                    if m is None:
+                        continue
+                    sess_ref = f"session:{m.group(1)}"
+                    for ref in refs:
+                        session_entity_evidence[sess_ref][ref] += 1
 
     # 3. Phantom nodes — entity refs tagged in entries but with no
     # consolidated page. Render them with a flag so the frontend can
@@ -126,6 +165,50 @@ def build_memory_graph(
             "phantom": True,
         }
 
+    # 3.5 Session nodes + meta-derived entity links (optional). One
+    # node per <key>.jsonl, weighted by message count. Edges fold in:
+    # (a) the per-entry source_refs evidence collected in step 2, and
+    # (b) any meta.json::derived._last_tags.entities lists (entities
+    # the consolidator surfaced as "this session was about X").
+    if include_sessions and sessions_root.is_dir():
+        for jsonl_path in sorted(sessions_root.glob("*.jsonl")):
+            stem = jsonl_path.stem
+            sess_ref = f"session:{stem}"
+            title, message_count = _read_session_summary(jsonl_path)
+            nodes_by_ref[sess_ref] = {
+                "id": sess_ref,
+                "type": "session",
+                "name": title or stem,
+                "aliases": [],
+                "weight": message_count,
+            }
+            # Add meta-driven evidence (additive on top of source_refs).
+            meta_tags = _read_session_meta_entities(
+                sessions_root / f"{stem}.meta.json"
+            )
+            if meta_tags:
+                bucket = session_entity_evidence.setdefault(sess_ref, defaultdict(int))
+                for tag in meta_tags:
+                    bucket[tag] += 1
+
+        # Promote any meta-only refs into phantom nodes so the
+        # corresponding session→entity edge has both endpoints
+        # registered. A meta tag for an entity that NO episodic entry
+        # has ever mentioned is still useful signal worth showing.
+        for ents in session_entity_evidence.values():
+            for ref in ents.keys():
+                if ref in nodes_by_ref:
+                    continue
+                type_name, _, slug = ref.partition(":")
+                nodes_by_ref[ref] = {
+                    "id": ref,
+                    "type": type_name or "unknown",
+                    "name": slug or ref,
+                    "aliases": [],
+                    "weight": 0,
+                    "phantom": True,
+                }
+
     # 4. Build the edge list. Only keep edges where both endpoints are
     # in the node set (defensive; same-ref edges already collapsed
     # by the sorted() dedup above).
@@ -133,6 +216,22 @@ def build_memory_graph(
     for (a, b), weight in edge_counts.items():
         if a in nodes_by_ref and b in nodes_by_ref:
             edges.append({"source": a, "target": b, "weight": weight})
+
+    # Session→entity edges. We keep them DIRECTIONAL conceptually
+    # (a session links to the entities it discussed) but the JSON
+    # shape stays the same — the renderer treats them as undirected
+    # like the others. Phantom-target edges are allowed: a session
+    # surfaced an entity that no one consolidated yet, that's still
+    # a real co-mention worth showing.
+    if include_sessions:
+        for sess_ref, ents in session_entity_evidence.items():
+            if sess_ref not in nodes_by_ref:
+                # Session walked off the disk between steps; skip.
+                continue
+            for ent_ref, w in ents.items():
+                if ent_ref not in nodes_by_ref:
+                    continue
+                edges.append({"source": sess_ref, "target": ent_ref, "weight": w})
 
     # 5. Cap: prefer higher-weight nodes/edges, drop the tail.
     nodes = sorted(
@@ -151,6 +250,7 @@ def build_memory_graph(
     # 6. Type palette hint for the frontend — stable order so the
     # legend doesn't reshuffle every payload.
     types_seen = sorted({n["type"] for n in nodes})
+    session_count = sum(1 for n in nodes if n["type"] == "session")
 
     return {
         "nodes": nodes,
@@ -159,8 +259,72 @@ def build_memory_graph(
             "node_count": len(nodes),
             "edge_count": len(edges),
             "phantom_count": sum(1 for n in nodes if n.get("phantom")),
+            "session_count": session_count,
             "truncated_nodes": truncated_nodes,
             "truncated_edges": truncated_edges,
             "types": types_seen,
         },
     }
+
+
+def _read_session_summary(jsonl_path: Path) -> tuple[str | None, int]:
+    """Return (title, message_count) without parsing the full file.
+
+    Line 0 is the identity block (title, channel, …); subsequent lines
+    are messages. We tolerate truncated / malformed files by counting
+    lines that look like JSON objects.
+    """
+    title: str | None = None
+    count = 0
+    try:
+        with jsonl_path.open("r", encoding="utf-8") as fh:
+            for i, raw in enumerate(fh):
+                raw = raw.strip()
+                if not raw:
+                    continue
+                if i == 0:
+                    try:
+                        head = json.loads(raw)
+                    except json.JSONDecodeError:
+                        head = None
+                    if isinstance(head, dict):
+                        title = (
+                            head.get("title")
+                            or head.get("display_name")
+                            or head.get("name")
+                        )
+                        # If the first line is itself a message (some
+                        # older sessions skip the identity block), count
+                        # it too.
+                        if "role" in head:
+                            count += 1
+                    continue
+                count += 1
+    except OSError:
+        return None, 0
+    return title, count
+
+
+def _read_session_meta_entities(meta_path: Path) -> list[str]:
+    """Extract entity refs from ``meta.json::derived._last_tags.entities``.
+
+    Tolerates partial / missing structure: this field is best-effort
+    populated by the curator and may not exist for every session.
+    """
+    if not meta_path.is_file():
+        return []
+    try:
+        with meta_path.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return []
+    derived = data.get("derived") if isinstance(data, dict) else None
+    if not isinstance(derived, dict):
+        return []
+    tags = derived.get("_last_tags") if isinstance(derived, dict) else None
+    if not isinstance(tags, dict):
+        return []
+    entities = tags.get("entities")
+    if not isinstance(entities, list):
+        return []
+    return [str(e) for e in entities if isinstance(e, str) and ":" in e]

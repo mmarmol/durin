@@ -343,4 +343,90 @@ tercero — bajo carga real veremos qué se mueve.
 
 ---
 
-## Last updated: 2026-05-24 (initial design + ship)
+---
+
+## §9 — Update 2026-05-24 PM: sessions are first-class nodes
+
+User feedback: the search panel already lists sessions (kind=`session`
+from `search_undreamed`) but the graph view didn't render them. Plus
+session metas (events, plans, memory ops) carry useful relations.
+
+### Changes
+
+**Builder** (`graph.py`):
+- New node type `"session"`, one per `<workspace>/sessions/<key>.jsonl`.
+  Color grey (#64748B) to read as scaffolding around semantic entities.
+- New `include_sessions: bool = True` constructor flag (default ON).
+- Two evidence sources for session→entity edges, weights compound:
+  - **source_refs**: episodic entries that link back to
+    `sessions/<stem>.md#turn-N` (per doc 18 §5.3 link format).
+  - **meta `_last_tags`**: `<key>.meta.json::derived._last_tags.entities`
+    (populated by the consolidator at archive-time).
+- Meta-only refs (an entity tagged in meta but never in an entry) are
+  promoted to phantom nodes so the edge always renders with both
+  endpoints, not just one.
+- New `stats.session_count` reports how many session nodes are in the
+  payload.
+
+**Backend** (`graph_api.py` + websocket route):
+- `get_session_detail(workspace, stem)` returns: identity (title /
+  channel / model / counts / timestamps), `entities_tagged.from_meta`
+  vs `entities_tagged.from_source_refs`, lifecycle events from
+  meta.json, **memory ops filtered out of events** (closes doc 20
+  §P5 — memory operations are surfaced inline per session), recent N
+  messages from the jsonl, episodic entries that link back via
+  source_refs.
+- `GET /api/memory/session/<stem>` — symmetrical to `/api/memory/entity/<ref>`.
+- Returns 404 on missing stem.
+
+**Frontend** (`MemoryGraphView.tsx`):
+- Palette adds `session: "#64748B"` (slate).
+- Side panel branches by selected node type:
+  - Entity nodes → Info / Body / History / Sources / Archive (as before).
+  - Session nodes → Info / Messages / Events / Memory ops / Entries linked.
+- Memory ops tab shows expandable args + result preview per call.
+- Messages tab shows compact role + ts + 280-char content preview.
+- Entries linked tab shows the episodic entries authored from this
+  conversation with their entities tagged.
+
+### Tests
+- 6 new in `test_graph_builder.py`: session nodes default ON, opt-out
+  via flag, edge from source_refs, edge from meta tags (including
+  phantom promotion), compounding evidence.
+- 5 new in `test_graph_api.py`: session detail missing returns None,
+  basic info, recent-messages cap, memory_ops filtering, source_refs
+  entries discovery, meta tags vs source_refs separation.
+
+Suite: 4490 passing (+11).
+
+### Decisiones
+
+- **DEFAULT ON** — sessions appearing automatically gives the user the
+  "conversation context" they expect from "Obsidian-style memory view".
+- **Slate grey instead of palette hue** — emphasises sessions are
+  scaffolding, not first-class semantic entities. Keeps the 8 doc 18
+  §4 colors free for actual entity types.
+- **Two-source evidence** because either path alone is incomplete:
+  some sessions have tags but no entries link back; some have entries
+  but no consolidator-emitted tags. Both signals real.
+- **Promote phantom for meta-only refs** — if the consolidator
+  surfaced an entity for a session, but no entry tagged it (could be
+  curator vs memory_store mismatch), still show the connection.
+
+### Known limitations carried forward
+
+- M3 in §5 (session viewer integration with the chat surface) still
+  pending — the session detail endpoint now exists, but the chat
+  page's session viewer doesn't link to it.
+- Session ↔ session edges (via shared entities) deliberately deferred
+  — noisy at scale, would require ranking by Jaccard similarity.
+- Tool ops from `<key>.jsonl` (not just `<key>.meta.json::events`)
+  aren't parsed yet. Currently `memory_ops` reads only from meta
+  events. If `tool_call` events aren't being added there, the tab
+  will be empty even when the chat actually used memory tools. Worth
+  cross-checking against `SessionManager._DERIVED_METADATA_KEYS`
+  next pass.
+
+---
+
+## Last updated: 2026-05-24 PM (sessions added as nodes + session detail surface)

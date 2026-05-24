@@ -458,3 +458,56 @@ export async function fetchMemoryEdge(
     `${base}/api/memory/edge/${encodeURIComponent(source)}/${encodeURIComponent(target)}`;
   return request<MemoryEdgeDetail>(url, token);
 }
+
+export interface MemorySessionDetail {
+  session_ref: string;
+  session_key: string | null;
+  info: {
+    title: string | null;
+    message_count: number;
+    channel: string | null;
+    model: string | null;
+    created_at: string | null;
+    updated_at: string | null;
+  };
+  entities_tagged: {
+    from_meta: string[];
+    from_source_refs: string[];
+  };
+  events: Array<Record<string, unknown>>;
+  memory_ops: Array<{
+    tool: string;
+    ts: string | null;
+    args_preview: string;
+    result_preview: string;
+    msg_index: number | null;
+  }>;
+  recent_messages: Array<{
+    role: string;
+    ts: string | number | null;
+    preview: string;
+  }>;
+  entries_linked: Array<{
+    id: string;
+    valid_from: string;
+    headline: string;
+    summary: string;
+    snippet: string;
+    entities: string[];
+  }>;
+}
+
+export async function fetchMemorySession(
+  token: string,
+  stem: string,
+  base: string = "",
+): Promise<MemorySessionDetail | null> {
+  const url = `${base}/api/memory/session/${encodeURIComponent(stem)}`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+    credentials: "same-origin",
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new ApiError(res.status, `HTTP ${res.status}`);
+  return (await res.json()) as MemorySessionDetail;
+}
