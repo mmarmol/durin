@@ -137,7 +137,8 @@ async def run_qa(
     started = time.monotonic()
     try:
         await asyncio.wait_for(
-            _ask_agent(qa, workspace_root, model, max_iterations, trace),
+            _ask_agent(qa, workspace_root, model, max_iterations, trace,
+                       enable_memory=enable_memory),
             timeout=timeout_s,
         )
     except asyncio.TimeoutError:
@@ -242,6 +243,8 @@ async def _ask_agent(
     model: str,
     max_iterations: int,
     trace: QATrace,
+    *,
+    enable_memory: bool = True,
 ) -> None:
     """Drive durin's agent loop to answer the question.
 
