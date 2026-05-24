@@ -273,6 +273,16 @@ async def _ask_agent(
     bus = MessageBus()
     loop_agent = AgentLoop.from_config(cfg, bus=bus)
 
+    # Ablation mode: strip every memory tool so the agent has zero
+    # read/write access to the memory layer — not just an empty workspace.
+    # This is a stricter baseline than --no-memory seeding alone: the LLM
+    # never sees memory_search / memory_store / memory_drill / memory_ingest
+    # in its tool list, so it cannot self-seed or bias its reasoning around
+    # the memory API surface.
+    if not enable_memory:
+        for tool_name in ("memory_search", "memory_store", "memory_drill", "memory_ingest"):
+            loop_agent.tools.unregister(tool_name)
+
     session_key = f"bench:{qa.qa_id}"
     msg = InboundMessage(
         channel="bench",
