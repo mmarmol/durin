@@ -344,3 +344,117 @@ export async function fetchMemoryGraph(
 ): Promise<MemoryGraphPayload> {
   return request<MemoryGraphPayload>(`${base}/api/memory/graph`, token);
 }
+
+export interface MemoryEntityDetail {
+  ref: string;
+  page: {
+    type: string;
+    name: string;
+    aliases: string[];
+    identifiers: Record<string, string[] | string> | null;
+    extra: Record<string, unknown>;
+    body: string;
+    dream_processed_through: string | null;
+  };
+  history: Array<{
+    sha: string;
+    short_sha: string;
+    subject: string;
+    body: string;
+    when: string;
+    trailers: Record<string, string[]>;
+  }>;
+  archive: Array<{
+    slug: string;
+    path: string;
+    name: string;
+    absorbed_at: string | null;
+    absorbed_reason: string | null;
+    absorbed_into: string | null;
+  }>;
+  entries: Array<{
+    id: string;
+    valid_from: string;
+    headline: string;
+    summary: string;
+    body: string;
+    class: string;
+    entities: string[];
+  }>;
+}
+
+export async function fetchMemoryEntity(
+  token: string,
+  ref: string,
+  base: string = "",
+): Promise<MemoryEntityDetail | null> {
+  const url = `${base}/api/memory/entity/${encodeURIComponent(ref)}`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+    credentials: "same-origin",
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new ApiError(res.status, `HTTP ${res.status}`);
+  return (await res.json()) as MemoryEntityDetail;
+}
+
+export interface MemorySearchResult {
+  source: string;
+  uri: string;
+  headline: string;
+  snippet: string;
+  summary?: string;
+  body?: string;
+  kind: string;          // "canonical" | "fragment" | "session" | "ingested"
+  class_name?: string;
+  valid_from?: string;
+  entities?: string[];
+  rendered?: string;     // marker-wrapped block for LLM-style display
+}
+
+export interface MemorySearchPayload {
+  results: MemorySearchResult[];
+  total: number;
+  strategy: string;
+  ranking: string;
+}
+
+export async function searchMemoryApi(
+  token: string,
+  query: string,
+  opts: { scope?: string; level?: string; base?: string } = {},
+): Promise<MemorySearchPayload> {
+  const params = new URLSearchParams({ q: query });
+  if (opts.scope) params.set("scope", opts.scope);
+  if (opts.level) params.set("level", opts.level);
+  const base = opts.base ?? "";
+  return request<MemorySearchPayload>(
+    `${base}/api/memory/search?${params}`,
+    token,
+  );
+}
+
+export interface MemoryEdgeDetail {
+  source: string;
+  target: string;
+  total: number;
+  entries: Array<{
+    id: string;
+    valid_from: string;
+    headline: string;
+    summary: string;
+    snippet: string;
+    entities: string[];
+  }>;
+}
+
+export async function fetchMemoryEdge(
+  token: string,
+  source: string,
+  target: string,
+  base: string = "",
+): Promise<MemoryEdgeDetail> {
+  const url =
+    `${base}/api/memory/edge/${encodeURIComponent(source)}/${encodeURIComponent(target)}`;
+  return request<MemoryEdgeDetail>(url, token);
+}

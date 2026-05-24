@@ -674,6 +674,17 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/memory/graph":
             return self._handle_memory_graph(request)
 
+        if got == "/api/memory/search":
+            return await self._handle_memory_search_api(request, query)
+
+        m = re.match(r"^/api/memory/entity/(.+)$", got)
+        if m:
+            return self._handle_memory_entity(request, m.group(1))
+
+        m = re.match(r"^/api/memory/edge/([^/]+)/([^/]+)$", got)
+        if m:
+            return self._handle_memory_edge(request, m.group(1), m.group(2))
+
         if got == "/api/model/test":
             return await self._handle_model_test(request)
 
@@ -802,6 +813,92 @@ class WebSocketChannel(BaseChannel):
         except Exception as exc:  # noqa: BLE001
             logger.exception("memory graph build failed")
             return _http_error(500, f"memory graph build failed: {exc}")
+        return _http_json_response(payload)
+
+    def _handle_memory_entity(self, request: WsRequest, ref_encoded: str) -> Response:
+        """GET /api/memory/entity/<ref> — full page + history + archive + entries.
+
+        ``<ref>`` is the entity reference (``type:slug``) URL-encoded —
+        ``person%3Amarcelo``. Returns 404 when the canonical page is
+        missing on disk. See :func:`graph_api.get_entity_detail`.
+        """
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from urllib.parse import unquote
+
+        from durin.config.loader import load_config
+        from durin.memory.graph_api import get_entity_detail
+
+        ref = unquote(ref_encoded)
+        try:
+            workspace = load_config().workspace_path
+            payload = get_entity_detail(workspace, ref)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("memory entity detail failed for %s", ref)
+            return _http_error(500, f"entity detail failed: {exc}")
+        if payload is None:
+            return _http_error(404, f"entity not found: {ref}")
+        return _http_json_response(payload)
+
+    def _handle_memory_edge(
+        self, request: WsRequest, source_enc: str, target_enc: str,
+    ) -> Response:
+        """GET /api/memory/edge/<source>/<target> — entries co-mentioning both.
+
+        Both refs URL-encoded. Returns the raw evidence behind a graph
+        edge: episodic entries that tag BOTH refs.
+        """
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from urllib.parse import unquote
+
+        from durin.config.loader import load_config
+        from durin.memory.graph_api import get_edge_detail
+
+        a = unquote(source_enc)
+        b = unquote(target_enc)
+        try:
+            workspace = load_config().workspace_path
+            payload = get_edge_detail(workspace, a, b)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("memory edge detail failed for %s ↔ %s", a, b)
+            return _http_error(500, f"edge detail failed: {exc}")
+        return _http_json_response(payload)
+
+    async def _handle_memory_search_api(
+        self, request: WsRequest, query: dict[str, list[str]],
+    ) -> Response:
+        """GET /api/memory/search?q=…&scope=…&level=… — same shape as memory_search tool.
+
+        Mirrors the LLM tool's surface so the webui filter behaves
+        identically to what the agent sees. Results carry ``kind`` +
+        ``rendered`` per doc 25 §2.H so canonical vs fragment markers
+        stay consistent across paths.
+        """
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from durin.config.loader import load_config
+        from durin.memory.graph_api import search_memory_api
+
+        q = _query_first(query, "q") or ""
+        scope = _query_first(query, "scope") or "all"
+        level = _query_first(query, "level") or "warm"
+        try:
+            cfg = load_config()
+            workspace = cfg.workspace_path
+            embedding_model = None
+            try:
+                if cfg.memory.enabled:
+                    embedding_model = cfg.memory.embedding.model
+            except (AttributeError, TypeError):
+                embedding_model = None
+            payload = await search_memory_api(
+                workspace, q, scope=scope, level=level,
+                embedding_model=embedding_model,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("memory search api failed")
+            return _http_error(500, f"memory search failed: {exc}")
         return _http_json_response(payload)
 
     def _handle_sessions_list(self, request: WsRequest) -> Response:
