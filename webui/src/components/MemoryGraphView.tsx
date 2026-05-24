@@ -78,6 +78,16 @@ function radiusForWeight(weight: number): number {
   return 5 + Math.sqrt(Math.max(0, weight)) * 2.2;
 }
 
+/** Cap a node label to a sensible visual length without dropping the
+ *  identifying suffix. Sessions can have long UUID-ish names; we
+ *  ellipsise the middle so both ends stay readable. */
+function shortLabel(label: string, max = 22): string {
+  if (label.length <= max) return label;
+  const headLen = Math.max(8, Math.floor(max * 0.55));
+  const tailLen = Math.max(4, max - headLen - 1);
+  return `${label.slice(0, headLen)}…${label.slice(-tailLen)}`;
+}
+
 function tickForces(
   nodes: SimNode[],
   edges: SimEdge[],
@@ -163,6 +173,19 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
   const [sessionTab, setSessionTab] = useState<SessionTabName>("info");
   const [focusRef, setFocusRef] = useState<string | null>(null);
   const isSessionSelected = selected?.type === "session";
+  // Set of node types the user has toggled OFF in the legend. Default
+  // empty = show all. Clicking a legend chip flips inclusion. Phantom
+  // is treated as its own pseudo-type for the toggle.
+  const [hiddenTypes, setHiddenTypes] = useState<Set<string>>(new Set());
+
+  function toggleType(type: string): void {
+    setHiddenTypes((prev) => {
+      const next = new Set(prev);
+      if (next.has(type)) next.delete(type);
+      else next.add(type);
+      return next;
+    });
+  }
 
   // Search panel state
   const [search, setSearch] = useState("");
@@ -278,6 +301,15 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
       return true;
     }
 
+    function isVisible(node: SimNode): boolean {
+      // Type-toggle: legend chips hide whole categories at a time.
+      // Phantom is treated as its own pseudo-type so the user can
+      // hide unconsolidated noise without losing the entity types.
+      if (hiddenTypes.has(node.type)) return false;
+      if (node.phantom && hiddenTypes.has("phantom")) return false;
+      return true;
+    }
+
     function frame() {
       if (stopped) return;
       const nodes = simNodesRef.current;
@@ -299,6 +331,8 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
 
       ctx.lineCap = "round";
       for (const e of edges) {
+        // Hidden endpoints → don't draw the edge at all.
+        if (!isVisible(e.source) || !isVisible(e.target)) continue;
         const lit = isHighlighted(e.source.id) && isHighlighted(e.target.id);
         ctx.strokeStyle = lit
           ? `rgba(120,120,140,${Math.min(0.55, 0.18 + e.weight * 0.06)})`
@@ -311,6 +345,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
       }
 
       for (const n of nodes) {
+        if (!isVisible(n)) continue;
         const r = radiusForWeight(n.weight);
         const lit = isHighlighted(n.id);
         const fill = colorForType(n.type);
@@ -343,13 +378,14 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
       ctx.textBaseline = "top";
       ctx.textAlign = "center";
       for (const n of nodes) {
+        if (!isVisible(n)) continue;
         const r = radiusForWeight(n.weight);
         const lit = isHighlighted(n.id);
         const shouldLabel =
           r > 9 || lit || selected?.id === n.id || focusRef === n.id;
         if (!shouldLabel) continue;
         ctx.fillStyle = lit ? "rgba(0,0,0,0.75)" : "rgba(0,0,0,0.30)";
-        ctx.fillText(n.name, n.x, n.y + r + 2);
+        ctx.fillText(shortLabel(n.name), n.x, n.y + r + 2);
       }
 
       rafRef.current = requestAnimationFrame(frame);
@@ -361,27 +397,34 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
       ro.disconnect();
     };
-  }, [_props.active, selected, focusRef, focusNeighbours, searchMatchSet]);
+  }, [_props.active, selected, focusRef, focusNeighbours, searchMatchSet, hiddenTypes]);
 
-  // Hit-test (for nodes AND edges)
+  // Hit-test (for nodes AND edges). Skips nodes hidden by legend
+  // toggles so the user can't accidentally select a node that's not
+  // even rendered.
   const hitTestNode = useCallback((x: number, y: number): SimNode | null => {
     const nodes = simNodesRef.current;
     for (let i = nodes.length - 1; i >= 0; i--) {
       const n = nodes[i];
+      if (hiddenTypes.has(n.type)) continue;
+      if (n.phantom && hiddenTypes.has("phantom")) continue;
       const r = radiusForWeight(n.weight) + 4;
       const dx = x - n.x;
       const dy = y - n.y;
       if (dx * dx + dy * dy <= r * r) return n;
     }
     return null;
-  }, []);
+  }, [hiddenTypes]);
 
   const hitTestEdge = useCallback((x: number, y: number): SimEdge | null => {
     // Distance from point (x,y) to each line segment; pick the closest
-    // under a tolerance of 6px.
+    // under a tolerance of 6px. Skip edges with hidden endpoints to
+    // match the visual render.
     const edges = simEdgesRef.current;
     let best: { e: SimEdge; d: number } | null = null;
     for (const e of edges) {
+      if (hiddenTypes.has(e.source.type) || hiddenTypes.has(e.target.type)) continue;
+      if ((e.source.phantom || e.target.phantom) && hiddenTypes.has("phantom")) continue;
       const x1 = e.source.x, y1 = e.source.y;
       const x2 = e.target.x, y2 = e.target.y;
       const dx = x2 - x1, dy = y2 - y1;
@@ -394,7 +437,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
       if (d < 6 && (best == null || d < best.d)) best = { e, d };
     }
     return best?.e ?? null;
-  }, []);
+  }, [hiddenTypes]);
 
   const onPointerDown = useCallback(
     (evt: React.PointerEvent<HTMLCanvasElement>) => {
@@ -662,22 +705,60 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
           className="block h-full w-full"
         />
 
-        {/* Legend bottom-left */}
+        {/* Legend bottom-left — chips are click-to-toggle filters.
+            Clicking a chip hides every node of that type; clicking
+            again restores. Phantom is its own pseudo-type. */}
         {typesLegend.length > 0 ? (
-          <div className="pointer-events-none absolute bottom-3 left-3 flex flex-wrap gap-x-3 gap-y-1 rounded-md bg-background/85 px-2 py-1 text-[11px] text-muted-foreground backdrop-blur">
-            {typesLegend.map((t) => (
-              <span key={t.type} className="flex items-center gap-1">
-                <span
-                  className="inline-block h-2.5 w-2.5 rounded-full"
-                  style={{ background: t.color }}
-                />
-                {t.type}
-              </span>
-            ))}
-            <span className="flex items-center gap-1">
-              <span className="inline-block h-2.5 w-2.5 rounded-full border border-dashed border-foreground/50" />
-              phantom
-            </span>
+          <div className="absolute bottom-3 left-3 flex flex-wrap items-center gap-1 rounded-md bg-background/85 p-1 text-[11px] backdrop-blur">
+            {typesLegend.map((t) => {
+              const hidden = hiddenTypes.has(t.type);
+              return (
+                <button
+                  key={t.type}
+                  type="button"
+                  onClick={() => toggleType(t.type)}
+                  aria-pressed={!hidden}
+                  title={hidden ? `Show ${t.type}` : `Hide ${t.type}`}
+                  className={cn(
+                    "flex items-center gap-1 rounded px-1.5 py-0.5 transition-opacity",
+                    "hover:bg-muted",
+                    hidden ? "opacity-40" : "opacity-100",
+                  )}
+                >
+                  <span
+                    className="inline-block h-2.5 w-2.5 rounded-full"
+                    style={{ background: t.color }}
+                  />
+                  <span className={cn(hidden && "line-through")}>{t.type}</span>
+                </button>
+              );
+            })}
+            {data && data.stats.phantom_count > 0 ? (
+              <button
+                type="button"
+                onClick={() => toggleType("phantom")}
+                aria-pressed={!hiddenTypes.has("phantom")}
+                title={hiddenTypes.has("phantom") ? "Show phantom" : "Hide phantom"}
+                className={cn(
+                  "flex items-center gap-1 rounded px-1.5 py-0.5 transition-opacity hover:bg-muted",
+                  hiddenTypes.has("phantom") ? "opacity-40" : "opacity-100",
+                )}
+              >
+                <span className="inline-block h-2.5 w-2.5 rounded-full border border-dashed border-foreground/50" />
+                <span className={cn(hiddenTypes.has("phantom") && "line-through")}>
+                  phantom
+                </span>
+              </button>
+            ) : null}
+            {hiddenTypes.size > 0 ? (
+              <button
+                type="button"
+                onClick={() => setHiddenTypes(new Set())}
+                className="ml-1 rounded border border-border/40 px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-muted"
+              >
+                Show all
+              </button>
+            ) : null}
           </div>
         ) : null}
 

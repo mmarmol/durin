@@ -268,11 +268,18 @@ def build_memory_graph(
 
 
 def _read_session_summary(jsonl_path: Path) -> tuple[str | None, int]:
-    """Return (title, message_count) without parsing the full file.
+    """Return (display_name, message_count) without parsing the full file.
 
     Line 0 is the identity block (title, channel, …); subsequent lines
     are messages. We tolerate truncated / malformed files by counting
     lines that look like JSON objects.
+
+    Display-name resolution order, falling through on each miss:
+
+    1. Identity block ``display_name`` / ``title`` / ``name``.
+    2. Channel prefix + short UUID suffix derived from the file stem.
+       ``websocket_12c54195-1548-…`` → ``ws · 12c54195``,
+       ``cli_direct`` → ``cli · direct``.
     """
     title: str | None = None
     count = 0
@@ -289,8 +296,8 @@ def _read_session_summary(jsonl_path: Path) -> tuple[str | None, int]:
                         head = None
                     if isinstance(head, dict):
                         title = (
-                            head.get("title")
-                            or head.get("display_name")
+                            head.get("display_name")
+                            or head.get("title")
                             or head.get("name")
                         )
                         # If the first line is itself a message (some
@@ -302,7 +309,55 @@ def _read_session_summary(jsonl_path: Path) -> tuple[str | None, int]:
                 count += 1
     except OSError:
         return None, 0
+    if not title:
+        title = _friendly_session_label(jsonl_path.stem)
     return title, count
+
+
+_CHANNEL_ABBREV = {
+    "websocket": "ws",
+    "cli": "cli",
+    "telegram": "tg",
+    "slack": "slack",
+    "discord": "dc",
+    "matrix": "matrix",
+    "whatsapp": "wa",
+    "feishu": "feishu",
+    "dingtalk": "dt",
+    "mochat": "mochat",
+    "qq": "qq",
+    "wecom": "wc",
+}
+
+
+def _friendly_session_label(stem: str) -> str:
+    """Render a compact human label from a session filename stem.
+
+    ``websocket_12c54195-1548-4d76-925f-dc772b023f40`` → ``ws · 12c54195``
+    ``cli_direct`` → ``cli · direct``
+    ``standalone_abc``  → ``standalone_abc`` (unknown prefix, returned as-is)
+    """
+    if "_" not in stem:
+        return stem
+    prefix, _, rest = stem.partition("_")
+    if not rest:
+        return stem
+    abbrev = _CHANNEL_ABBREV.get(prefix.lower())
+    if abbrev is None:
+        # Unknown prefix — surface the stem so the user has full
+        # context; the frontend truncation will handle visual length.
+        return stem
+    # For UUID-like rest (8+ hex chars before a dash), keep just the
+    # leading chunk. For short non-UUID rests like ``direct`` or
+    # ``chat42``, keep the whole thing — it's already readable.
+    first_hex = rest.split("-", 1)[0]
+    if "-" in rest and len(first_hex) >= 8 and all(
+        c in "0123456789abcdef" for c in first_hex.lower()
+    ):
+        suffix = first_hex
+    else:
+        suffix = rest
+    return f"{abbrev} · {suffix}"
 
 
 def _read_session_meta_entities(meta_path: Path) -> list[str]:

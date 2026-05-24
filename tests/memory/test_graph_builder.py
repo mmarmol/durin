@@ -269,6 +269,40 @@ def test_session_to_entity_edge_from_meta_tags(tmp_path: Path) -> None:
     assert ("session:sess_a", "project:durin") in sess_edges
 
 
+def test_session_friendly_label_uuid(tmp_path: Path) -> None:
+    """UUID-shaped stems get the channel abbrev + 8-char prefix."""
+    _write_session(tmp_path, "websocket_12c54195-1548-4d76-925f-dc772b023f40",
+                    messages=1)
+    g = build_memory_graph(tmp_path)
+    sess = next(n for n in g["nodes"] if n["type"] == "session")
+    assert sess["name"] == "ws · 12c54195"
+
+
+def test_session_friendly_label_short_suffix(tmp_path: Path) -> None:
+    """Non-UUID short suffix is kept whole (cli_direct → cli · direct)."""
+    _write_session(tmp_path, "cli_direct", messages=1)
+    g = build_memory_graph(tmp_path)
+    sess = next(n for n in g["nodes"] if n["type"] == "session")
+    assert sess["name"] == "cli · direct"
+
+
+def test_session_friendly_label_unknown_channel(tmp_path: Path) -> None:
+    """Unknown channel prefix returns the stem unchanged (no surprise rename)."""
+    _write_session(tmp_path, "weirdchannel_abc-def", messages=1)
+    g = build_memory_graph(tmp_path)
+    sess = next(n for n in g["nodes"] if n["type"] == "session")
+    assert sess["name"] == "weirdchannel_abc-def"
+
+
+def test_session_friendly_label_explicit_title_wins(tmp_path: Path) -> None:
+    """If the identity block has display_name/title, that wins over the stem heuristic."""
+    _write_session(tmp_path, "websocket_abcd1234-…", messages=1,
+                    title="My Project Sync")
+    g = build_memory_graph(tmp_path)
+    sess = next(n for n in g["nodes"] if n["type"] == "session")
+    assert sess["name"] == "My Project Sync"
+
+
 def test_source_refs_and_meta_evidence_compound_weight(tmp_path: Path) -> None:
     _write_page(tmp_path, "person", "m")
     _write_session(tmp_path, "sess", messages=2,
