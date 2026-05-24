@@ -172,6 +172,63 @@ state + history + sources).
 **Estado**: pendiente, post-Phase 5 (cuando la pipeline entity-centric
 esté implementada).
 
+### P6 — Índice keyword escalable como fallback de `memory_search` (FTS5 / inverted index)
+
+**Contexto**: el path de grep en `durin/memory/search.py` (`search_dreamed`,
+`search_undreamed`) hace walk + `load_entry` parse YAML por cada archivo
+en `memory/<class>/*.md` por cada query. Para N pequeño (bench LoCoMo,
+sesiones cortas) es instantáneo. A escala de daily use con miles de
+entradas episódicas / sesiones, O(N) walk + parse por query se vuelve
+caro.
+
+Hoy ya tenemos dos protecciones contra el escalado:
+- **Vector index** (`durin/memory/vector_index.py`) — O(log N) via
+  LanceDB. Es el path principal cuando `memory.enabled=True`.
+- **Dream consolidation** — fusiona episódicos en entity_pages
+  canónicos, reduciendo el N que llega al grep.
+
+**Problema**: si vector está apagado, falla, o no encuentra (queries
+naturales tipo "Calvin Japan stay" matcheando contra substring literal
+del query completo → 0 results), `memory_search` cae a grep, que no
+escala. El fallback no es robusto a largo plazo.
+
+**Trade-off explorado (24 May 2026)**: vimos tres patrones en sistemas
+de referencia:
+- **Hermes** → SQLite FTS5 + BM25 con tokenización AND por default + doc
+  explícita al LLM ("multi-word=AND, OR para broader, quoted para exact,
+  prefix*"). Es la opción más madura para keyword search escalable.
+- **Pi** → no tiene memoria long-term; delega a `grep` del filesystem.
+- **OpenClaude** → LLM-as-judge pre-inyecta memorias por turn; no usa
+  tool de search.
+
+**Propuesta tentativa**:
+
+- Agregar índice FTS5 (SQLite) sobre `memory/<class>/*.md` que se
+  actualiza al `store_memory` y al dream consolidation.
+- Schema mínimo: `(entry_id, class_name, headline, summary, body,
+  entities_concat, valid_from)` con FTS5 sobre `headline + summary +
+  body + entities_concat`.
+- Reemplazar el path grep actual en `search_dreamed` por query FTS5
+  cuando el índice existe (fallback al walk actual si está roto o
+  vacío).
+- Actualizar `memory_search` tool description para enseñar la sintaxis
+  Hermes-style cuando el path activo sea FTS5.
+
+**Cuándo elegir esta opción**: cuando veamos en producción que vector
+deja huecos sistemáticos (queries que el LLM hace y vector no responde
+bien) Y el N de archivos es grande. Hasta entonces, el path vector +
+fallback substring actual es suficiente — esta es una optimización de
+escala, no un fix funcional.
+
+**Riesgo de hacerlo antes de tiempo**: dos índices que mantener
+(LanceDB + SQLite FTS5) con su propia lógica de sincronización, race
+conditions en concurrent writes, dependencia adicional (SQLite es
+stdlib pero los wrappers de FTS5 requieren cuidado en triggers).
+
+**Estado**: backlog, no priorizado. Activar cuando: (a) el bench muestre
+queries reales donde vector falla sistemáticamente, o (b) reportes de
+slowdown en `memory_search` con workspaces grandes.
+
 ---
 
 ## §3 — Resueltos
@@ -180,4 +237,4 @@ esté implementada).
 
 ---
 
-## Last updated: 2026-05-23 (creado durante Phase 0 de implementación entity-centric)
+## Last updated: 2026-05-24 (P6 added)
