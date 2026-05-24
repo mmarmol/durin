@@ -1,11 +1,29 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Network, RefreshCw, X } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  Focus,
+  Network,
+  RefreshCw,
+  Search as SearchIcon,
+  X,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { useMemoryGraph } from "@/hooks/useMemoryGraph";
+import { useClient } from "@/providers/ClientProvider";
+import {
+  ApiError,
+  fetchMemoryEdge,
+  fetchMemoryEntity,
+  searchMemoryApi,
+  type MemoryEdgeDetail,
+  type MemoryEntityDetail,
+  type MemoryGraphNode,
+  type MemorySearchPayload,
+} from "@/lib/api";
 import { cn } from "@/lib/utils";
-import type { MemoryGraphNode } from "@/lib/api";
 
 interface MemoryGraphViewProps {
   active: boolean;
@@ -27,23 +45,20 @@ interface SimEdge {
   weight: number;
 }
 
-// Stable palette per type — same hues across renders so the legend
-// matches the canvas. Types beyond this list cycle through.
 const TYPE_PALETTE: Record<string, string> = {
-  person: "#7C3AED",   // violet
-  project: "#0EA5E9",  // sky
-  topic: "#10B981",    // emerald
-  place: "#F59E0B",    // amber
-  event: "#EF4444",    // red
-  artifact: "#8B5CF6", // purple
-  stance: "#EC4899",   // pink
-  practice: "#14B8A6", // teal
+  person: "#7C3AED",
+  project: "#0EA5E9",
+  topic: "#10B981",
+  place: "#F59E0B",
+  event: "#EF4444",
+  artifact: "#8B5CF6",
+  stance: "#EC4899",
+  practice: "#14B8A6",
 };
 const FALLBACK_HUES = [200, 25, 145, 285, 60, 320, 95];
 
 function colorForType(type: string): string {
   if (TYPE_PALETTE[type]) return TYPE_PALETTE[type];
-  // Deterministic hue from type string.
   let h = 0;
   for (let i = 0; i < type.length; i++) h = (h * 31 + type.charCodeAt(i)) >>> 0;
   const hue = FALLBACK_HUES[h % FALLBACK_HUES.length];
@@ -54,11 +69,10 @@ function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
 }
 
-/** Tiny force-directed layout. Vanilla, no d3 dependency.
- *  - Repulsion: O(N^2) Coulomb between every pair.
- *  - Attraction: spring along each edge.
- *  - Centering: gentle pull toward the canvas centre.
- *  Good enough for ≤200 nodes which is doc 25 §1 budget for typical workspaces. */
+function radiusForWeight(weight: number): number {
+  return 5 + Math.sqrt(Math.max(0, weight)) * 2.2;
+}
+
 function tickForces(
   nodes: SimNode[],
   edges: SimEdge[],
@@ -68,8 +82,6 @@ function tickForces(
 ) {
   const cx = width / 2;
   const cy = height / 2;
-
-  // Repulsion + centering
   for (let i = 0; i < nodes.length; i++) {
     const a = nodes[i];
     if (a.pinned) continue;
@@ -82,7 +94,6 @@ function tickForces(
       const dy = a.y - b.y;
       const d2 = dx * dx + dy * dy + 0.01;
       const d = Math.sqrt(d2);
-      // Repulsion strength scales mildly with size for visual breathing room.
       const sizeBoost = 1 + Math.log(2 + (a.weight ?? 0) + (b.weight ?? 0)) * 0.4;
       const k = (2200 * sizeBoost) / d2;
       fx += (dx / d) * k;
@@ -91,14 +102,12 @@ function tickForces(
     a.vx = (a.vx + fx * alpha) * 0.82;
     a.vy = (a.vy + fy * alpha) * 0.82;
   }
-
-  // Spring attraction along edges
   for (const e of edges) {
     const dx = e.target.x - e.source.x;
     const dy = e.target.y - e.source.y;
     const d = Math.sqrt(dx * dx + dy * dy + 0.01);
-    const rest = 90; // desired edge length
-    const k = 0.03 * Math.min(4, e.weight); // heavier edges pull harder
+    const rest = 90;
+    const k = 0.03 * Math.min(4, e.weight);
     const f = (d - rest) * k;
     const fx = (dx / d) * f * alpha;
     const fy = (dy / d) * f * alpha;
@@ -111,7 +120,6 @@ function tickForces(
       e.target.vy -= fy;
     }
   }
-
   for (const n of nodes) {
     if (n.pinned) continue;
     n.x = clamp(n.x + n.vx, 20, width - 20);
@@ -119,12 +127,14 @@ function tickForces(
   }
 }
 
-function radiusForWeight(weight: number): number {
-  return 5 + Math.sqrt(Math.max(0, weight)) * 2.2;
-}
+type TabName = "info" | "body" | "history" | "sources" | "archive";
 
-export function MemoryGraphView(props: MemoryGraphViewProps) {
-  const { data, loading, error, refresh } = useMemoryGraph(props.active);
+export function MemoryGraphView(_props: MemoryGraphViewProps) {
+  const { data, loading, error, refresh } = useMemoryGraph(_props.active);
+  const { token } = useClient();
+  const tokenRef = useRef(token);
+  tokenRef.current = token;
+
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const simNodesRef = useRef<SimNode[]>([]);
@@ -133,10 +143,29 @@ export function MemoryGraphView(props: MemoryGraphViewProps) {
   const rafRef = useRef<number | null>(null);
   const draggingRef = useRef<SimNode | null>(null);
   const hoverRef = useRef<SimNode | null>(null);
-  const [selected, setSelected] = useState<MemoryGraphNode | null>(null);
-  const [search, setSearch] = useState("");
 
-  // Build the simulation arrays whenever the payload changes.
+  // Side panel state
+  const [selected, setSelected] = useState<MemoryGraphNode | null>(null);
+  const [detail, setDetail] = useState<MemoryEntityDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<TabName>("info");
+  const [focusRef, setFocusRef] = useState<string | null>(null);
+
+  // Search panel state
+  const [search, setSearch] = useState("");
+  const [searchResults, setSearchResults] =
+    useState<MemorySearchPayload | null>(null);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+
+  // Edge popup state
+  const [edgePopup, setEdgePopup] = useState<{
+    x: number; y: number; detail: MemoryEdgeDetail | null; loading: boolean;
+  } | null>(null);
+
+  // Build simulation arrays from data
   const { simNodes, simEdges } = useMemo(() => {
     if (!data) return { simNodes: [] as SimNode[], simEdges: [] as SimEdge[] };
     const w = wrapRef.current?.clientWidth ?? 800;
@@ -144,8 +173,6 @@ export function MemoryGraphView(props: MemoryGraphViewProps) {
     const cx = w / 2;
     const cy = h / 2;
     const sims: SimNode[] = data.nodes.map((n, i) => {
-      // Initial positions on a circle so the force algorithm has
-      // something to relax from instead of all-stacked-at-center.
       const angle = (i / Math.max(1, data.nodes.length)) * Math.PI * 2;
       const radius = Math.min(w, h) * 0.32;
       return {
@@ -174,10 +201,39 @@ export function MemoryGraphView(props: MemoryGraphViewProps) {
     alphaRef.current = 1;
   }, [simNodes, simEdges]);
 
-  // RAF render loop — kept lean so the canvas stays responsive even
-  // with the chat tab still mounted off-screen behind it.
+  // Compute neighbour set for the active focus ref (1-hop)
+  const focusNeighbours = useMemo(() => {
+    if (!focusRef || !data) return null;
+    const set = new Set<string>([focusRef]);
+    for (const e of data.edges) {
+      if (e.source === focusRef) set.add(e.target);
+      else if (e.target === focusRef) set.add(e.source);
+    }
+    return set;
+  }, [focusRef, data]);
+
+  // Compute matching ref set for search dimming
+  const searchMatchSet = useMemo(() => {
+    if (!searchResults) return null;
+    const refs = new Set<string>();
+    for (const r of searchResults.results) {
+      // Result URI: memory/<class_name>/<id>; for entity_page rows the
+      // id IS the entity ref. For episodic rows, the entities[] field
+      // carries the refs.
+      if (r.class_name === "entity_page") {
+        const id = r.uri.split("/").pop() ?? "";
+        refs.add(id);
+      }
+      for (const ref of r.entities ?? []) {
+        refs.add(ref);
+      }
+    }
+    return refs.size > 0 ? refs : null;
+  }, [searchResults]);
+
+  // RAF render loop
   useEffect(() => {
-    if (!props.active) return;
+    if (!_props.active) return;
     const canvas = canvasRef.current;
     const wrap = wrapRef.current;
     if (!canvas || !wrap) return;
@@ -201,7 +257,14 @@ export function MemoryGraphView(props: MemoryGraphViewProps) {
     const ro = new ResizeObserver(resize);
     ro.observe(wrap);
 
-    const needle = search.trim().toLowerCase();
+    function isHighlighted(id: string): boolean {
+      // A node is highlighted iff it passes BOTH active dimming layers.
+      // (focus and search compose multiplicatively — focus AND search
+      // hit both must be true.)
+      if (focusNeighbours && !focusNeighbours.has(id)) return false;
+      if (searchMatchSet && !searchMatchSet.has(id)) return false;
+      return true;
+    }
 
     function frame() {
       if (stopped) return;
@@ -214,30 +277,20 @@ export function MemoryGraphView(props: MemoryGraphViewProps) {
       const w = wrap.clientWidth;
       const h = wrap.clientHeight;
 
-      // Anneal: alpha decays so the system settles instead of jittering.
       const alpha = alphaRef.current;
       if (alpha > 0.02) {
         tickForces(nodes, edges, w, h, alpha);
         alphaRef.current = alpha * 0.985;
       }
 
-      // Clear & draw
       ctx.clearRect(0, 0, w, h);
 
-      // Edges first (under nodes)
       ctx.lineCap = "round";
       for (const e of edges) {
-        const dim = needle
-          ? !(
-              e.source.id.toLowerCase().includes(needle) ||
-              e.target.id.toLowerCase().includes(needle) ||
-              e.source.name.toLowerCase().includes(needle) ||
-              e.target.name.toLowerCase().includes(needle)
-            )
-          : false;
-        ctx.strokeStyle = dim
-          ? "rgba(120,120,140,0.10)"
-          : `rgba(120,120,140,${Math.min(0.55, 0.18 + e.weight * 0.06)})`;
+        const lit = isHighlighted(e.source.id) && isHighlighted(e.target.id);
+        ctx.strokeStyle = lit
+          ? `rgba(120,120,140,${Math.min(0.55, 0.18 + e.weight * 0.06)})`
+          : "rgba(120,120,140,0.08)";
         ctx.lineWidth = Math.min(3, 0.8 + Math.log(1 + e.weight));
         ctx.beginPath();
         ctx.moveTo(e.source.x, e.source.y);
@@ -245,46 +298,45 @@ export function MemoryGraphView(props: MemoryGraphViewProps) {
         ctx.stroke();
       }
 
-      // Nodes
       for (const n of nodes) {
         const r = radiusForWeight(n.weight);
-        const matches = !needle ||
-          n.id.toLowerCase().includes(needle) ||
-          n.name.toLowerCase().includes(needle) ||
-          (n.aliases ?? []).some((a) => a.toLowerCase().includes(needle));
+        const lit = isHighlighted(n.id);
         const fill = colorForType(n.type);
         ctx.beginPath();
         ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
-        ctx.fillStyle = matches ? fill : `${fill}33`;
+        ctx.fillStyle = lit ? fill : `${fill}33`;
         ctx.fill();
         if (n.phantom) {
           ctx.setLineDash([3, 3]);
-          ctx.strokeStyle = matches ? "rgba(0,0,0,0.4)" : "rgba(0,0,0,0.15)";
+          ctx.strokeStyle = lit ? "rgba(0,0,0,0.4)" : "rgba(0,0,0,0.15)";
           ctx.lineWidth = 1;
           ctx.stroke();
           ctx.setLineDash([]);
         }
-        if (selected?.id === n.id || hoverRef.current?.id === n.id) {
+        if (
+          selected?.id === n.id ||
+          hoverRef.current?.id === n.id ||
+          focusRef === n.id
+        ) {
           ctx.beginPath();
           ctx.arc(n.x, n.y, r + 3, 0, Math.PI * 2);
-          ctx.strokeStyle = "rgba(0,0,0,0.55)";
-          ctx.lineWidth = 1.5;
+          ctx.strokeStyle =
+            focusRef === n.id ? "rgba(20,40,200,0.75)" : "rgba(0,0,0,0.55)";
+          ctx.lineWidth = 1.6;
           ctx.stroke();
         }
       }
 
-      // Labels — only for big-enough nodes, or matching the search.
       ctx.font = "11px ui-sans-serif, system-ui, -apple-system";
       ctx.textBaseline = "top";
       ctx.textAlign = "center";
       for (const n of nodes) {
         const r = radiusForWeight(n.weight);
-        const matches = !needle ||
-          n.id.toLowerCase().includes(needle) ||
-          n.name.toLowerCase().includes(needle);
-        const shouldLabel = r > 9 || matches || selected?.id === n.id;
+        const lit = isHighlighted(n.id);
+        const shouldLabel =
+          r > 9 || lit || selected?.id === n.id || focusRef === n.id;
         if (!shouldLabel) continue;
-        ctx.fillStyle = "rgba(0,0,0,0.75)";
+        ctx.fillStyle = lit ? "rgba(0,0,0,0.75)" : "rgba(0,0,0,0.30)";
         ctx.fillText(n.name, n.x, n.y + r + 2);
       }
 
@@ -297,12 +349,11 @@ export function MemoryGraphView(props: MemoryGraphViewProps) {
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
       ro.disconnect();
     };
-  }, [props.active, search, selected]);
+  }, [_props.active, selected, focusRef, focusNeighbours, searchMatchSet]);
 
-  // Pointer interactions
-  const hitTest = useCallback((x: number, y: number): SimNode | null => {
+  // Hit-test (for nodes AND edges)
+  const hitTestNode = useCallback((x: number, y: number): SimNode | null => {
     const nodes = simNodesRef.current;
-    // Reverse so top-rendered hits first; here z is unordered, so use radius gate.
     for (let i = nodes.length - 1; i >= 0; i--) {
       const n = nodes[i];
       const r = radiusForWeight(n.weight) + 4;
@@ -313,48 +364,174 @@ export function MemoryGraphView(props: MemoryGraphViewProps) {
     return null;
   }, []);
 
-  const onPointerDown = useCallback((evt: React.PointerEvent<HTMLCanvasElement>) => {
-    const rect = evt.currentTarget.getBoundingClientRect();
-    const x = evt.clientX - rect.left;
-    const y = evt.clientY - rect.top;
-    const hit = hitTest(x, y);
-    if (hit) {
-      hit.pinned = true;
-      hit.vx = 0;
-      hit.vy = 0;
-      draggingRef.current = hit;
-      setSelected(hit);
-      alphaRef.current = 0.4;
-      evt.currentTarget.setPointerCapture(evt.pointerId);
-    } else {
-      setSelected(null);
+  const hitTestEdge = useCallback((x: number, y: number): SimEdge | null => {
+    // Distance from point (x,y) to each line segment; pick the closest
+    // under a tolerance of 6px.
+    const edges = simEdgesRef.current;
+    let best: { e: SimEdge; d: number } | null = null;
+    for (const e of edges) {
+      const x1 = e.source.x, y1 = e.source.y;
+      const x2 = e.target.x, y2 = e.target.y;
+      const dx = x2 - x1, dy = y2 - y1;
+      const lenSq = dx * dx + dy * dy;
+      if (lenSq < 1) continue;
+      let t = ((x - x1) * dx + (y - y1) * dy) / lenSq;
+      t = clamp(t, 0, 1);
+      const px = x1 + t * dx, py = y1 + t * dy;
+      const d = Math.sqrt((x - px) ** 2 + (y - py) ** 2);
+      if (d < 6 && (best == null || d < best.d)) best = { e, d };
     }
-  }, [hitTest]);
-
-  const onPointerMove = useCallback((evt: React.PointerEvent<HTMLCanvasElement>) => {
-    const rect = evt.currentTarget.getBoundingClientRect();
-    const x = evt.clientX - rect.left;
-    const y = evt.clientY - rect.top;
-    const drag = draggingRef.current;
-    if (drag) {
-      drag.x = x;
-      drag.y = y;
-    } else {
-      const hit = hitTest(x, y);
-      hoverRef.current = hit;
-      evt.currentTarget.style.cursor = hit ? "pointer" : "default";
-    }
-  }, [hitTest]);
-
-  const onPointerUp = useCallback((evt: React.PointerEvent<HTMLCanvasElement>) => {
-    const drag = draggingRef.current;
-    if (drag) {
-      drag.pinned = false;
-      draggingRef.current = null;
-      alphaRef.current = Math.max(alphaRef.current, 0.3);
-      evt.currentTarget.releasePointerCapture(evt.pointerId);
-    }
+    return best?.e ?? null;
   }, []);
+
+  const onPointerDown = useCallback(
+    (evt: React.PointerEvent<HTMLCanvasElement>) => {
+      const rect = evt.currentTarget.getBoundingClientRect();
+      const x = evt.clientX - rect.left;
+      const y = evt.clientY - rect.top;
+      const hit = hitTestNode(x, y);
+      if (hit) {
+        hit.pinned = true;
+        hit.vx = 0;
+        hit.vy = 0;
+        draggingRef.current = hit;
+        setSelected(hit);
+        setActiveTab("info");
+        setEdgePopup(null);
+        alphaRef.current = 0.4;
+        evt.currentTarget.setPointerCapture(evt.pointerId);
+        return;
+      }
+      const edgeHit = hitTestEdge(x, y);
+      if (edgeHit) {
+        // Open edge popup near the midpoint
+        const mx = (edgeHit.source.x + edgeHit.target.x) / 2;
+        const my = (edgeHit.source.y + edgeHit.target.y) / 2;
+        setEdgePopup({ x: mx, y: my, detail: null, loading: true });
+        setSelected(null);
+        void (async () => {
+          if (!tokenRef.current) return;
+          try {
+            const d = await fetchMemoryEdge(
+              tokenRef.current,
+              edgeHit.source.id,
+              edgeHit.target.id,
+            );
+            setEdgePopup({ x: mx, y: my, detail: d, loading: false });
+          } catch (e) {
+            const msg = e instanceof ApiError ? `HTTP ${e.status}` : (e as Error).message;
+            setEdgePopup({
+              x: mx, y: my,
+              detail: { source: edgeHit.source.id, target: edgeHit.target.id, total: 0, entries: [] },
+              loading: false,
+            });
+            console.error("edge detail fetch failed", msg);
+          }
+        })();
+        return;
+      }
+      setSelected(null);
+      setEdgePopup(null);
+    },
+    [hitTestNode, hitTestEdge],
+  );
+
+  const onPointerMove = useCallback(
+    (evt: React.PointerEvent<HTMLCanvasElement>) => {
+      const rect = evt.currentTarget.getBoundingClientRect();
+      const x = evt.clientX - rect.left;
+      const y = evt.clientY - rect.top;
+      const drag = draggingRef.current;
+      if (drag) {
+        drag.x = x;
+        drag.y = y;
+      } else {
+        const hit = hitTestNode(x, y) || hitTestEdge(x, y);
+        hoverRef.current = (hit && "weight" in hit && !("source" in hit)) ? (hit as SimNode) : null;
+        evt.currentTarget.style.cursor = hit ? "pointer" : "default";
+      }
+    },
+    [hitTestNode, hitTestEdge],
+  );
+
+  const onPointerUp = useCallback(
+    (evt: React.PointerEvent<HTMLCanvasElement>) => {
+      const drag = draggingRef.current;
+      if (drag) {
+        drag.pinned = false;
+        draggingRef.current = null;
+        alphaRef.current = Math.max(alphaRef.current, 0.3);
+        evt.currentTarget.releasePointerCapture(evt.pointerId);
+      }
+    },
+    [],
+  );
+
+  // Fetch entity detail whenever the selection changes
+  useEffect(() => {
+    if (!selected) {
+      setDetail(null);
+      setDetailError(null);
+      return;
+    }
+    let cancelled = false;
+    setDetailLoading(true);
+    setDetailError(null);
+    setDetail(null);
+    (async () => {
+      if (!tokenRef.current) return;
+      try {
+        const d = await fetchMemoryEntity(tokenRef.current, selected.id);
+        if (!cancelled) setDetail(d);
+      } catch (e) {
+        if (!cancelled) {
+          const msg = e instanceof ApiError ? `HTTP ${e.status}` : (e as Error).message;
+          setDetailError(msg);
+        }
+      } finally {
+        if (!cancelled) setDetailLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selected]);
+
+  // Run search whenever the query stabilises
+  useEffect(() => {
+    const q = search.trim();
+    if (!q) {
+      setSearchResults(null);
+      setSearchError(null);
+      return;
+    }
+    let cancelled = false;
+    const handle = setTimeout(() => {
+      setSearchLoading(true);
+      (async () => {
+        if (!tokenRef.current) return;
+        try {
+          const r = await searchMemoryApi(tokenRef.current, q);
+          if (!cancelled) {
+            setSearchResults(r);
+            setSearchError(null);
+          }
+        } catch (e) {
+          if (!cancelled) {
+            const msg = e instanceof ApiError ? `HTTP ${e.status}` : (e as Error).message;
+            setSearchError(msg);
+            setSearchResults(null);
+          }
+        } finally {
+          if (!cancelled) setSearchLoading(false);
+        }
+      })();
+    }, 220);
+    return () => {
+      cancelled = true;
+      clearTimeout(handle);
+    };
+  }, [search]);
 
   const typesLegend = useMemo(() => {
     if (!data) return [] as { type: string; color: string }[];
@@ -377,25 +554,60 @@ export function MemoryGraphView(props: MemoryGraphViewProps) {
               : ""}
           </span>
         ) : null}
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Filter nodes…"
-          className={cn(
-            "ml-auto h-7 w-48 rounded-md border border-input bg-background px-2 text-[12.5px]",
-            "outline-none focus:ring-1 focus:ring-ring",
-          )}
-        />
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label="Refresh"
-          onClick={() => void refresh()}
-          disabled={loading}
-          className="h-7 w-7"
-        >
-          <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
-        </Button>
+        <div className="ml-auto flex items-center gap-2">
+          <div className="relative">
+            <SearchIcon
+              className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
+              aria-hidden
+            />
+            <input
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setSearchOpen(true);
+              }}
+              onFocus={() => setSearchOpen(true)}
+              placeholder="Search memory (vector + grep)…"
+              className={cn(
+                "h-7 w-72 rounded-md border border-input bg-background pl-7 pr-2 text-[12.5px]",
+                "outline-none focus:ring-1 focus:ring-ring",
+              )}
+            />
+            {search ? (
+              <button
+                type="button"
+                aria-label="Clear"
+                onClick={() => {
+                  setSearch("");
+                  setSearchResults(null);
+                }}
+                className="absolute right-1 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:bg-muted"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            ) : null}
+          </div>
+          {focusRef ? (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setFocusRef(null)}
+              className="h-7 gap-1 text-[11px]"
+            >
+              <Focus className="h-3 w-3" /> Unfocus
+            </Button>
+          ) : null}
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Refresh"
+            onClick={() => void refresh()}
+            disabled={loading}
+            className="h-7 w-7"
+          >
+            <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
+          </Button>
+        </div>
       </header>
 
       <div ref={wrapRef} className="relative min-h-0 flex-1">
@@ -429,7 +641,7 @@ export function MemoryGraphView(props: MemoryGraphViewProps) {
           className="block h-full w-full"
         />
 
-        {/* Legend */}
+        {/* Legend bottom-left */}
         {typesLegend.length > 0 ? (
           <div className="pointer-events-none absolute bottom-3 left-3 flex flex-wrap gap-x-3 gap-y-1 rounded-md bg-background/85 px-2 py-1 text-[11px] text-muted-foreground backdrop-blur">
             {typesLegend.map((t) => (
@@ -448,10 +660,149 @@ export function MemoryGraphView(props: MemoryGraphViewProps) {
           </div>
         ) : null}
 
-        {/* Detail panel for selected node */}
+        {/* Search results panel (left side, slides over) */}
+        {searchOpen && search.trim() ? (
+          <aside className="absolute bottom-12 left-3 top-3 z-10 w-80 max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-lg border border-border/50 bg-card/95 shadow-lg backdrop-blur">
+            <header className="flex items-center justify-between border-b border-border/40 px-3 py-2 text-xs">
+              <span className="font-semibold">
+                Search · {searchResults ? `${searchResults.total} results` : "…"}
+              </span>
+              <div className="flex items-center gap-1 text-muted-foreground">
+                {searchResults ? (
+                  <span>{searchResults.strategy}·{searchResults.ranking}</span>
+                ) : null}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-5 w-5"
+                  onClick={() => setSearchOpen(false)}
+                  aria-label="Close search panel"
+                >
+                  <X className="h-3 w-3" />
+                </Button>
+              </div>
+            </header>
+            <div className="max-h-full overflow-y-auto">
+              {searchLoading ? (
+                <div className="px-3 py-3 text-xs text-muted-foreground">Searching…</div>
+              ) : null}
+              {searchError ? (
+                <div className="px-3 py-3 text-xs text-destructive">{searchError}</div>
+              ) : null}
+              {searchResults && searchResults.results.length === 0 && !searchLoading ? (
+                <div className="px-3 py-3 text-xs text-muted-foreground">
+                  No matches.
+                </div>
+              ) : null}
+              {searchResults?.results.slice(0, 40).map((r, idx) => {
+                const isCanon = r.kind === "canonical";
+                const id = isCanon ? r.uri.split("/").pop() ?? "" : r.uri;
+                return (
+                  <button
+                    type="button"
+                    key={`${r.uri}-${idx}`}
+                    onClick={() => {
+                      // For canonical: select that node in the graph if present.
+                      if (isCanon) {
+                        const node = simNodesRef.current.find((n) => n.id === id);
+                        if (node) {
+                          setSelected(node);
+                          setActiveTab("info");
+                        }
+                      }
+                    }}
+                    className="block w-full border-t border-border/30 px-3 py-2 text-left text-xs hover:bg-muted/60"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={cn(
+                          "rounded px-1 text-[10px] uppercase tracking-wide",
+                          isCanon
+                            ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
+                            : "bg-amber-500/15 text-amber-700 dark:text-amber-400",
+                        )}
+                      >
+                        {r.kind}
+                      </span>
+                      <span className="truncate font-medium">{r.headline || r.uri}</span>
+                    </div>
+                    {r.snippet ? (
+                      <p className="mt-1 line-clamp-2 text-[11px] text-muted-foreground">
+                        {r.snippet}
+                      </p>
+                    ) : null}
+                    {r.valid_from ? (
+                      <div className="mt-1 font-mono text-[10px] text-muted-foreground">
+                        {r.valid_from.slice(0, 19)}
+                      </div>
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>
+          </aside>
+        ) : null}
+
+        {/* Edge popup */}
+        {edgePopup ? (
+          <div
+            className="absolute z-20 w-72 max-w-[calc(100vw-1.5rem)] rounded-lg border border-border/50 bg-card/95 p-2.5 text-xs shadow-lg backdrop-blur"
+            style={{
+              left: clamp(edgePopup.x + 10, 8, (wrapRef.current?.clientWidth ?? 800) - 300),
+              top: clamp(edgePopup.y + 10, 8, (wrapRef.current?.clientHeight ?? 600) - 240),
+            }}
+          >
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <span className="truncate font-semibold">
+                {edgePopup.detail ? (
+                  <>
+                    {edgePopup.detail.source} ↔ {edgePopup.detail.target}
+                  </>
+                ) : (
+                  "Edge"
+                )}
+              </span>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-5 w-5"
+                onClick={() => setEdgePopup(null)}
+                aria-label="Close edge popup"
+              >
+                <X className="h-3 w-3" />
+              </Button>
+            </div>
+            {edgePopup.loading ? (
+              <div className="text-muted-foreground">Loading…</div>
+            ) : edgePopup.detail ? (
+              <>
+                <div className="mb-1 text-muted-foreground">
+                  {edgePopup.detail.total} co-mention
+                  {edgePopup.detail.total === 1 ? "" : "s"}
+                </div>
+                <ul className="max-h-48 space-y-1 overflow-y-auto">
+                  {edgePopup.detail.entries.slice(0, 12).map((e) => (
+                    <li
+                      key={e.id}
+                      className="rounded border border-border/40 bg-background/60 p-1.5"
+                    >
+                      <div className="font-mono text-[10px] text-muted-foreground">
+                        {e.valid_from.slice(0, 10)} · {e.id.slice(0, 8)}
+                      </div>
+                      <div className="truncate">{e.headline || e.snippet}</div>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            ) : null}
+          </div>
+        ) : null}
+
+        {/* Right-side detail panel for the selected node */}
         {selected ? (
-          <aside className="absolute right-3 top-3 w-72 max-w-[calc(100vw-1.5rem)] rounded-lg border border-border/50 bg-card/95 p-3 text-sm shadow-lg backdrop-blur">
-            <div className="flex items-start gap-2">
+          <aside className="absolute right-3 top-3 z-10 flex w-[26rem] max-w-[calc(100vw-1.5rem)] flex-col rounded-lg border border-border/50 bg-card/95 text-sm shadow-lg backdrop-blur"
+                 style={{ maxHeight: "calc(100% - 1.5rem)" }}>
+            <header className="flex items-start gap-2 border-b border-border/40 px-3 py-2">
               <span
                 className="mt-1 inline-block h-2.5 w-2.5 shrink-0 rounded-full"
                 style={{ background: colorForType(selected.type) }}
@@ -466,49 +817,302 @@ export function MemoryGraphView(props: MemoryGraphViewProps) {
               <Button
                 variant="ghost"
                 size="icon"
+                aria-label={focusRef === selected.id ? "Unfocus" : "Focus 1-hop"}
+                onClick={() =>
+                  setFocusRef((c) => (c === selected.id ? null : selected.id))
+                }
+                className={cn(
+                  "h-6 w-6",
+                  focusRef === selected.id && "bg-primary/10 text-primary",
+                )}
+              >
+                <Focus className="h-3.5 w-3.5" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
                 aria-label="Close"
-                onClick={() => setSelected(null)}
+                onClick={() => {
+                  setSelected(null);
+                  if (focusRef) setFocusRef(null);
+                }}
                 className="h-6 w-6"
               >
                 <X className="h-3.5 w-3.5" />
               </Button>
+            </header>
+
+            <div className="flex shrink-0 gap-1 border-b border-border/30 px-2 py-1.5 text-[11px]">
+              {(
+                [
+                  { id: "info", label: "Info" },
+                  { id: "body", label: "Body" },
+                  { id: "history", label: `History${detail?.history.length ? ` (${detail.history.length})` : ""}` },
+                  { id: "sources", label: `Sources${detail?.entries.length ? ` (${detail.entries.length})` : ""}` },
+                  { id: "archive", label: `Archive${detail?.archive.length ? ` (${detail.archive.length})` : ""}` },
+                ] as const
+              ).map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => setActiveTab(t.id as TabName)}
+                  className={cn(
+                    "rounded px-2 py-1 font-medium transition-colors",
+                    activeTab === t.id
+                      ? "bg-primary/10 text-primary"
+                      : "text-muted-foreground hover:bg-muted",
+                  )}
+                >
+                  {t.label}
+                </button>
+              ))}
             </div>
-            <Separator className="my-2" />
-            <dl className="space-y-1.5 text-xs">
-              <div className="flex justify-between gap-2">
-                <dt className="text-muted-foreground">Type</dt>
-                <dd className="font-mono">{selected.type}</dd>
-              </div>
-              <div className="flex justify-between gap-2">
-                <dt className="text-muted-foreground">Entries referencing</dt>
-                <dd className="font-mono">{selected.weight}</dd>
-              </div>
-              {selected.aliases.length > 0 ? (
-                <div>
-                  <dt className="text-muted-foreground">Aliases</dt>
-                  <dd className="mt-0.5 flex flex-wrap gap-1">
-                    {selected.aliases.map((a) => (
-                      <span
-                        key={a}
-                        className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10.5px]"
-                      >
-                        {a}
-                      </span>
-                    ))}
-                  </dd>
-                </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2 text-xs">
+              {detailLoading ? (
+                <div className="text-muted-foreground">Loading detail…</div>
               ) : null}
-            </dl>
-            {selected.phantom ? (
-              <p className="mt-2 text-[11px] text-muted-foreground">
-                Tagged in episodic entries but no consolidated page yet.
-                Run <code className="rounded bg-muted px-1">durin memory dream</code>{" "}
-                to create one.
-              </p>
-            ) : null}
+              {detailError ? (
+                <div className="text-destructive">{detailError}</div>
+              ) : null}
+              {!detail && !detailLoading && selected.phantom ? (
+                <p className="text-[11px] text-muted-foreground">
+                  Tagged in episodic entries but no consolidated page yet. Run{" "}
+                  <code className="rounded bg-muted px-1">durin memory dream</code>{" "}
+                  to create one.
+                </p>
+              ) : null}
+              {detail ? (
+                <>
+                  {activeTab === "info" ? (
+                    <dl className="space-y-2">
+                      <div className="flex justify-between gap-2">
+                        <dt className="text-muted-foreground">Type</dt>
+                        <dd className="font-mono">{detail.page.type}</dd>
+                      </div>
+                      <div className="flex justify-between gap-2">
+                        <dt className="text-muted-foreground">
+                          Entries referencing
+                        </dt>
+                        <dd className="font-mono">{selected.weight}</dd>
+                      </div>
+                      {detail.page.dream_processed_through ? (
+                        <div className="flex justify-between gap-2">
+                          <dt className="text-muted-foreground">Last dreamed</dt>
+                          <dd className="font-mono text-[11px]">
+                            {detail.page.dream_processed_through}
+                          </dd>
+                        </div>
+                      ) : null}
+                      {detail.page.aliases.length > 0 ? (
+                        <div>
+                          <dt className="text-muted-foreground">Aliases</dt>
+                          <dd className="mt-0.5 flex flex-wrap gap-1">
+                            {detail.page.aliases.map((a) => (
+                              <span
+                                key={a}
+                                className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10.5px]"
+                              >
+                                {a}
+                              </span>
+                            ))}
+                          </dd>
+                        </div>
+                      ) : null}
+                      {detail.page.identifiers ? (
+                        <div>
+                          <dt className="text-muted-foreground">Identifiers</dt>
+                          <dd className="mt-0.5 space-y-0.5">
+                            {Object.entries(detail.page.identifiers).map(
+                              ([k, v]) => (
+                                <div key={k} className="text-[11px]">
+                                  <span className="font-mono text-muted-foreground">
+                                    {k}:
+                                  </span>{" "}
+                                  {Array.isArray(v) ? v.join(", ") : String(v)}
+                                </div>
+                              ),
+                            )}
+                          </dd>
+                        </div>
+                      ) : null}
+                    </dl>
+                  ) : null}
+
+                  {activeTab === "body" ? (
+                    detail.page.body ? (
+                      <pre className="whitespace-pre-wrap font-mono text-[11px] leading-relaxed">
+                        {detail.page.body}
+                      </pre>
+                    ) : (
+                      <p className="text-muted-foreground">No body content.</p>
+                    )
+                  ) : null}
+
+                  {activeTab === "history" ? (
+                    detail.history.length === 0 ? (
+                      <p className="text-muted-foreground">No git history yet.</p>
+                    ) : (
+                      <ul className="space-y-2">
+                        {detail.history.map((c) => (
+                          <CommitItem key={c.sha} commit={c} />
+                        ))}
+                      </ul>
+                    )
+                  ) : null}
+
+                  {activeTab === "sources" ? (
+                    detail.entries.length === 0 ? (
+                      <p className="text-muted-foreground">
+                        No post-cursor entries — everything has been consolidated.
+                      </p>
+                    ) : (
+                      <ul className="space-y-2">
+                        {detail.entries.map((e) => (
+                          <li
+                            key={e.id}
+                            className="rounded border border-border/40 bg-background/60 p-2"
+                          >
+                            <div className="flex items-center justify-between text-[10.5px] text-muted-foreground">
+                              <span className="font-mono">{e.id.slice(0, 8)}</span>
+                              <span>{e.valid_from.slice(0, 10)}</span>
+                            </div>
+                            {e.headline ? (
+                              <div className="mt-0.5 font-medium">{e.headline}</div>
+                            ) : null}
+                            {e.summary ? (
+                              <div className="mt-0.5 text-[11px]">{e.summary}</div>
+                            ) : null}
+                            {e.body ? (
+                              <details className="mt-1">
+                                <summary className="cursor-pointer text-[10.5px] text-muted-foreground">
+                                  body
+                                </summary>
+                                <pre className="mt-1 max-h-56 overflow-y-auto whitespace-pre-wrap text-[10.5px] leading-relaxed">
+                                  {e.body}
+                                </pre>
+                              </details>
+                            ) : null}
+                          </li>
+                        ))}
+                      </ul>
+                    )
+                  ) : null}
+
+                  {activeTab === "archive" ? (
+                    detail.archive.length === 0 ? (
+                      <p className="text-muted-foreground">
+                        No absorptions for this entity.
+                      </p>
+                    ) : (
+                      <ul className="space-y-2">
+                        {detail.archive.map((a) => (
+                          <li
+                            key={a.slug}
+                            className="rounded border border-border/40 bg-background/60 p-2"
+                          >
+                            <div className="font-medium">{a.name}</div>
+                            <div className="font-mono text-[10.5px] text-muted-foreground">
+                              {a.slug}
+                            </div>
+                            {a.absorbed_at ? (
+                              <div className="mt-0.5 text-[10.5px] text-muted-foreground">
+                                Absorbed: {a.absorbed_at.slice(0, 19)}
+                              </div>
+                            ) : null}
+                            {a.absorbed_reason ? (
+                              <div className="text-[10.5px] text-muted-foreground">
+                                Reason: {a.absorbed_reason}
+                              </div>
+                            ) : null}
+                          </li>
+                        ))}
+                      </ul>
+                    )
+                  ) : null}
+                </>
+              ) : null}
+            </div>
+            <Separator className="bg-border/30" />
+            <footer className="px-3 py-1.5 text-[10.5px] text-muted-foreground">
+              Click another node, drag to pin, click the focus icon to isolate
+              1-hop neighbours.
+            </footer>
           </aside>
         ) : null}
       </div>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Sub-component for collapsible commit details (history tab)
+// ---------------------------------------------------------------------------
+
+
+function CommitItem({
+  commit,
+}: {
+  commit: {
+    sha: string;
+    short_sha: string;
+    subject: string;
+    body: string;
+    when: string;
+    trailers: Record<string, string[]>;
+  };
+}) {
+  const [open, setOpen] = useState(false);
+  const trailerEntries = Object.entries(commit.trailers || {});
+  const isAuto = (commit.trailers?.Reason || []).includes("auto");
+  return (
+    <li className="rounded border border-border/40 bg-background/60 p-2">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-start gap-1.5 text-left"
+      >
+        {open ? (
+          <ChevronDown className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground" />
+        ) : (
+          <ChevronRight className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground" />
+        )}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="font-mono text-[10.5px] text-muted-foreground">
+              {commit.short_sha}
+            </span>
+            {isAuto ? (
+              <span className="rounded bg-amber-500/15 px-1 text-[10px] uppercase tracking-wide text-amber-700 dark:text-amber-400">
+                auto
+              </span>
+            ) : null}
+            <span className="font-mono text-[10.5px] text-muted-foreground">
+              {commit.when ? commit.when.slice(0, 10) : ""}
+            </span>
+          </div>
+          <div className="truncate text-[11.5px] font-medium">{commit.subject}</div>
+        </div>
+      </button>
+      {open ? (
+        <div className="mt-2 space-y-2">
+          {commit.body ? (
+            <pre className="whitespace-pre-wrap text-[10.5px] leading-relaxed text-muted-foreground">
+              {commit.body}
+            </pre>
+          ) : null}
+          {trailerEntries.length > 0 ? (
+            <dl className="space-y-0.5 text-[10.5px]">
+              {trailerEntries.map(([k, v]) => (
+                <div key={k} className="flex gap-1">
+                  <dt className="font-mono text-muted-foreground">{k}:</dt>
+                  <dd className="min-w-0 flex-1 break-all">{v.join(", ")}</dd>
+                </div>
+              ))}
+            </dl>
+          ) : null}
+        </div>
+      ) : null}
+    </li>
   );
 }
