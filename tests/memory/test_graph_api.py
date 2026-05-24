@@ -180,3 +180,125 @@ def test_edge_detail_respects_limit(tmp_path: Path) -> None:
     d = get_edge_detail(tmp_path, "person:a", "person:b", limit=3)
     assert d["total"] == 10  # total is the unbounded count
     assert len(d["entries"]) == 3
+
+
+# ---------------------------------------------------------------------------
+# session detail
+# ---------------------------------------------------------------------------
+
+
+def _write_session_fixture(
+    ws: Path, stem: str, *,
+    messages: int = 0,
+    title: str | None = None,
+    meta: dict | None = None,
+) -> None:
+    import json
+    sd = ws / "sessions"
+    sd.mkdir(parents=True, exist_ok=True)
+    lines: list[dict] = []
+    if title:
+        lines.append({"title": title, "channel": "websocket", "model": "glm-5.1"})
+    for i in range(messages):
+        lines.append({"role": "user", "content": f"msg {i}", "ts": 1000 + i})
+    (sd / f"{stem}.jsonl").write_text(
+        "\n".join(json.dumps(l) for l in lines) + "\n", encoding="utf-8"
+    )
+    if meta is not None:
+        (sd / f"{stem}.meta.json").write_text(json.dumps(meta), encoding="utf-8")
+
+
+def test_session_detail_missing_returns_none(tmp_path: Path) -> None:
+    from durin.memory.graph_api import get_session_detail
+    assert get_session_detail(tmp_path, "nobody") is None
+
+
+def test_session_detail_basic_info(tmp_path: Path) -> None:
+    from durin.memory.graph_api import get_session_detail
+    _write_session_fixture(tmp_path, "sess1", title="Hello", messages=5)
+    d = get_session_detail(tmp_path, "sess1")
+    assert d is not None
+    assert d["session_ref"] == "session:sess1"
+    assert d["info"]["title"] == "Hello"
+    assert d["info"]["channel"] == "websocket"
+    assert d["info"]["model"] == "glm-5.1"
+    assert d["info"]["message_count"] == 5
+    assert len(d["recent_messages"]) == 5
+    assert d["events"] == []
+    assert d["memory_ops"] == []
+    assert d["entries_linked"] == []
+
+
+def test_session_detail_recent_messages_capped(tmp_path: Path) -> None:
+    from durin.memory.graph_api import get_session_detail
+    _write_session_fixture(tmp_path, "sess1", title="x", messages=25)
+    d = get_session_detail(tmp_path, "sess1", recent_messages=10)
+    assert d is not None
+    assert d["info"]["message_count"] == 25
+    assert len(d["recent_messages"]) == 10
+    # Tail should be the LAST messages.
+    assert d["recent_messages"][-1]["preview"].startswith("msg 24")
+
+
+def test_session_detail_filters_memory_ops_from_events(tmp_path: Path) -> None:
+    from durin.memory.graph_api import get_session_detail
+    _write_session_fixture(
+        tmp_path, "sess1", messages=2,
+        meta={
+            "session_key": "websocket:sess1",
+            "events": [
+                {"type": "tool_call", "tool": "memory_store", "ts": "2026-05-22T00:00:00"},
+                {"type": "tool_call", "tool": "read_file", "ts": "2026-05-22T00:01:00"},
+                {"type": "tool_call", "tool": "memory_search", "ts": "2026-05-22T00:02:00"},
+                {"type": "plan", "title": "x"},
+            ],
+            "derived": {},
+        },
+    )
+    d = get_session_detail(tmp_path, "sess1")
+    assert d is not None
+    assert len(d["events"]) == 4
+    # Only memory_* tools surface in memory_ops; plan is excluded.
+    tools = [op["tool"] for op in d["memory_ops"]]
+    assert tools == ["memory_store", "memory_search"]
+
+
+def test_session_detail_finds_entries_linked_via_source_refs(tmp_path: Path) -> None:
+    from durin.memory.graph_api import get_session_detail
+    _write_session_fixture(tmp_path, "sess1", messages=1)
+    # Two entries: one linked, one not.
+    store_memory(
+        tmp_path, content="linked",
+        entities=["person:m"],
+        source_refs=["sessions/sess1.md#turn-2"],
+        valid_from=datetime.date(2026, 5, 22),
+    )
+    store_memory(
+        tmp_path, content="unlinked",
+        entities=["person:m"],
+        valid_from=datetime.date(2026, 5, 22),
+    )
+    d = get_session_detail(tmp_path, "sess1")
+    assert d is not None
+    assert len(d["entries_linked"]) == 1
+    assert d["entries_linked"][0]["snippet"].startswith("linked")
+    # entities_tagged.from_source_refs aggregates the linked entries' entities.
+    assert d["entities_tagged"]["from_source_refs"] == ["person:m"]
+
+
+def test_session_detail_meta_tags_separate_from_source_refs(tmp_path: Path) -> None:
+    from durin.memory.graph_api import get_session_detail
+    _write_session_fixture(
+        tmp_path, "sess1", messages=1,
+        meta={
+            "session_key": "websocket:sess1",
+            "events": [],
+            "derived": {
+                "_last_tags": {"entities": ["topic:autocompact"]},
+            },
+        },
+    )
+    d = get_session_detail(tmp_path, "sess1")
+    assert d is not None
+    assert d["entities_tagged"]["from_meta"] == ["topic:autocompact"]
+    assert d["entities_tagged"]["from_source_refs"] == []

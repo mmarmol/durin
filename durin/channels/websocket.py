@@ -681,6 +681,10 @@ class WebSocketChannel(BaseChannel):
         if m:
             return self._handle_memory_entity(request, m.group(1))
 
+        m = re.match(r"^/api/memory/session/(.+)$", got)
+        if m:
+            return self._handle_memory_session(request, m.group(1))
+
         m = re.match(r"^/api/memory/edge/([^/]+)/([^/]+)$", got)
         if m:
             return self._handle_memory_edge(request, m.group(1), m.group(2))
@@ -838,6 +842,33 @@ class WebSocketChannel(BaseChannel):
             return _http_error(500, f"entity detail failed: {exc}")
         if payload is None:
             return _http_error(404, f"entity not found: {ref}")
+        return _http_json_response(payload)
+
+    def _handle_memory_session(
+        self, request: WsRequest, stem_encoded: str,
+    ) -> Response:
+        """GET /api/memory/session/<stem> — session detail for the graph view.
+
+        ``<stem>`` is the filename stem (e.g. ``cli_direct``,
+        ``websocket_<uuid>``), URL-encoded. Returns 404 when the
+        corresponding ``sessions/<stem>.jsonl`` doesn't exist.
+        """
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from urllib.parse import unquote
+
+        from durin.config.loader import load_config
+        from durin.memory.graph_api import get_session_detail
+
+        stem = unquote(stem_encoded)
+        try:
+            workspace = load_config().workspace_path
+            payload = get_session_detail(workspace, stem)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("memory session detail failed for %s", stem)
+            return _http_error(500, f"session detail failed: {exc}")
+        if payload is None:
+            return _http_error(404, f"session not found: {stem}")
         return _http_json_response(payload)
 
     def _handle_memory_edge(

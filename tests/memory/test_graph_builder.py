@@ -55,6 +55,7 @@ def test_empty_workspace_returns_empty_graph(tmp_path: Path) -> None:
             "node_count": 0,
             "edge_count": 0,
             "phantom_count": 0,
+            "session_count": 0,
             "truncated_nodes": False,
             "truncated_edges": False,
             "types": [],
@@ -178,3 +179,108 @@ def test_stats_types_sorted(tmp_path: Path) -> None:
     _write_page(tmp_path, "topic", "t")
     g = build_memory_graph(tmp_path)
     assert g["stats"]["types"] == ["person", "project", "topic"]
+
+
+# ---------------------------------------------------------------------------
+# session nodes + session→entity edges (added in the sessions-in-graph pass)
+# ---------------------------------------------------------------------------
+
+
+def _write_session(ws: Path, stem: str, *, messages: int = 0,
+                    title: str | None = None,
+                    meta_entities: list[str] | None = None) -> Path:
+    """Write a minimal session jsonl + meta.json fixture."""
+    import json
+    sessions_dir = ws / "sessions"
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    jsonl = sessions_dir / f"{stem}.jsonl"
+    lines: list[dict] = []
+    if title:
+        lines.append({"title": title, "channel": "websocket"})
+    for i in range(messages):
+        lines.append({"role": "user", "content": f"msg {i}"})
+    jsonl.write_text("\n".join(json.dumps(l) for l in lines) + "\n",
+                      encoding="utf-8")
+    if meta_entities is not None:
+        meta = sessions_dir / f"{stem}.meta.json"
+        meta.write_text(json.dumps({
+            "session_key": f"websocket:{stem}",
+            "events": [],
+            "derived": {"_last_tags": {"entities": meta_entities}},
+        }), encoding="utf-8")
+    return jsonl
+
+
+def test_session_nodes_included_by_default(tmp_path: Path) -> None:
+    _write_session(tmp_path, "sess_a", messages=5, title="My session")
+    _write_session(tmp_path, "sess_b", messages=3)
+    g = build_memory_graph(tmp_path)
+    refs = {n["id"] for n in g["nodes"]}
+    assert "session:sess_a" in refs
+    assert "session:sess_b" in refs
+    a = next(n for n in g["nodes"] if n["id"] == "session:sess_a")
+    assert a["type"] == "session"
+    assert a["name"] == "My session"
+    assert a["weight"] == 5
+    assert g["stats"]["session_count"] == 2
+
+
+def test_session_nodes_excluded_when_flag_off(tmp_path: Path) -> None:
+    _write_page(tmp_path, "person", "marcelo")
+    _write_session(tmp_path, "sess_a", messages=2)
+    g = build_memory_graph(tmp_path, include_sessions=False)
+    refs = {n["id"] for n in g["nodes"]}
+    assert "session:sess_a" not in refs
+    assert g["stats"]["session_count"] == 0
+
+
+def test_session_to_entity_edge_from_source_refs(tmp_path: Path) -> None:
+    _write_page(tmp_path, "person", "marcelo")
+    _write_session(tmp_path, "sess_a", messages=2)
+    # Store entry with source_refs pointing back to sess_a
+    store_memory(
+        tmp_path, content="m discussed durin",
+        entities=["person:marcelo"],
+        source_refs=["sessions/sess_a.md#turn-3"],
+        valid_from=datetime.date(2026, 5, 1),
+    )
+    g = build_memory_graph(tmp_path)
+    sess_edges = [e for e in g["edges"]
+                   if e["source"].startswith("session:")
+                   or e["target"].startswith("session:")]
+    assert len(sess_edges) == 1
+    e = sess_edges[0]
+    assert {e["source"], e["target"]} == {"session:sess_a", "person:marcelo"}
+    assert e["weight"] == 1
+
+
+def test_session_to_entity_edge_from_meta_tags(tmp_path: Path) -> None:
+    _write_page(tmp_path, "person", "marcelo")
+    _write_session(tmp_path, "sess_a", messages=2,
+                    meta_entities=["person:marcelo", "project:durin"])
+    # project:durin is phantom (no page) — should still render the edge.
+    g = build_memory_graph(tmp_path)
+    sess_edges = sorted(
+        [(e["source"], e["target"]) for e in g["edges"]
+         if e["source"].startswith("session:")
+         or e["target"].startswith("session:")],
+    )
+    assert ("session:sess_a", "person:marcelo") in sess_edges
+    assert ("session:sess_a", "project:durin") in sess_edges
+
+
+def test_source_refs_and_meta_evidence_compound_weight(tmp_path: Path) -> None:
+    _write_page(tmp_path, "person", "m")
+    _write_session(tmp_path, "sess", messages=2,
+                    meta_entities=["person:m"])  # +1 from meta
+    store_memory(
+        tmp_path, content="x", entities=["person:m"],
+        source_refs=["sessions/sess.md#turn-1"],  # +1 from refs
+        valid_from=datetime.date(2026, 5, 1),
+    )
+    g = build_memory_graph(tmp_path)
+    sess_edges = [e for e in g["edges"]
+                   if e["source"].startswith("session:")
+                   or e["target"].startswith("session:")]
+    assert len(sess_edges) == 1
+    assert sess_edges[0]["weight"] == 2
