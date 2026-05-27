@@ -45,6 +45,10 @@ dependencies = [
     # scripts (CJK, Cyrillic, Arabic, etc.) into ASCII slugs per
     # doc memory §4.5. Pure Python, no native deps.
     "unidecode>=1.4,<2.0",
+    # RFC 6902 JSON Patch — used by Dream apply pipeline (doc memory
+    # §6) to apply LLM-emitted ops to an entity page's frontmatter.
+    # Pure Python.
+    "jsonpatch>=1.33,<2.0",
 ]
 
 [project.optional-dependencies]
