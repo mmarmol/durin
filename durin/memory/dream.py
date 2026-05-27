@@ -368,33 +368,48 @@ class DreamConsolidator:
     ) -> str:
         """Compose the prompt from the tracked template + dynamic vars.
 
-        Template is read fresh each call so iteration on the template
-        is reflected without restarting any service.
-        """
-        template = self._read_prompt_template()
+        Delegates to :func:`durin.memory.dream_prompt_builder.build_dream_prompt`
+        which assembles the multi-file v2 prompt package (consolidator
+        template + rules + commit_format + json_patch_reference + 6
+        examples) and fills the input slots.
 
-        entries_text_lines: list[str] = []
+        The legacy ``_read_prompt_template`` + inline-fence extraction
+        is no longer used — the v2 template is the prompt as-is (no
+        wrapping fence) and the builder reads all auxiliary files
+        directly from ``durin/templates/dream/``.
+
+        Inputs that are not yet wired by the runner
+        (``existing_attribute_keys``, ``existing_relation_types``,
+        ``existing_uris``, ``recent_history``) are passed as empty —
+        Phase 1 deliverables 9 and 10 will populate them from disk +
+        ``git log``.
+        """
+        from durin.memory.dream_prompt_builder import (
+            DreamPromptContext,
+            build_dream_prompt,
+        )
+
+        entries_lines: list[str] = []
         for entry in entries:
             entities_str = ", ".join(entry.entities) if entry.entities else ""
             tag_suffix = f" [tags: {entities_str}]" if entities_str else ""
-            entries_text_lines.append(
-                f"- [{entry.timestamp} / {entry.id}]{tag_suffix} {entry.text}"
+            entries_lines.append(
+                f"[{entry.timestamp} / {entry.id}]{tag_suffix} {entry.text}"
             )
-        entries_text = "\n".join(entries_text_lines)
 
-        prompt_vars = {
-            "entity_id": entity_ref,
-            "n_entries": str(len(entries)),
-            "entries_text": entries_text,
-            "current_page": current_page or "(no existing page — this is the first consolidation)",
-        }
-
-        # Simple {placeholder} substitution since the template is YAML/markdown
-        # — Python's str.format would fight with literal braces in markdown.
-        out = template
-        for key, value in prompt_vars.items():
-            out = out.replace("{" + key + "}", value)
-        return out
+        ctx = DreamPromptContext(
+            entity_id=entity_ref,
+            existing_page_content=(
+                current_page
+                or "(no existing page — this is the first consolidation)"
+            ),
+            existing_attribute_keys=(),
+            existing_relation_types=(),
+            existing_uris=(),
+            recent_history="",
+            entries=tuple(entries_lines),
+        )
+        return build_dream_prompt(ctx)
 
     def _read_prompt_template(self) -> str:
         """Read the prompt template file. Falls back to an inline default."""
