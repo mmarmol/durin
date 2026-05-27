@@ -41,6 +41,8 @@ _TYPE_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 
 # Known top-level fields the parser explicitly understands. Anything
 # outside this set lands in ``extra`` and is preserved on write.
+# v2 (doc memory §3.5) adds attributes / relations / provenance — first
+# class so callers don't have to fish them out of `extra`.
 _KNOWN_FIELDS = frozenset(
     {
         "type",
@@ -49,8 +51,22 @@ _KNOWN_FIELDS = frozenset(
         "dream_processed_through",
         "created_at",
         "updated_at",
+        "attributes",
+        "relations",
+        "provenance",
     }
 )
+
+
+# Imported lazily inside _validate to avoid a circular dependency
+# (`durin.memory.entities` imports nothing from here today, but a
+# future helper might; keeping the import local is cheap insurance).
+def _is_valid_entity_ref(ref: object) -> bool:
+    if not isinstance(ref, str):
+        return False
+    from durin.memory.entities import is_valid_entity_ref
+
+    return is_valid_entity_ref(ref)
 
 
 class EntityPageError(Exception):
@@ -70,6 +86,12 @@ class EntityPage:
     dream_processed_through: int | str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+
+    # v2 typed fields (doc memory §3.5). Empty defaults so v1 pages
+    # construct without surprises.
+    attributes: dict[str, Any] = field(default_factory=dict)
+    relations: list[dict[str, Any]] = field(default_factory=list)
+    provenance: dict[str, Any] = field(default_factory=dict)
 
     # Emergent fields preserved as-is. The dream may add ``identifiers``,
     # ``related``, etc. without parser changes. Survives round-trip.
@@ -111,6 +133,19 @@ class EntityPage:
         created_at = _coerce_dt(data.get("created_at"))
         updated_at = _coerce_dt(data.get("updated_at"))
 
+        # v2 fields: lenient on read — fall back to empty when the
+        # shape on disk is wrong rather than rejecting the whole page.
+        attributes_raw = data.get("attributes")
+        attributes = attributes_raw if isinstance(attributes_raw, dict) else {}
+        relations_raw = data.get("relations")
+        relations: list[dict[str, Any]] = []
+        if isinstance(relations_raw, list):
+            for item in relations_raw:
+                if isinstance(item, dict):
+                    relations.append(item)
+        provenance_raw = data.get("provenance")
+        provenance = provenance_raw if isinstance(provenance_raw, dict) else {}
+
         extra = {k: v for k, v in data.items() if k not in _KNOWN_FIELDS}
 
         return cls(
@@ -121,6 +156,9 @@ class EntityPage:
             dream_processed_through=cursor,
             created_at=created_at,
             updated_at=updated_at,
+            attributes=attributes,
+            relations=relations,
+            provenance=provenance,
             extra=extra,
         )
 
@@ -152,6 +190,14 @@ class EntityPage:
             frontmatter["created_at"] = self.created_at.isoformat()
         if self.updated_at is not None:
             frontmatter["updated_at"] = self.updated_at.isoformat()
+        # v2 fields: only emit when populated so v1 pages stay visually
+        # v1 on disk (no `attributes: {}` noise added gratuitously).
+        if self.attributes:
+            frontmatter["attributes"] = dict(self.attributes)
+        if self.relations:
+            frontmatter["relations"] = [dict(r) for r in self.relations]
+        if self.provenance:
+            frontmatter["provenance"] = dict(self.provenance)
         # Emergent fields appended after known ones for stable diff ordering.
         for key, value in self.extra.items():
             frontmatter[key] = value
@@ -262,6 +308,28 @@ class EntityPage:
             raise EntityPageError("name is required and must be non-empty")
         if not isinstance(self.aliases, list):
             raise EntityPageError("aliases must be a list")
+        # v2 write-side checks (doc memory §3.5 "Write-side constraints").
+        if not isinstance(self.attributes, dict):
+            raise EntityPageError("attributes must be a dict")
+        if not isinstance(self.relations, list):
+            raise EntityPageError("relations must be a list")
+        for i, rel in enumerate(self.relations):
+            if not isinstance(rel, dict):
+                raise EntityPageError(
+                    f"relations[{i}] must be a dict, got {type(rel).__name__}"
+                )
+            to = rel.get("to")
+            if not _is_valid_entity_ref(to):
+                raise EntityPageError(
+                    f"relations[{i}].to {to!r} must match <type>:<slug>"
+                )
+            rel_type = rel.get("type")
+            if not isinstance(rel_type, str) or not rel_type.strip():
+                raise EntityPageError(
+                    f"relations[{i}].type must be a non-empty string"
+                )
+        if not isinstance(self.provenance, dict):
+            raise EntityPageError("provenance must be a dict")
 
 
 # ---------------------------------------------------------------------------

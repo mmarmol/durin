@@ -64,6 +64,16 @@ def split_frontmatter(text: str) -> tuple[dict[str, Any], str]:
 def save_entry(entry: MemoryEntry, path: Path) -> None:
     """Write a memory entry to ``path`` as markdown + YAML frontmatter."""
     payload = entry.model_dump(exclude={"body"}, mode="json")
+    # Decay / evergreen are tristate: an absent key means "use class
+    # default", an explicit `null` means "override to no-decay". Avoid
+    # polluting v1 entries with `evergreen: false` and
+    # `decay_half_life: null` lines: drop them when the caller never
+    # set them explicitly. `model_fields_set` is the discriminator.
+    fields_set = entry.model_fields_set
+    if "decay_half_life" not in fields_set:
+        payload.pop("decay_half_life", None)
+    if "evergreen" not in fields_set:
+        payload.pop("evergreen", None)
     yaml_block = yaml.safe_dump(
         payload,
         sort_keys=False,
