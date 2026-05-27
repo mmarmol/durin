@@ -291,6 +291,12 @@ class AuxModelsConfig(Base):
 
     vision: AuxModelConfig | None = None
     audio: AuxModelConfig | None = None
+    # G3.b: model used by memory_search's LLM query rewriter. Same
+    # shape as vision/audio. When unset, the rewriter falls back to
+    # the agent's active preset — keeps one knob ("which model do I
+    # use?") consistent unless the user explicitly opts into a
+    # cheaper/faster model for memory ops.
+    memory: AuxModelConfig | None = None
 
 
 class ModelPresetConfig(Base):

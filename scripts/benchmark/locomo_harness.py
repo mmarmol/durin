@@ -113,6 +113,12 @@ async def run_qa(
     # much the memory layer actually contributes vs. answering cold).
     if enable_memory and qa.conversation is not None:
         _seed_memory_from_conversation(workspace_root, qa.conversation)
+        # Build the vector index over the seeded files. Without this
+        # `memory_search` falls to substring grep over the full natural-
+        # language query and returns 0 for queries like "Calvin Japan
+        # stay" (verified in 12cc1897 run). The bench is not a clean
+        # install — we want the full retrieval stack active.
+        _build_vector_index(workspace_root)
 
     # Bind per-QA telemetry. Every memory.recall / memory.store /
     # tool.* / cache.usage / compaction.* event durin emits while
@@ -157,51 +163,241 @@ async def run_qa(
 def _seed_memory_from_conversation(
     workspace_root: Path, conv: Conversation,
 ) -> None:
-    """Bulk-seed memory/episodic with every turn from every session.
+    """Bulk-seed memory with every turn, image caption, and LoCoMo
+    sample-level summary.
 
     Each turn becomes one episodic entry tagged with
-    ``person:<speaker_slug>``. The body is the raw text; the
-    ``source_refs`` field points at a synthetic ``sessions/<conv_id>.md``
-    URI so the graph view can later link entries → session.
+    ``person:<speaker_slug>``. When the turn carries a ``blip_caption``
+    or ``query`` (image-bearing turn), those are appended to the text
+    so the visual context is searchable (see doc 28 §4.5 — 20.8% of
+    turns had blip_caption silently dropped).
+
+    Additionally seeds the LoCoMo sample-level fields:
+    - ``event_summary[events_session_N]`` → one episodic entry per
+      session-event pair, dated with the session's date_time so the
+      vector index gets curator-provided event abstractions (e.g.
+      "John's car windshield is shattered" — a fact that lived nowhere
+      in the raw turn transcript for ``conv-2-q19``).
+    - ``observation`` → one entry per session+speaker.
+    - ``session_summary`` → one entry per session.
 
     Bulk seeding (not running the agent through the conversation) is
     standard for memory benchmarks — it factors out the agent's
     write-side noise and exercises only the read-side retrieval that
-    LoCoMo actually measures. The published winners (Mem0, HyperMem)
-    do the same.
+    LoCoMo actually measures.
     """
     speaker_slugs = {
         conv.speaker_a: _slug(conv.speaker_a),
         conv.speaker_b: _slug(conv.speaker_b),
     }
     for session in conv.sessions:
-        # Try to parse session.date_time into an ISO date for valid_from
-        # so retrieval temporal signals work. Fall back silently when
-        # the timestamp is unparseable.
         valid_from = _try_parse_session_date(session.date_time)
         source_ref = f"sessions/{conv.conv_id}_s{session.index}.md"
         for turn in session.turns:
             speaker = turn.get("speaker") or "unknown"
             text = turn.get("text") or ""
-            if not text.strip():
+            # Append image context (blip_caption + query) so the vector
+            # index covers it. Same entry — keeps the agent's view of
+            # "what was said in this turn" complete.
+            text_with_visuals = _enrich_turn_with_visuals(turn, text)
+            if not text_with_visuals.strip():
                 continue
             slug = speaker_slugs.get(speaker) or _slug(speaker)
             entity_ref = f"person:{slug}"
             try:
                 store_memory(
                     workspace_root,
-                    content=text,
-                    headline=f"{speaker}: {text[:60]}",
+                    content=text_with_visuals,
+                    headline=f"{speaker}: {text_with_visuals[:60]}",
                     entities=[entity_ref],
                     source_refs=[source_ref],
                     valid_from=valid_from,
                 )
             except Exception:  # noqa: BLE001
-                # Single bad turn must NOT kill the seeding pass.
-                # The agent can still answer most questions from the
-                # majority of correctly-seeded turns.
                 logger.exception("seed failure for conv %s session %d",
                                   conv.conv_id, session.index)
+
+    # Sample-level summaries — separate from per-turn entries so the
+    # agent can retrieve them as their own context blocks. Headlines are
+    # tagged "summary:" so the LLM can see they're curator-derived.
+    _seed_event_summaries(workspace_root, conv, speaker_slugs)
+    _seed_observations(workspace_root, conv, speaker_slugs)
+    _seed_session_summaries(workspace_root, conv)
+
+
+def _enrich_turn_with_visuals(turn: dict, text: str) -> str:
+    """Append blip_caption + query to text when the turn has an image.
+
+    Format: original text on its own line, then `[image: <caption>]`
+    and `[image_query: <query>]` lines. The LLM sees them as inline
+    annotations and the vector embedding picks up the visual nouns
+    (the conv-2-q19 'windshield' case).
+    """
+    parts = [text] if text else []
+    cap = (turn.get("blip_caption") or "").strip()
+    if cap:
+        parts.append(f"[image: {cap}]")
+    q = (turn.get("query") or "").strip()
+    if q:
+        parts.append(f"[image_query: {q}]")
+    return "\n".join(parts)
+
+
+def _seed_event_summaries(
+    workspace_root: Path, conv: Conversation,
+    speaker_slugs: dict[str, str],
+) -> None:
+    """Seed ``event_summary.events_session_N`` per speaker per session.
+
+    The LoCoMo curator produced these as third-person abstractions of
+    what happened during a session ("John suffers from an accident
+    where his car's windshield is shattered"). They cover facts that
+    sometimes aren't explicit in the raw turns.
+    """
+    summaries = conv.event_summary or {}
+    # session_idx → date for valid_from
+    session_dates = {
+        s.index: _try_parse_session_date(s.date_time) for s in conv.sessions
+    }
+    for key, events_by_speaker in summaries.items():
+        # key format: "events_session_N"
+        n = _extract_session_index(key)
+        if n is None or not isinstance(events_by_speaker, dict):
+            continue
+        valid_from = session_dates.get(n)
+        source_ref = f"sessions/{conv.conv_id}_s{n}_event_summary.md"
+        for speaker, events in events_by_speaker.items():
+            if not isinstance(events, list):
+                continue
+            slug = speaker_slugs.get(speaker) or _slug(speaker)
+            for event in events:
+                event_text = str(event).strip()
+                if not event_text:
+                    continue
+                try:
+                    store_memory(
+                        workspace_root,
+                        content=event_text,
+                        headline=f"event[{speaker}]: {event_text[:60]}",
+                        entities=[f"person:{slug}"],
+                        source_refs=[source_ref],
+                        valid_from=valid_from,
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.exception("event_summary seed failure %s s%d",
+                                     conv.conv_id, n)
+
+
+def _seed_observations(
+    workspace_root: Path, conv: Conversation,
+    speaker_slugs: dict[str, str],
+) -> None:
+    """Seed ``observation`` block — typically per-session per-speaker
+    observations the curator wrote about each side of the conversation."""
+    obs = conv.observation or {}
+    session_dates = {
+        s.index: _try_parse_session_date(s.date_time) for s in conv.sessions
+    }
+    for key, by_speaker in obs.items():
+        n = _extract_session_index(key)
+        valid_from = session_dates.get(n) if n is not None else None
+        source_ref = f"sessions/{conv.conv_id}_observation_{key}.md"
+        if not isinstance(by_speaker, dict):
+            continue
+        for speaker, observations in by_speaker.items():
+            slug = speaker_slugs.get(speaker) or _slug(speaker)
+            items = observations if isinstance(observations, list) else [observations]
+            for item in items:
+                text = str(item).strip()
+                if not text:
+                    continue
+                try:
+                    store_memory(
+                        workspace_root,
+                        content=text,
+                        headline=f"observation[{speaker}]: {text[:60]}",
+                        entities=[f"person:{slug}"],
+                        source_refs=[source_ref],
+                        valid_from=valid_from,
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.exception("observation seed failure %s", conv.conv_id)
+
+
+def _seed_session_summaries(workspace_root: Path, conv: Conversation) -> None:
+    """Seed ``session_summary`` block — one per session with a brief
+    summary of what was discussed."""
+    summaries = conv.session_summary or {}
+    session_dates = {
+        s.index: _try_parse_session_date(s.date_time) for s in conv.sessions
+    }
+    for key, summary in summaries.items():
+        n = _extract_session_index(key)
+        if n is None:
+            continue
+        valid_from = session_dates.get(n)
+        source_ref = f"sessions/{conv.conv_id}_s{n}_summary.md"
+        text = str(summary).strip() if not isinstance(summary, (list, dict)) else json.dumps(summary)
+        if not text or text in ("{}", "[]"):
+            continue
+        try:
+            store_memory(
+                workspace_root,
+                content=text,
+                headline=f"session-{n} summary: {text[:60]}",
+                entities=[],
+                source_refs=[source_ref],
+                valid_from=valid_from,
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("session_summary seed failure %s s%d", conv.conv_id, n)
+
+
+def _extract_session_index(key: str) -> int | None:
+    """Pull the N from keys like 'events_session_4', 'session_4_observation'."""
+    import re
+    m = re.search(r"session_(\d+)", key or "")
+    if m:
+        try:
+            return int(m.group(1))
+        except ValueError:
+            return None
+    return None
+
+
+def _build_vector_index(workspace: Path) -> None:
+    """Embed every seeded ``memory/<class>/*.md`` so vector search works.
+
+    Bulk-seeded entries (`store_memory`) skip the index by design —
+    only the tool path (`memory_store`) embeds at write time. For the
+    bench we want vector retrieval active, so we rebuild over the whole
+    workspace once after the seed.
+
+    Silent no-op when ``lancedb`` is unavailable in the env — the agent
+    still has the grep fallback. The first call triggers the embedding
+    model download (~400 MB, cached at ``~/.cache/fastembed``).
+    """
+    from durin.config.loader import load_config
+    from durin.memory.vector_index import VectorIndex, vector_index_available
+
+    if not vector_index_available():
+        logger.warning(
+            "vector index unavailable (lancedb not installed); bench will "
+            "fall back to grep retrieval"
+        )
+        return
+    cfg = load_config()
+    try:
+        from durin.memory.embedding import FastembedProvider
+
+        provider = FastembedProvider(model=cfg.memory.embedding.model)
+        vi = VectorIndex(workspace, provider)
+        n = vi.rebuild_from_workspace()
+        logger.info("vector index built: %d entries in %s", n, workspace)
+    except Exception:  # noqa: BLE001
+        # Single bad index build must NOT kill the QA — agent still has
+        # grep + filesystem grep as fallbacks.
+        logger.exception("vector index build failed for %s", workspace)
 
 
 def _slug(name: str) -> str:
@@ -272,6 +468,12 @@ async def _ask_agent(
     if model:
         cfg.agents.defaults.model = model
     cfg.agents.defaults.max_tool_iterations = max_iterations
+    # Activate vector retrieval for the bench. The durin default is opt-in
+    # (the embedding model is ~400 MB) but the bench is not a clean
+    # install — we want the full retrieval stack so memory_search uses
+    # semantic similarity instead of literal substring match.
+    if enable_memory:
+        cfg.memory.enabled = True
 
     bus = MessageBus()
     loop_agent = AgentLoop.from_config(cfg, bus=bus)

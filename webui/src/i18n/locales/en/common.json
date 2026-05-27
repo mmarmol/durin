@@ -193,6 +193,8 @@
       "visionHint": "Used by the interpret_image tool.",
       "audio": "Audio model",
       "audioHint": "Used by the interpret_audio tool.",
+      "memory": "Memory model",
+      "memoryHint": "Used by memory_search query rewriting. Falls back to the main model when unset.",
       "modelPlaceholder": "model id",
       "providerPlaceholder": "provider",
       "save": "Save",

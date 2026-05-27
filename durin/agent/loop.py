@@ -114,7 +114,7 @@ def _build_aux_providers(config: Any) -> dict[str, AuxProviderHandle]:
     aux = getattr(getattr(config, "agents", None), "aux_models", None)
     if aux is None:
         return out
-    for kind in ("vision", "audio"):
+    for kind in ("vision", "audio", "memory"):
         entry = getattr(aux, kind, None)
         if entry is None:
             continue
@@ -252,10 +252,17 @@ class AgentLoop:
         model_preset: str | None = None,
         preset_snapshot_loader: preset_helpers.PresetSnapshotLoader | None = None,
         runtime_model_publisher: Callable[[str, str | None], None] | None = None,
+        app_config: Any | None = None,
     ):
         from durin.config.schema import ToolsConfig
 
         _tc = tools_config or ToolsConfig()
+        # Full DurinConfig — needed by memory_* tools that read
+        # ``app_config.memory.{enabled,embedding,dream}``. Test paths that
+        # construct AgentLoop directly with tools_config and no full
+        # config get ``None``; the affected tools treat that as
+        # memory-disabled (fall back to grep / skip vector).
+        self.app_config = app_config
         defaults = AgentDefaults()
         self.bus = bus
         self.channels_config = channels_config
@@ -450,6 +457,7 @@ class AgentLoop:
             preemptive_compact_ratio=defaults.preemptive_compact_ratio,
             max_messages=defaults.max_messages,
             tools_config=config.tools,
+            app_config=config,
             model_presets=preset_helpers.configured_model_presets(config),
             model_preset=defaults.model_preset,
             provider_snapshot_loader=provider_snapshot_loader,
@@ -558,6 +566,7 @@ class AgentLoop:
             image_generation_provider_configs=self._image_generation_provider_configs,
             timezone=self.context.timezone or "UTC",
             aux_providers=self._aux_providers,
+            app_config=self.app_config,
         )
         loader = ToolLoader()
         registered = loader.load(ctx, self.tools)
@@ -602,12 +611,16 @@ class AgentLoop:
         installed, or the model identifier is unknown — the existing
         tool-side fallback to grep keeps everything functional.
         """
+        # Full config is optional — tests can construct AgentLoop without
+        # it. No config → no warmup (tools still work via the grep path).
+        if self.app_config is None:
+            return
         try:
-            if not getattr(self.config.memory, "enabled", False):
+            if not getattr(self.app_config.memory, "enabled", False):
                 return
         except AttributeError:
             return
-        model_name = self.config.memory.embedding.model
+        model_name = self.app_config.memory.embedding.model
         try:
             from durin.memory.embedding import FastembedProvider
             await asyncio.to_thread(FastembedProvider.warmup, model_name)

@@ -22,6 +22,7 @@ interface SidebarProps {
   onNewChat: () => void;
   onSelect: (key: string) => void;
   onRequestDelete: (key: string, label: string) => void;
+  onRequestRename: (key: string, title: string) => Promise<void>;
   onOpenSettings: () => void;
   onOpenMemoryGraph?: () => void;
   memoryGraphActive?: boolean;
@@ -56,14 +57,18 @@ export function Sidebar(props: SidebarProps) {
       className="flex h-full w-full min-w-0 flex-col border-r border-sidebar-border/60 bg-sidebar text-sidebar-foreground"
     >
       <div className="flex items-center justify-between px-3 pb-2.5 pt-3">
-        {/* Text logo: durin's wordmark is the ⚒️ hammer-and-pick (Durin,
-            the dwarf-king of Tolkien's Khazad-dûm) + lowercase name.
-            The old PNG was nanobot's cat logo with a renamed filename. */}
+        {/* Wordmark: durin shield logo + lowercase name. Logo asset is
+            shipped under /brand/durin-logo.png (see webui/public/brand). */}
         <span
-          className="flex select-none items-center gap-1.5 text-base font-semibold tracking-tight"
+          className="flex select-none items-center gap-2 text-base font-semibold tracking-tight"
           aria-label="durin"
         >
-          <span aria-hidden="true" className="text-lg leading-none">⚒️</span>
+          <img
+            src="/brand/durin-logo-64.png"
+            alt=""
+            aria-hidden="true"
+            className="h-6 w-auto"
+          />
           <span className="lowercase">durin</span>
         </span>
         <Button
@@ -118,6 +123,7 @@ export function Sidebar(props: SidebarProps) {
           }
           onSelect={props.onSelect}
           onRequestDelete={props.onRequestDelete}
+          onRequestRename={props.onRequestRename}
         />
       </div>
       {/* Below the sessions list: entry into the entity-centric memory

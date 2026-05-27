@@ -241,7 +241,7 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
   const { t, i18n } = useTranslation();
   const { client } = useClient();
   const { theme, toggle, palette, setPalette } = useTheme();
-  const { sessions, loading, refresh, createChat, deleteChat } = useSessions();
+  const { sessions, loading, refresh, createChat, deleteChat, renameChat } = useSessions();
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [view, setView] = useState<ShellView>("chat");
   const [desktopSidebarOpen, setDesktopSidebarOpen] =
@@ -433,6 +433,7 @@ function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName:
     onSelect: onSelectChat,
     onRequestDelete: (key: string, label: string) =>
       setPendingDelete({ key, label }),
+    onRequestRename: renameChat,
     onOpenSettings,
     onOpenMemoryGraph,
     memoryGraphActive: view === "memory_graph",
