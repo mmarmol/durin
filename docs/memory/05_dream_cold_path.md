@@ -408,21 +408,21 @@ The judge (defined in `durin/memory/absorb_judge.py` and `durin/templates/dream/
 | Cross-type filter | Both must have the same type to be merge candidates |
 | Source refs of both | So judge can see when each was created |
 
-It returns one of:
+It returns one of (verdict vocabulary is **identity-judgement**, not action-prescription — the runner maps verdict + confidence to the merge action):
 
-| Decision | Action |
-|---|---|
-| `merge` | Combine `entity_b` into `entity_a`, archive `entity_b` |
-| `keep_separate` | These are distinct entities with overlapping aliases (e.g., two people named "Marcelo") |
-| `unsure` | Re-judge in 24h; defer for now |
+| Verdict | Meaning | Action when `confidence ≥ confidence_threshold` |
+|---|---|---|
+| `same` | A and B describe the same real entity | Combine `entity_b` into `entity_a`, archive `entity_b` |
+| `different` | A and B are distinct entities with overlapping aliases (e.g., two people named "Marcelo") | Do nothing; log `memory.absorb.judged` |
+| `unclear` | The judge couldn't decide; defer for now | Re-judge in 24h; do nothing |
 
 ### 8.5 Judge decision and merge action
 
-The judge returns a structured decision plus a confidence score (0-100). The merge proceeds only if `confidence ≥ confidence_threshold`. Decisions below threshold are logged as `memory.absorb.judged` events without merging — the operator can inspect these later to decide whether to lower the threshold.
+The judge returns a structured decision plus a confidence score (0-100). The merge proceeds only if `verdict == "same"` AND `confidence ≥ confidence_threshold`. Decisions below threshold are logged as `memory.absorb.judged` events without merging — the operator can inspect these later to decide whether to lower the threshold.
 
 ### 8.6 Merge action (when confidence passes threshold)
 
-When `merge` is decided:
+When `verdict == "same"` and confidence passes the threshold:
 
 ```
 1. Load both pages

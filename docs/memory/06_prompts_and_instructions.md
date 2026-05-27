@@ -431,14 +431,22 @@ Examples cover the cases that are likely to confuse small models:
 
 ## 5. Absorb-judge prompt
 
-Lives at `durin/templates/dream/absorb_judge.md`. Active in current code. Specifies how the judge decides whether two entity pages with alias overlap should merge.
+Lives at `durin/templates/dream/absorb_judge.md`. Active in current code. Specifies how the judge decides whether two entity pages with alias overlap describe the same real entity.
 
 The prompt provides:
 - Both entity pages (canonical candidate + absorbed candidate).
 - Mtime of each (for staleness reasoning).
 - The peer-review framing (judge is critic, not confirmer).
 
-Output is one of `merge | keep_separate | unsure`. The current implementation is solid; this doc doesn't redefine it.
+The LLM emits one of three verdicts (identity judgement, **not** action prescription — the runner maps verdict + confidence to the merge action per `05_dream_cold_path.md` §8.4-8.5):
+
+| Verdict | Meaning |
+|---|---|
+| `same` | The two pages describe the same real entity |
+| `different` | The two pages are distinct entities with overlapping aliases (homonymy, shared acronyms, generic placeholders) |
+| `unclear` | Evidence is ambiguous; defer the call to a later pass |
+
+Output envelope mirrors the consolidator's: `===VERDICT===` + `===CONFIDENCE===` + `===REASONING===` + `===END===`. The current implementation (`durin/memory/absorb_judge.py::judge`) is solid; this doc captures the contract.
 
 ---
 
