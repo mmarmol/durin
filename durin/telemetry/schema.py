@@ -705,6 +705,54 @@ class MemoryDreamEntityFailedEvent(TypedDict):
     session_key: NotRequired[str | None]
 
 
+class MemoryIndexWriteEvent(TypedDict):
+    """One upsert into the FTS5 lexical index (doc 07 §9.1).
+
+    Fires per file written, so dashboards can detect bursty writes
+    (e.g., during `durin reindex`) vs steady-state agent activity.
+    ``index`` is either ``"fts"`` (lexical) or ``"lancedb"`` (vector);
+    a tool that writes to both fires twice.
+    """
+
+    uri: str
+    index: str  # "fts" | "lancedb"
+    op: str  # "upsert" | "delete"
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
+class MemoryIndexRebuildEvent(TypedDict):
+    """A full index rebuild completed (doc 07 §9.2).
+
+    Emitted by ``durin reindex``. ``target`` is ``"fts"``,
+    ``"lancedb"``, or ``"all"``. ``indexed`` + ``errors`` mirror
+    :class:`durin.memory.indexer.IndexStats`.
+    """
+
+    target: str
+    indexed: int
+    errors: int
+    duration_ms: float
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
+class MemoryIndexStalenessDetectedEvent(TypedDict):
+    """The on-disk index disagrees with the markdown source (doc 07 §9.3).
+
+    Emitted by the health-check cron when it spots a uri whose
+    ``fts_meta.mtime`` lags behind the file's mtime, or a file under
+    ``memory/`` that has no row in the index. ``reason`` captures the
+    detection signal so dashboards can split "missing row" vs "stale
+    mtime" trends.
+    """
+
+    uri: str
+    reason: str  # "missing_row" | "mtime_lag" | "row_for_missing_file"
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
 class MemoryHotLayerFailureEvent(TypedDict):
     """Hot-layer assembly failed for one component (per doc 06 §8.7).
 
@@ -796,6 +844,9 @@ EVENTS: dict[str, type] = {
     "memory.absorb.skipped": MemoryAbsorbSkippedEvent,
     "memory.absorb.reverted": MemoryAbsorbRevertedEvent,
     "memory.hot_layer.failure": MemoryHotLayerFailureEvent,
+    "memory.index.write": MemoryIndexWriteEvent,
+    "memory.index.rebuild": MemoryIndexRebuildEvent,
+    "memory.index.staleness_detected": MemoryIndexStalenessDetectedEvent,
 }
 
 
@@ -854,4 +905,7 @@ __all__ = [
     "MemoryDreamPatchAppliedEvent",
     "MemoryDreamEntityFailedEvent",
     "MemoryHotLayerFailureEvent",
+    "MemoryIndexWriteEvent",
+    "MemoryIndexRebuildEvent",
+    "MemoryIndexStalenessDetectedEvent",
 ]
