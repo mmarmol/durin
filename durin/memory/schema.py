@@ -40,6 +40,18 @@ class MemoryEntry(BaseModel):
     valid_from: Optional[date] = None
     body: str = ""
 
+    # Decay / evergreen (doc memory §10):
+    # - ``decay_half_life`` overrides the per-class default. ``None``
+    #   is a meaningful value ("never decay this entry") — discriminator
+    #   between "field absent → use class default" and "field present
+    #   and null → override to no-decay" lives in
+    #   ``model_fields_set``.
+    # - ``evergreen`` forces no decay regardless of class or override;
+    #   wins over everything. Defaults to ``False`` so unset entries
+    #   serialise without an explicit ``evergreen: false`` line.
+    decay_half_life: Optional[int] = Field(default=None, ge=0)
+    evergreen: bool = False
+
     @field_validator("entities")
     @classmethod
     def _validate_entities_format(cls, value: list[str]) -> list[str]:
