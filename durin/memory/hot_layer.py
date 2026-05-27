@@ -1,26 +1,27 @@
 """Hot layer — the always-loaded memory section of the stable prompt tier.
 
-Phase 1.9 of the memory subsystem. The hot layer is what the agent
-carries in every prompt without any tool call: identity essentials,
-canonical entity pages (the "main memory"), recent post-cursor
-fragments (entries that have not yet been consolidated into a page),
-top headlines and a de-duplicated entity name list. By design it
-changes at most once per day (refreshed by dream); between dreams it
-is read-only so the upstream provider's prompt cache stays warm across
-an entire day.
+Phase 1.9 of the memory subsystem (renderer + cursor logic), refreshed
+in Phase 1.5 (canonical spec: ``docs/memory/06_prompts_and_instructions.md``
+§8). The hot layer is what the agent carries in every prompt without
+any tool call: identity essentials, canonical entity pages (the "main
+memory"), recent post-cursor fragments (entries that have not yet been
+consolidated into a page), top headlines and a de-duplicated entity
+name list. By design it changes at most once per Dream pass; between
+passes it is read-only so the upstream provider's prompt cache stays
+warm across many turns.
 
-V1 (pre-dream-auto-trigger) builds the hot layer directly from disk on
-each prompt build. Ranking is naive: identity from
-``memory/stable/IDENTITY.md`` if present, canonical pages sorted by
-``updated_at`` desc, recent fragments are post-cursor entries sorted by
-``valid_from`` desc.
+The renderer reads from disk on every prompt build (cheap walk + YAML
+parse, <5ms typical). Sections that fail to assemble degrade silently
+and emit ``memory.hot_layer.failure`` telemetry per §8.7 — the agent
+still works, just without the broken section.
 
-Per doc 25 §2.H, canonical pages and recent fragments are wrapped in
-``=== CANONICAL: <ref> ===`` / ``=== FRAGMENT: <ref> (ts: ...) ===``
-markers so the LLM can reconcile read-time (doc 18 §6 promise:
-"coexisten en los resultados de retrieval; el LLM reconcilia en read-
-time con timestamps y contexto"). Same convention as the compaction
-``=== ARCHIVED SUMMARY ===`` block (bitácora 2026-05-19).
+Per doc 06 §8.3, canonical pages and recent fragments are wrapped in
+``=== CANONICAL: <uri> (consolidated <ts>) ===`` and
+``=== FRAGMENT: <path> (ts <ts>) ===`` markers so the LLM reconciles
+contradictions at read time using the timestamps embedded in the
+markers. Same convention as the compaction
+``=== ARCHIVED SUMMARY ===`` block (bitácora 2026-05-19) and
+``memory_search``'s result rendering.
 """
 
 from __future__ import annotations
@@ -32,22 +33,31 @@ from typing import Any, NamedTuple
 from durin.memory.entity_page import EntityPage
 from durin.memory.paths import MEMORY_CLASSES, walk_class
 from durin.memory.storage import load_entry
+from durin.telemetry.logger import current_telemetry
 
 __all__ = ["HotLayer", "read_hot_layer"]
 
-# Soft budgets matching docs/archive/08_memory_phase2_proposal.md
-# §0c.7 (~1000 tokens) plus §2.H additions for canonical pages +
-# recent fragments. Total: ~1900 tokens (still cache-friendly between
-# dreams, well within stable tier budget).
-_IDENTITY_BUDGET_CHARS = 800   # ~200 tokens
+# Budgets per docs/memory/06_prompts_and_instructions.md §8.2.
+# Total ~1900 tokens — still cache-friendly between dreams.
+_IDENTITY_BUDGET_CHARS = 800    # ~200 tokens
 _CANONICAL_BUDGET_CHARS = 2400  # ~600 tokens — N entity pages
 _FRAGMENTS_BUDGET_CHARS = 1200  # ~300 tokens — recent post-cursor entries
 _HEADLINES_BUDGET_CHARS = 1200  # ~300 tokens — legacy class entries
-_ENTITIES_BUDGET_CHARS = 600   # ~150 tokens
+_ENTITIES_BUDGET_CHARS = 600    # ~150 tokens
 _MAX_CANONICAL = 12
 _MAX_FRAGMENTS = 8
 _MAX_HEADLINES = 12
 _MAX_ENTITIES = 50
+
+# Per-page body cap inside the canonical block. Keeps a single huge
+# page from consuming the whole canonical budget.
+_CANONICAL_BODY_PER_PAGE = 600
+# Per-fragment body cap for the same reason.
+_FRAGMENT_BODY_PER_PAGE = 400
+
+# Classes that surface as "fragments" in the hot layer per §8.4.
+# Corpus and pending are intentionally excluded.
+_FRAGMENT_CLASSES: tuple[str, ...] = ("episodic", "stable")
 
 
 class HotLayer(NamedTuple):
@@ -60,11 +70,11 @@ class HotLayer(NamedTuple):
     def render(self) -> str:
         """Render the hot layer as markdown for the stable prompt tier.
 
-        Section order follows the §2.H contract: identity → canonical
-        (main memory) → fragments (recent, post-cursor) → headlines
-        (legacy entries) → entity list. The LLM sees the canonical
-        first, marked as authoritative; fragments come next with their
-        timestamp so the model can reconcile temporal contradictions.
+        Section order follows §8.3: identity → canonical (main memory) →
+        fragments (recent, post-cursor) → headlines (legacy entries) →
+        entity list. The LLM sees the canonical first, marked as
+        authoritative; fragments come next with their timestamp so the
+        model can reconcile temporal contradictions.
         """
         parts: list[str] = []
         if self.identity.strip():
@@ -96,15 +106,63 @@ class HotLayer(NamedTuple):
 
 
 def read_hot_layer(workspace: Path) -> HotLayer:
-    """Assemble the hot layer for a workspace."""
-    canonicals, canonical_cursors = _read_canonical_blocks(workspace)
+    """Assemble the hot layer for a workspace.
+
+    Each section is wrapped in its own try/except: any failure emits
+    ``memory.hot_layer.failure`` telemetry per §8.7 and degrades the
+    section to empty so the prompt still builds.
+    """
+    try:
+        canonicals, canonical_cursors = _read_canonical_blocks(workspace)
+    except Exception as exc:  # pragma: no cover - defensive
+        _emit_failure("canonical_blocks", exc)
+        canonicals, canonical_cursors = [], {}
+
+    try:
+        fragments = _read_fragment_blocks(workspace, canonical_cursors)
+    except Exception as exc:  # pragma: no cover - defensive
+        _emit_failure("fragment_blocks", exc)
+        fragments = []
+
+    try:
+        identity = _read_identity(workspace)
+    except Exception as exc:  # pragma: no cover - defensive
+        _emit_failure("identity", exc)
+        identity = ""
+
+    try:
+        headlines = _read_top_headlines(workspace)
+    except Exception as exc:  # pragma: no cover - defensive
+        _emit_failure("headlines", exc)
+        headlines = []
+
+    try:
+        entities = _read_entity_list(workspace)
+    except Exception as exc:  # pragma: no cover - defensive
+        _emit_failure("entities", exc)
+        entities = []
+
     return HotLayer(
-        identity=_read_identity(workspace),
+        identity=identity,
         canonical_blocks=canonicals,
-        fragment_blocks=_read_fragment_blocks(workspace, canonical_cursors),
-        headlines=_read_top_headlines(workspace),
-        entities=_read_entity_list(workspace),
+        fragment_blocks=fragments,
+        headlines=headlines,
+        entities=entities,
     )
+
+
+def _emit_failure(component: str, exc: BaseException) -> None:
+    """Best-effort telemetry; never re-raises."""
+    logger = current_telemetry()
+    if logger is None:
+        return
+    try:
+        logger.log(
+            "memory.hot_layer.failure",
+            {"component": component, "error": str(exc)[:200]},
+        )
+    except Exception:  # pragma: no cover - belt-and-suspenders
+        pass
 
 
 def _read_canonical_blocks(
@@ -117,25 +175,26 @@ def _read_canonical_blocks(
     :func:`_read_fragment_blocks` to filter to post-cursor entries.
     Pages under ``archive/`` are skipped (absorbed records, surfaced
     only via ``durin memory expand``).
+
+    Per-page parse failures degrade silently with a telemetry event;
+    the rest of the walk continues so one bad page can't break the
+    whole layer.
     """
     pages: list[tuple[str, str, EntityPage]] = []  # (sort_key, ref, page)
     cursors: dict[str, Any] = {}
     for page_path in walk_class(workspace, "entities"):
-        page = EntityPage.from_file(page_path)
+        try:
+            page = EntityPage.from_file(page_path)
+        except Exception as exc:
+            _emit_failure(f"canonical_blocks:{page_path.name}", exc)
+            continue
         if page is None:
             continue
         slug = page_path.stem
         ref = f"{page.type}:{slug}"
         # Sort key: prefer updated_at, fall back to mtime so freshly
         # written pages surface even pre-frontmatter updated_at adoption.
-        updated = page.extra.get("updated_at", "") if page.extra else ""
-        if not isinstance(updated, str) or not updated:
-            try:
-                updated = datetime.fromtimestamp(
-                    page_path.stat().st_mtime
-                ).isoformat()
-            except OSError:
-                updated = "0000-00-00"
+        updated = _resolve_updated_at(page, page_path)
         pages.append((updated, ref, page))
         if page.dream_processed_through is not None:
             cursors[ref] = page.dream_processed_through
@@ -144,7 +203,7 @@ def _read_canonical_blocks(
     blocks: list[str] = []
     total_chars = 0
     for sort_key, ref, page in pages[:_MAX_CANONICAL]:
-        block = _render_canonical_block(ref, page)
+        block = _render_canonical_block(ref, page, consolidated_ts=sort_key)
         if total_chars + len(block) > _CANONICAL_BUDGET_CHARS:
             break
         blocks.append(block)
@@ -152,84 +211,225 @@ def _read_canonical_blocks(
     return blocks, cursors
 
 
-def _render_canonical_block(ref: str, page: EntityPage) -> str:
+def _resolve_updated_at(page: EntityPage, page_path: Path) -> str:
+    """Best-effort consolidation timestamp for the canonical marker.
+
+    Order of preference: ``updated_at`` (v2/v1 frontmatter) → file
+    mtime → sentinel. Returned as an ISO-8601 string for stable sort.
+    """
+    if page.updated_at is not None:
+        return page.updated_at.isoformat()
+    raw = page.extra.get("updated_at", "") if page.extra else ""
+    if isinstance(raw, str) and raw:
+        return raw
+    try:
+        return datetime.fromtimestamp(page_path.stat().st_mtime).isoformat()
+    except OSError:
+        return "0000-00-00"
+
+
+def _render_canonical_block(
+    ref: str,
+    page: EntityPage,
+    *,
+    consolidated_ts: str,
+) -> str:
     """Format one canonical entity page for the hot layer.
 
-    Keeps the block compact: name + aliases on the header line,
-    identifiers on a second line (if any), then a body excerpt capped
-    at ~600 chars per page so 10 pages fit the canonical budget.
-    """
-    header = f"=== CANONICAL: {ref}"
-    if page.aliases:
-        header += f" (aliases: {', '.join(page.aliases[:5])})"
-    header += " ==="
+    Layout (per doc 06 §8.3 + Phase 1.5 v2 rendering):
 
-    lines = [header, page.name]
+        === CANONICAL: <ref> (consolidated <ts>) ===
+        <name>[ (aliases: a, b, c)].
+        Attributes: k1 is v1; k2 is v2.            # only if non-empty
+        Relations: <type> of <to>[ (since N)]; ... # only if non-empty
+        <body excerpt>
+        === END CANONICAL ===
+
+    v1 pages (no attributes/relations) render with just name + body;
+    aliases line is omitted when ``aliases`` is empty. This keeps the
+    block tight — no empty lines or label-only rows.
+    """
+    header = f"=== CANONICAL: {ref} (consolidated {consolidated_ts}) ==="
+    lines = [header, _render_name_line(page)]
+
+    attr_line = _render_attributes_line(page.attributes)
+    if attr_line:
+        lines.append(attr_line)
+
+    rel_line = _render_relations_line(page.relations)
+    if rel_line:
+        lines.append(rel_line)
+
+    # Legacy ``identifiers`` (v1 emergent field) still rendered so
+    # workspaces that haven't migrated to v2 attributes don't lose
+    # identifier visibility in the hot layer.
     identifiers = page.extra.get("identifiers") if page.extra else None
-    if isinstance(identifiers, dict) and identifiers:
-        flat = []
-        for kind, values in identifiers.items():
-            if isinstance(values, list) and values:
-                flat.append(f"{kind}: {', '.join(str(v) for v in values[:3])}")
-            elif isinstance(values, str) and values:
-                flat.append(f"{kind}: {values}")
-        if flat:
-            lines.append("Identifiers — " + "; ".join(flat))
+    ident_line = _render_identifiers_line(identifiers)
+    if ident_line:
+        lines.append(ident_line)
+
     body = (page.body or "").strip()
     if body:
-        # Cap per-page body so a single huge page can't consume the
-        # whole canonical budget.
-        body = body[:600]
-        lines.append(body)
-    lines.append(f"=== END CANONICAL ===")
+        lines.append(body[:_CANONICAL_BODY_PER_PAGE])
+    lines.append("=== END CANONICAL ===")
     return "\n".join(lines)
+
+
+def _render_name_line(page: EntityPage) -> str:
+    """``<name>`` or ``<name> (aliases: a, b).`` — empty aliases stay silent."""
+    if page.aliases:
+        aliases = ", ".join(page.aliases[:5])
+        return f"{page.name} (aliases: {aliases})."
+    return page.name
+
+
+def _render_attributes_line(attributes: dict[str, Any]) -> str:
+    """Prose form: ``Attributes: k1 is v1; k2 is v2.`` Empty → ``""``."""
+    if not attributes:
+        return ""
+    parts: list[str] = []
+    for key, value in attributes.items():
+        rendered_value = _render_attribute_value(value)
+        if rendered_value is None:
+            continue
+        parts.append(f"{key} is {rendered_value}")
+    if not parts:
+        return ""
+    return "Attributes: " + "; ".join(parts) + "."
+
+
+def _render_attribute_value(value: Any) -> str | None:
+    """Coerce one attribute value to prose. Returns None to skip the entry."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value if value else None
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, list):
+        items = [_render_attribute_value(v) for v in value]
+        items = [i for i in items if i]
+        return ", ".join(items) if items else None
+    if isinstance(value, dict):
+        # Stateful attribute (doc 01 §4.3) — render compactly.
+        sub_parts = []
+        for k, v in value.items():
+            rv = _render_attribute_value(v)
+            if rv:
+                sub_parts.append(f"{k}={rv}")
+        return "{" + ", ".join(sub_parts) + "}" if sub_parts else None
+    return str(value)
+
+
+def _render_relations_line(relations: list[dict[str, Any]]) -> str:
+    """Prose form: ``Relations: <type> of <to> (since N); ...``.
+
+    Renders ``since`` when present (the most common temporal qualifier
+    Dream emits per doc 01 §3.5). Other free-form metadata
+    (``intensity``, ``role``, etc.) is dropped from the prose to keep
+    the line tight — full data is still on disk and surfaces via the
+    canonical drill / memory_search.
+    """
+    if not relations:
+        return ""
+    parts: list[str] = []
+    for rel in relations:
+        if not isinstance(rel, dict):
+            continue
+        target = rel.get("to")
+        rtype = rel.get("type")
+        if not isinstance(target, str) or not isinstance(rtype, str):
+            continue
+        chunk = f"{rtype} of {target}" if target.split(":", 1)[0] == "person" else f"{rtype} {target}"
+        since = rel.get("since")
+        if since not in (None, "", []):
+            chunk += f" (since {since})"
+        parts.append(chunk)
+    if not parts:
+        return ""
+    return "Relations: " + "; ".join(parts) + "."
+
+
+def _render_identifiers_line(identifiers: Any) -> str:
+    """Legacy v1 emergent ``identifiers`` field → one prose line.
+
+    Compatible with both shapes the dream LLM emits (per
+    ``docs/research/phase0_results.md``): flat list or typed dict.
+    Returns ``""`` when there's nothing meaningful to render.
+    """
+    if not identifiers:
+        return ""
+    if isinstance(identifiers, dict):
+        parts: list[str] = []
+        for kind, values in identifiers.items():
+            if isinstance(values, list) and values:
+                parts.append(f"{kind}: {', '.join(str(v) for v in values[:3])}")
+            elif isinstance(values, str) and values:
+                parts.append(f"{kind}: {values}")
+        if parts:
+            return "Identifiers — " + "; ".join(parts)
+    if isinstance(identifiers, list) and identifiers:
+        flat = [str(v) for v in identifiers[:5] if v]
+        if flat:
+            return "Identifiers — " + ", ".join(flat)
+    return ""
 
 
 def _read_fragment_blocks(
     workspace: Path,
     cursors: dict[str, Any],
 ) -> list[str]:
-    """Render up to N post-cursor episodic entries as FRAGMENT blocks.
+    """Render up to N post-cursor entries from episodic/stable as FRAGMENT blocks.
 
-    Entries are post-cursor when their ``valid_from`` is later than the
-    ``dream_processed_through`` of every entity they tag (so all
-    canonical pages for those entities still need this fragment).
-    Entries that pre-date every relevant cursor are already absorbed
-    and skipped — surfacing them again would defeat the point of the
-    canonical page.
+    Per §8.4, a fragment qualifies when BOTH:
+
+    1. Its ``valid_from`` (or file mtime fallback) is strictly after the
+       ``dream_processed_through`` cursor of every entity it tags.
+    2. Its class is ``episodic`` or ``stable`` (corpus and pending out).
+
+    Untagged entries (``entry.entities == []``) are not "fragments
+    amending a canonical" by definition — they surface via the
+    headlines section instead.
     """
-    candidates: list[tuple[str, Path]] = []  # (sort_key desc, path)
-    for path in walk_class(workspace, "episodic"):
-        try:
-            entry = load_entry(path)
-        except Exception:
-            continue
-        # §2.H semantics: a fragment "amends a canonical" — entries with
-        # no entity tag are not fragments in this sense. They surface
-        # via the legacy headlines section (or not at all).
-        if not entry.entities:
-            continue
-        ts = entry.valid_from.isoformat() if entry.valid_from else ""
-        if ts and any(ref in cursors for ref in entry.entities):
-            if all(
-                _is_at_or_before(ts, cursors.get(ref))
-                for ref in entry.entities
-                if ref in cursors
-            ):
-                # Every relevant cursor already covers this entry —
-                # canonical already absorbed it, skip.
+    candidates: list[tuple[str, str, Path]] = []  # (sort_key, rel_path, path)
+    for class_name in _FRAGMENT_CLASSES:
+        for path in walk_class(workspace, class_name):
+            if path.name == "IDENTITY.md":
+                # IDENTITY surfaces only via the identity section.
                 continue
-        candidates.append((ts or "0000", path))
+            try:
+                entry = load_entry(path)
+            except Exception:
+                continue
+            if not entry.entities:
+                continue
+            ts = entry.valid_from.isoformat() if entry.valid_from else ""
+            if ts and any(ref in cursors for ref in entry.entities):
+                if all(
+                    _is_at_or_before(ts, cursors.get(ref))
+                    for ref in entry.entities
+                    if ref in cursors
+                ):
+                    # Every relevant cursor already covers this entry —
+                    # canonical already absorbed it, skip.
+                    continue
+            try:
+                rel = path.relative_to(workspace).as_posix()
+            except ValueError:
+                rel = path.name
+            candidates.append((ts or "0000", rel, path))
 
     candidates.sort(key=lambda t: t[0], reverse=True)
     blocks: list[str] = []
     total_chars = 0
-    for _, path in candidates[:_MAX_FRAGMENTS]:
+    for _, rel_path, path in candidates[:_MAX_FRAGMENTS]:
         try:
             entry = load_entry(path)
         except Exception:
             continue
-        block = _render_fragment_block(entry, path)
+        block = _render_fragment_block(entry, rel_path)
         if total_chars + len(block) > _FRAGMENTS_BUDGET_CHARS:
             break
         blocks.append(block)
@@ -237,12 +437,13 @@ def _read_fragment_blocks(
     return blocks
 
 
-def _render_fragment_block(entry: Any, path: Path) -> str:
-    ref_hint = ", ".join(entry.entities) if entry.entities else path.stem
+def _render_fragment_block(entry: Any, rel_path: str) -> str:
+    """``=== FRAGMENT: <path> (ts <ts>) ===`` per doc 06 §8.3."""
     ts = entry.valid_from.isoformat() if entry.valid_from else "unknown"
-    header = f"=== FRAGMENT: {ref_hint} (ts: {ts}) ==="
-    body = (entry.body or entry.summary or entry.headline or "").strip()[:400]
-    return "\n".join([header, body, f"=== END FRAGMENT ==="])
+    header = f"=== FRAGMENT: {rel_path} (ts {ts}) ==="
+    body = (entry.body or entry.summary or entry.headline or "").strip()
+    body = body[:_FRAGMENT_BODY_PER_PAGE]
+    return "\n".join([header, body, "=== END FRAGMENT ==="])
 
 
 def _is_at_or_before(entry_ts: str, cursor: Any) -> bool:

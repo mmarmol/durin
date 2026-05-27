@@ -661,6 +661,28 @@ class MemoryStoreBlockedNearDuplicateEvent(TypedDict):
     session_key: NotRequired[str | None]
 
 
+class MemoryHotLayerFailureEvent(TypedDict):
+    """Hot-layer assembly failed for one component (per doc 06 §8.7).
+
+    The hot layer renders five sections (identity / canonical / fragments /
+    headlines / entities). If any section's disk read or parse raises,
+    the renderer logs this event and degrades that section to empty so
+    the agent prompt still builds. The whole layer never fails hard.
+
+    ``component`` identifies which section degraded. For per-page parse
+    failures (one malformed entity page in an otherwise-healthy walk),
+    the value includes the filename suffix (e.g.
+    ``"canonical_blocks:broken.md"``) so dashboards can tell systemic
+    failures apart from one-off bad files.
+    """
+
+    component: str  # "canonical_blocks" | "fragment_blocks" | "identity" |
+                    # "headlines" | "entities" | "canonical_blocks:<file>"
+    error: str
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
 # ===========================================================================
 # Catalog — single source of truth
 # ===========================================================================
@@ -727,6 +749,7 @@ EVENTS: dict[str, type] = {
     "memory.absorb.auto_merged": MemoryAbsorbAutoMergedEvent,
     "memory.absorb.skipped": MemoryAbsorbSkippedEvent,
     "memory.absorb.reverted": MemoryAbsorbRevertedEvent,
+    "memory.hot_layer.failure": MemoryHotLayerFailureEvent,
 }
 
 
@@ -782,4 +805,5 @@ __all__ = [
     "MemoryEmbeddingLoadEvent",
     "MemoryEmbeddingEmbedEvent",
     "MemoryRecallVectorEvent",
+    "MemoryHotLayerFailureEvent",
 ]

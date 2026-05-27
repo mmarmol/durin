@@ -8,10 +8,11 @@ contract on both delivery paths (lazy `memory_search` + eager
 `hot_layer`) so future changes don't silently regress it.
 
 Marker convention follows the compaction precedent
-(``=== ARCHIVED SUMMARY ===`` per bitácora 2026-05-19):
+(``=== ARCHIVED SUMMARY ===`` per bitácora 2026-05-19) and was
+formalised in ``docs/memory/06_prompts_and_instructions.md`` §8.3 to:
 
-- ``=== CANONICAL: <ref> (canonical entity page) === ... === END CANONICAL ===``
-- ``=== FRAGMENT: <ref?>, ts=<valid_from> === ... === END FRAGMENT ===``
+- ``=== CANONICAL: <ref> (consolidated <ts>) === ... === END CANONICAL ===``
+- ``=== FRAGMENT: <path> (ts <ts>) === ... === END FRAGMENT ===``
 """
 
 from __future__ import annotations
@@ -285,7 +286,10 @@ class TestHotLayerFragmentsSection:
 
         rendered = read_hot_layer(tmp_path).render()
         assert "## Memory: Recent fragments (post-cursor)" in rendered
-        assert "=== FRAGMENT: person:marcelo" in rendered
+        # Marker format (doc 06 §8.3): `=== FRAGMENT: <path> (ts <ts>) ===`
+        # — path is workspace-relative, not the entity ref.
+        assert "=== FRAGMENT: memory/episodic/" in rendered
+        assert "(ts 2026-05-22" in rendered
         assert "post-cursor obs" in rendered
 
     def test_pre_cursor_fragment_filtered_out(self, tmp_path: Path) -> None:
