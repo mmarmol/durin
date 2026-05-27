@@ -148,12 +148,28 @@ def walk_class(
         )
     class_dir = workspace / "memory" / class_name
     if not class_dir.is_dir():
-        return
-    if class_name in ("entities", "archive"):
-        yield from sorted(class_dir.rglob("*.md"))
+        emitted: set[Path] = set()
+    elif class_name == "archive":
+        emitted = set(sorted(class_dir.rglob("*.md")))
+    elif class_name == "entities":
+        # Recurse but skip any path with an `archive/` component — the
+        # legacy nested archive layout (`<slug>/archive/<absorbed>.md`)
+        # must not surface (spec moves archive to top-level).
+        emitted = {
+            p for p in class_dir.rglob("*.md")
+            if "archive" not in p.relative_to(class_dir).parts
+        }
     else:
-        yield from sorted(class_dir.glob("*.md"))
+        emitted = set(class_dir.glob("*.md"))
+    for path in sorted(emitted):
+        yield path
     if include_archive and class_name != "archive":
         nested = workspace / "memory" / "archive" / class_name
         if nested.is_dir():
-            yield from sorted(nested.rglob("*.md") if class_name == "entities" else nested.glob("*.md"))
+            extra = (
+                sorted(nested.rglob("*.md"))
+                if class_name == "entities"
+                else sorted(nested.glob("*.md"))
+            )
+            for path in extra:
+                yield path

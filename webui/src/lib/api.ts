@@ -386,9 +386,9 @@ export interface MemoryEntityDetail {
     slug: string;
     path: string;
     name: string;
-    absorbed_at: string | null;
-    absorbed_reason: string | null;
-    absorbed_into: string | null;
+    archived_at: string | null;
+    archived_reason: string | null;
+    archived_into: string | null;
   }>;
   entries: Array<{
     id: string;

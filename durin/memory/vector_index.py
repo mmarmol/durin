@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from durin.memory.embedding import EmbeddingProvider
-from durin.memory.paths import MEMORY_CLASSES
+from durin.memory.paths import MEMORY_CLASSES, walk_class
 from durin.memory.schema import MemoryEntry
 from durin.memory.storage import load_entry
 
@@ -282,10 +282,7 @@ class VectorIndex:
         if not memory_root.is_dir():
             return 0
         for class_name in MEMORY_CLASSES:
-            class_dir = memory_root / class_name
-            if not class_dir.is_dir():
-                continue
-            for path in sorted(class_dir.glob("*.md")):
+            for path in walk_class(self._workspace, class_name):
                 try:
                     entry = load_entry(path)
                 except Exception:  # noqa: BLE001

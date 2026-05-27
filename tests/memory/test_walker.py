@@ -135,6 +135,26 @@ def test_walk_class_entities_recurses_into_types(tmp_path: Path) -> None:
     ]
 
 
+def test_walk_class_entities_skips_nested_archive(tmp_path: Path) -> None:
+    """Legacy `entities/<type>/<canonical>/archive/<absorbed>.md` is never yielded.
+
+    Spec (doc memory §3.2) places archived content at top-level
+    `memory/archive/`; the nested layout shouldn't exist after Phase 0,
+    but if it lingers in an older workspace we must NOT surface it.
+    """
+    _touch(tmp_path / "memory" / "entities" / "person" / "marcelo.md")
+    _touch(
+        tmp_path / "memory" / "entities" / "person" / "marcelo"
+        / "archive" / "marcelo_old.md"
+    )
+
+    paths = sorted(walk_class(tmp_path, "entities"))
+
+    assert paths == [
+        tmp_path / "memory" / "entities" / "person" / "marcelo.md",
+    ]
+
+
 def test_walk_class_archive_excluded_by_default(tmp_path: Path) -> None:
     """walk_class('episodic') does NOT cross into archive/episodic/ by default."""
     _touch(tmp_path / "memory" / "episodic" / "live.md")

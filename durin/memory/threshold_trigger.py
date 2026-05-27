@@ -84,22 +84,21 @@ def count_pending_for_trigger(
     # 2) Corpus entries tagged with the entity. Cursor doesn't apply
     # to corpus (no consolidation pass over it). Best-effort walk; a
     # malformed file is skipped, not propagated.
-    corpus_dir = workspace / "memory" / "corpus"
-    if corpus_dir.is_dir():
-        try:
-            from durin.memory.storage import load_entry
+    try:
+        from durin.memory.paths import walk_class
+        from durin.memory.storage import load_entry
 
-            for path in corpus_dir.glob("*.md"):
-                try:
-                    entry = load_entry(path)
-                except Exception:
+        for path in walk_class(workspace, "corpus"):
+            try:
+                entry = load_entry(path)
+            except Exception:
+                continue
+            for ref in entry.entities or ():
+                if entity_filter is not None and ref != entity_filter:
                     continue
-                for ref in entry.entities or ():
-                    if entity_filter is not None and ref != entity_filter:
-                        continue
-                    counts[ref] = counts.get(ref, 0) + 1
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("threshold trigger: walk corpus failed: %s", exc)
+                counts[ref] = counts.get(ref, 0) + 1
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("threshold trigger: walk corpus failed: %s", exc)
 
     return counts
 

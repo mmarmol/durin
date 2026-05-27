@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from durin.memory.entity_page import EntityPage
+from durin.memory.paths import walk_class
 from durin.memory.search import search_memory
 from durin.memory.storage import load_entry
 
@@ -75,8 +76,9 @@ def get_entity_detail(
                 ...
             ],
             "archive": [
-                {"slug": "marcelo-m", "path": "entities/person/marcelo/archive/marcelo-m.md",
-                 "absorbed_at": "...", "absorbed_reason": "auto"},
+                {"slug": "marcelo-m",
+                 "path": "memory/archive/entities/person/marcelo-m.md",
+                 "archived_at": "...", "archived_reason": "auto"},
                 ...
             ],
             "entries": [  # post-cursor episodic entries that reference this ref
@@ -166,14 +168,22 @@ def _load_history(
 def _load_archive(
     memory_root: Path, type_: str, slug: str,
 ) -> list[dict[str, Any]]:
-    """Absorbed pages parked under ``entities/<type>/<slug>/archive/``.
+    """Archived absorbed pages for *canonical* ``<type>:<slug>``.
 
-    Each entry returns the absorbed slug + workspace-relative path +
-    metadata stamped at absorb-time (`absorbed_at`, `absorbed_reason`).
+    Spec layout (doc memory §3.2): archives live at
+    ``memory/archive/entities/<type>/<absorbed_slug>.md``. Each absorbed
+    page's frontmatter carries ``archived_into`` pointing back at its
+    canonical (``<type>:<canonical_slug>``); this function filters to
+    the pages whose ``archived_into`` matches ``type_:slug``.
+
+    Returns ``archived_at`` / ``archived_reason`` / ``archived_into``
+    (new field names per spec). Legacy ``absorbed_*`` keys are also
+    recognised so older archive files keep rendering until migration.
     """
-    archive_dir = memory_root / "entities" / type_ / slug / "archive"
+    archive_dir = memory_root / "archive" / "entities" / type_
     if not archive_dir.is_dir():
         return []
+    canonical_ref = f"{type_}:{slug}"
     out: list[dict[str, Any]] = []
     for path in sorted(archive_dir.glob("*.md")):
         try:
@@ -181,15 +191,19 @@ def _load_archive(
         except Exception:  # noqa: BLE001
             page = None
         extra = dict(page.extra) if page and page.extra else {}
+        archived_into = extra.get("archived_into") or extra.get("absorbed_into")
+        if archived_into != canonical_ref:
+            continue
         out.append({
             "slug": path.stem,
             "path": str(path.relative_to(memory_root.parent))
                 if memory_root.parent in path.parents
                 else str(path),
             "name": (page.name if page else path.stem),
-            "absorbed_at": extra.get("absorbed_at"),
-            "absorbed_reason": extra.get("absorbed_reason"),
-            "absorbed_into": extra.get("absorbed_into"),
+            "archived_at": extra.get("archived_at") or extra.get("absorbed_at"),
+            "archived_reason": extra.get("archived_reason")
+                or extra.get("absorbed_reason"),
+            "archived_into": archived_into,
         })
     return out
 
@@ -206,12 +220,9 @@ def _load_post_cursor_entries(
     into the page body. Showing them in the side panel surfaces the
     raw evidence backing the consolidated content.
     """
-    episodic = memory_root / "episodic"
-    if not episodic.is_dir():
-        return []
     cursor_dt = _parse_cursor(cursor)
     rows: list[tuple[str, dict[str, Any]]] = []
-    for path in episodic.glob("*.md"):
+    for path in walk_class(memory_root.parent, "episodic"):
         try:
             entry = load_entry(path)
         except Exception:  # noqa: BLE001
@@ -363,9 +374,7 @@ def get_session_detail(
 
     # Entries authored from this session (source_refs link back)
     entries_linked = _entries_linked_to_session(
-        workspace / "memory" / "episodic",
-        session_stem,
-        limit=entries_limit,
+        workspace, session_stem, limit=entries_limit,
     )
     entries_from_refs = sorted(
         {ent for e in entries_linked for ent in (e.get("entities") or [])}
@@ -503,16 +512,14 @@ def _truncate(value: Any, n: int) -> str:
 
 
 def _entries_linked_to_session(
-    episodic_dir: Path, session_stem: str, *, limit: int,
+    workspace: Path, session_stem: str, *, limit: int,
 ) -> list[dict[str, Any]]:
     """Entries whose source_refs include ``sessions/<session_stem>.md``."""
-    if not episodic_dir.is_dir():
-        return []
     import re
 
     pat = re.compile(rf"sessions/{re.escape(session_stem)}\.md(?:#turn-\d+)?")
     rows: list[tuple[str, dict[str, Any]]] = []
-    for path in episodic_dir.glob("*.md"):
+    for path in walk_class(workspace, "episodic"):
         try:
             entry = load_entry(path)
         except Exception:  # noqa: BLE001
@@ -545,12 +552,8 @@ def get_edge_detail(
     Useful when the user wants to know "what binds Marcelo to durin"
     instead of just "they're connected".
     """
-    memory_root = Path(workspace) / "memory"
-    episodic = memory_root / "episodic"
-    if not episodic.is_dir():
-        return {"source": ref_a, "target": ref_b, "entries": []}
     rows: list[tuple[str, dict[str, Any]]] = []
-    for path in episodic.glob("*.md"):
+    for path in walk_class(Path(workspace), "episodic"):
         try:
             entry = load_entry(path)
         except Exception:  # noqa: BLE001
