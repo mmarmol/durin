@@ -301,11 +301,11 @@ def _coerce_dt(value: Any) -> datetime | None:
     return None
 
 
-_SLUG_CHARS = re.compile(r"[^a-z0-9]+")
-
-
 def _slugify(name: str) -> str:
-    """Conservative slug: lowercase, non-alnum → underscore, trim."""
-    lowered = name.lower()
-    slug = _SLUG_CHARS.sub("_", lowered).strip("_")
-    return slug or "unnamed"
+    """Canonical slug derivation — delegates to :func:`entities.slugify_name`
+    which implements the full pipeline from doc memory §4.5
+    (NFC + transliterate + lowercase + punct→_ + trim + truncate 64).
+    """
+    from durin.memory.entities import slugify_name
+
+    return slugify_name(name)

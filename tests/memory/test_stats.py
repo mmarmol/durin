@@ -41,15 +41,14 @@ def _write_entity_page(workspace: Path, type_: str, slug: str,
                        archived: bool = False) -> Path:
     """Build a minimal entity page on disk."""
     if archived:
-        # archive lives at memory/entities/<type>/<canonical>/archive/<slug>.md
-        # for the test we just need ONE pre-existing canonical to host it.
-        base = workspace / "memory" / "entities" / type_ / "canonical" / "archive"
-        base.mkdir(parents=True, exist_ok=True)
-        path = base / f"{slug}.md"
+        # Spec layout (doc memory §3.2): archived entities live at
+        # memory/archive/entities/<type>/<slug>.md, NOT under the
+        # canonical's subtree.
+        base = workspace / "memory" / "archive" / "entities" / type_
     else:
         base = workspace / "memory" / "entities" / type_
-        base.mkdir(parents=True, exist_ok=True)
-        path = base / f"{slug}.md"
+    base.mkdir(parents=True, exist_ok=True)
+    path = base / f"{slug}.md"
     path.write_text(
         f"---\ntype: {type_}\nname: {slug}\n---\n\n# {slug}\n",
         encoding="utf-8",

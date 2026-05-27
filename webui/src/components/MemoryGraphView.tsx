@@ -1198,14 +1198,14 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                             <div className="font-mono text-[10.5px] text-muted-foreground">
                               {a.slug}
                             </div>
-                            {a.absorbed_at ? (
+                            {a.archived_at ? (
                               <div className="mt-0.5 text-[10.5px] text-muted-foreground">
-                                Absorbed: {a.absorbed_at.slice(0, 19)}
+                                Archived: {a.archived_at.slice(0, 19)}
                               </div>
                             ) : null}
-                            {a.absorbed_reason ? (
+                            {a.archived_reason ? (
                               <div className="text-[10.5px] text-muted-foreground">
-                                Reason: {a.absorbed_reason}
+                                Reason: {a.archived_reason}
                               </div>
                             ) : null}
                           </li>

@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Literal
 
-from durin.memory.paths import MEMORY_CLASSES
+from durin.memory.paths import MEMORY_CLASSES, walk_class
 from durin.memory.schema import MemoryEntry
 from durin.memory.storage import FrontmatterError, load_entry
 
@@ -195,10 +195,7 @@ def search_dreamed(
     if not memory_root.is_dir():
         return results
     for class_name in MEMORY_CLASSES:
-        class_dir = memory_root / class_name
-        if not class_dir.is_dir():
-            continue
-        for path in sorted(class_dir.glob("*.md")):
+        for path in walk_class(workspace, class_name):
             try:
                 entry = load_entry(path)
             except (FrontmatterError, Exception):
@@ -245,48 +242,42 @@ def _search_entity_pages(
     """
     from durin.memory.entity_page import EntityPage
 
-    entities_root = memory_root / "entities"
-    if not entities_root.is_dir():
-        return []
-
+    workspace = memory_root.parent
     out: list[Result] = []
-    for type_dir in sorted(entities_root.iterdir()):
-        if not type_dir.is_dir():
+    for page_path in walk_class(workspace, "entities"):
+        page = EntityPage.from_file(page_path)
+        if page is None:
             continue
-        for page_path in sorted(type_dir.glob("*.md")):
-            page = EntityPage.from_file(page_path)
-            if page is None:
-                continue
-            haystack_parts = [
-                page.name,
-                " ".join(page.aliases or []),
-                page.body or "",
-            ]
-            haystack = " ".join(haystack_parts).lower()
-            if needle_low not in haystack:
-                continue
-            slug = page_path.stem
-            ref = f"{page.type}:{slug}"
-            summary = (
-                f"{page.name}"
-                + (f" — aliases: {', '.join(page.aliases)}" if page.aliases else "")
+        haystack_parts = [
+            page.name,
+            " ".join(page.aliases or []),
+            page.body or "",
+        ]
+        haystack = " ".join(haystack_parts).lower()
+        if needle_low not in haystack:
+            continue
+        slug = page_path.stem
+        ref = f"{page.type}:{slug}"
+        summary = (
+            f"{page.name}"
+            + (f" — aliases: {', '.join(page.aliases)}" if page.aliases else "")
+        )
+        out.append(
+            Result(
+                source="memory",
+                uri=f"memory/entity_page/{ref}",
+                headline=page.name,
+                snippet=summary[:160],
+                summary=summary if level == "warm" else "",
+                body=page.body if level == "cold" else "",
+                class_name="entity_page",
+                # Entity pages don't carry a single valid_from; the
+                # body uses prose ("since 2026-03-15...") for
+                # temporal claims, per doc 18 §6 protocol α.
+                valid_from="",
+                entities=(ref,),
             )
-            out.append(
-                Result(
-                    source="memory",
-                    uri=f"memory/entity_page/{ref}",
-                    headline=page.name,
-                    snippet=summary[:160],
-                    summary=summary if level == "warm" else "",
-                    body=page.body if level == "cold" else "",
-                    class_name="entity_page",
-                    # Entity pages don't carry a single valid_from; the
-                    # body uses prose ("since 2026-03-15...") for
-                    # temporal claims, per doc 18 §6 protocol α.
-                    valid_from="",
-                    entities=(ref,),
-                )
-            )
+        )
     return out
 
 

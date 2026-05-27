@@ -81,10 +81,19 @@ class AliasIndex:
         aliases are append-only and only add the bare slug.
         """
         self._map.clear()
+        # Walk memory_root/entities/ directly. We skip any path that
+        # contains an `archive/` component anywhere in its parts — that
+        # covers both the spec's top-level `memory/archive/entities/...`
+        # (which only matters if memory_root happens to point at the
+        # workspace root) and the legacy nested `<slug>/archive/...`
+        # layout that may still exist in older workspaces.
+        from durin.memory.paths import MEMORY_CLASSES
+
         entities_root = self.memory_root / "entities"
-        if entities_root.exists():
-            for md_file in entities_root.rglob("*.md"):
-                if _ARCHIVE_MARKER in str(md_file):
+        if entities_root.is_dir():
+            for md_file in sorted(entities_root.rglob("*.md")):
+                rel = md_file.relative_to(entities_root)
+                if "archive" in rel.parts:
                     continue
                 try:
                     page = EntityPage.from_file(md_file)
@@ -106,14 +115,18 @@ class AliasIndex:
         # an anti-pattern that pollutes search with noisy partial
         # matches. The full slug suffices as a discovery hook; richer
         # aliases come from entity_pages once Dream populates them.
-        from durin.memory.paths import MEMORY_CLASSES
         from durin.memory.storage import load_entry
 
+        # Iterate every entry class (including pending — original
+        # behavior preserved; walk_class only excludes pending when
+        # called as `walk_memory` general scan).
         for class_name in MEMORY_CLASSES:
             class_dir = self.memory_root / class_name
             if not class_dir.is_dir():
                 continue
-            for md_file in class_dir.glob("*.md"):
+            # Direct glob OK here: per-class entry dirs have only
+            # top-level .md files (no nested archive in entry classes).
+            for md_file in sorted(class_dir.glob("*.md")):
                 try:
                     entry = load_entry(md_file)
                 except Exception:  # noqa: BLE001

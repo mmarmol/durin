@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from durin.memory.entity_page import EntityPage
-from durin.memory.paths import MEMORY_CLASSES
+from durin.memory.paths import MEMORY_CLASSES, walk_class
 from durin.memory.storage import load_entry
 
 __all__ = ["HotLayer", "read_hot_layer"]
@@ -118,35 +118,27 @@ def _read_canonical_blocks(
     Pages under ``archive/`` are skipped (absorbed records, surfaced
     only via ``durin memory expand``).
     """
-    entities_root = workspace / "memory" / "entities"
-    if not entities_root.is_dir():
-        return [], {}
-
     pages: list[tuple[str, str, EntityPage]] = []  # (sort_key, ref, page)
     cursors: dict[str, Any] = {}
-    for type_dir in sorted(entities_root.iterdir()):
-        if not type_dir.is_dir():
+    for page_path in walk_class(workspace, "entities"):
+        page = EntityPage.from_file(page_path)
+        if page is None:
             continue
-        for page_path in sorted(type_dir.glob("*.md")):
-            page = EntityPage.from_file(page_path)
-            if page is None:
-                continue
-            slug = page_path.stem
-            ref = f"{page.type}:{slug}"
-            # Sort key: prefer updated_at, fall back to mtime so
-            # freshly written pages always surface even pre-frontmatter
-            # updated_at adoption.
-            updated = page.extra.get("updated_at", "") if page.extra else ""
-            if not isinstance(updated, str) or not updated:
-                try:
-                    updated = datetime.fromtimestamp(
-                        page_path.stat().st_mtime
-                    ).isoformat()
-                except OSError:
-                    updated = "0000-00-00"
-            pages.append((updated, ref, page))
-            if page.dream_processed_through is not None:
-                cursors[ref] = page.dream_processed_through
+        slug = page_path.stem
+        ref = f"{page.type}:{slug}"
+        # Sort key: prefer updated_at, fall back to mtime so freshly
+        # written pages surface even pre-frontmatter updated_at adoption.
+        updated = page.extra.get("updated_at", "") if page.extra else ""
+        if not isinstance(updated, str) or not updated:
+            try:
+                updated = datetime.fromtimestamp(
+                    page_path.stat().st_mtime
+                ).isoformat()
+            except OSError:
+                updated = "0000-00-00"
+        pages.append((updated, ref, page))
+        if page.dream_processed_through is not None:
+            cursors[ref] = page.dream_processed_through
 
     pages.sort(key=lambda t: t[0], reverse=True)
     blocks: list[str] = []
@@ -206,12 +198,8 @@ def _read_fragment_blocks(
     and skipped — surfacing them again would defeat the point of the
     canonical page.
     """
-    episodic_dir = workspace / "memory" / "episodic"
-    if not episodic_dir.is_dir():
-        return []
-
     candidates: list[tuple[str, Path]] = []  # (sort_key desc, path)
-    for path in episodic_dir.glob("*.md"):
+    for path in walk_class(workspace, "episodic"):
         try:
             entry = load_entry(path)
         except Exception:
@@ -290,16 +278,9 @@ def _read_identity(workspace: Path) -> str:
 
 def _read_top_headlines(workspace: Path) -> list[str]:
     """Glob memory/<class>/*.md, sort by valid_from desc, trim to budget."""
-    memory_root = workspace / "memory"
-    if not memory_root.is_dir():
-        return []
-
     candidates: list[tuple[str, str]] = []  # (sort_key, headline)
     for class_name in MEMORY_CLASSES:
-        class_dir = memory_root / class_name
-        if not class_dir.is_dir():
-            continue
-        for path in class_dir.glob("*.md"):
+        for path in walk_class(workspace, class_name):
             if path.name == "IDENTITY.md":
                 # Surfaced in the identity section already.
                 continue
@@ -319,16 +300,9 @@ def _read_top_headlines(workspace: Path) -> list[str]:
 
 def _read_entity_list(workspace: Path) -> list[str]:
     """Aggregate entities across all memory entries; dedup + alphabetise."""
-    memory_root = workspace / "memory"
-    if not memory_root.is_dir():
-        return []
-
     entities: set[str] = set()
     for class_name in MEMORY_CLASSES:
-        class_dir = memory_root / class_name
-        if not class_dir.is_dir():
-            continue
-        for path in class_dir.glob("*.md"):
+        for path in walk_class(workspace, class_name):
             try:
                 entry = load_entry(path)
             except Exception:

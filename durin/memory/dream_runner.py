@@ -614,13 +614,11 @@ class DreamRunner:
         this only fires when we're already about to commit a merge
         (rare, plus the dream pass just walked these entries anyway).
         """
-        episodic_dir = self.memory_root / "episodic"
-        if not episodic_dir.is_dir():
-            return 0
+        from durin.memory.paths import walk_class
         from durin.memory.storage import load_entry
 
         count = 0
-        for path in episodic_dir.glob("*.md"):
+        for path in walk_class(self.workspace, "episodic"):
             try:
                 entry = load_entry(path)
             except Exception:  # noqa: BLE001

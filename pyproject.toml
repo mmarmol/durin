@@ -41,6 +41,10 @@ dependencies = [
     # it explicit guarantees the wizard always works after a fresh
     # install instead of failing with "needs the 'questionary' package".
     "questionary>=2.0.0,<3.0.0",
+    # Used by `entities.slugify_name` for transliterating non-Latin
+    # scripts (CJK, Cyrillic, Arabic, etc.) into ASCII slugs per
+    # doc memory §4.5. Pure Python, no native deps.
+    "unidecode>=1.4,<2.0",
 ]
 
 [project.optional-dependencies]

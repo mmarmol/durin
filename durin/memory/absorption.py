@@ -5,9 +5,9 @@ detects that two pages refer to the same identity (aliases overlap,
 identifier overlap, or LLM judgment), one is absorbed into the other:
 
 - Canonical: receives merged aliases + identifiers + body section.
-- Absorbed: moved to ``<canonical_slug>/archive/<absorbed_slug>.md``
-  with frontmatter ``absorbed_into: ../../<canonical_slug>.md`` for
-  traceability.
+- Absorbed: moved to ``memory/archive/entities/<type>/<absorbed_slug>.md``
+  with frontmatter ``archived_into: <type>:<canonical_slug>`` for
+  traceability (doc memory §3.2 — archive is top-level, not nested).
 - Alias index drops the absorbed entity_ref (and any aliases unique
   to it become aliases of the canonical via the merged frontmatter).
 - Vector index drops the absorbed entity row.
@@ -124,9 +124,9 @@ class EntityAbsorption:
         1. Load both pages from disk.
         2. Merge aliases + identifiers + body into canonical.
         3. Write updated canonical.
-        4. Move absorbed file to ``<canonical_slug>/archive/<absorbed_slug>.md``.
-        5. Stamp absorbed file's frontmatter with ``absorbed_into`` /
-           ``absorbed_at`` / ``absorbed_reason``.
+        4. Move absorbed file to ``memory/archive/entities/<type>/<absorbed_slug>.md``.
+        5. Stamp absorbed file's frontmatter with ``archived_into`` /
+           ``archived_at`` / ``archived_reason``.
         6. Commit both changes in one git operation.
         7. Refresh alias_index (canonical) and remove absorbed entity_ref.
         8. Remove absorbed from vector_index (if provided).
@@ -321,9 +321,15 @@ def _merge_pages(
 
     # Identifiers and other emergent fields: union when possible.
     merged_extra: dict = dict(canonical.extra)
+    _archive_markers = {
+        "archived_into", "archived_at", "archived_reason",
+        # Legacy names — still skipped on merge for back-compat with
+        # archives written before the field rename.
+        "absorbed_into", "absorbed_at", "absorbed_reason",
+    }
     for key, value in absorbed.extra.items():
-        if key in {"absorbed_into", "absorbed_at", "absorbed_reason"}:
-            # Don't propagate absorption markers from a previously-absorbed
+        if key in _archive_markers:
+            # Don't propagate archive markers from a previously-absorbed
             # ancestor into the canonical (would confuse the trail).
             continue
         existing = merged_extra.get(key)

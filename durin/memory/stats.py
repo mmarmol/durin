@@ -192,27 +192,28 @@ def _scan_filesystem(workspace: Path, stats: MemoryStats) -> None:
     """Ground-truth counts from disk. Events can be lost / cleared;
     files are authoritative.
     """
+    from durin.memory.paths import walk_class
+
     memory_root = workspace / "memory"
     if not memory_root.exists():
         return
 
-    episodic = memory_root / "episodic"
-    if episodic.exists():
-        for md in episodic.rglob("*.md"):
-            stats.episodic_entries_on_disk += 1
-            if _entry_has_entities(md):
-                stats.episodic_entries_tagged += 1
+    for md in walk_class(workspace, "episodic"):
+        stats.episodic_entries_on_disk += 1
+        if _entry_has_entities(md):
+            stats.episodic_entries_tagged += 1
 
-    entities = memory_root / "entities"
-    if entities.exists():
-        for md in entities.rglob("*.md"):
-            # Pages under <slug>/archive/ are absorbed; track separately
-            # so the gate metric for §2.D ("duplicates absorbed") is
-            # observable from disk too, not only from telemetry.
-            if "/archive/" in str(md):
-                stats.entity_pages_archived += 1
-            else:
-                stats.entity_pages_on_disk += 1
+    # Live entity pages.
+    for md in walk_class(workspace, "entities"):
+        stats.entity_pages_on_disk += 1
+
+    # Archived entity pages live top-level at memory/archive/entities/
+    # (Phase 0 deliverable 5). Tracked separately so the §2.D gate
+    # metric ("duplicates absorbed") is observable from disk too.
+    archive_entities_root = memory_root / "archive" / "entities"
+    if archive_entities_root.is_dir():
+        for md in archive_entities_root.rglob("*.md"):
+            stats.entity_pages_archived += 1
 
 
 def _entry_has_entities(md_path: Path) -> bool:
