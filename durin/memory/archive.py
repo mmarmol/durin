@@ -36,9 +36,10 @@ def _annotate_frontmatter(
     *,
     archived_at: str,
     archived_into: str,
+    reason: str | None = None,
 ) -> str:
-    """Inject `archived_at` and `archived_into` into a markdown file's
-    YAML frontmatter. Returns the modified text.
+    """Inject `archived_at`, `archived_into`, and optional `archived_reason`
+    into a markdown file's YAML frontmatter. Returns the modified text.
 
     Preserves existing frontmatter fields. If the file has no frontmatter,
     a new one is added.
@@ -53,6 +54,8 @@ def _annotate_frontmatter(
 
     front_data["archived_at"] = archived_at
     front_data["archived_into"] = archived_into
+    if reason is not None:
+        front_data["archived_reason"] = reason
 
     new_front = yaml.safe_dump(
         front_data,
@@ -68,11 +71,13 @@ def archive_episodic(
     episodic_path: Path,
     *,
     into_uri: str,
+    reason: str | None = None,
 ) -> Path:
     """Move an episodic entry to `memory/archive/episodic/<id>.md`.
 
     Annotates the archived file's frontmatter with `archived_at` (now,
-    UTC ISO 8601) and `archived_into` (the URI it was consolidated into).
+    UTC ISO 8601), `archived_into` (the URI it was consolidated into),
+    and `archived_reason` if provided.
 
     Returns the new path. Raises `FileNotFoundError` if the source does
     not exist; raises `ValueError` if the source is not under
@@ -91,7 +96,10 @@ def archive_episodic(
     archived_at = datetime.now(timezone.utc).isoformat()
     content = episodic_path.read_text(encoding="utf-8")
     annotated = _annotate_frontmatter(
-        content, archived_at=archived_at, archived_into=into_uri,
+        content,
+        archived_at=archived_at,
+        archived_into=into_uri,
+        reason=reason,
     )
 
     dest_dir = workspace / "memory" / "archive" / "episodic"
@@ -107,12 +115,14 @@ def archive_entity(
     entity_path: Path,
     *,
     into_uri: str,
+    reason: str | None = None,
 ) -> Path:
     """Move an entity page to `memory/archive/entities/<type>/<slug>.md`.
 
     Annotates the archived file's frontmatter with `archived_at` (now,
-    UTC ISO 8601) and `archived_into` (the URI of the canonical entity
-    it was absorbed into).
+    UTC ISO 8601), `archived_into` (the URI of the canonical entity it
+    was absorbed into), and `archived_reason` if provided (judge
+    reasoning, manual operator note, etc.).
 
     The `<type>` segment is preserved from the source path. Returns the
     new path. Raises `FileNotFoundError` if the source does not exist;
@@ -135,7 +145,10 @@ def archive_entity(
     archived_at = datetime.now(timezone.utc).isoformat()
     content = entity_path.read_text(encoding="utf-8")
     annotated = _annotate_frontmatter(
-        content, archived_at=archived_at, archived_into=into_uri,
+        content,
+        archived_at=archived_at,
+        archived_into=into_uri,
+        reason=reason,
     )
 
     dest_dir = workspace / "memory" / "archive" / "entities" / rel.parts[0]

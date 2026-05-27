@@ -437,9 +437,12 @@ def test_absorb_merges_pages_and_archives(tmp_path: Path) -> None:
     # Absorbed moved to archive.
     absorbed_orig = tmp_path / "memory" / "entities" / "person" / "marcelo_m.md"
     assert not absorbed_orig.exists()
+    # Phase 0 deliverable 5: archive lives top-level at
+    # memory/archive/entities/<type>/<slug>.md (no longer nested under
+    # the canonical's slug folder).
     archived = (
-        tmp_path / "memory" / "entities" / "person" / "marcelo"
-        / "archive" / "marcelo_m.md"
+        tmp_path / "memory" / "archive" / "entities" / "person"
+        / "marcelo_m.md"
     )
     assert archived.exists()
 

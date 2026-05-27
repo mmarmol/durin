@@ -179,3 +179,48 @@ def test_archive_episodic_preserves_body(tmp_path: Path) -> None:
 
     content = dest.read_text(encoding="utf-8")
     assert "Marcelo dijo X el lunes." in content
+
+
+def test_archive_entity_with_reason(tmp_path: Path) -> None:
+    """Optional `reason` is recorded as `archived_reason` in frontmatter
+    so auditors can see why a merge happened (judge reasoning, manual
+    operator note, etc.)."""
+    from durin.memory.archive import archive_entity
+
+    src = _entity(tmp_path, "person", "marcelo-m")
+    dest = archive_entity(
+        tmp_path,
+        src,
+        into_uri="person:marcelo",
+        reason="alias overlap confirmed",
+    )
+
+    content = dest.read_text(encoding="utf-8")
+    assert "archived_reason: alias overlap confirmed" in content
+
+
+def test_archive_entity_no_reason_omits_field(tmp_path: Path) -> None:
+    """Without `reason`, no `archived_reason` field appears."""
+    from durin.memory.archive import archive_entity
+
+    src = _entity(tmp_path, "person", "alice")
+    dest = archive_entity(tmp_path, src, into_uri="person:bob")
+
+    content = dest.read_text(encoding="utf-8")
+    assert "archived_reason" not in content
+
+
+def test_archive_episodic_with_reason(tmp_path: Path) -> None:
+    """Episodic archive also supports `reason`."""
+    from durin.memory.archive import archive_episodic
+
+    src = _episodic(tmp_path, "obs-1")
+    dest = archive_episodic(
+        tmp_path,
+        src,
+        into_uri="person:marcelo",
+        reason="consolidated into entity page",
+    )
+
+    content = dest.read_text(encoding="utf-8")
+    assert "archived_reason: consolidated into entity page" in content

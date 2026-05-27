@@ -398,14 +398,14 @@ def test_e2e5_absorb_full_pipeline(tmp_path: Path) -> None:
         assert merged is not None
         assert any(a.lower() == "marcelo m" for a in merged.aliases)
 
-        # Absorbed archived.
+        # Absorbed archived. Phase 0 deliverable 5: top-level archive.
         absorbed_orig = (
             tmp_path / "memory" / "entities" / "person" / "marcelo_m.md"
         )
         assert not absorbed_orig.exists()
         archived = (
-            tmp_path / "memory" / "entities" / "person" / "marcelo"
-            / "archive" / "marcelo_m.md"
+            tmp_path / "memory" / "archive" / "entities" / "person"
+            / "marcelo_m.md"
         )
         assert archived.exists()
 
