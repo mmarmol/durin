@@ -270,9 +270,14 @@ def test_session_to_entity_edge_from_meta_tags(tmp_path: Path) -> None:
 
 
 def test_session_friendly_label_uuid(tmp_path: Path) -> None:
-    """UUID-shaped stems get the channel abbrev + 8-char prefix."""
+    """UUID-shaped stems get the channel abbrev + 8-char prefix.
+
+    `messages=0` ensures the first-user-preview fallback (added later)
+    does not kick in — this test isolates the stem-derived friendly
+    label transformation.
+    """
     _write_session(tmp_path, "websocket_12c54195-1548-4d76-925f-dc772b023f40",
-                    messages=1)
+                    messages=0)
     g = build_memory_graph(tmp_path)
     sess = next(n for n in g["nodes"] if n["type"] == "session")
     assert sess["name"] == "ws · 12c54195"
@@ -280,7 +285,7 @@ def test_session_friendly_label_uuid(tmp_path: Path) -> None:
 
 def test_session_friendly_label_short_suffix(tmp_path: Path) -> None:
     """Non-UUID short suffix is kept whole (cli_direct → cli · direct)."""
-    _write_session(tmp_path, "cli_direct", messages=1)
+    _write_session(tmp_path, "cli_direct", messages=0)
     g = build_memory_graph(tmp_path)
     sess = next(n for n in g["nodes"] if n["type"] == "session")
     assert sess["name"] == "cli · direct"
@@ -288,10 +293,25 @@ def test_session_friendly_label_short_suffix(tmp_path: Path) -> None:
 
 def test_session_friendly_label_unknown_channel(tmp_path: Path) -> None:
     """Unknown channel prefix returns the stem unchanged (no surprise rename)."""
-    _write_session(tmp_path, "weirdchannel_abc-def", messages=1)
+    _write_session(tmp_path, "weirdchannel_abc-def", messages=0)
     g = build_memory_graph(tmp_path)
     sess = next(n for n in g["nodes"] if n["type"] == "session")
     assert sess["name"] == "weirdchannel_abc-def"
+
+
+def test_session_first_user_preview_beats_friendly_label(tmp_path: Path) -> None:
+    """When the session has user messages but no explicit title, the
+    first user message excerpt is used as the node label — beating the
+    stem-derived friendly label. Mirrors the preview shown in the
+    sidebar chat list (consistency between webui surfaces).
+    """
+    _write_session(tmp_path, "websocket_abc12345-def0-1234-5678-90abcdef1234",
+                    messages=2)
+    g = build_memory_graph(tmp_path)
+    sess = next(n for n in g["nodes"] if n["type"] == "session")
+    # _write_session emits content "msg 0" for the first user message.
+    # That is the preview the graph node now carries (not "ws · abc12345").
+    assert sess["name"] == "msg 0"
 
 
 def test_session_friendly_label_explicit_title_wins(tmp_path: Path) -> None:
