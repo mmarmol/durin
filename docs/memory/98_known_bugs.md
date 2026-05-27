@@ -35,7 +35,11 @@ Add new entries as discovered. Remove or mark resolved with commit SHA when fixe
 
 The fix is naturally grouped with the Phase 0 archive refactor — the consumer of `archive_entity()` will be `absorption.py`, and while we're touching it, we close this bug.
 
-**Status:** Pending. Fix scheduled in Phase 0 absorption refactor commit.
+**Status:** Resolved — already fixed in earlier commit (before this bug tracker existed). Verified on 2026-05-27 by reading `absorption.py::absorb()` lines 247-273: the code calls `_vector_index.delete_by_id(absorbed)` followed by `_vector_index.upsert_entity_page(...)` with merged content. The observation #898 captured the bug at the moment it was diagnosed, but the fix shipped in a subsequent commit that the observation doesn't reference. Re-flagging this as a lesson:
+
+> Before opening a bug from a memory observation, READ the current code — observations are point-in-time and may have been resolved without being re-noted.
+
+No further work required. Entry kept here for historical traceability and as the lesson above.
 
 ---
 

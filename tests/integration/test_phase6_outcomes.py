@@ -314,15 +314,17 @@ def test_o5_drill_down_expand(tmp_path: Path) -> None:
     absorber.absorb("person:marcelo", "person:marcelo_m",
                     reason="duplicate identity confirmed")
 
+    # Phase 0 deliverable 5: archive is top-level under memory/archive/.
     archive_path = (
-        tmp_path / "memory" / "entities" / "person" / "marcelo" / "archive"
+        tmp_path / "memory" / "archive" / "entities" / "person"
         / "marcelo_m.md"
     )
-    assert archive_path.exists(), "absorbed page must be in archive subfolder"
+    assert archive_path.exists(), "absorbed page must be in top-level archive"
     archived = EntityPage.from_file(archive_path)
     assert archived is not None
-    # Drill-down via the absorbed_into pointer works:
-    assert archived.extra["absorbed_into"] == "../../marcelo.md"
+    # Drill-down via the canonical URI works (spec uses `archived_into`
+    # carrying the URI, not a relative filesystem link).
+    assert archived.extra["archived_into"] == "person:marcelo"
 
     # The canonical's body now references the absorbed entity:
     canonical = EntityPage.from_file(

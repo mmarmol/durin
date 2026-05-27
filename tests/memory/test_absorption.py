@@ -143,18 +143,23 @@ class TestAbsorb:
         assert "mmarmol@mxhero.com" in identifiers
         assert "UM7TCSZRN" in identifiers
 
-        # Absorbed file: gone from original location, present in archive
+        # Absorbed file: gone from original location, present in top-level
+        # archive (Phase 0 deliverable 5 — `memory/archive/entities/<type>/<slug>.md`).
         assert not absorbed_path.exists()
         archived = (
-            tmp_path / "memory" / "entities" / "person" / "marcelo" / "archive"
+            tmp_path / "memory" / "archive" / "entities" / "person"
             / "marcelo_m.md"
         )
         assert archived.exists()
-        # Absorbed page carries traceability frontmatter
+        # Absorbed page carries traceability frontmatter under the spec
+        # field names: `archived_into` (the canonical URI it merged into),
+        # `archived_at` (UTC ISO timestamp), `archived_reason` (caller's
+        # justification, when supplied).
         archived_page = EntityPage.from_file(archived)
         assert archived_page is not None
-        assert archived_page.extra.get("absorbed_into") == "../../marcelo.md"
-        assert archived_page.extra.get("absorbed_reason") == "alias overlap confirmed"
+        assert archived_page.extra.get("archived_into") == "person:marcelo"
+        assert archived_page.extra.get("archived_reason") == "alias overlap confirmed"
+        assert "archived_at" in archived_page.extra
 
     def test_alias_index_drops_absorbed_ref(self, tmp_path: Path) -> None:
         _write_page(
