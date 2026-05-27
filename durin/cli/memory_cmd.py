@@ -144,6 +144,11 @@ def _discover_pending_consolidations(
             entry = load_entry(entry_path)
         except Exception:  # noqa: BLE001
             continue
+        # Doc memory §4.6.1: user-authored entries are protected from
+        # Dream consumption — they carry deliberate human choice and
+        # must not get folded into a Dream-managed canonical page.
+        if entry.author == "user_authored":
+            continue
         ts = entry.valid_from.isoformat() if entry.valid_from else ""
         for ent_ref in entry.entities:
             if entity_filter and ent_ref != entity_filter:

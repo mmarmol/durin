@@ -15,11 +15,21 @@ from typing import Any
 
 import pytest
 
+from durin.memory.provenance import author_scope
 from durin.memory.store import store_memory
 from durin.memory.threshold_trigger import (
     count_pending_for_trigger,
     maybe_dispatch_threshold_dream,
 )
+
+
+@pytest.fixture(autouse=True)
+def _agent_created_scope():
+    """Doc memory §4.6.1: user-authored entries are protected from
+    Dream — the discover walk skips them. These tests model agent
+    observations, so wrap them in ``agent_created`` scope."""
+    with author_scope("agent_created"):
+        yield
 
 
 def _make_dream_config(threshold: int = 3) -> Any:
