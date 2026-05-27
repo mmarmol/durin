@@ -97,6 +97,12 @@ class Conversation:
     speaker_a: str
     speaker_b: str
     sessions: list[Session]
+    # Sample-level fields from the LoCoMo JSON that sit OUTSIDE the
+    # ``conversation`` block but carry answer-relevant info for some QAs
+    # (verified in doc 28 §4.5). Empty dict / list when absent.
+    event_summary: dict[str, Any] = field(default_factory=dict)
+    observation: dict[str, Any] = field(default_factory=dict)
+    session_summary: dict[str, Any] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -138,7 +144,13 @@ def load_dataset(path: str | Path) -> list[QA]:
     skipped = 0
     for conv_idx, sample in enumerate(raw):
         try:
-            conv = _parse_conversation(conv_idx, sample.get("conversation") or {})
+            conv = _parse_conversation(
+                conv_idx,
+                sample.get("conversation") or {},
+                event_summary=sample.get("event_summary") or {},
+                observation=sample.get("observation") or {},
+                session_summary=sample.get("session_summary") or {},
+            )
         except Exception as exc:  # noqa: BLE001
             logger.warning("skipping malformed conversation %s: %s", conv_idx, exc)
             continue
@@ -177,7 +189,14 @@ def load_dataset(path: str | Path) -> list[QA]:
     return qas
 
 
-def _parse_conversation(idx: int, raw: dict[str, Any]) -> Conversation:
+def _parse_conversation(
+    idx: int,
+    raw: dict[str, Any],
+    *,
+    event_summary: dict[str, Any] | None = None,
+    observation: dict[str, Any] | None = None,
+    session_summary: dict[str, Any] | None = None,
+) -> Conversation:
     """Normalise the per-sample ``conversation`` block.
 
     Session keys in the on-disk JSON are ``session_1``, ``session_2``,
@@ -209,6 +228,9 @@ def _parse_conversation(idx: int, raw: dict[str, Any]) -> Conversation:
         speaker_a=str(speaker_a),
         speaker_b=str(speaker_b),
         sessions=sessions,
+        event_summary=event_summary or {},
+        observation=observation or {},
+        session_summary=session_summary or {},
     )
 
 
@@ -223,6 +245,7 @@ def stratified_subset(
     *,
     seed: int = 42,
     categories: Iterable[str] = CATEGORIES,
+    allow_undersupplied: bool = False,
 ) -> list[QA]:
     """Pick ``per_category`` QAs from each category, deterministically.
 
@@ -230,9 +253,15 @@ def stratified_subset(
     re-run with the same seed produces the same subset (essential for
     reproducible comparisons across commits).
 
-    Raises :class:`LoCoMoDatasetError` if any category has fewer than
-    ``per_category`` samples — we'd rather fail loudly than silently
-    skew the report toward over-represented categories.
+    When ``allow_undersupplied=False`` (default), raises
+    :class:`LoCoMoDatasetError` if any category has fewer than
+    ``per_category`` samples — fail loudly so reports aren't silently
+    skewed toward over-represented categories.
+
+    When ``allow_undersupplied=True``, takes ``min(per_category, len)``
+    from each category and logs which ones were short. Useful for
+    larger samples where ``adversarial`` (only 2 QAs in locomo10) would
+    otherwise cap the whole run at 2/category.
     """
     rng = random.Random(seed)
     by_cat: dict[str, list[QA]] = {c: [] for c in categories}
@@ -244,14 +273,20 @@ def stratified_subset(
     short: list[str] = []
     for cat in categories:
         bucket = by_cat[cat]
+        take = min(per_category, len(bucket))
         if len(bucket) < per_category:
             short.append(f"{cat} has only {len(bucket)} (asked {per_category})")
+            if not allow_undersupplied:
+                continue
+        if take == 0:
             continue
-        sampled = sorted(rng.sample(bucket, per_category), key=lambda q: q.qa_id)
+        sampled = sorted(rng.sample(bucket, take), key=lambda q: q.qa_id)
         out.extend(sampled)
-    if short:
+    if short and not allow_undersupplied:
         raise LoCoMoDatasetError(
             "stratified_subset: under-supplied categories — "
             + "; ".join(short)
+            + ". Use allow_undersupplied=True (CLI: --allow-undersupplied) "
+              "to take min(per_category, available) instead."
         )
     return out

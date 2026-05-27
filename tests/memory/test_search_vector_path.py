@@ -216,10 +216,13 @@ async def test_search_scope_all_combines_vector_and_grep(
 
 
 @pytest.mark.asyncio
-async def test_search_cold_level_uses_grep_only(
+async def test_search_cold_level_uses_vector_with_body_enrichment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """level=cold needs full bodies → grep handles it, vector skipped."""
+    """level=cold goes through vector and enriches each hit with the
+    body from disk. Earlier versions short-circuited cold to literal
+    substring grep, which failed for any natural-language query that
+    didn't appear verbatim in the entry."""
     from durin.agent.tools.memory_search import MemorySearchTool
     from durin.agent.tools.memory_store import MemoryStoreTool
 
@@ -235,7 +238,7 @@ async def test_search_cold_level_uses_grep_only(
         )
         out = await search.execute(query="alpha", scope="dreamed", level="cold")
 
-    assert out["strategy"] == "grep"
+    assert out["strategy"] == "vector"
     assert out["total"] >= 1
-    # Cold tier returns bodies
+    # Cold tier returns bodies — populated from disk after vector hit.
     assert any(r.get("body") for r in out["results"])

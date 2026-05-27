@@ -116,6 +116,24 @@ export async function deleteSession(
   return body.deleted;
 }
 
+/** P2 (doc 20): persist a user-edited title for a webui session.
+ *  Backend sets ``title_user_edited`` so the LLM auto-title generator
+ *  won't overwrite it on later turns. */
+export async function renameSession(
+  token: string,
+  key: string,
+  title: string,
+  base: string = "",
+): Promise<string> {
+  const trimmed = title.trim();
+  if (!trimmed) throw new ApiError(400, "title is required");
+  const url =
+    `${base}/api/sessions/${encodeURIComponent(key)}/rename` +
+    `?title=${encodeURIComponent(trimmed)}`;
+  const body = await request<{ title: string }>(url, token);
+  return body.title;
+}
+
 export async function fetchSettings(
   token: string,
   base: string = "",

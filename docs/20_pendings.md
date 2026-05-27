@@ -172,6 +172,127 @@ state + history + sources).
 **Estado**: pendiente, post-Phase 5 (cuando la pipeline entity-centric
 esté implementada).
 
+### P6 — Índice keyword escalable como fallback de `memory_search` (FTS5 / inverted index)
+
+**Contexto**: el path de grep en `durin/memory/search.py` (`search_dreamed`,
+`search_undreamed`) hace walk + `load_entry` parse YAML por cada archivo
+en `memory/<class>/*.md` por cada query. Para N pequeño (bench LoCoMo,
+sesiones cortas) es instantáneo. A escala de daily use con miles de
+entradas episódicas / sesiones, O(N) walk + parse por query se vuelve
+caro.
+
+Hoy ya tenemos dos protecciones contra el escalado:
+- **Vector index** (`durin/memory/vector_index.py`) — O(log N) via
+  LanceDB. Es el path principal cuando `memory.enabled=True`.
+- **Dream consolidation** — fusiona episódicos en entity_pages
+  canónicos, reduciendo el N que llega al grep.
+
+**Problema**: si vector está apagado, falla, o no encuentra (queries
+naturales tipo "Calvin Japan stay" matcheando contra substring literal
+del query completo → 0 results), `memory_search` cae a grep, que no
+escala. El fallback no es robusto a largo plazo.
+
+**Trade-off explorado (24 May 2026)**: vimos tres patrones en sistemas
+de referencia:
+- **Hermes** → SQLite FTS5 + BM25 con tokenización AND por default + doc
+  explícita al LLM ("multi-word=AND, OR para broader, quoted para exact,
+  prefix*"). Es la opción más madura para keyword search escalable.
+- **Pi** → no tiene memoria long-term; delega a `grep` del filesystem.
+- **OpenClaude** → LLM-as-judge pre-inyecta memorias por turn; no usa
+  tool de search.
+
+**Propuesta tentativa**:
+
+- Agregar índice FTS5 (SQLite) sobre `memory/<class>/*.md` que se
+  actualiza al `store_memory` y al dream consolidation.
+- Schema mínimo: `(entry_id, class_name, headline, summary, body,
+  entities_concat, valid_from)` con FTS5 sobre `headline + summary +
+  body + entities_concat`.
+- Reemplazar el path grep actual en `search_dreamed` por query FTS5
+  cuando el índice existe (fallback al walk actual si está roto o
+  vacío).
+- Actualizar `memory_search` tool description para enseñar la sintaxis
+  Hermes-style cuando el path activo sea FTS5.
+
+**Cuándo elegir esta opción**: cuando veamos en producción que vector
+deja huecos sistemáticos (queries que el LLM hace y vector no responde
+bien) Y el N de archivos es grande. Hasta entonces, el path vector +
+fallback substring actual es suficiente — esta es una optimización de
+escala, no un fix funcional.
+
+**Riesgo de hacerlo antes de tiempo**: dos índices que mantener
+(LanceDB + SQLite FTS5) con su propia lógica de sincronización, race
+conditions en concurrent writes, dependencia adicional (SQLite es
+stdlib pero los wrappers de FTS5 requieren cuidado en triggers).
+
+**Estado**: backlog, no priorizado. Activar cuando: (a) el bench muestre
+queries reales donde vector falla sistemáticamente, o (b) reportes de
+slowdown en `memory_search` con workspaces grandes.
+
+### P7 — Threshold trigger para `memory_ingest` (simetría con `memory_store`)
+
+**Contexto**: `memory_store` (durin/agent/tools/memory_store.py:282-363) ya
+dispara `DreamRunner` en daemon thread cuando una entity acumula
+≥ `threshold_entries` post-cursor entries — patrón shipped 2026-05-24
+(§2.A.1 β.2). `memory_ingest` **no** tiene el equivalente: un usuario que
+sube docs no dispara consolidación intermedia, solo el cron diario o un
+post-compaction/session-close hook eventual.
+
+**Lo que cierra**: el "gap del ingest". Si el usuario carga 5 docs sobre
+Caroline y Caroline ya tenía 8 episodic + 4 corpus pendientes, ese es el
+momento natural de consolidar. Hoy se espera al cron diario o a que un
+`memory_store` posterior cruce el threshold por su cuenta.
+
+**SOTA reference (verificado 2026-05-25)**: ni hermes ni openclaw hacen
+esto — ambos son "dumb pipes" para writes (hermes mirror a SQLite
+fact-store sin merge, openclaw search-then-decide pre-write pero nada
+post-write). Durin ya está por delante en este eje (3 de 4 trigger
+points wireados); esto completa el 4to.
+
+**Diseño** (post-crítica glm-5.1 2026-05-25):
+
+- Nuevo módulo `durin/memory/threshold_trigger.py` con helper compartido
+  `maybe_dispatch_threshold_dream(workspace, entities, dream_config,
+  vector_index, source_trigger)`.
+- Refactor de `memory_store::_maybe_dispatch_threshold_dream` para
+  llamar al helper (preserva telemetry `trigger="threshold"` para
+  retrocompat).
+- `memory_ingest` acepta `dream_config` en constructor +
+  `create(ctx)`; llama al helper con `source_trigger="post_ingest_threshold"`
+  después de crear el corpus entry.
+- **El conteo del threshold cuenta episodic + corpus** (no solo
+  episodic). Razón: el ingest crea entries en `memory/corpus/`, y como
+  SEÑAL de "user activo sobre esta entity" el corpus debe contar
+  aunque Dream solo consolide episodic. Helper `_count_pending_for_trigger`
+  walkea ambos directorios.
+- **Sin dedup window global** (era over-engineering con race condition
+  y memory leak detectados por glm). Burst protection 100% delegada a
+  `DreamRunner` (lock + `min_seconds_between_runs=300s` + stale-lock
+  recovery). 20 threads spawnados que ven lock y mueren rápido es
+  cheap.
+- Tests: unitarios del helper + test de contención `test_concurrent_dispatches_serialize_via_lock`
+  (5 threads simultáneos → ≤1 Dream pass ejecutado).
+
+**Costo**: ~215 LOC (75 código + 130 tests + 10 docs). ~3-4h dev.
+Riesgo: bajo (patrón ya validado en `memory_store`).
+
+**Beneficio**:
+- Daily-driver: respuestas mejores post-ingest (canonical en vez de
+  fragments raw)
+- Cierra gap arquitectónico real
+- Activar `threshold_entries > 0` en bench LoCoMo podría sumar
+  +3-8pp en single_hop (especulativo, requiere medir)
+
+**Cuándo elegir**: post-bench v3. Priorizar si v3 no muestra mejora
+grande por otro lado (top_k=20 + rank visible). Si v3 sube >+2pp,
+Step 2 doc 28 (source-priority weighting en vector index) es mejor
+ROI para single_hop.
+
+**Plan completo**: ver `/tmp/plan_ingest_threshold.md` (notas de
+sesión 2026-05-25) — debe migrarse a `docs/arch/` si se aprueba.
+
+**Estado**: planeado, no priorizado. Esperando resultado bench v3.
+
 ---
 
 ## §3 — Resueltos
@@ -180,4 +301,4 @@ esté implementada).
 
 ---
 
-## Last updated: 2026-05-23 (creado durante Phase 0 de implementación entity-centric)
+## Last updated: 2026-05-25 (P7 added — ingest threshold trigger, pending bench v3 result)

@@ -3,9 +3,35 @@
 
 ## Workspace
 Your workspace is at: {{ workspace_path }}
-- Long-term memory: {{ workspace_path }}/memory/MEMORY.md (automatically managed by Dream — do not edit directly)
-- History log: {{ workspace_path }}/memory/history.jsonl (append-only JSONL; prefer built-in `grep` for search).
+- Memory store: {{ workspace_path }}/memory/ (managed by Dream — do not edit directly)
+- History log: {{ workspace_path }}/memory/history.jsonl (append-only JSONL)
 - Custom skills: {{ workspace_path }}/skills/{% raw %}{skill-name}{% endraw %}/SKILL.md
+
+## Memory
+
+A snapshot of stable identity, canonical entity pages, and recent
+episodic fragments is already in this prompt above. For anything the
+user asks about prior conversations, decisions, dates, people, or
+ingested documents that isn't in that snapshot, call `memory_search` —
+don't answer from cold recall.
+
+When you answer using memory content, state the fact and then name
+its source in parentheses (e.g. "Caroline lives in Stockholm
+(entity:caroline)" or "...as discussed on 2024-03-08 (turn ref)"). If
+you have no source for a claim, omit the claim rather than guess.
+
+## Memory writing
+
+When the user asks you to store or ingest substantial content (a
+document, a fact about a person, a decision):
+
+1. Call `memory_search` first with the topic to see what you already
+   know.
+2. Use that context to choose: store the new content noting how it
+   complements existing notes; skip if redundant; or surface the
+   overlap to the user before storing.
+
+This avoids duplicates and keeps the memory store coherent.
 
 {{ platform_policy }}
 {% if channel == 'telegram' or channel == 'qq' or channel == 'discord' %}

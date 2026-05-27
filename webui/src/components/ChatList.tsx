@@ -1,4 +1,5 @@
-import { MoreHorizontal, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -15,6 +16,10 @@ interface ChatListProps {
   activeKey: string | null;
   onSelect: (key: string) => void;
   onRequestDelete: (key: string, label: string) => void;
+  /** P2: persist a user-edited title for a session. Returns when the
+   *  server has acknowledged so the caller can revert the optimistic
+   *  update on failure. */
+  onRequestRename: (key: string, title: string) => Promise<void>;
   loading?: boolean;
   emptyLabel?: string;
 }
@@ -24,10 +29,51 @@ export function ChatList({
   activeKey,
   onSelect,
   onRequestDelete,
+  onRequestRename,
   loading,
   emptyLabel,
 }: ChatListProps) {
   const { t } = useTranslation();
+  // Which session row is currently being inline-renamed (only one at a
+  // time — mirrors the OS file-manager rename UX).
+  const [editingKey, setEditingKey] = useState<string | null>(null);
+  const [draftTitle, setDraftTitle] = useState("");
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  // Auto-focus + select when entering rename mode so the user can
+  // type-to-replace or arrow-edit immediately.
+  useEffect(() => {
+    if (editingKey && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [editingKey]);
+
+  const beginEdit = (key: string, current: string) => {
+    setEditingKey(key);
+    setDraftTitle(current);
+  };
+  const cancelEdit = () => {
+    setEditingKey(null);
+    setDraftTitle("");
+  };
+  const commitEdit = async (key: string) => {
+    const trimmed = draftTitle.trim();
+    // Empty or unchanged: silently cancel — don't punish the user.
+    if (!trimmed) {
+      cancelEdit();
+      return;
+    }
+    try {
+      await onRequestRename(key, trimmed);
+    } catch {
+      // Best-effort: leave the row visible with its previous label;
+      // a hard error here is uncommon enough that surfacing a banner
+      // would be overkill. The server is authoritative either way.
+    } finally {
+      cancelEdit();
+    }
+  };
   if (loading && sessions.length === 0) {
     return (
       <div className="px-3 py-6 text-[12px] text-muted-foreground">
@@ -66,6 +112,7 @@ export function ChatList({
                 });
                 const rawLabel = (s.title || s.preview)?.trim();
                 const title = rawLabel || fallbackTitle;
+                const isEditing = editingKey === s.key;
                 return (
                   <li key={s.key} className="min-w-0">
                     <div
@@ -76,41 +123,81 @@ export function ChatList({
                           : "text-sidebar-foreground/82 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground",
                       )}
                     >
-                      <button
-                        type="button"
-                        onClick={() => onSelect(s.key)}
-                        title={rawLabel || fallbackTitle}
-                        className="min-w-0 flex-1 overflow-hidden py-1.5 text-left"
-                      >
-                        <span className="block w-full truncate font-medium leading-5">{title}</span>
-                      </button>
-                      <DropdownMenu modal={false}>
-                        <DropdownMenuTrigger
+                      {isEditing ? (
+                        <input
+                          ref={inputRef}
+                          value={draftTitle}
+                          onChange={(e) => setDraftTitle(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              void commitEdit(s.key);
+                            } else if (e.key === "Escape") {
+                              e.preventDefault();
+                              cancelEdit();
+                            }
+                          }}
+                          onBlur={() => void commitEdit(s.key)}
+                          maxLength={60}
+                          aria-label={t("chat.renameAria", { defaultValue: "Rename chat" })}
                           className={cn(
-                            "inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground/75 opacity-40 transition-opacity",
-                            "hover:bg-sidebar-accent hover:text-sidebar-foreground group-hover:opacity-100",
-                            "focus-visible:opacity-100",
-                            active && "opacity-100",
+                            "min-w-0 flex-1 rounded-md border border-sidebar-border/50",
+                            "bg-background/80 px-2 py-1 text-[13px] font-medium",
+                            "text-sidebar-foreground outline-none",
+                            "focus:border-sidebar-border focus:ring-1 focus:ring-sidebar-border/70",
                           )}
-                          aria-label={t("chat.actions", { title })}
+                        />
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => onSelect(s.key)}
+                          onDoubleClick={() => beginEdit(s.key, rawLabel || "")}
+                          title={rawLabel || fallbackTitle}
+                          className="min-w-0 flex-1 overflow-hidden py-1.5 text-left"
                         >
-                          <MoreHorizontal className="h-3.5 w-3.5" />
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent
-                          align="end"
-                          onCloseAutoFocus={(event) => event.preventDefault()}
-                        >
-                          <DropdownMenuItem
-                            onSelect={() => {
-                              window.setTimeout(() => onRequestDelete(s.key, title), 0);
-                            }}
-                            className="text-destructive focus:text-destructive"
+                          <span className="block w-full truncate font-medium leading-5">{title}</span>
+                        </button>
+                      )}
+                      {isEditing ? null : (
+                        <DropdownMenu modal={false}>
+                          <DropdownMenuTrigger
+                            className={cn(
+                              "inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground/75 opacity-40 transition-opacity",
+                              "hover:bg-sidebar-accent hover:text-sidebar-foreground group-hover:opacity-100",
+                              "focus-visible:opacity-100",
+                              active && "opacity-100",
+                            )}
+                            aria-label={t("chat.actions", { title })}
                           >
-                            <Trash2 className="mr-2 h-4 w-4" />
-                            {t("chat.delete")}
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
+                            <MoreHorizontal className="h-3.5 w-3.5" />
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent
+                            align="end"
+                            onCloseAutoFocus={(event) => event.preventDefault()}
+                          >
+                            <DropdownMenuItem
+                              onSelect={() => {
+                                window.setTimeout(
+                                  () => beginEdit(s.key, rawLabel || ""),
+                                  0,
+                                );
+                              }}
+                            >
+                              <Pencil className="mr-2 h-4 w-4" />
+                              {t("chat.rename", { defaultValue: "Rename" })}
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onSelect={() => {
+                                window.setTimeout(() => onRequestDelete(s.key, title), 0);
+                              }}
+                              className="text-destructive focus:text-destructive"
+                            >
+                              <Trash2 className="mr-2 h-4 w-4" />
+                              {t("chat.delete")}
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      )}
                     </div>
                   </li>
                 );

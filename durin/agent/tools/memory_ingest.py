@@ -47,7 +47,7 @@ _PARAMETERS = tool_parameters_schema(
     required=["path"],
     description=(
         "Persist a user-supplied document into the agent's memory store. "
-        "V1: markdown and plain-text only — binaries are rejected."
+        "Markdown and plain-text only."
     ),
 )
 
@@ -62,11 +62,16 @@ class MemoryIngestTool(Tool):
         self,
         workspace: str | Path,
         embedding_model: str | None = None,
+        dream_config: Any | None = None,
     ) -> None:
         self._workspace = Path(workspace).expanduser()
         self._embedding_model = embedding_model
         self._vector_index: Optional[VectorIndex] = None
         self._vector_index_attempted = False
+        # Doc 25 §2.A.1 β.2 + P7 (doc 20): per-entity threshold trigger
+        # config for post-ingest dream dispatch. None disables. See
+        # ``durin.memory.threshold_trigger``.
+        self._dream_config = dream_config
 
     @property
     def name(self) -> str:
@@ -86,13 +91,26 @@ class MemoryIngestTool(Tool):
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
+        # Read memory.* from the full DurinConfig on ctx.app_config —
+        # ctx.config (= cfg.tools) does not carry a memory section.
         model = None
-        try:
-            if ctx.config.memory.enabled:
-                model = ctx.config.memory.embedding.model
-        except (AttributeError, TypeError):
-            model = None
-        return cls(workspace=ctx.workspace, embedding_model=model)
+        dream_cfg = None
+        app = getattr(ctx, "app_config", None)
+        if app is not None:
+            try:
+                if app.memory.enabled:
+                    model = app.memory.embedding.model
+            except (AttributeError, TypeError):
+                model = None
+            try:
+                dream_cfg = app.memory.dream
+            except (AttributeError, TypeError):
+                dream_cfg = None
+        return cls(
+            workspace=ctx.workspace,
+            embedding_model=model,
+            dream_config=dream_cfg,
+        )
 
     def _get_vector_index(self) -> Optional[VectorIndex]:
         if self._vector_index_attempted:
@@ -218,4 +236,34 @@ class MemoryIngestTool(Tool):
                 "headline": stored["headline"],
             },
         )
+
+        # P7 (doc 20): post-ingest threshold trigger. Reuses the same
+        # shared helper as memory_store. The corpus entry itself has
+        # no entity tags today (memory_ingest doesn't extract entities
+        # — that's G1 territory). The trigger only fires if a future
+        # change tags the corpus entry; in the meantime this is a
+        # no-op call that keeps the wiring in place and symmetrical
+        # with memory_store.
+        try:
+            from durin.memory.storage import load_entry as _load_entry
+            from durin.memory.threshold_trigger import (
+                maybe_dispatch_threshold_dream,
+            )
+
+            entry = _load_entry(Path(stored["path"]))
+            entities = list(entry.entities or ())
+            if entities:
+                maybe_dispatch_threshold_dream(
+                    workspace=self._workspace,
+                    entities=entities,
+                    dream_config=self._dream_config,
+                    vector_index=vi,
+                    source_trigger="post_ingest_threshold",
+                )
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "post_ingest_threshold dispatch failed for %s",
+                stored.get("id"),
+            )
+
         return stored["id"]
