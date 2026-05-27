@@ -629,4 +629,97 @@ These came out of running the 102-QA pass:
 
 ---
 
-## Last updated: 2026-05-25 (v3 run: B1+B2 shipped → 60.8%, +3pp over baseline; D1+D3 text-in-description hacks attempted then reverted after empirical -20pp regression; §7 reordered with §2.F as next concrete move)
+---
+
+## §9 — Post-v2 deep-dive (2026-05-25)
+
+After the v2 score (64.7%, +3.9pp from prompts), three experiments were run
+that did NOT make it to commit but produced load-bearing learnings:
+
+### §9.1 — v3 (top_k=20 + #N/K rank visible) — FAILED
+
+Hypothesis: more recall + transparent ranking helps.
+Result: -4.9pp net. **multi_hop -16pp**, open_domain -4pp. synthesis_error
++6 cases. Reverted.
+
+Lesson: more results = more context noise. The agent gets confused, not
+helped. v2 multi-query (3 reformulations × 10) already produces 30 unique
+candidates per turn implicitly — adding 10 more from top_k=20 pushed
+synthesis past a useful threshold.
+
+### §9.2 — Source-priority weighting — REFUTED BY DATA
+
+Hypothesis: turn_quotes hold the literal answer, curator-summaries
+outrank them, boosting turn_quotes via distance multiplier closes
+single_hop fails.
+
+Test: built `scripts/benchmark/recall_at_k.py` to measure, for each v2
+fail, the position of expected substring in `vi.search(top_k=100)`.
+
+Bug found: initial script searched only `headline+summary` (warm-tier).
+Bodies are where literal answers live. After fix (loading body from disk
+for substring match):
+
+| Bucket | Initial (warm-only) | Corrected (body-aware) |
+|---|---|---|
+| top_1 | 2 | 4 |
+| top_2-5 | 1 | 5 |
+| top_6-10 | 3 | 3 |
+| top_11-30 | 4 | 4 |
+| top_31-100 | 2 | 1 |
+| **not_found** | **24** | **19** |
+
+Source_type of matching row: turn_quote=9, observation=5, event_summary=3
+— **boosting turn_quote would hurt 9 of 17 found cases** because that's
+where the answer actually was. Plan dropped.
+
+### §9.3 — Code-level architectural diff vs mem0 (91.6% LoCoMo)
+
+Critical context: mem0 uses **gpt-4o-mini** (same tier as glm-5.1), yet
+hits 91.6% (verified `mem0/README.md:49`). The 27pp gap is NOT base
+model — it's architectural, and the components are modular.
+
+Concrete gaps identified (code-verified):
+
+| Gap | durin actual | mem0 (file:line) | Est. closure |
+|---|---|---|---|
+| **G1 Write-time LLM extraction** | NO (raw content stored as-is) | `ADDITIVE_EXTRACTION_PROMPT` + `llm.generate_response()` in add() path (`memory/main.py:725`) — turns raw turns into atomic facts | 5-8pp |
+| **G2 BM25 hybrid (read)** | NO | Multi-signal: semantic + BM25 + entity_boost with adaptive sigmoid (`memory/main.py:1361-1374`) | 8-12pp |
+| **G3 Query preprocessing** | NO (query → embedding direct) | Lemmatize + entity extract per query (`memory/main.py:1348-1350`) | 4-6pp |
+| **G4 LLM entity linking** | AliasIndex regex lookup | LLM extracts entities at add-time, stored in entity store, searched at retrieval | 3-5pp |
+
+Total estimated closure 20-31pp. Matches observed gap (~27pp).
+
+False alarm: sub-agent reported "absorbed canonical never re-embedded"
+as a durin bug. Verified at `durin/memory/absorption.py:248-258` — **the
+re-upsert IS implemented** (`vector_index.upsert_entity_page(...)` after
+the absorbed delete). No fix needed.
+
+### §9.4 — Cross-encoder reranker — NOT DOING NOW
+
+glm-5.1 (4-round discussion) suggested cross-encoder as the strongest
+missing lever. Verified: fastembed in our env does NOT ship `TextCrossEncoder`.
+Adding `sentence-transformers` + bge-reranker-v2-m3 adds ~1.1GB to deploy.
+Decision: offline experiment first (run reranker on the 17 found-in-top-100
+cases via a notebook script, see how many move to top-3). Wire only if
+ROI proven AND latency budget < 2s end-to-end search+rerank.
+
+### §9.5 — Revised priority order (consensus with glm-5.1)
+
+1. **P7 (Ingest Threshold Trigger)** — architectural safeguard; without
+   it, any G1 implementation burns LLM tokens on noise turns. See
+   `docs/20_pendings.md` §P7 for the design.
+2. **G3 Query Preprocessing** — read-only middleware, ~50 LOC, lowest
+   risk, decent lift. Glm calls it "máximo lift por línea de código".
+   Glm-5.1 (local) extracts keywords + intent from query, feeds into
+   existing RRF or concatenates to embedding text.
+3. **G1 Write-time LLM extraction** — intrusive (write-path), requires
+   P7 to be effective. ADDITIVE_EXTRACTION_PROMPT replicated in
+   `memory_store` (and optionally `memory_ingest` for ingested docs).
+
+Backlog (each measured against v2 baseline 64.7% in bench post-impl):
+- G2 BM25 hybrid (P6) — defer
+- G4 LLM entity linking — depends on G1 structure
+- Cross-encoder rerank — offline test first
+
+## Last updated: 2026-05-25 (post-v3 deep-dive: §9 added with recall@k findings, source-priority refutation, mem0 code-level diff identifying 4 modular gaps, revised priority order P7 → G3 → G1)

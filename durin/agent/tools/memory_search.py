@@ -90,11 +90,24 @@ class MemorySearchTool(Tool):
         self,
         workspace: str | Path,
         embedding_model: str | None = None,
+        *,
+        app_config: Any | None = None,
+        aux_provider_handle: Any | None = None,
     ) -> None:
         self._workspace = Path(workspace).expanduser()
         self._embedding_model = embedding_model
         self._vector_index: Optional[VectorIndex] = None
         self._vector_index_attempted = False
+        # G3.b: stash refs needed to resolve the memory LLM model at
+        # rewrite time. ``app_config`` carries the full DurinConfig so
+        # we can pick aux_models.memory or fall back to the agent
+        # preset. ``aux_provider_handle`` is the pre-built handle from
+        # AgentLoop._build_aux_providers (avoids rebuilding the
+        # provider per search call). Both default to None so test
+        # paths that construct the tool directly keep working with
+        # the legacy default_llm_invoke fallback.
+        self._app_config = app_config
+        self._aux_provider_handle = aux_provider_handle
         # Per doc 25 §2.C: alias index is shared process-wide via
         # durin.memory.aliases_cache, so DreamConsolidator and
         # EntityAbsorption see updates as soon as we (or they) call
@@ -109,12 +122,15 @@ class MemorySearchTool(Tool):
         return (
             "Search the agent's memory. Pass a short topical phrase (2-6 "
             "words) or an exact identifier — semantic retrieval when the "
-            "vector index is built, substring fallback otherwise. "
+            "vector index is built, substring fallback otherwise. For "
+            "multi-part or compound questions, issue 2-3 searches with "
+            "different phrasings rather than one long query. "
             "scope='dreamed' covers memory/<class>/*.md (consolidated "
             "learnings); scope='undreamed' covers sessions/<key>.md and "
             "ingested/<id>/; scope='all' is both. level='warm' returns "
-            "headlines and summaries (cheap); level='cold' adds full "
-            "bodies. Returns markdown URIs usable with memory_drill."
+            "headlines+summaries; level='cold' adds full bodies (use when "
+            "warm hits look on-topic but you need the detail). Returns "
+            "markdown URIs usable with memory_drill."
         )
 
     def _enrich_body(self, r: Result) -> Result:
@@ -152,13 +168,25 @@ class MemorySearchTool(Tool):
         # AgentLoop and build a bare ToolContext leave ``app_config=None``,
         # which intentionally disables the vector path (grep fallback).
         model = None
+        app = getattr(ctx, "app_config", None)
         try:
-            mem = getattr(ctx, "app_config", None)
-            if mem is not None and mem.memory.enabled:
-                model = mem.memory.embedding.model
+            if app is not None and app.memory.enabled:
+                model = app.memory.embedding.model
         except (AttributeError, TypeError):
             model = None
-        return cls(workspace=ctx.workspace, embedding_model=model)
+        # G3.b: forward the memory aux provider (if AgentLoop pre-built
+        # one) so the rewriter can avoid spinning up a fresh provider
+        # per search call.
+        aux_handle = None
+        aux_providers = getattr(ctx, "aux_providers", None)
+        if isinstance(aux_providers, dict):
+            aux_handle = aux_providers.get("memory")
+        return cls(
+            workspace=ctx.workspace,
+            embedding_model=model,
+            app_config=app,
+            aux_provider_handle=aux_handle,
+        )
 
     def _get_vector_index(self) -> Optional[VectorIndex]:
         if self._vector_index_attempted:
@@ -230,6 +258,14 @@ class MemorySearchTool(Tool):
         if scope in ("dreamed", "all") and vi is not None:
             try:
                 t0 = time.monotonic()
+                # Search path is intentionally LLM-free — this is the
+                # hot path (one user turn issues many searches). LLM
+                # operations on memory belong on the cold path (write
+                # / Dream curation) per the architectural decision
+                # logged 2026-05-26. See ``query_rewriter.py`` for the
+                # rewriter module preserved as an opt-in utility +
+                # building block for future write-time extraction
+                # (G1) and async curation (Dream-C).
                 vector_rows = vi.search(query, top_k=10)
                 duration_ms = (time.monotonic() - t0) * 1000.0
 

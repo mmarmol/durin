@@ -517,6 +517,28 @@ class MemoryRecallVectorEvent(TypedDict):
     session_key: NotRequired[str | None]
 
 
+class MemoryRecallRewrittenEvent(TypedDict):
+    """G3.b LLM-based query rewriting telemetry. One per memory_search
+    call that exercises the vector path.
+
+    Tracks how often the LLM rewriter ran successfully vs fell back to
+    passthrough (rate limit / parse failure), what entities it
+    extracted, and how many unique candidates the multi-query union
+    surfaced via RRF — all useful for tuning the prompt + cache.
+    """
+
+    original_query: str
+    intent: str  # factual_lookup | list | temporal | comparison | open_ended
+    n_rewrites: int  # always >= 1 (original included)
+    entities_extracted: list[str]
+    predicates_extracted: list[str]
+    language_hint: str  # ISO 639-1 or ""
+    llm_used: bool  # False on passthrough fallback
+    unique_results_count: int  # post-RRF union size before top-K cap
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
 class MemoryDreamStartEvent(TypedDict):
     """Entity-centric dream pass began (doc 25 §2.A.1).
 
@@ -719,6 +741,7 @@ EVENTS: dict[str, type] = {
     "memory.embedding.load": MemoryEmbeddingLoadEvent,
     "memory.embedding.embed": MemoryEmbeddingEmbedEvent,
     "memory.recall.vector": MemoryRecallVectorEvent,
+    "memory.recall.rewritten": MemoryRecallRewrittenEvent,
     "memory.store.blocked_near_duplicate": MemoryStoreBlockedNearDuplicateEvent,
     "memory.dream.start": MemoryDreamStartEvent,
     "memory.dream.end": MemoryDreamEndEvent,
@@ -782,4 +805,5 @@ __all__ = [
     "MemoryEmbeddingLoadEvent",
     "MemoryEmbeddingEmbedEvent",
     "MemoryRecallVectorEvent",
+    "MemoryRecallRewrittenEvent",
 ]

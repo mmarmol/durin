@@ -114,7 +114,7 @@ def _build_aux_providers(config: Any) -> dict[str, AuxProviderHandle]:
     aux = getattr(getattr(config, "agents", None), "aux_models", None)
     if aux is None:
         return out
-    for kind in ("vision", "audio"):
+    for kind in ("vision", "audio", "memory"):
         entry = getattr(aux, kind, None)
         if entry is None:
             continue

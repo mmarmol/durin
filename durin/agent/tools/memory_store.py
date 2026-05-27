@@ -26,9 +26,11 @@ _PARAMETERS = tool_parameters_schema(
         "Markdown body of the memory entry — the full text to remember."
     ),
     class_name=StringSchema(
-        "Memory class. Default: episodic. "
-        "stable=identity/corrections, episodic=working/recent, "
-        "corpus=queryable archive, pending=prospective.",
+        "Memory class — pick by lifespan and intent. Default: episodic. "
+        "stable=identity, preferences, durable facts ('Marcelo lives in "
+        "Spain'); episodic=working memory, recent events, conversation "
+        "outcomes; corpus=ingested reference material the user wants "
+        "searchable; pending=TODOs/things to act on later (not facts).",
         enum=list(MEMORY_CLASSES),
     ),
     headline=StringSchema(
@@ -106,11 +108,10 @@ class MemoryStoreTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "Persist a memory entry under memory/<class>/<id>.md with full "
-            "frontmatter (headline + summary + body + source_refs + entities + "
-            "author + valid_from). Idempotent: same (class, content) writes "
-            "the same id. Author defaults to agent_created when invoked by "
-            "the agent."
+            "Persist a memory entry. Idempotent on (class, content): same "
+            "input writes the same id, so repeated calls with the same "
+            "body are safe. Author is stamped automatically. Pick "
+            "class_name based on lifespan and intent — see the param."
         )
 
     @classmethod
@@ -283,80 +284,21 @@ class MemoryStoreTool(Tool):
         entities: list[str],
         vector_index: Optional[VectorIndex],
     ) -> None:
-        """Per-entity threshold check + background dispatch (§2.A.1 β.2).
+        """Thin wrapper around the shared helper (P7, doc 20).
 
-        For each entity ref in the just-written entry, count the
-        post-cursor entries (reusing the same discovery helper the CLI
-        and runner use). When any entity crosses ``threshold_entries``,
-        spawn a daemon thread that invokes
-        :meth:`DreamRunner.run` with ``trigger="threshold"`` and
-        ``entity_filter=ref``. The runner's own throttle prevents
-        thrashing when multiple thresholds fire in quick succession.
+        Kept as a method for backward-compat with existing tests that
+        call it directly. Delegates to
+        :func:`durin.memory.threshold_trigger.maybe_dispatch_threshold_dream`
+        with ``source_trigger="threshold"`` (preserved telemetry label).
         """
-        cfg = self._dream_config
-        if cfg is None or not getattr(cfg, "enabled", False):
-            return
-        threshold = getattr(cfg, "threshold_entries", 0) or 0
-        if threshold <= 0:
-            return
+        from durin.memory.threshold_trigger import (
+            maybe_dispatch_threshold_dream,
+        )
 
-        try:
-            from durin.cli.memory_cmd import _discover_pending_consolidations
-
-            memory_root = self._workspace / "memory"
-            pending = _discover_pending_consolidations(
-                memory_root, entity_filter=None,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("threshold dream: discover failed: %s", exc)
-            return
-
-        triggered_for: list[str] = []
-        for ref in entities:
-            entries = pending.get(ref) or []
-            if len(entries) >= threshold:
-                triggered_for.append(ref)
-
-        if not triggered_for:
-            return
-
-        # Spawn one daemon thread per triggered entity. The runner
-        # serialises with its own lock so two threads can't double-
-        # consolidate the same workspace.
-        import threading
-
-        from durin.memory.dream_runner import DreamRunner
-
-        for ref in triggered_for:
-            def _run(entity_ref: str = ref) -> None:
-                try:
-                    auto_cfg = getattr(cfg, "auto_absorb", None)
-                    runner = DreamRunner(
-                        workspace=self._workspace,
-                        min_seconds_between_runs=getattr(
-                            cfg, "min_seconds_between_runs", 300,
-                        ),
-                        model=getattr(cfg, "model_override", None),
-                        vector_index=vector_index,
-                        auto_absorb_enabled=bool(
-                            getattr(auto_cfg, "enabled", False),
-                        ),
-                        auto_absorb_threshold=int(
-                            getattr(auto_cfg, "confidence_threshold", 95),
-                        ),
-                        auto_absorb_min_age_hours=int(
-                            getattr(auto_cfg, "min_age_hours", 24),
-                        ),
-                        auto_absorb_judge_model=getattr(
-                            auto_cfg, "judge_model", None,
-                        ),
-                    )
-                    runner.run(trigger="threshold", entity_filter=entity_ref)
-                except Exception:
-                    logger.exception(
-                        "threshold dream for %s failed", entity_ref,
-                    )
-
-            t = threading.Thread(target=_run, daemon=True,
-                                 name=f"dream-threshold-{ref}")
-            t.start()
+        maybe_dispatch_threshold_dream(
+            workspace=self._workspace,
+            entities=entities,
+            dream_config=self._dream_config,
+            vector_index=vector_index,
+            source_trigger="threshold",
+        )

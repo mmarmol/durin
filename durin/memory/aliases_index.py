@@ -71,26 +71,64 @@ class AliasIndex:
 
         Skips archive subfolders. Pages that fail to parse are logged and
         skipped without aborting the build.
+
+        Doc 25 §G3.e (bootstrap from episodic, 2026-05-25): after the
+        entities/ walk, also derive minimal aliases from the
+        ``entities:`` frontmatter of `memory/<class>/*.md` entries.
+        This means entity_ranker activates even in cold workspaces
+        where Dream hasn't yet created canonical pages. Entity_page
+        aliases take precedence (richer info), the episodic-derived
+        aliases are append-only and only add the bare slug.
         """
         self._map.clear()
         entities_root = self.memory_root / "entities"
-        if not entities_root.exists():
-            return
-        for md_file in entities_root.rglob("*.md"):
-            if _ARCHIVE_MARKER in str(md_file):
+        if entities_root.exists():
+            for md_file in entities_root.rglob("*.md"):
+                if _ARCHIVE_MARKER in str(md_file):
+                    continue
+                try:
+                    page = EntityPage.from_file(md_file)
+                except (OSError, UnicodeDecodeError) as exc:
+                    logger.warning("aliases_index: skip unreadable %s: %s",
+                                   md_file, exc)
+                    continue
+                if page is None:
+                    logger.warning("aliases_index: skip unparseable %s", md_file)
+                    continue
+                slug = EntityPage.slug_from_path(md_file)
+                entity_ref = f"{page.type}:{slug}"
+                self._populate(page.identifying_strings(), entity_ref)
+
+        # G3.e: derive minimal aliases from episodic / stable / corpus
+        # / pending entries. We only index the *slug* portion of each
+        # entity ref — per glm review (2026-05-25), splitting underscored
+        # slugs into sub-tokens (data_migration → data, migration) is
+        # an anti-pattern that pollutes search with noisy partial
+        # matches. The full slug suffices as a discovery hook; richer
+        # aliases come from entity_pages once Dream populates them.
+        from durin.memory.paths import MEMORY_CLASSES
+        from durin.memory.storage import load_entry
+
+        for class_name in MEMORY_CLASSES:
+            class_dir = self.memory_root / class_name
+            if not class_dir.is_dir():
                 continue
-            try:
-                page = EntityPage.from_file(md_file)
-            except (OSError, UnicodeDecodeError) as exc:
-                logger.warning("aliases_index: skip unreadable %s: %s",
-                               md_file, exc)
-                continue
-            if page is None:
-                logger.warning("aliases_index: skip unparseable %s", md_file)
-                continue
-            slug = EntityPage.slug_from_path(md_file)
-            entity_ref = f"{page.type}:{slug}"
-            self._populate(page.identifying_strings(), entity_ref)
+            for md_file in class_dir.glob("*.md"):
+                try:
+                    entry = load_entry(md_file)
+                except Exception:  # noqa: BLE001
+                    # Corrupted entries skip silently — same policy as
+                    # entity_pages above.
+                    continue
+                for entity_ref in entry.entities:
+                    if not isinstance(entity_ref, str) or ":" not in entity_ref:
+                        continue
+                    _, slug = entity_ref.split(":", 1)
+                    if not slug:
+                        continue
+                    # _populate dedups: if entity_page already mapped
+                    # this slug to this ref, it's a no-op.
+                    self._populate([slug], entity_ref)
 
     # ------------------------------------------------------------------
     # lookup (case-insensitive, returns LIST per doc 18 §7 + R6)
