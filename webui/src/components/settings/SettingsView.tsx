@@ -919,6 +919,17 @@ function ModelBlockRows({
         />
       </SettingsRow>
       <SettingsRow
+        title={t("settings.models.memory")}
+        description={t("settings.models.memoryHint")}
+      >
+        <AuxControl
+          current={readAux(config, "memory")}
+          busy={busy === "memory"}
+          onSave={(v) => void saveAux("memory", v)}
+          onClear={() => void saveAux("memory", null)}
+        />
+      </SettingsRow>
+      <SettingsRow
         title={t("settings.models.testTitle")}
         description={
           test

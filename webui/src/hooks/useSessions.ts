@@ -7,6 +7,7 @@ import {
   deleteSession as apiDeleteSession,
   fetchWebuiThread,
   listSessions,
+  renameSession as apiRenameSession,
 } from "@/lib/api";
 import { deriveTitle } from "@/lib/format";
 import type { ChatSummary, UIMessage } from "@/lib/types";
@@ -21,6 +22,7 @@ export function useSessions(): {
   refresh: () => Promise<void>;
   createChat: () => Promise<string>;
   deleteChat: (key: string) => Promise<void>;
+  renameChat: (key: string, title: string) => Promise<void>;
 } {
   const { client, token } = useClient();
   const [sessions, setSessions] = useState<ChatSummary[]>([]);
@@ -82,7 +84,19 @@ export function useSessions(): {
     [],
   );
 
-  return { sessions, loading, error, refresh, createChat, deleteChat };
+  const renameChat = useCallback(
+    async (key: string, title: string) => {
+      const persisted = await apiRenameSession(tokenRef.current, key, title);
+      // Optimistic — server returns the normalized (trimmed/capped) title.
+      // Keep the sidebar row order stable; only the label changes.
+      setSessions((prev) =>
+        prev.map((s) => (s.key === key ? { ...s, title: persisted } : s)),
+      );
+    },
+    [],
+  );
+
+  return { sessions, loading, error, refresh, createChat, deleteChat, renameChat };
 }
 
 /** Lazy-load a session's on-disk messages the first time the UI displays it. */

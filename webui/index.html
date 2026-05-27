@@ -11,13 +11,12 @@
     />
     <meta name="theme-color" content="#fafaf9" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#161618" media="(prefers-color-scheme: dark)" />
-    <!-- Emoji favicon (⚒️) via inline SVG — the old /brand/*.png icons
-         were nanobot's cat, just renamed. durin is Tolkien's dwarf-king;
-         the hammer-and-pick is the dwarven mining mark. -->
-    <link
-      rel="icon"
-      href="data:image/svg+xml,&lt;svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22&gt;&lt;text y=%22.9em%22 font-size=%2290%22&gt;⚒️&lt;/text&gt;&lt;/svg&gt;"
-    />
+    <!-- durin logo favicon: shield + crown + anvil + flame, replaces the
+         interim ⚒️ emoji. Source: design/durin_logo.png (resized in
+         webui/public/brand/ via the dev workflow). -->
+    <link rel="icon" type="image/png" sizes="32x32" href="/brand/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/brand/durin-logo.png" />
+    <link rel="apple-touch-icon" href="/brand/durin-logo.png" />
     <style>
       html,
       body,
@@ -179,9 +178,19 @@
   <body class="bg-background text-foreground antialiased">
     <div id="root">
       <div class="boot-splash">
-        <div class="boot-splash-inner">
-          <span class="boot-dot" aria-hidden="true"></span>
-          <span data-boot-copy>Loading durin…</span>
+        <div class="boot-splash-inner" style="flex-direction: column; gap: 14px;">
+          <img
+            src="/brand/durin-logo.png"
+            alt=""
+            aria-hidden="true"
+            width="64"
+            height="83"
+            style="opacity: 0.9;"
+          />
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <span class="boot-dot" aria-hidden="true"></span>
+            <span data-boot-copy>Loading durin…</span>
+          </div>
         </div>
       </div>
     </div>
