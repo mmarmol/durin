@@ -28,9 +28,10 @@ import enum
 import logging
 import os
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import jsonpatch
 import jsonpointer
@@ -96,12 +97,40 @@ def apply_dream_output(
     workspace: Path,
     entity_ref: str,
     parsed: ParsedDreamOutput,
+    trigger: str = "manual",
+    cursor_after: str = "",
+    emit_telemetry: bool = True,
 ) -> DreamApplyResult:
     """Apply *parsed* to the entity page at
     ``workspace/memory/entities/<type>/<slug>.md``.
 
     Empty patch + empty body delta is a successful no-op (Rule 8).
+
+    Telemetry: on success emits ``memory.dream.patch_applied``; on
+    failure emits ``memory.dream.entity_failed`` (kind matches the
+    returned ``failure_kind``). Suppress with ``emit_telemetry=False``
+    in unit tests that don't need the side effect.
     """
+    t0 = time.perf_counter()
+    result = _apply_dream_output_inner(
+        workspace=workspace, entity_ref=entity_ref, parsed=parsed,
+    )
+    if emit_telemetry:
+        _emit_apply_telemetry(
+            result=result, parsed=parsed, trigger=trigger,
+            cursor_after=cursor_after,
+            duration_ms=(time.perf_counter() - t0) * 1000.0,
+        )
+    return result
+
+
+def _apply_dream_output_inner(
+    *,
+    workspace: Path,
+    entity_ref: str,
+    parsed: ParsedDreamOutput,
+) -> DreamApplyResult:
+    """Real apply logic; the public wrapper above handles telemetry."""
     type_, _, slug = entity_ref.partition(":")
     if not type_ or not slug:
         raise DreamApplyError(
@@ -367,3 +396,56 @@ def _rollback(
         error_message=error_message,
         ops_applied=ops_applied,
     )
+
+
+def _emit_apply_telemetry(
+    *,
+    result: DreamApplyResult,
+    parsed: ParsedDreamOutput,
+    trigger: str,
+    cursor_after: str,
+    duration_ms: float,
+) -> None:
+    """Fire one of memory.dream.{patch_applied,entity_failed}.
+
+    Best-effort: any error inside emit is logged and swallowed — the
+    apply result still flows back to the caller. We import lazily so
+    durin.memory imports don't pull in the telemetry stack.
+    """
+    try:
+        from durin.agent.tools._telemetry import emit_tool_event
+    except Exception:  # pragma: no cover
+        return
+
+    sources = sorted({
+        op["provenance"] for op in parsed.patch_ops
+        if isinstance(op.get("provenance"), str)
+    })
+
+    try:
+        if result.failure_kind is None:
+            emit_tool_event(
+                "memory.dream.patch_applied",
+                {
+                    "entity_ref": result.entity_ref,
+                    "trigger": trigger,
+                    "ops_applied": result.ops_applied,
+                    "sources_count": len(sources),
+                    "body_delta_chars": len(parsed.body_delta or ""),
+                    "cursor_after": cursor_after,
+                    "duration_ms": duration_ms,
+                },
+            )
+        else:
+            emit_tool_event(
+                "memory.dream.entity_failed",
+                {
+                    "entity_ref": result.entity_ref,
+                    "trigger": trigger,
+                    "kind": result.failure_kind.value,
+                    "error_message": (result.error_message or "")[:500],
+                    "failure_count_now": 0,
+                },
+            )
+    except Exception as exc:  # pragma: no cover
+        logger.warning("dream_apply: telemetry emit failed: %s", exc)

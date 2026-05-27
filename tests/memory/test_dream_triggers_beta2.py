@@ -27,7 +27,17 @@ from typing import Any
 
 import pytest
 
+from durin.memory.provenance import author_scope
 from durin.memory.store import store_memory
+
+
+@pytest.fixture(autouse=True)
+def _agent_created_scope():
+    """Doc memory §4.6.1: user-authored entries are protected from
+    Dream consumption. Wrap stored entries in ``agent_created`` so the
+    discover walk sees them."""
+    with author_scope("agent_created"):
+        yield
 
 
 # ---------------------------------------------------------------------------

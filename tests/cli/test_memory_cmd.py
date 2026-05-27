@@ -12,6 +12,16 @@ from typer.testing import CliRunner
 
 from durin.cli.memory_cmd import memory_app
 from durin.memory.dream import ConsolidationResult, DreamConsolidator, EntryRef
+from durin.memory.provenance import author_scope
+
+
+@pytest.fixture(autouse=True)
+def _agent_created_scope():
+    """Doc memory §4.6.1: ``user_authored`` entries are skipped by the
+    Dream discover walk. These CLI tests seed agent-observed entries,
+    so wrap them in ``agent_created`` scope."""
+    with author_scope("agent_created"):
+        yield
 
 
 runner = CliRunner()

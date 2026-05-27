@@ -661,6 +661,50 @@ class MemoryStoreBlockedNearDuplicateEvent(TypedDict):
     session_key: NotRequired[str | None]
 
 
+class MemoryDreamPatchAppliedEvent(TypedDict):
+    """A Dream apply for one entity completed successfully (doc 07 §6.5).
+
+    Counts the ops that landed plus the diagnostics dashboards need
+    to spot drift (cursor advanced, body delta length, sources count).
+    ``failure_kind`` is always empty here — the failure variant lands
+    in :class:`MemoryDreamEntityFailedEvent`.
+    """
+
+    entity_ref: str
+    trigger: str
+    ops_applied: int
+    sources_count: int
+    body_delta_chars: int
+    cursor_after: str  # ISO timestamp the runner stamped on the page
+    duration_ms: float
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
+class MemoryDreamEntityFailedEvent(TypedDict):
+    """A Dream apply for one entity failed (doc 07 §6.4).
+
+    Emitted on every failed entity (no batching). ``kind`` matches
+    :class:`durin.memory.dream_apply.DreamApplyFailureKind` for the
+    structural cases, plus ``"llm_call_failed"`` for ambient LLM
+    issues and ``"parse_failed"`` for unparseable LLM output. Only
+    *structural* kinds (validation / patch_runtime / round_trip)
+    contribute to the quarantine counter — that's enforced in
+    :mod:`durin.memory.dream_quarantine`, not here. The two are kept
+    distinct so dashboards can spot a network outage vs a busted
+    entity.
+    """
+
+    entity_ref: str
+    trigger: str
+    kind: str
+    error_message: str  # bounded; caller truncates if huge
+    failure_count_now: int  # post-increment value, 0 for ambient
+    quarantined_until: NotRequired[str]  # ISO timestamp when 3-strike trip
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
 class MemoryHotLayerFailureEvent(TypedDict):
     """Hot-layer assembly failed for one component (per doc 06 §8.7).
 
@@ -745,6 +789,8 @@ EVENTS: dict[str, type] = {
     "memory.dream.start": MemoryDreamStartEvent,
     "memory.dream.end": MemoryDreamEndEvent,
     "memory.dream.skipped": MemoryDreamSkippedEvent,
+    "memory.dream.patch_applied": MemoryDreamPatchAppliedEvent,
+    "memory.dream.entity_failed": MemoryDreamEntityFailedEvent,
     "memory.absorb.judged": MemoryAbsorbJudgedEvent,
     "memory.absorb.auto_merged": MemoryAbsorbAutoMergedEvent,
     "memory.absorb.skipped": MemoryAbsorbSkippedEvent,
@@ -805,5 +851,7 @@ __all__ = [
     "MemoryEmbeddingLoadEvent",
     "MemoryEmbeddingEmbedEvent",
     "MemoryRecallVectorEvent",
+    "MemoryDreamPatchAppliedEvent",
+    "MemoryDreamEntityFailedEvent",
     "MemoryHotLayerFailureEvent",
 ]
