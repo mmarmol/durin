@@ -171,6 +171,90 @@ def _discover_pending_consolidations(
     return pending
 
 
+@memory_app.command("reindex")
+def cmd_reindex(
+    target: str = typer.Option(
+        "all",
+        "--target",
+        help="Which index to rebuild: 'fts' | 'lancedb' | 'all' (default).",
+    ),
+) -> None:
+    """Wipe `.durin/index/` and rebuild from `memory/`.
+
+    Markdown is the source of truth. After a corruption / migration /
+    suspected staleness, this command rebuilds both the FTS5 lexical
+    tables and (when available) the LanceDB vector table from scratch.
+
+    The walk respects `walk_memory(workspace)` — `memory/archive/**`
+    and `memory/pending/**` are excluded, same rule as production.
+    """
+    from durin.memory.indexer import rebuild_fts_index
+
+    workspace = _workspace_root()
+    if not (workspace / "memory").is_dir():
+        console.print(
+            f"[yellow]No memory/ directory at {workspace} — nothing to "
+            f"index.[/yellow]"
+        )
+        raise typer.Exit(code=0)
+
+    target = target.lower()
+    if target not in ("all", "fts", "lancedb"):
+        raise typer.BadParameter(
+            f"--target must be one of 'all', 'fts', 'lancedb' "
+            f"(got {target!r})"
+        )
+
+    if target in ("all", "fts"):
+        console.print("[bold]Rebuilding FTS5 lexical index…[/bold]")
+        stats = rebuild_fts_index(workspace)
+        console.print(
+            f"  Indexed: [green]{stats.indexed}[/green]  "
+            f"Errors: "
+            f"[{'red' if stats.errors else 'green'}]{stats.errors}[/]"
+        )
+
+    if target in ("all", "lancedb"):
+        try:
+            from durin.memory.vector_index import (
+                VectorIndex, vector_index_available,
+            )
+        except ImportError:
+            console.print(
+                "[yellow]LanceDB optional dependency missing; "
+                "skipping vector rebuild. "
+                "Install with `pip install durin[memory]`.[/yellow]"
+            )
+        else:
+            if not vector_index_available():
+                console.print(
+                    "[yellow]LanceDB not available; skipping vector "
+                    "rebuild.[/yellow]"
+                )
+            else:
+                console.print(
+                    "[bold]Rebuilding LanceDB vector index…[/bold]"
+                )
+                # Vector rebuild uses whichever embedding provider is
+                # configured. Reuse the same construction path the
+                # search tool uses.
+                try:
+                    from durin.memory.embedding import FastembedProvider
+                    provider = FastembedProvider()
+                    vi = VectorIndex(workspace, provider)
+                    count = vi.rebuild_from_workspace()
+                    console.print(
+                        f"  Indexed: [green]{count}[/green] rows"
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    console.print(
+                        f"[red]Vector rebuild failed:[/red] {exc}"
+                    )
+                    raise typer.Exit(code=1) from exc
+
+    console.print("[green]Reindex complete.[/green]")
+
+
 @memory_app.command("dream")
 def cmd_dream(
     entity: str = typer.Argument(
