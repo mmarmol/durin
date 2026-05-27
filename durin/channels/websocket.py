@@ -709,6 +709,13 @@ class WebSocketChannel(BaseChannel):
         if m:
             return self._handle_session_delete(request, m.group(1))
 
+        # P2 (doc 20): user-driven rename. Same constraint as delete —
+        # GET-only HTTP, action folded into the path. New title arrives
+        # as a ``title`` query param (URL-encoded).
+        m = re.match(r"^/api/sessions/([^/]+)/rename$", got)
+        if m:
+            return self._handle_session_rename(request, m.group(1))
+
         # Signed media fetch: ``<sig>`` is an HMAC over ``<payload>``; the
         # payload decodes to a path inside :func:`get_media_dir`. See
         # :meth:`_sign_media_path` for the inverse direction used to build
@@ -1654,6 +1661,50 @@ class WebSocketChannel(BaseChannel):
         deleted = self._session_manager.delete_session(decoded_key)
         delete_webui_thread(decoded_key)
         return _http_json_response({"deleted": bool(deleted)})
+
+    def _handle_session_rename(self, request: WsRequest, key: str) -> Response:
+        """P2 (doc 20): set a user-edited title for a webui session.
+
+        Pulls ``?title=...`` from the query string, persists it into the
+        session metadata via the same fields :func:`maybe_generate_webui_title`
+        uses (``title`` + ``title_user_edited``). Marking
+        ``title_user_edited`` blocks future auto-regeneration so the
+        user's choice sticks. Trims + caps at the same length the LLM
+        title generator does to avoid one path producing values the
+        other refuses to display.
+        """
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        if self._session_manager is None:
+            return _http_error(503, "session manager unavailable")
+        decoded_key = _decode_api_key(key)
+        if decoded_key is None:
+            return _http_error(400, "invalid session key")
+        if not self._is_websocket_channel_session_key(decoded_key):
+            return _http_error(404, "session not found")
+
+        from durin.utils.webui_titles import (
+            TITLE_MAX_CHARS,
+            WEBUI_TITLE_METADATA_KEY,
+            WEBUI_TITLE_USER_EDITED_METADATA_KEY,
+            clean_generated_title,
+        )
+
+        query = _parse_query(request.path)
+        raw_title = _query_first(query, "title") or ""
+        title = clean_generated_title(raw_title)
+        if not title:
+            return _http_error(400, "title is required")
+        if len(title) > TITLE_MAX_CHARS:
+            title = title[: TITLE_MAX_CHARS - 1].rstrip() + "…"
+
+        session = self._session_manager._load(decoded_key)
+        if session is None:
+            return _http_error(404, "session not found")
+        session.metadata[WEBUI_TITLE_METADATA_KEY] = title
+        session.metadata[WEBUI_TITLE_USER_EDITED_METADATA_KEY] = True
+        self._session_manager.save(session)
+        return _http_json_response({"title": title})
 
     def _serve_static(self, request_path: str) -> Response | None:
         """Resolve *request_path* against the built SPA directory; SPA fallback to index.html."""

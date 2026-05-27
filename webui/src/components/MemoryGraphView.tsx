@@ -3,6 +3,8 @@ import {
   ChevronDown,
   ChevronRight,
   Focus,
+  Maximize2,
+  Minimize2,
   Network,
   RefreshCw,
   Search as SearchIcon,
@@ -173,6 +175,32 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
   const [sessionTab, setSessionTab] = useState<SessionTabName>("info");
   const [focusRef, setFocusRef] = useState<string | null>(null);
   const isSessionSelected = selected?.type === "session";
+  // Wide-mode toggle for the right-hand detail panel. Sessions can
+  // accumulate long tool outputs that get cramped in the default
+  // ~26rem column; expand to ~80% of the viewport when the user
+  // needs to read full message bodies. Persisted so the choice
+  // survives reloads.
+  const [panelExpanded, setPanelExpanded] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("durin.memoryGraph.panelExpanded") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const togglePanelExpanded = useCallback(() => {
+    setPanelExpanded((cur) => {
+      const next = !cur;
+      try {
+        localStorage.setItem(
+          "durin.memoryGraph.panelExpanded",
+          next ? "1" : "0",
+        );
+      } catch {
+        /* localStorage unavailable: ephemeral toggle is fine */
+      }
+      return next;
+    });
+  }, []);
   // Set of node types the user has toggled OFF in the legend. Default
   // empty = show all. Clicking a legend chip flips inclusion. Phantom
   // is treated as its own pseudo-type for the toggle.
@@ -900,10 +928,19 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
           </div>
         ) : null}
 
-        {/* Right-side detail panel for the selected node */}
+        {/* Right-side detail panel for the selected node. Width
+            toggles via the maximize button: 26rem (default, leaves
+            most of the graph visible) → up to ~80vw (long tool
+            outputs become readable). */}
         {selected ? (
-          <aside className="absolute right-3 top-3 z-10 flex w-[26rem] max-w-[calc(100vw-1.5rem)] flex-col rounded-lg border border-border/50 bg-card/95 text-sm shadow-lg backdrop-blur"
-                 style={{ maxHeight: "calc(100% - 1.5rem)" }}>
+          <aside
+            className={cn(
+              "absolute right-3 top-3 z-10 flex max-w-[calc(100vw-1.5rem)] flex-col rounded-lg border border-border/50 bg-card/95 text-sm shadow-lg backdrop-blur",
+              "transition-[width] duration-200 ease-out",
+              panelExpanded ? "w-[min(80vw,72rem)]" : "w-[26rem]",
+            )}
+            style={{ maxHeight: "calc(100% - 1.5rem)" }}
+          >
             <header className="flex items-start gap-2 border-b border-border/40 px-3 py-2">
               <span
                 className="mt-1 inline-block h-2.5 w-2.5 shrink-0 rounded-full"
@@ -929,6 +966,20 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                 )}
               >
                 <Focus className="h-3.5 w-3.5" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={panelExpanded ? "Collapse panel" : "Expand panel"}
+                onClick={togglePanelExpanded}
+                className="h-6 w-6"
+                title={panelExpanded ? "Collapse panel" : "Expand panel"}
+              >
+                {panelExpanded ? (
+                  <Minimize2 className="h-3.5 w-3.5" />
+                ) : (
+                  <Maximize2 className="h-3.5 w-3.5" />
+                )}
               </Button>
               <Button
                 variant="ghost"
