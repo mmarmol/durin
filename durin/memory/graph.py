@@ -267,6 +267,9 @@ def build_memory_graph(
     }
 
 
+_FIRST_USER_PREVIEW_MAX = 48
+
+
 def _read_session_summary(jsonl_path: Path) -> tuple[str | None, int]:
     """Return (display_name, message_count) without parsing the full file.
 
@@ -276,12 +279,21 @@ def _read_session_summary(jsonl_path: Path) -> tuple[str | None, int]:
 
     Display-name resolution order, falling through on each miss:
 
-    1. Identity block ``display_name`` / ``title`` / ``name``.
-    2. Channel prefix + short UUID suffix derived from the file stem.
+    1. ``metadata.title`` from the identity block — the webui title
+       set by :func:`maybe_generate_webui_title` (LLM-generated) or by
+       the user via the P2 rename endpoint. This is the authoritative
+       source when present.
+    2. Legacy top-level keys ``display_name`` / ``title`` / ``name``
+       — older sessions or non-webui channels may stash a name here.
+    3. First user message excerpt — same fallback the sidebar uses via
+       ``preview``. Keeps the graph nodes aligned with what the user
+       sees in the chat list when LLM auto-titling hasn't run yet.
+    4. Channel prefix + short UUID suffix derived from the file stem.
        ``websocket_12c54195-1548-…`` → ``ws · 12c54195``,
        ``cli_direct`` → ``cli · direct``.
     """
     title: str | None = None
+    first_user_preview: str | None = None
     count = 0
     try:
         with jsonl_path.open("r", encoding="utf-8") as fh:
@@ -289,26 +301,60 @@ def _read_session_summary(jsonl_path: Path) -> tuple[str | None, int]:
                 raw = raw.strip()
                 if not raw:
                     continue
+                line_obj: Any = None
+                try:
+                    line_obj = json.loads(raw)
+                except json.JSONDecodeError:
+                    line_obj = None
+
                 if i == 0:
-                    try:
-                        head = json.loads(raw)
-                    except json.JSONDecodeError:
-                        head = None
-                    if isinstance(head, dict):
-                        title = (
-                            head.get("display_name")
-                            or head.get("title")
-                            or head.get("name")
-                        )
+                    if isinstance(line_obj, dict):
+                        # 1. metadata.title (webui-managed)
+                        metadata = line_obj.get("metadata")
+                        if isinstance(metadata, dict):
+                            candidate = metadata.get("title")
+                            if isinstance(candidate, str) and candidate.strip():
+                                title = candidate.strip()
+                        # 2. Legacy fallbacks
+                        if not title:
+                            title = (
+                                line_obj.get("display_name")
+                                or line_obj.get("title")
+                                or line_obj.get("name")
+                            )
                         # If the first line is itself a message (some
                         # older sessions skip the identity block), count
-                        # it too.
-                        if "role" in head:
+                        # it too — and treat it as a candidate preview.
+                        if "role" in line_obj:
                             count += 1
+                            if (
+                                first_user_preview is None
+                                and line_obj.get("role") == "user"
+                                and isinstance(line_obj.get("content"), str)
+                            ):
+                                first_user_preview = line_obj["content"].strip()
                     continue
+
                 count += 1
+                # 3. Capture the first user message we see — mirrors
+                # ``preview`` shown in the sidebar.
+                if (
+                    title is None
+                    and first_user_preview is None
+                    and isinstance(line_obj, dict)
+                    and line_obj.get("role") == "user"
+                    and isinstance(line_obj.get("content"), str)
+                ):
+                    first_user_preview = line_obj["content"].strip()
     except OSError:
         return None, 0
+    if not title and first_user_preview:
+        # Clip the preview so very long first messages don't blow out
+        # the graph node label width.
+        text = first_user_preview
+        if len(text) > _FIRST_USER_PREVIEW_MAX:
+            text = text[: _FIRST_USER_PREVIEW_MAX - 1].rstrip() + "…"
+        title = text
     if not title:
         title = _friendly_session_label(jsonl_path.stem)
     return title, count
