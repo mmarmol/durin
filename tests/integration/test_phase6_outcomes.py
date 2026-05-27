@@ -360,11 +360,18 @@ def test_anti_fragility_no_dream_still_searchable(tmp_path: Path) -> None:
             valid_from=date(2026, 5, 20 + i),
         )
 
-    # No entity page exists. alias_index built from empty entities/ is empty.
+    # No entity page exists. AliasIndex builds with G3.e episodic bootstrap:
+    # even without an entities/<type>/<slug>.md page, the index scans
+    # episodic entries' `entities:` field and surfaces the URI as a
+    # lookup target (with lower precedence than canonical aliases when
+    # both are present). This is exactly the anti-fragility property
+    # being verified — the system stays useful even before Dream creates
+    # canonical pages.
     idx = AliasIndex(tmp_path / "memory")
     idx.build()
-    # The alias_index has nothing because no entity page → empty lookup.
-    assert idx.lookup("Marcelo") == []
+    # G3.e bootstrap surfaces `person:marcelo` from episodic entries
+    # tagged with that URI, despite no entity page existing yet.
+    assert idx.lookup("marcelo") == ["person:marcelo"]
 
     # BUT the entries themselves are searchable via vector_index.
     provider = _CharProvider()
