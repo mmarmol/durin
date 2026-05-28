@@ -9,6 +9,7 @@ EXISTING PAGE (current canonical state):
 EXISTING SCHEMA for this entity (for coherence; not a constraint):
   attributes: {existing_attribute_keys}
   relation types: {existing_relation_types}
+  current relation count: {current_relation_count} (hard cap: 200 — see Rule 9)
 
   Guidance:
   - PREFER reusing an existing key when the new info has the same semantic meaning.

@@ -94,7 +94,7 @@ All design decisions rest on these principles. Any decision violating one requir
 │                                                                   │
 │   LanceDB (vector)  │  FTS5 / SQLite (lexical BM25)                │
 │                                                                   │
-│   (Structural SQLite — deferred, see §10 #1)                      │
+│   (Structural SQLite — decided against, see §10 #1)               │
 │                                                                   │
 │   All reconstructible from the layer below.                       │
 └────────────────────────────┬─────────────────────────────────────┘
@@ -230,7 +230,7 @@ These decisions impact multiple modules. Resolutions below; details live in the 
 
 | # | Decision | Resolution | Affects |
 |---|---|---|---|
-| **1** | SQLite structural (counting / analytical queries via JSON_EXTRACT) | **Not in MVP.** Covered today by grep + parse on-the-fly and FTS5 over rendered frontmatter. Revisit when N entities grows or analytical queries become slow. | `02_indexing.md`, `03_search_pipeline.md` |
+| **1** | SQLite structural (counting / analytical queries via JSON_EXTRACT) | **Decided against** (audit B-5, 2026-05-28; doc 08 §2.5). Grep + parse on-the-fly handles MVP scale; FTS5 over rendered frontmatter covers attribute lookups; mainstream systems ship without a structural layer; the LLM agent is the analytical layer when one is needed. The "deferred" wording before B-5 was a soft defer with no observable trigger — upgraded to discarded. | `02_indexing.md`, `08_scope_and_discarded.md` §2.5 |
 | **2** | Cross-encoder reranker (top-50 → top-10 with dedicated reranking model, no LLM in hot path) | **In MVP as opt-in, OFF by default.** Multilingual cross-encoders add 300-1500ms latency on CPU, breaking the default search budget; comparable systems (mem0, graphiti) ship reranking opt-in too. Default model when enabled: `jinaai/jina-reranker-v2-base-multilingual`. User surface: workspace config + onboarding wizard question + web dashboard toggle. | `03_search_pipeline.md` |
 | **3a** | MMR (Maximal Marginal Relevance — diversity in top-K) | **Not in MVP, deferred.** Original concern was top-K redundancy, but archive of consolidated episodic (§3.6 doc 01) eliminates the primary source of duplication. The remaining concern (corpus chunks from the same long source) is handled differently via a per-source cap in sectioning (§12.4 doc 03). Mainstream systems don't implement MMR either. If post-MVP bench shows residual duplication, the algorithm is standalone and easy to add. | `03_search_pipeline.md`, `08_scope_and_discarded.md` |
 | **3b** | Temporal decay (half-life on ranking) | **Shipped 2026-05-28 (audit A9), enabled by default, only for observation-type docs.** episodic (90d half-life) and session_summary (120d) decay because their `valid_from` is intrinsic temporal information; entity_page, stable, corpus have `null` half-life because their `valid_from` reflects "last write" / "ingest date" not "fact age". The per-entry override (`decay_half_life` / `evergreen` in `MemoryEntry`) is honoured in paths that read the entry off disk (hot_layer, dream) but NOT in the search pipeline today — the LanceDB row doesn't carry those fields and no producer sets them. Class-defaults table verified by enumeration in doc 11 A9. | `03_search_pipeline.md` §10 |

@@ -737,6 +737,7 @@ class DreamConsolidator:
         # prompt; it just loses the schema-coherence hints.
         existing_attribute_keys: tuple[str, ...] = ()
         existing_relation_types: tuple[str, ...] = ()
+        current_relation_count: int = 0
         if current_page:
             try:
                 page = EntityPage.from_text(current_page)
@@ -749,6 +750,7 @@ class DreamConsolidator:
                     if isinstance(r, dict) and r.get("type")
                 })
                 existing_relation_types = tuple(rel_types)
+                current_relation_count = len(page.relations or [])
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "dream: prompt slot parse failed for %s: %s",
@@ -790,6 +792,7 @@ class DreamConsolidator:
             existing_uris=existing_uris,
             recent_history=recent_history_text,
             entries=tuple(entries_lines),
+            current_relation_count=current_relation_count,
         )
         return build_dream_prompt(ctx)
 

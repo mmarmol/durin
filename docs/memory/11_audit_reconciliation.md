@@ -1080,7 +1080,7 @@ Doc:
 
 ---
 
-### C2 — Doc 01 §4.4 "soft cap 50 / hard cap 200" entries-per-entity not enforced ✅ RESOLVED
+### C2 — Doc 01 §4.4 "soft cap 50 / hard cap 200" entries-per-entity not enforced ✅ RESOLVED → re-opened and shipped as B-19
 
 **Doc says** (`docs/memory/01_data_and_entities.md` §4.4): *"Per-entity cap — Soft cap = 50 (warn only), Hard cap = 200"*.
 
@@ -1090,7 +1090,25 @@ Doc:
 
 **Action**: implement the cap or remove from doc. Recommendation: implement the soft-cap (log warning when an entity has > 50 entries in its body). The hard cap is defensive — defer until it occurs.
 
-**State**: pending
+**State**: shipped in audit B-19 (2026-05-29) — see entry below.
+
+---
+
+### B-19 — Per-entity relation cap (50/200) shipped end-to-end ✅ SHIPPED
+
+**Audit context**: C2 marked the cap as a "documented-but-unenforced intent" and recommended deferring the hard cap until a real signal arrived. The second-pass `feedback_stop_soft_deferrals` filter (G5 form: trigger + counterfactual + why-current-suffices + cost) flagged that deferral as soft: there was no observable signal to wait for — without enforcement, no telemetry would ever fire, so the trigger never trips. C2 is the textbook phantom-backlog item that filter exists to prevent.
+
+**What shipped**:
+- `durin/memory/entity_relation_cap.py` — pure cap module: `SOFT_RELATION_CAP=50`, `HARD_RELATION_CAP=200`, `RelationCapDecision` dataclass, `check_relation_cap()` pure function.
+- `durin/memory/dream_apply.py` — cap check wired after `_apply_ops_to_page` succeeds; soft breach emits `memory.entity_relation_cap_warned` (apply proceeds); hard breach emits `memory.entity_relation_cap_rejected`, returns `DreamApplyFailureKind.VALIDATION`, rolls back via `_rollback`.
+- `durin/telemetry/schema.py` — `MemoryEntityRelationCapWarnedEvent` and `MemoryEntityRelationCapRejectedEvent` TypedDicts + `EVENTS` registry entries.
+- Doc-driven LLM-facing surface (so the cap is not just a silent reject): `current_relation_count` slot in `consolidator.md` + Rule 9 in `rules.md` + cross-ref in `json_patch_reference.md` ("Allowed path roots: `/relations/*` — count cap at 200, see Rule 9"). Producer is `len(page.relations or [])` computed in `dream.py` alongside the existing F7 schema-slot parse (one parse, no double cost).
+- Doc 01 §4.4 updated: removed "NOT enforced" language; now describes the shipped enforcement (apply-time check + LLM-facing surface). Doc 06 §4.2 documents the slot. Doc 06 §4.4 gains Rule 9 text.
+- Tests: `tests/memory/test_entity_relation_cap_b19.py` (6 unit + 2 integration end-to-end through `apply_dream_output`) + new slots-test in `tests/memory/test_dream_prompt_builder.py`.
+
+**Why visible to the LLM**: per `feedback_tool_description_weak_signal`, exhorting "do not exceed 200" in a rule is weak signal. Rendering `current relation count: N` as a dataline (parallel to `attributes:` / `relation types:` schema slots) is structural — the LLM reads the number and can budget. Rule 9 names the cap; the slot shows the headroom.
+
+**State**: shipped 2026-05-29.
 
 ---
 
@@ -1950,3 +1968,179 @@ A dedicated `durin archive show / list` would duplicate these without a unique u
 - Personal memory lesson `feedback_stop_soft_deferrals` recorded: "deferred until concrete trigger" without a written failure mode is the same as discarded — except it leaves a phantom to-do that returns each audit pass.
 
 **Commit pending** (E16-E23 batch close).
+
+### B-1 — §2.F eager pre-fetch defer tightened to G5 form ✅ RESOLVED
+
+**Context**: doc 08 §5 backlog table listed §2.F (query-specific eager pre-fetch of memory into the user message before the LLM call, hermes/openclaw pattern) with three triggers added in audit E7 (2026-05-28): (a) explicit user feedback (thumbs-down / retry on > 3 turns/week); (b) Phase 8 LoCoMo failure cluster; (c) operator reports "the agent didn't remember X" pattern. The original trigger `memory.silent_retrieval_miss > 5%` had been discarded in §2.11 / E7 because the underlying heuristic detector did not generalise to multi-lingual workloads.
+
+**Audit B-1 (2026-05-28, applying the G5 tight form)**:
+
+- Trigger (a) requires a thumbs-down / retry channel that does not exist in code — unobservable. Dropped.
+- Trigger (c) "operator reports" is not measurable. Dropped.
+- Trigger (b) Phase 8 LoCoMo cluster IS observable and dated — kept and tightened: ≥ 5 failures where the trace shows BOTH (i) the agent answered without invoking `memory_search` AND (ii) the gold answer required content present in memory but not in the static HotLayer block.
+
+**Counterfactual** (the close path): if Phase 8 shows < 5 such failures, §2.F moves from §5 backlog to §2 discarded with the Phase 8 evidence cited inline. The spec in §4.1 stays as design-history.
+
+**Why current behaviour might already suffice** (the question Phase 8 settles): HotLayer (`docs/memory/06_prompts_and_instructions.md` §8) already eager-injects canonical entity pages + recent fragments + entity name list on every prompt; the multi-query identity.md prompt pattern shipped 2026-05-25 bumped LoCoMo v2 by +3.9pp by teaching the agent to invoke `memory_search` itself on relevant turns. So query-specific pre-fetch would be incremental on top of an already-eager surface with an already-effective self-invocation pattern.
+
+**Estimated implementation cost when triggered**: ~150 LOC for the pre-LLM `memory_search` call in `AgentLoop._build_messages`, `<memory-context>` wrapper block format, ephemeral insertion (NOT persisted to session), failure-mode handling on `memory_search` errors; plus a new telemetry event `memory.eager_prefetch_invoked` with duration; plus a Phase-9 bench harness change to measure the +pp gain. Trigger latency cost per turn at run-time: +50-130ms + cache miss in upstream prompt cache (the user message changes per query, breaking cache reuse).
+
+**Resolution**: doc 08 §5 row reshaped to the tight form (single trigger + counterfactual + why-current-suffices + cost). Doc 09 §11.1 adds the explicit Phase-8 classifier so the trigger has a place to land in the bench output. Doc 08 §4.1 retained as the implementation spec; doc 08 §2.11 unchanged (silent_retrieval_miss stays discarded). The defer is legitimate post-tightening; the next audit pass should not re-litigate it without the Phase-8 numbers in hand.
+
+### B-2 — Cross-encoder reranker default ON ✅ RESOLVED (decided against)
+
+**Context**: doc 08 §5 backlog listed "Cross-encoder reranker default ON" with the trigger "Bench shows opt-in OFF is significantly worse" — soft-defer wording without the tight form.
+
+**Audit B-2 (2026-05-28)**: the decision is structural, not empirical. durin runs on operator hardware (laptop / small server) where the cross-encoder's 300-1500 ms p95 latency and ~1.1 GB resident memory would break the search and RAM budgets for the primary deployment shape. The configurability the operator needs already exists: onboarding wizard + web dashboard toggle + workspace config field all accept `memory.search.cross_encoder.enabled = true` per setup taste. An operator who values quality opts in; an operator who values latency opts out. A global default flip would force the latency cost on operators who never asked and would surprise upgrades with a regression they did not opt into.
+
+**Decision**: removed from §5 backlog, classified as decided-against in `08_scope_and_discarded.md` §2.17. Default OFF stays. If a future deployment shape (always-on server with quality SLA) wants a different default, that ships as a separate config profile — not a global default flip.
+
+### B-3 — MMR defer tightened to G5 form ✅ RESOLVED
+
+**Context**: doc 08 §5 listed MMR with the trigger "Bench / user reports show duplication in top-K post-archive" — vague wording without measurable threshold.
+
+**Audit B-3 (2026-05-28)**: tightened to a single concrete trigger that the Phase-8 LoCoMo run can evaluate from its output. The decision is empirical (depends on bench), not structural — unlike B-2 (cross-encoder default) which was operator hardware choice.
+
+- **Trigger**: ≥ 10% of recall-success queries (gold answer in top-10) carry > 2 SectionedHit pairs with cosine similarity ≥ 0.92 between summaries.
+- **Counterfactual**: < 10% → MMR decided-against, moved from §5 backlog to §2 discarded with Phase-8 evidence; doc 03 §11 retained as design history.
+- **Why current may suffice**: archive of consolidated episodic eliminates the primary duplication source; per-source cap handles corpus chunk clustering; MMR carries a real downside (pushes strongest exact-match out of top-K) hurting queries like "exact email of X"; mainstream systems (mem0, graphiti, hermes, letta, cognee) ship without MMR.
+- **Cost when triggered**: ~80 LOC standalone algorithm in `durin/memory/mmr.py`, wired between `_temporal_decay_step` and `apply_per_source_cap` in `run_search_pipeline`. `λ` (relevance vs diversity weight) added to `MemorySearchConfig` defaulting to the value tuned in the same Phase-8 sweep. `memory.recall` payload gains `mmr_drops`. TDD: 4-5 cases.
+
+**Resolution**: doc 08 §5 row reshaped to the tight form. Doc 09 §11.1 adds the explicit Phase-8 classifier so the trigger has a place to land in bench output. Doc 03 §11 unchanged (already carries the design rationale for the original deferral; B-3 builds on that with the measurable trigger).
+
+### B-4 — Temporal decay enabled for more classes by default ✅ RESOLVED (decided against)
+
+**Context**: doc 08 §5 listed "Temporal decay enabled for more classes" with the trigger "Workspace > 1 year old shows obsolete-info regressions" — soft wording.
+
+**Audit B-4 (2026-05-28)**: same structural pattern as B-2 (cross-encoder default). The per-class defaults in `CLASS_HALF_LIFE_DEFAULTS` reflect each class's semantics — `stable` is explicit user assertions invalidated by contradiction not by age; `entity_page` is Dream-updated canonical pages where old is consolidated not stale; `corpus` is ingested artifacts where time is the wrong staleness axis. The configurability already exists via G1's `class_half_life_overrides` field — an operator who wants a different decay shape for their multi-year workspace sets the override per-class in config. The trigger as written is not measurable (LoCoMo seed < 1 year, no telemetry for "obsolete retrieval").
+
+**Decision**: removed from §5 backlog, classified as decided-against in `08_scope_and_discarded.md` §2.18. Defaults stay as A9 set them. Operator opts in per class via G1.
+
+### B-5 — SQLite structural / analytical index ✅ RESOLVED (decided against)
+
+**Context**: doc 08 §2.5 had carried this as "deferred" since 2026-05-26 with the trigger "N entities > 500 OR analytical queries become frequent" — soft wording without observable failure mode.
+
+**Audit B-5 (2026-05-28)**: applied the `feedback_stop_soft_deferrals` filter and concluded the original deferred classification was incorrect. The decision is not "wait and see"; it is structural. "N > 500" is a workspace-size proxy, not a quality signal. "Analytical queries become frequent" cannot be measured because the agent itself serves analytical queries today by generating the grep / parse from .md files — there is no telemetry for "the agent had to fall back to grep" because grep IS the path. Mainstream systems (mem0, graphiti, hermes, letta, cognee) ship without a structural SQLite layer; this is a conscious cross-corpus choice across the field, not a coverage gap. The cost (~400 LOC + schema migration + sync hooks + drift detection) is unattractive at any N because the alternative scales with the LLM, not with a fixed schema.
+
+**Decision**: upgrade from "deferred" to **discarded**. Doc 08 §2.5 rewritten with the upgraded reasoning. Doc 00 §10 row 1 updated to "Decided against" with the audit reference. Removed from §5 backlog. Cross-corpus decision #1 holds: indices are vector + lexical only.
+
+### B-6 — Active forgetting (compression + deletion) ✅ RESOLVED (decided against)
+
+**Context**: doc 08 §5 backlog listed "Active forgetting (compression, deletion)" with the trigger "Workspace > 2 years; storage / index size becomes burden". Doc 08 §3.9 already had a "Backlog" classification under "Mechanisms NOT adopted".
+
+**Audit B-6 (2026-05-28)**: the destructive variant (delete the 100 originals after compressing into 1 summary) violates principle P7 from doc 00 ("Reversible decisions; Archive instead of delete; Provenance is always traceable") — deleting source observations to save disk trades a real safety property for a cheap axis. The non-destructive variant (compress without deletion) is structurally a different feature (reflection / Dream tier 2, item B-7) not "active forgetting". Archive already handles the "stop letting old chatter dilute search" use case by moving consolidated episodic out of active retrieval surfaces while keeping them on disk. Operator-side disk hygiene (manual `rm` on archive subdirs) covers the disk-pressure case explicitly. Mainstream lifecycle policies (mem0, letta) exist because those systems don't archive — durin's archive IS the middle state those policies need.
+
+**Decision**: upgraded from "Backlog" to **discarded**. Doc 08 §3.9 rewritten with the upgraded reasoning. Removed from §5 backlog. Operator-side `rm` on archive subdirs remains the supported path for disk reclaim.
+
+### B-7 — Reflection / Dream tier 2 (pattern detection nodes) ✅ RESOLVED (decided against)
+
+**Context**: doc 08 §3.2 carried this as "Backlog — cost-benefit not yet justified" since 2026-05-26, with a parallel §5 backlog row using the trigger "Generalist use cases show pattern queries fail".
+
+**Audit B-7 (2026-05-28)**: applied the filter and concluded:
+
+- Dream tier 1 (consolidation into entity pages) + LLM-in-the-loop reading already covers pattern queries at acceptable quality. The pre-computed reflection node version substitutes a stored summary for an inline LLM read — savings on LLM call, not on answer quality, and only when the same pattern query repeats often enough to amortise the precomputation.
+- Reflection nodes would be a fifth memory class (`memory/reflections/<id>.md`?) with its own write path, indexer hooks, and a sync invariant (reflections about `marcelo` become stale when `marcelo`'s page changes — invalidation graph required). ~300-500 LOC of complexity carried for every workspace regardless of whether the use case fires.
+- Mainstream agent-memory systems (mem0, letta, hermes, openclaw, graphiti) ship without reflection nodes. GAAMA and Zep do, but those are research-shaped systems with different deployment goals.
+- The trigger "generalist use cases show pattern queries fail" is not measurable in any current bench — LoCoMo is factual recall, the Phase-8 adversarial set might include pattern queries but the realistic delta is per-token-cost not per-quality.
+- The correct response if a real pattern-query cost ever surfaces is to **cache** the LLM-generated pattern read at the agent loop (smaller surface, inside the existing read path), not to introduce a fifth memory class.
+
+**Decision**: upgraded from "Backlog" to **discarded**. Doc 08 §3.2 rewritten with the upgraded reasoning and the cache-instead-of-reflection-nodes guidance for any future surfacing. Removed from §5 backlog.
+
+### B-8 — Cross-entity consistency checks ✅ RESOLVED (decided against)
+
+**Context**: doc 08 §5 backlog row "Cross-entity consistency checks" with the trigger "Drift between entities observed" — soft wording without an observable failure mode.
+
+**Audit B-8 (2026-05-29)**:
+
+- The major class of cross-entity inconsistency (duplicate entities like `person:marcelo` vs `person:marcelo_marmol`) is already handled by absorb-judge (`durin/memory/absorb_judge.py`). A separate scan would duplicate that work.
+- Relation reciprocity is not an invariant in durin's schema: "Marcelo knows X" does not imply "X knows Marcelo"; the LLM that writes relations is the direction of truth. A reciprocity check would produce false-positive noise.
+- Other inconsistencies (attribute conflicts, temporal drift) surface at LLM read time, where they matter for the conversation — same pattern as B-7's "LLM-in-the-loop reading is the analytical layer".
+- The trigger "drift observed" is tautological: no telemetry counts drift because there is no drift detector — adding one IS the proposed feature. Operators observe specific bad answers and debug via `durin memory history <uri>`, not via a scheduled scan.
+- Mainstream agent-memory systems do not ship cross-entity consistency scans (mem0, letta, hermes). Graphiti has reciprocity because it IS a graph DB; durin's markdown + indices treats relations as data, not as graph edges.
+
+**Decision**: discarded. Doc 08 §3.12 (new) carries the reasoning. Absorb-judge handles duplicates; LLM-in-the-loop reading handles the rest; `durin memory history` gives operators the audit trail on demand. Removed from §5 backlog.
+
+### B-9 — Concepts as mediators (GAAMA hypergraph) ✅ RESOLVED (decided against)
+
+**Context**: doc 08 §3.3 had carried this as "Backlog — different paradigm" since 2026-05-26, with a parallel §5 backlog row whose trigger was `architectural rework` — the wording itself acknowledged the item was a fork, not a defer.
+
+**Audit B-9 (2026-05-29)**:
+
+- Concepts are already first-class entities in durin (`topic:rlhf`, `topic:agile`); what GAAMA adds is **PageRank-mediated retrieval through the concept node**, not the concept-as-entity itself.
+- Adopting hypergraph mediation is ~2000+ LOC of architectural rework: hypergraph index over entities + topics, PageRank computation (offline-stale or per-query-slow), replacement of RRF fusion with PageRank traversal, damping factor tuning, full test-surface rebuild around new ranking semantics. The "trigger architectural rework" wording was an admission that the item is a fork of the system, not a feature on its roadmap.
+- Mainstream LLM-in-the-loop systems (mem0, letta, hermes, openclaw, graphiti) ship without hypergraph mediation. GAAMA is the outlier and is research-shaped.
+- The trigger "concept-level queries fail consistently" is not measurable — "what does Marcelo think about RLHF" is answered today by reading the topic page + entity fragments and synthesising at the LLM. The "failure" the trigger imagines is "the LLM cannot synthesise without PageRank", which is the same argument B-7 (reflection nodes) and B-8 (cross-entity scans) failed: the LLM-in-the-loop IS the analytical mediator.
+
+**Decision**: discarded. Doc 08 §3.3 rewritten with the upgraded reasoning. The `topic` entity type stays; it does not become a graph mediator. Removed from §5 backlog.
+
+### B-10 — Embedding hybrid (SPLADE / ColBERT) ✅ RESOLVED (decided against)
+
+**Context**: doc 08 §3.7 carried this as "Backlog — migration cost high" since 2026-05-26, with a parallel §5 row whose trigger was "Recall@10 plateau with current models".
+
+**Audit B-10 (2026-05-29)**: the trigger conflated two distinct interventions. If Phase 8 shows a recall plateau, the empirical response is to swap the dense embedding model — `MemoryEmbeddingConfig.model` already supports `multilingual-e5-large`, `bge-m3`, and any fastembed-listed alternative; the operator changes config and runs `durin memory reindex --target lancedb`. The architectural response (SPLADE/ColBERT) is a paradigm shift (sparse vocabulary expansion or multi-vector + PLAID specialised index) that would break the LanceDB + FTS5 setup the rest of the system is built around — ~1000-2000 LOC plus index migration plus bench re-tuning, for a marginal IR-benchmark gain that mainstream LLM-in-the-loop systems do not need. durin already runs the dense + sparse hybrid (MiniLM + BM25 fused via RRF) that mem0, letta, hermes, openclaw, graphiti ship with.
+
+**Decision**: discarded. Doc 08 §3.7 rewritten with the swap-the-model-not-the-paradigm reasoning. Removed from §5 backlog.
+
+### B-11 — Dedicated archive index ✅ RESOLVED (decided against)
+
+**Context**: doc 08 §5 backlog row "Dedicated archive index" with the trigger "Frequent archive queries from operators" — soft-defer wording. Doc 01 §283 already noted "if frequent archive queries emerge, a metadata table can be added" — a long-standing soft promise.
+
+**Audit B-11 (2026-05-29)**: "Recovery is rare by design" (doc 01 §3.6 + §283) is a structural commitment, not an empirical hypothesis. Frequent archive queries are not a workload to optimise for — they signal misuse of the recovery surface. The right response in that case is to teach the search ("use `scope='all'` with more specific keywords") rather than build a parallel index that legitimises the pattern. The trigger "Frequent" was never thresholded because the design intent precludes the use case; that is the soft-defer shape `feedback_stop_soft_deferrals` warns against. The current on-demand walker (F2) handles 1,000 archived entries in well under a second, 10,000 in a few seconds — acceptable for a surface hit a handful of times per week. Mainstream systems do not have archive at all; the comparison is not informative. Operators with a real ad-hoc need can shell-grep `memory/archive/` (same G2 escape-hatch reasoning).
+
+**Decision**: discarded. Doc 08 §2.19 (new) carries the structural commitment reasoning. Doc 01 §283 "if frequent archive queries emerge, a metadata table can be added" note remains historical but the §5 backlog row is removed. F2's on-demand walker remains the supported path.
+
+### B-12 — Pin-by-modality ✅ RESOLVED (decided against)
+
+**Context**: doc 08 §2.6 had pin-by-modality as "Not in MVP — reconsider if bench shows `keywords` is under-used and exact matches still get lost", with a parallel §5 row using a similarly soft trigger.
+
+**Audit B-12 (2026-05-29)**: the original wording predated P3.3 (`_detect_auto_keywords`, audit E14). Today the auto-keyword path detects email / URL / UUID / file-path identifiers in the query and bumps `w_lexical` from 0.7 to 2.5 via RRF; the LLM does not need to pass `keywords` explicitly for the typical exact-match case. The explicit `keywords` parameter remains the escape hatch for unusual identifier shapes. Pin-by-modality would either duplicate that path or override the agent's choice. The mechanism also regresses semantic queries (literal "founder" in an episodic outranking the canonical `person:marcelo`). Mainstream LLM-in-the-loop systems do not implement pin-by-modality. If Phase 8 shows exact-match misses, the empirical response is tuning `DEFAULT_W_LEXICAL_BOOSTED` upward, not adding a pin tier — same shape as B-10 (swap the model, not the paradigm).
+
+**Decision**: upgraded from "Not in MVP / reconsider" to **discarded**. Doc 08 §2.6 rewritten with the auto-keyword + boost reasoning. Removed from §5 backlog.
+
+### B-13 — HyDE (Hypothetical Document Embeddings) ✅ RESOLVED (decided against)
+
+**Context**: doc 08 §3.1 carried HyDE as "future direction but not MVP" since 2026-05-26 with a §5 backlog row whose trigger was "Need for cold-path query enrichment surfaces".
+
+**Audit B-13 (2026-05-29)**: hot-path HyDE is the same LLM-in-retrieval anti-pattern G3.b was discarded for. Cold-path HyDE would be Dream-generating-Dream-input — more LLM calls, more storage, no observable failure mode. Mainstream LLM-in-the-loop systems do not use HyDE. The trigger "need surfaces" is tautological since the system has no telemetry distinguishing retrieval-failed from synthesis-failed. The cheaper path for query enrichment (multi-query agent-side paraphrasing) already shipped +3.9pp via the identity.md prompt pattern.
+
+**Decision**: discarded. Doc 08 §3.1 rewritten. Removed from §5 backlog.
+
+### B-14 — Sub-paging by scope (R2 mitigation) ✅ RESOLVED (defer tightened to G5 form)
+
+**Context**: doc 08 §5 row had a measurable trigger ("entity > N claims") but no counterfactual, no why-current-suffices, and no implementation cost. R2 (mega-hub) is a real operational risk in doc 18 §10, so the defer is legitimate; the wording needed the G5 tight form.
+
+**Audit B-14 (2026-05-29)**: tightened the trigger to ≥ 200 claims (computed as `attributes + relations + body provenance lines`) **AND** bench evidence that post-200 content is lost to retrieval. Added the counterfactual (mega-hubs that retrieve fine stay single-page), why-current-suffices (archive does not count toward claims; doc 01 §4.4 cap logs/rejects at hard 200, enforcement tracked in B-19), and the ~300-400 LOC + selective-reindex cost when triggered.
+
+**Decision**: defer is legitimate post-tightening. Doc 08 §5 row reshaped. Trigger is observable from telemetry (claim count per entity) and bench (retrieval at the entity, partitioned by claim-position).
+
+### B-15 — Alias one-to-many resolution (R6 mitigation) ✅ RESOLVED (defer tightened to G5 form)
+
+**Context**: doc 08 §5 row already had a measurable trigger ("≥ 2 entities sharing an alias") but no counterfactual, no why-current-suffices, no implementation cost. R6 (alias collision) is a real operational risk in doc 18 §10.
+
+**Audit B-15 (2026-05-29)**: tightened. Trigger now requires BOTH ≥ 2 entities sharing an alias (observable via `AliasIndex.size()` vs unique-alias count) AND Dream apply recording a write-time collision (new telemetry event `memory.alias_collision`). Counterfactual: alias index stays one-to-one for a year → decided against, absorb-judge handles the rare merge case. Why-current-suffices: numeric slug suffix + absorb-judge + LLM-in-the-loop disambiguation at read time. Cost: ~250-350 LOC across `AliasIndex`, `extract_query_entities`, `_entity_aware_rerank`, Dream write-time tagger + alias index rebuild.
+
+**Decision**: defer is legitimate post-tightening. Doc 08 §5 row reshaped.
+
+### B-16 — Memory export / import (formal) ✅ RESOLVED (defer tightened to G5 form)
+
+**Context**: doc 08 §5 row had two concrete triggers already (first external user requests export OR breaking schema change planned) and the `cp -r workspace/` fallback. The G5 form needs the counterfactual + cost added explicitly.
+
+**Audit B-16 (2026-05-29)**: counterfactual added (single-operator + no breaking schema change → decided-against, `cp -r` is enough); why-current-suffices spelled out (workspace IS git repo, push to remote = portability); cost estimate added (~450-650 LOC across export with filter flags, per-source-system import adapter, optional encryption, plus a dedicated design doc on format-stability commitments).
+
+**Decision**: defer is legitimate post-tightening. Doc 08 §5 row reshaped.
+
+### B-17 — Data deletion (GDPR-like cascading delete) ✅ RESOLVED (decided against)
+
+**Context**: doc 08 §5 row had three concrete triggers (Telegram/Slack channel exposure, right-to-be-forgotten jurisdiction, public/beta release). The wording read as a legitimate defer, but the audit pulled apart what each trigger actually implies.
+
+**Audit B-17 (2026-05-29)**: durin is single-operator by architecture (doc 00 §2 non-goal #3). There is no second user whose data lives in durin and whose right-to-be-forgotten the operator would need to honour. The three triggers conflate distinct deployment changes — Telegram/Slack bot is the operator interacting from a different surface, not a tenant; right-to-be-forgotten applies when durin is hosted as a service for someone other than the operator (it is not); public/beta release would change the entire deployment shape and deserves its own design pass. Cascading delete "with honest git history handling" requires `git filter-repo`-class rewrites that violate P7's reversibility commitment. The escape hatch already exists: operator runs `rm` + `git commit` on their own files. Building agent-callable `forget(person:X)` introduces a security antipattern (malformed prompt → unintended deletion) the shell-level `rm` prevents by requiring operator action.
+
+**Decision**: discarded. Doc 08 §2.20 (new) carries the deployment-shape reasoning. Removed from §5 backlog. If the deployment shape ever changes (durin becomes a hosted multi-tenant service), GDPR gets a dedicated design pass inside that architectural rework — not as a feature added to the single-operator MVP.
+
+### B-18 — Auto-backup of memory workspace ✅ RESOLVED (decided against)
+
+**Context**: doc 08 §5 row's trigger was "operator enables `memory.backup.enabled = true`" — a config field that does not exist, making the trigger tautological (shipping the feature IS what enables the field).
+
+**Audit B-18 (2026-05-29)**: the workspace IS a git repo; `git push memory/.git/ origin main` is the entire feature, and it ships with git. For non-git backups `rsync`, `tar`, `restic` cover every shape an operator could want. Adding `memory.backup.enabled` would replace a documented standard mechanism with a custom configuration surface, introduce failure modes (network retry, credential management, recovery from corrupted backup state) the operator workflow does not have today, and there is no observable signal that the system needs the tier — no operator has asked. Mainstream LLM-in-the-loop systems treat backup as operator concern (mem0, letta, hermes).
+
+**Decision**: discarded. Doc 08 §2.21 (new) carries the git-repo + shell-tools reasoning. Removed from §5 backlog.

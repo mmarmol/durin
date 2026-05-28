@@ -18,6 +18,7 @@ Slots filled in `consolidator.md`:
   - {recent_history}           (multi-line git log block)
   - {n_entries}
   - {entries_text}             (newline-bulleted observations)
+  - {current_relation_count}   (integer; see Rule 9, B-19 cap surface)
 """
 
 from __future__ import annotations
@@ -181,3 +182,57 @@ def test_no_unsubstituted_placeholders(base_ctx: DreamPromptContext) -> None:
 def test_prompt_is_nonempty(base_ctx: DreamPromptContext) -> None:
     out = build_dream_prompt(base_ctx)
     assert len(out) > 500
+
+
+# ---------------------------------------------------------------------------
+# B-19 (2026-05-29): current_relation_count surfaces the cap budget
+# ---------------------------------------------------------------------------
+
+
+def test_current_relation_count_rendered() -> None:
+    """The integer count is interpolated into the prompt so the LLM
+    can budget against the 200 hard cap (Rule 9) before fanning out."""
+    ctx = DreamPromptContext(
+        entity_id="person:marcelo",
+        existing_page_content="",
+        existing_attribute_keys=(),
+        existing_relation_types=(),
+        existing_uris=(),
+        recent_history="",
+        entries=("episodic/x.md: ...",),
+        current_relation_count=187,
+    )
+    out = build_dream_prompt(ctx)
+    assert "current relation count: 187" in out
+
+
+def test_current_relation_count_defaults_to_zero() -> None:
+    """A fresh entity (no page yet) renders as `0`, not as missing."""
+    ctx = DreamPromptContext(
+        entity_id="person:new",
+        existing_page_content="",
+        existing_attribute_keys=(),
+        existing_relation_types=(),
+        existing_uris=(),
+        recent_history="",
+        entries=("episodic/x.md: ...",),
+    )
+    out = build_dream_prompt(ctx)
+    assert "current relation count: 0" in out
+
+
+def test_rule_9_appended() -> None:
+    """Rule 9 is part of the rules.md package the LLM reads."""
+    ctx = DreamPromptContext(
+        entity_id="person:marcelo",
+        existing_page_content="",
+        existing_attribute_keys=(),
+        existing_relation_types=(),
+        existing_uris=(),
+        recent_history="",
+        entries=("episodic/x.md: ...",),
+    )
+    out = build_dream_prompt(ctx)
+    assert "Rule 9" in out
+    assert "200" in out
+    assert "Per-entity relation cap" in out
