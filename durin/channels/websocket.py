@@ -695,6 +695,9 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/model/capabilities":
             return self._handle_model_capabilities(request)
 
+        if got == "/api/memory/cross-encoder/test":
+            return await self._handle_cross_encoder_test(request, query)
+
         m = re.match(r"^/api/sessions/([^/]+)/messages$", got)
         if m:
             return self._handle_session_messages(request, m.group(1))
@@ -1421,6 +1424,41 @@ class WebSocketChannel(BaseChannel):
                 "fix": result.fix or "",
             }
         )
+
+    async def _handle_cross_encoder_test(
+        self, request: WsRequest, query: dict,
+    ) -> Response:
+        """`GET /api/memory/cross-encoder/test?model=<id>` — probe a
+        cross-encoder model id by loading + running a trivial score.
+
+        Audit B12 (2026-05-28). Replaces the previously-considered
+        hardcoded enum: any model id that the user wants to evaluate
+        can be tested live, with the result surfaced to the webui
+        before the value is committed to config.
+
+        The load is potentially slow (model download + warmup). Run
+        it in a thread so the gateway event loop stays responsive.
+        """
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        import asyncio
+        from durin.memory.cross_encoder import test_model as ce_test_model
+
+        model = (_query_first(query, "model") or "").strip()
+        if not model:
+            return _http_error(400, "missing required `model` query param")
+        try:
+            result = await asyncio.to_thread(ce_test_model, model)
+        except Exception as exc:  # noqa: BLE001
+            return _http_json_response(
+                {
+                    "status": "fail",
+                    "message": f"unexpected error: {type(exc).__name__}: {exc}",
+                    "model_id": model,
+                    "duration_ms": 0.0,
+                },
+            )
+        return _http_json_response(result)
 
     @staticmethod
     def _is_websocket_channel_session_key(key: str) -> bool:

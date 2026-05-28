@@ -270,6 +270,31 @@ export async function testModel(
   );
 }
 
+/** Result of a cross-encoder model probe (audit B12). */
+export interface CrossEncoderTestResult {
+  status: "ok" | "fail";
+  message: string;
+  model_id: string;
+  duration_ms: number;
+}
+
+/** Probe a cross-encoder model id by loading + running a trivial score
+ *  against it. Returns ok/fail with a human-readable message and the
+ *  load+score timing. Used by the Settings → Memory pane so an operator
+ *  can verify a model id (sentence-transformers handle, HuggingFace
+ *  reference, local path, etc.) before committing it to config. */
+export async function testCrossEncoderModel(
+  token: string,
+  model: string,
+  base: string = "",
+): Promise<CrossEncoderTestResult> {
+  const query = new URLSearchParams({ model });
+  return request<CrossEncoderTestResult>(
+    `${base}/api/memory/cross-encoder/test?${query.toString()}`,
+    token,
+  );
+}
+
 export interface ChannelInfo {
   name: string;
   display_name: string;

@@ -26,7 +26,7 @@ Two surfaces:
 from __future__ import annotations
 
 import logging
-from typing import Optional, Protocol
+from typing import Any, Optional, Protocol
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,7 @@ __all__ = [
     "CrossEncoderReranker",
     "DEFAULT_MODEL",
     "rerank_hits",
+    "test_model",
 ]
 
 
@@ -126,6 +127,97 @@ def rerank_hits(
         zip(hits, scores), key=lambda x: x[1], reverse=True,
     )
     return [u for (u, _), _ in paired[:top_n]]
+
+
+def test_model(
+    model_id: str,
+    *,
+    loader: Optional[Any] = None,
+) -> dict:
+    """Probe a cross-encoder model id: load + score a trivial pair.
+
+    Audit B12 (2026-05-28). Replaces the previously-considered
+    hard-coded enum of "supported models" — any id that
+    ``sentence_transformers.CrossEncoder`` (or a custom loader) can
+    resolve is accepted. The validation happens dynamically when an
+    operator clicks "Test" in the webui or runs ``durin doctor``.
+
+    Returns a dict with:
+    - ``status``: ``"ok"`` | ``"fail"``.
+    - ``message``: human-readable summary.
+    - ``model_id``: the input id (echoed for the webui to confirm).
+    - ``duration_ms``: wall-clock of load + score.
+
+    ``loader`` is the factory that resolves the id to a :class:`Scorer`.
+    Defaults to :func:`_load_default_scorer` (production). Tests inject
+    a stub that returns a known scorer or simulates load failure.
+    Keeping the loader injectable means we can unit-test the result
+    shape without pulling sentence_transformers into the test path.
+    """
+    import time
+
+    if not model_id or not isinstance(model_id, str):
+        return {
+            "status": "fail",
+            "message": "model id is empty",
+            "model_id": model_id or "",
+            "duration_ms": 0.0,
+        }
+
+    factory = loader or _load_default_scorer
+    t0 = time.perf_counter()
+    try:
+        scorer = factory(model_id)
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "status": "fail",
+            "message": f"loader raised: {type(exc).__name__}: {exc}",
+            "model_id": model_id,
+            "duration_ms": (time.perf_counter() - t0) * 1000.0,
+        }
+    if scorer is None:
+        return {
+            "status": "fail",
+            "message": (
+                "loader returned None — either sentence_transformers "
+                "is missing (install durin[cross-encoder]) or the "
+                "model id failed to download or load. Check logs for "
+                "the underlying error."
+            ),
+            "model_id": model_id,
+            "duration_ms": (time.perf_counter() - t0) * 1000.0,
+        }
+    # Trivial score to confirm the loaded model is actually callable.
+    try:
+        scores = scorer.score([("test query", "test document")])
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "status": "fail",
+            "message": (
+                f"loaded but score() raised: {type(exc).__name__}: {exc}"
+            ),
+            "model_id": model_id,
+            "duration_ms": (time.perf_counter() - t0) * 1000.0,
+        }
+    if not isinstance(scores, list) or not scores:
+        return {
+            "status": "fail",
+            "message": (
+                f"loaded but score() returned an unusable result: "
+                f"{type(scores).__name__}({scores!r})"
+            ),
+            "model_id": model_id,
+            "duration_ms": (time.perf_counter() - t0) * 1000.0,
+        }
+    return {
+        "status": "ok",
+        "message": (
+            f"loaded {model_id} and produced a score "
+            f"(value={float(scores[0]):.3f})"
+        ),
+        "model_id": model_id,
+        "duration_ms": (time.perf_counter() - t0) * 1000.0,
+    }
 
 
 def _load_default_scorer(model: str) -> Optional[Scorer]:

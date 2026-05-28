@@ -1,31 +1,34 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Check, ChevronDown, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import { getConfig, setConfigValue } from "@/lib/api";
-import { cn } from "@/lib/utils";
+import {
+  getConfig,
+  setConfigValue,
+  testCrossEncoderModel,
+  type CrossEncoderTestResult,
+} from "@/lib/api";
 import {
   SettingsGroup,
   SettingsRow,
   SettingsSectionTitle,
 } from "./primitives";
 
-const CROSS_ENCODER_MODELS: ReadonlyArray<{ id: string; labelKey: string }> = [
-  { id: "jinaai/jina-reranker-v2-base-multilingual", labelKey: "jinaV2" },
-  { id: "BAAI/bge-reranker-base", labelKey: "bgeBase" },
-  { id: "BAAI/bge-reranker-v2-m3", labelKey: "bgeV2M3" },
-  { id: "Qwen/Qwen3-Reranker-0.6B", labelKey: "qwen3" },
+// Suggested cross-encoder models surfaced as datalist options.
+// Audit B12 (2026-05-28): the input is NOT restricted to this list —
+// any sentence-transformers compatible id (HuggingFace handle, local
+// path, etc.) is accepted, with validation happening live via the
+// Test button.
+const CROSS_ENCODER_SUGGESTED_MODELS: ReadonlyArray<string> = [
+  "jinaai/jina-reranker-v2-base-multilingual",
+  "BAAI/bge-reranker-base",
+  "BAAI/bge-reranker-v2-m3",
+  "Qwen/Qwen3-Reranker-0.6B",
 ] as const;
 
-const DEFAULT_CROSS_ENCODER_MODEL = CROSS_ENCODER_MODELS[0].id;
+const DEFAULT_CROSS_ENCODER_MODEL = CROSS_ENCODER_SUGGESTED_MODELS[0];
 
 interface CrossEncoderState {
   enabled: boolean;
@@ -147,10 +150,11 @@ export function MemorySettings({ token }: { token: string }) {
             title={t("settings.memory.rows.crossEncoderModel")}
             description={t("settings.memory.help.crossEncoderModel")}
           >
-            <CrossEncoderModelPicker
+            <CrossEncoderModelEditor
+              token={token}
               value={crossEncoder.model}
               disabled={!crossEncoder.enabled || savingPath === "memory.search.cross_encoder.model"}
-              onChange={(model) => void onSave("memory.search.cross_encoder.model", model)}
+              onSave={(model) => void onSave("memory.search.cross_encoder.model", model)}
             />
           </SettingsRow>
         </SettingsGroup>
@@ -177,62 +181,118 @@ export function MemorySettings({ token }: { token: string }) {
   );
 }
 
-function CrossEncoderModelPicker({
+/**
+ * Free-form model id editor with live test (audit B12, 2026-05-28).
+ *
+ * Replaces the prior fixed dropdown with a text input + <datalist> so any
+ * sentence-transformers compatible id can be entered (the four suggestions
+ * are bundled in the install but the user is free to type a HuggingFace
+ * handle, local path, etc.). The Test button validates the value live —
+ * the backend loads the model and runs a trivial score, surfacing OK /
+ * fail with the underlying error.
+ */
+function CrossEncoderModelEditor({
+  token,
   value,
   disabled,
-  onChange,
+  onSave,
 }: {
+  token: string;
   value: string;
   disabled: boolean;
-  onChange: (model: string) => void;
+  onSave: (model: string) => void;
 }) {
   const { t } = useTranslation();
-  const selected = CROSS_ENCODER_MODELS.find((m) => m.id === value);
-  const label = selected
-    ? t(`settings.memory.crossEncoderModels.${selected.labelKey}`)
-    : value;
+  const [draft, setDraft] = useState(value);
+  const [testing, setTesting] = useState(false);
+  const [result, setResult] = useState<CrossEncoderTestResult | null>(null);
+
+  useEffect(() => {
+    setDraft(value);
+    setResult(null);
+  }, [value]);
+
+  const dirty = draft.trim() !== value && draft.trim().length > 0;
+
+  const commit = () => {
+    if (!dirty) return;
+    onSave(draft.trim());
+  };
+
+  const runTest = async () => {
+    setTesting(true);
+    setResult(null);
+    try {
+      const r = await testCrossEncoderModel(token, draft.trim());
+      setResult(r);
+    } catch (err) {
+      setResult({
+        status: "fail",
+        message: (err as Error).message,
+        model_id: draft.trim(),
+        duration_ms: 0,
+      });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const datalistId = "ce-model-suggestions";
+
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild disabled={disabled}>
-        <Button
-          type="button"
-          variant="outline"
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center gap-2">
+        <Input
+          list={datalistId}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commit();
+          }}
+          placeholder={t("settings.memory.crossEncoderModelPlaceholder")}
           disabled={disabled}
-          className={cn(
-            "h-8 w-[260px] justify-between rounded-full border-input bg-background px-3 text-[13px] font-normal shadow-none",
-            "hover:bg-accent/55 focus-visible:ring-2 focus-visible:ring-ring",
-            disabled && "text-muted-foreground",
-          )}
+          className="h-8 w-[280px] rounded-full text-[13px]"
+        />
+        <datalist id={datalistId}>
+          {CROSS_ENCODER_SUGGESTED_MODELS.map((id) => (
+            <option key={id} value={id} />
+          ))}
+        </datalist>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!dirty || disabled}
+          onClick={commit}
+          className="rounded-full"
         >
-          <span className="truncate">{label}</span>
-          <ChevronDown className="ml-2 h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
+          {t("settings.config.save")}
         </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align="end"
-        className="max-h-[18rem] w-[300px] overflow-y-auto rounded-[18px] border-border/65 bg-popover p-1.5 text-popover-foreground shadow-[0_18px_55px_rgba(15,23,42,0.18)] dark:border-white/10 dark:shadow-[0_22px_55px_rgba(0,0,0,0.45)]"
-      >
-        {CROSS_ENCODER_MODELS.map((model) => {
-          const isSelected = model.id === value;
-          return (
-            <DropdownMenuItem
-              key={model.id}
-              onSelect={() => onChange(model.id)}
-              className={cn(
-                "flex cursor-default items-center justify-between gap-2 rounded-[12px] px-3 py-2 text-[13px]",
-                "focus:bg-muted focus:text-foreground",
-                isSelected && "bg-primary/10 text-primary focus:bg-primary/12 focus:text-primary",
-              )}
-            >
-              <span className="truncate">
-                {t(`settings.memory.crossEncoderModels.${model.labelKey}`)}
-              </span>
-              {isSelected ? <Check className="h-3.5 w-3.5 shrink-0" aria-hidden /> : null}
-            </DropdownMenuItem>
-          );
-        })}
-      </DropdownMenuContent>
-    </DropdownMenu>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={disabled || testing || draft.trim().length === 0}
+          onClick={() => void runTest()}
+          className="rounded-full"
+        >
+          {testing ? (
+            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden />
+          ) : null}
+          {t("settings.memory.crossEncoderTest")}
+        </Button>
+      </div>
+      {result ? (
+        <div
+          className={
+            result.status === "ok"
+              ? "text-[12px] text-emerald-600 dark:text-emerald-400"
+              : "text-[12px] text-destructive"
+          }
+        >
+          {result.status === "ok" ? "✓ " : "✗ "}
+          {result.message}
+        </div>
+      ) : null}
+    </div>
   );
 }
 

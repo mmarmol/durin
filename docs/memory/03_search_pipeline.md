@@ -335,6 +335,8 @@ When OFF (default), the pipeline jumps from step 4 directly to step 6 (temporal 
 
 ### 9.1 Default model (when enabled)
 
+**The model set is open** (audit B12, 2026-05-28). The four entries below are bundled in the install as suggestions surfaced in the webui datalist and the onboarding wizard, but the config field accepts any `sentence_transformers.CrossEncoder` compatible id — HuggingFace handles, local paths, future ollama / API-served models. Validation is dynamic: the operator clicks "Test" in Settings → Memory (or runs `durin doctor`) and the backend loads + scores a trivial pair, surfacing the result before the value is committed. No closed enum is enforced in the backend or in the frontend dropdown.
+
 When the user enables the cross-encoder, the default model is **`jinaai/jina-reranker-v2-base-multilingual`**:
 
 | Property | Value |

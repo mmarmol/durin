@@ -1003,7 +1003,7 @@ Los tres están en `EVENTS` registry y se emiten.
 
 ---
 
-### B12 — Cross-encoder model NO validado contra lista curada
+### B12 — Cross-encoder model NO validado contra lista curada ✅ RESOLVED
 
 **Doc dice** (`docs/memory/03_search_pipeline.md` §9.5): *"dropdown for picking the model from the curated list (jina-v2, bge-base, bge-v2-m3, qwen3-reranker-0.6b)"*.
 
@@ -1027,7 +1027,40 @@ No hay validador, no hay enum. Un valor inválido (e.g. `model: "bogus"`) pasa e
 
 **Recomendación**: A. Warn-but-allow es el balance correcto. La webui ya filtra a los 4 conocidos; el config schema acepta otros pero loguea warning.
 
-**Estado**: pending
+**Resolución (2026-05-28) — Opción C: validación dinámica, sin lista fija**: el user empujó con la observación clave: *"Los modelos antes de seleccionarlos y asignarlos deberian pasar un test. Los que durin ofrece en la instalacion no seran los unicos permitidos, el usuario deberia a la larga poder poner otro ya sea por ollama, o usando api de modelos que ya soportamos o customs. Pero no veo un listado fijo fuera el de la instalacion inicial."*
+
+Eso descartó tanto la Opción A (soft validator con lista) como la Opción B (dejar libre + doc fix). La fix correcta es **probar el modelo live** antes de aceptar el valor — patrón del `check_model_ping` que ya existe para LLM models.
+
+Cambios backend:
+
+- [durin/memory/cross_encoder.py](../../durin/memory/cross_encoder.py): nuevo `test_model(model_id, *, loader=None) → dict` con shape `{status, message, model_id, duration_ms}`. Intenta `_load_default_scorer(model_id)` + score trivial. Maneja cuatro modos de falla: empty id, loader retorna None (no sentence_transformers o model not found), loader raises (network error, etc.), score raises (model loaded pero broken).
+- [durin/channels/websocket.py](../../durin/channels/websocket.py): nuevo endpoint `GET /api/memory/cross-encoder/test?model=<id>` (`_handle_cross_encoder_test`). Async + `asyncio.to_thread` para que el load lento no bloquee el event loop del gateway.
+
+Cambios webui:
+
+- [webui/src/lib/api.ts](../../webui/src/lib/api.ts): nueva función `testCrossEncoderModel(token, model)` + `CrossEncoderTestResult` interface.
+- [webui/src/components/settings/MemorySettings.tsx](../../webui/src/components/settings/MemorySettings.tsx): refactor del control "Reranker model". Antes: dropdown cerrado de 4 valores. Ahora: input free-form con HTML `<datalist>` para los 4 sugeridos + botón "Test" + área de status. El user puede tipear cualquier id; el botón Test invoca el endpoint nuevo; el resultado (ok verde / fail rojo con mensaje) se muestra inline.
+- [webui/src/i18n/locales/en/common.json](../../webui/src/i18n/locales/en/common.json): strings actualizados — `crossEncoderModelPlaceholder` y `crossEncoderTest`; eliminé el namespace `crossEncoderModels` (labels per-model) ya que no hay lista cerrada.
+
+Tests:
+
+- [tests/memory/test_cross_encoder_model_validation.py](../../tests/memory/test_cross_encoder_model_validation.py) (nuevo, 8 tests): cubren los 4 modos de falla + happy path + invariante crítico:
+  * `test_no_hardcoded_model_enum_in_config_schema`: asserts that `CrossEncoderConfig.model_fields["model"].annotation is str` (free-form). Si alguien re-introduce un `Literal[...]` o un `enum`, el test falla loudly — defensa contra regresión al pattern anti-user-extensibility.
+
+Doc:
+
+- [docs/memory/03_search_pipeline.md §9.5](03_search_pipeline.md): aclaración explícita: "The model set is open. The four entries below are bundled in the install as suggestions… but the config field accepts any sentence_transformers compatible id. Validation is dynamic via the Test button."
+
+**Lecciones aplicadas**:
+- [[feedback-question-user-input]]: sin tu push-back yo habría implementado la Opción A (soft validator con lista hardcoded), que era exactamente el anti-pattern user-restrictive del que me advertiste.
+- [[feedback-sync-tests-exercise-behavior]]: el test del invariante `model_fields["model"].annotation is str` ejercita el contract del schema, no compara strings — defensa contra alguien convirtiendo el field a un Literal en el futuro.
+- Pattern similar al de A8 / [[feedback-telemetry-is-first-class]]: la validación correcta no es "permitir o no según una lista" sino "ejercitar el comportamiento real" — load + score, igual que `check_model_ping` lo hace para LLM models.
+
+**Verificado pre-commit**:
+- Backend: 8/8 tests del helper + 2328 full suite (sin regresiones).
+- Webui: `npx tsc --noEmit` clean, `npx vitest run` 142/142.
+
+**Estado**: resolved (commit pendiente).
 
 ---
 
