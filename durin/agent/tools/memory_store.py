@@ -139,12 +139,11 @@ class MemoryStoreTool(Tool):
 
     @property
     def description(self) -> str:
-        return (
-            "Persist a memory entry. Idempotent on (class, content): same "
-            "input writes the same id, so repeated calls with the same "
-            "body are safe. Author is stamped automatically. Pick "
-            "class_name based on lifespan and intent — see the param."
-        )
+        # Canonical text per `docs/memory/06_prompts_and_instructions.md` §3.2.
+        # Reads via `Tool.to_schema()` → `function.description` in the
+        # OpenAI spec — what the LLM sees. Audit B1 (2026-05-28) caught
+        # the prior short text drifted from the canonical doc.
+        return _PARAMETERS["description"]
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:

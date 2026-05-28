@@ -719,7 +719,7 @@ Aplicando `feedback_telemetry_is_first_class`: telemetría (health_check emit) y
 
 ## MEDIUM — drift sin romper UX directo
 
-### B1 — `.description` property de los tools no está sincronizada con la canónica
+### B1 — `.description` property de los tools no está sincronizada ✅ RESOLVED con la canónica
 
 **Doc dice** (`docs/memory/04_agent_tools.md:413-419` §8):
 
@@ -742,7 +742,24 @@ Hay que clarificar cuál se le presenta al LLM en runtime. Verificar `Tool` base
 2. Si la property es "human-readable short" y `_PARAMETERS` es "LLM canonical", documentar la distinción explícitamente y agregar test de invariante (e.g. property contiene un summary del canónico).
 3. Si la property no se usa en ningún lado relevante, **borrarla** — código muerto que confunde.
 
-**Estado**: pending
+**Resolución (2026-05-28) — Bug discovery + fix**: la investigación reveló que **el sync test de P6.3 estaba validando el campo equivocado**. `Tool.to_schema()` ([base.py:258](../../durin/agent/tools/base.py#L258)) emite `self.description` (la property corta) como `function.description` en el OpenAI function-calling spec — eso es lo que el LLM realmente lee para decidir invocar el tool. El `_PARAMETERS["description"]` que P6.3 sincronizó con doc 06 termina como `function.parameters.description` (descripción del schema del parameters object), que la mayoría de los LLMs ignora.
+
+**Bug**: durante semanas el sync test pasó verde validando un campo que el LLM ignoraba mientras el campo que el LLM SÍ leía contenía texto corto no sincronizado con doc 06. Mismo patrón que A4 (mis propios commits previos validados parcialmente).
+
+Cambios:
+
+- [durin/agent/tools/memory_search.py:181](../../durin/agent/tools/memory_search.py#L181), [memory_store.py:140](../../durin/agent/tools/memory_store.py#L140), [memory_ingest.py:99](../../durin/agent/tools/memory_ingest.py#L99), [memory_drill.py:47](../../durin/agent/tools/memory_drill.py#L47): cada `.description` property ahora delega a `_PARAMETERS["description"]` (single source of truth — ambos fields resuelven al mismo string). El texto corto no canónico se eliminó. Comentario inline explica el flujo y referencia B1.
+- [tests/memory/test_tool_description_sync.py](../../tests/memory/test_tool_description_sync.py): el test ahora instancia cada tool y lee `.description` property (en lugar de `_PARAMETERS["description"]`). Adicionalmente, nuevo test `test_description_property_is_what_to_schema_emits` verifica el invariante `to_schema()["function"]["description"] == tool.description` — anti-drift contra el caso "alguien cambia `to_schema()` para usar otro campo y el sync queda mirando el campo equivocado de nuevo".
+- [docs/memory/06_prompts_and_instructions.md §3.5](06_prompts_and_instructions.md): reescrito — explica el contract `.description` → `function.description`, por qué el `_PARAMETERS["description"]` (que termina como `function.parameters.description`) se mantiene idéntico por defense-in-depth, y documenta el bug B1 que esta sección refleja.
+
+**Lecciones aplicadas**:
+- [[feedback-sync-tests-exercise-behavior]]: el sync test ahora ejercita el **contract real** (`to_schema()` output) no sólo string equality. El nuevo invariant test `test_description_property_is_what_to_schema_emits` es defensa específica contra "alguien refactorea `to_schema()` y el sync queda mirando el lugar equivocado".
+- [[feedback-verify-quantifiers]]: durante la investigación verifiqué qué consumer real lee `self.description` (grep mostró `to_schema()` único). Sin ese check yo habría asumido que el sync test ya cubría lo correcto.
+- [[feedback-optimization-vs-principle]] aplicado al pattern A4: P6.3 fue commit mío que sincronizó parcialmente — el fix es local al consumer correcto (la property que el LLM lee), no cambiar el contract global.
+
+**Verificado pre-commit**: 5/5 tests del sync (4 contenido + 1 invariante); suite memoria 964 passing.
+
+**Estado**: resolved (commit pendiente).
 
 ---
 

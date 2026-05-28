@@ -46,13 +46,11 @@ class MemoryDrillTool(Tool):
 
     @property
     def description(self) -> str:
-        return (
-            "Resolve a markdown URI (path#anchor) to the addressed section. "
-            "Use after memory_search returns a URI to fetch just that turn or "
-            "section instead of the whole file. Returns the section text from "
-            "the matching `## <anchor>` header up to the next same-or-higher "
-            "level header. No anchor → whole file content."
-        )
+        # Canonical text per `docs/memory/06_prompts_and_instructions.md` §3.4.
+        # Reads via `Tool.to_schema()` → `function.description` in the
+        # OpenAI spec — what the LLM sees. Audit B1 (2026-05-28) caught
+        # the prior short text drifted from the canonical doc.
+        return _PARAMETERS["description"]
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
