@@ -346,7 +346,7 @@ These are NOT discarded; they're queued for post-MVP. When and how they enter de
 
 | Feature | Trigger to revisit | Likely doc to update |
 |---|---|---|
-| **§2.F eager pre-fetch** (query-specific memory injection into user message before LLM call, hermes/openclaw pattern) | Telemetry shows `memory.silent_retrieval_miss > 5%` of turns over 1 week, OR users report frequent "the agent didn't remember X" complaints | `06_prompts_and_instructions.md` new §9, `04_agent_tools.md` §6 |
+| **§2.F eager pre-fetch** (query-specific memory injection into user message before LLM call, hermes/openclaw pattern) | Any of: (a) explicit user feedback (thumbs-down / retry on > 3 turns/week), (b) bench failure cluster on LoCoMo / EverMemBench traces showing the agent answered without invoking `memory_search` AND the gold answer required it, (c) operator reports "the agent didn't remember X" pattern. Original trigger (`memory.silent_retrieval_miss > 5%`) was discarded — see §2.11. | `06_prompts_and_instructions.md` new §9, `04_agent_tools.md` §6 |
 | Cross-encoder reranker default ON | Bench shows opt-in OFF is significantly worse | `03_search_pipeline.md` §9, `06_prompts_and_instructions.md` §6.2 |
 | MMR | Bench / user reports show duplication in top-K post-archive | `03_search_pipeline.md` §11 |
 | Temporal decay enabled for more classes | Workspace > 1 year old shows obsolete-info regressions | `03_search_pipeline.md` §10 |
@@ -386,15 +386,33 @@ Before each agent turn:
 - **Multi-query identity.md pattern shipped +3.9pp** in LoCoMo v2 by teaching the agent to invoke memory_search itself when needed. Adding eager pre-fetch on top is uncertain incremental value.
 - **Cost per turn**: +50-130ms latency + cache miss in upstream prompt cache (variable payload in user message). Real cost; only worth paying if the value is observable.
 
-**Trigger to revisit (telemetry-driven):**
+**Trigger to revisit (post-§2.11 update, 2026-05-28):**
 
-1. Doc 07 §6.4 adds a new event `memory.silent_retrieval_miss` emitted when:
-   - The agent answered without invoking `memory_search` in this turn, AND
-   - The next user turn looks like a re-ask or correction (heuristic: `is_re_question(prev, curr) || contains_negation_correction(curr)`).
+The original spec was a telemetry event `memory.silent_retrieval_miss`
+detected via three heuristics (substring overlap + English negation
+tokens + correction patterns). Audit B9 + §2.11 discarded that
+detector — its heuristics don't generalise to multi-lingual
+workloads (CJK + Spanish in durin's seed bench), and replacing them
+with an LLM judge on the hot path breaks the cheap-telemetry
+contract the rest of doc 07 describes.
 
-2. Operator monitors weekly rate.
+Replacement triggers, in priority order:
 
-3. If `silent_retrieval_miss_rate > 5%` consistently over a week, OR users report "the agent didn't remember X" >3 times in a week, the deferred §2.F becomes active.
+1. **Explicit user-feedback signal.** When the operator opens a
+   thumbs-down / retry surface (any channel) and the rate of
+   "agent forgot" complaints exceeds ~3/week, that's the activation
+   signal. Unambiguous, language-agnostic.
+2. **Bench failure cluster.** On LoCoMo or EverMemBench traces,
+   when an unrecoverable cluster of failures shares the pattern
+   "agent didn't invoke `memory_search` AND the gold answer required
+   memory recall", that's a controlled-environment signal — same
+   meaning as the original detector but with ground-truth labels.
+3. **Offline LLM judge over bench traces** (post-hoc, batched, not
+   per-turn). Same accuracy as the discarded per-turn detector,
+   amortised cost, no hot-path budget impact.
+
+If any of these triggers fire and §2.F gets activated, the spec to
+write lives in the paragraph below.
 
 **When activated, the spec to write:** doc 06 new §9 "Eager pre-fetch (§2.F)" with: trigger condition (every turn), search builder (uses user_message as query, scope=all, level=warm), wrapper format (`<memory-context>` block with system note), insertion point (append to user message ephemerally — do NOT persist to session), failure behavior (omit silently on memory_search error), telemetry (`memory.eager_prefetch_invoked` + duration).
 

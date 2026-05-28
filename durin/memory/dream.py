@@ -653,6 +653,8 @@ class DreamConsolidator:
                         aliases=list(page.aliases),
                         body=page.body,
                         path=page_path,
+                        attributes=dict(page.attributes),
+                        relations=list(page.relations),
                     )
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
@@ -660,10 +662,14 @@ class DreamConsolidator:
                         entity_ref, exc,
                     )
 
-        # 7) Re-index FTS5 for the entity page (doc 02 §6.2).
+        # 7) Re-index FTS5 for the entity page (doc 02 §6.2). E5:
+        # `trigger="dream_apply"` so capacity dashboards can split
+        # this burst from the steady watcher stream.
         try:
             from durin.memory.indexer import reindex_one_file
-            reindex_one_file(self.workspace, page_path)
+            reindex_one_file(
+                self.workspace, page_path, trigger="dream_apply",
+            )
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "dream apply: FTS reindex failed for %s: %s",

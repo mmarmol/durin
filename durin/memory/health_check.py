@@ -228,7 +228,9 @@ class HealthChecker:
         for path in candidate_paths:
             if path.is_file():
                 try:
-                    reindex_one_file(self._workspace, path)
+                    reindex_one_file(
+                        self._workspace, path, trigger="drift_repair",
+                    )
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
                         "health_check: drift repair %s failed: %s",

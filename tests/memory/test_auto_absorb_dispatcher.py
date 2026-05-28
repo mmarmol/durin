@@ -342,10 +342,14 @@ def test_absorb_re_upserts_canonical_to_vector_index(tmp_path: Path) -> None:
 
     class _StubVI:
         def upsert_entity_page(self, *, entity_ref: str, name: str,
-                                aliases: list[str], body: str, path: Path) -> None:
+                                aliases: list[str], body: str, path: Path,
+                                attributes: dict[str, Any] | None = None,
+                                relations: list[dict[str, Any]] | None = None) -> None:
             upserts.append({
                 "entity_ref": entity_ref, "name": name,
                 "aliases": list(aliases), "body": body, "path": str(path),
+                "attributes": dict(attributes or {}),
+                "relations": list(relations or []),
             })
         def delete_by_id(self, ref: str) -> bool:
             deletes.append(ref)

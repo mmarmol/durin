@@ -256,6 +256,8 @@ class EntityAbsorption:
                     aliases=list(merged.aliases),
                     body=merged.body,
                     path=canonical_path,
+                    attributes=dict(merged.attributes),
+                    relations=list(merged.relations),
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning(

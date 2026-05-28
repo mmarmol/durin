@@ -81,20 +81,28 @@ Emitted by `memory_search` and its sub-pipeline.
 
 ### 4.1 `memory.recall`
 
-Top-level event, emitted once per `memory_search` call.
+Top-level event, emitted once per `memory_search` call. Audit E1
+(2026-05-28) aligned the payload with this table; pre-E1 only the
+first four required fields were emitted.
 
-| Field | Type | Description |
-|---|---|---|
-| `query` | string | Query string (truncated to 200 chars for telemetry storage) |
-| `keywords` | string \| null | Optional keywords param |
-| `scope` | enum | `dreamed | undreamed | all` |
-| `level` | enum | `warm | cold` |
-| `result_count` | int | Final count returned (after limit) |
-| `total_candidates` | int | Total candidates before limit |
-| `strategy` | enum | `vector | hybrid | grep | failed` (which path produced results) |
-| `recovered_from` | string \| null | If recovery activated, the component that recovered (`lancedb_rebuild`, etc.) |
-| `recovery_duration_ms` | float \| null | Recovery overhead |
-| `duration_ms` | float | Total search duration |
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `query` | string | yes | Raw query string |
+| `scope` | enum | yes | `dreamed | undreamed | all` |
+| `level` | enum | yes | `warm | cold` |
+| `result_count` | int | yes | Final count returned (after limit) |
+| `strategy` | enum | yes | `vector | lexical | hybrid | grep` (which path produced results) |
+| `duration_ms` | float | yes | Total search wall-clock |
+| `total_candidates` | int | yes | `vector_count + lexical_count` from the pipeline (pre-limit) |
+| `keywords` | string \| null | yes | The LLM-supplied keyword hint (`null` when omitted) |
+| `recovered_from` | list of strings | only on degraded run | Pipeline sources that raised and recovered (e.g. `["vector"]`) |
+| `recovery_duration_ms` | float | only on degraded run | Wall-clock spent inside the safe wrappers that swallowed failures |
+| `iteration` | int | optional | Agent iteration counter (auto-injected by `emit_tool_event`) |
+| `session_key` | string \| null | optional | Session key (auto-injected) |
+
+`recovered_from` + `recovery_duration_ms` mirror the tool's response
+shape (`MemorySearchTool.execute()`) — both are omitted on clean
+runs to keep dashboards' degradation panels grep-friendly.
 
 ### 4.2 `memory.recall.vector`
 
@@ -109,14 +117,22 @@ Fields covered there are sufficient; additions for v2:
 
 ### 4.3 `memory.recall.lexical`
 
-NEW event for FTS5 path observability.
+FTS5 path observability. Emitted by `durin/memory/lexical_search.py`.
+Audit E2 (2026-05-28) aligned doc with actual emission — pre-E2 the
+table referenced a non-existent `tokenizer_used` field.
 
 | Field | Type | Description |
 |---|---|---|
-| `query` | string | Truncated query |
-| `tokenizer_used` | enum | `unicode61 | trigram | like_fallback` (per §5.4 doc 02) |
+| `route` | enum | `unicode61 | trigram | like_substring` (from `LexicalRoute` enum in `query_router.py`) |
+| `query_chars` | int | Length of normalised query (post Unicode NFC + casefold) |
+| `cjk_chars` | int | Count of CJK chars in the query — drives the route decision |
 | `hit_count` | int | FTS5 returned hits |
 | `duration_ms` | float | FTS5 query duration |
+
+The raw `query` is intentionally NOT included here — `memory.recall`
+already carries it, and duplicating it doubles per-row storage on a
+hot path. Dashboards join `memory.recall.lexical` to `memory.recall`
+on `(session_key, iteration)` if they need the original text.
 
 ### 4.4 `memory.recall.rerank`
 
@@ -134,14 +150,25 @@ This event only emits when cross-encoder is enabled (default OFF).
 
 ### 4.5 `memory.recall.rrf`
 
-NEW event for the cross-RRF fusion step.
+Cross-source RRF fusion step. Emitted by `durin/memory/rrf_fusion.py`.
+Audit E3 (2026-05-28) aligned doc with actual emission — pre-E3 the
+table referenced abstract roll-ups (`sources_active`, `dedup_count`)
+that the code never emitted; the actual schema gives per-source hit
+counts, which are strictly richer.
 
 | Field | Type | Description |
 |---|---|---|
-| `sources_active` | list of strings | e.g., `["vector", "lexical"]` or `["vector", "lexical", "grep"]` |
-| `keyword_boost_applied` | bool | Whether `w_lexical` was boosted because `keywords` was provided |
-| `dedup_count` | int | How many uris appeared in multiple sources (i.e., the "co-occurrence boost" landed on N items) |
+| `vector_count` | int | Hits contributed by the vector path (0 ⇒ vector inactive) |
+| `lexical_count` | int | Hits contributed by the FTS5 lexical path |
+| `grep_count` | int | Hits contributed by the grep fallback path |
+| `fused_count` | int | Unique URIs after RRF fusion (post-dedup) |
+| `boosted` | bool | True when caller passed `keywords` and `w_lexical` was bumped to 2.5 |
 | `duration_ms` | float | RRF computation duration |
+
+Dashboards derive "sources active" as the set of `*_count > 0`; the
+"co-occurrence dedup" is implicit in `vector_count + lexical_count +
+grep_count − fused_count` (URIs counted in N sources but unified
+into one row).
 
 ### 4.6 `memory.silent_retrieval_miss` (discarded — see doc 08 §2.11)
 
@@ -156,6 +183,29 @@ Honest review: only (1) is language-agnostic — and it generates too many false
 The downstream consumer (§2.F eager pre-fetch) is itself deferred (doc 08 §4.1) — so even a reliable signal would have no consumer. If a future use case needs this kind of "miss" detection, the right approach is different (e.g. LLM-based classifier in background, explicit user-feedback signals, or post-hoc analysis on bench traces) — not these heuristics.
 
 See `08_scope_and_discarded.md` §2.11 for the full rationale.
+
+### 4.7 `memory.recall.decay`
+
+Temporal-decay step (audit A9). Emitted by
+`durin/memory/search_pipeline.py::_temporal_decay_step` whenever the
+search pipeline ran with `memory.search.temporal_decay.enabled =
+true` (the default). Lets dashboards see how many hits the decay
+touched and the average penalty applied — a constant flow with
+`avg_decay_factor` near 1.0 means decay is acting on recent hits as
+expected; a sudden drop means a workspace has accumulated very old
+`episodic` / `session_summary` entries.
+
+| Field | Type | Description |
+|---|---|---|
+| `hits_total` | int | Total hits the decay step received (pre-decay) |
+| `hits_decayed` | int | Hits whose class actually decays (`episodic`, `session_summary`) |
+| `avg_decay_factor` | float | Mean of `exp(−Δdays/half_life)` over `hits_decayed` only — no-op classes (`entity` / `stable` / `corpus`) do not contribute |
+
+The decay multiplies the post-fusion / post-rerank score by the
+class half-life factor; the event reports the aggregate after the
+multiplication. Class half-lives are configured via
+`memory.search.temporal_decay.class_half_life_overrides` (see doc 03
+§10.3).
 
 ---
 
@@ -280,15 +330,42 @@ The v1 spec proposed a richer field set (`kind` enum, `recoverable` bool). Audit
 
 ### 9.1 `memory.index.write`
 
-NEW. Emitted whenever the indexer re-derives a row.
+Emitted by `durin/memory/indexer.py::reindex_one_file` whenever the
+indexer re-derives a row. Audit E5 (2026-05-28) aligned the payload
+with the dashboards documented in §10.3 (perf) and doc 09 §216
+(capacity).
 
 | Field | Type | Description |
 |---|---|---|
-| `uri` | string | Item indexed |
-| `trigger` | enum | `tool_write | watcher | manual_rebuild | dream_apply` |
-| `targets` | list | `["lancedb", "fts5_unicode61", "fts5_trigram"]` |
-| `duration_ms` | float | Total re-derivation time |
-| `embedding_skipped` | bool | True if the item was already up-to-date (mtime check) |
+| `uri` | string | Item indexed (e.g. `person:marcelo`, `episodic/2026/...`) |
+| `op` | enum | `upsert | delete` |
+| `index` | enum | `fts` always today; `lancedb` reserved for the future per-row vector path |
+| `trigger` | enum | `watcher | dream_apply | drift_repair` — see taxonomy below |
+| `duration_ms` | float | Wall-clock of the FTS upsert/delete call (powers `index_write_p95_ms` alert in §10.3) |
+
+**Trigger taxonomy** — pre-E5 spec listed `tool_write` and
+`manual_rebuild`; both were dropped because they don't apply at
+this layer:
+
+- `tool_write` — agent writes go through `reindex_one_file` via the
+  file watcher; no tool calls the indexer directly.
+- `manual_rebuild` — `durin reindex` CLI invokes `rebuild_fts_index`
+  which emits `memory.index.rebuild` (§9.2), not `.write`.
+
+The real triggers are:
+
+- `watcher` (default) — `MemoryFileWatcher` picked up a `.md` change.
+  Steady-state load. Bulk of events.
+- `dream_apply` — `Consolidator.apply` re-indexed the entity page
+  after a successful consolidation. Bursty around cron triggers.
+- `drift_repair` — `HealthChecker.run_tick` repaired a stale row.
+  Rare; persistently > 0 means the watcher is missing events.
+
+`targets` (multi-index list) and `embedding_skipped` (mtime
+short-circuit) from the v1 spec were dropped — only FTS is written
+from this callsite today, and there is no mtime short-circuit. If a
+future change adds per-row vector writes or mtime caching, the
+fields can be reintroduced then.
 
 ### 9.2 `memory.index.rebuild`
 
@@ -507,7 +584,7 @@ None at the module level.
 | Aspect | Current state | v2 target | Migration work |
 |---|---|---|---|
 | Memory event registry | 25+ events in `schema.py` (audit C6: corrected from "12 events". `memory.*` keys in `EVENTS` cover recall (incl. `.lexical` / `.rerank` / `.rrf` / `.decay` / `.failure`), index (`.write` / `.rebuild` / `.staleness_detected`), dream (`.start` / `.end` / `.skipped` / `.entity_failed` / `.patch_applied`), absorb, store, ingest, embedding, hot_layer, health). Counts grow as new events ship (A5 added cost fields to `dream.end`; A6 added `tick_id`/`duration_ms` to `health_check`; A9 added `recall.decay`; B9 added `search.failure`). | — |
-| Cost in dream.end | Not present | Add `llm_input_tokens_total`, `llm_output_tokens_total`, optional `llm_cost_usd` | Wire LLM token counts into pass result |
+| Cost in dream.end | Shipped (audit A5, 2026-05-28). `memory.dream.end` carries `llm_input_tokens_total`, `llm_output_tokens_total`, `llm_call_count`. The `default_llm_invoke` extracts per-call usage from litellm `response.usage`; `_ConsolidateTotals` aggregates across the pass. See §6.2 and audit E6. | Optional `llm_cost_usd` would multiply by per-model price; left out because the cost ledger is upstream (see §1 "out of scope"). | None |
 | Privacy: query truncation | Enforced at emit time (audit C6: was incorrectly "Not enforced" in the v1 draft). `durin/agent/tools/_telemetry.py::_truncate_freetext` trims fields named `query`, `text`, `snippet`, `content`, `needle` to 200 chars before persistence. Applied by `emit_tool_event` so every event consumer gets a trimmed payload. | — | — |
 | Privacy: URI hashing opt-in | Not present | Optional via config | New config flag |
 | Alarms / dashboards | None | Internal threshold checks + optional Grafana export | Out of scope for memory subsystem; downstream |

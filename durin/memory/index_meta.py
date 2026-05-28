@@ -48,7 +48,11 @@ __all__ = [
 # LanceDB tables carry an extra `body` field that the new code does
 # not write or read — the bump forces a clean rebuild so the tables
 # match the documented schema (8 columns, no body).
-CURRENT_SCHEMA_VERSION: int = 3
+# v4 (audit E9, 2026-05-28): entity page embedding gets v2.a
+# rendered_frontmatter (attributes/relations as prose between aliases
+# and body) so attribute queries hit the centroid. Pre-v4 centroids
+# omit this signal — a forced rebuild realigns the table.
+CURRENT_SCHEMA_VERSION: int = 4
 
 
 @dataclass(frozen=True)

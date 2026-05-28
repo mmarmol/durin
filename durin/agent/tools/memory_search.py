@@ -451,15 +451,30 @@ class MemorySearchTool(Tool):
         if ai is not None and extract_query_entities(query, ai):
             ranking = "entity_aware"
 
-        emit_tool_event(
-            "memory.recall",
-            {
-                "query": query,
-                "scope": scope,
-                "level": level,
-                "result_count": len(results),
-            },
+        # E1: expand payload to match doc 07 §4.1 — all diagnostic
+        # fields are already computed above; this is a payload
+        # change, not new instrumentation.
+        total_candidates = (
+            pipeline_result.vector_count + pipeline_result.lexical_count
         )
+        recall_payload: dict[str, Any] = {
+            "query": query,
+            "scope": scope,
+            "level": level,
+            "result_count": len(results),
+            "strategy": strategy,
+            "duration_ms": duration_ms,
+            "total_candidates": total_candidates,
+            "keywords": keywords,
+        }
+        if pipeline_result.recovered_from:
+            recall_payload["recovered_from"] = list(
+                pipeline_result.recovered_from,
+            )
+            recall_payload["recovery_duration_ms"] = (
+                pipeline_result.recovery_duration_ms
+            )
+        emit_tool_event("memory.recall", recall_payload)
         response: dict[str, Any] = {
             "results": [
                 {**r.to_dict(), "rendered": r.render_block()}

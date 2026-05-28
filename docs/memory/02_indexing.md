@@ -131,8 +131,7 @@ The text passed to the embedding model determines what the vector represents. Th
 
 ### 4.2 Entity pages
 
-**v1 (current):** `name + aliases + body`.
-**v2 (target):** `name + aliases + rendered_frontmatter + summary + body`, in that order, until budget exhausted.
+**Shipped (v2.a, audit E9 2026-05-28):** `name + aliases + rendered_frontmatter + body`, in that order, until 1500-char budget exhausted. The optional `summary` slot from the v2 spec is deferred (Dream doesn't always produce one, and the body retains full prose).
 
 Concretely for an entity page like Marcelo:
 
@@ -158,12 +157,13 @@ Email: marcelo@mxhero.com. Phone: +34123. Current residence: Spain. Spouse: Susa
 | `provenance` | **Not rendered.** Internal metadata, no retrieval value. |
 | `dream_processed_through`, `created_at`, `updated_at` | **Not rendered.** Internal timestamps. |
 
-**v2 summary**: when Dream produces a `summary` for an entity page (because body exceeds budget or because the body is prose-heavy), the summary replaces the body in the embedding text. Body retains its full form on disk for grep and for display.
+**Deferred `summary` slot**: the original v2 spec inserted a Dream-generated `summary` between rendered_frontmatter and body. Deferred from E9 because Dream produces a `summary` attribute only sometimes; when present, the body already contains the prose form, so duplicating it in the centroid is marginal. If bench shows recall regression on long-body entity pages, restore the slot.
 
 ### 4.3 Entries (episodic / stable / corpus)
 
-**v1 (current):** `headline + summary + entities_list + body`.
-**v2 (target):** `headline + summary + entities_with_aliases + body`.
+**Shipped (v1, audit E9 2026-05-28):** `headline + summary + entities_list + body`.
+
+The originally-planned v2 (`entities_with_aliases` — expanding entity URIs to include aliases inline in the embedding text) is **superseded by the entity-aware ranker (audit A1)**. The ranker extracts entities from the query at search time and boosts entries tagged with that URI, achieving alias-aware retrieval without inflating the embedding centroid. Implementing entities_with_aliases on top would duplicate the ranker's work without measurable benefit; see audit E9 in [`11_audit_reconciliation.md`](11_audit_reconciliation.md) for the analysis.
 
 The change in v2: when listing entities, expand each URI to include the entity's known aliases. Concretely, an episodic entry tagged with `entities: ["person:marcelo"]` composes:
 
@@ -454,8 +454,8 @@ All open decisions for this module have been resolved (2026-05-27) in line with 
 | **1** | What gets indexed | Entity pages + entries (episodic/stable/corpus) + session summaries. NOT indexed: archive, pending, raw sessions/jsonl, raw ingested files. | §3.3 |
 | **2** | Single vs multiple embedding models | **Single model per workspace** (`paraphrase-multilingual-MiniLM-L12-v2`). Stored in `meta.json`; mismatch on startup forces rebuild. | §3.2, §7.2 |
 | **3** | Body in the vector row | **Not stored.** Body is read from disk on demand for cold-tier enrichment. Storing in LanceDB doubles index size for no retrieval benefit. | §3.1 |
-| **4** | Embedding text composition (entity pages) | `name` + `aliases` + `rendered_frontmatter` + `summary` + `body`, in order, hard cap 1500 chars. Frontmatter is rendered as prose; provenance and internal timestamps are not rendered. Historical values of stateful attributes are not rendered (only `current`). | §4.2 |
-| **5** | Embedding text composition (entries) | `headline` + `summary` + `entities_with_aliases` + `body`. v2 expands entity URIs with their known aliases to improve recall on nickname queries. | §4.3 |
+| **4** | Embedding text composition (entity pages) | **Shipped (v2.a, audit E9 2026-05-28):** `name` + `aliases` + `rendered_frontmatter` + `body`, hard cap 1500 chars. Frontmatter renders as prose; provenance + internal timestamps skipped; stateful attributes render `current` only. Optional `summary` slot deferred. | §4.2 |
+| **5** | Embedding text composition (entries) | **Shipped v1; v2.b superseded (audit E9 2026-05-28):** `headline` + `summary` + `entities_list` + `body`. The originally-planned `entities_with_aliases` expansion is covered at query time by the entity-aware ranker (audit A1) — implementing it in the embedding text would duplicate the ranker's work without measurable benefit. | §4.3 |
 | **6** | Sessions in the vector index | One row per session as `type=session_summary` using `_last_summary.text` as content. Sessions without a summary yet are not in the vector index (grep over raw `.jsonl` covers them). | §3.3, §4.4 |
 | **7** | Re-embed sync vs async | **Synchronous on write** for single-document updates. Bulk rebuild path uses async batching (32 docs/batch). | §6.2 |
 | **8** | File watcher technology | `watchdog` (Python) with polling fallback. Coalesces bursts. | §6.3 |
@@ -482,8 +482,9 @@ Rebuilt from scratch — the original v1 table described a "current state" that 
 | Aspect | Status | Where |
 |---|---|---|
 | Vector index (LanceDB) | ✅ Active. MiniLM-L12-v2 (384-dim default). 8-column schema per §3.1 (no `body` column — see A4). | `durin/memory/vector_index.py` |
-| Embedding text — entities | ✅ `name + aliases + body`, 1500-char cap (`_compose_entity_page_text`). v2 `rendered_frontmatter + summary` extensions never shipped; Dream produces well-shaped pages that don't need them today. | `durin/memory/vector_index.py:_compose_entity_page_text` |
-| Embedding text — entries | ✅ `headline + summary + entities_list + body`, 1500-char cap (`_embed_text`). v2 alias-expansion never shipped; the entity-aware ranker covers alias matching at query time without inflating the embedding text. | `durin/memory/vector_index.py:_embed_text` |
+| Embedding text — entities | ✅ v2.a shipped (audit E9, 2026-05-28). `name + aliases + rendered_frontmatter + body`, 1500-char cap (`_compose_entity_page_text`). Attribute queries ("Marcelo's email", "X's spouse") now hit the centroid. Schema bumped to v4; rebuild forced. | `durin/memory/vector_index.py:_compose_entity_page_text` |
+| Embedding text — entries | ✅ v1 (final shape). `headline + summary + entities_list + body`, 1500-char cap (`_embed_text`). Originally-planned `entities_with_aliases` expansion superseded by entity-aware ranker (A1); decision recorded in audit E9. | `durin/memory/vector_index.py:_embed_text` |
+| Vector rebuild walks entity pages | ✅ Shipped (audit E9, 2026-05-28). `rebuild_from_workspace` now walks `memory/entities/<type>/*.md` in addition to `memory/<class>/*.md`, so a forced rebuild (e.g. schema bump) doesn't silently drop entity page rows. | `durin/memory/vector_index.py:rebuild_from_workspace` |
 | Session summaries indexed | ✅ A10 (2026-05-28). `Consolidator._persist_last_summary` writes `memory/session_summary/<sanitized_key>.md`; walker picks it up; indexer assigns `class_name="session_summary"`; A9 decay (120 d) applies. | `durin/memory/session_summary_store.py` |
 | FTS5 lexical index | ✅ Active. `.durin/index/fts.sqlite` with two FTS5 tables (`memory_fts` unicode61 + `memory_fts_trigram`); paired writes; query-time routing in `query_router.py`. | `durin/memory/fts_index.py`, `durin/memory/query_router.py` |
 | File watcher | ✅ Active. `watchdog`-backed `MemoryFileWatcher` started by `AgentLoop.__init__` when `cfg.memory.file_watcher.enabled` (default true). A11 (2026-05-28). | `durin/memory/file_watcher.py` |

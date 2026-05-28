@@ -1227,9 +1227,192 @@ Round 1-3 marcados resolved. Spot-checks confirman. OK.
 | Medium (B1-B12) | 12 | Drift sin romper UX directo |
 | Low (C1-C10) | 10 | Cosmético / docs |
 | No accionable (D1-D3) | 3 | OK como están |
+| Second pass (E1-E38) | ~38 | Drift descubierto en segunda pasada (2026-05-28) |
 
-**Total**: 36 items.
+**Total inicial**: 36 items (A+B+C+D) — todos cerrados al 2026-05-28.
 
-**Orden de resolución sugerido**: A1 → A2 → A3 (los tres tools — UX agente) → A11 (wiring watcher+cron — operación) → A9 (decay) → A10 (session summaries) → A8 (push wiring) → A5+A6+A7 (telemetría payload) → A4 (LanceDB schema doc) → resto en orden.
+**Segunda pasada (E)**: el usuario pidió re-auditar tras cerrar A-D y se encontraron ~38 ítems nuevos (mayoría status/header drift, pero algunos contradicciones doc-vs-code reales en doc 07). Se trabajan high-impact primero (E1-E9).
+
+**Orden de resolución sugerido (primera pasada)**: A1 → A2 → A3 (los tres tools — UX agente) → A11 (wiring watcher+cron — operación) → A9 (decay) → A10 (session summaries) → A8 (push wiring) → A5+A6+A7 (telemetría payload) → A4 (LanceDB schema doc) → resto en orden.
 
 **Mantenimiento**: a medida que se resuelven items, marcar **resolved** + breve nota de la decisión + commit hash. No borrar items resueltos — sirven como decisions log.
+
+---
+
+## SECOND PASS (E) — drift descubierto en re-auditoría 2026-05-28
+
+### E1 — `memory.recall` event payload no coincide con doc 07 §4.1 ✅ RESOLVED
+
+**Doc 07 §4.1 (pre-E1)** listaba 10 campos: `query`, `keywords`, `scope`, `level`, `result_count`, `total_candidates`, `strategy`, `recovered_from`, `recovery_duration_ms`, `duration_ms`.
+
+**Código `durin/agent/tools/memory_search.py` (pre-E1, líneas 454-462)** emitía solo 4: `query`, `scope`, `level`, `result_count`. El TypedDict `MemoryRecallEvent` solo aceptaba esos 4 + `iteration`/`session_key` auto-inyectados.
+
+**Verificación**: grep `"memory.recall"` en todo el repo confirma una sola emisión (`memory_search.py:454`). Los 6 campos "faltantes" YA se computan localmente antes de la emisión (`strategy` en línea 441-448, `duration_ms` en 390, `pipeline_result.vector_count + lexical_count` para `total_candidates`, `keywords` es kwarg, `recovered_from` viene de `pipeline_result`).
+
+**Decisión**: A8-style (telemetría es infra de primera clase) — expandir el payload, NO reducir el doc. Cero overhead nuevo: todos los valores ya estaban computados.
+
+**Resolución**:
+- TypedDict `MemoryRecallEvent` ampliado con `strategy`/`duration_ms`/`total_candidates` requeridos + `keywords`/`recovered_from`/`recovery_duration_ms` opcionales.
+- Callsite construye dict y agrega recovery solo en runs degradados (espeja la forma de respuesta del tool).
+- Tests TDD: 6 cases en `tests/memory/test_recall_event_payload_e1.py` (strategy+duration, total_candidates, keywords con/sin, recovery con/sin).
+- Doc 07 §4.1 reescrita con columna `Required` para distinguir always-on vs degraded-only.
+
+**Commit pendiente** (cierre del batch E1-E9).
+
+### E2 — `memory.recall.lexical` field names doc vs code ✅ RESOLVED
+
+**Doc 07 §4.3 (pre-E2)** listaba `query`, `tokenizer_used` con valores `unicode61|trigram|like_fallback`, `hit_count`, `duration_ms`.
+
+**Código `durin/memory/lexical_search.py:124-133` + TypedDict `MemoryRecallLexicalEvent`**: emite `route` (con valores `unicode61|trigram|like_substring`), `query_chars`, `cjk_chars`, `hit_count`, `duration_ms`.
+
+**Verificación**: el TypedDict en `schema.py:780-796` está bien estructurado y la emisión coincide; el doc nunca se actualizó cuando el campo se nombró `route` en lugar del placeholder original `tokenizer_used`. `like_substring` es el `LexicalRoute` enum value (no `like_fallback`).
+
+**Decisión**: doc → code. El código es correcto y útil (route + query/cjk char counts dan dashboards de "cuántas queries cayeron al fallback CJK"). Reescribo §4.3.
+
+**Resolución**: doc 07 §4.3 reescrita con los 5 campos reales + nota de por qué `query` no se duplica (ya está en `memory.recall`, join por `session_key+iteration`).
+
+**Genealogía**: commit `792f1c6` (Phase 3 core) introdujo el evento con `route` desde la primera versión. El doc 07 §4.3 era spec aspiracional ("NEW event") nunca reconciliada. Cero consumers downstream (verificado por grep).
+
+**Commit pendiente** (cierre del batch E1-E9).
+
+### E3 — `memory.recall.rrf` field names doc vs code ✅ RESOLVED
+
+**Doc 07 §4.5 pre-E3**: `sources_active` (list), `keyword_boost_applied` (bool), `dedup_count` (int), `duration_ms`.
+
+**Código `durin/memory/rrf_fusion.py:148-158` + TypedDict `MemoryRecallRRFEvent`**: emite `vector_count`, `lexical_count`, `grep_count`, `fused_count`, `boosted`, `duration_ms`.
+
+**Genealogía**: mismo commit `792f1c6` que E2. Doc spec aspiracional, impl divergió y doc nunca reconciliado.
+
+**Consumers**: cero (grep en `durin/` confirma que solo el emitter y el TypedDict declaran estos campos; `memory_search.py` lee desde `SearchPipelineResult`, no del evento).
+
+**Decisión**: doc → code (Opción A). Razones:
+- Per-source counts son strictly más ricos que `sources_active` (derivable como `{s: count>0}`).
+- `dedup_count` es derivable como `vector_count + lexical_count + grep_count − fused_count` (cantidad de pares (URI, source) que se mergearon en el RRF).
+- `boosted` vs `keyword_boost_applied` es pure rename; el primero es más conciso.
+- Cero código tocado.
+
+**Resolución**: doc 07 §4.5 reescrita con los 6 campos reales + nota de derivación matemática para `sources_active` y `dedup_count`.
+
+**Commit pendiente** (cierre del batch E1-E9).
+
+### E4 — `memory.recall.decay` evento emitido sin entrada en doc 07 ✅ RESOLVED
+
+**Doc 07 §4 (pre-E4)**: tabla de eventos recall lista 4.1-4.6 sin entrada para decay.
+
+**Código**: `durin/memory/search_pipeline.py:594-601` emite `memory.recall.decay` con `hits_total`/`hits_decayed`/`avg_decay_factor`. TypedDict `MemoryRecallDecayEvent` declarado en `schema.py:859-880`.
+
+**Genealogía**: A9 (audit primera pasada) introdujo el evento + TypedDict pero no agregó entrada documental.
+
+**Decisión**: pure additive. `§4.6` (silent_retrieval_miss discarded) está referenciado desde doc 08 y doc 11 — NO renumerar; append como `§4.7`.
+
+**Resolución**: doc 07 §4.7 agregada describiendo los 3 campos + nota sobre cómo el decay interactúa con classes no-decaying (factor=1.0) + pointer a doc 03 §10.3 para config.
+
+**Commit pendiente** (cierre del batch E1-E9).
+
+### E5 — `memory.index.write` payload mínimo vs dashboards documentados ✅ RESOLVED
+
+**Doc 07 §9.1 (pre-E5)**: spec aspiracional con 5 campos: `uri`, `trigger`, `targets`, `duration_ms`, `embedding_skipped`.
+
+**Código `durin/memory/indexer.py:212-218` (pre-E5)**: emitía solo `uri`, `op`, `index` (siempre `"fts"` en práctica).
+
+**Evidencia de consumers documentados** (clave para decidir dirección):
+- Doc 07 §10.3 define alert `index_write_p95_ms < 50ms (per row)` que requiere `duration_ms`.
+- Doc 09 §216 declara mitigación de crecimiento del trigram table: "monitor via `memory.index.write` events" — necesita `trigger` para distinguir bursts.
+
+**Genealogía**: commit `be75998` (Phase 2 core) introdujo el emisor con shape mínimo; el doc se escribió como spec aspiracional y nunca reconciliado.
+
+**Decisión**: B-minimal (code → doc parcial). Agregar `duration_ms` + `trigger` al emisor; descartar `targets`/`embedding_skipped` como aspiracionales (LanceDB no escribe este evento; no hay mtime short-circuit).
+
+**Trigger taxonomy revisada** (vs spec original):
+- Descartados: `tool_write` (no hay callsites directos desde tools), `manual_rebuild` (esa ruta emite `.rebuild`, no `.write`).
+- Reales: `watcher` (default, file_watcher), `dream_apply` (post-consolidación), `drift_repair` (health check).
+
+**Resolución**:
+- `_emit_write` ampliado con `trigger` (kw) + `duration_ms` (kw).
+- `reindex_one_file` acepta `trigger="watcher"` default + mide duration en upsert y delete paths.
+- Callsites: dream.py:666 pasa `dream_apply`; health_check.py:231 pasa `drift_repair`; file_watcher.py usa default.
+- TypedDict `MemoryIndexWriteEvent` actualizado con los 2 campos como required.
+- Doc 07 §9.1 reescrito con shape real + taxonomía de triggers + nota de descarte de `targets`/`embedding_skipped`.
+- Tests TDD: 5 cases en `tests/memory/test_index_write_event_e5.py` (duration_ms, default trigger, dream_apply trigger, drift_repair trigger, delete op preserva campos).
+
+**Commit pendiente** (cierre del batch E1-E9).
+
+### E6 — Doc 07 §15 fila "Cost in dream.end" status stale ✅ RESOLVED
+
+**Doc 07 §15 (pre-E6)**: fila "Cost in dream.end" decía estado actual = "Not present", v2 target = "Add `llm_input_tokens_total`, `llm_output_tokens_total`, optional `llm_cost_usd`".
+
+**Realidad post-A5**: A5 (audit primera pasada, mismo doc) ya shippeó los 3 campos en `memory.dream.end`. La fila inmediatamente anterior ("Memory event registry") incluso reconoce "A5 added cost fields to `dream.end`".
+
+**Decisión**: flip status row a "shipped" con A5 reference. `llm_cost_usd` se mantiene como out-of-scope con razón en §1.
+
+**Resolución**: fila reescrita reflejando shipped + pointer a §6.2 y a E6.
+
+**Commit pendiente** (cierre del batch E1-E9).
+
+### E7 — Residuo de `silent_retrieval_miss` en docs post-discard ✅ RESOLVED
+
+**Contexto**: §2.11 de doc 08 (audit B9, 2026-05-28) descartó el evento `memory.silent_retrieval_miss` y sus 3 heurísticas (substring overlap + English-shaped negation tokens + correction patterns) por no ser multi-lingual viables. El doc 07 §4.6 se reescribió pointing a §2.11. Pero quedaron 4 referencias residuales que aún citaban el evento descartado como activo.
+
+**Residuos encontrados**:
+1. `08_scope_and_discarded.md` §5 línea 349 — fila "§2.F eager pre-fetch" cita `memory.silent_retrieval_miss > 5%` como trigger.
+2. `08_scope_and_discarded.md` §4.1 líneas 391-397 — sección "Trigger to revisit" describe el evento + 3 heurísticas como mecanismo activo.
+3. `09_implementation_roadmap.md` §10.1 línea 352 — checklist Phase 7 lista `memory.silent_retrieval_miss` como event a implementar.
+4. `99_gaps_audit.md` líneas 105 y 681 — historical decision records describen el evento como decisión activa sin nota de supersession.
+
+**Decisión**: doc → doc consistency, respetando el discard en §2.11. Reemplazar trigger telemétrico por los alternativos que §2.11 explícitamente sugiere: explicit user feedback, bench failure cluster on LoCoMo/EverMemBench, offline LLM judge over traces (post-hoc, no per-turn).
+
+**Resolución**:
+- doc 08 §5: fila §2.F reescrita con 3 triggers language-agnostic.
+- doc 08 §4.1: subsección "Trigger to revisit" reescrita; ya no describe el evento discarded como mecanismo activo.
+- doc 09 §10.1: checklist Phase 7 ahora lista 13 events; `silent_retrieval_miss` removido con nota de discard; `recall.decay` añadido (A9).
+- doc 99 historical records (líneas 105 + 681): append nota "Superseded 2026-05-28 (B9 + §2.11 + E7)" sin reescribir el record original.
+
+**Commit pendiente** (cierre del batch E1-E9).
+
+### E8 — Doc 03 §14.7 failure event schema stale vs B9 canonical ✅ RESOLVED
+
+**Doc 03 §14.7 (pre-E8)**: JSON shape con 3 campos (`component` single-value enum, `kind` 6-enum, `degraded_to` 4-enum + null) + nota explícita "No `recovery_attempted` field".
+
+**Doc 07 §8.1 (post-B9 canonical)** + código real (`search_pipeline.py:240-249`): 5 campos (`component` comma-joined string, `recovery_attempted` bool, `recovery_succeeded` bool, `recovery_duration_ms` float, `degraded_to` 5-enum `full|vector_only|lexical_only|grep_only|none`). No `kind` campo (B9 lo descartó).
+
+**Divergencias específicas**:
+1. `kind` listado en doc 03; descartado por B9 (wrappers catch generic Exception → emitir `kind` sería inventar data).
+2. Doc 03 dice explícitamente "No `recovery_attempted` field"; código sí lo emite (`recovery_attempted: True` siempre — forward-compat marker).
+3. `component` en doc 03 es single enum; código es comma-joined string (afectados pueden ser múltiples).
+4. `degraded_to` en doc 03 incluye "no_rerank"/null; código usa "full"/"none".
+5. Faltan en doc 03: `recovery_succeeded`, `recovery_duration_ms`.
+
+**Genealogía**: doc 03 §14.7 es spec aspiracional pre-B9 nunca reconciliada. Doc 07 §8.1 fue el output de B9 con schema definitivo.
+
+**Decisión**: doc 03 §14.7 → collapse a pointer al canonical en doc 07 §8.1 (DRY, evita re-drift). Mantener en doc 03 la nota histórica de campos `kind` + `recovery_attempted` descartados con la razón B9.
+
+**Resolución**: doc 03 §14.7 reescrita como 2 párrafos: (1) "evento emitido — schema canonical en doc 07 §8.1", (2) nota de qué pidió la v1 spec y por qué B9 lo cortó.
+
+**Commit pendiente** (cierre del batch E1-E9).
+
+### E9 — Contradicción doc 02 sobre v1/v2 embedding text (ship v2.a, supersede v2.b) ✅ RESOLVED
+
+**Doc 02 (pre-E9)**: §4.2 + §4.3 presentaban v2 como "target" activo; §10 filas 4+5 listaban v2 como decisión resuelta; §11 (post-C7) reportaba "v2 never shipped, entity-aware ranker cubre el caso". Triple contradicción.
+
+**Sub-decisiones separadas tras evidencia**:
+- **v2.a (rendered_frontmatter en entity pages)**: traduce `attributes` y `relations` a prosa en el embedding text. Cierra recall gap real en queries de tipo atributo ("X's email", "who is Y's spouse"). El entity-aware ranker NO cubre esto — el ranker re-ordena candidates dentro del top-50, pero la página tiene que entrar al top-50 vía centroide.
+- **v2.b (entities_with_aliases en entries)**: expandiría URIs en el embedding text. El entity-aware ranker (A1) cubre exactamente este caso a query-time. v2.b es trabajo duplicado.
+
+**Decisión (con user OK 2026-05-28)**: ship v2.a; supersede v2.b por A1.
+
+**Gap pre-existente descubierto**: `rebuild_from_workspace` no walkeaba entity pages — solo `memory/<class>/*.md` entries. Post forced-rebuild (schema bump) los entity page rows desaparecían del índice hasta el próximo Dream/absorb. Fixed como parte de E9.
+
+**Resolución**:
+- `VectorIndex._render_frontmatter(attributes, relations)` nuevo helper: renderiza attributes con `_title_key`, skipa internal metadata (provenance, dream_processed_through, created_at, updated_at), stateful attributes renderean solo `current`, relations renderean `Type: target (since date)`.
+- `_compose_entity_page_text` ampliado con `attributes`/`relations` kwargs (defaults None mantienen v1 behavior).
+- `upsert_entity_page` plumbing nuevo de attributes/relations.
+- Callsites: `dream.py:650-657` y `absorption.py:253-260` pasan `page.attributes` + `page.relations`.
+- `rebuild_from_workspace` ahora walka `memory/entities/` además de `memory/<class>/` y construye records vía nuevo `_entity_page_record` helper.
+- `CURRENT_SCHEMA_VERSION` bumped 3 → 4 (E9 — fuerza rebuild para realinear centroides).
+- Doc 02 §4.2 marca v2.a shipped + nota de summary slot deferred; §4.3 marca v1 final + v2.b superseded por A1; §10 filas 4+5 actualizadas; §11 agrega fila de "Vector rebuild walks entity pages" como bug-fix.
+- Stub en `tests/memory/test_auto_absorb_dispatcher.py:343-352` ampliado para aceptar las nuevas kwargs.
+- Tests TDD: 7 cases en `tests/memory/test_entity_page_embedding_v2a_e9.py` (rendered_attributes/relations, ordering preserved, empty case, skip internal metadata, stateful current only, rebuild walks entity pages).
+
+**Validación**: 995 tests pasan en tests/memory/ (1 skipped pre-existente).
+
+**Commit pendiente** (cierre del batch E1-E9).
