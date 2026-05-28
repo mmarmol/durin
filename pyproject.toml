@@ -49,6 +49,11 @@ dependencies = [
     # §6) to apply LLM-emitted ops to an entity page's frontmatter.
     # Pure Python.
     "jsonpatch>=1.33,<2.0",
+    # File-system watcher for the memory subsystem: detects manual
+    # edits to `memory/**/*.md` (vim, git checkout, etc.) and triggers
+    # a synchronous re-index. Doc 02 §6.3. macOS uses FSEvents,
+    # Linux uses inotify; both via this wrapper.
+    "watchdog>=4.0,<7.0",
 ]
 
 [project.optional-dependencies]
