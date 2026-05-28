@@ -58,6 +58,38 @@ _CJK_RANGES: tuple[tuple[int, int], ...] = (
 _WHITESPACE_RE = re.compile(r"\s+")
 
 
+# Identifier patterns (P3.3). Order matters: longer / more specific
+# patterns first so a URL doesn't get truncated to "://" segment.
+_IDENTIFIER_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # HTTPS / HTTP URLs.
+    re.compile(r"https?://[^\s]+"),
+    # File paths — must contain `/` and at least one path segment
+    # with an extension or three+ chars. Skips leading punctuation.
+    re.compile(r"(?:/|[A-Za-z0-9._-]+/)[A-Za-z0-9._/-]+\.[A-Za-z0-9]+"),
+    re.compile(r"/[A-Za-z0-9._/-]+(?:/[A-Za-z0-9._-]+)+"),
+    # UUIDs (with or without dashes).
+    re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"),
+    # Email addresses.
+    re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"),
+)
+
+
+def _detect_auto_keywords(query: str) -> Optional[str]:
+    """Pick the first identifier-looking token from *query*, if any.
+
+    Returns the matched substring verbatim so the lexical search can
+    quote it. None when no identifier is present.
+
+    Doc 03 §3.1 footnote: version strings (`v1.2.3`) are intentionally
+    NOT matched — they're too ambiguous.
+    """
+    for pattern in _IDENTIFIER_PATTERNS:
+        match = pattern.search(query)
+        if match:
+            return match.group(0)
+    return None
+
+
 class LexicalRoute(str, enum.Enum):
     """Which lexical retrieval path the search pipeline should use."""
 
@@ -74,6 +106,11 @@ class RoutingDecision:
     route: LexicalRoute
     cjk_chars: int
     keywords: Optional[str] = None
+    # P3.3: auto-detected identifier token. When the query contains
+    # an email, URL, UUID, or file path, surface it here so the
+    # search pipeline applies the lexical boost without the agent
+    # having to pass ``keywords`` explicitly.
+    auto_keywords: Optional[str] = None
 
 
 def count_cjk_chars(text: object) -> int:
@@ -136,4 +173,5 @@ def decide_lexical_route(
         route=route,
         cjk_chars=cjk,
         keywords=keywords,
+        auto_keywords=_detect_auto_keywords(normalized),
     )
