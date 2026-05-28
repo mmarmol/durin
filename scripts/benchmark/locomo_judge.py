@@ -24,8 +24,10 @@ the parser surface is consistent across durin LLM-as-judge calls.
 
 from __future__ import annotations
 
+import inspect
 import logging
 import re
+import time
 from dataclasses import dataclass
 from typing import Callable
 
@@ -88,13 +90,25 @@ def judge_answer(
     *,
     llm_invoke: LLMInvoke,
     model: str = "glm-5.1",
-    max_retries: int = 2,
+    max_retries: int = 4,
 ) -> JudgeVerdict:
     """Score one (expected, got) pair and return the verdict.
 
     Empty ``got`` is a guaranteed miss without an LLM call — saves a
     judge invocation per timeout / exception. Same for an obvious
     refusal pattern.
+
+    Audit H2 (2026-05-29): retry budget hardened. Previously
+    ``max_retries=2`` with no backoff and constant temperature meant
+    a ~30s upstream outage (z.ai returning empty completions) burned
+    all 3 attempts in <5s and the QA was marked
+    ``judge_error_possible``. H2 raises the default to 4 retries
+    (5 attempts total), adds exponential backoff (1, 2, 4, 8 s) so
+    the loop survives a transient outage, and varies temperature per
+    attempt (0.0, 0.2, 0.4, 0.6, 0.8) to break upstream wedges where
+    temp=0 reliably returns the same broken completion. Callers that
+    rely on the old budget for reproducibility can pin
+    ``max_retries=2``.
     """
     if not got or not got.strip():
         return JudgeVerdict(
@@ -107,27 +121,118 @@ def judge_answer(
         expected=expected.strip(),
         got=got.strip(),
     )
+    accepts_temperature = _invoke_accepts_temperature(llm_invoke)
     last_error: Exception | None = None
-    for attempt in range(max_retries + 1):
+    total_attempts = max_retries + 1
+    for attempt in range(total_attempts):
+        # H2: temperature jitter starts at 0.0 and steps by +0.2 per
+        # retry. Cap at 1.0 in case the budget grows past 5 attempts.
+        # ``round`` avoids float-binary surprises (0.2*3=0.6000…01).
+        temperature = round(min(1.0, 0.2 * attempt), 4)
         try:
-            raw = llm_invoke(prompt, model=model)
+            if accepts_temperature:
+                raw = llm_invoke(
+                    prompt, model=model, temperature=temperature,
+                )
+            else:
+                raw = llm_invoke(prompt, model=model)
+        except TypeError:
+            # Defensive: an invoker may accept `temperature` in its
+            # signature but reject the value (e.g. typing mismatch).
+            # Fall back to the temp-less call and remember to skip
+            # the kwarg on subsequent attempts.
+            accepts_temperature = False
+            try:
+                raw = llm_invoke(prompt, model=model)
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                logger.warning(
+                    "judge LLM call failed (attempt %d/%d): %s",
+                    attempt + 1, total_attempts, exc,
+                )
+                _maybe_sleep_backoff(attempt, total_attempts)
+                continue
         except Exception as exc:  # noqa: BLE001
             last_error = exc
             logger.warning(
                 "judge LLM call failed (attempt %d/%d): %s",
-                attempt + 1, max_retries + 1, exc,
+                attempt + 1, total_attempts, exc,
             )
+            _maybe_sleep_backoff(attempt, total_attempts)
             continue
         try:
-            return _parse_verdict(raw)
+            return _parse_verdict(_coerce_to_text(raw))
         except JudgeError as exc:
             last_error = exc
             logger.warning(
                 "judge parse failed (attempt %d/%d): %s",
-                attempt + 1, max_retries + 1, exc,
+                attempt + 1, total_attempts, exc,
             )
+        _maybe_sleep_backoff(attempt, total_attempts)
     raise JudgeError(
-        f"judge failed after {max_retries + 1} attempts: {last_error}"
+        f"judge failed after {total_attempts} attempts: {last_error}"
+    )
+
+
+def _coerce_to_text(raw: object) -> object:
+    """Unwrap LLM response objects to their textual payload.
+
+    The :class:`LLMInvoke` protocol declares ``str`` return values,
+    but the production :func:`durin.memory.dream.default_llm_invoke`
+    returns an :class:`LLMResponse` dataclass carrying both text and
+    token counts. Without unwrapping, every judge call against the
+    real invoker fails the ``isinstance(raw, str)`` check inside
+    :func:`_parse_verdict` and retries until exhausted — verified
+    by the 2026-05-29 bench (5/5 QAs reported
+    ``judge_error_possible`` despite the agent producing correct
+    answers in 3 of them).
+
+    Tolerant unwrap: any object with a ``.text`` attribute (the
+    LLMResponse convention) gives up its text; everything else passes
+    through unchanged so the existing parser path can reject it with
+    a clear ``JudgeError``.
+    """
+    if isinstance(raw, str):
+        return raw
+    text = getattr(raw, "text", None)
+    if isinstance(text, str):
+        return text
+    return raw
+
+
+def _maybe_sleep_backoff(attempt: int, total_attempts: int) -> None:
+    """Exponential backoff between judge attempts.
+
+    Sleeps ``2 ** attempt`` seconds after attempt N (0-indexed), but
+    skips the sleep that would come after the very last attempt (no
+    point waiting just to raise). The schedule for the default
+    5-attempt budget is 1, 2, 4, 8 — 15 s total worst case, enough
+    to ride out the kind of upstream outage observed on 2026-05-29.
+    """
+    if attempt + 1 >= total_attempts:
+        return
+    time.sleep(float(2 ** attempt))
+
+
+def _invoke_accepts_temperature(llm_invoke: LLMInvoke) -> bool:
+    """Best-effort probe: does ``llm_invoke`` accept ``temperature``?
+
+    The :class:`LLMInvoke` protocol historically was ``(prompt, *,
+    model)``; H2 wants to pass ``temperature`` too without breaking
+    callers stuck on the old signature. A strict ``inspect`` check
+    keeps the judge tolerant — for unknown callables (C-extensions
+    without a signature) we assume yes and fall back to a temp-less
+    call inside the loop if it raises ``TypeError``.
+    """
+    try:
+        sig = inspect.signature(llm_invoke)
+    except (TypeError, ValueError):
+        return True
+    params = sig.parameters
+    if "temperature" in params:
+        return True
+    return any(
+        p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()
     )
 
 

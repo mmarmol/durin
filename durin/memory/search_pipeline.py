@@ -449,12 +449,37 @@ def _safe_vector_search(
     try:
         # We accept either a real `VectorIndex.search` (returns a list
         # of dicts) or any duck-typed object with the same shape.
-        return list(vector_index.search(query, top_k=50))
+        rows = list(vector_index.search(query, top_k=50))
     except Exception as exc:  # noqa: BLE001
         logger.warning("search_pipeline: vector failed: %s", exc)
         recovery["sources"].add("vector")
         recovery["ms"] += (_time.perf_counter() - t0) * 1000.0
         return []
+    # Audit H1 (2026-05-29): the production ``VectorIndex.search()``
+    # returns rows keyed on ``id`` / ``class_name`` / ``path`` — but
+    # the rest of this pipeline (RRF fusion, _resolve_meta, etc.)
+    # keys off ``uri`` / ``type``. Pre-H1 ``vector_uris`` was always
+    # empty (the comprehension at the call site filtered every row
+    # via ``if "uri" in h``), making the entire warm-tier vector
+    # path silently inert. The Phase 3 orchestrator test
+    # (``test_fake_vector_index_integrated``) passed because the
+    # fixture emits ``uri`` directly; production never matched that
+    # shape. This boundary normaliser fixes it: rows that already
+    # carry ``uri``/``type`` pass through unchanged; native rows get
+    # ``uri = id`` (per the FTS convention in
+    # ``indexer._uri_for``: entity_page → entity_ref, episodic →
+    # bare filename stem) and ``type = class_name``.
+    normalized: list[dict] = []
+    for r in rows:
+        if "uri" not in r:
+            uri = r.get("id")
+            if not uri:
+                continue
+            r = {**r, "uri": uri}
+        if "type" not in r and "class_name" in r:
+            r = {**r, "type": r["class_name"]}
+        normalized.append(r)
+    return normalized
 
 
 def _safe_lexical_search(
