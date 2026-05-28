@@ -375,7 +375,30 @@ No tiene `tick_id`, `triggered_by`, `restorations_*`, `duration_ms`. `components
 
 **Recomendación**: opción A. La estructura plana del código es más simple y los datos de detalles ya van por `errors`. El doc se ajusta a la realidad; cuando haya necesidad real de tick_id/eager se vuelve a evaluar.
 
-**Estado**: pending
+**Resolución (2026-05-28) — Híbrida pragmática**: el análisis verificado mostró que **no hay consumers del evento en código hoy** (cero hits fuera del propio módulo emisor + tests), entonces "quién tiene razón" no es binario — es decisión de diseño anticipado. Resultado:
+
+- **Agregado al código**: `tick_id` (uuid hex, 32 chars) + `duration_ms` (vía `time.perf_counter()`). Son estándar operacional: tick_id para correlación de logs entre ticks, duration_ms para diferenciar ticks rápidos vs lentos.
+- **NO agregado**: `triggered_by` (sólo existe `scheduled` hoy; sería enum con un valor único), `components` nested (funcionalmente equivalente al flat + errors aparte; nested es churn sin beneficio), `restorations_attempted`/`succeeded` (`drift_count` + `errors` ya cubren la señal hoy; agregar cuando exista alarma operacional que lo necesite).
+
+Cambios:
+- [durin/memory/health_check.py](../../durin/memory/health_check.py): `import uuid` + `time` agregados. `run_tick()` genera `tick_id = uuid.uuid4().hex` y `t0 = time.perf_counter()` al entrar; el payload incluye ambos. ~5 LOC delta.
+- [durin/telemetry/schema.py](../../durin/telemetry/schema.py): `MemoryHealthCheckEvent` TypedDict gana `tick_id` y `duration_ms`. Adicionales — pre-A6 fields siguen requeridos.
+- [docs/memory/07_telemetry_and_observability.md §9.4](07_telemetry_and_observability.md): tabla reescrita con los 6 fields actuales + bloque "Shape decisions and what's deliberately NOT emitted" documentando por qué `triggered_by`/`nested components`/`restorations_*` quedaron fuera. **Ese bloque es lo que evita que esta decisión se vuelva a tomar al revés** (un futuro reader podría ver doc 07 §9.4 v1 y "implementar lo que el doc dice" sin saber el contexto).
+- [tests/memory/test_health_check_a6_fields.py](../../tests/memory/test_health_check_a6_fields.py): 5 tests nuevos ejercitando behavior:
+  - `tick_id` es exactamente 32-char hex (no 36-char dashed — catches `.hex` vs `str()` regression).
+  - `duration_ms` es > 0 (catches segundos-en-vez-de-ms regression — el delta de `perf_counter()` en segundos es <1, multiplicado por 1000 es >0).
+  - Ticks consecutivos producen tick_ids distintos (catches per-init vs per-tick generation regression).
+  - TypedDict tiene los A6 fields **y** los pre-A6 fields (additive, no replace).
+  - Pre-A6 fields siguen en el payload.
+
+**Lecciones aplicadas**:
+- [[feedback-verify-quantifiers]]: el test explícitamente verifica `len(tick_id) == 32` y que todos los caracteres sean hex. No asume "uuid es uuid".
+- [[feedback-sync-tests-exercise-behavior]]: behavior tests, no sólo schema declarations.
+- [[feedback-no-wait-and-measure]] invertido: NO agregar campos sin necesidad demostrada (`triggered_by`, `restorations_*`). Documentar la decisión para no volver a tomarla al revés.
+
+**Verificado pre-commit**: tests/memory/ 912 passed (907 baseline + 5 nuevos A6), 1 skipped.
+
+**Estado**: resolved (commit pendiente).
 
 ---
 

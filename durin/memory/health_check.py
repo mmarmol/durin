@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import time
+import uuid
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -64,7 +66,14 @@ class HealthChecker:
     # ------------------------------------------------------------------
 
     def run_tick(self) -> dict[str, Any]:
-        """Run all probes once. Returns the status map + drift count."""
+        """Run all probes once. Returns the status map + drift count.
+
+        A6 (2026-05-28) added ``tick_id`` and ``duration_ms`` to the
+        emitted payload. ``tick_id`` is a per-tick UUID hex for log
+        correlation; ``duration_ms`` is the wall-clock of the tick.
+        """
+        tick_id = uuid.uuid4().hex
+        t0 = time.perf_counter()
         components: dict[str, str] = {}
         errors: dict[str, str] = {}
 
@@ -111,10 +120,13 @@ class HealthChecker:
                 else "ok"
             )
         )
+        duration_ms = (time.perf_counter() - t0) * 1000.0
         payload: dict[str, Any] = {
+            "tick_id": tick_id,
             "status": status,
             "components": components,
             "drift_count": drift_count,
+            "duration_ms": duration_ms,
         }
         if errors:
             payload["errors"] = errors

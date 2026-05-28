@@ -317,18 +317,26 @@ NEW. Emitted when a search-time staleness check finds a row out of date.
 
 ### 9.4 `memory.health_check`
 
-NEW. Emitted by the background health-check cron (see `03_search_pipeline.md` §14.2) on every tick — both passing and failing probes, so a dashboard can graph "uptime" of each component.
+Emitted by the background health-check cron on every tick — both passing and failing probes, so a dashboard can graph "uptime" of each component.
+
+Shipped pre-A6 (commit `022d4b1`, P2.4) with `status`, `components`, `drift_count`, optional `errors`. Audit A6 (2026-05-28) added `tick_id` and `duration_ms`. Both additions are additive — pre-A6 consumers continue to work (there were none in-tree at the time, but the contract is preserved).
 
 | Field | Type | Description |
 |---|---|---|
-| `tick_id` | string | UUID identifying this cron tick |
-| `triggered_by` | enum | `scheduled | eager_post_failure` (the latter when within 30s of a `memory.search.failure` event) |
-| `components` | dict | `{component_name: {"status": "ok|degraded|critical", "details": <str|null>}}` for each probed: `lancedb`, `fts5_unicode61`, `fts5_trigram`, `cross_encoder`, `watcher`, `disk` |
-| `restorations_attempted` | list of strings | Components for which the cron started a background restoration this tick |
-| `restorations_succeeded` | list of strings | Subset of above where restoration completed within tick window |
-| `duration_ms` | float | Time taken for the probes + any restoration work |
+| `tick_id` | string (32-char UUID hex) | Per-tick correlation id — useful when many ticks land in the same logging window. |
+| `status` | string | Aggregate: `ok` (all probes pass), `degraded` (one or more probes fail but not yet escalated), or `critical` (a component reached the 3-consecutive-failure threshold and an alert was emitted). |
+| `components` | `dict[str, str]` | Per-probe status. Keys are probe names (`fts`, `lance` — more may be added without payload restructuring). Values are `ok`, `fail`, or `skipped`. |
+| `drift_count` | int | Files re-indexed during this tick's repair pass (via `detect_index_staleness` → `reindex_one_file`). A persistently high count signals a watcher gap. |
+| `duration_ms` | float | Wall-clock of the tick (probes + drift repair + emit). |
+| `errors` | `dict[str, str]` (optional) | Per-component error messages when a probe returned `fail`. Present only when at least one component failed. |
 
-When `restorations_attempted` is non-empty, the cron also emits per-restoration `memory.index.rebuild` events (§9.2) for traceability.
+**Shape decisions and what's deliberately NOT emitted** (recorded in doc 11 A6 so future contributors don't re-add them without evidence):
+
+- **No `triggered_by`**: only one trigger (`scheduled`) exists today. Adding an enum with a single value is noise. When `eager_post_failure` (or another trigger) gets implemented, add the field then.
+- **No nested `components` (`{name: {status, details}}`)**: a flat `components` map + a separate `errors` map carries the same information with less structure. Matches the convention in Prometheus/OpenTelemetry (labels separate from metric values).
+- **No `restorations_attempted` / `restorations_succeeded`**: `_repair_drift` runs silently per drift issue; the `drift_count` already signals that repair work happened, and `errors` carries any per-component failures. Add these counters only when an operator alarm motivates it.
+
+When the tick's drift repair triggers re-indexes, those emit their own `memory.index.write` events (§9.1) for traceability.
 
 ### 9.5 `memory.health.critical`
 
