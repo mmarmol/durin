@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Callable, Iterable, Protocol
 
 from durin.memory.aliases_index import AliasIndex
+from durin.memory.dream_git_history import format_recent_history
 from durin.memory.entity_page import EntityPage
 from durin.utils.git_repo import GitRepo, NothingToCommitError
 
@@ -703,11 +704,19 @@ class DreamConsolidator:
         wrapping fence) and the builder reads all auxiliary files
         directly from ``durin/templates/dream/``.
 
-        Inputs that are not yet wired by the runner
-        (``existing_attribute_keys``, ``existing_relation_types``,
-        ``existing_uris``, ``recent_history``) are passed as empty —
-        Phase 1 deliverables 9 and 10 will populate them from disk +
-        ``git log``.
+        Audit F7 (2026-05-28) wired three of the four placeholder
+        slots Phase 1 deliverable 9 promised:
+
+        - ``existing_attribute_keys`` and ``existing_relation_types``
+          are now parsed from the current entity page's frontmatter
+          so the LLM has a concrete schema to keep coherent.
+        - ``recent_history`` calls
+          :func:`durin.memory.dream_git_history.format_recent_history`
+          to inject the last 30 days of commits on this entity so the
+          LLM can avoid undoing its own recent decisions.
+
+        ``existing_uris`` remains empty (walk + sort by mtime + cap
+        is a separate change — flagged as F7-deferred in doc 11).
         """
         from durin.memory.dream_prompt_builder import (
             DreamPromptContext,
@@ -722,16 +731,52 @@ class DreamConsolidator:
                 f"[{entry.timestamp} / {entry.id}]{tag_suffix} {entry.text}"
             )
 
+        # F7: parse the existing page so we can populate the schema
+        # slots. Failures are swallowed — the LLM still gets a usable
+        # prompt; it just loses the schema-coherence hints.
+        existing_attribute_keys: tuple[str, ...] = ()
+        existing_relation_types: tuple[str, ...] = ()
+        if current_page:
+            try:
+                page = EntityPage.from_text(current_page)
+                existing_attribute_keys = tuple(
+                    sorted(page.attributes.keys())
+                )
+                rel_types = sorted({
+                    str(r.get("type", "")).strip()
+                    for r in (page.relations or [])
+                    if isinstance(r, dict) and r.get("type")
+                })
+                existing_relation_types = tuple(rel_types)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "dream: prompt slot parse failed for %s: %s",
+                    entity_ref, exc,
+                )
+
+        # F7: git history is best-effort context fuel; the producer
+        # already returns "(no recent history)" on any failure.
+        try:
+            recent_history_text = format_recent_history(
+                self.workspace, entity_ref,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "dream: recent_history failed for %s: %s",
+                entity_ref, exc,
+            )
+            recent_history_text = ""
+
         ctx = DreamPromptContext(
             entity_id=entity_ref,
             existing_page_content=(
                 current_page
                 or "(no existing page — this is the first consolidation)"
             ),
-            existing_attribute_keys=(),
-            existing_relation_types=(),
+            existing_attribute_keys=existing_attribute_keys,
+            existing_relation_types=existing_relation_types,
             existing_uris=(),
-            recent_history="",
+            recent_history=recent_history_text,
             entries=tuple(entries_lines),
         )
         return build_dream_prompt(ctx)

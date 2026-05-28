@@ -211,7 +211,7 @@ The normalized query string.
 ### 4.2 Mechanics
 
 ```python
-vector = MiniLM.embed(query)                       # 768-dim
+vector = MiniLM.embed(query)                       # 384-dim (audit F3, 2026-05-28)
 rows = lancedb.search(vector, top_k=50)            # cosine distance
 ```
 
@@ -563,19 +563,29 @@ The final top-K (default 10) is grouped by source class and rendered with struct
 
 ### 12.1 Sections
 
+Audit F4 (2026-05-28) completed the Phase 3 sectioned-rendering
+migration. The `memory_search` tool now emits a single
+`sectioned_rendered` string carrying section intros + per-block
+markers + END closes — the per-row `rendered` field was dropped
+(WebUI consumes raw fields directly; the LLM consumes the sectioned
+string).
+
 | Marker | Source class | Order priority |
 |---|---|---|
-| `=== CANONICAL: <uri> (consolidated <ts>) ===` | entity pages | 1 |
-| `=== FRAGMENT: <path> (ts <ts>) ===` | episodic post-cursor + stable | 2 |
-| `=== SESSION: <session_id>/<turn_or_summary> (ts <ts>) ===` | session summaries + raw session hits (grep fallback) | 3 |
-| `=== INGESTED: <ingest_id>/<chunk_or_source> ===` | corpus + raw ingested hits | 4 |
+| `=== CANONICAL: <uri> (consolidated <ts>) ===` (ts present) or `=== CANONICAL: <uri> (canonical entity page) ===` (no ts) | entity pages | 1 |
+| `=== FRAGMENT: <path> (ts <ts>) ===` or `=== FRAGMENT: <path> ===` (no ts) | episodic post-cursor + stable | 2 |
+| `=== SESSION: <uri> (ts <ts>) ===` or `=== SESSION: <uri> ===` (no ts) | session summaries + raw session hits | 3 |
+| `=== INGESTED: <ingest_id>/<uri> ===` | corpus + raw ingested hits | 4 |
+
+Each block closes with `=== END KIND ===` so the LLM can boundary-detect without relying on section intros.
 
 ### 12.2 Rendering rules
 
 - Within each section, hits ordered by score descending.
-- Each hit carries its full rendered block (headline + summary + body excerpt for warm; full body for cold).
+- Body inside each block follows the preference `summary > body > snippet` so warm-tier responses stay compact.
+- Non-canonical hits carry an `Entities: <ref>, <ref>` tail so the LLM can drill to the canonical entity page.
 - Sections with zero hits are omitted entirely.
-- Section headers carry only descriptive metadata (uri, timestamp, path). No valuative language ("treat as authoritative", "trust this") — these have been verified as weak signals (see `01_data_and_entities.md` §6.6 of doc 29).
+- Section intros precede each section (e.g. "Consolidated entity pages — the main memory; fragments below amend them with newer information.") — descriptive metadata only, no valuative language ("treat as authoritative", "trust this"), which has been verified as weak signal.
 
 ### 12.3 Snippets
 
@@ -595,7 +605,7 @@ This is **only applied to corpus** (the class where same-source clustering is st
 - Entity: one entity = one canonical page; clustering by source isn't meaningful.
 - Episodic/stable/session_summary: each has independent provenance; if 3 episodic mention the same fact, that's triangulation (see §11).
 
-The cap value (`3`) is configurable via `memory.search.sectioning.max_per_source` (default 3).
+The cap value (`3`) lives in `durin.memory.sectioned_output.DEFAULT_MAX_PER_SOURCE` and is currently hard-coded. The `memory.search.sectioning.max_per_source` config knob is **not yet implemented**; if operators report needing to tune the cap, lifting it into config is a small change (mirrors the F1 `class_half_life_overrides` pattern).
 
 ---
 

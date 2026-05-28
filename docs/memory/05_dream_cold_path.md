@@ -206,10 +206,10 @@ The prompt is the single most important LLM-facing surface in the system. It is 
 |---|---|---|
 | `entity_id` (e.g., `person:marcelo`) | Trigger | The entity to consolidate |
 | `existing_page` | Read from disk | Current entity page (frontmatter + body) |
-| `existing_schema` | Derived from `existing_page` | List of attribute keys and relation types already used on this entity |
-| `existing_uris` | Workspace state | URIs of entities already in `memory/entities/**` (used to discourage duplicate creation) |
+| `existing_schema` | Derived from `existing_page` via `EntityPage.from_text` (audit F7, 2026-05-28) | List of attribute keys and relation types already used on this entity, rendered as `attributes: k1, k2` + `relation types: t1, t2` (sorted; `(none)` when empty). |
+| `existing_uris` | Workspace state | URIs of entities already in `memory/entities/**` (used to discourage duplicate creation). **Still passed empty in production** — audit F7 (2026-05-28) deferred wiring this slot pending a small walk + sort-by-mtime + cap producer. The slot rendering tolerates the empty case so the prompt stays valid. |
 | `pending_entries` | Walk post-cursor `memory/episodic/`, `memory/stable/` filtered by entity tag | The N new observations to consolidate |
-| `recent_history` | `git log --since='30 days ago' -- <entity_path>` | Last few git commits of THIS entity page, so LLM sees recent changes Dream made |
+| `recent_history` | `git log --since='30 days ago' -- <entity_path>` via `format_recent_history` (audit F7, 2026-05-28) | Last few git commits of THIS entity page, so LLM sees recent changes Dream made. |
 
 ### 5.2 Prompt structure
 
@@ -514,45 +514,66 @@ User manual edits to `.md` files are committed separately by the indexer (§6.4 
 
 ## 12. Failure modes
 
-### 12.1 LLM call failure
+Audit F6 (2026-05-28) aligned this section to the shipped enum.
+The `DreamApplyFailureKind` enum in `durin/memory/dream_apply.py`
+emits four kinds: `validation | patch_runtime | round_trip | io`.
+LLM call failures (§12.1) happen UPSTREAM of `dream_apply` and are
+tracked by the consolidator path, not by this enum. The pre-F6
+spec used `_failed` suffixes that no caller ever emitted.
+
+### 12.1 LLM call failure (upstream)
 
 If `default_llm_invoke` raises (network error, API timeout, rate limit):
-- Catch in the consolidator.
-- Log as telemetry: `kind=llm_call_failed`.
+- Caught in the consolidator BEFORE `dream_apply` runs.
+- Telemetry emitted with the runner-level counter (not `DreamApplyFailureKind` — the apply step never executed).
 - Skip this entity for this pass; DO NOT advance cursor.
 - Continue to next entity.
 - Pass exits with one failure; next trigger will retry.
 
-### 12.2 Parse failure
+### 12.2 Patch runtime failure (`kind=patch_runtime`)
 
-If `===PATCH===` JSON is malformed (after `json_repair`):
-- Log: `kind=parse_failed`.
+If `===PATCH===` JSON is malformed (after `json_repair`) OR if applying a parsed op raises:
+- Log: `kind=patch_runtime`.
 - Skip this entity; cursor stays.
 
-### 12.3 Validation failure (patch tries to set illegal field)
+The pre-F6 spec split this as "parse failure"; the shipped enum
+folds both JSON-decode errors and patch-op runtime errors into the
+same category because the operator response (skip + cursor stays)
+is identical.
+
+### 12.3 Validation failure (`kind=validation`)
 
 If the patch tries to overwrite `dream_processed_through` or touches paths outside allowed roots:
 - Reject the patch.
-- Log: `kind=validation_failed` with details.
+- Log: `kind=validation` with details.
 - Skip; cursor stays.
 
-### 12.4 Round-trip failure (YAML breaks)
+### 12.4 Round-trip failure (`kind=round_trip`)
 
 If after applying the patch, the resulting frontmatter doesn't re-parse:
 - Restore from `.md.bak`.
-- Log: `kind=round_trip_failed`.
+- Log: `kind=round_trip`.
 - Skip; cursor stays.
+
+### 12.4a IO failure (`kind=io`)
+
+If the disk write itself fails (disk full, permission denied, etc.):
+- Log: `kind=io`.
+- Skip; cursor stays.
+
+`io` is treated as **ambient** alongside upstream LLM failures —
+the entity has no structural defect; the environment is at fault.
 
 ### 12.5 Repeated structural failures on the same entity
 
-If the same entity fails **3 times in a row** with a **structural** failure type (parse_failed, validation_failed, round_trip_failed) across consecutive passes:
+If the same entity fails **3 times in a row** with a **structural** failure type — `STRUCTURAL_FAILURE_KINDS = {validation, patch_runtime, round_trip}` per `dream_quarantine.py:44` — across consecutive passes:
 
 - Add `dream_failure_count: 3` and `dream_quarantine: <ISO_timestamp_now+7d>` to the entity's frontmatter.
 - Subsequent passes skip this entity until `dream_quarantine` expires (default 7 days).
 - Telemetry emits `kind=quarantined`.
 - Operator manually inspects, fixes, and removes the fields (or waits for quarantine to expire).
 
-**Crucial: only structural failures count.** Ambient failures (`llm_call_failed` from rate limits, network timeouts) do NOT increment the counter. Reasoning: ambient failures don't indicate a problem with the entity itself; they indicate transient infrastructure issues. Counting them would quarantine perfectly healthy entities during a z.ai outage.
+**Crucial: only structural failures count.** Ambient failures (upstream LLM call failures from rate limits / network timeouts, and `kind=io` from disk-write errors) do NOT increment the counter. Reasoning: ambient failures don't indicate a problem with the entity itself; they indicate transient infrastructure issues. Counting them would quarantine perfectly healthy entities during a z.ai outage or a disk-full event.
 
 After a successful apply, the counter resets to 0.
 
@@ -606,7 +627,7 @@ All consistent with prior decisions in docs 00-04.
 | 9 | v1 → v2 schema migration | Lazy on Dream touch. No bulk migration. Search works on v1 pages too. | §9 |
 | 10 | Drift control scope | Per-entity (workspace-wide normalization is deferred). | §10 |
 | 11 | Git commit pattern — skill instructs + code verifies | One commit per apply. Author: `durin-dream`. **Skill instructs** the LLM to format the commit message with trailers `Sources:`, `Cursor-after:`, `Entities-touched:`. **Code post-processes** the message: auto-completes `Trigger:` and `Run-id:` (always known by runner); verifies the LLM-supplied trailers are present and auto-fills from runner state if missing (warning, not block). | §11 |
-| 12 | Quarantine after repeated STRUCTURAL failures | After 3 consecutive **structural** failures (parse_failed, validation_failed, round_trip_failed) on the same entity, set `dream_failure_count` + `dream_quarantine: <now+7d>` in its frontmatter; skip until quarantine expires. **Ambient failures (llm_call_failed) do NOT count** — those indicate infrastructure issues, not entity-level problems. Counter resets after a successful apply. | §12.5 |
+| 12 | Quarantine after repeated STRUCTURAL failures | After 3 consecutive **structural** failures (`validation`, `patch_runtime`, `round_trip`) on the same entity, set `dream_failure_count` + `dream_quarantine: <now+7d>` in its frontmatter; skip until quarantine expires. **Ambient failures (upstream LLM call errors + `kind=io` disk errors) do NOT count** — those indicate infrastructure issues, not entity-level problems. Counter resets after a successful apply. Audit F6 (2026-05-28) aligned the enum names to the shipped code. | §12.5 |
 | 13 | Cost expectation | $0.25-$1.00/day for active workspace at typical pass rates. Adjustable via threshold + model. | §13 |
 
 ### Open

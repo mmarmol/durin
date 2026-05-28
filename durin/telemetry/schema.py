@@ -708,15 +708,21 @@ class MemoryDreamPatchAppliedEvent(TypedDict):
 class MemoryDreamEntityFailedEvent(TypedDict):
     """A Dream apply for one entity failed (doc 07 §6.4).
 
-    Emitted on every failed entity (no batching). ``kind`` matches
-    :class:`durin.memory.dream_apply.DreamApplyFailureKind` for the
-    structural cases, plus ``"llm_call_failed"`` for ambient LLM
-    issues and ``"parse_failed"`` for unparseable LLM output. Only
-    *structural* kinds (validation / patch_runtime / round_trip)
-    contribute to the quarantine counter — that's enforced in
-    :mod:`durin.memory.dream_quarantine`, not here. The two are kept
-    distinct so dashboards can spot a network outage vs a busted
-    entity.
+    Emitted on every failed entity (no batching) by
+    ``durin.memory.dream_apply._emit_apply_telemetry``. ``kind``
+    carries one of the four
+    :class:`durin.memory.dream_apply.DreamApplyFailureKind` values
+    (``validation`` / ``patch_runtime`` / ``round_trip`` / ``io``).
+    Only the structural kinds (validation / patch_runtime /
+    round_trip) contribute to the 3-strike quarantine counter —
+    enforced in :mod:`durin.memory.dream_quarantine`, not here.
+
+    Upstream LLM call failures (rate limit, timeout, network) happen
+    BEFORE ``dream_apply`` runs and bubble up to the runner; they do
+    NOT emit this event. Audit F6 (2026-05-28) corrected this
+    docstring after the third-pass audit caught a pre-F6 claim that
+    ``llm_call_failed`` / ``parse_failed`` were valid ``kind``
+    values here — neither string is ever emitted in production.
     """
 
     entity_ref: str

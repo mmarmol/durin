@@ -41,8 +41,10 @@ _PARAMETERS = tool_parameters_schema(
     ),
     scope=StringSchema(
         "Where to search. 'all' (default) covers both undreamed sources and "
-        "dreamed memory entries.",
-        enum=["all", "dreamed", "undreamed"],
+        "dreamed memory entries. 'archive' walks `memory/archive/` on demand "
+        "for recovery / diagnostic queries against consolidated content "
+        "(audit F1, doc 01 §3.6).",
+        enum=["all", "dreamed", "undreamed", "archive"],
     ),
     level=StringSchema(
         "How much content to return per result. 'warm' (default) returns "
@@ -312,10 +314,19 @@ class MemorySearchTool(Tool):
 
         if not query:
             return {"error": "query is required"}
-        if scope not in ("all", "dreamed", "undreamed"):
+        if scope not in ("all", "dreamed", "undreamed", "archive"):
             return {"error": f"invalid scope {scope!r}"}
         if level not in ("warm", "cold"):
             return {"error": f"invalid level {level!r}"}
+
+        # F2 (audit third pass, 2026-05-28): archive is intentionally
+        # not indexed (vector/lexical/grep over memory/ exclude
+        # `memory/archive/**`). The `scope='archive'` surface is a
+        # separate on-demand walk for recovery / diagnostic queries.
+        # No re-ranking, no decay, no entity-aware — substring match
+        # over headline + summary + body of each archived `.md`.
+        if scope == "archive":
+            return self._run_archive_scope(query, limit=limit)
 
         # v2 pipeline (Phase 5 d1): delegate the whole search to
         # `run_search_pipeline` — query router + lexical FTS + vector +
@@ -344,12 +355,19 @@ class MemorySearchTool(Tool):
         # MemoryTemporalDecayConfig). Reading via getattr lets test
         # paths that build the tool with `app_config=None` opt out
         # cleanly (decay still defaults ON for the real config).
+        # F1: thread `class_half_life_overrides` so operator config
+        # tunes per-class half-lives without a code patch.
         temporal_decay_enabled = True
+        temporal_decay_overrides: dict[str, int | None] | None = None
         if self._app_config is not None:
             try:
-                temporal_decay_enabled = bool(
-                    self._app_config.memory.search.temporal_decay.enabled
+                decay_cfg = self._app_config.memory.search.temporal_decay
+                temporal_decay_enabled = bool(decay_cfg.enabled)
+                overrides = getattr(
+                    decay_cfg, "class_half_life_overrides", None,
                 )
+                if overrides:
+                    temporal_decay_overrides = dict(overrides)
             except AttributeError:
                 temporal_decay_enabled = True
 
@@ -363,6 +381,7 @@ class MemorySearchTool(Tool):
             cross_encoder=cross_encoder,
             cross_encoder_top_n=ce_top_n,
             temporal_decay_enabled=temporal_decay_enabled,
+            temporal_decay_overrides=temporal_decay_overrides,
         )
         duration_ms = (time.monotonic() - t0) * 1000.0
 
@@ -405,12 +424,44 @@ class MemorySearchTool(Tool):
             ]
 
         # Convert :class:`SectionedHit` rows into the legacy `Result`
-        # shape expected by the agent (carries `to_dict` + `render_block`).
+        # shape expected by the agent (carries `to_dict`). F4 (third
+        # pass, 2026-05-28): the LLM-facing block rendering moved to
+        # `sectioned_output.render_sectioned` so the per-source cap
+        # (doc 03 §12.4) and section intros (§12) actually activate.
         results: list[Result] = []
         for h in hits:
             r = self._sectioned_to_result(h, level=level)
             if r is not None:
                 results.append(r)
+
+        # F4: apply per-source cap + render sectioned output.
+        from durin.memory.sectioned_output import (
+            SectionedHit, apply_per_source_cap, render_sectioned,
+        )
+        _TYPE_FROM_CLASS = {
+            "entity_page": "entity",
+            "episodic": "episodic", "stable": "stable",
+            "corpus": "corpus", "session_summary": "session_summary",
+        }
+        enriched_hits = [
+            SectionedHit(
+                uri=r.uri,
+                type=_TYPE_FROM_CLASS.get(r.class_name, "episodic"),
+                path=r.uri,
+                score=0.0,
+                ts=r.valid_from,
+                snippet=r.snippet,
+                body=r.body,
+                summary=r.summary,
+                entities=tuple(r.entities),
+                ingest_id=None,
+            )
+            for r in results
+        ]
+        capped_hits = apply_per_source_cap(enriched_hits)
+        kept_uris = {h.uri for h in capped_hits}
+        results = [r for r in results if r.uri in kept_uris]
+        sectioned_rendered = render_sectioned(capped_hits)
 
         # Strategy / ranking labels for downstream telemetry consumers
         # that pattern-match. We derive them from what the pipeline
@@ -453,13 +504,11 @@ class MemorySearchTool(Tool):
             )
         emit_tool_event("memory.recall", recall_payload)
         response: dict[str, Any] = {
-            "results": [
-                {**r.to_dict(), "rendered": r.render_block()}
-                for r in results
-            ],
+            "results": [r.to_dict() for r in results],
             "total": len(results),
             "strategy": strategy,
             "ranking": ranking,
+            "sectioned_rendered": sectioned_rendered,
         }
         # P5.2: surface degraded-run info when the pipeline recovered
         # from a source failure. Omitted on clean runs to keep the
@@ -470,6 +519,151 @@ class MemorySearchTool(Tool):
                 pipeline_result.recovery_duration_ms
             )
         return response
+
+    def _run_archive_scope(
+        self, query: str, *, limit: int,
+    ) -> dict[str, Any]:
+        """F2 (audit third pass, 2026-05-28): on-demand walk of
+        `memory/archive/**` for `scope='archive'` queries.
+
+        Archive is intentionally not indexed (doc 01 §3.6). This path
+        loads each archived `.md`, substring-matches the query against
+        headline + summary + body, and returns up to `limit` hits.
+
+        No vector / lexical / cross-encoder / decay — recovery surface,
+        not the hot path. The shape mirrors the normal response so the
+        agent renders it the same way (`results`, `total`, `strategy`).
+        """
+        import re
+        from durin.memory.storage import (
+            FrontmatterError, split_frontmatter,
+        )
+
+        archive_root = self._workspace / "memory" / "archive"
+        if not archive_root.is_dir():
+            return {
+                "results": [], "total": 0,
+                "strategy": "archive", "ranking": "default",
+            }
+
+        needle = query.lower()
+        hits: list[Result] = []
+        for path in sorted(archive_root.rglob("*.md")):
+            try:
+                text = path.read_text(encoding="utf-8")
+            except Exception:  # noqa: BLE001
+                continue
+            # Parse the frontmatter shallowly. Archive .md files always
+            # carry a YAML block; we only need headline / summary /
+            # name / aliases for matching + rendering.
+            try:
+                front, body = split_frontmatter(text)
+            except FrontmatterError:
+                continue
+            haystack = " ".join((
+                front.get("headline", ""),
+                front.get("summary", ""),
+                front.get("name", ""),
+                " ".join(front.get("aliases", []) or []),
+                body,
+            )).lower()
+            if needle not in haystack:
+                continue
+            # Determine class_name from the archive subpath:
+            # archive/episodic/...  → episodic
+            # archive/entities/...  → entity_page
+            try:
+                rel_parts = path.relative_to(archive_root).parts
+            except ValueError:
+                rel_parts = ()
+            if rel_parts and rel_parts[0] == "entities":
+                class_name = "entity_page"
+                uri = (
+                    f"{front.get('type', 'unknown')}:"
+                    f"{path.stem}"
+                )
+                headline = front.get("name", path.stem)
+            else:
+                class_name = (
+                    rel_parts[0] if rel_parts else "archived"
+                )
+                uri = front.get("uri", "") or path.stem
+                headline = front.get("headline", path.stem)
+            summary = front.get("summary", "")
+            # Snippet: first ~160 chars around the match.
+            m = re.search(re.escape(needle), haystack)
+            if m:
+                start = max(0, m.start() - 80)
+                end = min(len(haystack), m.end() + 80)
+                snippet = haystack[start:end]
+            else:
+                snippet = (body or summary)[:160]
+            hits.append(Result(
+                source="memory",
+                uri=uri,
+                headline=headline,
+                snippet=snippet,
+                summary=summary,
+                body=body,
+                class_name=class_name,
+                valid_from=str(front.get("valid_from", "") or ""),
+                entities=(),
+            ))
+            if len(hits) >= limit:
+                break
+
+        emit_tool_event(
+            "memory.recall",
+            {
+                "query": query,
+                "scope": "archive",
+                "level": "warm",
+                "result_count": len(hits),
+                "strategy": "archive",
+                "duration_ms": 0.0,
+                "total_candidates": len(hits),
+                "keywords": None,
+            },
+        )
+        # F4: archive path also uses sectioned rendering for parity
+        # with the main path. Map each Result to a SectionedHit and
+        # call render_sectioned. Per-source cap rarely triggers on
+        # archive but applying it keeps the path uniform.
+        from durin.memory.sectioned_output import (
+            SectionedHit, apply_per_source_cap, render_sectioned,
+        )
+        _ARCHIVE_TYPE_FROM_CLASS = {
+            "entity_page": "entity",
+            "episodic": "episodic", "stable": "stable",
+            "corpus": "corpus", "session_summary": "session_summary",
+        }
+        sectioned = [
+            SectionedHit(
+                uri=r.uri,
+                type=_ARCHIVE_TYPE_FROM_CLASS.get(
+                    r.class_name, "episodic",
+                ),
+                path=r.uri,
+                score=0.0,
+                ts=r.valid_from,
+                snippet=r.snippet,
+                body=r.body,
+                summary=r.summary,
+                entities=tuple(r.entities),
+                ingest_id=None,
+            )
+            for r in hits
+        ]
+        capped = apply_per_source_cap(sectioned)
+        kept = {h.uri for h in capped}
+        kept_results = [r for r in hits if r.uri in kept]
+        return {
+            "results": [r.to_dict() for r in kept_results],
+            "total": len(kept_results),
+            "strategy": "archive",
+            "ranking": "default",
+            "sectioned_rendered": render_sectioned(capped),
+        }
 
     def _sectioned_to_result(
         self, hit: Any, *, level: str,
@@ -545,11 +739,10 @@ def _vector_row_to_result(row: dict) -> Result:
     """Shape a LanceDB row to match the grep Result schema.
 
     Per doc 25 §2.H: preserve ``class_name`` / ``valid_from`` /
-    ``entities`` so the LLM-facing :meth:`Result.to_dict` and
-    :meth:`Result.render_block` can mark the row as canonical vs
-    fragment. Earlier versions dropped these fields, breaking the
-    contract that doc 18 §6 ("LLM reconcilia con timestamps y
-    contexto") implied.
+    ``entities`` so the canonical-vs-fragment contract holds. Audit
+    F4 (2026-05-28) moved the LLM-facing marker rendering to
+    ``sectioned_output.render_sectioned``; the fields still need to
+    flow through here so the sectioned renderer has the data.
     """
     class_name = row.get("class_name", "")
     entry_id = row.get("id", "")

@@ -76,13 +76,32 @@ CLASS_HALF_LIFE_DEFAULTS: dict[str, Optional[int]] = {
 }
 
 
-def resolve_class_half_life(class_name: str) -> Optional[int]:
-    """Lookup the class default half-life in days; ``None`` = no decay.
+def resolve_class_half_life(
+    class_name: str,
+    *,
+    overrides: Optional[dict[str, Optional[int]]] = None,
+) -> Optional[int]:
+    """Lookup the class half-life in days; ``None`` = no decay.
 
-    Unknown classes also return ``None`` (safe: an entry whose class
-    we don't recognise passes through unchanged rather than getting
-    an arbitrary half-life applied).
+    Unknown classes return ``None`` unless an override is supplied —
+    safe default: an entry whose class we don't recognise passes
+    through unchanged rather than getting an arbitrary half-life
+    applied.
+
+    Audit F1 (2026-05-28): accepts the operator-configured
+    ``overrides`` map (`memory.search.temporal_decay
+    .class_half_life_overrides`). Override semantics:
+
+    - Present + integer → use that half-life (in days).
+    - Present + ``None`` → disable decay for the class even when the
+      default would decay it.
+    - Absent → fall through to the per-class default.
+
+    Same lookup is used by both `apply_class_decay` (the ranking-time
+    consumer) and `half_life_for` (kept for legacy callers).
     """
+    if overrides is not None and class_name in overrides:
+        return overrides[class_name]
     return CLASS_HALF_LIFE_DEFAULTS.get(class_name)
 
 
@@ -92,12 +111,18 @@ def apply_class_decay(
     class_name: str,
     valid_from_iso: str,
     now: Optional[datetime] = None,
+    overrides: Optional[dict[str, Optional[int]]] = None,
 ) -> tuple[float, float]:
-    """Multiply *score* by exp(-Δdays / half_life), per class default.
+    """Multiply *score* by exp(-Δdays / half_life), per class half-life.
 
     Audit A9 (2026-05-28). The ranking-time consumer of the half-life
     table. Per-class only — per-entry overrides are NOT applied here
     (see module docstring).
+
+    Audit F1 (2026-05-28): forwards ``overrides`` to
+    ``resolve_class_half_life`` so operator config tuning (`memory
+    .search.temporal_decay.class_half_life_overrides`) flows through
+    this hot path.
 
     Returns ``(new_score, decay_factor)``:
 
@@ -109,7 +134,7 @@ def apply_class_decay(
     The caller is expected to swallow failures via the returned
     ``decay_factor`` — this function never raises.
     """
-    half_life = resolve_class_half_life(class_name)
+    half_life = resolve_class_half_life(class_name, overrides=overrides)
     if half_life is None or half_life <= 0:
         return score, 1.0
     if not valid_from_iso:

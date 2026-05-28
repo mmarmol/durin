@@ -56,8 +56,10 @@ All four are exposed as MCP/tool calls to the agent. None invokes an LLM interna
 ### 2.2 Return shape
 
 Audit E16 (2026-05-28) rebuilt this section from the actual tool
-output. The pre-E16 spec listed `type`/`path`/`score` fields that
-never existed and omitted half of what the tool actually returns.
+output. Audit F5 (2026-05-28) corrected the example after audit F4
+removed the per-row `rendered` field and added `sectioned_rendered`
+at the top level — and fixed `valid_from` (entity pages always
+write `""`; only entries have a real timestamp).
 
 ```json
 {
@@ -71,14 +73,24 @@ never existed and omitted half of what the tool actually returns.
       "summary": "Founder of durin…",
       "body": "…full markdown body (only when level=cold)…",
       "class_name": "entity_page",
-      "valid_from": "2024-01-15",
-      "entities": ["person:marcelo"],
-      "rendered": "=== CANONICAL: person:marcelo (consolidated 2026-05-20) ===\n…"
+      "entities": ["person:marcelo"]
+    },
+    {
+      "source": "memory",
+      "uri": "memory/episodic/abc123",
+      "headline": "Marcelo prefers pytest",
+      "snippet": "…",
+      "kind": "fragment",
+      "summary": "Marcelo prefers pytest as the default test runner.",
+      "class_name": "episodic",
+      "valid_from": "2026-05-23",
+      "entities": ["person:marcelo", "topic:pytest"]
     }
   ],
   "total": 10,
   "strategy": "hybrid",
-  "ranking": "entity_aware"
+  "ranking": "entity_aware",
+  "sectioned_rendered": "## Canonical\n\nConsolidated entity pages — the main memory; fragments below amend them with newer information.\n\n=== CANONICAL: person:marcelo (canonical entity page) ===\nFounder of durin…\n=== END CANONICAL ===\n\n## Fragment\n\nEpisodic and stable entries beyond the canonical cursor. Reconcile with the canonical above using the timestamps.\n\n=== FRAGMENT: memory/episodic/abc123 (ts 2026-05-23) ===\nMarcelo prefers pytest as the default test runner.\nEntities: person:marcelo, topic:pytest\n=== END FRAGMENT ==="
 }
 ```
 
@@ -94,17 +106,17 @@ Per-result fields (defined on `durin.memory.search.Result`):
 | `summary` | when non-empty | Dream-generated summary (entity pages, some entries) |
 | `body` | when `level=cold` | Full markdown body, read from disk after the pipeline returns |
 | `class_name` | when non-empty | `entity_page | episodic | stable | corpus | pending | session_summary` |
-| `valid_from` | when non-empty | ISO timestamp of when the entry's observation occurred |
+| `valid_from` | when non-empty | ISO timestamp of when the entry's observation occurred. **Entity pages always have `""`** (file mtime tracks "last Dream pass", not "age of fact" — see doc 03 §10.4); only memory entries carry a real value. |
 | `entities` | when non-empty | Entity URIs the hit pertains to (for entity pages: the page's own ref; for fragments: the entry's tags) |
-| `rendered` | yes | Section-marker block (§6) — the source of truth for what the LLM consumes; prefer this over reconstructing |
 
 Top-level fields:
 
 | Field | Always present | Description |
 |---|---|---|
 | `total` | yes | Final result count (after limit) |
-| `strategy` | yes | `vector | lexical | hybrid | grep` — which path produced the hits |
+| `strategy` | yes | `vector | lexical | hybrid | grep` (main path) or `archive` (`scope='archive'` recovery surface) |
 | `ranking` | yes | `default | entity_aware` — whether the entity-aware ranker contributed |
+| `sectioned_rendered` | yes | Section-grouped marker output (audit F4, 2026-05-28). Carries section intros + per-block markers with `=== KIND: <uri> ===` headers and `=== END KIND ===` closes. Body inside each block follows `summary > body > snippet` preference; non-canonical blocks carry an `Entities: <ref>, <ref>` tail. **This is what the LLM consumes** — prefer it over reconstructing from raw fields. Per-row `rendered` was retired in F4. |
 | `recovered_from` | **only on degraded runs** | List of source components that failed (e.g. `["vector"]`); omitted on clean runs |
 | `recovery_duration_ms` | **only on degraded runs** | Wall-clock spent inside the failed wrappers |
 
@@ -541,8 +553,8 @@ The agent invokes the four tools in §2-§5. Separately, the **operator** has CL
 | `durin embed-migrate --to <model_id>` | Switch embedding model with safe migration (backup + rebuild) | `02_indexing.md` §7.2.1 |
 | `durin dream run [--entity <uri>]` | Manually trigger a Dream consolidation pass, optionally filtered to one entity | `05_dream_cold_path.md` §2 |
 | `durin memory absorb [--auto|--interactive]` | Run absorb-judge over alias-overlap candidates and merge approved pairs | `05_dream_cold_path.md` §8 |
-| `durin archive show <uri>` | Read an archived entry by URI (recovery / audit) | `01_data_and_entities.md` §3.6 |
-| `durin archive list` | List archived entries (walks `memory/archive/` on demand) | `01_data_and_entities.md` §3.6 |
+| ~~`durin archive show <uri>`~~ | Deferred to backlog (audit F2, 2026-05-28) — `durin memory expand <entity>` covers per-entity recovery; `cat memory/archive/...` covers direct lookups. The dedicated command stays in `08_scope_and_discarded.md` §5 until a concrete operator workflow surfaces. | doc 08 §5 |
+| ~~`durin archive list`~~ | Deferred to backlog (audit F2). Until then, `find memory/archive -name '*.md'` enumerates archived files. | doc 08 §5 |
 | `durin memory health [restore --component <name>]` | Inspect health-check cron state; manually retry restoration for a paused component | `03_search_pipeline.md` §14.4 |
 | `durin memory history <uri> [--since <date>]` | Git log for an entity's `.md` file. Shows Dream consolidation history. | `00_overview.md` §10 #4 (versioning) |
 

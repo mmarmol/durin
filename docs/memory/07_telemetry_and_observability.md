@@ -267,29 +267,47 @@ Already exists.
 
 ### 6.4 `memory.dream.entity_failed`
 
-NEW.
+Emitted by `durin.memory.dream_apply._emit_apply_telemetry` whenever
+one entity's apply step fails. Audit F6 (2026-05-28) aligned this
+section to the shipped `DreamApplyFailureKind` enum.
 
 | Field | Type | Description |
 |---|---|---|
-| `entity_uri` | string | The entity that failed to consolidate |
-| `kind` | enum | `llm_call_failed | parse_failed | validation_failed | round_trip_failed` |
-| `attempt_count` | int | This entity's running failure count (0-3) |
-| `quarantined` | bool | Whether this failure triggered quarantine |
-| `error` | string | Short error message |
+| `entity_ref` | string | The entity that failed to consolidate (e.g. `person:marcelo`) |
+| `trigger` | string | Same trigger label the dream pass started with (`threshold`, `cron_daily`, `manual`, …) — see §6.1 |
+| `kind` | enum | `validation | patch_runtime | round_trip | io` — values of `DreamApplyFailureKind` |
+| `error_message` | string | Truncated to 500 chars (caller-side) |
+| `failure_count_now` | int | Post-increment counter; `0` for ambient (`io`) and pre-quarantine increments are emitted before the page is persisted, so structural kinds may also emit `0` here when the increment is recorded on the page separately |
+| `quarantined_until` | string | optional — ISO timestamp set only when this failure crossed the 3-strike quarantine threshold |
 
-This is the event downstream alerts watch to detect persistent broken entities.
+Failure kind taxonomy (cross-references doc 05 §12):
+
+- **Structural** (count toward quarantine): `validation`, `patch_runtime`, `round_trip`.
+- **Ambient** (do NOT count): `io` (disk write errors). Upstream LLM call failures bubble up before `dream_apply` runs and are tallied by the runner totals, not by this event.
+
+The pre-F6 spec referenced `llm_call_failed` / `parse_failed` as kinds emitted on this event; neither value is actually emitted by any production callsite (the upstream consolidator path does not emit `memory.dream.entity_failed` on raw LLM failures — it just bubbles the exception up to the runner so the entity is skipped and the next trigger retries).
 
 ### 6.5 `memory.dream.patch_applied`
 
 NEW.
 
+Emitted by `durin.memory.dream_apply._emit_apply_telemetry` on
+every successful apply. Audit F8 (2026-05-28) aligned this section
+to the shipped TypedDict — the pre-F8 spec named fields that no
+production callsite ever emits (`entity_uri`, `op_count`,
+`commit_sha`, `cursor_advanced_to`).
+
 | Field | Type | Description |
 |---|---|---|
-| `entity_uri` | string | Target entity |
-| `op_count` | int | Number of JSON Patch ops applied |
-| `body_delta_chars` | int | Length of body delta |
-| `commit_sha` | string | Git commit SHA |
-| `cursor_advanced_to` | ISO timestamp | New cursor value |
+| `entity_ref` | string | Target entity (e.g. `person:marcelo`) |
+| `trigger` | string | Pass trigger (same vocabulary as §6.1) |
+| `ops_applied` | int | Count of JSON Patch ops that landed |
+| `sources_count` | int | Distinct `provenance` values across the applied ops (how many source observations contributed) |
+| `body_delta_chars` | int | Length of the `===BODY_DELTA===` block in chars |
+| `cursor_after` | string | The ISO timestamp stamped on the page (`dream_processed_through`) after this apply |
+| `duration_ms` | float | Wall-clock of the apply step |
+
+Dashboards that want the commit SHA join this event to the workspace's git log via `entity_ref + cursor_after` — the SHA itself was deliberately not emitted (writing it would couple telemetry to git internals; the join is cheap on the dashboard side).
 
 ---
 
@@ -369,24 +387,40 @@ fields can be reintroduced then.
 
 ### 9.2 `memory.index.rebuild`
 
-NEW. Emitted by `durin reindex` command.
+Emitted by `durin.memory.indexer._emit_rebuild`. Audit F10
+(2026-05-28) aligned this section to the shipped TypedDict — the
+pre-F10 spec named fields that no production callsite ever emits
+(`entities_count`, `embedding_batches`, `prior_index_existed`).
 
 | Field | Type | Description |
 |---|---|---|
-| `entities_count` | int | Total .md files walked |
-| `embedding_batches` | int | Number of embedding batches processed |
-| `duration_ms` | float | Total rebuild time |
-| `prior_index_existed` | bool | Was this a fresh build or rebuild over existing |
+| `target` | enum | `fts` (or `all` / `lancedb` in future). Identifies which index was rebuilt; `durin memory reindex --target fts` always emits `"fts"` today. |
+| `indexed` | int | Rows successfully written (`IndexStats.indexed`) |
+| `errors` | int | Rows that failed to index (`IndexStats.errors`) |
+| `duration_ms` | float | Wall-clock of the rebuild |
+| `reason` | string | optional — when present, surfaces why the rebuild happened (e.g. `schema_version_bump`); absent for plain operator-triggered rebuilds |
 
 ### 9.3 `memory.index.staleness_detected`
 
-NEW. Emitted when a search-time staleness check finds a row out of date.
+Emitted by `durin.memory.indexer._emit_staleness` whenever the
+health-check cron detects a row whose `fts_meta.mtime` lags behind
+the file's mtime, or a file under `memory/` that has no row in the
+index. Audit F11 (2026-05-28) aligned this section to the shipped
+TypedDict — the pre-F11 spec used `delta_seconds` + `action` fields
+that no production callsite ever emits.
 
 | Field | Type | Description |
 |---|---|---|
 | `uri` | string | The stale URI |
-| `delta_seconds` | float | `mtime - indexed_at` |
-| `action` | enum | `re_derived | filtered | queued` |
+| `reason` | enum | `missing_row` (file exists, no FTS row) `| mtime_lag` (FTS row's `indexed_at < file mtime - 60s tolerance`) `| row_for_missing_file` (FTS row exists but the source `.md` was deleted) |
+
+The pre-F11 spec proposed `delta_seconds` (how far behind) and
+`action` (`re_derived | filtered | queued`). Both were dropped:
+the cron always re-derives via `reindex_one_file` (so `action` was
+single-valued and meaningless), and the time delta is implicit in
+the dashboard's join with the corresponding `memory.index.write`
+event a few seconds later. If the time delta becomes interesting
+to graph independently, the field can be reintroduced then.
 
 ### 9.4 `memory.health_check`
 
