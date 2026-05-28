@@ -249,12 +249,8 @@
         "thresholdEntries": "Run an entity-centric Dream pass once a single entity accumulates this many post-cursor entries. Set to 0 to disable the per-entity trigger (cron and session-close triggers still apply).",
         "decayOverrides": "Override the class default per entry by setting decay_half_life in the entry's frontmatter. Set evergreen: true to make an entry never decay."
       },
-      "crossEncoderModels": {
-        "jinaV2": "jina-reranker-v2-base-multilingual · default · 278 M",
-        "bgeBase": "BAAI/bge-reranker-base · 278 M · English-leaning",
-        "bgeV2M3": "BAAI/bge-reranker-v2-m3 · 568 M · multilingual",
-        "qwen3": "Qwen3-Reranker-0.6 B · top MTEB · 600 M"
-      },
+      "crossEncoderModelPlaceholder": "model id (e.g. jinaai/jina-reranker-v2-base-multilingual)",
+      "crossEncoderTest": "Test",
       "decayClasses": {
         "episodic": "Episodic",
         "session_summary": "Session summary",
