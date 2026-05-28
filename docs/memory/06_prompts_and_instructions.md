@@ -100,6 +100,9 @@ Usage:
 - Use `level: "cold"` only when you need full body content (verbose; consumes
   many tokens). `warm` (default) returns headline + summary, enough for most
   tasks.
+- `limit` defaults to 10. Reduce to 3-5 for chat-style short answers, raise
+  to 20-30 for audit / investigative queries that need to see every relevant
+  hit. Hard cap 50.
 
 Results come pre-sectioned with structural markers:
 - `=== CANONICAL: <uri> ===` — consolidated entity pages (durable knowledge)

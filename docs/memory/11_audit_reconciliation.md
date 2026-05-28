@@ -162,7 +162,28 @@ pipeline_result = run_search_pipeline(
 
 **Acción**: agregar `limit: IntegerSchema(default=10, min=1, max=50)` al schema, pasar al `run_search_pipeline`.
 
-**Estado**: pending
+**Resolución (2026-05-28)**: Opción A — exponer `limit`. A diferencia de A1 (URL duplicaba `web_fetch`) y A2 (varios knobs eran trampa), aquí **el pipeline ya soporta el parámetro** ([search_pipeline.py:71](../../durin/memory/search_pipeline.py#L71)), sólo faltaba propagarlo desde el tool. Doc 03 §1 y Doc 04 §2.1 ambos lo proponían — propuesta consistente, no invento aislado.
+
+Cambios:
+- Schema: `limit: IntegerSchema(10, minimum=1, maximum=50)` agregado a [memory_search.py](../../durin/agent/tools/memory_search.py).
+- `execute()`: clamp defensivo `max(1, min(50, int(...)))` con fallback a 10 cuando la coerción falla.
+- Llamada al pipeline: `run_search_pipeline(..., limit=limit, ...)` en vez del `limit=10` hardcoded.
+- Doc 06 §3.1 canonical + descripción del tool: mención breve con guidance ("3-5 para chat-short, 20-30 para audit/investigative, hard cap 50").
+- Test nuevo [test_memory_search_limit_param.py](../../tests/memory/test_memory_search_limit_param.py): 7 tests que **ejercitan el comportamiento**, cumpliendo la lección de [[feedback-sync-tests-exercise-behavior]]:
+  - Schema declarado correctamente.
+  - Default 10 cuando se omite.
+  - `limit=5` recorta a 5.
+  - `limit=30` permite más (con 25 entries seedeadas).
+  - `limit=999` clamp a 50.
+  - `limit=0` clamp a 1.
+  - `limit="abc"` fallback a 10 (string-coerce graceful).
+
+**Verificado pre-commit**:
+- `IntegerSchema(value, description, minimum, maximum)` signature contra [schema.py:54-72](../../durin/agent/tools/schema.py#L54-L72).
+- `tool_parameters_schema(...)` devuelve dict (no objeto), corregido el test después del primer falso intento — error tipo aplicación de [[feedback-verify-quantifiers]].
+- Default 10 = comportamiento previo: **no breaking change**.
+
+**Estado**: resolved (commit pendiente).
 
 ---
 
