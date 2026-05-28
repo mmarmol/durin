@@ -365,6 +365,11 @@ def _merge_pages(
         dream_processed_through=canonical.dream_processed_through,
         created_at=canonical.created_at,
         updated_at=canonical.updated_at,
+        # E19: absorption product is fully agent-managed even if
+        # the canonical input was user-authored — the merge itself
+        # came from durin's auto-absorb pipeline. Subsequent runs
+        # may continue to manage the resulting page.
+        author="agent_created",
         extra=merged_extra,
     )
 

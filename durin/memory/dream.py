@@ -511,6 +511,9 @@ class DreamConsolidator:
             placeholder = EntityPage(
                 type=type_, name=slug.replace("_", " ").title() or slug,
                 aliases=[],
+                # E19: Dream is the author of any placeholder it
+                # writes; auto-absorb must be free to merge it.
+                author="agent_created",
             )
             placeholder.save(page_path)
 
