@@ -791,6 +791,37 @@ class MemoryRecallRRFEvent(TypedDict):
     session_key: NotRequired[str | None]
 
 
+class MemoryHealthCheckEvent(TypedDict):
+    """One health-check tick completed (doc 02 §5.1 + doc 07 §9.4).
+
+    ``status`` is the aggregate label (``ok`` / ``degraded`` /
+    ``critical``); ``components`` carries per-probe status
+    (``fts`` / ``lance`` / future additions).
+    """
+
+    status: str
+    components: dict[str, str]
+    drift_count: int
+    errors: NotRequired[dict[str, str]]
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
+class MemoryHealthCriticalEvent(TypedDict):
+    """A component crossed the consecutive-failure threshold (doc 02
+    §5.1 escalation rule; doc 07 §9.5).
+
+    Emitted once per component per failure burst. Reset on the next
+    successful tick.
+    """
+
+    component: str
+    consecutive_failures: int
+    last_error: str
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
 class MemoryHotLayerFailureEvent(TypedDict):
     """Hot-layer assembly failed for one component (per doc 06 §8.7).
 
@@ -887,6 +918,8 @@ EVENTS: dict[str, type] = {
     "memory.index.staleness_detected": MemoryIndexStalenessDetectedEvent,
     "memory.recall.lexical": MemoryRecallLexicalEvent,
     "memory.recall.rrf": MemoryRecallRRFEvent,
+    "memory.health_check": MemoryHealthCheckEvent,
+    "memory.health.critical": MemoryHealthCriticalEvent,
 }
 
 
@@ -944,6 +977,8 @@ __all__ = [
     "MemoryRecallVectorEvent",
     "MemoryDreamPatchAppliedEvent",
     "MemoryDreamEntityFailedEvent",
+    "MemoryHealthCheckEvent",
+    "MemoryHealthCriticalEvent",
     "MemoryHotLayerFailureEvent",
     "MemoryRecallLexicalEvent",
     "MemoryRecallRRFEvent",
