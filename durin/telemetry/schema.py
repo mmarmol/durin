@@ -791,6 +791,20 @@ class MemoryRecallRRFEvent(TypedDict):
     session_key: NotRequired[str | None]
 
 
+class MemoryRecallRerankEvent(TypedDict):
+    """Cross-encoder rerank step completed (doc 07 §4.4 / doc 03 §9).
+
+    Emitted whenever the opt-in reranker ran. ``output_count``
+    reflects the top-N the pipeline carries forward.
+    """
+
+    input_count: int
+    output_count: int
+    duration_ms: float
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
 class MemoryHealthCheckEvent(TypedDict):
     """One health-check tick completed (doc 02 §5.1 + doc 07 §9.4).
 
@@ -918,6 +932,7 @@ EVENTS: dict[str, type] = {
     "memory.index.staleness_detected": MemoryIndexStalenessDetectedEvent,
     "memory.recall.lexical": MemoryRecallLexicalEvent,
     "memory.recall.rrf": MemoryRecallRRFEvent,
+    "memory.recall.rerank": MemoryRecallRerankEvent,
     "memory.health_check": MemoryHealthCheckEvent,
     "memory.health.critical": MemoryHealthCriticalEvent,
 }
@@ -982,6 +997,7 @@ __all__ = [
     "MemoryHotLayerFailureEvent",
     "MemoryRecallLexicalEvent",
     "MemoryRecallRRFEvent",
+    "MemoryRecallRerankEvent",
     "MemoryIndexWriteEvent",
     "MemoryIndexRebuildEvent",
     "MemoryIndexStalenessDetectedEvent",

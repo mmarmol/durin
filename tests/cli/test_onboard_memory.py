@@ -14,7 +14,9 @@ import pytest
 
 from durin.cli.onboard_memory import (
     AUTO_ABSORB_QUESTION_TEXT,
+    CROSS_ENCODER_QUESTION_TEXT,
     prompt_enable_auto_absorb,
+    prompt_enable_cross_encoder,
 )
 
 
@@ -104,6 +106,33 @@ def test_default_is_false_when_currently_disabled(
     )
     prompt_enable_auto_absorb(current=False)
     assert fake._default is False
+
+
+def test_cross_encoder_question_anchors() -> None:
+    text = CROSS_ENCODER_QUESTION_TEXT
+    assert "cross-encoder" in text.lower()
+    assert "300-1500ms" in text
+    assert "~1GB" in text
+    assert "[y/N]" in text
+
+
+def test_cross_encoder_yes(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _FakeQuestionary(answer=True)
+    monkeypatch.setattr(
+        "durin.cli.onboard_memory._get_questionary", lambda: fake,
+    )
+    assert prompt_enable_cross_encoder(current=False) is True
+
+
+def test_cross_encoder_default_preserved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeQuestionary(answer=False)
+    monkeypatch.setattr(
+        "durin.cli.onboard_memory._get_questionary", lambda: fake,
+    )
+    prompt_enable_cross_encoder(current=True)
+    assert fake._default is True
 
 
 def test_none_answer_returns_current_value(
