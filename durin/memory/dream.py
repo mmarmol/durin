@@ -168,7 +168,12 @@ class LLMInvoke(Protocol):
     def __call__(self, prompt: str, *, model: str) -> LLMResponse: ...
 
 
-def default_llm_invoke(prompt: str, *, model: str = "glm-5.1") -> LLMResponse:
+def default_llm_invoke(
+    prompt: str,
+    *,
+    model: str = "glm-5.1",
+    temperature: float = 0.1,
+) -> LLMResponse:
     """Production-default LLM invocation via litellm + zhipu coding plan.
 
     Reads the API key from durin's secret store. Uses the OpenAI-
@@ -179,6 +184,12 @@ def default_llm_invoke(prompt: str, *, model: str = "glm-5.1") -> LLMResponse:
     from ``response.usage``. Some upstream providers/proxies omit the
     usage block; in that case tokens fall back to 0 so the dream cost
     telemetry reports zero (under-report) rather than crashing.
+
+    ``temperature`` (default 0.1, kept identical to v1 behaviour) is
+    surfaced so callers like the LoCoMo judge can vary it across
+    retries — audit H2 (2026-05-29) introduced retry-time temperature
+    jitter to break upstream wedges where temp=0 returned the same
+    broken completion every attempt.
     """
     # Lazy imports so import-time isn't paid by callers that pass their own.
     from durin.security.secrets import get_secret_store
@@ -196,7 +207,7 @@ def default_llm_invoke(prompt: str, *, model: str = "glm-5.1") -> LLMResponse:
         messages=[{"role": "user", "content": prompt}],
         api_key=api_key,
         api_base="https://api.z.ai/api/coding/paas/v4",
-        temperature=0.1,
+        temperature=temperature,
     )
     usage = getattr(response, "usage", None)
     prompt_tokens = 0

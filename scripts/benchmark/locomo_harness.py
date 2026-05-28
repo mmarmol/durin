@@ -175,7 +175,48 @@ async def run_qa(
     finally:
         reset_telemetry(token)
         trace.duration_s = time.monotonic() - started
+        # Audit H3 (2026-05-29): the AgentLoop overrides our
+        # `bench_logger` binding with its own per-session logger
+        # (`durin/agent/loop.py::_main_loop` calls
+        # ``bind_telemetry(session_logger)`` unconditionally), so every
+        # memory.recall / memory.store / cache.usage event lands in
+        # ``~/.cache/durin/telemetry/bench_<qa_id>_<date>.jsonl`` rather
+        # than the per-QA bench file. Without this merge the run_dir's
+        # ``telemetry/`` directory carries only the harness's own bind
+        # window (embedding load + index rebuild + 2 composition rows)
+        # and post-bench analysis has to chase events across two
+        # directories. Append the session log into the per-QA file so
+        # the bench artefact is self-contained.
+        _merge_session_telemetry_into(telemetry_path, qa.qa_id, started)
     return trace
+
+
+def _merge_session_telemetry_into(
+    telemetry_path: Path, qa_id: str, started_monotonic: float,
+) -> None:
+    """Append events from the session-scoped telemetry file into the
+    per-QA bench file. Best-effort: failures degrade silently.
+    """
+    try:
+        from durin.telemetry.logger import get_session_logger
+        # `get_session_logger` is the same path the AgentLoop uses,
+        # so we reuse it to compute the exact destination filename
+        # rather than reconstructing the sanitiser by hand.
+        session_logger = get_session_logger(f"bench:{qa_id}")
+        session_path = Path(session_logger.path)
+    except Exception:  # noqa: BLE001
+        return
+    if not session_path.is_file() or session_path == telemetry_path:
+        return
+    try:
+        existing = telemetry_path.read_text(encoding="utf-8") \
+            if telemetry_path.exists() else ""
+        with session_path.open("r", encoding="utf-8") as src:
+            lines = src.readlines()
+        merged = existing + "".join(lines)
+        telemetry_path.write_text(merged, encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        return
 
 
 @_agent_seeded

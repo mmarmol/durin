@@ -100,3 +100,62 @@ def test_fake_vector_index_integrated(tmp_path: Path) -> None:
     hit = next((h for h in result.hits if h.uri == "person:marcelo"), None)
     assert hit is not None
     assert hit.type == "entity"
+
+
+def test_vector_index_native_row_shape_is_accepted(tmp_path: Path) -> None:
+    """Audit H1 (2026-05-29): the real ``VectorIndex.search()`` emits
+    rows with ``id`` / ``class_name`` / ``path`` — NOT ``uri`` / ``type``.
+    Pre-H1 the pipeline filtered every row out (``if "uri" in h``),
+    so warm-tier vector retrieval was silently lexical-only since the
+    Phase 3 orchestrator landed. This test pins the boundary
+    normalization that maps the native row shape into what the rest
+    of the pipeline keys off.
+    """
+    _seed(tmp_path)
+
+    class _NativeShapeIndex:
+        """Mirror the production VectorIndex row shape exactly."""
+
+        def search(self, query, top_k=50):
+            return [
+                {
+                    "id": "person:marcelo",        # NOT 'uri'
+                    "class_name": "entity_page",   # NOT 'type'
+                    "summary": "Marcelo (Marcelo Marmol)",
+                    "headline": "Marcelo",
+                    "valid_from": "",
+                    "entities": [],
+                    "path": "memory/entities/person/marcelo.md",
+                    "_distance": 13.5,
+                },
+                {
+                    "id": "abc123def456",
+                    "class_name": "episodic",
+                    "summary": "An episodic entry mentioning Marcelo",
+                    "headline": "Marcelo mentioned this",
+                    "valid_from": "2026-01-15T10:00:00",
+                    "entities": ["person:marcelo"],
+                    "path": "memory/episodic/abc123def456.md",
+                    "_distance": 14.2,
+                },
+            ]
+
+    result = run_search_pipeline(
+        tmp_path, "Marcelo", vector_index=_NativeShapeIndex(),
+    )
+    # Both rows must reach the fusion stage — vector_count counts the
+    # rows the pipeline successfully accepted from the vector source.
+    assert result.vector_count == 2, (
+        f"vector_count={result.vector_count}; expected 2. The pipeline "
+        "is silently filtering native-shape rows."
+    )
+    # Entity URI (entity_ref) must surface in the fused hits.
+    assert any(h.uri == "person:marcelo" for h in result.hits)
+    # Episodic URI (id, no .md) must surface too.
+    assert any(h.uri == "abc123def456" for h in result.hits)
+    # Entity-page hit type must normalise to 'entity' downstream.
+    entity_hit = next(
+        (h for h in result.hits if h.uri == "person:marcelo"), None,
+    )
+    assert entity_hit is not None
+    assert entity_hit.type == "entity"
