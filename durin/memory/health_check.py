@@ -25,11 +25,12 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import threading
 import time
 import uuid
 from collections import defaultdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from durin.agent.tools._telemetry import emit_tool_event
 from durin.memory.fts_index import fts_index_path
@@ -40,7 +41,7 @@ from durin.memory.indexer import (
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["HealthChecker"]
+__all__ = ["HealthCheckScheduler", "HealthChecker"]
 
 
 _FAILURE_THRESHOLD = 3
@@ -272,3 +273,82 @@ def _emit_critical(component: str, error: str, count: int) -> None:
         )
     except Exception:  # pragma: no cover
         pass
+
+
+# ---------------------------------------------------------------------------
+# A11 — periodic scheduler (daemon thread)
+# ---------------------------------------------------------------------------
+
+
+class HealthCheckScheduler:
+    """Daemon thread that calls ``HealthChecker.run_tick()`` periodically.
+
+    Audit A11 (2026-05-28). The HealthChecker itself ships the logic
+    but the docstring (and doc 02 §5.1) leaves the "drive it on an
+    interval" job to the agent loop. This is that driver.
+
+    Lifecycle: ``start()`` spawns one daemon thread; ``stop()``
+    signals exit via a ``threading.Event`` so the thread wakes from
+    ``wait()`` immediately instead of holding the interval. The
+    thread is a daemon so a hard process exit doesn't hang on the
+    join.
+
+    Failure isolation: a ``run_tick()`` exception is logged and the
+    thread keeps going — the next interval still fires. A burst of
+    failures is the HealthChecker's own ``memory.health.critical``
+    escalation territory (3 strikes).
+    """
+
+    def __init__(
+        self,
+        checker: "HealthChecker",
+        *,
+        interval_seconds: int,
+    ) -> None:
+        self._checker = checker
+        self._interval = max(1, int(interval_seconds))
+        self._stop_event = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._tick_count = 0
+
+    @property
+    def tick_count(self) -> int:
+        """Total ticks the scheduler has driven (tests + dashboards)."""
+        return self._tick_count
+
+    def start(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._stop_event.clear()
+        self._thread = threading.Thread(
+            target=self._loop,
+            name=(
+                f"durin-memory-health-{self._checker._workspace.name}"
+            ),
+            daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self, timeout: float = 2.0) -> None:
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=timeout)
+            self._thread = None
+
+    def _loop(self) -> None:
+        # First tick fires immediately so a fresh process has a
+        # health probe in its first interval window, not after.
+        # Subsequent ticks wait `interval_seconds`.
+        while not self._stop_event.is_set():
+            try:
+                self._checker.run_tick()
+                self._tick_count += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "health_check tick raised; thread keeps running: %s",
+                    exc,
+                )
+            # `wait` returns True on .set() — short-circuits the sleep
+            # so `stop()` is responsive.
+            if self._stop_event.wait(timeout=self._interval):
+                break

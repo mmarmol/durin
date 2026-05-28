@@ -677,7 +677,43 @@ Ningún call site los arranca. `AgentLoop.start`, `durin agent` CLI, los channel
 
 **Riesgo**: file watchers en macOS/Linux/Docker tienen edge cases. `watchdog` ya está como dep.
 
-**Estado**: pending
+**Resolución (2026-05-28) — Default ON ambos servicios + isolation**: aplicando `feedback_telemetry_is_first_class` (A8): el health check ES observability infrastructure — la razón por la que "no hay alertas" hoy es que no lo cableamos. **Default ON**. El file watcher es UX directo (vim edit → próximo search lo ve) — **también default ON**. Ambos opt-out vía config.
+
+Cambios:
+
+- [durin/config/schema.py](../../durin/config/schema.py): nuevos `MemoryFileWatcherConfig(enabled=True)` y `MemoryHealthCheckConfig(enabled=True, interval_seconds=900)`. `MemoryConfig` ahora tiene `file_watcher` y `health_check`.
+- [durin/memory/health_check.py](../../durin/memory/health_check.py): nuevo `HealthCheckScheduler` — daemon thread que llama `run_tick()` cada N segundos. `wait(timeout)` en lugar de `sleep(N)` para que `stop()` sea responsivo (no espera el interval completo). Failure isolation: `run_tick()` exception logueada pero el thread sigue (siguiente tick fires).
+- [durin/agent/loop.py::AgentLoop](../../durin/agent/loop.py):
+  * Nuevos atributos `self._memory_file_watcher` y `self._memory_health_scheduler` inicializados al final de `__init__`.
+  * Nuevo método `_start_memory_background_services()` — construye + start cada servicio si su flag de config está enabled. Cada uno aislado en try/except: si uno falla al arrancar, el otro sigue y `AgentLoop` arranca igual.
+  * Nuevo método `_stop_memory_background_services()` — None-safe; llama `stop()` en cada uno y aísla los failures.
+  * `AgentLoop.stop()` ahora invoca `_stop_memory_background_services()` antes de loguear.
+- [tests/memory/test_a11_lifecycle_wiring.py](../../tests/memory/test_a11_lifecycle_wiring.py) (nuevo, 12 tests):
+  * Config defaults: ambos enabled, interval=900.
+  * `HealthCheckScheduler` ticks on start (primer tick inmediato).
+  * `HealthCheckScheduler.stop()` responsivo aunque interval=3600.
+  * `HealthCheckScheduler` aisla failures de `run_tick`: el thread sigue después de exception.
+  * `app_config=None` → no servicios (mantiene tests existentes simples).
+  * Default config → ambos arrancan.
+  * Watcher disabled → sólo health corre.
+  * Health disabled → sólo watcher corre.
+  * `stop()` drena ambos cleanly.
+  * Watcher startup failure aislada — health sigue funcionando.
+
+- [docs/memory/02_indexing.md §6.3](02_indexing.md): nuevo bloque "Lifecycle (audit A11)" explica que el watcher arranca por default, failure isolation, y cómo deshabilitarlo.
+- [docs/memory/07_telemetry_and_observability.md §9.4](07_telemetry_and_observability.md): nuevo bloque "Scheduling (audit A11)" explica `interval_seconds=900` default + "first tick immediate" + responsive shutdown.
+
+**Test impact**: 2302 tests previos siguen pasando (los 2300+ que construyen `AgentLoop` lo hacen con `app_config=None`, lo cual skip la wiring por design). Sin breaking change para suite existente.
+
+**Decisión arquitectónica clave**: `_start_memory_background_services` es defensivo end-to-end. Cada servicio puede fallar independientemente:
+- Watchdog no instalado → watcher fail import → log warning → `_memory_file_watcher` queda None → resto del loop sigue.
+- Health check thread no se puede crear → log warning → `_memory_health_scheduler` queda None → file watcher sigue.
+
+Aplicando `feedback_telemetry_is_first_class`: telemetría (health_check emit) y observability infrastructure (file watcher reindex) NO requieren consumer downstream para justificar — son la fuente de los datos que después usaremos.
+
+**Verificado pre-commit**: tests/memory/ + tests/agent/ + tests/command/ + tests/session/ + tests/telemetry/ 2314 passed (2302 baseline + 12 nuevos A11), 1 skipped.
+
+**Estado**: resolved (commit pendiente).
 
 ---
 

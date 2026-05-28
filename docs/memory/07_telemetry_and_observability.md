@@ -319,6 +319,8 @@ NEW. Emitted when a search-time staleness check finds a row out of date.
 
 Emitted by the background health-check cron on every tick — both passing and failing probes, so a dashboard can graph "uptime" of each component.
 
+**Scheduling (audit A11, 2026-05-28).** `HealthChecker.run_tick()` is driven by `HealthCheckScheduler`, a daemon thread started by `AgentLoop.__init__` when `cfg.memory.health_check.enabled` is true — **default ON**. The default interval is **900 seconds (15 min)**; configurable via `[memory.health_check] interval_seconds`. The first tick fires immediately so a fresh process gets a probe in its first interval window; subsequent ticks wait the configured interval. `AgentLoop.stop()` drains the scheduler via `threading.Event` so shutdown is responsive even with a large interval (no long sleep to outlast).
+
 Shipped pre-A6 (commit `022d4b1`, P2.4) with `status`, `components`, `drift_count`, optional `errors`. Audit A6 (2026-05-28) added `tick_id` and `duration_ms`. Both additions are additive — pre-A6 consumers continue to work (there were none in-tree at the time, but the contract is preserved).
 
 | Field | Type | Description |
