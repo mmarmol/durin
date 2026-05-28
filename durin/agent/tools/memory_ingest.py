@@ -98,15 +98,11 @@ class MemoryIngestTool(Tool):
 
     @property
     def description(self) -> str:
-        return (
-            "Persist a markdown or plain-text file into the agent's memory "
-            "store. The file is copied to a stable location keyed by content "
-            "hash; a derived corpus memory entry is created so the document "
-            "is searchable immediately (full content stays in the original "
-            "ingested file, accessible via memory_drill). The file's content "
-            "is returned in the result so the agent can read it in the same "
-            "turn."
-        )
+        # Canonical text per `docs/memory/06_prompts_and_instructions.md` §3.3.
+        # Reads via `Tool.to_schema()` → `function.description` in the
+        # OpenAI spec — what the LLM sees. Audit B1 (2026-05-28) caught
+        # the prior short text drifted from the canonical doc.
+        return _PARAMETERS["description"]
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:

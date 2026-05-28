@@ -180,19 +180,15 @@ class MemorySearchTool(Tool):
 
     @property
     def description(self) -> str:
-        return (
-            "Search the agent's memory. Pass a short topical phrase (2-6 "
-            "words) or an exact identifier — semantic retrieval when the "
-            "vector index is built, substring fallback otherwise. For "
-            "multi-part or compound questions, issue 2-3 searches with "
-            "different phrasings rather than one long query. "
-            "scope='dreamed' covers memory/<class>/*.md (consolidated "
-            "learnings); scope='undreamed' covers sessions/<key>.md and "
-            "ingested/<id>/; scope='all' is both. level='warm' returns "
-            "headlines+summaries; level='cold' adds full bodies (use when "
-            "warm hits look on-topic but you need the detail). Returns "
-            "markdown URIs usable with memory_drill."
-        )
+        # Canonical text per `docs/memory/06_prompts_and_instructions.md` §3.1.
+        # `Tool.to_schema()` (durin/agent/tools/base.py:258) reads this and
+        # emits it as `function.description` in the OpenAI function-calling
+        # spec — that's the description the LLM actually reads to decide
+        # whether to call the tool. Synchronisation enforced by
+        # `tests/memory/test_tool_description_sync.py`. Audit B1 (2026-05-28)
+        # caught that the prior short text here diverged from the canonical
+        # doc; the long form below now matches doc 06 §3.1 verbatim.
+        return _PARAMETERS["description"]
 
     def _build_cross_encoder(self):
         """Construct a :class:`CrossEncoderReranker` when enabled in

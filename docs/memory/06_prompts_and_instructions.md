@@ -203,10 +203,11 @@ name or URI as the query instead.
 
 ### 3.5 Synchronization requirement
 
-The text above MUST match:
-- `durin/agent/tools/memory_*.py::DESCRIPTION` constants.
-- The MCP / OpenAI Tool format definitions exposed to the agent.
-- Any documentation surfaced to the user explaining the tools.
+The text above MUST match the `.description` property on each tool class (`durin/agent/tools/memory_search.py::MemorySearchTool.description`, etc.). That property is the field `Tool.to_schema()` emits as `function.description` in the OpenAI function-calling spec — i.e. what the LLM actually reads when deciding to call the tool.
+
+Each tool's `.description` property delegates to `_PARAMETERS["description"]`, so both fields stay identical with zero redundancy. The `_PARAMETERS["description"]` ends up as `function.parameters.description` (the JSON-Schema-level description of the parameters object), which most LLMs ignore — but keeping the two in lock-step means a future provider that does read it sees the canonical text.
+
+Sync is enforced by `tests/memory/test_tool_description_sync.py`. Audit B1 (2026-05-28) fixed a real bug here: the prior version of this test compared `_PARAMETERS["description"]` (which the LLM ignores) instead of `.description` (which it reads). The two fields had drifted — the long canonical text lived in the ignored field, the short non-canonical text in the read field. Both now resolve to the same string and the test guards the LLM-visible surface.
 
 Divergence is a bug. Updates flow from this document outward; never the other way.
 
