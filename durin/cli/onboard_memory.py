@@ -22,9 +22,13 @@ from typing import Any
 
 __all__ = [
     "AUTO_ABSORB_QUESTION_TEXT",
+    "AUX_MODEL_QUESTION_TEXT",
     "CROSS_ENCODER_QUESTION_TEXT",
+    "MEMORY_ENABLE_QUESTION_TEXT",
     "prompt_enable_auto_absorb",
     "prompt_enable_cross_encoder",
+    "prompt_enable_memory_subsystem",
+    "prompt_memory_aux_model",
 ]
 
 
@@ -49,6 +53,85 @@ AUTO_ABSORB_QUESTION_TEXT: str = dedent(
     Enable auto-absorb now? [y/N]:
     """
 )
+
+
+# Verbatim from `docs/memory/06_prompts_and_instructions.md` §6.1.
+MEMORY_ENABLE_QUESTION_TEXT: str = dedent(
+    """\
+    durin's memory system lets the agent remember facts across sessions.
+    Enabling it downloads a small embedding model (~120MB) and starts the
+    local consolidation process.
+
+    Enable memory? [Y/n]:
+    """
+)
+
+
+def prompt_enable_memory_subsystem(current: bool = True) -> bool:
+    """Q6.1 — defaults to True per spec.
+
+    Same idempotency contract as the other prompts: re-prompts
+    preserve the previous opt-out, aborts (Ctrl+C) preserve current.
+    """
+    questionary = _get_questionary()
+    answer: Any = questionary.confirm(
+        MEMORY_ENABLE_QUESTION_TEXT,
+        default=bool(current),
+    ).ask()
+    if answer is None:
+        return bool(current)
+    return bool(answer)
+
+
+# Verbatim from `docs/memory/06_prompts_and_instructions.md` §6.4.
+AUX_MODEL_QUESTION_TEXT: str = dedent(
+    """\
+    durin's Dream process consolidates memory using an LLM. It runs in
+    the background, consuming ~$0.25-$1.00/day for an active workspace.
+    You can use the same model as your main agent, or a separate one
+    for memory tasks.
+
+    Memory model: [same as agent / specify / skip]
+    """
+)
+
+
+def prompt_memory_aux_model(
+    *,
+    agent_model: str,
+    current: Optional[str] = None,
+) -> Optional[str]:
+    """Q6.4 — three-way choice: same / specify / skip.
+
+    Returns:
+        - ``agent_model`` when the user picks "same".
+        - A user-supplied model id when the user picks "specify".
+        - ``None`` when the user picks "skip" (Dream uses default).
+
+    Ctrl+C-style abort preserves the *current* value (or ``None`` if
+    the user has never set one).
+    """
+    questionary = _get_questionary()
+    choices = ["same as agent", "specify", "skip"]
+    selected: Any = questionary.select(
+        AUX_MODEL_QUESTION_TEXT,
+        choices=choices,
+        default=choices[0],
+    ).ask()
+    if selected is None:
+        return current
+    if selected == "same as agent":
+        return agent_model
+    if selected == "skip":
+        return None
+    # "specify"
+    typed: Any = questionary.text(
+        "Enter the memory model id (e.g. `glm-5.1`, `claude-haiku-4-5`):",
+        default=current or "",
+    ).ask()
+    if typed is None or not str(typed).strip():
+        return current
+    return str(typed).strip()
 
 
 # Verbatim from `docs/memory/06_prompts_and_instructions.md` §6.2.
