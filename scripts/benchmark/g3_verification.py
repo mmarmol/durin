@@ -42,6 +42,7 @@ from durin.agent.tools.memory_search import MemorySearchTool  # noqa: E402
 from durin.agent.tools.context import ToolContext  # noqa: E402
 from durin.config.loader import load_config  # noqa: E402
 from durin.memory.embedding import FastembedProvider  # noqa: E402
+from durin.memory.provenance import author_scope  # noqa: E402
 from durin.memory.store import store_memory  # noqa: E402
 from durin.memory.vector_index import VectorIndex, vector_index_available  # noqa: E402
 
@@ -277,29 +278,36 @@ def _seed_workspace(
     # Seed distractors first; all entries share the same date so the
     # entity_ranker's recency-boost doesn't tilt the playing field.
     SHARED_DATE = datetime.date(2024, 1, 1)
-    for i, (text, ents) in enumerate(_DISTRACTORS):
+    # Benchmarks model agent observations — wrap the whole seeding in
+    # an explicit author_scope per durin/memory/provenance.py
+    # (no implicit default; every write declares its author).
+    with author_scope("agent_created"):
+        for i, (text, ents) in enumerate(_DISTRACTORS):
+            store_memory(
+                workspace,
+                content=text,
+                class_name="episodic",
+                headline=f"distractor {i}: {text[:50]}",
+                entities=list(ents),
+                valid_from=SHARED_DATE,
+            )
+        # Snapshot file set BEFORE seeding target, so we can identify the
+        # target's auto-generated id afterwards (sorted-by-stem doesn't
+        # work — store_memory hashes content into an opaque id).
+        ep_dir = workspace / "memory" / "episodic"
+        pre_target_ids = (
+            {p.stem for p in ep_dir.glob("*.md")} if ep_dir.exists()
+            else set()
+        )
+        # Seed the target.
         store_memory(
             workspace,
-            content=text,
+            content=scenario.seed,
             class_name="episodic",
-            headline=f"distractor {i}: {text[:50]}",
-            entities=list(ents),
+            headline=f"seed: {scenario.seed[:60]}",
+            entities=list(scenario.entities),
             valid_from=SHARED_DATE,
         )
-    # Snapshot file set BEFORE seeding target, so we can identify the
-    # target's auto-generated id afterwards (sorted-by-stem doesn't
-    # work — store_memory hashes content into an opaque id).
-    ep_dir = workspace / "memory" / "episodic"
-    pre_target_ids = {p.stem for p in ep_dir.glob("*.md")} if ep_dir.exists() else set()
-    # Seed the target.
-    store_memory(
-        workspace,
-        content=scenario.seed,
-        class_name="episodic",
-        headline=f"seed: {scenario.seed[:60]}",
-        entities=list(scenario.entities),
-        valid_from=SHARED_DATE,
-    )
     post_target_ids = {p.stem for p in ep_dir.glob("*.md")}
     new_ids = post_target_ids - pre_target_ids
     if not new_ids:

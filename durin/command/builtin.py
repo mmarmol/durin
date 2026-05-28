@@ -1563,11 +1563,14 @@ async def _memory_reindex(
 
 
 async def cmd_remember(ctx: CommandContext) -> OutboundMessage:
-    """Store a fact in episodic memory as user_authored.
+    """Store a fact in episodic memory as ``user_authored``.
 
-    The curator + dream never touch user_authored entries (the
-    ContextVar default is user_authored, so no explicit scope needed).
+    The curator + dream never touch user_authored entries. We wrap
+    the write in an explicit ``author_scope("user_authored")`` —
+    per ``durin/memory/provenance.py`` there is no implicit default;
+    every write declares its author.
     """
+    from durin.memory.provenance import author_scope
     from durin.memory.store import StoreError, store_memory
 
     fact = (ctx.args or "").strip()
@@ -1579,7 +1582,10 @@ async def cmd_remember(ctx: CommandContext) -> OutboundMessage:
         )
     workspace = _resolve_workspace(ctx.loop)
     try:
-        result = store_memory(workspace, content=fact, class_name="episodic")
+        with author_scope("user_authored"):
+            result = store_memory(
+                workspace, content=fact, class_name="episodic",
+            )
     except (StoreError, OSError) as exc:
         return OutboundMessage(
             channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,

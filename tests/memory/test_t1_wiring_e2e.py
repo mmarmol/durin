@@ -28,17 +28,9 @@ from unittest.mock import patch
 import pytest
 from typer.testing import CliRunner
 
-from durin.memory.provenance import author_scope
 from durin.memory.vector_index import vector_index_available
 
-
-@pytest.fixture(autouse=True)
-def _agent_created_scope():
-    """Doc memory §4.6.1: ``user_authored`` entries are skipped by the
-    Dream discover walk. These tests model agent observations, so wrap
-    them in ``agent_created`` scope to make them visible."""
-    with author_scope("agent_created"):
-        yield
+# Default `agent_created` scope opened by `tests/conftest.py` (autouse).
 
 pytestmark = pytest.mark.skipif(
     not vector_index_available(),

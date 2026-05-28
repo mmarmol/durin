@@ -33,7 +33,25 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+import functools
+
+from durin.memory.provenance import author_scope
 from durin.memory.store import store_memory
+
+
+def _agent_seeded(fn):
+    """Decorator: wrap a seeder function in author_scope("agent_created").
+
+    LoCoMo bulk seeders model agent observations (the conversation
+    turns we replay as if the agent stored them via memory_store).
+    Per ``durin/memory/provenance.py`` every write must declare its
+    author; this decorator carries that declaration once per seeder.
+    """
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with author_scope("agent_created"):
+            return fn(*args, **kwargs)
+    return wrapper
 from durin.telemetry.logger import TelemetryLogger, bind_telemetry, reset_telemetry
 
 from scripts.benchmark.locomo_dataset import QA, Conversation
@@ -160,6 +178,7 @@ async def run_qa(
     return trace
 
 
+@_agent_seeded
 def _seed_memory_from_conversation(
     workspace_root: Path, conv: Conversation,
 ) -> None:
@@ -243,6 +262,7 @@ def _enrich_turn_with_visuals(turn: dict, text: str) -> str:
     return "\n".join(parts)
 
 
+@_agent_seeded
 def _seed_event_summaries(
     workspace_root: Path, conv: Conversation,
     speaker_slugs: dict[str, str],
@@ -288,6 +308,7 @@ def _seed_event_summaries(
                                      conv.conv_id, n)
 
 
+@_agent_seeded
 def _seed_observations(
     workspace_root: Path, conv: Conversation,
     speaker_slugs: dict[str, str],
@@ -324,6 +345,7 @@ def _seed_observations(
                     logger.exception("observation seed failure %s", conv.conv_id)
 
 
+@_agent_seeded
 def _seed_session_summaries(workspace_root: Path, conv: Conversation) -> None:
     """Seed ``session_summary`` block — one per session with a brief
     summary of what was discussed."""
