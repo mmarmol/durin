@@ -1,40 +1,157 @@
-"""Temporal decay configuration.
+"""Temporal decay configuration and ranking-time consumer.
 
-Per `docs/memory/03_search_pipeline.md` §10:
+Per `docs/memory/03_search_pipeline.md` §10 and audit A9
+(2026-05-28):
 
 - Each memory class has a default half-life in days. Observation-type
   classes (`episodic`, `session_summary`) decay; canonical-state
-  classes (`entity`, `stable`, `corpus`) do not (their mtime is "last
-  Dream update", not "fact age", so decaying them would punish
-  freshly-consolidated material).
-- Per-entry override: a `decay_half_life: <int|null>` frontmatter
-  field overrides the class default. A `null` value is a meaningful
-  signal — "this entry is a permanent fact, never decay it".
-- `evergreen: true` wins over everything.
+  classes (`entity` / `entity_page`, `stable`, `corpus`) do not (their
+  mtime / valid_from doesn't represent "fact age" — see the reasoning
+  table below).
+- Per-entry override (frontmatter `decay_half_life` / `evergreen`)
+  exists in :class:`durin.memory.schema.MemoryEntry` but **is NOT
+  applied in the search pipeline** as of A9. The override is honoured
+  in paths that read the full `MemoryEntry` (hot_layer, dream). The
+  LanceDB row doesn't carry these fields; promoting them would
+  require a schema bump and a forced rebuild — deferred until a real
+  use case appears (no producer sets them today; Dream's prompt
+  doesn't instruct the LLM to emit them either).
 
-Phase 0 scope: the half-life table + the `half_life_for` resolver. The
-ranking-time consumer (apply exponential decay to score) lands in a
-later phase.
+A9 added :func:`apply_class_decay` — the ranking-time consumer the
+Phase 0 header foreshadowed. It uses class defaults only, per the
+decision logged in doc 11.
+
+Reasoning per class (verified honestly during A9, not copied from
+the original spec table):
+
+- `entity_page`: no decay. `valid_from` is empty for entity pages,
+  and the file mtime tracks "last Dream pass", not "age of facts on
+  the page".
+- `episodic`: 90-day half-life. Observations naturally age. Recent
+  observations (≪ 90d) barely register decay; very old ones
+  (5× half-life ≈ 450d) round to ~0.7% of original score but can
+  still surface if strongly relevant.
+- `stable`: no decay. The user/agent explicitly marked these as
+  durable; decaying contradicts that decision.
+- `corpus`: no decay. `valid_from` is the INGEST date, not the
+  content date. Decaying corpus would penalise "old books in your
+  pipeline", not obsolete information.
+- `session_summary`: 120-day half-life. Session digests age, but
+  more slowly than episodic (they cover broader topics). Inert
+  until the session-summary emitter ships (audit A10).
+- `pending`: excluded from the walker (A2); never reaches the
+  search pipeline.
 """
 
 from __future__ import annotations
 
+import logging
+import math
+from datetime import date, datetime, timezone
 from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover
     from durin.memory.schema import MemoryEntry
 
-__all__ = ["CLASS_HALF_LIFE_DEFAULTS", "half_life_for"]
+logger = logging.getLogger(__name__)
+
+__all__ = [
+    "CLASS_HALF_LIFE_DEFAULTS",
+    "apply_class_decay",
+    "half_life_for",
+    "resolve_class_half_life",
+]
 
 
 # Days, per doc memory §10.2. `None` = never decay.
+# `entity_page` is an alias for `entity` (LanceDB uses the longer
+# name); both map to the same null half-life.
 CLASS_HALF_LIFE_DEFAULTS: dict[str, Optional[int]] = {
     "episodic": 90,
     "session_summary": 120,
     "entity": None,
+    "entity_page": None,
     "stable": None,
     "corpus": None,
 }
+
+
+def resolve_class_half_life(class_name: str) -> Optional[int]:
+    """Lookup the class default half-life in days; ``None`` = no decay.
+
+    Unknown classes also return ``None`` (safe: an entry whose class
+    we don't recognise passes through unchanged rather than getting
+    an arbitrary half-life applied).
+    """
+    return CLASS_HALF_LIFE_DEFAULTS.get(class_name)
+
+
+def apply_class_decay(
+    *,
+    score: float,
+    class_name: str,
+    valid_from_iso: str,
+    now: Optional[datetime] = None,
+) -> tuple[float, float]:
+    """Multiply *score* by exp(-Δdays / half_life), per class default.
+
+    Audit A9 (2026-05-28). The ranking-time consumer of the half-life
+    table. Per-class only — per-entry overrides are NOT applied here
+    (see module docstring).
+
+    Returns ``(new_score, decay_factor)``:
+
+    - ``decay_factor == 1.0`` means "no decay applied" — either the
+      class doesn't decay, the timestamp is missing/malformed, or
+      Δdays is non-positive (future-dated entries pass through).
+    - ``decay_factor`` in ``(0, 1)`` is the multiplier applied.
+
+    The caller is expected to swallow failures via the returned
+    ``decay_factor`` — this function never raises.
+    """
+    half_life = resolve_class_half_life(class_name)
+    if half_life is None or half_life <= 0:
+        return score, 1.0
+    if not valid_from_iso:
+        return score, 1.0
+
+    parsed = _parse_iso_date(valid_from_iso)
+    if parsed is None:
+        return score, 1.0
+
+    now_dt = now or datetime.now(timezone.utc)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    delta_days = (now_dt - parsed).total_seconds() / 86_400.0
+    # Future-dated entries (clock skew, optimistic timestamps) keep
+    # their score — punishing them with a positive multiplier > 1.0
+    # would be the wrong semantics (decay only acts in the past).
+    if delta_days <= 0:
+        return score, 1.0
+
+    factor = math.exp(-delta_days / half_life)
+    return score * factor, factor
+
+
+def _parse_iso_date(value: str) -> Optional[datetime]:
+    """Best-effort ISO parser for `valid_from` strings.
+
+    Handles ``YYYY-MM-DD`` (the common shape from `store_memory`'s
+    ``date.today()`` default) and full RFC 3339 timestamps. Returns
+    ``None`` on any parse failure so the caller can fall through to
+    "no decay" semantics.
+    """
+    s = value.strip()
+    if not s:
+        return None
+    # `datetime.fromisoformat` handles `YYYY-MM-DD` and the common
+    # `YYYY-MM-DDTHH:MM:SS[+TZ]` shapes in Python 3.11+.
+    try:
+        if "T" in s or " " in s:
+            return datetime.fromisoformat(s.replace("Z", "+00:00"))
+        return datetime.fromisoformat(s + "T00:00:00+00:00")
+    except (ValueError, TypeError):
+        return None
 
 
 def half_life_for(

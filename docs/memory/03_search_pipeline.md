@@ -452,6 +452,28 @@ The previous draft said "disabled by default". This is revised. Reasoning:
 
 The mechanism can be globally disabled via `memory.search.temporal_decay.enabled = false` if a workspace operator wants to opt out.
 
+### 10.7 What audit A9 actually shipped (2026-05-28)
+
+Up to audit A9, §10 was a promise — `decay.py` had the half-life table and the `half_life_for` resolver, but the search pipeline never called either. A9 wired the ranking-time consumer:
+
+- New helper `durin.memory.decay.apply_class_decay(score, class_name, valid_from_iso, now=None) → (decayed_score, decay_factor)` — pure function, never raises.
+- New pipeline step `_temporal_decay_step` in `durin/memory/search_pipeline.py`, inserted after the cross-encoder and before sectioning. Reorders `fused` by the new scores so the per-source cap (`apply_per_source_cap`) and the final `[:limit]` slice see the decayed ranking.
+- New config knob `memory.search.temporal_decay.enabled: bool = True` (`MemoryTemporalDecayConfig`). Read by `memory_search.execute` and threaded through to `run_search_pipeline(..., temporal_decay_enabled=...)`.
+- New telemetry event `memory.recall.decay` with `{hits_total, hits_decayed, avg_decay_factor}` so a dashboard can see how often decay actually bites.
+
+**Scope of A9 — class defaults only.** The per-entry override (`evergreen`, `decay_half_life` in `MemoryEntry`) is honoured in paths that read the full entry off disk (hot_layer, dream consolidator). The search pipeline only sees `meta` dicts derived from LanceDB / FTS5 rows, which don't carry those fields today. Adding them would require a LanceDB schema bump (3 → 4) and a forced rebuild — verified `grep` shows zero producers actually set `evergreen` or `decay_half_life` in entries today (Dream's prompt doesn't instruct the LLM to emit them; no entry in the workspace uses them). The override stays declared in `MemoryEntry` and resolved by `half_life_for`; if a future use case shows up, the second step is promoting those two fields into the row schema.
+
+**Per-class decision table** (verified by enumeration — recorded in doc 11 A9):
+
+| Class | Half-life | Why |
+|---|---|---|
+| `entity_page` (alias `entity`) | null | `valid_from = ""`; file mtime tracks "last Dream pass", not "age of fact" |
+| `episodic` | 90 days | Observations naturally age |
+| `stable` | null | Explicitly marked durable by user/agent |
+| `corpus` | null | `valid_from` is the INGEST date, not content date — decay would penalise old books in your pipeline |
+| `session_summary` | 120 days | Session digests age slower than raw episodic (broader topic surface) — currently inert until A10 emits these rows |
+| `pending` | N/A | Walker excludes it (A2) — never reaches the pipeline |
+
 ---
 
 ## 11. Step 7 — Removed (MMR deferred to backlog)

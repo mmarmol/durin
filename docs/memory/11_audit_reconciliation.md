@@ -546,7 +546,47 @@ later phase.
 
 **Recomendación**: opción A es ~1h de trabajo y cierra una promesa explícita del doc. Hagamos A.
 
-**Estado**: pending
+**Resolución (2026-05-28) — Opción A, class defaults only**: durante el análisis el user empujó con la pregunta clave: *"no asumas los defaults del doc, enumera todas las clases que se guardan y razoná por cada una"*. La enumeración (verificada contra `MEMORY_CLASSES` + el código real) llegó a la misma tabla que el doc original — pero ahora con el razonamiento explícito por clase grabado:
+
+| Clase | Decae | Half-life | Razonamiento verificado |
+|---|---|---|---|
+| `entity_page` (alias `entity`) | No | null | `valid_from = ""` siempre para entity pages; el mtime es "última pasada Dream", no "edad del hecho" |
+| `episodic` | Sí | 90d | Observaciones con timestamp intrínseco — la edad ES información del contenido |
+| `stable` | No | null | El user/agente lo marcó explícitamente como durable; decaerlo contradice la decisión |
+| `corpus` | No | null | `valid_from` es la fecha de INGEST, no del contenido — decaer castigaría "libros viejos en tu pipeline" |
+| `session_summary` | Sí | 120d | Igual concepto que episodic pero cubre temas más amplios — pero inert hasta A10 (no se emite hoy) |
+| `pending` | N/A | — | Walker lo excluye (A2) |
+
+**Override per-entry NO se aplica en search pipeline**: el user confirmó que por clase alcanza. Verificación adicional mostró que **es spec sin uso real**: Dream nunca setea `evergreen` ni `decay_half_life`; el workspace actual no tiene entries con esos overrides; los templates de Dream no instruyen al LLM a emitirlos. El field queda en `MemoryEntry` schema preparado para futuro; el resolver `half_life_for` sigue exportándose para callers que lo necesiten (hot_layer, dream).
+
+Cambios:
+
+- [durin/memory/decay.py](../../durin/memory/decay.py): nueva función pura `apply_class_decay(score, class_name, valid_from_iso, now=None) -> (decayed, factor)`. `CLASS_HALF_LIFE_DEFAULTS` gana `entity_page` como alias de `entity` (FTS5 / LanceDB usan nombres distintos; ambos resuelven a null). Module header reescrito con la tabla razonada inline.
+- [durin/config/schema.py](../../durin/config/schema.py): nuevo `MemoryTemporalDecayConfig(enabled: bool = True)`. `MemorySearchConfig` ahora tiene `temporal_decay`.
+- [durin/memory/search_pipeline.py](../../durin/memory/search_pipeline.py): nuevo `_temporal_decay_step()` insertado después del cross-encoder y antes del sectioning. Reordena `fused` por decayed scores. `run_search_pipeline` gana `temporal_decay_enabled: bool = True`. `now` inyectable para tests deterministas.
+- [durin/agent/tools/memory_search.py](../../durin/agent/tools/memory_search.py): lee `app_config.memory.search.temporal_decay.enabled` y lo threada al pipeline.
+- [durin/telemetry/schema.py](../../durin/telemetry/schema.py): nuevo `MemoryRecallDecayEvent` TypedDict + registro en `EVENTS`.
+- [tests/memory/test_decay_search_integration.py](../../tests/memory/test_decay_search_integration.py) (nuevo, 19 tests):
+  * Unit: `apply_class_decay` por cada clase (decae / no decae) + edge cases (empty/malformed/future timestamp, unknown class).
+  * Quantifier: `exp(-1) ≈ 0.368` para 1 half-life, `exp(-5) ≈ 0.0067` para 5 half-lives.
+  * `entity` y `entity_page` ambos resuelven a no-decay (catches the FTS5 vs LanceDB naming).
+  * Pipeline: hits viejos bajan al fondo, recientes suben; entity_page con valid_from antiguo NO mueve.
+  * Telemetry: `memory.recall.decay` event con counts correctos.
+  * Schema: TypedDict registrado, config default enabled=True.
+
+- [docs/memory/03_search_pipeline.md §10.7](03_search_pipeline.md) (nuevo): describe qué shippeó A9 + la tabla razonada + scope (class only).
+- [docs/memory/00_overview.md §10 row 3b](00_overview.md): de "promise" a "shipped".
+
+**Lecciones aplicadas**:
+- [[feedback-verify-quantifiers]] aplicado dos veces durante el desarrollo:
+  1. Test inicial usó `_FIXED_NOW = datetime(... 12:00)` pero `valid_from="2026-05-28"` parsea a 00:00 — delta de 0.5 días, factor ≈ 0.9945 (no 1.0). Fix: `_FIXED_NOW = datetime(... 00:00)` para que los deltas sean exactos.
+  2. Test del pipeline pasó `now=None` al `_temporal_decay_step` → wall-clock real diferente al `_FIXED_NOW` que esperaba el cálculo. Refactor para inyectar `now` desde tests.
+- [[feedback-question-user-input]]: el primer plan copió los defaults del doc sin razonar. El user empujó "enumera y razoná por clase" — y la enumeración produjo el mismo resultado, pero con razonamiento verbatim guardado. La diferencia: futuros readers ven *por qué* corpus no decae, no sólo *que* no decae.
+- [[feedback-sync-tests-exercise-behavior]]: tests no comparan strings del doc; ejercitan la función con valores numéricos verificados matemáticamente.
+
+**Verificado pre-commit**: tests/memory/ 937 passed (918 baseline + 19 nuevos A9), 1 skipped.
+
+**Estado**: resolved (commit pendiente).
 
 ---
 
