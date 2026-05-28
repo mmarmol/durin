@@ -1066,7 +1066,7 @@ Doc:
 
 ## LOW — cosmético / docs
 
-### C1 — Doc 01 §4.3 referencia `STATEFUL_ATTRIBUTE_PATTERNS` que no existe
+### C1 — Doc 01 §4.3 referencia `STATEFUL_ATTRIBUTE_PATTERNS` que no existe ✅ RESOLVED
 
 **Doc dice** (`docs/memory/01_data_and_entities.md` §4.3): *"The pattern set lives in code as a single source of truth (`STATEFUL_ATTRIBUTE_PATTERNS`)"*.
 
@@ -1080,7 +1080,7 @@ Doc:
 
 ---
 
-### C2 — Doc 01 §4.4 "soft cap 50 / hard cap 200" entries-per-entity sin enforcement
+### C2 — Doc 01 §4.4 "soft cap 50 / hard cap 200" entries-per-entity sin enforcement ✅ RESOLVED
 
 **Doc dice** (`docs/memory/01_data_and_entities.md` §4.4): *"Per-entity cap — Soft cap = 50 (warn only), Hard cap = 200"*.
 
@@ -1094,7 +1094,7 @@ Doc:
 
 ---
 
-### C3 — Doc 01 §4.5 step 2 describe pinyin-with-tones, código usa unidecode directo
+### C3 — Doc 01 §4.5 step 2 describe pinyin-with-tones, código usa unidecode directo ✅ RESOLVED
 
 **Doc dice**: *"Transliterate non-Latin scripts to Latin (e.g., 马塞洛 → mǎsàiluò → masailuo)"*.
 
@@ -1108,7 +1108,7 @@ Doc:
 
 ---
 
-### C4 — Doc 05 §14 dice 5 triggers, §2 enumera 6
+### C4 — Doc 05 §14 dice 5 triggers, §2 enumera 6 ✅ RESOLVED
 
 **Doc dice** §14 row 1: "Five trigger types".
 **Doc dice** §2: 6 triggers (`threshold`, `post_ingest_threshold`, `cron_daily`, `session_close`, `post_compaction`, `manual`).
@@ -1123,7 +1123,7 @@ Doc:
 
 ---
 
-### C5 — Doc 05 §8.7 menciona verdict `unsure`; código usa `unclear`
+### C5 — Doc 05 §8.7 menciona verdict `unsure`; código usa `unclear` ✅ RESOLVED
 
 **Doc dice** §8.7: *"flag uncertainty as `unsure` rather than confirm"*.
 **Código dice** (`durin/memory/absorb_judge.py:73`): verdicts = `{"same", "different", "unclear"}`.
@@ -1138,7 +1138,7 @@ Doc:
 
 ---
 
-### C6 — Doc 07 §15 sub-totales obsoletos
+### C6 — Doc 07 §15 sub-totales obsoletos ✅ RESOLVED
 
 **Doc dice** §15: "12 events in schema.py".
 **Código dice** `durin/telemetry/schema.py:911-937` — 25 entradas memory.*.
@@ -1154,7 +1154,7 @@ Doc:
 
 ---
 
-### C7 — Doc 02 §11 status table es stale completo
+### C7 — Doc 02 §11 status table es stale completo ✅ RESOLVED
 
 **Doc dice** §11 (status table): "FTS5 lexical index — Does not exist"; "File watcher — Manual rebuild only"; "Archive folder — Doesn't exist".
 
@@ -1171,7 +1171,7 @@ Doc:
 
 ---
 
-### C8 — Doc 03 §1 diagram tiene dos "Step 7" (header collision)
+### C8 — Doc 03 §1 diagram tiene dos "Step 7" (header collision) ✅ RESOLVED
 
 **Doc dice**: §11 "Step 7 — Removed (MMR deferred)"; §12 también titulada "STEP 7".
 
@@ -1181,7 +1181,7 @@ Doc:
 
 ---
 
-### C9 — Doc 06 §3.5 menciona `memory_*.py::DESCRIPTION` constants que no existen
+### C9 — Doc 06 §3.5 menciona `memory_*.py::DESCRIPTION` constants que no existen ✅ RESOLVED
 
 **Doc dice** §3.5: *"descriptions must match `memory_*.py::DESCRIPTION` constants"*.
 **Código dice**: no hay `DESCRIPTION` constant en ningún tool. La canónica vive en `_PARAMETERS["description"]`.
@@ -1194,7 +1194,7 @@ Doc:
 
 ---
 
-### C10 — Doc 04 §7.1 menciona webui surfaces — verificar
+### C10 — Doc 04 §7.1 menciona webui surfaces — verificar ✅ RESOLVED
 
 **Doc dice** §7.1: hay surfaces de webui "informational".
 

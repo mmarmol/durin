@@ -430,7 +430,7 @@ The cross-encoder reranker (opt-in, OFF by default) is configurable through thre
 |---|---|---|
 | **Config file** | `~/.durin/config.json` `memory.search.cross_encoder.{enabled, model, batch_size}` | Power users edit directly |
 | **Onboarding wizard** | CLI prompt during `durin init` | Yes/No question with latency + RAM trade-off explanation |
-| **Web dashboard** | Settings → Memory → Search | Toggle + dropdown of supported models (jina-v2, bge-base, bge-v2-m3, qwen3-reranker-0.6b) |
+| **Web dashboard** | Settings → Memory (P4.4 + B12) | Three controls: (a) cross-encoder enable toggle + free-form model id input with datalist of suggested ids + "Test" button that loads + scores the value live (audit B12, 2026-05-28 — no closed enum, any sentence-transformers compatible id works); (b) consolidation threshold count for `memory.dream.threshold_entries`; (c) read-only summary of `CLASS_HALF_LIFE_DEFAULTS`. Backed by `webui/src/components/settings/MemorySettings.tsx`. |
 
 Other memory.search.* settings are config-file-only (advanced) and not surfaced in UI in MVP.
 
@@ -453,11 +453,13 @@ Read-only by design — no mutation through these surfaces. Mutations flow throu
 
 The tool descriptions in §2.3, §3.3, §4.3, §5.3 are the **canonical text**. They must appear verbatim in:
 
-- `durin/agent/tools/memory_*.py::DESCRIPTION` constants.
+- Each tool's `.description` property (e.g. `durin/agent/tools/memory_search.py::MemorySearchTool.description`). The property delegates to `_PARAMETERS["description"]` so both fields stay identical — `.description` is what `Tool.to_schema()` emits as `function.description` in the OpenAI function-calling spec, i.e. what the LLM actually reads.
 - `durin/templates/agent/identity.md::Memory` section (where relevant).
 - Tool schemas exposed to MCP / OpenAI Tools format.
 
 Any divergence between code, identity.md, and this document is a bug. The text is decided here; code reflects it.
+
+Audit C9 + B1 (2026-05-28) corrected this section's earlier reference to `memory_*.py::DESCRIPTION` constants that never existed.
 
 ---
 

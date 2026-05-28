@@ -707,7 +707,7 @@ If `read_hot_layer(workspace)` fails (disk error, parser error, missing files), 
 
 | # | Decision | Resolution | Applied in |
 |---|---|---|---|
-| 1 | Source of truth for LLM-facing text | This document. Code constants + `templates/agent/identity.md` + templates/dream/* must match this doc verbatim. Divergence = bug. | §3.5 |
+| 1 | Source of truth for LLM-facing text | This document. The per-tool `.description` property (e.g. `MemorySearchTool.description` in `durin/agent/tools/memory_search.py`) + `templates/agent/identity.md` + `templates/dream/*` must match this doc verbatim. Divergence = bug. (Audit C9 + B1, 2026-05-28: the v1 text referenced `memory_*.py::DESCRIPTION` constants that never existed; the canonical text lives in `_PARAMETERS["description"]` and is emitted via `Tool.description` → `function.description` in the OpenAI spec — see §3.5.) | §3.5 |
 | 2 | Declarative not imperative phrasing | Validated by LoCoMo v2 (+3.9pp). "Don't answer cold" + "state source" + "issue 2-3 searches" worked; "USE BEFORE answering" did not. | §2.2 |
 | 3 | Dream prompt package layout (NOT a skill) | Multi-file prompt assembly in `templates/dream/`: main prompt + reference + rules + commit format + 6 few-shot examples. Concatenated by the runner at call time. ~1-2k tokens overhead accepted. This is a prompt template package, not an invocable skill — the agent does not "choose" to load it; the runner builds it. | §4 |
 | 4 | Few-shot examples for JSON Patch | Six examples covering common scenarios. Small models need concrete demonstrations of unfamiliar syntax. | §4.6 |
@@ -727,7 +727,7 @@ None at the module level.
 | Aspect | Current state | v2 target | Migration work |
 |---|---|---|---|
 | `identity.md` Memory section | v2 shipped 2026-05-25 (+3.9pp) | Light revision per §2 | Minor wording polish |
-| Tool descriptions | Active in tools' `DESCRIPTION` constants | Sync to §3 canonical text | Reconcile any divergence |
+| Tool descriptions | ✅ Sync'd. Each tool's `.description` property delegates to `_PARAMETERS["description"]` which carries the verbatim doc §3 text. `test_tool_description_sync.py` guards both string equality and the `to_schema()` invariant (audit B1, 2026-05-28). | — | — |
 | `templates/dream/consolidator.md` | v2 — skill package multi-file per §4. **Shipped in Phase 1.9 (commit `6aafc3f`).** | — | — |
 | `templates/dream/absorb_judge.md` | Active | Same | None |
 | Onboarding wizard text | Partial | Add §6 questions | Wizard CLI + webui changes |

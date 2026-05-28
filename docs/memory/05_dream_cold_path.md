@@ -445,7 +445,7 @@ When `verdict == "same"` and confidence passes the threshold:
 
 ### 8.7 Self-consistency bias mitigation
 
-When `judge_model == dream_model` (e.g., both glm-5.1), the judge tends to confirm Dream's recent decisions. The judge prompt includes a directive to peer-review critically and to flag uncertainty as `unsure` rather than confirm.
+When `judge_model == dream_model` (e.g., both glm-5.1), the judge tends to confirm Dream's recent decisions. The judge prompt includes a directive to peer-review critically and to flag uncertainty as `unclear` rather than confirm. (Corrected from `unsure` in audit C5 — §8.4 and `absorb_judge.py:73` both use the canonical `unclear`.)
 
 Per `feedback_question_user_input.md`-style reasoning: an LLM is more reliable when it has a different role (review vs. produce) than when it is asked to confirm its own output. Using a different model for the judge (when budget allows) further reduces this bias.
 
@@ -595,7 +595,7 @@ All consistent with prior decisions in docs 00-04.
 
 | # | Decision | Resolution | Applied in |
 |---|---|---|---|
-| 1 | Trigger types | Five: threshold (per-entity, post-write), cron (daily), session_close, post_compaction, manual. Threshold is the primary trigger; cron is the safety net. | §2 |
+| 1 | Trigger types | Six: threshold (per-entity, post-write), post_ingest_threshold (post-ingest pathway, mirrors threshold), cron_daily (safety net), session_close, post_compaction, manual. Threshold is the primary trigger; cron is the safety net. Corrected from "Five" in audit C4 (2026-05-28) — §2 of this doc enumerates all six and code wires all six (commit `c3eff1e`). | §2 |
 | 2 | Lock granularity | Single workspace-level file lock at `memory/.dream.lock`. Already exists; not introducing a new lock. | §4.1 |
 | 3 | Sequential per-entity within a pass | Yes. Parallel apply across entities can race on aliases / alias index. Cold path; serialization is acceptable. | §3 |
 | 4 | Throttle behavior | **300s (5 min) minimum interval between runs** (configurable via `min_seconds_between_runs`). Already in code. Manual trigger bypasses throttle. | §4.2 |

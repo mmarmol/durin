@@ -506,9 +506,9 @@ None at the module level.
 
 | Aspect | Current state | v2 target | Migration work |
 |---|---|---|---|
-| Memory event registry | 12 events in `schema.py` | + 7 new events (recall.lexical, recall.rerank, recall.rrf, search.failure, index.write, index.rebuild, index.staleness_detected, dream.entity_failed, dream.patch_applied) | Add TypedDicts + register |
+| Memory event registry | 25+ events in `schema.py` (audit C6: corrected from "12 events". `memory.*` keys in `EVENTS` cover recall (incl. `.lexical` / `.rerank` / `.rrf` / `.decay` / `.failure`), index (`.write` / `.rebuild` / `.staleness_detected`), dream (`.start` / `.end` / `.skipped` / `.entity_failed` / `.patch_applied`), absorb, store, ingest, embedding, hot_layer, health). Counts grow as new events ship (A5 added cost fields to `dream.end`; A6 added `tick_id`/`duration_ms` to `health_check`; A9 added `recall.decay`; B9 added `search.failure`). | — |
 | Cost in dream.end | Not present | Add `llm_input_tokens_total`, `llm_output_tokens_total`, optional `llm_cost_usd` | Wire LLM token counts into pass result |
-| Privacy: query truncation | Not enforced | Truncate to 200 chars at emit time | Add helper in emit_tool_event |
+| Privacy: query truncation | Enforced at emit time (audit C6: was incorrectly "Not enforced" in the v1 draft). `durin/agent/tools/_telemetry.py::_truncate_freetext` trims fields named `query`, `text`, `snippet`, `content`, `needle` to 200 chars before persistence. Applied by `emit_tool_event` so every event consumer gets a trimmed payload. | — | — |
 | Privacy: URI hashing opt-in | Not present | Optional via config | New config flag |
 | Alarms / dashboards | None | Internal threshold checks + optional Grafana export | Out of scope for memory subsystem; downstream |
 
