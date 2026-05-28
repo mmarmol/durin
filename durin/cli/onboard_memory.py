@@ -22,7 +22,9 @@ from typing import Any
 
 __all__ = [
     "AUTO_ABSORB_QUESTION_TEXT",
+    "CROSS_ENCODER_QUESTION_TEXT",
     "prompt_enable_auto_absorb",
+    "prompt_enable_cross_encoder",
 ]
 
 
@@ -47,6 +49,40 @@ AUTO_ABSORB_QUESTION_TEXT: str = dedent(
     Enable auto-absorb now? [y/N]:
     """
 )
+
+
+# Verbatim from `docs/memory/06_prompts_and_instructions.md` §6.2.
+CROSS_ENCODER_QUESTION_TEXT: str = dedent(
+    """\
+    Advanced retrieval option: durin can use a cross-encoder reranker
+    to improve search quality. This adds 300-1500ms latency per query
+    (depending on the model) and requires ~1GB additional RAM. The
+    default model is `jinaai/jina-reranker-v2-base-multilingual`
+    (multilingual, covers 100+ languages including CJK).
+
+    Most users do NOT need this — the default search (without the
+    reranker) works well for typical workloads. Enable it later via
+    the web dashboard if you find queries returning poor results.
+
+    Enable advanced reranker now? [y/N]:
+    """
+)
+
+
+def prompt_enable_cross_encoder(current: bool = False) -> bool:
+    """Render the Q6.2 question and return the user's choice.
+
+    Same pattern as :func:`prompt_enable_auto_absorb`: re-prompts
+    preserve the prior opt-in; Ctrl+C preserves *current*.
+    """
+    questionary = _get_questionary()
+    answer: Any = questionary.confirm(
+        CROSS_ENCODER_QUESTION_TEXT,
+        default=bool(current),
+    ).ask()
+    if answer is None:
+        return bool(current)
+    return bool(answer)
 
 
 def prompt_enable_auto_absorb(current: bool = False) -> bool:

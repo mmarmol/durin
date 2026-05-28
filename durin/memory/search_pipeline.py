@@ -63,6 +63,8 @@ def run_search_pipeline(
     keywords: Optional[str] = None,
     vector_index: Optional[Any] = None,
     limit: int = 10,
+    cross_encoder: Optional[Any] = None,
+    cross_encoder_top_n: int = 10,
 ) -> SearchPipelineResult:
     """Execute the v2 search pipeline.
 
@@ -114,6 +116,19 @@ def run_search_pipeline(
         vector_meta=vector_meta, lexical_meta=lexical_meta,
         grep_meta=grep_meta,
     )
+
+    # Step 5 — cross-encoder rerank (doc 03 §9). Opt-in. When a
+    # reranker instance is supplied, take the top 50 hits, build
+    # (query, doc_text) pairs, score them, and drop everything
+    # ranked below `cross_encoder_top_n`. Graceful degradation: a
+    # reranker failure returns the original RRF order.
+    if cross_encoder is not None and fused:
+        fused = _cross_encoder_rerank(
+            cross_encoder, decision.normalized_query, fused,
+            vector_meta=vector_meta, lexical_meta=lexical_meta,
+            grep_meta=grep_meta,
+            top_n=cross_encoder_top_n,
+        )
 
     # Build SectionedHit rows from the fused results, looking up
     # metadata from whichever source surfaced the uri.
@@ -229,6 +244,75 @@ def _entity_aware_rerank(
 # ---------------------------------------------------------------------------
 # Per-step wrappers — never raise
 # ---------------------------------------------------------------------------
+
+
+def _cross_encoder_rerank(
+    reranker: Any,
+    query: str,
+    fused: list,
+    *,
+    vector_meta: dict[str, dict],
+    lexical_meta: dict,
+    grep_meta: dict[str, dict] | None,
+    top_n: int,
+) -> list:
+    """Apply a cross-encoder rerank over the fused list (doc 03 §9).
+
+    Builds (uri, doc_text) pairs by pulling the richest text we have
+    for each hit — body (when LanceDB carried it) falls back to
+    snippet falls back to URI. Calls :func:`cross_encoder.rerank_hits`
+    which gracefully no-ops on reranker failure.
+    """
+    import time as _time
+    from durin.memory.cross_encoder import rerank_hits
+    from durin.memory.rrf_fusion import FusedHit
+
+    by_uri = {h.uri: h for h in fused}
+    pairs: list[tuple[str, str]] = []
+    for h in fused[:50]:  # cap input to 50 per doc 03 §9.3
+        meta = _resolve_meta(
+            h.uri, vector_meta, lexical_meta, grep_meta=grep_meta,
+        )
+        doc = (
+            meta.get("body")
+            or meta.get("snippet")
+            or meta.get("headline")
+            or h.uri
+        )
+        pairs.append((h.uri, doc))
+
+    t0 = _time.perf_counter()
+    new_order = rerank_hits(
+        reranker, query=query, hits=pairs, top_n=top_n,
+    )
+    duration_ms = (_time.perf_counter() - t0) * 1000.0
+    try:
+        from durin.agent.tools._telemetry import emit_tool_event
+        emit_tool_event(
+            "memory.recall.rerank",
+            {
+                "input_count": len(pairs),
+                "output_count": len(new_order),
+                "duration_ms": duration_ms,
+            },
+        )
+    except Exception:  # pragma: no cover
+        pass
+
+    # Preserve FusedHit shape for downstream sectioning.
+    out: list = []
+    for uri in new_order:
+        h = by_uri.get(uri)
+        if h is not None:
+            out.append(h)
+    # Append any URIs the reranker dropped but were in `fused`
+    # AFTER the new_order (so the per-source cap still has material
+    # to draw from if top_n was small).
+    seen = set(new_order)
+    for h in fused:
+        if h.uri not in seen:
+            out.append(h)
+    return out
 
 
 def _safe_vector_search(

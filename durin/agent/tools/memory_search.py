@@ -150,6 +150,34 @@ class MemorySearchTool(Tool):
             "markdown URIs usable with memory_drill."
         )
 
+    def _build_cross_encoder(self):
+        """Construct a :class:`CrossEncoderReranker` when enabled in
+        config; otherwise return None.
+
+        Lazy + cached per instance: the model load happens on first
+        :meth:`execute` that opts in. Re-building per call is cheap
+        (just a wrapper object) but the underlying model loads only
+        once via the scorer's lazy-load.
+        """
+        if self._app_config is None:
+            return None
+        try:
+            ce_cfg = (
+                self._app_config.memory.search.cross_encoder
+            )
+        except AttributeError:
+            return None
+        if not getattr(ce_cfg, "enabled", False):
+            return None
+        if getattr(self, "_cross_encoder_cache", None) is not None:
+            return self._cross_encoder_cache
+        from durin.memory.cross_encoder import CrossEncoderReranker
+        self._cross_encoder_cache = CrossEncoderReranker(
+            model=ce_cfg.model,
+            batch_size=int(ce_cfg.batch_size or 32),
+        )
+        return self._cross_encoder_cache
+
     def _enrich_body(self, r: Result) -> Result:
         """Populate ``body`` on a vector-shaped Result by loading the entry.
 
@@ -268,6 +296,22 @@ class MemorySearchTool(Tool):
         from durin.memory.search_pipeline import run_search_pipeline
 
         vi = self._get_vector_index() if scope in ("dreamed", "all") else None
+
+        # Cross-encoder rerank is opt-in via config (doc 03 §9). When
+        # enabled, build a reranker lazily and pass it through. The
+        # pipeline gracefully no-ops if the model fails to load.
+        cross_encoder = self._build_cross_encoder()
+        ce_top_n = 10
+        if (
+            self._app_config is not None
+            and getattr(self._app_config, "memory", None) is not None
+        ):
+            ce_cfg = getattr(
+                self._app_config.memory.search, "cross_encoder", None,
+            )
+            if ce_cfg is not None:
+                ce_top_n = int(getattr(ce_cfg, "top_n", 10) or 10)
+
         t0 = time.monotonic()
         pipeline_result = run_search_pipeline(
             self._workspace,
@@ -275,6 +319,8 @@ class MemorySearchTool(Tool):
             keywords=keywords,
             vector_index=vi,
             limit=10,
+            cross_encoder=cross_encoder,
+            cross_encoder_top_n=ce_top_n,
         )
         duration_ms = (time.monotonic() - t0) * 1000.0
 

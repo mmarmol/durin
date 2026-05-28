@@ -254,6 +254,33 @@ class AutoAbsorbConfig(Base):
     )
 
 
+class CrossEncoderConfig(Base):
+    """Cross-encoder reranker config (doc 03 §9, doc 10 P4).
+
+    OFF by default per spec — the model adds 300-1500ms latency and
+    requires ~1GB additional RAM. Power users with quality-sensitive
+    workloads enable it; the default pipeline already produces useful
+    retrieval.
+    """
+
+    enabled: bool = False
+    # Default model from doc 03 §9.1. Override to one of the curated
+    # alternatives (bge-base, bge-v2-m3, qwen3-reranker-0.6b) if you
+    # want a different trade-off.
+    model: str = "jinaai/jina-reranker-v2-base-multilingual"
+    batch_size: int = 32
+    # Top-N to keep after the rerank step. Doc 03 §9.3 says 10.
+    top_n: int = 10
+
+
+class MemorySearchConfig(Base):
+    """Search-pipeline configuration root."""
+
+    cross_encoder: CrossEncoderConfig = Field(
+        default_factory=CrossEncoderConfig,
+    )
+
+
 class MemoryConfig(Base):
     """Memory subsystem configuration root.
 
@@ -265,11 +292,14 @@ class MemoryConfig(Base):
     ``dream`` configures auto-trigger of the entity-centric
     :class:`DreamConsolidator` (doc 25 §2.A.1). Independent of
     ``enabled`` — manual ``durin memory dream`` works either way.
+
+    ``search`` configures the search pipeline (cross-encoder etc.).
     """
 
     enabled: bool = False
     embedding: MemoryEmbeddingConfig = Field(default_factory=MemoryEmbeddingConfig)
     dream: MemoryDreamConfig = Field(default_factory=MemoryDreamConfig)
+    search: MemorySearchConfig = Field(default_factory=MemorySearchConfig)
 
 
 class AuxModelsConfig(Base):
