@@ -66,7 +66,7 @@ Each row represents one indexable `.md` file under `memory/` (excluding `memory/
 |---|---|---|
 | `id` | string (PK) | For entries: 12-char content hash. For entity pages: `<type>:<slug>` (e.g. `person:marcelo`). FTS5 calls this `uri` — asymmetry documented in §5.1. |
 | `class_name` | string | `episodic`, `stable`, `corpus`, or `entity_page`. FTS5 calls this `type` — asymmetry documented in §5.1. `pending` is in `MEMORY_CLASSES` but never reaches the index (walker/indexer skip it). |
-| `summary` | string | For entries: frontmatter `summary` (may be empty). For entity pages: `name (also: alias1, alias2)` derived at upsert time. |
+| `summary` | string | For entries: frontmatter `summary` (may be empty). For entity pages: `name (alias1, alias2)` derived at upsert time (audit F23, 2026-05-28 corrected the pre-F23 spec which claimed `name (also: alias1, alias2)` — the shipped composer at `vector_index.py:142` + `:516` joins aliases without an `also:` prefix). |
 | `headline` | string | For entries: frontmatter `headline`. For entity pages: the entity `name`. |
 | `vector` | fixed-size list of floats | Dim depends on the configured model — default `paraphrase-multilingual-MiniLM-L12-v2` → **384**; CJK-heavy users on `multilingual-e5-large` → 1024. Validated at startup via `VectorIndex._guard_dim_match`. |
 | `valid_from` | string | ISO date if the entry frontmatter carries one; empty string `""` when absent. |
@@ -158,7 +158,7 @@ Email: marcelo@mxhero.com. Phone: +34123. Current residence: Spain. Spouse: Susa
 |---|---|
 | `attributes.<key>: <value>` | `<Key.title()>: <value>.` |
 | `attributes.<key>: { current: <v>, history: [...] }` (stateful) | Renders `<Key.title()>: <current>.` Historical values are not rendered to the embedding text (to avoid centroid drift toward defunct facts). |
-| `relations[i] = { to: <uri>, type: <t>, since: <date>, ... }` | `<type.title()>: <to_name_resolved> (since <date>).` `to_name_resolved` is the `name` of the target entity if known, else the URI. |
+| `relations[i] = { to: <uri>, type: <t>, since: <date>, ... }` | `<type.title()>: <slug> (since <date>).` Audit F22 (2026-05-28) corrected the spec: pre-F22 the doc claimed `to_name_resolved` (look up the target entity's `name` field), but `VectorIndex._render_frontmatter` (line 231) only strips the `type:` prefix from the URI to surface the slug. Resolving against the alias index at compose time would add disk reads on every embed; deferred until bench shows recall on relation queries is below target. |
 | `provenance` | **Not rendered.** Internal metadata, no retrieval value. |
 | `dream_processed_through`, `created_at`, `updated_at` | **Not rendered.** Internal timestamps. |
 
