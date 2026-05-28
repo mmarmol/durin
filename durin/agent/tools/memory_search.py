@@ -118,6 +118,17 @@ class MemorySearchTool(Tool):
         # durin.memory.aliases_cache, so DreamConsolidator and
         # EntityAbsorption see updates as soon as we (or they) call
         # refresh_for / remove on it. No per-instance state needed.
+        # Schema-version freshness check (doc 10 P2.2): on first
+        # construction per process per workspace, ensure the FTS
+        # index matches the code's CURRENT_SCHEMA_VERSION; auto-
+        # rebuild if not. The helper is idempotent.
+        try:
+            from durin.memory.indexer import ensure_index_fresh
+            ensure_index_fresh(self._workspace)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "memory_search: ensure_index_fresh failed: %s", exc,
+            )
 
     @property
     def name(self) -> str:
@@ -363,7 +374,12 @@ class MemorySearchTool(Tool):
         hit_path = hit.path or ""
         if hit.type == "entity":
             class_name = "entity_page"
-            uri = f"memory/entity_page/{hit.uri}"
+            # `hit.uri` for entity pages is `<type>:<slug>`; the legacy
+            # URI shape carries the class prefix.
+            uri = (
+                hit.uri if hit.uri.startswith("memory/entity_page/")
+                else f"memory/entity_page/{hit.uri}"
+            )
             source = "memory"
         elif hit.type in ("session_summary", "session") or (
             hit_path.startswith("sessions/") or "sessions/" in hit_path
@@ -377,10 +393,18 @@ class MemorySearchTool(Tool):
             source = "ingested"
         else:
             class_name = hit.type or ""
-            uri = (
-                f"memory/{class_name}/{hit.uri}"
-                if class_name else f"memory/{hit.uri}"
-            )
+            # FTS hits already carry the `memory/<class>/<id>` prefix
+            # (set by the indexer, P2.2 follow-up); grep hits do too
+            # (via search.search_memory). Don't double-prefix.
+            if hit.uri.startswith(f"memory/{class_name}/") or hit.uri.startswith(
+                "memory/"
+            ):
+                uri = hit.uri
+            else:
+                uri = (
+                    f"memory/{class_name}/{hit.uri}"
+                    if class_name else f"memory/{hit.uri}"
+                )
             source = "memory"
 
         entities = (hit.uri,) if class_name == "entity_page" else ()
