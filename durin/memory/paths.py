@@ -33,7 +33,9 @@ __all__ = [
     "walk_memory",
 ]
 
-MEMORY_CLASSES: tuple[str, ...] = ("stable", "episodic", "corpus", "pending")
+MEMORY_CLASSES: tuple[str, ...] = (
+    "stable", "episodic", "corpus", "pending", "session_summary",
+)
 
 # All directory names that `walk_class` accepts. Includes `entities`
 # (recursive) and `archive` (recursive across archived classes), beyond

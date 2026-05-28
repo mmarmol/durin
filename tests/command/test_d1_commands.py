@@ -184,7 +184,10 @@ async def test_compact_summarises_and_advances_cursor(tmp_path: Path) -> None:
     out = await cmd_compact(ctx)
     assert "Compacted 2 messages" in out.content
     assert session.last_consolidated == 2
-    assert session.metadata.get("_last_summary", {}).get("text") == "a brief summary"
+    # A10: summary lives in `memory/session_summary/<key>.md` now.
+    from durin.memory.session_summary_store import get_session_summary
+    text, _ = get_session_summary(loop.workspace, session.key)
+    assert text == "a brief summary"
 
 
 @pytest.mark.asyncio

@@ -17,7 +17,12 @@ from durin.memory.paths import (
 
 
 def test_memory_classes_are_canonical() -> None:
-    assert set(MEMORY_CLASSES) == {"stable", "episodic", "corpus", "pending"}
+    # A10 (2026-05-28): added `session_summary` so the walker picks
+    # up `memory/session_summary/*.md` (the markdown projection of
+    # the consolidator's session summaries).
+    assert set(MEMORY_CLASSES) == {
+        "stable", "episodic", "corpus", "pending", "session_summary",
+    }
 
 
 def test_memory_dir_creates_directory(tmp_path: Path) -> None:
