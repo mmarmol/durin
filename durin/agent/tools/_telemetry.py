@@ -46,11 +46,31 @@ def emit_tool_event(event_type: str, data: dict[str, Any]) -> None:
     persistence per `docs/memory/07_telemetry_and_observability.md`
     §13. The truncation is non-destructive — it does NOT mutate the
     caller's dict.
+
+    Audit F20 (2026-05-28): the bound
+    :class:`durin.telemetry.logger.TelemetryLogger` carries the
+    active ``session_key`` and per-turn ``iteration``; both are
+    auto-injected into the payload when the caller hasn't already
+    populated them. Dashboards joining `memory.recall` to other
+    events on `(session_key, iteration)` now have data to join on.
     """
     logger_obj = current_telemetry()
     if logger_obj is None:
         return
     safe_data = _truncate_freetext(data)
+    # F20: auto-inject identity fields if absent. Caller-supplied
+    # values always win so subagents / replay tools can stamp a
+    # different identity when they need to. `getattr` defaults keep
+    # ad-hoc test loggers (`_RecordingTelemetry`-style mocks without
+    # the F20 fields) working — they just won't carry the identity.
+    if "session_key" not in safe_data:
+        sk = getattr(logger_obj, "session_key", None)
+        if sk:
+            safe_data["session_key"] = sk
+    if "iteration" not in safe_data:
+        it = getattr(logger_obj, "iteration", None)
+        if it is not None:
+            safe_data["iteration"] = it
     with suppress(Exception):
         logger_obj.log(event_type, safe_data)
 

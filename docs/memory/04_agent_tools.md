@@ -361,16 +361,19 @@ on disk where preserving the original artifact matters.
 
 ### 5.3 Tool description
 
+Verbatim from `durin/agent/tools/memory_drill.py::_PARAMETERS["description"]`
+(audit F15, 2026-05-28 corrected this section after the pre-F15 spec
+diverged from the shipped string — the read-only line moved and the
+"related context" hint was reworded).
+
 ```
-Read the full content of a memory item by URI. Use this when memory_search
-returned a hit and you need to see the full body, including any structured
-data in the frontmatter.
+Read the full content of a memory item by URI. Use this when
+memory_search returned a hit and you need to see the full body,
+including any structured data in the frontmatter.
 
-For related context (recent post-cursor observations mentioning this URI),
-use memory_search instead — its sectioned output already groups canonical
-+ fragments.
-
-This tool is read-only. It does not modify state.
+This tool is read-only. For related context about an entity
+(recent observations, sessions mentioning it), use memory_search
+with the entity's name or URI as the query instead.
 ```
 
 ---

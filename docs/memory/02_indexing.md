@@ -120,7 +120,12 @@ The shared workspace walker (`walk_memory(workspace, include_archive=False)`) is
 
 ## 4. Embedding text composition
 
-The text passed to the embedding model determines what the vector represents. This section specifies exactly what gets composed for each indexable `.md`. **Single source of truth: `vector_index.py::compose_embedding_text(...)`**.
+The text passed to the embedding model determines what the vector represents. This section specifies exactly what gets composed for each indexable `.md`. **Single source of truth: `VectorIndex.compose_embedding_text(item, ...)`** (audit F12, 2026-05-28). The dispatcher routes on input type:
+
+- `EntityPage` → `_compose_entity_page_text` (name + aliases + rendered_frontmatter + body, 1500 chars).
+- `MemoryEntry` → `_embed_text` (headline + summary + entities + body, 1500 chars).
+
+Pre-F12 the two specialised composers were the only entry points, leaving the documented public name unimplemented; the dispatcher closes the gap so callers have one obvious method to call.
 
 ### 4.1 Common rules
 
@@ -492,7 +497,7 @@ Rebuilt from scratch — the original v1 table described a "current state" that 
 | Health-check cron | ✅ Active. `HealthCheckScheduler` daemon thread driving `HealthChecker.run_tick()` every 900s by default. A11. | `durin/memory/health_check.py` |
 | Archive exclusion | ✅ `walk_memory` excludes `memory/archive/**` (and `memory/pending/**`). Single chokepoint per §6.5. | `durin/memory/paths.py:walk_memory` |
 | `durin memory reindex` command | ✅ Active CLI: `durin memory reindex --target {fts,lancedb,all}`. | `durin/cli/memory_cmd.py:cmd_reindex` |
-| Schema version + auto-rebuild | ✅ `index_meta.py::CURRENT_SCHEMA_VERSION` (3 as of A4). `ensure_index_fresh` triggers clean rebuild on mismatch. | `durin/memory/index_meta.py` |
+| Schema version + auto-rebuild | ✅ `index_meta.py::CURRENT_SCHEMA_VERSION` (4 as of audit E9 / F13 verification, 2026-05-28; bumped from 3 when entity-page composition gained `rendered_frontmatter`). `ensure_index_fresh` triggers clean rebuild on mismatch. | `durin/memory/index_meta.py` |
 
 ---
 

@@ -269,11 +269,16 @@ EXISTING SCHEMA for this entity (for coherence; not a constraint):
 EXISTING ENTITY URIs in workspace (consider for dedup; create new only if no match):
   {existing_uris}
 
-  Audit E33 (2026-05-28): this slot is currently populated as an
-  empty list (`dream.py:733` passes `existing_uris=()`). The
-  recent-mtime ranking + 100-cap described in earlier drafts is
-  the intended shape when the producer wires up — design preserved
-  here so the prompt stays consistent when implementation lands.
+  Audit F17 (2026-05-28): producer shipped at
+  `durin.memory.entity_inventory.existing_uris_by_recent_mtime`.
+  Walks `memory/entities/<type>/<slug>.md` excluding archive,
+  sorts by file mtime descending, caps at 100. The slot now
+  carries the freshest URIs in the workspace so the LLM avoids
+  creating duplicates (e.g. `person:marcelo_marmol` when
+  `person:marcelo` already exists). Default cap of 100 lives at
+  `DEFAULT_EXISTING_URIS_CAP` and is hard-coded; lifting it into
+  config is straightforward if operators with very large workspaces
+  ask.
 
 SUGGESTED STARTER TYPES (for when you must create a new entity URI):
   person, place, project, topic, event, artifact, stance, practice
