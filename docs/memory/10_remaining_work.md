@@ -141,19 +141,21 @@ Documentado aquí para histórico. Hooks en `memory_store.execute`, `memory_inge
   - Patrón existente: `prompt_enable_auto_absorb` en `onboard_memory.py`.
 - **LOC**: ~30 + 4 tests.
 
-### P4.4 — Web dashboard memory settings panel
+### P4.4 — Web dashboard memory settings panel ✅ DONE
 
-- **TYPE**: 🟡 refactor webui (~150 LOC)
-- **DoD**: En `webui/src/components/settings/SettingsView.tsx`, sección "Memory" con tres controles:
-  1. Toggle cross-encoder enabled + dropdown model (jina-v2, bge-base, bge-v2-m3, qwen3-reranker-0.6b).
-  2. Number input "consolidation threshold count" (lee/escribe `memory.dream.threshold_entries`).
-  3. Read-only summary de temporal decay (lee `memory.search.decay.*`).
+- **TYPE**: 🟡 refactor webui (~250 LOC componente + ~50 i18n)
+- **DoD**: Sección "Memory" agregada al nav de Settings con tres bloques observables:
+  1. Cross-encoder toggle (`memory.search.cross_encoder.enabled`) + dropdown de 4 modelos curados.
+  2. Number input para `memory.dream.threshold_entries` (commit on Enter o botón Save).
+  3. Read-only summary de los defaults de `CLASS_HALF_LIFE_DEFAULTS` (no son configurables; viven en código).
 - **Refs**:
-  - Component: `webui/src/components/settings/SettingsView.tsx`.
-  - API: añadir endpoints GET/PATCH config en `durin/api/server.py` (o reusar existente).
-  - i18n strings: `webui/src/i18n/locales/en/common.json`.
-- **LOC**: ~150 (component + endpoint + i18n).
-- **Risk**: cambios al UI requieren testing manual (no hay tests automatizados de webui hoy).
+  - Nuevo: `webui/src/components/settings/MemorySettings.tsx`.
+  - Wiring nav: `webui/src/components/settings/SettingsView.tsx` (SETTINGS_NAV_ITEMS + render branch).
+  - i18n: `webui/src/i18n/locales/en/common.json` (memory namespace completo); `es/common.json` (sólo nav.memory).
+  - Backend: reusa `/api/config` y `/api/config/set` existentes en `durin/channels/websocket.py`.
+- **Verificación**: `npx tsc --noEmit` pasa; `npx vitest run` 142 tests pasan; `npm run build` produce dist (vite build 1.89s).
+- **Test manual pendiente**: `npm run dev` + abrir Settings → Memory, togglear cross-encoder, cambiar modelo, ajustar threshold, verificar que `~/.durin/config.json` cambia.
+- **Risk asumido**: el dropdown del cross-encoder se desactiva cuando el toggle está OFF — UX deliberadamente conservador para evitar configurar un modelo que no se va a usar.
 
 ---
 
