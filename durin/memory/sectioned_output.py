@@ -54,6 +54,10 @@ class SectionedHit:
     ts: str = ""
     snippet: str = ""
     ingest_id: Optional[str] = None
+    # P2.5: full body for cold-tier callers. Populated by the
+    # pipeline when the vector index carries it; empty otherwise
+    # (callers fall back to disk read).
+    body: str = ""
 
 
 # Map each source class to a section bucket. Stable entries surface as
