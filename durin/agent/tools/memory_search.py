@@ -408,18 +408,23 @@ class MemorySearchTool(Tool):
             source = "memory"
 
         entities = (hit.uri,) if class_name == "entity_page" else ()
+        # P2.5: prefer the body the search pipeline already carries
+        # (populated from the LanceDB row). Falls back to disk read
+        # via `_enrich_body` only when the vector index didn't have
+        # the row (e.g. grep-only path).
+        carried_body = getattr(hit, "body", "") or ""
         result = Result(
             source=source,
             uri=uri,
             headline=hit.snippet or hit.uri,
             snippet=(hit.snippet or "")[:160],
             summary=hit.snippet or "",
-            body="",
+            body=carried_body if level == "cold" else "",
             class_name=class_name,
             valid_from=hit.ts or "",
             entities=entities,
         )
-        if level == "cold":
+        if level == "cold" and not result.body:
             result = self._enrich_body(result)
         return result
 

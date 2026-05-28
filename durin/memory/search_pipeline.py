@@ -128,6 +128,7 @@ def run_search_pipeline(
             ts=meta.get("ts", "") or meta.get("valid_from", ""),
             snippet=meta.get("snippet", "") or meta.get("headline", ""),
             ingest_id=meta.get("ingest_id"),
+            body=meta.get("body", ""),
         ))
     capped = apply_per_source_cap(section_hits)
     return SearchPipelineResult(
@@ -320,4 +321,8 @@ def _resolve_meta(
             meta["valid_from"] = vh["valid_from"]
         if vh.get("headline"):
             meta["headline"] = vh["headline"]
+        # P2.5: vector index now persists `body`. Pass it through so
+        # cold-tier callers don't need a disk read.
+        if vh.get("body"):
+            meta["body"] = vh["body"]
     return meta
