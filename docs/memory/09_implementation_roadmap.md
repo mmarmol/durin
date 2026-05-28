@@ -387,6 +387,7 @@ Listed between §4 (Phase 1) and §5 (Phase 2) in document order, but its real d
 ### 11.1 Deliverables
 
 - LoCoMo bench run with the full v2 pipeline; report comparing to current 64.7%.
+- **Relation-target recall slice** (audit G5, 2026-05-28): partition LoCoMo failures by whether the gold answer hinges on a relation target's full name (e.g. "Who is Marcelo's spouse?"). If recall on that slice is **≥ 2 pp lower** than the bench mean AND the per-failure trace shows the missing token IS the target entity's `name` field, ship alias resolution in `VectorIndex._render_frontmatter` per `02_indexing.md` §4.2 "Why slug-only and not the target's resolved name". If the slice matches the mean, mark the deferred item as decided-against and remove the open question from doc 02 §4.2 (it has been validated empirically).
 - Hand-coded adversarial set for non-LoCoMo domains: 50 QAs each for coder, sales, support, personal-assistant. Tests generalist capability.
 - Soak test: run durin against a workspace for 7 days with simulated daily user activity; confirm:
   - Dream cost stays within $0.25-$1.50/day.

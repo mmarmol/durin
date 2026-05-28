@@ -1644,8 +1644,8 @@ After closing E1-E38 and verifying the full test suite (5088/0 fail), the user a
 **Full suite green**: 5107 passed, 16 skipped, 0 failed.
 
 **Out of F4 scope (deferred)**:
-- `hot_layer._render_canonical_block` (parallel renderer for eager pre-injection) — different use case (carries the full entity page structure), not in F4 scope.
-- `memory.search.sectioning.max_per_source` config knob — the cap works but is hard-coded; lift to config later if an operator asks.
+- `hot_layer._render_canonical_block` (parallel renderer for eager pre-injection) — different use case (carries the full entity page structure), not in F4 scope. **Updated by G7 (2026-05-28)**: full unification is decided against (doc 08 §2.15); the marker convention is now shared via `durin.memory.section_markers` while the renderers keep their distinct body logic.
+- `memory.search.sectioning.max_per_source` config knob — the cap works but is hard-coded; lift to config later if an operator asks. **Updated by G1 (2026-05-28)**: shipped as `MemorySearchSectioningConfig.max_per_source: int = 3`; the original promise in doc 03 §16 row 8 now matches code.
 
 **Commit pending** (F1-F11 batch close).
 
@@ -1710,6 +1710,8 @@ After closing E1-E38 and verifying the full test suite (5088/0 fail), the user a
 
 **Resolution**: doc 07 §6.5 rewritten with the 7 real fields + explicit note about `commit_sha` deferred-by-design.
 
+**G8 correction (2026-05-28)**: F8 framed the `commit_sha` drop as "dashboards join via `entity_ref + cursor_after`" — that argument was fragile (the join requires parsing commit-message trailers and breaks when two entity touches share a cursor in the same Dream pass). The conclusion (don't emit the field) is still correct, but for a different reason: the realistic consumers (operator forensics, audit) run `git log memory/entities/<type>/<slug>.md` directly because the file path is known from `entity_ref` and the commit trailers per doc 05 §6 carry `Trigger`, `Sources`, and `Cursor-after`. The only consumer that would genuinely benefit from `commit_sha` emission is a debug dashboard tracking commit latency at scale — no such consumer exists in code or in any written operational ask. If one materialises, the cheap path is a NEW event `memory.dream.commit_recorded` fired from `dream.py::apply()` after `repo.commit(...)` returns; it joins to `memory.dream.patch_applied` on `(session_key, iteration, entity_ref)`. The implementation cost when triggered is roughly 30-50 LOC (event TypedDict + emission site + telemetry test) — far less than the F8 alternative of restructuring `_emit_apply_telemetry` to fire post-commit. Doc 08 §2.16 carries the full reasoning so the next audit does not silently re-propose the field.
+
 ### F10 — Doc 07 §9.2 `memory.index.rebuild` field names ✅ RESOLVED
 
 **Pre-F10**: doc listed `entities_count`, `embedding_batches`, `duration_ms`, `prior_index_existed`.
@@ -1729,6 +1731,10 @@ After closing E1-E38 and verifying the full test suite (5088/0 fail), the user a
 **Decision**: doc → code. `delta_seconds` and `action` were aspirational — the cron always re-derives (action single-valued = meaningless), and the time delta is implicit in the join with the corresponding `memory.index.write` event a few seconds later.
 
 **Resolution**: doc 07 §9.3 rewritten + note discarding the 2 aspirational fields with rationale.
+
+**G3 correction (2026-05-28)**: F11 dropped `delta_seconds` claiming "the delta is implicit in the join with `memory.index.write` posterior". That justification was technically wrong: `staleness_detected@T1 → write@T2` gives **recovery latency** (T2 − T1), not **staleness magnitude** (T1 − indexed_mtime) — two different metrics. Without the magnitude, an operator can only count staleness events but not graph p50/p95 of how far behind the watcher fell. G3 ships `delta_seconds` as `NotRequired[float]` set only on `reason='mtime_lag'` events (the other two reasons have no `indexed_mtime` to compare against). `action` stays dropped (single-valued, meaningless). TDD: 4 cases in `tests/memory/test_staleness_delta_seconds_g3.py`.
+
+Pre-existing bug discovered while writing the test: `detect_index_staleness` uses `md.stem` to derive URIs for entries, but the indexer stores `memory/<class>/<id>` with the class prefix. The two don't match, so `mtime_lag` never fires for entries — only `row_for_missing_file` and `missing_row` ghost events from the mismatch. Entity pages (`<type>:<slug>`) match correctly. Out of scope for G3; tracked separately.
 
 ### F12 — `compose_embedding_text` single source of truth ✅ RESOLVED
 
@@ -1793,6 +1799,8 @@ After closing E1-E38 and verifying the full test suite (5088/0 fail), the user a
 - TDD tests: 7 cases (empty workspace, collects URIs, recent-mtime sort, caps at 100, custom cap, excludes both archive variants, end-to-end via prompt builder).
 - Doc 05 §5.1 + doc 06 §2 updated with producer reference.
 
+**G4 correction (2026-05-28)**: F17 closed with the note "Default cap of 100 lives at `DEFAULT_EXISTING_URIS_CAP` and is hard-coded; lifting it into config is straightforward if operators with very large workspaces ask." Same `feedback_stop_soft_deferrals` filter applies: no telemetry detects "duplicate created because cap was too low", so an operator has no observable trigger to file the ask. Plus, there are TWO caps in series (`entity_inventory.DEFAULT_EXISTING_URIS_CAP` and `dream_prompt_builder._EXISTING_URIS_CAP`) so lifting one silently leaves the other in effect. Classified as **discarded** in doc 08 §2.13; doc 06 §2 note rewritten to say "explicitly decided NOT to lift" rather than "straightforward if asked". The cap stays at 100; the operator who truly needs to tune can patch the constant (one line).
+
 ### F18 — Doc 07 §6.1 trigger enum missing `post_ingest_threshold` ✅ RESOLVED
 
 **Doc 07 §6.1 (pre-F18)**: trigger enum `threshold | cron_daily | post_compaction | session_close | manual`. §6.2 (dream.end) already included `post_ingest_threshold`.
@@ -1844,6 +1852,46 @@ After closing E1-E38 and verifying the full test suite (5088/0 fail), the user a
 
 **Resolution**: row corrected; clarifies that the slug is used; alias-index resolution deferred until bench shows a recall gap on relation queries.
 
+**G5 correction (2026-05-28)**: F22's defer wording "until bench shows a recall gap on relation queries" was vague — same shape as the soft deferrals G2/G4 corrected, but here there IS a real bench (Phase 8 LoCoMo) on a dated roadmap. The defer is legitimate; the wording was loose. G5 tightened both ends:
+
+1. **Trigger written concretely**, so a future audit can check it without re-litigating: Phase 8 LoCoMo bench reports **≥ 2 pp lower recall** on the slice of questions whose gold answer hinges on a relation target's full name, AND the per-failure trace shows the missing token IS the target's `name` field (not some other failure mode). The "AND" matters — if the regression is FTS tokenisation or decay, alias resolution would not fix it.
+
+2. **Counterfactual written**, so we close the question if the trigger does NOT fire: if Phase 8 shows the relation-target slice at or above the bench mean, slug-only is empirically validated and the open question is closed (moved from "deferred" to "decided against, evidence in Phase 8 results").
+
+3. **Doc 02 §4.2** now has a multi-paragraph block "Why slug-only and not the target's resolved name" covering: why current behaviour might already be sufficient (slug == name in most workspaces), why we did not ship it preventively (~5ms extra reads + implementation surface), the trigger + counterfactual verbatim, and the estimated cost when triggered (~80 LOC + reindex).
+
+4. **Doc 09 §11.1** adds the relation-target recall slice as an explicit Phase 8 deliverable so the trigger has a place to land.
+
+Lesson recorded in `feedback_stop_soft_deferrals` already covers this; G5 is the worked example of the tight form (trigger + counterfactual + cost) when a defer IS legitimate.
+
+### G6 — `memory_drill` could not resolve entity-page or archive-scope URIs ✅ RESOLVED
+
+**Discovered while investigating Item 6** (summary slot in entity-page embedding). The user asked whether entity pages were drill candidates and whether the 1500-char embedding budget was a problem. Investigating revealed two unrelated drill bugs that mattered far more than the summary slot.
+
+**Bug 1 — entity pages**: `memory_search` emits URI `memory/entity_page/<type>:<slug>` for every canonical hit (`memory_search.py:720-722`). On-disk file lives at `memory/entities/<type>/<slug>.md`. `drill()` resolved the URI literally and returned `file not found` for every canonical hit. The hot-path flow `agent → memory_search → drill` was broken for entity pages — the primary canonical output of the memory system.
+
+**Bug 2 — archive scope (F2 regression)**: `_run_archive_scope` (`memory_search.py:606`) emitted `uri = front.get('uri', '') or path.stem` — a bare id like `arch1` with no path prefix. `drill()` could not resolve any archive hit. The archive recovery surface F2 shipped was forensically incomplete: agent could see snippets but not pull the full archived body when the snippet was insufficient.
+
+Other URI shapes (`memory/<class>/<id>` for episodic/stable/corpus/pending, `sessions/<key>.md#anchor`, `ingested/<id>/source.md#anchor`) all resolved correctly. Bugs were isolated to these two shapes.
+
+**Resolution**:
+
+- `drill.py` gains `_translate_entity_page_uri(path_part)` — pure URI-shape mapping from `memory/entity_page/<type>:<slug>(.md)?` to `memory/entities/<type>/<slug>.md`. Non-matching paths pass through unchanged. Error message now surfaces the original URI so the agent can debug a canonical lookup that missed.
+- `_run_archive_scope` in `memory_search.py` emits the relative path under the workspace (`path.relative_to(self._workspace).as_posix()`) for archive hits, replacing the bare id. Both archived entries (`memory/archive/<class>/<id>.md`) and archived entity pages (`memory/archive/entities/<type>/<slug>.md`) now produce drillable URIs.
+- TDD: 6 cases in `tests/memory/test_drill_uri_resolution_g6.py` (entity canonical URI resolves, `.md` suffix variant tolerated, legacy on-disk path still works, missing entity returns clear error with original URI, archive scope entry drillable, archive scope entity-page drillable).
+
+**Resolution of Item 6 (summary slot) after G6**: with drill fixed for entity pages, the original concern "long-body entity pages where match is beyond 1500 chars" splits as follows. The vector path is the only one limited by the 1500-char budget; FTS5 (doc 02 §5.2 "BM25 text truncation: None") indexes the full body, and the grep fallback reads the full file from disk. So a query whose match lives at char 7000 of a 10000-char entity page is found by lexical/grep; the canonical surfaces in the result set; the agent receives the URI; G6 makes that URI drillable; the agent pulls the full body via drill. The summary slot would only help the vector path — and only when the embedding model could not retrieve via headline+aliases+frontmatter alone. With three retrieval paths reaching the page and drill resolving the URI, the summary slot is materially less important than the E9 defer note implied. The slot stays unimplemented; the data-model change (adding `summary` to `EntityPage`) and Dream prompt work that shipping it would require are not justified by the marginal vector-only benefit. The E9 defer is reclassified as "decided against" — same reasoning as G4 (no failure mode that would empirically produce the ask, given the other paths cover retrieval and drill closes the body-recovery loop).
+
+### G7 — Shared marker convention for hot_layer and sectioned_output ✅ RESOLVED
+
+**Context**: F4 (2026-05-28) unified the two search-side renderers (`Result.render_block` → `sectioned_output._render_block`) but left `hot_layer._render_canonical_block` as a third renderer with the F4 wording "deferred — different use case". G7 applies the `feedback_stop_soft_deferrals` filter and splits the question in two.
+
+**A — Full unification of the two renderers**: decided against. The two renderers serve different consumers (eager pre-injection vs lazy search-result rendering), take different inputs (`EntityPage` dataclass vs `SectionedHit` row), and emit different inner content (structured attributes/relations lines vs summary > body > snippet preference). Forcing one into the other's shape produces a regression in both directions. See doc 08 §2.15 for the full reasoning, the table comparing the two renderers, and the estimated cost of doing the work if a future trigger appears (~150-200 LOC + doubled test surface).
+
+**B — Shared marker convention**: shipped. The `=== KIND: <ref> ===` / `=== END KIND ===` strings move to `durin/memory/section_markers.py` (canonical_marker, fragment_marker, session_marker, ingested_marker, end_marker). Both `sectioned_output._marker_for` and `hot_layer._render_canonical_block`/`_render_fragment_block` call the shared helpers. The renderers' body composition stays distinct; only the marker strings have a single source of truth. ~20 LOC of helper + 11 TDD cases in `tests/memory/test_section_markers_g7.py`. Eliminates the drift surface without merging the renderers.
+
+**Combined effect**: the F4 deferred bullet "hot_layer._render_canonical_block — different use case, not in F4 scope" is now correctly classified as "decided against full unification" (doc 08 §2.15) AND "marker convention shared via section_markers" (G7 ship). The deferred item closes.
+
 ### F23 — Doc 02 §3.1 summary format ✅ RESOLVED
 
 **Pre-F23**: doc said `name (also: alias1, alias2)`.
@@ -1875,10 +1923,30 @@ After closing E1-E38 and verifying the full test suite (5088/0 fail), the user a
 - `_run_archive_scope(query, limit)` added: walks `memory/archive/**`, parses YAML frontmatter via `split_frontmatter`, substring match over `headline+summary+name+aliases+body`. No decay, no rerank, no cross-encoder (recovery surface, not a hot path).
 - Emits `memory.recall` event with `scope='archive'` + `strategy='archive'` so dashboards can tell them apart.
 - TDD tests: 6 cases (`scope='archive'` accepted, finds archived episodic, finds archived entity, empty when no archive dir, does NOT include active memory, respects limit).
-- Doc 01 §3.6 + §10 row 4 mark F2 shipped + clarify the CLI defer.
-- Doc 04 §11 marks the CLI commands as deferred with strikethrough.
-- Doc 08 §5 backlog: entry added with trigger ("concrete operator workflow") and the current workaround (`find` + `cat`).
+- Doc 01 §3.6 + §10 row 4 mark F2 shipped.
+- Doc 04 §11 listed the CLI commands as deferred with strikethrough (later corrected by G2, see below).
+- Doc 08 §5 backlog: entry added with trigger "concrete operator workflow" (later moved to §2.12 discarded by G2).
 
 **Commit pending** (F1-F11 batch close).
+
+### G2 — Correct F2 CLI defer to "decided against" ✅ RESOLVED
+
+**Context**: F2 framed `durin archive show / list` as "deferred until concrete operator workflow surfaces". The user (2026-05-28) pointed out this is a recidivist pattern of soft deferral — wording that effectively kept the items as a phantom to-do because no failure mode would produce that workflow. The items belong in §2 (discarded) not §5 (deferred backlog).
+
+**Reality**: three existing surfaces cover archive recovery:
+1. `memory_search(scope='archive')` — agent-visible semantic recovery (audit F2 shipped this).
+2. `durin memory expand <entity>` — per-entity rendering of canonical + archived predecessors.
+3. `cat memory/archive/<class>/<id>.md` + `find memory/archive -name '*.md'` — direct shell access.
+
+A dedicated `durin archive show / list` would duplicate these without a unique use case.
+
+**Decision**: discarded, not deferred.
+
+**Resolution**:
+- Doc 08 entry moved from §5 backlog to §2.12 discarded with explicit "what was proposed", "why we are not implementing", "concrete trigger that would change this", "lesson".
+- Doc 04 §11 strikethrough replaced with "Not implemented — covered by …".
+- Doc 01 §3.6 + §10 row 4 point at the three existing surfaces with explicit "decided against" note.
+- F2 entry in this doc (above) annotated with the G2 correction.
+- Personal memory lesson `feedback_stop_soft_deferrals` recorded: "deferred until concrete trigger" without a written failure mode is the same as discarded — except it leaves a phantom to-do that returns each audit pass.
 
 **Commit pending** (E16-E23 batch close).

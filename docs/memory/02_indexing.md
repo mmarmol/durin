@@ -158,11 +158,86 @@ Email: marcelo@mxhero.com. Phone: +34123. Current residence: Spain. Spouse: Susa
 |---|---|
 | `attributes.<key>: <value>` | `<Key.title()>: <value>.` |
 | `attributes.<key>: { current: <v>, history: [...] }` (stateful) | Renders `<Key.title()>: <current>.` Historical values are not rendered to the embedding text (to avoid centroid drift toward defunct facts). |
-| `relations[i] = { to: <uri>, type: <t>, since: <date>, ... }` | `<type.title()>: <slug> (since <date>).` Audit F22 (2026-05-28) corrected the spec: pre-F22 the doc claimed `to_name_resolved` (look up the target entity's `name` field), but `VectorIndex._render_frontmatter` (line 231) only strips the `type:` prefix from the URI to surface the slug. Resolving against the alias index at compose time would add disk reads on every embed; deferred until bench shows recall on relation queries is below target. |
+| `relations[i] = { to: <uri>, type: <t>, since: <date>, ... }` | `<type.title()>: <slug> (since <date>).` See "Why slug-only and not the target's resolved name" below — audit G5 (2026-05-28) tightened the F22 defer. |
 | `provenance` | **Not rendered.** Internal metadata, no retrieval value. |
 | `dream_processed_through`, `created_at`, `updated_at` | **Not rendered.** Internal timestamps. |
 
-**Deferred `summary` slot**: the original v2 spec inserted a Dream-generated `summary` between rendered_frontmatter and body. Deferred from E9 because Dream produces a `summary` attribute only sometimes; when present, the body already contains the prose form, so duplicating it in the centroid is marginal. If bench shows recall regression on long-body entity pages, restore the slot.
+**Why slug-only and not the target's resolved name** (audit G5,
+2026-05-28, tightening the F22 defer): the v1 spec proposed
+rendering relations as `<Type>: <to_name_resolved> (since <date>).`
+where `to_name_resolved` reads `name:` from the target entity's
+`.md` file. The shipped composer only strips the `type:` prefix
+from the URI to surface the slug. We have left this gap open
+intentionally — the explanation is long enough that the next audit
+pass should not re-litigate it without new evidence.
+
+**Why the current behaviour might already be sufficient.** Most
+slugs in practice are derived from the entity's name
+(`person:marcelo`, `project:durin`); slug == name modulo case and
+separator. In those cases, slug-only puts the relevant tokens into
+the centroid: a relation `Spouse: susana` already contains the
+string `susana`. The cases where resolution would materially help
+are those where `slug != name` (e.g. `person:m_canonical` with
+`name: Marcelo Marmol`); we have no data showing this is common
+enough in real workspaces to justify the cost.
+
+**Why we did not just ship it preventively.** Resolution adds a
+disk read per relation per embed: each `_render_frontmatter` call
+would need to `EntityPage.from_file(workspace / memory / entities /
+<type> / <slug>.md)` and parse YAML for every relation. A typical
+entity page with 10 relations costs 10 reads per upsert; a Dream
+pass touching 50 entities costs ~500 reads. On modern SSD that is
+~5ms total — not catastrophic. The actual cost is implementation
+surface: a per-compose cache keyed by URI (otherwise the same
+target is read N times per page), invalidation when the target's
+name changes, and the rebuild that ships the change.
+
+**What would make us ship it.** A single failure mode, made
+concrete so the next audit pass can check it without re-litigating:
+
+> Phase 8 LoCoMo bench run reports **≥ 2 percentage points lower
+> recall** on questions whose gold answer hinges on a relation
+> target's full name (e.g. "Who is Marcelo's spouse?") **AND** the
+> failure trace shows the target's `name` would have entered the
+> top-K had it been in the entity page's embedding text.
+
+The "AND" matters: it is not enough that LoCoMo regresses; the
+regression has to be diagnosable as "missing name token in the
+relation render". If the regression is something else (FTS
+tokenisation, decay, sectioning), shipping resolution does not fix
+it.
+
+**What would confirm we keep the slug-only behaviour permanently.**
+If Phase 8 runs and the recall on relation-target questions is at
+or above target, slug-only is empirically validated and the next
+audit can mark the open question closed (move from "deferred with
+trigger" to "decided against, evidence in Phase 8 results").
+
+**Estimated implementation cost when triggered**: ~40 LOC in
+`VectorIndex._render_frontmatter` (per-compose URI cache + lazy
+`EntityPage.from_file` lookup; fall back to slug on any failure
+because telemetry must never break a Dream apply), plus a TDD
+surface (~3 cases: resolves when target exists, falls back to slug
+when target missing, cache hits on repeated targets), plus a forced
+schema bump + rebuild so existing centroids re-embed with the new
+shape. Total ~80 LOC + reindex.
+
+**Status**: deferred with Phase 8 trigger, not discarded — there
+IS an observable failure mode (LoCoMo relation-target recall
+metric) on the dated roadmap (Phase 8 in doc 09 §11). G5 tightened
+the trigger from "below target" to the concrete condition above so
+future audits can check the trigger without re-running the cost
+analysis.
+
+**`summary` slot — decided against** (audit G6, 2026-05-28, closing the E9 defer): the original v2 spec inserted a Dream-generated `summary` between rendered_frontmatter and body, intended to replace the truncated body in the centroid when body exceeded the 1500-char budget. E9 deferred the slot with the wording "if bench shows recall regression on long-body entity pages, restore the slot." Investigation under G6 (triggered by drill bugs) revealed three things that change the analysis:
+
+1. **The data model does not support the slot.** `EntityPage` has no `summary` field; Dream produces zero summaries for entity pages today. The "defer" was built on a factual error ("Dream produces it sometimes" — no, it never does).
+
+2. **Three retrieval paths reach the page; only the vector path is bounded by the 1500-char cap.** FTS5 indexes the full composed text (no truncation, doc 02 §5.2), and the grep fallback reads the file from disk. A query whose match is at char 7000 of a 10000-char body is found by lexical and grep; the canonical surfaces in the result set; the agent receives the URI.
+
+3. **G6 fixed drill for entity-page URIs** (`memory/entity_page/<type>:<slug>` now resolves to the on-disk file). The agent that gets a canonical hit with a truncated snippet can drill to the full body. The body-recovery loop is closed.
+
+With three retrieval paths reaching the page and drill closing the body-recovery loop, the summary slot would only help the vector path's specific corner case where the embedding model could not retrieve via name + aliases + rendered_frontmatter. Shipping it would require adding a `summary` field to `EntityPage`, modifying the Dream prompt and apply to emit it, modifying this composer to substitute body for summary when present, plus a schema bump and reindex. The marginal vector-only benefit does not justify that work, and there is no failure mode whose occurrence would empirically produce a request for it (same shape as G4). Status: **decided against**, not deferred. See doc 08 §2.14 for the discarded entry and doc 11 G6 for the worked reasoning.
 
 ### 4.3 Entries (episodic / stable / corpus)
 

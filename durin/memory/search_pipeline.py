@@ -73,6 +73,7 @@ def run_search_pipeline(
     cross_encoder_top_n: int = 10,
     temporal_decay_enabled: bool = True,
     temporal_decay_overrides: dict[str, int | None] | None = None,
+    max_per_source: int | None = None,
 ) -> SearchPipelineResult:
     """Execute the v2 search pipeline.
 
@@ -179,7 +180,14 @@ def run_search_pipeline(
             ingest_id=meta.get("ingest_id"),
             body=meta.get("body", ""),
         ))
-    capped = apply_per_source_cap(section_hits)
+    # G1 (audit fourth pass, 2026-05-28): honour the configured cap
+    # when supplied; fall back to `DEFAULT_MAX_PER_SOURCE` otherwise.
+    if max_per_source is None:
+        capped = apply_per_source_cap(section_hits)
+    else:
+        capped = apply_per_source_cap(
+            section_hits, max_per_source=max_per_source,
+        )
     result = SearchPipelineResult(
         hits=capped[:limit],
         vector_count=len(vector_uris),

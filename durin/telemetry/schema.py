@@ -784,10 +784,22 @@ class MemoryIndexStalenessDetectedEvent(TypedDict):
     ``memory/`` that has no row in the index. ``reason`` captures the
     detection signal so dashboards can split "missing row" vs "stale
     mtime" trends.
+
+    Audit G3 (2026-05-28): ``delta_seconds`` ships the staleness
+    magnitude (``current_file_mtime - indexed_mtime``) but only on
+    ``reason='mtime_lag'`` — the other two reasons have no
+    indexed_mtime to compare against. Dashboards graph p50/p95 of
+    ``delta_seconds`` to detect watcher gap regressions; pre-G3 they
+    could only count events without knowing how far behind the
+    watcher fell. F11 wrongly justified dropping the field as
+    "implicit in the join with memory.index.write" — recovery
+    latency (write_time - detect_time) and staleness magnitude are
+    different metrics.
     """
 
     uri: str
     reason: str  # "missing_row" | "mtime_lag" | "row_for_missing_file"
+    delta_seconds: NotRequired[float]
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
 

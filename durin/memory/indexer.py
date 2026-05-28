@@ -33,7 +33,7 @@ import logging
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from durin.memory.entity_page import EntityPage
 from durin.memory.fts_index import FTSIndex
@@ -239,13 +239,28 @@ def _emit_write(
         pass
 
 
-def _emit_staleness(*, uri: str, reason: str) -> None:
-    """Used by the health-check cron + the indexer's drift detection."""
+def _emit_staleness(
+    *,
+    uri: str,
+    reason: str,
+    delta_seconds: float | None = None,
+) -> None:
+    """Used by the health-check cron + the indexer's drift detection.
+
+    Audit G3 (2026-05-28): when ``reason='mtime_lag'`` the caller
+    supplies ``delta_seconds = current_file_mtime - indexed_mtime``
+    so dashboards can graph p50/p95 staleness magnitude (not just
+    event count). For ``missing_row`` and ``row_for_missing_file``
+    there's no indexed_mtime to compare against, so the field is
+    omitted — kept as ``NotRequired[float]`` in the TypedDict.
+    """
     try:
         from durin.agent.tools._telemetry import emit_tool_event
+        payload: dict[str, Any] = {"uri": uri, "reason": reason}
+        if delta_seconds is not None:
+            payload["delta_seconds"] = float(delta_seconds)
         emit_tool_event(
-            "memory.index.staleness_detected",
-            {"uri": uri, "reason": reason},
+            "memory.index.staleness_detected", payload,
         )
     except Exception:  # pragma: no cover
         pass
@@ -285,8 +300,20 @@ def detect_index_staleness(workspace: Path) -> list[dict]:
                 issues.append({"uri": uri, "reason": "row_for_missing_file"})
                 continue
             if current > indexed_mtime:
-                _emit_staleness(uri=uri, reason="mtime_lag")
-                issues.append({"uri": uri, "reason": "mtime_lag"})
+                # G3 (audit fourth pass, 2026-05-28): include the
+                # magnitude of the gap so dashboards can graph
+                # staleness p50/p95 instead of just event counts.
+                delta = current - indexed_mtime
+                _emit_staleness(
+                    uri=uri,
+                    reason="mtime_lag",
+                    delta_seconds=delta,
+                )
+                issues.append({
+                    "uri": uri,
+                    "reason": "mtime_lag",
+                    "delta_seconds": delta,
+                })
 
     for uri in fs_files:
         if uri not in seen_in_index:

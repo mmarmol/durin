@@ -249,7 +249,12 @@ def _render_canonical_block(
     aliases line is omitted when ``aliases`` is empty. This keeps the
     block tight — no empty lines or label-only rows.
     """
-    header = f"=== CANONICAL: {ref} (consolidated {consolidated_ts}) ==="
+    # G7 (audit fourth pass, 2026-05-28): single source of truth for
+    # marker construction. `hot_layer` always supplies the
+    # consolidated_ts so it gets the timestamped variant; the helper
+    # also handles the no-ts case used by `sectioned_output`.
+    from durin.memory.section_markers import canonical_marker
+    header = canonical_marker(ref, ts=consolidated_ts)
     lines = [header, _render_name_line(page)]
 
     attr_line = _render_attributes_line(page.attributes)
@@ -271,7 +276,8 @@ def _render_canonical_block(
     body = (page.body or "").strip()
     if body:
         lines.append(body[:_CANONICAL_BODY_PER_PAGE])
-    lines.append("=== END CANONICAL ===")
+    from durin.memory.section_markers import end_marker
+    lines.append(end_marker("canonical"))
     return "\n".join(lines)
 
 
@@ -438,12 +444,20 @@ def _read_fragment_blocks(
 
 
 def _render_fragment_block(entry: Any, rel_path: str) -> str:
-    """``=== FRAGMENT: <path> (ts <ts>) ===`` per doc 06 §8.3."""
+    """``=== FRAGMENT: <path> (ts <ts>) ===`` per doc 06 §8.3.
+
+    G7 (audit fourth pass, 2026-05-28): delegates to the shared
+    `section_markers` helper. ``unknown`` is preserved as the ts
+    fallback when ``valid_from`` is missing — historical convention
+    used by the hot layer; the helper accepts any ts string including
+    ``unknown``.
+    """
+    from durin.memory.section_markers import end_marker, fragment_marker
     ts = entry.valid_from.isoformat() if entry.valid_from else "unknown"
-    header = f"=== FRAGMENT: {rel_path} (ts {ts}) ==="
+    header = fragment_marker(rel_path, ts=ts)
     body = (entry.body or entry.summary or entry.headline or "").strip()
     body = body[:_FRAGMENT_BODY_PER_PAGE]
-    return "\n".join([header, body, "=== END FRAGMENT ==="])
+    return "\n".join([header, body, end_marker("fragment")])
 
 
 def _is_at_or_before(entry_ts: str, cursor: Any) -> bool:
