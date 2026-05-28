@@ -1426,7 +1426,7 @@ Round 1-3 marked resolved. Spot-checks confirm. OK.
 - Call sites: `dream.py:650-657` and `absorption.py:253-260` pass `page.attributes` + `page.relations`.
 - `rebuild_from_workspace` now walks `memory/entities/` in addition to `memory/<class>/` and builds records via a new `_entity_page_record` helper.
 - `CURRENT_SCHEMA_VERSION` bumped 3 → 4 (E9 — forces rebuild to realign centroids).
-- Doc 02 §4.2 marks v2.a shipped + note that summary slot is deferred; §4.3 marks v1 final + v2.b superseded by A1; §10 rows 4+5 updated; §11 adds a "Vector rebuild walks entity pages" row as bug-fix.
+- Doc 02 §4.2 marks v2.a shipped + summary slot deferred (later **decided against** by audit G6, 2026-05-28 — doc 08 §2.14); §4.3 marks v1 final + v2.b superseded by A1; §10 rows 4+5 updated; §11 adds a "Vector rebuild walks entity pages" row as bug-fix.
 - Stub in `tests/memory/test_auto_absorb_dispatcher.py:343-352` extended to accept the new kwargs.
 - TDD tests: 7 cases in `tests/memory/test_entity_page_embedding_v2a_e9.py` (rendered_attributes/relations, ordering preserved, empty case, skip internal metadata, stateful current only, rebuild walks entity pages).
 
@@ -1639,7 +1639,7 @@ After closing E1-E38 and verifying the full test suite (5088/0 fail), the user a
 - `Result.render_block` removed (it had 3 callsites, all in memory_search.py — all migrated).
 - TDD tests: 7 new cases in `tests/memory/test_sectioned_migration_f4.py` (END markers, ts/no-ts canonical, summary preference, fallback body/snippet, entities tail, sectioned_rendered field, section intros).
 - Tests migrated: `test_fragment_canonical_contract.py::TestRenderBlock` removed (3 cases) and `test_memory_search_tool_includes_rendered_blocks` → `test_memory_search_tool_emits_sectioned_rendered`.
-- Doc 03 §12.1/§12.2/§12.4: marker table to the real format, body preference + entities tail documented, section intros mentioned, `max_per_source` config marked "not yet implemented" (gap for a future F).
+- Doc 03 §12.1/§12.2/§12.4: marker table to the real format, body preference + entities tail documented, section intros mentioned. The `max_per_source` config gap noted here as "for a future F" was shipped in audit G1 (2026-05-28).
 
 **Full suite green**: 5107 passed, 16 skipped, 0 failed.
 

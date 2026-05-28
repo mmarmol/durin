@@ -136,7 +136,7 @@ Pre-F12 the two specialised composers were the only entry points, leaving the do
 
 ### 4.2 Entity pages
 
-**Shipped (v2.a, audit E9 2026-05-28):** `name + aliases + rendered_frontmatter + body`, in that order, until 1500-char budget exhausted. The optional `summary` slot from the v2 spec is deferred (Dream doesn't always produce one, and the body retains full prose).
+**Shipped (v2.a, audit E9 2026-05-28):** `name + aliases + rendered_frontmatter + body`, in that order, until 1500-char budget exhausted. The optional `summary` slot from the v2 spec is **decided against** (audit G6, 2026-05-28) — see "`summary` slot — decided against" below and doc 08 §2.14.
 
 Concretely for an entity page like Marcelo:
 
@@ -535,7 +535,7 @@ All open decisions for this module have been resolved (2026-05-27) in line with 
 | **1** | What gets indexed | Entity pages + entries (episodic/stable/corpus) + session summaries. NOT indexed: archive, pending, raw sessions/jsonl, raw ingested files. | §3.3 |
 | **2** | Single vs multiple embedding models | **Single model per workspace** (`paraphrase-multilingual-MiniLM-L12-v2`). Stored in `meta.json`; mismatch on startup forces rebuild. | §3.2, §7.2 |
 | **3** | Body in the vector row | **Not stored.** Body is read from disk on demand for cold-tier enrichment. Storing in LanceDB doubles index size for no retrieval benefit. | §3.1 |
-| **4** | Embedding text composition (entity pages) | **Shipped (v2.a, audit E9 2026-05-28):** `name` + `aliases` + `rendered_frontmatter` + `body`, hard cap 1500 chars. Frontmatter renders as prose; provenance + internal timestamps skipped; stateful attributes render `current` only. Optional `summary` slot deferred. | §4.2 |
+| **4** | Embedding text composition (entity pages) | **Shipped (v2.a, audit E9 2026-05-28):** `name` + `aliases` + `rendered_frontmatter` + `body`, hard cap 1500 chars. Frontmatter renders as prose; provenance + internal timestamps skipped; stateful attributes render `current` only. Optional `summary` slot **decided against** (audit G6, 2026-05-28; doc 08 §2.14). | §4.2 |
 | **5** | Embedding text composition (entries) | **Shipped v1; v2.b superseded (audit E9 2026-05-28):** `headline` + `summary` + `entities_list` + `body`. The originally-planned `entities_with_aliases` expansion is covered at query time by the entity-aware ranker (audit A1) — implementing it in the embedding text would duplicate the ranker's work without measurable benefit. | §4.3 |
 | **6** | Sessions in the vector index | One row per session as `type=session_summary` using `_last_summary.text` as content. Sessions without a summary yet are not in the vector index (grep over raw `.jsonl` covers them). | §3.3, §4.4 |
 | **7** | Re-embed sync vs async | **Synchronous on write** for single-document updates. Bulk rebuild path uses async batching (32 docs/batch). | §6.2 |
