@@ -753,6 +753,44 @@ class MemoryIndexStalenessDetectedEvent(TypedDict):
     session_key: NotRequired[str | None]
 
 
+class MemoryRecallLexicalEvent(TypedDict):
+    """One FTS5 lexical search ran (doc 07 §4.3).
+
+    ``route`` is the value of
+    :class:`durin.memory.query_router.LexicalRoute`
+    (``unicode61`` | ``trigram`` | ``like_substring``). Dashboards
+    use ``route`` distribution + ``hit_count`` to spot when CJK
+    queries are falling into the LIKE fallback instead of trigram.
+    """
+
+    route: str
+    query_chars: int
+    cjk_chars: int
+    hit_count: int
+    duration_ms: float
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
+class MemoryRecallRRFEvent(TypedDict):
+    """Cross-source RRF fusion completed (doc 07 §4.5).
+
+    Logs the per-source contribution so dashboards can see whether the
+    vector / lexical / grep paths each surfaced anything. ``boosted``
+    is True when the caller passed ``keywords`` and the lexical weight
+    was bumped to 2.5.
+    """
+
+    vector_count: int
+    lexical_count: int
+    grep_count: int
+    fused_count: int
+    boosted: bool
+    duration_ms: float
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
 class MemoryHotLayerFailureEvent(TypedDict):
     """Hot-layer assembly failed for one component (per doc 06 §8.7).
 
@@ -847,6 +885,8 @@ EVENTS: dict[str, type] = {
     "memory.index.write": MemoryIndexWriteEvent,
     "memory.index.rebuild": MemoryIndexRebuildEvent,
     "memory.index.staleness_detected": MemoryIndexStalenessDetectedEvent,
+    "memory.recall.lexical": MemoryRecallLexicalEvent,
+    "memory.recall.rrf": MemoryRecallRRFEvent,
 }
 
 
@@ -905,6 +945,8 @@ __all__ = [
     "MemoryDreamPatchAppliedEvent",
     "MemoryDreamEntityFailedEvent",
     "MemoryHotLayerFailureEvent",
+    "MemoryRecallLexicalEvent",
+    "MemoryRecallRRFEvent",
     "MemoryIndexWriteEvent",
     "MemoryIndexRebuildEvent",
     "MemoryIndexStalenessDetectedEvent",
