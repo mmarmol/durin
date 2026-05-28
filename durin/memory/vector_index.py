@@ -106,20 +106,31 @@ class VectorIndex:
         aliases: list[str],
         body: str,
         path: Path,
+        attributes: dict[str, Any] | None = None,
+        relations: list[dict[str, Any]] | None = None,
     ) -> None:
         """Index a consolidated entity page (``memory/entities/<type>/<slug>.md``).
 
-        Per ``docs/18_entity_centric_plan.md`` §7 + Phase 0.1 finding:
-        the embedded text composes ``name + aliases + body`` **without**
-        the ``<type>:`` prefix (which Phase 0.1 measured at cosine 0.517
-        against ``durin``, vs 0.755 for ``durin``/``durin-agent`` — the
-        prefix introduces token noise).
+        Per ``docs/18_entity_centric_plan.md`` §7 + Phase 0.1 finding,
+        the embedded text omits the ``<type>:`` prefix (which Phase 0.1
+        measured at cosine 0.517 against ``durin``, vs 0.755 for
+        ``durin``/``durin-agent`` — the prefix introduces token noise).
+
+        Audit E9 (2026-05-28) ships v2.a: when `attributes` and
+        `relations` are passed, they're rendered into the embedding
+        text between aliases and body so attribute queries
+        ("Marcelo's email", "who is X's spouse") hit the centroide.
+        Pre-E9 callsites that pass only `name`/`aliases`/`body`
+        continue to work — frontmatter defaults to empty.
 
         Stored as ``class_name="entity_page"`` so search consumers can
         distinguish from memory entries via the same field that already
         carries the memory class for ``memory/<class>/*.md`` entries.
         """
-        text = self._compose_entity_page_text(name=name, aliases=aliases, body=body)
+        text = self._compose_entity_page_text(
+            name=name, aliases=aliases, body=body,
+            attributes=attributes, relations=relations,
+        )
         [vec] = self._provider.embed([text])
         try:
             rel_path = path.relative_to(self._workspace)
@@ -155,6 +166,81 @@ class VectorIndex:
 
     _PAGE_EMBED_BUDGET_CHARS = 1500
 
+    # E9 (audit second pass, 2026-05-28): attribute keys that are
+    # internal metadata, never rendered into the embedding centroid.
+    _SKIP_FRONTMATTER_KEYS = frozenset({
+        "created_at", "updated_at", "provenance",
+        "dream_processed_through",
+    })
+
+    @classmethod
+    def _render_frontmatter(
+        cls,
+        *,
+        attributes: dict[str, Any] | None,
+        relations: list[dict[str, Any]] | None,
+    ) -> str:
+        """E9 v2.a: render structured attributes + relations as prose
+        for the embedding centroid.
+
+        Rules (doc 02 §4.2 v2):
+        - Stateful attributes (`{current, history}`) render only
+          `current` to avoid centroid drift toward defunct facts.
+        - Internal metadata (provenance, timestamps) is skipped.
+        - Relations render as `Type.title(): <to_name or uri> (since
+          <date>)`. We don't resolve names against the alias index
+          here (the index isn't available at compose-time without
+          extra plumbing); future-work: resolve via shared alias
+          cache if recall on relation queries is below target.
+        - Empty inputs return an empty string so the caller can skip
+          the section cleanly.
+        """
+        sentences: list[str] = []
+
+        if attributes:
+            for key, value in attributes.items():
+                if key in cls._SKIP_FRONTMATTER_KEYS:
+                    continue
+                if isinstance(value, dict) and "current" in value:
+                    rendered = value.get("current")
+                    if rendered is None or rendered == "":
+                        continue
+                    sentences.append(
+                        f"{cls._title_key(key)}: {rendered}."
+                    )
+                elif value is None or value == "":
+                    continue
+                elif isinstance(value, (list, tuple)):
+                    if not value:
+                        continue
+                    sentences.append(
+                        f"{cls._title_key(key)}: {', '.join(str(v) for v in value)}."
+                    )
+                else:
+                    sentences.append(
+                        f"{cls._title_key(key)}: {value}."
+                    )
+
+        if relations:
+            for rel in relations:
+                rel_type = rel.get("type")
+                to = rel.get("to")
+                since = rel.get("since")
+                if not rel_type or not to:
+                    continue
+                target = str(to).split(":", 1)[-1] or str(to)
+                clause = f"{cls._title_key(rel_type)}: {target}"
+                if since:
+                    clause = f"{clause} (since {since})"
+                sentences.append(clause + ".")
+
+        return " ".join(sentences)
+
+    @staticmethod
+    def _title_key(key: str) -> str:
+        """`current_residence` -> `Current Residence`."""
+        return " ".join(part.capitalize() for part in str(key).split("_"))
+
     @classmethod
     def _compose_entity_page_text(
         cls,
@@ -162,11 +248,22 @@ class VectorIndex:
         name: str,
         aliases: list[str],
         body: str,
+        attributes: dict[str, Any] | None = None,
+        relations: list[dict[str, Any]] | None = None,
     ) -> str:
         """Compose embedding text for an entity page.
 
-        Layout: ``name`` (most distilled), then ``aliases`` joined,
-        then ``body`` (longest, most truncatable). NO ``type:`` prefix.
+        Layout (v2.a, audit E9 2026-05-28):
+        ``name`` → ``aliases`` → ``rendered_frontmatter`` → ``body``,
+        in order, until 1500-char budget exhausted. Most distilled
+        signal first (name); structured attributes/relations next so
+        attribute queries hit the centroide; body (longest, most
+        truncatable) last.
+
+        Pre-E9 layout was ``name + aliases + body`` (v1) — the
+        ``attributes`` and ``relations`` params default to None so
+        existing callsites continue to work; v1 behaviour is the
+        empty-frontmatter case (see test_compose_empty_attributes).
         """
         budget = cls._PAGE_EMBED_BUDGET_CHARS
         parts: list[str] = []
@@ -192,6 +289,11 @@ class VectorIndex:
         _add(name)
         if aliases:
             _add("Aliases: " + ", ".join(a for a in aliases if a))
+        rendered_fm = cls._render_frontmatter(
+            attributes=attributes, relations=relations,
+        )
+        if rendered_fm:
+            _add(rendered_fm)
         _add(body)
         return "\n\n".join(parts) or name or "entity page"
 
@@ -272,15 +374,26 @@ class VectorIndex:
         return True
 
     def rebuild_from_workspace(self) -> int:
-        """Re-embed every ``memory/<class>/*.md`` entry; returns count rebuilt.
+        """Re-embed every ``memory/<class>/*.md`` entry AND every
+        ``memory/entities/<type>/<slug>.md`` page; returns total count
+        rebuilt.
 
         Atomic from the consumer's perspective: the existing table is
         dropped only after the new one is built successfully.
+
+        Audit E9 (2026-05-28) extended this to also walk entity pages.
+        Pre-E9, only memory entries (`memory/<class>/*.md`) were walked
+        — entity pages were re-upserted only by Dream apply or absorb,
+        which meant that after a forced rebuild (e.g. schema version
+        bump) entity pages were silently missing from the vector index
+        until the next consolidation pass. Now the rebuild is complete.
         """
-        entries: list[tuple[MemoryEntry, str, Path]] = []
         memory_root = self._workspace / "memory"
         if not memory_root.is_dir():
             return 0
+
+        # Pass 1: walk classified memory entries.
+        entries: list[tuple[MemoryEntry, str, Path]] = []
         for class_name in MEMORY_CLASSES:
             for path in walk_class(self._workspace, class_name):
                 try:
@@ -289,21 +402,92 @@ class VectorIndex:
                     logger.warning("vector_index: skipping malformed %s", path)
                     continue
                 entries.append((entry, class_name, path))
-        if not entries:
+
+        # Pass 2: walk entity pages. Carry attributes/relations into the
+        # embed text via v2.a composition (audit E9). `from_file`
+        # returns None for malformed pages (frontmatter missing or
+        # invalid) — skip them silently like the rest of the walker.
+        from durin.memory.entity_page import EntityPage
+        entity_pages: list[tuple[EntityPage, Path]] = []
+        entities_root = memory_root / "entities"
+        if entities_root.is_dir():
+            for md_file in sorted(entities_root.rglob("*.md")):
+                try:
+                    page = EntityPage.from_file(md_file)
+                except Exception:  # noqa: BLE001
+                    logger.warning(
+                        "vector_index: skipping malformed entity page %s",
+                        md_file,
+                    )
+                    continue
+                if page is None:
+                    continue
+                entity_pages.append((page, md_file))
+
+        if not entries and not entity_pages:
             self._drop_if_exists()
             return 0
 
-        texts = [self._embed_text(entry) for entry, _, _ in entries]
-        vectors = self._provider.embed(texts)
+        # Embed batches: entries first, then entity pages.
+        entry_texts = [self._embed_text(entry) for entry, _, _ in entries]
+        page_texts = [
+            self._compose_entity_page_text(
+                name=page.name,
+                aliases=list(page.aliases),
+                body=page.body,
+                attributes=dict(page.attributes),
+                relations=list(page.relations),
+            )
+            for page, _ in entity_pages
+        ]
+        all_vectors = self._provider.embed(entry_texts + page_texts) if (
+            entry_texts or page_texts
+        ) else []
+        entry_vectors = all_vectors[: len(entry_texts)]
+        page_vectors = all_vectors[len(entry_texts):]
+
         records = [
             self._record_with_vector(entry, class_name, path, vec)
-            for (entry, class_name, path), vec in zip(entries, vectors)
+            for (entry, class_name, path), vec
+            in zip(entries, entry_vectors)
         ]
+        records.extend(
+            self._entity_page_record(page, md_file, vec)
+            for (page, md_file), vec
+            in zip(entity_pages, page_vectors)
+        )
 
         db = self._connect()
         self._drop_if_exists(db)
         db.create_table(_TABLE_NAME, data=records)
         return len(records)
+
+    def _entity_page_record(
+        self,
+        page: Any,  # durin.memory.entity_page.EntityPage
+        md_file: Path,
+        vec: list[float],
+    ) -> dict[str, Any]:
+        """Build the LanceDB row for an entity page, sharing the
+        table schema with memory entries (E9 rebuild support)."""
+        try:
+            rel_path = md_file.relative_to(self._workspace)
+        except ValueError:
+            rel_path = md_file
+        entity_ref = f"{page.type}:{md_file.stem}"
+        summary = page.name + (
+            f" ({', '.join(page.aliases)})" if page.aliases else ""
+        )
+        return {
+            "id": entity_ref,
+            "class_name": "entity_page",
+            "summary": summary,
+            "headline": page.name,
+            "vector": vec,
+            "valid_from": "",
+            "entities": [],
+            "path": str(rel_path),
+        }
 
     # ------------------------------------------------------------------
     # read path

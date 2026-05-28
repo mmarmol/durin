@@ -345,11 +345,11 @@ Listed between §4 (Phase 1) and §5 (Phase 2) in document order, but its real d
 
 ### 10.1 Deliverables
 
-- Add new TypedDicts to `durin/telemetry/schema.py` for **11 new events** (explicit checklist):
+- Add new TypedDicts to `durin/telemetry/schema.py` for **13 new events** (explicit checklist):
   - `memory.recall.lexical` (doc 07 §4.3)
   - `memory.recall.rerank` (§4.4)
   - `memory.recall.rrf` (§4.5)
-  - `memory.silent_retrieval_miss` (§4.6)
+  - `memory.recall.decay` (§4.7) — audit A9 (2026-05-28)
   - `memory.dream.entity_failed` (§6.4)
   - `memory.dream.patch_applied` (§6.5)
   - `memory.search.failure` (§8.1)
@@ -359,7 +359,10 @@ Listed between §4 (Phase 1) and §5 (Phase 2) in document order, but its real d
   - `memory.health_check` (§9.4)
   - `memory.health.critical` (§9.5)
   - `memory.hot_layer.failure` (per doc 06 §8.7)
-- Wire emit calls in: search pipeline (lexical/rerank/rrf/failure), index module (write/rebuild/staleness), Dream (patch_applied/entity_failed), health-check cron, hot layer assembly, the silent-retrieval-miss detector.
+
+  `memory.silent_retrieval_miss` (§4.6) was discarded — see doc 08 §2.11. The heuristics didn't generalise to multi-lingual workloads; replacement triggers for the §2.F revisit live in doc 08 §4.1.
+
+- Wire emit calls in: search pipeline (lexical/rerank/rrf/decay/failure), index module (write/rebuild/staleness), Dream (patch_applied/entity_failed), health-check cron, hot layer assembly.
 - Privacy: query truncation to 200 chars in `emit_tool_event` for memory events.
 - Retention: log rotation at 30 days; compression after.
 - Optional: HTTPS push of events (default off, opt-in via config).

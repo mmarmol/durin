@@ -104,6 +104,8 @@ Audit performed 2026-05-27 against `/Users/marcelo/git_personal/durin/durin/` (c
 **Status:** resolved
 **Decision:** 2026-05-27 — deferred to backlog with **telemetry-driven trigger** to activate. Rationale: HotLayer already covers ~70% of the silent-retrieval-miss problem, and the multi-query identity.md pattern shipped +3.9pp on LoCoMo v2 by teaching the agent to invoke search itself. Adding §2.F costs +50-130ms latency per turn + cache miss; only worth paying if the value is observable. Added entry in doc 08 §4 (with new sub-section §4.1 detailing mechanism, why deferred, activation trigger). Added telemetry event `memory.silent_retrieval_miss` in doc 07 §4.6 that detects re-asks / corrections / negations after agent answered without invoking search — aggregate rate becomes the data-driven decision point (>5% rolling 7-day → activate).
 
+**Superseded 2026-05-28 (audit B9 + §2.11 + E7):** the telemetry event `memory.silent_retrieval_miss` was discarded because its three detection heuristics (substring overlap, negation tokens, correction patterns) don't generalise to multi-lingual workloads (durin's seed bench includes CJK and Spanish). Doc 07 §4.6 now points to doc 08 §2.11 explaining the discard. The §2.F revisit triggers were rewritten to use language-agnostic signals: explicit user feedback (thumbs-down/retry), bench failure clusters, and offline LLM judge over bench traces (post-hoc, not per-turn). See doc 08 §4.1.
+
 ---
 
 ### H5. Operational risks from doc 18 §9 are omitted
@@ -678,7 +680,7 @@ After all 20 items above were resolved, a second audit ran to verify (a) corpus-
 **Affects:** doc 09 Phase 7.
 
 **Status:** resolved
-**Decision:** 2026-05-27 — Phase 7 §10.1 now lists 13 events as explicit checklist (more than original 9 — added `memory.silent_retrieval_miss`, `memory.health_check`, `memory.health.critical`, `memory.hot_layer.failure` from later remediations). Each event references its doc 07 subsection.
+**Decision:** 2026-05-27 — Phase 7 §10.1 now lists 13 events as explicit checklist (more than original 9 — added `memory.silent_retrieval_miss`, `memory.health_check`, `memory.health.critical`, `memory.hot_layer.failure` from later remediations). Each event references its doc 07 subsection. **Updated 2026-05-28 (E7):** `memory.silent_retrieval_miss` removed from the checklist (discarded — doc 08 §2.11); `memory.recall.decay` added (audit A9). Net count unchanged at 13.
 
 ---
 

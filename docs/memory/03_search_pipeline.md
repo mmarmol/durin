@@ -673,20 +673,23 @@ When ALL retrieval paths fail simultaneously:
 
 ### 14.7 Failure telemetry
 
-Every hot-path failure emits:
+Every hot-path failure emits `memory.search.failure`. The canonical
+field list (component, recovery_attempted, recovery_succeeded,
+recovery_duration_ms, degraded_to) lives in
+[`07_telemetry_and_observability.md` §8.1](07_telemetry_and_observability.md);
+audit B9 (2026-05-28) shipped this event and audit E8 (2026-05-28)
+collapsed this section to a single pointer so doc 03 and doc 07
+stop drifting against each other.
 
-```
-{
-  "event": "memory.search.failure",
-  "component": "lancedb" | "fts5" | "cross_encoder" | "watcher" | "disk",
-  "kind": "missing" | "corrupted" | "syntax" | "load_error" | "timeout" | "stale_entry",
-  "degraded_to": "lexical_only" | "vector_only" | "grep_only" | "no_rerank" | null
-}
-```
+The v1 spec proposed `kind` (exception classification enum) and
+emphasised "No `recovery_attempted` field". Both were cut by B9 — the
+safe wrappers catch generic `Exception` (so `kind="syntax"` vs
+`kind="timeout"` would be inventing data), and the pipeline always
+attempts recovery inline so `recovery_attempted` is always `True`
+(field kept as forward-compat marker).
 
-(No `recovery_attempted` field — recovery is async, not inline. The cron's restoration attempts emit separate `memory.health_check` events.)
-
-Telemetry schemas in `07_telemetry_and_observability.md` §8 and §9.
+The cron's restoration attempts emit separate `memory.health_check`
+events (doc 07 §9.4) — not `memory.search.failure`.
 
 ---
 

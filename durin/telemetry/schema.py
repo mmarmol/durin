@@ -439,12 +439,26 @@ class SleepEndEvent(TypedDict):
 
 
 class MemoryRecallEvent(TypedDict):
-    """memory_search invocation. Logged once per call (not per result)."""
+    """memory_search invocation. Logged once per call (not per result).
+
+    Audit E1 (2026-05-28): payload extended to match docs/memory/07
+    §4.1. Diagnostic fields (`strategy`, `duration_ms`,
+    `total_candidates`) emit on every call. `keywords` carries the
+    LLM-supplied hint string (None when omitted). `recovered_from` +
+    `recovery_duration_ms` only emit on degraded runs — matches the
+    tool response shape, which omits them on clean runs.
+    """
 
     query: str
     scope: str
     level: str
     result_count: int
+    strategy: str
+    duration_ms: float
+    total_candidates: int
+    keywords: NotRequired[str | None]
+    recovered_from: NotRequired[list[str]]
+    recovery_duration_ms: NotRequired[float]
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
 
@@ -719,14 +733,23 @@ class MemoryIndexWriteEvent(TypedDict):
     """One upsert into the FTS5 lexical index (doc 07 §9.1).
 
     Fires per file written, so dashboards can detect bursty writes
-    (e.g., during `durin reindex`) vs steady-state agent activity.
-    ``index`` is either ``"fts"`` (lexical) or ``"lancedb"`` (vector);
-    a tool that writes to both fires twice.
+    (e.g., during dream consolidations or drift repairs) vs
+    steady-state agent activity. ``index`` is either ``"fts"``
+    (lexical) or ``"lancedb"`` (vector); only ``"fts"`` is emitted
+    today since `reindex_one_file` only writes the FTS row.
+
+    Audit E5 (2026-05-28) added ``trigger`` + ``duration_ms`` to
+    close the two documented dashboards: doc 07 §10.3
+    (``index_write_p95_ms`` < 50ms per row) and doc 09 §216
+    (FTS5 trigram capacity monitoring needs to split watcher steady
+    state from dream/drift bursts).
     """
 
     uri: str
     index: str  # "fts" | "lancedb"
     op: str  # "upsert" | "delete"
+    trigger: str  # "watcher" | "dream_apply" | "drift_repair"
+    duration_ms: float
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
 

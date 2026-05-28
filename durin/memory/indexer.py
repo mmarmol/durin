@@ -209,12 +209,31 @@ def _emit_rebuild(
         pass
 
 
-def _emit_write(*, uri: str, op: str, index: str = "fts") -> None:
+def _emit_write(
+    *,
+    uri: str,
+    op: str,
+    index: str = "fts",
+    trigger: str = "watcher",
+    duration_ms: float = 0.0,
+) -> None:
+    """E5 (audit second pass, 2026-05-28): added `trigger` +
+    `duration_ms` so the documented dashboards become computable
+    (doc 07 §10.3 `index_write_p95_ms` < 50ms; doc 09 §216 trigram
+    capacity monitoring needs to distinguish watcher vs drift_repair
+    bursts).
+    """
     try:
         from durin.agent.tools._telemetry import emit_tool_event
         emit_tool_event(
             "memory.index.write",
-            {"uri": uri, "op": op, "index": index},
+            {
+                "uri": uri,
+                "op": op,
+                "index": index,
+                "trigger": trigger,
+                "duration_ms": duration_ms,
+            },
         )
     except Exception:  # pragma: no cover
         pass
@@ -277,7 +296,12 @@ def detect_index_staleness(workspace: Path) -> list[dict]:
     return issues
 
 
-def reindex_one_file(workspace: Path, md_path: Path) -> None:
+def reindex_one_file(
+    workspace: Path,
+    md_path: Path,
+    *,
+    trigger: str = "watcher",
+) -> None:
     """Synchronous re-index for one file. Called after every write.
 
     No-ops when:
@@ -285,7 +309,16 @@ def reindex_one_file(workspace: Path, md_path: Path) -> None:
     - The path is under ``memory/archive/`` or ``memory/pending/``.
     - The file disappeared between the write and this call (we
       delete the row instead).
+
+    E5 (audit second pass, 2026-05-28): ``trigger`` propagates the
+    caller context into ``memory.index.write`` so dashboards can
+    split steady-state (`watcher`) from burst (`dream_apply`,
+    `drift_repair`) writes. Default is `watcher` because that's the
+    most common callsite (every agent write goes through the file
+    watcher).
     """
+    import time
+
     workspace = Path(workspace)
     md_path = Path(md_path)
     memory_root = workspace / "memory"
@@ -302,8 +335,13 @@ def reindex_one_file(workspace: Path, md_path: Path) -> None:
         if not md_path.is_file():
             uri = _uri_for(workspace, md_path)
             if uri is not None:
+                t0 = time.monotonic()
                 idx.delete_by_uri(uri)
-                _emit_write(uri=uri, op="delete")
+                duration_ms = (time.monotonic() - t0) * 1000.0
+                _emit_write(
+                    uri=uri, op="delete",
+                    trigger=trigger, duration_ms=duration_ms,
+                )
             return
         try:
             payload = _payload_for(workspace, md_path)
@@ -315,8 +353,13 @@ def reindex_one_file(workspace: Path, md_path: Path) -> None:
         if payload is None:
             return
         try:
+            t0 = time.monotonic()
             idx.upsert(**payload)
-            _emit_write(uri=payload["uri"], op="upsert")
+            duration_ms = (time.monotonic() - t0) * 1000.0
+            _emit_write(
+                uri=payload["uri"], op="upsert",
+                trigger=trigger, duration_ms=duration_ms,
+            )
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "indexer: incremental upsert %s failed: %s",
