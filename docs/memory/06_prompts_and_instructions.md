@@ -142,22 +142,25 @@ duplicates but in the meantime they pollute results.
 ### 3.3 `memory_ingest`
 
 ```
-Add a document to durin's memory corpus. Use this for sources the user wants
-remembered as reference material — PDFs, articles, transcripts, technical
-specs, etc.
+Add a local document (markdown or plain text) to durin's memory corpus.
+Use this when the user wants a file on disk remembered as reference
+material — research notes, transcripts, technical specs, exported pages,
+markdown books, etc.
 
-`source` can be:
-- A local file path: e.g., "/Users/.../paper.pdf"
-- A URL: e.g., "https://arxiv.org/pdf/2602.12345.pdf"
-- The literal string "inline" (with `content` populated): for when you have
-  the text directly
+`path` is the absolute or workspace-relative path to the file. The file
+is copied to `ingested/<id>/` for preservation (so the original is
+recoverable verbatim) and the content is chunked into searchable
+`memory/corpus/*.md` entries. Re-ingesting the same file is idempotent
+— the id is derived from a content hash.
 
-Long documents are automatically chunked into searchable corpus entries.
-Re-ingesting the same source replaces the prior chunks; the older version
-is preserved in git history of the workspace.
+For web content, use `web_fetch(url=...)` first to get clean markdown,
+then `memory_store(content=..., class_name="corpus", source_refs=[url])`.
+`web_fetch` already handles URL extraction (Jina/readability),
+SSRF protection, redirects, and image detection.
 
-For short notes (a paragraph or two), use `memory_store` with class
-`stable` instead — those are not chunked and behave as single observations.
+For short inline text (a paragraph or two), call `memory_store` directly
+with `class_name="corpus"` — `memory_ingest` is specifically for files
+on disk where preserving the original artifact matters.
 ```
 
 ### 3.4 `memory_drill`

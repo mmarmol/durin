@@ -201,11 +201,7 @@ duplicates but in the meantime they pollute results.
 
 ```json
 {
-  "source": "string (required, can be: file path, URL, or 'inline')",
-  "content": "string (required if source='inline')",
-  "title": "string (optional)",
-  "entities": "array of <type>:<value> strings (optional)",
-  "chunking": "auto | none (default: auto)"
+  "path": "string (required, absolute or workspace-relative file path)"
 }
 ```
 
@@ -213,46 +209,52 @@ duplicates but in the meantime they pollute results.
 
 | Param | Semantics |
 |---|---|
-| `source` | A local file path, a URL to fetch, or the literal string `"inline"` to indicate `content` is provided directly. |
-| `content` | Raw content when `source='inline'`. Otherwise the system reads from `source`. |
-| `title` | Optional title for the ingest. Defaults to the source's filename or URL host. |
-| `entities` | Entities mentioned in the document. Used for cross-referencing. |
-| `chunking` | `auto` chunks long documents into corpus entries (1500-char overlap-aware chunks). `none` stores the document as a single corpus entry. Auto is default. |
+| `path` | Local file path (absolute or workspace-relative). The tool only ingests files already on disk — markdown and plain-text formats. Binary or other formats raise an error. |
+
+**Scope deliberately narrow.** URL fetch and inline content are NOT supported here; see §10 below for the rationale. The relevant workflows are:
+
+- **Web content** → use `web_fetch(url=...)` (which already returns clean markdown via Jina/readability + SSRF protection) followed by `memory_store(content=..., class_name="corpus", source_refs=[url])`.
+- **Inline text** (a paragraph or two the agent has in context) → call `memory_store(content=..., class_name="corpus")` directly.
+
+The chunking pipeline (`durin/memory/text_splitter.py::split_text`, P5.3) runs inside `memory_ingest` only; if you need chunking on inline content, call `split_text` first and emit one `memory_store` per chunk.
 
 ### 4.2 Return shape
 
 ```json
 {
-  "ingest_id": "2026-05-26-paper-arxiv-2602.12345",
-  "corpus_entries": [
-    "memory/corpus/2026-05-26-paper-chunk-0.md",
-    "memory/corpus/2026-05-26-paper-chunk-1.md",
-    ...
-  ],
-  "total_chunks": 12,
-  "indexed": true
+  "id": "<12-char content hash>",
+  "saved_to": "ingested/<id>/source.<ext>",
+  "meta_path": "ingested/<id>/meta.json",
+  "size_bytes": 12345,
+  "content": "<full text of the ingested file>",
+  "corpus_entry_id": "<id of the first chunked memory/corpus entry>"
 }
 ```
+
+`content` is returned so the agent can read the file in the same turn (without a follow-up `memory_drill`). `corpus_entry_id` is the first chunk; subsequent chunks live under `memory/corpus/` with headlines annotated `(chunk N/M)` and are findable via `memory_search`.
 
 ### 4.3 Tool description
 
 ```
-Add a document to durin's memory corpus. Use this for sources the user wants
-remembered as reference material — PDFs, articles, transcripts, technical
-specs, etc.
+Add a local document (markdown or plain text) to durin's memory corpus.
+Use this when the user wants a file on disk remembered as reference
+material — research notes, transcripts, technical specs, exported pages,
+markdown books, etc.
 
-`source` can be:
-- A local file path: e.g., "/Users/.../paper.pdf"
-- A URL: e.g., "https://arxiv.org/pdf/2602.12345.pdf"
-- The literal string "inline" (with `content` populated): for when you have
-  the text directly
+`path` is the absolute or workspace-relative path to the file. The file
+is copied to `ingested/<id>/` for preservation (so the original is
+recoverable verbatim) and the content is chunked into searchable
+`memory/corpus/*.md` entries. Re-ingesting the same file is idempotent
+— the id is derived from a content hash.
 
-Long documents are automatically chunked into searchable corpus entries.
-Re-ingesting the same source replaces the prior chunks; the older version
-is preserved in git history of the workspace.
+For web content, use `web_fetch(url=...)` first to get clean markdown,
+then `memory_store(content=..., class_name="corpus", source_refs=[url])`.
+`web_fetch` already handles URL extraction (Jina/readability),
+SSRF protection, redirects, and image detection.
 
-For short notes (a paragraph or two), use `memory_store` with class
-`stable` instead — those are not chunked and behave as single observations.
+For short inline text (a paragraph or two), call `memory_store` directly
+with `class_name="corpus"` — `memory_ingest` is specifically for files
+on disk where preserving the original artifact matters.
 ```
 
 ---
@@ -433,7 +435,8 @@ All decisions are consistent with cross-corpus decisions in `00_overview.md` and
 | 3 | Result format — sectioned with markers | Pre-rendered per hit in a `rendered` field; agents read `rendered` directly. Markers are CANONICAL/FRAGMENT/SESSION/INGESTED — descriptive only, no valuative language. | §2.2, §6 |
 | 4 | Tool description style | Declarative, not imperative. Embeds patterns proven by LoCoMo v2 (+3.9pp): multi-query for compound questions, cite by URI, don't answer cold. | §2.3, §2.4 |
 | 5 | `memory_store` class default | `episodic`. `stable` is reserved for explicit-durability cases. Description warns against creating duplicates. | §3.1, §3.3 |
-| 6 | `memory_ingest` chunking | Auto by default (1500-char overlap-aware). `none` for short docs. Re-ingest replaces chunks; git history preserves versions. | §4.1 |
+| 6 | `memory_ingest` chunking | Always on (1500-char chunks with 200-char overlap, recursive paragraph→line→sentence→word split per P5.3). Re-ingest is idempotent by content hash. Single-chunk docs collapse to one entry naturally. | §4.1 |
+| 6b | `memory_ingest` scope = local files only | URL fetch and inline content branches deliberately not supported. `web_fetch` already handles URLs (with Jina/readability, SSRF protection, image detection); `memory_store(class_name="corpus")` handles inline text. Avoiding duplication of those policies. See `08_scope_and_discarded.md` for full rationale. | §4.1, §10 |
 | 7 | `memory_drill` purpose | Read full body of a single URI by reference. Read-only. Single `uri` parameter — for related context use `memory_search`. | §5 |
 | 8 | Tool description as source of truth | The text in this doc is canonical; code and identity.md must match. | §8 |
 | 9 | Configuration surface | Cross-encoder opt-in exposed in config file + onboarding wizard + web dashboard. Other settings config-file-only. | §7 |
@@ -452,7 +455,7 @@ None at the module level.
 | `memory_search` return | `results` with `to_dict()` + `rendered` | Same shape + `recovered_from` + `recovery_duration_ms` fields | Wire recovery info from pipeline |
 | Result rendering | CANONICAL/FRAGMENT markers exist | Extend to SESSION + INGESTED; per-source cap | Update renderer; integrate cap |
 | `memory_store` parameters | `headline`, `body`, `class_name`, `entities`, `summary` | Same + improved description | Description text update |
-| `memory_ingest` parameters | Active | Same | None for params; description update |
+| `memory_ingest` parameters | Active (`path` only) | Same (`path` only) | None — earlier spec proposed `source`/URL/`inline` branches; removed because `web_fetch` + `memory_store(class_name="corpus")` already cover those workflows (see decision 6b + doc 08) |
 | `memory_drill` | Active (single `uri` param) | Same | None — earlier draft proposed an `include_context` flag; removed because `memory_search` already covers that need with sectioned output |
 | Tool descriptions | In code, partially in identity.md | Canonical in this doc; sync to code + identity.md | Audit and reconcile |
 | Cross-encoder UI surface | Not implemented | Onboarding wizard + dashboard | New onboarding step; new webui setting |
