@@ -39,6 +39,9 @@ __all__ = [
     "DreamConsolidator",
     "DreamError",
     "EntryRef",
+    "LLMInvoke",
+    "LLMResponse",
+    "default_llm_invoke",
 ]
 
 logger = logging.getLogger(__name__)
@@ -50,7 +53,19 @@ logger = logging.getLogger(__name__)
 
 
 class DreamError(Exception):
-    """Raised when consolidation fails (LLM bad output, IO, etc.)."""
+    """Raised when consolidation fails (LLM bad output, IO, etc.).
+
+    ``triggered_quarantine`` is set by ``DreamConsolidator.apply`` when
+    the failure was the third structural strike for this entity (i.e.
+    ``record_failure`` just set ``dream_quarantine`` on the page). The
+    runner reads this attribute to increment its
+    ``entities_quarantined`` counter for ``memory.dream.end``
+    telemetry (audit A5).
+    """
+
+    def __init__(self, *args, triggered_quarantine: bool = False) -> None:
+        super().__init__(*args)
+        self.triggered_quarantine = triggered_quarantine
 
 
 @dataclass
@@ -72,6 +87,11 @@ class ConsolidationResult:
     the on-disk entity page. ``page_text`` is populated by
     :meth:`DreamConsolidator.apply` after the write succeeds, so it
     reflects what actually landed on disk (post-cursor-override).
+
+    Token counters (audit A5) sum across every LLM call made during
+    ``consolidate_entity`` for this entity — that is, the initial
+    call plus any parse-retry calls. The DreamRunner aggregates these
+    across all entities in a pass for the ``memory.dream.end`` event.
     """
 
     parsed_output: Any  # ParsedDreamOutput; typed lazily to avoid cycle
@@ -79,6 +99,13 @@ class ConsolidationResult:
     commit_body: str
     commit_trailers: dict[str, list[str]] = field(default_factory=dict)
     raw_output: str = ""                           # original LLM response, for audit
+    # A5: token accounting per consolidation. `llm_call_count` includes
+    # successful parse + every parse-retry. Defaults make existing
+    # call sites (e.g. tests that build a ConsolidationResult by hand)
+    # compatible without churn.
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    llm_call_count: int = 0
     # G2 invariant: timestamp of the last entry sent to the LLM in this
     # batch. :meth:`DreamConsolidator.apply` forces the entity page's
     # ``dream_processed_through`` to this value (overriding whatever the
@@ -112,18 +139,44 @@ def _trailer_value(
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class LLMResponse:
+    """Outcome of one LLM call: generated text + token accounting.
+
+    Token counts are best-effort — providers that don't report usage
+    leave them at 0. The Dream cost alarm (doc 08 §3 R3) computes
+    `dream_llm_cost_per_day_usd` from `llm_input_tokens_total` and
+    `llm_output_tokens_total` aggregated across one pass; missing
+    counts under-report cost (safe-failure direction).
+    """
+
+    text: str
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+
+
 class LLMInvoke(Protocol):
-    """Protocol for any callable that takes prompt + model → response."""
+    """Protocol for any callable that takes prompt + model → response.
 
-    def __call__(self, prompt: str, *, model: str) -> str: ...
+    Returns an :class:`LLMResponse` carrying both the generated text
+    and the token usage (for cost telemetry, audit A5). Implementations
+    that cannot report usage should leave token counts at 0.
+    """
+
+    def __call__(self, prompt: str, *, model: str) -> LLMResponse: ...
 
 
-def default_llm_invoke(prompt: str, *, model: str = "glm-5.1") -> str:
+def default_llm_invoke(prompt: str, *, model: str = "glm-5.1") -> LLMResponse:
     """Production-default LLM invocation via litellm + zhipu coding plan.
 
     Reads the API key from durin's secret store. Uses the OpenAI-
     compatible adapter (``openai/<model>``) with ``api_base`` override
     pointing at ``https://api.z.ai/api/coding/paas/v4``.
+
+    Returns the generated text plus prompt/completion tokens extracted
+    from ``response.usage``. Some upstream providers/proxies omit the
+    usage block; in that case tokens fall back to 0 so the dream cost
+    telemetry reports zero (under-report) rather than crashing.
     """
     # Lazy imports so import-time isn't paid by callers that pass their own.
     from durin.security.secrets import get_secret_store
@@ -143,7 +196,17 @@ def default_llm_invoke(prompt: str, *, model: str = "glm-5.1") -> str:
         api_base="https://api.z.ai/api/coding/paas/v4",
         temperature=0.1,
     )
-    return response.choices[0].message.content
+    usage = getattr(response, "usage", None)
+    prompt_tokens = 0
+    completion_tokens = 0
+    if usage is not None:
+        prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+        completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+    return LLMResponse(
+        text=response.choices[0].message.content,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -328,6 +391,11 @@ class DreamConsolidator:
         current_page = self._read_existing_page(entity_ref)
 
         last_error: str | None = None
+        # A5: accumulate tokens across retries — the prompt is sent
+        # again on each parse-retry, so cost compounds with retries.
+        total_prompt_tokens = 0
+        total_completion_tokens = 0
+        call_count = 0
         for attempt in range(self.MAX_RETRIES):
             prompt = self._build_prompt(entity_ref, entries, current_page)
             if last_error is not None:
@@ -338,7 +406,18 @@ class DreamConsolidator:
                     "===END=== markers and a JSON array of patch ops "
                     "(each carrying a `provenance` field)."
                 )
-            raw = self._llm_invoke(prompt, model=self.model)
+            response = self._llm_invoke(prompt, model=self.model)
+            call_count += 1
+            # Tolerate legacy llm_invoke implementations that return a
+            # bare str (pre-A5 protocol). The dataclass case is the
+            # normal one; the str fallback is a compat shim for
+            # third-party callers that haven't migrated.
+            if isinstance(response, LLMResponse):
+                raw = response.text
+                total_prompt_tokens += response.prompt_tokens
+                total_completion_tokens += response.completion_tokens
+            else:
+                raw = str(response)
             try:
                 parsed = parse_dream_output(raw)
             except DreamPatchParseError as exc:
@@ -359,6 +438,9 @@ class DreamConsolidator:
                 commit_trailers=trailers,
                 raw_output=raw,
                 batch_last_ts=batch_last_ts,
+                prompt_tokens=total_prompt_tokens,
+                completion_tokens=total_completion_tokens,
+                llm_call_count=call_count,
             )
 
         raise DreamError(
@@ -448,7 +530,10 @@ class DreamConsolidator:
         )
 
         if apply_result.failure_kind is not None:
-            # Structural failures increment the quarantine counter.
+            # Structural failures increment the quarantine counter. A5:
+            # propagate whether THIS failure crossed the 3-strike
+            # threshold so the runner can count quarantined entities.
+            triggered = False
             try:
                 page = EntityPage.from_file(page_path)
                 if page is not None and apply_result.failure_kind in {
@@ -456,7 +541,7 @@ class DreamConsolidator:
                     DreamApplyFailureKind.PATCH_RUNTIME,
                     DreamApplyFailureKind.ROUND_TRIP,
                 }:
-                    record_failure(page, apply_result.failure_kind)
+                    triggered = record_failure(page, apply_result.failure_kind)
                     page.save(page_path)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
@@ -465,7 +550,8 @@ class DreamConsolidator:
                 )
             raise DreamError(
                 f"apply_dream_output failed ({apply_result.failure_kind.value}): "
-                f"{apply_result.error_message}"
+                f"{apply_result.error_message}",
+                triggered_quarantine=triggered,
             )
 
         # 3) G2 — force cursor to batch_last_ts AFTER the patch has
