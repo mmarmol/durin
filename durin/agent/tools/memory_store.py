@@ -268,6 +268,19 @@ class MemoryStoreTool(Tool):
             except Exception as exc:
                 logger.warning("vector upsert failed for %s: %s", result["id"], exc)
 
+        # Re-index FTS5 synchronously (doc 02 §6.2). Best-effort: a
+        # failure here logs + continues so the markdown write still
+        # succeeds. Reindex from the file path so the indexer derives
+        # the BM25 text via the canonical text-composition rule.
+        try:
+            from durin.memory.indexer import reindex_one_file
+            reindex_one_file(self._workspace, Path(result["path"]))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "memory_store FTS reindex failed for %s: %s",
+                result["id"], exc,
+            )
+
         # Doc 25 §2.A.1 β.2: threshold trigger. After a successful write
         # that tagged at least one entity, check whether any of those
         # entities crossed the per-entity post-cursor threshold. If yes,

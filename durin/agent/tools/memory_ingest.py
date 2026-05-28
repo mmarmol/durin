@@ -227,6 +227,16 @@ class MemoryIngestTool(Tool):
                     stored["id"], exc,
                 )
 
+        # Re-index FTS5 synchronously (doc 02 §6.2). Best-effort.
+        try:
+            from durin.memory.indexer import reindex_one_file
+            reindex_one_file(self._workspace, Path(stored["path"]))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "memory_ingest FTS reindex failed for %s: %s",
+                stored["id"], exc,
+            )
+
         emit_tool_event(
             "memory.store",
             {

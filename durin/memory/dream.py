@@ -574,6 +574,16 @@ class DreamConsolidator:
                         entity_ref, exc,
                     )
 
+        # 7) Re-index FTS5 for the entity page (doc 02 §6.2).
+        try:
+            from durin.memory.indexer import reindex_one_file
+            reindex_one_file(self.workspace, page_path)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "dream apply: FTS reindex failed for %s: %s",
+                entity_ref, exc,
+            )
+
         return sha
 
     # ------------------------------------------------------------------
