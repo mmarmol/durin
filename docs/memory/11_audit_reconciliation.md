@@ -1221,21 +1221,38 @@ Round 1-3 marcados resolved. Spot-checks confirman. OK.
 
 ## Resumen ejecutivo
 
-| Bloque | Items | Naturaleza |
-|---|---|---|
-| Critical (A1-A11) | 11 | Afectan UX agente, operación, o medibilidad |
-| Medium (B1-B12) | 12 | Drift sin romper UX directo |
-| Low (C1-C10) | 10 | Cosmético / docs |
-| No accionable (D1-D3) | 3 | OK como están |
-| Second pass (E1-E38) | ~38 | Drift descubierto en segunda pasada (2026-05-28) |
+| Bloque | Items | Naturaleza | Estado |
+|---|---|---|---|
+| Critical (A1-A11) | 11 | Afectan UX agente, operación, o medibilidad | ✅ Cerrados 2026-05-28 |
+| Medium (B1-B12) | 12 | Drift sin romper UX directo | ✅ Cerrados 2026-05-28 |
+| Low (C1-C10) | 10 | Cosmético / docs | ✅ Cerrados 2026-05-28 |
+| No accionable (D1-D3) | 3 | OK como están | ✅ Registrados 2026-05-28 |
+| Second pass (E1-E38) | 38 | Drift descubierto en re-auditoría | ✅ Cerrados 2026-05-28 |
 
-**Total inicial**: 36 items (A+B+C+D) — todos cerrados al 2026-05-28.
+**Total**: 36 items primera pasada + 38 items segunda pasada = **74 items reconciliados al 2026-05-28**.
 
-**Segunda pasada (E)**: el usuario pidió re-auditar tras cerrar A-D y se encontraron ~38 ítems nuevos (mayoría status/header drift, pero algunos contradicciones doc-vs-code reales en doc 07). Se trabajan high-impact primero (E1-E9).
+**Tally por commits del segundo pass**:
+- `42d0986` feat(memory): close E1-E9 second-pass audit (high impact — telemetría + embedding v2.a + EntityPage author + rebuild gap).
+- `51b3579` feat(memory): close E10-E15 (doc 03 drift + cursor wiring regression + entities meta bug).
+- `935e330` feat(memory): close E16-E20 (doc 04 shapes + EntityPage user-authored protection + walker contract).
+- `2c8495b` docs(memory): close E21-E23 (doc 05/06 status drift).
+- (TBD) docs(memory): close E24-E38 (cosmetic batch — status rows, numbering, CLI commands).
 
-**Orden de resolución sugerido (primera pasada)**: A1 → A2 → A3 (los tres tools — UX agente) → A11 (wiring watcher+cron — operación) → A9 (decay) → A10 (session summaries) → A8 (push wiring) → A5+A6+A7 (telemetría payload) → A4 (LanceDB schema doc) → resto en orden.
+**Code regressions cerradas en el segundo pass**:
+- E11: pre/post-cursor wiring perdida en migración v2 (commit c820447) — restaurada.
+- E11 bonus: `_resolve_meta` no propagaba `entities` desde vector_meta — fixed.
+- E19: protección user_authored entity pages arch-unsupported — `EntityPage.author` + `_maybe_auto_absorb` check shipped.
+- E5: dashboards documentados (§10.3 perf, §216 capacity) imposibles de implementar — `memory.index.write` ampliado con `duration_ms` + `trigger`.
+- E9: v2.a (rendered_frontmatter en entity pages) + fix gap de `rebuild_from_workspace` que no walkeaba entity pages.
 
-**Mantenimiento**: a medida que se resuelven items, marcar **resolved** + breve nota de la decisión + commit hash. No borrar items resueltos — sirven como decisions log.
+**Lecciones registradas en memory de proyecto durante el segundo pass**:
+- `feedback_telemetry_is_first_class`, `feedback_optimization_vs_principle`, `feedback_sync_tests_exercise_behavior`, `feedback_verify_quantifiers`, `feedback_heuristic_detectors_multilingual` (de la primera pasada, refrescadas).
+
+**Orden de resolución (referencia histórica)**:
+- Primera pasada: A1 → A2 → A3 (los tres tools — UX agente) → A11 (wiring watcher+cron) → A9 (decay) → A10 (session summaries) → A8 (push wiring) → A5+A6+A7 (telemetría payload) → A4 (LanceDB schema doc) → B/C/D según orden.
+- Segunda pasada: E1-E9 high-impact (mismo flujo de evidencia → propuesta → OK → implement → TDD → commit), luego E10-E15 medium (doc 03), E16-E20 (doc 04 + EntityPage author), E21-E23 (doc 05/06 status), E24-E38 batch cosmético.
+
+**Mantenimiento**: items marcados ✅ RESOLVED son immutable decision log. No borrar; cuando un fix se supersede por audit posterior, append nota "Superseded YYYY-MM-DD by X" en lugar de reescribir el registro original.
 
 ---
 

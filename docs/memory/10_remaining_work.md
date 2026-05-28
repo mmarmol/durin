@@ -21,7 +21,7 @@ Este documento es el **listado granular de lo que queda** después del estado ac
 
 **Convención de orden por fase**: los items se listan en orden de **dependencia**, no de prioridad. Si X depende de Y, X viene después.
 
-**Estado al cierre de la sesión actual**: 4888 tests pasando, 19 skipped (3 marcados explícitamente "Phase 5 follow-up"). El sistema v2 anda end-to-end. Lo que queda son refinamientos + Phase 4 (cross-encoder) + Phase 8 (validation).
+**Estado al cierre del segundo-pass audit (2026-05-28)**: ~5096 tests collected; tests/memory/ 1000 passed + 1 skipped (pre-existing). El sistema v2 anda end-to-end. Phase 4 (cross-encoder) shipped (P4.1-P4.4); Phase 8 (validation con LoCoMo bench) sigue pending. Audit E35/E36 (2026-05-28) actualizó este header — el conteo "4888 tests" y la frase "queda Phase 4 + Phase 8" se rezagaron a partir de los commits de la jornada audit.
 
 > **Audit refresh 2026-05-28** (audit B3): la mayor parte de los items P2-P7 listados sin ✅ DONE abajo **se cerraron durante el día 2026-05-28** vía los commits del audit A1-A11. El estado vigente y razonado por item está en [`11_audit_reconciliation.md`](11_audit_reconciliation.md) (sección de cada A*). Resumen rápido por phase:
 >

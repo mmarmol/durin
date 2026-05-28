@@ -61,18 +61,22 @@ This split lets the indexers, Dream, and archival routines operate on `memory/` 
 
 ## 2. Data classes
 
-The system has **eight** data classes. The first seven are active today; the eighth (`archive`) is introduced in v2.
+The system has **nine** data classes. Audit E25 (2026-05-28) added
+`session_summary` to this table — A10 (2026-05-28) promoted session
+summaries from JSON sidecars into a first-class memory class at
+`memory/session_summary/`.
 
 | Class | Path | Mutability | Created by | Indexed for search? | Consumed by Dream? |
 |---|---|---|---|---|---|
-| **Session** | `sessions/<id>/` | Append-only during session, then read-only | AgentLoop (automatic, scoped per interlocutor unless `unified_session=true`) | `_last_summary` vector [V2], full text grep | No (referenced only as source_refs) |
+| **Session** | `sessions/<id>/` | Append-only during session, then read-only | AgentLoop (automatic, scoped per interlocutor unless `unified_session=true`) | Full text grep | No (referenced only as source_refs) |
+| **Session summary** | `memory/session_summary/<sanitized_key>.md` | Replaced when consolidator re-summarises | Consolidator (`_persist_last_summary`, audit A10) | Vector + lexical (class `session_summary`); A9 decay (120 d) | No — used as retrieval context, not consumed as raw input |
 | **Ingested** | `ingested/<id>/` | Immutable | User (UI) or agent (tool) | Not directly; chunks via `corpus/` | No (chunks → corpus is what gets read) |
 | **Corpus** | `memory/corpus/<id>.md` | Replaced on re-ingest | Ingestion pipeline, agent | Vector + lexical | **Counts as signal** (threshold trigger §2.2 doc 05) but NOT consumed into entity pages — ingested docs are already canonical-ish |
 | **Episodic** | `memory/episodic/<id>.md` | Append-only typically | Agent via `memory_store` | Vector + lexical | **Yes, primary input.** Post-cursor entries are consumed, applied as PATCH ops, then archived |
 | **Stable** | `memory/stable/<id>.md` | Semi-mutable (editable) | Agent, user | Vector + lexical | Referenced as context but **never consumed or archived** by Dream (user-marked durable) |
 | **Pending** | `memory/pending/<id>.md` | Short-lived | Intake pipeline | Not indexed | No (intermediate buffer) |
 | **Entity** | `memory/entities/<type>/<slug>.md` | Mutable (Dream + user) | Dream consolidator, user | Vector + lexical | **Yes, target.** Dream's PATCH ops write to this class. |
-| **Archive** [V2] | `memory/archive/<class>/<id>.md` | Frozen | Dream after consolidation | **Excluded from all search paths by default** (vector index, FTS5/BM25, raw grep, walk+parse). Reachable only via explicit recovery flag. | No (terminal state) |
+| **Archive** | `memory/archive/<class>/<id>.md` | Frozen | Dream after consolidation | **Excluded from all search paths by default** (vector index, FTS5/BM25, raw grep, walk+parse). Reachable only via explicit recovery flag. | No (terminal state) |
 
 ### 2.1 Why each class exists
 
@@ -174,9 +178,9 @@ updated_at: <ISO timestamp>
 <markdown body — free form>
 ```
 
-Known top-level fields (parsed explicitly): `type`, `name`, `aliases`, `dream_processed_through`, `created_at`, `updated_at`.
+Known top-level fields (parsed explicitly): `type`, `name`, `aliases`, `dream_processed_through`, `created_at`, `updated_at`, `attributes`, `relations`, `provenance`, `author`. Audit E26 (2026-05-28) brought this list in sync with `_KNOWN_FIELDS` in `entity_page.py`: v2 fields (`attributes`/`relations`/`provenance`) shipped in earlier work, and `author` shipped with audit E19 (2026-05-28) for user-authored protection.
 
-**Anything else is preserved verbatim** in `entry.extra` (round-trip safe). Today Dream uses this to add emergent fields like `identifiers`, `related`, etc. without parser changes.
+**Anything else is preserved verbatim** in `entry.extra` (round-trip safe). Today Dream uses this to add emergent fields like `identifiers`, `related`, `dream_failure_count`, `dream_quarantine`, etc. without parser changes.
 
 ### 3.5 Entity page — v2 target
 
@@ -374,7 +378,9 @@ An attribute is **stateful** if and only if its key name matches one of these pa
 
 All other attribute keys are **static** (overwriting on update, no history). When Dream sets a stateful attribute and detects a change, it appends to `history` and updates `current`. When it sets a static attribute and detects a change, it overwrites the previous value (the prior value remains accessible via git history of the entity page).
 
-The patterns are applied by Dream during consolidation per the prompt's instructions (see `durin/templates/dream/rules.md` and the examples in `durin/templates/dream/examples/`). No `STATEFUL_ATTRIBUTE_PATTERNS` constant exists in code — earlier drafts of this section referenced one that was never extracted. Decision: keep the rule in the LLM-facing prompt corpus (where it lives today) rather than mirror it as a Python regex set. If the rule ever needs to gate non-LLM code paths, extract the constant then. (Audit C1, 2026-05-28.)
+The patterns are applied by Dream during consolidation per **demonstration** in the prompt's few-shot examples (`durin/templates/dream/examples/`, especially `01_new_entity.md`, `02_update_attribute.md`, `04_handle_conflict.md`, `06_no_changes.md`). Audit E27 (2026-05-28) corrected an earlier claim that the patterns were articulated in `rules.md` — grep against `rules.md` and `consolidator.md` returns no mention of "stateful" or the explicit selection rule; the LLM learns the convention by example.
+
+No `STATEFUL_ATTRIBUTE_PATTERNS` constant exists in code — earlier drafts of this section referenced one that was never extracted. Decision: keep the rule in the LLM-facing prompt corpus (where it lives today) rather than mirror it as a Python regex set. If the rule ever needs to gate non-LLM code paths, extract the constant then. (Audit C1, 2026-05-28.)
 
 ### 4.4 Relations — design rules
 
@@ -785,18 +791,22 @@ This:
 
 ## 11. Implementation status (current vs target)
 
-| Aspect | Current code | v2 target | Migration work |
-|---|---|---|---|
-| Sessions structure | Active | Same + `_last_summary` field | None (field already exists) |
-| Ingested structure | Active | Same | None |
-| Memory entries (episodic/stable/corpus) | `MemoryEntry` Pydantic | Same | None |
-| Entity page schema | `EntityPage` dataclass with `extra: dict` | + `attributes`, `relations`, `provenance` | Extend dataclass; backward-compatible parser |
-| Archive folder | Doesn't exist | `memory/archive/` | New folder; Dream apply moves files; indexer skips archive |
-| URI naming | `<type>:<value>` validated in `entities.py::is_valid_entity_ref` | Same | None |
-| Slug normalization | Ad-hoc per call site | Centralized helper in `entities.py` | Refactor existing call sites |
-| Provenance tracking | Not explicit | New `provenance` frontmatter field | Dream prompt + apply update |
-| Round-trip safety | Already tested | Same | None |
-| Versioning | git history exists in `memory/.git/`; no consumer reads it | Dream prompt includes recent commits via pipeline code; user uses git CLI; no dedicated tool | Update Dream prompt builder + indexer auto-commits user edits |
+Audit E26 (2026-05-28) rebuilt this table — most rows were stale
+since Phase 1.9 / Phase 3 work shipped.
+
+| Aspect | Status | Where |
+|---|---|---|
+| Sessions structure | ✅ Active | `durin/runtime/session.py` |
+| Session summaries as a class | ✅ Active (audit A10) | `durin/memory/session_summary_store.py` |
+| Ingested structure | ✅ Active | `durin/memory/ingestion.py` |
+| Memory entries (episodic/stable/corpus) | ✅ `MemoryEntry` Pydantic | `durin/memory/schema.py` |
+| Entity page schema (v2: attributes/relations/provenance + `author`) | ✅ Shipped. Audit E19 added `author` field for user-authored protection. | `durin/memory/entity_page.py::EntityPage` |
+| Archive folder | ✅ Active. Dream apply moves files; walker skips archive by default. | `durin/memory/archive.py` + `durin/memory/dream_archive_consumed.py` |
+| URI naming | ✅ `<type>:<value>` validated | `durin/memory/entities.py::is_valid_entity_ref` |
+| Slug normalization | ✅ Centralised | `durin/memory/entities.py::normalize_slug` (and `EntityPage.slug_from_path`) |
+| Provenance tracking | ✅ Active per PATCH op (Phase 1.9). Collected during apply and persisted in the entity page. | `durin/memory/dream_apply.py` |
+| Round-trip safety | ✅ Tested | `tests/memory/test_entity_page.py` |
+| Versioning + git history exposure | ✅ Dream prompt builder reads `git log` of the entity page over the last 30 days as context. User accesses via any git CLI or webui. | `durin/memory/dream_git_history.py` |
 
 When this module is locked, the migration tasks above will move into `09_implementation_roadmap.md`.
 

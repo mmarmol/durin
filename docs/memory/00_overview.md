@@ -175,18 +175,22 @@ All design decisions rest on these principles. Any decision violating one requir
 
 This section will be replaced by a detailed roadmap once all modules are specified. For now, a general picture:
 
-| Component | Current state | Final state (target) |
+Audit E24 (2026-05-28) rebuilt this snapshot — most rows had been
+stale since Phase 1.9 / Phase 3 shipped. Per-row pointers go to
+the specific module where the work landed.
+
+| Component | Current state | Notes |
 |---|---|---|
-| **Data types** | 7 active classes | Schema v2 with attributes + relations + provenance |
-| **Vector index** | LanceDB + MiniLM | + summary for entity pages, + frontmatter rendering, + aliases in entries |
-| **Lexical** | Raw binary grep | FTS5 BM25 with scoring |
-| **Fusion** | Concatenation | Weighted merge / cross-RRF |
-| **Reranking** | Entity-aware RRF | + Cross-encoder reranker (opt-in, default OFF). MMR deferred (per-source cap in sectioning covers the corpus-chunks case). |
-| **Recency handling** | None | Temporal decay (opt-in, conservative default) |
-| **Versioning / audit** | Git history exists but not exposed | Dream uses git log internally; users access via any git CLI; web UI post-MVP |
-| **Tools** | Single `query` | `query` + optional `keywords`, sectioned results |
-| **Dream** | Consolidates facts into entities | + JSON Patch diff + archive episodic + robust entity dedup |
-| **Sessions** | Grep only | + `_last_summary` vectorized |
+| **Data types** | 5 classes (`stable`, `episodic`, `corpus`, `pending`, `session_summary`) + `entity_page` (separate model) | `MEMORY_CLASSES` in `durin/memory/paths.py`. `session_summary` was added in audit A10 (was 4 classes before). |
+| **Vector index** | LanceDB + MiniLM with v2.a embedding text for entity pages (name + aliases + rendered_frontmatter + body) | Shipped audit E9 (2026-05-28). Schema v4. |
+| **Lexical** | FTS5 BM25 (`unicode61` + `trigram` + `like_substring` for short CJK) | Shipped Phase 3. Auto-detection of identifier tokens (P3.3) boosts lexical weight on URL/email/UUID/file-path queries (audit E14). |
+| **Fusion** | Cross-source RRF over per-source rank lists | Shipped Phase 3 (`durin/memory/rrf_fusion.py`). Score-scale invariant. |
+| **Reranking** | Entity-aware RRF (default ON) + cross-encoder (opt-in, default OFF) | Cross-encoder opt-in via `memory.search.cross_encoder.enabled`. Pre/post-cursor logic in entity_ranker restored audit E11. MMR deferred. |
+| **Recency handling** | Temporal decay per class (audit A9): `episodic` 90d, `session_summary` 120d, `entity` / `entity_page` / `stable` / `corpus` no decay | Configurable via `memory.search.temporal_decay.class_half_life_overrides`. |
+| **Versioning / audit** | Git history exists; webui surfaces it via memory dashboards (Phase 4 dashboards shipped) | Dream uses git log internally; operators access via any git CLI or webui. |
+| **Tools** | `query` + `keywords` + `scope` + `level` + `limit` + sectioned results | Shipped Phase 5 d1. `limit` exposed audit A3. |
+| **Dream** | Consolidates facts into entities via JSON Patch + BODY_DELTA + COMMIT (Phase 1.9). Archives consumed episodic. Absorb-judge for entity dedup (opt-in). 3-strike quarantine on structural failures. | All shipped Phase 1.9 (commit `6aafc3f`). Auto-absorb skips user-authored entity pages (audit E19). |
+| **Sessions** | Session summaries are a first-class memory class (`session_summary`) indexed by FTS5 + LanceDB | Shipped audit A10 (2026-05-28). `Consolidator._persist_last_summary` writes `memory/session_summary/<key>.md`. |
 
 ## 8. Document index
 
