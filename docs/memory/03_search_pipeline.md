@@ -690,41 +690,34 @@ Telemetry schemas in `07_telemetry_and_observability.md` §8 and §9.
 
 ## 15. Configuration
 
-The following parameters live in workspace config (`~/.durin/config.json` `memory.search` section):
+The actual configuration surface in `MemorySearchConfig` (`durin/config/schema.py`) — audit B8 (2026-05-28) aligned this section to code reality:
 
-```json
-{
-  "memory": {
-    "search": {
-      "vector_top_k": 50,
-      "lexical_top_k": 50,
-      "rrf_constant": 60,
-      "rrf_weights": { "vector": 1.0, "lexical": 0.7, "grep": 0.3 },
-      "cross_encoder": {
-        "enabled": false,
-        "model": "jinaai/jina-reranker-v2-base-multilingual",
-        "batch_size": 32
-      },
-      "temporal_decay": {
-        "enabled": true,
-        "half_life_days": {
-          "episodic": 90,
-          "session_summary": 120,
-          "entity": null,
-          "stable": null,
-          "corpus": null
-        }
-      },
-      "sectioning": {
-        "max_per_source": 3
-      },
-      "final_top_k": 10
-    }
-  }
-}
+```toml
+[memory.search.cross_encoder]
+enabled = false
+model = "jinaai/jina-reranker-v2-base-multilingual"
+batch_size = 32
+top_n = 10
+
+[memory.search.temporal_decay]   # A9
+enabled = true
 ```
 
-All values shown are defaults. Most users never edit this.
+**What's hardcoded** (not exposed as config keys today — audit B8 deliberate scope decision):
+
+| Hardcoded knob | Value | Where | Why no config? |
+|---|---|---|---|
+| `vector_top_k` | 50 | `search_pipeline.py:347` | Sane default; tuning never asked for |
+| `lexical_top_k` | 50 | `search_pipeline.py:362` | Sane default |
+| `rrf_constant` | 60 | `rrf_fusion.py:38` | Textbook value; no operator has requested override |
+| `rrf_weights` | `{vector: 1.0, lexical: 0.7→2.5 boosted, grep: 0.3}` | `rrf_fusion.py:38-42` | Already adaptive (lexical boost on identifier queries) |
+| `max_per_source` (sectioning) | 3 | `sectioned_output.py:38` | Per doc 03 §12.4; tuning never asked for |
+| `final_top_k` (a.k.a. `limit`) | 10 default | `memory_search.py` `_PARAMETERS["limit"]` (A3) | Now per-call configurable via the `limit` tool parameter (audit A3) — 1..50 |
+| `half_life_days` per class | 90 / 120 / null | `decay.py::CLASS_HALF_LIFE_DEFAULTS` (A9) | Per-class table in code; doc 03 §10.2 documents the reasoning |
+
+The earlier draft of §15 listed every hardcoded value as a config key as if it were configurable. The honest state is: **only the items shown in the TOML block above accept overrides today**. If a real operator workflow surfaces a need (with data), the relevant knob gets promoted to `MemorySearchConfig`. Until then, hardcoded defaults keep the config surface minimal.
+
+All values shown are defaults. Most users never edit any of them.
 
 ---
 
@@ -763,7 +756,7 @@ None at the module level.
 | Entity-aware rerank | Active over vector rows only | After RRF fusion (cross-source) | Move ranker step downstream of fusion |
 | Cross-encoder rerank | Not implemented | New step, **default disabled**, opt-in via config / onboarding wizard / web dashboard. Default model when enabled: `jinaai/jina-reranker-v2-base-multilingual` | New module; lazy model load; config schema; onboarding question; webui setting |
 | Temporal decay | Not implemented | New step, **enabled by default for observation-type docs only (episodic, session_summary)**. Entity/stable/corpus have `half_life = null`. Per-entry override + evergreen flag. | New module; per-class config; Dream sets `decay_half_life` field on permanent facts |
-| MMR | Not implemented | New step, default enabled | New module; reuses vector similarity |
+| MMR | Not implemented | **Removed from MVP** (see §11). The original "default enabled" intent was revised after analysis: archive of consolidated episodic already addresses primary duplication; mainstream systems (mem0, graphiti, hermes, letta) don't use MMR; exact-match queries regress under diversity push. Re-add post-MVP only if bench shows residual duplication. Aligned to §11 in audit B6. | — |
 | Sectioning | Markers exist (CANONICAL/FRAGMENT) | Extended to SESSION + INGESTED; empty omitted | Extend renderer |
 | Configuration | Hardcoded params | `memory.search.*` config section | Schema change to `DurinConfig` |
 

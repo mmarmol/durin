@@ -67,6 +67,11 @@ The `event` name is the registry key. Payload schemas are validated against the 
 | Absorb | `memory.absorb.*` | Every absorb-judge decision (auto-merge, skipped, reverted) | Dedup observability |
 | Search-fail | `memory.search.failure` | Whenever a search-path component fails (recoverable or not) | Recovery + degradation tracking |
 | Index | `memory.index.*` | Index re-derivation events (per write, per rebuild) | Indexer health |
+| Embedding | `memory.embedding.*` | Model load (`.load`) + per-embed timing (`.embed`) from `FastembedProvider` | Provider performance + eviction signals |
+| Hot layer | `memory.hot_layer.failure` | When the hot-layer renderer fails to assemble a context block (read error, parse error) | Context-assembly resilience signal |
+| Health | `memory.health_check`, `memory.health.critical` | Every health-check tick (A11) + 3-strike escalation (A7) | Subsystem availability monitoring |
+
+Audit B10 (2026-05-28) added the `Embedding`, `Hot layer`, and `Health` rows — these events are emitted by the code but the original §3 table omitted them. The TypedDicts live in `durin/telemetry/schema.py`.
 
 ---
 
@@ -497,7 +502,7 @@ These defaults protect against accidental data leak when telemetry is shared wit
 | 5 | Quarantine telemetry | `memory.dream.entity_failed` emits with `quarantined: true` when triggered. Operator alarms on this. | §6.4 |
 | 6 | No external telemetry sink in MVP | Local jsonl file. Optional HTTPS push later. | §12 |
 | 7 | Sampling = none in MVP | Volume is low; emit everything. | §12.1 |
-| 8 | Retention | 30 days uncompressed + 1 year compressed. | §12.2 |
+| 8 | Retention | 30 days uncompressed + 60 more days compressed (90 days total). The original v1 draft proposed "1 year compressed"; aligned to code in audit B5 (`COMPRESSION_AGE_DAYS=30`, `DELETION_AGE_DAYS=90` in `durin/telemetry/retention.py`). | §12.2 |
 | 9 | Privacy defaults | Query truncated, URIs logged, content NEVER logged. | §13 |
 
 ### Open

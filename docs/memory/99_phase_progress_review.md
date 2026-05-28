@@ -1,11 +1,13 @@
 # Phase 0 → Phase 7 progress + decisions for review
 
-**Autoría:** Claude (sesión autónoma 2026-05-28).
+**Autoría:** Claude (sesión autónoma 2026-05-28) + audit con humano (mismo día).
 **Branch:** `memory/phase-0-foundations`.
-**Estado:** 4885 tests pasando, 16 skipped, 0 fallando. Webui build limpio.
+**Estado:** 2314+ tests pasando, 1 skipped (condicional), 0 fallando. Webui build limpio.
 
-Este documento es para que revises mañana. Lista de:
-1. Qué se completó.
+> **Audit refresh 2026-05-28** (audit B2): este doc se escribió como snapshot pre-audit a las ~02:00am. Durante el día se ejecutó el audit A1-A11 + Bloque B contra el código y los docs; muchas decisiones marcadas aquí como "deferred" o "próximo paso" se ejecutaron. El estado vigente vive en `11_audit_reconciliation.md` (más reciente, granular por item) y los commits del día. Este doc se conserva como histórico — léelo como "lo que se sabía al escribirlo", no como "lo que es ahora".
+
+Este documento original lista:
+1. Qué se completó (snapshot pre-audit).
 2. Decisiones tomadas sin consultar (con justificación).
 3. Trabajo deferido (con motivo + scope estimado).
 4. Próximo siguiente paso recomendado.

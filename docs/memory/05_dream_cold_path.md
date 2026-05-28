@@ -198,7 +198,7 @@ If apply fails (LLM error, parse error, validation error), the cursor is NOT adv
 
 The prompt is the single most important LLM-facing surface in the system. It is the canonical text in `durin/templates/dream/consolidator.md`. This section specifies the prompt's structure and the contract it establishes with the LLM.
 
-> **Implementation status:** §5 and §6 describe the **v2 target**. Current code uses full-page rewrites — the LLM emits the entire markdown page rather than JSON Patch operations. The v2 migration (PATCH + BODY_DELTA + COMMIT format, with `json_repair` tolerance and `.md.bak` rollback) is tracked in `09_implementation_roadmap.md` Phase 1.
+> **Implementation status:** §5 and §6 describe the format that **shipped** in Phase 1.9 (commit `6aafc3f`, 2026-05-28). The Dream consolidator now emits `===PATCH===` + `===BODY_DELTA===` + `===COMMIT===` markers with a JSON Patch list, parsed by `durin/memory/dream_patch_parser.py` and applied by `durin/memory/dream_apply.py` with `.md.bak` rollback. The earlier draft of this section described v1 (full-page rewrites) as the current state; corrected in audit B7 (2026-05-28).
 
 ### 5.1 Inputs to the prompt
 
@@ -621,8 +621,8 @@ None at the module level.
 |---|---|---|---|
 | Trigger types | threshold + cron_daily + post_compaction + session_close + manual labels exist in code | Same (labels already defined); just ensure threshold is dispatched from `memory_store`/`memory_ingest` and not only as runner label | Minor wiring; document label semantics |
 | Lock + throttle + cursor | Active (works well) | Same | None |
-| Consolidator prompt | v1 (page + commit) | v2 (PATCH + BODY_DELTA + COMMIT, with existing_schema + uris + recent_history). Reorganized as **Dream skill package** in `durin/templates/dream/` (main prompt + json_patch_reference + examples/ + rules). | Rewrite `templates/dream/consolidator.md`; create the supporting skill files; update `_parse_response`; update prompt builder to concatenate skill |
-| Apply mechanism | Full page rewrite | JSON Patch over frontmatter + body delta | Significant — new apply pipeline with `jsonpatch` lib, `.md.bak` safety |
+| Consolidator prompt | v2 — PATCH + BODY_DELTA + COMMIT, with existing_schema + uris + recent_history. **Shipped in Phase 1.9 (commit `6aafc3f`).** Multi-file Dream skill package at `durin/templates/dream/` (main prompt + json_patch_reference + examples/ + rules), assembled by `dream_prompt_builder.build_dream_prompt`. | — | — |
+| Apply mechanism | v2 — JSON Patch over frontmatter + body delta with `.md.bak` rollback. **Shipped in Phase 1.9.** See `durin/memory/dream_apply.py`. | — | — |
 | Provenance tracking | Not explicit | New field in frontmatter; populated by every PATCH op | Schema change + LLM prompt + parser |
 | Archive of consumed episodic | Not implemented | New | New module; coordinate with indexer + alias index update |
 | Absorb-judge | Active for alias overlap | Same; add merge action that uses structured merge + archive | Extend `judge_pair` decision handling |
