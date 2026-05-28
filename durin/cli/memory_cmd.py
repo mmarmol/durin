@@ -171,6 +171,13 @@ def _discover_pending_consolidations(
     return pending
 
 
+# Exposed for the health-check recovery-hint anti-drift test
+# (tests/memory/test_health_critical_a7_recovery_hint.py). If this
+# tuple changes, the `_RECOVERY_HINTS` dict in
+# `durin/memory/health_check.py` must be updated or the test fails.
+VALID_REINDEX_TARGETS: tuple[str, ...] = ("all", "fts", "lancedb")
+
+
 @memory_app.command("reindex")
 def cmd_reindex(
     target: str = typer.Option(
@@ -199,9 +206,9 @@ def cmd_reindex(
         raise typer.Exit(code=0)
 
     target = target.lower()
-    if target not in ("all", "fts", "lancedb"):
+    if target not in VALID_REINDEX_TARGETS:
         raise typer.BadParameter(
-            f"--target must be one of 'all', 'fts', 'lancedb' "
+            f"--target must be one of {VALID_REINDEX_TARGETS} "
             f"(got {target!r})"
         )
 

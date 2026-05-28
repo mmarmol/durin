@@ -236,8 +236,28 @@ class HealthChecker:
                 return
 
 
+# A7 (2026-05-28): map probe-component names → the CLI command that
+# rebuilds that component from `memory/`. Probe names are not the
+# same as CLI --target values (drift between health_check probes
+# and `durin memory reindex`); this dict is where the translation
+# lives. If `durin memory reindex --target ...` renames, the
+# anti-drift test (test_health_critical_a7_recovery_hint.py) fails
+# loudly — the hint never goes stale silently.
+_RECOVERY_HINTS: dict[str, str] = {
+    "fts": "durin memory reindex --target fts",
+    "lance": "durin memory reindex --target lancedb",
+}
+_RECOVERY_HINT_FALLBACK = "durin memory reindex --target all"
+
+
 def _emit_critical(component: str, error: str, count: int) -> None:
-    """One-shot critical-status emit (re-armed on recovery)."""
+    """One-shot critical-status emit (re-armed on recovery).
+
+    A7: payload includes ``manual_recovery_hint`` — the CLI command
+    an operator can run to rebuild the failed component. The hint is
+    informational; nothing executes it automatically. See doc 07
+    §9.5 and ``_RECOVERY_HINTS`` above.
+    """
     try:
         emit_tool_event(
             "memory.health.critical",
@@ -245,6 +265,9 @@ def _emit_critical(component: str, error: str, count: int) -> None:
                 "component": component,
                 "consecutive_failures": count,
                 "last_error": error[:200],
+                "manual_recovery_hint": _RECOVERY_HINTS.get(
+                    component, _RECOVERY_HINT_FALLBACK,
+                ),
             },
         )
     except Exception:  # pragma: no cover

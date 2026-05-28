@@ -844,11 +844,16 @@ class MemoryHealthCriticalEvent(TypedDict):
 
     Emitted once per component per failure burst. Reset on the next
     successful tick.
+
+    Audit A7 (2026-05-28) added ``manual_recovery_hint`` — the CLI
+    command an operator runs to rebuild the failed component
+    (informational; nothing executes it automatically).
     """
 
     component: str
     consecutive_failures: int
     last_error: str
+    manual_recovery_hint: str
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
 

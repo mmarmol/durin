@@ -436,7 +436,34 @@ _RECOVERY_HINTS = {
 
 Y agregar al payload.
 
-**Estado**: pending
+**Resolución (2026-05-28) — Opción A con anti-drift test**: el campo se agrega + test que protege contra drift entre los hints y el CLI real. Aplicando `feedback_verify_quantifiers`, el comando sugerido por el doc original (`durin reindex --target lancedb`) era **incorrecto** — el comando real es `durin memory reindex` (le faltaba el `memory`). Y el `--target` accepta `lancedb` (no `lance` que es el nombre del probe). Ambos errores en spec corregidos en la implementación.
+
+Cambios:
+
+- [durin/memory/health_check.py](../../durin/memory/health_check.py):
+  * Nuevo `_RECOVERY_HINTS` dict — mapping probe-name → CLI command verbatim.
+  * Nuevo `_RECOVERY_HINT_FALLBACK = "durin memory reindex --target all"` para componentes nuevos sin hint específico.
+  * `_emit_critical()` payload incluye `manual_recovery_hint` (lookup con fallback).
+- [durin/cli/memory_cmd.py](../../durin/cli/memory_cmd.py): la constante `("all", "fts", "lancedb")` extraída a `VALID_REINDEX_TARGETS` exportable. Permite que el test anti-drift compare contra una single-source-of-truth en vez de hardcodear strings.
+- [durin/telemetry/schema.py](../../durin/telemetry/schema.py): `MemoryHealthCriticalEvent` gana `manual_recovery_hint: str`. Additive.
+- [tests/memory/test_health_critical_a7_recovery_hint.py](../../tests/memory/test_health_critical_a7_recovery_hint.py) (nuevo, 6 tests):
+  * Todos los probes conocidos (`fts`, `lance`) tienen hint.
+  * Todos los hints empiezan con `durin memory reindex` (no `durin reindex` — protege contra re-introducir el spec-typo).
+  * **Anti-drift core**: cada `--target X` en cada hint pasa la validación del CLI (importa `VALID_REINDEX_TARGETS`). Si alguien renombra un target sin actualizar `_RECOVERY_HINTS`, el test falla.
+  * Emit path para componente conocido usa el hint específico.
+  * Emit path para componente desconocido usa el fallback.
+  * TypedDict declara el field + preserva pre-A7 fields.
+
+- [docs/memory/07_telemetry_and_observability.md §9.5](07_telemetry_and_observability.md): reescrito con los 4 campos. Sección explica la traducción probe-name → CLI target (legacy drift `lance` vs `lancedb`) y referencia el anti-drift test. Corregido el comando equivocado de la spec v1.
+
+**Lecciones aplicadas**:
+- [[feedback-verify-quantifiers]]: verificar que el comando sugerido **realmente exista**. Doc 07 v1 decía `durin reindex` — comando inexistente (falta `memory`). El audit lo descubrió antes de implementar.
+- [[feedback-sync-tests-exercise-behavior]]: el test no compara strings entre doc y código — verifica que el target sugerido **pase la validación del CLI**, ejercitando el contrato real.
+- [[feedback-optimization-vs-principle]]: el fix es local al consumer (health_check + memory_cmd extract VALID_REINDEX_TARGETS). El consumer humano que lee logs es legítimo aunque no haya consumer software hoy.
+
+**Verificado pre-commit**: tests/memory/ 918 passed (912 baseline + 6 nuevos A7), 1 skipped.
+
+**Estado**: resolved (commit pendiente).
 
 ---
 
