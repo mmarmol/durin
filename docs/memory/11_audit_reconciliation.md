@@ -1730,6 +1730,106 @@ Tras cerrar E1-E38 y verificar test suite full (5088/0 fail), el usuario pidió 
 
 **Resolución**: doc 07 §9.3 reescrita + nota descartando los 2 campos aspiracionales con razón.
 
+### F12 — `compose_embedding_text` single source of truth ✅ RESOLVED
+
+**Doc 02 §4 (pre-F12)**: "**Single source of truth: `vector_index.py::compose_embedding_text(...)`**".
+
+**Realidad pre-F12**: NO había tal función. Dos especializadas:
+- `_compose_entity_page_text(name, aliases, body, attributes?, relations?)` para EntityPage.
+- `_embed_text(entry)` para MemoryEntry.
+
+**Decisión**: code → doc. Crear dispatcher público real que delega a la specialista correcta según tipo. La doc claim deja de ser aspiracional.
+
+**Resolución**:
+- `VectorIndex.compose_embedding_text(item, ...)` agregado como `@classmethod` público: routea EntityPage → `_compose_entity_page_text`, MemoryEntry → `_embed_text`, raises TypeError sobre input no soportado.
+- Las dos specialists quedan como implementation details (siguen accesibles, no removidas).
+- Doc 02 §4 actualizado: ahora el doc claim "Single source of truth" es literalmente cierto.
+
+### F13 — Doc 02 §11 schema_version 3 vs 4 ✅ RESOLVED
+
+**Doc 02 §11 (pre-F13)**: `CURRENT_SCHEMA_VERSION (3 as of A4)`.
+
+**Realidad**: `index_meta.py:55` dice `CURRENT_SCHEMA_VERSION = 4`. E9 lo bumpeó cuando entity page composition ganó `rendered_frontmatter`.
+
+**Resolución**: doc 02 §11 fila actualizada a `(4 as of audit E9 / F13 verification, 2026-05-28; bumped from 3 when entity-page composition gained rendered_frontmatter)`.
+
+### F14 — Doc 03 §2.1 scope enum + grep coverage drift ✅ RESOLVED
+
+**Doc 03 §2.1 (pre-F14)**: scope enum `dreamed|undreamed|all`; grep fallback dice "raw session/ingested" only.
+
+**Realidad**:
+- F2 agregó `archive` al enum.
+- `_safe_grep_fallback` (search_pipeline.py:472-479) cubre `memory/` + `sessions/` + `ingested/` para capturar memory entries written outside the tool layer (tests, scripts).
+
+**Resolución**: doc 03 §2.1 fila scope actualiza enum a `dreamed|undreamed|all|archive` + nota que grep también cubre `memory/` por entries-written-outside-tool.
+
+### F15 — Doc 04 §5.3 memory_drill description divergence ✅ RESOLVED
+
+**Doc 04 §5.3 (pre-F15)**: tres paragraphs; "For related context (recent post-cursor observations mentioning this URI)..." + "This tool is read-only. It does not modify state.".
+
+**Realidad** (`memory_drill.py::_PARAMETERS["description"]`): dos paragraphs; "This tool is read-only. For related context about an entity (recent observations, sessions mentioning it), use memory_search with the entity's name or URI as the query instead."
+
+**Resolución**: doc 04 §5.3 reescrito verbatim del shipped string + nota de audit F15 + clarifies fuente canonical.
+
+### F16 — Doc 05 §6 step 9 `.md.bak` ordering ✅ RESOLVED
+
+**Doc 05 §6 (pre-F16)**: step 8 = "Write to temp file + atomic rename"; step 9 = "Pre-write: copy the target to .md.bak". El step 9 ocurre DESPUÉS del write — contradicción intra-doc (no puede ser "pre-write" después del write).
+
+**Realidad** (`dream_apply.py:165-168`): la copia a `.md.bak` ocurre ANTES de cualquier mutación. Step 9 del doc tenía orden invertido.
+
+**Resolución**: doc 05 §6 reordenado: step 4 = copy `.md.bak` (pre-write); step 5-9 = apply + render + validate + write; step 10 = round-trip check + restore from bak on failure; step 11 = delete bak + commit. Nota referencia a `dream_apply.py:165-168` para verificability.
+
+### F17 — `existing_uris` slot wired (Dream prompt) ✅ RESOLVED
+
+**Pre-F17**: doc 06 §2 prometía `{existing_uris}` recent-mtime ranked + 100-cap para prevenir duplicate entity creation. `dream.py:733` pasaba `existing_uris=()`. F7 deferred wiring. LLM Dream creaba duplicados (`person:marcelo_marmol` cuando `person:marcelo` ya existía) sin signal del workspace state.
+
+**Decisión**: implementar el producer real.
+
+**Resolución**:
+- Nuevo módulo `durin/memory/entity_inventory.py` con `existing_uris_by_recent_mtime(workspace, *, cap=100)`.
+- Walk `memory/entities/<type>/<slug>.md` excluding archive (top-level + legacy nested).
+- Sort por file mtime descending; cap default 100.
+- `DreamConsolidator._build_prompt` reemplaza `existing_uris=()` con call al producer (try/except swallows failures → preserves dream resilience).
+- Tests TDD: 7 cases (empty workspace, collects URIs, recent-mtime sort, caps at 100, custom cap, excludes both archive variants, end-to-end via prompt builder).
+- Doc 05 §5.1 + doc 06 §2 actualizados con producer reference.
+
+### F18 — Doc 07 §6.1 trigger enum missing `post_ingest_threshold` ✅ RESOLVED
+
+**Doc 07 §6.1 (pre-F18)**: trigger enum `threshold | cron_daily | post_compaction | session_close | manual`. §6.2 (dream.end) ya incluía `post_ingest_threshold`.
+
+**Realidad**: `threshold_trigger.py:12-13` emite ambos en `memory.dream.start`.
+
+**Resolución**: doc 07 §6.1 enum extendido a `threshold | post_ingest_threshold | cron_daily | post_compaction | session_close | manual` + cross-ref a §6.2.
+
+### F19 — Doc 07 alarm threshold contradicción ($1.50 vs $5/day) ✅ RESOLVED
+
+**Pre-F19**: §10.2 "healthy range < $1.50 (alerting threshold)" vs §11 "Dream LLM cost > $5/day | error". Aparente contradicción.
+
+**Análisis cross-doc**: doc 09 §11.1 target soak $0.25-$1.50/day; doc 09 §13 alerting $1.50; doc 08 §3 R3 alarm $5/day. Los valores describen un two-tier alarm coherente (warn $1.50, error $5).
+
+**Decisión**: reconciliar §10.2 y §11 explicit-two-tier.
+
+**Resolución**:
+- §10.2 fila actualizada a "target $0.25-$1.50/day; warn at $1.50 (F19), error at $5".
+- §11 alerts table: nueva fila warn `> $1.50/day`; fila existente error `> $5/day` preservada.
+
+### F20 — `iteration`/`session_key` auto-injection wired ✅ RESOLVED
+
+**Doc 07 §4.1 (pre-F20)**: "auto-injected by `emit_tool_event`".
+
+**Realidad pre-F20**: claim aspiracional; código `_telemetry.py` no inyectaba nada. Dashboards joining `memory.recall` con otros eventos por `(session_key, iteration)` no tenían data para join.
+
+**Decisión**: implementar auto-injection real.
+
+**Resolución**:
+- `TelemetryLogger.__init__(path, *, session_key="")` ahora acepta session_key.
+- Properties `session_key`, `iteration` + `set_iteration(int)` method.
+- `get_session_logger(session_key, ...)` pasa session_key al constructor.
+- `emit_tool_event` lee `logger.session_key` y `logger.iteration` vía `getattr` con default (mocks de tests funcionan sin tener los atributos), auto-injects si no presentes en payload. Caller-supplied values win (subagent override).
+- `AgentLoop._on_iteration(iteration)` callback nuevo: setattr `_current_iteration` + `current_telemetry().set_iteration(iteration)`. Reemplaza la lambda anterior en setup del runner.
+- Tests TDD: 6 cases (session_key stamped, iteration starts 0, set_iteration updates, auto-inject, caller-supplied wins, no-logger no-crash).
+- Doc 07 §4.1 fila actualizada para indicar F20 wired.
+
 ### F2 — `scope='archive'` + CLI archive commands ✅ RESOLVED (parcial)
 
 **Doc 01 §3.6 + doc 04 §11 (pre-F2)**: prometían 3 surfaces de recovery:

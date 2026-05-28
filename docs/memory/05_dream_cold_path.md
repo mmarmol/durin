@@ -207,7 +207,7 @@ The prompt is the single most important LLM-facing surface in the system. It is 
 | `entity_id` (e.g., `person:marcelo`) | Trigger | The entity to consolidate |
 | `existing_page` | Read from disk | Current entity page (frontmatter + body) |
 | `existing_schema` | Derived from `existing_page` via `EntityPage.from_text` (audit F7, 2026-05-28) | List of attribute keys and relation types already used on this entity, rendered as `attributes: k1, k2` + `relation types: t1, t2` (sorted; `(none)` when empty). |
-| `existing_uris` | Workspace state | URIs of entities already in `memory/entities/**` (used to discourage duplicate creation). **Still passed empty in production** — audit F7 (2026-05-28) deferred wiring this slot pending a small walk + sort-by-mtime + cap producer. The slot rendering tolerates the empty case so the prompt stays valid. |
+| `existing_uris` | Workspace state via `durin.memory.entity_inventory.existing_uris_by_recent_mtime` (audit F17, 2026-05-28) | URIs of entities already in `memory/entities/**`, sorted by file mtime descending, capped at 100. Used to discourage duplicate entity creation (e.g. `person:marcelo_marmol` when `person:marcelo` already exists). |
 | `pending_entries` | Walk post-cursor `memory/episodic/`, `memory/stable/` filtered by entity tag | The N new observations to consolidate |
 | `recent_history` | `git log --since='30 days ago' -- <entity_path>` via `format_recent_history` (audit F7, 2026-05-28) | Last few git commits of THIS entity page, so LLM sees recent changes Dream made. |
 
@@ -309,15 +309,19 @@ After the LLM returns a response, the apply pipeline:
    - Paths only touch /attributes/*, /relations/*, /body (the latter is BODY_DELTA's job)
    - provenance source_refs must point to entries that exist
 3. Read the current .md file
-4. Apply the JSON Patch operations to the frontmatter (using `jsonpatch` lib)
-5. Append BODY_DELTA to the body if non-empty
-6. Update internal fields: dream_processed_through = batch_last_ts, updated_at = now
-7. Re-render the entire .md (frontmatter + body), validate round-trip
-8. Write to a temp file, fsync, atomically rename over the target
-9. Pre-write: copy the target to .md.bak
+4. Copy the target to `.md.bak` BEFORE any mutation (audit F16, 2026-05-28:
+   the pre-F16 doc listed this AFTER the write step, which contradicts
+   `durin/memory/dream_apply.py` lines 165-168 where the backup happens
+   first so any failure has something to restore from)
+5. Apply the JSON Patch operations to the frontmatter (using `jsonpatch` lib)
+6. Append BODY_DELTA to the body if non-empty
+7. Update internal fields: dream_processed_through = batch_last_ts, updated_at = now
+8. Re-render the entire .md (frontmatter + body), validate round-trip
+9. Write to a temp file, fsync, atomically rename over the target
 10. Post-write: re-parse the written file; if it doesn't pass schema validation,
-    restore from .md.bak and report failure
-11. Commit to memory/.git/ with the COMMIT message + structured trailers:
+    restore from `.md.bak` and report failure (`ROUND_TRIP` kind)
+11. On success: delete `.md.bak`; commit to `memory/.git/` with the COMMIT
+    message + structured trailers:
     Sources: <list of consumed entries>
     Entities-touched: <entity_id>
     Cursor-after: <batch_last_ts>

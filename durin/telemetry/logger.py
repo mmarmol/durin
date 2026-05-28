@@ -46,11 +46,31 @@ class TelemetryLogger:
     logged and skipped — telemetry must never break the calling tool.
     """
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, session_key: str = "") -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._path = path
         self._count = 0
         self._extra_sinks: list[_Sink] = []
+        # F20 (audit third pass, 2026-05-28): identity fields the
+        # emit_tool_event helper auto-injects into every payload so
+        # dashboards can join cross-event by (session_key, iteration)
+        # without each callsite stamping the IDs by hand.
+        self._session_key = session_key
+        self._iteration = 0
+
+    @property
+    def session_key(self) -> str:
+        return self._session_key
+
+    @property
+    def iteration(self) -> int:
+        return self._iteration
+
+    def set_iteration(self, iteration: int) -> None:
+        """Update the per-turn counter. AgentLoop calls this from its
+        `on_iteration` callback so subsequent `emit_tool_event` calls
+        in this turn carry the right value."""
+        self._iteration = int(iteration)
 
     @property
     def path(self) -> Path:
@@ -137,7 +157,7 @@ def get_session_logger(
     safe_key = re.sub(r"\.{2,}", "_", safe_key)
     today = date.today().isoformat()
     filename = f"{safe_key}_{today}.jsonl"
-    return TelemetryLogger(target_dir / filename)
+    return TelemetryLogger(target_dir / filename, session_key=session_key)
 
 
 # Per-task telemetry binding. Mirrors the file_state ContextVar pattern so a

@@ -97,8 +97,8 @@ first four required fields were emitted.
 | `keywords` | string \| null | yes | The LLM-supplied keyword hint (`null` when omitted) |
 | `recovered_from` | list of strings | only on degraded run | Pipeline sources that raised and recovered (e.g. `["vector"]`) |
 | `recovery_duration_ms` | float | only on degraded run | Wall-clock spent inside the safe wrappers that swallowed failures |
-| `iteration` | int | optional | Agent iteration counter (auto-injected by `emit_tool_event`) |
-| `session_key` | string \| null | optional | Session key (auto-injected) |
+| `iteration` | int | optional | Agent iteration counter (auto-injected by `emit_tool_event`, audit F20 2026-05-28). Caller-supplied values win — subagents stamping the parent session pass it explicitly. |
+| `session_key` | string \| null | optional | Session key (auto-injected by `emit_tool_event` from the bound `TelemetryLogger`, audit F20 2026-05-28). |
 
 `recovered_from` + `recovery_duration_ms` mirror the tool's response
 shape (`MemorySearchTool.execute()`) — both are omitted on clean
@@ -233,7 +233,7 @@ Already exists.
 
 | Field | Type | Description |
 |---|---|---|
-| `trigger` | string | `threshold | cron_daily | post_compaction | session_close | manual` |
+| `trigger` | string | `threshold | post_ingest_threshold | cron_daily | post_compaction | session_close | manual` (audit F18, 2026-05-28 added `post_ingest_threshold`; matches the `dream.end` enum in §6.2 and the `threshold_trigger.py` ingest path) |
 | `entity_filter` | string \| null | If filter was applied |
 | `entities_pending` | int | How many entities have post-cursor entries |
 
@@ -486,7 +486,7 @@ These are aggregations the operator should track (via dashboards or periodic che
 | `dream_skipped_rate` | `memory.dream.skipped` / total triggers | < 30% |
 | `dream_entity_failure_rate` | `memory.dream.entity_failed` / total entities consolidated | < 2% |
 | `dream_quarantined_entities` | accumulated `entities_quarantined` | 0-2 (alerting threshold) |
-| `dream_llm_cost_per_day_usd` | sum of `llm_input_tokens × price + ...` | < $1.50 (alerting threshold) |
+| `dream_llm_cost_per_day_usd` | sum of `llm_input_tokens × price + ...` | $0.25-$1.50/day (target soak range per doc 09 §11.1); two-tier alarm — warn at $1.50/day (audit F19, 2026-05-28), error at $5/day (§11 below + doc 08 §3 R3) |
 | `dream_duration_p95_ms` | `memory.dream.end.duration_ms` | < 60s (per pass) |
 
 ### 10.3 Index health
@@ -516,6 +516,7 @@ When telemetry collection lands in a dashboard, these conditions should alert:
 | Recall p95 > 2× expected | continuous over 1 hour | warn |
 | Recall persistent recovery (>5% rate) | over 1 hour | warn |
 | Dream entities_quarantined > 2 | single event | error |
+| Dream LLM cost > $1.50/day | rolling 24h sum | warn (audit F19, 2026-05-28: warn tier — operator inspects) |
 | Dream LLM cost > $5/day | rolling 24h sum | error |
 | Recall returning 0 results > 10% of calls | 1 hour rolling | warn (could be a real "nothing in memory" or a search bug) |
 | `memory.search.failure` with `recovery_succeeded=false` | single event | error |

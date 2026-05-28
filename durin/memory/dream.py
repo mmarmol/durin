@@ -32,6 +32,7 @@ from typing import Callable, Iterable, Protocol
 
 from durin.memory.aliases_index import AliasIndex
 from durin.memory.dream_git_history import format_recent_history
+from durin.memory.entity_inventory import existing_uris_by_recent_mtime
 from durin.memory.entity_page import EntityPage
 from durin.utils.git_repo import GitRepo, NothingToCommitError
 
@@ -767,6 +768,17 @@ class DreamConsolidator:
             )
             recent_history_text = ""
 
+        # F17 (audit third pass, 2026-05-28): workspace entity
+        # inventory so the LLM avoids creating duplicate URIs (e.g.
+        # `person:marcelo_marmol` when `person:marcelo` already exists).
+        try:
+            existing_uris = existing_uris_by_recent_mtime(self.workspace)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "dream: existing_uris producer failed: %s", exc,
+            )
+            existing_uris = ()
+
         ctx = DreamPromptContext(
             entity_id=entity_ref,
             existing_page_content=(
@@ -775,7 +787,7 @@ class DreamConsolidator:
             ),
             existing_attribute_keys=existing_attribute_keys,
             existing_relation_types=existing_relation_types,
-            existing_uris=(),
+            existing_uris=existing_uris,
             recent_history=recent_history_text,
             entries=tuple(entries_lines),
         )

@@ -198,6 +198,25 @@ class AgentLoop:
     def current_iteration(self) -> int:
         return self._current_iteration
 
+    def _on_iteration(self, iteration: int) -> None:
+        """Single callback for per-turn iteration updates.
+
+        Audit F20 (2026-05-28): also pushes the counter into the bound
+        TelemetryLogger so `emit_tool_event` can auto-inject
+        ``iteration`` into every event payload (doc 07 §4.1). Pre-F20
+        the field was declared NotRequired in the TypedDicts but no
+        callsite ever populated it.
+        """
+        self._current_iteration = iteration
+        try:
+            from durin.telemetry.logger import current_telemetry
+            tel = current_telemetry()
+            if tel is not None:
+                tel.set_iteration(iteration)
+        except Exception:  # noqa: BLE001
+            # Telemetry must never break the agent loop. Best-effort.
+            pass
+
     @property
     def tool_names(self) -> list[str]:
         return self.tools.tool_names
@@ -954,7 +973,7 @@ class AgentLoop:
             session_key=session_key,
             tool_hint_max_length=self.tool_hint_max_length,
             set_tool_context=self._set_tool_context,
-            on_iteration=lambda iteration: setattr(self, "_current_iteration", iteration),
+            on_iteration=lambda iteration: self._on_iteration(iteration),
             on_cache_usage=lambda payload: setattr(self, "_last_cache_usage", payload),
         )
         hook: AgentHook = (

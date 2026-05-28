@@ -112,7 +112,7 @@ boundary" below the table.
 |---|---|---|---|
 | `query` | string | yes | The semantic + lexical query. Used for embedding AND for FTS5 search. |
 | `keywords` | string \| null | no | Optional literal-match string. When provided, biases the lexical search; the vector search ignores it. |
-| `scope` | enum `dreamed|undreamed|all` | no (default `all`) | Limits which classes are searched. `dreamed` = entities + episodic + stable + corpus + session summaries; `undreamed` = raw session/ingested grep fallback; `all` = both. |
+| `scope` | enum `dreamed|undreamed|all|archive` | no (default `all`) | Limits which classes are searched. `dreamed` = entities + episodic + stable + corpus + session summaries; `undreamed` = raw session/ingested grep fallback; `all` = both; `archive` = on-demand walk of `memory/archive/**` for recovery / diagnostic queries (audit F2, 2026-05-28). Audit F14 (2026-05-28) also corrected the grep-fallback coverage note: the fallback walks `memory/` in addition to `sessions/` + `ingested/` so memory entries written outside the tool layer (tests, scripts) still surface. |
 | `level` | enum `warm|cold` | no (default `warm`) | `warm` returns the headline+summary+metadata; `cold` enriches each hit with its body. |
 | `limit` | int | no (default 10) | Max results returned after sectioning. |
 
