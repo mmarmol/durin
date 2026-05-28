@@ -302,6 +302,44 @@ class MemorySearchConfig(Base):
     )
 
 
+class MemoryFileWatcherConfig(Base):
+    """Background filesystem watcher for ``memory/`` (audit A11 / doc 02 §6.3).
+
+    Default ON. When enabled, the agent loop starts a
+    :class:`durin.memory.file_watcher.MemoryFileWatcher` that listens
+    for ``.md`` modifications under the workspace's ``memory/``
+    directory and triggers ``reindex_one_file`` on each change. Lets
+    the user edit memory entries with vim and have the next
+    ``memory_search`` see the change without running ``durin memory
+    reindex`` manually.
+
+    Disable to skip the watcher (one less background thread + no
+    watchdog Observer). Indices stay in sync via the per-tool
+    re-index-on-write hooks (memory_store / memory_ingest / Dream).
+    """
+
+    enabled: bool = True
+
+
+class MemoryHealthCheckConfig(Base):
+    """Periodic memory subsystem health probe (audit A11 / doc 02 §5.1).
+
+    Default ON. When enabled, the agent loop starts a daemon thread
+    that calls :meth:`durin.memory.health_check.HealthChecker.run_tick`
+    every ``interval_seconds``. Each tick emits
+    ``memory.health_check`` (per A6 — `tick_id`, `duration_ms`,
+    `components`, `drift_count`, `errors`) and runs the retention
+    pass for telemetry files (P7.2 piggyback).
+
+    Disable to skip the cron (one less background thread). Health
+    can still be probed on demand by calling ``run_tick()`` directly
+    from a CLI command.
+    """
+
+    enabled: bool = True
+    interval_seconds: int = Field(default=900, ge=60, le=86_400)
+
+
 class MemoryConfig(Base):
     """Memory subsystem configuration root.
 
@@ -315,12 +353,21 @@ class MemoryConfig(Base):
     ``enabled`` — manual ``durin memory dream`` works either way.
 
     ``search`` configures the search pipeline (cross-encoder etc.).
+
+    ``file_watcher`` and ``health_check`` (audit A11) wire the
+    background services the agent loop runs.
     """
 
     enabled: bool = False
     embedding: MemoryEmbeddingConfig = Field(default_factory=MemoryEmbeddingConfig)
     dream: MemoryDreamConfig = Field(default_factory=MemoryDreamConfig)
     search: MemorySearchConfig = Field(default_factory=MemorySearchConfig)
+    file_watcher: MemoryFileWatcherConfig = Field(
+        default_factory=MemoryFileWatcherConfig,
+    )
+    health_check: MemoryHealthCheckConfig = Field(
+        default_factory=MemoryHealthCheckConfig,
+    )
 
 
 class AuxModelsConfig(Base):

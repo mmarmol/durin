@@ -395,6 +395,102 @@ class AgentLoop:
         # session-close on (low frequency, safe).
         self.on_session_close: Callable[[str], None] | None = None
 
+        # A11 (2026-05-28) — wire memory background services. Both
+        # default ON; opt-out per `cfg.memory.{file_watcher,
+        # health_check}.enabled`. Failures here are isolated — the
+        # agent loop still functions; only the optional background
+        # work is skipped.
+        self._memory_file_watcher: Any | None = None
+        self._memory_health_scheduler: Any | None = None
+        self._start_memory_background_services()
+
+    # ------------------------------------------------------------------
+    # A11 — memory background services lifecycle
+    # ------------------------------------------------------------------
+
+    def _start_memory_background_services(self) -> None:
+        """Start the optional memory file watcher and health-check
+        scheduler if the config enables them.
+
+        Each service is constructed and started independently; a
+        failure in one doesn't affect the other. Tests that build
+        an AgentLoop with ``app_config=None`` (most of them) get
+        no services — keeps test isolation tight.
+        """
+        if self.app_config is None:
+            return
+        mem_cfg = getattr(self.app_config, "memory", None)
+        if mem_cfg is None:
+            return
+
+        fw_cfg = getattr(mem_cfg, "file_watcher", None)
+        if fw_cfg is not None and getattr(fw_cfg, "enabled", False):
+            try:
+                from durin.memory.file_watcher import MemoryFileWatcher
+
+                watcher = MemoryFileWatcher(self.workspace)
+                watcher.start()
+                self._memory_file_watcher = watcher
+                logger.info(
+                    "memory file watcher started for {}", self.workspace,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "memory file watcher failed to start "
+                    "(continuing without): {}", exc,
+                )
+
+        hc_cfg = getattr(mem_cfg, "health_check", None)
+        if hc_cfg is not None and getattr(hc_cfg, "enabled", False):
+            try:
+                from durin.memory.health_check import (
+                    HealthCheckScheduler,
+                    HealthChecker,
+                )
+
+                checker = HealthChecker(self.workspace)
+                scheduler = HealthCheckScheduler(
+                    checker,
+                    interval_seconds=int(
+                        getattr(hc_cfg, "interval_seconds", 900),
+                    ),
+                )
+                scheduler.start()
+                self._memory_health_scheduler = scheduler
+                logger.info(
+                    "memory health check scheduler started "
+                    "(interval={}s)",
+                    getattr(hc_cfg, "interval_seconds", 900),
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "memory health check failed to start "
+                    "(continuing without): {}", exc,
+                )
+
+    def _stop_memory_background_services(self) -> None:
+        """Stop the memory background services. Safe to call when
+        they were never started — each is None-guarded."""
+        watcher = self._memory_file_watcher
+        if watcher is not None:
+            try:
+                watcher.stop()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "memory file watcher stop raised: {}", exc,
+                )
+            self._memory_file_watcher = None
+
+        scheduler = self._memory_health_scheduler
+        if scheduler is not None:
+            try:
+                scheduler.stop()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "memory health scheduler stop raised: {}", exc,
+                )
+            self._memory_health_scheduler = None
+
     @classmethod
     def from_config(
         cls,
@@ -1270,6 +1366,9 @@ class AgentLoop:
     def stop(self) -> None:
         """Stop the agent loop."""
         self._running = False
+        # A11: drain memory background services so the watchdog
+        # Observer and health-check thread terminate cleanly.
+        self._stop_memory_background_services()
         logger.info("Agent loop stopping")
 
     async def _process_system_message(
