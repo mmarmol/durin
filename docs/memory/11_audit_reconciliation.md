@@ -746,7 +746,7 @@ Hay que clarificar cuál se le presenta al LLM en runtime. Verificar `Tool` base
 
 ---
 
-### B2 — Doc 99_phase_progress_review obsoleto
+### B2 — Doc 99_phase_progress_review obsoleto ✅ RESOLVED
 
 **Doc dice** (`docs/memory/99_phase_progress_review.md:5`): "4885 tests pasando".
 
@@ -764,7 +764,7 @@ Hay que clarificar cuál se le presenta al LLM en runtime. Verificar `Tool` base
 
 ---
 
-### B3 — Doc 10 marca como pending lo que está hecho
+### B3 — Doc 10 marca como pending lo que está hecho ✅ RESOLVED
 
 **Doc dice** (`docs/memory/10_remaining_work.md` líneas 24, P2.x, P3.x, P4.x, P5.x, P6.x, P7.x): muchos items sin ✅ DONE.
 
@@ -790,7 +790,7 @@ Línea 24 dice "queda Phase 4 + Phase 8" — Phase 4 cerrado.
 
 ---
 
-### B4 — P5.5 implementado distinto al spec
+### B4 — P5.5 implementado distinto al spec ✅ RESOLVED
 
 **Doc dice** (`docs/memory/10_remaining_work.md` P5.5):
 > *"Script `scripts/audit_tool_descriptions.py` extrae las descripciones... falla con diff específico si difieren. Wired en CI."*
@@ -808,7 +808,7 @@ Línea 24 dice "queda Phase 4 + Phase 8" — Phase 4 cerrado.
 
 ---
 
-### B5 — Retention: 1 año en doc vs 90 días en código
+### B5 — Retention: 1 año en doc vs 90 días en código ✅ RESOLVED
 
 **Doc dice** (`docs/memory/07_telemetry_and_observability.md` §12.2):
 > *"old events compressed... kept 1 year, then deleted"*
@@ -832,7 +832,7 @@ DELETION_AGE_DAYS: int = 90
 
 ---
 
-### B6 — Doc 03 §17 status table contradice §11 sobre MMR
+### B6 — Doc 03 §17 status table contradice §11 sobre MMR ✅ RESOLVED
 
 **Doc dice** §11: "MMR — Removed from MVP".
 **Doc dice** §17 status table: "MMR | Not implemented | New step, default enabled".
@@ -847,7 +847,7 @@ DELETION_AGE_DAYS: int = 90
 
 ---
 
-### B7 — Doc 05 §15 + doc 06 §10 status: "v1 page rewrites"
+### B7 — Doc 05 §15 + doc 06 §10 status: "v1 page rewrites" ✅ RESOLVED
 
 **Doc dice** (`docs/memory/05_dream_cold_path.md:201` y §15 status table): *"current code uses full-page rewrites"*.
 **Doc dice** (`docs/memory/06_prompts_and_instructions.md` §10): *"templates/dream/consolidator.md: v1 (page + commit)"*.
@@ -865,7 +865,7 @@ DELETION_AGE_DAYS: int = 90
 
 ---
 
-### B8 — Doc 03 §15 promete config keys que no existen
+### B8 — Doc 03 §15 promete config keys que no existen ✅ RESOLVED
 
 **Doc dice** (`docs/memory/03_search_pipeline.md` §15):
 
@@ -925,7 +925,7 @@ Sólo `cross_encoder`. Lo demás está hardcoded:
 
 ---
 
-### B10 — Eventos emitidos no documentados
+### B10 — Eventos emitidos no documentados ✅ RESOLVED
 
 **Código dice**:
 - `memory.embedding.load` (`durin/memory/embedding.py:172`)
@@ -944,7 +944,7 @@ Los tres están en `EVENTS` registry y se emiten.
 
 ---
 
-### B11 — Doc 06 §2 sólo menciona `## Memory` (incompleta)
+### B11 — Doc 06 §2 sólo menciona `## Memory` (incompleta) ✅ RESOLVED
 
 **Doc dice** (`docs/memory/06_prompts_and_instructions.md` §2): reproduce sólo el bloque `## Memory` del identity.md.
 

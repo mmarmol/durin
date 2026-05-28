@@ -23,6 +23,18 @@ Este documento es el **listado granular de lo que queda** después del estado ac
 
 **Estado al cierre de la sesión actual**: 4888 tests pasando, 19 skipped (3 marcados explícitamente "Phase 5 follow-up"). El sistema v2 anda end-to-end. Lo que queda son refinamientos + Phase 4 (cross-encoder) + Phase 8 (validation).
 
+> **Audit refresh 2026-05-28** (audit B3): la mayor parte de los items P2-P7 listados sin ✅ DONE abajo **se cerraron durante el día 2026-05-28** vía los commits del audit A1-A11. El estado vigente y razonado por item está en [`11_audit_reconciliation.md`](11_audit_reconciliation.md) (sección de cada A*). Resumen rápido por phase:
+>
+> - **Phase 2**: P2.2 ✅ (commit `c3eff1e`), P2.3 ✅ módulo + cableado en `989d33e` (A11), P2.4 ✅ módulo + cableado en `989d33e` (A11), **P2.5 reverted** en `7a835f8` (audit A4 — viola principio "filesystem es source of truth").
+> - **Phase 3**: P3.3 ✅ commit `bc55686`.
+> - **Phase 4**: P4.1/P4.2/P4.3 ✅ commit `b3c50c6`. P4.4 ✅ commit `11d9f96`.
+> - **Phase 5**: P5.1 ✅, P5.2 ✅ commit `2e7097a`, P5.3 ✅ commit `572d5cf`, P5.4 ✅ era no-op (verificado en B4 audit), P5.5 ✅ pero **shipped como pytest sync test** en `tests/memory/test_tool_description_sync.py` en lugar del script `scripts/audit_tool_descriptions.py` que el plan original proponía — divergencia documentada en B4, mismo objetivo cumplido vía CI test, P5.6 ✅ commit `2e7097a`.
+> - **Phase 6**: P6.1/P6.2/P6.3 ✅ commit `572d5cf`. P6.4 ya estaba ✅.
+> - **Phase 7**: P7.1 ya estaba ✅. P7.2 ✅ commit `2e7097a`. P7.3 (PushSink) ✅ wired end-to-end en `b822b75` (A8) con secret store + config + tests.
+> - **Phase 8**: pendiente (validación con bench LoCoMo etc.).
+>
+> Los items individuales abajo conservan su descripción para histórico; las secciones con ✅ DONE in-line están up-to-date. Cuando hay divergencia entre el plan original y lo que efectivamente se shippeó, el doc 11 documenta la razón.
+
 ---
 
 ## Phase 2 — Indexing v2 (4 items pendientes)
@@ -30,7 +42,7 @@ Este documento es el **listado granular de lo que queda** después del estado ac
 ### P2.1 — Re-index-on-write hooks ✅ DONE (commit `1ea70ac`)
 Documentado aquí para histórico. Hooks en `memory_store.execute`, `memory_ingest.execute`, `DreamConsolidator.apply`.
 
-### P2.2 — Schema-version startup check
+### P2.2 — Schema-version startup check ✅ DONE (commit `c3eff1e`)
 
 - **TYPE**: 🔴 integration
 - **DoD**: Cuando `<workspace>/.durin/index/meta.json::schema_version != CURRENT_SCHEMA_VERSION` o el archivo no existe, la próxima llamada a `MemorySearchTool.execute` (o equivalente) dispara `rebuild_fts_index` + `VectorIndex.rebuild_from_workspace` automáticamente y emite `memory.index.rebuild` con `reason="schema_mismatch"`.
@@ -43,7 +55,7 @@ Documentado aquí para histórico. Hooks en `memory_store.execute`, `memory_inge
 - **Risk**: si el rebuild tarda (>10s para workspaces grandes), bloquea el primer `memory_search` post-update. Mitigación: emitir progress log + considerar lock para que dos procesos no rebuild-en a la vez.
 - **Test**: setear `meta.json` con `schema_version=1`, llamar `memory_search`, assert rebuild corrió + meta actualizado.
 
-### P2.3 — Watchdog file watcher
+### P2.3 — Watchdog file watcher ✅ DONE (module: `d9a4d8e`; wired in `AgentLoop` in `989d33e` / audit A11)
 
 - **TYPE**: 🟢 module (~120 LOC)
 - **DoD**: Modificar `memory/entities/person/marcelo.md` con vim y, dentro de 5 segundos, el siguiente `memory_search` para "marcelo" surface las palabras del edit. Adicionalmente: el commit en `memory/.git/` queda con `author: user`.
@@ -57,7 +69,7 @@ Documentado aquí para histórico. Hooks en `memory_store.execute`, `memory_inge
 - **Risk**: watchdog en macOS usa FSEvents (built-in); en Linux usa inotify (fine); en Docker / network FS puede fallar — `watchdog` falla a polling automáticamente pero hay que verificar. Doc 02 §6.3 confirma esta mitigación.
 - **Test**: `tmp_path` + tocar archivo + esperar evento + assert FTS index lo ve.
 
-### P2.4 — Health-check cron
+### P2.4 — Health-check cron ✅ DONE (module: `022d4b1`; scheduler + lifecycle wiring in `989d33e` / audit A11)
 
 - **TYPE**: 🟢 module (~150 LOC, per spec §5.1)
 - **DoD**: Cada 15 minutos (configurable), un job background:
@@ -75,7 +87,7 @@ Documentado aquí para histórico. Hooks en `memory_store.execute`, `memory_inge
 - **Risk**: cron en proceso del agente vs cron separado. Doc 02 sugiere in-process (un thread). Eso significa que `durin agent` debe correr para que el health-check ocurra — apagar agente = no probe.
 - **Test**: simular fallo de LanceDB con monkeypatch + verificar emit + verificar pause después de 3 fallos.
 
-### P2.5 — LanceDB body column extension
+### P2.5 — LanceDB body column extension ❌ REVERTED (audit A4, commit `7a835f8`) — violated "filesystem is source of truth"
 
 - **TYPE**: 🟡 refactor (~50 LOC)
 - **DoD**: `level="cold"` queries devuelven el body sin tocar disco. `VectorIndex.rebuild_from_workspace` popula el nuevo column. Tabla existente se migra (rebuild forzado on schema_version bump — ver P2.2).
@@ -93,7 +105,7 @@ Documentado aquí para histórico. Hooks en `memory_store.execute`, `memory_inge
 
 ### P3.1 — Entity-aware rerank wiring ✅ DONE (commit `1ea70ac`)
 ### P3.2 — Grep fallback wired ✅ DONE (commit `1ea70ac`)
-### P3.3 — Intent router pattern detection
+### P3.3 — Intent router pattern detection ✅ DONE (commit `bc55686`)
 
 - **TYPE**: 🟢 module (~80 LOC)
 - **DoD**: Query "mmarmol@mxhero.com" (email pattern) → search_pipeline detecta el pattern + boost lexical weight a 2.5 incluso si el agente NO pasó `keywords`. Lo mismo para queries que parecen URLs (`https://...`), UUIDs, file paths.
@@ -109,7 +121,7 @@ Documentado aquí para histórico. Hooks en `memory_store.execute`, `memory_inge
 
 ## Phase 4 — Cross-encoder opt-in (todo) — total ~250 LOC
 
-### P4.1 — Cross-encoder runner module
+### P4.1 — Cross-encoder runner module ✅ DONE (commit `b3c50c6`)
 
 - **TYPE**: 🟢 module (~100 LOC)
 - **DoD**: `CrossEncoderReranker(model_id).score(query, [doc_text, ...]) -> [scores]`. Lazy-loads model on first call. Batches inputs of N=32. Graceful degradation: model load failure → log + return None (caller skips).
@@ -121,7 +133,7 @@ Documentado aquí para histórico. Hooks en `memory_store.execute`, `memory_inge
 - **Risk**: model download ~1.1GB en primera invocación. Mitigación: progress log + considerar pre-download en onboarding (P6.1).
 - **Test**: mock model with stub `score(query, docs) → [random]`; verify batching de 32; verify failure handling.
 
-### P4.2 — Integration en search_pipeline step 5
+### P4.2 — Integration en search_pipeline step 5 ✅ DONE (commit `b3c50c6`)
 
 - **TYPE**: 🔴 integration (~30 LOC)
 - **DoD**: Cuando `memory.search.cross_encoder.enabled=true` y `pipeline_result.hits` no-empty, `run_search_pipeline` invoca el reranker con (query, [hit.snippet+body for hit in top 50]) y reordena. Hits ranked > 10 dropped. Emit `memory.recall.rerank`.
@@ -133,7 +145,7 @@ Documentado aquí para histórico. Hooks en `memory_store.execute`, `memory_inge
 - **Risk**: latency. Mitigación: spec dice OFF por default; user explícito.
 - **Test**: con cross_encoder enabled + stub model, verifica re-ranking aplicado.
 
-### P4.3 — Onboarding question (doc 06 §6.2)
+### P4.3 — Onboarding question (doc 06 §6.2) ✅ DONE (commit `b3c50c6`)
 
 - **TYPE**: 🟢 module (~30 LOC)
 - **DoD**: `durin/cli/onboard_memory.py::prompt_enable_cross_encoder(current: bool) -> dict` con texto verbatim del doc 06 §6.2. Devuelve `{"enabled": bool, "model": str}`.
@@ -162,7 +174,7 @@ Documentado aquí para histórico. Hooks en `memory_store.execute`, `memory_inge
 ## Phase 5 — Tools v2 (4 items pendientes, ~180 LOC)
 
 ### P5.1 — `memory_search` keywords ✅ DONE (commit `c820447` / D6)
-### P5.2 — `memory_search` `recovered_from` + `recovery_duration_ms` fields
+### P5.2 — `memory_search` `recovered_from` + `recovery_duration_ms` fields ✅ DONE (commit `2e7097a`)
 
 - **TYPE**: 🟡 refactor (~40 LOC)
 - **DoD**: Cuando `run_search_pipeline` activa un recovery (e.g. lance index recreado on the fly), el dict de respuesta del tool incluye `"recovered_from": ["lance"]` y `"recovery_duration_ms": <float>`. Cuando no hay recovery, los campos no aparecen.
@@ -173,7 +185,7 @@ Documentado aquí para histórico. Hooks en `memory_store.execute`, `memory_inge
 - **LOC**: ~40 + 2 tests.
 - **Depende de**: nothing — puede ir antes o después de P2.4 (health-check).
 
-### P5.3 — `memory_ingest` recursive character splitter
+### P5.3 — `memory_ingest` recursive character splitter ✅ DONE (commit `572d5cf`)
 
 - **TYPE**: 🟡 refactor (~60 LOC)
 - **DoD**: `memory_ingest` con un PDF de 50 páginas genera N chunks de ~1500 chars con ~200 chars de overlap, prefiriendo cortes en paragraph > line > sentence > word > char. Verificable via test: feed text de 10000 chars, verify chunk count + overlaps + boundary preference.
@@ -184,7 +196,7 @@ Documentado aquí para histórico. Hooks en `memory_store.execute`, `memory_inge
 - **Risk**: cambios al splitter pueden mover chunks existentes en producción → re-ingest necesario. Mitigación: solo aplica a nuevos ingests; los corpus existentes no se re-procesan automáticamente.
 - **Test**: text de 10k chars con párrafos definidos; verify cuts en paragraph boundaries; verify overlap.
 
-### P5.4 — `memory_drill` remove `include_context` flag
+### P5.4 — `memory_drill` remove `include_context` flag ✅ DONE (no-op — verified the flag never existed; B4 audit)
 
 - **TYPE**: 🟡 refactor (~10 LOC)
 - **DoD**: La descripción del tool en doc 06 §3.4 no menciona `include_context`. El tool en `durin/agent/tools/memory_drill.py` lo tiene; eliminar del schema + execute signature.
@@ -193,7 +205,7 @@ Documentado aquí para histórico. Hooks en `memory_store.execute`, `memory_inge
 - **LOC**: ~10 (delete code + update test mocks).
 - **Risk**: tests que pasan `include_context` → fail. Update them.
 
-### P5.5 — Tool description audit script
+### P5.5 — Tool description audit script ✅ DONE differently (B4 divergence: shipped as `tests/memory/test_tool_description_sync.py` instead of `scripts/audit_tool_descriptions.py` — same outcome via CI test, simpler integration)
 
 - **TYPE**: 🟢 module + CI (~50 LOC)
 - **DoD**: Script `scripts/audit_tool_descriptions.py` extrae las descripciones de los 4 tools de memoria + el bloque Memory de `identity.md`; compara contra los strings canónicos en doc 06 §3 y §2; falla con diff específico si difieren. Wired en CI.
@@ -205,7 +217,7 @@ Documentado aquí para histórico. Hooks en `memory_store.execute`, `memory_inge
 - **LOC**: ~50 (script + 1 test + 1 CI step).
 - **Risk**: spec drift inevitable — la spec evoluciona. Mitigación: el script muestra DIFF preciso, el dev decide actualizar spec o código.
 
-### P5.6 — Re-test los 3 skipped en commit `c820447`
+### P5.6 — Re-test los 3 skipped en commit `c820447` ✅ DONE (commit `2e7097a`)
 
 - **TYPE**: 🟣 test-migration (~50 LOC)
 - **DoD**: Los 3 tests skipped en `test_phase2_smoke.py` y `test_t1_wiring_e2e.py` (mencionados en commit message) se re-escriben contra la v2 surface: assertions sobre resultados (qué hits surge primero) en vez de detalles internos (qué función se llamó).
@@ -220,7 +232,7 @@ Documentado aquí para histórico. Hooks en `memory_store.execute`, `memory_inge
 
 ## Phase 6 — Prompts v2 (4 items pendientes, ~100 LOC)
 
-### P6.1 — Onboarding wizard: memory subsystem enable
+### P6.1 — Onboarding wizard: memory subsystem enable ✅ DONE (commit `572d5cf`)
 
 - **TYPE**: 🟢 module (~30 LOC)
 - **DoD**: `prompt_enable_memory_subsystem(current: bool) -> bool` con texto verbatim doc 06 §6.1. Wired en `durin onboard` flow.
@@ -228,14 +240,14 @@ Documentado aquí para histórico. Hooks en `memory_store.execute`, `memory_inge
   - `durin/cli/onboard_memory.py` (ya existe, añadir función).
   - Wizard wiring: `durin/cli/onboard.py::run_onboard` — añadir step "Memory" antes del config provider.
 
-### P6.2 — Onboarding: aux model for memory (doc 06 §6.4)
+### P6.2 — Onboarding: aux model for memory (doc 06 §6.4) ✅ DONE (commit `572d5cf`)
 
 - **TYPE**: 🟢 module (~30 LOC)
 - **DoD**: `prompt_memory_aux_model(current_agent_model: str, current: str | None) -> str` ofrece "same / specify / skip". Setea `config.aux_models.memory`.
 - **Refs**:
   - `durin/cli/onboard_memory.py`.
 
-### P6.3 — Tool description constants per doc 06 §3
+### P6.3 — Tool description constants per doc 06 §3 ✅ DONE (commit `572d5cf`)
 
 - **TYPE**: 🟡 refactor + 📄 docs sync (~50 LOC)
 - **DoD**: Las descripciones de `memory_search`, `memory_store`, `memory_ingest`, `memory_drill` en código coinciden VERBATIM con doc 06 §3.1-§3.4. La verificación es automática vía P5.5.
@@ -254,7 +266,7 @@ Documentado aquí para histórico. Hooks en `memory_store.execute`, `memory_inge
 ## Phase 7 — Telemetry v2 (3 items pendientes)
 
 ### P7.1 — Privacy truncation ✅ DONE (commit `2bdafec`)
-### P7.2 — Retention / log rotation
+### P7.2 — Retention / log rotation ✅ DONE (commit `2e7097a`)
 
 - **TYPE**: 🟢 module (~80 LOC)
 - **DoD**: Telemetry JSONL files > 30 days old se comprimen a `.jsonl.gz`. Archives > 90 days se borran. Job corre diariamente vía health-check cron (P2.4).
@@ -264,7 +276,7 @@ Documentado aquí para histórico. Hooks en `memory_store.execute`, `memory_inge
   - Hook en P2.4 health-check tick.
 - **LOC**: ~80 (module + tests).
 
-### P7.3 — HTTPS push opt-in
+### P7.3 — HTTPS push opt-in ✅ DONE (PushSink: `2e7097a`; end-to-end wiring incl. secret store + config + tests: `b822b75` / audit A8)
 
 - **TYPE**: 🟢 module (~120 LOC)
 - **DoD**: Cuando `telemetry.push_url` está set, eventos se envían además al endpoint via POST batches (cada 10 eventos o cada 60s). Authentication via `telemetry.push_token`.

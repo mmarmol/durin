@@ -36,9 +36,9 @@ Also documented here (consumed structurally, not as instruction text):
 
 ---
 
-## 2. `identity.md` Memory section
+## 2. `identity.md` Memory sections
 
-`durin/templates/agent/identity.md` is the agent's persistent identity prompt. It contains a `## Memory` section that the agent reads every turn. Canonical text:
+`durin/templates/agent/identity.md` is the agent's persistent identity prompt. It contains **two** memory sections that the agent reads every turn: `## Memory` (read-time guidance) and `## Memory writing` (write-time guidance, added in audit B11). Canonical text:
 
 ```markdown
 ## Memory
@@ -65,6 +65,21 @@ more current — explain the difference instead of choosing silently.
 
 For compound or multi-part questions, issue 2-3 searches with different
 phrasings rather than one long query. This consistently improves recall.
+```
+
+```markdown
+## Memory writing
+
+When the user asks you to store or ingest substantial content (a
+document, a fact about a person, a decision):
+
+1. Call `memory_search` first with the topic to see what you already
+   know.
+2. Use that context to choose: store the new content noting how it
+   complements existing notes; skip if redundant; or surface the
+   overlap to the user before storing.
+
+This avoids duplicates and keeps the memory store coherent.
 ```
 
 ### 2.1 What this prompt does NOT say
@@ -712,7 +727,7 @@ None at the module level.
 |---|---|---|---|
 | `identity.md` Memory section | v2 shipped 2026-05-25 (+3.9pp) | Light revision per §2 | Minor wording polish |
 | Tool descriptions | Active in tools' `DESCRIPTION` constants | Sync to §3 canonical text | Reconcile any divergence |
-| `templates/dream/consolidator.md` | v1 (page + commit) | v2 (skill package multi-file per §4) | Rewrite; create supporting files; update prompt builder |
+| `templates/dream/consolidator.md` | v2 — skill package multi-file per §4. **Shipped in Phase 1.9 (commit `6aafc3f`).** | — | — |
 | `templates/dream/absorb_judge.md` | Active | Same | None |
 | Onboarding wizard text | Partial | Add §6 questions | Wizard CLI + webui changes |
 | Structural markers | CANONICAL/FRAGMENT in code | + SESSION + INGESTED | Renderer extension |
