@@ -59,8 +59,8 @@ class TestEpisodicBootstrap:
     def test_picks_up_episodic_entities_when_no_entity_pages(
         self, tmp_path: Path,
     ) -> None:
-        """Sin entity_pages, AliasIndex se debe poblar con slugs derivados
-        de los `entities:` frontmatter de las episodic entries."""
+        """Without entity_pages, AliasIndex must populate with slugs derived
+        from the `entities:` frontmatter of the episodic entries."""
         store_memory(
             tmp_path, content="Caroline lives in Boston",
             entities=["person:caroline"],
@@ -82,7 +82,7 @@ class TestEpisodicBootstrap:
     def test_handles_mixed_classes_corpus_stable_pending(
         self, tmp_path: Path,
     ) -> None:
-        """corpus / stable / pending entries con entities también cuentan."""
+        """corpus / stable / pending entries with entities also count."""
         store_memory(
             tmp_path, content="Python tips collection",
             entities=["topic:python"],
@@ -145,9 +145,9 @@ class TestEntityPagePrecedence:
     def test_entity_page_aliases_preserved_alongside_episodic_slug(
         self, tmp_path: Path,
     ) -> None:
-        """Entity_page con `aliases: [Caro, Carolina]` debe seguir
-        siendo lookup-able por esos aliases, además del slug que
-        derivamos del episodic."""
+        """Entity_page with `aliases: [Caro, Carolina]` must still be
+        lookup-able by those aliases, in addition to the slug we
+        derive from the episodic."""
         memory_root = tmp_path / "memory"
         _write_entity_page(
             memory_root, "person", "caroline",

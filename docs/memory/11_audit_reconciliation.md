@@ -1,33 +1,33 @@
 ---
-title: Reconciliación auditoría doc ↔ código (2026-05-28)
+title: Audit reconciliation doc ↔ code (2026-05-28)
 version: 1.0
-status: living document — se cierra item por item
+status: living document — closed item by item
 last_updated: 2026-05-28
-audience: humans + LLMs cerrando deuda doc/código
+audience: humans + LLMs closing doc/code debt
 depends_on: docs/memory/00..10 (audited)
 ---
 
-# Reconciliación auditoría — doc vs código
+# Audit reconciliation — doc vs code
 
-Este doc lista cada discrepancia encontrada entre `docs/memory/00..10` y el código real en `durin/`. Cada item incluye:
+This doc lists each discrepancy found between `docs/memory/00..10` and the real code in `durin/`. Each item includes:
 
-- **Doc dice** — cita verbatim + cita `file:line`
-- **Código dice** — cita verbatim + cita `file:line`
-- **Quién tiene razón** — evaluado con justificación
-- **Acción propuesta** — fix code, fix doc, o ambos
-- **Estado** — `pending` / `resolved` / `wontfix`
+- **Doc says** — verbatim quote + `file:line` cite
+- **Code says** — verbatim quote + `file:line` cite
+- **Who is right** — evaluated with justification
+- **Proposed action** — fix code, fix doc, or both
+- **State** — `pending` / `resolved` / `wontfix`
 
-**Regla**: no asumir nada. Sólo lo verificado con `grep`/`read` directos sobre el código actual entra como "code dice".
+**Rule**: assume nothing. Only what is verified with direct `grep`/`read` against the current code counts as "code says".
 
-**Orden**: critical (1-10), medium (11-22), low (23+). Resolvemos uno por uno en orden, comenzando por los que pueden romper UX del agente.
+**Order**: critical (1-10), medium (11-22), low (23+). We resolve one by one in order, starting with those that can break agent UX.
 
 ---
 
-## CRITICAL — afectan UX del agente o operación
+## CRITICAL — affect agent UX or operation
 
-### A1 — `memory_ingest`: descripción promete API que el schema no implementa
+### A1 — `memory_ingest`: description promises API the schema doesn't implement
 
-**Doc dice** (`docs/memory/04_agent_tools.md:200-209`):
+**Doc says** (`docs/memory/04_agent_tools.md:200-209`):
 
 ```json
 {
@@ -39,7 +39,7 @@ Este doc lista cada discrepancia encontrada entre `docs/memory/00..10` y el cód
 }
 ```
 
-**Código dice** (`durin/agent/tools/memory_ingest.py:42-47`):
+**Code says** (`durin/agent/tools/memory_ingest.py:42-47`):
 
 ```python
 _PARAMETERS = tool_parameters_schema(
@@ -52,37 +52,37 @@ _PARAMETERS = tool_parameters_schema(
 )
 ```
 
-La **descripción canónica** sincronizada con `docs/memory/06_prompts_and_instructions.md` §3.3 (líneas 48-65 del mismo archivo) además publica `source`/`URL`/`"inline"`/`content` al LLM. El LLM entonces invoca `memory_ingest(source="https://...", content=...)` y falla con `unknown parameter`.
+The **canonical description** synchronized with `docs/memory/06_prompts_and_instructions.md` §3.3 (lines 48-65 of the same file) also publishes `source`/`URL`/`"inline"`/`content` to the LLM. The LLM then invokes `memory_ingest(source="https://...", content=...)` and fails with `unknown parameter`.
 
-**Quién tiene razón**: ambiguo. La intención original (doc) es razonable — un tool de ingest debería aceptar URL e inline. La implementación se quedó corto. **El doc es la dirección correcta**; el código está incompleto.
+**Who is right**: ambiguous. The original intent (doc) is reasonable — an ingest tool should accept URL and inline. The implementation fell short. **The doc is the correct direction**; the code is incomplete.
 
-**Acción**: extender el schema y la lógica de `memory_ingest.execute` para:
+**Action**: extend the schema and the logic of `memory_ingest.execute` for:
 - `source` (req): file path | URL | "inline"
-- `content` (opt): texto cuando `source="inline"`
+- `content` (opt): text when `source="inline"`
 - `title` (opt)
 - `entities` (opt)
 - `chunking` (opt, default auto)
 
-Mantener compatibilidad con `path` (alias o paso de migración).
+Keep compatibility with `path` (alias or migration step).
 
-**Riesgo**: implementar URL fetch trae questions (timeouts, SSRF, content-type sniffing). Si se prefiere reducir scope: **alinear el doc al código** (sólo `path`) y dejar URL/inline como deferred. Decisión humana.
+**Risk**: implementing URL fetch raises questions (timeouts, SSRF, content-type sniffing). If reducing scope is preferred: **align the doc to the code** (only `path`) and leave URL/inline as deferred. Human decision.
 
-**Resolución (2026-05-28)**: Opción 2 — alinear el doc al código. Razón clave descubierta durante la decisión: **`web_fetch` ya existe** ([durin/agent/tools/web.py:454](durin/agent/tools/web.py#L454)) y ya hace URL → markdown con SSRF protection, Jina/readability extractors, image detection. La rama URL en `memory_ingest` no era una capability faltante sino una **duplicación pendiente**. Similar para "inline": `memory_store(class_name="corpus")` cubre el caso. Cambios:
+**Resolution (2026-05-28)**: Option 2 — align the doc to the code. Key reason discovered during the decision: **`web_fetch` already exists** ([durin/agent/tools/web.py:454](durin/agent/tools/web.py#L454)) and already does URL → markdown with SSRF protection, Jina/readability extractors, image detection. The URL branch in `memory_ingest` wasn't a missing capability but a **pending duplication**. Similar for "inline": `memory_store(class_name="corpus")` covers the case. Changes:
 
-- `_PARAMETERS["description"]` en [memory_ingest.py:48-68](durin/agent/tools/memory_ingest.py#L48-L68) reescrito para reflejar sólo `path` + dirigir al workflow correcto (`web_fetch` + `memory_store`).
-- [docs/memory/04_agent_tools.md](docs/memory/04_agent_tools.md) §4.1, §4.2, §4.3 y §10 (status table) actualizados.
-- [docs/memory/06_prompts_and_instructions.md](docs/memory/06_prompts_and_instructions.md) §3.3 sincronizada.
-- [docs/memory/08_scope_and_discarded.md](docs/memory/08_scope_and_discarded.md) §2.8 nueva entry con la genealogía del error y la lección sobre sync tests.
+- `_PARAMETERS["description"]` in [memory_ingest.py:48-68](durin/agent/tools/memory_ingest.py#L48-L68) rewritten to reflect only `path` + direct to the correct workflow (`web_fetch` + `memory_store`).
+- [docs/memory/04_agent_tools.md](docs/memory/04_agent_tools.md) §4.1, §4.2, §4.3 and §10 (status table) updated.
+- [docs/memory/06_prompts_and_instructions.md](docs/memory/06_prompts_and_instructions.md) §3.3 synchronized.
+- [docs/memory/08_scope_and_discarded.md](docs/memory/08_scope_and_discarded.md) §2.8 new entry with the genealogy of the error and the lesson on sync tests.
 
-**Lección sobre sync tests**: `test_tool_description_sync.py` valida igualdad de strings, no comportamiento. Pasó verde con el doc mintiéndole al LLM desde commit `572d5cf` (2026-05-28 09:28 +0200) hasta el fix `bce9092` (~1 hora después). El drift fue corto por suerte — el audit lo agarró la misma mañana, pero el test no lo habría detectado nunca. Fix general para tests de "sync" en futuro: ejercitar el comportamiento, no sólo comparar strings.
+**Sync test lesson**: `test_tool_description_sync.py` validates string equality, not behavior. It passed green with the doc lying to the LLM from commit `572d5cf` (2026-05-28 09:28 +0200) until the fix `bce9092` (~1 hour later). The drift was short by luck — the audit caught it the same morning, but the test would never have detected it. General fix for "sync" tests in the future: exercise the behavior, not just compare strings.
 
-**Estado**: resolved (commit pendiente).
+**State**: resolved (commit pending).
 
 ---
 
-### A2 — `memory_store` parámetros divergen entre doc, código y descripción interna
+### A2 — `memory_store` parameters diverge between doc, code, and internal description
 
-**Doc dice** (`docs/memory/04_agent_tools.md:134-144`):
+**Doc says** (`docs/memory/04_agent_tools.md:134-144`):
 
 ```json
 {
@@ -96,56 +96,56 @@ Mantener compatibilidad con `path` (alias o paso de migración).
 }
 ```
 
-**Código dice** (`durin/agent/tools/memory_store.py:24-68`): parámetros = `content` (req), `class_name` (enum incluye `corpus`/`pending`), `headline` (opt, auto-gen), `summary` (opt), `source_refs` (opt), `entities` (opt), `force` (opt). **No existe `valid_from`. No existe `body` — se llama `content`.**
+**Code says** (`durin/agent/tools/memory_store.py:24-68`): parameters = `content` (req), `class_name` (enum includes `corpus`/`pending`), `headline` (opt, auto-gen), `summary` (opt), `source_refs` (opt), `entities` (opt), `force` (opt). **There is no `valid_from`. There is no `body` — it's called `content`.**
 
-**Descripción canónica del propio código** (`memory_store.py:83`, sincronizada con doc 06 §3.2):
+**Canonical description in the code itself** (`memory_store.py:83`, synchronized with doc 06 §3.2):
 > *"Keep `headline` short and specific. `body` should be the full content; don't truncate."*
 
-→ El propio tool habla de `body` en la descripción al LLM, pero el parámetro real es `content`. **El código es inconsistente consigo mismo.**
+→ The tool itself talks about `body` in the description to the LLM, but the real parameter is `content`. **The code is inconsistent with itself.**
 
-**Quién tiene razón**: parcialmente cada uno.
-- `content` vs `body`: el código es más viejo, doc 04 propuso `body`. Renombrar el parámetro a `body` no rompe nada externo (los tools sólo se invocan vía schema), pero rompe tests internos y código que llama a `store_memory(content=...)`. **Mejor: actualizar doc 04 y descripción del tool a `content` para minimizar cambio** — el dato está, sólo el nombre difiere.
-- `valid_from`: doc lo propone, código no lo tiene. No es accionable hoy (no se usa para temporal scoring porque decay no está cableado, ver A9). Defer hasta que decay opere — entonces sí tiene sentido.
-- `force`: existe en código (skip-dedup), doc 04 no lo menciona. **Doc tiene razón en el sentido de "el agente nunca debería verlo"** — `force=true` es para humans/tools usando el tool programáticamente. Pero como está expuesto al LLM, debería documentarse o quitarse del schema y exponerse sólo via API interna.
-- `class_name` enum: código incluye `corpus`/`pending`; doc dice "stable | episodic". El código es correcto — el LLM debería poder almacenar `corpus` (aunque normalmente lo hace `memory_ingest`) y `pending` (TODOs). **Doc desactualizado.**
+**Who is right**: partially each one.
+- `content` vs `body`: the code is older, doc 04 proposed `body`. Renaming the parameter to `body` doesn't break anything external (tools are only invoked via schema), but breaks internal tests and code that calls `store_memory(content=...)`. **Better: update doc 04 and the tool description to `content` to minimize change** — the data is there, only the name differs.
+- `valid_from`: doc proposes it, code doesn't have it. Not actionable today (it's not used for temporal scoring because decay is not wired, see A9). Defer until decay operates — then it makes sense.
+- `force`: exists in code (skip-dedup), doc 04 doesn't mention it. **Doc is right in the sense of "the agent should never see it"** — `force=true` is for humans/tools using the tool programmatically. But since it's exposed to the LLM, it should be documented or removed from the schema and exposed only via internal API.
+- `class_name` enum: code includes `corpus`/`pending`; doc says "stable | episodic". The code is correct — the LLM should be able to store `corpus` (although normally `memory_ingest` does it) and `pending` (TODOs). **Doc out of date.**
 
-**Acción**:
-1. Doc 04 §3.1: renombrar `body` → `content`, ampliar enum `class_name`, agregar `force` (con caveat "rara vez relevante"), marcar `valid_from` como deferred.
-2. Descripción del tool (`memory_store.py:83`): cambiar `"body"` → `"content"`.
-3. Recurrir el sync test después.
+**Action**:
+1. Doc 04 §3.1: rename `body` → `content`, extend `class_name` enum, add `force` (with caveat "rarely relevant"), mark `valid_from` as deferred.
+2. Tool description (`memory_store.py:83`): change `"body"` → `"content"`.
+3. Re-run the sync test afterwards.
 
-**Resolución (2026-05-28)**: cinco discrepancias auditadas individualmente. Cambios shipped:
+**Resolution (2026-05-28)**: five discrepancies audited individually. Changes shipped:
 
-1. **`pending` removed from agent-facing enum** ([memory_store.py](../../durin/agent/tools/memory_store.py): nuevo `_AGENT_FACING_CLASSES = ("stable", "episodic", "corpus")` reemplaza `list(MEMORY_CLASSES)`). Razón verificada: `paths.py::walk_memory` + `indexer.py` + `file_watcher.py` todos excluyen `memory/pending/**`. Escribir ahí desde el LLM era data loss silencioso. Internal callers (compaction) siguen usando la función pura `store_memory`.
+1. **`pending` removed from agent-facing enum** ([memory_store.py](../../durin/agent/tools/memory_store.py): new `_AGENT_FACING_CLASSES = ("stable", "episodic", "corpus")` replaces `list(MEMORY_CLASSES)`). Verified reason: `paths.py::walk_memory` + `indexer.py` + `file_watcher.py` all exclude `memory/pending/**`. Writing there from the LLM was silent data loss. Internal callers (compaction) keep using the pure `store_memory` function.
 
-2. **`body` → `content` en doc 04 §3.1**. El campo persistido del `MemoryEntry` SÍ se llama `body` (declarado en doc 01 §3.3), pero el parámetro del tool y de la función pura siempre fueron `content`. Doc 04 v1 confundió los dos planos. Doc 04 v2 explicita la asimetría.
+2. **`body` → `content` in doc 04 §3.1**. The persisted field of `MemoryEntry` IS called `body` (declared in doc 01 §3.3), but the tool parameter and the pure function were always `content`. Doc 04 v1 conflated the two planes. Doc 04 v2 makes the asymmetry explicit.
 
-3. **`valid_from` NO se expone como param del tool**. Es campo real del `MemoryEntry` con uses downstream legítimos (hot_layer cursor compare, entity_ranker pre/post, sort de fragments). Default automático `date.today()`. **El consumer que necesita back-datear (LoCoMo bench) usa la función pura directamente** ([locomo_harness.py:227-233](../../scripts/benchmark/locomo_harness.py)), no el tool. 99% de los stores del LLM son "ahora" — exponer el knob agrega ruido al schema sin caso de uso real.
+3. **`valid_from` is NOT exposed as a tool param**. It's a real field of `MemoryEntry` with legitimate downstream uses (hot_layer cursor compare, entity_ranker pre/post, fragments sort). Automatic default `date.today()`. **The consumer that needs to back-date (LoCoMo bench) uses the pure function directly** ([locomo_harness.py:227-233](../../scripts/benchmark/locomo_harness.py)), not the tool. 99% of LLM stores are "now" — exposing the knob adds noise to the schema with no real use case.
 
-4. **`headline` queda optional**. Auto-gen [`store.py:106-109`](../../durin/memory/store.py) usa primeros ~10 words; razonable para LLM-generated content. Required agregaría latencia sin beneficio claro.
+4. **`headline` stays optional**. Auto-gen [`store.py:106-109`](../../durin/memory/store.py) uses the first ~10 words; reasonable for LLM-generated content. Required would add latency with no clear benefit.
 
-5. **`force` documentado** en doc 04 §3.1 con caveat ("rara vez relevante"). Existe en código desde commit `d34b337` para bypass del dedup near-duplicate check; doc 04 v1 lo omitió por oversight.
+5. **`force` documented** in doc 04 §3.1 with caveat ("rarely relevant"). Exists in code since commit `d34b337` for the dedup near-duplicate bypass; doc 04 v1 omitted it by oversight.
 
-Cambios al canónico ([doc 06 §3.2](06_prompts_and_instructions.md)) reflejan los 5 puntos; `_PARAMETERS["description"]` sincronizada verbatim. Doc 04 §3.1/§3.2/§3.3/§9 (decision 5b) actualizados. Nueva entry [doc 08 §2.9](08_scope_and_discarded.md) con justificación completa + lecciones (enum-as-trap, param-vs-field, default-beats-knob).
+Changes to the canonical ([doc 06 §3.2](06_prompts_and_instructions.md)) reflect the 5 points; `_PARAMETERS["description"]` synchronized verbatim. Doc 04 §3.1/§3.2/§3.3/§9 (decision 5b) updated. New entry [doc 08 §2.9](08_scope_and_discarded.md) with full justification + lessons (enum-as-trap, param-vs-field, default-beats-knob).
 
-**Lecciones nuevas**:
-- *Enum values pueden ser trampas* — no mirror ciegamente un constants tuple a tool-facing enum sin verificar que TODO el sistema honra cada miembro.
-- *Tool param name ≠ persisted field name* — cuando difieren, documentar AMBOS planos explícitamente.
-- *Default behavior often beats new tool params* — antes de exponer un knob, preguntar quién lo necesita realmente; si es un internal pipeline, dejar la function pura como su path.
+**New lessons**:
+- *Enum values can be traps* — don't blindly mirror a constants tuple to a tool-facing enum without verifying that THE WHOLE system honors each member.
+- *Tool param name ≠ persisted field name* — when they differ, document BOTH planes explicitly.
+- *Default behavior often beats new tool params* — before exposing a knob, ask who really needs it; if it's an internal pipeline, leave the pure function as its path.
 
-**Estado**: resolved (commit pendiente).
+**State**: resolved (commit pending).
 
 ---
 
-### A3 — `memory_search` `limit` documentado pero no expuesto
+### A3 — `memory_search` `limit` documented but not exposed
 
-**Doc dice** (`docs/memory/04_agent_tools.md:42`):
+**Doc says** (`docs/memory/04_agent_tools.md:42`):
 
 ```json
 "limit": "integer (default: 10, max: 50)"
 ```
 
-**Código dice** (`durin/agent/tools/memory_search.py:53-77`): `_PARAMETERS` sólo tiene `query`, `scope`, `level`, `keywords`. El límite está hardcoded a 10 en `memory_search.py:348`:
+**Code says** (`durin/agent/tools/memory_search.py:53-77`): `_PARAMETERS` only has `query`, `scope`, `level`, `keywords`. The limit is hardcoded to 10 at `memory_search.py:348`:
 
 ```python
 pipeline_result = run_search_pipeline(
@@ -158,38 +158,38 @@ pipeline_result = run_search_pipeline(
 )
 ```
 
-**Quién tiene razón**: **doc tiene razón**. Exponer `limit` al LLM es útil — algunas queries quieren top-3 (chat corto), otras quieren top-30 (auditoría). Hoy el LLM no tiene control.
+**Who is right**: **doc is right**. Exposing `limit` to the LLM is useful — some queries want top-3 (short chat), others want top-30 (audit). Today the LLM has no control.
 
-**Acción**: agregar `limit: IntegerSchema(default=10, min=1, max=50)` al schema, pasar al `run_search_pipeline`.
+**Action**: add `limit: IntegerSchema(default=10, min=1, max=50)` to the schema, pass it to `run_search_pipeline`.
 
-**Resolución (2026-05-28)**: Opción A — exponer `limit`. A diferencia de A1 (URL duplicaba `web_fetch`) y A2 (varios knobs eran trampa), aquí **el pipeline ya soporta el parámetro** ([search_pipeline.py:71](../../durin/memory/search_pipeline.py#L71)), sólo faltaba propagarlo desde el tool. Doc 03 §1 y Doc 04 §2.1 ambos lo proponían — propuesta consistente, no invento aislado.
+**Resolution (2026-05-28)**: Option A — expose `limit`. Unlike A1 (URL duplicated `web_fetch`) and A2 (several knobs were traps), here **the pipeline already supports the parameter** ([search_pipeline.py:71](../../durin/memory/search_pipeline.py#L71)), only propagation from the tool was missing. Doc 03 §1 and Doc 04 §2.1 both proposed it — consistent proposal, not an isolated invention.
 
-Cambios:
-- Schema: `limit: IntegerSchema(10, minimum=1, maximum=50)` agregado a [memory_search.py](../../durin/agent/tools/memory_search.py).
-- `execute()`: clamp defensivo `max(1, min(50, int(...)))` con fallback a 10 cuando la coerción falla.
-- Llamada al pipeline: `run_search_pipeline(..., limit=limit, ...)` en vez del `limit=10` hardcoded.
-- Doc 06 §3.1 canonical + descripción del tool: mención breve con guidance ("3-5 para chat-short, 20-30 para audit/investigative, hard cap 50").
-- Test nuevo [test_memory_search_limit_param.py](../../tests/memory/test_memory_search_limit_param.py): 7 tests que **ejercitan el comportamiento**, cumpliendo la lección de [[feedback-sync-tests-exercise-behavior]]:
-  - Schema declarado correctamente.
-  - Default 10 cuando se omite.
-  - `limit=5` recorta a 5.
-  - `limit=30` permite más (con 25 entries seedeadas).
-  - `limit=999` clamp a 50.
-  - `limit=0` clamp a 1.
-  - `limit="abc"` fallback a 10 (string-coerce graceful).
+Changes:
+- Schema: `limit: IntegerSchema(10, minimum=1, maximum=50)` added to [memory_search.py](../../durin/agent/tools/memory_search.py).
+- `execute()`: defensive clamp `max(1, min(50, int(...)))` with fallback to 10 when coercion fails.
+- Pipeline call: `run_search_pipeline(..., limit=limit, ...)` instead of the hardcoded `limit=10`.
+- Doc 06 §3.1 canonical + tool description: brief mention with guidance ("3-5 for chat-short, 20-30 for audit/investigative, hard cap 50").
+- New test [test_memory_search_limit_param.py](../../tests/memory/test_memory_search_limit_param.py): 7 tests that **exercise the behavior**, fulfilling the lesson in [[feedback-sync-tests-exercise-behavior]]:
+  - Schema declared correctly.
+  - Default 10 when omitted.
+  - `limit=5` trims to 5.
+  - `limit=30` allows more (with 25 seeded entries).
+  - `limit=999` clamps to 50.
+  - `limit=0` clamps to 1.
+  - `limit="abc"` fallback to 10 (string-coerce graceful).
 
-**Verificado pre-commit**:
-- `IntegerSchema(value, description, minimum, maximum)` signature contra [schema.py:54-72](../../durin/agent/tools/schema.py#L54-L72).
-- `tool_parameters_schema(...)` devuelve dict (no objeto), corregido el test después del primer falso intento — error tipo aplicación de [[feedback-verify-quantifiers]].
-- Default 10 = comportamiento previo: **no breaking change**.
+**Pre-commit verification**:
+- `IntegerSchema(value, description, minimum, maximum)` signature against [schema.py:54-72](../../durin/agent/tools/schema.py#L54-L72).
+- `tool_parameters_schema(...)` returns dict (not object), test corrected after first false attempt — application-type error of [[feedback-verify-quantifiers]].
+- Default 10 = previous behavior: **no breaking change**.
 
-**Estado**: resolved (commit pendiente).
+**State**: resolved (commit pending).
 
 ---
 
-### A4 — LanceDB schema en doc 02 §3.1 ≠ columnas reales
+### A4 — LanceDB schema in doc 02 §3.1 ≠ actual columns
 
-**Doc dice** (`docs/memory/02_indexing.md:65-79`):
+**Doc says** (`docs/memory/02_indexing.md:65-79`):
 
 | Column | Type |
 |---|---|
@@ -205,9 +205,9 @@ Cambios:
 | `valid_from` | string \| null |
 | `indexed_at` | string |
 
-Y *"**No `body` column.** Storing the body in LanceDB would double the index size for no retrieval benefit."*
+And *"**No `body` column.** Storing the body in LanceDB would double the index size for no retrieval benefit."*
 
-**Código dice** (`durin/memory/vector_index.py:131-147`):
+**Code says** (`durin/memory/vector_index.py:131-147`):
 
 ```python
 record: dict[str, Any] = {
@@ -224,51 +224,51 @@ record: dict[str, Any] = {
 }
 ```
 
-Columnas reales: `id, class_name, summary, headline, vector, valid_from, entities, path, body`. Dim del vector: 384 (modelo default `paraphrase-multilingual-MiniLM-L12-v2` emite 384, no 768 — `vector_index.py:444` comenta migración "from 384-dim to 1024-dim").
+Actual columns: `id, class_name, summary, headline, vector, valid_from, entities, path, body`. Vector dim: 384 (default model `paraphrase-multilingual-MiniLM-L12-v2` emits 384, not 768 — `vector_index.py:444` comments migration "from 384-dim to 1024-dim").
 
-**Quién tiene razón**: **código tiene razón**. P2.5 (commit `a266344`) agregó `body` deliberadamente como trade-off explícito (doblar tamaño del índice vs ahorrar N file reads para cold queries). El doc nunca se actualizó.
+**Who is right**: **code is right**. P2.5 (commit `a266344`) added `body` deliberately as an explicit trade-off (double index size vs save N file reads for cold queries). The doc was never updated.
 
-**Acción**: actualizar doc 02 §3.1:
-- Renombrar `uri` → `id`, `type` → `class_name`. Sacar `entity_type`, `mtime`, `indexed_at` (no existen).
-- Agregar `body` con la justificación P2.5 (doblar tamaño es aceptable porque ahorra disk hits cold-tier).
-- Corregir dim 768 → 384.
-- Actualizar §3.2 "Dim: 768" → "Dim: 384 (default; cambiar requiere full rebuild)".
+**Action**: update doc 02 §3.1:
+- Rename `uri` → `id`, `type` → `class_name`. Remove `entity_type`, `mtime`, `indexed_at` (don't exist).
+- Add `body` with the P2.5 justification (doubling size is acceptable because it saves cold-tier disk hits).
+- Correct dim 768 → 384.
+- Update §3.2 "Dim: 768" → "Dim: 384 (default; changing requires full rebuild)".
 
-**Resolución (2026-05-28)**: durante el análisis el usuario empujó con la pregunta clave — *"el doc real se mantiene en disco fue para no replicar toda la información; la fuente de verdad es el doc en disco no la base de datos"*. Verificación columna por columna mostró que `body` era el ÚNICO campo que duplicaba contenido sustancial del `.md` en LanceDB. P2.5 (commit `a266344`, 2026-05-28 09:10) había violado el principio arquitectónico original por una optimización de latencia (~5-10 ms ahorrados en disk reads de cold-tier) que NO era bottleneck — el LLM call downstream toma segundos.
+**Resolution (2026-05-28)**: during the analysis the user pushed back with the key question — *"the real doc is kept on disk so as not to replicate all the information; the source of truth is the doc on disk, not the database"*. Column-by-column verification showed that `body` was the ONLY field that duplicated substantial `.md` content in LanceDB. P2.5 (commit `a266344`, 2026-05-28 09:10) had violated the original architectural principle for a latency optimization (~5-10 ms saved in cold-tier disk reads) that was NOT a bottleneck — the downstream LLM call takes seconds.
 
-**Decisión**: revertir P2.5 + alinear doc al schema real. Cambios al código:
+**Decision**: revert P2.5 + align doc to the real schema. Code changes:
 
-- [vector_index.py:131-147](../../durin/memory/vector_index.py#L131-L147) (entity-page record) y [:360-377](../../durin/memory/vector_index.py#L360-L377) (entry record): remover el campo `body` del dict. Comentario explicativo apunta a doc 08 §2.10.
-- [search_pipeline.py:294-298](../../durin/memory/search_pipeline.py#L294-L298): el cross-encoder rerank ya no usa `meta.get("body")`. Doc inline en la función explica que si CE quality requiere body en el futuro, la solución es un top-N disk fetch dentro del CE step, NO una columna en LanceDB.
-- [search_pipeline.py:445-449](../../durin/memory/search_pipeline.py#L445-L449): `_resolve_meta` ya no threadea `body` desde vector hits.
-- [sectioned_output.py:60](../../durin/memory/sectioned_output.py#L60): `SectionedHit.body` keep como field con default `""` (backward-compat; cold-tier callers caen a `_enrich_body`).
-- [index_meta.py:47](../../durin/memory/index_meta.py#L47): `CURRENT_SCHEMA_VERSION` bumped 2 → 3 para forzar clean rebuild de tablas v2 existentes (que tendrán la columna `body` huérfana). El check `ensure_index_fresh` (P2.2) lo dispara automáticamente en el próximo `memory_search.execute`.
-- [tests/memory/test_vector_index_no_body_column.py](../../tests/memory/test_vector_index_no_body_column.py): 2 tests nuevos que assertan el invariante post-A4 — si alguien re-introduce la columna, el test falla con mensaje específico apuntando a doc 08 §2.10.
+- [vector_index.py:131-147](../../durin/memory/vector_index.py#L131-L147) (entity-page record) and [:360-377](../../durin/memory/vector_index.py#L360-L377) (entry record): remove the `body` field from the dict. Explanatory comment points to doc 08 §2.10.
+- [search_pipeline.py:294-298](../../durin/memory/search_pipeline.py#L294-L298): the cross-encoder rerank no longer uses `meta.get("body")`. Inline doc in the function explains that if CE quality requires body in the future, the solution is a top-N disk fetch inside the CE step, NOT a column in LanceDB.
+- [search_pipeline.py:445-449](../../durin/memory/search_pipeline.py#L445-L449): `_resolve_meta` no longer threads `body` from vector hits.
+- [sectioned_output.py:60](../../durin/memory/sectioned_output.py#L60): `SectionedHit.body` kept as field with default `""` (backward-compat; cold-tier callers fall back to `_enrich_body`).
+- [index_meta.py:47](../../durin/memory/index_meta.py#L47): `CURRENT_SCHEMA_VERSION` bumped 2 → 3 to force clean rebuild of existing v2 tables (which would have the orphaned `body` column). The `ensure_index_fresh` check (P2.2) triggers it automatically on the next `memory_search.execute`.
+- [tests/memory/test_vector_index_no_body_column.py](../../tests/memory/test_vector_index_no_body_column.py): 2 new tests that assert the post-A4 invariant — if anyone re-introduces the column, the test fails with a specific message pointing to doc 08 §2.10.
 
-Cambios al doc:
+Doc changes:
 
-- [docs/memory/02_indexing.md §3.1](02_indexing.md): 8 columnas reales en la tabla del schema. Bloque dedicado explicando *"no body column — body lives on disk"* con justificación arquitectónica + referencia a doc 08 §2.10. Aclaración de la asimetría `id/class_name` (LanceDB) vs `uri/type` (FTS5).
-- [docs/memory/02_indexing.md §3.2](02_indexing.md): dim corregida (default 384, no 768); listadas alternativas (e5-large 1024-dim, MiniLM-L6 384-dim).
-- [docs/memory/02_indexing.md §3.3](02_indexing.md): `entity_page` en vez de `entity`; nota sobre session_summary que NO se emite hoy (delegada a A10).
-- [docs/memory/02_indexing.md §5.1](02_indexing.md): nota sobre la asimetría con LanceDB + cómo FTS5 también honra el principio (indexa el `text` pero nunca lo devuelve).
-- [docs/memory/02_indexing.md §11 status](02_indexing.md): fila vector index actualizada con el schema actual.
-- [docs/memory/08_scope_and_discarded.md §2.10](08_scope_and_discarded.md): entry permanente con genealogía + 5 razones del revert + lección sobre optimización vs principio + lección sobre symmetry entre índices.
+- [docs/memory/02_indexing.md §3.1](02_indexing.md): 8 real columns in the schema table. Dedicated block explaining *"no body column — body lives on disk"* with architectural justification + reference to doc 08 §2.10. Clarification of the `id/class_name` (LanceDB) vs `uri/type` (FTS5) asymmetry.
+- [docs/memory/02_indexing.md §3.2](02_indexing.md): dim corrected (default 384, not 768); alternatives listed (e5-large 1024-dim, MiniLM-L6 384-dim).
+- [docs/memory/02_indexing.md §3.3](02_indexing.md): `entity_page` instead of `entity`; note about session_summary which is NOT emitted today (delegated to A10).
+- [docs/memory/02_indexing.md §5.1](02_indexing.md): note about the asymmetry with LanceDB + how FTS5 also honors the principle (indexes the `text` but never returns it).
+- [docs/memory/02_indexing.md §11 status](02_indexing.md): vector index row updated with the current schema.
+- [docs/memory/08_scope_and_discarded.md §2.10](08_scope_and_discarded.md): permanent entry with genealogy + 5 revert reasons + lesson on optimization vs principle + lesson on symmetry between indices.
 
-**Lecciones nuevas** (a guardar en memoria persistente):
+**New lessons** (to save in persistent memory):
 
-- *"Una optimización que viola un principio arquitectónico debe justificarse con medición, no con intuición"* — P2.5 ahorraba ~10ms en una operación dominada por LLM latency de segundos.
-- *"El fix para un consumer lento es local a ese consumer, no un schema change"* — si CE necesita más texto, optimizar CE; no agregar columnas a LanceDB que el 95% de las queries no usan.
-- *"Symmetry entre componentes es feature"* — FTS5 y LanceDB siendo ambos "metadata + index, content en disk" hace el sistema más simple de razonar.
+- *"An optimization that violates an architectural principle must be justified by measurement, not intuition"* — P2.5 saved ~10ms in an operation dominated by LLM latency of seconds.
+- *"The fix for a slow consumer is local to that consumer, not a schema change"* — if CE needs more text, optimize CE; don't add columns to LanceDB that 95% of queries don't use.
+- *"Symmetry between components is a feature"* — FTS5 and LanceDB both being "metadata + index, content on disk" makes the system easier to reason about.
 
-**Verificado pre-commit**: tests/memory/ 903 passed, 1 skipped (894 base + 7 A3 + 2 A4 invariante).
+**Pre-commit verification**: tests/memory/ 903 passed, 1 skipped (894 base + 7 A3 + 2 A4 invariant).
 
-**Estado**: resolved (commit pendiente).
+**State**: resolved (commit pending).
 
 ---
 
-### A5 — `memory.dream.end` no emite los campos de costo que doc 08 §3 R3 necesita
+### A5 — `memory.dream.end` doesn't emit the cost fields doc 08 §3 R3 needs
 
-**Doc dice** (`docs/memory/07_telemetry_and_observability.md:194-206`):
+**Doc says** (`docs/memory/07_telemetry_and_observability.md:194-206`):
 
 ```
 Already exists, augment with:
@@ -279,7 +279,7 @@ Already exists, augment with:
 | duration_ms | float |
 ```
 
-**Código dice** (`durin/memory/dream_runner.py:337-354`):
+**Code says** (`durin/memory/dream_runner.py:337-354`):
 
 ```python
 emit_tool_event(
@@ -294,50 +294,50 @@ emit_tool_event(
 )
 ```
 
-No emite `entities_quarantined` / `llm_call_count` / `llm_input_tokens_total` / `llm_output_tokens_total`. `duration_s` en segundos, no `duration_ms`.
+Doesn't emit `entities_quarantined` / `llm_call_count` / `llm_input_tokens_total` / `llm_output_tokens_total`. `duration_s` in seconds, not `duration_ms`.
 
-Doc 08 §3 R3 (risk register) propone alarmar en `dream_llm_cost_per_day_usd > $5/día`. **Sin los token totals, esta alarma es inviable hoy.**
+Doc 08 §3 R3 (risk register) proposes alarming on `dream_llm_cost_per_day_usd > $5/day`. **Without the token totals, this alarm is infeasible today.**
 
-**Quién tiene razón**: doc tiene razón en intención (el costo dream es importante medir), pero la implementación requiere instrumentar los llm_invoke calls dentro de DreamConsolidator para capturar prompt/completion tokens. Eso es real work (no doc fix).
+**Who is right**: doc is right in intent (dream cost is important to measure), but the implementation requires instrumenting the llm_invoke calls inside DreamConsolidator to capture prompt/completion tokens. That's real work (not a doc fix).
 
-**Acción**: implementar acumulador de tokens en DreamRunner, pasar como kwargs a `_emit_end`. Renombrar `duration_s` → `duration_ms` (* 1000.0). Agregar `entities_quarantined` (ya existe el concepto en `_maybe_auto_absorb`).
+**Action**: implement a token accumulator in DreamRunner, pass as kwargs to `_emit_end`. Rename `duration_s` → `duration_ms` (* 1000.0). Add `entities_quarantined` (the concept already exists in `_maybe_auto_absorb`).
 
-**Resolución (2026-05-28)**: El `LLMInvoke` Protocol del dream era `Callable[..., str]` — descartaba el `response.usage` que litellm sí provee. Cambio arquitectónico local al consumer correcto (el dream namespace) — aplicando la lección de A4 [[feedback-optimization-vs-principle]]: el fix vive donde el consumer está, no como global state.
+**Resolution (2026-05-28)**: The dream's `LLMInvoke` Protocol was `Callable[..., str]` — it discarded the `response.usage` that litellm does provide. Architectural change local to the correct consumer (the dream namespace) — applying the A4 lesson [[feedback-optimization-vs-principle]]: the fix lives where the consumer is, not as global state.
 
-Cambios:
+Changes:
 
-- **[durin/memory/dream.py](../../durin/memory/dream.py)**: nuevo `LLMResponse` dataclass (`text + prompt_tokens + completion_tokens`); `LLMInvoke` Protocol actualizado a devolver `LLMResponse`; `default_llm_invoke` extrae `response.usage` de litellm; `ConsolidationResult` gana `prompt_tokens`/`completion_tokens`/`llm_call_count`; `consolidate_entity` acumula tokens incluso a través de retries; `DreamError` gana `triggered_quarantine` flag.
-- **[durin/memory/dream_quarantine.py](../../durin/memory/dream_quarantine.py)**: `record_failure` ahora devuelve `bool` — `True` cuando esa llamada disparó la 3ª strike → quarantine.
-- **[durin/memory/dream.py::DreamConsolidator.apply](../../durin/memory/dream.py)**: capta el flag de `record_failure` y lo propaga en `raise DreamError(..., triggered_quarantine=triggered)`.
-- **[durin/memory/dream_runner.py](../../durin/memory/dream_runner.py)**: nuevo `_ConsolidateTotals` dataclass (accumulador per-pass); `_consolidate()` devuelve los totals; `_emit_end()` payload con los 4 nuevos campos + `duration_ms`.
-- **[durin/memory/absorb_judge.py](../../durin/memory/absorb_judge.py)**: extrae `.text` del response. NO acumula tokens en `dream.end` (el judge corre POST-dream y tiene su propia telemetría `memory.absorb.judged`).
-- **[durin/telemetry/schema.py](../../durin/telemetry/schema.py)**: `MemoryDreamEndEvent` TypedDict actualizado — 4 nuevos campos, `duration_s` eliminado.
-- **[tests/memory/test_dream_end_cost_telemetry.py](../../tests/memory/test_dream_end_cost_telemetry.py)** (nuevo, 4 tests): ejercita el comportamiento real:
-  - `LLMResponse` → tokens en el payload de `dream.end`.
+- **[durin/memory/dream.py](../../durin/memory/dream.py)**: new `LLMResponse` dataclass (`text + prompt_tokens + completion_tokens`); `LLMInvoke` Protocol updated to return `LLMResponse`; `default_llm_invoke` extracts `response.usage` from litellm; `ConsolidationResult` gains `prompt_tokens`/`completion_tokens`/`llm_call_count`; `consolidate_entity` accumulates tokens even across retries; `DreamError` gains `triggered_quarantine` flag.
+- **[durin/memory/dream_quarantine.py](../../durin/memory/dream_quarantine.py)**: `record_failure` now returns `bool` — `True` when that call triggered the 3rd strike → quarantine.
+- **[durin/memory/dream.py::DreamConsolidator.apply](../../durin/memory/dream.py)**: captures the flag from `record_failure` and propagates it in `raise DreamError(..., triggered_quarantine=triggered)`.
+- **[durin/memory/dream_runner.py](../../durin/memory/dream_runner.py)**: new `_ConsolidateTotals` dataclass (per-pass accumulator); `_consolidate()` returns the totals; `_emit_end()` payload with the 4 new fields + `duration_ms`.
+- **[durin/memory/absorb_judge.py](../../durin/memory/absorb_judge.py)**: extracts `.text` from the response. Does NOT accumulate tokens in `dream.end` (the judge runs POST-dream and has its own `memory.absorb.judged` telemetry).
+- **[durin/telemetry/schema.py](../../durin/telemetry/schema.py)**: `MemoryDreamEndEvent` TypedDict updated — 4 new fields, `duration_s` removed.
+- **[tests/memory/test_dream_end_cost_telemetry.py](../../tests/memory/test_dream_end_cost_telemetry.py)** (new, 4 tests): exercises the real behavior:
+  - `LLMResponse` → tokens in the `dream.end` payload.
   - Legacy `str`-returning `llm_invoke` → tokens=0 (under-report safe-failure).
-  - Multi-entity → tokens sumados correctamente.
-  - Schema TypedDict tiene los campos requeridos + sacó `duration_s`.
+  - Multi-entity → tokens summed correctly.
+  - TypedDict schema has the required fields + removed `duration_s`.
 
-**Backward-compat shim**: el call site en `dream.py:341` y `absorb_judge.py:144` aceptan TANTO `LLMResponse` como `str` (`isinstance` check). Esto permite que los ~15 tests existentes con mocks `lambda p,**kw: "raw"` sigan pasando sin churn mecánico — under-reportan tokens (0) pero el dream flow funciona.
+**Backward-compat shim**: the call site in `dream.py:341` and `absorb_judge.py:144` accept BOTH `LLMResponse` AND `str` (`isinstance` check). This allows the ~15 existing tests with `lambda p,**kw: "raw"` mocks to keep passing without mechanical churn — they under-report tokens (0) but the dream flow works.
 
-**Doc 07 §6.2 actualizado**: tabla completa con los 9 campos, nota explícita de que el campo viejo `duration_s` se eliminó (no es additive), nota sobre safe-failure direction cuando el provider no surface `usage`.
+**Doc 07 §6.2 updated**: complete table with the 9 fields, explicit note that the old `duration_s` field was removed (not additive), note on safe-failure direction when the provider doesn't surface `usage`.
 
-**Doc 08 §3 R3 alarma**: ahora es computable. La fórmula es `dream_llm_cost_per_day_usd = sum(llm_input_tokens_total * input_rate + llm_output_tokens_total * output_rate)` sobre eventos `memory.dream.end` del día.
+**Doc 08 §3 R3 alarm**: now computable. The formula is `dream_llm_cost_per_day_usd = sum(llm_input_tokens_total * input_rate + llm_output_tokens_total * output_rate)` over the day's `memory.dream.end` events.
 
-**Lecciones aplicadas**:
-- [[feedback-optimization-vs-principle]]: el cambio es **local al consumer correcto** (dream namespace). `query_rewriter.LLMInvoke` queda intacto.
-- [[feedback-sync-tests-exercise-behavior]]: el behavior test no compara sólo strings de doc, **emite eventos reales y verifica los valores**.
-- [[feedback-verify-quantifiers]]: durante el desarrollo el test `test_dream_end_aggregates_tokens_across_multiple_entities` falló con assumption "slug in prompt matches unique entity" — falsa porque los prompts incluyen aliases cross-entity. Corregido con counter-based stub.
+**Lessons applied**:
+- [[feedback-optimization-vs-principle]]: the change is **local to the correct consumer** (dream namespace). `query_rewriter.LLMInvoke` is left intact.
+- [[feedback-sync-tests-exercise-behavior]]: the behavior test doesn't just compare doc strings, **it emits real events and verifies the values**.
+- [[feedback-verify-quantifiers]]: during development, the test `test_dream_end_aggregates_tokens_across_multiple_entities` failed with the assumption "slug in prompt matches unique entity" — false because prompts include cross-entity aliases. Fixed with a counter-based stub.
 
-**Verificado pre-commit**: tests/memory/ 907 passed (903 baseline + 4 nuevos A5), 1 skipped (condition).
+**Pre-commit verification**: tests/memory/ 907 passed (903 baseline + 4 new A5), 1 skipped (condition).
 
-**Estado**: resolved (commit pendiente).
+**State**: resolved (commit pending).
 
 ---
 
 ### A6 — `memory.health_check` payload mismatch
 
-**Doc dice** (`docs/memory/07_telemetry_and_observability.md:314-327`):
+**Doc says** (`docs/memory/07_telemetry_and_observability.md:314-327`):
 
 ```
 | tick_id | UUID |
@@ -348,69 +348,69 @@ Cambios:
 | duration_ms | float |
 ```
 
-**Código dice** (`durin/memory/health_check.py:114-120`):
+**Code says** (`durin/memory/health_check.py:114-120`):
 
 ```python
 payload: dict[str, Any] = {
     "status": status,
-    "components": components,       # dict[str, str] plano, no nested
+    "components": components,       # flat dict[str, str], not nested
     "drift_count": drift_count,
 }
 if errors:
     payload["errors"] = errors
 ```
 
-No tiene `tick_id`, `triggered_by`, `restorations_*`, `duration_ms`. `components` es `dict[str, str]` (status flat), no `dict[str, {"status", "details"}]`.
+No `tick_id`, `triggered_by`, `restorations_*`, `duration_ms`. `components` is `dict[str, str]` (flat status), not `dict[str, {"status", "details"}]`.
 
-**Quién tiene razón**: pieza por pieza:
-- `tick_id`: bueno para correlacionar logs cuando hay múltiples ticks por hora. **Razonable agregar**.
-- `triggered_by`: hoy sólo hay scheduled (no hay eager-post-failure). Si nunca habrá eager, este campo es spec-only. **Defer hasta que eager exista o quitar del doc.**
-- `components` nested vs flat: la versión nested permite incluir detalles (e.g. "lance probe: connection refused"). El código emite los detalles en un campo aparte `errors`. **Funcionalmente equivalente, pero shape distinto.** Es decisión de schema.
-- `restorations_*`: el código tiene `_repair_drift` pero no emite agregados. Razonable agregar.
-- `duration_ms`: trivial agregar (medir t0 al entrar `run_tick`).
+**Who is right**: piece by piece:
+- `tick_id`: useful for correlating logs when there are multiple ticks per hour. **Reasonable to add**.
+- `triggered_by`: today there's only scheduled (no eager-post-failure). If there will never be eager, this field is spec-only. **Defer until eager exists or remove from doc.**
+- `components` nested vs flat: the nested version allows including details (e.g. "lance probe: connection refused"). The code emits the details in a separate `errors` field. **Functionally equivalent, but different shape.** A schema decision.
+- `restorations_*`: the code has `_repair_drift` but doesn't emit aggregates. Reasonable to add.
+- `duration_ms`: trivial to add (measure t0 on entering `run_tick`).
 
-**Acción opción A** (menor cambio): actualizar doc 07 §9.4 para describir el payload real. Agregar `duration_ms` (trivial). Dejar lo demás como "futuro".
+**Action option A** (smaller change): update doc 07 §9.4 to describe the real payload. Add `duration_ms` (trivial). Leave the rest as "future".
 
-**Acción opción B** (mayor cambio): agregar al código `tick_id` + `restorations_attempted/succeeded` + `duration_ms` y promover `components` a nested.
+**Action option B** (larger change): add `tick_id` + `restorations_attempted/succeeded` + `duration_ms` to the code and promote `components` to nested.
 
-**Recomendación**: opción A. La estructura plana del código es más simple y los datos de detalles ya van por `errors`. El doc se ajusta a la realidad; cuando haya necesidad real de tick_id/eager se vuelve a evaluar.
+**Recommendation**: option A. The code's flat structure is simpler and the detail data already goes through `errors`. The doc adjusts to reality; when there's real need for tick_id/eager, re-evaluate.
 
-**Resolución (2026-05-28) — Híbrida pragmática**: el análisis verificado mostró que **no hay consumers del evento en código hoy** (cero hits fuera del propio módulo emisor + tests), entonces "quién tiene razón" no es binario — es decisión de diseño anticipado. Resultado:
+**Resolution (2026-05-28) — Pragmatic hybrid**: verified analysis showed that **there are no consumers of the event in code today** (zero hits outside the emitter module + tests), so "who is right" is not binary — it's a forward-looking design decision. Result:
 
-- **Agregado al código**: `tick_id` (uuid hex, 32 chars) + `duration_ms` (vía `time.perf_counter()`). Son estándar operacional: tick_id para correlación de logs entre ticks, duration_ms para diferenciar ticks rápidos vs lentos.
-- **NO agregado**: `triggered_by` (sólo existe `scheduled` hoy; sería enum con un valor único), `components` nested (funcionalmente equivalente al flat + errors aparte; nested es churn sin beneficio), `restorations_attempted`/`succeeded` (`drift_count` + `errors` ya cubren la señal hoy; agregar cuando exista alarma operacional que lo necesite).
+- **Added to code**: `tick_id` (uuid hex, 32 chars) + `duration_ms` (via `time.perf_counter()`). They're operational standard: tick_id for log correlation between ticks, duration_ms to differentiate fast vs slow ticks.
+- **NOT added**: `triggered_by` (only `scheduled` exists today; would be an enum with a single value), `components` nested (functionally equivalent to flat + errors separate; nested is churn without benefit), `restorations_attempted`/`succeeded` (`drift_count` + `errors` already cover the signal today; add when there's operational alarm requiring it).
 
-Cambios:
-- [durin/memory/health_check.py](../../durin/memory/health_check.py): `import uuid` + `time` agregados. `run_tick()` genera `tick_id = uuid.uuid4().hex` y `t0 = time.perf_counter()` al entrar; el payload incluye ambos. ~5 LOC delta.
-- [durin/telemetry/schema.py](../../durin/telemetry/schema.py): `MemoryHealthCheckEvent` TypedDict gana `tick_id` y `duration_ms`. Adicionales — pre-A6 fields siguen requeridos.
-- [docs/memory/07_telemetry_and_observability.md §9.4](07_telemetry_and_observability.md): tabla reescrita con los 6 fields actuales + bloque "Shape decisions and what's deliberately NOT emitted" documentando por qué `triggered_by`/`nested components`/`restorations_*` quedaron fuera. **Ese bloque es lo que evita que esta decisión se vuelva a tomar al revés** (un futuro reader podría ver doc 07 §9.4 v1 y "implementar lo que el doc dice" sin saber el contexto).
-- [tests/memory/test_health_check_a6_fields.py](../../tests/memory/test_health_check_a6_fields.py): 5 tests nuevos ejercitando behavior:
-  - `tick_id` es exactamente 32-char hex (no 36-char dashed — catches `.hex` vs `str()` regression).
-  - `duration_ms` es > 0 (catches segundos-en-vez-de-ms regression — el delta de `perf_counter()` en segundos es <1, multiplicado por 1000 es >0).
-  - Ticks consecutivos producen tick_ids distintos (catches per-init vs per-tick generation regression).
-  - TypedDict tiene los A6 fields **y** los pre-A6 fields (additive, no replace).
-  - Pre-A6 fields siguen en el payload.
+Changes:
+- [durin/memory/health_check.py](../../durin/memory/health_check.py): `import uuid` + `time` added. `run_tick()` generates `tick_id = uuid.uuid4().hex` and `t0 = time.perf_counter()` on entry; the payload includes both. ~5 LOC delta.
+- [durin/telemetry/schema.py](../../durin/telemetry/schema.py): `MemoryHealthCheckEvent` TypedDict gains `tick_id` and `duration_ms`. Additive — pre-A6 fields still required.
+- [docs/memory/07_telemetry_and_observability.md §9.4](07_telemetry_and_observability.md): table rewritten with the 6 current fields + "Shape decisions and what's deliberately NOT emitted" block documenting why `triggered_by`/`nested components`/`restorations_*` were left out. **That block is what prevents this decision from being taken in reverse** (a future reader might see doc 07 §9.4 v1 and "implement what the doc says" without knowing the context).
+- [tests/memory/test_health_check_a6_fields.py](../../tests/memory/test_health_check_a6_fields.py): 5 new tests exercising behavior:
+  - `tick_id` is exactly 32-char hex (not 36-char dashed — catches `.hex` vs `str()` regression).
+  - `duration_ms` is > 0 (catches seconds-instead-of-ms regression — `perf_counter()` delta in seconds is <1, multiplied by 1000 is >0).
+  - Consecutive ticks produce distinct tick_ids (catches per-init vs per-tick generation regression).
+  - TypedDict has the A6 fields **and** the pre-A6 fields (additive, not replace).
+  - Pre-A6 fields still in the payload.
 
-**Lecciones aplicadas**:
-- [[feedback-verify-quantifiers]]: el test explícitamente verifica `len(tick_id) == 32` y que todos los caracteres sean hex. No asume "uuid es uuid".
-- [[feedback-sync-tests-exercise-behavior]]: behavior tests, no sólo schema declarations.
-- [[feedback-no-wait-and-measure]] invertido: NO agregar campos sin necesidad demostrada (`triggered_by`, `restorations_*`). Documentar la decisión para no volver a tomarla al revés.
+**Lessons applied**:
+- [[feedback-verify-quantifiers]]: the test explicitly verifies `len(tick_id) == 32` and that all characters are hex. Doesn't assume "uuid is uuid".
+- [[feedback-sync-tests-exercise-behavior]]: behavior tests, not just schema declarations.
+- [[feedback-no-wait-and-measure]] inverted: do NOT add fields without demonstrated need (`triggered_by`, `restorations_*`). Document the decision so it doesn't get reversed.
 
-**Verificado pre-commit**: tests/memory/ 912 passed (907 baseline + 5 nuevos A6), 1 skipped.
+**Pre-commit verification**: tests/memory/ 912 passed (907 baseline + 5 new A6), 1 skipped.
 
-**Estado**: resolved (commit pendiente).
+**State**: resolved (commit pending).
 
 ---
 
-### A7 — `memory.health.critical` falta `manual_recovery_hint`
+### A7 — `memory.health.critical` missing `manual_recovery_hint`
 
-**Doc dice** (`docs/memory/07_telemetry_and_observability.md:338`):
+**Doc says** (`docs/memory/07_telemetry_and_observability.md:338`):
 
 ```
 | manual_recovery_hint | string | Suggested CLI: e.g., `durin reindex --target lancedb` |
 ```
 
-**Código dice** (`durin/memory/health_check.py:227-238`):
+**Code says** (`durin/memory/health_check.py:227-238`):
 
 ```python
 emit_tool_event(
@@ -423,9 +423,9 @@ emit_tool_event(
 )
 ```
 
-**Quién tiene razón**: doc tiene razón en valor (si vas a alertar, dar el comando de recovery ayuda). Implementación es trivial — mapping component → comando sugerido.
+**Who is right**: doc is right on value (if you're going to alert, giving the recovery command helps). Implementation is trivial — mapping component → suggested command.
 
-**Acción**: agregar dict de recovery hints en `health_check.py`:
+**Action**: add a recovery hints dict in `health_check.py`:
 
 ```python
 _RECOVERY_HINTS = {
@@ -434,99 +434,99 @@ _RECOVERY_HINTS = {
 }
 ```
 
-Y agregar al payload.
+And add to the payload.
 
-**Resolución (2026-05-28) — Opción A con anti-drift test**: el campo se agrega + test que protege contra drift entre los hints y el CLI real. Aplicando `feedback_verify_quantifiers`, el comando sugerido por el doc original (`durin reindex --target lancedb`) era **incorrecto** — el comando real es `durin memory reindex` (le faltaba el `memory`). Y el `--target` accepta `lancedb` (no `lance` que es el nombre del probe). Ambos errores en spec corregidos en la implementación.
+**Resolution (2026-05-28) — Option A with anti-drift test**: the field is added + a test that protects against drift between the hints and the real CLI. Applying `feedback_verify_quantifiers`, the command suggested by the original doc (`durin reindex --target lancedb`) was **incorrect** — the real command is `durin memory reindex` (it was missing the `memory`). And `--target` accepts `lancedb` (not `lance` which is the probe name). Both spec errors corrected in the implementation.
 
-Cambios:
+Changes:
 
 - [durin/memory/health_check.py](../../durin/memory/health_check.py):
-  * Nuevo `_RECOVERY_HINTS` dict — mapping probe-name → CLI command verbatim.
-  * Nuevo `_RECOVERY_HINT_FALLBACK = "durin memory reindex --target all"` para componentes nuevos sin hint específico.
-  * `_emit_critical()` payload incluye `manual_recovery_hint` (lookup con fallback).
-- [durin/cli/memory_cmd.py](../../durin/cli/memory_cmd.py): la constante `("all", "fts", "lancedb")` extraída a `VALID_REINDEX_TARGETS` exportable. Permite que el test anti-drift compare contra una single-source-of-truth en vez de hardcodear strings.
-- [durin/telemetry/schema.py](../../durin/telemetry/schema.py): `MemoryHealthCriticalEvent` gana `manual_recovery_hint: str`. Additive.
-- [tests/memory/test_health_critical_a7_recovery_hint.py](../../tests/memory/test_health_critical_a7_recovery_hint.py) (nuevo, 6 tests):
-  * Todos los probes conocidos (`fts`, `lance`) tienen hint.
-  * Todos los hints empiezan con `durin memory reindex` (no `durin reindex` — protege contra re-introducir el spec-typo).
-  * **Anti-drift core**: cada `--target X` en cada hint pasa la validación del CLI (importa `VALID_REINDEX_TARGETS`). Si alguien renombra un target sin actualizar `_RECOVERY_HINTS`, el test falla.
-  * Emit path para componente conocido usa el hint específico.
-  * Emit path para componente desconocido usa el fallback.
-  * TypedDict declara el field + preserva pre-A7 fields.
+  * New `_RECOVERY_HINTS` dict — mapping probe-name → verbatim CLI command.
+  * New `_RECOVERY_HINT_FALLBACK = "durin memory reindex --target all"` for new components without a specific hint.
+  * `_emit_critical()` payload includes `manual_recovery_hint` (lookup with fallback).
+- [durin/cli/memory_cmd.py](../../durin/cli/memory_cmd.py): the `("all", "fts", "lancedb")` constant extracted to an exportable `VALID_REINDEX_TARGETS`. Allows the anti-drift test to compare against a single source of truth instead of hardcoding strings.
+- [durin/telemetry/schema.py](../../durin/telemetry/schema.py): `MemoryHealthCriticalEvent` gains `manual_recovery_hint: str`. Additive.
+- [tests/memory/test_health_critical_a7_recovery_hint.py](../../tests/memory/test_health_critical_a7_recovery_hint.py) (new, 6 tests):
+  * All known probes (`fts`, `lance`) have a hint.
+  * All hints start with `durin memory reindex` (not `durin reindex` — protects against re-introducing the spec typo).
+  * **Anti-drift core**: each `--target X` in each hint passes CLI validation (imports `VALID_REINDEX_TARGETS`). If someone renames a target without updating `_RECOVERY_HINTS`, the test fails.
+  * Emit path for known component uses the specific hint.
+  * Emit path for unknown component uses the fallback.
+  * TypedDict declares the field + preserves pre-A7 fields.
 
-- [docs/memory/07_telemetry_and_observability.md §9.5](07_telemetry_and_observability.md): reescrito con los 4 campos. Sección explica la traducción probe-name → CLI target (legacy drift `lance` vs `lancedb`) y referencia el anti-drift test. Corregido el comando equivocado de la spec v1.
+- [docs/memory/07_telemetry_and_observability.md §9.5](07_telemetry_and_observability.md): rewritten with the 4 fields. Section explains the probe-name → CLI target translation (legacy drift `lance` vs `lancedb`) and references the anti-drift test. The wrong command from the v1 spec corrected.
 
-**Lecciones aplicadas**:
-- [[feedback-verify-quantifiers]]: verificar que el comando sugerido **realmente exista**. Doc 07 v1 decía `durin reindex` — comando inexistente (falta `memory`). El audit lo descubrió antes de implementar.
-- [[feedback-sync-tests-exercise-behavior]]: el test no compara strings entre doc y código — verifica que el target sugerido **pase la validación del CLI**, ejercitando el contrato real.
-- [[feedback-optimization-vs-principle]]: el fix es local al consumer (health_check + memory_cmd extract VALID_REINDEX_TARGETS). El consumer humano que lee logs es legítimo aunque no haya consumer software hoy.
+**Lessons applied**:
+- [[feedback-verify-quantifiers]]: verify that the suggested command **actually exists**. Doc 07 v1 said `durin reindex` — non-existent command (missing `memory`). The audit caught it before implementing.
+- [[feedback-sync-tests-exercise-behavior]]: the test doesn't compare strings between doc and code — it verifies that the suggested target **passes CLI validation**, exercising the real contract.
+- [[feedback-optimization-vs-principle]]: the fix is local to the consumer (health_check + memory_cmd extract VALID_REINDEX_TARGETS). The human consumer reading logs is legitimate even though there's no software consumer today.
 
-**Verificado pre-commit**: tests/memory/ 918 passed (912 baseline + 6 nuevos A7), 1 skipped.
+**Pre-commit verification**: tests/memory/ 918 passed (912 baseline + 6 new A7), 1 skipped.
 
-**Estado**: resolved (commit pendiente).
+**State**: resolved (commit pending).
 
 ---
 
-### A8 — `PushSink` es código muerto sin wiring
+### A8 — `PushSink` is dead code without wiring
 
-**Doc dice** (`docs/memory/07_telemetry_and_observability.md` §12.2 + `09_implementation_roadmap.md` P7.3): HTTPS push opt-in via `telemetry.push_url` + `telemetry.push_token`.
+**Doc says** (`docs/memory/07_telemetry_and_observability.md` §12.2 + `09_implementation_roadmap.md` P7.3): HTTPS push opt-in via `telemetry.push_url` + `telemetry.push_token`.
 
-**Código dice**:
-- `durin/telemetry/push.py:32` existe `PushSink` con tests pasando.
-- `grep -rn "PushSink" durin/` (fuera del propio push.py): cero hits.
-- `grep -rn "push_url|push_token" durin/config/`: cero hits.
-- Ningún sink lo invoca; el config no tiene los campos; el agente nunca lo crea.
+**Code says**:
+- `durin/telemetry/push.py:32` `PushSink` exists with passing tests.
+- `grep -rn "PushSink" durin/` (outside push.py itself): zero hits.
+- `grep -rn "push_url|push_token" durin/config/`: zero hits.
+- No sink invokes it; the config doesn't have the fields; the agent never creates it.
 
-**Quién tiene razón**: ambos. El doc describe la feature correctamente. El código tiene la mitad (la clase). Falta el wiring: campos en `durin/config/schema.py::TelemetryConfig`, construcción en el sink registry, llamada `push.log(...)` desde el emit pipeline.
+**Who is right**: both. The doc describes the feature correctly. The code has half (the class). The wiring is missing: fields in `durin/config/schema.py::TelemetryConfig`, construction in the sink registry, `push.log(...)` call from the emit pipeline.
 
-**Acción**:
-1. Agregar a `durin/config/schema.py` (probablemente bajo `TelemetryConfig` o crear `TelemetryPushConfig`):
+**Action**:
+1. Add to `durin/config/schema.py` (probably under `TelemetryConfig` or create `TelemetryPushConfig`):
    - `push_url: str | None`
-   - `push_token: str | None` (mejor leer del secret store)
+   - `push_token: str | None` (better read from the secret store)
    - `push_batch_size: int = 10`
-2. En el sink registry (`durin/telemetry/sinks.py` o equivalente): si `push_url` configurado, instanciar `PushSink` y añadir al fan-out.
-3. Test E2E: configurar URL fake (httpbin), verificar que un emit dispara HTTP request.
+2. In the sink registry (`durin/telemetry/sinks.py` or equivalent): if `push_url` configured, instantiate `PushSink` and add to the fan-out.
+3. E2E test: configure fake URL (httpbin), verify that an emit triggers an HTTP request.
 
-**Resolución (2026-05-28) — Opción A cableado end-to-end**: el primer análisis del audit propuso borrar PushSink ("no consumer"). El user corrigió: *"medir comportamiento es el propósito de la telemetría — si no hay consumo es porque todavía no lo publicamos a un dashboard/API, no porque no se necesite. Medir lo es todo."* Lección nueva guardada en memoria persistente: [[feedback-telemetry-is-first-class]] — pattern opuesto al de A4 (P2.5 revert).
+**Resolution (2026-05-28) — Option A end-to-end wiring**: the first audit analysis proposed deleting PushSink ("no consumer"). The user corrected: *"measuring behavior is the purpose of telemetry — if there's no consumption, it's because we haven't yet published it to a dashboard/API, not because it's not needed. Measuring is everything."* New lesson saved in persistent memory: [[feedback-telemetry-is-first-class]] — pattern opposite to A4 (P2.5 revert).
 
-Cambios:
+Changes:
 
-- [durin/config/schema.py](../../durin/config/schema.py): `TelemetryPushConfig` + `TelemetryConfig` nuevos. `Config` gana `telemetry: TelemetryConfig`. El schema declara `token_secret_name` (referencia), NO el token; un test invariante (`test_config_schema_has_no_plaintext_token_field`) protege contra regresión.
-- [durin/telemetry/logger.py](../../durin/telemetry/logger.py): `TelemetryLogger` gana `_extra_sinks` + `add_sink()`. `log()` escribe primero al JSONL (canonical source of truth) y luego itera los sinks adicionales — cada uno aislado en try/except para que un sink que falle no afecte el resto ni el JSONL.
-- [durin/telemetry/wiring.py](../../durin/telemetry/wiring.py) (nuevo): `wire_push_sink()` que (a) verifica config válida, (b) resuelve el token via `get_secret_store().get(name)`, (c) construye `PushSink` + attach al logger, (d) loggea warnings claros si la config está incompleta o el secret falta. Todos los modos de falla terminan en "push disabled, JSONL keeps working".
-- [durin/telemetry/__init__.py](../../durin/telemetry/__init__.py): `PushSink` exportado en `__all__` (ahora es API pública del paquete).
-- [durin/agent/loop.py](../../durin/agent/loop.py): integrated — al crear el session_logger se intenta wire_push_sink; en el `finally` del cleanup se llama `push_sink.flush()` para no perder eventos del buffer parcial.
-- [tests/telemetry/test_push_wiring.py](../../tests/telemetry/test_push_wiring.py) (nuevo, 9 tests):
+- [durin/config/schema.py](../../durin/config/schema.py): new `TelemetryPushConfig` + `TelemetryConfig`. `Config` gains `telemetry: TelemetryConfig`. The schema declares `token_secret_name` (reference), NOT the token; an invariant test (`test_config_schema_has_no_plaintext_token_field`) guards against regression.
+- [durin/telemetry/logger.py](../../durin/telemetry/logger.py): `TelemetryLogger` gains `_extra_sinks` + `add_sink()`. `log()` writes first to the JSONL (canonical source of truth) and then iterates the additional sinks — each isolated in try/except so a failing sink doesn't affect the rest or the JSONL.
+- [durin/telemetry/wiring.py](../../durin/telemetry/wiring.py) (new): `wire_push_sink()` that (a) verifies config validity, (b) resolves the token via `get_secret_store().get(name)`, (c) constructs `PushSink` + attaches to the logger, (d) logs clear warnings if config is incomplete or the secret is missing. All failure modes end in "push disabled, JSONL keeps working".
+- [durin/telemetry/__init__.py](../../durin/telemetry/__init__.py): `PushSink` exported in `__all__` (now public package API).
+- [durin/agent/loop.py](../../durin/agent/loop.py): integrated — when creating the session_logger, `wire_push_sink` is attempted; in the cleanup `finally`, `push_sink.flush()` is called so events in the partial buffer aren't lost.
+- [tests/telemetry/test_push_wiring.py](../../tests/telemetry/test_push_wiring.py) (new, 9 tests):
   * Disabled-path: default → no sink. None config → no sink (no raise).
-  * Misconfigured: url o secret_name vacío → graceful disable.
-  * Secret missing: store no tiene el name → graceful disable + warning.
-  * Happy path: el sink se attacha, el token RESUELTO viene del secret store (assert privacy invariant).
-  * Fan-out: 3 events emitidos → 3 lines en JSONL + 3 pending en el push buffer.
-  * Isolation: sink broken (raises) → JSONL sigue escribiendo correctamente.
-  * Schema invariant: `TelemetryPushConfig` NO tiene field `token` plaintext — sólo `token_secret_name`. Catches a regression que pondría el token en config.json.
+  * Misconfigured: empty url or secret_name → graceful disable.
+  * Secret missing: store doesn't have the name → graceful disable + warning.
+  * Happy path: the sink attaches, the RESOLVED token comes from the secret store (assert privacy invariant).
+  * Fan-out: 3 events emitted → 3 lines in JSONL + 3 pending in the push buffer.
+  * Isolation: broken sink (raises) → JSONL keeps writing correctly.
+  * Schema invariant: `TelemetryPushConfig` does NOT have a plaintext `token` field — only `token_secret_name`. Catches a regression that would put the token in config.json.
 
-- [docs/memory/07_telemetry_and_observability.md §12.2](07_telemetry_and_observability.md): retention corregida (90 días, no 1 año). §12.3 nueva — descripción completa del push opt-in: config TOML, comando para el secret, privacy implications, behaviour (failure isolation, drain on shutdown, retry path).
+- [docs/memory/07_telemetry_and_observability.md §12.2](07_telemetry_and_observability.md): retention corrected (90 days, not 1 year). New §12.3 — full description of the push opt-in: TOML config, command for the secret, privacy implications, behavior (failure isolation, drain on shutdown, retry path).
 
-**Lecciones aplicadas**:
-- [[feedback-telemetry-is-first-class]] (nueva): medir comportamiento es el propósito, no requiere downstream consumer para justificar.
-- [[feedback-verify-quantifiers]]: tests verifican el shape del Config schema (no asume; lee `model_fields`).
-- [[feedback-sync-tests-exercise-behavior]]: el test no compara strings entre doc y código; ejercita los happy/unhappy paths del wiring real.
-- Privacy by design: token via secret store (lección de cómo `ZHIPU_API_KEY` se maneja en A5), default OFF, warning explícito en doc 07 §12.3.
+**Lessons applied**:
+- [[feedback-telemetry-is-first-class]] (new): measuring behavior is the purpose, doesn't require a downstream consumer to justify.
+- [[feedback-verify-quantifiers]]: tests verify the Config schema shape (don't assume; read `model_fields`).
+- [[feedback-sync-tests-exercise-behavior]]: the test doesn't compare strings between doc and code; it exercises the happy/unhappy paths of the real wiring.
+- Privacy by design: token via secret store (lesson from how `ZHIPU_API_KEY` is handled in A5), default OFF, explicit warning in doc 07 §12.3.
 
-**Verificado pre-commit**: tests/memory/ + tests/telemetry/ 962 passed (953 baseline + 9 nuevos A8), 1 skipped.
+**Pre-commit verification**: tests/memory/ + tests/telemetry/ 962 passed (953 baseline + 9 new A8), 1 skipped.
 
-**Estado**: resolved (commit pendiente).
+**State**: resolved (commit pending).
 
 ---
 
-### A9 — Temporal decay no aplicado al ranking
+### A9 — Temporal decay not applied to ranking
 
-**Doc dice** (`docs/memory/00_overview.md:232`, fila 3b):
+**Doc says** (`docs/memory/00_overview.md:232`, row 3b):
 > **In MVP, enabled by default**, but only for observation-type docs. episodic (90d half-life) and session_summary (120d) decay.
 
-**Doc dice** también (`docs/memory/03_search_pipeline.md` §10) — paso "STEP 6 — Temporal decay" entre cross-encoder y sectioning, "default enabled".
+**Doc says** also (`docs/memory/03_search_pipeline.md` §10) — "STEP 6 — Temporal decay" between cross-encoder and sectioning, "default enabled".
 
-**Código dice** (`durin/memory/decay.py:14-18`, header literal):
+**Code says** (`durin/memory/decay.py:14-18`, literal header):
 
 ```python
 """...
@@ -536,355 +536,355 @@ later phase.
 """
 ```
 
-`grep -n "decay|half_life" search_pipeline.py rrf_fusion.py entity_ranker.py` → **cero hits**. Nada consume el resolver.
+`grep -n "decay|half_life" search_pipeline.py rrf_fusion.py entity_ranker.py` → **zero hits**. Nothing consumes the resolver.
 
-**Quién tiene razón**: el código se autodocumenta correctamente (header explica que está pendiente). **Doc 00 §10 row 3b miente.** Doc 03 §10 promete "enabled by default" — falso.
+**Who is right**: the code self-documents correctly (header explains that it's pending). **Doc 00 §10 row 3b lies.** Doc 03 §10 promises "enabled by default" — false.
 
-**Acción opción A** (cumplir el doc): implementar consumer ranking-time. ~50 LOC: en `run_search_pipeline`, después de RRF y antes de entity rerank, multiplicar `score *= exp(-Δdays/half_life)` para hits con `half_life ≠ None`.
+**Action option A** (fulfill the doc): implement the ranking-time consumer. ~50 LOC: in `run_search_pipeline`, after RRF and before entity rerank, multiply `score *= exp(-Δdays/half_life)` for hits with `half_life ≠ None`.
 
-**Acción opción B** (alinear doc): marcar decay como deferred en doc 00 y doc 03, mover a `08_scope_and_discarded.md` como "deferred to post-MVP".
+**Action option B** (align doc): mark decay as deferred in doc 00 and doc 03, move to `08_scope_and_discarded.md` as "deferred to post-MVP".
 
-**Recomendación**: opción A es ~1h de trabajo y cierra una promesa explícita del doc. Hagamos A.
+**Recommendation**: option A is ~1h of work and closes an explicit doc promise. Let's do A.
 
-**Resolución (2026-05-28) — Opción A, class defaults only**: durante el análisis el user empujó con la pregunta clave: *"no asumas los defaults del doc, enumera todas las clases que se guardan y razoná por cada una"*. La enumeración (verificada contra `MEMORY_CLASSES` + el código real) llegó a la misma tabla que el doc original — pero ahora con el razonamiento explícito por clase grabado:
+**Resolution (2026-05-28) — Option A, class defaults only**: during the analysis the user pushed back with the key question: *"don't assume the defaults from the doc, enumerate all the classes that get stored and reason about each one"*. The enumeration (verified against `MEMORY_CLASSES` + the real code) arrived at the same table as the original doc — but now with the explicit per-class reasoning recorded:
 
-| Clase | Decae | Half-life | Razonamiento verificado |
+| Class | Decays | Half-life | Verified reasoning |
 |---|---|---|---|
-| `entity_page` (alias `entity`) | No | null | `valid_from = ""` siempre para entity pages; el mtime es "última pasada Dream", no "edad del hecho" |
-| `episodic` | Sí | 90d | Observaciones con timestamp intrínseco — la edad ES información del contenido |
-| `stable` | No | null | El user/agente lo marcó explícitamente como durable; decaerlo contradice la decisión |
-| `corpus` | No | null | `valid_from` es la fecha de INGEST, no del contenido — decaer castigaría "libros viejos en tu pipeline" |
-| `session_summary` | Sí | 120d | Igual concepto que episodic pero cubre temas más amplios — pero inert hasta A10 (no se emite hoy) |
-| `pending` | N/A | — | Walker lo excluye (A2) |
+| `entity_page` (alias `entity`) | No | null | `valid_from = ""` always for entity pages; mtime is "last Dream pass", not "fact age" |
+| `episodic` | Yes | 90d | Observations with intrinsic timestamp — age IS content information |
+| `stable` | No | null | User/agent explicitly marked it as durable; decaying contradicts the decision |
+| `corpus` | No | null | `valid_from` is the INGEST date, not the content date — decaying would punish "old books in your pipeline" |
+| `session_summary` | Yes | 120d | Same concept as episodic but covers broader topics — but inert until A10 (not emitted today) |
+| `pending` | N/A | — | Walker excludes it (A2) |
 
-**Override per-entry NO se aplica en search pipeline**: el user confirmó que por clase alcanza. Verificación adicional mostró que **es spec sin uso real**: Dream nunca setea `evergreen` ni `decay_half_life`; el workspace actual no tiene entries con esos overrides; los templates de Dream no instruyen al LLM a emitirlos. El field queda en `MemoryEntry` schema preparado para futuro; el resolver `half_life_for` sigue exportándose para callers que lo necesiten (hot_layer, dream).
+**Per-entry override is NOT applied in search pipeline**: the user confirmed that per-class is enough. Additional verification showed that **it's spec without real use**: Dream never sets `evergreen` nor `decay_half_life`; the current workspace has no entries with those overrides; the Dream templates don't instruct the LLM to emit them. The field stays in the `MemoryEntry` schema prepared for the future; the `half_life_for` resolver continues to be exported for callers that need it (hot_layer, dream).
 
-Cambios:
+Changes:
 
-- [durin/memory/decay.py](../../durin/memory/decay.py): nueva función pura `apply_class_decay(score, class_name, valid_from_iso, now=None) -> (decayed, factor)`. `CLASS_HALF_LIFE_DEFAULTS` gana `entity_page` como alias de `entity` (FTS5 / LanceDB usan nombres distintos; ambos resuelven a null). Module header reescrito con la tabla razonada inline.
-- [durin/config/schema.py](../../durin/config/schema.py): nuevo `MemoryTemporalDecayConfig(enabled: bool = True)`. `MemorySearchConfig` ahora tiene `temporal_decay`.
-- [durin/memory/search_pipeline.py](../../durin/memory/search_pipeline.py): nuevo `_temporal_decay_step()` insertado después del cross-encoder y antes del sectioning. Reordena `fused` por decayed scores. `run_search_pipeline` gana `temporal_decay_enabled: bool = True`. `now` inyectable para tests deterministas.
-- [durin/agent/tools/memory_search.py](../../durin/agent/tools/memory_search.py): lee `app_config.memory.search.temporal_decay.enabled` y lo threada al pipeline.
-- [durin/telemetry/schema.py](../../durin/telemetry/schema.py): nuevo `MemoryRecallDecayEvent` TypedDict + registro en `EVENTS`.
-- [tests/memory/test_decay_search_integration.py](../../tests/memory/test_decay_search_integration.py) (nuevo, 19 tests):
-  * Unit: `apply_class_decay` por cada clase (decae / no decae) + edge cases (empty/malformed/future timestamp, unknown class).
-  * Quantifier: `exp(-1) ≈ 0.368` para 1 half-life, `exp(-5) ≈ 0.0067` para 5 half-lives.
-  * `entity` y `entity_page` ambos resuelven a no-decay (catches the FTS5 vs LanceDB naming).
-  * Pipeline: hits viejos bajan al fondo, recientes suben; entity_page con valid_from antiguo NO mueve.
-  * Telemetry: `memory.recall.decay` event con counts correctos.
-  * Schema: TypedDict registrado, config default enabled=True.
+- [durin/memory/decay.py](../../durin/memory/decay.py): new pure function `apply_class_decay(score, class_name, valid_from_iso, now=None) -> (decayed, factor)`. `CLASS_HALF_LIFE_DEFAULTS` gains `entity_page` as an alias for `entity` (FTS5 / LanceDB use different names; both resolve to null). Module header rewritten with the reasoned table inline.
+- [durin/config/schema.py](../../durin/config/schema.py): new `MemoryTemporalDecayConfig(enabled: bool = True)`. `MemorySearchConfig` now has `temporal_decay`.
+- [durin/memory/search_pipeline.py](../../durin/memory/search_pipeline.py): new `_temporal_decay_step()` inserted after the cross-encoder and before sectioning. Reorders `fused` by decayed scores. `run_search_pipeline` gains `temporal_decay_enabled: bool = True`. `now` injectable for deterministic tests.
+- [durin/agent/tools/memory_search.py](../../durin/agent/tools/memory_search.py): reads `app_config.memory.search.temporal_decay.enabled` and threads it to the pipeline.
+- [durin/telemetry/schema.py](../../durin/telemetry/schema.py): new `MemoryRecallDecayEvent` TypedDict + registration in `EVENTS`.
+- [tests/memory/test_decay_search_integration.py](../../tests/memory/test_decay_search_integration.py) (new, 19 tests):
+  * Unit: `apply_class_decay` for each class (decays / doesn't decay) + edge cases (empty/malformed/future timestamp, unknown class).
+  * Quantifier: `exp(-1) ≈ 0.368` for 1 half-life, `exp(-5) ≈ 0.0067` for 5 half-lives.
+  * `entity` and `entity_page` both resolve to no-decay (catches the FTS5 vs LanceDB naming).
+  * Pipeline: old hits drop to the bottom, recent ones rise; entity_page with old valid_from does NOT move.
+  * Telemetry: `memory.recall.decay` event with correct counts.
+  * Schema: TypedDict registered, config default enabled=True.
 
-- [docs/memory/03_search_pipeline.md §10.7](03_search_pipeline.md) (nuevo): describe qué shippeó A9 + la tabla razonada + scope (class only).
-- [docs/memory/00_overview.md §10 row 3b](00_overview.md): de "promise" a "shipped".
+- [docs/memory/03_search_pipeline.md §10.7](03_search_pipeline.md) (new): describes what A9 shipped + the reasoned table + scope (class only).
+- [docs/memory/00_overview.md §10 row 3b](00_overview.md): from "promise" to "shipped".
 
-**Lecciones aplicadas**:
-- [[feedback-verify-quantifiers]] aplicado dos veces durante el desarrollo:
-  1. Test inicial usó `_FIXED_NOW = datetime(... 12:00)` pero `valid_from="2026-05-28"` parsea a 00:00 — delta de 0.5 días, factor ≈ 0.9945 (no 1.0). Fix: `_FIXED_NOW = datetime(... 00:00)` para que los deltas sean exactos.
-  2. Test del pipeline pasó `now=None` al `_temporal_decay_step` → wall-clock real diferente al `_FIXED_NOW` que esperaba el cálculo. Refactor para inyectar `now` desde tests.
-- [[feedback-question-user-input]]: el primer plan copió los defaults del doc sin razonar. El user empujó "enumera y razoná por clase" — y la enumeración produjo el mismo resultado, pero con razonamiento verbatim guardado. La diferencia: futuros readers ven *por qué* corpus no decae, no sólo *que* no decae.
-- [[feedback-sync-tests-exercise-behavior]]: tests no comparan strings del doc; ejercitan la función con valores numéricos verificados matemáticamente.
+**Lessons applied**:
+- [[feedback-verify-quantifiers]] applied twice during development:
+  1. Initial test used `_FIXED_NOW = datetime(... 12:00)` but `valid_from="2026-05-28"` parses to 00:00 — 0.5-day delta, factor ≈ 0.9945 (not 1.0). Fix: `_FIXED_NOW = datetime(... 00:00)` so deltas are exact.
+  2. Pipeline test passed `now=None` to `_temporal_decay_step` → real wall-clock different from `_FIXED_NOW` the calculation expected. Refactor to inject `now` from tests.
+- [[feedback-question-user-input]]: the first plan copied the doc's defaults without reasoning. The user pushed "enumerate and reason about each class" — and the enumeration produced the same result, but with verbatim reasoning saved. The difference: future readers see *why* corpus doesn't decay, not just *that* it doesn't decay.
+- [[feedback-sync-tests-exercise-behavior]]: tests don't compare doc strings; they exercise the function with numerical values verified mathematically.
 
-**Verificado pre-commit**: tests/memory/ 937 passed (918 baseline + 19 nuevos A9), 1 skipped.
+**Pre-commit verification**: tests/memory/ 937 passed (918 baseline + 19 new A9), 1 skipped.
 
-**Estado**: resolved (commit pendiente).
+**State**: resolved (commit pending).
 
 ---
 
-### A10 — Doc 02 promete indexar session summaries; nada las indexa
+### A10 — Doc 02 promises indexing of session summaries; nothing indexes them
 
-**Doc dice** (`docs/memory/02_indexing.md:104`):
+**Doc says** (`docs/memory/02_indexing.md:104`):
 
 > *"`sessions/<id>/<id>.meta.json::derived._last_summary` (one row per session as `type=session_summary`)"*
 
-Y §6.5 (yield rule): *"Also yields `sessions/<id>/<id>.meta.json` if a `_last_summary` is present"*.
+And §6.5 (yield rule): *"Also yields `sessions/<id>/<id>.meta.json` if a `_last_summary` is present"*.
 
-**Código dice**:
-- `durin/memory/paths.py:78-111` `walk_memory` itera **sólo** `*.md` bajo `memory/`. Nunca toca `sessions/`.
-- `grep -rn "session_summary\|_last_summary" durin/memory/indexer.py durin/memory/vector_index.py` → cero hits relevantes (sólo aparece en metadata tables o como categoría de retorno, no como input).
-- `CLASS_HALF_LIFE_DEFAULTS` lista `session_summary: 120` pero nada emite filas con ese tipo a Lance/FTS.
+**Code says**:
+- `durin/memory/paths.py:78-111` `walk_memory` iterates **only** `*.md` under `memory/`. Never touches `sessions/`.
+- `grep -rn "session_summary\|_last_summary" durin/memory/indexer.py durin/memory/vector_index.py` → zero relevant hits (only appears in metadata tables or as return category, not as input).
+- `CLASS_HALF_LIFE_DEFAULTS` lists `session_summary: 120` but nothing emits rows with that type to Lance/FTS.
 
-**Quién tiene razón**: doc 02 promete una capacidad que sería útil pero no existe. Si el dream consolidator escribiera summaries en `memory/sessions/<id>.md` (formato markdown), el walker las recogería; hoy viven en `sessions/<id>/<id>.meta.json` (JSON-derived) y nadie las propaga al índice.
+**Who is right**: doc 02 promises a capability that would be useful but doesn't exist. If the dream consolidator wrote summaries as `memory/sessions/<id>.md` (markdown format), the walker would pick them up; today they live in `sessions/<id>/<id>.meta.json` (JSON-derived) and nothing propagates them to the index.
 
-**Acción opción A** (implementar): tras cerrar una sesión, escribir el last_summary como `memory/episodic/session-<id>.md` con class `session_summary`. Entonces el walker las ve.
+**Action option A** (implement): after closing a session, write the last_summary as `memory/episodic/session-<id>.md` with class `session_summary`. Then the walker sees them.
 
-**Acción opción B** (sacar del doc): borrar §6.5 yield y la fila `session_summary` de §3.3. Marcar como deferred.
+**Action option B** (remove from doc): delete the §6.5 yield and the `session_summary` row from §3.3. Mark as deferred.
 
-**Recomendación**: opción A — las session summaries son retrieval-valiosas (resumen condensado de una conversación entera). ~30 LOC en el handler de session close. Pero requiere decidir dónde viven (`memory/<class>/` requiere una clase nueva o reusar `episodic`).
+**Recommendation**: option A — session summaries are retrieval-valuable (condensed summary of an entire conversation). ~30 LOC in the session-close handler. But it requires deciding where they live (`memory/<class>/` requires a new class or reusing `episodic`).
 
-**Resolución (2026-05-28) — Opción A con single source of truth**: el user empujó con la pregunta clave: *"el last summary ahora va vivir en el archivo metadata de la session ademas de su entidad propia?"* — exactamente el pattern A4 (P2.5) que ya habíamos identificado como anti-pattern. La duplicación entre `<key>.meta.json::_last_summary` y `memory/session_summary/<key>.md` era replication, no fan-out. Solución: el `.md` es la **única** fuente de verdad; el JSON metadata deja de cargar `_last_summary` going forward.
+**Resolution (2026-05-28) — Option A with single source of truth**: the user pushed back with the key question: *"will the last summary now live in the session's metadata file in addition to its own entity?"* — exactly the A4 (P2.5) pattern we'd already identified as an anti-pattern. The duplication between `<key>.meta.json::_last_summary` and `memory/session_summary/<key>.md` was replication, not fan-out. Solution: the `.md` is the **only** source of truth; the JSON metadata stops carrying `_last_summary` going forward.
 
-Cambios:
+Changes:
 
-- [durin/memory/session_summary_store.py](../../durin/memory/session_summary_store.py) (nuevo, ~155 LOC):
-  * `SESSION_SUMMARY_CLASS = "session_summary"` constante.
-  * `sanitize_session_key(key)` — mismo patrón que `TelemetryLogger`'s sanitiser: collapses non-word chars + dot runs (path-traversal safe), cap a 80 chars.
-  * `session_summary_path(workspace, key)` — resuelve a `memory/session_summary/<sanitized>.md`.
-  * `write_session_summary(workspace, key, text, last_active=None)` — escribe la entry via Pydantic-valid `MemoryEntry`. Empty/sentinel input → no write.
+- [durin/memory/session_summary_store.py](../../durin/memory/session_summary_store.py) (new, ~155 LOC):
+  * `SESSION_SUMMARY_CLASS = "session_summary"` constant.
+  * `sanitize_session_key(key)` — same pattern as `TelemetryLogger`'s sanitiser: collapses non-word chars + dot runs (path-traversal safe), cap at 80 chars.
+  * `session_summary_path(workspace, key)` — resolves to `memory/session_summary/<sanitized>.md`.
+  * `write_session_summary(workspace, key, text, last_active=None)` — writes the entry via Pydantic-valid `MemoryEntry`. Empty/sentinel input → no write.
   * `get_session_summary(workspace, key) -> (text, last_active)` — read path. Never raises.
-  * `delete_session_summary(workspace, key) -> bool` — borrado explícito.
-- [durin/memory/paths.py](../../durin/memory/paths.py): `MEMORY_CLASSES` ahora incluye `"session_summary"` (5 valores). Walker recoge automáticamente.
-- [durin/agent/memory.py::Consolidator._persist_last_summary](../../durin/agent/memory.py): refactorizado — escribe al `.md` via `write_session_summary` y **pop el legacy `_last_summary` del `session.metadata`** + save (migración one-shot por compaction). Aislado en try/except para que el flow del consolidator nunca rompa por un write fail.
-- [durin/agent/memory.py::estimate_session_prompt_tokens](../../durin/agent/memory.py): lee del `.md` via `get_session_summary`; fallback al legacy `metadata["_last_summary"]` para sesiones pre-A10 que aún no compactaron.
-- [durin/agent/loop.py::_format_pending_summary](../../durin/agent/loop.py): cambió de `@staticmethod` a método de instancia para acceder a `self.workspace`. Lee del `.md` primero; fallback al legacy metadata.
-- [tests/memory/test_paths.py](../../tests/memory/test_paths.py): test del set canonical actualizado a 5 valores.
-- 3 tests legacy actualizados para usar `get_session_summary` en vez de leer `session.metadata["_last_summary"]`: [test_consolidator.py:167](../../tests/agent/test_consolidator.py), [test_loop_consolidation_tokens.py:191](../../tests/agent/test_loop_consolidation_tokens.py), [test_d1_commands.py:187](../../tests/command/test_d1_commands.py).
-- [tests/memory/test_session_summary_indexing.py](../../tests/memory/test_session_summary_indexing.py) (nuevo, 14 tests):
-  * `session_summary` en `MEMORY_CLASSES` pero NO en `_AGENT_FACING_CLASSES` (agent never writes summaries directly).
+  * `delete_session_summary(workspace, key) -> bool` — explicit deletion.
+- [durin/memory/paths.py](../../durin/memory/paths.py): `MEMORY_CLASSES` now includes `"session_summary"` (5 values). Walker picks it up automatically.
+- [durin/agent/memory.py::Consolidator._persist_last_summary](../../durin/agent/memory.py): refactored — writes to the `.md` via `write_session_summary` and **pops the legacy `_last_summary` from `session.metadata`** + saves (one-shot migration per compaction). Isolated in try/except so the consolidator flow never breaks on a write failure.
+- [durin/agent/memory.py::estimate_session_prompt_tokens](../../durin/agent/memory.py): reads from the `.md` via `get_session_summary`; fallback to legacy `metadata["_last_summary"]` for pre-A10 sessions that haven't yet compacted.
+- [durin/agent/loop.py::_format_pending_summary](../../durin/agent/loop.py): changed from `@staticmethod` to instance method to access `self.workspace`. Reads from the `.md` first; falls back to legacy metadata.
+- [tests/memory/test_paths.py](../../tests/memory/test_paths.py): canonical set test updated to 5 values.
+- 3 legacy tests updated to use `get_session_summary` instead of reading `session.metadata["_last_summary"]`: [test_consolidator.py:167](../../tests/agent/test_consolidator.py), [test_loop_consolidation_tokens.py:191](../../tests/agent/test_loop_consolidation_tokens.py), [test_d1_commands.py:187](../../tests/command/test_d1_commands.py).
+- [tests/memory/test_session_summary_indexing.py](../../tests/memory/test_session_summary_indexing.py) (new, 14 tests):
+  * `session_summary` in `MEMORY_CLASSES` but NOT in `_AGENT_FACING_CLASSES` (agent never writes summaries directly).
   * `sanitize_session_key`: simple/colon/path-traversal/empty handled.
-  * `write_session_summary` round-trip → texto idéntico.
+  * `write_session_summary` round-trip → identical text.
   * Empty/sentinel input → no write.
-  * Update overrides same path (id = sanitized key).
+  * Update overwrites same path (id = sanitized key).
   * `delete_session_summary` removes md; second delete is no-op.
   * Persisted entry is Pydantic-valid (round-trips via `load_entry`).
-  * Indexer's `_payload_for` asigna `class_name="session_summary"`.
-  * A9 decay para `session_summary` resuelve a 120 días.
+  * Indexer's `_payload_for` assigns `class_name="session_summary"`.
+  * A9 decay for `session_summary` resolves to 120 days.
 
-- [docs/memory/02_indexing.md §3.3](02_indexing.md): nueva §3.3.1 "Session summaries (audit A10)" explica el flow + la decisión de single source of truth + agent_facing_classes exclusion.
+- [docs/memory/02_indexing.md §3.3](02_indexing.md): new §3.3.1 "Session summaries (audit A10)" explains the flow + single source of truth decision + agent_facing_classes exclusion.
 
-**Sesiones pre-A10**: tienen `_last_summary` en `metadata` JSON. La migración es **lazy**: en la próxima compaction de cada session, `_persist_last_summary` escribe el `.md` nuevo Y pop el legacy field del metadata. Si una session NUNCA se vuelve a compactar (e.g. user abandona), el legacy summary queda en su JSON — el `_format_pending_summary` lo lee como fallback. No data loss; sólo "no indexing" para esas sesiones huérfanas (aceptable; user nunca las va a usar).
+**Pre-A10 sessions**: have `_last_summary` in the `metadata` JSON. The migration is **lazy**: on the next compaction of each session, `_persist_last_summary` writes the new `.md` AND pops the legacy field from metadata. If a session is NEVER recompacted (e.g. user abandons it), the legacy summary stays in its JSON — `_format_pending_summary` reads it as fallback. No data loss; only "no indexing" for those orphan sessions (acceptable; the user will never use them).
 
-**Lecciones aplicadas**:
-- [[feedback-optimization-vs-principle]] (A4): el user identificó la replication antes de que yo la implementara. Cumple exactamente el pattern de A4.
-- [[feedback-question-user-input]]: el user empujó "esto vive en dos lugares?" y la respuesta correcta era refactorizar el plan, no defender la duplicación.
-- [[feedback-sync-tests-exercise-behavior]]: tests ejercitan round-trips reales, no schemas mockeados.
+**Lessons applied**:
+- [[feedback-optimization-vs-principle]] (A4): the user identified the replication before I implemented it. Exactly fits the A4 pattern.
+- [[feedback-question-user-input]]: the user pushed "does this live in two places?" and the correct answer was to refactor the plan, not defend the duplication.
+- [[feedback-sync-tests-exercise-behavior]]: tests exercise real round-trips, not mocked schemas.
 
-**Verificado pre-commit**: tests/memory/ + tests/agent/ + tests/command/ + tests/session/ + tests/telemetry/ 2302 passed (todos los tests pasan después de actualizar los 3 legacy + agregar 14 nuevos), 1 skipped.
+**Pre-commit verification**: tests/memory/ + tests/agent/ + tests/command/ + tests/session/ + tests/telemetry/ 2302 passed (all tests pass after updating the 3 legacy + adding 14 new), 1 skipped.
 
-**Estado**: resolved (commit pendiente).
+**State**: resolved (commit pending).
 
 ---
 
-### A11 — `MemoryFileWatcher` y `HealthChecker` shippeados pero no cableados al lifecycle
+### A11 — `MemoryFileWatcher` and `HealthChecker` shipped but not wired to lifecycle
 
-**Doc dice** (`docs/memory/10_remaining_work.md` P2.3 + P2.4 DoD):
-- P2.3: *"Modificar `memory/entities/person/marcelo.md` con vim y, dentro de 5 segundos, el siguiente `memory_search` para 'marcelo' surface las palabras del edit."*
-- P2.4: *"Cada 15 minutos (configurable), un job background... probe FTS + Lance."*
+**Doc says** (`docs/memory/10_remaining_work.md` P2.3 + P2.4 DoD):
+- P2.3: *"Edit `memory/entities/person/marcelo.md` with vim and, within 5 seconds, the next `memory_search` for 'marcelo' surfaces the words from the edit."*
+- P2.4: *"Every 15 minutes (configurable), a background job... probes FTS + Lance."*
 
-**Código dice**:
-- `durin/memory/file_watcher.py::MemoryFileWatcher` existe + tests pasan.
-- `durin/memory/health_check.py::HealthChecker` existe + tests pasan.
-- `grep -rn "MemoryFileWatcher\|HealthChecker" durin/agent durin/cli durin/channels` → **cero hits**.
+**Code says**:
+- `durin/memory/file_watcher.py::MemoryFileWatcher` exists + tests pass.
+- `durin/memory/health_check.py::HealthChecker` exists + tests pass.
+- `grep -rn "MemoryFileWatcher\|HealthChecker" durin/agent durin/cli durin/channels` → **zero hits**.
 
-Ningún call site los arranca. `AgentLoop.start`, `durin agent` CLI, los channel adapters — ninguno los menciona.
+No call site starts them. `AgentLoop.start`, `durin agent` CLI, the channel adapters — none mention them.
 
-**Quién tiene razón**: doc tiene razón sobre la **intención**; los DoDs propuestos requieren wiring que no existe.
+**Who is right**: doc is right about the **intent**; the proposed DoDs require wiring that doesn't exist.
 
-**Acción**:
-1. `durin/agent/loop.py::AgentLoop.start` — si `cfg.memory.enabled` y `cfg.memory.file_watcher.enabled` (nuevo flag), arrancar `MemoryFileWatcher` como background thread; detenerlo en `stop`.
-2. Decisión: ¿el cron de health_check vive in-process (un thread daemon) o como cron externo? Doc 10 P2.4 sugiere in-process. Implementar `HealthCheckScheduler` que dispara `run_tick()` cada `cfg.memory.health_check.interval_seconds` (nuevo).
-3. Agregar config keys.
-4. Verify live: editar un .md con vim → memory_search ve el cambio.
+**Action**:
+1. `durin/agent/loop.py::AgentLoop.start` — if `cfg.memory.enabled` and `cfg.memory.file_watcher.enabled` (new flag), start `MemoryFileWatcher` as a background thread; stop it in `stop`.
+2. Decision: does the health_check cron live in-process (a daemon thread) or as an external cron? Doc 10 P2.4 suggests in-process. Implement `HealthCheckScheduler` that fires `run_tick()` every `cfg.memory.health_check.interval_seconds` (new).
+3. Add config keys.
+4. Verify live: edit a .md with vim → memory_search sees the change.
 
-**Riesgo**: file watchers en macOS/Linux/Docker tienen edge cases. `watchdog` ya está como dep.
+**Risk**: file watchers on macOS/Linux/Docker have edge cases. `watchdog` is already a dep.
 
-**Resolución (2026-05-28) — Default ON ambos servicios + isolation**: aplicando `feedback_telemetry_is_first_class` (A8): el health check ES observability infrastructure — la razón por la que "no hay alertas" hoy es que no lo cableamos. **Default ON**. El file watcher es UX directo (vim edit → próximo search lo ve) — **también default ON**. Ambos opt-out vía config.
+**Resolution (2026-05-28) — Default ON both services + isolation**: applying `feedback_telemetry_is_first_class` (A8): the health check IS observability infrastructure — the reason "there are no alerts" today is that we didn't wire it. **Default ON**. The file watcher is direct UX (vim edit → next search sees it) — **also default ON**. Both opt-out via config.
 
-Cambios:
+Changes:
 
-- [durin/config/schema.py](../../durin/config/schema.py): nuevos `MemoryFileWatcherConfig(enabled=True)` y `MemoryHealthCheckConfig(enabled=True, interval_seconds=900)`. `MemoryConfig` ahora tiene `file_watcher` y `health_check`.
-- [durin/memory/health_check.py](../../durin/memory/health_check.py): nuevo `HealthCheckScheduler` — daemon thread que llama `run_tick()` cada N segundos. `wait(timeout)` en lugar de `sleep(N)` para que `stop()` sea responsivo (no espera el interval completo). Failure isolation: `run_tick()` exception logueada pero el thread sigue (siguiente tick fires).
+- [durin/config/schema.py](../../durin/config/schema.py): new `MemoryFileWatcherConfig(enabled=True)` and `MemoryHealthCheckConfig(enabled=True, interval_seconds=900)`. `MemoryConfig` now has `file_watcher` and `health_check`.
+- [durin/memory/health_check.py](../../durin/memory/health_check.py): new `HealthCheckScheduler` — daemon thread that calls `run_tick()` every N seconds. `wait(timeout)` instead of `sleep(N)` so `stop()` is responsive (doesn't wait the full interval). Failure isolation: `run_tick()` exception logged but the thread continues (next tick fires).
 - [durin/agent/loop.py::AgentLoop](../../durin/agent/loop.py):
-  * Nuevos atributos `self._memory_file_watcher` y `self._memory_health_scheduler` inicializados al final de `__init__`.
-  * Nuevo método `_start_memory_background_services()` — construye + start cada servicio si su flag de config está enabled. Cada uno aislado en try/except: si uno falla al arrancar, el otro sigue y `AgentLoop` arranca igual.
-  * Nuevo método `_stop_memory_background_services()` — None-safe; llama `stop()` en cada uno y aísla los failures.
-  * `AgentLoop.stop()` ahora invoca `_stop_memory_background_services()` antes de loguear.
-- [tests/memory/test_a11_lifecycle_wiring.py](../../tests/memory/test_a11_lifecycle_wiring.py) (nuevo, 12 tests):
-  * Config defaults: ambos enabled, interval=900.
-  * `HealthCheckScheduler` ticks on start (primer tick inmediato).
-  * `HealthCheckScheduler.stop()` responsivo aunque interval=3600.
-  * `HealthCheckScheduler` aisla failures de `run_tick`: el thread sigue después de exception.
-  * `app_config=None` → no servicios (mantiene tests existentes simples).
-  * Default config → ambos arrancan.
-  * Watcher disabled → sólo health corre.
-  * Health disabled → sólo watcher corre.
-  * `stop()` drena ambos cleanly.
-  * Watcher startup failure aislada — health sigue funcionando.
+  * New attributes `self._memory_file_watcher` and `self._memory_health_scheduler` initialized at the end of `__init__`.
+  * New method `_start_memory_background_services()` — constructs + starts each service if its config flag is enabled. Each isolated in try/except: if one fails to start, the other continues and `AgentLoop` starts anyway.
+  * New method `_stop_memory_background_services()` — None-safe; calls `stop()` on each and isolates failures.
+  * `AgentLoop.stop()` now invokes `_stop_memory_background_services()` before logging.
+- [tests/memory/test_a11_lifecycle_wiring.py](../../tests/memory/test_a11_lifecycle_wiring.py) (new, 12 tests):
+  * Config defaults: both enabled, interval=900.
+  * `HealthCheckScheduler` ticks on start (first tick immediate).
+  * `HealthCheckScheduler.stop()` responsive even with interval=3600.
+  * `HealthCheckScheduler` isolates `run_tick` failures: the thread continues after exception.
+  * `app_config=None` → no services (keeps existing tests simple).
+  * Default config → both start.
+  * Watcher disabled → only health runs.
+  * Health disabled → only watcher runs.
+  * `stop()` drains both cleanly.
+  * Watcher startup failure isolated — health keeps running.
 
-- [docs/memory/02_indexing.md §6.3](02_indexing.md): nuevo bloque "Lifecycle (audit A11)" explica que el watcher arranca por default, failure isolation, y cómo deshabilitarlo.
-- [docs/memory/07_telemetry_and_observability.md §9.4](07_telemetry_and_observability.md): nuevo bloque "Scheduling (audit A11)" explica `interval_seconds=900` default + "first tick immediate" + responsive shutdown.
+- [docs/memory/02_indexing.md §6.3](02_indexing.md): new "Lifecycle (audit A11)" block explains that the watcher starts by default, failure isolation, and how to disable it.
+- [docs/memory/07_telemetry_and_observability.md §9.4](07_telemetry_and_observability.md): new "Scheduling (audit A11)" block explains `interval_seconds=900` default + "first tick immediate" + responsive shutdown.
 
-**Test impact**: 2302 tests previos siguen pasando (los 2300+ que construyen `AgentLoop` lo hacen con `app_config=None`, lo cual skip la wiring por design). Sin breaking change para suite existente.
+**Test impact**: 2302 previous tests keep passing (the 2300+ that build `AgentLoop` do so with `app_config=None`, which skips wiring by design). No breaking change for the existing suite.
 
-**Decisión arquitectónica clave**: `_start_memory_background_services` es defensivo end-to-end. Cada servicio puede fallar independientemente:
-- Watchdog no instalado → watcher fail import → log warning → `_memory_file_watcher` queda None → resto del loop sigue.
-- Health check thread no se puede crear → log warning → `_memory_health_scheduler` queda None → file watcher sigue.
+**Key architectural decision**: `_start_memory_background_services` is defensive end-to-end. Each service can fail independently:
+- Watchdog not installed → watcher fails import → log warning → `_memory_file_watcher` stays None → rest of the loop continues.
+- Health check thread can't be created → log warning → `_memory_health_scheduler` stays None → file watcher continues.
 
-Aplicando `feedback_telemetry_is_first_class`: telemetría (health_check emit) y observability infrastructure (file watcher reindex) NO requieren consumer downstream para justificar — son la fuente de los datos que después usaremos.
+Applying `feedback_telemetry_is_first_class`: telemetry (health_check emit) and observability infrastructure (file watcher reindex) do NOT require a downstream consumer to justify — they are the source of the data we will later use.
 
-**Verificado pre-commit**: tests/memory/ + tests/agent/ + tests/command/ + tests/session/ + tests/telemetry/ 2314 passed (2302 baseline + 12 nuevos A11), 1 skipped.
+**Pre-commit verification**: tests/memory/ + tests/agent/ + tests/command/ + tests/session/ + tests/telemetry/ 2314 passed (2302 baseline + 12 new A11), 1 skipped.
 
-**Estado**: resolved (commit pendiente).
+**State**: resolved (commit pending).
 
 ---
 
-## MEDIUM — drift sin romper UX directo
+## MEDIUM — drift without breaking direct UX
 
-### B1 — `.description` property de los tools no está sincronizada ✅ RESOLVED con la canónica
+### B1 — `.description` property of the tools is not synchronized ✅ RESOLVED with the canonical
 
-**Doc dice** (`docs/memory/04_agent_tools.md:413-419` §8):
+**Doc says** (`docs/memory/04_agent_tools.md:413-419` §8):
 
 > *"The description in the tool registration MUST match the doc 06 §3.1-§3.4 text verbatim. Sync via `tests/memory/test_tool_description_sync.py`."*
 
-**Código dice**:
-- `_PARAMETERS["description"]` en cada tool **está** sincronizada (test pasa).
-- Pero cada tool además tiene una `description` property distinta. Ejemplos:
-  - `memory_search.py:165-178`: *"Search the agent's memory. Pass a short topical phrase..."* (texto comprimido, distinto al canónico).
-  - `memory_store.py:121-127`: *"Persist a memory entry. Idempotent on (class, content)..."* (no menciona dedup vs Dream).
-  - `memory_ingest.py:94-103`: *"Persist a markdown or plain-text file..."* (no menciona URLs, inline, etc.).
+**Code says**:
+- `_PARAMETERS["description"]` in each tool **is** synchronized (test passes).
+- But each tool also has a different `description` property. Examples:
+  - `memory_search.py:165-178`: *"Search the agent's memory. Pass a short topical phrase..."* (compressed text, different from canonical).
+  - `memory_store.py:121-127`: *"Persist a memory entry. Idempotent on (class, content)..."* (doesn't mention dedup vs Dream).
+  - `memory_ingest.py:94-103`: *"Persist a markdown or plain-text file..."* (doesn't mention URLs, inline, etc.).
   - `memory_drill.py`: similar drift.
 
-**Quién tiene razón**: doc tiene razón. **Dos descripciones distintas para el mismo tool es exactamente lo que el doc dice evitar.**
+**Who is right**: doc is right. **Two different descriptions for the same tool is exactly what the doc says to avoid.**
 
-Hay que clarificar cuál se le presenta al LLM en runtime. Verificar `Tool` base class para saber si usa `_PARAMETERS["description"]` o `self.description`.
+We need to clarify which one is presented to the LLM at runtime. Check the `Tool` base class to see if it uses `_PARAMETERS["description"]` or `self.description`.
 
-**Acción**:
-1. Investigar cuál de las dos llega al LLM. Probablemente `_PARAMETERS["description"]` (lo que valida el sync test), pero si la property se usa en algún registro/CLI, debe alinearse.
-2. Si la property es "human-readable short" y `_PARAMETERS` es "LLM canonical", documentar la distinción explícitamente y agregar test de invariante (e.g. property contiene un summary del canónico).
-3. Si la property no se usa en ningún lado relevante, **borrarla** — código muerto que confunde.
+**Action**:
+1. Investigate which of the two reaches the LLM. Probably `_PARAMETERS["description"]` (what the sync test validates), but if the property is used in some registry/CLI, it must be aligned.
+2. If the property is "human-readable short" and `_PARAMETERS` is "LLM canonical", document the distinction explicitly and add an invariant test (e.g. property contains a summary of the canonical).
+3. If the property isn't used anywhere relevant, **delete it** — dead code that confuses.
 
-**Resolución (2026-05-28) — Bug discovery + fix**: la investigación reveló que **el sync test de P6.3 estaba validando el campo equivocado**. `Tool.to_schema()` ([base.py:258](../../durin/agent/tools/base.py#L258)) emite `self.description` (la property corta) como `function.description` en el OpenAI function-calling spec — eso es lo que el LLM realmente lee para decidir invocar el tool. El `_PARAMETERS["description"]` que P6.3 sincronizó con doc 06 termina como `function.parameters.description` (descripción del schema del parameters object), que la mayoría de los LLMs ignora.
+**Resolution (2026-05-28) — Bug discovery + fix**: the investigation revealed that **the P6.3 sync test was validating the wrong field**. `Tool.to_schema()` ([base.py:258](../../durin/agent/tools/base.py#L258)) emits `self.description` (the short property) as `function.description` in the OpenAI function-calling spec — that's what the LLM actually reads to decide whether to invoke the tool. The `_PARAMETERS["description"]` that P6.3 synchronized with doc 06 ends up as `function.parameters.description` (description of the parameters object schema), which most LLMs ignore.
 
-**Bug**: durante semanas el sync test pasó verde validando un campo que el LLM ignoraba mientras el campo que el LLM SÍ leía contenía texto corto no sincronizado con doc 06. Mismo patrón que A4 (mis propios commits previos validados parcialmente).
+**Bug**: for weeks the sync test passed green validating a field the LLM ignored while the field the LLM DID read contained short text not synchronized with doc 06. Same pattern as A4 (my own previous commits validated partially).
 
-Cambios:
+Changes:
 
-- [durin/agent/tools/memory_search.py:181](../../durin/agent/tools/memory_search.py#L181), [memory_store.py:140](../../durin/agent/tools/memory_store.py#L140), [memory_ingest.py:99](../../durin/agent/tools/memory_ingest.py#L99), [memory_drill.py:47](../../durin/agent/tools/memory_drill.py#L47): cada `.description` property ahora delega a `_PARAMETERS["description"]` (single source of truth — ambos fields resuelven al mismo string). El texto corto no canónico se eliminó. Comentario inline explica el flujo y referencia B1.
-- [tests/memory/test_tool_description_sync.py](../../tests/memory/test_tool_description_sync.py): el test ahora instancia cada tool y lee `.description` property (en lugar de `_PARAMETERS["description"]`). Adicionalmente, nuevo test `test_description_property_is_what_to_schema_emits` verifica el invariante `to_schema()["function"]["description"] == tool.description` — anti-drift contra el caso "alguien cambia `to_schema()` para usar otro campo y el sync queda mirando el campo equivocado de nuevo".
-- [docs/memory/06_prompts_and_instructions.md §3.5](06_prompts_and_instructions.md): reescrito — explica el contract `.description` → `function.description`, por qué el `_PARAMETERS["description"]` (que termina como `function.parameters.description`) se mantiene idéntico por defense-in-depth, y documenta el bug B1 que esta sección refleja.
+- [durin/agent/tools/memory_search.py:181](../../durin/agent/tools/memory_search.py#L181), [memory_store.py:140](../../durin/agent/tools/memory_store.py#L140), [memory_ingest.py:99](../../durin/agent/tools/memory_ingest.py#L99), [memory_drill.py:47](../../durin/agent/tools/memory_drill.py#L47): each `.description` property now delegates to `_PARAMETERS["description"]` (single source of truth — both fields resolve to the same string). The non-canonical short text is removed. Inline comment explains the flow and references B1.
+- [tests/memory/test_tool_description_sync.py](../../tests/memory/test_tool_description_sync.py): the test now instantiates each tool and reads the `.description` property (instead of `_PARAMETERS["description"]`). Additionally, new test `test_description_property_is_what_to_schema_emits` verifies the invariant `to_schema()["function"]["description"] == tool.description` — anti-drift against the case "someone changes `to_schema()` to use another field and the sync ends up looking at the wrong field again".
+- [docs/memory/06_prompts_and_instructions.md §3.5](06_prompts_and_instructions.md): rewritten — explains the `.description` → `function.description` contract, why `_PARAMETERS["description"]` (which ends up as `function.parameters.description`) is kept identical by defense-in-depth, and documents the B1 bug this section reflects.
 
-**Lecciones aplicadas**:
-- [[feedback-sync-tests-exercise-behavior]]: el sync test ahora ejercita el **contract real** (`to_schema()` output) no sólo string equality. El nuevo invariant test `test_description_property_is_what_to_schema_emits` es defensa específica contra "alguien refactorea `to_schema()` y el sync queda mirando el lugar equivocado".
-- [[feedback-verify-quantifiers]]: durante la investigación verifiqué qué consumer real lee `self.description` (grep mostró `to_schema()` único). Sin ese check yo habría asumido que el sync test ya cubría lo correcto.
-- [[feedback-optimization-vs-principle]] aplicado al pattern A4: P6.3 fue commit mío que sincronizó parcialmente — el fix es local al consumer correcto (la property que el LLM lee), no cambiar el contract global.
+**Lessons applied**:
+- [[feedback-sync-tests-exercise-behavior]]: the sync test now exercises the **real contract** (`to_schema()` output) not just string equality. The new invariant test `test_description_property_is_what_to_schema_emits` is specific defense against "someone refactors `to_schema()` and the sync ends up looking at the wrong place".
+- [[feedback-verify-quantifiers]]: during the investigation I verified which real consumer reads `self.description` (grep showed `to_schema()` only). Without that check I would have assumed the sync test already covered the right thing.
+- [[feedback-optimization-vs-principle]] applied to the A4 pattern: P6.3 was my own commit that synchronized partially — the fix is local to the correct consumer (the property the LLM reads), not changing the global contract.
 
-**Verificado pre-commit**: 5/5 tests del sync (4 contenido + 1 invariante); suite memoria 964 passing.
+**Pre-commit verification**: 5/5 sync tests (4 content + 1 invariant); memory suite 964 passing.
 
-**Estado**: resolved (commit pendiente).
-
----
-
-### B2 — Doc 99_phase_progress_review obsoleto ✅ RESOLVED
-
-**Doc dice** (`docs/memory/99_phase_progress_review.md:5`): "4885 tests pasando".
-
-**Doc dice** (§2 D4): "Phase 1.9 deferido (integración v2 pipeline en DreamConsolidator)... Próximo siguiente paso: Phase 1.9".
-
-**Código dice**:
-- `git log --oneline`: commit `6aafc3f` shipped Phase 1.9 (DreamConsolidator usa parse_dream_output + apply_dream_output).
-- Test count actual (último commit `2e7097a` body): 4968 passing.
-
-**Quién tiene razón**: código (commits dicen la verdad). Doc desactualizado.
-
-**Acción**: actualizar `99_phase_progress_review.md` — marcar D4 resuelto, actualizar test count, mover §4 recomendaciones a estado "DONE".
-
-**Estado**: pending
+**State**: resolved (commit pending).
 
 ---
 
-### B3 — Doc 10 marca como pending lo que está hecho ✅ RESOLVED
+### B2 — Doc 99_phase_progress_review obsolete ✅ RESOLVED
 
-**Doc dice** (`docs/memory/10_remaining_work.md` líneas 24, P2.x, P3.x, P4.x, P5.x, P6.x, P7.x): muchos items sin ✅ DONE.
+**Doc says** (`docs/memory/99_phase_progress_review.md:5`): "4885 tests passing".
 
-**Código dice** (git log):
+**Doc says** (§2 D4): "Phase 1.9 deferred (v2 pipeline integration in DreamConsolidator)... Next step: Phase 1.9".
+
+**Code says**:
+- `git log --oneline`: commit `6aafc3f` shipped Phase 1.9 (DreamConsolidator uses parse_dream_output + apply_dream_output).
+- Current test count (latest commit `2e7097a` body): 4968 passing.
+
+**Who is right**: code (commits tell the truth). Doc out of date.
+
+**Action**: update `99_phase_progress_review.md` — mark D4 resolved, update test count, move §4 recommendations to "DONE" state.
+
+**State**: pending
+
+---
+
+### B3 — Doc 10 marks as pending what is done ✅ RESOLVED
+
+**Doc says** (`docs/memory/10_remaining_work.md` lines 24, P2.x, P3.x, P4.x, P5.x, P6.x, P7.x): many items without ✅ DONE.
+
+**Code says** (git log):
 - P2.2 ✅ commit `c3eff1e`
-- P2.3 ✅ commit `d9a4d8e` (módulo existe; ver A11 sobre wiring)
-- P2.4 ✅ commit `022d4b1` (módulo existe; ver A11)
+- P2.3 ✅ commit `d9a4d8e` (module exists; see A11 about wiring)
+- P2.4 ✅ commit `022d4b1` (module exists; see A11)
 - P2.5 ✅ commit `a266344`
 - P3.3 ✅ commit `bc55686`
 - P4.1-P4.3 ✅ commit `b3c50c6`
-- P4.4 ✅ este turno
+- P4.4 ✅ this turn
 - P5.2-P5.6 ✅ commits `2e7097a`, `572d5cf`
 - P6.1-P6.3 ✅ commit `572d5cf`
 - P7.2-P7.3 ✅ commit `2e7097a`
 
-Línea 24 dice "queda Phase 4 + Phase 8" — Phase 4 cerrado.
+Line 24 says "Phase 4 + Phase 8 remain" — Phase 4 closed.
 
-**Quién tiene razón**: código. Doc desactualizado.
+**Who is right**: code. Doc out of date.
 
-**Acción**: pasar por doc 10 y marcar cada item con ✅ DONE + commit hash. Reescribir línea 24.
+**Action**: go through doc 10 and mark each item with ✅ DONE + commit hash. Rewrite line 24.
 
-**Estado**: pending
-
----
-
-### B4 — P5.5 implementado distinto al spec ✅ RESOLVED
-
-**Doc dice** (`docs/memory/10_remaining_work.md` P5.5):
-> *"Script `scripts/audit_tool_descriptions.py` extrae las descripciones... falla con diff específico si difieren. Wired en CI."*
-
-**Código dice**:
-- `ls scripts/audit_tool_descriptions.py` → no existe.
-- `tests/memory/test_tool_description_sync.py` existe, 4 tests pasan, valida `_PARAMETERS["description"]` contra doc 06 §3.1-§3.4.
-- No hay CI step nuevo en `.github/workflows/`.
-
-**Quién tiene razón**: ambos válidos en intención. Test pytest cumple la misma función que el script + CI (pytest YA corre en CI), y es más estándar (no introduce un comando custom).
-
-**Acción**: actualizar doc 10 P5.5 para reflejar que la implementación es pytest, no standalone script. Estado: ✅ DONE con desviación documentada.
-
-**Estado**: pending
+**State**: pending
 
 ---
 
-### B5 — Retention: 1 año en doc vs 90 días en código ✅ RESOLVED
+### B4 — P5.5 implemented differently from spec ✅ RESOLVED
 
-**Doc dice** (`docs/memory/07_telemetry_and_observability.md` §12.2):
+**Doc says** (`docs/memory/10_remaining_work.md` P5.5):
+> *"Script `scripts/audit_tool_descriptions.py` extracts descriptions... fails with specific diff if they differ. Wired in CI."*
+
+**Code says**:
+- `ls scripts/audit_tool_descriptions.py` → doesn't exist.
+- `tests/memory/test_tool_description_sync.py` exists, 4 tests pass, validates `_PARAMETERS["description"]` against doc 06 §3.1-§3.4.
+- There's no new CI step in `.github/workflows/`.
+
+**Who is right**: both valid in intent. The pytest test fulfills the same function as the script + CI (pytest already runs in CI), and is more standard (doesn't introduce a custom command).
+
+**Action**: update doc 10 P5.5 to reflect that the implementation is pytest, not a standalone script. State: ✅ DONE with documented deviation.
+
+**State**: pending
+
+---
+
+### B5 — Retention: 1 year in doc vs 90 days in code ✅ RESOLVED
+
+**Doc says** (`docs/memory/07_telemetry_and_observability.md` §12.2):
 > *"old events compressed... kept 1 year, then deleted"*
 
-**Código dice** (`durin/telemetry/retention.py:34-35`):
+**Code says** (`durin/telemetry/retention.py:34-35`):
 
 ```python
 COMPRESSION_AGE_DAYS: int = 30
 DELETION_AGE_DAYS: int = 90
 ```
 
-→ 30d para comprimir, 90d para borrar. Total 90 días, no 1 año.
+→ 30d to compress, 90d to delete. Total 90 days, not 1 year.
 
-**Quién tiene razón**: depende de uso real.
-- Doc (1 año): conservador, útil para análisis longitudinal.
-- Código (90d): minimiza disk usage. Razonable para single-user durin.
+**Who is right**: depends on real use.
+- Doc (1 year): conservative, useful for longitudinal analysis.
+- Code (90d): minimizes disk usage. Reasonable for single-user durin.
 
-**Acción**: hacerlo configurable (`telemetry.retention.{compress_age_days, delete_age_days}` en config schema). Default actual (30/90) razonable; user puede subirlo a 365 si quiere análisis anual. Actualizar doc 07 §12.2 para describir los defaults reales + cómo extender.
+**Action**: make it configurable (`telemetry.retention.{compress_age_days, delete_age_days}` in config schema). Current default (30/90) reasonable; user can raise it to 365 if they want annual analysis. Update doc 07 §12.2 to describe the real defaults + how to extend.
 
-**Estado**: pending
+**State**: pending
 
 ---
 
-### B6 — Doc 03 §17 status table contradice §11 sobre MMR ✅ RESOLVED
+### B6 — Doc 03 §17 status table contradicts §11 about MMR ✅ RESOLVED
 
-**Doc dice** §11: "MMR — Removed from MVP".
-**Doc dice** §17 status table: "MMR | Not implemented | New step, default enabled".
+**Doc says** §11: "MMR — Removed from MVP".
+**Doc says** §17 status table: "MMR | Not implemented | New step, default enabled".
 
-**Código dice**: `grep -rn "mmr\|MMR" durin/memory/` → cero hits en código de producción.
+**Code says**: `grep -rn "mmr\|MMR" durin/memory/` → zero hits in production code.
 
-**Quién tiene razón**: §11 (removed). §17 quedó stale al actualizar §11.
+**Who is right**: §11 (removed). §17 was left stale when §11 was updated.
 
-**Acción**: corregir §17 — fila MMR debe decir "Removed from MVP".
+**Action**: correct §17 — MMR row should say "Removed from MVP".
 
-**Estado**: pending
+**State**: pending
 
 ---
 
 ### B7 — Doc 05 §15 + doc 06 §10 status: "v1 page rewrites" ✅ RESOLVED
 
-**Doc dice** (`docs/memory/05_dream_cold_path.md:201` y §15 status table): *"current code uses full-page rewrites"*.
-**Doc dice** (`docs/memory/06_prompts_and_instructions.md` §10): *"templates/dream/consolidator.md: v1 (page + commit)"*.
+**Doc says** (`docs/memory/05_dream_cold_path.md:201` and §15 status table): *"current code uses full-page rewrites"*.
+**Doc says** (`docs/memory/06_prompts_and_instructions.md` §10): *"templates/dream/consolidator.md: v1 (page + commit)"*.
 
-**Código dice**:
-- `durin/memory/dream.py` llama `parse_dream_output` + `apply_dream_output` (Phase 1.9 shipped en commit `6aafc3f`).
-- `durin/templates/dream/` contiene `consolidator.md`, `rules.md`, `commit_format.md`, `json_patch_reference.md`, `examples/01..06_*.md`.
-- `dream_prompt_builder.build_dream_prompt` arma el package.
+**Code says**:
+- `durin/memory/dream.py` calls `parse_dream_output` + `apply_dream_output` (Phase 1.9 shipped in commit `6aafc3f`).
+- `durin/templates/dream/` contains `consolidator.md`, `rules.md`, `commit_format.md`, `json_patch_reference.md`, `examples/01..06_*.md`.
+- `dream_prompt_builder.build_dream_prompt` assembles the package.
 
-**Quién tiene razón**: código. Doc desactualizado al no haberse pasado tras Phase 1.9.
+**Who is right**: code. Doc out of date because it wasn't updated after Phase 1.9.
 
-**Acción**: borrar el callout de §15 doc 05 línea 201; actualizar status table; actualizar doc 06 §10 a "v2 (JSON Patch + body delta)".
+**Action**: delete the §15 doc 05 line 201 callout; update status table; update doc 06 §10 to "v2 (JSON Patch + body delta)".
 
-**Estado**: pending
+**State**: pending
 
 ---
 
-### B8 — Doc 03 §15 promete config keys que no existen ✅ RESOLVED
+### B8 — Doc 03 §15 promises config keys that don't exist ✅ RESOLVED
 
-**Doc dice** (`docs/memory/03_search_pipeline.md` §15):
+**Doc says** (`docs/memory/03_search_pipeline.md` §15):
 
 ```
 memory.search.vector_top_k
@@ -895,7 +895,7 @@ memory.search.sectioning.max_per_source
 memory.search.final_top_k
 ```
 
-**Código dice** (`durin/config/schema.py:276-281`):
+**Code says** (`durin/config/schema.py:276-281`):
 
 ```python
 class MemorySearchConfig(Base):
@@ -904,110 +904,110 @@ class MemorySearchConfig(Base):
     )
 ```
 
-Sólo `cross_encoder`. Lo demás está hardcoded:
+Only `cross_encoder`. The rest is hardcoded:
 - `vector_top_k=50` (search_pipeline.py:347)
 - `limit=10` (memory_search.py:348)
 - RRF k=60 + weights (rrf_fusion.py:38-42)
 - `DEFAULT_MAX_PER_SOURCE=3` (sectioned_output.py:38)
 
-**Quién tiene razón**: depende del nivel de configurabilidad deseado. **Hoy, en single-user durin, hardcoded defaults razonables son OK** — exponer 6 knobs adicionales agrega complejidad sin necesidad clara.
+**Who is right**: depends on the desired level of configurability. **Today, in single-user durin, reasonable hardcoded defaults are OK** — exposing 6 additional knobs adds complexity without clear need.
 
-**Acción opción A** (mínimo): actualizar doc 03 §15 para listar **sólo** los keys que existen (`memory.search.cross_encoder.*`) y agregar nota "los demás defaults están hardcoded; cambiar requiere PR".
+**Action option A** (minimal): update doc 03 §15 to list **only** the keys that exist (`memory.search.cross_encoder.*`) and add note "the other defaults are hardcoded; changing requires a PR".
 
-**Acción opción B** (full config surface): exponer cada knob en schema.
+**Action option B** (full config surface): expose each knob in the schema.
 
-**Recomendación**: A. La configurabilidad adicional es deferred hasta que alguien necesite ajustar (con datos). Marcar como "ergonomic deferral".
+**Recommendation**: A. Additional configurability is deferred until someone needs to adjust (with data). Mark as "ergonomic deferral".
 
-**Estado**: pending
+**State**: pending
 
 ---
 
-### B9 — Eventos documentados que nunca se emiten ✅ RESOLVED (asymmetric)
+### B9 — Documented events that are never emitted ✅ RESOLVED (asymmetric)
 
-**Doc dice**:
+**Doc says**:
 - `memory.silent_retrieval_miss` (doc 07 §4.6)
 - `memory.search.failure` (doc 07 §8.1)
 
-**Código dice**:
-- `grep -rn "memory\.silent_retrieval_miss\|memory\.search\.failure" durin/` → cero hits.
-- No están en `EVENTS` registry de `durin/telemetry/schema.py`.
+**Code says**:
+- `grep -rn "memory\.silent_retrieval_miss\|memory\.search\.failure" durin/` → zero hits.
+- They're not in the `EVENTS` registry of `durin/telemetry/schema.py`.
 
-**Quién tiene razón**: doc propone, código no implementa. **Cada evento es legítimo** — `silent_retrieval_miss` permitiría detectar "el usuario preguntó X, debía estar en memory, no surgió" (telemetría crítica para validar G3.b query rewriting). `memory.search.failure` permitiría alertas de degradación.
+**Who is right**: doc proposes, code doesn't implement. **Each event is legitimate** — `silent_retrieval_miss` would let us detect "the user asked X, it should have been in memory, didn't surface" (critical telemetry to validate G3.b query rewriting). `memory.search.failure` would enable degradation alerts.
 
-**Acción**:
-- `memory.search.failure`: implementar en `search_pipeline.py` cuando un safe wrapper recupera (P5.2 ya tiene `recovered_from`); fácil. ~20 LOC.
-- `memory.silent_retrieval_miss`: complejo — requiere LLM judge o user feedback. Defer; sacar del doc 07 §4.6 o marcar como "research item".
+**Action**:
+- `memory.search.failure`: implement in `search_pipeline.py` when a safe wrapper recovers (P5.2 already has `recovered_from`); easy. ~20 LOC.
+- `memory.silent_retrieval_miss`: complex — requires LLM judge or user feedback. Defer; remove from doc 07 §4.6 or mark as "research item".
 
-**Resolución (2026-05-28) — Asimétrica: failure implementado, silent_retrieval_miss discarded**: el user empujó con la pregunta clave sobre `silent_retrieval_miss`: *"como se puede detectar considerando multiples lenguajes de forma efectiva, no se me ocurre"*. La revisión honesta confirmó que 2 de las 3 heurísticas propuestas (negation tokens, correction patterns) son inherentemente English-shaped, y la 1 (substring overlap) genera demasiados falsos positivos. Sin un classifier LLM-based (que rompe el budget de telemetría), el evento no es viable para los workloads multi-lingual que durin sirve (LoCoMo seed usa CJK + español). Mover de "deferred" a **discarded** con la lección.
+**Resolution (2026-05-28) — Asymmetric: failure implemented, silent_retrieval_miss discarded**: the user pushed back with the key question about `silent_retrieval_miss`: *"how can this be detected effectively across multiple languages, I can't think of a way"*. The honest review confirmed that 2 of the 3 proposed heuristics (negation tokens, correction patterns) are inherently English-shaped, and 1 (substring overlap) generates too many false positives. Without an LLM-based classifier (which breaks the telemetry budget), the event is not viable for the multi-lingual workloads durin serves (LoCoMo seed uses CJK + Spanish). Move from "deferred" to **discarded** with the lesson.
 
-**`memory.search.failure` — IMPLEMENTADO**:
+**`memory.search.failure` — IMPLEMENTED**:
 
-- [durin/telemetry/schema.py](../../durin/telemetry/schema.py): nuevo `MemoryRecallFailureEvent` TypedDict con shape recortado vs la spec v1 (sin `kind` enum ni `recoverable` bool — los wrappers no clasifican exceptions hoy; inventar esos fields sería data fabricada).
-- [durin/memory/search_pipeline.py](../../durin/memory/search_pipeline.py): nuevo `_emit_search_failure()` que se invoca al final de `run_search_pipeline` cuando `recovery["sources"]` no está vacío. `degraded_to` derivado de los counts: `full` (solo grep falló y los otros cubrieron), `vector_only`, `lexical_only`, `grep_only`, o `none` (recovery_succeeded == False). Wrapped en try/except — un fallo de emit jamás rompe el search result.
-- [tests/memory/test_search_failure_event.py](../../tests/memory/test_search_failure_event.py) (nuevo, 5 tests):
+- [durin/telemetry/schema.py](../../durin/telemetry/schema.py): new `MemoryRecallFailureEvent` TypedDict with shape trimmed vs the v1 spec (no `kind` enum or `recoverable` bool — the wrappers don't classify exceptions today; inventing those fields would be fabricated data).
+- [durin/memory/search_pipeline.py](../../durin/memory/search_pipeline.py): new `_emit_search_failure()` invoked at the end of `run_search_pipeline` when `recovery["sources"]` is not empty. `degraded_to` derived from the counts: `full` (only grep failed and the others covered), `vector_only`, `lexical_only`, `grep_only`, or `none` (recovery_succeeded == False). Wrapped in try/except — an emit failure never breaks the search result.
+- [tests/memory/test_search_failure_event.py](../../tests/memory/test_search_failure_event.py) (new, 5 tests):
   * Clean run → no event.
-  * Vector falla pero lexical produce hits → degraded_to=lexical_only.
-  * Todas las sources fallan → recovery_succeeded=False, degraded_to=none.
-  * TypedDict registrado en EVENTS + tiene los fields requeridos.
-  * `emit_tool_event` raises → search result intacto (telemetry never breaks search).
+  * Vector fails but lexical produces hits → degraded_to=lexical_only.
+  * All sources fail → recovery_succeeded=False, degraded_to=none.
+  * TypedDict registered in EVENTS + has the required fields.
+  * `emit_tool_event` raises → search result intact (telemetry never breaks search).
 
 **`memory.silent_retrieval_miss` — DISCARDED**:
 
-- [docs/memory/07_telemetry_and_observability.md §4.6](07_telemetry_and_observability.md): reescrita — el evento ya no se emite, sección apunta a doc 08 §2.11 con la razón.
-- [docs/memory/08_scope_and_discarded.md §2.11](08_scope_and_discarded.md) (nuevo): entry permanente con 4 razones del discard + 3 alternativas si en el futuro se necesita la señal + lesson general sobre "heuristic detectors with language-specific token lists are a red flag for any subsystem that has to serve multi-lingual workloads".
+- [docs/memory/07_telemetry_and_observability.md §4.6](07_telemetry_and_observability.md): rewritten — the event is no longer emitted, the section points to doc 08 §2.11 with the reason.
+- [docs/memory/08_scope_and_discarded.md §2.11](08_scope_and_discarded.md) (new): permanent entry with 4 discard reasons + 3 alternatives if the signal is needed in the future + general lesson about "heuristic detectors with language-specific token lists are a red flag for any subsystem that has to serve multi-lingual workloads".
 
-**Doc 07 §8.1** actualizada con shape real del payload + explicación de por qué se recortaron `kind` y `recoverable` vs spec v1.
+**Doc 07 §8.1** updated with real payload shape + explanation of why `kind` and `recoverable` were trimmed vs the v1 spec.
 
-**Lecciones aplicadas**:
-- [[feedback-question-user-input]]: el user empujó "como se hace cross-lingual?" — sin ese push yo habría implementado las heurísticas como "deferred" pretending que el problema era de scheduling. La pregunta correcta no era "cuándo" sino "si tiene sentido siquiera".
-- [[feedback-telemetry-is-first-class]]: aplica para `search.failure` (datos de degradation que el operator querría). NO aplica para `silent_retrieval_miss` con el approach propuesto — datos no confiables son peores que no datos (ruido > silencio).
-- [[feedback-optimization-vs-principle]]: aplicado a la spec. El v1 de `silent_retrieval_miss` violaba el principio "must serve multi-lingual workloads"; defenderlo como "será deferred" hubiera repetido el pattern de A8 invertido (cablear something speculative cuyo costo de mantenimiento supera el valor).
-- Nueva entry futura en memoria persistente: "heuristic detectors con language-specific token lists son red flag para multi-lingual systems".
+**Lessons applied**:
+- [[feedback-question-user-input]]: the user pushed "how do you do this cross-lingual?" — without that push I would have implemented the heuristics as "deferred" pretending the problem was scheduling. The right question wasn't "when" but "whether it even makes sense".
+- [[feedback-telemetry-is-first-class]]: applies for `search.failure` (degradation data the operator would want). Does NOT apply for `silent_retrieval_miss` with the proposed approach — unreliable data is worse than no data (noise > silence).
+- [[feedback-optimization-vs-principle]]: applied to the spec. The v1 of `silent_retrieval_miss` violated the principle "must serve multi-lingual workloads"; defending it as "will be deferred" would have repeated the A8 pattern inverted (wiring something speculative whose maintenance cost exceeds the value).
+- New future entry in persistent memory: "heuristic detectors with language-specific token lists are a red flag for multi-lingual systems".
 
-**Verificado pre-commit**: 5/5 tests del search failure event; suite memoria 969+ passing.
+**Pre-commit verification**: 5/5 tests for the search failure event; memory suite 969+ passing.
 
-**Estado**: resolved (commit pendiente).
+**State**: resolved (commit pending).
 
 ---
 
-### B10 — Eventos emitidos no documentados ✅ RESOLVED
+### B10 — Emitted events not documented ✅ RESOLVED
 
-**Código dice**:
+**Code says**:
 - `memory.embedding.load` (`durin/memory/embedding.py:172`)
 - `memory.embedding.embed` (`durin/memory/embedding.py:192`)
 - `memory.hot_layer.failure` (`durin/memory/hot_layer.py:161`)
 
-Los tres están en `EVENTS` registry y se emiten.
+All three are in the `EVENTS` registry and are emitted.
 
-**Doc dice**: doc 07 §3 categoría tables no los lista.
+**Doc says**: doc 07 §3 category tables don't list them.
 
-**Quién tiene razón**: código (emite eventos legítimamente útiles). Doc incompleto.
+**Who is right**: code (emits legitimately useful events). Doc incomplete.
 
-**Acción**: agregar los 3 eventos a doc 07 con sus payload schemas.
+**Action**: add the 3 events to doc 07 with their payload schemas.
 
-**Estado**: pending
-
----
-
-### B11 — Doc 06 §2 sólo menciona `## Memory` (incompleta) ✅ RESOLVED
-
-**Doc dice** (`docs/memory/06_prompts_and_instructions.md` §2): reproduce sólo el bloque `## Memory` del identity.md.
-
-**Código dice** (`durin/templates/agent/identity.md:35-46`): además del `## Memory`, existe `## Memory writing` que da guidance para escrituras (dedup, cuándo NO llamar memory_store).
-
-**Quién tiene razón**: código (tiene contenido útil que el doc oculta).
-
-**Acción**: actualizar doc 06 §2 para reproducir AMBAS secciones verbatim.
-
-**Estado**: pending
+**State**: pending
 
 ---
 
-### B12 — Cross-encoder model NO validado contra lista curada ✅ RESOLVED
+### B11 — Doc 06 §2 only mentions `## Memory` (incomplete) ✅ RESOLVED
 
-**Doc dice** (`docs/memory/03_search_pipeline.md` §9.5): *"dropdown for picking the model from the curated list (jina-v2, bge-base, bge-v2-m3, qwen3-reranker-0.6b)"*.
+**Doc says** (`docs/memory/06_prompts_and_instructions.md` §2): reproduces only the `## Memory` block of identity.md.
 
-**Código dice** (`durin/config/schema.py:266-273`):
+**Code says** (`durin/templates/agent/identity.md:35-46`): besides `## Memory`, there is `## Memory writing` that gives writing guidance (dedup, when NOT to call memory_store).
+
+**Who is right**: code (has useful content the doc hides).
+
+**Action**: update doc 06 §2 to reproduce BOTH sections verbatim.
+
+**State**: pending
+
+---
+
+### B12 — Cross-encoder model NOT validated against curated list ✅ RESOLVED
+
+**Doc says** (`docs/memory/03_search_pipeline.md` §9.5): *"dropdown for picking the model from the curated list (jina-v2, bge-base, bge-v2-m3, qwen3-reranker-0.6b)"*.
+
+**Code says** (`durin/config/schema.py:266-273`):
 
 ```python
 class CrossEncoderConfig(Base):
@@ -1017,214 +1017,214 @@ class CrossEncoderConfig(Base):
     top_n: int = 10
 ```
 
-No hay validador, no hay enum. Un valor inválido (e.g. `model: "bogus"`) pasa el config y crashea al cargar.
+There's no validator, no enum. An invalid value (e.g. `model: "bogus"`) passes config and crashes at load.
 
-**Quién tiene razón**: doc tiene razón en intención (lista curada). Pero hacer enum **estricto** rompe extensibilidad — un user que quiera probar un modelo nuevo no debería editar el schema.
+**Who is right**: doc is right in intent (curated list). But a **strict** enum breaks extensibility — a user wanting to try a new model shouldn't have to edit the schema.
 
-**Acción opción A**: validador soft (lista de "known good", warn si no está, no falla). ~10 LOC.
+**Action option A**: soft validator (list of "known good", warn if not in it, don't fail). ~10 LOC.
 
-**Acción opción B**: dejar como string libre, alinear doc a "models known to work" (no curated dropdown).
+**Action option B**: leave as free string, align doc to "models known to work" (no curated dropdown).
 
-**Recomendación**: A. Warn-but-allow es el balance correcto. La webui ya filtra a los 4 conocidos; el config schema acepta otros pero loguea warning.
+**Recommendation**: A. Warn-but-allow is the right balance. The webui already filters to the 4 known; the config schema accepts others but logs a warning.
 
-**Resolución (2026-05-28) — Opción C: validación dinámica, sin lista fija**: el user empujó con la observación clave: *"Los modelos antes de seleccionarlos y asignarlos deberian pasar un test. Los que durin ofrece en la instalacion no seran los unicos permitidos, el usuario deberia a la larga poder poner otro ya sea por ollama, o usando api de modelos que ya soportamos o customs. Pero no veo un listado fijo fuera el de la instalacion inicial."*
+**Resolution (2026-05-28) — Option C: dynamic validation, no fixed list**: the user pushed back with the key observation: *"Models, before being selected and assigned, should pass a test. The ones durin offers at install won't be the only ones allowed; eventually the user should be able to set another, whether via ollama, the API of models we already support, or customs. But I don't see a fixed list outside the one at initial install."*
 
-Eso descartó tanto la Opción A (soft validator con lista) como la Opción B (dejar libre + doc fix). La fix correcta es **probar el modelo live** antes de aceptar el valor — patrón del `check_model_ping` que ya existe para LLM models.
+That discarded both Option A (soft validator with list) and Option B (leave free + doc fix). The correct fix is to **test the model live** before accepting the value — the `check_model_ping` pattern that already exists for LLM models.
 
-Cambios backend:
+Backend changes:
 
-- [durin/memory/cross_encoder.py](../../durin/memory/cross_encoder.py): nuevo `test_model(model_id, *, loader=None) → dict` con shape `{status, message, model_id, duration_ms}`. Intenta `_load_default_scorer(model_id)` + score trivial. Maneja cuatro modos de falla: empty id, loader retorna None (no sentence_transformers o model not found), loader raises (network error, etc.), score raises (model loaded pero broken).
-- [durin/channels/websocket.py](../../durin/channels/websocket.py): nuevo endpoint `GET /api/memory/cross-encoder/test?model=<id>` (`_handle_cross_encoder_test`). Async + `asyncio.to_thread` para que el load lento no bloquee el event loop del gateway.
+- [durin/memory/cross_encoder.py](../../durin/memory/cross_encoder.py): new `test_model(model_id, *, loader=None) → dict` with shape `{status, message, model_id, duration_ms}`. Attempts `_load_default_scorer(model_id)` + trivial score. Handles four failure modes: empty id, loader returns None (no sentence_transformers or model not found), loader raises (network error, etc.), score raises (model loaded but broken).
+- [durin/channels/websocket.py](../../durin/channels/websocket.py): new `GET /api/memory/cross-encoder/test?model=<id>` endpoint (`_handle_cross_encoder_test`). Async + `asyncio.to_thread` so the slow load doesn't block the gateway event loop.
 
-Cambios webui:
+Webui changes:
 
-- [webui/src/lib/api.ts](../../webui/src/lib/api.ts): nueva función `testCrossEncoderModel(token, model)` + `CrossEncoderTestResult` interface.
-- [webui/src/components/settings/MemorySettings.tsx](../../webui/src/components/settings/MemorySettings.tsx): refactor del control "Reranker model". Antes: dropdown cerrado de 4 valores. Ahora: input free-form con HTML `<datalist>` para los 4 sugeridos + botón "Test" + área de status. El user puede tipear cualquier id; el botón Test invoca el endpoint nuevo; el resultado (ok verde / fail rojo con mensaje) se muestra inline.
-- [webui/src/i18n/locales/en/common.json](../../webui/src/i18n/locales/en/common.json): strings actualizados — `crossEncoderModelPlaceholder` y `crossEncoderTest`; eliminé el namespace `crossEncoderModels` (labels per-model) ya que no hay lista cerrada.
+- [webui/src/lib/api.ts](../../webui/src/lib/api.ts): new `testCrossEncoderModel(token, model)` function + `CrossEncoderTestResult` interface.
+- [webui/src/components/settings/MemorySettings.tsx](../../webui/src/components/settings/MemorySettings.tsx): "Reranker model" control refactor. Before: closed dropdown of 4 values. Now: free-form input with HTML `<datalist>` for the 4 suggested + "Test" button + status area. The user can type any id; the Test button invokes the new endpoint; the result (green ok / red fail with message) is shown inline.
+- [webui/src/i18n/locales/en/common.json](../../webui/src/i18n/locales/en/common.json): updated strings — `crossEncoderModelPlaceholder` and `crossEncoderTest`; the `crossEncoderModels` namespace (per-model labels) was removed since there's no closed list.
 
 Tests:
 
-- [tests/memory/test_cross_encoder_model_validation.py](../../tests/memory/test_cross_encoder_model_validation.py) (nuevo, 8 tests): cubren los 4 modos de falla + happy path + invariante crítico:
-  * `test_no_hardcoded_model_enum_in_config_schema`: asserts that `CrossEncoderConfig.model_fields["model"].annotation is str` (free-form). Si alguien re-introduce un `Literal[...]` o un `enum`, el test falla loudly — defensa contra regresión al pattern anti-user-extensibility.
+- [tests/memory/test_cross_encoder_model_validation.py](../../tests/memory/test_cross_encoder_model_validation.py) (new, 8 tests): cover the 4 failure modes + happy path + critical invariant:
+  * `test_no_hardcoded_model_enum_in_config_schema`: asserts that `CrossEncoderConfig.model_fields["model"].annotation is str` (free-form). If someone re-introduces a `Literal[...]` or an `enum`, the test fails loudly — defense against regression to the anti-user-extensibility pattern.
 
 Doc:
 
-- [docs/memory/03_search_pipeline.md §9.5](03_search_pipeline.md): aclaración explícita: "The model set is open. The four entries below are bundled in the install as suggestions… but the config field accepts any sentence_transformers compatible id. Validation is dynamic via the Test button."
+- [docs/memory/03_search_pipeline.md §9.5](03_search_pipeline.md): explicit clarification: "The model set is open. The four entries below are bundled in the install as suggestions… but the config field accepts any sentence_transformers compatible id. Validation is dynamic via the Test button."
 
-**Lecciones aplicadas**:
-- [[feedback-question-user-input]]: sin tu push-back yo habría implementado la Opción A (soft validator con lista hardcoded), que era exactamente el anti-pattern user-restrictive del que me advertiste.
-- [[feedback-sync-tests-exercise-behavior]]: el test del invariante `model_fields["model"].annotation is str` ejercita el contract del schema, no compara strings — defensa contra alguien convirtiendo el field a un Literal en el futuro.
-- Pattern similar al de A8 / [[feedback-telemetry-is-first-class]]: la validación correcta no es "permitir o no según una lista" sino "ejercitar el comportamiento real" — load + score, igual que `check_model_ping` lo hace para LLM models.
+**Lessons applied**:
+- [[feedback-question-user-input]]: without your push-back I would have implemented Option A (soft validator with hardcoded list), which was exactly the user-restrictive anti-pattern you warned me about.
+- [[feedback-sync-tests-exercise-behavior]]: the `model_fields["model"].annotation is str` invariant test exercises the schema contract, doesn't compare strings — defense against someone converting the field to a Literal in the future.
+- Pattern similar to A8 / [[feedback-telemetry-is-first-class]]: the correct validation is not "allow or not based on a list" but "exercise the real behavior" — load + score, just as `check_model_ping` does for LLM models.
 
-**Verificado pre-commit**:
-- Backend: 8/8 tests del helper + 2328 full suite (sin regresiones).
+**Pre-commit verification**:
+- Backend: 8/8 helper tests + 2328 full suite (no regressions).
 - Webui: `npx tsc --noEmit` clean, `npx vitest run` 142/142.
 
-**Estado**: resolved (commit pendiente).
+**State**: resolved (commit pending).
 
 ---
 
-## LOW — cosmético / docs
+## LOW — cosmetic / docs
 
-### C1 — Doc 01 §4.3 referencia `STATEFUL_ATTRIBUTE_PATTERNS` que no existe ✅ RESOLVED
+### C1 — Doc 01 §4.3 references `STATEFUL_ATTRIBUTE_PATTERNS` which doesn't exist ✅ RESOLVED
 
-**Doc dice** (`docs/memory/01_data_and_entities.md` §4.3): *"The pattern set lives in code as a single source of truth (`STATEFUL_ATTRIBUTE_PATTERNS`)"*.
+**Doc says** (`docs/memory/01_data_and_entities.md` §4.3): *"The pattern set lives in code as a single source of truth (`STATEFUL_ATTRIBUTE_PATTERNS`)"*.
 
-**Código dice**: `grep -rn "STATEFUL_ATTRIBUTE_PATTERNS" durin/` → cero hits.
+**Code says**: `grep -rn "STATEFUL_ATTRIBUTE_PATTERNS" durin/` → zero hits.
 
-**Quién tiene razón**: doc miente. La constante no existe. La lógica de "stateful attribute" probablemente está implícita en `entity_page.py::_validate`.
+**Who is right**: doc lies. The constant doesn't exist. The "stateful attribute" logic is probably implicit in `entity_page.py::_validate`.
 
-**Acción**: o crear la constante (extraer del código actual), o quitar la referencia del doc.
+**Action**: either create the constant (extract from current code), or remove the reference from the doc.
 
-**Estado**: pending
-
----
-
-### C2 — Doc 01 §4.4 "soft cap 50 / hard cap 200" entries-per-entity sin enforcement ✅ RESOLVED
-
-**Doc dice** (`docs/memory/01_data_and_entities.md` §4.4): *"Per-entity cap — Soft cap = 50 (warn only), Hard cap = 200"*.
-
-**Código dice**: `grep -rn "50\|200" durin/memory/dream.py durin/memory/entity_page.py | grep -iE "cap|limit"` → cero hits semánticamente relevantes.
-
-**Quién tiene razón**: doc propone, código no enforca.
-
-**Acción**: implementar el cap o sacar del doc. Recomendación: implementar el soft-cap (log warning cuando una entity tiene > 50 entries en su body). El hard cap es defensivo — defer hasta que ocurra.
-
-**Estado**: pending
+**State**: pending
 
 ---
 
-### C3 — Doc 01 §4.5 step 2 describe pinyin-with-tones, código usa unidecode directo ✅ RESOLVED
+### C2 — Doc 01 §4.4 "soft cap 50 / hard cap 200" entries-per-entity not enforced ✅ RESOLVED
 
-**Doc dice**: *"Transliterate non-Latin scripts to Latin (e.g., 马塞洛 → mǎsàiluò → masailuo)"*.
+**Doc says** (`docs/memory/01_data_and_entities.md` §4.4): *"Per-entity cap — Soft cap = 50 (warn only), Hard cap = 200"*.
 
-**Código dice** (`durin/memory/entities.py:153`): `unidecode(nfc)` directo. Para "马塞洛", `unidecode` produce `"Ma Sai Luo "` → `ma_sai_luo`.
+**Code says**: `grep -rn "50\|200" durin/memory/dream.py durin/memory/entity_page.py | grep -iE "cap|limit"` → zero semantically relevant hits.
 
-**Quién tiene razón**: código (más simple y correcto). El intermedio pinyin-with-tones es ficción.
+**Who is right**: doc proposes, code doesn't enforce.
 
-**Acción**: actualizar doc 01 §4.5 step 2: *"Transliterate non-Latin scripts to ASCII via unidecode (e.g., 马塞洛 → Ma Sai Luo → ma_sai_luo)"*.
+**Action**: implement the cap or remove from doc. Recommendation: implement the soft-cap (log warning when an entity has > 50 entries in its body). The hard cap is defensive — defer until it occurs.
 
-**Estado**: pending
-
----
-
-### C4 — Doc 05 §14 dice 5 triggers, §2 enumera 6 ✅ RESOLVED
-
-**Doc dice** §14 row 1: "Five trigger types".
-**Doc dice** §2: 6 triggers (`threshold`, `post_ingest_threshold`, `cron_daily`, `session_close`, `post_compaction`, `manual`).
-
-**Código dice** — 6 triggers efectivamente cableados (verificado vía grep en commit `c3eff1e`).
-
-**Quién tiene razón**: §2 + código.
-
-**Acción**: corregir §14 a "Six trigger types".
-
-**Estado**: pending
+**State**: pending
 
 ---
 
-### C5 — Doc 05 §8.7 menciona verdict `unsure`; código usa `unclear` ✅ RESOLVED
+### C3 — Doc 01 §4.5 step 2 describes pinyin-with-tones, code uses direct unidecode ✅ RESOLVED
 
-**Doc dice** §8.7: *"flag uncertainty as `unsure` rather than confirm"*.
-**Código dice** (`durin/memory/absorb_judge.py:73`): verdicts = `{"same", "different", "unclear"}`.
+**Doc says**: *"Transliterate non-Latin scripts to Latin (e.g., 马塞洛 → mǎsàiluò → masailuo)"*.
 
-§8.4 del mismo doc 05 dice `unclear` correctamente.
+**Code says** (`durin/memory/entities.py:153`): direct `unidecode(nfc)`. For "马塞洛", `unidecode` produces `"Ma Sai Luo "` → `ma_sai_luo`.
 
-**Quién tiene razón**: §8.4 + código.
+**Who is right**: code (simpler and correct). The pinyin-with-tones intermediate is fiction.
 
-**Acción**: corregir §8.7 a `unclear`.
+**Action**: update doc 01 §4.5 step 2: *"Transliterate non-Latin scripts to ASCII via unidecode (e.g., 马塞洛 → Ma Sai Luo → ma_sai_luo)"*.
 
-**Estado**: pending
-
----
-
-### C6 — Doc 07 §15 sub-totales obsoletos ✅ RESOLVED
-
-**Doc dice** §15: "12 events in schema.py".
-**Código dice** `durin/telemetry/schema.py:911-937` — 25 entradas memory.*.
-
-**Doc dice** §15: "query truncation: Not enforced".
-**Código dice** (`durin/agent/tools/_telemetry.py:29-33`) — sí enforzado vía `_truncate_freetext`.
-
-**Quién tiene razón**: código (recuento actual).
-
-**Acción**: actualizar §15 con counts y status reales.
-
-**Estado**: pending
+**State**: pending
 
 ---
 
-### C7 — Doc 02 §11 status table es stale completo ✅ RESOLVED
+### C4 — Doc 05 §14 says 5 triggers, §2 enumerates 6 ✅ RESOLVED
 
-**Doc dice** §11 (status table): "FTS5 lexical index — Does not exist"; "File watcher — Manual rebuild only"; "Archive folder — Doesn't exist".
+**Doc says** §14 row 1: "Five trigger types".
+**Doc says** §2: 6 triggers (`threshold`, `post_ingest_threshold`, `cron_daily`, `session_close`, `post_compaction`, `manual`).
 
-**Código dice**:
-- `durin/memory/fts_index.py` existe + indexer usa.
-- `MemoryFileWatcher` existe (aunque no cableado, ver A11).
-- `archive/` walker existe (`durin/memory/archive.py`).
+**Code says** — 6 triggers actually wired (verified via grep in commit `c3eff1e`).
 
-**Quién tiene razón**: código. Doc 02 §11 entera está obsoleta.
+**Who is right**: §2 + code.
 
-**Acción**: rehacer §11 desde cero reflejando estado actual.
+**Action**: correct §14 to "Six trigger types".
 
-**Estado**: pending
+**State**: pending
 
 ---
 
-### C8 — Doc 03 §1 diagram tiene dos "Step 7" (header collision) ✅ RESOLVED
+### C5 — Doc 05 §8.7 mentions verdict `unsure`; code uses `unclear` ✅ RESOLVED
 
-**Doc dice**: §11 "Step 7 — Removed (MMR deferred)"; §12 también titulada "STEP 7".
+**Doc says** §8.7: *"flag uncertainty as `unsure` rather than confirm"*.
+**Code says** (`durin/memory/absorb_judge.py:73`): verdicts = `{"same", "different", "unclear"}`.
 
-**Acción**: renumerar.
+§8.4 of the same doc 05 says `unclear` correctly.
 
-**Estado**: pending
+**Who is right**: §8.4 + code.
 
----
+**Action**: correct §8.7 to `unclear`.
 
-### C9 — Doc 06 §3.5 menciona `memory_*.py::DESCRIPTION` constants que no existen ✅ RESOLVED
-
-**Doc dice** §3.5: *"descriptions must match `memory_*.py::DESCRIPTION` constants"*.
-**Código dice**: no hay `DESCRIPTION` constant en ningún tool. La canónica vive en `_PARAMETERS["description"]`.
-
-**Quién tiene razón**: código.
-
-**Acción**: corregir §3.5: *"matches `_PARAMETERS['description']` field"*.
-
-**Estado**: pending
+**State**: pending
 
 ---
 
-### C10 — Doc 04 §7.1 menciona webui surfaces — verificar ✅ RESOLVED
+### C6 — Doc 07 §15 subtotals out of date ✅ RESOLVED
 
-**Doc dice** §7.1: hay surfaces de webui "informational".
+**Doc says** §15: "12 events in schema.py".
+**Code says** `durin/telemetry/schema.py:911-937` — 25 memory.* entries.
 
-**Código dice**: webui Settings → Memory ahora existe (P4.4 este turno). Doc no lo refleja con detalle de los 3 controles añadidos.
+**Doc says** §15: "query truncation: Not enforced".
+**Code says** (`durin/agent/tools/_telemetry.py:29-33`) — it IS enforced via `_truncate_freetext`.
 
-**Acción**: actualizar §7.1 con los 3 controles del MemorySettings.tsx.
+**Who is right**: code (current count).
 
-**Estado**: pending
+**Action**: update §15 with real counts and status.
+
+**State**: pending
 
 ---
 
-## Items NO accionables (sólo registro)
+### C7 — Doc 02 §11 status table fully stale ✅ RESOLVED
 
-### D1 — Doc 09 spec, sin claims de status
-OK — referencia, no cambia.
+**Doc says** §11 (status table): "FTS5 lexical index — Does not exist"; "File watcher — Manual rebuild only"; "Archive folder — Doesn't exist".
+
+**Code says**:
+- `durin/memory/fts_index.py` exists + indexer uses it.
+- `MemoryFileWatcher` exists (though not wired, see A11).
+- `archive/` walker exists (`durin/memory/archive.py`).
+
+**Who is right**: code. Doc 02 §11 is entirely obsolete.
+
+**Action**: redo §11 from scratch reflecting current state.
+
+**State**: pending
+
+---
+
+### C8 — Doc 03 §1 diagram has two "Step 7" (header collision) ✅ RESOLVED
+
+**Doc says**: §11 "Step 7 — Removed (MMR deferred)"; §12 also titled "STEP 7".
+
+**Action**: renumber.
+
+**State**: pending
+
+---
+
+### C9 — Doc 06 §3.5 mentions `memory_*.py::DESCRIPTION` constants that don't exist ✅ RESOLVED
+
+**Doc says** §3.5: *"descriptions must match `memory_*.py::DESCRIPTION` constants"*.
+**Code says**: there's no `DESCRIPTION` constant in any tool. The canonical lives in `_PARAMETERS["description"]`.
+
+**Who is right**: code.
+
+**Action**: correct §3.5: *"matches `_PARAMETERS['description']` field"*.
+
+**State**: pending
+
+---
+
+### C10 — Doc 04 §7.1 mentions webui surfaces — verify ✅ RESOLVED
+
+**Doc says** §7.1: there are "informational" webui surfaces.
+
+**Code says**: webui Settings → Memory now exists (P4.4 this turn). The doc doesn't reflect it with the detail of the 3 added controls.
+
+**Action**: update §7.1 with the 3 MemorySettings.tsx controls.
+
+**State**: pending
+
+---
+
+## NON-actionable items (record only)
+
+### D1 — Doc 09 spec, no status claims
+OK — reference, doesn't change.
 
 ### D2 — Doc 98 known_bugs.md
-Sólo 1 entry (B1 absorption vector index), marcado Resolved 2026-05-27. Verificado vía `absorption.py:244-253`. OK.
+Only 1 entry (B1 absorption vector index), marked Resolved 2026-05-27. Verified via `absorption.py:244-253`. OK.
 
 ### D3 — Doc 99 gaps_audit.md
-Round 1-3 marcados resolved. Spot-checks confirman. OK.
+Round 1-3 marked resolved. Spot-checks confirm. OK.
 
 ---
 
-## Resumen ejecutivo
+## Executive summary
 
-| Bloque | Items | Naturaleza | Estado |
+| Block | Items | Nature | State |
 |---|---|---|---|
-| Critical (A1-A11) | 11 | Afectan UX agente, operación, o medibilidad | ✅ Cerrados 2026-05-28 |
-| Medium (B1-B12) | 12 | Drift sin romper UX directo | ✅ Cerrados 2026-05-28 |
+| Critical (A1-A11) | 11 | Affect agent UX, operation, or measurability | ✅ Closed 2026-05-28 |
+| Medium (B1-B12) | 12 | Drift without breaking direct UX | ✅ Closed 2026-05-28 |
 | Low (C1-C10) | 10 | Cosmetic / docs | ✅ Closed 2026-05-28 |
 | Not actionable (D1-D3) | 3 | OK as-is | ✅ Recorded 2026-05-28 |
 | Second pass (E1-E38) | 38 | Drift discovered in re-audit | ✅ Closed 2026-05-28 |
@@ -1258,318 +1258,318 @@ Round 1-3 marcados resolved. Spot-checks confirman. OK.
 
 ## SECOND PASS (E) — drift discovered in re-audit 2026-05-28
 
-### E1 — `memory.recall` event payload no coincide con doc 07 §4.1 ✅ RESOLVED
+### E1 — `memory.recall` event payload doesn't match doc 07 §4.1 ✅ RESOLVED
 
-**Doc 07 §4.1 (pre-E1)** listaba 10 campos: `query`, `keywords`, `scope`, `level`, `result_count`, `total_candidates`, `strategy`, `recovered_from`, `recovery_duration_ms`, `duration_ms`.
+**Doc 07 §4.1 (pre-E1)** listed 10 fields: `query`, `keywords`, `scope`, `level`, `result_count`, `total_candidates`, `strategy`, `recovered_from`, `recovery_duration_ms`, `duration_ms`.
 
-**Código `durin/agent/tools/memory_search.py` (pre-E1, líneas 454-462)** emitía solo 4: `query`, `scope`, `level`, `result_count`. El TypedDict `MemoryRecallEvent` solo aceptaba esos 4 + `iteration`/`session_key` auto-inyectados.
+**Code `durin/agent/tools/memory_search.py` (pre-E1, lines 454-462)** emitted only 4: `query`, `scope`, `level`, `result_count`. The `MemoryRecallEvent` TypedDict only accepted those 4 + auto-injected `iteration`/`session_key`.
 
-**Verificación**: grep `"memory.recall"` en todo el repo confirma una sola emisión (`memory_search.py:454`). Los 6 campos "faltantes" YA se computan localmente antes de la emisión (`strategy` en línea 441-448, `duration_ms` en 390, `pipeline_result.vector_count + lexical_count` para `total_candidates`, `keywords` es kwarg, `recovered_from` viene de `pipeline_result`).
+**Verification**: grep `"memory.recall"` across the repo confirms a single emission (`memory_search.py:454`). The 6 "missing" fields are ALREADY computed locally before the emission (`strategy` at line 441-448, `duration_ms` at 390, `pipeline_result.vector_count + lexical_count` for `total_candidates`, `keywords` is a kwarg, `recovered_from` comes from `pipeline_result`).
 
-**Decisión**: A8-style (telemetría es infra de primera clase) — expandir el payload, NO reducir el doc. Cero overhead nuevo: todos los valores ya estaban computados.
+**Decision**: A8-style (telemetry is first-class infra) — expand the payload, do NOT shrink the doc. Zero new overhead: all values were already computed.
 
-**Resolución**:
-- TypedDict `MemoryRecallEvent` ampliado con `strategy`/`duration_ms`/`total_candidates` requeridos + `keywords`/`recovered_from`/`recovery_duration_ms` opcionales.
-- Callsite construye dict y agrega recovery solo en runs degradados (espeja la forma de respuesta del tool).
-- Tests TDD: 6 cases en `tests/memory/test_recall_event_payload_e1.py` (strategy+duration, total_candidates, keywords con/sin, recovery con/sin).
-- Doc 07 §4.1 reescrita con columna `Required` para distinguir always-on vs degraded-only.
+**Resolution**:
+- `MemoryRecallEvent` TypedDict extended with required `strategy`/`duration_ms`/`total_candidates` + optional `keywords`/`recovered_from`/`recovery_duration_ms`.
+- Callsite builds the dict and adds recovery only on degraded runs (mirrors the tool's response shape).
+- TDD tests: 6 cases in `tests/memory/test_recall_event_payload_e1.py` (strategy+duration, total_candidates, keywords with/without, recovery with/without).
+- Doc 07 §4.1 rewritten with a `Required` column to distinguish always-on vs degraded-only.
 
-**Commit pendiente** (cierre del batch E1-E9).
+**Commit pending** (E1-E9 batch close).
 
 ### E2 — `memory.recall.lexical` field names doc vs code ✅ RESOLVED
 
-**Doc 07 §4.3 (pre-E2)** listaba `query`, `tokenizer_used` con valores `unicode61|trigram|like_fallback`, `hit_count`, `duration_ms`.
+**Doc 07 §4.3 (pre-E2)** listed `query`, `tokenizer_used` with values `unicode61|trigram|like_fallback`, `hit_count`, `duration_ms`.
 
-**Código `durin/memory/lexical_search.py:124-133` + TypedDict `MemoryRecallLexicalEvent`**: emite `route` (con valores `unicode61|trigram|like_substring`), `query_chars`, `cjk_chars`, `hit_count`, `duration_ms`.
+**Code `durin/memory/lexical_search.py:124-133` + TypedDict `MemoryRecallLexicalEvent`**: emits `route` (with values `unicode61|trigram|like_substring`), `query_chars`, `cjk_chars`, `hit_count`, `duration_ms`.
 
-**Verificación**: el TypedDict en `schema.py:780-796` está bien estructurado y la emisión coincide; el doc nunca se actualizó cuando el campo se nombró `route` en lugar del placeholder original `tokenizer_used`. `like_substring` es el `LexicalRoute` enum value (no `like_fallback`).
+**Verification**: the TypedDict at `schema.py:780-796` is well-structured and the emission matches; the doc was never updated when the field was named `route` instead of the original `tokenizer_used` placeholder. `like_substring` is the `LexicalRoute` enum value (not `like_fallback`).
 
-**Decisión**: doc → code. El código es correcto y útil (route + query/cjk char counts dan dashboards de "cuántas queries cayeron al fallback CJK"). Reescribo §4.3.
+**Decision**: doc → code. The code is correct and useful (route + query/cjk char counts give "how many queries fell to the CJK fallback" dashboards). Rewriting §4.3.
 
-**Resolución**: doc 07 §4.3 reescrita con los 5 campos reales + nota de por qué `query` no se duplica (ya está en `memory.recall`, join por `session_key+iteration`).
+**Resolution**: doc 07 §4.3 rewritten with the 5 real fields + note on why `query` is not duplicated (already in `memory.recall`, join by `session_key+iteration`).
 
-**Genealogía**: commit `792f1c6` (Phase 3 core) introdujo el evento con `route` desde la primera versión. El doc 07 §4.3 era spec aspiracional ("NEW event") nunca reconciliada. Cero consumers downstream (verificado por grep).
+**Genealogy**: commit `792f1c6` (Phase 3 core) introduced the event with `route` from the first version. Doc 07 §4.3 was an aspirational spec ("NEW event") never reconciled. Zero downstream consumers (verified by grep).
 
-**Commit pendiente** (cierre del batch E1-E9).
+**Commit pending** (E1-E9 batch close).
 
 ### E3 — `memory.recall.rrf` field names doc vs code ✅ RESOLVED
 
 **Doc 07 §4.5 pre-E3**: `sources_active` (list), `keyword_boost_applied` (bool), `dedup_count` (int), `duration_ms`.
 
-**Código `durin/memory/rrf_fusion.py:148-158` + TypedDict `MemoryRecallRRFEvent`**: emite `vector_count`, `lexical_count`, `grep_count`, `fused_count`, `boosted`, `duration_ms`.
+**Code `durin/memory/rrf_fusion.py:148-158` + TypedDict `MemoryRecallRRFEvent`**: emits `vector_count`, `lexical_count`, `grep_count`, `fused_count`, `boosted`, `duration_ms`.
 
-**Genealogía**: mismo commit `792f1c6` que E2. Doc spec aspiracional, impl divergió y doc nunca reconciliado.
+**Genealogy**: same `792f1c6` commit as E2. Aspirational spec doc, impl diverged and doc never reconciled.
 
-**Consumers**: cero (grep en `durin/` confirma que solo el emitter y el TypedDict declaran estos campos; `memory_search.py` lee desde `SearchPipelineResult`, no del evento).
+**Consumers**: zero (grep in `durin/` confirms only the emitter and the TypedDict declare these fields; `memory_search.py` reads from `SearchPipelineResult`, not from the event).
 
-**Decisión**: doc → code (Opción A). Razones:
-- Per-source counts son strictly más ricos que `sources_active` (derivable como `{s: count>0}`).
-- `dedup_count` es derivable como `vector_count + lexical_count + grep_count − fused_count` (cantidad de pares (URI, source) que se mergearon en el RRF).
-- `boosted` vs `keyword_boost_applied` es pure rename; el primero es más conciso.
-- Cero código tocado.
+**Decision**: doc → code (Option A). Reasons:
+- Per-source counts are strictly richer than `sources_active` (derivable as `{s: count>0}`).
+- `dedup_count` is derivable as `vector_count + lexical_count + grep_count − fused_count` (count of (URI, source) pairs merged in RRF).
+- `boosted` vs `keyword_boost_applied` is a pure rename; the former is more concise.
+- Zero code touched.
 
-**Resolución**: doc 07 §4.5 reescrita con los 6 campos reales + nota de derivación matemática para `sources_active` y `dedup_count`.
+**Resolution**: doc 07 §4.5 rewritten with the 6 real fields + note on mathematical derivation for `sources_active` and `dedup_count`.
 
-**Commit pendiente** (cierre del batch E1-E9).
+**Commit pending** (E1-E9 batch close).
 
-### E4 — `memory.recall.decay` evento emitido sin entrada en doc 07 ✅ RESOLVED
+### E4 — `memory.recall.decay` event emitted without entry in doc 07 ✅ RESOLVED
 
-**Doc 07 §4 (pre-E4)**: tabla de eventos recall lista 4.1-4.6 sin entrada para decay.
+**Doc 07 §4 (pre-E4)**: recall events table lists 4.1-4.6 with no entry for decay.
 
-**Código**: `durin/memory/search_pipeline.py:594-601` emite `memory.recall.decay` con `hits_total`/`hits_decayed`/`avg_decay_factor`. TypedDict `MemoryRecallDecayEvent` declarado en `schema.py:859-880`.
+**Code**: `durin/memory/search_pipeline.py:594-601` emits `memory.recall.decay` with `hits_total`/`hits_decayed`/`avg_decay_factor`. `MemoryRecallDecayEvent` TypedDict declared at `schema.py:859-880`.
 
-**Genealogía**: A9 (audit primera pasada) introdujo el evento + TypedDict pero no agregó entrada documental.
+**Genealogy**: A9 (first-pass audit) introduced the event + TypedDict but didn't add a doc entry.
 
-**Decisión**: pure additive. `§4.6` (silent_retrieval_miss discarded) está referenciado desde doc 08 y doc 11 — NO renumerar; append como `§4.7`.
+**Decision**: pure additive. `§4.6` (silent_retrieval_miss discarded) is referenced from doc 08 and doc 11 — do NOT renumber; append as `§4.7`.
 
-**Resolución**: doc 07 §4.7 agregada describiendo los 3 campos + nota sobre cómo el decay interactúa con classes no-decaying (factor=1.0) + pointer a doc 03 §10.3 para config.
+**Resolution**: doc 07 §4.7 added describing the 3 fields + note about how decay interacts with non-decaying classes (factor=1.0) + pointer to doc 03 §10.3 for config.
 
-**Commit pendiente** (cierre del batch E1-E9).
+**Commit pending** (E1-E9 batch close).
 
-### E5 — `memory.index.write` payload mínimo vs dashboards documentados ✅ RESOLVED
+### E5 — `memory.index.write` minimal payload vs documented dashboards ✅ RESOLVED
 
-**Doc 07 §9.1 (pre-E5)**: spec aspiracional con 5 campos: `uri`, `trigger`, `targets`, `duration_ms`, `embedding_skipped`.
+**Doc 07 §9.1 (pre-E5)**: aspirational spec with 5 fields: `uri`, `trigger`, `targets`, `duration_ms`, `embedding_skipped`.
 
-**Código `durin/memory/indexer.py:212-218` (pre-E5)**: emitía solo `uri`, `op`, `index` (siempre `"fts"` en práctica).
+**Code `durin/memory/indexer.py:212-218` (pre-E5)**: emitted only `uri`, `op`, `index` (always `"fts"` in practice).
 
-**Evidencia de consumers documentados** (clave para decidir dirección):
-- Doc 07 §10.3 define alert `index_write_p95_ms < 50ms (per row)` que requiere `duration_ms`.
-- Doc 09 §216 declara mitigación de crecimiento del trigram table: "monitor via `memory.index.write` events" — necesita `trigger` para distinguir bursts.
+**Evidence of documented consumers** (key to deciding direction):
+- Doc 07 §10.3 defines alert `index_write_p95_ms < 50ms (per row)` which requires `duration_ms`.
+- Doc 09 §216 declares mitigation for trigram table growth: "monitor via `memory.index.write` events" — needs `trigger` to distinguish bursts.
 
-**Genealogía**: commit `be75998` (Phase 2 core) introdujo el emisor con shape mínimo; el doc se escribió como spec aspiracional y nunca reconciliado.
+**Genealogy**: commit `be75998` (Phase 2 core) introduced the emitter with minimal shape; the doc was written as an aspirational spec and never reconciled.
 
-**Decisión**: B-minimal (code → doc parcial). Agregar `duration_ms` + `trigger` al emisor; descartar `targets`/`embedding_skipped` como aspiracionales (LanceDB no escribe este evento; no hay mtime short-circuit).
+**Decision**: B-minimal (code → partial doc). Add `duration_ms` + `trigger` to the emitter; discard `targets`/`embedding_skipped` as aspirational (LanceDB doesn't write this event; no mtime short-circuit).
 
-**Trigger taxonomy revisada** (vs spec original):
-- Descartados: `tool_write` (no hay callsites directos desde tools), `manual_rebuild` (esa ruta emite `.rebuild`, no `.write`).
-- Reales: `watcher` (default, file_watcher), `dream_apply` (post-consolidación), `drift_repair` (health check).
+**Revised trigger taxonomy** (vs original spec):
+- Discarded: `tool_write` (no direct call sites from tools), `manual_rebuild` (that path emits `.rebuild`, not `.write`).
+- Real: `watcher` (default, file_watcher), `dream_apply` (post-consolidation), `drift_repair` (health check).
 
-**Resolución**:
-- `_emit_write` ampliado con `trigger` (kw) + `duration_ms` (kw).
-- `reindex_one_file` acepta `trigger="watcher"` default + mide duration en upsert y delete paths.
-- Callsites: dream.py:666 pasa `dream_apply`; health_check.py:231 pasa `drift_repair`; file_watcher.py usa default.
-- TypedDict `MemoryIndexWriteEvent` actualizado con los 2 campos como required.
-- Doc 07 §9.1 reescrito con shape real + taxonomía de triggers + nota de descarte de `targets`/`embedding_skipped`.
-- Tests TDD: 5 cases en `tests/memory/test_index_write_event_e5.py` (duration_ms, default trigger, dream_apply trigger, drift_repair trigger, delete op preserva campos).
+**Resolution**:
+- `_emit_write` extended with `trigger` (kw) + `duration_ms` (kw).
+- `reindex_one_file` accepts default `trigger="watcher"` + measures duration on upsert and delete paths.
+- Call sites: dream.py:666 passes `dream_apply`; health_check.py:231 passes `drift_repair`; file_watcher.py uses default.
+- `MemoryIndexWriteEvent` TypedDict updated with the 2 fields as required.
+- Doc 07 §9.1 rewritten with real shape + trigger taxonomy + note discarding `targets`/`embedding_skipped`.
+- TDD tests: 5 cases in `tests/memory/test_index_write_event_e5.py` (duration_ms, default trigger, dream_apply trigger, drift_repair trigger, delete op preserves fields).
 
-**Commit pendiente** (cierre del batch E1-E9).
+**Commit pending** (E1-E9 batch close).
 
-### E6 — Doc 07 §15 fila "Cost in dream.end" status stale ✅ RESOLVED
+### E6 — Doc 07 §15 "Cost in dream.end" row status stale ✅ RESOLVED
 
-**Doc 07 §15 (pre-E6)**: fila "Cost in dream.end" decía estado actual = "Not present", v2 target = "Add `llm_input_tokens_total`, `llm_output_tokens_total`, optional `llm_cost_usd`".
+**Doc 07 §15 (pre-E6)**: "Cost in dream.end" row said current state = "Not present", v2 target = "Add `llm_input_tokens_total`, `llm_output_tokens_total`, optional `llm_cost_usd`".
 
-**Realidad post-A5**: A5 (audit primera pasada, mismo doc) ya shippeó los 3 campos en `memory.dream.end`. La fila inmediatamente anterior ("Memory event registry") incluso reconoce "A5 added cost fields to `dream.end`".
+**Post-A5 reality**: A5 (first-pass audit, same doc) already shipped the 3 fields in `memory.dream.end`. The row immediately before ("Memory event registry") even acknowledges "A5 added cost fields to `dream.end`".
 
-**Decisión**: flip status row a "shipped" con A5 reference. `llm_cost_usd` se mantiene como out-of-scope con razón en §1.
+**Decision**: flip status row to "shipped" with A5 reference. `llm_cost_usd` remains out-of-scope with reason in §1.
 
-**Resolución**: fila reescrita reflejando shipped + pointer a §6.2 y a E6.
+**Resolution**: row rewritten reflecting shipped + pointer to §6.2 and E6.
 
-**Commit pendiente** (cierre del batch E1-E9).
+**Commit pending** (E1-E9 batch close).
 
-### E7 — Residuo de `silent_retrieval_miss` en docs post-discard ✅ RESOLVED
+### E7 — `silent_retrieval_miss` residue in docs post-discard ✅ RESOLVED
 
-**Contexto**: §2.11 de doc 08 (audit B9, 2026-05-28) descartó el evento `memory.silent_retrieval_miss` y sus 3 heurísticas (substring overlap + English-shaped negation tokens + correction patterns) por no ser multi-lingual viables. El doc 07 §4.6 se reescribió pointing a §2.11. Pero quedaron 4 referencias residuales que aún citaban el evento descartado como activo.
+**Context**: §2.11 of doc 08 (audit B9, 2026-05-28) discarded the `memory.silent_retrieval_miss` event and its 3 heuristics (substring overlap + English-shaped negation tokens + correction patterns) for not being multi-lingual viable. Doc 07 §4.6 was rewritten pointing to §2.11. But 4 residual references remained that still cited the discarded event as active.
 
-**Residuos encontrados**:
-1. `08_scope_and_discarded.md` §5 línea 349 — fila "§2.F eager pre-fetch" cita `memory.silent_retrieval_miss > 5%` como trigger.
-2. `08_scope_and_discarded.md` §4.1 líneas 391-397 — sección "Trigger to revisit" describe el evento + 3 heurísticas como mecanismo activo.
-3. `09_implementation_roadmap.md` §10.1 línea 352 — checklist Phase 7 lista `memory.silent_retrieval_miss` como event a implementar.
-4. `99_gaps_audit.md` líneas 105 y 681 — historical decision records describen el evento como decisión activa sin nota de supersession.
+**Residues found**:
+1. `08_scope_and_discarded.md` §5 line 349 — "§2.F eager pre-fetch" row cites `memory.silent_retrieval_miss > 5%` as trigger.
+2. `08_scope_and_discarded.md` §4.1 lines 391-397 — "Trigger to revisit" section describes the event + 3 heuristics as an active mechanism.
+3. `09_implementation_roadmap.md` §10.1 line 352 — Phase 7 checklist lists `memory.silent_retrieval_miss` as an event to implement.
+4. `99_gaps_audit.md` lines 105 and 681 — historical decision records describe the event as an active decision without a supersession note.
 
-**Decisión**: doc → doc consistency, respetando el discard en §2.11. Reemplazar trigger telemétrico por los alternativos que §2.11 explícitamente sugiere: explicit user feedback, bench failure cluster on LoCoMo/EverMemBench, offline LLM judge over traces (post-hoc, no per-turn).
+**Decision**: doc → doc consistency, respecting the §2.11 discard. Replace the telemetric trigger with the alternatives §2.11 explicitly suggests: explicit user feedback, bench failure cluster on LoCoMo/EverMemBench, offline LLM judge over traces (post-hoc, not per-turn).
 
-**Resolución**:
-- doc 08 §5: fila §2.F reescrita con 3 triggers language-agnostic.
-- doc 08 §4.1: subsección "Trigger to revisit" reescrita; ya no describe el evento discarded como mecanismo activo.
-- doc 09 §10.1: checklist Phase 7 ahora lista 13 events; `silent_retrieval_miss` removido con nota de discard; `recall.decay` añadido (A9).
-- doc 99 historical records (líneas 105 + 681): append nota "Superseded 2026-05-28 (B9 + §2.11 + E7)" sin reescribir el record original.
+**Resolution**:
+- doc 08 §5: §2.F row rewritten with 3 language-agnostic triggers.
+- doc 08 §4.1: "Trigger to revisit" subsection rewritten; no longer describes the discarded event as an active mechanism.
+- doc 09 §10.1: Phase 7 checklist now lists 13 events; `silent_retrieval_miss` removed with a discard note; `recall.decay` added (A9).
+- doc 99 historical records (lines 105 + 681): append "Superseded 2026-05-28 (B9 + §2.11 + E7)" note without rewriting the original record.
 
-**Commit pendiente** (cierre del batch E1-E9).
+**Commit pending** (E1-E9 batch close).
 
 ### E8 — Doc 03 §14.7 failure event schema stale vs B9 canonical ✅ RESOLVED
 
-**Doc 03 §14.7 (pre-E8)**: JSON shape con 3 campos (`component` single-value enum, `kind` 6-enum, `degraded_to` 4-enum + null) + nota explícita "No `recovery_attempted` field".
+**Doc 03 §14.7 (pre-E8)**: JSON shape with 3 fields (`component` single-value enum, `kind` 6-enum, `degraded_to` 4-enum + null) + explicit note "No `recovery_attempted` field".
 
-**Doc 07 §8.1 (post-B9 canonical)** + código real (`search_pipeline.py:240-249`): 5 campos (`component` comma-joined string, `recovery_attempted` bool, `recovery_succeeded` bool, `recovery_duration_ms` float, `degraded_to` 5-enum `full|vector_only|lexical_only|grep_only|none`). No `kind` campo (B9 lo descartó).
+**Doc 07 §8.1 (post-B9 canonical)** + real code (`search_pipeline.py:240-249`): 5 fields (`component` comma-joined string, `recovery_attempted` bool, `recovery_succeeded` bool, `recovery_duration_ms` float, `degraded_to` 5-enum `full|vector_only|lexical_only|grep_only|none`). No `kind` field (B9 discarded it).
 
-**Divergencias específicas**:
-1. `kind` listado en doc 03; descartado por B9 (wrappers catch generic Exception → emitir `kind` sería inventar data).
-2. Doc 03 dice explícitamente "No `recovery_attempted` field"; código sí lo emite (`recovery_attempted: True` siempre — forward-compat marker).
-3. `component` en doc 03 es single enum; código es comma-joined string (afectados pueden ser múltiples).
-4. `degraded_to` en doc 03 incluye "no_rerank"/null; código usa "full"/"none".
-5. Faltan en doc 03: `recovery_succeeded`, `recovery_duration_ms`.
+**Specific divergences**:
+1. `kind` listed in doc 03; discarded by B9 (wrappers catch generic Exception → emitting `kind` would be invented data).
+2. Doc 03 explicitly says "No `recovery_attempted` field"; code does emit it (`recovery_attempted: True` always — forward-compat marker).
+3. `component` in doc 03 is a single enum; code is comma-joined string (multiple affected possible).
+4. `degraded_to` in doc 03 includes "no_rerank"/null; code uses "full"/"none".
+5. Missing in doc 03: `recovery_succeeded`, `recovery_duration_ms`.
 
-**Genealogía**: doc 03 §14.7 es spec aspiracional pre-B9 nunca reconciliada. Doc 07 §8.1 fue el output de B9 con schema definitivo.
+**Genealogy**: doc 03 §14.7 is a pre-B9 aspirational spec never reconciled. Doc 07 §8.1 was the B9 output with the definitive schema.
 
-**Decisión**: doc 03 §14.7 → collapse a pointer al canonical en doc 07 §8.1 (DRY, evita re-drift). Mantener en doc 03 la nota histórica de campos `kind` + `recovery_attempted` descartados con la razón B9.
+**Decision**: doc 03 §14.7 → collapse to a pointer to the canonical in doc 07 §8.1 (DRY, avoids re-drift). Keep in doc 03 the historical note about discarded `kind` + `recovery_attempted` fields with the B9 reason.
 
-**Resolución**: doc 03 §14.7 reescrita como 2 párrafos: (1) "evento emitido — schema canonical en doc 07 §8.1", (2) nota de qué pidió la v1 spec y por qué B9 lo cortó.
+**Resolution**: doc 03 §14.7 rewritten as 2 paragraphs: (1) "event emitted — canonical schema in doc 07 §8.1", (2) note on what v1 spec asked for and why B9 cut it.
 
-**Commit pendiente** (cierre del batch E1-E9).
+**Commit pending** (E1-E9 batch close).
 
-### E9 — Contradicción doc 02 sobre v1/v2 embedding text (ship v2.a, supersede v2.b) ✅ RESOLVED
+### E9 — Doc 02 contradiction about v1/v2 embedding text (ship v2.a, supersede v2.b) ✅ RESOLVED
 
-**Doc 02 (pre-E9)**: §4.2 + §4.3 presentaban v2 como "target" activo; §10 filas 4+5 listaban v2 como decisión resuelta; §11 (post-C7) reportaba "v2 never shipped, entity-aware ranker cubre el caso". Triple contradicción.
+**Doc 02 (pre-E9)**: §4.2 + §4.3 presented v2 as an active "target"; §10 rows 4+5 listed v2 as a resolved decision; §11 (post-C7) reported "v2 never shipped, entity-aware ranker covers the case". Triple contradiction.
 
-**Sub-decisiones separadas tras evidencia**:
-- **v2.a (rendered_frontmatter en entity pages)**: traduce `attributes` y `relations` a prosa en el embedding text. Cierra recall gap real en queries de tipo atributo ("X's email", "who is Y's spouse"). El entity-aware ranker NO cubre esto — el ranker re-ordena candidates dentro del top-50, pero la página tiene que entrar al top-50 vía centroide.
-- **v2.b (entities_with_aliases en entries)**: expandiría URIs en el embedding text. El entity-aware ranker (A1) cubre exactamente este caso a query-time. v2.b es trabajo duplicado.
+**Sub-decisions separated by evidence**:
+- **v2.a (rendered_frontmatter in entity pages)**: translates `attributes` and `relations` to prose in the embedding text. Closes a real recall gap on attribute-type queries ("X's email", "who is Y's spouse"). The entity-aware ranker does NOT cover this — the ranker re-orders candidates within the top-50, but the page has to enter the top-50 via centroid.
+- **v2.b (entities_with_aliases in entries)**: would expand URIs in the embedding text. The entity-aware ranker (A1) covers exactly this case at query-time. v2.b is duplicate work.
 
-**Decisión (con user OK 2026-05-28)**: ship v2.a; supersede v2.b por A1.
+**Decision (with user OK 2026-05-28)**: ship v2.a; supersede v2.b by A1.
 
-**Gap pre-existente descubierto**: `rebuild_from_workspace` no walkeaba entity pages — solo `memory/<class>/*.md` entries. Post forced-rebuild (schema bump) los entity page rows desaparecían del índice hasta el próximo Dream/absorb. Fixed como parte de E9.
+**Pre-existing gap discovered**: `rebuild_from_workspace` did not walk entity pages — only `memory/<class>/*.md` entries. Post forced-rebuild (schema bump) the entity page rows disappeared from the index until the next Dream/absorb. Fixed as part of E9.
 
-**Resolución**:
-- `VectorIndex._render_frontmatter(attributes, relations)` nuevo helper: renderiza attributes con `_title_key`, skipa internal metadata (provenance, dream_processed_through, created_at, updated_at), stateful attributes renderean solo `current`, relations renderean `Type: target (since date)`.
-- `_compose_entity_page_text` ampliado con `attributes`/`relations` kwargs (defaults None mantienen v1 behavior).
-- `upsert_entity_page` plumbing nuevo de attributes/relations.
-- Callsites: `dream.py:650-657` y `absorption.py:253-260` pasan `page.attributes` + `page.relations`.
-- `rebuild_from_workspace` ahora walka `memory/entities/` además de `memory/<class>/` y construye records vía nuevo `_entity_page_record` helper.
-- `CURRENT_SCHEMA_VERSION` bumped 3 → 4 (E9 — fuerza rebuild para realinear centroides).
-- Doc 02 §4.2 marca v2.a shipped + nota de summary slot deferred; §4.3 marca v1 final + v2.b superseded por A1; §10 filas 4+5 actualizadas; §11 agrega fila de "Vector rebuild walks entity pages" como bug-fix.
-- Stub en `tests/memory/test_auto_absorb_dispatcher.py:343-352` ampliado para aceptar las nuevas kwargs.
-- Tests TDD: 7 cases en `tests/memory/test_entity_page_embedding_v2a_e9.py` (rendered_attributes/relations, ordering preserved, empty case, skip internal metadata, stateful current only, rebuild walks entity pages).
+**Resolution**:
+- New `VectorIndex._render_frontmatter(attributes, relations)` helper: renders attributes with `_title_key`, skips internal metadata (provenance, dream_processed_through, created_at, updated_at), stateful attributes render only `current`, relations render `Type: target (since date)`.
+- `_compose_entity_page_text` extended with `attributes`/`relations` kwargs (defaults None preserve v1 behavior).
+- `upsert_entity_page` new plumbing for attributes/relations.
+- Call sites: `dream.py:650-657` and `absorption.py:253-260` pass `page.attributes` + `page.relations`.
+- `rebuild_from_workspace` now walks `memory/entities/` in addition to `memory/<class>/` and builds records via a new `_entity_page_record` helper.
+- `CURRENT_SCHEMA_VERSION` bumped 3 → 4 (E9 — forces rebuild to realign centroids).
+- Doc 02 §4.2 marks v2.a shipped + note that summary slot is deferred; §4.3 marks v1 final + v2.b superseded by A1; §10 rows 4+5 updated; §11 adds a "Vector rebuild walks entity pages" row as bug-fix.
+- Stub in `tests/memory/test_auto_absorb_dispatcher.py:343-352` extended to accept the new kwargs.
+- TDD tests: 7 cases in `tests/memory/test_entity_page_embedding_v2a_e9.py` (rendered_attributes/relations, ordering preserved, empty case, skip internal metadata, stateful current only, rebuild walks entity pages).
 
-**Validación**: 995 tests pasan en tests/memory/ (1 skipped pre-existente).
+**Validation**: 995 tests pass in tests/memory/ (1 pre-existing skipped).
 
-**Commit pendiente** (cierre del batch E1-E9).
+**Commit pending** (E1-E9 batch close).
 
-### E10 — Doc 03 §2.1 scope/level no son inputs de `run_search_pipeline` ✅ RESOLVED
+### E10 — Doc 03 §2.1 scope/level are not inputs to `run_search_pipeline` ✅ RESOLVED
 
-**Doc 03 §2.1 (pre-E10)**: tabla de inputs lista `scope`/`level`/`limit` junto con `query`/`keywords`, presentando todos como inputs al "search pipeline".
+**Doc 03 §2.1 (pre-E10)**: inputs table lists `scope`/`level`/`limit` alongside `query`/`keywords`, presenting all as inputs to the "search pipeline".
 
-**Código**: `run_search_pipeline(workspace, query, *, keywords, vector_index, limit, cross_encoder, cross_encoder_top_n, temporal_decay_enabled)` — NO acepta `scope` ni `level`. Estos se manejan en `MemorySearchTool` (memory_search.py:349 decide `vi=None` cuando `scope=undreamed`; línea 424 filtra hits post-pipeline; `level=cold` enriquece con body después).
+**Code**: `run_search_pipeline(workspace, query, *, keywords, vector_index, limit, cross_encoder, cross_encoder_top_n, temporal_decay_enabled)` — does NOT accept `scope` or `level`. These are handled in `MemorySearchTool` (memory_search.py:349 decides `vi=None` when `scope=undreamed`; line 424 filters hits post-pipeline; `level=cold` enriches with body afterwards).
 
-**Decisión**: doc → reality. Agregar nota "Tool vs pipeline boundary" explicando que §2.1 lista los inputs del tool surface, y que el pipeline solo consume `query`/`keywords`/`vector_index`/`limit` directamente. Cero código tocado.
+**Decision**: doc → reality. Add a "Tool vs pipeline boundary" note explaining that §2.1 lists the tool surface inputs, and that the pipeline only consumes `query`/`keywords`/`vector_index`/`limit` directly. Zero code touched.
 
-**Resolución**: doc 03 §2.1 ampliada con bloque "Tool vs pipeline boundary" describiendo cómo cada input se orquesta (scope/level alrededor del pipeline call; limit clamped a [1,50] en el tool; bodies enriched post-pipeline en cold-tier).
+**Resolution**: doc 03 §2.1 extended with a "Tool vs pipeline boundary" block describing how each input is orchestrated (scope/level around the pipeline call; limit clamped to [1,50] in the tool; bodies enriched post-pipeline at cold-tier).
 
-### E11 — Doc 03 §8.4 pre/post-cursor logic perdida en migración v2 ✅ RESOLVED
+### E11 — Doc 03 §8.4 pre/post-cursor logic lost in v2 migration ✅ RESOLVED
 
-**Doc 03 §8.4**: describe el partitioning pre/post-cursor como conducta activa del entity-aware rerank.
+**Doc 03 §8.4**: describes pre/post-cursor partitioning as active behavior of the entity-aware rerank.
 
-**Código pre-E11**:
-- `entity_ranker.rank_with_entities(cursors=...)` implementa la lógica correctamente (tests pasan).
-- Helper `_load_cursors_from_entities_dir` (memory_search.py:31) cargaba cursors desde entity pages.
-- v1 search path los cableaba con `cursors=cursors`.
-- v2 search_pipeline `_entity_aware_rerank` NO los cableaba — llamaba `rank_with_entities` sin `cursors=`.
-- Helper quedó huérfano post-migración.
+**Pre-E11 code**:
+- `entity_ranker.rank_with_entities(cursors=...)` implements the logic correctly (tests pass).
+- `_load_cursors_from_entities_dir` helper (memory_search.py:31) loaded cursors from entity pages.
+- v1 search path wired them with `cursors=cursors`.
+- v2 search_pipeline `_entity_aware_rerank` did NOT wire them — it called `rank_with_entities` without `cursors=`.
+- Helper became orphan post-migration.
 
-**Genealogía**:
-- Commit `b724fa8`: helper introducido y wireado en v1.
-- Commit `1ea70ac` (Phase 2.5/3.5): nuevo `_entity_aware_rerank` en v2 pipeline SIN cursors desde día 1.
-- Commit `c820447` (Phase 5 d1): migración v1 → v2 elimina la vieja función; helper queda huérfano en memory_search.py.
+**Genealogy**:
+- Commit `b724fa8`: helper introduced and wired in v1.
+- Commit `1ea70ac` (Phase 2.5/3.5): new `_entity_aware_rerank` in v2 pipeline WITHOUT cursors from day one.
+- Commit `c820447` (Phase 5 d1): v1 → v2 migration eliminates the old function; helper becomes orphan in memory_search.py.
 
-**Análisis de use cases** (con user, 2026-05-28):
-- (a) Textura narrativa: usuario pide reconstrucción de eventos → drill por URI funciona.
-- (b) Validación de evidence: agente cita fuente → drill al provenance URI funciona.
-- (c) Evolución temporal: agente ve histórico → drill puntual funciona.
+**Use case analysis** (with user, 2026-05-28):
+- (a) Narrative texture: user requests event reconstruction → drill by URI works.
+- (b) Evidence validation: agent cites source → drill to provenance URI works.
+- (c) Temporal evolution: agent sees history → punctual drill works.
 
-Esos 3 casos son drill-by-URI, NO búsquedas amplias. La duplicación canonical + N fragmentos pre-cursor en TODA query general es ruido sin valor.
+Those 3 cases are drill-by-URI, NOT broad searches. The canonical + N pre-cursor fragments duplication in EVERY general query is noise without value.
 
-**Decisión (con user OK, opción B)**: restaurar cursor wiring en `_entity_aware_rerank`. NO archivar agresivamente (opción C descartada — perdería recall por contenido raw).
+**Decision (with user OK, option B)**: restore cursor wiring in `_entity_aware_rerank`. Do NOT archive aggressively (option C discarded — would lose recall on raw content).
 
-**Bug adicional descubierto** durante TDD: `_resolve_meta` (search_pipeline.py:507) NO propagaba `entities` desde vector_meta. Resultado: entries no-entity_page llegaban a `rank_with_entities` con `entities=[]` → ningún overlap → ningún entry boosteado al entity-match list (solo el canonical page). Esto **enmascaraba** la regresión pre-cursor: sin entries en entity-match list, no había diferencia observable entre pre y post.
+**Additional bug discovered** during TDD: `_resolve_meta` (search_pipeline.py:507) did NOT propagate `entities` from vector_meta. Result: non-entity_page entries arrived at `rank_with_entities` with `entities=[]` → no overlap → no entry boosted to the entity-match list (only the canonical page). This **masked** the pre-cursor regression: with no entries in the entity-match list, there was no observable difference between pre and post.
 
-**Resolución**:
-- Helper `_load_cursors_from_entities_dir` movido a `entity_ranker.py::load_cursors_from_entities_dir` (junto a su único consumer). Comment en memory_search.py:31 marca el move.
-- `_entity_aware_rerank`: carga cursors después de `extract_query_entities` y los pasa a `rank_with_entities`.
-- `_resolve_meta`: propaga `entities` desde vector_meta cuando está presente.
-- Import huérfano `EntityPage` removido de memory_search.py.
-- Tests TDD: 2 cases en `tests/memory/test_pipeline_cursor_wiring_e11.py` (pipeline excluye pre-cursor del boost; cursor loader devuelve dict correcto).
+**Resolution**:
+- `_load_cursors_from_entities_dir` helper moved to `entity_ranker.py::load_cursors_from_entities_dir` (next to its only consumer). Comment in memory_search.py:31 marks the move.
+- `_entity_aware_rerank`: loads cursors after `extract_query_entities` and passes them to `rank_with_entities`.
+- `_resolve_meta`: propagates `entities` from vector_meta when present.
+- Orphan `EntityPage` import removed from memory_search.py.
+- TDD tests: 2 cases in `tests/memory/test_pipeline_cursor_wiring_e11.py` (pipeline excludes pre-cursor from the boost; cursor loader returns correct dict).
 
-**Validación**: 997 tests pasan en tests/memory/ (995 base + 2 E11; 1 skipped pre-existente).
+**Validation**: 997 tests pass in tests/memory/ (995 base + 2 E11; 1 pre-existing skipped).
 
-**Commit pendiente** (cierre del batch E10-E23).
+**Commit pending** (E10-E23 batch close).
 
-### E16 — Doc 04 §2.2/§4.2/§5.2 return shapes vs código ✅ RESOLVED
+### E16 — Doc 04 §2.2/§4.2/§5.2 return shapes vs code ✅ RESOLVED
 
-**Doc 04 §2.2 (pre-E16)** memory_search return: listaba `type`, `path`, `score` (no existen), omitía `source`, `snippet`, `kind`, `class_name`, `entities`, top-level `strategy`, `ranking`. Claim "`recovered_from: null in normal operation`" era falso (omitted, no null).
+**Doc 04 §2.2 (pre-E16)** memory_search return: listed `type`, `path`, `score` (don't exist), omitted `source`, `snippet`, `kind`, `class_name`, `entities`, top-level `strategy`, `ranking`. The "`recovered_from: null in normal operation`" claim was false (omitted, not null).
 
-**Realidad** (`Result.to_dict()` + `memory_search.py:454-480`):
-- Per-result: `source`, `uri`, `headline`, `snippet`, `kind` siempre + `summary`/`body`/`class_name`/`valid_from`/`entities` condicionales + `rendered`.
-- Top-level: `results`, `total`, `strategy`, `ranking` siempre + `recovered_from`/`recovery_duration_ms` solo on degraded.
+**Reality** (`Result.to_dict()` + `memory_search.py:454-480`):
+- Per-result: `source`, `uri`, `headline`, `snippet`, `kind` always + `summary`/`body`/`class_name`/`valid_from`/`entities` conditional + `rendered`.
+- Top-level: `results`, `total`, `strategy`, `ranking` always + `recovered_from`/`recovery_duration_ms` only on degraded.
 
-**Doc 04 §4.2** memory_ingest: shape coincide pero `corpus_entry_id` no marcaba condicional.
+**Doc 04 §4.2** memory_ingest: shape matches but `corpus_entry_id` didn't mark conditional.
 
-**Doc 04 §5.2** memory_drill (E18): listaba `path`; código devuelve `{uri, content}` solamente.
+**Doc 04 §5.2** memory_drill (E18): listed `path`; code returns only `{uri, content}`.
 
-**Decisión**: doc → reality. Reescribir §2.2 con tabla detallada (yes/condicional/never null), aclarar §4.2 `corpus_entry_id` opcional, eliminar `path` del §5.2.
+**Decision**: doc → reality. Rewrite §2.2 with detailed table (yes/conditional/never null), clarify §4.2 `corpus_entry_id` optional, remove `path` from §5.2.
 
 ### E17 — Doc 04 +12pp vs +3.9pp ✅ RESOLVED
 
-**Contradicción interna**: §2.4 línea 149 dice "+3.9pp result"; línea 155 dice "+12pp on single-hop". Memoria `project_locomo_v2_prompts_result.md` registra **+3.9pp overall (60.8% → 64.7%)**; el "+12pp single-hop" no tiene fuente verificable.
+**Internal contradiction**: §2.4 line 149 says "+3.9pp result"; line 155 says "+12pp on single-hop". `project_locomo_v2_prompts_result.md` memory records **+3.9pp overall (60.8% → 64.7%)**; the "+12pp single-hop" has no verifiable source.
 
-**Decisión**: aplicar `feedback_verify_quantifiers` — no inventar números. Alinear ambas líneas al verificado.
+**Decision**: apply `feedback_verify_quantifiers` — don't invent numbers. Align both lines to the verified value.
 
 ### E18 — Doc 04 §5.2 memory_drill path ✅ RESOLVED
 
-**Doc**: incluía `"path": "memory/entities/person/marcelo.md"`. **Código `memory_drill.py:71`**: `return {"uri": uri, "content": text}` — no `path`. Doc → reality.
+**Doc**: included `"path": "memory/entities/person/marcelo.md"`. **Code `memory_drill.py:71`**: `return {"uri": uri, "content": text}` — no `path`. Doc → reality.
 
 ### E19 — Doc 01 §4.6.1 wrong pointers + arch gap ✅ RESOLVED (B-full)
 
-**Doc 01 §4.6.1 línea 480 (pre-E19)**: dos claims falsos:
-1. "`dream.py::DreamConsolidator.apply()` filters out user_authored entries" → el único filter está en `cli/memory_cmd.py:150` (`_discover_pending_consolidations`).
-2. "`dream_runner.py::_maybe_auto_absorb` skips entity pages where author: user_authored" → ningún check existía Y `EntityPage` no tenía campo `author`.
+**Doc 01 §4.6.1 line 480 (pre-E19)**: two false claims:
+1. "`dream.py::DreamConsolidator.apply()` filters out user_authored entries" → the only filter is in `cli/memory_cmd.py:150` (`_discover_pending_consolidations`).
+2. "`dream_runner.py::_maybe_auto_absorb` skips entity pages where author: user_authored" → no check existed AND `EntityPage` had no `author` field.
 
-**Gap arquitectónico descubierto**: el doc prometía protección para entity pages, pero `EntityPage` no soportaba `author`. Auto-absorb fusionaría páginas hechas a mano por el usuario.
+**Architectural gap discovered**: the doc promised protection for entity pages, but `EntityPage` didn't support `author`. Auto-absorb would merge pages hand-edited by the user.
 
-**Decisión (con user OK, B-full)**: cerrar el gap completo, no solo el doc:
-- `EntityPage` gana campo `author: str = "user_authored"` (default safe).
-- Round-trip de frontmatter (read lenient con fallback, emit solo cuando difiere del default).
-- `dream.py:511` placeholder y `absorption.py:360` merge product setean `author="agent_created"`.
-- `dream_runner.py::_maybe_auto_absorb` chequea ambas páginas y skipea con `reason="user_authored"`.
-- Tests TDD: 3 cases en `tests/memory/test_auto_absorb_user_authored_e19.py` (canonical user-authored, absorbed user-authored, both agent-created proceeds).
-- Stub helper `tests/memory/test_auto_absorb_dispatcher.py:_write_page` actualizado para pasar `author="agent_created"` por default (dispatcher tests simulan páginas Dream).
-- Doc 01 §4.6.1 reescrita con pointers correctos + nota de E19.
+**Decision (with user OK, B-full)**: close the full gap, not just the doc:
+- `EntityPage` gains `author: str = "user_authored"` field (default safe).
+- Frontmatter round-trip (lenient read with fallback, emit only when it differs from the default).
+- `dream.py:511` placeholder and `absorption.py:360` merge product set `author="agent_created"`.
+- `dream_runner.py::_maybe_auto_absorb` checks both pages and skips with `reason="user_authored"`.
+- TDD tests: 3 cases in `tests/memory/test_auto_absorb_user_authored_e19.py` (canonical user-authored, absorbed user-authored, both agent-created proceeds).
+- Stub helper `tests/memory/test_auto_absorb_dispatcher.py:_write_page` updated to pass `author="agent_created"` by default (dispatcher tests simulate Dream pages).
+- Doc 01 §4.6.1 rewritten with correct pointers + E19 note.
 
-**Validación**: 1000 tests pasan en tests/memory/ (997 + 3 nuevos E19; 1 skipped pre-existente).
+**Validation**: 1000 tests pass in tests/memory/ (997 + 3 new E19; 1 pre-existing skipped).
 
-### E20 — Doc 02 §6.5 walker contract bullet obsoleto post-A10 ✅ RESOLVED
+### E20 — Doc 02 §6.5 walker contract bullet obsolete post-A10 ✅ RESOLVED
 
-**Doc 02 §6.5 línea 352 (pre-E20)**: "Also yields `sessions/<id>/<id>.meta.json` if a `_last_summary` is present".
+**Doc 02 §6.5 line 352 (pre-E20)**: "Also yields `sessions/<id>/<id>.meta.json` if a `_last_summary` is present".
 
-**Realidad** (`walk_memory` en `paths.py:80-113`): solo emite `.md` files bajo `memory/`. A10 (audit primera pasada) movió el session summary de JSON sidecar a `memory/session_summary/<sanitized>.md`; el walker lo trata como cualquier otra class. No hay peek a `sessions/.../meta.json` en ningún lado.
+**Reality** (`walk_memory` in `paths.py:80-113`): only emits `.md` files under `memory/`. A10 (first-pass audit) moved the session summary from JSON sidecar to `memory/session_summary/<sanitized>.md`; the walker treats it like any other class. No peek to `sessions/.../meta.json` anywhere.
 
-**Decisión**: doc → reality. Eliminar el bullet stale y agregar nota explicando el cambio post-A10.
+**Decision**: doc → reality. Remove the stale bullet and add a note explaining the post-A10 change.
 
-**Commit pendiente** (cierre del batch E16-E23).
+**Commit pending** (E16-E23 batch close).
 
-### E21 — Doc 05 §15 status table 4 filas "Not implemented" shipped ✅ RESOLVED
+### E21 — Doc 05 §15 status table 4 rows "Not implemented" shipped ✅ RESOLVED
 
-**Doc 05 §15 (pre-E21)** marcaba como "Not implemented" / "Not explicit":
+**Doc 05 §15 (pre-E21)** marked as "Not implemented" / "Not explicit":
 - Provenance tracking
 - Archive of consumed episodic
 - Git commits (Hybrid model)
 - Failure quarantine
 
-**Realidad** (Phase 1.9, commit `6aafc3f`): los 4 están shipped.
-- `dream_patch_parser.py` + `dream_apply.py` colectan provenance por op.
-- `dream_archive_consumed.py::archive_consumed_episodic` move a `memory/archive/episodic/`.
-- `dream_commit_message.py` + `dream_git_history.py` implementan el hybrid model.
+**Reality** (Phase 1.9, commit `6aafc3f`): all 4 are shipped.
+- `dream_patch_parser.py` + `dream_apply.py` collect provenance per op.
+- `dream_archive_consumed.py::archive_consumed_episodic` moves to `memory/archive/episodic/`.
+- `dream_commit_message.py` + `dream_git_history.py` implement the hybrid model.
 - `dream_quarantine.py` + frontmatter fields `dream_failure_count` / `dream_quarantine` + 3-strike logic.
 
-**Decisión**: flip a "Shipped (Phase 1.9)" con pointer a módulo concreto en cada fila + audit E21 reference.
+**Decision**: flip to "Shipped (Phase 1.9)" with concrete module pointer in each row + audit E21 reference.
 
-### E22 — Doc 05 §14 row 8 verdict vocab obsoleto ✅ RESOLVED
+### E22 — Doc 05 §14 row 8 verdict vocab obsolete ✅ RESOLVED
 
 **Doc 05 §14 row 8 (pre-E22)**: "LLM-judged: merge / keep_separate / unsure".
 
-**Código `absorb_judge.py:6,84`**: vocabulary real es `same | different | unclear`. Auto-merge solo cuando `verdict == "same"` AND `confidence ≥ threshold`.
+**Code `absorb_judge.py:6,84`**: real vocabulary is `same | different | unclear`. Auto-merge only when `verdict == "same"` AND `confidence ≥ threshold`.
 
-**Genealogía**: posible holdover de spec original. Nunca matchó el enum real.
+**Genealogy**: possible holdover from the original spec. Never matched the real enum.
 
-**Decisión**: doc → reality.
+**Decision**: doc → reality.
 
 ### E23 — Doc 06 §10 status rows identity + onboarding ✅ RESOLVED
 
 **Doc 06 §10 (pre-E23)**:
-- "identity.md Memory section | v2 shipped 2026-05-25 (+3.9pp) | Light revision per §2 | Minor wording polish" — la "light revision pending" no tenía scope concreto; el bench gain fue sobre lo que está en el template hoy.
-- "Onboarding wizard text | Partial | Add §6 questions" — accurate, `onboard.py` (1169 LOC) no tiene grep hit para "memory".
+- "identity.md Memory section | v2 shipped 2026-05-25 (+3.9pp) | Light revision per §2 | Minor wording polish" — the "light revision pending" had no concrete scope; the bench gain was over what's in the template today.
+- "Onboarding wizard text | Partial | Add §6 questions" — accurate, `onboard.py` (1169 LOC) has no grep hit for "memory".
 
-**Plus**: doc 06 §2.2 también tenía "+12pp on single_hop" (mismo claim stale removido de doc 04 §2.4 en E17). Extendido el fix.
+**Plus**: doc 06 §2.2 also had "+12pp on single_hop" (same stale claim removed from doc 04 §2.4 in E17). Fix extended.
 
-**Decisión**: identity row a fully shipped (drop "light revision pending"); onboarding row mantiene "Partial" pero con evidencia concreta (grep miss); +12pp removido también de doc 06 §2.2.
+**Decision**: identity row to fully shipped (drop "light revision pending"); onboarding row keeps "Partial" but with concrete evidence (grep miss); +12pp also removed from doc 06 §2.2.
 
 ---
 

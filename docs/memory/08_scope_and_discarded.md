@@ -155,7 +155,7 @@ Until that cleanup happens, the module sits unused. Importing from it is discour
 
 **What we initially proposed** (doc 04 §3.1 v1):
 - `valid_from` as an optional ISO-date parameter on the tool ("for time-bound facts").
-- `class_name` enum recorded as `stable | episodic` (recortado de los 4 valores reales de `MEMORY_CLASSES`).
+- `class_name` enum recorded as `stable | episodic` (trimmed from the 4 actual values of `MEMORY_CLASSES`).
 - `body` (vs `content`) as the param name.
 - `headline` required (vs auto-generated).
 - `force` undocumented (despite shipping in commit `d34b337`).
@@ -217,6 +217,26 @@ Aggregate metric `silent_retrieval_miss_rate` would gate activation of §2.F (ea
 **Lesson** (so the same pattern doesn't recur): heuristic detectors with language-specific token lists are a red flag for any subsystem that has to serve multi-lingual workloads. If the spec's "detection rule" looks like a literal pattern match against English idioms, ship the LLM judge or skip the feature — don't ship the English detector and hope it generalises.
 
 **Status:** event removed from doc 07 §4.6 — that section now points here. The TypedDict was never created; `EVENTS` registry does not include the event. If a future change re-introduces it under a different design, that change should also restore the §4.6 documentation with the new approach.
+
+---
+
+### 2.12 `durin archive show / list` CLI commands
+
+**What was proposed**: dedicated operator-facing CLI subcommands to inspect archived content from the shell, listed alongside `durin memory reindex`, `durin memory dream run`, `durin memory absorb` etc. as part of the operator-facing CLI suite (doc 04 §11). Audit F2 (2026-05-28) initially marked them "deferred to backlog with concrete-operator-workflow trigger".
+
+**Why we are not implementing them** (audit G2, 2026-05-28 — correcting the F2 defer): the recovery surface is already saturated by three other paths and a dedicated CLI command would be redundant work without a unique use case:
+
+1. **Agent-visible recovery**: `memory_search(scope='archive')` (shipped audit F2) walks `memory/archive/**` on demand, parses each entry, returns results to the agent. The LLM can recover archived content semantically without the operator typing a command.
+
+2. **Per-entity recovery**: `durin memory expand <entity>` (shipped earlier) renders the canonical entity page plus its archived predecessors. Exactly the case "show me what was consolidated into person:marcelo".
+
+3. **Direct lookup**: `cat memory/archive/<class>/<id>.md` and `find memory/archive -name '*.md'` are standard shell idioms. An operator running CLI commands already speaks shell; a dedicated `durin archive show <uri>` would only save typing the relative path.
+
+**The concrete trigger that would change this**: an actual operator workflow where (1) and (2) and `cat`/`find` are demonstrably worse than a dedicated command. We have not seen one. The F2 "deferred until concrete operator workflow surfaces" wording was effectively a way to keep the items on the to-do list as a soft promise — but with no failure mode that would produce that workflow, the items would have sat in the backlog indefinitely. Honest classification: discarded.
+
+**Lesson** (recorded in personal memory, [feedback-stop-soft-deferrals](../../../../.claude/projects/-Users-marcelo-git-personal-durin/memory/feedback_stop_soft_deferrals.md)): "deferred until concrete trigger" without a written failure mode is the same as discarded — except it leaves a phantom to-do that returns each audit pass. When a feature is covered by existing surfaces and has no unique use case, mark it discarded with the reasoning, not deferred.
+
+**Status**: removed from doc 08 §5 backlog (was added in F2, removed in G2). Doc 04 §11 lists them as "not implemented — covered by …" instead of strikethrough deferred. Doc 01 §3.6 + §10 row 4 updated to point at the three existing surfaces.
 
 ---
 
@@ -366,7 +386,6 @@ These are NOT discarded; they're queued for post-MVP. When and how they enter de
 | **Memory export / import (formal)** — structured dump filterable by entity/scope/date, cross-system migration from competing systems (mem0, letta), encrypted format option | Pre-condition for sharing durin with real external users (any first beta or limited-release). Specific triggers: (1) first user request for export OR (2) immediately before any breaking schema change (operators need to export before migrating). Until then, `cp -r ~/.durin/workspace/` is the informal portability mechanism between same-version installations. | New design doc when triggered |
 | **Data deletion (GDPR-like cascading delete)** — "forget everything about `person:X`" with cascading delete across entity page + archive + episodic mentions + provenance refs in other entities + LanceDB rows + FTS5 entries; honest handling of git history | Pre-condition for exposing durin to external users via channels (Telegram/Slack/etc. bots). Specific triggers: (1) first external user interacts with durin via any channel, (2) operator opens durin to users in a jurisdiction with explicit right-to-be-forgotten laws (EU GDPR, California CCPA, etc.), or (3) any public/beta release announcement. Until then, the operator removes data manually (delete files + git commits) with no formal flow. | New design doc when triggered |
 | **Auto-backup of memory workspace** — push `memory/.git/` to a remote, OR encrypted snapshot to cloud, OR scheduled local backup directory | Trigger: operator enables `memory.backup.enabled = true` in workspace config (currently not implemented). Until then, the operator can manually `git remote add` and `git push` `memory/.git/` to any git remote (the workspace folder is a normal git repo). For non-git backup, `rsync` or `tar` of `~/.durin/workspace/` works. | `02_indexing.md` and/or a dedicated `backup.md` doc when triggered |
-| **`durin archive show <uri>` / `durin archive list` CLI commands** — dedicated operator-facing commands to inspect archived content from the shell | Audit F2 (2026-05-28) shipped `memory_search(scope='archive')` for agent-visible recovery; the dedicated CLI commands stay deferred until a concrete operator workflow surfaces ("I want to enumerate yesterday's archive from a shell script" or similar). Until then, `find memory/archive -name '*.md'` enumerates and `cat memory/archive/<class>/<id>.md` reads. `durin memory expand <entity>` covers per-entity archive rendering. | `04_agent_tools.md` §11 and `01_data_and_entities.md` §3.6 when triggered |
 
 ### 4.1 §2.F eager pre-fetch — detailed rationale
 

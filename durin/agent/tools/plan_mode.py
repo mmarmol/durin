@@ -22,7 +22,7 @@ Design notes (file-based plan storage):
 
 The original Sprint B used the ``plan`` argument as the message body of the
 tool result, with no disk persistence. That MVP traded daily-driver
-ergonomics for ~3h of implementation simplicity (see bitácora entry "Plan
+ergonomics for ~3h of implementation simplicity (see logbook entry "Plan
 storage redesign — May 2026" for the post-mortem). File-based gives:
 
 - Persistence across context compaction

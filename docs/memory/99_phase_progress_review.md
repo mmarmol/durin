@@ -1,179 +1,179 @@
 # Phase 0 → Phase 7 progress + decisions for review
 
-**Autoría:** Claude (sesión autónoma 2026-05-28) + audit con humano (mismo día).
+**Authorship:** Claude (autonomous session 2026-05-28) + audit with human (same day).
 **Branch:** `memory/phase-0-foundations`.
-**Estado:** 2314+ tests pasando, 1 skipped (condicional), 0 fallando. Webui build limpio.
+**State:** 2314+ tests passing, 1 skipped (conditional), 0 failing. Webui builds cleanly.
 
-> **Audit refresh 2026-05-28** (audit B2): este doc se escribió como snapshot pre-audit a las ~02:00am. Durante el día se ejecutó el audit A1-A11 + Bloque B contra el código y los docs; muchas decisiones marcadas aquí como "deferred" o "próximo paso" se ejecutaron. El estado vigente vive en `11_audit_reconciliation.md` (más reciente, granular por item) y los commits del día. Este doc se conserva como histórico — léelo como "lo que se sabía al escribirlo", no como "lo que es ahora".
+> **Audit refresh 2026-05-28** (audit B2): this doc was written as a pre-audit snapshot at ~02:00am. During the day audit A1-A11 + Block B were executed against the code and the docs; many decisions marked here as "deferred" or "next step" were executed. The current state lives in `11_audit_reconciliation.md` (more recent, granular per item) and the day's commits. This doc is kept as historical reference — read it as "what was known when written", not "what is now".
 
-Este documento original lista:
-1. Qué se completó (snapshot pre-audit).
-2. Decisiones tomadas sin consultar (con justificación).
-3. Trabajo deferido (con motivo + scope estimado).
-4. Próximo siguiente paso recomendado.
+This original document lists:
+1. What was completed (pre-audit snapshot).
+2. Decisions taken without asking (with justification).
+3. Deferred work (with reason + estimated scope).
+4. Recommended next step.
 
 ---
 
-## 1. Fases completas
+## 1. Completed phases
 
 ### Phase 0 — Foundations (100%)
-- `walk_memory` / `walk_class` walker centralizado, todos los callers migrados.
-- `archive_episodic` / `archive_entity` helpers, layout top-level `memory/archive/<class>/`.
+- Centralized `walk_memory` / `walk_class` walker, all callers migrated.
+- `archive_episodic` / `archive_entity` helpers, top-level `memory/archive/<class>/` layout.
 - `slugify_name` + `resolve_slug_collision` (NFC + unidecode + truncate 64).
-- `EntityPage` v2: `attributes`, `relations`, `provenance` como campos tipados.
-- `MemoryEntry`: `decay_half_life`, `evergreen` + `decay.py` con `half_life_for` y `CLASS_HALF_LIFE_DEFAULTS`.
-- `index_meta.py`: `<workspace>/.durin/index/meta.json` con `schema_version=2` + `embedding_model_id` + atomic save.
+- `EntityPage` v2: `attributes`, `relations`, `provenance` as typed fields.
+- `MemoryEntry`: `decay_half_life`, `evergreen` + `decay.py` with `half_life_for` and `CLASS_HALF_LIFE_DEFAULTS`.
+- `index_meta.py`: `<workspace>/.durin/index/meta.json` with `schema_version=2` + `embedding_model_id` + atomic save.
 
-### Phase 1 — Dream v2 (módulos d1-d12 todos shippeados como unidades aisladas)
-- `consolidator.md` reescrito al spec v2 + 6 examples (`01_new_entity` … `06_no_changes`).
+### Phase 1 — Dream v2 (modules d1-d12 all shipped as isolated units)
+- `consolidator.md` rewritten to v2 spec + 6 examples (`01_new_entity` … `06_no_changes`).
 - `rules.md`, `commit_format.md`, `json_patch_reference.md`.
-- `dream_patch_parser.py` — split `===PATCH=== / ===BODY_DELTA=== / ===COMMIT=== / ===END===` con `json_repair`.
-- `dream_prompt_builder.py` — assembler del paquete con substitución de slots + truncation a 100 URIs.
-- `dream_apply.py` — apply pipeline con jsonpatch, `.md.bak` rollback, telemetría
+- `dream_patch_parser.py` — splits `===PATCH=== / ===BODY_DELTA=== / ===COMMIT=== / ===END===` with `json_repair`.
+- `dream_prompt_builder.py` — package assembler with slot substitution + truncation to 100 URIs.
+- `dream_apply.py` — apply pipeline with jsonpatch, `.md.bak` rollback, telemetry
   `memory.dream.patch_applied` / `memory.dream.entity_failed`.
-- `dream_archive_consumed.py` — mueve los episódicos consumidos a archive + delete LanceDB row.
-- `dream_quarantine.py` — counter de fallos estructurales + cuarentena de 7 días.
-- `dream_commit_message.py` — finaliza el commit con trailers canónicos.
-- `dream_git_history.py` — formatter para el slot `{recent_history}`.
-- `user_authored` filter en `_discover_pending_consolidations` + 5 test files actualizados con `_agent_created_scope` autouse.
-- `absorb_judge` template + parser locked vía test contract.
-- `onboard_memory.prompt_enable_auto_absorb` con texto Q6.3 verbatim del spec.
+- `dream_archive_consumed.py` — moves consumed episodics to archive + deletes LanceDB row.
+- `dream_quarantine.py` — structural failure counter + 7-day quarantine.
+- `dream_commit_message.py` — finalizes the commit with canonical trailers.
+- `dream_git_history.py` — formatter for the `{recent_history}` slot.
+- `user_authored` filter in `_discover_pending_consolidations` + 5 test files updated with `_agent_created_scope` autouse.
+- `absorb_judge` template + parser locked via test contract.
+- `onboard_memory.prompt_enable_auto_absorb` with Q6.3 text verbatim from the spec.
 
-### Phase 1.5 — Hot layer (100% via worktree agent paralelo)
-- `hot_layer.py` budgets / markers / cursor logic verificado contra spec.
-- v2 rendering: `attributes` y `relations` como prose dentro del bloque CANONICAL.
-- Per-section failure handling + `memory.hot_layer.failure` telemetría.
+### Phase 1.5 — Hot layer (100% via parallel worktree agent)
+- `hot_layer.py` budgets / markers / cursor logic verified against spec.
+- v2 rendering: `attributes` and `relations` as prose inside the CANONICAL block.
+- Per-section failure handling + `memory.hot_layer.failure` telemetry.
 
-### Phase 2 — Indexing v2 (core, falta watcher + cron + tool hooks)
-- `fts_index.py` — sqlite FTS5 con dual table (`memory_fts` unicode61 + `memory_fts_trigram`) + `fts_meta` bookkeeping.
+### Phase 2 — Indexing v2 (core, missing watcher + cron + tool hooks)
+- `fts_index.py` — sqlite FTS5 with dual table (`memory_fts` unicode61 + `memory_fts_trigram`) + `fts_meta` bookkeeping.
 - `indexer.py` — `rebuild_fts_index` (bulk) + `reindex_one_file` (incremental) + `detect_index_staleness` (drift).
 - `durin memory reindex [--target fts|lancedb|all]` CLI.
-- 3 telemetría: `memory.index.write`, `memory.index.rebuild`, `memory.index.staleness_detected`.
+- 3 telemetry events: `memory.index.write`, `memory.index.rebuild`, `memory.index.staleness_detected`.
 
-### Phase 3 — Search pipeline v2 (core, falta entity-aware rerank wiring + cross-encoder)
-- `query_router.py` — CJK detection + NFC + routing a `UNICODE61` / `TRIGRAM` / `LIKE_SUBSTRING`.
-- `rrf_fusion.py` — RRF k=60 cross-source + dynamic boost (`w_lexical = 2.5` cuando `keywords_provided`).
-- `lexical_search.py` — ejecutor que conecta router → FTS index con quoting + emit.
-- `sectioned_output.py` — render con markers `=== CANONICAL / FRAGMENT / SESSION / INGESTED ===` + per-source cap (default 3 corpus chunks/ingest_id).
-- `search_pipeline.py` — orquestador end-to-end con graceful degradation.
-- 2 telemetría: `memory.recall.lexical`, `memory.recall.rrf`.
+### Phase 3 — Search pipeline v2 (core, missing entity-aware rerank wiring + cross-encoder)
+- `query_router.py` — CJK detection + NFC + routing to `UNICODE61` / `TRIGRAM` / `LIKE_SUBSTRING`.
+- `rrf_fusion.py` — RRF k=60 cross-source + dynamic boost (`w_lexical = 2.5` when `keywords_provided`).
+- `lexical_search.py` — executor connecting router → FTS index with quoting + emit.
+- `sectioned_output.py` — rendering with markers `=== CANONICAL / FRAGMENT / SESSION / INGESTED ===` + per-source cap (default 3 corpus chunks/ingest_id).
+- `search_pipeline.py` — end-to-end orchestrator with graceful degradation.
+- 2 telemetry events: `memory.recall.lexical`, `memory.recall.rrf`.
 
-### Phase 5 — Tools v2 (parcial: solo `keywords` param)
-- `memory_search` ahora acepta `keywords` (descripción match doc 04 §2.3 + doc 06 §3.1).
+### Phase 5 — Tools v2 (partial: only `keywords` param)
+- `memory_search` now accepts `keywords` (description matches doc 04 §2.3 + doc 06 §3.1).
 
-### Phase 6 — Prompts v2 (parcial: identity.md)
-- `identity.md::Memory` section migrado al texto v2 verbatim de doc 06 §2.
+### Phase 6 — Prompts v2 (partial: identity.md)
+- `identity.md::Memory` section migrated to v2 text verbatim from doc 06 §2.
 - `tests/memory/test_identity_memory_section.py` locks spec-anchor phrases against drift.
 
-### Phase 7 — Telemetry v2 (parcial: privacy truncation)
-- `emit_tool_event` trunca free-text fields (`query` / `text` / `snippet` / `content` / `needle`) a 200 chars per doc 07 §13.
+### Phase 7 — Telemetry v2 (partial: privacy truncation)
+- `emit_tool_event` truncates free-text fields (`query` / `text` / `snippet` / `content` / `needle`) to 200 chars per doc 07 §13.
 
 ---
 
-## 2. Decisiones tomadas sin consultar
+## 2. Decisions taken without asking
 
-> Si crees que alguna está mal, dimelo y la revierto.
+> If you think any are wrong, tell me and I'll revert.
 
 ### D1 — absorb_judge vocabulary (Phase 1 d11)
-**Conflicto:** doc 06 §5 spec decía `merge | keep_separate | unsure`. El código (`absorb_judge.py:_VALID_VERDICTS`) usa `same | different | unclear`. La template `absorb_judge.md` también usa `same/different/unclear`.
+**Conflict:** doc 06 §5 spec said `merge | keep_separate | unsure`. The code (`absorb_judge.py:_VALID_VERDICTS`) uses `same | different | unclear`. The `absorb_judge.md` template also uses `same/different/unclear`.
 
-**Decisión:** Actualicé doc 06 §5 + doc 05 §8.4-8.6 para que coincidan con el código.
+**Decision:** I updated doc 06 §5 + doc 05 §8.4-8.6 to match the code.
 
-**Justificación:** El vocabulario `same/different/unclear` es **identity-judgement**, no action-prescription. Separación más limpia: LLM juzga identidad; runner mapea verdict+confidence a la acción (merge / log / defer). Cambiar el código + la template + retrain del LLM era el costo mayor, vs editar el doc que ya advertía "current implementation is solid; this doc doesn't redefine it".
+**Justification:** The `same/different/unclear` vocabulary is **identity-judgement**, not action-prescription. Cleaner separation: LLM judges identity; runner maps verdict+confidence to the action (merge / log / defer). Changing the code + the template + retraining the LLM was the bigger cost, vs editing the doc which already warned "current implementation is solid; this doc doesn't redefine it".
 
-**Test que lockea:** `tests/memory/test_absorb_judge_template_contract.py`.
+**Locking test:** `tests/memory/test_absorb_judge_template_contract.py`.
 
-### D2 — `user_authored` filter rompió 23 tests existentes (Phase 1 d9)
-**Causa:** El filter (correcto, per spec doc 01 §4.6.1) hace skip de entradas con `author=user_authored`. El default de `MemoryEntry.author` es `user_authored` (apropiado para edits manuales humanos). Tests existentes creaban entries con el default y esperaban que Dream las viera.
+### D2 — `user_authored` filter broke 23 existing tests (Phase 1 d9)
+**Cause:** The filter (correct, per spec doc 01 §4.6.1) skips entries with `author=user_authored`. The default for `MemoryEntry.author` is `user_authored` (appropriate for manual human edits). Existing tests created entries with the default and expected Dream to see them.
 
-**Decisión:** Añadí autouse fixture `_agent_created_scope` en 6 test modules (test_dream_runner, test_dream_triggers_beta2, test_threshold_trigger, test_threshold_trigger_e2e, test_t1_wiring_e2e, test_memory_cmd) que envuelve los test bodies en `author_scope("agent_created")`.
+**Decision:** Added autouse fixture `_agent_created_scope` in 6 test modules (test_dream_runner, test_dream_triggers_beta2, test_threshold_trigger, test_threshold_trigger_e2e, test_t1_wiring_e2e, test_memory_cmd) that wraps test bodies in `author_scope("agent_created")`.
 
-**Justificación:** En producción, los tool calls del agente corren bajo `author_scope("agent_created")`. Los tests modelaban observaciones del agente; el wrap es semánticamente correcto. La alternativa (cambiar el default de `MemoryEntry.author` a `agent_created`) habría roto la protección que el spec quiere.
+**Justification:** In production, the agent's tool calls run under `author_scope("agent_created")`. The tests modelled agent observations; the wrap is semantically correct. The alternative (changing the default of `MemoryEntry.author` to `agent_created`) would have broken the protection that the spec wants.
 
-### D3 — Phase 1.5 lanzado en worktree aislado
-Inicialmente lancé el agente Phase 1.5 en el workspace principal. Luego identifiqué que ambos tocaríamos `durin/telemetry/schema.py` y lo maté + relancé con `isolation: "worktree"`. El branch (`memory-phase-1.5-hot-layer`) fue mergeado limpiamente, worktree eliminado, branch borrado.
+### D3 — Phase 1.5 launched in isolated worktree
+I initially launched the Phase 1.5 agent in the main workspace. Then I identified that both of us would touch `durin/telemetry/schema.py` and killed it + relaunched with `isolation: "worktree"`. The branch (`memory-phase-1.5-hot-layer`) was merged cleanly, worktree removed, branch deleted.
 
-### D4 — Phase 1.9 deferido (integración v2 pipeline en DreamConsolidator)
-**Estado actual:** Todos los módulos v2 (parser, builder, applier, archive, quarantine, commit, git_history) están construidos y testeados en aislamiento. El `consolidate_entity` viejo todavía usa el parser `===PAGE===` legacy y el flujo full-page-rewrite.
+### D4 — Phase 1.9 deferred (v2 pipeline integration in DreamConsolidator)
+**Current state:** All v2 modules (parser, builder, applier, archive, quarantine, commit, git_history) are built and tested in isolation. The old `consolidate_entity` still uses the legacy `===PAGE===` parser and the full-page-rewrite flow.
 
-**Decisión:** No hice la integración wholesale.
+**Decision:** I did not do the wholesale integration.
 
-**Motivo:** El refactor toca `DreamConsolidator.consolidate_entity` + `apply` + migración de ~12 test stubs que retornan formato `===PAGE===`. Estimo 200-400 LOC + migración cuidadosa de tests. Lo dejé como **Phase 1.9** para que tú decidas si lo hacemos juntos en una sesión enfocada o por chunks.
+**Reason:** The refactor touches `DreamConsolidator.consolidate_entity` + `apply` + migration of ~12 test stubs that return `===PAGE===` format. I estimate 200-400 LOC + careful test migration. I left it as **Phase 1.9** so you decide whether we do it together in a focused session or in chunks.
 
-**Riesgo:** Mientras esto no esté wired, el `consolidator.md` v2 se le pasa al LLM PERO el response se intenta parsear como v1 → todos los Dream runs reales fallarían (el stub LLM en tests retorna v1 format, así que la suite no captura este bug). **Recomiendo no correr Dream pass real hasta que esté wired**.
+**Risk:** While this is not wired, the v2 `consolidator.md` is passed to the LLM BUT the response is attempted to be parsed as v1 → all real Dream runs would fail (the LLM stub in tests returns v1 format, so the suite doesn't catch this bug). **I recommend not running a real Dream pass until this is wired**.
 
-### D5 — Scope de Phase 2/3 deliberadamente acotado
-Phase 2 watchdog file watcher, health-check cron, tool re-index hooks, y schema-version startup check NO están implementados. Phase 3 entity-aware rerank no está wired downstream del orquestador.
+### D5 — Phase 2/3 scope deliberately bounded
+Phase 2 watchdog file watcher, health-check cron, tool re-index hooks, and schema-version startup check are NOT implemented. Phase 3 entity-aware rerank is not wired downstream of the orchestrator.
 
-**Motivo:** Tiempo + contexto + el camino crítico (search pipeline working) ya está cubierto por los core modules. Los items deferidos son operacionales / opt-in.
+**Reason:** Time + context + the critical path (search pipeline working) is already covered by the core modules. The deferred items are operational / opt-in.
 
-### D6 — `keywords` param añadido pero no aún wired al search path
-El parameter `keywords` está expuesto en `memory_search`, parseado en `execute`, pero **NO se pasa al lexical search** (porque el lexical search del memory_search actual va por grep + LanceDB, no por `run_search_pipeline`). Cuando se migre el tool a `run_search_pipeline`, el thread completo conecta automáticamente vía `keywords_provided=True` en `fuse_rrf`.
+### D6 — `keywords` param added but not yet wired into the search path
+The `keywords` parameter is exposed on `memory_search`, parsed in `execute`, but **NOT passed to the lexical search** (because the current memory_search's lexical search goes through grep + LanceDB, not `run_search_pipeline`). When the tool is migrated to `run_search_pipeline`, the full thread connects automatically via `keywords_provided=True` in `fuse_rrf`.
 
 ---
 
-## 3. Trabajo pendiente (con scope estimado)
+## 3. Pending work (with estimated scope)
 
-### Phase 1.9 — Wire v2 pipeline en DreamConsolidator
-- Refactor `consolidate_entity` para parsear con `parse_dream_output`.
-- Refactor `apply` para usar `apply_dream_output` + `archive_consumed_episodic` + `record_failure`/`clear_failures` + `finalize_commit_message`.
-- Migrar `_well_formed_response()` y ~12 dream tests a v2 format.
-- Escala: ~200-400 LOC + careful test migration.
+### Phase 1.9 — Wire v2 pipeline in DreamConsolidator
+- Refactor `consolidate_entity` to parse with `parse_dream_output`.
+- Refactor `apply` to use `apply_dream_output` + `archive_consumed_episodic` + `record_failure`/`clear_failures` + `finalize_commit_message`.
+- Migrate `_well_formed_response()` and ~12 dream tests to v2 format.
+- Scale: ~200-400 LOC + careful test migration.
 
-### Phase 2 — restantes
-- File watcher (`watchdog`) — operational, manual edits son raros hoy. ~100 LOC.
-- Health-check cron — operational, restaura índices corruptos cada 15min. ~150 LOC.
-- Re-index-on-write hooks en `memory_store` / `memory_ingest` / Dream apply — necesario para que el FTS se mantenga sin correr `durin reindex`. ~30 LOC + tests.
-- Schema-version mismatch check en startup. Tiene infraestructura (`index_meta.py`); falta hook. ~20 LOC.
-- LanceDB body column extension (doc 02 §5.1) — opcional, para search level=cold sin disk reads. ~50 LOC.
+### Phase 2 — remaining
+- File watcher (`watchdog`) — operational, manual edits are rare today. ~100 LOC.
+- Health-check cron — operational, restores corrupted indices every 15min. ~150 LOC.
+- Re-index-on-write hooks in `memory_store` / `memory_ingest` / Dream apply — needed for FTS to stay current without running `durin reindex`. ~30 LOC + tests.
+- Schema-version mismatch check on startup. Has infrastructure (`index_meta.py`); missing hook. ~20 LOC.
+- LanceDB body column extension (doc 02 §5.1) — optional, for search level=cold without disk reads. ~50 LOC.
 
-### Phase 3 — restantes
-- Entity-aware rerank wiring downstream del orquestador (el módulo `entity_ranker.py` existe; solo falta llamada). ~30 LOC.
-- Intent router para patrones email/URL/ID. ~50 LOC.
-- Grep fallback wired al orquestador. ~30 LOC.
+### Phase 3 — remaining
+- Entity-aware rerank wiring downstream of the orchestrator (the `entity_ranker.py` module exists; only the call is missing). ~30 LOC.
+- Intent router for email/URL/ID patterns. ~50 LOC.
+- Grep fallback wired to the orchestrator. ~30 LOC.
 
 ### Phase 4 — Cross-encoder (todo)
-- Module `cross_encoder.py` con lazy load.
-- Integración en `search_pipeline.py` step 5.
+- `cross_encoder.py` module with lazy load.
+- Integration in `search_pipeline.py` step 5.
 - Config `memory.search.cross_encoder.*`.
 - Webui dashboard panel.
 - ~200-300 LOC.
 
-### Phase 5 — Tools v2 restantes
-- Wire `memory_search` to `run_search_pipeline` (replace old grep+vector path or coexist con flag).
+### Phase 5 — Tools v2 remaining
+- Wire `memory_search` to `run_search_pipeline` (replace old grep+vector path or coexist via flag).
 - `memory_search` `recovered_from` + `recovery_duration_ms` fields.
 - `memory_ingest` recursive character splitter.
 - `memory_drill` remove `include_context` flag.
 - Tool description audit script.
 - ~150 LOC.
 
-### Phase 6 — restantes
-- 3 onboarding questions (memory enable, cross-encoder, aux model) — solo el Q6.3 (auto-absorb) está listo.
+### Phase 6 — remaining
+- 3 onboarding questions (memory enable, cross-encoder, aux model) — only Q6.3 (auto-absorb) is ready.
 - Tool description constants per doc 06 §3.
 - Audit script comparing strings in code vs doc 06.
 
-### Phase 7 — restantes
-- Retention (log rotation a 30 días + gzip).
+### Phase 7 — remaining
+- Retention (log rotation to 30 days + gzip).
 - HTTPS push opt-in.
-- 11 telemetría restantes per roadmap §10.1 (la mayoría ya emitidas; falta wire algunos sites).
+- 11 remaining telemetry events per roadmap §10.1 (most are already emitted; some sites need wiring).
 
 ### Phase 8 — Validation
-- LoCoMo bench run con v2 pipeline.
-- 200 hand-coded adversarial QAs (50 c/u en coder, sales, support, personal-assistant).
-- Soak test 7 días.
+- LoCoMo bench run with v2 pipeline.
+- 200 hand-coded adversarial QAs (50 each in coder, sales, support, personal-assistant).
+- 7-day soak test.
 - Documentation pass.
 
 ---
 
-## 4. Próximo siguiente paso recomendado
+## 4. Recommended next step
 
-**Phase 1.9 — Wire v2 pipeline en DreamConsolidator**. Es el cierre crítico de Phase 1 + bloquea Phase 8 validation (no podemos benchear el flow nuevo si el wiring no está). Estimado 1-2 sesiones de trabajo enfocado.
+**Phase 1.9 — Wire v2 pipeline in DreamConsolidator**. It's the critical closure of Phase 1 + blocks Phase 8 validation (we can't bench the new flow if the wiring is missing). Estimated 1-2 focused work sessions.
 
-Después: **Phase 5 d1** (wire memory_search a `run_search_pipeline`) — desbloquea Phase 8 y empieza a entregar el FTS+RRF al agente real.
+After: **Phase 5 d1** (wire memory_search to `run_search_pipeline`) — unblocks Phase 8 and starts delivering FTS+RRF to the real agent.
 
 ---
 
-## 5. Estado del repo
+## 5. Repo state
 
 ```
 Branch: memory/phase-0-foundations
@@ -200,4 +200,4 @@ Last commits (newest first):
 - `980e36c` feat(memory): archive helpers + bug tracker (Phase 0 deliverable 5)
 - `be8fe01` feat(memory): shared workspace walker (Phase 0 deliverable 1)
 
-Cuando vuelvas mañana, `git log --oneline memory/phase-0-foundations` te da el detalle.
+When you come back tomorrow, `git log --oneline memory/phase-0-foundations` gives you the details.

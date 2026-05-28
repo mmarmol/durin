@@ -1,14 +1,14 @@
 """§2.H — fragment/canonical retrieval contract.
 
-The doc 18 §6 promise — "página consolidada y entries post-cursor
-coexisten en los resultados; el LLM reconcilia en read-time con
-timestamps y contexto" — was a design intent that did not survive
+The doc 18 §6 promise — "consolidated page and post-cursor entries
+coexist in the results; the LLM reconciles at read-time with
+timestamps and context" — was a design intent that did not survive
 into the LLM delivery contract until §2.H. These tests pin the
 contract on both delivery paths (lazy `memory_search` + eager
 `hot_layer`) so future changes don't silently regress it.
 
 Marker convention follows the compaction precedent
-(``=== ARCHIVED SUMMARY ===`` per bitácora 2026-05-19) and was
+(``=== ARCHIVED SUMMARY ===`` per logbook 2026-05-19) and was
 formalised in ``docs/memory/06_prompts_and_instructions.md`` §8.3 to:
 
 - ``=== CANONICAL: <ref> (consolidated <ts>) === ... === END CANONICAL ===``
