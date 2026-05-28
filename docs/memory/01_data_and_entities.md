@@ -374,7 +374,7 @@ An attribute is **stateful** if and only if its key name matches one of these pa
 
 All other attribute keys are **static** (overwriting on update, no history). When Dream sets a stateful attribute and detects a change, it appends to `history` and updates `current`. When it sets a static attribute and detects a change, it overwrites the previous value (the prior value remains accessible via git history of the entity page).
 
-The pattern set lives in code as a single source of truth (`STATEFUL_ATTRIBUTE_PATTERNS`) and can be extended as new patterns emerge. Changes to the set should be considered backward-compatible (existing static attributes don't become stateful retroactively; new writes use the updated rule).
+The patterns are applied by Dream during consolidation per the prompt's instructions (see `durin/templates/dream/rules.md` and the examples in `durin/templates/dream/examples/`). No `STATEFUL_ATTRIBUTE_PATTERNS` constant exists in code — earlier drafts of this section referenced one that was never extracted. Decision: keep the rule in the LLM-facing prompt corpus (where it lives today) rather than mirror it as a Python regex set. If the rule ever needs to gate non-LLM code paths, extract the constant then. (Audit C1, 2026-05-28.)
 
 ### 4.4 Relations — design rules
 
@@ -385,7 +385,7 @@ Relations are first-class graph edges from one entity to another. Rules:
 | **First-class only if information-bearing** | A relation must add information beyond mention. Mere "appeared in session X" is NOT a relation. |
 | **Targets must have URIs** | `to` field references another entity. If the target doesn't exist, Dream creates a placeholder (`auto_created: true` in extra). |
 | **Free-form metadata** | Each relation can carry `since`, `intensity`, `role`, etc. No enforced schema beyond `to` and `type`. |
-| **Per-entity cap** | **Soft cap = 50** (warn only: log + telemetry event). **Hard cap = 200** (Dream rejects the new relation and records the issue in its commit message). Cap is a guard against runaway growth; if a real entity legitimately hits the hard cap, the design is revisited. No automatic summarization or partitioning in MVP. |
+| **Per-entity cap** | **Documented in v1 as soft cap 50 + hard cap 200, but NOT enforced in code today** (audit C2, 2026-05-28). The Dream consolidator does not count relations or reject new ones — if an entity legitimately accumulates 500 relations, nothing blocks it. The numbers stay here as a documented intent: when a real workload first crosses 50, the cap can be implemented as a log warning (soft) and the hard cap as a Dream-side reject (~20 LOC). No producer has hit those numbers yet in durin's workspaces, so the implementation is deferred until a real signal arrives. |
 
 **Pure mentions are NOT relations.** "Marcelo was mentioned in session abc" is covered by:
 1. The vector index (sessions are vectorized via `_last_summary` in v2; episodic via body).
@@ -398,7 +398,7 @@ This avoids hub explosion (one entity becoming connected to hundreds of sessions
 The slug for an entity URI is derived from `name`:
 
 1. Unicode NFC normalize.
-2. Transliterate non-Latin scripts to Latin (e.g., 马塞洛 → mǎsàiluò → masailuo).
+2. Transliterate non-Latin scripts to ASCII via `unidecode` (e.g., 马塞洛 → `Ma Sai Luo` → `ma_sai_luo`). The earlier draft of this step described a pinyin-with-tones intermediate (`马塞洛 → mǎsàiluò → masailuo`); the code uses `unidecode` directly — no tone-marked intermediate exists. Corrected in audit C3 (2026-05-28).
 3. Lowercase.
 4. Replace whitespace and punctuation with single underscores.
 5. Strip leading/trailing underscores.

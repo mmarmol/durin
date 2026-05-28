@@ -478,7 +478,7 @@ Up to audit A9, §10 was a promise — `decay.py` had the half-life table and th
 
 ---
 
-## 11. Step 7 — Removed (MMR deferred to backlog)
+## 11. Step 7 — MMR (removed; deferred to backlog)
 
 The original plan included a Maximal Marginal Relevance (MMR) step here to diversify top-K results. This step was **removed from the MVP** after analysis:
 
@@ -493,7 +493,7 @@ If post-MVP bench shows residual duplication (e.g., > 2 nearly-identical hits in
 
 ---
 
-## 12. Step 7 — Sectioning and rendering
+## 12. Step 8 — Sectioning and rendering (audit C8: renumbered from "Step 7")
 
 The final top-K (default 10) is grouped by source class and rendered with structural markers. This is what the agent sees.
 

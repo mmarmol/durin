@@ -475,18 +475,22 @@ None at the module level. Cross-references to other modules:
 
 ---
 
-## 11. Implementation status (current vs target)
+## 11. Implementation status (current — audit C7, 2026-05-28)
 
-| Aspect | Current state | v2 target | Migration work |
-|---|---|---|---|
-| Vector index (LanceDB) | Active, single table, MiniLM-L12-v2 (384-dim default), 8-column schema per §3.1 | Same engine; if session summaries are emitted (see A10) they would index as `class_name=session_summary` | Optional: session_summary emitter (A10); other knobs all already shipped |
-| Embedding text — entities | `name + aliases + body`, 1500 char cap | + `rendered_frontmatter` + `summary` | Update `compose_embedding_text` for entities |
-| Embedding text — entries | `headline + summary + entities_list + body` | Same + `entities_with_aliases` | Update `compose_embedding_text` for entries; integrate alias index lookup |
-| Session summaries indexed | No (sessions grep-only) | Yes (one row per session with `_last_summary`) | New emitter; trigger on `_last_summary` update |
-| FTS5 lexical index | Does not exist | New `.durin/index/fts.sqlite` with **two FTS5 tables** (`unicode61` + `trigram`); paired writes; query-time routing by CJK detection | Build indexer with paired inserts; implement CJK detection helper used by the pipeline; integrate into write path; integrate into search pipeline |
-| File watcher | Manual rebuild only | `watchdog` watcher with auto-commit | New module; integrate with workspace lock |
-| Archive exclusion | Not yet relevant (no archive) | Walker excludes by default; chokepoint enforced | Implement walker + audit all scanners |
-| `durin reindex` command | Manual `_build_vector_index` helper exists | First-class CLI command + bulk batching | Wrap and expose |
+Rebuilt from scratch — the original v1 table described a "current state" that was already obsolete when written. The full v2 set has shipped.
+
+| Aspect | Status | Where |
+|---|---|---|
+| Vector index (LanceDB) | ✅ Active. MiniLM-L12-v2 (384-dim default). 8-column schema per §3.1 (no `body` column — see A4). | `durin/memory/vector_index.py` |
+| Embedding text — entities | ✅ `name + aliases + body`, 1500-char cap (`_compose_entity_page_text`). v2 `rendered_frontmatter + summary` extensions never shipped; Dream produces well-shaped pages that don't need them today. | `durin/memory/vector_index.py:_compose_entity_page_text` |
+| Embedding text — entries | ✅ `headline + summary + entities_list + body`, 1500-char cap (`_embed_text`). v2 alias-expansion never shipped; the entity-aware ranker covers alias matching at query time without inflating the embedding text. | `durin/memory/vector_index.py:_embed_text` |
+| Session summaries indexed | ✅ A10 (2026-05-28). `Consolidator._persist_last_summary` writes `memory/session_summary/<sanitized_key>.md`; walker picks it up; indexer assigns `class_name="session_summary"`; A9 decay (120 d) applies. | `durin/memory/session_summary_store.py` |
+| FTS5 lexical index | ✅ Active. `.durin/index/fts.sqlite` with two FTS5 tables (`memory_fts` unicode61 + `memory_fts_trigram`); paired writes; query-time routing in `query_router.py`. | `durin/memory/fts_index.py`, `durin/memory/query_router.py` |
+| File watcher | ✅ Active. `watchdog`-backed `MemoryFileWatcher` started by `AgentLoop.__init__` when `cfg.memory.file_watcher.enabled` (default true). A11 (2026-05-28). | `durin/memory/file_watcher.py` |
+| Health-check cron | ✅ Active. `HealthCheckScheduler` daemon thread driving `HealthChecker.run_tick()` every 900s by default. A11. | `durin/memory/health_check.py` |
+| Archive exclusion | ✅ `walk_memory` excludes `memory/archive/**` (and `memory/pending/**`). Single chokepoint per §6.5. | `durin/memory/paths.py:walk_memory` |
+| `durin memory reindex` command | ✅ Active CLI: `durin memory reindex --target {fts,lancedb,all}`. | `durin/cli/memory_cmd.py:cmd_reindex` |
+| Schema version + auto-rebuild | ✅ `index_meta.py::CURRENT_SCHEMA_VERSION` (3 as of A4). `ensure_index_fresh` triggers clean rebuild on mismatch. | `durin/memory/index_meta.py` |
 
 ---
 
