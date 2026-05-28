@@ -20,7 +20,7 @@ Per doc 06 §8.3, canonical pages and recent fragments are wrapped in
 ``=== FRAGMENT: <path> (ts <ts>) ===`` markers so the LLM reconciles
 contradictions at read time using the timestamps embedded in the
 markers. Same convention as the compaction
-``=== ARCHIVED SUMMARY ===`` block (bitácora 2026-05-19) and
+``=== ARCHIVED SUMMARY ===`` block (logbook 2026-05-19) and
 ``memory_search``'s result rendering.
 """
 

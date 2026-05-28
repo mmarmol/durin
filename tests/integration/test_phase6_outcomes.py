@@ -8,7 +8,7 @@ and fake embeddings (no real fastembed download).
 
 If any of these tests fail, the architecture has regressed on a
 load-bearing promise; the right move is to reopen doc 18 (or doc 19's
-asunción master list) with the new evidence.
+assumption master list) with the new evidence.
 """
 
 from __future__ import annotations
@@ -91,7 +91,7 @@ def _make_stub_llm(entity_ref: str, *, body: str, sources: list[str], cursor):
 
 
 # ---------------------------------------------------------------------------
-# O1 — Coherencia cross-sesión sobre proyecto
+# O1 — Cross-session coherence about a project
 # ---------------------------------------------------------------------------
 
 
@@ -158,7 +158,7 @@ def test_o1_project_decisions_consolidated(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# O2 — Unificación automática por aliases / identifiers
+# O2 — Automatic unification by aliases / identifiers
 # ---------------------------------------------------------------------------
 
 
@@ -334,7 +334,7 @@ def test_o5_drill_down_expand(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Anti-fragilidad — el sistema funciona aún sin dream activo
+# Anti-fragility — the system works even without an active dream
 # ---------------------------------------------------------------------------
 
 

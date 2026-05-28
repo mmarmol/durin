@@ -373,7 +373,7 @@ class DreamRunner:
         # A5: payload now carries the per-pass token totals + the
         # quarantine counter + duration in ms (not s). Doc 07 §6.2
         # specifies this shape; doc 08 §3 R3 alarm
-        # (`dream_llm_cost_per_day_usd > $5/día`) depends on the
+        # (`dream_llm_cost_per_day_usd > $5/day`) depends on the
         # `llm_input_tokens_total` + `llm_output_tokens_total` fields.
         emit_tool_event(
             "memory.dream.end",

@@ -555,7 +555,7 @@ class MemoryDreamEndEvent(TypedDict):
     non-zero failed value is a soft signal, not a stop condition.
 
     Audit A5 (2026-05-28) added the four cost-telemetry fields below
-    so doc 08 §3 R3's alarm (`dream_llm_cost_per_day_usd > $5/día`)
+    so doc 08 §3 R3's alarm (`dream_llm_cost_per_day_usd > $5/day`)
     can be computed. Pre-A5 emit payloads used `duration_s`; that
     name is gone — consumers should read `duration_ms`.
     """
