@@ -821,11 +821,18 @@ class MemoryHealthCheckEvent(TypedDict):
     ``status`` is the aggregate label (``ok`` / ``degraded`` /
     ``critical``); ``components`` carries per-probe status
     (``fts`` / ``lance`` / future additions).
+
+    Audit A6 (2026-05-28) added ``tick_id`` (per-tick UUID hex for
+    log correlation) and ``duration_ms`` (wall-clock of the tick).
+    Both fields are required — adding them is additive vs. the
+    pre-A6 payload, and no consumer pinned to the prior shape.
     """
 
+    tick_id: str
     status: str
     components: dict[str, str]
     drift_count: int
+    duration_ms: float
     errors: NotRequired[dict[str, str]]
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
