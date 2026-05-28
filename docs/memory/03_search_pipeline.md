@@ -605,7 +605,7 @@ This is **only applied to corpus** (the class where same-source clustering is st
 - Entity: one entity = one canonical page; clustering by source isn't meaningful.
 - Episodic/stable/session_summary: each has independent provenance; if 3 episodic mention the same fact, that's triangulation (see §11).
 
-The cap value (`3`) lives in `durin.memory.sectioned_output.DEFAULT_MAX_PER_SOURCE` and is currently hard-coded. The `memory.search.sectioning.max_per_source` config knob is **not yet implemented**; if operators report needing to tune the cap, lifting it into config is a small change (mirrors the F1 `class_half_life_overrides` pattern).
+The cap value (`3`) lives in `durin.memory.sectioned_output.DEFAULT_MAX_PER_SOURCE` and is the **default** when nothing overrides. Audit G1 (2026-05-28) shipped the promised `memory.search.sectioning.max_per_source` config knob (`MemorySearchSectioningConfig.max_per_source: int = 3`). When set, the value flows through `run_search_pipeline(..., max_per_source=...)` and is honoured by both the main path and the archive path in `memory_search.execute`.
 
 ---
 
@@ -780,6 +780,11 @@ top_n = 10
 
 [memory.search.temporal_decay]   # A9
 enabled = true
+# F1: per-class half-life overrides — empty by default
+# [memory.search.temporal_decay.class_half_life_overrides]
+
+[memory.search.sectioning]   # G1
+max_per_source = 3
 ```
 
 **What's hardcoded** (not exposed as config keys today — audit B8 deliberate scope decision):
@@ -790,7 +795,7 @@ enabled = true
 | `lexical_top_k` | 50 | `search_pipeline.py:459` (audit F21 verified) | Sane default |
 | `rrf_constant` | 60 | `rrf_fusion.py::DEFAULT_K` | Textbook value (Cormack/Clarke/Buettcher 2009); no operator has requested override |
 | `rrf_weights` | `{vector: 1.0, lexical: 0.7→2.5 boosted, grep: 0.3}` | `rrf_fusion.py::DEFAULT_W_*` | Already adaptive (lexical boost on identifier queries) |
-| `max_per_source` (sectioning) | 3 | `sectioned_output.py::DEFAULT_MAX_PER_SOURCE` | Per doc 03 §12.4; tuning never asked for |
+| `max_per_source` (sectioning) — default | 3 | `sectioned_output.py::DEFAULT_MAX_PER_SOURCE` | Audit G1 (2026-05-28) promoted this to a configurable knob via `memory.search.sectioning.max_per_source`; the hard-coded constant is only the default when nothing in config overrides. |
 | `final_top_k` (a.k.a. `limit`) | 10 default | `memory_search.py` `_PARAMETERS["limit"]` (A3) | Now per-call configurable via the `limit` tool parameter (audit A3) — 1..50 |
 | `half_life_days` per class | 90 / 120 / null | `decay.py::CLASS_HALF_LIFE_DEFAULTS` (A9) | Per-class table in code; doc 03 §10.2 documents the reasoning |
 
@@ -813,7 +818,7 @@ All decisions consistent with cross-corpus decisions in `00_overview.md` §10 an
 | 5 | Cross-encoder graceful degradation + UI exposure | Failure to load model logs warning; pipeline continues at default latency. **Exposed in onboarding wizard (CLI question with trade-off explanation) + web dashboard (toggle + model picker dropdown).** Workspace config file is the canonical source; UIs are surfaces over it. | §9.4, §9.5 |
 | 6 | Temporal decay default | **Enabled by default, but only types where time-of-document is intrinsic information decay.** episodic (90d) and session_summary (120d) decay; entity, stable, corpus have `half_life = null` (no decay) because their `mtime` doesn't represent fact-age. Per-entry override via `decay_half_life` frontmatter field. Evergreen flag (`evergreen: true`) wins over all. Aligned with cross-corpus decision #3b (mechanism in place, conservative defaults). | §10 |
 | 7 | MMR deferred to backlog | **Not in MVP.** Archive of consolidated episodic (§3.6 doc 01) eliminates the primary duplication that MMR would address; the remaining typical pattern is triangulation (entity + fragment + session), not redundancy. Mainstream systems (mem0, graphiti, hermes, letta) don't implement MMR. If post-MVP bench shows residual duplication, MMR is a standalone algorithm easy to add later. | §11 |
-| 8 | Per-source cap (corpus chunks) | Sectioning step caps corpus hits to **max 3 per ingest_id** to prevent monotopic top-K when a long ingested doc was chunked into many corpus entries. Only applies to corpus; other classes are triangulation, not duplication. Configurable via `memory.search.sectioning.max_per_source`. | §12.4 |
+| 8 | Per-source cap (corpus chunks) | Sectioning step caps corpus hits to **max 3 per ingest_id** by default to prevent monotopic top-K when a long ingested doc was chunked into many corpus entries. Only applies to corpus; other classes are triangulation, not duplication. Configurable via `memory.search.sectioning.max_per_source` (audit G1 shipped the field, 2026-05-28; default 3). | §12.4 |
 | 9 | Sectioning markers | `=== CANONICAL/FRAGMENT/SESSION/INGESTED ===`. Descriptive metadata only — no valuative language. Empty sections omitted. | §12 |
 | 10 | Failure mode — recovery first | **Recovery > Degradation > Error.** Recoverable failures (corrupt index, missing model, process crash) trigger synchronous recovery (rebuild, reload, reconnect) before serving the query — accepting up to 30s extra latency rather than returning a silently degraded result. Degradation only when recovery is exhausted or not applicable. Error only when ALL paths collapse. Recovery latency surfaces in the tool result (`recovered_from`, `recovery_duration_ms`) so the agent can communicate the delay. | §14 |
 | 11 | Latency guidelines (not SLAs) | Default (cross-encoder OFF): ~30-130ms p95 end-to-end. When cross-encoder enabled: 400-1600ms p95 depending on model. **Operational rule:** any call > 10s WITHOUT `recovered_from` set is anomalous — investigate. Recovery-induced latency is expected and surfaced via `recovery_duration_ms`. | §13 |

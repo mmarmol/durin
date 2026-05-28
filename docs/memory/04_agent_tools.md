@@ -569,8 +569,7 @@ The agent invokes the four tools in §2-§5. Separately, the **operator** has CL
 | `durin embed-migrate --to <model_id>` | Switch embedding model with safe migration (backup + rebuild) | `02_indexing.md` §7.2.1 |
 | `durin dream run [--entity <uri>]` | Manually trigger a Dream consolidation pass, optionally filtered to one entity | `05_dream_cold_path.md` §2 |
 | `durin memory absorb [--auto|--interactive]` | Run absorb-judge over alias-overlap candidates and merge approved pairs | `05_dream_cold_path.md` §8 |
-| ~~`durin archive show <uri>`~~ | Deferred to backlog (audit F2, 2026-05-28) — `durin memory expand <entity>` covers per-entity recovery; `cat memory/archive/...` covers direct lookups. The dedicated command stays in `08_scope_and_discarded.md` §5 until a concrete operator workflow surfaces. | doc 08 §5 |
-| ~~`durin archive list`~~ | Deferred to backlog (audit F2). Until then, `find memory/archive -name '*.md'` enumerates archived files. | doc 08 §5 |
+| **Not implemented**: `durin archive show <uri>` / `durin archive list` | Audit G2 (2026-05-28) decided against — three existing surfaces already cover archive recovery: `memory_search(scope='archive')` for agent-visible semantic recovery (audit F2), `durin memory expand <entity>` for per-entity rendering, and `cat memory/archive/<class>/<id>.md` / `find memory/archive -name '*.md'` for direct shell access. A dedicated CLI command would duplicate these without a unique use case. Discarded in `08_scope_and_discarded.md` §2.12 (not deferred). | doc 08 §2.12 |
 | `durin memory health [restore --component <name>]` | Inspect health-check cron state; manually retry restoration for a paused component | `03_search_pipeline.md` §14.4 |
 | `durin memory history <uri> [--since <date>]` | Git log for an entity's `.md` file. Shows Dream consolidation history. | `00_overview.md` §10 #4 (versioning) |
 
