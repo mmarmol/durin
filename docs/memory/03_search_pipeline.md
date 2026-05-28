@@ -101,6 +101,13 @@ Each step is detailed in §3 onwards.
 
 ### 2.1 Inputs
 
+These are the inputs to the `memory_search` **tool** surface
+(`MemorySearchTool.execute`). Audit E10 (2026-05-28) clarified the
+layer boundary: `query` + `keywords` are forwarded directly into
+`run_search_pipeline`; `scope` + `level` + `limit` are orchestrated
+at the tool layer around the pipeline call. See "Tool vs pipeline
+boundary" below the table.
+
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `query` | string | yes | The semantic + lexical query. Used for embedding AND for FTS5 search. |
@@ -108,6 +115,23 @@ Each step is detailed in §3 onwards.
 | `scope` | enum `dreamed|undreamed|all` | no (default `all`) | Limits which classes are searched. `dreamed` = entities + episodic + stable + corpus + session summaries; `undreamed` = raw session/ingested grep fallback; `all` = both. |
 | `level` | enum `warm|cold` | no (default `warm`) | `warm` returns the headline+summary+metadata; `cold` enriches each hit with its body. |
 | `limit` | int | no (default 10) | Max results returned after sectioning. |
+
+**Tool vs pipeline boundary** (audit E10): the `run_search_pipeline`
+function signature only takes `query`, `keywords`, `vector_index`,
+`limit`, `cross_encoder`, `cross_encoder_top_n`,
+`temporal_decay_enabled`. The other tool inputs are handled around
+the call:
+
+- `scope=undreamed` → the tool passes `vector_index=None` so the
+  pipeline skips step 2a, and post-filters hits to keep only
+  `session_summary` / `corpus` types.
+- `scope=dreamed` → vector_index is passed; grep fallback in §6 of
+  the pipeline still runs but the tool keeps its hits intact.
+- `level=cold` → the tool enriches each `SectionedHit` with the
+  body read from disk after the pipeline returns; pipeline rows
+  carry only the snippet on either level.
+- `limit` is clamped to `[1, 50]` at the tool and forwarded to the
+  pipeline.
 
 ### 2.2 Output
 
@@ -139,6 +163,39 @@ The pipeline calls `extract_query_entities(query, alias_index)` (existing helper
 
 This set feeds step 4 (entity-aware rerank). If empty, step 4 becomes a no-op.
 
+### 3.3.bis Auto-keyword detection (audit E14, P3.3)
+
+`_detect_auto_keywords` (`durin/memory/query_router.py`) scans the
+query for an identifier-shaped token. If one is found, the lexical
+weight in the RRF fusion is boosted (0.7 → 2.5) automatically —
+the agent does NOT have to pass `keywords` explicitly. Documented
+as P3.3 in commit `bc55686`; audit E14 (2026-05-28) lifted it from
+implementation detail into this spec.
+
+Matched patterns (order matters: longest / most-specific first):
+
+| Pattern | Example | Why |
+|---|---|---|
+| `https?://...` | `https://github.com/foo/bar` | URLs need verbatim match — tokenisers split them |
+| File paths with extension | `src/foo/bar.py`, `/Users/.../file.md` | Same |
+| Bare absolute / relative paths | `/var/log/app.log` | Same |
+| UUID (with or without dashes) | `550e8400-e29b-41d4-a716-446655440000` | Hex sequences degrade in cosine matching |
+| Email addresses | `mmarmol@mxhero.com` | Verbatim match wins; cosine misses subdomain noise |
+
+When a match fires, `RoutingDecision.auto_keywords` carries the
+matched substring verbatim. The pipeline forwards
+`keywords_provided=bool(keywords or decision.auto_keywords)` to
+the RRF fusion (`search_pipeline.py:121`); the lexical weight bumps
+identically whether the boost came from the agent's `keywords`
+input or from auto-detection.
+
+Explicitly NOT matched:
+- Version strings (`v1.2.3`) — too ambiguous; would catch
+  conversational "version 1" mentions and over-boost.
+- Bare numbers (`12345`) — high false-positive rate.
+- Domain-only (`mxhero.com`) — captured incidentally by the URL
+  pattern when prefixed with `http(s)://` only.
+
 ### 3.3 Whitespace normalization
 
 The query is NFC-normalized and whitespace-collapsed before being passed to both retrieval engines. This avoids embedding mismatches on the same query with different leading/trailing whitespace.
@@ -158,7 +215,7 @@ vector = MiniLM.embed(query)                       # 768-dim
 rows = lancedb.search(vector, top_k=50)            # cosine distance
 ```
 
-LanceDB returns up to 50 hits with `_distance` column (cosine distance; lower is better). Hits include `uri`, `path`, `type`, `entities`, `headline`, `summary`, `mtime`, `valid_from`.
+LanceDB returns up to 50 hits with `_distance` column (cosine distance; lower is better). Hits carry the row's persisted columns plus `_distance`: `id` (used as `uri`), `class_name` (mapped to `type`), `summary`, `headline`, `valid_from`, `entities`, `path`. Audit E12 (2026-05-28) removed a stale `mtime` claim — the LanceDB schema does NOT store `mtime`; the temporal-decay step (§10) reads file `mtime` from disk when needed.
 
 The top-K size for this step is **50** (not 10). The pipeline narrows down later through rerank and MMR. Retrieving more candidates here gives the rerank steps meaningful room to operate.
 
@@ -184,7 +241,7 @@ Based on §3.1 CJK detection:
 |---|---|
 | `unicode61` (no CJK) | `SELECT ... FROM memory_fts WHERE text MATCH ? ORDER BY bm25(memory_fts) LIMIT 50` |
 | `trigram` (CJK ≥ 3, tokens ≥ 3 chars) | `SELECT ... FROM memory_fts_trigram WHERE text MATCH ? ORDER BY bm25(memory_fts_trigram) LIMIT 50` |
-| `LIKE` substring (short CJK) | `SELECT ... FROM memory_fts WHERE text LIKE '%query%' LIMIT 50` (no scoring — returned in mtime order) |
+| `LIKE` substring (short CJK) | `SELECT ... FROM memory_fts WHERE text LIKE '%query%' LIMIT 50` (no scoring — returned in arbitrary table order; audit E12 corrected pre-existing "mtime order" claim — there is no ORDER BY) |
 
 ### 5.2 Query construction
 
@@ -194,7 +251,14 @@ If `keywords` is provided (the optional second input parameter), the lexical que
 
 ### 5.3 BM25 scoring
 
-FTS5 returns negative scores (more negative = better match). The pipeline normalizes via `score = -bm25_raw / max(-bm25_observed_in_set)` to a `[0, 1]` range for fusion with vector scores in step 3.
+FTS5 returns negative scores (more negative = better match). Audit
+E13 (2026-05-28) removed an obsolete normalisation paragraph: the v1
+pipeline normalised `score = -bm25_raw / max(-bm25_observed)` to
+`[0,1]` so BM25 could be linearly fused with cosine scores. The v2
+pipeline fuses via RRF (§7) which operates in **rank space** and is
+score-scale invariant — the raw BM25 value is read only for the
+sort within the lexical source; the rank position is all that
+crosses into the fusion step.
 
 ---
 
@@ -202,7 +266,7 @@ FTS5 returns negative scores (more negative = better match). The pipeline normal
 
 When `scope=undreamed` or `scope=all`, the pipeline also runs `search_undreamed(workspace, query)` — a literal `ripgrep`-style scan over `sessions/<id>/<id>.jsonl` and `ingested/<id>/`. These artifacts are not in LanceDB or FTS5 by design (see `01_data_and_entities.md` §3.1, §3.2; `02_indexing.md` §3.3).
 
-Results from this fallback enter the pipeline as a third source feeding into step 3 (weighted merge), with their own normalized score.
+Results from this fallback enter the pipeline as a third source feeding into the RRF fusion in §7 (alongside vector + lexical). Per E13: there is no "normalised score" or "weighted merge" — RRF takes the per-source rank position only.
 
 This path is the only way short, non-indexed session turns or raw ingested artifacts become reachable. It is conceptually different from FTS5 and serves a different content layer.
 
@@ -405,7 +469,7 @@ Where `Δt` is time since the document's `mtime` in days, and `half_life` is loo
 |---|---|---|
 | `episodic` | **90 days** | Observation with timestamp; naturally ages |
 | `session_summary` | **120 days** | Past conversation; ages with time |
-| `entity` | **null (never decays)** | Canonical state; `mtime` is "last Dream update", not "fact age" |
+| `entity` / `entity_page` | **null (never decays)** | Canonical state; `mtime` is "last Dream update", not "fact age". Audit E15 (2026-05-28) added the `entity_page` alias to match `CLASS_HALF_LIFE_DEFAULTS` (`decay.py:67-73`); the LanceDB row carries `class_name="entity_page"` while in-memory entries use `"entity"`. Decay lookups normalise both. |
 | `stable` | **null (never decays)** | Explicit user intent to persist |
 | `corpus` | **null (never decays)** | Chunk of an ingested source; source relevance dictates, not chunk age |
 

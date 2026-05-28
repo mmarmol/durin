@@ -17,7 +17,6 @@ from durin.agent.tools.schema import (
     tool_parameters_schema,
 )
 from durin.memory.aliases_index import AliasIndex
-from durin.memory.entity_page import EntityPage
 from durin.memory.entity_ranker import (
     extract_query_entities,
     rank_with_entities,
@@ -28,31 +27,9 @@ from durin.memory.vector_index import VectorIndex, vector_index_available
 logger = logging.getLogger(__name__)
 
 
-def _load_cursors_from_entities_dir(
-    memory_root: Path,
-    entity_refs: list[str],
-) -> dict[str, Any]:
-    """Read ``dream_processed_through`` from each entity's page (S3, doc 24).
-
-    Returns ``{entity_ref: cursor_value}`` for refs whose page exists and
-    has a cursor field. Used by entity_ranker to apply the pre/post-cursor
-    boost/demote. Best-effort — missing or unparseable pages skip silently.
-    """
-    cursors: dict[str, Any] = {}
-    for ref in entity_refs:
-        if ":" not in ref:
-            continue
-        type_, slug = ref.split(":", 1)
-        page_path = memory_root / "entities" / type_ / f"{slug}.md"
-        if not page_path.exists():
-            continue
-        try:
-            page = EntityPage.from_file(page_path)
-        except Exception:  # noqa: BLE001
-            continue
-        if page is not None and page.dream_processed_through is not None:
-            cursors[ref] = page.dream_processed_through
-    return cursors
+# E11 (2026-05-28): `_load_cursors_from_entities_dir` moved to
+# `durin.memory.entity_ranker` next to its consumer
+# `rank_with_entities`. The v2 pipeline now calls it directly.
 
 _PARAMETERS = tool_parameters_schema(
     query=StringSchema(

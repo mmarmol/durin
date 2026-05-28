@@ -48,14 +48,56 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from pathlib import Path
+
 from durin.memory.aliases_index import AliasIndex
+from durin.memory.entity_page import EntityPage
 
 __all__ = [
     "RRF_K",
     "extract_query_entities",
     "rank_with_entities",
+    "load_cursors_from_entities_dir",
     "RankedCandidate",
 ]
+
+
+def load_cursors_from_entities_dir(
+    memory_root: Path,
+    entity_refs: list[str],
+) -> dict[str, Any]:
+    """Read ``dream_processed_through`` from each entity's page (E11).
+
+    Returns ``{entity_ref: cursor_value}`` for refs whose page exists
+    and has a cursor field. The cursor map feeds ``rank_with_entities``
+    so the pre/post-cursor partitioning in §8.4 of doc 03 actually
+    applies — pre-E11 the v2 pipeline never loaded cursors and treated
+    every tagged entry as post-cursor.
+
+    Best-effort — missing pages or parse errors skip silently.
+
+    History: pre-E11 this lived as ``_load_cursors_from_entities_dir``
+    in ``durin/agent/tools/memory_search.py`` (v1 path consumer). When
+    the v1 path was removed in commit c820447 (Phase 5 d1 migration),
+    the helper was orphaned. Audit E11 (2026-05-28) moved it here next
+    to ``rank_with_entities``, the only consumer that needs it.
+    """
+    cursors: dict[str, Any] = {}
+    memory_root = Path(memory_root)
+    for ref in entity_refs:
+        if ":" not in ref:
+            continue
+        type_, slug = ref.split(":", 1)
+        page_path = memory_root / "entities" / type_ / f"{slug}.md"
+        if not page_path.exists():
+            continue
+        try:
+            page = EntityPage.from_file(page_path)
+        except Exception:  # noqa: BLE001
+            continue
+        if page is not None and page.dream_processed_through is not None:
+            cursors[ref] = page.dream_processed_through
+    return cursors
 
 
 # Constant from Cormack, Clarke, Buettcher 2009 ("Reciprocal Rank Fusion

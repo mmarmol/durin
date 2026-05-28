@@ -1416,3 +1416,51 @@ Round 1-3 marcados resolved. Spot-checks confirman. OK.
 **Validación**: 995 tests pasan en tests/memory/ (1 skipped pre-existente).
 
 **Commit pendiente** (cierre del batch E1-E9).
+
+### E10 — Doc 03 §2.1 scope/level no son inputs de `run_search_pipeline` ✅ RESOLVED
+
+**Doc 03 §2.1 (pre-E10)**: tabla de inputs lista `scope`/`level`/`limit` junto con `query`/`keywords`, presentando todos como inputs al "search pipeline".
+
+**Código**: `run_search_pipeline(workspace, query, *, keywords, vector_index, limit, cross_encoder, cross_encoder_top_n, temporal_decay_enabled)` — NO acepta `scope` ni `level`. Estos se manejan en `MemorySearchTool` (memory_search.py:349 decide `vi=None` cuando `scope=undreamed`; línea 424 filtra hits post-pipeline; `level=cold` enriquece con body después).
+
+**Decisión**: doc → reality. Agregar nota "Tool vs pipeline boundary" explicando que §2.1 lista los inputs del tool surface, y que el pipeline solo consume `query`/`keywords`/`vector_index`/`limit` directamente. Cero código tocado.
+
+**Resolución**: doc 03 §2.1 ampliada con bloque "Tool vs pipeline boundary" describiendo cómo cada input se orquesta (scope/level alrededor del pipeline call; limit clamped a [1,50] en el tool; bodies enriched post-pipeline en cold-tier).
+
+### E11 — Doc 03 §8.4 pre/post-cursor logic perdida en migración v2 ✅ RESOLVED
+
+**Doc 03 §8.4**: describe el partitioning pre/post-cursor como conducta activa del entity-aware rerank.
+
+**Código pre-E11**:
+- `entity_ranker.rank_with_entities(cursors=...)` implementa la lógica correctamente (tests pasan).
+- Helper `_load_cursors_from_entities_dir` (memory_search.py:31) cargaba cursors desde entity pages.
+- v1 search path los cableaba con `cursors=cursors`.
+- v2 search_pipeline `_entity_aware_rerank` NO los cableaba — llamaba `rank_with_entities` sin `cursors=`.
+- Helper quedó huérfano post-migración.
+
+**Genealogía**:
+- Commit `b724fa8`: helper introducido y wireado en v1.
+- Commit `1ea70ac` (Phase 2.5/3.5): nuevo `_entity_aware_rerank` en v2 pipeline SIN cursors desde día 1.
+- Commit `c820447` (Phase 5 d1): migración v1 → v2 elimina la vieja función; helper queda huérfano en memory_search.py.
+
+**Análisis de use cases** (con user, 2026-05-28):
+- (a) Textura narrativa: usuario pide reconstrucción de eventos → drill por URI funciona.
+- (b) Validación de evidence: agente cita fuente → drill al provenance URI funciona.
+- (c) Evolución temporal: agente ve histórico → drill puntual funciona.
+
+Esos 3 casos son drill-by-URI, NO búsquedas amplias. La duplicación canonical + N fragmentos pre-cursor en TODA query general es ruido sin valor.
+
+**Decisión (con user OK, opción B)**: restaurar cursor wiring en `_entity_aware_rerank`. NO archivar agresivamente (opción C descartada — perdería recall por contenido raw).
+
+**Bug adicional descubierto** durante TDD: `_resolve_meta` (search_pipeline.py:507) NO propagaba `entities` desde vector_meta. Resultado: entries no-entity_page llegaban a `rank_with_entities` con `entities=[]` → ningún overlap → ningún entry boosteado al entity-match list (solo el canonical page). Esto **enmascaraba** la regresión pre-cursor: sin entries en entity-match list, no había diferencia observable entre pre y post.
+
+**Resolución**:
+- Helper `_load_cursors_from_entities_dir` movido a `entity_ranker.py::load_cursors_from_entities_dir` (junto a su único consumer). Comment en memory_search.py:31 marca el move.
+- `_entity_aware_rerank`: carga cursors después de `extract_query_entities` y los pasa a `rank_with_entities`.
+- `_resolve_meta`: propaga `entities` desde vector_meta cuando está presente.
+- Import huérfano `EntityPage` removido de memory_search.py.
+- Tests TDD: 2 cases en `tests/memory/test_pipeline_cursor_wiring_e11.py` (pipeline excluye pre-cursor del boost; cursor loader devuelve dict correcto).
+
+**Validación**: 997 tests pasan en tests/memory/ (995 base + 2 E11; 1 skipped pre-existente).
+
+**Commit pendiente** (cierre del batch E10-E23).
