@@ -68,6 +68,12 @@ _PARAMETERS = tool_parameters_schema(
         "headlines + summaries; 'cold' returns full bodies.",
         enum=["warm", "cold"],
     ),
+    keywords=StringSchema(
+        "Optional literal string that MUST appear in results "
+        "(e.g. an email, UUID, exact phrase). When supplied, lexical "
+        "matches against this string are weighted heavily so the exact "
+        "hit surfaces robustly. Leave empty for purely semantic queries."
+    ),
     required=["query"],
     description=(
         "Search the agent's memory. Returns markdown URIs the agent can "
@@ -230,6 +236,12 @@ class MemorySearchTool(Tool):
         query = str(kwargs.get("query") or "").strip()
         scope = str(kwargs.get("scope") or "all")
         level = str(kwargs.get("level") or "warm")
+        keywords_raw = kwargs.get("keywords")
+        keywords = (
+            str(keywords_raw).strip()
+            if isinstance(keywords_raw, str) and keywords_raw.strip()
+            else None
+        )
 
         if not query:
             return {"error": "query is required"}
