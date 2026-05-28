@@ -43,9 +43,93 @@ from durin.memory.storage import load_entry
 __all__ = [
     "IndexStats",
     "detect_index_staleness",
+    "ensure_index_fresh",
     "rebuild_fts_index",
     "reindex_one_file",
 ]
+
+
+# Module-level cache of workspaces we've already freshness-checked in
+# this process. Prevents re-walking memory/ on every tool init.
+_FRESHNESS_CHECKED: set[str] = set()
+
+
+def _RESET_FRESHNESS_CACHE_FOR_TESTS() -> None:  # noqa: N802
+    """Test helper — never call from production code."""
+    _FRESHNESS_CHECKED.clear()
+
+
+def ensure_index_fresh(workspace: Path) -> dict:
+    """Auto-rebuild the FTS index when the on-disk schema_version
+    differs from :data:`durin.memory.index_meta.CURRENT_SCHEMA_VERSION`.
+
+    Idempotent within a single process — the second call for the same
+    workspace short-circuits via a module-level cache. Different
+    workspaces stay isolated.
+
+    Returns a dict ``{"rebuilt": bool, "reason": str}`` so callers can
+    log the outcome. ``reason`` values:
+
+    - ``"cached"``  — already checked this workspace this process.
+    - ``"no_memory_dir"`` — workspace has no ``memory/`` yet.
+    - ``"missing_meta"`` — first run; meta.json absent.
+    - ``"schema_mismatch"`` — on-disk version differs from code.
+    - ``"current"``  — meta matches; no work done.
+    """
+    from durin.memory.index_meta import (
+        CURRENT_SCHEMA_VERSION,
+        IndexMeta,
+        load_index_meta,
+        save_index_meta,
+    )
+
+    key = str(Path(workspace).resolve())
+    if key in _FRESHNESS_CHECKED:
+        return {"rebuilt": False, "reason": "cached"}
+    _FRESHNESS_CHECKED.add(key)
+
+    workspace = Path(workspace)
+    if not (workspace / "memory").is_dir():
+        return {"rebuilt": False, "reason": "no_memory_dir"}
+
+    meta = load_index_meta(workspace)
+    if meta is None:
+        reason = "missing_meta"
+    elif meta.schema_version != CURRENT_SCHEMA_VERSION:
+        reason = "schema_mismatch"
+    else:
+        return {"rebuilt": False, "reason": "current"}
+
+    # Rebuild + persist new meta. Best-effort: a rebuild failure logs
+    # but doesn't propagate — the search pipeline's graceful
+    # degradation handles a stale/empty index from there.
+    try:
+        stats = rebuild_fts_index(workspace)
+        _emit_rebuild(
+            target="fts",
+            indexed=stats.indexed,
+            errors=stats.errors,
+            duration_ms=0.0,
+            reason=reason,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "ensure_index_fresh: rebuild failed for %s: %s",
+            workspace, exc,
+        )
+        return {"rebuilt": False, "reason": f"error: {exc}"}
+
+    # Bump meta to the current version. Preserve any previous
+    # embedding_model_id if present, else write an empty marker.
+    existing_model = meta.embedding_model_id if meta else ""
+    save_index_meta(
+        workspace,
+        IndexMeta(
+            schema_version=CURRENT_SCHEMA_VERSION,
+            embedding_model_id=existing_model,
+        ),
+    )
+    return {"rebuilt": True, "reason": reason}
 
 logger = logging.getLogger(__name__)
 
@@ -97,20 +181,30 @@ def rebuild_fts_index(workspace: Path) -> IndexStats:
 
 
 def _emit_rebuild(
-    *, target: str, indexed: int, errors: int, duration_ms: float,
+    *,
+    target: str,
+    indexed: int,
+    errors: int,
+    duration_ms: float,
+    reason: str | None = None,
 ) -> None:
-    """Best-effort telemetry — never raises."""
+    """Best-effort telemetry — never raises.
+
+    ``reason`` is included when the rebuild was triggered by something
+    other than an explicit CLI call (e.g. ``schema_mismatch`` from
+    :func:`ensure_index_fresh`).
+    """
     try:
         from durin.agent.tools._telemetry import emit_tool_event
-        emit_tool_event(
-            "memory.index.rebuild",
-            {
-                "target": target,
-                "indexed": indexed,
-                "errors": errors,
-                "duration_ms": duration_ms,
-            },
-        )
+        payload: dict = {
+            "target": target,
+            "indexed": indexed,
+            "errors": errors,
+            "duration_ms": duration_ms,
+        }
+        if reason:
+            payload["reason"] = reason
+        emit_tool_event("memory.index.rebuild", payload)
     except Exception:  # pragma: no cover
         pass
 
@@ -268,8 +362,13 @@ def _payload_for(workspace: Path, md_path: Path) -> Optional[dict]:
     # Let load_entry's parse errors propagate — the caller counts them
     # as `errors` so `IndexStats` reflects the corruption surface.
     entry = load_entry(md_path)
+    # URI shape matches the grep/v1 path's `Result.uri` so cross-
+    # source RRF can dedupe a hit that surfaces via both FTS and
+    # grep. Without this prefix the same entry would appear twice
+    # in the fused result list (once as "abc123" via FTS, once as
+    # "memory/episodic/abc123" via grep).
     return {
-        "uri": entry.id,
+        "uri": f"memory/{class_name}/{entry.id}",
         "path": rel_path,
         "type_": class_name,
         "entity_type": None,
