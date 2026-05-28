@@ -61,6 +61,7 @@ import {
 } from "@/lib/api";
 import { ChannelsSettings } from "@/components/settings/ChannelsSettings";
 import { ConfigSettings } from "@/components/settings/ConfigSettings";
+import { MemorySettings } from "@/components/settings/MemorySettings";
 import { ModelPicker } from "@/components/settings/ModelPicker";
 import {
   SettingsGroup,
@@ -77,6 +78,7 @@ type SettingsSectionKey =
   | "providers"
   | "web-search"
   | "channels"
+  | "memory"
   | "secrets"
   | "advanced";
 type ByokPaneKey = "llm" | "web-search";
@@ -400,6 +402,8 @@ export function SettingsView({
                 />
               ) : activeSection === "channels" ? (
                 <ChannelsSettings token={token} />
+              ) : activeSection === "memory" ? (
+                <MemorySettings token={token} />
               ) : activeSection === "secrets" ? (
                 <SecretsSettings token={token} />
               ) : activeSection === "advanced" ? (
@@ -457,6 +461,7 @@ const SETTINGS_NAV_ITEMS = [
   { key: "providers", icon: KeyRound },
   { key: "web-search", icon: Globe },
   { key: "channels", icon: MessagesSquare },
+  { key: "memory", icon: Brain },
   { key: "secrets", icon: Lock },
   { key: "advanced", icon: Sliders },
 ] as const;

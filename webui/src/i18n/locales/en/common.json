@@ -70,7 +70,8 @@
       "advanced": "All settings",
       "providers": "Model providers",
       "web-search": "Web search",
-      "channels": "Channels"
+      "channels": "Channels",
+      "memory": "Memory"
     },
     "sections": {
       "interface": "Interface",
@@ -226,6 +227,50 @@
       "noCredential": "No credential needed.",
       "loadError": "Could not load channels.",
       "saveError": "Could not save the channel."
+    },
+    "memory": {
+      "description": "Tune the memory subsystem — search reranking, dream auto-consolidation, and temporal decay defaults.",
+      "loadError": "Could not load memory settings.",
+      "saveError": "Could not save {{path}}.",
+      "sections": {
+        "rerank": "Search reranking",
+        "dream": "Dream auto-consolidation",
+        "decay": "Temporal decay (read-only)"
+      },
+      "rows": {
+        "crossEncoderEnabled": "Cross-encoder reranker",
+        "crossEncoderModel": "Reranker model",
+        "thresholdEntries": "Consolidation threshold",
+        "decayOverrides": "Per-entry overrides"
+      },
+      "help": {
+        "crossEncoderEnabled": "Opt-in second-pass reranker. Adds 300-1500 ms per query and ~1 GB RAM but improves quality on ambiguous queries. Off by default.",
+        "crossEncoderModel": "Model used when the reranker is enabled. The default works well for multilingual queries; alternatives trade size for latency.",
+        "thresholdEntries": "Run an entity-centric Dream pass once a single entity accumulates this many post-cursor entries. Set to 0 to disable the per-entity trigger (cron and session-close triggers still apply).",
+        "decayOverrides": "Override the class default per entry by setting decay_half_life in the entry's frontmatter. Set evergreen: true to make an entry never decay."
+      },
+      "crossEncoderModels": {
+        "jinaV2": "jina-reranker-v2-base-multilingual · default · 278 M",
+        "bgeBase": "BAAI/bge-reranker-base · 278 M · English-leaning",
+        "bgeV2M3": "BAAI/bge-reranker-v2-m3 · 568 M · multilingual",
+        "qwen3": "Qwen3-Reranker-0.6 B · top MTEB · 600 M"
+      },
+      "decayClasses": {
+        "episodic": "Episodic",
+        "session_summary": "Session summary",
+        "entity": "Entity",
+        "stable": "Stable",
+        "corpus": "Corpus"
+      },
+      "decayHelp": {
+        "episodic": "Day-to-day observations. Decay because age matters.",
+        "session_summary": "Per-session digests. Decay slower than raw episodic.",
+        "entity": "Canonical entity pages. mtime tracks last Dream update, not fact age.",
+        "stable": "Long-lived facts. Should not decay with time.",
+        "corpus": "Imported source material. mtime is the ingest date, not the fact's age."
+      },
+      "decayNever": "never decays",
+      "decayDays": "{{days}} days"
     }
   },
   "chat": {
