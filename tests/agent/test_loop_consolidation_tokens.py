@@ -189,15 +189,17 @@ async def test_consolidation_persists_summary_for_next_prepare_session(tmp_path,
     await loop.consolidator.maybe_consolidate_by_tokens(session)
 
     reloaded = loop.sessions.get_or_create("cli:test")
-    meta = reloaded.metadata.get("_last_summary")
-    assert meta is not None
-    assert meta["text"] == "User discussed project status."
+    # A10: summary lives in `memory/session_summary/<key>.md` (single
+    # source of truth) — NOT in `reloaded.metadata["_last_summary"]`.
+    from durin.memory.session_summary_store import get_session_summary
+    text, _ = get_session_summary(loop.workspace, reloaded.key)
+    assert text == "User discussed project status."
 
     pending = loop._format_pending_summary(reloaded)
     assert pending is not None
     assert "User discussed project status." in pending
-    # _last_summary persists for restart survival.
-    assert "_last_summary" in reloaded.metadata
+    # Legacy field was migrated out of metadata — single source of truth.
+    assert "_last_summary" not in reloaded.metadata
 
 
 @pytest.mark.asyncio

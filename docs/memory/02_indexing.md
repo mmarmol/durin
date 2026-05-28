@@ -110,8 +110,9 @@ The model is **not configurable per-row**. All vectors in the index share this m
 | `memory/episodic/<id>.md` (post-cursor + pre-cursor both) | `memory/pending/<id>.md` (intake buffer; walker/indexer skip it) |
 | `memory/stable/<id>.md` | `sessions/<id>/<id>.jsonl` (raw conversation transcripts) |
 | `memory/corpus/<id>.md` | `ingested/<id>/source.*` (raw artifacts; only the derived `memory/corpus/<id>.md` chunks are indexed) |
+| `memory/session_summary/<sanitized_key>.md` (audit A10 — see §3.3.1) | `sessions/<id>/<id>.jsonl` (raw transcripts; never indexed) |
 
-> **Session summaries**: doc v1 promised one row per session at `class_name=session_summary` derived from `sessions/<id>/<id>.meta.json::_last_summary`. **No code emits these rows today** — the walker only iterates `.md` files under `memory/`. Tracked as audit item A10 (`docs/memory/11_audit_reconciliation.md`).
+> **§3.3.1 Session summaries (audit A10, 2026-05-28)**: when the consolidator persists a session summary (`Consolidator._persist_last_summary` in `durin/agent/memory.py`), it writes the canonical copy to `memory/session_summary/<sanitized_key>.md`. Pre-A10 sessions kept the text in `session.metadata["_last_summary"]` (JSON sidecar); A10 picks the single-source-of-truth path per A4 lessons — the JSON field is dropped on the next compaction and the markdown becomes authoritative. The walker picks the directory up automatically (`MEMORY_CLASSES` now includes `session_summary`), the indexer assigns `class_name="session_summary"`, and A9's 120-day half-life applies. The agent-facing `memory_store` enum deliberately excludes `session_summary` — only the compactor produces these rows.
 
 The shared workspace walker (`walk_memory(workspace, include_archive=False)`) is the single chokepoint. Indexer, ranker, alias bootstrapper, and any future scanner all consume its output.
 

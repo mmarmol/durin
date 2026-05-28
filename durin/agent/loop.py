@@ -1853,24 +1853,44 @@ class AgentLoop:
             message.get("thinking_blocks"),
         )
 
-    @staticmethod
-    def _format_pending_summary(session: Session) -> str | None:
-        """Read the consolidator's last summary from session.metadata and wrap
-        it with the archive marker so the next turn can distinguish "this is
-        a summary, not real conversation".
+    def _format_pending_summary(self, session: Session) -> str | None:
+        """Read the consolidator's last summary and wrap it with an
+        archive marker so the next turn can distinguish "this is a
+        summary" from "this is real conversation".
 
         Returns ``None`` when no summary has been persisted yet (fresh
         session or no consolidation rounds have run).
+
+        A10 (2026-05-28): the summary primarily lives at
+        ``memory/session_summary/<sanitized_key>.md`` (single source
+        of truth). For backward compatibility with pre-A10 sessions
+        whose metadata still carries the legacy ``_last_summary``
+        dict, we fall through to that path when the markdown isn't
+        there yet (the next compaction migrates it).
         """
-        meta = session.metadata.get("_last_summary")
-        if not isinstance(meta, dict):
-            return None
-        text = meta.get("text")
-        last_active = meta.get("last_active")
-        if not isinstance(text, str) or not text:
+        from durin.memory.session_summary_store import get_session_summary
+
+        text: str | None = None
+        last_active: str | None = None
+
+        md_text, md_last_active = get_session_summary(self.workspace, session.key)
+        if md_text:
+            text = md_text
+            last_active = md_last_active.isoformat() if md_last_active else None
+        else:
+            # Legacy fallback: pre-A10 metadata. Gets migrated next compaction.
+            meta = session.metadata.get("_last_summary")
+            if isinstance(meta, dict):
+                cand = meta.get("text")
+                if isinstance(cand, str) and cand:
+                    text = cand
+                    raw_last = meta.get("last_active")
+                    last_active = raw_last if isinstance(raw_last, str) else None
+
+        if not text:
             return None
         header = "consolidator"
-        if isinstance(last_active, str) and last_active:
+        if last_active:
             header = f"consolidator, last active {last_active}"
         return (
             f"=== ARCHIVED SUMMARY ({header}) ===\n"

@@ -611,7 +611,46 @@ Y §6.5 (yield rule): *"Also yields `sessions/<id>/<id>.meta.json` if a `_last_s
 
 **Recomendación**: opción A — las session summaries son retrieval-valiosas (resumen condensado de una conversación entera). ~30 LOC en el handler de session close. Pero requiere decidir dónde viven (`memory/<class>/` requiere una clase nueva o reusar `episodic`).
 
-**Estado**: pending
+**Resolución (2026-05-28) — Opción A con single source of truth**: el user empujó con la pregunta clave: *"el last summary ahora va vivir en el archivo metadata de la session ademas de su entidad propia?"* — exactamente el pattern A4 (P2.5) que ya habíamos identificado como anti-pattern. La duplicación entre `<key>.meta.json::_last_summary` y `memory/session_summary/<key>.md` era replication, no fan-out. Solución: el `.md` es la **única** fuente de verdad; el JSON metadata deja de cargar `_last_summary` going forward.
+
+Cambios:
+
+- [durin/memory/session_summary_store.py](../../durin/memory/session_summary_store.py) (nuevo, ~155 LOC):
+  * `SESSION_SUMMARY_CLASS = "session_summary"` constante.
+  * `sanitize_session_key(key)` — mismo patrón que `TelemetryLogger`'s sanitiser: collapses non-word chars + dot runs (path-traversal safe), cap a 80 chars.
+  * `session_summary_path(workspace, key)` — resuelve a `memory/session_summary/<sanitized>.md`.
+  * `write_session_summary(workspace, key, text, last_active=None)` — escribe la entry via Pydantic-valid `MemoryEntry`. Empty/sentinel input → no write.
+  * `get_session_summary(workspace, key) -> (text, last_active)` — read path. Never raises.
+  * `delete_session_summary(workspace, key) -> bool` — borrado explícito.
+- [durin/memory/paths.py](../../durin/memory/paths.py): `MEMORY_CLASSES` ahora incluye `"session_summary"` (5 valores). Walker recoge automáticamente.
+- [durin/agent/memory.py::Consolidator._persist_last_summary](../../durin/agent/memory.py): refactorizado — escribe al `.md` via `write_session_summary` y **pop el legacy `_last_summary` del `session.metadata`** + save (migración one-shot por compaction). Aislado en try/except para que el flow del consolidator nunca rompa por un write fail.
+- [durin/agent/memory.py::estimate_session_prompt_tokens](../../durin/agent/memory.py): lee del `.md` via `get_session_summary`; fallback al legacy `metadata["_last_summary"]` para sesiones pre-A10 que aún no compactaron.
+- [durin/agent/loop.py::_format_pending_summary](../../durin/agent/loop.py): cambió de `@staticmethod` a método de instancia para acceder a `self.workspace`. Lee del `.md` primero; fallback al legacy metadata.
+- [tests/memory/test_paths.py](../../tests/memory/test_paths.py): test del set canonical actualizado a 5 valores.
+- 3 tests legacy actualizados para usar `get_session_summary` en vez de leer `session.metadata["_last_summary"]`: [test_consolidator.py:167](../../tests/agent/test_consolidator.py), [test_loop_consolidation_tokens.py:191](../../tests/agent/test_loop_consolidation_tokens.py), [test_d1_commands.py:187](../../tests/command/test_d1_commands.py).
+- [tests/memory/test_session_summary_indexing.py](../../tests/memory/test_session_summary_indexing.py) (nuevo, 14 tests):
+  * `session_summary` en `MEMORY_CLASSES` pero NO en `_AGENT_FACING_CLASSES` (agent never writes summaries directly).
+  * `sanitize_session_key`: simple/colon/path-traversal/empty handled.
+  * `write_session_summary` round-trip → texto idéntico.
+  * Empty/sentinel input → no write.
+  * Update overrides same path (id = sanitized key).
+  * `delete_session_summary` removes md; second delete is no-op.
+  * Persisted entry is Pydantic-valid (round-trips via `load_entry`).
+  * Indexer's `_payload_for` asigna `class_name="session_summary"`.
+  * A9 decay para `session_summary` resuelve a 120 días.
+
+- [docs/memory/02_indexing.md §3.3](02_indexing.md): nueva §3.3.1 "Session summaries (audit A10)" explica el flow + la decisión de single source of truth + agent_facing_classes exclusion.
+
+**Sesiones pre-A10**: tienen `_last_summary` en `metadata` JSON. La migración es **lazy**: en la próxima compaction de cada session, `_persist_last_summary` escribe el `.md` nuevo Y pop el legacy field del metadata. Si una session NUNCA se vuelve a compactar (e.g. user abandona), el legacy summary queda en su JSON — el `_format_pending_summary` lo lee como fallback. No data loss; sólo "no indexing" para esas sesiones huérfanas (aceptable; user nunca las va a usar).
+
+**Lecciones aplicadas**:
+- [[feedback-optimization-vs-principle]] (A4): el user identificó la replication antes de que yo la implementara. Cumple exactamente el pattern de A4.
+- [[feedback-question-user-input]]: el user empujó "esto vive en dos lugares?" y la respuesta correcta era refactorizar el plan, no defender la duplicación.
+- [[feedback-sync-tests-exercise-behavior]]: tests ejercitan round-trips reales, no schemas mockeados.
+
+**Verificado pre-commit**: tests/memory/ + tests/agent/ + tests/command/ + tests/session/ + tests/telemetry/ 2302 passed (todos los tests pasan después de actualizar los 3 legacy + agregar 14 nuevos), 1 skipped.
+
+**Estado**: resolved (commit pendiente).
 
 ---
 

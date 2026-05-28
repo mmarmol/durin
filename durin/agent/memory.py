@@ -672,12 +672,52 @@ class Consolidator:
         }
 
     def _persist_last_summary(self, session: Session, summary: str | None) -> None:
+        """Persist the session summary as the single source of truth.
+
+        A10 (2026-05-28): the summary lives as a markdown projection
+        under ``memory/session_summary/<sanitized_key>.md`` — NOT in
+        ``session.metadata["_last_summary"]`` anymore. The walker /
+        indexer pick it up automatically, and the search pipeline
+        can return it as a hit (`class_name=session_summary`, decay
+        120d per A9).
+
+        Backward-compat: if the session's metadata still carries a
+        legacy ``_last_summary`` dict (pre-A10 persistence), we drop
+        it here so the JSON and the markdown can't drift apart. The
+        markdown is the source of truth going forward.
+        """
         if summary and summary != "(nothing)":
-            session.metadata["_last_summary"] = {
-                "text": summary,
-                "last_active": session.updated_at.isoformat(),
-            }
-            self.sessions.save(session)
+            from durin.memory.session_summary_store import (
+                write_session_summary,
+            )
+            try:
+                write_session_summary(
+                    self.store.workspace,
+                    session.key,
+                    summary,
+                    last_active=session.updated_at,
+                )
+            except Exception as exc:  # noqa: BLE001
+                # The persistence must NEVER break the compaction
+                # path — the summary will be regenerated next time
+                # if this write fails. Log loudly so the failure
+                # surfaces in operator review.
+                logger.warning(
+                    "session_summary: write for %s failed: %s",
+                    session.key, exc,
+                )
+        # Drop the legacy field from metadata if it was carrying a
+        # pre-A10 summary. Saves the session so the JSON reflects
+        # the new state (single source of truth principle).
+        legacy = session.metadata.pop("_last_summary", None)
+        if legacy is not None:
+            try:
+                self.sessions.save(session)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "session_summary: failed to drop legacy "
+                    "metadata for %s: %s", session.key, exc,
+                )
 
     def estimate_session_prompt_tokens(
         self,
@@ -687,8 +727,18 @@ class Consolidator:
         history = self._full_unconsolidated_history(session, include_timestamps=True)
         channel, chat_id = (session.key.split(":", 1) if ":" in session.key else (None, None))
         # Include archived summary in estimation so the budget accounts for it.
-        meta = session.metadata.get("_last_summary")
-        summary = meta.get("text") if isinstance(meta, dict) else (meta if isinstance(meta, str) else None)
+        # A10: summary lives in `memory/session_summary/<key>.md` now (single
+        # source of truth); the legacy `session.metadata["_last_summary"]` is
+        # kept as a backward-compat fallback for pre-A10 sessions until they
+        # next compact (at which point `_persist_last_summary` migrates).
+        from durin.memory.session_summary_store import get_session_summary
+        summary, _ = get_session_summary(self.store.workspace, session.key)
+        if summary is None:
+            legacy = session.metadata.get("_last_summary")
+            if isinstance(legacy, dict):
+                summary = legacy.get("text") if isinstance(legacy.get("text"), str) else None
+            elif isinstance(legacy, str):
+                summary = legacy
         probe_messages = self._build_messages(
             history=history,
             current_message="[token-probe]",
