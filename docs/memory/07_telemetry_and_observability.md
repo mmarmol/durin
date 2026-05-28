@@ -427,10 +427,47 @@ These thresholds are guidelines; they should be tuned once we have weeks of prod
 
 ### 12.2 Retention
 
-- Local file storage (typically `~/.durin/telemetry/*.jsonl`).
-- Default rotation: keep 30 days. Older events compressed to `.jsonl.gz` and kept 1 year, then deleted.
-- Operator can extend retention via config.
-- Telemetry is NOT pushed to a remote server by default. If the operator opts in (settings), events ship to a configurable HTTPS endpoint.
+- Local file storage at `~/.cache/durin/telemetry/*.jsonl` (per-session, per-day file).
+- Rotation: see `durin/telemetry/retention.py` — `COMPRESSION_AGE_DAYS=30`, `DELETION_AGE_DAYS=90`. Files older than the compression threshold are gzipped in place; archives older than the deletion threshold are removed. Defaults can be raised by editing the constants (configurable retention is `08_scope_and_discarded.md` B5 — deferred until an operator asks).
+- Retention runs on the health-check tick (P7.2 piggyback). No separate cron.
+
+### 12.3 Opt-in HTTPS push (audit A8)
+
+Telemetry is NOT pushed to any remote server by default. The `PushSink` library (`durin/telemetry/push.py`) supports fan-out to an HTTPS endpoint for operators who want to centralize observability data — e.g. into Grafana/Loki, Datadog, a custom collector, or an internal durin dashboard.
+
+**Why this exists**: telemetry is first-class infrastructure for understanding what durin does and how it's used. The local JSONL is always the source of truth, but to query, alarm, and analyze across sessions/machines, an export pipeline matters. PushSink is the pipe.
+
+**Configuration** (default OFF):
+
+```toml
+[telemetry.push]
+enabled = false
+url = ""                              # e.g. "https://collector.example.com/durin"
+token_secret_name = ""                # name of the secret in ~/.durin/secrets.json
+batch_size = 10                       # events buffered before a POST
+```
+
+**Auth**: the bearer token NEVER lives in `config.json`. Set it in the secret store:
+
+```sh
+durin secrets set DURIN_TELEMETRY_PUSH_TOKEN <token>
+```
+
+…and reference the name in config (`token_secret_name = "DURIN_TELEMETRY_PUSH_TOKEN"`).
+
+**Privacy implications**: every event the local JSONL receives also POSTs to the endpoint. That includes the truncated `query`, `text`, `snippet`, `content`, `needle` fields (200 char max per `_truncate_freetext`). Enable push ONLY when:
+
+- The endpoint is YOUR OWN infrastructure (or a service you've vetted for the kind of content durin events carry).
+- You understand that 200-char truncations of queries can still contain personal information.
+- TLS is enforced on the URL (`https://...` only).
+
+**Behaviour**:
+
+- Wiring is in `durin/telemetry/wiring.py::wire_push_sink`, invoked once per session by `AgentLoop`.
+- Misconfiguration (URL or `token_secret_name` empty, or the secret not in the store) → push is silently disabled and the local JSONL keeps working. The startup log surfaces a warning so the operator can fix it.
+- `PushSink.log()` is isolated in a try/except inside the logger's fan-out loop — a failing push NEVER breaks the JSONL write or the calling tool.
+- On agent shutdown, `AgentLoop` calls `push_sink.flush()` so the last partial batch isn't lost.
+- Failed POSTs are restored to the buffer by `PushSink._drain()`; the next batch retries them.
 
 ---
 

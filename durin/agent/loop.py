@@ -924,10 +924,29 @@ class AgentLoop:
         active_session_key = session.key if session else session_key
         file_state_token = bind_file_states(self._file_state_store.for_session(active_session_key))
         telemetry_token = None
+        # A8: optional HTTPS push sink. Default OFF; opt-in via
+        # cfg.telemetry.push.enabled. Captured here so the cleanup
+        # path can call flush() before the process exits.
+        push_sink_for_cleanup = None
         if active_session_key:
             try:
                 from durin.telemetry.logger import bind_telemetry, get_session_logger
-                telemetry_token = bind_telemetry(get_session_logger(active_session_key))
+                session_logger = get_session_logger(active_session_key)
+                try:
+                    from durin.telemetry.wiring import wire_push_sink
+                    push_sink_for_cleanup = wire_push_sink(
+                        session_logger,
+                        getattr(
+                            getattr(self.app_config, "telemetry", None),
+                            "push", None,
+                        ),
+                    )
+                except Exception:  # noqa: BLE001
+                    # Push wiring failure must NEVER affect the JSONL
+                    # path. Log via the session_logger so the failure
+                    # is itself recorded; the local sink keeps working.
+                    push_sink_for_cleanup = None
+                telemetry_token = bind_telemetry(session_logger)
             except Exception:
                 telemetry_token = None
         # Sprint B / L3 — agent-mode provider, resolved per iteration so a
@@ -982,6 +1001,14 @@ class AgentLoop:
             ))
         finally:
             reset_file_states(file_state_token)
+            # A8: drain the push sink BEFORE we let the logger go out
+            # of scope. A partial buffer that's never drained loses
+            # those events — flush is best-effort but worth the call.
+            if push_sink_for_cleanup is not None:
+                try:
+                    push_sink_for_cleanup.flush()
+                except Exception:  # noqa: BLE001
+                    pass
             if telemetry_token is not None:
                 from durin.telemetry.logger import reset_telemetry
                 reset_telemetry(telemetry_token)
