@@ -275,10 +275,13 @@ EXISTING ENTITY URIs in workspace (consider for dedup; create new only if no mat
   sorts by file mtime descending, caps at 100. The slot now
   carries the freshest URIs in the workspace so the LLM avoids
   creating duplicates (e.g. `person:marcelo_marmol` when
-  `person:marcelo` already exists). Default cap of 100 lives at
-  `DEFAULT_EXISTING_URIS_CAP` and is hard-coded; lifting it into
-  config is straightforward if operators with very large workspaces
-  ask.
+  `person:marcelo` already exists). The 100-cap lives at
+  `entity_inventory.DEFAULT_EXISTING_URIS_CAP` and at
+  `dream_prompt_builder._EXISTING_URIS_CAP` (two caps in series);
+  audit G4 (2026-05-28) explicitly decided NOT to lift it to
+  config — no telemetry detects "duplicate created because cap was
+  too low" so an operator has no observable trigger to tune it.
+  See `08_scope_and_discarded.md` §2.13.
 
 SUGGESTED STARTER TYPES (for when you must create a new entity URI):
   person, place, project, topic, event, artifact, stance, practice

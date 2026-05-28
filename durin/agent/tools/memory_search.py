@@ -371,6 +371,21 @@ class MemorySearchTool(Tool):
             except AttributeError:
                 temporal_decay_enabled = True
 
+        # G1 (audit fourth pass, 2026-05-28): operator-configured
+        # per-source cap for the sectioning step. Default is None →
+        # `run_search_pipeline` falls back to
+        # `DEFAULT_MAX_PER_SOURCE` so existing workspaces are
+        # unchanged.
+        max_per_source: int | None = None
+        if self._app_config is not None:
+            try:
+                sectioning_cfg = (
+                    self._app_config.memory.search.sectioning
+                )
+                max_per_source = int(sectioning_cfg.max_per_source)
+            except AttributeError:
+                max_per_source = None
+
         t0 = time.monotonic()
         pipeline_result = run_search_pipeline(
             self._workspace,
@@ -382,6 +397,7 @@ class MemorySearchTool(Tool):
             cross_encoder_top_n=ce_top_n,
             temporal_decay_enabled=temporal_decay_enabled,
             temporal_decay_overrides=temporal_decay_overrides,
+            max_per_source=max_per_source,
         )
         duration_ms = (time.monotonic() - t0) * 1000.0
 
@@ -572,23 +588,29 @@ class MemorySearchTool(Tool):
             # Determine class_name from the archive subpath:
             # archive/episodic/...  → episodic
             # archive/entities/...  → entity_page
+            # G6 (audit fourth pass, 2026-05-28): emit the relative
+            # path under `memory/` as the URI so the agent can drill
+            # archive hits directly. Pre-G6 the URI was
+            # `front.uri or path.stem` — a bare id with no path
+            # prefix that drill could not resolve, so the agent had
+            # no way to fetch the full body of an archive hit.
+            try:
+                rel_path = path.relative_to(self._workspace).as_posix()
+            except ValueError:
+                rel_path = f"memory/archive/{path.name}"
             try:
                 rel_parts = path.relative_to(archive_root).parts
             except ValueError:
                 rel_parts = ()
             if rel_parts and rel_parts[0] == "entities":
                 class_name = "entity_page"
-                uri = (
-                    f"{front.get('type', 'unknown')}:"
-                    f"{path.stem}"
-                )
                 headline = front.get("name", path.stem)
             else:
                 class_name = (
                     rel_parts[0] if rel_parts else "archived"
                 )
-                uri = front.get("uri", "") or path.stem
                 headline = front.get("headline", path.stem)
+            uri = rel_path
             summary = front.get("summary", "")
             # Snippet: first ~160 chars around the match.
             m = re.search(re.escape(needle), haystack)
@@ -654,7 +676,26 @@ class MemorySearchTool(Tool):
             )
             for r in hits
         ]
-        capped = apply_per_source_cap(sectioned)
+        # G1 (audit fourth pass, 2026-05-28): honour the operator-
+        # configured cap on the archive path too. In practice every
+        # archived hit has `ingest_id=None` so the cap keys off `uri`
+        # and rarely triggers, but threading the config keeps the two
+        # paths uniform.
+        archive_cap: int | None = None
+        if self._app_config is not None:
+            try:
+                archive_cap = int(
+                    self._app_config.memory.search.sectioning
+                    .max_per_source
+                )
+            except AttributeError:
+                archive_cap = None
+        if archive_cap is None:
+            capped = apply_per_source_cap(sectioned)
+        else:
+            capped = apply_per_source_cap(
+                sectioned, max_per_source=archive_cap,
+            )
         kept = {h.uri for h in capped}
         kept_results = [r for r in hits if r.uri in kept]
         return {

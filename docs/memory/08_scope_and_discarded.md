@@ -240,6 +240,26 @@ Aggregate metric `silent_retrieval_miss_rate` would gate activation of §2.F (ea
 
 ---
 
+### 2.13 `existing_uris_cap` Dream-prompt config knob
+
+**What was proposed**: lift `DEFAULT_EXISTING_URIS_CAP = 100` (in `durin.memory.entity_inventory`) and the parallel `_EXISTING_URIS_CAP = 100` (in `durin.memory.dream_prompt_builder`) into config so an operator could tune how many recent entity URIs land in the Dream consolidator's prompt to discourage duplicate entity creation. Audit F17 (2026-05-28) deferred this with the rationale "Hard-coded; lifting it into config is straightforward if operators with very large workspaces ask."
+
+**Why we are not implementing it** (audit G4, 2026-05-28 — correcting the F17 defer):
+
+1. **No failure mode would produce the ask.** Duplicate entity creation is invisible to operators: the Dream LLM either creates a duplicate or does not, and the cap is one of many inputs (also: the page content, the entries being consolidated, the model temperature). There is no telemetry that measures "duplicate avoided thanks to existing_uris signal", so operators cannot detect "cap too low" empirically.
+
+2. **The 100-most-recent is a strong signal where duplicates actually happen.** Duplicate creation occurs typically around recently-active entities (the LLM sees `person:marcelo` in a fragment and emits a new `person:marcelo_marmol` because it doesn't realise the existing slug). Old, forgotten entities are not where duplicates come from — and raising the cap to 200+ pulls more old entities into the prompt without addressing the typical failure.
+
+3. **Two caps in series.** `entity_inventory` and `dream_prompt_builder` both cap at 100. Lifting just the producer to config silently leaves the renderer's cap in effect; lifting both requires coordinated config + threading from `DreamConsolidator._build_prompt` to two modules. The work-to-benefit ratio is poor without a concrete trigger.
+
+4. **The operator who really needs to tune can patch the constant.** It is one line of code in `entity_inventory.py`. The defer would replace a one-line patch with ~60 LOC of config plumbing and a TDD surface, for a knob no telemetry would tell the operator to turn.
+
+**The concrete trigger that would change this**: telemetry that tags duplicate entity creations as such and attributes them to "missed in existing_uris signal" — i.e., a dashboard showing "N duplicates created last week, K of them had the canonical in the workspace but outside the top-100 by mtime". We have neither the telemetry nor any signal that the rate is non-zero.
+
+**Status**: removed from the deferred list. Doc 06 §2 (existing_uris slot) and doc 05 §5.1 row drop the "lift to config when asked" note. F17 entry in doc 11 annotated with this G4 correction.
+
+---
+
 ### 2.10 `body` column in LanceDB (P2.5, reverted by A4)
 
 **What we briefly did**: commit `a266344` (P2.5, 2026-05-28 09:10) added a `body` column to the LanceDB row schema so cold-tier queries (`memory_search(level="cold")`) could return full bodies without N disk reads. The commit message framed it as a "trade-off explicit": doubled index size in exchange for eliminating per-cold-hit file opens.
@@ -270,6 +290,76 @@ Aggregate metric `silent_retrieval_miss_rate` would gate activation of §2.F (ea
 - **An optimisation that violates an architectural principle must be justified by measurement, not intuition.** "Avoids N disk reads" sounds compelling but is meaningless without knowing whether those disk reads were the bottleneck. They weren't.
 - **The fix for a slow consumer is local to that consumer, not a schema change.** If cross-encoder rerank is slow when reading body from disk, optimise the CE step (top-N fetch, async I/O, caching). Don't add a body column to LanceDB that 95% of queries don't need.
 - **Symmetry between indices is a feature.** FTS5 and LanceDB both being "metadata + index, content on disk" makes the system easier to reason about. Breaking symmetry in one place leaks complexity everywhere.
+
+---
+
+### 2.14 `summary` slot in entity-page embedding text
+
+**What was proposed**: insert a Dream-generated `summary` between `rendered_frontmatter` and `body` in the entity-page embedding text, intended to replace the truncated body in the centroid when body exceeded the 1500-char budget. Audit E9 (2026-05-28) deferred it with the wording "if bench shows recall regression on long-body entity pages, restore the slot."
+
+**Why we are not implementing it** (audit G6, 2026-05-28 — closing the E9 defer): the defer was built on a factual error and the alternative paths cover the use case.
+
+1. **The data model does not support the slot.** `EntityPage` has no `summary` field; Dream produces zero summaries for entity pages today. The E9 wording "Dream produces a `summary` attribute only sometimes" was wrong — Dream never produces one, because the dataclass does not accept it. Shipping the slot would require modifying `EntityPage`, the Dream prompt, the `dream_apply` logic, and the composer — not "restoring" a feature that was there.
+
+2. **Only the vector path is bounded by the 1500-char cap.** FTS5 indexes the full composed text without truncation (doc 02 §5.2 "BM25 text truncation: None"); the grep fallback reads the file from disk. A query whose match is at char 7000 of a 10000-char body is found by the lexical path and by grep. The canonical surfaces in the result set even when the vector centroid does not have those tokens.
+
+3. **G6 closed the body-recovery loop**. Pre-G6 `drill()` could not resolve the canonical URI `memory/entity_page/<type>:<slug>` that `memory_search` emits; every canonical hit was undrillable. G6 fixed that. The agent that gets a canonical hit with a truncated snippet now drills to the full body in one tool call. The `summary` slot would have addressed a symptom that G6 cured at the source.
+
+**The concrete trigger that would change this**: a Phase 8 bench result showing recall regression on entity pages with body > 1500 chars, AND failure-trace attribution to "vector path missed because canonical centroid lacked tokens" (i.e. FTS5 + grep also failed to surface the page). No bench evidence supports this; the corner case where all three paths fail is narrow.
+
+**Estimated implementation cost when triggered** (so a future audit does not re-litigate the size of the work): add `summary: str = ""` to `EntityPage`; modify the Dream consolidator prompt and apply path to emit and persist it; modify `_compose_entity_page_text` to substitute body for summary when summary is present; bump `CURRENT_SCHEMA_VERSION` and force a rebuild. Roughly 100-150 LOC plus reindex.
+
+**Status**: removed from the deferred list. E9 entry in doc 11 annotated with the G6 reclassification. Doc 02 §4.2 carries the full "decided against" reasoning so the next audit pass does not silently re-propose it without new evidence.
+
+---
+
+### 2.15 Full unification of `hot_layer` and `sectioned_output` renderers
+
+**What was proposed**: collapse the two renderers in `durin/memory/` that produce `=== CANONICAL: ... === END CANONICAL ===` blocks into a single module. Audit F4 (2026-05-28) unified the two renderers used by `memory_search` (`Result.render_block` and `sectioned_output._render_block`), then noted in passing that `hot_layer._render_canonical_block` is a third renderer and was "deferred — different use case".
+
+**Why we are not implementing it** (audit G7, 2026-05-28 — closing the F4 defer): the two renderers are intentionally separate because they serve different consumers with structurally different inputs and outputs.
+
+| Aspect | `hot_layer._render_canonical_block` | `sectioned_output._render_block` |
+|---|---|---|
+| When invoked | Eager pre-injection into every agent prompt | Lazy search-result rendering for `memory_search` |
+| Input data | `EntityPage` dataclass with full structure | `SectionedHit` — a search-hit row |
+| Inner content | `<name> (aliases: ...)`, `Attributes: k1 is v1; k2 is v2.`, `Relations: <type> of <to> (since N).`, body excerpt | summary > body > snippet preference, optional `Entities: ...` tail |
+| Body cap | `_CANONICAL_BODY_PER_PAGE` (200 chars) — tight, hot-layer budget | typically the full hit body up to caller's budget |
+| Purpose | "Here is the canonical state of this entity — ground truth" | "Here is a search hit — title + summary" |
+
+Forcing either into the other's shape produces a regression: the search renderer would gain attributes/relations noise per hit (waste — the agent does not need a per-relation breakdown on every search result), and the hot layer would lose the structured page representation (the `Attributes: k1 is v1; ...` line is what makes the eager-injection useful as ground truth).
+
+**What we DID share** (audit G7): the marker convention itself — the `=== KIND: <ref> ===` and `=== END KIND ===` strings — moved to a single source of truth at `durin.memory.section_markers`. Both renderers now call `canonical_marker(ref, ts=...)`, `fragment_marker(path, ts=...)`, etc. instead of building the strings independently. This eliminates the drift surface (~20 LOC of helper code) without merging the renderers' body logic.
+
+**The concrete trigger that would change this**: a documented case where the agent's behaviour materially benefits from the hot-layer-style structured rendering inside a search result (or vice versa). We have not seen one and the use cases point in opposite directions.
+
+**Estimated cost of full unification when triggered** (so a future audit does not re-litigate the size): introduce a unified `render_block(mode: Literal["search", "hot_layer"], ...)` with mode-specific body composition. ~150-200 LOC. Doubles the test surface because every behaviour now has to be re-verified under both modes. The G7 marker-helper refactor (~20 LOC) gets us most of the drift-protection benefit at ~10% of the cost.
+
+**Status**: removed from the F4-deferred list. F4 entry in doc 11 annotated with the G7 reclassification. The shared marker helper lives at `durin/memory/section_markers.py`; if a future change touches marker format, that one file is the source of truth.
+
+---
+
+### 2.16 `commit_sha` field in `memory.dream.patch_applied`
+
+**What was proposed**: include the git commit SHA produced by `dream.py::apply()` in the `memory.dream.patch_applied` telemetry event payload. The v1 spec listed it as one of the canonical fields. Audit F8 (2026-05-28) dropped it from doc 07 §6.5 with the rationale "telemetry should not couple to git internals; dashboards join via `entity_ref + cursor_after`."
+
+**Why we are not implementing it** (audit G8, 2026-05-28 — correcting the F8 reasoning, not the F8 conclusion):
+
+1. **The F8 join-via-trailers argument was fragile.** The proposed join — query `memory.dream.patch_applied` events for `(entity_ref, cursor_after)` pairs, then scan `memory/.git/log` for commits whose `Entities-touched:` and `Cursor-after:` trailers match — requires shell access to `memory/.git/`, brittle commit-message parsing, and breaks when two entity touches in the same Dream pass share a cursor. The "you can just join" framing was hand-waving.
+
+2. **But the F8 conclusion still holds for a different reason.** The realistic consumers of `commit_sha` are:
+
+   - **Operator forensics** ("when did Dream change this page?"): runs `git log memory/entities/<type>/<slug>.md` directly. The file path is known from the event's `entity_ref`. Operator does not need the SHA in telemetry.
+   - **Audit / change review** ("show every Dream change to `person:marcelo` last week"): runs `git log --since=1week memory/entities/person/marcelo.md`. Same answer; the trailers in commit messages already carry `Trigger`, `Sources`, `Cursor-after`. Operator does not need the SHA in telemetry.
+   - **Debug dashboards** ("dream commit latency p95 by entity"): genuinely benefits from `commit_sha`, but no such dashboard exists and nobody has asked for the metric. The use case is hypothetical.
+
+3. **The implementation cost is non-trivial because of ordering.** `_emit_apply_telemetry` fires INSIDE `dream_apply.py` (line 119) BEFORE the git commit happens in `dream.py::apply()` (line 630). To emit a SHA, the telemetry call would have to move to `dream.py::apply()` after the commit returns — ~50 LOC of restructuring, plus a new dependency on commit success (or a separate "commit failed but apply succeeded" variant event). The cost is not enormous but it serves nobody.
+
+4. **The path forward if the debug dashboard ever materialises** (so a future audit does not re-litigate the work): introduce a new event `memory.dream.commit_recorded` fired from `dream.py::apply()` after `repo.commit(...)` returns, carrying `entity_ref + commit_sha + duration_from_apply_emit_ms`. Joining the new event to `memory.dream.patch_applied` on `(session_key, iteration, entity_ref)` gives the dashboard everything it needs without restructuring the existing apply telemetry path.
+
+**The concrete trigger that would change this**: a documented dashboard or telemetry consumer that needs commit SHAs at scale (every commit, not on-demand). Until that consumer exists in code or in a written operational ask, the cost is for nobody.
+
+**Status**: removed from the spec. Doc 07 §6.5 already drops the field per F8; G8 only corrects the rationale in doc 11 F8 entry so the next audit pass sees the operator-forensics-uses-git-log reasoning rather than the fragile join argument.
 
 ---
 

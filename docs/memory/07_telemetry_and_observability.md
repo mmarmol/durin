@@ -307,7 +307,7 @@ production callsite ever emits (`entity_uri`, `op_count`,
 | `cursor_after` | string | The ISO timestamp stamped on the page (`dream_processed_through`) after this apply |
 | `duration_ms` | float | Wall-clock of the apply step |
 
-Dashboards that want the commit SHA join this event to the workspace's git log via `entity_ref + cursor_after` — the SHA itself was deliberately not emitted (writing it would couple telemetry to git internals; the join is cheap on the dashboard side).
+The commit SHA is deliberately not emitted. F8 (2026-05-28) framed this as "dashboards can join via `entity_ref + cursor_after`"; G8 (2026-05-28) corrected the rationale because that join is fragile (requires parsing commit-message trailers, ambiguous when two entity touches share a cursor in the same pass). The real reason the field stays out: the realistic consumers (operator forensics, audit) use `git log memory/entities/<type>/<slug>.md` directly — the file path is known from the event's `entity_ref`, and `git log` carries the trailers per doc 05 §6. A debug dashboard would benefit from the SHA in telemetry but no such consumer exists. If one ever does, the cheap path is a NEW event `memory.dream.commit_recorded` fired after `repo.commit(...)` returns in `dream.py::apply()`, joining to `memory.dream.patch_applied` on `(session_key, iteration, entity_ref)`. See doc 08 §2.16 for the full reasoning.
 
 ---
 
@@ -405,22 +405,28 @@ pre-F10 spec named fields that no production callsite ever emits
 Emitted by `durin.memory.indexer._emit_staleness` whenever the
 health-check cron detects a row whose `fts_meta.mtime` lags behind
 the file's mtime, or a file under `memory/` that has no row in the
-index. Audit F11 (2026-05-28) aligned this section to the shipped
-TypedDict — the pre-F11 spec used `delta_seconds` + `action` fields
-that no production callsite ever emits.
+index. Audit G3 (2026-05-28) re-added `delta_seconds` after F11
+wrongly justified dropping it; `action` stays dropped.
 
 | Field | Type | Description |
 |---|---|---|
 | `uri` | string | The stale URI |
 | `reason` | enum | `missing_row` (file exists, no FTS row) `| mtime_lag` (FTS row's `indexed_at < file mtime - 60s tolerance`) `| row_for_missing_file` (FTS row exists but the source `.md` was deleted) |
+| `delta_seconds` | float | optional — set ONLY when `reason='mtime_lag'`; carries `current_file_mtime - indexed_mtime` so dashboards can graph p50/p95 staleness magnitude. Missing on `missing_row` and `row_for_missing_file` because there is no indexed_mtime to compare against. |
 
-The pre-F11 spec proposed `delta_seconds` (how far behind) and
-`action` (`re_derived | filtered | queued`). Both were dropped:
-the cron always re-derives via `reindex_one_file` (so `action` was
-single-valued and meaningless), and the time delta is implicit in
-the dashboard's join with the corresponding `memory.index.write`
-event a few seconds later. If the time delta becomes interesting
-to graph independently, the field can be reintroduced then.
+**Why `delta_seconds` and not the F11 "implicit join" justification**:
+F11 claimed the magnitude is implicit in joining
+`staleness_detected@T1 → memory.index.write@T2`. That join surfaces
+the **recovery latency** (T2 − T1), which is a different metric
+from the **staleness magnitude** (T1 − indexed_mtime). Recovery
+latency tells you how fast the cron repaired the gap once detected;
+staleness magnitude tells you how far behind the watcher fell
+before the cron tick fired. Operators need both.
+
+The pre-F11 spec also proposed an `action` field
+(`re_derived | filtered | queued`). That stays dropped because the
+cron always re-derives via `reindex_one_file` — the enum would be
+single-valued and meaningless.
 
 ### 9.4 `memory.health_check`
 

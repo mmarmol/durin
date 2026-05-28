@@ -359,6 +359,19 @@ on disk where preserving the original artifact matters.
 
 `content` is the full markdown of the file. Audit E18 (2026-05-28) removed a `path` field from this spec — `memory_drill` does not echo the resolved path back to the agent (see `durin/agent/tools/memory_drill.py:71`). The agent receives the URI it sent + the file contents. If the agent needs the resolved path for downstream tools, it can derive it from the URI.
 
+**URI shapes drill accepts** (audit G6, 2026-05-28 — pre-G6 two of these were silently broken):
+
+| URI | What it addresses |
+|---|---|
+| `memory/<class>/<id>` | Memory entries (`episodic`, `stable`, `corpus`, `pending`). `.md` suffix appended automatically. |
+| `memory/entity_page/<type>:<slug>` | The canonical-shape URI `memory_search` emits for entity-page hits. G6 translates it to `memory/entities/<type>/<slug>.md` before reading. |
+| `memory/entities/<type>/<slug>.md` | Direct on-disk path to an entity page — legacy form, still works. |
+| `memory/archive/<class>/<id>.md` | Archived content surfaced by `memory_search(scope='archive')`. The archive path generates relative paths under `memory/archive/` post-G6 so the URIs are directly drillable. |
+| `memory/archive/entities/<type>/<slug>.md` | Archived entity pages, same as above. |
+| `sessions/<key>.md` (optionally `#turn-N`) | Session view, optionally a specific turn. |
+| `ingested/<id>/source.md` (optionally `#anchor`) | Ingested document, optionally a markdown header section. |
+| Any other workspace-relative path | Read as-is. Useful escape hatch when the agent has the on-disk path. |
+
 ### 5.3 Tool description
 
 Verbatim from `durin/agent/tools/memory_drill.py::_PARAMETERS["description"]`

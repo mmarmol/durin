@@ -182,26 +182,24 @@ def _render_block(section: str, hit: SectionedHit) -> str:
         parts.append(body)
     if section != "canonical" and hit.entities:
         parts.append(f"Entities: {', '.join(hit.entities)}")
-    kind = section.upper()
-    parts.append(f"=== END {kind} ===")
+    from durin.memory.section_markers import end_marker
+    parts.append(end_marker(section))
     return "\n".join(parts)
 
 
 def _marker_for(section: str, hit: SectionedHit) -> str:
+    # G7 (audit fourth pass, 2026-05-28): delegate to the shared
+    # `section_markers` helper so the marker format has one source
+    # of truth across both this renderer and `hot_layer`. The body
+    # composition stays here — only the header strings are shared.
+    from durin.memory.section_markers import (
+        canonical_marker, fragment_marker,
+        ingested_marker, session_marker,
+    )
     if section == "canonical":
-        if hit.ts:
-            return (
-                f"=== CANONICAL: {hit.uri} (consolidated {hit.ts}) ==="
-            )
-        return f"=== CANONICAL: {hit.uri} (canonical entity page) ==="
+        return canonical_marker(hit.uri, ts=hit.ts)
     if section == "fragment":
-        if hit.ts:
-            return f"=== FRAGMENT: {hit.path} (ts {hit.ts}) ==="
-        return f"=== FRAGMENT: {hit.path} ==="
+        return fragment_marker(hit.path, ts=hit.ts)
     if section == "session":
-        if hit.ts:
-            return f"=== SESSION: {hit.uri} (ts {hit.ts}) ==="
-        return f"=== SESSION: {hit.uri} ==="
-    # ingested
-    label = hit.ingest_id or "unknown"
-    return f"=== INGESTED: {label}/{hit.uri} ==="
+        return session_marker(hit.uri, ts=hit.ts)
+    return ingested_marker(hit.ingest_id, hit.uri)

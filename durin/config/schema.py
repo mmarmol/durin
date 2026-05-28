@@ -301,6 +301,25 @@ class MemoryTemporalDecayConfig(Base):
     )
 
 
+class MemorySearchSectioningConfig(Base):
+    """Sectioning step configuration (audit G1, 2026-05-28).
+
+    ``max_per_source`` caps how many `corpus` hits sharing the same
+    `ingest_id` can survive the sectioning step. Default 3 — set
+    when an ingested document is chunked into many corpus entries
+    and a single semantic query would otherwise monopolise the
+    top-K with consecutive chunks of the same source. Doc 03 §12.4.
+
+    Pre-G1 the value was hard-coded at
+    `durin.memory.sectioned_output.DEFAULT_MAX_PER_SOURCE`. Doc 03
+    §16 row 8 had promised configurability since Phase 3 but the
+    field never landed. G1 ships it; default unchanged so existing
+    workspaces see zero behaviour change.
+    """
+
+    max_per_source: int = 3
+
+
 class MemorySearchConfig(Base):
     """Search-pipeline configuration root."""
 
@@ -309,6 +328,9 @@ class MemorySearchConfig(Base):
     )
     temporal_decay: MemoryTemporalDecayConfig = Field(
         default_factory=MemoryTemporalDecayConfig,
+    )
+    sectioning: MemorySearchSectioningConfig = Field(
+        default_factory=MemorySearchSectioningConfig,
     )
 
 
