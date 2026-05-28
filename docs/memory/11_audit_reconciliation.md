@@ -1225,38 +1225,38 @@ Round 1-3 marcados resolved. Spot-checks confirman. OK.
 |---|---|---|---|
 | Critical (A1-A11) | 11 | Afectan UX agente, operación, o medibilidad | ✅ Cerrados 2026-05-28 |
 | Medium (B1-B12) | 12 | Drift sin romper UX directo | ✅ Cerrados 2026-05-28 |
-| Low (C1-C10) | 10 | Cosmético / docs | ✅ Cerrados 2026-05-28 |
-| No accionable (D1-D3) | 3 | OK como están | ✅ Registrados 2026-05-28 |
-| Second pass (E1-E38) | 38 | Drift descubierto en re-auditoría | ✅ Cerrados 2026-05-28 |
+| Low (C1-C10) | 10 | Cosmetic / docs | ✅ Closed 2026-05-28 |
+| Not actionable (D1-D3) | 3 | OK as-is | ✅ Recorded 2026-05-28 |
+| Second pass (E1-E38) | 38 | Drift discovered in re-audit | ✅ Closed 2026-05-28 |
 
-**Total**: 36 items primera pasada + 38 items segunda pasada = **74 items reconciliados al 2026-05-28**.
+**Total**: 36 items first pass + 38 items second pass = **74 items reconciled as of 2026-05-28**.
 
-**Tally por commits del segundo pass**:
-- `42d0986` feat(memory): close E1-E9 second-pass audit (high impact — telemetría + embedding v2.a + EntityPage author + rebuild gap).
+**Second-pass commit tally**:
+- `42d0986` feat(memory): close E1-E9 second-pass audit (high impact — telemetry + embedding v2.a + EntityPage author + rebuild gap).
 - `51b3579` feat(memory): close E10-E15 (doc 03 drift + cursor wiring regression + entities meta bug).
 - `935e330` feat(memory): close E16-E20 (doc 04 shapes + EntityPage user-authored protection + walker contract).
 - `2c8495b` docs(memory): close E21-E23 (doc 05/06 status drift).
 - (TBD) docs(memory): close E24-E38 (cosmetic batch — status rows, numbering, CLI commands).
 
-**Code regressions cerradas en el segundo pass**:
-- E11: pre/post-cursor wiring perdida en migración v2 (commit c820447) — restaurada.
-- E11 bonus: `_resolve_meta` no propagaba `entities` desde vector_meta — fixed.
-- E19: protección user_authored entity pages arch-unsupported — `EntityPage.author` + `_maybe_auto_absorb` check shipped.
-- E5: dashboards documentados (§10.3 perf, §216 capacity) imposibles de implementar — `memory.index.write` ampliado con `duration_ms` + `trigger`.
-- E9: v2.a (rendered_frontmatter en entity pages) + fix gap de `rebuild_from_workspace` que no walkeaba entity pages.
+**Code regressions closed in the second pass**:
+- E11: pre/post-cursor wiring lost in the v2 migration (commit c820447) — restored.
+- E11 bonus: `_resolve_meta` was not propagating `entities` from vector_meta — fixed.
+- E19: user_authored entity page protection was arch-unsupported — `EntityPage.author` + `_maybe_auto_absorb` check shipped.
+- E5: documented dashboards (§10.3 perf, §216 capacity) were impossible to implement — `memory.index.write` extended with `duration_ms` + `trigger`.
+- E9: v2.a (rendered_frontmatter in entity pages) + fix for the `rebuild_from_workspace` gap that wasn't walking entity pages.
 
-**Lecciones registradas en memory de proyecto durante el segundo pass**:
-- `feedback_telemetry_is_first_class`, `feedback_optimization_vs_principle`, `feedback_sync_tests_exercise_behavior`, `feedback_verify_quantifiers`, `feedback_heuristic_detectors_multilingual` (de la primera pasada, refrescadas).
+**Lessons recorded in project memory during the second pass**:
+- `feedback_telemetry_is_first_class`, `feedback_optimization_vs_principle`, `feedback_sync_tests_exercise_behavior`, `feedback_verify_quantifiers`, `feedback_heuristic_detectors_multilingual` (refreshed from the first pass).
 
-**Orden de resolución (referencia histórica)**:
-- Primera pasada: A1 → A2 → A3 (los tres tools — UX agente) → A11 (wiring watcher+cron) → A9 (decay) → A10 (session summaries) → A8 (push wiring) → A5+A6+A7 (telemetría payload) → A4 (LanceDB schema doc) → B/C/D según orden.
-- Segunda pasada: E1-E9 high-impact (mismo flujo de evidencia → propuesta → OK → implement → TDD → commit), luego E10-E15 medium (doc 03), E16-E20 (doc 04 + EntityPage author), E21-E23 (doc 05/06 status), E24-E38 batch cosmético.
+**Resolution order (historical reference)**:
+- First pass: A1 → A2 → A3 (the three tools — agent UX) → A11 (watcher+cron wiring) → A9 (decay) → A10 (session summaries) → A8 (push wiring) → A5+A6+A7 (telemetry payload) → A4 (LanceDB schema doc) → B/C/D in order.
+- Second pass: E1-E9 high-impact (same flow of evidence → proposal → OK → implement → TDD → commit), then E10-E15 medium (doc 03), E16-E20 (doc 04 + EntityPage author), E21-E23 (doc 05/06 status), E24-E38 cosmetic batch.
 
-**Mantenimiento**: items marcados ✅ RESOLVED son immutable decision log. No borrar; cuando un fix se supersede por audit posterior, append nota "Superseded YYYY-MM-DD by X" en lugar de reescribir el registro original.
+**Maintenance**: items marked ✅ RESOLVED are the immutable decision log. Do not delete; when a fix is superseded by a later audit, append a "Superseded YYYY-MM-DD by X" note instead of rewriting the original record.
 
 ---
 
-## SECOND PASS (E) — drift descubierto en re-auditoría 2026-05-28
+## SECOND PASS (E) — drift discovered in re-audit 2026-05-28
 
 ### E1 — `memory.recall` event payload no coincide con doc 07 §4.1 ✅ RESOLVED
 
@@ -1573,312 +1573,312 @@ Esos 3 casos son drill-by-URI, NO búsquedas amplias. La duplicación canonical 
 
 ---
 
-## THIRD PASS (F) — drift descubierto en re-auditoría 2026-05-28
+## THIRD PASS (F) — drift discovered in re-audit 2026-05-28
 
-Tras cerrar E1-E38 y verificar test suite full (5088/0 fail), el usuario pidió tercer pass para validar que doc + code quedaron consistentes. Sub-agentes encontraron ~17 ítems nuevos. La mayoría son drift que segundo pass no alcanzó.
+After closing E1-E38 and verifying the full test suite (5088/0 fail), the user asked for a third pass to validate that doc + code stayed consistent. Sub-agents found ~17 new items. Most are drift the second pass didn't reach.
 
-### F1 — Doc 00 §189 promesa `class_half_life_overrides` ✅ RESOLVED
+### F1 — Doc 00 §189 `class_half_life_overrides` promise ✅ RESOLVED
 
 **Doc 00 §189 (pre-F1)**: "Configurable via `memory.search.temporal_decay.class_half_life_overrides`."
 
-**Código `durin/config/schema.py:276-291` (pre-F1)**: `MemoryTemporalDecayConfig` solo tenía `enabled: bool`. El field prometido **no existía**. `resolve_class_half_life(class_name)` solo consultaba `CLASS_HALF_LIFE_DEFAULTS` sin override.
+**Code `durin/config/schema.py:276-291` (pre-F1)**: `MemoryTemporalDecayConfig` only had `enabled: bool`. The promised field **did not exist**. `resolve_class_half_life(class_name)` only consulted `CLASS_HALF_LIFE_DEFAULTS` without overrides.
 
-**Análisis "buen sistema"**:
-- Operadores reales pueden necesitar tunear: workspace activo (90d → 30d), workspace long-running multi-year (90d → 365d), per-class enable/disable.
-- Toggle global ya existe pero too coarse — no permite "decay activo pero conservador".
-- A9 cabló toda la infra; el override es toggle pequeño encima.
+**"Good system" analysis**:
+- Real operators may need to tune: active workspace (90d → 30d), long-running multi-year workspace (90d → 365d), per-class enable/disable.
+- The global toggle already exists but is too coarse — it does not allow "decay active but conservative".
+- A9 wired all the infra; the override is a small toggle on top.
 
-**Decisión**: code → doc (Ship el field). Razones:
-1. Promesa razonable y útil, no aspiracional.
-2. Costo bajo (~30 LOC + TDD), cero riesgo de regresión (default `{}` = no-op).
-3. Cierra drift cumpliendo la promesa en vez de retraerla.
+**Decision**: code → doc (ship the field). Rationale:
+1. Reasonable, useful promise — not aspirational.
+2. Low cost (~30 LOC + TDD), zero regression risk (default `{}` = no-op).
+3. Closes drift by honouring the promise instead of retracting it.
 
-**Resolución**:
-- `MemoryTemporalDecayConfig.class_half_life_overrides: dict[str, int | None] = {}` agregado.
-- `resolve_class_half_life(name, *, overrides=None)` extendido con semántica: present-int → use, present-None → disable, absent → fallthrough a default.
-- `apply_class_decay` acepta y forwardea `overrides`.
-- `_temporal_decay_step` acepta y propaga.
-- `run_search_pipeline` acepta `temporal_decay_overrides`.
-- `memory_search.execute` lee `cfg.memory.search.temporal_decay.class_half_life_overrides` y threadea.
-- Tests TDD: 9 cases en `tests/memory/test_class_half_life_overrides_f1.py` (default + override-int + override-null + add decay to no-op class + unknown class + apply_class_decay threads + null disables + config field exists + end-to-end via memory_search).
-- Doc 00 §189 actualizado: marca "audit F1 (2026-05-28)" + clarifica semántica (map class → days, `null` to disable).
+**Resolution**:
+- `MemoryTemporalDecayConfig.class_half_life_overrides: dict[str, int | None] = {}` added.
+- `resolve_class_half_life(name, *, overrides=None)` extended with semantics: present-int → use, present-None → disable, absent → fall through to default.
+- `apply_class_decay` accepts and forwards `overrides`.
+- `_temporal_decay_step` accepts and propagates.
+- `run_search_pipeline` accepts `temporal_decay_overrides`.
+- `memory_search.execute` reads `cfg.memory.search.temporal_decay.class_half_life_overrides` and threads it through.
+- TDD tests: 9 cases in `tests/memory/test_class_half_life_overrides_f1.py` (default + override-int + override-null + add decay to no-op class + unknown class + apply_class_decay threads + null disables + config field exists + end-to-end via memory_search).
+- Doc 00 §189 updated: marks "audit F1 (2026-05-28)" + clarifies semantics (map class → days, `null` to disable).
 
-**Commit pendiente** (cierre del batch F1-F11).
+**Commit pending** (F1-F11 batch close).
 
 ### F3 — Doc 03 §4.2 embedding dim 768 vs 384 ✅ RESOLVED
 
-**Doc 03 §4.2 (pre-F3)** (línea 214): `vector = MiniLM.embed(query)  # 768-dim`.
+**Doc 03 §4.2 (pre-F3)** (line 214): `vector = MiniLM.embed(query)  # 768-dim`.
 
-**Realidad**: MiniLM-L12-v2 emite 384-dim (doc 02 §3.2 lo dice correctamente; embedding.py lo confirma).
+**Reality**: MiniLM-L12-v2 emits 384-dim (doc 02 §3.2 says so correctly; embedding.py confirms).
 
-**Decisión**: doc → reality, fix cosmético.
+**Decision**: doc → reality, cosmetic fix.
 
-**Resolución**: línea 214 actualizada a `# 384-dim (audit F3, 2026-05-28)`.
+**Resolution**: line 214 updated to `# 384-dim (audit F3, 2026-05-28)`.
 
-**Commit pendiente** (cierre del batch F1-F11).
+**Commit pending** (F1-F11 batch close).
 
-### F4 — Completar migración Phase 3 sectioned_output ✅ RESOLVED
+### F4 — Complete Phase 3 sectioned_output migration ✅ RESOLVED
 
-**Contexto**: Phase 3 (commit 792f1c6, 2026-05-28) shippeó `query_router`, `RRF`, `sectioned_output`, `lexical_executor` como infraestructura — pero el wiring del callsite en `memory_search` quedó intacto. Resultado: dos renderers paralelos (`Result.render_block` en search.py vs `sectioned_output._render_block`) con formats distintos. La intent de Phase 3 (rendering centralizado con section intros + per-source cap activo + grouping cross-section) nunca aterrizó en producción.
+**Context**: Phase 3 (commit 792f1c6, 2026-05-28) shipped `query_router`, `RRF`, `sectioned_output`, `lexical_executor` as infrastructure — but the callsite wiring in `memory_search` was left intact. Result: two parallel renderers (`Result.render_block` in search.py vs `sectioned_output._render_block`) with different formats. The Phase 3 intent (centralised rendering with section intros + active per-source cap + cross-section grouping) never landed in production.
 
-**Por qué no avanzamos antes**: el callsite migration se aplazó probablemente para minimizar riesgo de cambio de output al agente; las pasadas de audit (E1-E38) chequearon field-level drift pero no traced el rendering codepath end-to-end. Sistema con dos renderers para el mismo concepto fue deuda técnica que segundo y tercer pass debieron capturar.
+**Why we hadn't advanced before**: the callsite migration was probably deferred to minimise risk of agent output change; the audit passes (E1-E38) checked field-level drift but did not trace the rendering codepath end-to-end. A system with two renderers for the same concept was technical debt that the second and third pass should have caught.
 
-**Realidad pre-F4**:
-- `memory_search.execute` llamaba `r.render_block()` por cada Result (legacy path).
-- `sectioned_output._render_block` emitía marker básico (snippet only, sin END close).
-- Section intros nunca llegaban al LLM (legacy no las tenía).
-- Per-source cap sí se aplicaba en pipeline (search_pipeline.py:182) pero el rendering era per-row, perdiendo el grouping cross-section que Phase 3 quería.
+**Pre-F4 reality**:
+- `memory_search.execute` called `r.render_block()` per Result (legacy path).
+- `sectioned_output._render_block` emitted a basic marker (snippet only, no END close).
+- Section intros never reached the LLM (the legacy path didn't have them).
+- The per-source cap WAS applied in the pipeline (search_pipeline.py:182) but rendering was per-row, losing the cross-section grouping Phase 3 wanted.
 
-**Decisión**: full migration (user-explicit).
+**Decision**: full migration (user-explicit).
 
-**Resolución**:
-- `SectionedHit` extendido con `summary` y `entities` (frozen dataclass, nuevos defaults).
-- `_render_block` enriched con: END marker (`=== END KIND ===`), body preference `summary > body > snippet`, entities tail (`Entities: ref, ref`) para non-canonical, `(canonical entity page)` hint cuando no ts.
-- `_marker_for` ahora honra `ts=""` → format sin `(ts ...)` suffix.
-- `memory_search.execute` main path + archive path: convierten Results a SectionedHits enriched, aplican `apply_per_source_cap`, llaman `render_sectioned`. Response shape gana `sectioned_rendered` (string), pierde per-row `rendered` (WebUI no lo consumía; LLM lee el sectioned string).
-- `Result.render_block` eliminado (3 callsites tenía, todos en memory_search.py — migrados).
-- Tests TDD: 7 cases nuevos en `tests/memory/test_sectioned_migration_f4.py` (END markers, ts/no-ts canonical, summary preference, fallback body/snippet, entities tail, sectioned_rendered field, section intros).
-- Tests migrados: `test_fragment_canonical_contract.py::TestRenderBlock` eliminado (3 cases) y `test_memory_search_tool_includes_rendered_blocks` → `test_memory_search_tool_emits_sectioned_rendered`.
-- Doc 03 §12.1/§12.2/§12.4: marker table al formato real, body preference + entities tail documentadas, section intros mencionadas, `max_per_source` config marca "not yet implemented" (gap para futuro F).
+**Resolution**:
+- `SectionedHit` extended with `summary` and `entities` (frozen dataclass, new defaults).
+- `_render_block` enriched with: END marker (`=== END KIND ===`), body preference `summary > body > snippet`, entities tail (`Entities: ref, ref`) for non-canonical, `(canonical entity page)` hint when no ts.
+- `_marker_for` now honours `ts=""` → format without `(ts ...)` suffix.
+- `memory_search.execute` main path + archive path: convert Results into enriched SectionedHits, apply `apply_per_source_cap`, call `render_sectioned`. Response shape gains `sectioned_rendered` (string), loses per-row `rendered` (WebUI didn't consume it; the LLM reads the sectioned string).
+- `Result.render_block` removed (it had 3 callsites, all in memory_search.py — all migrated).
+- TDD tests: 7 new cases in `tests/memory/test_sectioned_migration_f4.py` (END markers, ts/no-ts canonical, summary preference, fallback body/snippet, entities tail, sectioned_rendered field, section intros).
+- Tests migrated: `test_fragment_canonical_contract.py::TestRenderBlock` removed (3 cases) and `test_memory_search_tool_includes_rendered_blocks` → `test_memory_search_tool_emits_sectioned_rendered`.
+- Doc 03 §12.1/§12.2/§12.4: marker table to the real format, body preference + entities tail documented, section intros mentioned, `max_per_source` config marked "not yet implemented" (gap for a future F).
 
-**Full suite verde**: 5107 passed, 16 skipped, 0 failed.
+**Full suite green**: 5107 passed, 16 skipped, 0 failed.
 
-**Lo que NO incluye F4 (deferred)**:
-- `hot_layer._render_canonical_block` (parallel renderer para eager pre-injection) — use case distinto (carga structure de entity page completa), no scope de F4.
-- `memory.search.sectioning.max_per_source` config knob — el cap funciona pero hard-coded; lift to config futuro si operador lo pide.
+**Out of F4 scope (deferred)**:
+- `hot_layer._render_canonical_block` (parallel renderer for eager pre-injection) — different use case (carries the full entity page structure), not in F4 scope.
+- `memory.search.sectioning.max_per_source` config knob — the cap works but is hard-coded; lift to config later if an operator asks.
 
-**Commit pendiente** (cierre del batch F1-F11).
+**Commit pending** (F1-F11 batch close).
 
 ### F5 — Doc 04 §2.2 return shape example stale ✅ RESOLVED
 
-**Doc 04 §2.2 ejemplo (pre-F5)**: `valid_from: "2024-01-15"` para entity_page; `rendered` per-row field.
+**Doc 04 §2.2 example (pre-F5)**: `valid_from: "2024-01-15"` for entity_page; `rendered` per-row field.
 
-**Realidad**: entity pages siempre escriben `valid_from = ""` (doc 03 §10.4 lo dice; código en vector_index.py:149,487 confirma). El `rendered` per-row field se eliminó en F4.
+**Reality**: entity pages always write `valid_from = ""` (doc 03 §10.4 says so; vector_index.py:149,487 confirms). The `rendered` per-row field was removed in F4.
 
-**Decisión**: doc → reality, expand example a 2-result shape para mostrar entity vs entry distinction; doc top-level fields table actualizada con `sectioned_rendered`.
+**Decision**: doc → reality, expand example to a 2-result shape to show the entity vs entry distinction; top-level fields table updated with `sectioned_rendered`.
 
-**Resolución**: doc 04 §2.2 reescrito con ejemplo 2-result, fila `rendered` reemplazada por `sectioned_rendered`, fila `valid_from` clarifica "Entity pages always `""`".
+**Resolution**: doc 04 §2.2 rewritten with a 2-result example, `rendered` row replaced by `sectioned_rendered`, `valid_from` row clarifies "Entity pages always `""`".
 
-### F6 — Doc 05 §12 + doc 07 §6.4 kind enum aspiracional ✅ RESOLVED
+### F6 — Doc 05 §12 + doc 07 §6.4 kind enum aspirational ✅ RESOLVED
 
 **Doc 05 §12.1-12.4 + doc 07 §6.4 (pre-F6)**: `kind=llm_call_failed | parse_failed | validation_failed | round_trip_failed`.
 
-**Realidad**: `DreamApplyFailureKind` enum shipped con values `validation | patch_runtime | round_trip | io`. Quarantine logic en `dream_quarantine.STRUCTURAL_FAILURE_KINDS = {VALIDATION, PATCH_RUNTIME, ROUND_TRIP}`. LLM call failures NUNCA emiten `memory.dream.entity_failed` (bubble up upstream del consolidator). El TypedDict docstring también claimea `parse_failed`/`llm_call_failed` que jamás se emiten.
+**Reality**: `DreamApplyFailureKind` enum shipped with values `validation | patch_runtime | round_trip | io`. Quarantine logic in `dream_quarantine.STRUCTURAL_FAILURE_KINDS = {VALIDATION, PATCH_RUNTIME, ROUND_TRIP}`. LLM call failures NEVER emit `memory.dream.entity_failed` (they bubble up upstream from the consolidator). The TypedDict docstring also claimed `parse_failed`/`llm_call_failed` which are never emitted.
 
-**Decisión**: doc → code. Documento las 4 values reales + clarifico que LLM failures son ambient/upstream + corrijo el TypedDict docstring.
+**Decision**: doc → code. Document the 4 real values + clarify that LLM failures are ambient/upstream + fix the TypedDict docstring.
 
-**Resolución**:
-- Doc 05 §12.1: LLM call failure marcada como upstream-del-apply (runner tally, no este evento).
-- Doc 05 §12.2: parse failure → patch_runtime (categoría más amplia que incluye parse + runtime errors).
+**Resolution**:
+- Doc 05 §12.1: LLM call failure marked as upstream-of-apply (runner tally, not this event).
+- Doc 05 §12.2: parse failure → patch_runtime (broader category covering parse + runtime errors).
 - Doc 05 §12.3: `validation_failed` → `validation`.
 - Doc 05 §12.4: `round_trip_failed` → `round_trip`.
-- Doc 05 §12.4a: nuevo — `io` failure category (disk write).
+- Doc 05 §12.4a: new — `io` failure category (disk write).
 - Doc 05 §12.5: STRUCTURAL_FAILURE_KINDS set = `{validation, patch_runtime, round_trip}`; ambient = `io` + upstream LLM.
-- Doc 05 §14 row 12 actualizado con enum real.
-- Doc 07 §6.4 reescrita: campos reales (`entity_ref`, `trigger`, `kind`, `error_message`, `failure_count_now`, optional `quarantined_until`); structural vs ambient taxonomy explicada; nota descartando los kinds aspiracionales.
-- `MemoryDreamEntityFailedEvent` TypedDict docstring corregido para reflejar que solo los 4 enum values se emiten.
+- Doc 05 §14 row 12 updated to the real enum.
+- Doc 07 §6.4 rewritten: real fields (`entity_ref`, `trigger`, `kind`, `error_message`, `failure_count_now`, optional `quarantined_until`); structural vs ambient taxonomy explained; note discarding the aspirational kinds.
+- `MemoryDreamEntityFailedEvent` TypedDict docstring corrected to reflect that only the 4 enum values are emitted.
 
 ### F7 — Dream prompt slots silently empty ✅ RESOLVED
 
-**dream.py:731-734 (pre-F7)**: `existing_attribute_keys=()`, `existing_relation_types=()`, `existing_uris=()`, `recent_history=""` pasados como vacíos. Comment original decía "Phase 1 deliverables 9 and 10 will populate" — nunca aterrizaron.
+**dream.py:731-734 (pre-F7)**: `existing_attribute_keys=()`, `existing_relation_types=()`, `existing_uris=()`, `recent_history=""` passed as empty. The original comment said "Phase 1 deliverables 9 and 10 will populate" — those never landed.
 
-**Impact pre-F7**: el LLM Dream sentaba schema-blind a la entidad existente. Si la página tenía `attributes: {e-mail: ...}` y el LLM proponía `attributes.email`, no había hint para reusar. Schema drift documentado pero invisible al LLM.
+**Pre-F7 impact**: the Dream LLM ran schema-blind to the existing entity. If the page had `attributes: {e-mail: ...}` and the LLM proposed `attributes.email`, there was no hint to reuse. Schema drift was documented but invisible to the LLM.
 
-**Análisis para "buen sistema"**:
-- `existing_schema` (attributes + relations): prevenir schema drift. Crítico para coherencia largo plazo.
-- `recent_history`: el LLM ve sus propias decisiones pasadas; evita undoing.
-- `existing_uris`: prevenir duplicate entity creation (mismo persona registrada como `person:marcelo` y `person:marcelo_marmol`).
+**"Good system" analysis**:
+- `existing_schema` (attributes + relations): prevents schema drift. Critical for long-term coherence.
+- `recent_history`: lets the LLM see its own past decisions; avoids undoing them.
+- `existing_uris`: prevents duplicate entity creation (same person registered as `person:marcelo` and `person:marcelo_marmol`).
 
-**Decisión**: wire 3 de 4 slots. Defer `existing_uris` (producer más complejo: walk + sort by mtime + cap).
+**Decision**: wire 3 of 4 slots. Defer `existing_uris` (the producer is more complex: walk + sort by mtime + cap).
 
-**Resolución**:
-- `dream.py` top-level import `format_recent_history`.
-- `DreamConsolidator._build_prompt`: parsea `EntityPage.from_text(current_page)` para extraer `attributes.keys()` y `relations.type` set. Llama `format_recent_history(workspace, entity_ref)`. Failures swallowed con warning log.
-- TDD: 4 cases (attribute_keys populado vs `(none)`, relation_types populado vs `(none)`, format_recent_history called once, first-consolidation gracefully empty).
-- Doc 05 §5.1 row `existing_schema` actualizado a "derived via EntityPage.from_text (F7)".
-- Doc 05 §5.1 row `existing_uris` marca deferred.
-- Doc 05 §5.1 row `recent_history` actualiza producer.
-- Doc 06 §2 anotaciones inline en cada slot affected.
+**Resolution**:
+- `dream.py` top-level import of `format_recent_history`.
+- `DreamConsolidator._build_prompt`: parses `EntityPage.from_text(current_page)` to extract `attributes.keys()` and `relations.type` set. Calls `format_recent_history(workspace, entity_ref)`. Failures swallowed with a warning log.
+- TDD: 4 cases (attribute_keys populated vs `(none)`, relation_types populated vs `(none)`, format_recent_history called once, first-consolidation gracefully empty).
+- Doc 05 §5.1 row `existing_schema` updated to "derived via EntityPage.from_text (F7)".
+- Doc 05 §5.1 row `existing_uris` marked deferred.
+- Doc 05 §5.1 row `recent_history` updates producer.
+- Doc 06 §2 inline annotations on each affected slot.
 
 ### F8 — Doc 07 §6.5 `memory.dream.patch_applied` field names ✅ RESOLVED
 
-**Pre-F8**: doc listaba `entity_uri`, `op_count`, `body_delta_chars`, `commit_sha`, `cursor_advanced_to`. Solo `body_delta_chars` matcheaba el código.
+**Pre-F8**: doc listed `entity_uri`, `op_count`, `body_delta_chars`, `commit_sha`, `cursor_advanced_to`. Only `body_delta_chars` matched the code.
 
-**Realidad** (`dream_apply._emit_apply_telemetry` + `MemoryDreamPatchAppliedEvent`): `entity_ref`, `trigger`, `ops_applied`, `sources_count`, `body_delta_chars`, `cursor_after`, `duration_ms`.
+**Reality** (`dream_apply._emit_apply_telemetry` + `MemoryDreamPatchAppliedEvent`): `entity_ref`, `trigger`, `ops_applied`, `sources_count`, `body_delta_chars`, `cursor_after`, `duration_ms`.
 
-**Decisión**: doc → code. Pre-F8 spec era aspiracional con field names que nunca llegaron a producción. `commit_sha` se descarta deliberadamente (telemetría no se acopla a internals de git; dashboards joinean por `entity_ref + cursor_after`).
+**Decision**: doc → code. The pre-F8 spec was aspirational with field names that never reached production. `commit_sha` is deliberately dropped (telemetry should not couple to git internals; dashboards join on `entity_ref + cursor_after`).
 
-**Resolución**: doc 07 §6.5 reescrita con los 7 campos reales + nota explícita sobre `commit_sha` deferred-by-design.
+**Resolution**: doc 07 §6.5 rewritten with the 7 real fields + explicit note about `commit_sha` deferred-by-design.
 
 ### F10 — Doc 07 §9.2 `memory.index.rebuild` field names ✅ RESOLVED
 
-**Pre-F10**: doc listaba `entities_count`, `embedding_batches`, `duration_ms`, `prior_index_existed`.
+**Pre-F10**: doc listed `entities_count`, `embedding_batches`, `duration_ms`, `prior_index_existed`.
 
-**Realidad** (`indexer._emit_rebuild` + `MemoryIndexRebuildEvent`): `target`, `indexed`, `errors`, `duration_ms`, optional `reason`.
+**Reality** (`indexer._emit_rebuild` + `MemoryIndexRebuildEvent`): `target`, `indexed`, `errors`, `duration_ms`, optional `reason`.
 
-**Decisión**: doc → code.
+**Decision**: doc → code.
 
-**Resolución**: doc 07 §9.2 reescrita con shape real + explicación de cada campo. `target` clarifica que hoy es siempre `"fts"` (futuro: `lancedb`, `all`).
+**Resolution**: doc 07 §9.2 rewritten with the real shape + explanation per field. `target` clarifies that today it is always `"fts"` (future: `lancedb`, `all`).
 
 ### F11 — Doc 07 §9.3 `memory.index.staleness_detected` field names ✅ RESOLVED
 
-**Pre-F11**: doc listaba `uri`, `delta_seconds`, `action`.
+**Pre-F11**: doc listed `uri`, `delta_seconds`, `action`.
 
-**Realidad** (`indexer._emit_staleness` + `MemoryIndexStalenessDetectedEvent`): `uri`, `reason` con valores `missing_row | mtime_lag | row_for_missing_file`.
+**Reality** (`indexer._emit_staleness` + `MemoryIndexStalenessDetectedEvent`): `uri`, `reason` with values `missing_row | mtime_lag | row_for_missing_file`.
 
-**Decisión**: doc → code. `delta_seconds` y `action` aspiracionales — el cron siempre re-derive (action single-valued = meaningless), y el delta está implícito en el join con `memory.index.write` posterior.
+**Decision**: doc → code. `delta_seconds` and `action` were aspirational — the cron always re-derives (action single-valued = meaningless), and the time delta is implicit in the join with the corresponding `memory.index.write` event a few seconds later.
 
-**Resolución**: doc 07 §9.3 reescrita + nota descartando los 2 campos aspiracionales con razón.
+**Resolution**: doc 07 §9.3 rewritten + note discarding the 2 aspirational fields with rationale.
 
 ### F12 — `compose_embedding_text` single source of truth ✅ RESOLVED
 
 **Doc 02 §4 (pre-F12)**: "**Single source of truth: `vector_index.py::compose_embedding_text(...)`**".
 
-**Realidad pre-F12**: NO había tal función. Dos especializadas:
-- `_compose_entity_page_text(name, aliases, body, attributes?, relations?)` para EntityPage.
-- `_embed_text(entry)` para MemoryEntry.
+**Pre-F12 reality**: no such function existed. Two specialised composers:
+- `_compose_entity_page_text(name, aliases, body, attributes?, relations?)` for EntityPage.
+- `_embed_text(entry)` for MemoryEntry.
 
-**Decisión**: code → doc. Crear dispatcher público real que delega a la specialista correcta según tipo. La doc claim deja de ser aspiracional.
+**Decision**: code → doc. Create the real public dispatcher that delegates to the correct specialist by type. The doc claim stops being aspirational.
 
-**Resolución**:
-- `VectorIndex.compose_embedding_text(item, ...)` agregado como `@classmethod` público: routea EntityPage → `_compose_entity_page_text`, MemoryEntry → `_embed_text`, raises TypeError sobre input no soportado.
-- Las dos specialists quedan como implementation details (siguen accesibles, no removidas).
-- Doc 02 §4 actualizado: ahora el doc claim "Single source of truth" es literalmente cierto.
+**Resolution**:
+- `VectorIndex.compose_embedding_text(item, ...)` added as a public `@classmethod`: routes EntityPage → `_compose_entity_page_text`, MemoryEntry → `_embed_text`, raises TypeError on unsupported input.
+- The two specialists remain as implementation details (still accessible, not removed).
+- Doc 02 §4 updated: the "Single source of truth" claim is now literally true.
 
 ### F13 — Doc 02 §11 schema_version 3 vs 4 ✅ RESOLVED
 
 **Doc 02 §11 (pre-F13)**: `CURRENT_SCHEMA_VERSION (3 as of A4)`.
 
-**Realidad**: `index_meta.py:55` dice `CURRENT_SCHEMA_VERSION = 4`. E9 lo bumpeó cuando entity page composition ganó `rendered_frontmatter`.
+**Reality**: `index_meta.py:55` says `CURRENT_SCHEMA_VERSION = 4`. E9 bumped it when entity page composition gained `rendered_frontmatter`.
 
-**Resolución**: doc 02 §11 fila actualizada a `(4 as of audit E9 / F13 verification, 2026-05-28; bumped from 3 when entity-page composition gained rendered_frontmatter)`.
+**Resolution**: doc 02 §11 row updated to `(4 as of audit E9 / F13 verification, 2026-05-28; bumped from 3 when entity-page composition gained rendered_frontmatter)`.
 
 ### F14 — Doc 03 §2.1 scope enum + grep coverage drift ✅ RESOLVED
 
-**Doc 03 §2.1 (pre-F14)**: scope enum `dreamed|undreamed|all`; grep fallback dice "raw session/ingested" only.
+**Doc 03 §2.1 (pre-F14)**: scope enum `dreamed|undreamed|all`; grep fallback note says "raw session/ingested" only.
 
-**Realidad**:
-- F2 agregó `archive` al enum.
-- `_safe_grep_fallback` (search_pipeline.py:472-479) cubre `memory/` + `sessions/` + `ingested/` para capturar memory entries written outside the tool layer (tests, scripts).
+**Reality**:
+- F2 added `archive` to the enum.
+- `_safe_grep_fallback` (search_pipeline.py:472-479) covers `memory/` + `sessions/` + `ingested/` to capture memory entries written outside the tool layer (tests, scripts).
 
-**Resolución**: doc 03 §2.1 fila scope actualiza enum a `dreamed|undreamed|all|archive` + nota que grep también cubre `memory/` por entries-written-outside-tool.
+**Resolution**: doc 03 §2.1 scope row updates the enum to `dreamed|undreamed|all|archive` + note that grep also covers `memory/` for entries-written-outside-tool.
 
 ### F15 — Doc 04 §5.3 memory_drill description divergence ✅ RESOLVED
 
-**Doc 04 §5.3 (pre-F15)**: tres paragraphs; "For related context (recent post-cursor observations mentioning this URI)..." + "This tool is read-only. It does not modify state.".
+**Doc 04 §5.3 (pre-F15)**: three paragraphs; "For related context (recent post-cursor observations mentioning this URI)..." + "This tool is read-only. It does not modify state.".
 
-**Realidad** (`memory_drill.py::_PARAMETERS["description"]`): dos paragraphs; "This tool is read-only. For related context about an entity (recent observations, sessions mentioning it), use memory_search with the entity's name or URI as the query instead."
+**Reality** (`memory_drill.py::_PARAMETERS["description"]`): two paragraphs; "This tool is read-only. For related context about an entity (recent observations, sessions mentioning it), use memory_search with the entity's name or URI as the query instead."
 
-**Resolución**: doc 04 §5.3 reescrito verbatim del shipped string + nota de audit F15 + clarifies fuente canonical.
+**Resolution**: doc 04 §5.3 rewritten verbatim from the shipped string + audit F15 note + clarifies canonical source.
 
 ### F16 — Doc 05 §6 step 9 `.md.bak` ordering ✅ RESOLVED
 
-**Doc 05 §6 (pre-F16)**: step 8 = "Write to temp file + atomic rename"; step 9 = "Pre-write: copy the target to .md.bak". El step 9 ocurre DESPUÉS del write — contradicción intra-doc (no puede ser "pre-write" después del write).
+**Doc 05 §6 (pre-F16)**: step 8 = "Write to temp file + atomic rename"; step 9 = "Pre-write: copy the target to .md.bak". Step 9 happened AFTER the write — intra-doc contradiction (cannot be "pre-write" after the write).
 
-**Realidad** (`dream_apply.py:165-168`): la copia a `.md.bak` ocurre ANTES de cualquier mutación. Step 9 del doc tenía orden invertido.
+**Reality** (`dream_apply.py:165-168`): the copy to `.md.bak` happens BEFORE any mutation. The doc's step 9 had inverted order.
 
-**Resolución**: doc 05 §6 reordenado: step 4 = copy `.md.bak` (pre-write); step 5-9 = apply + render + validate + write; step 10 = round-trip check + restore from bak on failure; step 11 = delete bak + commit. Nota referencia a `dream_apply.py:165-168` para verificability.
+**Resolution**: doc 05 §6 reordered: step 4 = copy `.md.bak` (pre-write); steps 5-9 = apply + render + validate + write; step 10 = round-trip check + restore from bak on failure; step 11 = delete bak + commit. Note references `dream_apply.py:165-168` for verifiability.
 
 ### F17 — `existing_uris` slot wired (Dream prompt) ✅ RESOLVED
 
-**Pre-F17**: doc 06 §2 prometía `{existing_uris}` recent-mtime ranked + 100-cap para prevenir duplicate entity creation. `dream.py:733` pasaba `existing_uris=()`. F7 deferred wiring. LLM Dream creaba duplicados (`person:marcelo_marmol` cuando `person:marcelo` ya existía) sin signal del workspace state.
+**Pre-F17**: doc 06 §2 promised `{existing_uris}` recent-mtime ranked + 100-cap to prevent duplicate entity creation. `dream.py:733` passed `existing_uris=()`. F7 deferred wiring. The Dream LLM was creating duplicates (`person:marcelo_marmol` when `person:marcelo` already existed) without any workspace state signal.
 
-**Decisión**: implementar el producer real.
+**Decision**: implement the real producer.
 
-**Resolución**:
-- Nuevo módulo `durin/memory/entity_inventory.py` con `existing_uris_by_recent_mtime(workspace, *, cap=100)`.
-- Walk `memory/entities/<type>/<slug>.md` excluding archive (top-level + legacy nested).
-- Sort por file mtime descending; cap default 100.
-- `DreamConsolidator._build_prompt` reemplaza `existing_uris=()` con call al producer (try/except swallows failures → preserves dream resilience).
-- Tests TDD: 7 cases (empty workspace, collects URIs, recent-mtime sort, caps at 100, custom cap, excludes both archive variants, end-to-end via prompt builder).
-- Doc 05 §5.1 + doc 06 §2 actualizados con producer reference.
+**Resolution**:
+- New module `durin/memory/entity_inventory.py` with `existing_uris_by_recent_mtime(workspace, *, cap=100)`.
+- Walks `memory/entities/<type>/<slug>.md` excluding archive (top-level + legacy nested).
+- Sorts by file mtime descending; default cap 100.
+- `DreamConsolidator._build_prompt` replaces `existing_uris=()` with the producer call (try/except swallows failures → preserves dream resilience).
+- TDD tests: 7 cases (empty workspace, collects URIs, recent-mtime sort, caps at 100, custom cap, excludes both archive variants, end-to-end via prompt builder).
+- Doc 05 §5.1 + doc 06 §2 updated with producer reference.
 
 ### F18 — Doc 07 §6.1 trigger enum missing `post_ingest_threshold` ✅ RESOLVED
 
-**Doc 07 §6.1 (pre-F18)**: trigger enum `threshold | cron_daily | post_compaction | session_close | manual`. §6.2 (dream.end) ya incluía `post_ingest_threshold`.
+**Doc 07 §6.1 (pre-F18)**: trigger enum `threshold | cron_daily | post_compaction | session_close | manual`. §6.2 (dream.end) already included `post_ingest_threshold`.
 
-**Realidad**: `threshold_trigger.py:12-13` emite ambos en `memory.dream.start`.
+**Reality**: `threshold_trigger.py:12-13` emits both in `memory.dream.start`.
 
-**Resolución**: doc 07 §6.1 enum extendido a `threshold | post_ingest_threshold | cron_daily | post_compaction | session_close | manual` + cross-ref a §6.2.
+**Resolution**: doc 07 §6.1 enum extended to `threshold | post_ingest_threshold | cron_daily | post_compaction | session_close | manual` + cross-ref to §6.2.
 
-### F19 — Doc 07 alarm threshold contradicción ($1.50 vs $5/day) ✅ RESOLVED
+### F19 — Doc 07 alarm threshold contradiction ($1.50 vs $5/day) ✅ RESOLVED
 
-**Pre-F19**: §10.2 "healthy range < $1.50 (alerting threshold)" vs §11 "Dream LLM cost > $5/day | error". Aparente contradicción.
+**Pre-F19**: §10.2 "healthy range < $1.50 (alerting threshold)" vs §11 "Dream LLM cost > $5/day | error". Apparent contradiction.
 
-**Análisis cross-doc**: doc 09 §11.1 target soak $0.25-$1.50/day; doc 09 §13 alerting $1.50; doc 08 §3 R3 alarm $5/day. Los valores describen un two-tier alarm coherente (warn $1.50, error $5).
+**Cross-doc analysis**: doc 09 §11.1 target soak $0.25-$1.50/day; doc 09 §13 alerting $1.50; doc 08 §3 R3 alarm $5/day. The values describe a coherent two-tier alarm (warn $1.50, error $5).
 
-**Decisión**: reconciliar §10.2 y §11 explicit-two-tier.
+**Decision**: reconcile §10.2 and §11 as explicit two-tier.
 
-**Resolución**:
-- §10.2 fila actualizada a "target $0.25-$1.50/day; warn at $1.50 (F19), error at $5".
-- §11 alerts table: nueva fila warn `> $1.50/day`; fila existente error `> $5/day` preservada.
+**Resolution**:
+- §10.2 row updated to "target $0.25-$1.50/day; warn at $1.50 (F19), error at $5".
+- §11 alerts table: new warn row `> $1.50/day`; existing error row `> $5/day` preserved.
 
 ### F20 — `iteration`/`session_key` auto-injection wired ✅ RESOLVED
 
 **Doc 07 §4.1 (pre-F20)**: "auto-injected by `emit_tool_event`".
 
-**Realidad pre-F20**: claim aspiracional; código `_telemetry.py` no inyectaba nada. Dashboards joining `memory.recall` con otros eventos por `(session_key, iteration)` no tenían data para join.
+**Pre-F20 reality**: aspirational claim; code in `_telemetry.py` did not inject anything. Dashboards joining `memory.recall` to other events on `(session_key, iteration)` had no data to join on.
 
-**Decisión**: implementar auto-injection real.
+**Decision**: implement the real auto-injection.
 
-**Resolución**:
-- `TelemetryLogger.__init__(path, *, session_key="")` ahora acepta session_key.
+**Resolution**:
+- `TelemetryLogger.__init__(path, *, session_key="")` now accepts session_key.
 - Properties `session_key`, `iteration` + `set_iteration(int)` method.
-- `get_session_logger(session_key, ...)` pasa session_key al constructor.
-- `emit_tool_event` lee `logger.session_key` y `logger.iteration` vía `getattr` con default (mocks de tests funcionan sin tener los atributos), auto-injects si no presentes en payload. Caller-supplied values win (subagent override).
-- `AgentLoop._on_iteration(iteration)` callback nuevo: setattr `_current_iteration` + `current_telemetry().set_iteration(iteration)`. Reemplaza la lambda anterior en setup del runner.
-- Tests TDD: 6 cases (session_key stamped, iteration starts 0, set_iteration updates, auto-inject, caller-supplied wins, no-logger no-crash).
-- Doc 07 §4.1 fila actualizada para indicar F20 wired.
+- `get_session_logger(session_key, ...)` passes session_key to the constructor.
+- `emit_tool_event` reads `logger.session_key` and `logger.iteration` via `getattr` with default (test mocks without the attributes keep working), auto-injects if not already present in the payload. Caller-supplied values win (subagent override).
+- New `AgentLoop._on_iteration(iteration)` callback: setattr `_current_iteration` + `current_telemetry().set_iteration(iteration)`. Replaces the previous lambda in the runner setup.
+- TDD tests: 6 cases (session_key stamped, iteration starts 0, set_iteration updates, auto-inject, caller-supplied wins, no-logger no-crash).
+- Doc 07 §4.1 row updated to flag F20 wired.
 
 ### F21 — Doc 03 §15 hardcoded knobs line refs stale ✅ RESOLVED
 
-**Pre-F21**: `vector_top_k @ search_pipeline.py:347`, `lexical_top_k @ :362`, `rrf_constant @ rrf_fusion.py:38`. Líneas reales tras refactors: `:444`, `:459`.
+**Pre-F21**: `vector_top_k @ search_pipeline.py:347`, `lexical_top_k @ :362`, `rrf_constant @ rrf_fusion.py:38`. Real lines after refactors: `:444`, `:459`.
 
-**Resolución**: tabla actualizada con líneas verificadas O símbolos (`DEFAULT_K`, `DEFAULT_W_*`, `DEFAULT_MAX_PER_SOURCE`) — survive refactors.
+**Resolution**: table updated with verified line numbers OR symbols (`DEFAULT_K`, `DEFAULT_W_*`, `DEFAULT_MAX_PER_SOURCE`) that survive refactors.
 
 ### F22 — Doc 02 §4.2 `to_name_resolved` claim vs slug-only ✅ RESOLVED
 
-**Pre-F22**: doc decía relaciones renderean `<type.title()>: <to_name_resolved>` con "name of the target entity if known".
+**Pre-F22**: doc said relations render as `<type.title()>: <to_name_resolved>` with "name of the target entity if known".
 
-**Realidad** (`vector_index.py:231`): solo strip de type prefix; no resolve nombre.
+**Reality** (`vector_index.py:231`): only strips the type prefix; does not resolve the name.
 
-**Resolución**: fila corregida; aclaro que slug se usa; resolution via alias index deferred hasta bench muestre recall gap.
+**Resolution**: row corrected; clarifies that the slug is used; alias-index resolution deferred until bench shows a recall gap on relation queries.
 
 ### F23 — Doc 02 §3.1 summary format ✅ RESOLVED
 
-**Pre-F23**: doc decía `name (also: alias1, alias2)`.
+**Pre-F23**: doc said `name (also: alias1, alias2)`.
 
-**Realidad** (`vector_index.py:142, 516`): `name (alias1, alias2)` — sin "also:".
+**Reality** (`vector_index.py:142, 516`): `name (alias1, alias2)` — no "also:".
 
-**Resolución**: fila corregida con formato real.
+**Resolution**: row corrected with the real format.
 
-### F2 — `scope='archive'` + CLI archive commands ✅ RESOLVED (parcial)
+### F2 — `scope='archive'` + CLI archive commands ✅ RESOLVED (partial)
 
-**Doc 01 §3.6 + doc 04 §11 (pre-F2)**: prometían 3 surfaces de recovery:
+**Doc 01 §3.6 + doc 04 §11 (pre-F2)**: promised 3 recovery surfaces:
 1. `memory_search(scope='archive')` walks `memory/archive/` on demand.
-2. `durin archive show <uri>` reads archived entry.
-3. `durin archive list` enumera archive folder.
+2. `durin archive show <uri>` reads an archived entry.
+3. `durin archive list` enumerates the archive folder.
 
-**Realidad pre-F2**:
-1. `scope` enum era `["all", "dreamed", "undreamed"]`; `'archive'` rejected en `memory_search.py:315`.
-2. CLI tenía 10 comandos (`reindex`, `dream`, `history`, `show`, `diff`, `revert`, `expand`, `absorb`, `stats`, `absorb-suggest`) ninguno archive-prefixed.
-3. `durin memory expand <entity>` ya cubría archive de UNA entidad; file access via `cat memory/archive/...` cubre directos.
+**Pre-F2 reality**:
+1. `scope` enum was `["all", "dreamed", "undreamed"]`; `'archive'` rejected at `memory_search.py:315`.
+2. CLI had 10 commands (`reindex`, `dream`, `history`, `show`, `diff`, `revert`, `expand`, `absorb`, `stats`, `absorb-suggest`); none archive-prefixed.
+3. `durin memory expand <entity>` already covered the archive of a SINGLE entity; file access via `cat memory/archive/...` covered direct lookups.
 
-**Análisis "buen sistema"**:
-- `scope='archive'` es de **más valor** para asistente LLM-in-the-loop: agente puede recuperar contenido archivado sin que operador haga grep manual. Cubre caso "buscá lo que dijiste hace 3 meses sobre X".
-- CLI commands son convenience para operador-debugging; file access + `memory expand` ya cubren mínimo viable. Sin caso concreto, son construcción especulativa.
+**"Good system" analysis**:
+- `scope='archive'` is the **highest-value** surface for an LLM-in-the-loop assistant: the agent can recover archived content without the operator doing manual grep. Covers the "find what you said 3 months ago about X" case.
+- CLI commands are operator-debugging convenience; file access + `memory expand` already cover the minimum viable surface. Without a concrete case, they are speculative construction.
 
-**Decisión**: Opción C (híbrida). Ship `scope='archive'`, defer ambos CLI commands.
+**Decision**: Option C (hybrid). Ship `scope='archive'`, defer both CLI commands.
 
-**Resolución**:
-- Enum extendido a `["all", "dreamed", "undreamed", "archive"]`.
-- `_run_archive_scope(query, limit)` agregado: walker `memory/archive/**`, parse YAML frontmatter via `split_frontmatter`, substring match sobre `headline+summary+name+aliases+body`. No decay, no rerank, no cross-encoder (recovery surface, no hot path).
-- Emite `memory.recall` event con `scope='archive'` + `strategy='archive'` para que dashboards diferencien.
-- Tests TDD: 6 cases (`scope='archive'` aceptado, encuentra archived episodic, encuentra archived entity, empty cuando no archive dir, NO incluye active memory, respeta limit).
-- Doc 01 §3.6 + §10 row 4 marcan F2 shipped + clarifican defer de CLI.
-- Doc 04 §11 marca CLI commands como deferred con strikethrough.
-- Doc 08 §5 backlog: entry agregado con trigger ("operator workflow concreto") y workaround actual (`find` + `cat`).
+**Resolution**:
+- Enum extended to `["all", "dreamed", "undreamed", "archive"]`.
+- `_run_archive_scope(query, limit)` added: walks `memory/archive/**`, parses YAML frontmatter via `split_frontmatter`, substring match over `headline+summary+name+aliases+body`. No decay, no rerank, no cross-encoder (recovery surface, not a hot path).
+- Emits `memory.recall` event with `scope='archive'` + `strategy='archive'` so dashboards can tell them apart.
+- TDD tests: 6 cases (`scope='archive'` accepted, finds archived episodic, finds archived entity, empty when no archive dir, does NOT include active memory, respects limit).
+- Doc 01 §3.6 + §10 row 4 mark F2 shipped + clarify the CLI defer.
+- Doc 04 §11 marks the CLI commands as deferred with strikethrough.
+- Doc 08 §5 backlog: entry added with trigger ("concrete operator workflow") and the current workaround (`find` + `cat`).
 
-**Commit pendiente** (cierre del batch F1-F11).
+**Commit pending** (F1-F11 batch close).
 
-**Commit pendiente** (cierre del batch E16-E23).
+**Commit pending** (E16-E23 batch close).
