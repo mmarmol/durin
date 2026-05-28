@@ -29,17 +29,9 @@ import pytest
 
 from durin.agent.tools.memory_store import MemoryStoreTool
 from durin.memory.dream_runner import DreamRunner as _RealRunner
-from durin.memory.provenance import author_scope
 from durin.memory.store import store_memory
 
-
-@pytest.fixture(autouse=True)
-def _agent_created_scope():
-    """Doc memory §4.6.1: user-authored entries are protected from
-    Dream — tests model agent observations, so wrap in
-    ``agent_created`` scope."""
-    with author_scope("agent_created"):
-        yield
+# Default `agent_created` scope opened by `tests/conftest.py` (autouse).
 
 
 def _stub_llm_for_alice():

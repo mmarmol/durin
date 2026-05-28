@@ -58,17 +58,12 @@ def _make_stub_llm(slug: str = "marcelo"):
 
 
 def _seed_pending_entry(workspace: Path, slug: str = "marcelo") -> None:
-    # Doc memory §4.6.1: `user_authored` entries are protected from
-    # Dream consumption. The tests model agent-observed entries —
-    # wrap the store call in agent_created scope so the resulting
-    # episodic is picked up by `_discover_pending_consolidations`.
-    from durin.memory.provenance import author_scope
-    with author_scope("agent_created"):
-        store_memory(
-            workspace, content=f"{slug} observation",
-            entities=[f"person:{slug}"],
-            valid_from=datetime.date(2026, 5, 23),
-        )
+    # `agent_created` scope is opened by tests/conftest.py (autouse).
+    store_memory(
+        workspace, content=f"{slug} observation",
+        entities=[f"person:{slug}"],
+        valid_from=datetime.date(2026, 5, 23),
+    )
 
 
 # ---------------------------------------------------------------------------
