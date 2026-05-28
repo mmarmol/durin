@@ -90,7 +90,7 @@ This avoids duplicates and keeps the memory store coherent.
 
 ### 2.2 Verified effect
 
-The v2 form of this section (with "don't answer from cold recall" + "state source") shipped 2026-05-25 and produced **+12pp on single_hop** and **+3.9pp net on LoCoMo bench** (`project_locomo_v2_prompts_result.md`). Declarative + specific worked; imperative + generic did not (D1/D3 prompts tested 2026-05 lost 20pp).
+The v2 form of this section (with "don't answer from cold recall" + "state source") shipped 2026-05-25 and produced **+3.9pp net on LoCoMo bench** (60.8% → 64.7%, `project_locomo_v2_prompts_result.md`). Audit E17 (2026-05-28) removed an earlier "+12pp on single_hop" claim — that per-category number was never verifiable from the bench data; only the overall +3.9pp is supported. Declarative + specific worked; imperative + generic did not (D1/D3 prompts tested 2026-05 lost 20pp).
 
 ---
 
@@ -726,11 +726,11 @@ None at the module level.
 
 | Aspect | Current state | v2 target | Migration work |
 |---|---|---|---|
-| `identity.md` Memory section | v2 shipped 2026-05-25 (+3.9pp) | Light revision per §2 | Minor wording polish |
+| `identity.md` Memory section | **Shipped (v2, 2026-05-25, +3.9pp on LoCoMo).** Both `## Memory` (read-time) and `## Memory writing` (write-time, B11) blocks present in `durin/templates/agent/identity.md`. Audit E23 (2026-05-28) flipped this row from "Light revision per §2 pending" — no concrete pending polish was specified, and the verified bench gain landed on what's currently in the template. | — | — |
 | Tool descriptions | ✅ Sync'd. Each tool's `.description` property delegates to `_PARAMETERS["description"]` which carries the verbatim doc §3 text. `test_tool_description_sync.py` guards both string equality and the `to_schema()` invariant (audit B1, 2026-05-28). | — | — |
 | `templates/dream/consolidator.md` | v2 — skill package multi-file per §4. **Shipped in Phase 1.9 (commit `6aafc3f`).** | — | — |
 | `templates/dream/absorb_judge.md` | Active | Same | None |
-| Onboarding wizard text | Partial | Add §6 questions | Wizard CLI + webui changes |
+| Onboarding wizard text | **Partial.** `durin/cli/onboard.py` exists (1169 LOC wizard) but contains no memory-related questions today — grep for `memory` returns zero. Doc §6 specifies three blocks (memory enable, cross-encoder, auto-absorb) yet to land. | Add §6 questions | Wizard CLI + webui changes |
 | Structural markers | CANONICAL/FRAGMENT in code | + SESSION + INGESTED | Renderer extension |
 
 ---

@@ -1517,3 +1517,41 @@ Esos 3 casos son drill-by-URI, NO búsquedas amplias. La duplicación canonical 
 **Decisión**: doc → reality. Eliminar el bullet stale y agregar nota explicando el cambio post-A10.
 
 **Commit pendiente** (cierre del batch E16-E23).
+
+### E21 — Doc 05 §15 status table 4 filas "Not implemented" shipped ✅ RESOLVED
+
+**Doc 05 §15 (pre-E21)** marcaba como "Not implemented" / "Not explicit":
+- Provenance tracking
+- Archive of consumed episodic
+- Git commits (Hybrid model)
+- Failure quarantine
+
+**Realidad** (Phase 1.9, commit `6aafc3f`): los 4 están shipped.
+- `dream_patch_parser.py` + `dream_apply.py` colectan provenance por op.
+- `dream_archive_consumed.py::archive_consumed_episodic` move a `memory/archive/episodic/`.
+- `dream_commit_message.py` + `dream_git_history.py` implementan el hybrid model.
+- `dream_quarantine.py` + frontmatter fields `dream_failure_count` / `dream_quarantine` + 3-strike logic.
+
+**Decisión**: flip a "Shipped (Phase 1.9)" con pointer a módulo concreto en cada fila + audit E21 reference.
+
+### E22 — Doc 05 §14 row 8 verdict vocab obsoleto ✅ RESOLVED
+
+**Doc 05 §14 row 8 (pre-E22)**: "LLM-judged: merge / keep_separate / unsure".
+
+**Código `absorb_judge.py:6,84`**: vocabulary real es `same | different | unclear`. Auto-merge solo cuando `verdict == "same"` AND `confidence ≥ threshold`.
+
+**Genealogía**: posible holdover de spec original. Nunca matchó el enum real.
+
+**Decisión**: doc → reality.
+
+### E23 — Doc 06 §10 status rows identity + onboarding ✅ RESOLVED
+
+**Doc 06 §10 (pre-E23)**:
+- "identity.md Memory section | v2 shipped 2026-05-25 (+3.9pp) | Light revision per §2 | Minor wording polish" — la "light revision pending" no tenía scope concreto; el bench gain fue sobre lo que está en el template hoy.
+- "Onboarding wizard text | Partial | Add §6 questions" — accurate, `onboard.py` (1169 LOC) no tiene grep hit para "memory".
+
+**Plus**: doc 06 §2.2 también tenía "+12pp on single_hop" (mismo claim stale removido de doc 04 §2.4 en E17). Extendido el fix.
+
+**Decisión**: identity row a fully shipped (drop "light revision pending"); onboarding row mantiene "Partial" pero con evidencia concreta (grep miss); +12pp removido también de doc 06 §2.2.
+
+**Commit pendiente** (cierre del batch E16-E23).
