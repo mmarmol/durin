@@ -44,7 +44,11 @@ __all__ = [
 # Phase 0 introduces walker + archive + slug + EntityPage v2 + decay
 # fields — they are all additive against v1 entries, but the indexer
 # now skips the top-level archive and that's enough to call it v2.
-CURRENT_SCHEMA_VERSION: int = 2
+# v3 (audit A4, 2026-05-28): P2.5 body column reverted. Existing v2
+# LanceDB tables carry an extra `body` field that the new code does
+# not write or read — the bump forces a clean rebuild so the tables
+# match the documented schema (8 columns, no body).
+CURRENT_SCHEMA_VERSION: int = 3
 
 
 @dataclass(frozen=True)

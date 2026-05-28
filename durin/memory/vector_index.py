@@ -142,8 +142,6 @@ class VectorIndex:
             # separately from tag-overlap logic.
             "entities": [],
             "path": str(rel_path),
-            # P2.5: full body for cold-tier reads without disk hits.
-            "body": body or "",
         }
         db = self._connect()
         names = db.list_tables().tables
@@ -370,10 +368,14 @@ class VectorIndex:
             # boost tagged entries — W1 would be inoperative.
             "entities": list(entry.entities),
             "path": str(rel_path),
-            # P2.5 (doc 10): store the full body so cold-tier search
-            # can return it without a disk read. Doubles the index
-            # size at the benefit of avoiding N file opens per query.
-            "body": entry.body or "",
+            # NOTE: `body` is deliberately NOT stored here. The .md on
+            # disk is the single source of truth; the search pipeline
+            # reads the body on demand via `memory_search._enrich_body`
+            # when level=cold is requested. P2.5 (commit a266344)
+            # briefly stored body here for a latency micro-optimisation,
+            # reverted in audit A4 because it duplicated content and
+            # opened a drift window between disk edits and LanceDB
+            # reads. See docs/memory/08_scope_and_discarded.md §2.10.
         }
 
     _EMBED_BUDGET_CHARS = 1500  # ~375 tokens; e5-small max_seq is 512.

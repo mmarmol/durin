@@ -60,48 +60,58 @@ This document specifies the two derived indices that accelerate retrieval over t
 
 ### 3.1 Schema
 
-Each row represents one indexable `.md` file under `memory/` (excluding `memory/archive/`).
+Each row represents one indexable `.md` file under `memory/` (excluding `memory/archive/` and `memory/pending/`). The row is **metadata + the embedding vector**; the body content lives in the `.md` on disk, which is the single source of truth.
 
 | Column | Type | Description |
 |---|---|---|
-| `uri` | string (primary key) | Canonical reference: `person:marcelo`, `episodic:2026-05-23T10-12-uuid`, `session:c155274d`, `corpus:2026-05-26-paper-chunk-3`, etc. |
-| `path` | string | Relative path to the `.md` from workspace root. |
-| `type` | string | Memory class: `entity`, `episodic`, `stable`, `corpus`, `session_summary`. |
-| `entity_type` | string \| null | For `type=entity`: the entity type (`person`, `bug`, `project`, ...). Null otherwise. |
-| `entities` | list of strings | For entries: `entities` field from frontmatter (e.g., `["person:marcelo", "project:durin"]`). For entity pages: just `[<own_uri>]`. Used by the entity-aware ranker. |
-| `vector` | fixed-size list of floats (768) | Embedding produced by MiniLM over the composed text (§4). |
-| `mtime` | float | File modification time at indexing. Used to detect staleness. |
-| `headline` | string | For entries: frontmatter `headline`. For entity pages: `name`. For session summaries: session title or first 80 chars of summary. |
-| `summary` | string | For entries: frontmatter `summary` (may be empty). For entity pages: empty in v1, populated in v2 once Dream generates summaries. For session summaries: the `_last_summary.text` itself. |
-| `valid_from` | string \| null | ISO date if entry has one; for temporal scoring. |
-| `indexed_at` | string | ISO timestamp of when this row was last written. |
+| `id` | string (PK) | For entries: 12-char content hash. For entity pages: `<type>:<slug>` (e.g. `person:marcelo`). FTS5 calls this `uri` — asymmetry documented in §5.1. |
+| `class_name` | string | `episodic`, `stable`, `corpus`, or `entity_page`. FTS5 calls this `type` — asymmetry documented in §5.1. `pending` is in `MEMORY_CLASSES` but never reaches the index (walker/indexer skip it). |
+| `summary` | string | For entries: frontmatter `summary` (may be empty). For entity pages: `name (also: alias1, alias2)` derived at upsert time. |
+| `headline` | string | For entries: frontmatter `headline`. For entity pages: the entity `name`. |
+| `vector` | fixed-size list of floats | Dim depends on the configured model — default `paraphrase-multilingual-MiniLM-L12-v2` → **384**; CJK-heavy users on `multilingual-e5-large` → 1024. Validated at startup via `VectorIndex._guard_dim_match`. |
+| `valid_from` | string | ISO date if the entry frontmatter carries one; empty string `""` when absent. |
+| `entities` | list[string] | For entries: frontmatter `entities` field (e.g. `["person:marcelo", "project:durin"]`). For entity pages: `[]` (a page IS the entity; the ranker treats `class_name="entity_page"` specially). Used by `entity_ranker` for the post-cursor boost. |
+| `path` | string | Relative path to the `.md` from workspace root. Used by consumers that need to read the body on demand. |
 
-**No `body` column.** The body is read from disk on demand when a search hit needs to be enriched (e.g., `level=cold` retrieval). Storing the body in LanceDB would double the index size for no retrieval benefit (it's not what gets searched over).
+**No `body` column. The body lives on disk.** When a cold-tier caller (`memory_search(level="cold")`) needs the full body, the consumer reads the `.md` via `memory_search._enrich_body`. This is a deliberate architectural choice: the `.md` is the single source of truth; LanceDB is a derivable, disposable cache that can be rebuilt from disk at any time. P2.5 (commit `a266344`) briefly stored the body here as a latency micro-optimisation; audit A4 reverted it because:
+
+1. The latency saved (~5-10 ms for 10 file opens on SSD) was not bottleneck — the LLM call downstream takes seconds.
+2. Storing the body duplicated content and opened a drift window between disk edits (e.g., via the file watcher path of P2.3) and LanceDB reads.
+3. Doubling the index size compounded at scale.
+4. FTS5 already honors the "indexed for search, content lives on disk" model — LanceDB now matches.
+
+See `docs/memory/08_scope_and_discarded.md` §2.10 for the full rationale and the lesson on "premature optimisation that violates an architectural principle".
 
 ### 3.2 Embedding model
 
-Single global choice:
+Single global choice per workspace (configurable via `memory.embedding.model`):
 
-| Property | Value |
+| Property | Default value |
 |---|---|
-| Model | `paraphrase-multilingual-MiniLM-L12-v2` (HuggingFace `sentence-transformers/`) |
-| Dim | 768 |
+| Model | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` |
+| Dim | **384** (varies by model — see below) |
+| Size | 220 MB on disk |
 | Max sequence | 512 tokens (~1500 chars) |
 | Multilingual | Yes (EN/ES/ZH/JA/KO and ~50 others) |
 
-The model is **not configurable per-row**. All vectors in the index share this model. Changing the model requires a full rebuild (`durin reindex`). The model identifier is stored in `meta.json` so a mismatch on startup is detected and the system refuses to operate until rebuilt.
+Recommended overrides:
+- CJK-heavy workloads: `intfloat/multilingual-e5-large` (2.24 GB, 1024-dim).
+- English-only minimal: `sentence-transformers/all-MiniLM-L6-v2` (90 MB, 384-dim).
+
+The model is **not configurable per-row**. All vectors in the index share this model. Changing the model requires a full rebuild (`durin memory reindex`). The model identifier is stored in `<workspace>/.durin/index/meta.json`; `VectorIndex._guard_dim_match` checks the on-disk table's vector dim against the provider's reported dim at every read/write and raises `VectorIndexDimensionMismatch` if they differ, so the search pipeline can fall back to lexical instead of mixing 384-dim and 1024-dim rows.
 
 **Provider abstraction.** `durin/memory/embedding.py` defines an `EmbeddingProvider` ABC plus a concrete `FastembedProvider` (uses ONNX in-process, no GPU required). The abstraction is so adding a new provider (e.g., for a different model family, a remote inference endpoint, or quantized variants) is a one-class addition without touching the rest of the indexer. The provider validates model identifier at construction and exposes telemetry hooks for load + per-embed timings.
 
 ### 3.3 What is indexed vs not
 
-| Indexed | Not indexed |
+| Indexed (rows present) | Not indexed |
 |---|---|
-| `memory/entities/<type>/<slug>.md` | `memory/archive/**` (decision §3.6 of doc 01) |
-| `memory/episodic/<id>.md` (post-cursor + pre-cursor both) | `memory/pending/<id>.md` (intake buffer, not yet classified) |
-| `memory/stable/<id>.md` | `sessions/<id>/<id>.jsonl` (raw conversation; only the summary is indexed) |
-| `memory/corpus/<id>.md` | `ingested/<id>/source.*` (raw documents; only corpus chunks are indexed) |
-| `sessions/<id>/<id>.meta.json::derived._last_summary` (one row per session as `type=session_summary`) | |
+| `memory/entities/<type>/<slug>.md` (class_name = `entity_page`) | `memory/archive/**` (decision §3.6 of doc 01) |
+| `memory/episodic/<id>.md` (post-cursor + pre-cursor both) | `memory/pending/<id>.md` (intake buffer; walker/indexer skip it) |
+| `memory/stable/<id>.md` | `sessions/<id>/<id>.jsonl` (raw conversation transcripts) |
+| `memory/corpus/<id>.md` | `ingested/<id>/source.*` (raw artifacts; only the derived `memory/corpus/<id>.md` chunks are indexed) |
+
+> **Session summaries**: doc v1 promised one row per session at `class_name=session_summary` derived from `sessions/<id>/<id>.meta.json::_last_summary`. **No code emits these rows today** — the walker only iterates `.md` files under `memory/`. Tracked as audit item A10 (`docs/memory/11_audit_reconciliation.md`).
 
 The shared workspace walker (`walk_memory(workspace, include_archive=False)`) is the single chokepoint. Indexer, ranker, alias bootstrapper, and any future scanner all consume its output.
 
@@ -211,6 +221,10 @@ CREATE TABLE fts_meta (
 ```
 
 `UNINDEXED` columns are stored but not tokenized — they're available in result rows but not searched over.
+
+**Naming asymmetry with LanceDB** (see §3.1). This index uses `uri` and `type` as column names; the LanceDB row schema uses `id` and `class_name` for the same logical fields. The two indices were built at different points in time and the names were never reconciled. Consumers (the search pipeline in `search_pipeline._resolve_meta`) translate at the boundary: a vector hit's `id` becomes the FTS-style `uri` for cross-index joins, and `class_name="entity_page"` is normalised to `type="entity"` in the meta dict. The asymmetry is benign once you know about it; renaming either side would mean a one-time rebuild with no functional benefit.
+
+**Body indexed, body not stored**: similar to LanceDB, FTS5 indexes the composed `text` (headline + summary + entities + body) but never returns the `text` column in query results — queries return only the UNINDEXED metadata, and the consumer reads the body from disk if it needs the full content. This mirrors §3.1's decision: indices are for retrieval, the `.md` is the source of truth.
 
 **Why dual:**
 - `unicode61` tokenizes by whitespace/punctuation and word boundaries. Excellent for Latin and similar scripts. Splits CJK into single-character tokens, which works but is suboptimal for substring/phrase queries.
@@ -460,7 +474,7 @@ None at the module level. Cross-references to other modules:
 
 | Aspect | Current state | v2 target | Migration work |
 |---|---|---|---|
-| Vector index (LanceDB) | Active, single table, MiniLM | Same engine; row schema extended with `valid_from`, `session_summary` type | Schema migration; add new type emitter for session summaries |
+| Vector index (LanceDB) | Active, single table, MiniLM-L12-v2 (384-dim default), 8-column schema per §3.1 | Same engine; if session summaries are emitted (see A10) they would index as `class_name=session_summary` | Optional: session_summary emitter (A10); other knobs all already shipped |
 | Embedding text — entities | `name + aliases + body`, 1500 char cap | + `rendered_frontmatter` + `summary` | Update `compose_embedding_text` for entities |
 | Embedding text — entries | `headline + summary + entities_list + body` | Same + `entities_with_aliases` | Update `compose_embedding_text` for entries; integrate alias index lookup |
 | Session summaries indexed | No (sessions grep-only) | Yes (one row per session with `_last_summary`) | New emitter; trigger on `_last_summary` update |

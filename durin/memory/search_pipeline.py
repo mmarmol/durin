@@ -275,10 +275,15 @@ def _cross_encoder_rerank(
 ) -> list:
     """Apply a cross-encoder rerank over the fused list (doc 03 §9).
 
-    Builds (uri, doc_text) pairs by pulling the richest text we have
-    for each hit — body (when LanceDB carried it) falls back to
-    snippet falls back to URI. Calls :func:`cross_encoder.rerank_hits`
-    which gracefully no-ops on reranker failure.
+    Builds (uri, doc_text) pairs by pulling the richest text the
+    pipeline already has for each hit — snippet falls back to
+    headline falls back to URI. Body is NOT pulled from disk here:
+    cross-encoder rerank is opt-in and runs on top-50 hits, so a
+    per-hit file read would add 50 IOPS to a step whose latency is
+    already dominated by the GPU/CPU model. If snippet+headline
+    quality turns out to limit rerank precision in benchmarks, the
+    fix is a CE-specific top-N body fetch inside this function, not
+    re-introducing a body column in LanceDB (audit A4).
     """
     import time as _time
     from durin.memory.cross_encoder import rerank_hits
@@ -291,8 +296,7 @@ def _cross_encoder_rerank(
             h.uri, vector_meta, lexical_meta, grep_meta=grep_meta,
         )
         doc = (
-            meta.get("body")
-            or meta.get("snippet")
+            meta.get("snippet")
             or meta.get("headline")
             or h.uri
         )
@@ -442,8 +446,7 @@ def _resolve_meta(
             meta["valid_from"] = vh["valid_from"]
         if vh.get("headline"):
             meta["headline"] = vh["headline"]
-        # P2.5: vector index now persists `body`. Pass it through so
-        # cold-tier callers don't need a disk read.
-        if vh.get("body"):
-            meta["body"] = vh["body"]
+        # NOTE: A4 reverted P2.5 — body is no longer stored in
+        # LanceDB. `meta["body"]` stays unset; the cold-tier caller
+        # (memory_search._enrich_body) reads it from disk.
     return meta

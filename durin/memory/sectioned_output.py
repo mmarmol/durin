@@ -54,9 +54,11 @@ class SectionedHit:
     ts: str = ""
     snippet: str = ""
     ingest_id: Optional[str] = None
-    # P2.5: full body for cold-tier callers. Populated by the
-    # pipeline when the vector index carries it; empty otherwise
-    # (callers fall back to disk read).
+    # Body stays in this dataclass for backward-compat with call
+    # sites that consult `hit.body`, but it is no longer populated
+    # by the pipeline (audit A4 reverted P2.5). Cold-tier callers
+    # default-fall to disk reads via `_enrich_body` — the empty
+    # default here is the trigger that activates that path.
     body: str = ""
 
 

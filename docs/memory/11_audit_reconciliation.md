@@ -234,7 +234,35 @@ Columnas reales: `id, class_name, summary, headline, vector, valid_from, entitie
 - Corregir dim 768 → 384.
 - Actualizar §3.2 "Dim: 768" → "Dim: 384 (default; cambiar requiere full rebuild)".
 
-**Estado**: pending
+**Resolución (2026-05-28)**: durante el análisis el usuario empujó con la pregunta clave — *"el doc real se mantiene en disco fue para no replicar toda la información; la fuente de verdad es el doc en disco no la base de datos"*. Verificación columna por columna mostró que `body` era el ÚNICO campo que duplicaba contenido sustancial del `.md` en LanceDB. P2.5 (commit `a266344`, 2026-05-28 09:10) había violado el principio arquitectónico original por una optimización de latencia (~5-10 ms ahorrados en disk reads de cold-tier) que NO era bottleneck — el LLM call downstream toma segundos.
+
+**Decisión**: revertir P2.5 + alinear doc al schema real. Cambios al código:
+
+- [vector_index.py:131-147](../../durin/memory/vector_index.py#L131-L147) (entity-page record) y [:360-377](../../durin/memory/vector_index.py#L360-L377) (entry record): remover el campo `body` del dict. Comentario explicativo apunta a doc 08 §2.10.
+- [search_pipeline.py:294-298](../../durin/memory/search_pipeline.py#L294-L298): el cross-encoder rerank ya no usa `meta.get("body")`. Doc inline en la función explica que si CE quality requiere body en el futuro, la solución es un top-N disk fetch dentro del CE step, NO una columna en LanceDB.
+- [search_pipeline.py:445-449](../../durin/memory/search_pipeline.py#L445-L449): `_resolve_meta` ya no threadea `body` desde vector hits.
+- [sectioned_output.py:60](../../durin/memory/sectioned_output.py#L60): `SectionedHit.body` keep como field con default `""` (backward-compat; cold-tier callers caen a `_enrich_body`).
+- [index_meta.py:47](../../durin/memory/index_meta.py#L47): `CURRENT_SCHEMA_VERSION` bumped 2 → 3 para forzar clean rebuild de tablas v2 existentes (que tendrán la columna `body` huérfana). El check `ensure_index_fresh` (P2.2) lo dispara automáticamente en el próximo `memory_search.execute`.
+- [tests/memory/test_vector_index_no_body_column.py](../../tests/memory/test_vector_index_no_body_column.py): 2 tests nuevos que assertan el invariante post-A4 — si alguien re-introduce la columna, el test falla con mensaje específico apuntando a doc 08 §2.10.
+
+Cambios al doc:
+
+- [docs/memory/02_indexing.md §3.1](02_indexing.md): 8 columnas reales en la tabla del schema. Bloque dedicado explicando *"no body column — body lives on disk"* con justificación arquitectónica + referencia a doc 08 §2.10. Aclaración de la asimetría `id/class_name` (LanceDB) vs `uri/type` (FTS5).
+- [docs/memory/02_indexing.md §3.2](02_indexing.md): dim corregida (default 384, no 768); listadas alternativas (e5-large 1024-dim, MiniLM-L6 384-dim).
+- [docs/memory/02_indexing.md §3.3](02_indexing.md): `entity_page` en vez de `entity`; nota sobre session_summary que NO se emite hoy (delegada a A10).
+- [docs/memory/02_indexing.md §5.1](02_indexing.md): nota sobre la asimetría con LanceDB + cómo FTS5 también honra el principio (indexa el `text` pero nunca lo devuelve).
+- [docs/memory/02_indexing.md §11 status](02_indexing.md): fila vector index actualizada con el schema actual.
+- [docs/memory/08_scope_and_discarded.md §2.10](08_scope_and_discarded.md): entry permanente con genealogía + 5 razones del revert + lección sobre optimización vs principio + lección sobre symmetry entre índices.
+
+**Lecciones nuevas** (a guardar en memoria persistente):
+
+- *"Una optimización que viola un principio arquitectónico debe justificarse con medición, no con intuición"* — P2.5 ahorraba ~10ms en una operación dominada por LLM latency de segundos.
+- *"El fix para un consumer lento es local a ese consumer, no un schema change"* — si CE necesita más texto, optimizar CE; no agregar columnas a LanceDB que el 95% de las queries no usan.
+- *"Symmetry entre componentes es feature"* — FTS5 y LanceDB siendo ambos "metadata + index, content en disk" hace el sistema más simple de razonar.
+
+**Verificado pre-commit**: tests/memory/ 903 passed, 1 skipped (894 base + 7 A3 + 2 A4 invariante).
+
+**Estado**: resolved (commit pendiente).
 
 ---
 
