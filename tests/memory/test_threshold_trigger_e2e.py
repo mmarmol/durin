@@ -35,24 +35,26 @@ from durin.memory.store import store_memory
 
 
 def _stub_llm_for_alice():
-    """Stub LLM that produces a well-formed dream response for Alice."""
+    """v2 stub for Alice consolidation."""
+    import json as _json
+    ops = [
+        {"op": "add", "path": "/aliases/-", "value": "alice",
+         "provenance": "episodic/e1.md"},
+        {"op": "add", "path": "/attributes/note",
+         "value": "Consolidated from 5 observations.",
+         "provenance": "episodic/e1.md"},
+    ]
     response = (
-        "===PAGE===\n"
-        "---\n"
-        "type: person\n"
-        "name: Alice\n"
-        "aliases: [alice]\n"
-        "dream_processed_through: 2026-05-23T00:00:00\n"
-        "---\n"
-        "\n"
-        "# Alice\n"
-        "\n## Current State\nConsolidated from 5 observations.\n"
-        "===COMMIT===\n"
-        "Consolidate person:alice (rev 1)\n"
-        "\nE2E threshold trigger pass.\n"
-        "\nSources: e1\nEntities-touched: person:alice\n"
-        "Cursor-after: 2026-05-23T00:00:00\n"
-        "===END===\n"
+        "===PATCH===\n"
+        + _json.dumps(ops, indent=2) + "\n"
+        + "===BODY_DELTA===\n"
+        + "Consolidated from 5 observations.\n"
+        + "===COMMIT===\n"
+        + "Consolidate person:alice (rev 1)\n"
+        + "\nE2E threshold trigger pass.\n"
+        + "\nSources: episodic/e1.md\nEntities-touched: person:alice\n"
+        + "Cursor-after: 2026-05-23T00:00:00\n"
+        + "===END===\n"
     )
 
     def stub(prompt: str, *, model: str) -> str:

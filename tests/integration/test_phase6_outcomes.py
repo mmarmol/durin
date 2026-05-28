@@ -62,31 +62,30 @@ class _CharProvider(EmbeddingProvider):
         return out
 
 
-def _make_stub_llm(entity_ref: str, *, body: str, sources: list[str], cursor: int):
-    """Builds an LLM stub that returns a well-formed consolidation response."""
+def _make_stub_llm(entity_ref: str, *, body: str, sources: list[str], cursor):
+    """v2 LLM stub for consolidation."""
+    import json as _json
     type_, slug = entity_ref.split(":", 1)
     source_str = ", ".join(sources)
+    primary = sources[0] if sources else "episodic/unknown.md"
+    ops = [
+        {"op": "add", "path": "/aliases/-", "value": slug,
+         "provenance": primary},
+        {"op": "add", "path": "/aliases/-", "value": slug.title(),
+         "provenance": primary},
+    ]
     response = (
-        "===PAGE===\n"
-        "---\n"
-        f"type: {type_}\n"
-        f"name: {slug.replace('_', ' ').title()}\n"
-        f"aliases: [{slug}, {slug.title()}]\n"
-        f"dream_processed_through: {cursor}\n"
-        "---\n"
-        "\n"
-        f"# {slug.replace('_', ' ').title()}\n"
-        "\n"
-        f"{body}\n"
-        "===COMMIT===\n"
-        f"Consolidate {entity_ref} (rev 1)\n"
-        "\n"
-        "Consolidation pass merging episodic observations.\n"
-        "\n"
-        f"Sources: {source_str}\n"
-        f"Entities-touched: {entity_ref}\n"
-        f"Cursor-after: {cursor}\n"
-        "===END===\n"
+        "===PATCH===\n"
+        + _json.dumps(ops, indent=2) + "\n"
+        + "===BODY_DELTA===\n"
+        + f"{body}\n"
+        + "===COMMIT===\n"
+        + f"Consolidate {entity_ref} (rev 1)\n"
+        + "\nConsolidation pass merging episodic observations.\n"
+        + f"\nSources: {source_str}\n"
+        + f"Entities-touched: {entity_ref}\n"
+        + f"Cursor-after: {cursor}\n"
+        + "===END===\n"
     )
     return lambda prompt, *, model: response
 

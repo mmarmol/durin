@@ -179,30 +179,27 @@ async def test_e2e1_memory_search_invokes_entity_aware_ranker(
 
 
 def _stub_consolidation_response(entity_ref: str) -> str:
-    """Well-formed dream LLM response for an entity (page + commit blocks)."""
+    """v2 dream LLM response for an entity."""
+    import json as _json
     type_, slug = entity_ref.split(":", 1)
+    ops = [
+        {"op": "add", "path": "/aliases/-", "value": slug,
+         "provenance": "episodic/e1.md"},
+        {"op": "add", "path": "/aliases/-", "value": slug.title(),
+         "provenance": "episodic/e1.md"},
+    ]
     return (
-        "===PAGE===\n"
-        "---\n"
-        f"type: {type_}\n"
-        f"name: {slug.title()}\n"
-        f"aliases: [{slug}, {slug.title()}]\n"
-        "dream_processed_through: 2026-05-20\n"
-        "---\n"
-        "\n"
-        f"# {slug.title()}\n"
-        "\n"
-        "## Current State\n"
-        "First consolidation pass.\n"
-        "===COMMIT===\n"
-        f"Consolidate {entity_ref} (rev 1)\n"
-        "\n"
-        "Initial pass.\n"
-        "\n"
-        f"Sources: e1, e2, e3\n"
-        f"Entities-touched: {entity_ref}\n"
-        "Cursor-after: 2026-05-20\n"
-        "===END===\n"
+        "===PATCH===\n"
+        + _json.dumps(ops, indent=2) + "\n"
+        + "===BODY_DELTA===\n"
+        + "First consolidation pass.\n"
+        + "===COMMIT===\n"
+        + f"Consolidate {entity_ref} (rev 1)\n"
+        + "\nInitial pass.\n"
+        + f"\nSources: episodic/e1.md, episodic/e2.md, episodic/e3.md\n"
+        + f"Entities-touched: {entity_ref}\n"
+        + "Cursor-after: 2026-05-20\n"
+        + "===END===\n"
     )
 
 

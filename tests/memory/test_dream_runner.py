@@ -31,24 +31,25 @@ from durin.memory.store import store_memory
 
 
 def _make_stub_llm(slug: str = "marcelo"):
-    """Return an LLM stub that produces a well-formed dream response."""
+    """Return a v2 LLM stub for Dream tests."""
+    import json as _json
+    ops = [
+        {"op": "add", "path": "/aliases/-", "value": slug,
+         "provenance": "episodic/e1.md"},
+        {"op": "add", "path": "/attributes/note", "value": "observed",
+         "provenance": "episodic/e1.md"},
+    ]
     response = (
-        "===PAGE===\n"
-        "---\n"
-        "type: person\n"
-        f"name: {slug.title()}\n"
-        f"aliases: [{slug}]\n"
-        "dream_processed_through: 2026-05-23T00:00:00\n"
-        "---\n"
-        "\n"
-        f"# {slug.title()}\n"
-        "\n## Current State\nObserved.\n"
-        "===COMMIT===\n"
-        f"Consolidate person:{slug} (rev 1)\n"
-        "\nInitial pass.\n"
-        f"\nSources: e1\nEntities-touched: person:{slug}\n"
-        "Cursor-after: 2026-05-23T00:00:00\n"
-        "===END===\n"
+        "===PATCH===\n"
+        + _json.dumps(ops, indent=2) + "\n"
+        + "===BODY_DELTA===\n"
+        + "Observed.\n"
+        + "===COMMIT===\n"
+        + f"Consolidate person:{slug} (rev 1)\n"
+        + "\nInitial pass.\n"
+        + f"\nSources: episodic/e1.md\nEntities-touched: person:{slug}\n"
+        + "Cursor-after: 2026-05-23T00:00:00\n"
+        + "===END===\n"
     )
 
     def stub(prompt, *, model):
