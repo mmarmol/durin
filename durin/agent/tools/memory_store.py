@@ -67,12 +67,24 @@ _PARAMETERS = tool_parameters_schema(
     ),
     required=["content"],
     description=(
-        "Persist a memory entry under memory/<class>/<id>.md. Author is "
-        "stamped automatically from the agent's current write-origin "
-        "(agent_created when called by the agent, user_authored otherwise). "
-        "By default, content that's a near-duplicate of an existing entry "
-        "(cosine sim >= 0.95) returns a warning instead of writing; pass "
-        "force=true to override."
+        # Canonical text per `docs/memory/06_prompts_and_instructions.md` §3.2.
+        "Persist an observation to memory. Use this when you learn a fact "
+        "the user is likely to need again — preferences, decisions, facts "
+        "about people/projects/ tasks, etc.\n\n"
+        "Storage class:\n"
+        "- `episodic` (default): working memory; short atomic observation. "
+        "Most uses.\n"
+        "- `stable`: durable, important note. Use sparingly — only when the "
+        "user has explicitly said \"remember this\" or when the fact is "
+        "clearly identity-level.\n\n"
+        "Always populate `entities` with the URIs this observation mentions "
+        "(format: `<type>:<value>`, e.g., `person:marcelo`, `project:durin`). "
+        "This enables entity-aware retrieval later.\n\n"
+        "Keep `headline` short and specific. `body` should be the full "
+        "content; don't truncate.\n\n"
+        "If the user is restating something already known, do NOT call this "
+        "tool — it creates duplicates. The Dream consolidation process will "
+        "eventually fold duplicates but in the meantime they pollute results."
     ),
 )
 
