@@ -133,41 +133,67 @@ These are declarative facts, not imperatives ("USE BEFORE answering" was tested 
 
 ```json
 {
-  "headline": "string (required)",
-  "body": "string (required)",
-  "class_name": "stable | episodic (default: episodic)",
+  "content": "string (required, full markdown body)",
+  "class_name": "stable | episodic | corpus (default: episodic)",
+  "headline": "string (optional, auto-generated from first ~10 words of content)",
+  "summary": "string (optional)",
   "entities": "array of <type>:<value> strings (optional)",
-  "summary": "string (optional, default: auto-generated)",
-  "source_refs": "array of strings (optional)",
-  "valid_from": "ISO date (optional)"
+  "source_refs": "array of markdown link strings (optional)",
+  "force": "boolean (optional, default false)"
 }
 ```
 
 **Param semantics:**
 
-| Param | Semantics |
-|---|---|
-| `headline` | One-line title. Required. |
-| `body` | Full markdown body of the observation. |
-| `class_name` | `episodic` = working memory, recent observations (default). `stable` = durable, the user/agent explicitly marks this as worth persisting. Stable is never auto-archived. |
-| `entities` | List of entity URIs this observation mentions. Format strict: `<type>:<value>` (e.g., `person:marcelo`, `project:durin`). Drives entity-aware ranking. |
-| `summary` | Optional short summary. If absent, generated from headline+body. |
-| `source_refs` | References to other entries (e.g., another `memory/episodic/...` path, or a `session:<id>/turn-N`). |
-| `valid_from` | ISO date for time-bound facts. |
+| Param | Required | Semantics |
+|---|---|---|
+| `content` | ✓ | The full markdown body to remember. Persisted as the `body` field of the resulting `MemoryEntry` (the doc-04-vs-internal-schema naming asymmetry is deliberate — `content` is the action the LLM takes, `body` is the field on disk). |
+| `class_name` | — | Enum: `stable`, `episodic`, `corpus`. Default `episodic`. `pending` exists in `MEMORY_CLASSES` but is **excluded** from the tool-facing enum — see decision 5b. |
+| `headline` | — | Optional. When omitted, auto-generated as the first ~10 words of `content` ([store.py::_auto_headline](../../durin/memory/store.py)). |
+| `summary` | — | Optional ~50-word summary, returned by `memory_search(level="warm")`. |
+| `entities` | — | List of entity URIs. Format strict: `<type>:<slug>` (e.g., `person:marcelo`, `project:durin`). Drives entity-aware ranking. Open-vocabulary on type. |
+| `source_refs` | — | Markdown links to originating turns / ingested doc sections (e.g., `[turn 42](../sessions/abc.md#turn-42)`). |
+| `force` | — | Default `false`. The write path runs a dedup pre-check via vector similarity; near-duplicates (cosine ≥ 0.95 = LanceDB L2 ≈ 0.10) return a warning instead of persisting. Set `force=true` to bypass and intentionally re-affirm. Rare. |
+
+**Not exposed as parameters** (but present in the persisted `MemoryEntry`):
+
+- `valid_from` — defaults automatically to `date.today()` in [store.py::store_memory](../../durin/memory/store.py). Not exposed to the LLM because (a) the default covers the 99% case of "agent learned this just now", and (b) back-dating use cases go through `store_memory` directly (e.g. the LoCoMo bench seeds with conversation dates via the pure function, not the tool). See `08_scope_and_discarded.md` §2.9.
+- `decay_half_life`, `evergreen` — Dream-managed; LLM does not set these directly.
+- `related`, `author` — derived (`related` from heuristics; `author` from `provenance.current_author()` ContextVar).
 
 ### 3.2 Return shape
 
+**Happy path** (entry persisted):
+
 ```json
 {
-  "id": "2026-05-26T10-12-uuid",
-  "path": "memory/episodic/2026-05-26T10-12-uuid.md",
-  "uri": "episodic:2026-05-26T10-12-uuid",
-  "indexed": true,
-  "threshold_dream_triggered": false
+  "id": "<12-char content hash>",
+  "class": "episodic",
+  "path": "memory/episodic/<id>.md",
+  "headline": "<provided or auto-generated>",
+  "author": "agent_created"
 }
 ```
 
-`threshold_dream_triggered` indicates whether storing this entry pushed any entity over the threshold for cold-path Dream consolidation. The agent doesn't need to act on this — it's diagnostic.
+`id` is deterministic — `sha256(class_name + "\0" + content)[:12]` — so a repeated store of the same `(class_name, content)` writes to the same path (idempotent).
+
+**Near-duplicate blocked** (cosine ≥ 0.95 to an existing entry, and `force` is `false`):
+
+```json
+{
+  "warning": "near-duplicate",
+  "nearest_id": "<existing id>",
+  "nearest_headline": "<existing headline>",
+  "nearest_distance": 0.07,
+  "hint": "Content is nearly identical to an existing entry (cosine ≈ 0.95+). To store anyway, re-call with force=true."
+}
+```
+
+**Validation error**:
+
+```json
+{"error": "<message>"}
+```
 
 ### 3.3 Tool description
 
@@ -176,21 +202,28 @@ Persist an observation to memory. Use this when you learn a fact the user is
 likely to need again — preferences, decisions, facts about people/projects/
 tasks, etc.
 
-Storage class:
-- `episodic` (default): working memory; short atomic observation. Most uses.
-- `stable`: durable, important note. Use sparingly — only when the user has
-  explicitly said "remember this" or when the fact is clearly identity-level.
+Storage class (default: episodic):
+- `episodic`: working memory; short atomic observation. Most uses.
+- `stable`: durable, identity-level. Use sparingly — only when the user has
+  explicitly said "remember this" or the fact is clearly identity-level.
+- `corpus`: chunks of inline reference text. For files on disk use
+  memory_ingest instead — it preserves the original artifact and handles
+  chunking.
 
 Always populate `entities` with the URIs this observation mentions (format:
 `<type>:<value>`, e.g., `person:marcelo`, `project:durin`). This enables
 entity-aware retrieval later.
 
-Keep `headline` short and specific. `body` should be the full content; don't
-truncate.
+Keep `headline` short and specific — it can be omitted and the system will
+auto-generate one from the first ~10 words of `content`. `content` is the
+full body of the observation; don't truncate.
 
 If the user is restating something already known, do NOT call this tool — it
 creates duplicates. The Dream consolidation process will eventually fold
-duplicates but in the meantime they pollute results.
+duplicates but in the meantime they pollute results. A near-duplicate
+(cosine ≥ 0.95 of an existing entry) returns a warning instead of persisting;
+pass `force=true` only when you intentionally want to re-affirm an existing
+fact.
 ```
 
 ---
@@ -222,16 +255,20 @@ The chunking pipeline (`durin/memory/text_splitter.py::split_text`, P5.3) runs i
 
 ```json
 {
-  "id": "<12-char content hash>",
-  "saved_to": "ingested/<id>/source.<ext>",
-  "meta_path": "ingested/<id>/meta.json",
+  "id": "<12-char sha256[:12] of (filename + content)>",
+  "saved_to": "/abs/path/.../ingested/<id>/source.<ext>",
+  "meta_path": "/abs/path/.../ingested/<id>/meta.json",
   "size_bytes": 12345,
   "content": "<full text of the ingested file>",
   "corpus_entry_id": "<id of the first chunked memory/corpus entry>"
 }
 ```
 
-`content` is returned so the agent can read the file in the same turn (without a follow-up `memory_drill`). `corpus_entry_id` is the first chunk; subsequent chunks live under `memory/corpus/` with headlines annotated `(chunk N/M)` and are findable via `memory_search`.
+Notes:
+- `saved_to` and `meta_path` are **absolute** paths (the tool returns `str(target)` from [`ingestion.py`](../../durin/memory/ingestion.py)).
+- `id` is `sha256(filename + "\0" + content)[:12]` — re-ingesting the same file is idempotent, but renaming the file before re-ingest produces a different id (and therefore a duplicate entry under `ingested/`). If the user wants to "update" a previously-ingested file, the workflow is: re-ingest, then archive the old `ingested/<old-id>/` directory manually (or accept the duplicate; both versions live in git history).
+- `content` is returned so the agent can read the file in the same turn (without a follow-up `memory_drill`).
+- `corpus_entry_id` is the first chunk's memory entry id; subsequent chunks live under `memory/corpus/` with headlines annotated `(chunk N/M)` and are findable via `memory_search`.
 
 ### 4.3 Tool description
 
@@ -435,7 +472,8 @@ All decisions are consistent with cross-corpus decisions in `00_overview.md` and
 | 3 | Result format — sectioned with markers | Pre-rendered per hit in a `rendered` field; agents read `rendered` directly. Markers are CANONICAL/FRAGMENT/SESSION/INGESTED — descriptive only, no valuative language. | §2.2, §6 |
 | 4 | Tool description style | Declarative, not imperative. Embeds patterns proven by LoCoMo v2 (+3.9pp): multi-query for compound questions, cite by URI, don't answer cold. | §2.3, §2.4 |
 | 5 | `memory_store` class default | `episodic`. `stable` is reserved for explicit-durability cases. Description warns against creating duplicates. | §3.1, §3.3 |
-| 6 | `memory_ingest` chunking | Always on (1500-char chunks with 200-char overlap, recursive paragraph→line→sentence→word split per P5.3). Re-ingest is idempotent by content hash. Single-chunk docs collapse to one entry naturally. | §4.1 |
+| 5b | `memory_store` enum excludes `pending` | `MEMORY_CLASSES` has 4 values (`stable`, `episodic`, `corpus`, `pending`) but the agent-facing enum offers only the first 3. Reason: the walker / indexer / file_watcher all skip `memory/pending/**` (intake buffer for compaction). Exposing `pending` to the LLM would let it write entries the rest of the system silently ignores. Internal callers that legitimately need to write to `pending` use the pure `store_memory` function. | §3.1, `durin/agent/tools/memory_store.py::_AGENT_FACING_CLASSES` |
+| 6 | `memory_ingest` chunking | Always on (1500-char chunks with 200-char overlap, recursive paragraph→line→sentence→word split per P5.3). Re-ingest is idempotent on `(filename, content)` — renaming the file before re-ingest yields a different id. Docs shorter than `chunk_size` collapse to one entry naturally. | §4.1 |
 | 6b | `memory_ingest` scope = local files only | URL fetch and inline content branches deliberately not supported. `web_fetch` already handles URLs (with Jina/readability, SSRF protection, image detection); `memory_store(class_name="corpus")` handles inline text. Avoiding duplication of those policies. See `08_scope_and_discarded.md` for full rationale. | §4.1, §10 |
 | 7 | `memory_drill` purpose | Read full body of a single URI by reference. Read-only. Single `uri` parameter — for related context use `memory_search`. | §5 |
 | 8 | Tool description as source of truth | The text in this doc is canonical; code and identity.md must match. | §8 |
@@ -454,7 +492,7 @@ None at the module level.
 | `memory_search` parameters | `query`, `scope`, `level` | + `keywords` optional + cap `limit` at 50 | Schema update; pipeline wires `keywords` to RRF dynamic boost |
 | `memory_search` return | `results` with `to_dict()` + `rendered` | Same shape + `recovered_from` + `recovery_duration_ms` fields | Wire recovery info from pipeline |
 | Result rendering | CANONICAL/FRAGMENT markers exist | Extend to SESSION + INGESTED; per-source cap | Update renderer; integrate cap |
-| `memory_store` parameters | `headline`, `body`, `class_name`, `entities`, `summary` | Same + improved description | Description text update |
+| `memory_store` parameters | `content` (req), `class_name` (enum 3 values), `headline`, `summary`, `source_refs`, `entities`, `force` | Same | None — earlier doc-04 draft proposed `body` (vs `content`), `headline` required, `valid_from` exposed, and a 2-value enum; reconciled in audit A2 (see doc 11) |
 | `memory_ingest` parameters | Active (`path` only) | Same (`path` only) | None — earlier spec proposed `source`/URL/`inline` branches; removed because `web_fetch` + `memory_store(class_name="corpus")` already cover those workflows (see decision 6b + doc 08) |
 | `memory_drill` | Active (single `uri` param) | Same | None — earlier draft proposed an `include_context` flag; removed because `memory_search` already covers that need with sectioned output |
 | Tool descriptions | In code, partially in identity.md | Canonical in this doc; sync to code + identity.md | Audit and reconcile |

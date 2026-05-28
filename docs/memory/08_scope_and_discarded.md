@@ -143,9 +143,46 @@ Until that cleanup happens, the module sits unused. Importing from it is discour
 | Agent finds an article on the web that should be remembered | `web_fetch(url=...)` → `memory_store(content=markdown, class_name="corpus", source_refs=[url])` |
 | Agent has text already in context that the user wants persisted | `memory_store(content=..., class_name="corpus")` |
 
-**Genealogy / lesson** (so the same error doesn't repeat): the URL/`inline` branches lived in the prospective spec (doc 04 + doc 06) before the tool was implemented. When the tool descriptions were "synced" to the doc in commit `572d5cf` (P6.3), the descriptions were copied verbatim *without verifying the schema implemented the promised parameters*. For about a week the agent read a description promising `source=URL`/`inline` and got `unknown parameter` errors when it tried. The `test_tool_description_sync.py` test passed (it compares strings) but the behaviour didn't match. **The fix for "sync" tests in general: exercise the behaviour, not just the string.**
+**Genealogy / lesson** (so the same error doesn't repeat): the URL/`inline` branches lived in the prospective spec (doc 04 + doc 06) before the tool was implemented. When the tool descriptions were "synced" to the doc in commit `572d5cf` (P6.3, 2026-05-28 09:28 +0200), the descriptions were copied verbatim *without verifying the schema implemented the promised parameters*. The drift was caught the same morning during the audit (`bce9092`, ~1 hour after the sync commit), so the LLM-facing lie was short-lived — but only by accident. The `test_tool_description_sync.py` test passed throughout because it compares strings, not behaviour. **The fix for "sync" tests in general: exercise the behaviour, not just the string.**
 
 **Status:** `memory_ingest` accepts only `path` (local file). URL and inline workflows go through `web_fetch` + `memory_store(class_name="corpus")` respectively. Recorded in doc 11 reconciliation A1.
+
+---
+
+### 2.9 `memory_store` parameter surface — `valid_from` and `pending` class
+
+**What we initially proposed** (doc 04 §3.1 v1):
+- `valid_from` as an optional ISO-date parameter on the tool ("for time-bound facts").
+- `class_name` enum recorded as `stable | episodic` (recortado de los 4 valores reales de `MEMORY_CLASSES`).
+- `body` (vs `content`) as the param name.
+- `headline` required (vs auto-generated).
+- `force` undocumented (despite shipping in commit `d34b337`).
+
+**What survived audit A2:**
+
+1. **`valid_from` NOT exposed as tool parameter.** Verified facts:
+   - The field IS a real part of `MemoryEntry` ([`schema.py:40`](../../durin/memory/schema.py)) — declared in doc 01 §3.3.
+   - `store_memory(*, valid_from=date | None)` accepts it and defaults to `date.today()` when omitted ([`store.py:90`](../../durin/memory/store.py)).
+   - Used downstream by hot_layer cursor compare, entity_ranker pre/post-cursor logic, fragment sort, and search result display.
+   - The one consumer that actually needs to back-date — the LoCoMo benchmark harness ([`scripts/benchmark/locomo_harness.py:227-233`](../../scripts/benchmark/locomo_harness.py)) — calls the pure `store_memory` function directly, NOT the tool, because seeding 1000s of turns through the agent loop would be orders of magnitude slower.
+   
+   So the tool-facing surface stays minimal: 99% of agent-in-conversation stores observe facts "now", `date.today()` is correct. The 1% back-dating case is either (a) seeding from outside the agent (handled by the pure function) or (b) post-hoc `.md` edit by the user (the file watcher under P2.3 reindexes the change). Adding a `valid_from` parameter to the tool would expose a knob the LLM would default-fill 99% of the time, while the legitimate back-date workflow already has its path.
+
+2. **`pending` excluded from the agent-facing class enum.** The exclusion is structural, not aesthetic: `MEMORY_CLASSES` has 4 values, but `paths.py::walk_memory` skips `memory/pending/**`, `indexer.py` skips it for FTS + LanceDB, and `file_watcher.py` skips it for reindex. An entry written to `memory/pending/<id>.md` is invisible to every retrieval path. Letting the LLM write there would be silent data loss. The tool's enum is now `["stable", "episodic", "corpus"]`; internal callers that legitimately use `pending` (e.g. compaction intake) keep working via the pure `store_memory` function.
+
+3. **`body` is the persisted field, `content` is the tool parameter.** Doc 04 §3.1 v1 conflated the two planes. The asymmetry is deliberate: the LLM action is "store this content"; the persisted entry has a `body` field. We document the mapping (doc 04 §3.1 v2 calls it out) and keep `content` as the parameter name.
+
+4. **`headline` stays optional.** Auto-gen via `_auto_headline = " ".join(words[:10])` ([`store.py:106-109`](../../durin/memory/store.py)) is functional for LLM-generated content (the model tends to lead with the topic sentence). Forcing `required` would add latency to every store call to no clear benefit; if the agent has a sharper headline in mind, it can pass one.
+
+5. **`force` is documented.** Added in commit `d34b337` for the dedup near-duplicate flow (cosine ≥ 0.95 returns a warning; `force=true` overrides). Doc 04 v1 omitted it by oversight.
+
+**Lessons** (so the same errors don't recur):
+
+- **Enum values can be traps.** Don't blindly mirror an internal constants tuple into a tool-facing enum without checking whether the rest of the system honors all members. `pending` was in `MEMORY_CLASSES` but excluded from every retrieval pipeline — a write-only black hole.
+- **Tool param name ≠ persisted field name.** When they differ, document both planes explicitly so future readers don't conflate them like doc 04 v1 did.
+- **Default behavior often beats new tool params.** Before exposing a knob, ask: who actually needs it? If the answer is "an internal pipeline" (LoCoMo seeding via the pure function), the tool surface stays clean.
+
+**Status:** the tool schema is now: `content` (req) + `class_name` ∈ {`stable`, `episodic`, `corpus`} + `headline`/`summary`/`source_refs`/`entities`/`force` (opt). `valid_from`/`pending` deliberately not exposed. Recorded in doc 11 reconciliation A2.
 
 ---
 

@@ -122,21 +122,28 @@ Persist an observation to memory. Use this when you learn a fact the user is
 likely to need again — preferences, decisions, facts about people/projects/
 tasks, etc.
 
-Storage class:
-- `episodic` (default): working memory; short atomic observation. Most uses.
-- `stable`: durable, important note. Use sparingly — only when the user has
-  explicitly said "remember this" or when the fact is clearly identity-level.
+Storage class (default: episodic):
+- `episodic`: working memory; short atomic observation. Most uses.
+- `stable`: durable, identity-level. Use sparingly — only when the user has
+  explicitly said "remember this" or the fact is clearly identity-level.
+- `corpus`: chunks of inline reference text. For files on disk use
+  memory_ingest instead — it preserves the original artifact and handles
+  chunking.
 
 Always populate `entities` with the URIs this observation mentions (format:
 `<type>:<value>`, e.g., `person:marcelo`, `project:durin`). This enables
 entity-aware retrieval later.
 
-Keep `headline` short and specific. `body` should be the full content; don't
-truncate.
+Keep `headline` short and specific — it can be omitted and the system will
+auto-generate one from the first ~10 words of `content`. `content` is the
+full body of the observation; don't truncate.
 
 If the user is restating something already known, do NOT call this tool — it
 creates duplicates. The Dream consolidation process will eventually fold
-duplicates but in the meantime they pollute results.
+duplicates but in the meantime they pollute results. A near-duplicate
+(cosine ≥ 0.95 of an existing entry) returns a warning instead of persisting;
+pass `force=true` only when you intentionally want to re-affirm an existing
+fact.
 ```
 
 ### 3.3 `memory_ingest`
@@ -151,7 +158,8 @@ markdown books, etc.
 is copied to `ingested/<id>/` for preservation (so the original is
 recoverable verbatim) and the content is chunked into searchable
 `memory/corpus/*.md` entries. Re-ingesting the same file is idempotent
-— the id is derived from a content hash.
+— the id is derived from a hash of (filename + content), so renaming
+the file before re-ingesting produces a different id.
 
 For web content, use `web_fetch(url=...)` first to get clean markdown,
 then `memory_store(content=..., class_name="corpus", source_refs=[url])`.
