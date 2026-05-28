@@ -46,8 +46,21 @@ _PARAMETERS = tool_parameters_schema(
     ),
     required=["path"],
     description=(
-        "Persist a user-supplied document into the agent's memory store. "
-        "Markdown and plain-text only."
+        # Canonical text per `docs/memory/06_prompts_and_instructions.md` §3.3.
+        "Add a document to durin's memory corpus. Use this for sources "
+        "the user wants remembered as reference material — PDFs, "
+        "articles, transcripts, technical specs, etc.\n\n"
+        "`source` can be:\n"
+        "- A local file path: e.g., \"/Users/.../paper.pdf\"\n"
+        "- A URL: e.g., \"https://arxiv.org/pdf/2602.12345.pdf\"\n"
+        "- The literal string \"inline\" (with `content` populated): for "
+        "when you have the text directly\n\n"
+        "Long documents are automatically chunked into searchable corpus "
+        "entries. Re-ingesting the same source replaces the prior chunks; "
+        "the older version is preserved in git history of the workspace.\n\n"
+        "For short notes (a paragraph or two), use `memory_store` with "
+        "class `stable` instead — those are not chunked and behave as "
+        "single observations."
     ),
 )
 
@@ -194,48 +207,72 @@ class MemoryIngestTool(Tool):
         except ValueError:
             pass
         source_ref = f"[ingested {source_path.name}]({ingested_rel})"
-        body = content[:_CORPUS_BODY_BUDGET_CHARS]
 
-        try:
-            with author_scope("agent_created"):
-                stored = store_memory(
-                    self._workspace,
-                    content=body,
-                    class_name="corpus",
-                    headline=f"Ingested: {source_path.name}",
-                    summary="",
-                    source_refs=[source_ref],
-                )
-        except (StoreError, OSError) as exc:
-            logger.warning(
-                "memory_ingest: derived corpus entry failed for %s: %s",
-                source_path.name, exc,
-            )
-            return None
-
-        vi = self._get_vector_index()
-        if vi is not None:
+        # P5.3: recursive character splitter — paragraph > line >
+        # sentence > word > char preference, ~1500 chars per chunk
+        # with ~200 chars overlap so a fact straddling a cut still
+        # surfaces in both chunks.
+        from durin.memory.text_splitter import split_text
+        chunks = split_text(content) or [content[:_CORPUS_BODY_BUDGET_CHARS]]
+        # Multi-chunk ingest: each chunk is its own corpus entry so
+        # the search pipeline can rank them independently + the per-
+        # source cap (doc 03 §12.4) limits top-K to 3 chunks per
+        # source. We return the FIRST chunk's id for backward-compat
+        # with callers that expect a single id.
+        first_id: str | None = None
+        for idx, chunk in enumerate(chunks):
             try:
-                entry_path = Path(stored["path"])
-                entry = load_entry(entry_path)
-                vi.upsert(entry, stored["class"], entry_path)
-            except VectorIndexDimensionMismatch as exc:
-                logger.warning("ingest vector upsert: %s", exc)
+                with author_scope("agent_created"):
+                    stored = store_memory(
+                        self._workspace,
+                        content=chunk,
+                        class_name="corpus",
+                        headline=(
+                            f"Ingested: {source_path.name}"
+                            + (f" (chunk {idx + 1}/{len(chunks)})"
+                               if len(chunks) > 1 else "")
+                        ),
+                        summary="",
+                        source_refs=[source_ref],
+                    )
+            except (StoreError, OSError) as exc:
+                logger.warning(
+                    "memory_ingest: chunk %d/%d failed for %s: %s",
+                    idx + 1, len(chunks), source_path.name, exc,
+                )
+                continue
+            if first_id is None:
+                first_id = stored["id"]
+
+            vi = self._get_vector_index()
+            if vi is not None:
+                try:
+                    entry_path = Path(stored["path"])
+                    entry = load_entry(entry_path)
+                    vi.upsert(entry, stored["class"], entry_path)
+                except VectorIndexDimensionMismatch as exc:
+                    logger.warning("ingest vector upsert: %s", exc)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "ingest vector upsert failed for %s: %s",
+                        stored["id"], exc,
+                    )
+
+            try:
+                from durin.memory.indexer import reindex_one_file
+                reindex_one_file(
+                    self._workspace, Path(stored["path"]),
+                )
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
-                    "ingest vector upsert failed for %s: %s",
+                    "memory_ingest FTS reindex failed for %s: %s",
                     stored["id"], exc,
                 )
 
-        # Re-index FTS5 synchronously (doc 02 §6.2). Best-effort.
-        try:
-            from durin.memory.indexer import reindex_one_file
-            reindex_one_file(self._workspace, Path(stored["path"]))
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "memory_ingest FTS reindex failed for %s: %s",
-                stored["id"], exc,
-            )
+        if first_id is None:
+            # Every chunk failed; nothing to emit, return None to
+            # signal the failure.
+            return None
 
         emit_tool_event(
             "memory.store",
@@ -276,4 +313,4 @@ class MemoryIngestTool(Tool):
                 stored.get("id"),
             )
 
-        return stored["id"]
+        return first_id

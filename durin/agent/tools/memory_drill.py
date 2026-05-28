@@ -15,7 +15,15 @@ _PARAMETERS = tool_parameters_schema(
         "'ingested/<id>/source.md#section-3', or 'memory/<class>/<id>'."
     ),
     required=["uri"],
-    description="Read the section addressed by a markdown anchor URI.",
+    description=(
+        # Canonical text per `docs/memory/06_prompts_and_instructions.md` §3.4.
+        "Read the full content of a memory item by URI. Use this when "
+        "memory_search returned a hit and you need to see the full body, "
+        "including any structured data in the frontmatter.\n\n"
+        "This tool is read-only. For related context about an entity "
+        "(recent observations, sessions mentioning it), use memory_search "
+        "with the entity's name or URI as the query instead."
+    ),
 )
 
 

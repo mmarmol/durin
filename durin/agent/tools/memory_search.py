@@ -76,8 +76,35 @@ _PARAMETERS = tool_parameters_schema(
     ),
     required=["query"],
     description=(
-        "Search the agent's memory. Returns markdown URIs the agent can "
-        "drill into via memory_drill."
+        # Canonical text per `docs/memory/06_prompts_and_instructions.md` §3.1.
+        # Synchronisation enforced by `tests/memory/test_tool_description_sync.py`.
+        "Search durin's memory for content relevant to your question. "
+        "Searches across canonical entity pages, recent observations, "
+        "session summaries, and ingested documents in one call.\n\n"
+        "Usage:\n"
+        "- For most queries, use a single call with a natural-language `query`.\n"
+        "- For multi-part questions, issue 2-3 calls with different phrasings "
+        "rather than one long query.\n"
+        "- For literal-match queries (emails, IDs, URLs), pass the literal "
+        "string in `keywords` in addition to a natural-language `query`. "
+        "This biases the search toward exact matches.\n"
+        "- Use `level: \"cold\"` only when you need full body content "
+        "(verbose; consumes many tokens). `warm` (default) returns "
+        "headline + summary, enough for most tasks.\n\n"
+        "Results come pre-sectioned with structural markers:\n"
+        "- `=== CANONICAL: <uri> ===` — consolidated entity pages "
+        "(durable knowledge)\n"
+        "- `=== FRAGMENT: <path> ===` — recent observations not yet "
+        "consolidated\n"
+        "- `=== SESSION: <id> ===` — conversation summaries\n"
+        "- `=== INGESTED: <id> ===` — chunks of documents the user has "
+        "loaded\n\n"
+        "When sources disagree, more recent fragments may reflect updates "
+        "that have not yet been consolidated into the canonical entity "
+        "page. Use timestamps in the markers to reason about recency.\n\n"
+        "State the source of any fact you cite (uri or section marker) "
+        "in parentheses. Do not claim facts that are not in the search "
+        "results."
     ),
 )
 
