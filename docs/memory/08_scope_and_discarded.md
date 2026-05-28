@@ -126,6 +126,29 @@ Until that cleanup happens, the module sits unused. Importing from it is discour
 
 ---
 
+### 2.8 `memory_ingest` URL fetch + inline content branches
+
+**What we initially proposed** (doc 04 §4.1 v1, doc 06 §3.3 v1): `memory_ingest(source=...)` accepting three kinds of source — local file path, URL, or the literal `"inline"` with a separate `content` parameter. Auto-chunking either way.
+
+**Why removed:**
+- **URL fetch would duplicate `web_fetch`.** `durin/agent/tools/web.py::WebFetchTool` already handles URL → markdown extraction with the hard parts done well: Jina Reader primary, readability-lxml fallback, SSRF protection (resolved-IP allowlist on every redirect via `durin/security/network.py::validate_url_target`), image passthrough, content-type sniffing, 15-30 s timeouts, max redirects, `_UNTRUSTED_BANNER` marker on returned text. Reimplementing those policies inside `memory_ingest` would either (a) duplicate the code and drift, or (b) call `web_fetch` internally — at which point exposing URL as a `memory_ingest` parameter just hides a two-step workflow behind a flag.
+- **Inline content is `memory_store(class_name="corpus")`.** When the agent already has the text in context, persisting it goes through `memory_store` with no extra surface area. The only `memory_ingest`-exclusive capability would have been auto-chunking, which is separable — `durin/memory/text_splitter.py::split_text` is a public function any caller can use.
+- **`memory_ingest`'s remaining value is local-file-specific.** It preserves the original artifact under `ingested/<id>/source.<ext>` (idempotent by content hash) and chunks the parsed content into `memory/corpus/*.md` entries. Both of those are only meaningful when there is an original file on disk — for web/inline content there is no "original" worth preserving as a separate artifact.
+
+**The composition rule:**
+
+| Workflow | Tools |
+|---|---|
+| User drops a markdown file in a folder, asks the agent to remember it | `memory_ingest(path=...)` |
+| Agent finds an article on the web that should be remembered | `web_fetch(url=...)` → `memory_store(content=markdown, class_name="corpus", source_refs=[url])` |
+| Agent has text already in context that the user wants persisted | `memory_store(content=..., class_name="corpus")` |
+
+**Genealogy / lesson** (so the same error doesn't repeat): the URL/`inline` branches lived in the prospective spec (doc 04 + doc 06) before the tool was implemented. When the tool descriptions were "synced" to the doc in commit `572d5cf` (P6.3), the descriptions were copied verbatim *without verifying the schema implemented the promised parameters*. For about a week the agent read a description promising `source=URL`/`inline` and got `unknown parameter` errors when it tried. The `test_tool_description_sync.py` test passed (it compares strings) but the behaviour didn't match. **The fix for "sync" tests in general: exercise the behaviour, not just the string.**
+
+**Status:** `memory_ingest` accepts only `path` (local file). URL and inline workflows go through `web_fetch` + `memory_store(class_name="corpus")` respectively. Recorded in doc 11 reconciliation A1.
+
+---
+
 ## 3. Operational risks (from doc 18 §10)
 
 The entity-centric memory design carries known operational risks. They were enumerated in `docs/18_entity_centric_plan.md` §10 before the corpus was written. This section maps each risk to its status in v2 and identifies what (if anything) the corpus does to mitigate it.

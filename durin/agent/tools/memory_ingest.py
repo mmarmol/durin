@@ -47,20 +47,24 @@ _PARAMETERS = tool_parameters_schema(
     required=["path"],
     description=(
         # Canonical text per `docs/memory/06_prompts_and_instructions.md` §3.3.
-        "Add a document to durin's memory corpus. Use this for sources "
-        "the user wants remembered as reference material — PDFs, "
-        "articles, transcripts, technical specs, etc.\n\n"
-        "`source` can be:\n"
-        "- A local file path: e.g., \"/Users/.../paper.pdf\"\n"
-        "- A URL: e.g., \"https://arxiv.org/pdf/2602.12345.pdf\"\n"
-        "- The literal string \"inline\" (with `content` populated): for "
-        "when you have the text directly\n\n"
-        "Long documents are automatically chunked into searchable corpus "
-        "entries. Re-ingesting the same source replaces the prior chunks; "
-        "the older version is preserved in git history of the workspace.\n\n"
-        "For short notes (a paragraph or two), use `memory_store` with "
-        "class `stable` instead — those are not chunked and behave as "
-        "single observations."
+        "Add a local document (markdown or plain text) to durin's memory "
+        "corpus. Use this when the user wants a file on disk remembered "
+        "as reference material — research notes, transcripts, technical "
+        "specs, exported pages, markdown books, etc.\n\n"
+        "`path` is the absolute or workspace-relative path to the file. "
+        "The file is copied to `ingested/<id>/` for preservation (so the "
+        "original is recoverable verbatim) and the content is chunked "
+        "into searchable `memory/corpus/*.md` entries. Re-ingesting the "
+        "same file is idempotent — the id is derived from a content hash.\n\n"
+        "For web content, use `web_fetch(url=...)` first to get clean "
+        "markdown, then `memory_store(content=..., class_name=\"corpus\", "
+        "source_refs=[url])`. `web_fetch` already handles URL extraction "
+        "(Jina/readability), SSRF protection, redirects, and image "
+        "detection.\n\n"
+        "For short inline text (a paragraph or two), call `memory_store` "
+        "directly with `class_name=\"corpus\"` — `memory_ingest` is "
+        "specifically for files on disk where preserving the original "
+        "artifact matters."
     ),
 )
 
