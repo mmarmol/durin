@@ -186,6 +186,39 @@ Until that cleanup happens, the module sits unused. Importing from it is discour
 
 ---
 
+### 2.10 `body` column in LanceDB (P2.5, reverted by A4)
+
+**What we briefly did**: commit `a266344` (P2.5, 2026-05-28 09:10) added a `body` column to the LanceDB row schema so cold-tier queries (`memory_search(level="cold")`) could return full bodies without N disk reads. The commit message framed it as a "trade-off explicit": doubled index size in exchange for eliminating per-cold-hit file opens.
+
+**Why we reverted it (audit A4, same day)**:
+
+1. **Violates the architectural principle of single source of truth.** The `.md` on disk is canonical; LanceDB is a derivable, disposable cache that can be rebuilt at any time. Storing the body in LanceDB makes the cache hold content the disk also holds — and now there are two places to keep consistent.
+
+2. **The optimisation was not measured against a bottleneck.** Cold-tier disk reads are ~5-10 ms total for 10 hits on a modern SSD. The next LLM call downstream takes seconds. P2.5 saved ~10 ms in an operation that is otherwise gated on multi-second latency. Premature optimisation per `feedback_no_wait_and_measure`.
+
+3. **Drift window.** The file watcher (P2.3) reindexes `.md` changes asynchronously. Between a `vim` edit and the next reindex tick, LanceDB returns a stale body. Without P2.5, the body is always read from disk via `_enrich_body` at query time, so the freshly-edited version is always what the LLM sees.
+
+4. **Doubles index size at scale.** A 10k-entry workspace with average body 1500 chars (corpus chunks) gains ~30 MB; 100k entries gain ~300 MB. Not catastrophic but consistent with the broader pattern of "let's just store it again, disk is cheap" that leads to multi-source confusion later.
+
+5. **Breaks symmetry with FTS5.** FTS5 indexes the composed `text` (headline + summary + entities + body) for BM25 ranking, but it never returns `text` in query results — consumers go to disk for the content. The two indices were aligned on that principle; P2.5 broke it for LanceDB alone, with no corresponding gain over FTS5's approach.
+
+**What we kept (the legitimate small metadata in LanceDB)**: `id`, `class_name`, `summary`, `headline`, `valid_from`, `entities`, `path`. Each is small (kilobytes per row at most), each is needed during retrieval (warm-tier results, ranker inputs, sort keys, hit attribution). Reading them from disk per query would be the real bottleneck. The body is different — it can be megabytes, it's only needed in cold-tier queries, and disk reads are fast.
+
+**The implementation**:
+- `vector_index.py` no longer writes `body` to the row dict (entries or entity pages).
+- `search_pipeline._resolve_meta` no longer threads `body` from vector hits.
+- `_cross_encoder_rerank` uses `snippet`+`headline`+URI for its (uri, doc_text) pairs instead of body. If benchmarks ever show that snippet-only CE rerank is materially worse, the fix is a CE-specific top-N body fetch inside the rerank function — NOT a column in LanceDB.
+- `CURRENT_SCHEMA_VERSION` bumped 2 → 3 so v2 LanceDB tables (carrying the now-orphaned `body` column) trigger a clean rebuild on the next `MemorySearchTool.execute` via `ensure_index_fresh` (P2.2).
+- `tests/memory/test_vector_index_no_body_column.py` asserts the post-A4 invariant — if a future change reintroduces the column, that test fails loudly.
+
+**Lesson** (so the same mistake doesn't recur):
+
+- **An optimisation that violates an architectural principle must be justified by measurement, not intuition.** "Avoids N disk reads" sounds compelling but is meaningless without knowing whether those disk reads were the bottleneck. They weren't.
+- **The fix for a slow consumer is local to that consumer, not a schema change.** If cross-encoder rerank is slow when reading body from disk, optimise the CE step (top-N fetch, async I/O, caching). Don't add a body column to LanceDB that 95% of queries don't need.
+- **Symmetry between indices is a feature.** FTS5 and LanceDB both being "metadata + index, content on disk" makes the system easier to reason about. Breaking symmetry in one place leaks complexity everywhere.
+
+---
+
 ## 3. Operational risks (from doc 18 §10)
 
 The entity-centric memory design carries known operational risks. They were enumerated in `docs/18_entity_centric_plan.md` §10 before the corpus was written. This section maps each risk to its status in v2 and identifies what (if anything) the corpus does to mitigate it.
