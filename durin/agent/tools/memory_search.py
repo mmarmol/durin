@@ -250,103 +250,84 @@ class MemorySearchTool(Tool):
         if level not in ("warm", "cold"):
             return {"error": f"invalid level {level!r}"}
 
-        # Vector path: runs for any scope that includes ``dreamed`` (the
-        # index only holds memory entries, not raw sessions or ingested
-        # artifacts). Both warm and cold tiers go through vector — for
-        # cold we enrich the warm-shape rows with the body from disk
-        # afterwards (the vector table doesn't store bodies; rebuilding
-        # it to do so would double its size for zero retrieval benefit).
-        # Falls back to grep on any failure so the tool never returns
-        # nothing because the index was broken.
+        # v2 pipeline (Phase 5 d1): delegate the whole search to
+        # `run_search_pipeline` — query router + lexical FTS + vector +
+        # cross-source RRF + entity-aware rerank + grep fallback +
+        # sectioning + per-source cap. Doc 03 (full pipeline).
+        from durin.memory.search_pipeline import run_search_pipeline
+
+        vi = self._get_vector_index() if scope in ("dreamed", "all") else None
+        t0 = time.monotonic()
+        pipeline_result = run_search_pipeline(
+            self._workspace,
+            query,
+            keywords=keywords,
+            vector_index=vi,
+            limit=10,
+        )
+        duration_ms = (time.monotonic() - t0) * 1000.0
+
+        # Preserve `memory.recall.vector` telemetry (consumed by
+        # `durin memory stats`'s vector_total counter). Emitted
+        # whenever the vector path was attempted — matches the v1
+        # behaviour where the event fired regardless of hit count.
+        if vi is not None:
+            _ai = self._get_alias_index()
+            ranking_label = (
+                "entity_aware"
+                if (_ai is not None and extract_query_entities(query, _ai))
+                else "default"
+            )
+            emit_tool_event(
+                "memory.recall.vector",
+                {
+                    "query": query,
+                    "scope": scope,
+                    "embedding_model": self._embedding_model or "",
+                    "hit_count": pipeline_result.vector_count,
+                    "duration_ms": duration_ms,
+                    "ranking": ranking_label,
+                    "query_entities_count": 0,
+                    "reordered": False,
+                    "top_1_id_before": "",
+                    "top_1_id_after": "",
+                },
+            )
+
+        # `scope=undreamed` mode is a v1 niche — the orchestrator's
+        # grep step covers sessions + ingested but mixes them with
+        # dreamed memory hits. When the caller wants ONLY undreamed,
+        # filter the result set down.
+        hits = pipeline_result.hits
+        if scope == "undreamed":
+            hits = [
+                h for h in hits
+                if h.type in ("session_summary", "corpus")
+            ]
+
+        # Convert :class:`SectionedHit` rows into the legacy `Result`
+        # shape expected by the agent (carries `to_dict` + `render_block`).
         results: list[Result] = []
-        strategy = "grep"
+        for h in hits:
+            r = self._sectioned_to_result(h, level=level)
+            if r is not None:
+                results.append(r)
+
+        # Strategy / ranking labels for downstream telemetry consumers
+        # that pattern-match. We derive them from what the pipeline
+        # actually used so the labels reflect reality, not heuristics.
+        if pipeline_result.vector_count and pipeline_result.lexical_count:
+            strategy = "hybrid"
+        elif pipeline_result.vector_count:
+            strategy = "vector"
+        elif pipeline_result.lexical_count:
+            strategy = "lexical"
+        else:
+            strategy = "grep"
         ranking = "default"
-        # S2 (doc 24): metrics for telemetry to inform future tuning.
-        top_1_before: str = ""
-        top_1_after: str = ""
-        query_entities: list[str] = []
-
-        vi = self._get_vector_index()
-        if scope in ("dreamed", "all") and vi is not None:
-            try:
-                t0 = time.monotonic()
-                # Search path is intentionally LLM-free — this is the
-                # hot path (one user turn issues many searches). LLM
-                # operations on memory belong on the cold path (write
-                # / Dream curation) per the architectural decision
-                # logged 2026-05-26. See ``query_rewriter.py`` for the
-                # rewriter module preserved as an opt-in utility +
-                # building block for future write-time extraction
-                # (G1) and async curation (Dream-C).
-                vector_rows = vi.search(query, top_k=10)
-                duration_ms = (time.monotonic() - t0) * 1000.0
-
-                # W1 (doc 24): entity-aware reranking via RRF when alias
-                # index has data + query mentions a known entity. Operates
-                # on raw LanceDB rows BEFORE Result conversion so the
-                # ranker has access to entities + valid_from + _distance.
-                top_1_before = vector_rows[0]["id"] if vector_rows else ""
-                ai = self._get_alias_index()
-                if vector_rows and ai is not None:
-                    query_entities = extract_query_entities(query, ai)
-                    if query_entities:
-                        cursors = _load_cursors_from_entities_dir(
-                            self._workspace / "memory", query_entities,
-                        )
-                        ranked = rank_with_entities(
-                            vector_rows,
-                            query_entities=query_entities,
-                            cursors=cursors,
-                            score_field="_distance",
-                            higher_is_better=False,
-                        )
-                        vector_rows = [rc.record for rc in ranked]
-                        ranking = "entity_aware"
-                top_1_after = vector_rows[0]["id"] if vector_rows else ""
-
-                vector_results = [_vector_row_to_result(row) for row in vector_rows]
-                # Cold tier: enrich each warm-shape result with the body
-                # by loading the .md from disk. Skipping silently on
-                # load failure preserves the rest of the result set.
-                if level == "cold":
-                    vector_results = [
-                        self._enrich_body(r) for r in vector_results
-                    ]
-                emit_tool_event(
-                    "memory.recall.vector",
-                    {
-                        "query": query,
-                        "scope": scope,
-                        "embedding_model": self._embedding_model or "",
-                        "hit_count": len(vector_results),
-                        "duration_ms": duration_ms,
-                        # S2 (doc 24): entity-aware ranking telemetry
-                        # piggy-backs on the existing vector event instead
-                        # of duplicating into memory.recall.entity_aware.
-                        "ranking": ranking,
-                        "query_entities_count": len(query_entities),
-                        "reordered": top_1_before != top_1_after,
-                        "top_1_id_before": top_1_before,
-                        "top_1_id_after": top_1_after,
-                    },
-                )
-                if scope == "dreamed":
-                    results = vector_results
-                    strategy = "vector"
-                else:
-                    # scope=all: vector covers memory entries; grep adds
-                    # sessions + ingested.
-                    undreamed = search_memory(
-                        self._workspace, query, scope="undreamed", level=level
-                    )
-                    results = vector_results + undreamed
-                    strategy = "hybrid"
-            except Exception as exc:
-                logger.warning("vector search failed, falling back to grep: %s", exc)
-                results = []
-
-        if not results and strategy == "grep":
-            results = search_memory(self._workspace, query, scope=scope, level=level)  # type: ignore[arg-type]
+        ai = self._get_alias_index()
+        if ai is not None and extract_query_entities(query, ai):
+            ranking = "entity_aware"
 
         emit_tool_event(
             "memory.recall",
@@ -357,11 +338,6 @@ class MemorySearchTool(Tool):
                 "result_count": len(results),
             },
         )
-        # §2.H: rendered block carries explicit `=== CANONICAL/FRAGMENT
-        # ===` markers so the LLM can distinguish the main answer from
-        # recent post-cursor context at parse time. Same convention as
-        # the compaction `=== ARCHIVED SUMMARY ===` block. Raw fields
-        # remain in to_dict() for callers that prefer structured access.
         return {
             "results": [
                 {**r.to_dict(), "rendered": r.render_block()}
@@ -369,11 +345,59 @@ class MemorySearchTool(Tool):
             ],
             "total": len(results),
             "strategy": strategy,
-            # S1 (doc 24): separate `ranking` field from `strategy` so
-            # downstream callers that pattern-match strategy don't break
-            # when entity-aware ranking is applied.
             "ranking": ranking,
         }
+
+    def _sectioned_to_result(
+        self, hit: Any, *, level: str,
+    ) -> Optional[Result]:
+        """Convert a :class:`durin.memory.sectioned_output.SectionedHit`
+        into a legacy :class:`Result` for the tool's response shape.
+
+        - Loads the body from disk on `level=cold` (the search pipeline
+          carries snippet only).
+        - Maps `entity` → `class_name='entity_page'` to preserve the
+          §2.H rendering contract (canonical vs fragment markers).
+        """
+        # Derive the legacy class_name + uri + source shape.
+        hit_path = hit.path or ""
+        if hit.type == "entity":
+            class_name = "entity_page"
+            uri = f"memory/entity_page/{hit.uri}"
+            source = "memory"
+        elif hit.type in ("session_summary", "session") or (
+            hit_path.startswith("sessions/") or "sessions/" in hit_path
+        ):
+            class_name = hit.type or "session_summary"
+            uri = hit_path or hit.uri
+            source = "sessions"
+        elif "ingested/" in hit_path:
+            class_name = hit.type or "corpus"
+            uri = hit_path or f"memory/corpus/{hit.uri}"
+            source = "ingested"
+        else:
+            class_name = hit.type or ""
+            uri = (
+                f"memory/{class_name}/{hit.uri}"
+                if class_name else f"memory/{hit.uri}"
+            )
+            source = "memory"
+
+        entities = (hit.uri,) if class_name == "entity_page" else ()
+        result = Result(
+            source=source,
+            uri=uri,
+            headline=hit.snippet or hit.uri,
+            snippet=(hit.snippet or "")[:160],
+            summary=hit.snippet or "",
+            body="",
+            class_name=class_name,
+            valid_from=hit.ts or "",
+            entities=entities,
+        )
+        if level == "cold":
+            result = self._enrich_body(result)
+        return result
 
 
 def _vector_row_to_result(row: dict) -> Result:
