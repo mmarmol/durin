@@ -74,7 +74,7 @@ Mantener compatibilidad con `path` (alias o paso de migración).
 - [docs/memory/06_prompts_and_instructions.md](docs/memory/06_prompts_and_instructions.md) §3.3 sincronizada.
 - [docs/memory/08_scope_and_discarded.md](docs/memory/08_scope_and_discarded.md) §2.8 nueva entry con la genealogía del error y la lección sobre sync tests.
 
-**Lección sobre sync tests**: `test_tool_description_sync.py` valida igualdad de strings, no comportamiento. Pasó verde con el doc mintiéndole al LLM por una semana. Fix general para tests de "sync" en futuro: ejercitar el comportamiento, no sólo comparar strings.
+**Lección sobre sync tests**: `test_tool_description_sync.py` valida igualdad de strings, no comportamiento. Pasó verde con el doc mintiéndole al LLM desde commit `572d5cf` (2026-05-28 09:28 +0200) hasta el fix `bce9092` (~1 hora después). El drift fue corto por suerte — el audit lo agarró la misma mañana, pero el test no lo habría detectado nunca. Fix general para tests de "sync" en futuro: ejercitar el comportamiento, no sólo comparar strings.
 
 **Estado**: resolved (commit pendiente).
 
@@ -114,7 +114,26 @@ Mantener compatibilidad con `path` (alias o paso de migración).
 2. Descripción del tool (`memory_store.py:83`): cambiar `"body"` → `"content"`.
 3. Recurrir el sync test después.
 
-**Estado**: pending
+**Resolución (2026-05-28)**: cinco discrepancias auditadas individualmente. Cambios shipped:
+
+1. **`pending` removed from agent-facing enum** ([memory_store.py](../../durin/agent/tools/memory_store.py): nuevo `_AGENT_FACING_CLASSES = ("stable", "episodic", "corpus")` reemplaza `list(MEMORY_CLASSES)`). Razón verificada: `paths.py::walk_memory` + `indexer.py` + `file_watcher.py` todos excluyen `memory/pending/**`. Escribir ahí desde el LLM era data loss silencioso. Internal callers (compaction) siguen usando la función pura `store_memory`.
+
+2. **`body` → `content` en doc 04 §3.1**. El campo persistido del `MemoryEntry` SÍ se llama `body` (declarado en doc 01 §3.3), pero el parámetro del tool y de la función pura siempre fueron `content`. Doc 04 v1 confundió los dos planos. Doc 04 v2 explicita la asimetría.
+
+3. **`valid_from` NO se expone como param del tool**. Es campo real del `MemoryEntry` con uses downstream legítimos (hot_layer cursor compare, entity_ranker pre/post, sort de fragments). Default automático `date.today()`. **El consumer que necesita back-datear (LoCoMo bench) usa la función pura directamente** ([locomo_harness.py:227-233](../../scripts/benchmark/locomo_harness.py)), no el tool. 99% de los stores del LLM son "ahora" — exponer el knob agrega ruido al schema sin caso de uso real.
+
+4. **`headline` queda optional**. Auto-gen [`store.py:106-109`](../../durin/memory/store.py) usa primeros ~10 words; razonable para LLM-generated content. Required agregaría latencia sin beneficio claro.
+
+5. **`force` documentado** en doc 04 §3.1 con caveat ("rara vez relevante"). Existe en código desde commit `d34b337` para bypass del dedup near-duplicate check; doc 04 v1 lo omitió por oversight.
+
+Cambios al canónico ([doc 06 §3.2](06_prompts_and_instructions.md)) reflejan los 5 puntos; `_PARAMETERS["description"]` sincronizada verbatim. Doc 04 §3.1/§3.2/§3.3/§9 (decision 5b) actualizados. Nueva entry [doc 08 §2.9](08_scope_and_discarded.md) con justificación completa + lecciones (enum-as-trap, param-vs-field, default-beats-knob).
+
+**Lecciones nuevas**:
+- *Enum values pueden ser trampas* — no mirror ciegamente un constants tuple a tool-facing enum sin verificar que TODO el sistema honra cada miembro.
+- *Tool param name ≠ persisted field name* — cuando difieren, documentar AMBOS planos explícitamente.
+- *Default behavior often beats new tool params* — antes de exponer un knob, preguntar quién lo necesita realmente; si es un internal pipeline, dejar la function pura como su path.
+
+**Estado**: resolved (commit pendiente).
 
 ---
 

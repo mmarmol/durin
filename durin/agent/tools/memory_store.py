@@ -21,20 +21,32 @@ from durin.memory.vector_index import VectorIndex, vector_index_available
 
 logger = logging.getLogger(__name__)
 
+# Agent-facing class enum. `pending` is a `MEMORY_CLASSES` value but is
+# excluded here because the walker / indexer / file_watcher all skip
+# `memory/pending/**` (intake buffer for compaction, not user-visible
+# yet — see `paths.py::walk_memory`). Exposing `pending` to the LLM
+# would let it write entries that the rest of the system never sees
+# back — silent data loss. Internal callers that legitimately need to
+# write under `pending` (e.g. compaction) use the pure `store_memory`
+# function directly, bypassing the tool.
+_AGENT_FACING_CLASSES = ("stable", "episodic", "corpus")
+
 _PARAMETERS = tool_parameters_schema(
     content=StringSchema(
-        "Markdown body of the memory entry — the full text to remember."
+        "Markdown body of the memory entry — the full text to remember. "
+        "Persisted as the `body` field of the resulting MemoryEntry."
     ),
     class_name=StringSchema(
         "Memory class — pick by lifespan and intent. Default: episodic. "
         "stable=identity, preferences, durable facts ('Marcelo lives in "
         "Spain'); episodic=working memory, recent events, conversation "
-        "outcomes; corpus=ingested reference material the user wants "
-        "searchable; pending=TODOs/things to act on later (not facts).",
-        enum=list(MEMORY_CLASSES),
+        "outcomes; corpus=chunks of inline reference text the user wants "
+        "searchable (for files on disk use memory_ingest instead).",
+        enum=list(_AGENT_FACING_CLASSES),
     ),
     headline=StringSchema(
-        "Optional ~10-word headline. Auto-generated from content if omitted."
+        "Optional ~10-word headline. Auto-generated from the first ~10 "
+        "words of `content` if omitted."
     ),
     summary=StringSchema(
         "Optional ~50-word summary returned by memory_search(level='warm')."
@@ -71,20 +83,28 @@ _PARAMETERS = tool_parameters_schema(
         "Persist an observation to memory. Use this when you learn a fact "
         "the user is likely to need again — preferences, decisions, facts "
         "about people/projects/ tasks, etc.\n\n"
-        "Storage class:\n"
-        "- `episodic` (default): working memory; short atomic observation. "
-        "Most uses.\n"
-        "- `stable`: durable, important note. Use sparingly — only when the "
-        "user has explicitly said \"remember this\" or when the fact is "
-        "clearly identity-level.\n\n"
+        "Storage class (default: episodic):\n"
+        "- `episodic`: working memory; short atomic observation. Most "
+        "uses.\n"
+        "- `stable`: durable, identity-level. Use sparingly — only when "
+        "the user has explicitly said \"remember this\" or the fact is "
+        "clearly identity-level.\n"
+        "- `corpus`: chunks of inline reference text. For files on disk "
+        "use memory_ingest instead — it preserves the original artifact "
+        "and handles chunking.\n\n"
         "Always populate `entities` with the URIs this observation mentions "
         "(format: `<type>:<value>`, e.g., `person:marcelo`, `project:durin`). "
         "This enables entity-aware retrieval later.\n\n"
-        "Keep `headline` short and specific. `body` should be the full "
-        "content; don't truncate.\n\n"
+        "Keep `headline` short and specific — it can be omitted and the "
+        "system will auto-generate one from the first ~10 words of "
+        "`content`. `content` is the full body of the observation; don't "
+        "truncate.\n\n"
         "If the user is restating something already known, do NOT call this "
         "tool — it creates duplicates. The Dream consolidation process will "
-        "eventually fold duplicates but in the meantime they pollute results."
+        "eventually fold duplicates but in the meantime they pollute "
+        "results. A near-duplicate (cosine ≥ 0.95 of an existing entry) "
+        "returns a warning instead of persisting; pass `force=true` only "
+        "when you intentionally want to re-affirm an existing fact."
     ),
 )
 
