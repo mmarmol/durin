@@ -124,6 +124,14 @@ class HealthChecker:
         except Exception:  # pragma: no cover
             pass
 
+        # P7.2: telemetry retention pass piggybacks on the cron tick.
+        try:
+            from durin.memory.stats import DEFAULT_TELEMETRY_DIR
+            from durin.telemetry.retention import run_retention
+            run_retention(DEFAULT_TELEMETRY_DIR)
+        except Exception:  # pragma: no cover
+            pass
+
         return payload
 
     def consecutive_failures(self, component: str) -> int:

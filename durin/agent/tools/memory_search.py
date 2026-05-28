@@ -357,11 +357,11 @@ class MemorySearchTool(Tool):
         # behaviour where the event fired regardless of hit count.
         if vi is not None:
             _ai = self._get_alias_index()
-            ranking_label = (
-                "entity_aware"
-                if (_ai is not None and extract_query_entities(query, _ai))
-                else "default"
+            qents = (
+                extract_query_entities(query, _ai)
+                if _ai is not None else []
             )
+            ranking_label = "entity_aware" if qents else "default"
             emit_tool_event(
                 "memory.recall.vector",
                 {
@@ -371,7 +371,7 @@ class MemorySearchTool(Tool):
                     "hit_count": pipeline_result.vector_count,
                     "duration_ms": duration_ms,
                     "ranking": ranking_label,
-                    "query_entities_count": 0,
+                    "query_entities_count": len(qents),
                     "reordered": False,
                     "top_1_id_before": "",
                     "top_1_id_after": "",
@@ -422,7 +422,7 @@ class MemorySearchTool(Tool):
                 "result_count": len(results),
             },
         )
-        return {
+        response: dict[str, Any] = {
             "results": [
                 {**r.to_dict(), "rendered": r.render_block()}
                 for r in results
@@ -431,6 +431,15 @@ class MemorySearchTool(Tool):
             "strategy": strategy,
             "ranking": ranking,
         }
+        # P5.2: surface degraded-run info when the pipeline recovered
+        # from a source failure. Omitted on clean runs to keep the
+        # response shape minimal.
+        if pipeline_result.recovered_from:
+            response["recovered_from"] = list(pipeline_result.recovered_from)
+            response["recovery_duration_ms"] = (
+                pipeline_result.recovery_duration_ms
+            )
+        return response
 
     def _sectioned_to_result(
         self, hit: Any, *, level: str,

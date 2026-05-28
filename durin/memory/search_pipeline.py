@@ -54,6 +54,12 @@ class SearchPipelineResult:
     # produced before fusion. Useful for the bench harness too.
     vector_count: int
     lexical_count: int
+    # P5.2: degraded-run surface. When a safe wrapper caught an
+    # exception, the source name lands in `recovered_from` and the
+    # total wall-clock spent recovering accumulates in
+    # `recovery_duration_ms`. Empty / 0 on clean runs.
+    recovered_from: tuple[str, ...] = ()
+    recovery_duration_ms: float = 0.0
 
 
 def run_search_pipeline(
@@ -76,14 +82,21 @@ def run_search_pipeline(
     to render via :func:`durin.memory.sectioned_output.render_sectioned`.
     """
     decision = decide_lexical_route(query, keywords=keywords)
+    # P5.2: shared accumulator passed to safe wrappers so any
+    # failure surfaces in the result.
+    recovery: dict = {"sources": set(), "ms": 0.0}
 
     # Step 2a — vector retrieval (optional)
-    vector_hits = _safe_vector_search(vector_index, decision.normalized_query)
+    vector_hits = _safe_vector_search(
+        vector_index, decision.normalized_query, recovery=recovery,
+    )
     vector_uris = [h["uri"] for h in vector_hits if "uri" in h]
     vector_meta = {h["uri"]: h for h in vector_hits if "uri" in h}
 
     # Step 2b — lexical retrieval
-    lexical_hits = _safe_lexical_search(workspace, decision)
+    lexical_hits = _safe_lexical_search(
+        workspace, decision, recovery=recovery,
+    )
     lexical_uris = [h.uri for h in lexical_hits]
     lexical_meta = {h.uri: h for h in lexical_hits}
 
@@ -91,7 +104,9 @@ def run_search_pipeline(
     # artifacts. These aren't in LanceDB/FTS5 by design; the only
     # way to surface them is a direct file scan. Best-effort: a
     # failure here logs and degrades that source to empty.
-    grep_hits = _safe_grep_fallback(workspace, decision.normalized_query)
+    grep_hits = _safe_grep_fallback(
+        workspace, decision.normalized_query, recovery=recovery,
+    )
     grep_uris = [h["uri"] for h in grep_hits if "uri" in h]
     grep_meta = {h["uri"]: h for h in grep_hits if "uri" in h}
 
@@ -152,6 +167,8 @@ def run_search_pipeline(
         hits=capped[:limit],
         vector_count=len(vector_uris),
         lexical_count=len(lexical_uris),
+        recovered_from=tuple(sorted(recovery["sources"])),
+        recovery_duration_ms=recovery["ms"],
     )
 
 
@@ -317,28 +334,42 @@ def _cross_encoder_rerank(
 
 def _safe_vector_search(
     vector_index: Optional[Any], query: str,
+    *,
+    recovery: dict,
 ) -> list[dict]:
     if vector_index is None or not query:
         return []
+    import time as _time
+    t0 = _time.perf_counter()
     try:
         # We accept either a real `VectorIndex.search` (returns a list
         # of dicts) or any duck-typed object with the same shape.
         return list(vector_index.search(query, top_k=50))
     except Exception as exc:  # noqa: BLE001
         logger.warning("search_pipeline: vector failed: %s", exc)
+        recovery["sources"].add("vector")
+        recovery["ms"] += (_time.perf_counter() - t0) * 1000.0
         return []
 
 
-def _safe_lexical_search(workspace: Path, decision) -> list:
+def _safe_lexical_search(
+    workspace: Path, decision, *, recovery: dict,
+) -> list:
+    import time as _time
+    t0 = _time.perf_counter()
     try:
         with FTSIndex.open(workspace) as idx:
             return lexical_search(idx, decision, limit=50)
     except Exception as exc:  # noqa: BLE001
         logger.warning("search_pipeline: lexical failed: %s", exc)
+        recovery["sources"].add("lexical")
+        recovery["ms"] += (_time.perf_counter() - t0) * 1000.0
         return []
 
 
-def _safe_grep_fallback(workspace: Path, query: str) -> list[dict]:
+def _safe_grep_fallback(
+    workspace: Path, query: str, *, recovery: dict,
+) -> list[dict]:
     """Run the v1 grep fallback over memory/, sessions/, ingested/.
 
     Covers two complementary cases:
@@ -352,6 +383,8 @@ def _safe_grep_fallback(workspace: Path, query: str) -> list[dict]:
     """
     if not query:
         return []
+    import time as _time
+    t0 = _time.perf_counter()
     try:
         from durin.memory.search import search_memory
         # `search_memory(scope='all', level='warm')` walks both
@@ -361,6 +394,8 @@ def _safe_grep_fallback(workspace: Path, query: str) -> list[dict]:
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("search_pipeline: grep fallback failed: %s", exc)
+        recovery["sources"].add("grep")
+        recovery["ms"] += (_time.perf_counter() - t0) * 1000.0
         return []
     out: list[dict] = []
     for r in results:

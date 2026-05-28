@@ -14,9 +14,13 @@ import pytest
 
 from durin.cli.onboard_memory import (
     AUTO_ABSORB_QUESTION_TEXT,
+    AUX_MODEL_QUESTION_TEXT,
     CROSS_ENCODER_QUESTION_TEXT,
+    MEMORY_ENABLE_QUESTION_TEXT,
     prompt_enable_auto_absorb,
     prompt_enable_cross_encoder,
+    prompt_enable_memory_subsystem,
+    prompt_memory_aux_model,
 )
 
 
@@ -50,16 +54,27 @@ class _FakeQuestionary:
     helper. Captures the rendered prompt text and returns a canned
     answer."""
 
-    def __init__(self, answer: bool) -> None:
+    def __init__(self, answer) -> None:
         self.captured_message: str | None = None
         self._answer = answer
+        self._default = None
 
     def confirm(self, message: str, default: bool = False) -> "_FakeQuestionary":
         self.captured_message = message
         self._default = default
         return self
 
-    def ask(self) -> bool:
+    def select(self, message, choices=None, default=None) -> "_FakeQuestionary":
+        self.captured_message = message
+        self._default = default
+        return self
+
+    def text(self, message, default=None) -> "_FakeQuestionary":
+        self.captured_message = message
+        self._default = default
+        return self
+
+    def ask(self):
         return self._answer
 
 
@@ -154,3 +169,82 @@ def test_none_answer_returns_current_value(
     )
     assert prompt_enable_auto_absorb(current=True) is True
     assert prompt_enable_auto_absorb(current=False) is False
+
+
+# ---------------------------------------------------------------------------
+# Q6.1 — Memory subsystem enable
+# ---------------------------------------------------------------------------
+
+
+def test_memory_enable_text_anchors() -> None:
+    text = MEMORY_ENABLE_QUESTION_TEXT
+    assert "memory system" in text.lower()
+    assert "~120MB" in text
+    assert "[Y/n]" in text
+
+
+def test_memory_enable_default_is_true(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeQuestionary(answer=True)
+    monkeypatch.setattr(
+        "durin.cli.onboard_memory._get_questionary", lambda: fake,
+    )
+    prompt_enable_memory_subsystem()  # default current=True
+    assert fake._default is True
+
+
+# ---------------------------------------------------------------------------
+# Q6.4 — Aux model picker
+# ---------------------------------------------------------------------------
+
+
+def test_aux_model_text_anchors() -> None:
+    text = AUX_MODEL_QUESTION_TEXT
+    assert "Dream" in text
+    assert "memory" in text.lower()
+
+
+def test_aux_model_same_as_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _FakeQuestionary(answer="same as agent")
+    monkeypatch.setattr(
+        "durin.cli.onboard_memory._get_questionary", lambda: fake,
+    )
+    result = prompt_memory_aux_model(agent_model="glm-5.1")
+    assert result == "glm-5.1"
+
+
+def test_aux_model_skip_returns_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeQuestionary(answer="skip")
+    monkeypatch.setattr(
+        "durin.cli.onboard_memory._get_questionary", lambda: fake,
+    )
+    result = prompt_memory_aux_model(agent_model="glm-5.1")
+    assert result is None
+
+
+def test_aux_model_specify_uses_text_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When 'specify' is chosen, the text prompt fires and its value
+    becomes the model id."""
+    # Two-step interaction: first `select` returns "specify", then
+    # `text` returns the typed value. The fake's `.ask()` reads
+    # whatever the test set last.
+    answers = iter(["specify", "claude-haiku-4-5"])
+    fake = _FakeQuestionary(answer=None)
+
+    def _ask():
+        try:
+            return next(answers)
+        except StopIteration:
+            return None
+
+    fake.ask = _ask  # type: ignore[assignment]
+    monkeypatch.setattr(
+        "durin.cli.onboard_memory._get_questionary", lambda: fake,
+    )
+    result = prompt_memory_aux_model(agent_model="glm-5.1")
+    assert result == "claude-haiku-4-5"
