@@ -487,7 +487,35 @@ Cambios:
 2. En el sink registry (`durin/telemetry/sinks.py` o equivalente): si `push_url` configurado, instanciar `PushSink` y añadir al fan-out.
 3. Test E2E: configurar URL fake (httpbin), verificar que un emit dispara HTTP request.
 
-**Estado**: pending
+**Resolución (2026-05-28) — Opción A cableado end-to-end**: el primer análisis del audit propuso borrar PushSink ("no consumer"). El user corrigió: *"medir comportamiento es el propósito de la telemetría — si no hay consumo es porque todavía no lo publicamos a un dashboard/API, no porque no se necesite. Medir lo es todo."* Lección nueva guardada en memoria persistente: [[feedback-telemetry-is-first-class]] — pattern opuesto al de A4 (P2.5 revert).
+
+Cambios:
+
+- [durin/config/schema.py](../../durin/config/schema.py): `TelemetryPushConfig` + `TelemetryConfig` nuevos. `Config` gana `telemetry: TelemetryConfig`. El schema declara `token_secret_name` (referencia), NO el token; un test invariante (`test_config_schema_has_no_plaintext_token_field`) protege contra regresión.
+- [durin/telemetry/logger.py](../../durin/telemetry/logger.py): `TelemetryLogger` gana `_extra_sinks` + `add_sink()`. `log()` escribe primero al JSONL (canonical source of truth) y luego itera los sinks adicionales — cada uno aislado en try/except para que un sink que falle no afecte el resto ni el JSONL.
+- [durin/telemetry/wiring.py](../../durin/telemetry/wiring.py) (nuevo): `wire_push_sink()` que (a) verifica config válida, (b) resuelve el token via `get_secret_store().get(name)`, (c) construye `PushSink` + attach al logger, (d) loggea warnings claros si la config está incompleta o el secret falta. Todos los modos de falla terminan en "push disabled, JSONL keeps working".
+- [durin/telemetry/__init__.py](../../durin/telemetry/__init__.py): `PushSink` exportado en `__all__` (ahora es API pública del paquete).
+- [durin/agent/loop.py](../../durin/agent/loop.py): integrated — al crear el session_logger se intenta wire_push_sink; en el `finally` del cleanup se llama `push_sink.flush()` para no perder eventos del buffer parcial.
+- [tests/telemetry/test_push_wiring.py](../../tests/telemetry/test_push_wiring.py) (nuevo, 9 tests):
+  * Disabled-path: default → no sink. None config → no sink (no raise).
+  * Misconfigured: url o secret_name vacío → graceful disable.
+  * Secret missing: store no tiene el name → graceful disable + warning.
+  * Happy path: el sink se attacha, el token RESUELTO viene del secret store (assert privacy invariant).
+  * Fan-out: 3 events emitidos → 3 lines en JSONL + 3 pending en el push buffer.
+  * Isolation: sink broken (raises) → JSONL sigue escribiendo correctamente.
+  * Schema invariant: `TelemetryPushConfig` NO tiene field `token` plaintext — sólo `token_secret_name`. Catches a regression que pondría el token en config.json.
+
+- [docs/memory/07_telemetry_and_observability.md §12.2](07_telemetry_and_observability.md): retention corregida (90 días, no 1 año). §12.3 nueva — descripción completa del push opt-in: config TOML, comando para el secret, privacy implications, behaviour (failure isolation, drain on shutdown, retry path).
+
+**Lecciones aplicadas**:
+- [[feedback-telemetry-is-first-class]] (nueva): medir comportamiento es el propósito, no requiere downstream consumer para justificar.
+- [[feedback-verify-quantifiers]]: tests verifican el shape del Config schema (no asume; lee `model_fields`).
+- [[feedback-sync-tests-exercise-behavior]]: el test no compara strings entre doc y código; ejercita los happy/unhappy paths del wiring real.
+- Privacy by design: token via secret store (lección de cómo `ZHIPU_API_KEY` se maneja en A5), default OFF, warning explícito en doc 07 §12.3.
+
+**Verificado pre-commit**: tests/memory/ + tests/telemetry/ 962 passed (953 baseline + 9 nuevos A8), 1 skipped.
+
+**Estado**: resolved (commit pendiente).
 
 ---
 

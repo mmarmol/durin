@@ -630,6 +630,46 @@ class AppearanceConfig(Base):
     mode: str = "auto"  # auto | light | dark
 
 
+class TelemetryPushConfig(Base):
+    """Opt-in HTTPS push of telemetry events (audit A8 / doc 07 §12.2).
+
+    Default OFF. When enabled, every event emitted locally also POSTs
+    to ``url`` (buffered, batched per ``batch_size``). The local JSONL
+    persistence under ``~/.cache/durin/telemetry/`` runs UNCHANGED —
+    push is an ADDITIONAL sink, never a replacement.
+
+    **Privacy**: events carry truncated user content (queries,
+    snippets, needles — 200 chars max via ``_truncate_freetext`` in
+    ``durin/agent/tools/_telemetry.py``). Enable this only when
+    exporting to YOUR OWN infrastructure (Grafana/Loki/Datadog/custom
+    endpoint). Read doc 07 §12.2 + §13 before enabling.
+
+    **Auth**: ``token_secret_name`` references a secret stored in
+    ``~/.durin/secrets.json`` — NEVER put the bearer token directly
+    in ``config.json``. Use ``durin secrets set <name> <token>``.
+    """
+
+    enabled: bool = False
+    url: str | None = None
+    token_secret_name: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "tokenSecretName", "token_secret_name",
+        ),
+    )
+    batch_size: int = Field(default=10, ge=1, le=1000)
+
+
+class TelemetryConfig(Base):
+    """Telemetry subsystem configuration (audit A8).
+
+    Events emit locally to JSONL by default; optional fan-out to an
+    HTTPS endpoint via :class:`TelemetryPushConfig`.
+    """
+
+    push: TelemetryPushConfig = Field(default_factory=TelemetryPushConfig)
+
+
 class Config(BaseSettings):
     """Root configuration for durin."""
 
@@ -638,6 +678,7 @@ class Config(BaseSettings):
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
+    telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     api: ApiConfig = Field(default_factory=ApiConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
