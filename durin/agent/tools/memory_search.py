@@ -11,7 +11,11 @@ from typing import Optional
 
 from durin.agent.tools._telemetry import emit_tool_event
 from durin.agent.tools.base import Tool, tool_parameters
-from durin.agent.tools.schema import StringSchema, tool_parameters_schema
+from durin.agent.tools.schema import (
+    IntegerSchema,
+    StringSchema,
+    tool_parameters_schema,
+)
 from durin.memory.aliases_index import AliasIndex
 from durin.memory.entity_page import EntityPage
 from durin.memory.entity_ranker import (
@@ -74,6 +78,16 @@ _PARAMETERS = tool_parameters_schema(
         "matches against this string are weighted heavily so the exact "
         "hit surfaces robustly. Leave empty for purely semantic queries."
     ),
+    limit=IntegerSchema(
+        10,
+        description=(
+            "Max results to return. Default 10. Increase to 20-30 for "
+            "audit / investigative queries; reduce for chat-style short "
+            "answers. Hard cap 50 — higher values consume many tokens."
+        ),
+        minimum=1,
+        maximum=50,
+    ),
     required=["query"],
     description=(
         # Canonical text per `docs/memory/06_prompts_and_instructions.md` §3.1.
@@ -90,7 +104,10 @@ _PARAMETERS = tool_parameters_schema(
         "This biases the search toward exact matches.\n"
         "- Use `level: \"cold\"` only when you need full body content "
         "(verbose; consumes many tokens). `warm` (default) returns "
-        "headline + summary, enough for most tasks.\n\n"
+        "headline + summary, enough for most tasks.\n"
+        "- `limit` defaults to 10. Reduce to 3-5 for chat-style short "
+        "answers, raise to 20-30 for audit / investigative queries that "
+        "need to see every relevant hit. Hard cap 50.\n\n"
         "Results come pre-sectioned with structural markers:\n"
         "- `=== CANONICAL: <uri> ===` — consolidated entity pages "
         "(durable knowledge)\n"
@@ -309,6 +326,17 @@ class MemorySearchTool(Tool):
             else None
         )
 
+        # `limit` is clamped to [1, 50] defensively even though the
+        # schema declares minimum/maximum — the LLM occasionally emits
+        # values outside the declared bounds, and a 50-row cap protects
+        # the response from token blow-up regardless.
+        try:
+            limit_raw = kwargs.get("limit")
+            limit = 10 if limit_raw is None else int(limit_raw)
+        except (TypeError, ValueError):
+            limit = 10
+        limit = max(1, min(50, limit))
+
         if not query:
             return {"error": "query is required"}
         if scope not in ("all", "dreamed", "undreamed"):
@@ -345,7 +373,7 @@ class MemorySearchTool(Tool):
             query,
             keywords=keywords,
             vector_index=vi,
-            limit=10,
+            limit=limit,
             cross_encoder=cross_encoder,
             cross_encoder_top_n=ce_top_n,
         )
