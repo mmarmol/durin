@@ -143,28 +143,19 @@ NEW event for the cross-RRF fusion step.
 | `dedup_count` | int | How many uris appeared in multiple sources (i.e., the "co-occurrence boost" landed on N items) |
 | `duration_ms` | float | RRF computation duration |
 
-### 4.6 `memory.silent_retrieval_miss`
+### 4.6 `memory.silent_retrieval_miss` (discarded — see doc 08 §2.11)
 
-NEW event. Detects turns where the agent should have invoked `memory_search` but didn't, and the user signaled dissatisfaction. Used as the **telemetry-driven trigger** to activate the §2.F eager pre-fetch feature (currently deferred — see `08_scope_and_discarded.md` §4.1).
+**Not emitted.** Discarded in audit B9 (2026-05-28). The v1 spec proposed three heuristics to detect "agent should have called `memory_search` but didn't":
 
-**When emitted:** at the start of turn N+1, if BOTH conditions hold:
+1. Substring overlap > 60% with turn N's user message.
+2. Starts with negation tokens ("no,", "wrong,", "actually,").
+3. Contains correction patterns ("I said X, not Y", "you forgot…").
 
-1. In turn N, the agent's response did NOT include a `memory_search` tool call (despite the user message being question-shaped or referencing past context).
-2. In turn N+1, the user's message looks like a re-ask, correction, or negation of the prior response. Heuristic detection:
-   - Substring overlap > 60% with turn N's user message (re-ask)
-   - Starts with negation tokens ("no,", "wrong,", "actually,", "that's not...")
-   - Contains correction patterns ("I said X, not Y", "you forgot...")
+Honest review: only (1) is language-agnostic — and it generates too many false positives (legitimate refinements look like re-asks). (2) and (3) are inherently English-shaped; the token lists and patterns would need per-language maintenance, and even then they wouldn't catch idiomatic corrections in CJK / Spanish. Without an LLM classifier (which breaks the telemetry budget), the event is unreliable for the multi-lingual workloads durin actually targets.
 
-| Field | Type | Description |
-|---|---|---|
-| `turn_n_user_message_hash` | string | Hash of turn N user message (privacy: no full text) |
-| `turn_n_agent_invoked_tools` | list of strings | Which tools the agent called in turn N (empty list if none) |
-| `detector_signals` | list of enum | Which of the 3 heuristics fired: `re_ask | negation | correction` |
-| `session_id` | string | For correlation |
+The downstream consumer (§2.F eager pre-fetch) is itself deferred (doc 08 §4.1) — so even a reliable signal would have no consumer. If a future use case needs this kind of "miss" detection, the right approach is different (e.g. LLM-based classifier in background, explicit user-feedback signals, or post-hoc analysis on bench traces) — not these heuristics.
 
-**Aggregate metric:** `silent_retrieval_miss_rate` = count of this event / total user turns. **Action trigger:** if rate > 5% over a rolling 7-day window, the operator should evaluate activating §2.F. This is the data-driven case for that feature.
-
-**False positives accepted.** The heuristics will trigger on legitimate user negations that have nothing to do with memory ("no, do X instead"). The metric is a rate, not a per-event signal — only the aggregate matters.
+See `08_scope_and_discarded.md` §2.11 for the full rationale.
 
 ---
 
@@ -271,17 +262,17 @@ Schemas in `schema.py`. Not redefining here.
 
 ### 8.1 `memory.search.failure`
 
-NEW. Detailed in §14.5 of doc 03.
+Shipped in audit B9 (2026-05-28). Emitted once per `run_search_pipeline` invocation where at least one of the safe wrappers (`_safe_vector_search`, `_safe_lexical_search`, `_safe_grep_fallback`) caught an exception. The pipeline always recovers (the surviving sources cover the loss most of the time); the event lets dashboards see degradation rate per component.
 
 | Field | Type | Description |
 |---|---|---|
-| `component` | enum | `lancedb | fts5 | cross_encoder | watcher | disk` |
-| `kind` | enum | `missing | corrupted | syntax | load_error | timeout | stale_entry` |
-| `recoverable` | bool | Was the failure flagged recoverable? |
-| `recovery_attempted` | bool | Did we try? |
-| `recovery_succeeded` | bool | Did recovery work? |
-| `recovery_duration_ms` | float \| null | Time spent in recovery |
-| `degraded_to` | enum \| null | `lexical_only | vector_only | grep_only | no_rerank | null` |
+| `component` | string | Comma-joined list of affected sources (`vector`, `lexical`, `grep`). |
+| `recovery_attempted` | bool | Always `True` today — the pipeline doesn't ship without recovery. Field kept for forward-compat. |
+| `recovery_succeeded` | bool | `True` iff the result set is non-empty despite the failure. |
+| `recovery_duration_ms` | float | Time spent inside the failed wrapper(s) before falling through to the surviving sources. |
+| `degraded_to` | string | `full` (only `grep` failed and the others covered), `vector_only`, `lexical_only`, `grep_only`, or `none` (recovery_succeeded == False). |
+
+The v1 spec proposed a richer field set (`kind` enum, `recoverable` bool). Audit B9 cut those: the wrappers don't classify the exception type today (catching `Exception`), so emitting `kind="syntax"` vs `kind="timeout"` would be inventing data. If a future operational need surfaces, the wrappers can grow per-exception handlers and the field can be added then.
 
 ---
 

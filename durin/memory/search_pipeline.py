@@ -178,12 +178,74 @@ def run_search_pipeline(
             body=meta.get("body", ""),
         ))
     capped = apply_per_source_cap(section_hits)
-    return SearchPipelineResult(
+    result = SearchPipelineResult(
         hits=capped[:limit],
         vector_count=len(vector_uris),
         lexical_count=len(lexical_uris),
         recovered_from=tuple(sorted(recovery["sources"])),
         recovery_duration_ms=recovery["ms"],
+    )
+    # Audit B9 (2026-05-28) — emit `memory.search.failure` when at
+    # least one safe wrapper caught an exception. The pipeline always
+    # recovers (the surviving sources cover the loss most of the
+    # time); the event lets dashboards see degradation rate per
+    # component. Wrapped in try/except: telemetry never breaks the
+    # search result.
+    if recovery["sources"]:
+        try:
+            _emit_search_failure(
+                affected=recovery["sources"],
+                duration_ms=recovery["ms"],
+                vector_count=len(vector_uris),
+                lexical_count=len(lexical_uris),
+                hit_count=len(capped),
+            )
+        except Exception:  # pragma: no cover
+            pass
+    return result
+
+
+def _emit_search_failure(
+    *,
+    affected: set[str],
+    duration_ms: float,
+    vector_count: int,
+    lexical_count: int,
+    hit_count: int,
+) -> None:
+    """Emit ``memory.search.failure`` with derived degradation info.
+
+    ``degraded_to`` is derived from the per-source counts AFTER
+    recovery so the dashboard sees what the pipeline actually
+    surfaced — not just what failed.
+    """
+    from durin.agent.tools._telemetry import emit_tool_event
+
+    # Derive degraded_to from which sources still produced hits.
+    surviving_with_vector = vector_count > 0 and "vector" not in affected
+    surviving_with_lexical = lexical_count > 0 and "lexical" not in affected
+    if hit_count == 0:
+        degraded_to = "none"
+    elif surviving_with_vector and surviving_with_lexical:
+        # Both primary sources alive — must be grep that failed.
+        degraded_to = "full"
+    elif surviving_with_vector:
+        degraded_to = "vector_only"
+    elif surviving_with_lexical:
+        degraded_to = "lexical_only"
+    else:
+        # Only hits left came from grep (or a survivor with 0 count).
+        degraded_to = "grep_only"
+
+    emit_tool_event(
+        "memory.search.failure",
+        {
+            "component": ",".join(sorted(affected)),
+            "recovery_attempted": True,
+            "recovery_succeeded": hit_count > 0,
+            "recovery_duration_ms": duration_ms,
+            "degraded_to": degraded_to,
+        },
     )
 
 
