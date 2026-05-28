@@ -786,11 +786,11 @@ enabled = true
 
 | Hardcoded knob | Value | Where | Why no config? |
 |---|---|---|---|
-| `vector_top_k` | 50 | `search_pipeline.py:347` | Sane default; tuning never asked for |
-| `lexical_top_k` | 50 | `search_pipeline.py:362` | Sane default |
-| `rrf_constant` | 60 | `rrf_fusion.py:38` | Textbook value; no operator has requested override |
-| `rrf_weights` | `{vector: 1.0, lexical: 0.7→2.5 boosted, grep: 0.3}` | `rrf_fusion.py:38-42` | Already adaptive (lexical boost on identifier queries) |
-| `max_per_source` (sectioning) | 3 | `sectioned_output.py:38` | Per doc 03 §12.4; tuning never asked for |
+| `vector_top_k` | 50 | `search_pipeline.py:444` (audit F21 verified, 2026-05-28) | Sane default; tuning never asked for |
+| `lexical_top_k` | 50 | `search_pipeline.py:459` (audit F21 verified) | Sane default |
+| `rrf_constant` | 60 | `rrf_fusion.py::DEFAULT_K` | Textbook value (Cormack/Clarke/Buettcher 2009); no operator has requested override |
+| `rrf_weights` | `{vector: 1.0, lexical: 0.7→2.5 boosted, grep: 0.3}` | `rrf_fusion.py::DEFAULT_W_*` | Already adaptive (lexical boost on identifier queries) |
+| `max_per_source` (sectioning) | 3 | `sectioned_output.py::DEFAULT_MAX_PER_SOURCE` | Per doc 03 §12.4; tuning never asked for |
 | `final_top_k` (a.k.a. `limit`) | 10 default | `memory_search.py` `_PARAMETERS["limit"]` (A3) | Now per-call configurable via the `limit` tool parameter (audit A3) — 1..50 |
 | `half_life_days` per class | 90 / 120 / null | `decay.py::CLASS_HALF_LIFE_DEFAULTS` (A9) | Per-class table in code; doc 03 §10.2 documents the reasoning |
 

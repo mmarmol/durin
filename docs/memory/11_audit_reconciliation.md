@@ -1830,6 +1830,28 @@ Tras cerrar E1-E38 y verificar test suite full (5088/0 fail), el usuario pidió 
 - Tests TDD: 6 cases (session_key stamped, iteration starts 0, set_iteration updates, auto-inject, caller-supplied wins, no-logger no-crash).
 - Doc 07 §4.1 fila actualizada para indicar F20 wired.
 
+### F21 — Doc 03 §15 hardcoded knobs line refs stale ✅ RESOLVED
+
+**Pre-F21**: `vector_top_k @ search_pipeline.py:347`, `lexical_top_k @ :362`, `rrf_constant @ rrf_fusion.py:38`. Líneas reales tras refactors: `:444`, `:459`.
+
+**Resolución**: tabla actualizada con líneas verificadas O símbolos (`DEFAULT_K`, `DEFAULT_W_*`, `DEFAULT_MAX_PER_SOURCE`) — survive refactors.
+
+### F22 — Doc 02 §4.2 `to_name_resolved` claim vs slug-only ✅ RESOLVED
+
+**Pre-F22**: doc decía relaciones renderean `<type.title()>: <to_name_resolved>` con "name of the target entity if known".
+
+**Realidad** (`vector_index.py:231`): solo strip de type prefix; no resolve nombre.
+
+**Resolución**: fila corregida; aclaro que slug se usa; resolution via alias index deferred hasta bench muestre recall gap.
+
+### F23 — Doc 02 §3.1 summary format ✅ RESOLVED
+
+**Pre-F23**: doc decía `name (also: alias1, alias2)`.
+
+**Realidad** (`vector_index.py:142, 516`): `name (alias1, alias2)` — sin "also:".
+
+**Resolución**: fila corregida con formato real.
+
 ### F2 — `scope='archive'` + CLI archive commands ✅ RESOLVED (parcial)
 
 **Doc 01 §3.6 + doc 04 §11 (pre-F2)**: prometían 3 surfaces de recovery:
