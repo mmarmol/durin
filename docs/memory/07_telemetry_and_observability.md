@@ -193,17 +193,21 @@ Already exists.
 
 ### 6.2 `memory.dream.end`
 
-Already exists, augment with:
+Shipped pre-A5 with `trigger` + `entity_filter` + `entities_consolidated` + `entities_failed` + `duration_s`. Audit A5 (commit landing this doc update) added the four cost-telemetry fields below, renamed `duration_s` → `duration_ms`, and removed the old `duration_s` field. Consumers that pinned to `duration_s` need to update.
 
-| Added field | Type | Description |
+| Field | Type | Description |
 |---|---|---|
-| `entities_consolidated` | int | Successful applies |
-| `entities_failed` | int | Failed applies |
-| `entities_quarantined` | int | NEW: how many got quarantine'd this pass (§12.5 doc 05) |
-| `llm_call_count` | int | Total LLM calls in this pass |
-| `llm_input_tokens_total` | int | Input tokens (for cost) |
-| `llm_output_tokens_total` | int | Output tokens |
-| `duration_ms` | float | Full pass duration |
+| `trigger` | string | One of `threshold | post_ingest_threshold | cron_daily | post_compaction | session_close | manual`. |
+| `entity_filter` | string | When set, restricted the pass to one entity (empty string when no filter). |
+| `entities_consolidated` | int | Entities whose `apply` succeeded. |
+| `entities_failed` | int | Entities whose `consolidate_entity` or `apply` raised. |
+| `entities_quarantined` | int | Entities whose failure was the third structural strike (`dream_quarantine` field set on the page). Subset of `entities_failed`. |
+| `llm_call_count` | int | LLM calls across the pass — sums initial + retries per entity. |
+| `llm_input_tokens_total` | int | Prompt tokens summed across every LLM call. Cost = `total_input_tokens * input_rate + total_output_tokens * output_rate`. |
+| `llm_output_tokens_total` | int | Completion tokens summed across every LLM call. |
+| `duration_ms` | float | Wall-clock of the full pass (lock → consolidate → release). Replaces the pre-A5 `duration_s`. |
+
+> **Token totals are best-effort.** A provider that doesn't surface `usage` (legacy `LLMInvoke` mocks, custom transports) leaves the counts at 0. The Dream cost alarm (doc 08 §3 R3) under-reports when tokens are missing — the safe-failure direction (no false positives). See `LLMResponse` in `durin/memory/dream.py`.
 
 ### 6.3 `memory.dream.skipped`
 

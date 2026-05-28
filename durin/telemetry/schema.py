@@ -533,19 +533,29 @@ class MemoryDreamStartEvent(TypedDict):
 
 
 class MemoryDreamEndEvent(TypedDict):
-    """Entity-centric dream pass completed (doc 25 §2.A.1).
+    """Entity-centric dream pass completed (doc 25 §2.A.1, audit A5).
 
     Mirrors :class:`MemoryDreamStartEvent` with the outcome counters
     and wall-clock duration. ``entities_failed`` counts entities whose
     consolidate_entity raised — the rest of the pass still runs, so a
     non-zero failed value is a soft signal, not a stop condition.
+
+    Audit A5 (2026-05-28) added the four cost-telemetry fields below
+    so doc 08 §3 R3's alarm (`dream_llm_cost_per_day_usd > $5/día`)
+    can be computed. Pre-A5 emit payloads used `duration_s`; that
+    name is gone — consumers should read `duration_ms`.
     """
 
     trigger: str
     entity_filter: str
     entities_consolidated: int
     entities_failed: int
-    duration_s: float
+    # A5: NEW fields per doc 07 §6.2.
+    entities_quarantined: int
+    llm_call_count: int
+    llm_input_tokens_total: int
+    llm_output_tokens_total: int
+    duration_ms: float
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
 

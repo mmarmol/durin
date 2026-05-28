@@ -302,7 +302,36 @@ Doc 08 §3 R3 (risk register) propone alarmar en `dream_llm_cost_per_day_usd > $
 
 **Acción**: implementar acumulador de tokens en DreamRunner, pasar como kwargs a `_emit_end`. Renombrar `duration_s` → `duration_ms` (* 1000.0). Agregar `entities_quarantined` (ya existe el concepto en `_maybe_auto_absorb`).
 
-**Estado**: pending
+**Resolución (2026-05-28)**: El `LLMInvoke` Protocol del dream era `Callable[..., str]` — descartaba el `response.usage` que litellm sí provee. Cambio arquitectónico local al consumer correcto (el dream namespace) — aplicando la lección de A4 [[feedback-optimization-vs-principle]]: el fix vive donde el consumer está, no como global state.
+
+Cambios:
+
+- **[durin/memory/dream.py](../../durin/memory/dream.py)**: nuevo `LLMResponse` dataclass (`text + prompt_tokens + completion_tokens`); `LLMInvoke` Protocol actualizado a devolver `LLMResponse`; `default_llm_invoke` extrae `response.usage` de litellm; `ConsolidationResult` gana `prompt_tokens`/`completion_tokens`/`llm_call_count`; `consolidate_entity` acumula tokens incluso a través de retries; `DreamError` gana `triggered_quarantine` flag.
+- **[durin/memory/dream_quarantine.py](../../durin/memory/dream_quarantine.py)**: `record_failure` ahora devuelve `bool` — `True` cuando esa llamada disparó la 3ª strike → quarantine.
+- **[durin/memory/dream.py::DreamConsolidator.apply](../../durin/memory/dream.py)**: capta el flag de `record_failure` y lo propaga en `raise DreamError(..., triggered_quarantine=triggered)`.
+- **[durin/memory/dream_runner.py](../../durin/memory/dream_runner.py)**: nuevo `_ConsolidateTotals` dataclass (accumulador per-pass); `_consolidate()` devuelve los totals; `_emit_end()` payload con los 4 nuevos campos + `duration_ms`.
+- **[durin/memory/absorb_judge.py](../../durin/memory/absorb_judge.py)**: extrae `.text` del response. NO acumula tokens en `dream.end` (el judge corre POST-dream y tiene su propia telemetría `memory.absorb.judged`).
+- **[durin/telemetry/schema.py](../../durin/telemetry/schema.py)**: `MemoryDreamEndEvent` TypedDict actualizado — 4 nuevos campos, `duration_s` eliminado.
+- **[tests/memory/test_dream_end_cost_telemetry.py](../../tests/memory/test_dream_end_cost_telemetry.py)** (nuevo, 4 tests): ejercita el comportamiento real:
+  - `LLMResponse` → tokens en el payload de `dream.end`.
+  - Legacy `str`-returning `llm_invoke` → tokens=0 (under-report safe-failure).
+  - Multi-entity → tokens sumados correctamente.
+  - Schema TypedDict tiene los campos requeridos + sacó `duration_s`.
+
+**Backward-compat shim**: el call site en `dream.py:341` y `absorb_judge.py:144` aceptan TANTO `LLMResponse` como `str` (`isinstance` check). Esto permite que los ~15 tests existentes con mocks `lambda p,**kw: "raw"` sigan pasando sin churn mecánico — under-reportan tokens (0) pero el dream flow funciona.
+
+**Doc 07 §6.2 actualizado**: tabla completa con los 9 campos, nota explícita de que el campo viejo `duration_s` se eliminó (no es additive), nota sobre safe-failure direction cuando el provider no surface `usage`.
+
+**Doc 08 §3 R3 alarma**: ahora es computable. La fórmula es `dream_llm_cost_per_day_usd = sum(llm_input_tokens_total * input_rate + llm_output_tokens_total * output_rate)` sobre eventos `memory.dream.end` del día.
+
+**Lecciones aplicadas**:
+- [[feedback-optimization-vs-principle]]: el cambio es **local al consumer correcto** (dream namespace). `query_rewriter.LLMInvoke` queda intacto.
+- [[feedback-sync-tests-exercise-behavior]]: el behavior test no compara sólo strings de doc, **emite eventos reales y verifica los valores**.
+- [[feedback-verify-quantifiers]]: durante el desarrollo el test `test_dream_end_aggregates_tokens_across_multiple_entities` falló con assumption "slug in prompt matches unique entity" — falsa porque los prompts incluyen aliases cross-entity. Corregido con counter-based stub.
+
+**Verificado pre-commit**: tests/memory/ 907 passed (903 baseline + 4 nuevos A5), 1 skipped (condition).
+
+**Estado**: resolved (commit pendiente).
 
 ---
 

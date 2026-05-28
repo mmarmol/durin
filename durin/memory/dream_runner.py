@@ -74,6 +74,25 @@ class DreamRunResult:
     duration_s: float
 
 
+@dataclass
+class _ConsolidateTotals:
+    """Mutable accumulator for one ``_consolidate`` invocation.
+
+    A5: dream cost telemetry needs per-pass totals (sum across all
+    entities) for `memory.dream.end`. The runner builds this as the
+    iteration progresses, then folds the values into both the
+    DreamRunResult (consolidated/failed for back-compat) and the
+    telemetry payload (the four A5 fields).
+    """
+
+    consolidated: int = 0
+    failed: int = 0
+    quarantined: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    llm_calls: int = 0
+
+
 class DreamRunner:
     """Coordinates one entity-centric dream pass with lock + throttle."""
 
@@ -167,17 +186,18 @@ class DreamRunner:
                 duration_s=time.monotonic() - start,
             )
 
-        consolidated = 0
-        failed = 0
+        totals = _ConsolidateTotals()
         try:
             self._emit_start(trigger, entity_filter, len(pending))
-            consolidated, failed = self._consolidate(pending, on_progress)
+            totals = self._consolidate(pending, on_progress)
         finally:
             self._release_lock()
             self._touch_last_run()
 
         duration = time.monotonic() - start
-        self._emit_end(trigger, entity_filter, consolidated, failed, duration)
+        self._emit_end(trigger, entity_filter, totals, duration)
+        consolidated = totals.consolidated
+        failed = totals.failed
 
         # §2.D: auto-absorb post-dream. Runs only when at least one
         # entity was consolidated (no point re-judging pairs that
@@ -216,7 +236,7 @@ class DreamRunner:
         self,
         pending: dict[str, list[Any]],
         on_progress: Callable[[str, str], None] | None,
-    ) -> tuple[int, int]:
+    ) -> "_ConsolidateTotals":
         from durin.memory.dream import DreamConsolidator, DreamError
 
         kwargs: dict[str, Any] = {"workspace": self.workspace}
@@ -228,27 +248,36 @@ class DreamRunner:
             kwargs["llm_invoke"] = self._llm_invoke
         consolidator = DreamConsolidator(**kwargs)
 
-        consolidated = 0
-        failed = 0
+        totals = _ConsolidateTotals()
         for ent_ref, entries in pending.items():
             try:
                 result = consolidator.consolidate_entity(ent_ref, entries)
+                # A5: collect token usage from the consolidator BEFORE
+                # apply — `consolidate_entity` is the only LLM-touching
+                # step. `apply` is pure I/O + patch logic.
+                totals.prompt_tokens += int(getattr(result, "prompt_tokens", 0) or 0)
+                totals.completion_tokens += int(getattr(result, "completion_tokens", 0) or 0)
+                totals.llm_calls += int(getattr(result, "llm_call_count", 0) or 0)
                 sha = consolidator.apply(ent_ref, result)
-                consolidated += 1
+                totals.consolidated += 1
                 if on_progress is not None:
                     msg = f"→ {sha[:8]}" if sha else "= no changes"
                     on_progress(ent_ref, msg)
             except DreamError as exc:
-                failed += 1
+                totals.failed += 1
+                # A5: distinguish "failed and got quarantined" from
+                # "failed but still has strikes left".
+                if getattr(exc, "triggered_quarantine", False):
+                    totals.quarantined += 1
                 logger.warning("dream consolidate %s failed: %s", ent_ref, exc)
                 if on_progress is not None:
                     on_progress(ent_ref, f"✗ {exc}")
             except Exception as exc:  # noqa: BLE001
-                failed += 1
+                totals.failed += 1
                 logger.exception("dream consolidate %s unexpected error", ent_ref)
                 if on_progress is not None:
                     on_progress(ent_ref, f"✗ unexpected: {exc}")
-        return consolidated, failed
+        return totals
 
     # ------------------------------------------------------------------
     # lock + throttle
@@ -338,18 +367,26 @@ class DreamRunner:
         self,
         trigger: str,
         entity_filter: Optional[str],
-        consolidated: int,
-        failed: int,
+        totals: _ConsolidateTotals,
         duration_s: float,
     ) -> None:
+        # A5: payload now carries the per-pass token totals + the
+        # quarantine counter + duration in ms (not s). Doc 07 §6.2
+        # specifies this shape; doc 08 §3 R3 alarm
+        # (`dream_llm_cost_per_day_usd > $5/día`) depends on the
+        # `llm_input_tokens_total` + `llm_output_tokens_total` fields.
         emit_tool_event(
             "memory.dream.end",
             {
                 "trigger": trigger,
                 "entity_filter": entity_filter or "",
-                "entities_consolidated": consolidated,
-                "entities_failed": failed,
-                "duration_s": duration_s,
+                "entities_consolidated": totals.consolidated,
+                "entities_failed": totals.failed,
+                "entities_quarantined": totals.quarantined,
+                "llm_call_count": totals.llm_calls,
+                "llm_input_tokens_total": totals.prompt_tokens,
+                "llm_output_tokens_total": totals.completion_tokens,
+                "duration_ms": duration_s * 1000.0,
             },
         )
 

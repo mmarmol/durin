@@ -55,16 +55,21 @@ def record_failure(
     kind: DreamApplyFailureKind,
     *,
     now: Optional[datetime] = None,
-) -> None:
+) -> bool:
     """Mutate *page* to reflect that an apply attempt failed.
 
     No-ops for ambient (non-structural) kinds. Sets
     ``dream_quarantine`` once the counter reaches
     :data:`_FAILURE_THRESHOLD`. The caller is responsible for
     persisting the page back to disk.
+
+    Returns ``True`` iff this call was the one that crossed the
+    quarantine threshold (audit A5 — used by the DreamRunner to
+    increment its ``entities_quarantined`` counter for the
+    ``memory.dream.end`` telemetry).
     """
     if kind not in STRUCTURAL_FAILURE_KINDS:
-        return
+        return False
     extra = page.extra if isinstance(page.extra, dict) else {}
     page.extra = extra
 
@@ -74,9 +79,14 @@ def record_failure(
     new_count = current + 1
     extra["dream_failure_count"] = new_count
 
+    quarantine_triggered = (
+        new_count >= _FAILURE_THRESHOLD
+        and current < _FAILURE_THRESHOLD
+    )
     if new_count >= _FAILURE_THRESHOLD:
         when = (now or datetime.now(timezone.utc)) + QUARANTINE_DURATION
         extra["dream_quarantine"] = when.isoformat()
+    return quarantine_triggered
 
 
 def clear_failures(page: EntityPage) -> None:
