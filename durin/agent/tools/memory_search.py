@@ -367,6 +367,19 @@ class MemorySearchTool(Tool):
             if ce_cfg is not None:
                 ce_top_n = int(getattr(ce_cfg, "top_n", 10) or 10)
 
+        # A9: temporal decay flag. Default True (matches
+        # MemoryTemporalDecayConfig). Reading via getattr lets test
+        # paths that build the tool with `app_config=None` opt out
+        # cleanly (decay still defaults ON for the real config).
+        temporal_decay_enabled = True
+        if self._app_config is not None:
+            try:
+                temporal_decay_enabled = bool(
+                    self._app_config.memory.search.temporal_decay.enabled
+                )
+            except AttributeError:
+                temporal_decay_enabled = True
+
         t0 = time.monotonic()
         pipeline_result = run_search_pipeline(
             self._workspace,
@@ -376,6 +389,7 @@ class MemorySearchTool(Tool):
             limit=limit,
             cross_encoder=cross_encoder,
             cross_encoder_top_n=ce_top_n,
+            temporal_decay_enabled=temporal_decay_enabled,
         )
         duration_ms = (time.monotonic() - t0) * 1000.0
 

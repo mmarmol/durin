@@ -815,6 +815,30 @@ class MemoryRecallRerankEvent(TypedDict):
     session_key: NotRequired[str | None]
 
 
+class MemoryRecallDecayEvent(TypedDict):
+    """Temporal-decay step applied to a recall pass (audit A9 / doc 03 §10).
+
+    Emitted whenever the search pipeline ran with
+    ``memory.search.temporal_decay.enabled = true`` (the default).
+    Lets dashboards see how many hits the decay touched and the
+    average penalty applied — a constant flow with
+    ``avg_decay_factor`` near 1.0 means decay is acting on recent
+    hits as expected; a sudden drop means a workspace has
+    accumulated very old `episodic`/`session_summary` entries.
+
+    ``hits_decayed`` counts only hits whose class actually decays
+    (`episodic`, `session_summary`). ``avg_decay_factor`` averages
+    only over those — a no-op class (entity/stable/corpus) does not
+    contribute.
+    """
+
+    hits_total: int
+    hits_decayed: int
+    avg_decay_factor: float
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
 class MemoryHealthCheckEvent(TypedDict):
     """One health-check tick completed (doc 02 §5.1 + doc 07 §9.4).
 
@@ -955,6 +979,7 @@ EVENTS: dict[str, type] = {
     "memory.recall.lexical": MemoryRecallLexicalEvent,
     "memory.recall.rrf": MemoryRecallRRFEvent,
     "memory.recall.rerank": MemoryRecallRerankEvent,
+    "memory.recall.decay": MemoryRecallDecayEvent,
     "memory.health_check": MemoryHealthCheckEvent,
     "memory.health.critical": MemoryHealthCriticalEvent,
 }
@@ -1020,6 +1045,7 @@ __all__ = [
     "MemoryRecallLexicalEvent",
     "MemoryRecallRRFEvent",
     "MemoryRecallRerankEvent",
+    "MemoryRecallDecayEvent",
     "MemoryIndexWriteEvent",
     "MemoryIndexRebuildEvent",
     "MemoryIndexStalenessDetectedEvent",
