@@ -340,14 +340,16 @@ When the tick's drift repair triggers re-indexes, those emit their own `memory.i
 
 ### 9.5 `memory.health.critical`
 
-NEW. Emitted when the cron exhausts the per-component retry budget (3 failures in 1h by default) and pauses restoration of that component pending manual intervention.
+Emitted once when a component crosses the consecutive-failure threshold (3 strikes by default). Re-armed on the next successful tick for that component, so a recovered-then-re-failing component escalates again.
 
 | Field | Type | Description |
 |---|---|---|
-| `component` | string | The component that hit the threshold (`lancedb`, `fts5_unicode61`, etc.) |
-| `consecutive_failures` | int | Count that triggered the threshold (typically 3) |
-| `last_error` | string | Last restoration error message |
-| `manual_recovery_hint` | string | Suggested CLI: e.g., `durin reindex --target lancedb` |
+| `component` | string | The probed component that crossed the threshold. Today: `fts` or `lance` (more may be added without payload restructuring). |
+| `consecutive_failures` | int | Count that triggered the threshold (typically 3). |
+| `last_error` | string | Last probe error message, truncated to 200 chars. |
+| `manual_recovery_hint` | string | The CLI command an operator runs to rebuild the failed component — e.g. `durin memory reindex --target fts` for `fts`, `durin memory reindex --target lancedb` for `lance`. The mapping lives in `_RECOVERY_HINTS` in `durin/memory/health_check.py`; the anti-drift test (`tests/memory/test_health_critical_a7_recovery_hint.py`) keeps the hint targets aligned with the CLI's accepted target set. Audit A7 added this field — the v1 spec proposed `durin reindex --target lancedb` (missing `memory` subcommand); the in-code constants use the verified prefix. |
+
+**Naming note**: the probe component name (`lance`) differs from the CLI `--target` value (`lancedb`). This is legacy drift between the two modules; `_RECOVERY_HINTS` translates at the boundary so operators see a runnable command, not a probe name they have to interpret. If we ever reconcile the names, the dict still works (and the anti-drift test catches a half-finished rename).
 
 This is the event operators should alarm on.
 
