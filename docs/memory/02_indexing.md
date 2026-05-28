@@ -287,7 +287,7 @@ The indexer is a stateful component with the following responsibilities, all of 
 | User edits a `.md` manually | File watcher detects mtime change; indexer re-derives that row; indexer commits the change to `memory/.git/` with `author: user` |
 | Dream moves a file to archive | Remove the corresponding row from both indices |
 | Dream merges entities (absorb-judge) | Move absorbed entity to `archive/`; remove its row; update aliases on the canonical entity |
-| `durin reindex` command | Wipe `.durin/index/`, walk `memory/` (excluding archive), re-derive every row |
+| `durin memory reindex` command | Wipe `.durin/index/`, walk `memory/` (excluding archive), re-derive every row |
 
 ### 6.2 Re-embed-on-write — synchronous, not queued
 
@@ -299,7 +299,7 @@ Reasoning:
 - FTS5 insertion is fast (~1ms).
 - Combined latency is well within tool-response budgets.
 
-**Exception:** during `durin reindex` (bulk rebuild), embedding is batched (32 documents per batch by default) for throughput. The bulk path is separate from the per-write path.
+**Exception:** during `durin memory reindex` (bulk rebuild), embedding is batched (32 documents per batch by default) for throughput. The bulk path is separate from the per-write path.
 
 ### 6.3 File watcher
 
@@ -358,12 +358,12 @@ The indexer always uses this walker. Any future scanner that needs to enumerate 
 
 ## 7. Rebuild and recovery
 
-### 7.1 `durin reindex` command
+### 7.1 `durin memory reindex` command
 
 Wipes `.durin/index/` and rebuilds from scratch by walking the workspace.
 
 ```
-$ durin reindex
+\$ durin memory reindex
 Walking memory/ ... 1,243 files found
 Embedding (batch 32) ... [progress bar]
 Writing LanceDB ... done (1,243 rows)
@@ -372,7 +372,7 @@ Updating meta.json ... done
 Rebuild complete in 47s.
 ```
 
-This is the **operational guarantee** that markdown is the source of truth. If the index is corrupt or stale, the operator runs `durin reindex` and the system recovers.
+This is the **operational guarantee** that markdown is the source of truth. If the index is corrupt or stale, the operator runs `durin memory reindex` and the system recovers.
 
 ### 7.2 Schema version mismatch
 
@@ -380,7 +380,7 @@ This is the **operational guarantee** that markdown is the source of truth. If t
 
 | Mismatch | Behavior |
 |---|---|
-| Embedding model in `meta.json` differs from current code | Refuse to operate. Log: "embedding model changed from X to Y; run `durin reindex`." |
+| Embedding model in `meta.json` differs from current code | Refuse to operate. Log: "embedding model changed from X to Y; run `durin memory reindex`." |
 | Schema version older than current code expects | Same: refuse + log to rebuild. |
 | `meta.json` missing | Treat as fresh install; run an automatic rebuild on first use. |
 
@@ -392,7 +392,7 @@ When the operator deliberately switches embedding model (e.g., the current MiniL
 
 1. **Backup** current `meta.json` and (optionally) `~/.durin/workspace/memory/.git/` push to a remote.
 2. Update code/config to reference the new model identifier (e.g., bump `EMBEDDING_MODEL = "<new-model-id>"`).
-3. Run `durin embed-migrate --to <new-model-id>` (or `durin reindex` with model auto-detected from code). The command:
+3. Run `durin memory reindex` with the new model already configured (the command auto-detects the model from `cfg.memory.embedding.model_id`). Audit E29 (2026-05-28) removed a `durin embed-migrate` reference — that command was a proposed name in an earlier draft; it never shipped. The migration workflow is: set the new model in config, run `durin memory reindex`. The command:
    - Writes the new identifier into a fresh `meta.json` after backing up the old.
    - Wipes `.durin/index/lance/` (vector index — the new model produces different-dim vectors typically).
    - **Preserves FTS5** unless the new model requires a tokenizer change (FTS5 is tokenizer-driven, not embedding-driven).
@@ -426,7 +426,7 @@ When a write to LanceDB or FTS5 fails:
 
 The system tolerates brief windows where `.md` and indices are not in sync (e.g., between a write and the next index update). Staleness is detected by:
 
-- `meta.json::indexed_at` per row vs `.md` file mtime.
+- `fts_meta` per-uri `(mtime, indexed_at)` rows in `fts.sqlite` (§5.1) compared against the `.md` file mtime on disk. Audit E30 (2026-05-28) corrected an earlier reference to "`meta.json::indexed_at` per row" — `.durin/index/meta.json` is workspace-level state (`schema_version`, `embedding_model_id`, `last_full_rebuild`), not a per-row store; the per-row staleness data lives in the SQLite `fts_meta` table managed by `fts_index.py`.
 - When a search returns a hit whose `path` no longer exists on disk: the row is removed lazily.
 - When the file watcher detects a change but the indexer write fails: the file is re-queued.
 
@@ -464,7 +464,7 @@ All open decisions for this module have been resolved (2026-05-27) in line with 
 | **10** | Race between Dream apply and watcher | **No new lock added.** Existing `memory/.dream.lock` (file-based) already serializes Dream runs. Coordination between Dream's index update and the watcher's index update relies on idempotent writes + `indexed_at` vs `mtime` comparison. Worst case is a wasted embedding, never corruption. LanceDB/FTS5 each serialize internal writes. | §6.3 |
 | **11** | FTS5 tokenizers — single vs dual | **Dual FTS5 tables (Hermes-style):** `memory_fts` with `unicode61 remove_diacritics 2` for Latin/Cyrillic/Greek/etc., and `memory_fts_trigram` with `trigram` for CJK + substring queries. Both tables receive every write. Query pipeline routes by CJK detection (verified pattern from `hermes-agent/hermes_state.py:2197-2280`). Storage cost ~4-6x raw indexed text (40-200 MB for a 10k-entry workspace), accepted because it removes operator burden and makes CJK out-of-the-box. | §5.1, §5.3, §5.4 |
 | **12** | BM25 text truncation | **None.** Full document is indexed. BM25 needs term frequencies and doc length. | §5.2 |
-| **13** | Embedding model mismatch on startup | System refuses to operate; logs the mismatch; requires `durin reindex`. Prevents silent inconsistency. | §7.2 |
+| **13** | Embedding model mismatch on startup | System refuses to operate; logs the mismatch; requires `durin memory reindex`. Prevents silent inconsistency. | §7.2 |
 | **14** | Staleness detection | Per-row `indexed_at` vs file `mtime`. 60-second tolerance; beyond that, row is re-derived on read or filtered from results. | §8 |
 
 ### Open
@@ -472,7 +472,7 @@ All open decisions for this module have been resolved (2026-05-27) in line with 
 None at the module level. Cross-references to other modules:
 - How these indices are queried: `03_search_pipeline.md`.
 - How Dream interacts with re-index during apply: `05_dream_cold_path.md`.
-- How `durin reindex` and `durin archive ...` commands surface: `04_agent_tools.md` (CLI section, pending).
+- How `durin memory reindex` and `durin archive ...` commands surface: `04_agent_tools.md` (CLI section, pending).
 
 ---
 

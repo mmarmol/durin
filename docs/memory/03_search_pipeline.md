@@ -542,9 +542,9 @@ Up to audit A9, §10 was a promise — `decay.py` had the half-life table and th
 
 ---
 
-## 11. Step 7 — MMR (removed; deferred to backlog)
+## 11. (Removed) MMR — deferred to backlog
 
-The original plan included a Maximal Marginal Relevance (MMR) step here to diversify top-K results. This step was **removed from the MVP** after analysis:
+The original plan included a Maximal Marginal Relevance (MMR) step here to diversify top-K results. Audit E31 (2026-05-28) renamed this section from "Step 7 — MMR" to "(Removed) MMR" so the live pipeline numbering stops at step 6 (temporal decay) and §12 picks up directly with sectioning. The MMR step was **removed from the MVP** after analysis:
 
 1. **Archive of consolidated episodic** (§3.6 of doc 01) already eliminates the primary source of top-K duplication. Post-archive, the typical pattern is `entity (canonical) + 0-3 fragment + 1 session_summary` — that's triangulation, not redundancy, and the agent wants to see it.
 2. **Mainstream systems don't use MMR.** mem0, graphiti, hermes, letta, cognee: none implement it. Only openclaw does.
@@ -557,7 +557,7 @@ If post-MVP bench shows residual duplication (e.g., > 2 nearly-identical hits in
 
 ---
 
-## 12. Step 8 — Sectioning and rendering (audit C8: renumbered from "Step 7")
+## 12. Step 7 — Sectioning and rendering (audit E31, 2026-05-28: renumbered to step 7 after MMR was officially removed from the pipeline)
 
 The final top-K (default 10) is grouped by source class and rendered with structural markers. This is what the agent sees.
 
@@ -814,20 +814,24 @@ None at the module level.
 
 ---
 
-## 17. Implementation status (current vs target)
+## 17. Implementation status
 
-| Aspect | Current state | v2 target | Migration work |
-|---|---|---|---|
-| Vector search | Active, top_k=10 | top_k=50 (more candidates for rerank) | Change default; no schema change |
-| Lexical search | Raw grep | FTS5 with routing (per doc 02) | Build per doc 02; replace grep with FTS5 in `search_dreamed` |
-| Grep fallback | Concatenation with vector | Used only for sessions/ingested; feeds RRF as third source | Refactor `search_undreamed`; tune RRF weight |
-| Fusion | Concatenation (vector + grep) | Cross-source RRF with weighted sources | New module; entity_ranker hooks in after |
-| Entity-aware rerank | Active over vector rows only | After RRF fusion (cross-source) | Move ranker step downstream of fusion |
-| Cross-encoder rerank | Not implemented | New step, **default disabled**, opt-in via config / onboarding wizard / web dashboard. Default model when enabled: `jinaai/jina-reranker-v2-base-multilingual` | New module; lazy model load; config schema; onboarding question; webui setting |
-| Temporal decay | Not implemented | New step, **enabled by default for observation-type docs only (episodic, session_summary)**. Entity/stable/corpus have `half_life = null`. Per-entry override + evergreen flag. | New module; per-class config; Dream sets `decay_half_life` field on permanent facts |
-| MMR | Not implemented | **Removed from MVP** (see §11). The original "default enabled" intent was revised after analysis: archive of consolidated episodic already addresses primary duplication; mainstream systems (mem0, graphiti, hermes, letta) don't use MMR; exact-match queries regress under diversity push. Re-add post-MVP only if bench shows residual duplication. Aligned to §11 in audit B6. | — |
-| Sectioning | Markers exist (CANONICAL/FRAGMENT) | Extended to SESSION + INGESTED; empty omitted | Extend renderer |
-| Configuration | Hardcoded params | `memory.search.*` config section | Schema change to `DurinConfig` |
+Audit E32 (2026-05-28) rebuilt this table — every row had been
+stale since Phase 3 / Phase 4 shipped. Pointers go to the module
+where the work lives.
+
+| Aspect | Status | Where |
+|---|---|---|
+| Vector search | ✅ Active, top_k=50 | `durin/memory/vector_index.py::search` (callsites pass 50) |
+| Lexical search | ✅ FTS5 with routing (unicode61 / trigram / like_substring) per §3.3.bis + §5 | `durin/memory/lexical_search.py` + `durin/memory/query_router.py` |
+| Grep fallback | ✅ Used only for sessions/ingested; feeds RRF as third source | `durin/memory/search.py::search_undreamed` |
+| Fusion | ✅ Cross-source RRF with weighted sources (vector=1.0, lexical=0.7→2.5 boosted, grep=0.3) | `durin/memory/rrf_fusion.py` |
+| Entity-aware rerank | ✅ After RRF fusion; pre/post-cursor partition restored in audit E11 (2026-05-28) | `durin/memory/entity_ranker.py` + `durin/memory/search_pipeline.py::_entity_aware_rerank` |
+| Cross-encoder rerank | ✅ Shipped (Phase 4). Default OFF, opt-in via `memory.search.cross_encoder.enabled`. Default model `jinaai/jina-reranker-v2-base-multilingual` when enabled. | `durin/memory/cross_encoder.py` |
+| Temporal decay | ✅ Shipped (audit A9, 2026-05-28). Default ON for `episodic` (90d) and `session_summary` (120d); other classes `half_life=null`. | `durin/memory/decay.py` + `durin/memory/search_pipeline.py::_temporal_decay_step` |
+| MMR | Removed from MVP (see §11). Re-add post-MVP only if bench shows residual duplication. | — |
+| Sectioning | ✅ CANONICAL / FRAGMENT / SESSION / INGESTED markers active; empty sections omitted | `durin/memory/sectioned_output.py` |
+| Configuration | ✅ `memory.search.*` config section with sub-Pydantic models | `durin/config/schema.py::MemorySearchConfig` |
 
 ---
 

@@ -261,7 +261,13 @@ EXISTING SCHEMA for this entity (for coherence; not a constraint):
   - The goal is coherent evolution, not rigid preservation.
 
 EXISTING ENTITY URIs in workspace (consider for dedup; create new only if no match):
-  {list_of_uris_truncated_to_100_by_recent_mtime}
+  {existing_uris}
+
+  Audit E33 (2026-05-28): this slot is currently populated as an
+  empty list (`dream.py:733` passes `existing_uris=()`). The
+  recent-mtime ranking + 100-cap described in earlier drafts is
+  the intended shape when the producer wires up — design preserved
+  here so the prompt stays consistent when implementation lands.
 
 SUGGESTED STARTER TYPES (for when you must create a new entity URI):
   person, place, project, topic, event, artifact, stance, practice

@@ -35,6 +35,8 @@ Reproduced from `00_overview.md` §2 with one-line rationale per item:
 
 These were tried (in code or as proposals), evaluated against reality, and removed or rejected.
 
+> **Numeric order note (audit E34, 2026-05-28).** Sub-section numbers are chronological by addition, not strictly sorted: §2.11 appears before §2.10 because audit B9 (which added §2.11) landed before audit A4 (which added §2.10) on the same day's audit pass. External references (doc 07 §4.6 → §2.11, etc.) are stable, so the numbers stay. Readers looking for the most recent discard should scan from the bottom.
+
 ### 2.1 G3.b — LLM query rewriter on hot path
 
 **What we tried:** an LLM call before every `memory_search` that generated 5 paraphrases, extracted entities and predicates, and merged results via RRF (`durin/memory/query_rewriter.py`, preserved as library, not active).
