@@ -54,6 +54,11 @@ _KNOWN_FIELDS = frozenset(
         "attributes",
         "relations",
         "provenance",
+        # E19 (2026-05-28): explicit authorship parity with
+        # `MemoryEntry.author`. Pre-E19 entity pages had no author
+        # field, so the §4.6.1 promise of "auto-absorb skips user-
+        # authored pages" was arch-unsupported. Now first-class.
+        "author",
     }
 )
 
@@ -92,6 +97,14 @@ class EntityPage:
     attributes: dict[str, Any] = field(default_factory=dict)
     relations: list[dict[str, Any]] = field(default_factory=list)
     provenance: dict[str, Any] = field(default_factory=dict)
+
+    # E19 (2026-05-28): authorship parity with `MemoryEntry`. Pages
+    # default to ``user_authored`` so a hand-written page without
+    # the field is treated as user content (same convention as
+    # entries — safe default per §4.6.1 of doc 01). Dream and
+    # absorption set ``author="agent_created"`` when they write a
+    # page so auto-absorb knows it can modify it.
+    author: str = "user_authored"
 
     # Emergent fields preserved as-is. The dream may add ``identifiers``,
     # ``related``, etc. without parser changes. Survives round-trip.
@@ -146,6 +159,14 @@ class EntityPage:
         provenance_raw = data.get("provenance")
         provenance = provenance_raw if isinstance(provenance_raw, dict) else {}
 
+        # E19: lenient read. Unknown values fall back to the safe
+        # default (``user_authored``) — same convention as MemoryEntry.
+        author_raw = data.get("author")
+        author = (
+            author_raw if author_raw in ("user_authored", "agent_created")
+            else "user_authored"
+        )
+
         extra = {k: v for k, v in data.items() if k not in _KNOWN_FIELDS}
 
         return cls(
@@ -159,6 +180,7 @@ class EntityPage:
             attributes=attributes,
             relations=relations,
             provenance=provenance,
+            author=author,
             extra=extra,
         )
 
@@ -198,6 +220,12 @@ class EntityPage:
             frontmatter["relations"] = [dict(r) for r in self.relations]
         if self.provenance:
             frontmatter["provenance"] = dict(self.provenance)
+        # E19: emit `author` only when it differs from the safe
+        # default. v1 pages stay visually v1 on disk; pages written
+        # by dream/absorption explicitly carry `author:
+        # agent_created` so auto-absorb can tell them apart.
+        if self.author and self.author != "user_authored":
+            frontmatter["author"] = self.author
         # Emergent fields appended after known ones for stable diff ordering.
         for key, value in self.extra.items():
             frontmatter[key] = value

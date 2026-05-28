@@ -55,31 +55,60 @@ All four are exposed as MCP/tool calls to the agent. None invokes an LLM interna
 
 ### 2.2 Return shape
 
+Audit E16 (2026-05-28) rebuilt this section from the actual tool
+output. The pre-E16 spec listed `type`/`path`/`score` fields that
+never existed and omitted half of what the tool actually returns.
+
 ```json
 {
   "results": [
     {
-      "uri": "person:marcelo",
-      "type": "entity",
-      "path": "memory/entities/person/marcelo.md",
-      "score": 0.87,
+      "source": "memory",
+      "uri": "memory/entity_page/person:marcelo",
       "headline": "Marcelo",
-      "summary": "Founder of durin...",
-      "body": "...full markdown body (only when level=cold)...",
+      "snippet": "Founder of durin…",
+      "kind": "canonical",
+      "summary": "Founder of durin…",
+      "body": "…full markdown body (only when level=cold)…",
+      "class_name": "entity_page",
       "valid_from": "2024-01-15",
-      "rendered": "=== CANONICAL: person:marcelo (consolidated 2026-05-20) ===\n..."
-    },
-    ...
+      "entities": ["person:marcelo"],
+      "rendered": "=== CANONICAL: person:marcelo (consolidated 2026-05-20) ===\n…"
+    }
   ],
   "total": 10,
-  "recovered_from": null,
-  "recovery_duration_ms": null
+  "strategy": "hybrid",
+  "ranking": "entity_aware"
 }
 ```
 
-`rendered` carries the section-marker block (§5 of this doc). Agents should prefer reading `rendered` over reconstructing the block from individual fields — the rendering is the source of truth for what the LLM should consume.
+Per-result fields (defined on `durin.memory.search.Result`):
 
-`recovered_from` and `recovery_duration_ms` (`null` in normal operation) communicate when the pipeline performed recovery work (§14 of doc 03). The agent can mention to the user when latency was caused by recovery.
+| Field | Always present | Description |
+|---|---|---|
+| `source` | yes | `memory | sessions | ingested` — which content layer the hit came from |
+| `uri` | yes | The address the agent passes to `memory_drill` to fetch the full file |
+| `headline` | yes | Title-ish summary for at-a-glance |
+| `snippet` | yes | 200-char preview around the strongest match (or empty for entity pages) |
+| `kind` | yes | `canonical | fragment | session | ingested` — the structural marker the LLM should treat the result as (§6 of this doc) |
+| `summary` | when non-empty | Dream-generated summary (entity pages, some entries) |
+| `body` | when `level=cold` | Full markdown body, read from disk after the pipeline returns |
+| `class_name` | when non-empty | `entity_page | episodic | stable | corpus | pending | session_summary` |
+| `valid_from` | when non-empty | ISO timestamp of when the entry's observation occurred |
+| `entities` | when non-empty | Entity URIs the hit pertains to (for entity pages: the page's own ref; for fragments: the entry's tags) |
+| `rendered` | yes | Section-marker block (§6) — the source of truth for what the LLM consumes; prefer this over reconstructing |
+
+Top-level fields:
+
+| Field | Always present | Description |
+|---|---|---|
+| `total` | yes | Final result count (after limit) |
+| `strategy` | yes | `vector | lexical | hybrid | grep` — which path produced the hits |
+| `ranking` | yes | `default | entity_aware` — whether the entity-aware ranker contributed |
+| `recovered_from` | **only on degraded runs** | List of source components that failed (e.g. `["vector"]`); omitted on clean runs |
+| `recovery_duration_ms` | **only on degraded runs** | Wall-clock spent inside the failed wrappers |
+
+`recovered_from` + `recovery_duration_ms` are not `null` in normal operation — they are simply absent from the dict. Same convention as the underlying `memory.recall` telemetry event (doc 07 §4.1).
 
 ### 2.3 Tool description (what the LLM sees)
 
@@ -123,7 +152,7 @@ The description above embeds these patterns based on what worked in the LoCoMo v
 - "Multi-query for compound questions." 2-3 calls with phrasings beat one long query.
 - "Cite by uri in parentheses."
 
-These are declarative facts, not imperatives ("USE BEFORE answering" was tested and is weak signal per `feedback_tool_description_weak_signal.md`). Verified pattern; LoCoMo v2 gained 12pp on single-hop after adding these.
+These are declarative facts, not imperatives ("USE BEFORE answering" was tested and is weak signal per `feedback_tool_description_weak_signal.md`). Verified pattern; LoCoMo v2 gained **+3.9pp overall** (60.8% → 64.7%) after adding these. Audit E17 (2026-05-28) corrected a stale "+12pp on single-hop" claim that this same paragraph used to carry — no per-category measurement at that magnitude exists in the verified bench data; the +3.9pp overall is the only number we can stand behind.
 
 ---
 
@@ -260,12 +289,13 @@ The chunking pipeline (`durin/memory/text_splitter.py::split_text`, P5.3) runs i
   "meta_path": "/abs/path/.../ingested/<id>/meta.json",
   "size_bytes": 12345,
   "content": "<full text of the ingested file>",
-  "corpus_entry_id": "<id of the first chunked memory/corpus entry>"
+  "corpus_entry_id": "<id of the first chunked memory/corpus entry — present only when a corpus entry was created>"
 }
 ```
 
 Notes:
 - `saved_to` and `meta_path` are **absolute** paths (the tool returns `str(target)` from [`ingestion.py`](../../durin/memory/ingestion.py)).
+- `corpus_entry_id` is present **only when the ingest produced a corpus chunk** (typical case for text files). Audit E16 (2026-05-28) flagged it as conditional — the tool omits the key when `_maybe_create_corpus_entry` returns no id (e.g. on a re-ingest of identical content where dedup blocked the chunk write).
 - `id` is `sha256(filename + "\0" + content)[:12]` — re-ingesting the same file is idempotent, but renaming the file before re-ingest produces a different id (and therefore a duplicate entry under `ingested/`). If the user wants to "update" a previously-ingested file, the workflow is: re-ingest, then archive the old `ingested/<old-id>/` directory manually (or accept the duplicate; both versions live in git history).
 - `content` is returned so the agent can read the file in the same turn (without a follow-up `memory_drill`).
 - `corpus_entry_id` is the first chunk's memory entry id; subsequent chunks live under `memory/corpus/` with headlines annotated `(chunk N/M)` and are findable via `memory_search`.
@@ -311,12 +341,11 @@ on disk where preserving the original artifact matters.
 ```json
 {
   "uri": "person:marcelo",
-  "path": "memory/entities/person/marcelo.md",
   "content": "---\ntype: person\nname: Marcelo\n...\n---\n\n# Marcelo\n\nFounder of durin..."
 }
 ```
 
-`content` is the full markdown of the file.
+`content` is the full markdown of the file. Audit E18 (2026-05-28) removed a `path` field from this spec — `memory_drill` does not echo the resolved path back to the agent (see `durin/agent/tools/memory_drill.py:71`). The agent receives the URI it sent + the file contents. If the agent needs the resolved path for downstream tools, it can derive it from the URI.
 
 ### 5.3 Tool description
 

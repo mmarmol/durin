@@ -348,8 +348,9 @@ The walker `walk_memory(workspace, include_archive=False)` is the **single choke
 
 - Skips `memory/archive/**`.
 - Skips `memory/pending/**`.
-- Yields all other `.md` files under `memory/`.
-- Also yields `sessions/<id>/<id>.meta.json` if a `_last_summary` is present (one yield per session).
+- Yields all other `.md` files under `memory/` (recursively, sorted by path).
+
+Audit E20 (2026-05-28) removed a stale fourth bullet that said the walker "also yields `sessions/<id>/<id>.meta.json` if a `_last_summary` is present". That contract was the pre-A10 path. Since A10 (2026-05-28) the session summary lives on disk as a real markdown file at `memory/session_summary/<sanitized_key>.md` (see [`session_summary_store.py`](../../durin/memory/session_summary_store.py)), so the walker treats it like any other class — there is no special peek into `sessions/<id>/meta.json` anymore.
 
 The indexer always uses this walker. Any future scanner that needs to enumerate workspace markdown must use this walker too, or explicitly justify why.
 

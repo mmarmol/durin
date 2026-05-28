@@ -1464,3 +1464,56 @@ Esos 3 casos son drill-by-URI, NO búsquedas amplias. La duplicación canonical 
 **Validación**: 997 tests pasan en tests/memory/ (995 base + 2 E11; 1 skipped pre-existente).
 
 **Commit pendiente** (cierre del batch E10-E23).
+
+### E16 — Doc 04 §2.2/§4.2/§5.2 return shapes vs código ✅ RESOLVED
+
+**Doc 04 §2.2 (pre-E16)** memory_search return: listaba `type`, `path`, `score` (no existen), omitía `source`, `snippet`, `kind`, `class_name`, `entities`, top-level `strategy`, `ranking`. Claim "`recovered_from: null in normal operation`" era falso (omitted, no null).
+
+**Realidad** (`Result.to_dict()` + `memory_search.py:454-480`):
+- Per-result: `source`, `uri`, `headline`, `snippet`, `kind` siempre + `summary`/`body`/`class_name`/`valid_from`/`entities` condicionales + `rendered`.
+- Top-level: `results`, `total`, `strategy`, `ranking` siempre + `recovered_from`/`recovery_duration_ms` solo on degraded.
+
+**Doc 04 §4.2** memory_ingest: shape coincide pero `corpus_entry_id` no marcaba condicional.
+
+**Doc 04 §5.2** memory_drill (E18): listaba `path`; código devuelve `{uri, content}` solamente.
+
+**Decisión**: doc → reality. Reescribir §2.2 con tabla detallada (yes/condicional/never null), aclarar §4.2 `corpus_entry_id` opcional, eliminar `path` del §5.2.
+
+### E17 — Doc 04 +12pp vs +3.9pp ✅ RESOLVED
+
+**Contradicción interna**: §2.4 línea 149 dice "+3.9pp result"; línea 155 dice "+12pp on single-hop". Memoria `project_locomo_v2_prompts_result.md` registra **+3.9pp overall (60.8% → 64.7%)**; el "+12pp single-hop" no tiene fuente verificable.
+
+**Decisión**: aplicar `feedback_verify_quantifiers` — no inventar números. Alinear ambas líneas al verificado.
+
+### E18 — Doc 04 §5.2 memory_drill path ✅ RESOLVED
+
+**Doc**: incluía `"path": "memory/entities/person/marcelo.md"`. **Código `memory_drill.py:71`**: `return {"uri": uri, "content": text}` — no `path`. Doc → reality.
+
+### E19 — Doc 01 §4.6.1 wrong pointers + arch gap ✅ RESOLVED (B-full)
+
+**Doc 01 §4.6.1 línea 480 (pre-E19)**: dos claims falsos:
+1. "`dream.py::DreamConsolidator.apply()` filters out user_authored entries" → el único filter está en `cli/memory_cmd.py:150` (`_discover_pending_consolidations`).
+2. "`dream_runner.py::_maybe_auto_absorb` skips entity pages where author: user_authored" → ningún check existía Y `EntityPage` no tenía campo `author`.
+
+**Gap arquitectónico descubierto**: el doc prometía protección para entity pages, pero `EntityPage` no soportaba `author`. Auto-absorb fusionaría páginas hechas a mano por el usuario.
+
+**Decisión (con user OK, B-full)**: cerrar el gap completo, no solo el doc:
+- `EntityPage` gana campo `author: str = "user_authored"` (default safe).
+- Round-trip de frontmatter (read lenient con fallback, emit solo cuando difiere del default).
+- `dream.py:511` placeholder y `absorption.py:360` merge product setean `author="agent_created"`.
+- `dream_runner.py::_maybe_auto_absorb` chequea ambas páginas y skipea con `reason="user_authored"`.
+- Tests TDD: 3 cases en `tests/memory/test_auto_absorb_user_authored_e19.py` (canonical user-authored, absorbed user-authored, both agent-created proceeds).
+- Stub helper `tests/memory/test_auto_absorb_dispatcher.py:_write_page` actualizado para pasar `author="agent_created"` por default (dispatcher tests simulan páginas Dream).
+- Doc 01 §4.6.1 reescrita con pointers correctos + nota de E19.
+
+**Validación**: 1000 tests pasan en tests/memory/ (997 + 3 nuevos E19; 1 skipped pre-existente).
+
+### E20 — Doc 02 §6.5 walker contract bullet obsoleto post-A10 ✅ RESOLVED
+
+**Doc 02 §6.5 línea 352 (pre-E20)**: "Also yields `sessions/<id>/<id>.meta.json` if a `_last_summary` is present".
+
+**Realidad** (`walk_memory` en `paths.py:80-113`): solo emite `.md` files bajo `memory/`. A10 (audit primera pasada) movió el session summary de JSON sidecar a `memory/session_summary/<sanitized>.md`; el walker lo trata como cualquier otra class. No hay peek a `sessions/.../meta.json` en ningún lado.
+
+**Decisión**: doc → reality. Eliminar el bullet stale y agregar nota explicando el cambio post-A10.
+
+**Commit pendiente** (cierre del batch E16-E23).

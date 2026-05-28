@@ -477,7 +477,10 @@ When the memory entry is persisted, `MemoryEntry.author` is set from `current_au
 
 The rationale: a user who edited a `.md` file explicitly stated this content matters. Auto-managing it would destroy the user's stated intent. If the user wants Dream to take over an entry they wrote, they can change the `author:` field manually to `agent_created`.
 
-**Where the rule lives in code:** `dream.py::DreamConsolidator.apply()` filters out `user_authored` entries from the batch before consolidation. `dream_runner.py::_maybe_auto_absorb` skips entity pages where `author: user_authored` is set in the frontmatter.
+**Where the rule lives in code** (audit E19, 2026-05-28):
+
+- **Memory entries** (episodic / stable / corpus): the filter is in `cli/memory_cmd.py::_discover_pending_consolidations` (line ~150) — entries with `author: user_authored` never enter the batch the Dream consolidator receives. Pre-E19 this doc claimed the filter was inside `dream.py::DreamConsolidator.apply()`; corrected to the actual location.
+- **Entity pages**: `dream_runner.py::_maybe_auto_absorb` checks `page_a.author` and `page_b.author` and emits `memory.absorb.skipped` with `reason="user_authored"` when either side is hand-written. Pre-E19 this protection didn't exist — `EntityPage` had no `author` field, so the §4.6.1 promise was arch-unsupported for entity pages even though it was documented. E19 added the field (defaults to `user_authored` for safety; Dream and absorption set `agent_created` when they write a page) and wired the runner check.
 
 **Note on the discrepancy in the prior schema field** (corrected 2026-05-27): an earlier draft of doc 01 listed `"agent_authored"` and `"dream"` as values; the code only has `"user_authored"` and `"agent_created"`. The schema field declaration in §3.3 has been corrected to match.
 

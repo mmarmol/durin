@@ -454,7 +454,22 @@ class DreamRunner:
                 self._emit_absorb_skipped(ref_a, ref_b, 0, "page_load_failed")
                 continue
 
-            # 3. Quarantine — both pages must be older than the window.
+            # 3. User-authored protection (audit E19, doc 01 §4.6.1).
+            # Auto-absorb must NOT touch entity pages the user wrote
+            # by hand — they carry deliberate intent that the LLM
+            # judge cannot recover. The check fires for either side
+            # of the pair: a user-authored canonical and a user-
+            # authored absorbed both protect the page from merging.
+            if (
+                page_a.author == "user_authored"
+                or page_b.author == "user_authored"
+            ):
+                self._emit_absorb_skipped(
+                    ref_a, ref_b, 0, "user_authored",
+                )
+                continue
+
+            # 4. Quarantine — both pages must be older than the window.
             if self._is_quarantined(mtime_a, mtime_b):
                 self._emit_absorb_skipped(ref_a, ref_b, 0, "quarantine")
                 continue
