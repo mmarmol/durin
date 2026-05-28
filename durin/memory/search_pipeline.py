@@ -252,19 +252,26 @@ def _safe_lexical_search(workspace: Path, decision) -> list:
 
 
 def _safe_grep_fallback(workspace: Path, query: str) -> list[dict]:
-    """Run the v1 grep fallback over raw sessions/ + ingested/.
+    """Run the v1 grep fallback over memory/, sessions/, ingested/.
 
-    Sessions and ingested artifacts are not indexed by LanceDB or
-    FTS5 by design (`01_data_and_entities.md` §3.1-§3.2). The grep
-    fallback is the only way to surface them. Returns a list of
-    duck-typed dicts (uri, path, type, snippet) so the orchestrator
-    can fuse them via RRF and look up metadata afterwards.
+    Covers two complementary cases:
+    - Sessions and ingested artifacts not indexed by LanceDB/FTS5
+      (per `01_data_and_entities.md` §3.1-§3.2) — only reachable
+      via grep.
+    - Memory entries written by callers that bypass the tool layer
+      (tests, scripts) and therefore have no FTS row yet — grep
+      over `memory/` recovers them so the search doesn't return
+      empty just because the indexer never ran.
     """
     if not query:
         return []
     try:
-        from durin.memory.search import search_undreamed
-        results = search_undreamed(workspace, query)
+        from durin.memory.search import search_memory
+        # `search_memory(scope='all', level='warm')` walks both
+        # dreamed (memory/<class>/*) and undreamed (sessions, ingested).
+        results = search_memory(
+            workspace, query, scope="all", level="warm",
+        )
     except Exception as exc:  # noqa: BLE001
         logger.warning("search_pipeline: grep fallback failed: %s", exc)
         return []
@@ -273,7 +280,7 @@ def _safe_grep_fallback(workspace: Path, query: str) -> list[dict]:
         out.append({
             "uri": r.uri,
             "path": getattr(r, "uri", ""),
-            "type": getattr(r, "class_name", "") or "session_summary",
+            "type": getattr(r, "class_name", "") or "episodic",
             "snippet": getattr(r, "snippet", "")
                 or getattr(r, "headline", ""),
         })
