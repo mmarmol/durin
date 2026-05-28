@@ -735,6 +735,36 @@ class MemoryDreamEntityFailedEvent(TypedDict):
     session_key: NotRequired[str | None]
 
 
+class MemoryEntityRelationCapWarnedEvent(TypedDict):
+    """A Dream apply took an entity's relation count across the soft
+    cap (50). The apply proceeded; this event lets dashboards spot
+    mega-hub formation before sub-paging (audit B-14) becomes
+    necessary. Audit B-19 (2026-05-29) shipped this event alongside
+    the cap enforcement in `dream_apply.py`.
+    """
+
+    entity_ref: str
+    current_count: int  # before the apply
+    new_count: int  # after the apply
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
+class MemoryEntityRelationCapRejectedEvent(TypedDict):
+    """A Dream apply was rejected because it would have taken an
+    entity's relation count over the hard cap (200). The apply was
+    rolled back and the entity surfaced as a
+    `DreamApplyFailureKind.VALIDATION` failure. Audit B-19
+    (2026-05-29).
+    """
+
+    entity_ref: str
+    current_count: int  # before the rejected apply
+    new_count: int  # the count the apply would have reached
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
 class MemoryIndexWriteEvent(TypedDict):
     """One upsert into the FTS5 lexical index (doc 07 §9.1).
 
@@ -1036,6 +1066,8 @@ EVENTS: dict[str, type] = {
     "memory.dream.skipped": MemoryDreamSkippedEvent,
     "memory.dream.patch_applied": MemoryDreamPatchAppliedEvent,
     "memory.dream.entity_failed": MemoryDreamEntityFailedEvent,
+    "memory.entity_relation_cap_warned": MemoryEntityRelationCapWarnedEvent,
+    "memory.entity_relation_cap_rejected": MemoryEntityRelationCapRejectedEvent,
     "memory.absorb.judged": MemoryAbsorbJudgedEvent,
     "memory.absorb.auto_merged": MemoryAbsorbAutoMergedEvent,
     "memory.absorb.skipped": MemoryAbsorbSkippedEvent,
@@ -1108,6 +1140,8 @@ __all__ = [
     "MemoryRecallVectorEvent",
     "MemoryDreamPatchAppliedEvent",
     "MemoryDreamEntityFailedEvent",
+    "MemoryEntityRelationCapWarnedEvent",
+    "MemoryEntityRelationCapRejectedEvent",
     "MemoryHealthCheckEvent",
     "MemoryHealthCriticalEvent",
     "MemoryHotLayerFailureEvent",

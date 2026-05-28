@@ -184,6 +184,7 @@ def _apply_dream_output_inner(
                 0,
             )
 
+        relations_before = len(page.relations)
         ops_applied, patch_err = _apply_ops_to_page(page, parsed.patch_ops)
         if patch_err is not None:
             return _rollback(
@@ -191,6 +192,39 @@ def _apply_dream_output_inner(
                 DreamApplyFailureKind.PATCH_RUNTIME,
                 patch_err,
                 ops_applied,
+            )
+
+        # B-19 (audit fourth pass, 2026-05-29): enforce the per-entity
+        # relation cap documented in doc 01 §4.4. Soft cap (50) warns;
+        # hard cap (200) rejects and rolls the apply back.
+        from durin.memory.entity_relation_cap import check_relation_cap
+        cap_decision = check_relation_cap(
+            entity_ref=entity_ref,
+            current_count=relations_before,
+            adding=len(page.relations) - relations_before,
+        )
+        if cap_decision.cap_rejected:
+            _emit_cap_event(
+                "memory.entity_relation_cap_rejected",
+                entity_ref=entity_ref,
+                current_count=relations_before,
+                new_count=cap_decision.new_count,
+            )
+            return _rollback(
+                bak_path, page_path, entity_ref,
+                DreamApplyFailureKind.VALIDATION,
+                (
+                    f"relation count {cap_decision.new_count} would "
+                    f"exceed hard cap (200) on {entity_ref}"
+                ),
+                ops_applied,
+            )
+        if cap_decision.cap_warned:
+            _emit_cap_event(
+                "memory.entity_relation_cap_warned",
+                entity_ref=entity_ref,
+                current_count=relations_before,
+                new_count=cap_decision.new_count,
             )
 
         # Append body delta (Rule 6).
@@ -396,6 +430,32 @@ def _rollback(
         error_message=error_message,
         ops_applied=ops_applied,
     )
+
+
+def _emit_cap_event(
+    event_type: str,
+    *,
+    entity_ref: str,
+    current_count: int,
+    new_count: int,
+) -> None:
+    """B-19: fire `memory.entity_relation_cap_warned` or
+    `memory.entity_relation_cap_rejected` with the cap context.
+
+    Best-effort — never raises. Same pattern as `_emit_apply_telemetry`.
+    """
+    try:
+        from durin.agent.tools._telemetry import emit_tool_event
+        emit_tool_event(
+            event_type,
+            {
+                "entity_ref": entity_ref,
+                "current_count": current_count,
+                "new_count": new_count,
+            },
+        )
+    except Exception:  # pragma: no cover
+        pass
 
 
 def _emit_apply_telemetry(

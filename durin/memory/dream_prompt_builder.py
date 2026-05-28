@@ -61,6 +61,10 @@ class DreamPromptContext:
     existing_uris: tuple[str, ...] = field(default_factory=tuple)
     recent_history: str = ""
     entries: tuple[str, ...] = field(default_factory=tuple)
+    # B-19 (2026-05-29): surface the current relation count so the LLM
+    # can budget against the 200 hard cap before fanning out new
+    # `/relations/-` ops. See Rule 9 in `rules.md`.
+    current_relation_count: int = 0
 
 
 def build_dream_prompt(ctx: DreamPromptContext) -> str:
@@ -119,6 +123,7 @@ def _fill_slots(template: str, ctx: DreamPromptContext) -> str:
         .replace("{recent_history}", history)
         .replace("{n_entries}", str(n_entries))
         .replace("{entries_text}", entries_text)
+        .replace("{current_relation_count}", str(max(0, int(ctx.current_relation_count))))
     )
 
 

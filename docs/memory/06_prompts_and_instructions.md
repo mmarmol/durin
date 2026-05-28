@@ -252,12 +252,23 @@ EXISTING PAGE (current canonical state):
 EXISTING SCHEMA for this entity (for coherence; not a constraint):
   attributes: {list_of_attribute_keys}
   relation types: {list_of_relation_types}
+  current relation count: {current_relation_count} (hard cap: 200 — see Rule 9)
 
-  Audit F7 (2026-05-28): both slots are now populated from the
+  Audit F7 (2026-05-28): both schema slots are now populated from the
   current entity page's frontmatter. Pre-F7 they rendered as
   `(none)` regardless of page state, leaving the LLM blind to
   the existing schema and inviting drift (e.g. emitting `email`
   when the page already has `e-mail`).
+
+  Audit B-19 (2026-05-29): `current_relation_count` is the integer
+  `len(page.relations)`. It is rendered into the prompt so the LLM
+  can budget against the 200 hard cap (Rule 9) before emitting new
+  `/relations/-` ops. Producer: `dream.py` parses the page once for
+  schema slots and reuses the count. The cap itself is enforced at
+  apply time in `durin.memory.entity_relation_cap.check_relation_cap`
+  (telemetry events `memory.entity_relation_cap_warned` /
+  `_rejected`); this slot is the LLM-facing surface that makes the
+  cap legible **before** the patch is emitted.
 
   Guidance:
   - PREFER reusing an existing key when the new info has the same semantic meaning.
@@ -401,6 +412,23 @@ The `===COMMIT===` section becomes a git commit message. Format per
 `commit_format.md`. Subject ≤ 70 chars; trailers required per the format.
 The body of the message should explain non-obvious decisions you made
 (why you used `replace` vs `add`, why you didn't merge two keys, etc.).
+
+## Rule 8 — When in doubt, no-op is valid
+If the pending observations don't add new facts beyond what's already
+in the canonical page, emit an empty patch (`[]`), an empty body delta,
+and a commit message that says so. This is a successful pass.
+
+## Rule 9 — Per-entity relation cap (audit B-19, 2026-05-29)
+Each entity tolerates at most 200 outgoing relations (hard cap). The
+prompt shows you the current count as `current relation count: N`.
+If `current + new > 200`, the apply pipeline REJECTS the entire patch
+— re-rank, dedupe, or `remove` low-signal relations before fanning
+out. At ≥ 50 a soft cap fires (warn only, patch proceeds) as a hint
+that further growth needs justification. Body delta and attribute
+ops do NOT count against the cap. Enforcement lives at
+`durin.memory.entity_relation_cap.check_relation_cap`; telemetry
+events `memory.entity_relation_cap_warned` /
+`memory.entity_relation_cap_rejected` expose breaches for operators.
 ```
 
 ### 4.5 `commit_format.md`

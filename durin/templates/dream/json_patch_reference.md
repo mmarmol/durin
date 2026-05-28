@@ -63,6 +63,10 @@ keys instead.
   `/aliases/*`. Internal fields (`dream_processed_through`,
   `created_at`, `updated_at`, `type`, `name`) are managed by the
   runner — touching them gets the patch rejected.
+- **Relation count cap.** `/relations/*` is bounded at 200 per
+  entity — see Rule 9 in `rules.md`. Patches that would push the
+  total over the cap are rejected wholesale; check the
+  `current relation count` shown in the prompt before fan-out.
 - **Order matters** within the patch array — ops apply sequentially.
   Don't `replace` a path you haven't created (`add`) earlier in the
   same patch.

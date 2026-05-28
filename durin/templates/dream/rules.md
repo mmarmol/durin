@@ -66,3 +66,18 @@ If the pending observations don't add new facts beyond what's already
 in the canonical page, emit an empty patch (`[]`), an empty body
 delta, and a commit message that says so. This is a successful pass
 — the runner advances the cursor and moves on.
+
+## Rule 9 — Per-entity relation cap
+
+Each entity tolerates at most **200 outgoing relations** (hard cap).
+The CURRENT count is shown to you in the prompt as
+`current relation count: N`. Treat it as a hard budget, not a guideline:
+
+- If `current + new > 200`, the apply pipeline REJECTS the entire
+  patch and your work is lost. Re-rank, dedupe, or `remove` low-signal
+  relations to free space instead of appending.
+- At ≥ 50 relations the soft cap fires (warn only — the patch
+  proceeds). Treat this as a hint that further growth needs
+  justification: prefer merging duplicate relations, narrowing
+  redundant types, or routing the observation to a sub-page.
+- Body delta and attribute ops do NOT count against the cap.
