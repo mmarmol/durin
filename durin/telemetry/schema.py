@@ -815,6 +815,33 @@ class MemoryRecallRerankEvent(TypedDict):
     session_key: NotRequired[str | None]
 
 
+class MemoryRecallFailureEvent(TypedDict):
+    """A search-path component failed and the pipeline recovered or
+    degraded (audit B9 / doc 07 §8.1).
+
+    Emitted once per `run_search_pipeline` invocation where at least
+    one of the safe wrappers (`_safe_vector_search`,
+    `_safe_lexical_search`, `_safe_grep_fallback`) caught an
+    exception. ``component`` carries the comma-separated list of
+    affected sources; ``degraded_to`` describes which sources still
+    produced hits.
+
+    ``recovery_succeeded`` is True iff the pipeline returned a
+    non-empty result set despite the failure — i.e. the surviving
+    sources covered the loss. False means everything failed AND no
+    hits surfaced (rare; usually one source's failure is masked by
+    the others).
+    """
+
+    component: str  # comma-joined affected sources
+    recovery_attempted: bool
+    recovery_succeeded: bool
+    recovery_duration_ms: float
+    degraded_to: str  # one of: vector_only | lexical_only | grep_only | none | full
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
 class MemoryRecallDecayEvent(TypedDict):
     """Temporal-decay step applied to a recall pass (audit A9 / doc 03 §10).
 
@@ -980,6 +1007,7 @@ EVENTS: dict[str, type] = {
     "memory.recall.rrf": MemoryRecallRRFEvent,
     "memory.recall.rerank": MemoryRecallRerankEvent,
     "memory.recall.decay": MemoryRecallDecayEvent,
+    "memory.search.failure": MemoryRecallFailureEvent,
     "memory.health_check": MemoryHealthCheckEvent,
     "memory.health.critical": MemoryHealthCriticalEvent,
 }
@@ -1046,6 +1074,7 @@ __all__ = [
     "MemoryRecallRRFEvent",
     "MemoryRecallRerankEvent",
     "MemoryRecallDecayEvent",
+    "MemoryRecallFailureEvent",
     "MemoryIndexWriteEvent",
     "MemoryIndexRebuildEvent",
     "MemoryIndexStalenessDetectedEvent",

@@ -922,7 +922,7 @@ Sólo `cross_encoder`. Lo demás está hardcoded:
 
 ---
 
-### B9 — Eventos documentados que nunca se emiten
+### B9 — Eventos documentados que nunca se emiten ✅ RESOLVED (asymmetric)
 
 **Doc dice**:
 - `memory.silent_retrieval_miss` (doc 07 §4.6)
@@ -938,7 +938,35 @@ Sólo `cross_encoder`. Lo demás está hardcoded:
 - `memory.search.failure`: implementar en `search_pipeline.py` cuando un safe wrapper recupera (P5.2 ya tiene `recovered_from`); fácil. ~20 LOC.
 - `memory.silent_retrieval_miss`: complejo — requiere LLM judge o user feedback. Defer; sacar del doc 07 §4.6 o marcar como "research item".
 
-**Estado**: pending
+**Resolución (2026-05-28) — Asimétrica: failure implementado, silent_retrieval_miss discarded**: el user empujó con la pregunta clave sobre `silent_retrieval_miss`: *"como se puede detectar considerando multiples lenguajes de forma efectiva, no se me ocurre"*. La revisión honesta confirmó que 2 de las 3 heurísticas propuestas (negation tokens, correction patterns) son inherentemente English-shaped, y la 1 (substring overlap) genera demasiados falsos positivos. Sin un classifier LLM-based (que rompe el budget de telemetría), el evento no es viable para los workloads multi-lingual que durin sirve (LoCoMo seed usa CJK + español). Mover de "deferred" a **discarded** con la lección.
+
+**`memory.search.failure` — IMPLEMENTADO**:
+
+- [durin/telemetry/schema.py](../../durin/telemetry/schema.py): nuevo `MemoryRecallFailureEvent` TypedDict con shape recortado vs la spec v1 (sin `kind` enum ni `recoverable` bool — los wrappers no clasifican exceptions hoy; inventar esos fields sería data fabricada).
+- [durin/memory/search_pipeline.py](../../durin/memory/search_pipeline.py): nuevo `_emit_search_failure()` que se invoca al final de `run_search_pipeline` cuando `recovery["sources"]` no está vacío. `degraded_to` derivado de los counts: `full` (solo grep falló y los otros cubrieron), `vector_only`, `lexical_only`, `grep_only`, o `none` (recovery_succeeded == False). Wrapped en try/except — un fallo de emit jamás rompe el search result.
+- [tests/memory/test_search_failure_event.py](../../tests/memory/test_search_failure_event.py) (nuevo, 5 tests):
+  * Clean run → no event.
+  * Vector falla pero lexical produce hits → degraded_to=lexical_only.
+  * Todas las sources fallan → recovery_succeeded=False, degraded_to=none.
+  * TypedDict registrado en EVENTS + tiene los fields requeridos.
+  * `emit_tool_event` raises → search result intacto (telemetry never breaks search).
+
+**`memory.silent_retrieval_miss` — DISCARDED**:
+
+- [docs/memory/07_telemetry_and_observability.md §4.6](07_telemetry_and_observability.md): reescrita — el evento ya no se emite, sección apunta a doc 08 §2.11 con la razón.
+- [docs/memory/08_scope_and_discarded.md §2.11](08_scope_and_discarded.md) (nuevo): entry permanente con 4 razones del discard + 3 alternativas si en el futuro se necesita la señal + lesson general sobre "heuristic detectors with language-specific token lists are a red flag for any subsystem that has to serve multi-lingual workloads".
+
+**Doc 07 §8.1** actualizada con shape real del payload + explicación de por qué se recortaron `kind` y `recoverable` vs spec v1.
+
+**Lecciones aplicadas**:
+- [[feedback-question-user-input]]: el user empujó "como se hace cross-lingual?" — sin ese push yo habría implementado las heurísticas como "deferred" pretending que el problema era de scheduling. La pregunta correcta no era "cuándo" sino "si tiene sentido siquiera".
+- [[feedback-telemetry-is-first-class]]: aplica para `search.failure` (datos de degradation que el operator querría). NO aplica para `silent_retrieval_miss` con el approach propuesto — datos no confiables son peores que no datos (ruido > silencio).
+- [[feedback-optimization-vs-principle]]: aplicado a la spec. El v1 de `silent_retrieval_miss` violaba el principio "must serve multi-lingual workloads"; defenderlo como "será deferred" hubiera repetido el pattern de A8 invertido (cablear something speculative cuyo costo de mantenimiento supera el valor).
+- Nueva entry futura en memoria persistente: "heuristic detectors con language-specific token lists son red flag para multi-lingual systems".
+
+**Verificado pre-commit**: 5/5 tests del search failure event; suite memoria 969+ passing.
+
+**Estado**: resolved (commit pendiente).
 
 ---
 

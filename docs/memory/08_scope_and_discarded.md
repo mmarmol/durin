@@ -186,6 +186,38 @@ Until that cleanup happens, the module sits unused. Importing from it is discour
 
 ---
 
+### 2.11 `memory.silent_retrieval_miss` heuristic detection (audit B9)
+
+**What we initially proposed** (doc 07 §4.6 v1): a telemetry event emitted in turn N+1 when the agent's turn-N response didn't include `memory_search` AND the user's next message looks like a re-ask, negation, or correction. Three heuristics for detection:
+
+1. Substring overlap > 60% with turn N's user message.
+2. Starts with negation tokens (`no,`, `wrong,`, `actually,`).
+3. Contains correction patterns (`I said X, not Y`, `you forgot…`).
+
+Aggregate metric `silent_retrieval_miss_rate` would gate activation of §2.F (eager pre-fetch).
+
+**Why discarded** (not deferred — see lesson below):
+
+- **Heuristic (1) is cross-lingual but unreliable.** Substring overlap doesn't require parsing the language, but legitimate refinement turns ("OK and what about X?", "Same thing but for project Y") have high overlap with the prior message. The false-positive rate would drown the signal.
+
+- **Heuristics (2) and (3) are inherently English-shaped.** The token lists (`no,`, `wrong,`, `actually,`) and the correction patterns (`I said X, not Y`) don't translate — Chinese puts negation markers adjacent to the verb (not at the start of the sentence); Japanese / Korean use sentence-final particles in positions that "starts with" doesn't catch. Multi-lingual maintenance would require per-language detector code (or a per-language LLM classifier — see next bullet). Durin's LoCoMo seed uses CJK plus Spanish; English-only detectors would miss those workloads entirely.
+
+- **An LLM classifier breaks the telemetry budget.** The only path to language-agnostic detection of "this is a correction" is a small LLM judge — but every user turn would incur an extra LLM call just to compute a telemetry metric. Telemetry events that cost per-turn LLM calls are a different category from the cheap structured-event stream the rest of `07_telemetry_and_observability.md` describes.
+
+- **The consumer (§2.F) is deferred too.** Even a reliable signal wouldn't have a consumer until §2.F ships (`08_scope_and_discarded.md` §4.1). Shipping the detector now would produce data with no decision to feed.
+
+**What we'd do instead if a future use case actually surfaces:**
+
+- LLM-based classifier as a background pass over recent turns (not per-turn). Same accuracy, amortised cost.
+- Explicit user-feedback signals (thumbs-up / thumbs-down, retry button) — slower data collection but unambiguous signal.
+- Post-hoc analysis on bench traces (LoCoMo / EverMemBench) — controlled environment, ground-truth labels.
+
+**Lesson** (so the same pattern doesn't recur): heuristic detectors with language-specific token lists are a red flag for any subsystem that has to serve multi-lingual workloads. If the spec's "detection rule" looks like a literal pattern match against English idioms, ship the LLM judge or skip the feature — don't ship the English detector and hope it generalises.
+
+**Status:** event removed from doc 07 §4.6 — that section now points here. The TypedDict was never created; `EVENTS` registry does not include the event. If a future change re-introduces it under a different design, that change should also restore the §4.6 documentation with the new approach.
+
+---
+
 ### 2.10 `body` column in LanceDB (P2.5, reverted by A4)
 
 **What we briefly did**: commit `a266344` (P2.5, 2026-05-28 09:10) added a `body` column to the LanceDB row schema so cold-tier queries (`memory_search(level="cold")`) could return full bodies without N disk reads. The commit message framed it as a "trade-off explicit": doubled index size in exchange for eliminating per-cold-hit file opens.
