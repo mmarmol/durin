@@ -98,7 +98,9 @@ def run_search_pipeline(
         vector=vector_uris,
         lexical=lexical_uris,
         grep=grep_uris,
-        keywords_provided=bool(keywords),
+        # P3.3: auto-detected identifier (email/URL/UUID/path) gets
+        # the same lexical boost as an explicit `keywords` param.
+        keywords_provided=bool(keywords or decision.auto_keywords),
     )
 
     # Step 4 — entity-aware rerank (doc 03 §8). When the query
