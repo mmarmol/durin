@@ -114,39 +114,14 @@ class Result:
             d["entities"] = list(self.entities)
         return d
 
-    def render_block(self) -> str:
-        """Wrap the result in a `=== KIND: ... ===` block (§2.H).
-
-        Mirrors the compaction summary marker convention
-        (``=== ARCHIVED SUMMARY ===``): an explicit ASCII delimiter the
-        LLM can pattern-match without relying on field structure. The
-        header line carries the kind, ref/uri, and a time hint when
-        available.
-
-        The body inside the block prefers ``summary`` over ``body``
-        over ``snippet`` so the rendered block stays compact in warm-
-        tier responses; cold-tier consumers can read ``body`` directly
-        off ``to_dict()`` if they need the full text.
-        """
-        kind = self.kind.upper()
-        header = f"=== {kind}: {self.uri}"
-        if self.valid_from:
-            header += f" (ts: {self.valid_from})"
-        elif kind == "CANONICAL":
-            # Pages don't carry valid_from; mark them as authoritative.
-            header += " (canonical entity page)"
-        header += " ==="
-
-        body = self.summary or self.body or self.snippet or ""
-        tail_bits: list[str] = []
-        if self.entities and kind != "CANONICAL":
-            tail_bits.append(f"Entities: {', '.join(self.entities)}")
-        tail = "\n".join(tail_bits)
-        parts = [header, body]
-        if tail:
-            parts.append(tail)
-        parts.append(f"=== END {kind} ===")
-        return "\n".join(parts)
+    # Audit F4 (2026-05-28): `render_block` retired. The LLM-facing
+    # rendering moved to `durin.memory.sectioned_output.render_sectioned`,
+    # which groups hits by section, adds intros, applies the
+    # per-source cap (doc 03 §12.4), and emits per-block markers
+    # with the same END / body-preference / entities-tail semantics
+    # this method used to provide. Direct callers should consume
+    # `to_dict()` for raw fields and `sectioned_rendered` from the
+    # tool response for the marker output.
 
 
 def search_memory(

@@ -44,6 +44,11 @@ class SectionedHit:
 
     Built upstream by the pipeline after fusion + entity-aware rerank.
     The renderer only consumes these fields; it does not enrich them.
+
+    Audit F4 (2026-05-28): added ``summary`` and ``entities`` so the
+    renderer has the same data Result.render_block used to reach. The
+    body preference inside the block is `summary > body > snippet`;
+    the entities tail tags fragments so the LLM can drill to canonical.
     """
 
     uri: str
@@ -60,6 +65,8 @@ class SectionedHit:
     # default-fall to disk reads via `_enrich_body` — the empty
     # default here is the trigger that activates that path.
     body: str = ""
+    summary: str = ""
+    entities: tuple[str, ...] = ()
 
 
 # Map each source class to a section bucket. Stable entries surface as
@@ -158,20 +165,43 @@ def render_sectioned(hits: Iterable[SectionedHit]) -> str:
 
 
 def _render_block(section: str, hit: SectionedHit) -> str:
-    """One marker block. Body is just the snippet for now; cold-mode
-    callers can pass the full body in the snippet field."""
+    """One marker block. Audit F4 (2026-05-28): brought to feature
+    parity with the (now retired) `Result.render_block`:
+
+    - Body preference: ``summary > body > snippet``.
+    - END marker (`=== END KIND ===`) closes each block.
+    - Entities tail (`Entities: ...`) for non-canonical hits so the
+      LLM can drill to the canonical page.
+    - Canonical header uses ``(canonical entity page)`` when no ts,
+      ``(consolidated <ts>)`` when ts is present.
+    """
     marker = _marker_for(section, hit)
-    body = hit.snippet.strip()
-    return f"{marker}\n{body}" if body else marker
+    body = (hit.summary or hit.body or hit.snippet or "").strip()
+    parts = [marker]
+    if body:
+        parts.append(body)
+    if section != "canonical" and hit.entities:
+        parts.append(f"Entities: {', '.join(hit.entities)}")
+    kind = section.upper()
+    parts.append(f"=== END {kind} ===")
+    return "\n".join(parts)
 
 
 def _marker_for(section: str, hit: SectionedHit) -> str:
     if section == "canonical":
-        return f"=== CANONICAL: {hit.uri} (consolidated {hit.ts}) ==="
+        if hit.ts:
+            return (
+                f"=== CANONICAL: {hit.uri} (consolidated {hit.ts}) ==="
+            )
+        return f"=== CANONICAL: {hit.uri} (canonical entity page) ==="
     if section == "fragment":
-        return f"=== FRAGMENT: {hit.path} (ts {hit.ts}) ==="
+        if hit.ts:
+            return f"=== FRAGMENT: {hit.path} (ts {hit.ts}) ==="
+        return f"=== FRAGMENT: {hit.path} ==="
     if section == "session":
-        return f"=== SESSION: {hit.uri} (ts {hit.ts}) ==="
+        if hit.ts:
+            return f"=== SESSION: {hit.uri} (ts {hit.ts}) ==="
+        return f"=== SESSION: {hit.uri} ==="
     # ingested
     label = hit.ingest_id or "unknown"
     return f"=== INGESTED: {label}/{hit.uri} ==="

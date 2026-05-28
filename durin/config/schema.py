@@ -286,9 +286,19 @@ class MemoryTemporalDecayConfig(Base):
     is NOT applied here — that path runs in modules that read the
     full `MemoryEntry` (hot_layer, dream). See A9 in
     `docs/memory/11_audit_reconciliation.md` for the rationale.
+
+    ``class_half_life_overrides`` (audit F1, 2026-05-28): operator
+    knob to tune per-class half-lives without editing code. Maps
+    class name → half-life in days, or ``None`` to disable decay for
+    that class while keeping the global toggle ON. Default empty
+    dict = exact pre-F1 behaviour. Doc 00 §189 promised this field;
+    F1 ships it.
     """
 
     enabled: bool = True
+    class_half_life_overrides: dict[str, int | None] = Field(
+        default_factory=dict,
+    )
 
 
 class MemorySearchConfig(Base):

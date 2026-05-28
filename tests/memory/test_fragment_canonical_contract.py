@@ -105,47 +105,17 @@ class TestToDictContract:
 
 
 # ---------------------------------------------------------------------------
-# render_block — the LLM-facing marker format
+# render_block markers — migrated to sectioned_output (audit F4, 2026-05-28)
 # ---------------------------------------------------------------------------
-
-
-class TestRenderBlock:
-    def test_canonical_header_and_footer(self) -> None:
-        r = Result(
-            source="memory", uri="memory/entity_page/person:marcelo",
-            headline="Marcelo", snippet="m",
-            summary="Marcelo Marmol",
-            class_name="entity_page",
-            entities=("person:marcelo",),
-        )
-        out = r.render_block()
-        assert out.startswith("=== CANONICAL: memory/entity_page/person:marcelo (canonical entity page) ===")
-        assert out.endswith("=== END CANONICAL ===")
-        assert "Marcelo Marmol" in out
-
-    def test_fragment_includes_timestamp(self) -> None:
-        r = Result(
-            source="memory", uri="memory/episodic/e1",
-            headline="h", snippet="s",
-            summary="Just observed something",
-            class_name="episodic",
-            valid_from="2026-05-23T18:00",
-            entities=("person:marcelo",),
-        )
-        out = r.render_block()
-        assert "=== FRAGMENT: memory/episodic/e1 (ts: 2026-05-23T18:00) ===" in out
-        assert "Just observed something" in out
-        assert "Entities: person:marcelo" in out
-        assert out.endswith("=== END FRAGMENT ===")
-
-    def test_fragment_with_no_valid_from_still_renders(self) -> None:
-        r = Result(
-            source="memory", uri="memory/stable/x",
-            headline="h", snippet="s", class_name="stable",
-        )
-        out = r.render_block()
-        # No ts hint and no canonical marker since stable is fragment.
-        assert out.startswith("=== FRAGMENT: memory/stable/x ===")
+#
+# Pre-F4 `Result.render_block` produced per-row marker blocks consumed
+# by the agent. F4 completed the Phase 3 migration: the renderer is
+# now `durin.memory.sectioned_output.render_sectioned`, which groups
+# hits by section and emits intros + per-block markers + END closes.
+#
+# Tests for marker format moved to `tests/memory/test_sectioned_migration_f4.py`
+# (END markers, summary > body > snippet preference, entities tail,
+# canonical ts/no-ts variants).
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +186,11 @@ class TestSearchDreamedGrep:
 # ---------------------------------------------------------------------------
 
 
-def test_memory_search_tool_includes_rendered_blocks(tmp_path: Path) -> None:
+def test_memory_search_tool_emits_sectioned_rendered(tmp_path: Path) -> None:
+    """Audit F4 (2026-05-28): the tool returns a single
+    `sectioned_rendered` string with grouped sections + per-block
+    markers + END closes. Per-row `rendered` was dropped — WebUI
+    consumes raw fields, the LLM consumes the sectioned string."""
     from durin.agent.tools.memory_search import MemorySearchTool
 
     page = EntityPage(type="person", name="Marcelo", aliases=["marcelo"])
@@ -230,10 +204,13 @@ def test_memory_search_tool_includes_rendered_blocks(tmp_path: Path) -> None:
     tool = MemorySearchTool(workspace=tmp_path)
     out = asyncio.run(tool.execute(query="marcelo", scope="dreamed", level="warm"))
     assert out["total"] >= 2
+    # The sectioned string carries markers + section headers.
+    rendered = out["sectioned_rendered"]
+    assert "=== CANONICAL: " in rendered
+    assert "=== END CANONICAL ===" in rendered
+    # Per-row `rendered` no longer present in the response shape.
     for r in out["results"]:
-        assert "rendered" in r, "tool boundary must add the marker block"
-        assert r["rendered"].startswith("=== ")
-        assert r["rendered"].endswith(" ===")
+        assert "rendered" not in r
 
 
 # ---------------------------------------------------------------------------

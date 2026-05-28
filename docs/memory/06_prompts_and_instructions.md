@@ -253,6 +253,12 @@ EXISTING SCHEMA for this entity (for coherence; not a constraint):
   attributes: {list_of_attribute_keys}
   relation types: {list_of_relation_types}
 
+  Audit F7 (2026-05-28): both slots are now populated from the
+  current entity page's frontmatter. Pre-F7 they rendered as
+  `(none)` regardless of page state, leaving the LLM blind to
+  the existing schema and inviting drift (e.g. emitting `email`
+  when the page already has `e-mail`).
+
   Guidance:
   - PREFER reusing an existing key when the new info has the same semantic meaning.
   - If you notice two existing keys mean the same thing (e.g. 'email' and 'e-mail'),
@@ -276,6 +282,10 @@ SUGGESTED STARTER TYPES (for when you must create a new entity URI):
 
 RECENT GIT HISTORY for this entity (so you can avoid undoing recent updates):
   {recent_commits_with_short_diffs}
+
+  Audit F7 (2026-05-28): slot populated via
+  `durin.memory.dream_git_history.format_recent_history`. Pre-F7 it
+  always rendered as `(no recent history)` regardless of git state.
 
 PENDING OBSERVATIONS ({n_entries}):
 {entries_text}

@@ -72,6 +72,7 @@ def run_search_pipeline(
     cross_encoder: Optional[Any] = None,
     cross_encoder_top_n: int = 10,
     temporal_decay_enabled: bool = True,
+    temporal_decay_overrides: dict[str, int | None] | None = None,
 ) -> SearchPipelineResult:
     """Execute the v2 search pipeline.
 
@@ -158,6 +159,7 @@ def run_search_pipeline(
             vector_meta=vector_meta,
             lexical_meta=lexical_meta,
             grep_meta=grep_meta,
+            overrides=temporal_decay_overrides,
         )
 
     # Build SectionedHit rows from the fused results, looking up
@@ -561,6 +563,7 @@ def _temporal_decay_step(
     lexical_meta: dict,
     grep_meta: dict[str, dict] | None,
     now: Any = None,
+    overrides: dict[str, int | None] | None = None,
 ) -> list:
     """Apply per-class temporal decay to fused scores (audit A9).
 
@@ -599,6 +602,7 @@ def _temporal_decay_step(
             class_name=class_name,
             valid_from_iso=valid_from,
             now=now,
+            overrides=overrides,
         )
         if factor < 1.0:
             hits_decayed += 1
