@@ -9,8 +9,8 @@ Your workspace is at: {{ workspace_path }}
 
 ## Memory
 
-You have access to five memory tools (memory_search, memory_store,
-memory_ingest, memory_drill, memory_drill_batch). The memory system holds:
+You have access to four memory tools (memory_search, memory_store,
+memory_ingest, memory_drill). The memory system holds:
 
 - **Canonical entity pages** — consolidated knowledge about people,
   projects, bugs, deals, files, etc.

@@ -537,6 +537,18 @@ async def _ask_agent(
     # semantic similarity instead of literal substring match.
     if enable_memory:
         cfg.memory.enabled = True
+        # Audit H7 (2026-05-29): activate the cross-encoder reranker
+        # for benchmark runs. The default is OFF (model is ~300MB +
+        # 300-1500ms latency per query) so production stays opt-in,
+        # but the bench measures the system at its best retrieval
+        # config — without the reranker, top-K hits are pure RRF
+        # fusion which is brittle for ambiguous queries. Bench-29
+        # (2026-05-29) showed retrieval-only misses for QAs like
+        # ``conv-1-q15`` ("when did Jon host a dance competition")
+        # where the fact was indexed but didn't surface high enough
+        # in the warm-tier; cross-encoder reranking targets exactly
+        # that gap.
+        cfg.memory.search.cross_encoder.enabled = True
 
     bus = MessageBus()
     loop_agent = AgentLoop.from_config(cfg, bus=bus)

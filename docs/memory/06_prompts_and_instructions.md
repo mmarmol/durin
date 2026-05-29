@@ -43,8 +43,8 @@ Also documented here (consumed structurally, not as instruction text):
 ```markdown
 ## Memory
 
-You have access to five memory tools (memory_search, memory_store,
-memory_ingest, memory_drill, memory_drill_batch). The memory system holds:
+You have access to four memory tools (memory_search, memory_store,
+memory_ingest, memory_drill). The memory system holds:
 
 - **Canonical entity pages** — consolidated knowledge about people,
   projects, bugs, deals, files, etc.
@@ -132,6 +132,11 @@ Usage:
 - For literal-match queries (emails, IDs, URLs), pass the literal string in
   `keywords` in addition to a natural-language `query`. This biases the search
   toward exact matches.
+- For exact phrase matching, wrap the phrase in double quotes inside `query` —
+  e.g. `"shooting percentage" basketball` requires the two words to appear
+  adjacent and in order, while `basketball` matches anywhere. Words outside
+  quotes stay as loose tokens. An unbalanced quote is treated as a typo and
+  discarded.
 - Use `level: "cold"` only when you need full body content (verbose; consumes
   many tokens). `warm` (default) returns headline + summary, enough for most
   tasks.
@@ -217,46 +222,33 @@ on disk where preserving the original artifact matters.
 ### 3.4 `memory_drill`
 
 ```
-Read the full content of a memory item by URI.
+Read the full content of one or more memory items by URI.
 
-Use this ONLY when the corresponding memory_search result block is marked
-`preview N/M` in its section header — N chars were shown, M chars exist —
-i.e. more body is available beyond what you already have. Drill in that
-case to fetch the rest.
+Pass either ``uri`` (single string) for one item, or ``uris`` (array, up
+to 10) for multiple items in one round-trip. With ``uris`` the response
+carries one ``{uri, content}`` record per request in the same order,
+plus an ``error`` field on entries that failed — individual failures
+don't abort the batch.
 
-Do NOT drill when the block is marked `complete`: the search already
+Use this ONLY when the corresponding memory_search result block is
+marked ``preview N/M`` in its section header — N chars were shown, M
+chars exist — i.e. more body is available beyond what you already have.
+Drill in that case to fetch the rest.
+
+Do NOT drill when the block is marked ``complete``: the search already
 showed you the entire body and drill will return the same text, wasting
 tokens and an LLM round-trip. Blocks without an explicit completeness
 qualifier (rare; legacy / lexical-only hits) are best-guess — drill only
 if the visible content seems truncated.
 
-This tool is read-only. For related context about an entity (recent
-observations, sessions mentioning it), use memory_search with the
-entity's name or URI as the query instead — drill on a single URI never
-expands beyond that URI.
+Prefer the ``uris`` form whenever 2+ URIs from one search all need
+follow-up. Drill on URIs never expands the candidate set — use
+memory_search to find new candidates.
 ```
 
-### 3.5 `memory_drill_batch`
+Audit H9 (2026-05-29) consolidated the previous ``memory_drill_batch`` tool into ``memory_drill`` so the LLM sees one drill surface instead of two. The list-of-uris payload is identical to the old batch tool; the single-``uri`` legacy shape is preserved unchanged.
 
-```
-Read the full content of multiple memory items by URI in a single tool call.
-
-Pass up to 10 URIs; the response carries one ``{uri, content}`` record per
-request in the same order, plus an ``error`` field on entries that failed
-(missing file, malformed uri, etc.). Failing one uri does NOT abort the
-others.
-
-Use this INSTEAD of N back-to-back ``memory_drill`` calls when a single
-memory_search result block flagged multiple URIs as ``preview N/M`` and you
-need to cross-reference them. One round-trip, lower latency, same payload
-as N drills.
-
-Do NOT batch when the search marked the relevant blocks as ``complete``:
-drill returns the same text already shown. Do NOT use as a replacement for
-memory_search — drill on N URIs never expands the candidate set.
-```
-
-### 3.6 Synchronization requirement
+### 3.5 Synchronization requirement
 
 The text above MUST match the `.description` property on each tool class (`durin/agent/tools/memory_search.py::MemorySearchTool.description`, etc.). That property is the field `Tool.to_schema()` emits as `function.description` in the OpenAI function-calling spec — i.e. what the LLM actually reads when deciding to call the tool.
 
