@@ -65,6 +65,42 @@ def vector_index_available() -> bool:
     return True
 
 
+SUMMARY_FALLBACK_CHARS: int = 400
+"""H4 (audit 2026-05-29): module-level export of the body-prefix cap so
+the FTS indexer (`durin/memory/indexer.py`) shares the same value as
+the vector index. See ``VectorIndex._SUMMARY_FALLBACK_CHARS`` for the
+class-level alias kept for backward compat."""
+
+
+def _effective_summary(entry: MemoryEntry) -> str:
+    """Return the summary to materialise into the index row.
+
+    Authoritative when the source carries one; otherwise the
+    body-prefix fallback. Empty source body + empty source summary
+    yields an empty string — there's nothing to fall back on.
+    """
+    persisted = (entry.summary or "").strip()
+    if persisted:
+        return entry.summary
+    body = entry.body or ""
+    if not body:
+        return ""
+    return body[:SUMMARY_FALLBACK_CHARS]
+
+
+def _is_body_prefix(summary: str, body: str) -> bool:
+    """True when ``summary`` is exactly the leading slice of ``body``.
+
+    The H4 dedup marker: if the summary is just a body prefix (the
+    fallback case), embedding it as its own slot would re-weight the
+    same tokens twice. Authoritative summaries (Dream / user-supplied)
+    rarely match a body prefix verbatim, so the comparison is safe.
+    """
+    if not summary or not body:
+        return False
+    return body.startswith(summary)
+
+
 class VectorIndex:
     """LanceDB table wrapper for memory entries."""
 
@@ -580,7 +616,20 @@ class VectorIndex:
         return {
             "id": entry.id,
             "class_name": class_name,
-            "summary": entry.summary,
+            # H4 (audit 2026-05-29): when the source has no summary
+            # (bench seeds, memory_ingest chunks, raw episodic turns
+            # all leave it empty by design — Dream is the intended
+            # summary author but doesn't process corpus and only
+            # consolidates episodic into entity_pages), materialise
+            # ``body[:SUMMARY_FALLBACK_CHARS]`` into the index row.
+            # The .md on disk keeps ``summary: ''`` as a legitimate
+            # pre-Dream state; the index always carries triage content
+            # so the renderer never hands the LLM a 60-char truncated
+            # headline as the only signal. When Dream / memory_store
+            # later populates the source's real summary, the next
+            # upsert overwrites the fallback with the authoritative
+            # value.
+            "summary": _effective_summary(entry),
             "headline": entry.headline,
             "vector": vector,
             "valid_from": entry.valid_from.isoformat() if entry.valid_from else "",
@@ -601,6 +650,11 @@ class VectorIndex:
         }
 
     _EMBED_BUDGET_CHARS = 1500  # ~375 tokens; e5-small max_seq is 512.
+
+    # H4: class-level alias of the module-level
+    # ``SUMMARY_FALLBACK_CHARS`` — kept so existing callers that read
+    # via ``VectorIndex._SUMMARY_FALLBACK_CHARS`` keep working.
+    _SUMMARY_FALLBACK_CHARS = SUMMARY_FALLBACK_CHARS
 
     @staticmethod
     def _embed_text(entry: MemoryEntry, *, budget_chars: int | None = None) -> str:
@@ -636,7 +690,16 @@ class VectorIndex:
             used += len(chunk) + extra
 
         _add(entry.headline)
-        _add(entry.summary)
+        # H4 (audit 2026-05-29): when ``summary`` is the body-prefix
+        # fallback (carried for renderer / triage use, not as new
+        # semantic signal), embedding it AS WELL AS body would weight
+        # those tokens twice and shrink the budget available to unique
+        # body content. Skip the summary slot when it matches the
+        # leading slice of the body. Authoritative summaries (Dream
+        # output, memory_store explicit) survive intact because they
+        # describe the entry differently from its body prefix.
+        if not _is_body_prefix(entry.summary, entry.body):
+            _add(entry.summary)
         if entry.entities:
             _add("Entities: " + ", ".join(entry.entities))
         _add(entry.body)
