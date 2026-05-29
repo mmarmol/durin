@@ -128,6 +128,17 @@ def test_memory_drill_description_matches_doc(doc_text: str) -> None:
     )
 
 
+def test_memory_drill_batch_description_matches_doc(doc_text: str) -> None:
+    from durin.agent.tools.memory_drill_batch import MemoryDrillBatchTool
+    expected = _extract_section_block(
+        doc_text, "### 3.5 `memory_drill_batch`",
+    )
+    actual = _tool_description(MemoryDrillBatchTool)
+    assert _normalise(actual) == _normalise(expected), (
+        "memory_drill_batch `.description` property drifted from doc 06 §3.5."
+    )
+
+
 def test_description_property_is_what_to_schema_emits() -> None:
     """B1 invariant: the field the test guards (`.description`) IS
     the one OpenAI function-calling consumers read. If
