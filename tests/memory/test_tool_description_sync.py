@@ -128,15 +128,10 @@ def test_memory_drill_description_matches_doc(doc_text: str) -> None:
     )
 
 
-def test_memory_drill_batch_description_matches_doc(doc_text: str) -> None:
-    from durin.agent.tools.memory_drill_batch import MemoryDrillBatchTool
-    expected = _extract_section_block(
-        doc_text, "### 3.5 `memory_drill_batch`",
-    )
-    actual = _tool_description(MemoryDrillBatchTool)
-    assert _normalise(actual) == _normalise(expected), (
-        "memory_drill_batch `.description` property drifted from doc 06 §3.5."
-    )
+# H9 (audit 2026-05-29): the standalone ``memory_drill_batch`` tool was
+# folded into ``memory_drill``. The consolidated drill description must
+# document both the single-``uri`` and list-``uris`` shapes; the dedicated
+# ``test_memory_drill_description_matches_doc`` above covers it.
 
 
 def test_description_property_is_what_to_schema_emits() -> None:

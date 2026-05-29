@@ -163,3 +163,113 @@ async def test_tool_error_on_missing(tmp_path: Path) -> None:
     tool = MemoryDrillTool(workspace=tmp_path)
     out = await tool.execute(uri="nope.md#turn-1")
     assert "error" in out
+
+
+# ---------------------------------------------------------------------------
+# Audit H9 (2026-05-29): consolidated drill — single ``uri`` or list ``uris``
+# ---------------------------------------------------------------------------
+#
+# The standalone ``memory_drill_batch`` tool was folded into ``memory_drill``
+# so the LLM sees one drill surface instead of two. The single-``uri`` shape
+# remains the legacy path (returns ``{uri, content}``); the new ``uris``
+# list returns ``{results: [{uri, content/error}, ...]}`` with per-uri
+# graceful failure.
+
+
+def _seed_entry(workspace: Path, body: str, headline: str) -> str:
+    from durin.memory.store import store_memory
+    result = store_memory(workspace, content=body, headline=headline)
+    return Path(result["path"]).stem
+
+
+@pytest.mark.asyncio
+async def test_uris_list_returns_all_requested_bodies(tmp_path: Path) -> None:
+    from durin.agent.tools.memory_drill import MemoryDrillTool
+
+    id_a = _seed_entry(tmp_path, body="alpha body content", headline="A")
+    id_b = _seed_entry(tmp_path, body="beta body content", headline="B")
+    id_c = _seed_entry(tmp_path, body="gamma body content", headline="C")
+
+    tool = MemoryDrillTool(workspace=tmp_path)
+    result = await tool.execute(uris=[
+        f"memory/episodic/{id_a}",
+        f"memory/episodic/{id_b}",
+        f"memory/episodic/{id_c}",
+    ])
+    assert "results" in result
+    assert len(result["results"]) == 3
+    bodies = [r.get("content", "") for r in result["results"]]
+    assert any("alpha body content" in b for b in bodies)
+    assert any("beta body content" in b for b in bodies)
+    assert any("gamma body content" in b for b in bodies)
+
+
+@pytest.mark.asyncio
+async def test_uris_preserves_request_order(tmp_path: Path) -> None:
+    from durin.agent.tools.memory_drill import MemoryDrillTool
+    id_a = _seed_entry(tmp_path, body="first", headline="first")
+    id_b = _seed_entry(tmp_path, body="second", headline="second")
+    tool = MemoryDrillTool(workspace=tmp_path)
+    uris = [f"memory/episodic/{id_a}", f"memory/episodic/{id_b}"]
+    result = await tool.execute(uris=uris)
+    assert [r["uri"] for r in result["results"]] == uris
+
+
+@pytest.mark.asyncio
+async def test_uris_individual_errors_dont_kill_the_batch(
+    tmp_path: Path,
+) -> None:
+    from durin.agent.tools.memory_drill import MemoryDrillTool
+    id_ok = _seed_entry(tmp_path, body="real body", headline="r")
+    tool = MemoryDrillTool(workspace=tmp_path)
+    result = await tool.execute(uris=[
+        f"memory/episodic/{id_ok}",
+        "memory/episodic/nonexistent_id_999",
+    ])
+    assert len(result["results"]) == 2
+    assert "real body" in result["results"][0].get("content", "")
+    assert result["results"][1].get("error")
+
+
+@pytest.mark.asyncio
+async def test_uris_rejects_empty_list(tmp_path: Path) -> None:
+    from durin.agent.tools.memory_drill import MemoryDrillTool
+    tool = MemoryDrillTool(workspace=tmp_path)
+    result = await tool.execute(uris=[])
+    assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_uris_rejects_oversize_list(tmp_path: Path) -> None:
+    from durin.agent.tools.memory_drill import MemoryDrillTool, MAX_BATCH_URIS
+    tool = MemoryDrillTool(workspace=tmp_path)
+    too_many = [f"memory/episodic/x{i}" for i in range(MAX_BATCH_URIS + 1)]
+    result = await tool.execute(uris=too_many)
+    assert "error" in result
+    assert str(MAX_BATCH_URIS) in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_rejects_both_uri_and_uris(tmp_path: Path) -> None:
+    from durin.agent.tools.memory_drill import MemoryDrillTool
+    tool = MemoryDrillTool(workspace=tmp_path)
+    result = await tool.execute(uri="x", uris=["y"])
+    assert "error" in result
+    assert "either" in result["error"].lower() or "both" in result["error"].lower()
+
+
+@pytest.mark.asyncio
+async def test_rejects_neither_uri_nor_uris(tmp_path: Path) -> None:
+    from durin.agent.tools.memory_drill import MemoryDrillTool
+    tool = MemoryDrillTool(workspace=tmp_path)
+    result = await tool.execute()
+    assert "error" in result
+
+
+def test_description_documents_both_shapes() -> None:
+    """The tool description must mention both `uri` and `uris` so the
+    LLM knows the consolidated surface."""
+    from durin.agent.tools.memory_drill import MemoryDrillTool
+    desc = MemoryDrillTool(workspace=Path("/tmp")).description
+    assert "uri" in desc and "uris" in desc
+    assert "preview" in desc.lower()

@@ -26,7 +26,7 @@ def identity_text() -> str:
 # whole block (whitespace + Jinja interpolation make exact equality
 # brittle) but we lock the load-bearing sentences.
 _REQUIRED_PHRASES = (
-    "You have access to five memory tools",
+    "You have access to four memory tools",
     # Tool list may wrap across lines in the file; normalise whitespace
     # before comparing.
     # (Checked separately below.)
@@ -59,8 +59,7 @@ def test_each_required_phrase_present(identity_text: str) -> None:
     # The full tool name list must be present (in any whitespace
     # arrangement).
     assert (
-        "memory_search, memory_store, memory_ingest, memory_drill, "
-        "memory_drill_batch"
+        "memory_search, memory_store, memory_ingest, memory_drill"
         in normalised
     )
 
