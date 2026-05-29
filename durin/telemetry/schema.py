@@ -980,6 +980,31 @@ class MemoryHealthCriticalEvent(TypedDict):
     session_key: NotRequired[str | None]
 
 
+class MemoryFallbackToolUsedEvent(TypedDict):
+    """Agent invoked a non-memory tool (grep / list_dir / read_file /
+    etc.) while a memory-enabled workspace was active (audit H17,
+    2026-05-29).
+
+    Pattern observed in bench-100 v8: 27 / 102 traces (26%) fell to
+    grep after exhausting memory_search/memory_drill candidates.
+    The agent's fallback is rational — try the curated tool, fall
+    back to raw search — but the high rate masks a memory_search
+    recall gap. This event lets dashboards quantify the rate
+    longitudinally without re-instrumenting per-tool.
+
+    ``is_bench_relevant`` is True when the tool is one of the
+    filesystem-scanning fallbacks (grep / list_dir / read_file /
+    edit_file / exec / write_file). Other non-memory tools (web_*,
+    message, etc.) emit too but with the flag False so analysis
+    can filter.
+    """
+
+    tool_name: str
+    is_bench_relevant: bool
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
 class MemoryHotLayerFailureEvent(TypedDict):
     """Hot-layer assembly failed for one component (per doc 06 §8.7).
 
@@ -1083,6 +1108,7 @@ EVENTS: dict[str, type] = {
     "memory.search.failure": MemoryRecallFailureEvent,
     "memory.health_check": MemoryHealthCheckEvent,
     "memory.health.critical": MemoryHealthCriticalEvent,
+    "memory.fallback_tool_used": MemoryFallbackToolUsedEvent,
 }
 
 
@@ -1143,6 +1169,7 @@ __all__ = [
     "MemoryEntityRelationCapWarnedEvent",
     "MemoryEntityRelationCapRejectedEvent",
     "MemoryHealthCheckEvent",
+    "MemoryFallbackToolUsedEvent",
     "MemoryHealthCriticalEvent",
     "MemoryHotLayerFailureEvent",
     "MemoryRecallLexicalEvent",
