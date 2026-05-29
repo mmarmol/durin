@@ -179,6 +179,10 @@ def run_search_pipeline(
             snippet=meta.get("snippet", "") or meta.get("headline", ""),
             ingest_id=meta.get("ingest_id"),
             body=meta.get("body", ""),
+            # H4 (audit 2026-05-29): propagate the index's materialised
+            # summary (authoritative or body-prefix fallback) so the
+            # warm-tier renderer never falls back to a 60-char headline.
+            summary=meta.get("summary", ""),
         ))
     # G1 (audit fourth pass, 2026-05-28): honour the configured cap
     # when supplied; fall back to `DEFAULT_MAX_PER_SOURCE` otherwise.
@@ -583,6 +587,12 @@ def _resolve_meta(
         # difference to detect.
         if vh.get("entities"):
             meta["entities"] = vh["entities"]
+        # H4 (audit 2026-05-29): the vector row carries summary —
+        # authoritative when Dream / memory_store set it, otherwise
+        # the body-prefix fallback materialised at upsert time. The
+        # renderer keys off this for the warm-tier triage block.
+        if vh.get("summary"):
+            meta["summary"] = vh["summary"]
         # NOTE: A4 reverted P2.5 — body is no longer stored in
         # LanceDB. `meta["body"]` stays unset; the cold-tier caller
         # (memory_search._enrich_body) reads it from disk.

@@ -327,3 +327,170 @@ def test_embed_text_respects_char_budget() -> None:
     # Headline survives (was 100 chars, fits comfortably) and a portion
     # of the next field appears before the budget is hit.
     assert text.startswith("H" * 100)
+
+
+# ---------------------------------------------------------------------------
+# Audit H4 (2026-05-29): summary fallback at vector-index write time
+# ---------------------------------------------------------------------------
+#
+# Context: bulk-imported entries (bench seeds, memory_ingest chunks,
+# raw episodic turns) leave ``summary=''`` because no LLM call runs on
+# the write path — Dream was the intended summary author but doesn't
+# process corpus and only consolidates episodic into entity_pages
+# (the source episodic stays with ``summary=''`` forever). Pre-H4 the
+# warm-tier renderer fell back to ``snippet or headline`` and the agent
+# saw a 60-char headline as the only triage signal, drilling repeatedly.
+#
+# H4 makes the vector index materialise ``body[:400]`` into the LanceDB
+# row's ``summary`` field when the source entry has none. The file on
+# disk stays the source of truth (``summary: ''`` remains a legitimate
+# state); the index carries a derived value so search results never
+# hand the LLM an empty summary. When Dream or memory_store later
+# populates the source's real summary, the row gets re-upserted with
+# the authoritative value.
+
+
+def _store_entry_with_body(workspace: Path, *, body: str, headline: str,
+                            summary: str = "") -> Path:
+    """Helper: persist a memory entry with the requested body/summary
+    on disk, return its path. Mirrors what store_memory does but lets
+    us set ``summary`` explicitly (the public API also accepts it)."""
+    from durin.memory.store import store_memory
+    result = store_memory(
+        workspace, content=body, headline=headline, summary=summary,
+    )
+    return Path(result["path"])
+
+
+def test_vector_row_derives_summary_from_body_when_source_empty(
+    tmp_path: Path, provider: _FakeEmbeddingProvider,
+) -> None:
+    """Source entry has summary='' (the bench / ingest reality). The
+    LanceDB row carries body[:400] as the materialised fallback so the
+    renderer can hand the LLM real triage content."""
+    long_body = (
+        "Joanna keeps her stuffed animal dog Tilly with her while she "
+        "writes. Tilly helps her stay focused and brings her so much joy. "
+        "Nate gifted Tilly to Joanna because she had to give up her real "
+        "dog when she moved to Michigan. " * 3
+    )
+    entry_path = _store_entry_with_body(
+        tmp_path, body=long_body, headline="Joanna: Tilly helps me stay focu",
+        summary="",
+    )
+    from durin.memory.storage import load_entry
+    entry = load_entry(entry_path)
+    assert entry.summary == "", "fixture precondition: source summary empty"
+
+    index = VectorIndex(tmp_path, provider)
+    index.upsert(entry, "episodic", entry_path)
+
+    hits = index.search("Joanna writing", top_k=5)
+    assert hits
+    row_summary = hits[0]["summary"]
+    assert row_summary, "vector row must materialise a non-empty summary"
+    assert row_summary == long_body[:400], (
+        f"expected body[:400] fallback; got {row_summary[:60]!r}…"
+    )
+
+
+def test_vector_row_preserves_authoritative_summary(
+    tmp_path: Path, provider: _FakeEmbeddingProvider,
+) -> None:
+    """When the source has a real summary (Dream or memory_store
+    explicit), the index must NOT overwrite it with the body prefix."""
+    real_summary = (
+        "Joanna writes movie scripts and keeps Tilly the stuffed animal "
+        "with her for focus and emotional support."
+    )
+    entry_path = _store_entry_with_body(
+        tmp_path,
+        body="Some longer body text that should not become the summary.",
+        headline="Joanna writing summary",
+        summary=real_summary,
+    )
+    from durin.memory.storage import load_entry
+    entry = load_entry(entry_path)
+    index = VectorIndex(tmp_path, provider)
+    index.upsert(entry, "episodic", entry_path)
+
+    hits = index.search("Joanna", top_k=5)
+    assert hits
+    assert hits[0]["summary"] == real_summary, (
+        "authoritative summary must survive the write path"
+    )
+
+
+def test_vector_row_handles_body_shorter_than_fallback(
+    tmp_path: Path, provider: _FakeEmbeddingProvider,
+) -> None:
+    """Bench seed entries are typically <300 chars. The fallback must
+    clip safely — summary == body when body fits, no out-of-bounds."""
+    short_body = "Joanna: Tilly is a stuffed dog. She helps me stay focused."
+    entry_path = _store_entry_with_body(
+        tmp_path, body=short_body, headline="Joanna short",
+    )
+    from durin.memory.storage import load_entry
+    entry = load_entry(entry_path)
+    index = VectorIndex(tmp_path, provider)
+    index.upsert(entry, "episodic", entry_path)
+
+    hits = index.search("Joanna", top_k=5)
+    assert hits[0]["summary"] == short_body, (
+        f"short body should appear verbatim; got {hits[0]['summary']!r}"
+    )
+
+
+def test_embed_text_skips_fallback_summary_to_avoid_duplication() -> None:
+    """When ``summary == body[:N]`` (the H4 fallback marker), composing
+    ``headline + summary + entities + body`` would embed the first N
+    chars twice — once in the summary slot and again at the start of
+    body. The embedding text must detect this and skip the summary
+    slot so the budget goes to unique content instead of repeating
+    the body prefix."""
+    from durin.memory.schema import MemoryEntry
+
+    body = "X" * 1000
+    fallback_summary = body[:400]
+    entry = MemoryEntry(
+        id="x",
+        headline="head",
+        summary=fallback_summary,
+        body=body,
+    )
+    text = VectorIndex._embed_text(entry)
+    # Headline first, then body (skipping summary slot).
+    assert text.startswith("head")
+    # The fallback summary block ("X"*400) must NOT appear as a separate
+    # joined paragraph — body starts immediately after the headline
+    # joiner, not after a duplicated 400-X block.
+    # Quick invariant: total length is roughly head + joiner + body_clipped,
+    # NOT head + joiner + 400X + joiner + body_clipped.
+    assert "X" * 401 in text, "body content must reach the embedder"
+    # The summary slot's exact opening ("\n\n" + 400X + "\n\n" + same-X-prefix)
+    # would mean the prefix appears separately. Detect with a quick check:
+    # if summary slot was added, we'd have len(text) ~> 60+1500 budget hit
+    # with prefix duplicated. Detect more robustly: search for two distinct
+    # 400-X blocks separated by a joiner.
+    duplicated_marker = ("X" * 400) + "\n\n" + ("X" * 400)
+    assert duplicated_marker not in text, (
+        "fallback summary must not be re-embedded as its own slot"
+    )
+
+
+def test_embed_text_includes_summary_when_authoritative() -> None:
+    """When summary carries new semantic info (Dream output, not a
+    body prefix), it MUST be embedded — that's the whole point of
+    persisting it. The dedup heuristic must trigger ONLY on the
+    body-prefix case."""
+    from durin.memory.schema import MemoryEntry
+
+    entry = MemoryEntry(
+        id="x",
+        headline="head",
+        summary="distinct semantic summary not present in body",
+        body="entirely different body text about other matters",
+    )
+    text = VectorIndex._embed_text(entry)
+    assert "distinct semantic summary" in text
+    assert "entirely different body text" in text
