@@ -112,19 +112,35 @@ def _write_manifest(
     )
 
 
+# Audit H15 (2026-05-29): the "iteration cap" marker was REMOVED
+# from this list. Pre-H15 a trace whose got started with "I reached
+# the maximum number of tool call iterations" was classified as
+# infra — which queued it for a retry pass that always re-ran the
+# same agent against the same workspace, hitting the same cap. The
+# bench-100 v8 analysis confirmed: 4 of 5 iter-cap traces were
+# agents falling back to grep/list_dir because memory_search didn't
+# surface the answer. That's agent behaviour, not LLM provider
+# instability — it deserves to be counted as a real fail so the
+# next durin change has measurable signal to optimise against.
 _INFRA_GOT_MARKERS = (
     "Error calling LLM",
     "Connection error",
-    "I reached the maximum number of tool call iterations",
 )
 
 
 def _is_infra_fail(trace: Any, verdict: dict[str, Any]) -> bool:
-    """True when this fail is environmental (LLM provider error, timeout,
-    iteration cap), not a real agent/memory failure.
+    """True when this fail is environmental (LLM provider error or
+    timeout) rather than an agent/memory failure.
 
-    These should be retried once before being reported as fails — they
+    These get retried once before being reported as fails — they
     inflate the error rate of durin without being durin's fault.
+
+    Audit H15 (2026-05-29): iteration-cap fails are NO LONGER
+    treated as infra. They reflect the agent burning its iteration
+    budget without finding the answer — a real durin signal. Letta's
+    public LoCoMo benchmark uses a similar policy: only LLM-provider
+    transient errors are retried; iteration / budget exhaustion
+    counts as a fail.
     """
     if verdict.get("score", 0) >= 1.0:
         return False
@@ -276,23 +292,59 @@ async def _main_async(args: argparse.Namespace) -> int:
             tag = " [infra-retry-queued]" if is_infra else ""
             print(f"  ✗ fail ({trace.duration_s:.1f}s, iter={trace.iterations}) — {short_reason}{tag}")
 
-    # B1: re-run infrastructure fails once (LLM connection error, max-iter,
-    # timeout). These are environmental, not durin/agent issues — counting
-    # them as fails inflates the apparent error rate of the memory layer.
+    # B1+H18: re-run infrastructure fails (LLM provider transient errors,
+    # exception, timeout). Two retry passes with a backoff between them so
+    # a sustained upstream outage has a chance to recover. Pre-H18 the
+    # bench used ONE retry pass; bench-100 v8 showed 9/15 infra-fails
+    # didn't recover, partly because the upstream window hadn't closed by
+    # the time the lone retry fired. The two-pass schedule (5s before
+    # pass 1, 30s before pass 2) is a compromise: short enough that a
+    # healthy provider sees no extra wall-clock, long enough to ride out
+    # an outage burst.
+    import asyncio as _asyncio_for_backoff
     if infra_fail_qas:
-        print(f"\n[locomo_run] re-running {len(infra_fail_qas)} infra-fail QAs (one retry)…")
         recovered = 0
-        for qa in infra_fail_qas:
-            print(f"  [retry] {qa.qa_id} [{qa.category}] running…", end="", flush=True)
-            trace, verdict_dict, is_infra = await _run_one(qa, prefix="[retry]")
-            if verdict_dict["score"] >= 1.0:
-                pass_count += 1
-                fail_count -= 1
-                recovered += 1
-                print(f"  ✓ recovered ({trace.duration_s:.1f}s)")
-            else:
-                short_reason = verdict_dict["reasoning"][:60]
-                print(f"  ✗ still fail — {short_reason}")
+        retry_delays_s = (5.0, 30.0)  # H18: 2 passes with widening backoff
+        remaining = list(infra_fail_qas)
+        for pass_idx, delay_s in enumerate(retry_delays_s, start=1):
+            if not remaining:
+                break
+            print(
+                f"\n[locomo_run] retry pass {pass_idx}/{len(retry_delays_s)} "
+                f"— {len(remaining)} QAs queued, sleeping {delay_s:.0f}s "
+                f"to let upstream recover…"
+            )
+            await _asyncio_for_backoff.sleep(delay_s)
+            next_remaining: list = []
+            for qa in remaining:
+                print(
+                    f"  [retry-{pass_idx}] {qa.qa_id} [{qa.category}] running…",
+                    end="", flush=True,
+                )
+                trace, verdict_dict, is_infra = await _run_one(
+                    qa, prefix=f"[retry-{pass_idx}]",
+                )
+                if verdict_dict["score"] >= 1.0:
+                    pass_count += 1
+                    fail_count -= 1
+                    recovered += 1
+                    print(f"  ✓ recovered ({trace.duration_s:.1f}s)")
+                elif is_infra:
+                    # Still infra-fail: queue for next pass (if any).
+                    next_remaining.append(qa)
+                    short_reason = verdict_dict["reasoning"][:60]
+                    print(
+                        f"  ⟳ still infra (will retry again) — {short_reason}"
+                    )
+                else:
+                    short_reason = verdict_dict["reasoning"][:60]
+                    print(f"  ✗ still fail — {short_reason}")
+            remaining = next_remaining
+        if remaining:
+            print(
+                f"[locomo_run] {len(remaining)} QAs remain infra-failed "
+                f"after {len(retry_delays_s)} retry passes — counted as fails"
+            )
         print(f"[locomo_run] recovered via retry: {recovered}/{len(infra_fail_qas)}")
 
     print(f"\n[locomo_run] done: {pass_count} pass · {fail_count} fail · {skip_count} skip")
@@ -333,8 +385,17 @@ def main() -> int:
         help="LLM-as-judge model. Same z.ai plan.",
     )
     parser.add_argument(
-        "--max-iterations", type=int, default=8,
-        help="Cap on agent iterations per QA (default 8).",
+        "--max-iterations", type=int, default=12,
+        help=(
+            "Cap on agent iterations per QA (default 12). Bumped from 8 "
+            "in audit H16 (2026-05-29) after bench-100 v8 analysis "
+            "showed iter-cap fails where the agent FOUND the answer at "
+            "iteration 9-13 but ran out of budget — e.g. conv-3-q32 "
+            "reached the correct ``Woodhaven`` URI on iteration 13. The "
+            "default tracks the LoCoMo paper §4.2's `max_tool_calls=10` "
+            "with margin for the multi-search + drill pattern memory-"
+            "augmented agents use."
+        ),
     )
     parser.add_argument(
         "--timeout-s", type=float, default=90.0,

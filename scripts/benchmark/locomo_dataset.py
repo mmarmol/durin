@@ -48,12 +48,20 @@ logger = logging.getLogger(__name__)
 CATEGORIES = ("single_hop", "multi_hop", "temporal", "open_domain", "adversarial")
 
 # Mapeo de los códigos numéricos del dataset (1..5) a las categorías
-# nombradas. El orden refleja el §4.1 del paper.
+# nombradas. Canonical per mem0's published benchmark code
+# (``mem0/memory-benchmarks/benchmarks/locomo/prompts.py::
+# CATEGORY_NAMES``) — VERIFIED against the raw counts in
+# ``locomo10.json`` which yield 282 / 321 / 96 / 841 / 446
+# for codes 1..5. Audit H13 (2026-05-29) fixed a pre-existing
+# swap that re-labelled the four non-adversarial categories
+# (paper §4.1 narrative order ≠ dataset code-to-label order);
+# every prior bench-X labelling that called single_hop "our
+# weakest category" was really pointing at multi_hop.
 _CATEGORY_BY_CODE = {
-    1: "single_hop",
-    2: "multi_hop",
-    3: "temporal",
-    4: "open_domain",
+    1: "multi_hop",
+    2: "temporal",
+    3: "open_domain",
+    4: "single_hop",
     5: "adversarial",
 }
 
@@ -172,9 +180,24 @@ def load_dataset(path: str | Path) -> list[QA]:
                 continue
             question = q.get("question") or ""
             answer = q.get("answer")
-            if not question or answer is None:
+            if not question:
                 skipped += 1
                 continue
+            # Audit H14 (2026-05-29): LoCoMo adversarial questions
+            # (category code 5) come with ``answer=None`` by design —
+            # the agent is expected to REFUSE to answer because the
+            # fact isn't in the conversation. Pre-H14 the loader
+            # skipped them (444 / 446 of the adversarial set were
+            # invisible) so every prior bench reported adversarial
+            # over a sample of size 2 — mostly noise. The string
+            # sentinel ``"__REFUSE__"`` flags these for the judge to
+            # score with a refusal rubric instead of substring match.
+            if answer is None:
+                if category == "adversarial":
+                    answer = "__REFUSE__"
+                else:
+                    skipped += 1
+                    continue
             qas.append(QA(
                 qa_id=f"{conv.conv_id}-q{q_idx}",
                 conv_id=conv.conv_id,

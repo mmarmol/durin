@@ -116,6 +116,14 @@ def judge_answer(
             reasoning="empty answer (agent produced no content)",
         )
 
+    # Audit H14 (2026-05-29): adversarial questions with the
+    # ``__REFUSE__`` sentinel score 1.0 when the agent refused
+    # (says it can't determine / no info), 0.0 when it
+    # hallucinated a positive answer. No LLM call needed — the
+    # detection is purely lexical.
+    if expected.strip() == "__REFUSE__":
+        return _score_refusal(got)
+
     prompt = _PROMPT_TEMPLATE.format(
         question=question.strip(),
         expected=expected.strip(),
@@ -171,6 +179,53 @@ def judge_answer(
         _maybe_sleep_backoff(attempt, total_attempts)
     raise JudgeError(
         f"judge failed after {total_attempts} attempts: {last_error}"
+    )
+
+
+# Audit H14 (2026-05-29): refusal patterns the LoCoMo adversarial
+# rubric counts as correct. Lowercased substring match — robust to
+# variations in agent wording across languages (English + Spanish
+# patterns covered; CJK can be added when a CJK bench arrives).
+_REFUSAL_MARKERS = (
+    "i don't have",
+    "i do not have",
+    "no information",
+    "no record",
+    "not specified",
+    "not mentioned",
+    "cannot determine",
+    "can't determine",
+    "unable to determine",
+    "i don't know",
+    "no info",
+    "the memory doesn't",
+    "the memory does not",
+    "no encuentro",
+    "no tengo información",
+    "no tengo informacion",
+    "no se menciona",
+    "no se especifica",
+    "no hay registro",
+)
+
+
+def _score_refusal(got: str) -> "JudgeVerdict":
+    """H14: adversarial refusal rubric — agent earns 1.0 when its
+    answer expresses 'I don't have / no info / cannot determine'
+    rather than hallucinating a value."""
+    low = got.lower()
+    if any(marker in low for marker in _REFUSAL_MARKERS):
+        return JudgeVerdict(
+            score=1.0, confidence=95,
+            reasoning="adversarial: agent correctly refused / said no info",
+        )
+    return JudgeVerdict(
+        score=0.0, confidence=80,
+        reasoning=(
+            "adversarial: agent gave a positive answer when the gold "
+            "expected a refusal — likely hallucinated a fact not in the "
+            "conversation"
+        ),
     )
 
 
