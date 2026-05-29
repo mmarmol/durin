@@ -125,6 +125,11 @@ Results come pre-sectioned with structural markers:
 - `=== SESSION: <id> ===` — conversation summaries
 - `=== INGESTED: <id> ===` — chunks of documents the user has loaded
 
+Each marker also carries a completeness qualifier:
+- `(complete)` — the body shown IS the full entry; do NOT call memory_drill on this uri, it returns the same text.
+- `(preview N/M)` — N chars shown, M chars exist; call memory_drill on this uri only if you need the remaining body.
+Markers without a completeness qualifier are rare (legacy / lexical-only hits) — use judgment.
+
 When sources disagree, more recent fragments may reflect updates that have
 not yet been consolidated into the canonical entity page. Use timestamps in
 the markers to reason about recency.
@@ -192,13 +197,23 @@ on disk where preserving the original artifact matters.
 ### 3.4 `memory_drill`
 
 ```
-Read the full content of a memory item by URI. Use this when memory_search
-returned a hit and you need to see the full body, including any structured
-data in the frontmatter.
+Read the full content of a memory item by URI.
+
+Use this ONLY when the corresponding memory_search result block is marked
+`preview N/M` in its section header — N chars were shown, M chars exist —
+i.e. more body is available beyond what you already have. Drill in that
+case to fetch the rest.
+
+Do NOT drill when the block is marked `complete`: the search already
+showed you the entire body and drill will return the same text, wasting
+tokens and an LLM round-trip. Blocks without an explicit completeness
+qualifier (rare; legacy / lexical-only hits) are best-guess — drill only
+if the visible content seems truncated.
 
 This tool is read-only. For related context about an entity (recent
-observations, sessions mentioning it), use memory_search with the entity's
-name or URI as the query instead.
+observations, sessions mentioning it), use memory_search with the
+entity's name or URI as the query instead — drill on a single URI never
+expands beyond that URI.
 ```
 
 ### 3.5 Synchronization requirement

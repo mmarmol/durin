@@ -17,12 +17,21 @@ _PARAMETERS = tool_parameters_schema(
     required=["uri"],
     description=(
         # Canonical text per `docs/memory/06_prompts_and_instructions.md` §3.4.
-        "Read the full content of a memory item by URI. Use this when "
-        "memory_search returned a hit and you need to see the full body, "
-        "including any structured data in the frontmatter.\n\n"
+        "Read the full content of a memory item by URI.\n\n"
+        "Use this ONLY when the corresponding memory_search result block "
+        "is marked `preview N/M` in its section header — N chars were "
+        "shown, M chars exist — i.e. more body is available beyond what "
+        "you already have. Drill in that case to fetch the rest.\n\n"
+        "Do NOT drill when the block is marked `complete`: the search "
+        "already showed you the entire body and drill will return the "
+        "same text, wasting tokens and an LLM round-trip. Blocks without "
+        "an explicit completeness qualifier (rare; legacy / lexical-only "
+        "hits) are best-guess — drill only if the visible content seems "
+        "truncated.\n\n"
         "This tool is read-only. For related context about an entity "
         "(recent observations, sessions mentioning it), use memory_search "
-        "with the entity's name or URI as the query instead."
+        "with the entity's name or URI as the query instead — drill on "
+        "a single URI never expands beyond that URI."
     ),
 )
 

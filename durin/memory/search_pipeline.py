@@ -183,6 +183,10 @@ def run_search_pipeline(
             # summary (authoritative or body-prefix fallback) so the
             # warm-tier renderer never falls back to a 60-char headline.
             summary=meta.get("summary", ""),
+            # H5 (audit 2026-05-29): propagate the source body length
+            # so the renderer can emit the completeness qualifier
+            # (``complete`` vs ``preview N/M``) in the marker line.
+            body_length=int(meta.get("body_length", 0) or 0),
         ))
     # G1 (audit fourth pass, 2026-05-28): honour the configured cap
     # when supplied; fall back to `DEFAULT_MAX_PER_SOURCE` otherwise.
@@ -593,6 +597,12 @@ def _resolve_meta(
         # renderer keys off this for the warm-tier triage block.
         if vh.get("summary"):
             meta["summary"] = vh["summary"]
+        # H5 (audit 2026-05-29): propagate the source body length so
+        # the renderer can compute the per-hit completeness qualifier.
+        # ``body_length=0`` (the default) marks "unknown" — the
+        # renderer omits the signal entirely for backward compat.
+        if vh.get("body_length") is not None:
+            meta["body_length"] = int(vh["body_length"] or 0)
         # NOTE: A4 reverted P2.5 — body is no longer stored in
         # LanceDB. `meta["body"]` stays unset; the cold-tier caller
         # (memory_search._enrich_body) reads it from disk.

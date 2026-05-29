@@ -181,6 +181,13 @@ class VectorIndex:
             "class_name": "entity_page",
             "summary": summary,
             "headline": name,
+            # H5 (audit 2026-05-29): schema parity with memory-entry
+            # rows. Entity pages don't carry a single ``body`` field
+            # in the same shape as MemoryEntry; the closest analogue
+            # is the rendered page body the caller passed. Persisting
+            # its length lets the renderer compute completeness for
+            # entity hits with the same logic as fragments.
+            "body_length": len(body or ""),
             "vector": vec,
             "valid_from": "",
             # B1: keep schema consistent with memory entries; entity pages
@@ -631,6 +638,14 @@ class VectorIndex:
             # value.
             "summary": _effective_summary(entry),
             "headline": entry.headline,
+            # H5 (audit 2026-05-29): persist the source body's total
+            # length so the search pipeline / renderer can compute the
+            # per-hit completeness qualifier (``complete`` vs
+            # ``preview N/M``). Without this, every hit would have to
+            # guess whether drilling reveals more — the agent drills
+            # defensively. ``len()`` on a Python str is char count
+            # (consistent with the H4 ``body[:400]`` slice unit).
+            "body_length": len(entry.body or ""),
             "vector": vector,
             "valid_from": entry.valid_from.isoformat() if entry.valid_from else "",
             # B1 (doc 24 §7): persist entity tags so entity_ranker's
