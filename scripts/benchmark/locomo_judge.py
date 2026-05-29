@@ -203,15 +203,21 @@ def _coerce_to_text(raw: object) -> object:
 def _maybe_sleep_backoff(attempt: int, total_attempts: int) -> None:
     """Exponential backoff between judge attempts.
 
-    Sleeps ``2 ** attempt`` seconds after attempt N (0-indexed), but
-    skips the sleep that would come after the very last attempt (no
-    point waiting just to raise). The schedule for the default
-    5-attempt budget is 1, 2, 4, 8 — 15 s total worst case, enough
-    to ride out the kind of upstream outage observed on 2026-05-29.
+    Sleeps ``4 * 2 ** attempt`` seconds after attempt N (0-indexed),
+    but skips the sleep that would come after the very last attempt
+    (no point waiting just to raise). The schedule for the default
+    5-attempt budget is 4, 8, 16, 32 — 60 s total worst case.
+
+    Audit H8 (2026-05-29): base bumped from 1 s to 4 s after the
+    bench-100 overnight run hit z.ai outage windows lasting hours.
+    The original 1-2-4-8 schedule (15 s worst case) burnt through
+    every retry before z.ai recovered; the 4-8-16-32 schedule gives
+    upstream more headroom before the next attempt without changing
+    the retry budget itself.
     """
     if attempt + 1 >= total_attempts:
         return
-    time.sleep(float(2 ** attempt))
+    time.sleep(float(4 * (2 ** attempt)))
 
 
 def _invoke_accepts_temperature(llm_invoke: LLMInvoke) -> bool:
