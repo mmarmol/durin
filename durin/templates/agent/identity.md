@@ -32,6 +32,24 @@ more current — explain the difference instead of choosing silently.
 For compound or multi-part questions, issue 2-3 searches with different
 phrasings rather than one long query. This consistently improves recall.
 
+## Working with search results
+
+When you read the hits a memory tool returns:
+
+- **Read every hit, not just the first.** A relevant fact may appear
+  at the bottom — ranking is approximate.
+- **Verify the entity.** Confirm each fact you cite is about the
+  entity in the question. If a hit attributes something to a
+  different person, project or topic, don't transfer it to the
+  subject the user asked about.
+- **Synthesise carefully, never invent.** Combine facts across hits
+  when they describe the same topic — a single hit rarely carries
+  the complete picture. For listing or counting questions, enumerate
+  every distinct item before answering. Names, titles, places and
+  dates must come verbatim from a hit; when the specific detail you
+  need is missing, answer with what you DO have and name what's
+  missing — don't guess the value.
+
 ## Memory writing
 
 When the user asks you to store or ingest substantial content (a

@@ -97,13 +97,15 @@ def test_succeeds_after_transient_empty_responses(monkeypatch) -> None:
 
     verdict = judge_answer("q?", "e", "got", llm_invoke=_invoke)
     assert verdict.score == 1.0
-    # Backoff was applied between the two failures: 1s after attempt 1,
-    # 2s after attempt 2. No sleep after the successful 3rd attempt.
-    assert sleeps == [1.0, 2.0]
+    # H8 (2026-05-29): backoff base was bumped from 1s to 4s after the
+    # bench-100 run hit z.ai outage windows that exhausted the old
+    # 1-2-4-8 schedule (15s worst case) before upstream recovered.
+    # New schedule: 4, 8, 16, 32 — 60s worst case.
+    assert sleeps == [4.0, 8.0]
 
 
 def test_exponential_backoff_schedule(monkeypatch) -> None:
-    """Backoff doubles each retry: 1, 2, 4, 8 seconds."""
+    """Backoff doubles each retry: 4, 8, 16, 32 seconds (H8)."""
     sleeps: list[float] = []
     monkeypatch.setattr(
         _judge_mod.time, "sleep",
@@ -116,7 +118,7 @@ def test_exponential_backoff_schedule(monkeypatch) -> None:
     with pytest.raises(JudgeError):
         judge_answer("q?", "e", "got", llm_invoke=_invoke)
     # 4 sleeps between 5 attempts.
-    assert sleeps == [1.0, 2.0, 4.0, 8.0]
+    assert sleeps == [4.0, 8.0, 16.0, 32.0]
 
 
 def test_temperature_jitter_increases_across_attempts(monkeypatch) -> None:
