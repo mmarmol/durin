@@ -43,8 +43,8 @@ Also documented here (consumed structurally, not as instruction text):
 ```markdown
 ## Memory
 
-You have access to four memory tools (memory_search, memory_store,
-memory_ingest, memory_drill). The memory system holds:
+You have access to five memory tools (memory_search, memory_store,
+memory_ingest, memory_drill, memory_drill_batch). The memory system holds:
 
 - **Canonical entity pages** — consolidated knowledge about people,
   projects, bugs, deals, files, etc.
@@ -216,7 +216,27 @@ entity's name or URI as the query instead — drill on a single URI never
 expands beyond that URI.
 ```
 
-### 3.5 Synchronization requirement
+### 3.5 `memory_drill_batch`
+
+```
+Read the full content of multiple memory items by URI in a single tool call.
+
+Pass up to 10 URIs; the response carries one ``{uri, content}`` record per
+request in the same order, plus an ``error`` field on entries that failed
+(missing file, malformed uri, etc.). Failing one uri does NOT abort the
+others.
+
+Use this INSTEAD of N back-to-back ``memory_drill`` calls when a single
+memory_search result block flagged multiple URIs as ``preview N/M`` and you
+need to cross-reference them. One round-trip, lower latency, same payload
+as N drills.
+
+Do NOT batch when the search marked the relevant blocks as ``complete``:
+drill returns the same text already shown. Do NOT use as a replacement for
+memory_search — drill on N URIs never expands the candidate set.
+```
+
+### 3.6 Synchronization requirement
 
 The text above MUST match the `.description` property on each tool class (`durin/agent/tools/memory_search.py::MemorySearchTool.description`, etc.). That property is the field `Tool.to_schema()` emits as `function.description` in the OpenAI function-calling spec — i.e. what the LLM actually reads when deciding to call the tool.
 
