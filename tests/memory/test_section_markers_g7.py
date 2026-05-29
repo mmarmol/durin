@@ -155,3 +155,101 @@ def test_hot_layer_fragment_block_uses_shared_helper() -> None:
         "memory/episodic/abc", ts="2026-05-23",
     )
     assert out.splitlines()[0] == expected_header
+
+
+# ---------------------------------------------------------------------------
+# Audit H5 (2026-05-29): per-hit completeness signal
+# ---------------------------------------------------------------------------
+#
+# Pre-H5 the warm-tier render block carried no signal to the LLM about
+# whether the rendered content was the entire body (drilling adds
+# nothing) or a preview (drilling reveals the rest). The wording of
+# `memory_drill` actively prescribes "drill after every hit if you need
+# the full body" — the LLM has no way to know whether drilling is
+# warranted, so it drills defensively. Bench v3 confirmed: even after
+# H4 gave hits informative summaries, drill ratio stayed at 2.24 per
+# search.
+#
+# H5 adds an optional `completeness` qualifier to each section header
+# so the LLM gets explicit signal: ``(complete)`` when the rendered
+# content is the whole body, ``(preview N/M)`` when more is available
+# via drill. Backward compat: when the caller doesn't pass
+# completeness, the marker shape stays identical to pre-H5.
+
+
+def test_fragment_marker_completeness_complete() -> None:
+    from durin.memory.section_markers import fragment_marker
+    out = fragment_marker(
+        "memory/episodic/abc", ts="2026-05-23", completeness="complete",
+    )
+    assert out == (
+        "=== FRAGMENT: memory/episodic/abc (ts 2026-05-23, complete) ==="
+    )
+
+
+def test_fragment_marker_completeness_preview() -> None:
+    from durin.memory.section_markers import fragment_marker
+    out = fragment_marker(
+        "memory/episodic/x", ts="2026-05-23",
+        completeness="preview 400/1500",
+    )
+    assert out == (
+        "=== FRAGMENT: memory/episodic/x (ts 2026-05-23, preview 400/1500) ==="
+    )
+
+
+def test_fragment_marker_completeness_without_ts() -> None:
+    from durin.memory.section_markers import fragment_marker
+    out = fragment_marker("memory/episodic/x", completeness="complete")
+    assert out == "=== FRAGMENT: memory/episodic/x (complete) ==="
+
+
+def test_canonical_marker_completeness() -> None:
+    from durin.memory.section_markers import canonical_marker
+    out = canonical_marker(
+        "person:marcelo", ts="2026-05-23T18:00",
+        completeness="preview 400/2200",
+    )
+    assert out == (
+        "=== CANONICAL: person:marcelo "
+        "(consolidated 2026-05-23T18:00, preview 400/2200) ==="
+    )
+
+
+def test_session_marker_completeness() -> None:
+    from durin.memory.section_markers import session_marker
+    out = session_marker(
+        "sessions/abc.md#turn-42", ts="2026-05-23",
+        completeness="complete",
+    )
+    assert out == (
+        "=== SESSION: sessions/abc.md#turn-42 (ts 2026-05-23, complete) ==="
+    )
+
+
+def test_ingested_marker_completeness() -> None:
+    from durin.memory.section_markers import ingested_marker
+    out = ingested_marker(
+        "doc-42", "paper.pdf", completeness="preview 400/1500",
+    )
+    assert out == (
+        "=== INGESTED: doc-42/paper.pdf (preview 400/1500) ==="
+    )
+
+
+def test_markers_without_completeness_stay_unchanged() -> None:
+    """Backward compat: omitting the kwarg leaves the marker identical
+    to pre-H5 shape, so existing tests and hot-layer callsites don't
+    break."""
+    from durin.memory.section_markers import (
+        canonical_marker, fragment_marker,
+        ingested_marker, session_marker,
+    )
+    assert fragment_marker("p", ts="2026") == "=== FRAGMENT: p (ts 2026) ==="
+    assert canonical_marker("r", ts="2026") == (
+        "=== CANONICAL: r (consolidated 2026) ==="
+    )
+    assert session_marker("u", ts="2026") == (
+        "=== SESSION: u (ts 2026) ==="
+    )
+    assert ingested_marker("id", "uri") == "=== INGESTED: id/uri ==="

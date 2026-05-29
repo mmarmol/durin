@@ -73,9 +73,13 @@ def test_entry_record_has_no_body_column(tmp_path: Path) -> None:
         "that consumer's module (see search_pipeline._cross_encoder_rerank "
         "for the rationale)."
     )
+    # H5 (audit 2026-05-29): ``body_length`` (int) was added so the
+    # renderer can emit the per-hit completeness qualifier. This is
+    # metadata about the body, NOT the body itself — A4 prohibited
+    # the latter, not the former.
     expected_columns = {
         "id", "class_name", "summary", "headline", "vector",
-        "valid_from", "entities", "path",
+        "valid_from", "entities", "path", "body_length",
     }
     assert set(record.keys()) == expected_columns, (
         f"row schema drifted from doc 02 §3.1 — expected "

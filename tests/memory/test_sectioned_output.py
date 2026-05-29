@@ -200,3 +200,78 @@ def test_section_intro_has_no_valuative_language() -> None:
     out = render_sectioned(hits).lower()
     for forbidden in ("authoritative", "trust this", "treat as"):
         assert forbidden not in out
+
+
+# ---------------------------------------------------------------------------
+# Audit H5 (2026-05-29): per-hit completeness signal in renderer
+# ---------------------------------------------------------------------------
+#
+# The renderer must compute and surface the completeness qualifier so
+# the LLM can decide whether drilling is warranted. Three cases:
+# - body_length unknown (legacy / lexical-only hits): omit signal.
+# - len(summary) >= body_length: rendered content IS the whole body →
+#   "complete" — drill returns the same text.
+# - len(summary) < body_length: rendered content is a preview →
+#   "preview N/M" where N=len(summary), M=body_length.
+
+
+def test_render_marks_complete_when_summary_covers_body() -> None:
+    """Body fits entirely in the H4 summary fallback (typical for
+    bench seeds / short turns). The marker carries `complete` so the
+    LLM doesn't waste a drill on identical content."""
+    full = "Joanna keeps Tilly with her while writing."
+    hit = SectionedHit(
+        uri="x", type="episodic", path="memory/episodic/x.md",
+        score=0.5, ts="2026-05-23",
+        summary=full, body_length=len(full),
+    )
+    out = render_sectioned([hit])
+    assert "complete)" in out, (
+        "marker must carry the `complete` qualifier when "
+        "summary covers the full body"
+    )
+
+
+def test_render_marks_preview_when_body_exceeds_summary() -> None:
+    """Body is longer than the summary slice — the LLM gets `preview
+    400/1500` so it knows drilling reveals more content."""
+    hit = SectionedHit(
+        uri="x", type="corpus", path="memory/corpus/x.md",
+        score=0.5, ts="2026-05-23",
+        summary="lead summary of 28 chars here",
+        body_length=1500,
+        ingest_id="doc-42",
+    )
+    out = render_sectioned([hit])
+    assert "preview 29/1500)" in out, (
+        f"marker must show preview length / total body length;\n"
+        f"actual block: {out!r}"
+    )
+
+
+def test_render_omits_completeness_when_body_length_unknown() -> None:
+    """Backward compat: hits without ``body_length`` (lexical-only,
+    legacy callers) must render with the pre-H5 marker shape."""
+    hit = SectionedHit(
+        uri="x", type="episodic", path="memory/episodic/x.md",
+        score=0.5, ts="2026-05-23",
+        summary="some summary",
+        body_length=0,
+    )
+    out = render_sectioned([hit])
+    assert "complete" not in out
+    assert "preview" not in out
+
+
+def test_render_marks_complete_for_canonical_entity_pages() -> None:
+    """Entity-page hits go through the canonical_marker path; same
+    completeness signal applies."""
+    full = "Marcelo Marmol: architect of durin."
+    hit = SectionedHit(
+        uri="person:marcelo", type="entity",
+        path="memory/entities/person/marcelo.md",
+        score=0.5, ts="2026-05-23T18:00",
+        summary=full, body_length=len(full),
+    )
+    out = render_sectioned([hit])
+    assert "complete)" in out

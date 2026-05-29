@@ -38,7 +38,25 @@ __all__ = [
 ]
 
 
-def canonical_marker(ref: str, *, ts: str = "") -> str:
+def _compose_qualifiers(*parts: str) -> str:
+    """Join non-empty qualifiers inside a single trailing parenthesis.
+
+    H5 (audit 2026-05-29) introduces an optional ``completeness``
+    qualifier (``"complete"`` / ``"preview N/M"``) that lives in the
+    same parens as the existing ``ts`` / ``consolidated`` qualifier.
+    Composing them here keeps the marker shape predictable and lets
+    each marker helper express its specific qualifiers without
+    re-implementing the join.
+    """
+    kept = [p for p in parts if p]
+    if not kept:
+        return ""
+    return " (" + ", ".join(kept) + ")"
+
+
+def canonical_marker(
+    ref: str, *, ts: str = "", completeness: str = "",
+) -> str:
     """Header for a canonical entity-page block.
 
     With ``ts`` set: ``=== CANONICAL: <ref> (consolidated <ts>) ===``
@@ -49,43 +67,56 @@ def canonical_marker(ref: str, *, ts: str = "") -> str:
     emits in practice; the hot layer always passes a `consolidated_ts`
     (the file mtime of the entity page) so it always gets the
     timestamped variant.
+
+    H5 (audit 2026-05-29): ``completeness`` (optional) is appended to
+    the trailing parens — ``"complete"`` when the rendered body is the
+    whole entry, ``"preview N/M"`` when more is available via drill.
     """
-    if ts:
-        return f"=== CANONICAL: {ref} (consolidated {ts}) ==="
-    return f"=== CANONICAL: {ref} (canonical entity page) ==="
+    primary = f"consolidated {ts}" if ts else "canonical entity page"
+    return f"=== CANONICAL: {ref}{_compose_qualifiers(primary, completeness)} ==="
 
 
-def fragment_marker(path: str, *, ts: str = "") -> str:
+def fragment_marker(
+    path: str, *, ts: str = "", completeness: str = "",
+) -> str:
     """Header for a fragment block (episodic / stable / post-cursor).
 
     With ``ts`` set: ``=== FRAGMENT: <path> (ts <ts>) ===``
     With ``ts`` empty: ``=== FRAGMENT: <path> ===``
+
+    H5: ``completeness`` (optional) appends to the trailing parens.
     """
-    if ts:
-        return f"=== FRAGMENT: {path} (ts {ts}) ==="
-    return f"=== FRAGMENT: {path} ==="
+    primary = f"ts {ts}" if ts else ""
+    return f"=== FRAGMENT: {path}{_compose_qualifiers(primary, completeness)} ==="
 
 
-def session_marker(uri: str, *, ts: str = "") -> str:
+def session_marker(
+    uri: str, *, ts: str = "", completeness: str = "",
+) -> str:
     """Header for a session block (summary or turn match).
 
     With ``ts`` set: ``=== SESSION: <uri> (ts <ts>) ===``
     With ``ts`` empty: ``=== SESSION: <uri> ===``
+
+    H5: ``completeness`` (optional) appends to the trailing parens.
     """
-    if ts:
-        return f"=== SESSION: {uri} (ts {ts}) ==="
-    return f"=== SESSION: {uri} ==="
+    primary = f"ts {ts}" if ts else ""
+    return f"=== SESSION: {uri}{_compose_qualifiers(primary, completeness)} ==="
 
 
-def ingested_marker(ingest_id: str | None, uri: str) -> str:
+def ingested_marker(
+    ingest_id: str | None, uri: str, *, completeness: str = "",
+) -> str:
     """Header for an ingested-content block.
 
     Format: ``=== INGESTED: <ingest_id>/<uri> ===``. When the
     ``ingest_id`` is not known the helper falls back to ``unknown``
     so the LLM still sees a structured marker line.
+
+    H5: ``completeness`` (optional) appends to the trailing parens.
     """
     label = ingest_id or "unknown"
-    return f"=== INGESTED: {label}/{uri} ==="
+    return f"=== INGESTED: {label}/{uri}{_compose_qualifiers(completeness)} ==="
 
 
 def end_marker(kind: str) -> str:

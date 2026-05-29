@@ -67,6 +67,11 @@ class SectionedHit:
     body: str = ""
     summary: str = ""
     entities: tuple[str, ...] = ()
+    # H5 (audit 2026-05-29): total source body length so the renderer
+    # can compute the per-hit completeness qualifier. ``0`` means
+    # unknown (lexical-only hits, legacy callers) — the renderer
+    # then omits the signal entirely (backward-compat marker shape).
+    body_length: int = 0
 
 
 # Map each source class to a section bucket. Stable entries surface as
@@ -174,12 +179,19 @@ def _render_block(section: str, hit: SectionedHit) -> str:
       LLM can drill to the canonical page.
     - Canonical header uses ``(canonical entity page)`` when no ts,
       ``(consolidated <ts>)`` when ts is present.
+
+    H5 (audit 2026-05-29): the marker gets a completeness qualifier
+    when the source body length is known (``hit.body_length > 0``).
+    ``complete`` means the rendered text IS the whole body — drilling
+    returns the same content; ``preview N/M`` means more is available.
     """
-    marker = _marker_for(section, hit)
-    body = (hit.summary or hit.body or hit.snippet or "").strip()
+    rendered_body = (hit.summary or hit.body or hit.snippet or "").strip()
+    marker = _marker_for(
+        section, hit, completeness=_completeness_for(hit, rendered_body),
+    )
     parts = [marker]
-    if body:
-        parts.append(body)
+    if rendered_body:
+        parts.append(rendered_body)
     if section != "canonical" and hit.entities:
         parts.append(f"Entities: {', '.join(hit.entities)}")
     from durin.memory.section_markers import end_marker
@@ -187,19 +199,46 @@ def _render_block(section: str, hit: SectionedHit) -> str:
     return "\n".join(parts)
 
 
-def _marker_for(section: str, hit: SectionedHit) -> str:
+def _completeness_for(hit: SectionedHit, rendered_body: str) -> str:
+    """Compute the H5 completeness qualifier for a rendered block.
+
+    Returns ``"complete"`` when the rendered text covers the entire
+    source body, ``"preview N/M"`` when more is available via drill,
+    or ``""`` when the body length is unknown (backward-compat path
+    for legacy / lexical-only hits).
+    """
+    if hit.body_length <= 0:
+        return ""
+    rendered_len = len(rendered_body)
+    if rendered_len >= hit.body_length:
+        return "complete"
+    return f"preview {rendered_len}/{hit.body_length}"
+
+
+def _marker_for(
+    section: str, hit: SectionedHit, *, completeness: str = "",
+) -> str:
     # G7 (audit fourth pass, 2026-05-28): delegate to the shared
     # `section_markers` helper so the marker format has one source
     # of truth across both this renderer and `hot_layer`. The body
     # composition stays here — only the header strings are shared.
+    # H5 (2026-05-29): pass through the completeness qualifier.
     from durin.memory.section_markers import (
         canonical_marker, fragment_marker,
         ingested_marker, session_marker,
     )
     if section == "canonical":
-        return canonical_marker(hit.uri, ts=hit.ts)
+        return canonical_marker(
+            hit.uri, ts=hit.ts, completeness=completeness,
+        )
     if section == "fragment":
-        return fragment_marker(hit.path, ts=hit.ts)
+        return fragment_marker(
+            hit.path, ts=hit.ts, completeness=completeness,
+        )
     if section == "session":
-        return session_marker(hit.uri, ts=hit.ts)
-    return ingested_marker(hit.ingest_id, hit.uri)
+        return session_marker(
+            hit.uri, ts=hit.ts, completeness=completeness,
+        )
+    return ingested_marker(
+        hit.ingest_id, hit.uri, completeness=completeness,
+    )
