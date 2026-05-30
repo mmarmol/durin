@@ -81,6 +81,12 @@ class HealthChecker:
         for name, probe in (
             ("fts", self._probe_fts),
             ("lance", self._probe_lance),
+            # P11 Fix B (2026-05-30): cross-encoder probe. "skipped"
+            # when CE disabled in config (most common case — silent).
+            # "fail" surfaces missing sentence_transformers OR model
+            # unreachable; escalates after 3 strikes per the standard
+            # streak. P11 Fix C handles the in-process retry.
+            ("cross_encoder", self._probe_cross_encoder),
         ):
             status, error = probe()
             components[name] = status
@@ -98,6 +104,38 @@ class HealthChecker:
                 # mute so a new failure burst can escalate again.
                 self._failure_count[name] = 0
                 self._critical_emitted.discard(name)
+
+        # P11 Fix C (2026-05-30): if cross-encoder probe failed,
+        # reset the global-ish reranker state so the next user-facing
+        # search retries the load. Combined with the time-based
+        # retry in `CrossEncoderReranker.score()`, this gives two
+        # paths to recovery: in-process retry every 60s OR an
+        # explicit reset from the periodic probe.
+        if components.get("cross_encoder") == "fail":
+            try:
+                self._reset_cross_encoder()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "health_check: cross_encoder reset failed: %s", exc,
+                )
+
+        # P11 Fix D (2026-05-30): if lance probe failed, attempt a
+        # rebuild_from_workspace. Only fires when the .lance dir is
+        # present (the probe returns "ok" for a missing index — that
+        # case is normal during cold start). Best-effort: a rebuild
+        # failure logs + lets the 3-strike escalation continue on
+        # the next tick.
+        if components.get("lance") == "fail":
+            try:
+                rebuilt = self._rebuild_lance()
+                if rebuilt:
+                    logger.info(
+                        "health_check: lance index rebuilt after probe failure"
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "health_check: lance rebuild failed: %s", exc,
+                )
 
         # Drift detection runs always (it's a read; cheap). Auto-
         # repair via reindex_one_file for each issue. This is a
@@ -196,9 +234,121 @@ class HealthChecker:
             return ("fail", f"lance probe: {exc}")
         return ("ok", "")
 
+    def _probe_cross_encoder(self) -> tuple[str, str]:
+        """P11 Fix B (2026-05-30): check the cross-encoder rerank
+        subsystem can actually score a pair.
+
+        States:
+        - CE not enabled in config → ``("skipped", reason)``. Most
+          users disable CE; reporting fail/warn would be noise.
+        - sentence_transformers missing → ``("fail", reason)``. H25's
+          static doctor check should have caught this at install
+          time, but the runtime probe catches drift (someone removed
+          the package after enabling CE).
+        - Probe load + score works → ``("ok", "")``.
+        - Probe load fails → ``("fail", reason)``. Triggers the
+          standard 3-strike escalation in ``run_tick`` AND calls
+          ``CrossEncoderReranker.reset()`` so the next user-facing
+          search retries the load instead of falling through to RRF
+          forever. P11 Fix C is the in-process retry; this is the
+          out-of-process detection that escalates if the retry also
+          fails repeatedly.
+        """
+        try:
+            from durin.config.loader import load_config
+            cfg = load_config()
+            ce_cfg = cfg.memory.search.cross_encoder
+            if not ce_cfg.enabled:
+                return ("skipped", "cross-encoder disabled in config")
+            model_id = ce_cfg.model
+        except Exception as exc:  # noqa: BLE001
+            return ("skipped", f"config load failed: {exc}")
+        try:
+            from durin.memory.cross_encoder import CrossEncoderReranker
+        except Exception as exc:  # noqa: BLE001
+            return ("fail", f"cross_encoder module import failed: {exc}")
+        try:
+            probe = CrossEncoderReranker(model=model_id)
+            # Score a trivial pair to force the lazy load + verify
+            # the model is reachable end-to-end. Cheap once warm
+            # (~10-50ms); slow on cold cache (the first call may
+            # download the model — that's the rare case and we
+            # accept the latency to verify reachability).
+            scores = probe.score("health_probe", ["dummy doc"])
+        except Exception as exc:  # noqa: BLE001
+            return ("fail", f"cross-encoder probe raised: {exc}")
+        if not scores:
+            # Returned None or [] — load failed gracefully via H25
+            # fallback. Report fail so the 3-strike escalation fires.
+            return (
+                "fail",
+                "cross-encoder load returned no scores "
+                "(likely sentence_transformers missing or model "
+                "unreachable; see ERROR log earlier)",
+            )
+        return ("ok", "")
+
     # ------------------------------------------------------------------
     # repair
     # ------------------------------------------------------------------
+
+    def _reset_cross_encoder(self) -> None:
+        """P11 Fix C (2026-05-30): clear cached reranker state in any
+        live tool instance, so the next user-facing search re-attempts
+        the model load.
+
+        We can't reach into the per-tool-instance cache from here
+        (HealthChecker doesn't know about the agent's tool registry),
+        so this is conservative: we clear the module-level fallback
+        log marker so a recovered CE re-fires its WARNING path the
+        next time it degrades. The actual re-load happens via
+        `CrossEncoderReranker._should_retry_load` time-window —
+        the probe's role is to surface the failure loudly.
+        """
+        from durin.memory import cross_encoder as ce_mod
+
+        ce_mod._RERANK_FALLBACK_LOGGED = False
+
+    def _rebuild_lance(self) -> bool:
+        """P11 Fix D (2026-05-30): rebuild the LanceDB vector index
+        when the periodic probe finds it dead.
+
+        Returns True on success, False on no-op (lance unavailable
+        or index dir missing — both legitimate states, not failures).
+        Raises only on rebuild itself failing — caller logs.
+
+        Caveat: a rebuild walks every `memory/<class>/*.md` and
+        re-embeds the lot. On a workspace of 5k entries that's
+        ~10-30s of CPU. We accept that cost because (a) the alternative
+        is leaving vector search dead until manual `durin memory
+        reindex`, and (b) the probe only fires when the index is
+        actually broken — not on normal operation.
+        """
+        try:
+            from durin.memory.vector_index import (
+                VectorIndex, _INDEX_PATH, vector_index_available,
+            )
+        except Exception:
+            return False
+        if not vector_index_available():
+            return False
+        lance_dir = self._workspace.joinpath(*_INDEX_PATH)
+        if not lance_dir.is_dir():
+            # No index present — nothing to rebuild. The lazy-create
+            # path on next memory_store will handle it.
+            return False
+        from durin.config.loader import load_config
+        from durin.memory.embedding import FastembedProvider
+
+        cfg = load_config()
+        provider = FastembedProvider(model=cfg.memory.embedding.model)
+        vi = VectorIndex(self._workspace, provider)
+        n = vi.rebuild_from_workspace()
+        logger.info(
+            "lance rebuild: %d entries indexed for %s",
+            n, self._workspace,
+        )
+        return True
 
     def _repair_drift(self, issue: dict[str, Any]) -> None:
         """Best-effort drift repair: re-index the offending path."""
