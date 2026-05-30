@@ -340,8 +340,17 @@ class TestSafetyNets:
                 [EntryRef(id="e1", timestamp="2026-04-10", text="x")],
             )
 
-    def test_context_budget_caps_entries(self, tmp_path: Path) -> None:
-        """G11: when N > MAX_ENTRIES_PER_CALL, take newest by timestamp."""
+    def test_context_budget_caps_entries_oldest_first(self, tmp_path: Path) -> None:
+        """G11 (post-2026-05-30 data-loss fix): when N > MAX_ENTRIES_PER_CALL,
+        take OLDEST by timestamp.
+
+        Previously took newest, which combined with cursor advancing to
+        ``batch_last_ts`` silently dropped the older entries forever:
+        cursor jumped to the timestamp of the newest entry → the older
+        N-50 entries got filtered out as "pre-cursor" on the next
+        discovery pass. Drain loop in the runner now paginates over
+        successive oldest-first batches.
+        """
         captured_prompt = []
 
         def capturing(prompt: str, *, model: str) -> str:
@@ -349,18 +358,33 @@ class TestSafetyNets:
             return _well_formed_response()
 
         c = DreamConsolidator(workspace=tmp_path, llm_invoke=capturing)
-        # Build 60 entries with zero-padded ids so substring match is reliable.
-        # Newest first by timestamp — e59 is the latest.
-        entries = [
-            EntryRef(id=f"entry-{i:03d}", timestamp=f"2026-04-{(i%28)+1:02d}",
+        # 60 entries with distinct timestamps. Pass them shuffled to
+        # prove the consolidator sorts before slicing.
+        entries_sorted = [
+            EntryRef(id=f"entry-{i:03d}", timestamp=f"2026-04-{i+1:02d}",
                      text=f"obs {i}")
-            for i in range(60)
+            for i in range(28)
+        ] + [
+            EntryRef(id=f"entry-{i:03d}", timestamp=f"2026-05-{i-27:02d}",
+                     text=f"obs {i}")
+            for i in range(28, 60)
         ]
-        c.consolidate_entity("person:marcelo", entries)
+        # Shuffle deterministically (reverse) so the sort is exercised.
+        entries = list(reversed(entries_sorted))
+        result = c.consolidate_entity("person:marcelo", entries)
         prompt = captured_prompt[0]
         ids_in_prompt = [f"entry-{i:03d}" for i in range(60)
                          if f"entry-{i:03d}" in prompt]
         assert len(ids_in_prompt) == DreamConsolidator.MAX_ENTRIES_PER_CALL
+        # Cap takes the OLDEST 50 (entries 0..49), NOT the newest.
+        assert "entry-000" in ids_in_prompt, "oldest must be included"
+        assert "entry-049" in ids_in_prompt, "50th oldest must be included"
+        assert "entry-050" not in ids_in_prompt, "51st (newer) must be EXCLUDED"
+        assert "entry-059" not in ids_in_prompt, "newest must be EXCLUDED"
+        # batch_last_ts is the newest of the batch processed = entry-049's ts.
+        # The cursor will advance to this; entries 50..59 remain pending
+        # for the next pass (re-discovered because their ts > cursor).
+        assert result.batch_last_ts == "2026-05-22"  # entry-049 = May 22
 
     def test_cursor_force_set_overrides_llm(self, tmp_path: Path) -> None:
         """G2: apply() forces cursor to batch_last_ts regardless of

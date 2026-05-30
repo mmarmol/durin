@@ -324,9 +324,17 @@ class DreamConsolidator:
 
     # G11: input budget per call. 50 entries × ~100 tokens = ~5000
     # input tokens; plus prompt (~2000) + current_page (~1500) ≈ 8500
-    # tokens total. Well within 32K+ context windows. Take *newest*
-    # entries when capping (assumes caller passes them in any order;
-    # we sort by timestamp before slicing).
+    # tokens total. Well within 32K+ context windows.
+    #
+    # Take *oldest* entries when capping (fix 2026-05-30): previously
+    # took newest, but combined with the cursor advancing to
+    # ``batch_last_ts`` that silently dropped the older N-50 entries
+    # forever — the cursor jumped to the newest timestamp and the next
+    # discovery filtered the rest as "pre-cursor". Oldest-first is
+    # FIFO + monotonic-cursor-safe: each pass drains 50, cursor moves
+    # to the newest of the batch (still older than the unprocessed
+    # remainder), DreamRunner's drain loop repeats until empty or
+    # `max_seconds_per_run` budget exhausted.
     MAX_ENTRIES_PER_CALL = 50
 
     # G10/retries: 3 attempts on parse failure with feedback-in-prompt.
@@ -368,12 +376,11 @@ class DreamConsolidator:
         """Build prompt, call LLM, parse v2 output. Pure (no disk writes).
 
         Per doc 05 + doc 23 §9:
-        - G11: caps entries at ``MAX_ENTRIES_PER_CALL`` (newest first
-          by timestamp).
+        - G11: caps entries at ``MAX_ENTRIES_PER_CALL`` (oldest first
+          by timestamp — see constant docstring).
         - G2: tags the result with ``batch_last_ts`` so :meth:`apply`
           can force the cursor to the last entry of the batch,
-          overriding whatever the LLM put in ``Cursor-after`` (prevents
-          silent data loss when N > cap).
+          overriding whatever the LLM put in ``Cursor-after``.
         - G10/retry: retries up to ``MAX_RETRIES`` on parse failure,
           feeding the error back into the prompt.
         """
@@ -389,14 +396,17 @@ class DreamConsolidator:
                 f"entity_ref must be '<type>:<value>': {entity_ref!r}"
             )
 
-        # G11: cap entries — take the newest by timestamp.
+        # G11: cap entries — take the OLDEST by timestamp (FIFO).
+        # Pre-2026-05-30 took newest; combined with cursor=batch_last_ts
+        # that filtered older entries out of subsequent discoveries.
+        # Oldest-first + drain loop in DreamRunner = no data loss.
         if len(entries) > self.MAX_ENTRIES_PER_CALL:
             logger.info(
-                "dream: capping %s from %d to %d entries (newest first)",
+                "dream: capping %s from %d to %d entries (oldest first)",
                 entity_ref, len(entries), self.MAX_ENTRIES_PER_CALL,
             )
             entries = sorted(entries, key=lambda e: e.timestamp)[
-                -self.MAX_ENTRIES_PER_CALL:
+                : self.MAX_ENTRIES_PER_CALL
             ]
         # G2: remember the last ts of the actual batch we're sending.
         batch_last_ts = entries[-1].timestamp if entries else None
