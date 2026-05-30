@@ -1,12 +1,17 @@
-# 20 — Pendings observados durante uso
+# Backlog
 
-> Bitácora viva de items de UX / features que aparecen mientras uso durin
-> pero que NO bloquean el trabajo actual (entity-centric memory, doc 18 y
-> doc 19). Cada item se anota con: contexto, problema, propuesta tentativa
-> (si la hay), y estado.
+> Items observados durante el uso de durin (UX, features, deuda
+> técnica) que NO bloquean el trabajo en curso pero merecen quedar
+> registrados para no perderse. Cada item se anota con: contexto,
+> problema, propuesta tentativa (si la hay), y estado.
 >
-> Cuando un item se aborda, se mueve a "Resueltos" al final con la fecha
-> y el commit/PR de referencia.
+> Cuando un item se cierra **se elimina del backlog** — el commit
+> que lo cierra es el registro canónico (`git log` lo encuentra por
+> mensaje). Items con avance parcial se actualizan in-place con el
+> estado real. Items descartados explícitamente (decidimos no
+> hacerlos) van a `bitacora.md` con el rationale. Documentos
+> completos que quedaron superados (planes, propuestas) van a
+> `archive/` con nota en `archive/README.md`.
 
 ---
 
@@ -61,7 +66,11 @@ vuelve difícil distinguir cuál era cuál.
 - TUI: comando `/rename <new name>` para la sesión actual, o `/sessions
   rename <key> <new name>`.
 
-**Estado**: pendiente.
+**Estado**: **parcial** (2026-05-30) — backend shipped en
+`durin/channels/websocket.py::_handle_session_rename` (endpoint
+`POST /api/sessions/<key>/rename?title=...`). **UI pendiente** —
+ningún componente webui invoca el endpoint todavía. TUI tampoco
+expone un comando `/rename`.
 
 ---
 
@@ -172,63 +181,6 @@ state + history + sources).
 **Estado**: pendiente, post-Phase 5 (cuando la pipeline entity-centric
 esté implementada).
 
-### P6 — Índice keyword escalable como fallback de `memory_search` (FTS5 / inverted index)
-
-**Contexto**: el path de grep en `durin/memory/search.py` (`search_dreamed`,
-`search_undreamed`) hace walk + `load_entry` parse YAML por cada archivo
-en `memory/<class>/*.md` por cada query. Para N pequeño (bench LoCoMo,
-sesiones cortas) es instantáneo. A escala de daily use con miles de
-entradas episódicas / sesiones, O(N) walk + parse por query se vuelve
-caro.
-
-Hoy ya tenemos dos protecciones contra el escalado:
-- **Vector index** (`durin/memory/vector_index.py`) — O(log N) via
-  LanceDB. Es el path principal cuando `memory.enabled=True`.
-- **Dream consolidation** — fusiona episódicos en entity_pages
-  canónicos, reduciendo el N que llega al grep.
-
-**Problema**: si vector está apagado, falla, o no encuentra (queries
-naturales tipo "Calvin Japan stay" matcheando contra substring literal
-del query completo → 0 results), `memory_search` cae a grep, que no
-escala. El fallback no es robusto a largo plazo.
-
-**Trade-off explorado (24 May 2026)**: vimos tres patrones en sistemas
-de referencia:
-- **Hermes** → SQLite FTS5 + BM25 con tokenización AND por default + doc
-  explícita al LLM ("multi-word=AND, OR para broader, quoted para exact,
-  prefix*"). Es la opción más madura para keyword search escalable.
-- **Pi** → no tiene memoria long-term; delega a `grep` del filesystem.
-- **OpenClaude** → LLM-as-judge pre-inyecta memorias por turn; no usa
-  tool de search.
-
-**Propuesta tentativa**:
-
-- Agregar índice FTS5 (SQLite) sobre `memory/<class>/*.md` que se
-  actualiza al `store_memory` y al dream consolidation.
-- Schema mínimo: `(entry_id, class_name, headline, summary, body,
-  entities_concat, valid_from)` con FTS5 sobre `headline + summary +
-  body + entities_concat`.
-- Reemplazar el path grep actual en `search_dreamed` por query FTS5
-  cuando el índice existe (fallback al walk actual si está roto o
-  vacío).
-- Actualizar `memory_search` tool description para enseñar la sintaxis
-  Hermes-style cuando el path activo sea FTS5.
-
-**Cuándo elegir esta opción**: cuando veamos en producción que vector
-deja huecos sistemáticos (queries que el LLM hace y vector no responde
-bien) Y el N de archivos es grande. Hasta entonces, el path vector +
-fallback substring actual es suficiente — esta es una optimización de
-escala, no un fix funcional.
-
-**Riesgo de hacerlo antes de tiempo**: dos índices que mantener
-(LanceDB + SQLite FTS5) con su propia lógica de sincronización, race
-conditions en concurrent writes, dependencia adicional (SQLite es
-stdlib pero los wrappers de FTS5 requieren cuidado en triggers).
-
-**Estado**: backlog, no priorizado. Activar cuando: (a) el bench muestre
-queries reales donde vector falla sistemáticamente, o (b) reportes de
-slowdown en `memory_search` con workspaces grandes.
-
 ### P8 — Bench-100 fail audit (2026-05-30) — 13 bugs reales identificados
 
 **Contexto**: bench-100 proporcional post-H26 (decay removal) → 68/100 oficial. Análisis QA-por-QA de los 30 fails reveló que ~17 son ruido del dataset (gold mal etiquetado, judge demasiado estricto, infra timeouts) y **~13 son fails reales del sistema**. Score "fair" estimado: ~85%.
@@ -254,10 +206,10 @@ slowdown en `memory_search` con workspaces grandes.
 
 **Acciones derivadas**:
 
-- [ ] **Acción 1 (en curso)**: bench-100 post-H27 corriendo. Comparar score + per-category vs bench-100 post-H26. Si retrieval miss bucket baja → e5-small validado.
-- [ ] **Acción 2**: instalar `sentence-transformers` localmente (no lo agregamos a deps por footprint — pero podemos hacer un bench experimental con CE activo para medir delta).
-- [ ] **Acción 3**: si bench-100 post-H27 no cierra los synthesis fails, reforzar enumeration rule en identity.md (variante stronger del bullet "Combine facts across hits — enumerate every distinct item before answering").
-- [ ] **Acción 4 (out of scope inmediato)**: re-judge con prompt más liberal para validar empíricamente que los 5 "judge over-strict" son realmente over-strict. No bug del sistema; ayuda interpretación del bench.
+- [x] **Acción 1 — DONE**: bench-100 post-H27 corrido (75% vs 71% post-H26, +2pp). e5-small validado marginalmente; los 8 retrieval miss originales se redujeron a 4 reales (commit `d6a6e16` + análisis QA-by-QA).
+- [x] **Acción 2 — DONE**: `sentence-transformers` instalado + CE working con `BAAI/bge-reranker-base` (H30, commit `9b11b0c`). Bench post-CE corriendo en momento de esta actualización.
+- [ ] **Acción 3 — PENDIENTE**: si bench post-CE no cierra los synthesis fails, reforzar enumeration rule en `identity.md`. Esperando datos del bench actual.
+- [ ] **Acción 4 — PENDIENTE (out of scope inmediato)**: re-judge con prompt más liberal para validar empíricamente que los 5 "judge over-strict" son realmente over-strict. No bug del sistema; ayuda interpretación del bench.
 
 **Dataset issues identificados (informativo, no actionable)**:
 
@@ -344,95 +296,4 @@ sesión 2026-05-25) — debe migrarse a `docs/architecture/` si se aprueba.
 
 ---
 
-### P9 — Workspace navegable como Obsidian vault (read-only viewer)
-
-**Contexto**: el workspace de durin es 100% markdown + frontmatter YAML — técnicamente abrible en Obsidian, pero hoy con varias fricciones de UX (filenames hash ilegibles, binarios LanceDB mezclados con .md, sin wikilinks, sin orientación al usuario). Objetivo: hacerlo navegable como **viewer de memoria read-only** (el usuario consulta/explora; agente y Dream siguen siendo los únicos que escriben).
-
-**Beneficio multi-surface**: la limpieza del data layer no aplica solo a Obsidian — también beneficia:
-- **`MemoryGraphView` en webui actual** ([webui/src/components/MemoryGraphView.tsx](../webui/src/components/MemoryGraphView.tsx) + [hooks/useMemoryGraph.ts](../webui/src/hooks/useMemoryGraph.ts)): ya existe vista estilo Obsidian con D3 force-graph que consume `/api/memory/graph`. Wikilinks en source_refs (Cambio 3) le permiten construir el grafo entity→fragment automáticamente sin lógica especial. Filenames legibles via plugin Obsidian o headline-display en nuestra UI propia.
-- **Futura app de escritorio** (Tauri/Electron wrapping webui o nativa): consume el mismo data layer. Si el on-disk format es navegable + auto-documented (VAULT_README + per-class _INDEX), portar una app que renderice memoria es trivial — la fuente de verdad ya es self-describing.
-- **Third-party tools / plugins / SDK**: cualquier herramienta que quiera leer memoria de durin (export tool, backup viewer, analytics) hereda el mismo on-disk format. Las mejoras de P9 lo vuelven "vault-grade" portable.
-
-**Principio rector**: el on-disk format (markdown + frontmatter + wikilinks + folder structure) es el **contrato público** entre durin y cualquier consumidor (Obsidian, webui propio, desktop app, plugins, scripts). Hacerlo "vault-grade" es invertir en interoperabilidad, no en una integración específica con Obsidian.
-
-**Discovery clave 2026-05-30**: el plugin Obsidian community **"Front Matter Title"** resuelve el problema cosmético de filenames hash usando el campo `headline` del frontmatter como display name en sidebar/graph/search, **sin necesidad de renombrar archivos**. Esto eliminó la necesidad del cambio originalmente más invasivo (slug filenames) y reduce el alcance del plan a 4 cambios safe.
-
-#### Cambios planificados
-
-| # | Cambio | LOC | Riesgo search | Status |
-|---|---|---|---|---|
-| 1 | Mover `.index.lance/` a `.durin/index/lance/` | ~10 | 0 (solo path, sin tocar semántica) | pending |
-| 3 | `source_refs` y `related` → wikilinks `[[memory/episodic/<id>]]` | ~30 | 0 (verificado: NO se incluyen en embedding text ni en BM25 — solo presentación) | pending |
-| 4 | `<workspace>/VAULT_README.md` autogenerado en workspace root (no en `memory/` para evitar indexación) | ~50 + tests | 0 (additive) | pending |
-| 5 | `memory/<class>/_INDEX.md` por clase con Dataview snippets + recomendaciones de plugins | ~100 | 0 (si filename `_` se filtra de walk_memory) | pending |
-| ~~2~~ DROPPED | Slug en filenames | — | — | Front Matter Title plugin lo resuelve sin tocar código |
-
-#### Verificación pre-implementación (ya hecha)
-
-- ✅ `walk_memory` excluye `.index.lance/` por filtrar solo `*.md` → safe mover el path
-- ✅ `_embed_text` ([vector_index.py:687](../durin/memory/vector_index.py)) compone `headline + summary + entities + body`. **NO usa source_refs/related**
-- ✅ `_entry_text` ([indexer.py:483](../durin/memory/indexer.py)) hace lo mismo para FTS. Tampoco usa source_refs/related
-- ✅ `drill()` ([drill.py:52](../durin/memory/drill.py)) resuelve URI literalmente con `.md` append — no afectado por mover `.index.lance/`
-- ⚠ `walk_memory` HOY no filtra archivos con prefijo `_` — confirmado con test. Cambio 5 requiere agregar filtro `if name.startswith("_"): continue` en `walk_memory` y `walk_class`, o poner `_INDEX.md` solo en raíces no escaneadas.
-
-#### Touch points por cambio
-
-**Cambio 1**: `durin/memory/vector_index.py:49,110` + `durin/memory/health_check.py:184` + `durin/cli/footer.py:38` + docstrings + `docs/architecture/memory/02_indexing.md`.
-
-**Cambio 3**: serialización en `durin/memory/storage.py::save_entry` + parser tolerante en `load_entry` para backward compat (acepta tanto plain strings como wikilink-wrapped); tests en `tests/memory/test_storage.py`.
-
-**Cambio 4**: nuevo módulo `durin/memory/vault_readme.py` con template + función `ensure_vault_readme(workspace)` invocada en `AgentLoop` startup (idempotente).
-
-**Cambio 5**: extensión del módulo anterior con `ensure_class_index(workspace, class_name)` por cada `MEMORY_CLASSES` + opcional una `memory/entities/_INDEX.md`. Documentación de plugins recomendados:
-- **Front Matter Title** — resuelve cosmética de filenames hash
-- **Dataview** — queries sobre frontmatter
-- **Graph Analysis** — métricas de centralidad
-- **Folder Notes** (opcional) — folder-as-index navigation
-
-#### Decisiones explícitas sobre folders existentes
-
-- `memory/pending/` — **dejar visible**. Temporal por naturaleza; usuario lo verá vacío la mayoría del tiempo. Mencionar en VAULT_README que son "intake buffer" que Dream procesa.
-- `memory/archive/` — **dejar visible**. Tiene valor de recovery surface; usuario puede inspeccionar entries absorbidos. Mencionar en VAULT_README.
-- Ni pending ni archive necesitan ocultarse — el usuario es read-only viewer, no editor.
-
-#### Orden de rollout sugerido
-
-1. **Cambio 1 + 4** en un commit (mover LanceDB + crear VAULT_README al boot). Cero riesgo de search; smoke test + bench-mini para confirmar.
-2. **Cambio 3 + 5** en otro commit (wikilinks + per-class index notes). Requiere update al parser de `load_entry` y filter en `walk_memory`. Tests específicos para backward compat.
-3. **Recomendar plugins en VAULT_README** — texto, no código.
-
-#### Verificación post-implementación
-
-Para cada commit:
-- Full test suite (target: 5180+ pass)
-- Lab forensics en `conv-7-q113` — confirmar que fused top-10 sigue trayendo `9b6f1c81724a` (regresión de search rompería el principio "search is the product")
-- Si conservador: bench-100 mini (sólo single_hop, ~5 min) para confirmar score se mantiene; bench-100 completo no es necesario porque los cambios son orthogonales al pipeline de retrieval
-
-#### Estado
-
-- Diseño completo y validado contra código (2026-05-30)
-- **Cambios 1+4 IMPLEMENTADOS** (2026-05-30, commit `03e333e`):
-  - Cambio 1: `.index.lance/` movido a `.durin/index/lance/`
-  - Cambio 4: `VAULT_README.md` autogenerado en workspace root con instrucciones de navegación, lista de viewers recomendados (Obsidian + webui MemoryGraphView), plugins sugeridos
-- **Cambios 3+5 IMPLEMENTADOS** (2026-05-30):
-  - Cambio 3: `source_refs` y `related` serializados como wikilinks `[[uri]]` en disco; loader tolerante backward-compat (acepta plain refs); zero impact search verificado (no van al embedding text)
-  - Cambio 5: `_INDEX.md` per-class generado en cada `memory/<class>/` con descripción + Dataview snippet; `walk_memory` filtra `_*` files/folders para no indexar navegación como entries
-- **Cambio 2 (slug filenames) DROPPED** — Front Matter Title plugin elimina la necesidad sin tocar código
-- **P9 100% completo** (excepto Cambio 2 deliberadamente droppeado)
-
-#### Referencias
-
-- Memoria persistente: `[[feedback-search-is-the-product]]` (search no se puede romper por cambios cosméticos)
-- Memoria persistente: `[[feedback-search-faithful-retrieval]]` (search es solo retrieval, no juzga)
-- Discovery del plugin Front Matter Title: conversación 2026-05-30 sobre Obsidian compatibility
-- Lab que validó "no impacto en search": forensics sobre conv-7-q113
-
----
-
-## §3 — Resueltos
-
-(Vacío por ahora — items se mueven acá con fecha + commit al cerrarse.)
-
----
-
-## Last updated: 2026-05-30 (P9 added — Obsidian-friendly read-only viewer plan, Cambio 2 dropped via Front Matter Title plugin)
+## Last updated: 2026-05-30 (cleanup — renamed file, removed shipped P6/P9, removed empty Resueltos section, updated P2/P5/P8 to partial)
