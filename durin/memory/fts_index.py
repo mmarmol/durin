@@ -1,6 +1,6 @@
 """FTS5 lexical index for memory entries and entity pages.
 
-Per `docs/memory/02_indexing.md` §5: one SQLite database at
+Per `docs/architecture/memory/02_indexing.md` §5: one SQLite database at
 ``<workspace>/.durin/index/fts.sqlite`` with two FTS5 virtual tables
 sharing a bookkeeping table:
 

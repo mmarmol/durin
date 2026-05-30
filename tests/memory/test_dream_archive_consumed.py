@@ -1,6 +1,6 @@
 """Archive consumed episodic entries after a successful Dream apply.
 
-Per `docs/memory/05_dream_cold_path.md` §7: for each unique
+Per `docs/architecture/memory/05_dream_cold_path.md` §7: for each unique
 `provenance` ref in the applied patch that points under
 `memory/episodic/`, **move** the file to
 `memory/archive/episodic/<id>.md` and (best-effort) drop the

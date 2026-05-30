@@ -1,6 +1,6 @@
 """Privacy: free-text fields truncated to 200 chars at emit time.
 
-Per `docs/memory/07_telemetry_and_observability.md` §13: the
+Per `docs/architecture/memory/07_telemetry_and_observability.md` §13: the
 indexer / search pipeline / agent must NOT persist full user queries
 or content snippets to telemetry. The emit helper truncates the
 listed fields at 200 chars; nested structures pass through.

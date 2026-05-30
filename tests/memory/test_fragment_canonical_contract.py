@@ -9,7 +9,7 @@ contract on both delivery paths (lazy `memory_search` + eager
 
 Marker convention follows the compaction precedent
 (``=== ARCHIVED SUMMARY ===`` per logbook 2026-05-19) and was
-formalised in ``docs/memory/06_prompts_and_instructions.md`` §8.3 to:
+formalised in ``docs/architecture/memory/06_prompts_and_instructions.md`` §8.3 to:
 
 - ``=== CANONICAL: <ref> (consolidated <ts>) === ... === END CANONICAL ===``
 - ``=== FRAGMENT: <path> (ts <ts>) === ... === END FRAGMENT ===``

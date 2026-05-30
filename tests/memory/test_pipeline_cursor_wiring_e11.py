@@ -1,7 +1,7 @@
 """E11 (audit second pass, 2026-05-28): the v2 pipeline's
 `_entity_aware_rerank` must pass `cursors` to
 `entity_ranker.rank_with_entities` so the pre/post-cursor
-partitioning documented in `docs/memory/03` §8.4 is actually
+partitioning documented in `docs/architecture/memory/03` §8.4 is actually
 applied.
 
 Pre-E11 the helper `_load_cursors_from_entities_dir` was orphaned

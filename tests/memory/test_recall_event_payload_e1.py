@@ -1,5 +1,5 @@
 """E1 (audit second pass, 2026-05-28): `memory.recall` payload must
-expose the diagnostic fields documented in `docs/memory/07` §4.1.
+expose the diagnostic fields documented in `docs/architecture/memory/07` §4.1.
 
 Pre-E1, the event only carried `query`, `scope`, `level`,
 `result_count` — useful for counts but blind to: which path produced

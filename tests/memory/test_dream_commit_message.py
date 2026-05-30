@@ -1,6 +1,6 @@
 """Hybrid commit-message post-processor for Dream apply.
 
-Per `docs/memory/05_dream_cold_path.md` §11 + `docs/memory/06_prompts_and_instructions.md` §4.5:
+Per `docs/architecture/memory/05_dream_cold_path.md` §11 + `docs/architecture/memory/06_prompts_and_instructions.md` §4.5:
 
 The LLM emits a `===COMMIT===` section with subject + optional body +
 `Sources:` / `Cursor-after:` / `Entities-touched:` trailers. The

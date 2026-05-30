@@ -194,7 +194,7 @@ producción (`memory.recall`, `memory.recall.vector`,
 
 ## 5. ARCHITECTURE.md updates
 
-Cada phase actualiza `docs/ARCHITECTURE.md`:
+Cada phase actualiza `docs/architecture/README.md`:
 
 - D1 → nueva sección sobre footer persistente + drag-and-drop processor + lista de slash commands.
 - D2 → extender §8 (Memory Subsystem) con la CLI surface + provenance commands.

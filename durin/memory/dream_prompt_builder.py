@@ -1,6 +1,6 @@
 """Assembles the v2 Dream consolidator prompt from the package files.
 
-Per `docs/memory/06_prompts_and_instructions.md` §4 the prompt is a
+Per `docs/architecture/memory/06_prompts_and_instructions.md` §4 the prompt is a
 concatenation of:
 
   1. ``durin/templates/dream/consolidator.md`` (template; carries
@@ -40,7 +40,7 @@ _TEMPLATE_ROOT = (
 
 # Spec §5.1: cap the existing-URIs list so the prompt stays bounded
 # even in mature workspaces with thousands of entities. The 100 figure
-# comes from `docs/memory/06_prompts_and_instructions.md` §4.2.
+# comes from `docs/architecture/memory/06_prompts_and_instructions.md` §4.2.
 _EXISTING_URIS_CAP: int = 100
 
 

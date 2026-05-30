@@ -1,6 +1,6 @@
 """Audit: tool descriptions in code must match doc 06 §3 verbatim.
 
-Per `docs/memory/06_prompts_and_instructions.md` §3.5: the canonical
+Per `docs/architecture/memory/06_prompts_and_instructions.md` §3.5: the canonical
 text the LLM sees lives in the doc. Code drift silently changes
 agent behaviour. This test parses the doc + compares against the
 4 memory tools' descriptions.
@@ -35,7 +35,7 @@ from durin.agent.tools.memory_store import MemoryStoreTool
 
 _DOC_PATH = (
     Path(__file__).resolve().parents[2]
-    / "docs" / "memory" / "06_prompts_and_instructions.md"
+    / "docs" / "architecture" / "memory" / "06_prompts_and_instructions.md"
 )
 
 

@@ -377,7 +377,7 @@ sesión 2026-05-25) — debe migrarse a `docs/architecture/` si se aprueba.
 
 #### Touch points por cambio
 
-**Cambio 1**: `durin/memory/vector_index.py:49,110` + `durin/memory/health_check.py:184` + `durin/cli/footer.py:38` + docstrings + `docs/memory/02_indexing.md`.
+**Cambio 1**: `durin/memory/vector_index.py:49,110` + `durin/memory/health_check.py:184` + `durin/cli/footer.py:38` + docstrings + `docs/architecture/memory/02_indexing.md`.
 
 **Cambio 3**: serialización en `durin/memory/storage.py::save_entry` + parser tolerante en `load_entry` para backward compat (acepta tanto plain strings como wikilink-wrapped); tests en `tests/memory/test_storage.py`.
 

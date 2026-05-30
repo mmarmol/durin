@@ -1,6 +1,6 @@
 """Indexer state file: `<workspace>/.durin/index/meta.json`.
 
-Per `docs/memory/02_indexing.md` §2 + §7.2 the file carries the
+Per `docs/architecture/memory/02_indexing.md` §2 + §7.2 the file carries the
 indexer's notion of "what does the index correspond to". Today the
 relevant fields are:
 

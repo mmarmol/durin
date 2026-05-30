@@ -1,6 +1,6 @@
 """Lexical retrieval — execute the query against the right FTS5 table.
 
-Per `docs/memory/03_search_pipeline.md` §5: take a
+Per `docs/architecture/memory/03_search_pipeline.md` §5: take a
 :class:`durin.memory.query_router.RoutingDecision` and run it against
 the corresponding FTS5 path, returning a ranked list of URIs that
 the RRF fusion step consumes.

@@ -46,7 +46,7 @@ _PARAMETERS = tool_parameters_schema(
     ),
     required=["path"],
     description=(
-        # Canonical text per `docs/memory/06_prompts_and_instructions.md` §3.3.
+        # Canonical text per `docs/architecture/memory/06_prompts_and_instructions.md` §3.3.
         "Add a local document (markdown or plain text) to durin's memory "
         "corpus. Use this when the user wants a file on disk remembered "
         "as reference material — research notes, transcripts, technical "
@@ -98,7 +98,7 @@ class MemoryIngestTool(Tool):
 
     @property
     def description(self) -> str:
-        # Canonical text per `docs/memory/06_prompts_and_instructions.md` §3.3.
+        # Canonical text per `docs/architecture/memory/06_prompts_and_instructions.md` §3.3.
         # Reads via `Tool.to_schema()` → `function.description` in the
         # OpenAI spec — what the LLM sees. Audit B1 (2026-05-28) caught
         # the prior short text drifted from the canonical doc.

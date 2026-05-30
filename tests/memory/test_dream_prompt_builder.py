@@ -1,6 +1,6 @@
 """Prompt builder for the v2 Dream consolidator.
 
-Per `docs/memory/06_prompts_and_instructions.md` §4 the builder
+Per `docs/architecture/memory/06_prompts_and_instructions.md` §4 the builder
 concatenates:
 
   1. `consolidator.md` (template with {slot} placeholders)

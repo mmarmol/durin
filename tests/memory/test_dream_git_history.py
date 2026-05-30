@@ -1,6 +1,6 @@
 """Git history formatter for the ``{recent_history}`` prompt slot.
 
-Per `docs/memory/05_dream_cold_path.md` §5.1: the LLM gets a compact
+Per `docs/architecture/memory/05_dream_cold_path.md` §5.1: the LLM gets a compact
 view of the last ~30 days of git commits to its target entity page so
 it can avoid undoing its own recent decisions. The git source is
 ``memory/.git/`` (the memory subsystem has its own repo per doc 02).

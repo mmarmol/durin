@@ -322,7 +322,7 @@ Documented here for historical reference. Hooks in `memory_store.execute`, `memo
 ### P8.4 — Documentation lint pass
 
 - **TYPE**: 📄 docs
-- **DoD**: `grep -rn "(pending)" docs/memory/` returns nothing. All decisions marked with a resolution. Spec↔code discrepancies detected by P5.5 fixed.
+- **DoD**: `grep -rn "(pending)" docs/architecture/memory/` returns nothing. All decisions marked with a resolution. Spec↔code discrepancies detected by P5.5 fixed.
 - **LOC**: ~varies (depends on how much doc debt there is).
 
 ---

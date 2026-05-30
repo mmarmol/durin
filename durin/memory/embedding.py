@@ -9,7 +9,7 @@ fastembed model (see :func:`_register_custom_models`) because the
 fastembed default catalog doesn't include it. For heavy workloads
 needing top-tier multilingual recall, ``intfloat/multilingual-e5-large``
 (2.24 GB, 1024-dim) is the override; it ships in fastembed's catalog
-natively. See ``docs/memory/02_indexing.md`` and the wizard in
+natively. See ``docs/architecture/memory/02_indexing.md`` and the wizard in
 ``durin/cli/onboard_wizard.py``.
 
 **E5 prefix convention**: E5-family models were trained with asymmetric

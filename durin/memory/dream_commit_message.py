@@ -11,7 +11,7 @@ with the format documented in ``durin/templates/dream/commit_format.md``:
     Cursor-after: ...
     Entities-touched: ...
 
-Per `docs/memory/05_dream_cold_path.md` §11, the runner is responsible
+Per `docs/architecture/memory/05_dream_cold_path.md` §11, the runner is responsible
 for two final touches:
 
 1. **Verify** the three LLM-supplied trailers exist. Missing ones are

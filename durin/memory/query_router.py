@@ -1,6 +1,6 @@
 """Query analysis + FTS5 routing decisions.
 
-Per `docs/memory/03_search_pipeline.md` §3.1 + §5.1:
+Per `docs/architecture/memory/03_search_pipeline.md` §3.1 + §5.1:
 
   1. **NFC normalise** + **whitespace collapse** so the FTS query
      matches whatever was indexed.

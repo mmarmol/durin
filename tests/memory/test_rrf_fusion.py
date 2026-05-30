@@ -1,6 +1,6 @@
 """Reciprocal Rank Fusion (RRF) cross-source merge.
 
-Per `docs/memory/03_search_pipeline.md` §7: merge vector + lexical +
+Per `docs/architecture/memory/03_search_pipeline.md` §7: merge vector + lexical +
 grep result lists into one ranked list using RRF with k=60 and
 per-source weights. When the agent supplied ``keywords``, the lexical
 weight is boosted from 0.7 to 2.5.

@@ -4,7 +4,7 @@ version: 0.1
 status: actionable backlog
 last_updated: 2026-05-27
 audience: humans + LLMs working through remediation
-purpose: One-stop list of gaps identified between docs/memory/ corpus (00-09) and actual durin code + prior docs. To be remediated item-by-item; this doc is the checklist.
+purpose: One-stop list of gaps identified between docs/architecture/memory/ corpus (00-09) and actual durin code + prior docs. To be remediated item-by-item; this doc is the checklist.
 ---
 
 # Memory corpus — gaps audit (working doc)

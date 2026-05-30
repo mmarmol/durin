@@ -1,6 +1,6 @@
 """Query analysis + FTS5 routing.
 
-Per `docs/memory/03_search_pipeline.md` §3.1 + §5.1: the search
+Per `docs/architecture/memory/03_search_pipeline.md` §3.1 + §5.1: the search
 pipeline routes each query to one of three lexical paths based on
 CJK content and token length. The router is pure (no I/O); it
 returns a typed decision the lexical-search layer consumes.

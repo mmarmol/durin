@@ -1,6 +1,6 @@
 """Tests for the hot layer Phase 1.5 deliverables.
 
-Covers the v2 rendering format per ``docs/memory/06_prompts_and_instructions.md``
+Covers the v2 rendering format per ``docs/architecture/memory/06_prompts_and_instructions.md``
 §8.3 — exact marker format, v2 entity fields rendered as prose, intro
 sentences locked, and telemetry failure event wiring per §8.7.
 

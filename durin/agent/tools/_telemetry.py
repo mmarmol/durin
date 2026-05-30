@@ -43,7 +43,7 @@ def emit_tool_event(event_type: str, data: dict[str, Any]) -> None:
 
     Privacy: free-text fields (``query`` / ``text`` / ``snippet`` /
     ``content`` / ``needle``) are truncated to 200 characters before
-    persistence per `docs/memory/07_telemetry_and_observability.md`
+    persistence per `docs/architecture/memory/07_telemetry_and_observability.md`
     §13. The truncation is non-destructive — it does NOT mutate the
     caller's dict.
 

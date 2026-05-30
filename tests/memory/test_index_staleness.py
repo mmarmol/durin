@@ -1,6 +1,6 @@
 """Drift detector between markdown source and FTS5 index.
 
-Per `docs/memory/02_indexing.md` §7.3 + doc 07 §9.3: the health-check
+Per `docs/architecture/memory/02_indexing.md` §7.3 + doc 07 §9.3: the health-check
 cron compares files under `memory/` to rows in `fts_meta` and emits
 `memory.index.staleness_detected` events for each discrepancy.
 """

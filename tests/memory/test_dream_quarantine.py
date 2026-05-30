@@ -1,6 +1,6 @@
 """Quarantine logic for repeatedly failing entities.
 
-Per `docs/memory/05_dream_cold_path.md` §12.5:
+Per `docs/architecture/memory/05_dream_cold_path.md` §12.5:
 
 - Structural failures (`VALIDATION`, `PATCH_RUNTIME`, `ROUND_TRIP`)
   increment ``dream_failure_count`` on the entity page's frontmatter.

@@ -80,7 +80,7 @@ Each row represents one indexable `.md` file under `memory/` (excluding `memory/
 3. Doubling the index size compounded at scale.
 4. FTS5 already honors the "indexed for search, content lives on disk" model — LanceDB now matches.
 
-See `docs/memory/08_scope_and_discarded.md` §2.10 for the full rationale and the lesson on "premature optimisation that violates an architectural principle".
+See `docs/architecture/memory/08_scope_and_discarded.md` §2.10 for the full rationale and the lesson on "premature optimisation that violates an architectural principle".
 
 ### 3.2 Embedding model
 

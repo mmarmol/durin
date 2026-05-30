@@ -1,6 +1,6 @@
 """E5 (audit second pass, 2026-05-28): `memory.index.write` payload
 must include `duration_ms` and `trigger` so the documented dashboards
-in `docs/memory/07` §10.3 (`index_write_p95_ms`) and `docs/memory/09`
+in `docs/architecture/memory/07` §10.3 (`index_write_p95_ms`) and `docs/architecture/memory/09`
 §216 (FTS5 trigram size monitoring) actually become computable.
 
 Trigger taxonomy reflects real callsites of `reindex_one_file`:
