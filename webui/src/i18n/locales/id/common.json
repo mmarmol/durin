@@ -131,6 +131,9 @@
         "missingCredential": "Tambahkan kredensial yang diperlukan sebelum menyimpan.",
         "saveHint": "Perubahan berlaku untuk permintaan web search baru."
       }
+    },
+    "models": {
+      "provAuto": "Auto"
     }
   },
   "chat": {
