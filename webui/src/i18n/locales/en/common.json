@@ -249,7 +249,7 @@
         "thresholdEntries": "Run an entity-centric Dream pass once a single entity accumulates this many post-cursor entries. Set to 0 to disable the per-entity trigger (cron and session-close triggers still apply).",
         "decayOverrides": "Override the class default per entry by setting decay_half_life in the entry's frontmatter. Set evergreen: true to make an entry never decay."
       },
-      "crossEncoderModelPlaceholder": "model id (e.g. jinaai/jina-reranker-v2-base-multilingual)",
+      "crossEncoderModelPlaceholder": "model id (e.g. BAAI/bge-reranker-base)",
       "crossEncoderTest": "Test",
       "decayClasses": {
         "episodic": "Episodic",

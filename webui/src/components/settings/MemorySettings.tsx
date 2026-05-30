@@ -21,11 +21,14 @@ import {
 // any sentence-transformers compatible id (HuggingFace handle, local
 // path, etc.) is accepted, with validation happening live via the
 // Test button.
+// H30 (2026-05-30): bge-reranker-base promoted to default (MIT, no
+// trust_remote_code required, no transformers 5.x compat issues).
+// jina-reranker-v2 dropped from suggestions (CC-BY-NC + custom-code
+// requirement that breaks on fresh installs).
 const CROSS_ENCODER_SUGGESTED_MODELS: ReadonlyArray<string> = [
-  "jinaai/jina-reranker-v2-base-multilingual",
   "BAAI/bge-reranker-base",
   "BAAI/bge-reranker-v2-m3",
-  "Qwen/Qwen3-Reranker-0.6B",
+  "mixedbread-ai/mxbai-rerank-base-v2",
 ] as const;
 
 const DEFAULT_CROSS_ENCODER_MODEL = CROSS_ENCODER_SUGGESTED_MODELS[0];
