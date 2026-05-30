@@ -462,17 +462,41 @@ def _safe_vector_search(
     # path silently inert. The Phase 3 orchestrator test
     # (``test_fake_vector_index_integrated``) passed because the
     # fixture emits ``uri`` directly; production never matched that
-    # shape. This boundary normaliser fixes it: rows that already
-    # carry ``uri``/``type`` pass through unchanged; native rows get
-    # ``uri = id`` (per the FTS convention in
-    # ``indexer._uri_for``: entity_page → entity_ref, episodic →
-    # bare filename stem) and ``type = class_name``.
+    # shape. This boundary normaliser fixes it.
+    #
+    # Audit H28 (2026-05-30): H1 set ``uri = id`` (bare filename
+    # stem) but the FTS indexer (``indexer._payload_for``) writes
+    # entries as ``memory/<class>/<id>`` — so RRF was fusing
+    # ``9b6f1c81724a`` (vector) and ``memory/episodic/9b6f1c81724a``
+    # (FTS) as DIFFERENT URIs. The same entry surfaced twice in the
+    # ranked list with split scores; neither contribution alone
+    # passed the threshold to top-K, so well-matched entries
+    # disappeared from fused even when both subsystems found them
+    # (verified: conv-7-q113 Deborah/Karlie case). Fix: vector
+    # normaliser builds the SAME ``memory/<class>/<id>`` URI shape
+    # as FTS. Entity-page rows (``class_name == "entity_page"``)
+    # keep the entity-ref URI (``person:deborah``, etc.) since
+    # FTS upserts those with that shape too (see
+    # ``indexer._payload_for``).
     normalized: list[dict] = []
     for r in rows:
         if "uri" not in r:
-            uri = r.get("id")
-            if not uri:
+            raw_id = r.get("id")
+            if not raw_id:
                 continue
+            class_name = r.get("class_name", "")
+            if class_name == "entity_page":
+                # Entity-page rows: id is already the entity_ref
+                # (e.g. "person:deborah") per upsert_entity_page.
+                uri = raw_id
+            elif class_name:
+                # Episodic / stable / corpus / session_summary etc.
+                # Match the FTS convention: memory/<class>/<id>.
+                uri = f"memory/{class_name}/{raw_id}"
+            else:
+                # No class — fall back to bare id (defensive; should
+                # never happen in production).
+                uri = raw_id
             r = {**r, "uri": uri}
         if "type" not in r and "class_name" in r:
             r = {**r, "type": r["class_name"]}

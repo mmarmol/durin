@@ -131,12 +131,19 @@ async def run_qa(
     # much the memory layer actually contributes vs. answering cold).
     if enable_memory and qa.conversation is not None:
         _seed_memory_from_conversation(workspace_root, qa.conversation)
-        # Build the vector index over the seeded files. Without this
-        # `memory_search` falls to substring grep over the full natural-
-        # language query and returns 0 for queries like "Calvin Japan
-        # stay" (verified in 12cc1897 run). The bench is not a clean
-        # install — we want the full retrieval stack active.
+        # Build BOTH indices over the seeded files. In production, the
+        # file-watcher's `reindex_one_file` populates LanceDB + FTS5
+        # whenever a memory entry is written; in the bench we bypass
+        # the tool layer and write .md files directly via
+        # `store_memory()`, so neither index gets touched automatically.
+        # Without these calls, `memory_search` falls back to substring
+        # grep — measurably worse for natural-language queries.
+        #
+        # Audit (2026-05-30): missing FTS rebuild was silently dropping
+        # the lexical retrieval channel across every bench run. Fixed
+        # by adding `_build_fts_index(workspace_root)` here.
         _build_vector_index(workspace_root)
+        _build_fts_index(workspace_root)
 
     # Bind per-QA telemetry. Every memory.recall / memory.store /
     # tool.* / cache.usage / compaction.* event durin emits while
@@ -461,6 +468,37 @@ def _build_vector_index(workspace: Path) -> None:
         # Single bad index build must NOT kill the QA — agent still has
         # grep + filesystem grep as fallbacks.
         logger.exception("vector index build failed for %s", workspace)
+
+
+def _build_fts_index(workspace: Path) -> None:
+    """Populate the FTS5 lexical index over the seeded `memory/<class>/*.md`.
+
+    Mirrors `_build_vector_index` but for SQLite FTS5. Both bulk-seeded
+    entries (`store_memory()`) and bench bypass the file-watcher that
+    normally drives `reindex_one_file`, so FTS would be empty without
+    this rebuild — and the lexical channel contributes 0 hits to the
+    search pipeline, halving the retrieval signal.
+
+    Discovery context: lab on conv-7-q113 (Deborah/Karlie) found that
+    the FTS index had 0 rows post-seed across every bench run since
+    Phase 3 shipped. Query 'Deborah garden' returned the exact answer
+    entry as FTS top-1 immediately after this rebuild — the info was
+    always reachable, the bench was just disabling lexical search.
+
+    Failure-mode: log + degrade silently. The agent still has vector
+    + grep fallback, but the bench is no longer apples-to-apples vs
+    production unless this populates successfully.
+    """
+    try:
+        from durin.memory.indexer import rebuild_fts_index
+
+        stats = rebuild_fts_index(workspace)
+        logger.info(
+            "fts index built: indexed=%d errors=%d in %s",
+            stats.indexed, stats.errors, workspace,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("fts index build failed for %s", workspace)
 
 
 def _slug(name: str) -> str:

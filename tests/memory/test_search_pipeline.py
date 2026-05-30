@@ -103,13 +103,16 @@ def test_fake_vector_index_integrated(tmp_path: Path) -> None:
 
 
 def test_vector_index_native_row_shape_is_accepted(tmp_path: Path) -> None:
-    """Audit H1 (2026-05-29): the real ``VectorIndex.search()`` emits
-    rows with ``id`` / ``class_name`` / ``path`` — NOT ``uri`` / ``type``.
-    Pre-H1 the pipeline filtered every row out (``if "uri" in h``),
-    so warm-tier vector retrieval was silently lexical-only since the
-    Phase 3 orchestrator landed. This test pins the boundary
-    normalization that maps the native row shape into what the rest
-    of the pipeline keys off.
+    """Audit H1 (2026-05-29) + H28 (2026-05-30): the real
+    ``VectorIndex.search()`` emits rows with ``id`` / ``class_name`` /
+    ``path`` — NOT ``uri`` / ``type``. Pre-H1 the pipeline filtered
+    every row out (``if "uri" in h``), so warm-tier vector retrieval
+    was silently lexical-only since the Phase 3 orchestrator landed.
+    H1 fixed the filtering. H28 fixed the URI format mismatch: the
+    normaliser now builds ``memory/<class>/<id>`` URIs to match what
+    the FTS indexer writes (``indexer._payload_for``); pre-H28 vector
+    used bare ``<id>`` and RRF couldn't fuse vector + FTS hits for
+    the same entry.
     """
     _seed(tmp_path)
 
@@ -151,8 +154,9 @@ def test_vector_index_native_row_shape_is_accepted(tmp_path: Path) -> None:
     )
     # Entity URI (entity_ref) must surface in the fused hits.
     assert any(h.uri == "person:marcelo" for h in result.hits)
-    # Episodic URI (id, no .md) must surface too.
-    assert any(h.uri == "abc123def456" for h in result.hits)
+    # Episodic URI must use FTS-compatible `memory/<class>/<id>` shape
+    # so RRF can fuse vector + FTS hits for the same entry (H28).
+    assert any(h.uri == "memory/episodic/abc123def456" for h in result.hits)
     # Entity-page hit type must normalise to 'entity' downstream.
     entity_hit = next(
         (h for h in result.hits if h.uri == "person:marcelo"), None,
