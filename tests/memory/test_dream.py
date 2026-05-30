@@ -147,6 +147,35 @@ class TestConsolidateEntity:
         assert "Marcelo said unittest" in stub.last_prompt
         assert "person:marcelo" in stub.last_prompt
 
+    def test_prompt_entry_header_uses_episodic_path_format(
+        self, tmp_path: Path,
+    ) -> None:
+        """Entry headers in the prompt MUST present the entry id in the
+        same `episodic/<id>.md` path format the spec asks the LLM to
+        cite as `provenance`. Pre-2026-05-31 the bracket showed
+        `[<timestamp> / <bare_id>]`, which induced the LLM to emit
+        provenance as `<timestamp>/<bare_id>` — matching the visual cue
+        rather than the textual spec. That breaks
+        `archive_consumed_episodic` (which filters by
+        `startswith("episodic/")`) so consumed episodic entries silently
+        accumulate on disk forever.
+        """
+        stub = _llm_with_response(_well_formed_response())
+        c = DreamConsolidator(workspace=tmp_path, llm_invoke=stub)
+        entries = [
+            EntryRef(id="abc123", timestamp="2026-04-10", text="something"),
+        ]
+        c.consolidate_entity("person:marcelo", entries)
+        prompt = stub.last_prompt
+        # The path token the spec wants the LLM to cite must appear
+        # literally inside the entry header so the LLM mirrors it.
+        assert "episodic/abc123.md" in prompt, (
+            "entry header must surface the spec-format path; otherwise the "
+            "LLM cites a different format and the archive step silently "
+            "skips. Found prompt segment around id: " +
+            "\n".join(line for line in prompt.splitlines() if "abc123" in line)
+        )
+
     def test_prompt_includes_existing_page_when_present(
         self, tmp_path: Path
     ) -> None:

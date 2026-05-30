@@ -153,6 +153,57 @@ def test_stable_provenance_skipped(tmp_path: Path) -> None:
     assert p.exists()  # untouched
 
 
+def test_archive_tolerates_date_prefix_provenance(tmp_path: Path) -> None:
+    """LLM-emitted provenance like `2023-03-26/e3caeb1ee93a` must still
+    archive — defensive parser. Bug 2026-05-31: the consolidator render
+    used `[<timestamp> / <id>]` brackets, inducing the LLM to cite that
+    same shape instead of `episodic/<id>.md`. The render is now fixed
+    (test_prompt_entry_header_uses_episodic_path_format), but old
+    workspaces + model variance mean the archive parser must remain
+    tolerant.
+    """
+    _write_episodic(tmp_path, "e3caeb1ee93a")
+    output = ParsedDreamOutput(
+        patch_ops=[
+            {"op": "add", "path": "/attributes/x", "value": 1,
+             "provenance": "2023-03-26/e3caeb1ee93a"},
+        ],
+        body_delta="", commit_message="s",
+    )
+    result = archive_consumed_episodic(
+        workspace=tmp_path, entity_ref="person:m", parsed=output,
+    )
+    assert result.archived, (
+        f"expected episodic to archive, got: archived={result.archived}, "
+        f"errors={result.errors}"
+    )
+    assert not (tmp_path / "memory" / "episodic" / "e3caeb1ee93a.md").exists()
+    assert (
+        tmp_path / "memory" / "archive" / "episodic" / "e3caeb1ee93a.md"
+    ).exists()
+
+
+def test_archive_tolerates_bare_id_provenance(tmp_path: Path) -> None:
+    """Bare ids (no path prefix, no date) — what we see in `Sources:`
+    commit trailers. Same defensive contract as the date-prefix case.
+    """
+    _write_episodic(tmp_path, "abc123def456")
+    output = ParsedDreamOutput(
+        patch_ops=[
+            {"op": "add", "path": "/attributes/x", "value": 1,
+             "provenance": "abc123def456"},
+        ],
+        body_delta="", commit_message="s",
+    )
+    result = archive_consumed_episodic(
+        workspace=tmp_path, entity_ref="person:m", parsed=output,
+    )
+    assert result.archived, (
+        f"expected episodic to archive, got: archived={result.archived}, "
+        f"errors={result.errors}"
+    )
+
+
 def test_corpus_provenance_skipped(tmp_path: Path) -> None:
     p = _write_corpus(tmp_path, "chunk-3")
     output = ParsedDreamOutput(
