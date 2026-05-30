@@ -2,7 +2,7 @@
 title: Dream — cold-path consolidation
 version: 0.1-draft
 status: current — describes the shipped system (P11 era, 2026-05-30)
-last_updated: 2026-05-27
+last_updated: 2026-05-31
 audience: humans and LLMs implementing or modifying this system
 depends_on: 00_overview.md, 01_data_and_entities.md, 02_indexing.md
 related: 03_search_pipeline.md, 04_agent_tools.md
@@ -186,11 +186,32 @@ This is a soft optimization — missing one trigger doesn't lose data (the next 
 
 Each entity page has `dream_processed_through` in its frontmatter (`01_data_and_entities.md` §3.4): an ISO timestamp or msg_idx. Episodic/stable/corpus entries with timestamps **strictly after** the cursor are "post-cursor" — they are candidates for the next Dream pass.
 
-After successful apply, the cursor is moved to the timestamp of the latest consumed entry in this batch (`batch_last_ts`). This guarantees:
+After successful apply, the cursor is moved to the timestamp of the latest consumed entry **in the batch the consolidator actually saw** (`batch_last_ts`). Because the consolidator caps at `MAX_ENTRIES_PER_CALL = 50` taking the **oldest** by timestamp (§6.1), `batch_last_ts` is the timestamp of the 50th-oldest pending entry — which is older than any unprocessed entry. The next discovery pass re-walks `memory/episodic/` and the entries newer than `batch_last_ts` remain visible as still-pending. This guarantees:
 - No re-processing of already-consumed entries in subsequent passes.
+- **No silent loss when N > cap**: the runner's drain loop (§4.4) keeps re-invoking the consolidator until the entity has no pending entries OR the per-pass time budget is exhausted.
 - New entries that arrived during the LLM call (race-safe) will be picked up on the next pass.
 
 If apply fails (LLM error, parse error, validation error), the cursor is NOT advanced. The entries remain post-cursor and the next pass tries again.
+
+### 4.4 Drain loop + per-pass time budget
+
+`DreamRunner._drain_entity` paginates over an entity's pending queue:
+
+```
+remaining = pending_for_entity
+while remaining:
+    consolidate(remaining)       # G11 cap = 50 oldest
+    apply(...)                   # cursor advances to batch_last_ts
+    remaining = re_discover(entity_filter=ent_ref)
+    if not remaining: break      # drained
+    if elapsed >= budget:
+        emit memory.dream.budget_exhausted
+        break                    # next trigger picks up the rest
+```
+
+`memory.dream.max_seconds_per_run` (default 600s) is the **per-pass** wall-clock cap — not per entity. A single greedy entity can consume the whole budget; any remaining entities in this pass are deferred to the next trigger. Telemetry event `memory.dream.budget_exhausted` carries `entity_ref`, `pending_remaining`, `elapsed_s`, `budget_s` so operators see what got pushed forward.
+
+Rationale: a 10-min budget covers ~10 batches per entity at glm-5.1 speeds (~60s per batch), which drains 500 entries — enough for a bootstrap of any normal-sized entity. Large bulk-ingests of an entity with thousands of entries will take multiple passes; that's fine, the cron tick re-runs the next day.
 
 ---
 
@@ -344,9 +365,11 @@ By forcing `dream_processed_through = batch_last_ts` (the timestamp of entry 10,
 
 The LLM's `Cursor-after:` trailer is still recorded in the git commit message for audit — it tells us what the LLM *thought* it processed. The runner's enforced cursor tells us what was *actually* taken out of the post-cursor queue. Divergence between the two is a useful diagnostic signal (logged at `INFO` level when detected).
 
-Trade-off: if the LLM truly processed only 5 of 10 entries, those 5 are correctly captured (their PATCH ops are applied) but the other 5 are silently dropped from re-processing. Mitigation: this is rare with modern models on reasonable batch sizes (default `max_entries_per_batch = 10`); when it happens, the missing ops manifest as gaps in the entity page that the next batch of entries (or a manual `durin dream run --entity <uri>`) will fill in. Data is not lost from disk — only from the consolidation pass.
+Trade-off: if the LLM truly processed only K of N entries (N ≤ 50 cap), those K are correctly captured (their PATCH ops are applied) but the other N-K are silently dropped from re-processing within this batch. Mitigation: rare with modern models at the 50-entry cap; when it happens, the missing ops manifest as gaps in the entity page that the next batch (drain loop §4.4 immediately re-discovers and processes more) or a manual `durin memory dream` will fill in. Data is not lost from disk — only from the current consolidation pass.
 
 This invariant is enforced in `dream.py::ConsolidationResult.batch_last_ts` and applied in `DreamConsolidator.apply()` before writing the entity page.
+
+> **Historical note (2026-05-30):** the consolidator previously took the **newest** 50 entries on cap, which combined with `batch_last_ts` = newest-of-batch made the cursor jump to the timestamp of the newest entry in the entire pending set. Older entries that didn't fit in the batch were silently filtered out on the next discovery (they were now "pre-cursor"). End-to-end this dropped ~89% of pending entries on bootstraps of entities with > 50 history. Fix flipped the cap to **oldest-first** and added the drain loop in §4.4; the cursor now only advances over actually-processed entries.
 
 ---
 

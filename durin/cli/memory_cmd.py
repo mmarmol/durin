@@ -339,6 +339,7 @@ def cmd_dream(
     runner = DreamRunner(
         workspace=workspace,
         min_seconds_between_runs=0,
+        max_seconds_per_run=cfg.memory.dream.max_seconds_per_run,
         model=cfg.memory.dream.model_override,
         vector_index=vi,
         # §2.D: opt-in auto-absorb post-dream. Manual `durin memory dream`

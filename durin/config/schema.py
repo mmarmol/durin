@@ -194,6 +194,20 @@ class MemoryDreamConfig(Base):
         validation_alias=AliasChoices("minSecondsBetweenRuns", "min_seconds_between_runs"),
     )
 
+    # Hard wall-clock cap per dream pass. The runner drains an entity's
+    # backlog across multiple consolidate batches (FIFO oldest-first,
+    # cursor advances per batch); this caps how long that drain runs
+    # before yielding. Remainder fires `memory.dream.budget_exhausted`
+    # telemetry and is picked up by the next trigger. Default 600s
+    # (10 min) covers ~10 oldest-first batches per entity at glm-5.1
+    # speeds; bump up for bootstraps of large entities, down for
+    # tighter cron windows.
+    max_seconds_per_run: int = Field(
+        default=600,
+        ge=0,
+        validation_alias=AliasChoices("maxSecondsPerRun", "max_seconds_per_run"),
+    )
+
     # §2.D auto-absorb config nested under dream.
     auto_absorb: "AutoAbsorbConfig" = Field(
         default_factory=lambda: AutoAbsorbConfig(),

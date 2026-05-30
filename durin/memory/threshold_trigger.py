@@ -173,6 +173,9 @@ def maybe_dispatch_threshold_dream(
                     min_seconds_between_runs=int(
                         getattr(dream_config, "min_seconds_between_runs", 300),
                     ),
+                    max_seconds_per_run=int(
+                        getattr(dream_config, "max_seconds_per_run", 600),
+                    ),
                     model=getattr(dream_config, "model_override", None),
                     vector_index=vector_index,
                     auto_absorb_enabled=bool(

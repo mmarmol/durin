@@ -1344,6 +1344,7 @@ def _run_gateway(
             runner = DreamRunner(
                 workspace=workspace,
                 min_seconds_between_runs=mem_dream_cfg.min_seconds_between_runs,
+                max_seconds_per_run=mem_dream_cfg.max_seconds_per_run,
                 model=mem_dream_cfg.model_override,
                 vector_index=vi,
                 auto_absorb_enabled=mem_dream_cfg.auto_absorb.enabled,
