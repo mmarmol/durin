@@ -80,6 +80,7 @@ def _new_run_dir(model: str, *, no_memory: bool = False) -> Path:
 
 def _write_manifest(
     run_dir: Path, *, args: argparse.Namespace, subset_size: int,
+    subset: list[Any] | None = None,
 ) -> None:
     """Write the manifest BEFORE the first QA runs so even a crashed
     run is traceable. Includes commit SHA, timestamps, the exact CLI
@@ -93,16 +94,44 @@ def _write_manifest(
     except Exception:  # noqa: BLE001
         model_resolved = args.model
 
+    # H19 (2026-05-29): sampling block makes the bench reproducible —
+    # operator can grep ``manifest.json`` to know exactly which mode
+    # and parameters produced this run dir. ``sampling.target_total``
+    # is the requested N for proportional mode (subset_size may
+    # diverge by ±N_cats due to the largest-remainder allocation but
+    # is also recorded). ``sampling.per_category_breakdown`` records
+    # the actual per-category counts so a re-sampler can verify a
+    # historical run picked from the same distribution.
+    import collections as _collections
+    if args.proportional_total:
+        sampling_mode = "proportional"
+        sampling_target = args.proportional_total
+    elif args.qa_id:
+        sampling_mode = "single_qa"
+        sampling_target = 1
+    else:
+        sampling_mode = "stratified"
+        sampling_target = args.per_category
+    per_cat_actual = dict(_collections.Counter(
+        qa.category for qa in (subset or [])
+    ))
     manifest = {
         "started_at": datetime.now(timezone.utc).isoformat(),
         "commit": _git_commit_sha(),
         "args": vars(args),
         "subset_size": subset_size,
+        "sampling": {
+            "mode": sampling_mode,
+            "target": sampling_target,
+            "seed": args.seed,
+            "per_category_actual": per_cat_actual,
+        },
         "config_snapshot": {
             "model_resolved": model_resolved,
             "judge_model": args.judge_model,
             "data_path": args.data_path,
             "per_category": args.per_category,
+            "proportional_total": args.proportional_total,
             "seed": args.seed,
         },
         "durin_version": _durin_version(),
@@ -164,6 +193,7 @@ async def _main_async(args: argparse.Namespace) -> int:
     from scripts.benchmark.locomo_dataset import (
         LoCoMoDatasetError,
         load_dataset,
+        proportional_subset,
         stratified_subset,
     )
     from scripts.benchmark.locomo_harness import run_qa
@@ -180,6 +210,17 @@ async def _main_async(args: argparse.Namespace) -> int:
         if not subset:
             print(f"[locomo_run] no QA matching {args.qa_id!r}", file=sys.stderr)
             return 2
+    elif args.proportional_total:
+        # H19 (2026-05-29): proportional sampling — N total allocated
+        # to each category by its share of the corpus. Use this for
+        # scores comparable to mem0 / Letta / MemMachine (all run
+        # against the full 1986 corpus with natural distribution,
+        # not stratified). Sample composition is deterministic per
+        # ``(--proportional-total, --seed)`` and persisted in the
+        # manifest under ``sampling`` for reproducibility audits.
+        subset = proportional_subset(
+            all_qas, total_n=args.proportional_total, seed=args.seed,
+        )
     else:
         try:
             subset = stratified_subset(
@@ -197,7 +238,9 @@ async def _main_async(args: argparse.Namespace) -> int:
             return 2
     else:
         run_dir = _new_run_dir(args.model, no_memory=args.no_memory)
-        _write_manifest(run_dir, args=args, subset_size=len(subset))
+        _write_manifest(
+            run_dir, args=args, subset_size=len(subset), subset=subset,
+        )
 
     traces_dir = run_dir / "traces"
     telemetry_dir = run_dir / "telemetry"
@@ -370,6 +413,19 @@ def main() -> int:
     parser.add_argument(
         "--per-category", type=int, default=5,
         help="Stratified subset size per category (default 5 → 25 total).",
+    )
+    parser.add_argument(
+        "--proportional-total", type=int, default=None,
+        help=(
+            "H19 (2026-05-29): proportional sample mode — N total QAs "
+            "allocated to each category by its share of the corpus "
+            "(single_hop ~42%%, adversarial ~23%%, temporal ~16%%, "
+            "multi_hop ~14%%, open_domain ~5%% in locomo10). "
+            "Use this for scores comparable to mem0 / Letta / MemMachine "
+            "which all benchmark against the full corpus distribution, "
+            "not stratified. Overrides --per-category when set. "
+            "Reproducible per (--proportional-total, --seed)."
+        ),
     )
     parser.add_argument(
         "--seed", type=int, default=42,

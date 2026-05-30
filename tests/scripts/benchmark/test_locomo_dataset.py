@@ -124,3 +124,112 @@ def test_adversarial_null_answers_load_with_refuse_sentinel() -> None:
     assert other_refuse == [], (
         "the __REFUSE__ sentinel must only apply to adversarial category"
     )
+
+
+# ---------------------------------------------------------------------------
+# Audit H19 (2026-05-29): proportional sampling vs stratified
+# ---------------------------------------------------------------------------
+#
+# ``stratified_subset`` takes N per category which over-represents
+# rare categories (adversarial has 23% of the corpus; open_domain
+# only 5%). For a score comparable to mem0 / Letta / MemMachine
+# (which all run against the full 1986 corpus), the bench needs
+# proportional sampling — N total, allocated to each category by
+# its share of the dataset.
+
+
+def test_proportional_subset_preserves_distribution() -> None:
+    """Sampling 100 from locomo10's 1986 QAs must allocate proportional
+    to category sizes — single_hop ~42%, temporal ~16%, etc."""
+    from collections import Counter
+    data_path = Path.home() / ".cache" / "durin" / "locomo10.json"
+    if not data_path.is_file():
+        pytest.skip("locomo10.json not present")
+    qas = _ds_mod.load_dataset(data_path)
+    subset = _ds_mod.proportional_subset(qas, total_n=100, seed=42)
+    assert 95 <= len(subset) <= 105, (
+        f"got {len(subset)} samples; expected ~100 (off by < 5 due to rounding)"
+    )
+    cats = Counter(qa.category for qa in subset)
+    # Loose tolerance — rounding + min-1-per-category constraint
+    # means the proportions are approximate. Each category should
+    # still be within ±3 of its expected share.
+    full_cats = Counter(qa.category for qa in qas)
+    total_full = sum(full_cats.values())
+    for cat, total_n in full_cats.items():
+        expected_share = total_n / total_full * 100
+        actual = cats.get(cat, 0)
+        assert abs(actual - expected_share) <= 3, (
+            f"{cat}: got {actual}, expected ~{expected_share:.1f}"
+        )
+
+
+def test_proportional_subset_is_deterministic_per_seed() -> None:
+    """Same seed → identical subset across runs."""
+    data_path = Path.home() / ".cache" / "durin" / "locomo10.json"
+    if not data_path.is_file():
+        pytest.skip("locomo10.json not present")
+    qas = _ds_mod.load_dataset(data_path)
+    a = _ds_mod.proportional_subset(qas, total_n=50, seed=7)
+    b = _ds_mod.proportional_subset(qas, total_n=50, seed=7)
+    assert [qa.qa_id for qa in a] == [qa.qa_id for qa in b]
+
+
+def test_proportional_subset_different_seed_different_sample() -> None:
+    data_path = Path.home() / ".cache" / "durin" / "locomo10.json"
+    if not data_path.is_file():
+        pytest.skip("locomo10.json not present")
+    qas = _ds_mod.load_dataset(data_path)
+    a = _ds_mod.proportional_subset(qas, total_n=50, seed=7)
+    b = _ds_mod.proportional_subset(qas, total_n=50, seed=8)
+    assert [qa.qa_id for qa in a] != [qa.qa_id for qa in b]
+
+
+def test_proportional_subset_handles_small_total() -> None:
+    """A small N still allocates at least 1 to each category that
+    has > 0 entries — losing a category entirely would defeat the
+    purpose of proportional sampling."""
+    data_path = Path.home() / ".cache" / "durin" / "locomo10.json"
+    if not data_path.is_file():
+        pytest.skip("locomo10.json not present")
+    qas = _ds_mod.load_dataset(data_path)
+    subset = _ds_mod.proportional_subset(qas, total_n=10, seed=42)
+    from collections import Counter
+    cats = Counter(qa.category for qa in subset)
+    # Every category present in the source must have at least one
+    # sample in the output, even if its share rounds to 0.
+    assert all(cats.get(c, 0) >= 1 for c in {qa.category for qa in qas}), (
+        f"some categories disappeared: {cats}"
+    )
+
+
+def test_proportional_subset_empty_input() -> None:
+    assert _ds_mod.proportional_subset([], total_n=100, seed=42) == []
+
+
+def test_proportional_subset_locomo10_100_distribution_snapshot() -> None:
+    """Reproducibility snapshot: with locomo10 + total_n=100 + seed=42,
+    the per-category counts must lock to a known distribution so a
+    historical run-dir can be re-sampled identically. If this changes,
+    document it in the audit log — every prior bench result becomes
+    incomparable."""
+    from collections import Counter
+    data_path = Path.home() / ".cache" / "durin" / "locomo10.json"
+    if not data_path.is_file():
+        pytest.skip("locomo10.json not present")
+    qas = _ds_mod.load_dataset(data_path)
+    subset = _ds_mod.proportional_subset(qas, total_n=100, seed=42)
+    cats = Counter(qa.category for qa in subset)
+    # Locked distribution (H19, seed=42, total=100, locomo10):
+    # multi_hop 282/1986=14.2% → 14
+    # temporal 321/1986=16.2% → 16
+    # open_domain 96/1986=4.8% → 5
+    # single_hop 841/1986=42.3% → 42
+    # adversarial 446/1986=22.5% → 22 or 23 (rounding)
+    # total = 99-100 depending on largest-remainder pass
+    assert cats["multi_hop"] == 14, cats
+    assert cats["temporal"] == 16, cats
+    assert cats["open_domain"] == 5, cats
+    assert cats["single_hop"] == 42, cats
+    assert cats["adversarial"] in (22, 23), cats
+    assert sum(cats.values()) in (99, 100), cats
