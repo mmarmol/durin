@@ -14,7 +14,9 @@ from pathlib import Path
 import pytest
 
 from durin.memory.vault_readme import (
+    CLASS_INDEX_FILENAME,
     VAULT_README_FILENAME,
+    ensure_class_indices,
     ensure_vault_readme,
 )
 
@@ -89,3 +91,106 @@ def test_graceful_failure_on_unwritable_workspace(
     assert result is False
     # The file should not have been created.
     assert not (tmp_path / VAULT_README_FILENAME).exists()
+
+
+# ---------------------------------------------------------------------------
+# P9 Cambio 5: per-class `_INDEX.md` navigation helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_class_dirs(workspace: Path) -> None:
+    """Create empty class folders so `ensure_class_indices` has
+    something to write into."""
+    from durin.memory.paths import MEMORY_CLASSES
+    for cls in MEMORY_CLASSES:
+        (workspace / "memory" / cls).mkdir(parents=True, exist_ok=True)
+
+
+def test_class_indices_written_once_per_class(tmp_path: Path) -> None:
+    """First call writes one _INDEX.md per existing class folder."""
+    _make_class_dirs(tmp_path)
+    n = ensure_class_indices(tmp_path)
+    from durin.memory.paths import MEMORY_CLASSES
+    assert n == len(MEMORY_CLASSES)
+    for cls in MEMORY_CLASSES:
+        target = tmp_path / "memory" / cls / CLASS_INDEX_FILENAME
+        assert target.is_file(), f"missing _INDEX.md in {cls}"
+
+
+def test_class_indices_idempotent(tmp_path: Path) -> None:
+    """Second call writes nothing (existing files preserved)."""
+    _make_class_dirs(tmp_path)
+    ensure_class_indices(tmp_path)
+    # Mutate one index — second call must not overwrite
+    target = tmp_path / "memory" / "episodic" / CLASS_INDEX_FILENAME
+    custom = "# my edits\nnothing here\n"
+    target.write_text(custom, encoding="utf-8")
+    n_again = ensure_class_indices(tmp_path)
+    assert n_again == 0
+    assert target.read_text(encoding="utf-8") == custom
+
+
+def test_class_indices_skipped_when_class_dir_missing(tmp_path: Path) -> None:
+    """If memory/<class>/ doesn't exist, no index written for it."""
+    # Create only episodic
+    (tmp_path / "memory" / "episodic").mkdir(parents=True)
+    n = ensure_class_indices(tmp_path)
+    assert n == 1
+    assert (tmp_path / "memory" / "episodic" / CLASS_INDEX_FILENAME).is_file()
+    assert not (tmp_path / "memory" / "stable" / CLASS_INDEX_FILENAME).exists()
+
+
+def test_class_indices_not_indexed_by_walk_memory(tmp_path: Path) -> None:
+    """The `_` prefix in CLASS_INDEX_FILENAME ensures `walk_memory()`
+    skips them — the navigation helpers must NOT pollute FTS / vector
+    index as if they were memory entries."""
+    from durin.memory.paths import walk_memory
+
+    _make_class_dirs(tmp_path)
+    # Also drop a real entry so walk_memory has something to yield
+    (tmp_path / "memory" / "episodic" / "real_entry.md").write_text(
+        "x", encoding="utf-8",
+    )
+    ensure_class_indices(tmp_path)
+    paths = list(walk_memory(tmp_path))
+    names = [p.name for p in paths]
+    assert "real_entry.md" in names
+    # No _INDEX.md must appear
+    assert CLASS_INDEX_FILENAME not in names
+    assert not any(n.startswith("_") for n in names)
+
+
+def test_class_indices_content_mentions_dataview(tmp_path: Path) -> None:
+    """Indices should include a Dataview query snippet so users with
+    the plugin can browse immediately."""
+    _make_class_dirs(tmp_path)
+    ensure_class_indices(tmp_path)
+    episodic_index = (
+        tmp_path / "memory" / "episodic" / CLASS_INDEX_FILENAME
+    ).read_text(encoding="utf-8")
+    assert "dataview" in episodic_index.lower()
+
+
+def test_walk_memory_skips_underscore_files(tmp_path: Path) -> None:
+    """Defensive regression: any `_*.md` in memory/ subfolders must be
+    excluded. P9 Cambio 5 establishes this convention."""
+    from durin.memory.paths import walk_memory
+    (tmp_path / "memory" / "stable").mkdir(parents=True)
+    (tmp_path / "memory" / "stable" / "_helper.md").write_text("x", encoding="utf-8")
+    (tmp_path / "memory" / "stable" / "real.md").write_text("x", encoding="utf-8")
+    names = [p.name for p in walk_memory(tmp_path)]
+    assert "real.md" in names
+    assert "_helper.md" not in names
+
+
+def test_walk_memory_skips_underscore_folders(tmp_path: Path) -> None:
+    """Defensive: an entire `_*` folder under memory/ should also be
+    skipped, in case future tooling drops navigation/state there."""
+    from durin.memory.paths import walk_memory
+    (tmp_path / "memory" / "episodic").mkdir(parents=True)
+    (tmp_path / "memory" / "episodic" / "real.md").write_text("x", encoding="utf-8")
+    (tmp_path / "memory" / "_internal").mkdir(parents=True)
+    (tmp_path / "memory" / "_internal" / "stuff.md").write_text("x", encoding="utf-8")
+    names = [str(p.relative_to(tmp_path / "memory")) for p in walk_memory(tmp_path)]
+    assert "episodic/real.md" in names
+    assert not any(n.startswith("_internal") for n in names)

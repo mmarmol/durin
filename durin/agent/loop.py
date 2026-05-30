@@ -445,16 +445,20 @@ class AgentLoop:
             return
 
         # P9 (2026-05-30): write the vault README at workspace root if
-        # missing. Idempotent + safe — never overwrites. This is the
-        # one-line "what is this folder?" handoff for any external
-        # viewer of the on-disk format.
+        # missing, plus per-class `_INDEX.md` navigation helpers inside
+        # each `memory/<class>/`. Idempotent + safe — never overwrites.
+        # Files starting with `_` are skipped by `walk_memory()` so the
+        # indices are NOT picked up as memory entries.
         try:
-            from durin.memory.vault_readme import ensure_vault_readme
+            from durin.memory.vault_readme import (
+                ensure_class_indices, ensure_vault_readme,
+            )
 
             ensure_vault_readme(self.workspace)
+            ensure_class_indices(self.workspace)
         except Exception as exc:  # noqa: BLE001
             logger.warning(
-                "vault readme init failed (continuing): {}", exc,
+                "vault navigation files init failed (continuing): {}", exc,
             )
 
         fw_cfg = getattr(mem_cfg, "file_watcher", None)
