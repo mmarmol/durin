@@ -71,8 +71,6 @@ def run_search_pipeline(
     limit: int = 10,
     cross_encoder: Optional[Any] = None,
     cross_encoder_top_n: int = 10,
-    temporal_decay_enabled: bool = True,
-    temporal_decay_overrides: dict[str, int | None] | None = None,
     max_per_source: int | None = None,
 ) -> SearchPipelineResult:
     """Execute the v2 search pipeline.
@@ -148,20 +146,12 @@ def run_search_pipeline(
             top_n=cross_encoder_top_n,
         )
 
-    # Step 6 (doc 03 §10) — temporal decay (A9). Default ON. Multiplies
-    # each hit's score by exp(-Δdays / class_half_life). Classes whose
-    # half_life is None (entity_page, stable, corpus) are no-ops;
-    # episodic and session_summary actually decay. Reorders `fused`
-    # by the new scores so later steps (sectioning, per-source cap)
-    # see the decayed ranking.
-    if temporal_decay_enabled and fused:
-        fused = _temporal_decay_step(
-            fused,
-            vector_meta=vector_meta,
-            lexical_meta=lexical_meta,
-            grep_meta=grep_meta,
-            overrides=temporal_decay_overrides,
-        )
+    # Temporal decay removed (2026-05-30): search is faithful
+    # retrieval; the LLM does temporal reasoning with `valid_from`
+    # already present on every hit. Pre-judging recency without the
+    # question's context perjudicated factual atemporal queries (the
+    # LoCoMo conv-5-q20 chicken-vs-sushi case) and gave no win we
+    # couldn't get from the LLM reading dates itself.
 
     # Build SectionedHit rows from the fused results, looking up
     # metadata from whichever source surfaced the uri.
@@ -609,78 +599,3 @@ def _resolve_meta(
     return meta
 
 
-def _temporal_decay_step(
-    fused: list,
-    *,
-    vector_meta: dict[str, dict],
-    lexical_meta: dict,
-    grep_meta: dict[str, dict] | None,
-    now: Any = None,
-    overrides: dict[str, int | None] | None = None,
-) -> list:
-    """Apply per-class temporal decay to fused scores (audit A9).
-
-    Looks up each hit's ``type`` and ``valid_from`` via ``_resolve_meta``
-    and multiplies the fused score by ``exp(-Δdays/class_half_life)``.
-    Reorders the list by the decayed scores (descending). Emits
-    ``memory.recall.decay`` telemetry with aggregate counts.
-
-    Hits with a class that doesn't decay (`entity_page`, `stable`,
-    `corpus`) pass through unchanged — same with hits whose
-    ``valid_from`` is missing or unparseable (safe-failure direction;
-    we never penalise on a parse error).
-
-    ``now`` (optional ``datetime``) is forwarded to
-    ``apply_class_decay``. Tests inject a deterministic value;
-    production passes ``None`` and the underlying call uses
-    ``datetime.now(timezone.utc)``.
-    """
-    from durin.memory.decay import apply_class_decay
-    from durin.memory.rrf_fusion import FusedHit
-
-    hits_decayed = 0
-    factor_sum = 0.0
-    out: list = []
-    for h in fused:
-        meta = _resolve_meta(
-            h.uri, vector_meta, lexical_meta, grep_meta=grep_meta,
-        )
-        # FTS5 / vector index both use "entity" for entity pages;
-        # decay accepts both spellings, but normalise here so meta
-        # readers downstream see a single canonical name.
-        class_name = str(meta.get("type", "episodic"))
-        valid_from = str(meta.get("valid_from", "") or meta.get("ts", ""))
-        new_score, factor = apply_class_decay(
-            score=h.score,
-            class_name=class_name,
-            valid_from_iso=valid_from,
-            now=now,
-            overrides=overrides,
-        )
-        if factor < 1.0:
-            hits_decayed += 1
-            factor_sum += factor
-        out.append(FusedHit(
-            uri=h.uri,
-            score=new_score,
-            sources=h.sources,
-            ranks=h.ranks,
-        ))
-    # Re-sort by the new score (descending). Stable sort keeps the
-    # original order among ties (preserves the pre-decay tiebreak).
-    out.sort(key=lambda x: x.score, reverse=True)
-
-    avg = (factor_sum / hits_decayed) if hits_decayed else 1.0
-    try:
-        from durin.agent.tools._telemetry import emit_tool_event
-        emit_tool_event(
-            "memory.recall.decay",
-            {
-                "hits_total": len(fused),
-                "hits_decayed": hits_decayed,
-                "avg_decay_factor": avg,
-            },
-        )
-    except Exception:  # pragma: no cover
-        pass
-    return out

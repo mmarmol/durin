@@ -204,7 +204,7 @@ concrete so the next audit pass can check it without re-litigating:
 The "AND" matters: it is not enough that LoCoMo regresses; the
 regression has to be diagnosable as "missing name token in the
 relation render". If the regression is something else (FTS
-tokenisation, decay, sectioning), shipping resolution does not fix
+tokenisation, sectioning), shipping resolution does not fix
 it.
 
 **What would confirm we keep the slug-only behaviour permanently.**
@@ -566,7 +566,7 @@ Rebuilt from scratch — the original v1 table described a "current state" that 
 | Embedding text — entities | ✅ v2.a shipped (audit E9, 2026-05-28). `name + aliases + rendered_frontmatter + body`, 1500-char cap (`_compose_entity_page_text`). Attribute queries ("Marcelo's email", "X's spouse") now hit the centroid. Schema bumped to v4; rebuild forced. | `durin/memory/vector_index.py:_compose_entity_page_text` |
 | Embedding text — entries | ✅ v1 (final shape). `headline + summary + entities_list + body`, 1500-char cap (`_embed_text`). Originally-planned `entities_with_aliases` expansion superseded by entity-aware ranker (A1); decision recorded in audit E9. | `durin/memory/vector_index.py:_embed_text` |
 | Vector rebuild walks entity pages | ✅ Shipped (audit E9, 2026-05-28). `rebuild_from_workspace` now walks `memory/entities/<type>/*.md` in addition to `memory/<class>/*.md`, so a forced rebuild (e.g. schema bump) doesn't silently drop entity page rows. | `durin/memory/vector_index.py:rebuild_from_workspace` |
-| Session summaries indexed | ✅ A10 (2026-05-28). `Consolidator._persist_last_summary` writes `memory/session_summary/<sanitized_key>.md`; walker picks it up; indexer assigns `class_name="session_summary"`; A9 decay (120 d) applies. | `durin/memory/session_summary_store.py` |
+| Session summaries indexed | ✅ A10 (2026-05-28). `Consolidator._persist_last_summary` writes `memory/session_summary/<sanitized_key>.md`; walker picks it up; indexer assigns `class_name="session_summary"`. | `durin/memory/session_summary_store.py` |
 | FTS5 lexical index | ✅ Active. `.durin/index/fts.sqlite` with two FTS5 tables (`memory_fts` unicode61 + `memory_fts_trigram`); paired writes; query-time routing in `query_router.py`. | `durin/memory/fts_index.py`, `durin/memory/query_router.py` |
 | File watcher | ✅ Active. `watchdog`-backed `MemoryFileWatcher` started by `AgentLoop.__init__` when `cfg.memory.file_watcher.enabled` (default true). A11 (2026-05-28). | `durin/memory/file_watcher.py` |
 | Health-check cron | ✅ Active. `HealthCheckScheduler` daemon thread driving `HealthChecker.run_tick()` every 900s by default. A11. | `durin/memory/health_check.py` |

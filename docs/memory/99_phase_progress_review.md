@@ -21,7 +21,7 @@ This original document lists:
 - `archive_episodic` / `archive_entity` helpers, top-level `memory/archive/<class>/` layout.
 - `slugify_name` + `resolve_slug_collision` (NFC + unidecode + truncate 64).
 - `EntityPage` v2: `attributes`, `relations`, `provenance` as typed fields.
-- `MemoryEntry`: `decay_half_life`, `evergreen` + `decay.py` with `half_life_for` and `CLASS_HALF_LIFE_DEFAULTS`.
+- ~~`MemoryEntry`: `decay_half_life`, `evergreen` + `decay.py` with `half_life_for` and `CLASS_HALF_LIFE_DEFAULTS`.~~ Removed 2026-05-30 (doc 03 §10).
 - `index_meta.py`: `<workspace>/.durin/index/meta.json` with `schema_version=2` + `embedding_model_id` + atomic save.
 
 ### Phase 1 — Dream v2 (modules d1-d12 all shipped as isolated units)

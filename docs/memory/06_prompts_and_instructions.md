@@ -662,7 +662,6 @@ Default: same as agent. Detailed model picker comes from `config/schema.py::AuxM
 
 The web dashboard (`webui/src/components/settings/SettingsView.tsx`) mirrors these questions plus exposes config that the CLI wizard skips:
 - `memory.search.cross_encoder.model` — dropdown of supported models.
-- `memory.search.temporal_decay` — read-only summary of current half-lives.
 - `memory.consolidation.threshold_count` — number input.
 
 The dashboard is post-install configuration; the CLI wizard is one-time setup. Both write to the same `~/.durin/config.json`.

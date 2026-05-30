@@ -69,7 +69,7 @@ Phases can be worked in parallel where dependencies allow. The critical path is 
 ### 3.1 Deliverables
 
 - Entity page schema v2 (extend `EntityPage` dataclass with `attributes`, `relations`, `provenance` fields). Backward-compat: v1 pages parse with these as empty.
-- `decay_half_life` and `evergreen` frontmatter fields supported in entries.
+- ~~`decay_half_life` and `evergreen` frontmatter fields supported in entries.~~ Removed 2026-05-30 with the temporal decay feature (see doc 03 §10).
 - Shared workspace walker `walk_memory(workspace, include_archive=False)` — single chokepoint.
 - `memory/archive/` folder convention; helpers `archive_episodic(uri)`, `archive_entity(uri, into_uri)`.
 - Slug normalization helper in `entities.py` (recursive splitter, NFC, transliteration, suffix on collision).
@@ -260,7 +260,7 @@ Listed between §4 (Phase 1) and §5 (Phase 2) in document order, but its real d
 - Default model: `jinaai/jina-reranker-v2-base-multilingual`. Config field for alternative models.
 - Integration in search pipeline (step 5 per §9 doc 03).
 - Onboarding wizard: question 6.2 per doc 06 ("Enable advanced reranker? [y/N]").
-- **Web dashboard memory settings panel** with three controls per `06_prompts_and_instructions.md` §6.5: (a) cross-encoder toggle + model dropdown (jina-v2, bge-base, bge-v2-m3, qwen3-reranker-0.6b), (b) consolidation threshold count (read-write), (c) temporal decay summary (read-only). Shared workspace-config backend.
+- **Web dashboard memory settings panel** with two controls per `06_prompts_and_instructions.md` §6.5: (a) cross-encoder toggle + model dropdown (jina-v2, bge-base, bge-v2-m3, qwen3-reranker-0.6b), (b) consolidation threshold count (read-write). Shared workspace-config backend. (Pre-2026-05-30 included a temporal-decay summary; removed with the feature.)
 - Telemetry: `memory.recall.rerank`.
 - Graceful degradation: model load failure → step is no-op, log warning, fused scores carry forward.
 
@@ -349,7 +349,7 @@ Listed between §4 (Phase 1) and §5 (Phase 2) in document order, but its real d
   - `memory.recall.lexical` (doc 07 §4.3)
   - `memory.recall.rerank` (§4.4)
   - `memory.recall.rrf` (§4.5)
-  - `memory.recall.decay` (§4.7) — audit A9 (2026-05-28)
+  - ~~`memory.recall.decay` (§4.7)~~ — removed 2026-05-30 with the temporal decay feature.
   - `memory.dream.entity_failed` (§6.4)
   - `memory.dream.patch_applied` (§6.5)
   - `memory.search.failure` (§8.1)
@@ -362,7 +362,7 @@ Listed between §4 (Phase 1) and §5 (Phase 2) in document order, but its real d
 
   `memory.silent_retrieval_miss` (§4.6) was discarded — see doc 08 §2.11. The heuristics didn't generalise to multi-lingual workloads; replacement triggers for the §2.F revisit live in doc 08 §4.1.
 
-- Wire emit calls in: search pipeline (lexical/rerank/rrf/decay/failure), index module (write/rebuild/staleness), Dream (patch_applied/entity_failed), health-check cron, hot layer assembly.
+- Wire emit calls in: search pipeline (lexical/rerank/rrf/failure), index module (write/rebuild/staleness), Dream (patch_applied/entity_failed), health-check cron, hot layer assembly.
 - Privacy: query truncation to 200 chars in `emit_tool_event` for memory events.
 - Retention: log rotation at 30 days; compression after.
 - Optional: HTTPS push of events (default off, opt-in via config).

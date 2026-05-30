@@ -9,8 +9,7 @@ Per doc 02 §3.3 and doc 11 audit A10:
   migrated on the next compaction (the field is popped + session
   saved).
 - Walker picks up the new directory; indexer assigns
-  `class_name = "session_summary"`; A9 decay (120 d) applies
-  automatically.
+  `class_name = "session_summary"`.
 
 Per [[feedback-sync-tests-exercise-behavior]]: these tests
 exercise the BEHAVIOUR — write the markdown via the store, read it
@@ -163,7 +162,7 @@ def test_indexer_assigns_session_summary_class_name(tmp_path: Path) -> None:
     """The indexer's _payload_for assigns class_name from parts[0]
     — `memory/session_summary/<key>.md` → class_name="session_summary".
     This is what makes the new rows show up with the right type in
-    LanceDB / FTS5 (and feed A9's 120-day decay)."""
+    LanceDB / FTS5."""
     from durin.memory.indexer import _payload_for
 
     write_session_summary(
@@ -173,16 +172,3 @@ def test_indexer_assigns_session_summary_class_name(tmp_path: Path) -> None:
     payload = _payload_for(tmp_path, md_path)
     assert payload is not None
     assert payload["type_"] == SESSION_SUMMARY_CLASS
-
-
-# ---------------------------------------------------------------------------
-# A9 integration: 120-day decay applies
-# ---------------------------------------------------------------------------
-
-
-def test_session_summary_class_decays_at_120_days() -> None:
-    """A9 wired decay for `session_summary`. Verify the lookup
-    returns 120 (not None, not 90)."""
-    from durin.memory.decay import resolve_class_half_life
-
-    assert resolve_class_half_life(SESSION_SUMMARY_CLASS) == 120

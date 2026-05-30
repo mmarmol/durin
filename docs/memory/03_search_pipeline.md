@@ -10,7 +10,7 @@ related: 04_agent_tools.md
 
 # Search pipeline
 
-This document specifies the **hot path** that runs every time the agent calls `memory_search`. It transforms a raw query string into a ranked set of structured, sectioned results — without invoking any LLM. The pipeline composes vector retrieval (LanceDB), lexical retrieval (FTS5), weighted fusion, entity-aware reranking, cross-encoder reranking, MMR diversity, and (opt-in) temporal decay.
+This document specifies the **hot path** that runs every time the agent calls `memory_search`. It transforms a raw query string into a ranked set of structured, sectioned results — without invoking any LLM. The pipeline composes vector retrieval (LanceDB), lexical retrieval (FTS5), weighted fusion, entity-aware reranking, and cross-encoder reranking.
 
 **Invariant:** no step in this document calls an LLM. The pipeline is fully deterministic per query + workspace state. LLMs only run on the cold path (Dream, ingestion).
 
@@ -72,14 +72,7 @@ This document specifies the **hot path** that runs every time the agent calls `m
                             │
                             ▼
        ┌─────────────────────────────────────────────────┐
-       │  STEP 6 — Temporal decay (opt-in)                │
-       │  Multiply each score by exp(-Δt / half_life)     │
-       │  Disabled by default; configurable per workspace │
-       └────────────────────┬────────────────────────────┘
-                            │
-                            ▼
-       ┌─────────────────────────────────────────────────┐
-       │  STEP 7 — Sectioning + rendering                 │
+       │  STEP 6 — Sectioning + rendering                 │
        │  Group hits by class with structural markers:    │
        │  CANONICAL / FRAGMENT / SESSION / INGESTED       │
        │  Apply per-source cap (e.g., max N chunks per    │
@@ -118,9 +111,8 @@ boundary" below the table.
 
 **Tool vs pipeline boundary** (audit E10): the `run_search_pipeline`
 function signature only takes `query`, `keywords`, `vector_index`,
-`limit`, `cross_encoder`, `cross_encoder_top_n`,
-`temporal_decay_enabled`. The other tool inputs are handled around
-the call:
+`limit`, `cross_encoder`, `cross_encoder_top_n`. The other tool
+inputs are handled around the call:
 
 - `scope=undreamed` → the tool passes `vector_index=None` so the
   pipeline skips step 2a, and post-filters hits to keep only
@@ -215,7 +207,7 @@ vector = MiniLM.embed(query)                       # 384-dim (audit F3, 2026-05-
 rows = lancedb.search(vector, top_k=50)            # cosine distance
 ```
 
-LanceDB returns up to 50 hits with `_distance` column (cosine distance; lower is better). Hits carry the row's persisted columns plus `_distance`: `id` (used as `uri`), `class_name` (mapped to `type`), `summary`, `headline`, `valid_from`, `entities`, `path`. Audit E12 (2026-05-28) removed a stale `mtime` claim — the LanceDB schema does NOT store `mtime`; the temporal-decay step (§10) reads file `mtime` from disk when needed.
+LanceDB returns up to 50 hits with `_distance` column (cosine distance; lower is better). Hits carry the row's persisted columns plus `_distance`: `id` (used as `uri`), `class_name` (mapped to `type`), `summary`, `headline`, `valid_from`, `entities`, `path`. Audit E12 (2026-05-28) removed a stale `mtime` claim — the LanceDB schema does NOT store `mtime`.
 
 The top-K size for this step is **50** (not 10). The pipeline narrows down later through rerank and MMR. Retrieving more candidates here gives the rerank steps meaningful room to operate.
 
@@ -380,7 +372,7 @@ Documented in `entity_ranker.py` module docstring (note "G13").
 
 ### 8.6 Output
 
-The 50 hits, reordered. Score modified by the entity-aware boost. Carried forward to step 5 (cross-encoder, when enabled) or directly to step 6 (temporal decay).
+The 50 hits, reordered. Score modified by the entity-aware boost. Carried forward to step 5 (cross-encoder, when enabled) or directly to step 6 (sectioning).
 
 ---
 
@@ -395,7 +387,7 @@ A dedicated reranker model (no LLM, dedicated transformer) takes the top-50 hits
 - The fused RRF + entity-aware rank from steps 3-4 already produces useful retrieval for most queries.
 - Users who want maximum retrieval quality (and accept the latency cost) enable it via config or UI.
 
-When OFF (default), the pipeline jumps from step 4 directly to step 6 (temporal decay) or step 7 (MMR).
+When OFF (default), the pipeline jumps from step 4 directly to step 6 (sectioning).
 
 ### 9.1 Default model (when enabled)
 
@@ -449,102 +441,28 @@ Detailed specs for these UI surfaces live in `06_prompts_and_instructions.md` (o
 
 ---
 
-## 10. Step 6 — Temporal decay
+## 10. (Removed 2026-05-30) Temporal decay
 
-Default **enabled with generous half-lives**, but applied **only to types whose timestamp is intrinsically information** (observation-like). Types representing canonical state (entity, stable, corpus) do NOT decay.
+**Decay was removed entirely from the search pipeline.** Reasoning:
 
-### 10.1 Conceptual model
+Search must be **faithful retrieval**: it surfaces hits that match the query, ranked by relevance signals derived from the query (vector similarity, lexical overlap, entity match). It must not pre-judge **which fact is "current"** without the LLM's question context — that decision belongs to the LLM, which has the full prompt and already receives `valid_from` on every hit.
 
-Decay is meaningful for documents where the time of the document IS information about the content. A session that happened 2 years ago is intrinsically older than one from yesterday. But an entity page that says "Marcelo lives in Spain" represents the canonical current state — its `mtime` reflects "when Dream last touched the page", not "how old the fact is". Decaying entity pages would be wrong: untouched ≠ obsolete.
+The trigger was [LoCoMo conv-5-q20](docs/memory/11_audit_reconciliation.md) ("Which meat does Audrey prefer eating more than others?"). The corpus contains 6 entries stating Audrey loves roasted chicken (dated 2023-07-03) and many entries about her also loving sushi (dated 2023-10-24). With wall-clock decay at 90-day half-life and "now" = 2026, all entries decayed to near zero — but the relative penalty (chicken 3.6× more decayed than sushi) was enough to push chicken out of top-10 across every Audrey-related query the agent tried. The agent reported "no record of preferred meat" with high confidence. Reproducing the search with decay disabled returned chicken at top-5.
 
-### 10.2 Per-class defaults
+The pathology is structural: decay assumes recency is the right tiebreaker, but the question's temporal nature (factual atemporal vs current state vs historical) determines that. Search cannot know which kind of question it's serving.
 
-```
-decayed_score(hit) = score(hit) × exp(-Δt / half_life)
-```
+What replaces decay:
+1. **`valid_from` is already on every hit** the agent receives. The LLM can reason "Madrid 2026 is more current than Buenos Aires 2024" itself.
+2. **Dream consolidation** resolves the "what's the current state" problem at write/curation time — fragments that contradict canonical pages get archived; canonical pages carry the latest synthesis.
+3. **If a query has explicit time intent** ("what did we talk about last week"), the right answer is exposing a date filter on `memory_search`, not implicit decay ranking.
 
-Where `Δt` is time since the document's `mtime` in days, and `half_life` is looked up per class:
-
-| Class | Half-life default | Reasoning |
-|---|---|---|
-| `episodic` | **90 days** | Observation with timestamp; naturally ages |
-| `session_summary` | **120 days** | Past conversation; ages with time |
-| `entity` / `entity_page` | **null (never decays)** | Canonical state; `mtime` is "last Dream update", not "fact age". Audit E15 (2026-05-28) added the `entity_page` alias to match `CLASS_HALF_LIFE_DEFAULTS` (`decay.py:67-73`); the LanceDB row carries `class_name="entity_page"` while in-memory entries use `"entity"`. Decay lookups normalise both. |
-| `stable` | **null (never decays)** | Explicit user intent to persist |
-| `corpus` | **null (never decays)** | Chunk of an ingested source; source relevance dictates, not chunk age |
-
-Hits older than `5 × half_life` (about 450 days for episodic, 600 days for session) round to ~0.7% of original score — effectively suppressed but not deleted. Strong relevance can still surface them.
-
-### 10.3 Per-entry override
-
-A document's frontmatter can specify `decay_half_life: <int|null>` to override the class default. This handles edge cases:
-
-```yaml
----
-id: 2010-05-15-marcelo-wedding
-headline: "Marcelo y Susana se casaron en 2010"
-decay_half_life: null   # permanent fact; override the 90-day episodic default
----
-```
-
-Dream sets this field when it recognizes a fact as permanent (timestamp-bound vs eternal). Users can edit manually. Without the field, the class default applies.
-
-### 10.4 Evergreen exemptions
-
-A flag `evergreen: true` in frontmatter forces no decay regardless of class or override. By default this applies to `memory/MEMORY.md` (the index) and to any entry or entity the user explicitly marks. Evergreen wins over `decay_half_life`.
-
-### 10.5 Decision logic
-
-```
-half_life_for(doc):
-  if doc.frontmatter.evergreen == True:
-      return null
-  if 'decay_half_life' in doc.frontmatter:
-      return doc.frontmatter.decay_half_life
-  return CLASS_DEFAULT[doc.type]
-```
-
-If `half_life` is null, the decay step is a no-op for that hit. Score passes through unchanged.
-
-### 10.6 Why default enabled (revised)
-
-The previous draft said "disabled by default". This is revised. Reasoning:
-
-- Decay applies only to types where it conceptually makes sense (observations).
-- On types where it does NOT make sense (entities, stable, corpus), the default is null — same effect as disabled.
-- For types where it does apply (episodic, session_summary), recent docs in an MVP workspace barely register decay (half-lives are generous).
-- Comparable systems (mem0, openclaw) ship with decay on. Durin aligning is consistent.
-- Removes the "discover later" UX where a user with an aging workspace doesn't know to enable it.
-
-The mechanism can be globally disabled via `memory.search.temporal_decay.enabled = false` if a workspace operator wants to opt out.
-
-### 10.7 What audit A9 actually shipped (2026-05-28)
-
-Up to audit A9, §10 was a promise — `decay.py` had the half-life table and the `half_life_for` resolver, but the search pipeline never called either. A9 wired the ranking-time consumer:
-
-- New helper `durin.memory.decay.apply_class_decay(score, class_name, valid_from_iso, now=None) → (decayed_score, decay_factor)` — pure function, never raises.
-- New pipeline step `_temporal_decay_step` in `durin/memory/search_pipeline.py`, inserted after the cross-encoder and before sectioning. Reorders `fused` by the new scores so the per-source cap (`apply_per_source_cap`) and the final `[:limit]` slice see the decayed ranking.
-- New config knob `memory.search.temporal_decay.enabled: bool = True` (`MemoryTemporalDecayConfig`). Read by `memory_search.execute` and threaded through to `run_search_pipeline(..., temporal_decay_enabled=...)`.
-- New telemetry event `memory.recall.decay` with `{hits_total, hits_decayed, avg_decay_factor}` so a dashboard can see how often decay actually bites.
-
-**Scope of A9 — class defaults only.** The per-entry override (`evergreen`, `decay_half_life` in `MemoryEntry`) is honoured in paths that read the full entry off disk (hot_layer, dream consolidator). The search pipeline only sees `meta` dicts derived from LanceDB / FTS5 rows, which don't carry those fields today. Adding them would require a LanceDB schema bump (3 → 4) and a forced rebuild — verified `grep` shows zero producers actually set `evergreen` or `decay_half_life` in entries today (Dream's prompt doesn't instruct the LLM to emit them; no entry in the workspace uses them). The override stays declared in `MemoryEntry` and resolved by `half_life_for`; if a future use case shows up, the second step is promoting those two fields into the row schema.
-
-**Per-class decision table** (verified by enumeration — recorded in doc 11 A9):
-
-| Class | Half-life | Why |
-|---|---|---|
-| `entity_page` (alias `entity`) | null | `valid_from = ""`; file mtime tracks "last Dream pass", not "age of fact" |
-| `episodic` | 90 days | Observations naturally age |
-| `stable` | null | Explicitly marked durable by user/agent |
-| `corpus` | null | `valid_from` is the INGEST date, not content date — decay would penalise old books in your pipeline |
-| `session_summary` | 120 days | Session digests age slower than raw episodic (broader topic surface) — currently inert until A10 emits these rows |
-| `pending` | N/A | Walker excludes it (A2) — never reaches the pipeline |
+Removed: `durin/memory/decay.py`, `_temporal_decay_step` in the pipeline, `MemoryTemporalDecayConfig`, `decay_half_life` + `evergreen` fields on `MemoryEntry`, `memory.recall.decay` telemetry event, 3 dedicated test files. The previous §10.1–§10.7 (A9 implementation, per-class half-lives, evergreen overrides) is now historical context only — see commit history before 2026-05-30 if needed.
 
 ---
 
 ## 11. (Removed) MMR — deferred to backlog
 
-The original plan included a Maximal Marginal Relevance (MMR) step here to diversify top-K results. Audit E31 (2026-05-28) renamed this section from "Step 7 — MMR" to "(Removed) MMR" so the live pipeline numbering stops at step 6 (temporal decay) and §12 picks up directly with sectioning. The MMR step was **removed from the MVP** after analysis:
+The original plan included a Maximal Marginal Relevance (MMR) step here to diversify top-K results. Audit E31 (2026-05-28) renamed this section from "Step 7 — MMR" to "(Removed) MMR" so the live pipeline numbering stops at the prior step and §12 picks up directly with sectioning. The MMR step was **removed from the MVP** after analysis:
 
 1. **Archive of consolidated episodic** (§3.6 of doc 01) already eliminates the primary source of top-K duplication. Post-archive, the typical pattern is `entity (canonical) + 0-3 fragment + 1 session_summary` — that's triangulation, not redundancy, and the agent wants to see it.
 2. **Mainstream systems don't use MMR.** mem0, graphiti, hermes, letta, cognee: none implement it. Only openclaw does.
@@ -624,8 +542,7 @@ End-to-end p95 for hot path, **default configuration (cross-encoder disabled)**:
 | 3 — Weighted merge | < 1ms |
 | 4 — Entity-aware rerank | < 5ms |
 | 5 — Cross-encoder rerank | **skipped (default)** |
-| 6 — Temporal decay | < 1ms |
-| 7 — Sectioning + per-source cap | < 5ms |
+| 6 — Sectioning + per-source cap | < 5ms |
 | **Total (default)** | **~30-130ms p95** |
 
 When cross-encoder is enabled by the user, latency increases as follows:
@@ -778,11 +695,6 @@ model = "jinaai/jina-reranker-v2-base-multilingual"
 batch_size = 32
 top_n = 10
 
-[memory.search.temporal_decay]   # A9
-enabled = true
-# F1: per-class half-life overrides — empty by default
-# [memory.search.temporal_decay.class_half_life_overrides]
-
 [memory.search.sectioning]   # G1
 max_per_source = 3
 ```
@@ -797,7 +709,6 @@ max_per_source = 3
 | `rrf_weights` | `{vector: 1.0, lexical: 0.7→2.5 boosted, grep: 0.3}` | `rrf_fusion.py::DEFAULT_W_*` | Already adaptive (lexical boost on identifier queries) |
 | `max_per_source` (sectioning) — default | 3 | `sectioned_output.py::DEFAULT_MAX_PER_SOURCE` | Audit G1 (2026-05-28) promoted this to a configurable knob via `memory.search.sectioning.max_per_source`; the hard-coded constant is only the default when nothing in config overrides. |
 | `final_top_k` (a.k.a. `limit`) | 10 default | `memory_search.py` `_PARAMETERS["limit"]` (A3) | Now per-call configurable via the `limit` tool parameter (audit A3) — 1..50 |
-| `half_life_days` per class | 90 / 120 / null | `decay.py::CLASS_HALF_LIFE_DEFAULTS` (A9) | Per-class table in code; doc 03 §10.2 documents the reasoning |
 
 The earlier draft of §15 listed every hardcoded value as a config key as if it were configurable. The honest state is: **only the items shown in the TOML block above accept overrides today**. If a real operator workflow surfaces a need (with data), the relevant knob gets promoted to `MemorySearchConfig`. Until then, hardcoded defaults keep the config surface minimal.
 
@@ -816,7 +727,7 @@ All decisions consistent with cross-corpus decisions in `00_overview.md` §10 an
 | 3 | Entity-aware rerank | Reuse existing `entity_ranker`. Pre/post-cursor boost logic preserved. | §8 |
 | 4 | Cross-encoder default state + model | **Opt-in, OFF by default.** When enabled, default model is `jinaai/jina-reranker-v2-base-multilingual` (278M, ~1.1GB RAM, ~300-800ms CPU). Selected over English-only MiniLM (silent multilingual failure), bge-base (older training), bge-v2-m3 (2x latency), and qwen3-reranker (very new). Pattern matches mem0/graphiti (opt-in). Configurable model field allows switching to bge-base, bge-v2-m3, or qwen3-reranker-0.6b without code changes. | §9, §9.1, §9.5 |
 | 5 | Cross-encoder graceful degradation + UI exposure | Failure to load model logs warning; pipeline continues at default latency. **Exposed in onboarding wizard (CLI question with trade-off explanation) + web dashboard (toggle + model picker dropdown).** Workspace config file is the canonical source; UIs are surfaces over it. | §9.4, §9.5 |
-| 6 | Temporal decay default | **Enabled by default, but only types where time-of-document is intrinsic information decay.** episodic (90d) and session_summary (120d) decay; entity, stable, corpus have `half_life = null` (no decay) because their `mtime` doesn't represent fact-age. Per-entry override via `decay_half_life` frontmatter field. Evergreen flag (`evergreen: true`) wins over all. Aligned with cross-corpus decision #3b (mechanism in place, conservative defaults). | §10 |
+| 6 | Temporal decay removed (2026-05-30) | **Search must not pre-judge recency without the question's context** — that's the LLM's job, and it already receives `valid_from` on every hit. The previous decay step penalised factual atemporal queries (LoCoMo conv-5-q20: chicken-vs-sushi). See §10. | §10 |
 | 7 | MMR deferred to backlog | **Not in MVP.** Archive of consolidated episodic (§3.6 doc 01) eliminates the primary duplication that MMR would address; the remaining typical pattern is triangulation (entity + fragment + session), not redundancy. Mainstream systems (mem0, graphiti, hermes, letta) don't implement MMR. If post-MVP bench shows residual duplication, MMR is a standalone algorithm easy to add later. | §11 |
 | 8 | Per-source cap (corpus chunks) | Sectioning step caps corpus hits to **max 3 per ingest_id** by default to prevent monotopic top-K when a long ingested doc was chunked into many corpus entries. Only applies to corpus; other classes are triangulation, not duplication. Configurable via `memory.search.sectioning.max_per_source` (audit G1 shipped the field, 2026-05-28; default 3). | §12.4 |
 | 9 | Sectioning markers | `=== CANONICAL/FRAGMENT/SESSION/INGESTED ===`. Descriptive metadata only — no valuative language. Empty sections omitted. | §12 |
@@ -843,7 +754,7 @@ where the work lives.
 | Fusion | ✅ Cross-source RRF with weighted sources (vector=1.0, lexical=0.7→2.5 boosted, grep=0.3) | `durin/memory/rrf_fusion.py` |
 | Entity-aware rerank | ✅ After RRF fusion; pre/post-cursor partition restored in audit E11 (2026-05-28) | `durin/memory/entity_ranker.py` + `durin/memory/search_pipeline.py::_entity_aware_rerank` |
 | Cross-encoder rerank | ✅ Shipped (Phase 4). Default OFF, opt-in via `memory.search.cross_encoder.enabled`. Default model `jinaai/jina-reranker-v2-base-multilingual` when enabled. | `durin/memory/cross_encoder.py` |
-| Temporal decay | ✅ Shipped (audit A9, 2026-05-28). Default ON for `episodic` (90d) and `session_summary` (120d); other classes `half_life=null`. | `durin/memory/decay.py` + `durin/memory/search_pipeline.py::_temporal_decay_step` |
+| Temporal decay | ❌ Removed (2026-05-30). The LLM does temporal reasoning with `valid_from` already on every hit. See §10. | — |
 | MMR | Removed from MVP (see §11). Re-add post-MVP only if bench shows residual duplication. | — |
 | Sectioning | ✅ CANONICAL / FRAGMENT / SESSION / INGESTED markers active; empty sections omitted | `durin/memory/sectioned_output.py` |
 | Configuration | ✅ `memory.search.*` config section with sub-Pydantic models | `durin/config/schema.py::MemorySearchConfig` |
@@ -861,4 +772,5 @@ where the work lives.
 - Tools that invoke this pipeline (`memory_search`, `memory_drill`, etc.): `04_agent_tools.md` (pending).
 - Markers and sectioning conventions: this doc §12; consumed by `04_agent_tools.md`.
 - Cross-encoder reranker rationale: `00_overview.md` §10 #2.
-- MMR and temporal decay rationale: `00_overview.md` §10 #3a, #3b.
+- MMR rationale: `00_overview.md` §10 #3a.
+- Temporal decay removal (2026-05-30): see §10 of this document for the rationale.

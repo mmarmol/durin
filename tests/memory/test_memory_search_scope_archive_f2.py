@@ -10,8 +10,8 @@ Design notes:
   `memory/` exclude `memory/archive/**`). The `scope='archive'`
   path is a separate walk that loads each archived `.md`,
   substring-matches body+summary+headline, and returns hits.
-- No re-ranking, no decay, no entity-aware: it's a recovery
-  surface, not the hot path.
+- No re-ranking, no entity-aware: it's a recovery surface, not the
+  hot path.
 - CLI commands `durin archive show <uri>` and `durin archive list`
   remain deferred to backlog — file access already covers them.
 """

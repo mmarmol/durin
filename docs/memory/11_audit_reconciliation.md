@@ -521,6 +521,8 @@ Changes:
 
 ### A9 — Temporal decay not applied to ranking
 
+> **Superseded 2026-05-30**: temporal decay was removed entirely from the search pipeline. The LoCoMo conv-5-q20 case (chicken vs sushi) showed that wall-clock decay perjudicated factual atemporal queries; the LLM already receives `valid_from` on every hit and can reason about recency itself. See doc 03 §10 for the removal rationale. The A9/F1/E15 work below is historical.
+
 **Doc says** (`docs/memory/00_overview.md:232`, row 3b):
 > **In MVP, enabled by default**, but only for observation-type docs. episodic (90d half-life) and session_summary (120d) decay.
 

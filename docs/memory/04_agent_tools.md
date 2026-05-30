@@ -12,7 +12,7 @@ related: 06_prompts_and_instructions.md
 
 This document specifies the tool API surface that the agent LLM sees. It defines each tool's parameters, return shape, tool description (the prompt the LLM reads to decide when to call), and result rendering — including the structural markers introduced in `03_search_pipeline.md` §12.
 
-**Invariant:** these are the ONLY memory-related tools the agent sees. Anything beyond this is either internal to the pipeline (no LLM-facing surface) or a CLI / web surface for human operators. The agent never sees cross-encoder weights, RRF coefficients, decay half-lives, index schemas, or LanceDB internals.
+**Invariant:** these are the ONLY memory-related tools the agent sees. Anything beyond this is either internal to the pipeline (no LLM-facing surface) or a CLI / web surface for human operators. The agent never sees cross-encoder weights, RRF coefficients, index schemas, or LanceDB internals.
 
 ---
 
@@ -199,7 +199,6 @@ These are declarative facts, not imperatives ("USE BEFORE answering" was tested 
 **Not exposed as parameters** (but present in the persisted `MemoryEntry`):
 
 - `valid_from` — defaults automatically to `date.today()` in [store.py::store_memory](../../durin/memory/store.py). Not exposed to the LLM because (a) the default covers the 99% case of "agent learned this just now", and (b) back-dating use cases go through `store_memory` directly (e.g. the LoCoMo bench seeds with conversation dates via the pure function, not the tool). See `08_scope_and_discarded.md` §2.9.
-- `decay_half_life`, `evergreen` — Dream-managed; LLM does not set these directly.
 - `related`, `author` — derived (`related` from heuristics; `author` from `provenance.current_author()` ContextVar).
 
 ### 3.2 Return shape

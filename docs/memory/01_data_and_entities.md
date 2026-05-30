@@ -69,7 +69,7 @@ summaries from JSON sidecars into a first-class memory class at
 | Class | Path | Mutability | Created by | Indexed for search? | Consumed by Dream? |
 |---|---|---|---|---|---|
 | **Session** | `sessions/<id>/` | Append-only during session, then read-only | AgentLoop (automatic, scoped per interlocutor unless `unified_session=true`) | Full text grep | No (referenced only as source_refs) |
-| **Session summary** | `memory/session_summary/<sanitized_key>.md` | Replaced when consolidator re-summarises | Consolidator (`_persist_last_summary`, audit A10) | Vector + lexical (class `session_summary`); A9 decay (120 d) | No — used as retrieval context, not consumed as raw input |
+| **Session summary** | `memory/session_summary/<sanitized_key>.md` | Replaced when consolidator re-summarises | Consolidator (`_persist_last_summary`, audit A10) | Vector + lexical (class `session_summary`) | No — used as retrieval context, not consumed as raw input |
 | **Ingested** | `ingested/<id>/` | Immutable | User (UI) or agent (tool) | Not directly; chunks via `corpus/` | No (chunks → corpus is what gets read) |
 | **Corpus** | `memory/corpus/<id>.md` | Replaced on re-ingest | Ingestion pipeline, agent | Vector + lexical | **Counts as signal** (threshold trigger §2.2 doc 05) but NOT consumed into entity pages — ingested docs are already canonical-ish |
 | **Episodic** | `memory/episodic/<id>.md` | Append-only typically | Agent via `memory_store` | Vector + lexical | **Yes, primary input.** Post-cursor entries are consumed, applied as PATCH ops, then archived |
@@ -276,7 +276,7 @@ Access to archived content requires an **explicit opt-in**:
 
 | Surface | Mechanism |
 |---|---|
-| Diagnostic search | `memory_search(..., scope='archive')` walks `memory/archive/` on demand, parses on the fly, returns results. No parallel index for archive in MVP. **Shipped audit F2 (2026-05-28)**: enum accepts `'archive'`; substring match over headline+summary+body+name+aliases of every archived `.md`; no decay / re-rank / cross-encoder. |
+| Diagnostic search | `memory_search(..., scope='archive')` walks `memory/archive/` on demand, parses on the fly, returns results. No parallel index for archive in MVP. **Shipped audit F2 (2026-05-28)**: enum accepts `'archive'`; substring match over headline+summary+body+name+aliases of every archived `.md`; no re-rank / cross-encoder. |
 | CLI recovery | `durin memory expand <entity>` renders the canonical page plus its archived predecessors; `cat memory/archive/<class>/<id>.md` and `find memory/archive -name '*.md'` cover direct lookup and enumeration. Audit G2 (2026-05-28) explicitly **decided against** adding dedicated `durin archive show / list` commands — the three existing surfaces already cover recovery without a unique use case for a fourth. See `08_scope_and_discarded.md` §2.12. |
 | Direct file access | The user opens `memory/archive/<class>/<id>.md` in any editor; nothing prevents this. |
 
