@@ -273,34 +273,6 @@ class CrossEncoderConfig(Base):
     top_n: int = 10
 
 
-class MemoryTemporalDecayConfig(Base):
-    """Temporal decay applied at ranking time (audit A9 / doc 03 §10).
-
-    Default ON. Multiplies each hit's fused score by
-    ``exp(-Δdays/half_life)`` where ``half_life`` is the per-class
-    default (see :data:`durin.memory.decay.CLASS_HALF_LIFE_DEFAULTS`).
-    Classes with null half-life (`entity_page`, `stable`, `corpus`)
-    are no-ops; only `episodic` and `session_summary` actually decay.
-
-    The per-entry override (frontmatter `evergreen` / `decay_half_life`)
-    is NOT applied here — that path runs in modules that read the
-    full `MemoryEntry` (hot_layer, dream). See A9 in
-    `docs/memory/11_audit_reconciliation.md` for the rationale.
-
-    ``class_half_life_overrides`` (audit F1, 2026-05-28): operator
-    knob to tune per-class half-lives without editing code. Maps
-    class name → half-life in days, or ``None`` to disable decay for
-    that class while keeping the global toggle ON. Default empty
-    dict = exact pre-F1 behaviour. Doc 00 §189 promised this field;
-    F1 ships it.
-    """
-
-    enabled: bool = True
-    class_half_life_overrides: dict[str, int | None] = Field(
-        default_factory=dict,
-    )
-
-
 class MemorySearchSectioningConfig(Base):
     """Sectioning step configuration (audit G1, 2026-05-28).
 
@@ -325,9 +297,6 @@ class MemorySearchConfig(Base):
 
     cross_encoder: CrossEncoderConfig = Field(
         default_factory=CrossEncoderConfig,
-    )
-    temporal_decay: MemoryTemporalDecayConfig = Field(
-        default_factory=MemoryTemporalDecayConfig,
     )
     sectioning: MemorySearchSectioningConfig = Field(
         default_factory=MemorySearchSectioningConfig,

@@ -336,8 +336,8 @@ class MemorySearchTool(Tool):
         # not indexed (vector/lexical/grep over memory/ exclude
         # `memory/archive/**`). The `scope='archive'` surface is a
         # separate on-demand walk for recovery / diagnostic queries.
-        # No re-ranking, no decay, no entity-aware — substring match
-        # over headline + summary + body of each archived `.md`.
+        # No re-ranking, no entity-aware — substring match over
+        # headline + summary + body of each archived `.md`.
         if scope == "archive":
             return self._run_archive_scope(query, limit=limit)
 
@@ -364,26 +364,6 @@ class MemorySearchTool(Tool):
             if ce_cfg is not None:
                 ce_top_n = int(getattr(ce_cfg, "top_n", 10) or 10)
 
-        # A9: temporal decay flag. Default True (matches
-        # MemoryTemporalDecayConfig). Reading via getattr lets test
-        # paths that build the tool with `app_config=None` opt out
-        # cleanly (decay still defaults ON for the real config).
-        # F1: thread `class_half_life_overrides` so operator config
-        # tunes per-class half-lives without a code patch.
-        temporal_decay_enabled = True
-        temporal_decay_overrides: dict[str, int | None] | None = None
-        if self._app_config is not None:
-            try:
-                decay_cfg = self._app_config.memory.search.temporal_decay
-                temporal_decay_enabled = bool(decay_cfg.enabled)
-                overrides = getattr(
-                    decay_cfg, "class_half_life_overrides", None,
-                )
-                if overrides:
-                    temporal_decay_overrides = dict(overrides)
-            except AttributeError:
-                temporal_decay_enabled = True
-
         # G1 (audit fourth pass, 2026-05-28): operator-configured
         # per-source cap for the sectioning step. Default is None →
         # `run_search_pipeline` falls back to
@@ -408,8 +388,6 @@ class MemorySearchTool(Tool):
             limit=limit,
             cross_encoder=cross_encoder,
             cross_encoder_top_n=ce_top_n,
-            temporal_decay_enabled=temporal_decay_enabled,
-            temporal_decay_overrides=temporal_decay_overrides,
             max_per_source=max_per_source,
         )
         duration_ms = (time.monotonic() - t0) * 1000.0
@@ -559,7 +537,7 @@ class MemorySearchTool(Tool):
         loads each archived `.md`, substring-matches the query against
         headline + summary + body, and returns up to `limit` hits.
 
-        No vector / lexical / cross-encoder / decay — recovery surface,
+        No vector / lexical / cross-encoder — recovery surface,
         not the hot path. The shape mirrors the normal response so the
         agent renders it the same way (`results`, `total`, `strategy`).
         """
