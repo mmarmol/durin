@@ -94,6 +94,19 @@ memory = [
     # daemon, optional cloud backends. Phase 2.2.
     "lancedb>=0.30.0,<1.0.0",
 ]
+cross-encoder = [
+    # Cross-encoder reranker for the memory search pipeline (doc 03 §9 /
+    # P4.1). OFF by default — operator opts in via
+    # `cfg.memory.search.cross_encoder.enabled = true`. When the flag is
+    # on but this extra is NOT installed, `durin.memory.cross_encoder`
+    # logs ERROR and falls back to pure RRF fusion (search still ships,
+    # ranking quality reduced). H25 (2026-05-30) made the silent-disable
+    # loud so operators know their config intent became a no-op.
+    #
+    # sentence-transformers pulls in torch (~1 GB) — large dep, hence
+    # gated behind the extra rather than in `memory`.
+    "sentence-transformers>=3.0,<6.0",
+]
 dev = [
     "pytest>=9.0.0,<10.0.0",
     "pytest-asyncio>=1.3.0,<2.0.0",
