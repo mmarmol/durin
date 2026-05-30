@@ -936,19 +936,63 @@ def _maybe_warm_embedding_model(model: str, size_label: str) -> None:
 def _configure_memory(
     config: Config, extras: set[str], q: Any, summary: list[str],
 ) -> None:
-    """Vector-memory submenu: toggle it on/off, choose the embedding.
+    """Vector-memory submenu: toggle it on/off, choose the embedding,
+    and configure the search/quality extras (cross-encoder rerank,
+    Dream auto-absorb, Dream's auxiliary LLM).
 
     Re-entrant — every option returns here, and ← Back leaves without
-    forcing any choice. Enabling adds the `[memory]` extra; the
-    embedding keeps its default unless the user changes it.
+    forcing any choice. Enabling adds the `[memory]` extra; enabling
+    cross-encoder adds the `[cross-encoder]` extra (sentence-transformers
+    + torch ~1GB). Other options are pure config toggles.
+
+    P10 (2026-05-30): expanded from the prior 2-option menu (toggle +
+    embedding) to include the existing `prompt_enable_cross_encoder`,
+    `prompt_enable_auto_absorb`, `prompt_memory_aux_model` functions
+    that were defined in `onboard_memory.py` but never wired into the
+    wizard flow.
     """
+    from durin.cli.onboard_memory import (
+        prompt_enable_auto_absorb,
+        prompt_enable_cross_encoder,
+        prompt_memory_aux_model,
+    )
+
     while True:
         on = bool(getattr(config.memory, "enabled", False))
         emb = config.memory.embedding.model
+        ce_on = bool(getattr(
+            config.memory.search.cross_encoder, "enabled", False,
+        ))
+        ce_model = getattr(
+            config.memory.search.cross_encoder, "model", "",
+        )
+        absorb_on = bool(getattr(
+            config.memory.dream.auto_absorb, "enabled", False,
+        ))
+        aux_model = getattr(
+            config.memory.dream, "model_override", None,
+        )
         toggle = "Disable vector memory" if on else "Enable vector memory"
+        ce_label = (
+            f"Cross-encoder reranker — {'ON' if ce_on else 'off'}"
+            f"  ({ce_model})"
+        )
+        absorb_label = (
+            f"Dream auto-absorb — {'ON' if absorb_on else 'off'}"
+        )
+        aux_label = (
+            f"Dream LLM — {'override: ' + aux_model if aux_model else 'same as agent'}"
+        )
         pick = q.select(
             f"Vector memory — {'ON' if on else 'off'}  (embedding: {emb}):",
-            choices=[toggle, "Change embedding model", _BACK_CHOICE],
+            choices=[
+                toggle,
+                "Change embedding model",
+                ce_label,
+                absorb_label,
+                aux_label,
+                _BACK_CHOICE,
+            ],
         ).ask()
         if pick is None or pick == _BACK_CHOICE:
             return
@@ -963,6 +1007,46 @@ def _configure_memory(
             continue
         if pick == "Change embedding model":
             _pick_embedding(config, q, summary)
+            continue
+        if pick == ce_label:
+            new_ce = prompt_enable_cross_encoder(current=ce_on)
+            config.memory.search.cross_encoder.enabled = new_ce
+            if new_ce:
+                extras.add("cross-encoder")
+                summary.append(
+                    f"Cross-encoder reranker: enabled ({ce_model})"
+                )
+            else:
+                extras.discard("cross-encoder")
+                summary.append("Cross-encoder reranker: disabled")
+            continue
+        if pick == absorb_label:
+            new_absorb = prompt_enable_auto_absorb(current=absorb_on)
+            config.memory.dream.auto_absorb.enabled = new_absorb
+            summary.append(
+                f"Dream auto-absorb: {'enabled' if new_absorb else 'disabled'}"
+            )
+            continue
+        if pick == aux_label:
+            agent_model = getattr(
+                config.agents.defaults, "model", "glm-5.1",
+            )
+            new_aux = prompt_memory_aux_model(
+                agent_model=agent_model,
+                current=aux_model,
+            )
+            # `prompt_memory_aux_model` returns:
+            #   `agent_model` for "same as agent" → store None (means
+            #   "follow agent's model"); user-typed id → store as-is;
+            #   None for "skip" → preserve current.
+            if new_aux is None:
+                pass  # skip
+            elif new_aux == agent_model:
+                config.memory.dream.model_override = None
+                summary.append("Dream LLM: same as agent")
+            else:
+                config.memory.dream.model_override = new_aux
+                summary.append(f"Dream LLM: {new_aux}")
             continue
 
 
