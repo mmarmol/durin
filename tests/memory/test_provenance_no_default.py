@@ -5,7 +5,7 @@ author via :func:`author_scope`. Calling :func:`current_author`
 outside an active scope must raise loud, not silently produce a
 default that masks "I forgot to wrap" bugs.
 
-Doc reference: `docs/memory/99_phase_progress_review.md` D2.
+Doc reference: `docs/architecture/memory/99_phase_progress_review.md` D2.
 """
 
 from __future__ import annotations

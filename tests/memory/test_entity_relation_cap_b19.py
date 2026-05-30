@@ -1,5 +1,5 @@
 """B-19 (audit fourth pass, 2026-05-29): enforce the per-entity
-relation cap documented in `docs/memory/01_data_and_entities.md`
+relation cap documented in `docs/architecture/memory/01_data_and_entities.md`
 §4.4 (soft 50 / hard 200).
 
 Pre-B-19 the doc carried the numbers as documented intent, but

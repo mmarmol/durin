@@ -683,7 +683,7 @@ class VectorIndex:
             # briefly stored body here for a latency micro-optimisation,
             # reverted in audit A4 because it duplicated content and
             # opened a drift window between disk edits and LanceDB
-            # reads. See docs/memory/08_scope_and_discarded.md §2.10.
+            # reads. See docs/architecture/memory/08_scope_and_discarded.md §2.10.
         }
 
     _EMBED_BUDGET_CHARS = 1500  # ~375 tokens; e5-small max_seq is 512.

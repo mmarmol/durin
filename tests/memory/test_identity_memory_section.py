@@ -60,7 +60,7 @@ def test_each_required_phrase_present(identity_text: str) -> None:
     normalised = re.sub(r"\s+", " ", identity_text)
     missing = [p for p in _REQUIRED_PHRASES if p not in normalised]
     assert not missing, (
-        "identity.md drifted from docs/memory/06_prompts_and_instructions.md "
+        "identity.md drifted from docs/architecture/memory/06_prompts_and_instructions.md "
         "§2. Missing spec phrases:\n  - " + "\n  - ".join(missing)
     )
     # The full tool name list must be present (in any whitespace

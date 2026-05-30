@@ -1,6 +1,6 @@
 """Apply a parsed v2 Dream output to an entity page on disk.
 
-Per `docs/memory/05_dream_cold_path.md` §6:
+Per `docs/architecture/memory/05_dream_cold_path.md` §6:
 
   1. Validate every patch op (allowed root, provenance present,
      known op type).

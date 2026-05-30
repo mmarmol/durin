@@ -1,7 +1,7 @@
 """Reciprocal Rank Fusion (RRF) — cross-source merge for the search
 pipeline.
 
-Per `docs/memory/03_search_pipeline.md` §7:
+Per `docs/architecture/memory/03_search_pipeline.md` §7:
 
   RRF_score(uri) = Σ over sources:  w_source / (k + rank_in_source(uri))
 

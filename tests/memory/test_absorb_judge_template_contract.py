@@ -7,7 +7,7 @@ envelope (``===VERDICT===`` etc.). A drift between template and code
 would make every judge call fail at parse time — so this test is the
 canary.
 
-Doc-level reference: `docs/memory/06_prompts_and_instructions.md` §5.
+Doc-level reference: `docs/architecture/memory/06_prompts_and_instructions.md` §5.
 """
 
 from __future__ import annotations

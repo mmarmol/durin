@@ -356,7 +356,7 @@ What it DOES do:
 
 - Three slash commands (`/plan`, `/build`, `/mode`) work in every channel that uses the shared `CommandRouter` — zero per-channel code required for dispatch.
 - WebUI gets autocomplete for free via the existing `<SlashCommandPalette>` + `/api/commands` endpoint.
-- CLI and Telegram get dispatch but not autocomplete out of the box — both are ~10 LOC additions and documented as "future improvements" in `ARCHITECTURE.md`. They aren't blockers for daily-driver use.
+- CLI and Telegram get dispatch but not autocomplete out of the box — both are ~10 LOC additions and documented as "future improvements" in `architecture/README.md`. They aren't blockers for daily-driver use.
 - The `exit_plan_mode` tool surfaces the plan but does NOT auto-restore the previous mode. The user must run `/build` explicitly. This avoids the model jumping into execution without human review and works channel-agnostic (no UI dialog).
 - 51 new tests; full suite 3,153.
 

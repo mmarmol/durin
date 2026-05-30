@@ -5,7 +5,7 @@ and the sectioned_output renderer.
 Two renderers stay intentionally separate (per audit G6 closing the
 F4 unification question — different responsibilities, different
 internal content). But they both wrap their output in the same
-marker convention defined in `docs/memory/06_prompts_and_instructions.md`
+marker convention defined in `docs/architecture/memory/06_prompts_and_instructions.md`
 §8.3. Pre-G7 each module built the marker strings independently —
 two places to drift. G7 ships a small `section_markers` helper they
 both call, eliminating the drift surface without forcing the two

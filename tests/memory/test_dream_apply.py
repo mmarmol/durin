@@ -1,6 +1,6 @@
 """Apply pipeline for the v2 Dream output.
 
-Per `docs/memory/05_dream_cold_path.md` §6: take a parsed
+Per `docs/architecture/memory/05_dream_cold_path.md` §6: take a parsed
 :class:`ParsedDreamOutput` and apply its patch + body delta to the
 entity page on disk, atomically. Steps:
 

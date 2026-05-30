@@ -79,7 +79,7 @@ _PARAMETERS = tool_parameters_schema(
     ),
     required=["content"],
     description=(
-        # Canonical text per `docs/memory/06_prompts_and_instructions.md` §3.2.
+        # Canonical text per `docs/architecture/memory/06_prompts_and_instructions.md` §3.2.
         "Persist an observation to memory. Use this when you learn a fact "
         "the user is likely to need again — preferences, decisions, facts "
         "about people/projects/ tasks, etc.\n\n"
@@ -139,7 +139,7 @@ class MemoryStoreTool(Tool):
 
     @property
     def description(self) -> str:
-        # Canonical text per `docs/memory/06_prompts_and_instructions.md` §3.2.
+        # Canonical text per `docs/architecture/memory/06_prompts_and_instructions.md` §3.2.
         # Reads via `Tool.to_schema()` → `function.description` in the
         # OpenAI spec — what the LLM sees. Audit B1 (2026-05-28) caught
         # the prior short text drifted from the canonical doc.

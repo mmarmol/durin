@@ -1,6 +1,6 @@
 """Parser for the v2 Dream consolidator output format.
 
-Per `docs/memory/05_dream_cold_path.md` §6 + `docs/memory/06_prompts_and_instructions.md` §4:
+Per `docs/architecture/memory/05_dream_cold_path.md` §6 + `docs/architecture/memory/06_prompts_and_instructions.md` §4:
 
 Sections, in order, terminated by `===END===`:
   ===PATCH===

@@ -1,6 +1,6 @@
 """Tests for the shared workspace walker `walk_memory`.
 
-Per `docs/memory/02_indexing.md` §6.5 + `01_data_and_entities.md` §3.6:
+Per `docs/architecture/memory/02_indexing.md` §6.5 + `01_data_and_entities.md` §3.6:
 the walker is the single chokepoint for "what .md files under memory/
 should be processed". Excludes archive/ (consolidated content) and
 pending/ (intake buffer) by default. An `include_archive=True` opt-in

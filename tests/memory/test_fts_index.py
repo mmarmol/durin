@@ -1,6 +1,6 @@
 """FTS5 dual-table lexical index for memory.
 
-Per `docs/memory/02_indexing.md` §5: one SQLite database at
+Per `docs/architecture/memory/02_indexing.md` §5: one SQLite database at
 `.durin/index/fts.sqlite` with two FTS5 virtual tables sharing a
 `fts_meta` bookkeeping table. The two virtual tables:
 

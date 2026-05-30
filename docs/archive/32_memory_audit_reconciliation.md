@@ -4,12 +4,12 @@ version: 1.0
 status: living document — closed item by item
 last_updated: 2026-05-28
 audience: humans + LLMs closing doc/code debt
-depends_on: docs/memory/00..10 (audited)
+depends_on: docs/architecture/memory/00..10 (audited)
 ---
 
 # Audit reconciliation — doc vs code
 
-This doc lists each discrepancy found between `docs/memory/00..10` and the real code in `durin/`. Each item includes:
+This doc lists each discrepancy found between `docs/architecture/memory/00..10` and the real code in `durin/`. Each item includes:
 
 - **Doc says** — verbatim quote + `file:line` cite
 - **Code says** — verbatim quote + `file:line` cite
@@ -27,7 +27,7 @@ This doc lists each discrepancy found between `docs/memory/00..10` and the real 
 
 ### A1 — `memory_ingest`: description promises API the schema doesn't implement
 
-**Doc says** (`docs/memory/04_agent_tools.md:200-209`):
+**Doc says** (`docs/architecture/memory/04_agent_tools.md:200-209`):
 
 ```json
 {
@@ -52,7 +52,7 @@ _PARAMETERS = tool_parameters_schema(
 )
 ```
 
-The **canonical description** synchronized with `docs/memory/06_prompts_and_instructions.md` §3.3 (lines 48-65 of the same file) also publishes `source`/`URL`/`"inline"`/`content` to the LLM. The LLM then invokes `memory_ingest(source="https://...", content=...)` and fails with `unknown parameter`.
+The **canonical description** synchronized with `docs/architecture/memory/06_prompts_and_instructions.md` §3.3 (lines 48-65 of the same file) also publishes `source`/`URL`/`"inline"`/`content` to the LLM. The LLM then invokes `memory_ingest(source="https://...", content=...)` and fails with `unknown parameter`.
 
 **Who is right**: ambiguous. The original intent (doc) is reasonable — an ingest tool should accept URL and inline. The implementation fell short. **The doc is the correct direction**; the code is incomplete.
 
@@ -70,9 +70,9 @@ Keep compatibility with `path` (alias or migration step).
 **Resolution (2026-05-28)**: Option 2 — align the doc to the code. Key reason discovered during the decision: **`web_fetch` already exists** ([durin/agent/tools/web.py:454](durin/agent/tools/web.py#L454)) and already does URL → markdown with SSRF protection, Jina/readability extractors, image detection. The URL branch in `memory_ingest` wasn't a missing capability but a **pending duplication**. Similar for "inline": `memory_store(class_name="corpus")` covers the case. Changes:
 
 - `_PARAMETERS["description"]` in [memory_ingest.py:48-68](durin/agent/tools/memory_ingest.py#L48-L68) rewritten to reflect only `path` + direct to the correct workflow (`web_fetch` + `memory_store`).
-- [docs/memory/04_agent_tools.md](docs/memory/04_agent_tools.md) §4.1, §4.2, §4.3 and §10 (status table) updated.
-- [docs/memory/06_prompts_and_instructions.md](docs/memory/06_prompts_and_instructions.md) §3.3 synchronized.
-- [docs/memory/08_scope_and_discarded.md](docs/memory/08_scope_and_discarded.md) §2.8 new entry with the genealogy of the error and the lesson on sync tests.
+- [docs/architecture/memory/04_agent_tools.md](docs/architecture/memory/04_agent_tools.md) §4.1, §4.2, §4.3 and §10 (status table) updated.
+- [docs/architecture/memory/06_prompts_and_instructions.md](docs/architecture/memory/06_prompts_and_instructions.md) §3.3 synchronized.
+- [docs/architecture/memory/08_scope_and_discarded.md](docs/architecture/memory/08_scope_and_discarded.md) §2.8 new entry with the genealogy of the error and the lesson on sync tests.
 
 **Sync test lesson**: `test_tool_description_sync.py` validates string equality, not behavior. It passed green with the doc lying to the LLM from commit `572d5cf` (2026-05-28 09:28 +0200) until the fix `bce9092` (~1 hour later). The drift was short by luck — the audit caught it the same morning, but the test would never have detected it. General fix for "sync" tests in the future: exercise the behavior, not just compare strings.
 
@@ -82,7 +82,7 @@ Keep compatibility with `path` (alias or migration step).
 
 ### A2 — `memory_store` parameters diverge between doc, code, and internal description
 
-**Doc says** (`docs/memory/04_agent_tools.md:134-144`):
+**Doc says** (`docs/architecture/memory/04_agent_tools.md:134-144`):
 
 ```json
 {
@@ -139,7 +139,7 @@ Changes to the canonical ([doc 06 §3.2](06_prompts_and_instructions.md)) reflec
 
 ### A3 — `memory_search` `limit` documented but not exposed
 
-**Doc says** (`docs/memory/04_agent_tools.md:42`):
+**Doc says** (`docs/architecture/memory/04_agent_tools.md:42`):
 
 ```json
 "limit": "integer (default: 10, max: 50)"
@@ -189,7 +189,7 @@ Changes:
 
 ### A4 — LanceDB schema in doc 02 §3.1 ≠ actual columns
 
-**Doc says** (`docs/memory/02_indexing.md:65-79`):
+**Doc says** (`docs/architecture/memory/02_indexing.md:65-79`):
 
 | Column | Type |
 |---|---|
@@ -247,12 +247,12 @@ Actual columns: `id, class_name, summary, headline, vector, valid_from, entities
 
 Doc changes:
 
-- [docs/memory/02_indexing.md §3.1](02_indexing.md): 8 real columns in the schema table. Dedicated block explaining *"no body column — body lives on disk"* with architectural justification + reference to doc 08 §2.10. Clarification of the `id/class_name` (LanceDB) vs `uri/type` (FTS5) asymmetry.
-- [docs/memory/02_indexing.md §3.2](02_indexing.md): dim corrected (default 384, not 768); alternatives listed (e5-large 1024-dim, MiniLM-L6 384-dim).
-- [docs/memory/02_indexing.md §3.3](02_indexing.md): `entity_page` instead of `entity`; note about session_summary which is NOT emitted today (delegated to A10).
-- [docs/memory/02_indexing.md §5.1](02_indexing.md): note about the asymmetry with LanceDB + how FTS5 also honors the principle (indexes the `text` but never returns it).
-- [docs/memory/02_indexing.md §11 status](02_indexing.md): vector index row updated with the current schema.
-- [docs/memory/08_scope_and_discarded.md §2.10](08_scope_and_discarded.md): permanent entry with genealogy + 5 revert reasons + lesson on optimization vs principle + lesson on symmetry between indices.
+- [docs/architecture/memory/02_indexing.md §3.1](02_indexing.md): 8 real columns in the schema table. Dedicated block explaining *"no body column — body lives on disk"* with architectural justification + reference to doc 08 §2.10. Clarification of the `id/class_name` (LanceDB) vs `uri/type` (FTS5) asymmetry.
+- [docs/architecture/memory/02_indexing.md §3.2](02_indexing.md): dim corrected (default 384, not 768); alternatives listed (e5-large 1024-dim, MiniLM-L6 384-dim).
+- [docs/architecture/memory/02_indexing.md §3.3](02_indexing.md): `entity_page` instead of `entity`; note about session_summary which is NOT emitted today (delegated to A10).
+- [docs/architecture/memory/02_indexing.md §5.1](02_indexing.md): note about the asymmetry with LanceDB + how FTS5 also honors the principle (indexes the `text` but never returns it).
+- [docs/architecture/memory/02_indexing.md §11 status](02_indexing.md): vector index row updated with the current schema.
+- [docs/architecture/memory/08_scope_and_discarded.md §2.10](08_scope_and_discarded.md): permanent entry with genealogy + 5 revert reasons + lesson on optimization vs principle + lesson on symmetry between indices.
 
 **New lessons** (to save in persistent memory):
 
@@ -268,7 +268,7 @@ Doc changes:
 
 ### A5 — `memory.dream.end` doesn't emit the cost fields doc 08 §3 R3 needs
 
-**Doc says** (`docs/memory/07_telemetry_and_observability.md:194-206`):
+**Doc says** (`docs/architecture/memory/07_telemetry_and_observability.md:194-206`):
 
 ```
 Already exists, augment with:
@@ -337,7 +337,7 @@ Changes:
 
 ### A6 — `memory.health_check` payload mismatch
 
-**Doc says** (`docs/memory/07_telemetry_and_observability.md:314-327`):
+**Doc says** (`docs/architecture/memory/07_telemetry_and_observability.md:314-327`):
 
 ```
 | tick_id | UUID |
@@ -383,7 +383,7 @@ No `tick_id`, `triggered_by`, `restorations_*`, `duration_ms`. `components` is `
 Changes:
 - [durin/memory/health_check.py](../../durin/memory/health_check.py): `import uuid` + `time` added. `run_tick()` generates `tick_id = uuid.uuid4().hex` and `t0 = time.perf_counter()` on entry; the payload includes both. ~5 LOC delta.
 - [durin/telemetry/schema.py](../../durin/telemetry/schema.py): `MemoryHealthCheckEvent` TypedDict gains `tick_id` and `duration_ms`. Additive — pre-A6 fields still required.
-- [docs/memory/07_telemetry_and_observability.md §9.4](07_telemetry_and_observability.md): table rewritten with the 6 current fields + "Shape decisions and what's deliberately NOT emitted" block documenting why `triggered_by`/`nested components`/`restorations_*` were left out. **That block is what prevents this decision from being taken in reverse** (a future reader might see doc 07 §9.4 v1 and "implement what the doc says" without knowing the context).
+- [docs/architecture/memory/07_telemetry_and_observability.md §9.4](07_telemetry_and_observability.md): table rewritten with the 6 current fields + "Shape decisions and what's deliberately NOT emitted" block documenting why `triggered_by`/`nested components`/`restorations_*` were left out. **That block is what prevents this decision from being taken in reverse** (a future reader might see doc 07 §9.4 v1 and "implement what the doc says" without knowing the context).
 - [tests/memory/test_health_check_a6_fields.py](../../tests/memory/test_health_check_a6_fields.py): 5 new tests exercising behavior:
   - `tick_id` is exactly 32-char hex (not 36-char dashed — catches `.hex` vs `str()` regression).
   - `duration_ms` is > 0 (catches seconds-instead-of-ms regression — `perf_counter()` delta in seconds is <1, multiplied by 1000 is >0).
@@ -404,7 +404,7 @@ Changes:
 
 ### A7 — `memory.health.critical` missing `manual_recovery_hint`
 
-**Doc says** (`docs/memory/07_telemetry_and_observability.md:338`):
+**Doc says** (`docs/architecture/memory/07_telemetry_and_observability.md:338`):
 
 ```
 | manual_recovery_hint | string | Suggested CLI: e.g., `durin reindex --target lancedb` |
@@ -454,7 +454,7 @@ Changes:
   * Emit path for unknown component uses the fallback.
   * TypedDict declares the field + preserves pre-A7 fields.
 
-- [docs/memory/07_telemetry_and_observability.md §9.5](07_telemetry_and_observability.md): rewritten with the 4 fields. Section explains the probe-name → CLI target translation (legacy drift `lance` vs `lancedb`) and references the anti-drift test. The wrong command from the v1 spec corrected.
+- [docs/architecture/memory/07_telemetry_and_observability.md §9.5](07_telemetry_and_observability.md): rewritten with the 4 fields. Section explains the probe-name → CLI target translation (legacy drift `lance` vs `lancedb`) and references the anti-drift test. The wrong command from the v1 spec corrected.
 
 **Lessons applied**:
 - [[feedback-verify-quantifiers]]: verify that the suggested command **actually exists**. Doc 07 v1 said `durin reindex` — non-existent command (missing `memory`). The audit caught it before implementing.
@@ -469,7 +469,7 @@ Changes:
 
 ### A8 — `PushSink` is dead code without wiring
 
-**Doc says** (`docs/memory/07_telemetry_and_observability.md` §12.2 + `09_implementation_roadmap.md` P7.3): HTTPS push opt-in via `telemetry.push_url` + `telemetry.push_token`.
+**Doc says** (`docs/architecture/memory/07_telemetry_and_observability.md` §12.2 + `09_implementation_roadmap.md` P7.3): HTTPS push opt-in via `telemetry.push_url` + `telemetry.push_token`.
 
 **Code says**:
 - `durin/telemetry/push.py:32` `PushSink` exists with passing tests.
@@ -505,7 +505,7 @@ Changes:
   * Isolation: broken sink (raises) → JSONL keeps writing correctly.
   * Schema invariant: `TelemetryPushConfig` does NOT have a plaintext `token` field — only `token_secret_name`. Catches a regression that would put the token in config.json.
 
-- [docs/memory/07_telemetry_and_observability.md §12.2](07_telemetry_and_observability.md): retention corrected (90 days, not 1 year). New §12.3 — full description of the push opt-in: TOML config, command for the secret, privacy implications, behavior (failure isolation, drain on shutdown, retry path).
+- [docs/architecture/memory/07_telemetry_and_observability.md §12.2](07_telemetry_and_observability.md): retention corrected (90 days, not 1 year). New §12.3 — full description of the push opt-in: TOML config, command for the secret, privacy implications, behavior (failure isolation, drain on shutdown, retry path).
 
 **Lessons applied**:
 - [[feedback-telemetry-is-first-class]] (new): measuring behavior is the purpose, doesn't require a downstream consumer to justify.
@@ -523,10 +523,10 @@ Changes:
 
 > **Superseded 2026-05-30**: temporal decay was removed entirely from the search pipeline. The LoCoMo conv-5-q20 case (chicken vs sushi) showed that wall-clock decay perjudicated factual atemporal queries; the LLM already receives `valid_from` on every hit and can reason about recency itself. See doc 03 §10 for the removal rationale. The A9/F1/E15 work below is historical.
 
-**Doc says** (`docs/memory/00_overview.md:232`, row 3b):
+**Doc says** (`docs/architecture/memory/00_overview.md:232`, row 3b):
 > **In MVP, enabled by default**, but only for observation-type docs. episodic (90d half-life) and session_summary (120d) decay.
 
-**Doc says** also (`docs/memory/03_search_pipeline.md` §10) — "STEP 6 — Temporal decay" between cross-encoder and sectioning, "default enabled".
+**Doc says** also (`docs/architecture/memory/03_search_pipeline.md` §10) — "STEP 6 — Temporal decay" between cross-encoder and sectioning, "default enabled".
 
 **Code says** (`durin/memory/decay.py:14-18`, literal header):
 
@@ -576,8 +576,8 @@ Changes:
   * Telemetry: `memory.recall.decay` event with correct counts.
   * Schema: TypedDict registered, config default enabled=True.
 
-- [docs/memory/03_search_pipeline.md §10.7](03_search_pipeline.md) (new): describes what A9 shipped + the reasoned table + scope (class only).
-- [docs/memory/00_overview.md §10 row 3b](00_overview.md): from "promise" to "shipped".
+- [docs/architecture/memory/03_search_pipeline.md §10.7](03_search_pipeline.md) (new): describes what A9 shipped + the reasoned table + scope (class only).
+- [docs/architecture/memory/00_overview.md §10 row 3b](00_overview.md): from "promise" to "shipped".
 
 **Lessons applied**:
 - [[feedback-verify-quantifiers]] applied twice during development:
@@ -594,7 +594,7 @@ Changes:
 
 ### A10 — Doc 02 promises indexing of session summaries; nothing indexes them
 
-**Doc says** (`docs/memory/02_indexing.md:104`):
+**Doc says** (`docs/architecture/memory/02_indexing.md:104`):
 
 > *"`sessions/<id>/<id>.meta.json::derived._last_summary` (one row per session as `type=session_summary`)"*
 
@@ -641,7 +641,7 @@ Changes:
   * Indexer's `_payload_for` assigns `class_name="session_summary"`.
   * A9 decay for `session_summary` resolves to 120 days.
 
-- [docs/memory/02_indexing.md §3.3](02_indexing.md): new §3.3.1 "Session summaries (audit A10)" explains the flow + single source of truth decision + agent_facing_classes exclusion.
+- [docs/architecture/memory/02_indexing.md §3.3](02_indexing.md): new §3.3.1 "Session summaries (audit A10)" explains the flow + single source of truth decision + agent_facing_classes exclusion.
 
 **Pre-A10 sessions**: have `_last_summary` in the `metadata` JSON. The migration is **lazy**: on the next compaction of each session, `_persist_last_summary` writes the new `.md` AND pops the legacy field from metadata. If a session is NEVER recompacted (e.g. user abandons it), the legacy summary stays in its JSON — `_format_pending_summary` reads it as fallback. No data loss; only "no indexing" for those orphan sessions (acceptable; the user will never use them).
 
@@ -658,7 +658,7 @@ Changes:
 
 ### A11 — `MemoryFileWatcher` and `HealthChecker` shipped but not wired to lifecycle
 
-**Doc says** (`docs/memory/10_remaining_work.md` P2.3 + P2.4 DoD):
+**Doc says** (`docs/architecture/memory/10_remaining_work.md` P2.3 + P2.4 DoD):
 - P2.3: *"Edit `memory/entities/person/marcelo.md` with vim and, within 5 seconds, the next `memory_search` for 'marcelo' surfaces the words from the edit."*
 - P2.4: *"Every 15 minutes (configurable), a background job... probes FTS + Lance."*
 
@@ -702,8 +702,8 @@ Changes:
   * `stop()` drains both cleanly.
   * Watcher startup failure isolated — health keeps running.
 
-- [docs/memory/02_indexing.md §6.3](02_indexing.md): new "Lifecycle (audit A11)" block explains that the watcher starts by default, failure isolation, and how to disable it.
-- [docs/memory/07_telemetry_and_observability.md §9.4](07_telemetry_and_observability.md): new "Scheduling (audit A11)" block explains `interval_seconds=900` default + "first tick immediate" + responsive shutdown.
+- [docs/architecture/memory/02_indexing.md §6.3](02_indexing.md): new "Lifecycle (audit A11)" block explains that the watcher starts by default, failure isolation, and how to disable it.
+- [docs/architecture/memory/07_telemetry_and_observability.md §9.4](07_telemetry_and_observability.md): new "Scheduling (audit A11)" block explains `interval_seconds=900` default + "first tick immediate" + responsive shutdown.
 
 **Test impact**: 2302 previous tests keep passing (the 2300+ that build `AgentLoop` do so with `app_config=None`, which skips wiring by design). No breaking change for the existing suite.
 
@@ -723,7 +723,7 @@ Applying `feedback_telemetry_is_first_class`: telemetry (health_check emit) and 
 
 ### B1 — `.description` property of the tools is not synchronized ✅ RESOLVED with the canonical
 
-**Doc says** (`docs/memory/04_agent_tools.md:413-419` §8):
+**Doc says** (`docs/architecture/memory/04_agent_tools.md:413-419` §8):
 
 > *"The description in the tool registration MUST match the doc 06 §3.1-§3.4 text verbatim. Sync via `tests/memory/test_tool_description_sync.py`."*
 
@@ -752,7 +752,7 @@ Changes:
 
 - [durin/agent/tools/memory_search.py:181](../../durin/agent/tools/memory_search.py#L181), [memory_store.py:140](../../durin/agent/tools/memory_store.py#L140), [memory_ingest.py:99](../../durin/agent/tools/memory_ingest.py#L99), [memory_drill.py:47](../../durin/agent/tools/memory_drill.py#L47): each `.description` property now delegates to `_PARAMETERS["description"]` (single source of truth — both fields resolve to the same string). The non-canonical short text is removed. Inline comment explains the flow and references B1.
 - [tests/memory/test_tool_description_sync.py](../../tests/memory/test_tool_description_sync.py): the test now instantiates each tool and reads the `.description` property (instead of `_PARAMETERS["description"]`). Additionally, new test `test_description_property_is_what_to_schema_emits` verifies the invariant `to_schema()["function"]["description"] == tool.description` — anti-drift against the case "someone changes `to_schema()` to use another field and the sync ends up looking at the wrong field again".
-- [docs/memory/06_prompts_and_instructions.md §3.5](06_prompts_and_instructions.md): rewritten — explains the `.description` → `function.description` contract, why `_PARAMETERS["description"]` (which ends up as `function.parameters.description`) is kept identical by defense-in-depth, and documents the B1 bug this section reflects.
+- [docs/architecture/memory/06_prompts_and_instructions.md §3.5](06_prompts_and_instructions.md): rewritten — explains the `.description` → `function.description` contract, why `_PARAMETERS["description"]` (which ends up as `function.parameters.description`) is kept identical by defense-in-depth, and documents the B1 bug this section reflects.
 
 **Lessons applied**:
 - [[feedback-sync-tests-exercise-behavior]]: the sync test now exercises the **real contract** (`to_schema()` output) not just string equality. The new invariant test `test_description_property_is_what_to_schema_emits` is specific defense against "someone refactors `to_schema()` and the sync ends up looking at the wrong place".
@@ -785,7 +785,7 @@ Changes:
 
 ### B3 — Doc 10 marks as pending what is done ✅ RESOLVED
 
-**Doc says** (`docs/memory/10_remaining_work.md` lines 24, P2.x, P3.x, P4.x, P5.x, P6.x, P7.x): many items without ✅ DONE.
+**Doc says** (`docs/architecture/memory/10_remaining_work.md` lines 24, P2.x, P3.x, P4.x, P5.x, P6.x, P7.x): many items without ✅ DONE.
 
 **Code says** (git log):
 - P2.2 ✅ commit `c3eff1e`
@@ -811,7 +811,7 @@ Line 24 says "Phase 4 + Phase 8 remain" — Phase 4 closed.
 
 ### B4 — P5.5 implemented differently from spec ✅ RESOLVED
 
-**Doc says** (`docs/memory/10_remaining_work.md` P5.5):
+**Doc says** (`docs/architecture/memory/10_remaining_work.md` P5.5):
 > *"Script `scripts/audit_tool_descriptions.py` extracts descriptions... fails with specific diff if they differ. Wired in CI."*
 
 **Code says**:
@@ -829,7 +829,7 @@ Line 24 says "Phase 4 + Phase 8 remain" — Phase 4 closed.
 
 ### B5 — Retention: 1 year in doc vs 90 days in code ✅ RESOLVED
 
-**Doc says** (`docs/memory/07_telemetry_and_observability.md` §12.2):
+**Doc says** (`docs/architecture/memory/07_telemetry_and_observability.md` §12.2):
 > *"old events compressed... kept 1 year, then deleted"*
 
 **Code says** (`durin/telemetry/retention.py:34-35`):
@@ -868,8 +868,8 @@ DELETION_AGE_DAYS: int = 90
 
 ### B7 — Doc 05 §15 + doc 06 §10 status: "v1 page rewrites" ✅ RESOLVED
 
-**Doc says** (`docs/memory/05_dream_cold_path.md:201` and §15 status table): *"current code uses full-page rewrites"*.
-**Doc says** (`docs/memory/06_prompts_and_instructions.md` §10): *"templates/dream/consolidator.md: v1 (page + commit)"*.
+**Doc says** (`docs/architecture/memory/05_dream_cold_path.md:201` and §15 status table): *"current code uses full-page rewrites"*.
+**Doc says** (`docs/architecture/memory/06_prompts_and_instructions.md` §10): *"templates/dream/consolidator.md: v1 (page + commit)"*.
 
 **Code says**:
 - `durin/memory/dream.py` calls `parse_dream_output` + `apply_dream_output` (Phase 1.9 shipped in commit `6aafc3f`).
@@ -886,7 +886,7 @@ DELETION_AGE_DAYS: int = 90
 
 ### B8 — Doc 03 §15 promises config keys that don't exist ✅ RESOLVED
 
-**Doc says** (`docs/memory/03_search_pipeline.md` §15):
+**Doc says** (`docs/architecture/memory/03_search_pipeline.md` §15):
 
 ```
 memory.search.vector_top_k
@@ -955,8 +955,8 @@ Only `cross_encoder`. The rest is hardcoded:
 
 **`memory.silent_retrieval_miss` — DISCARDED**:
 
-- [docs/memory/07_telemetry_and_observability.md §4.6](07_telemetry_and_observability.md): rewritten — the event is no longer emitted, the section points to doc 08 §2.11 with the reason.
-- [docs/memory/08_scope_and_discarded.md §2.11](08_scope_and_discarded.md) (new): permanent entry with 4 discard reasons + 3 alternatives if the signal is needed in the future + general lesson about "heuristic detectors with language-specific token lists are a red flag for any subsystem that has to serve multi-lingual workloads".
+- [docs/architecture/memory/07_telemetry_and_observability.md §4.6](07_telemetry_and_observability.md): rewritten — the event is no longer emitted, the section points to doc 08 §2.11 with the reason.
+- [docs/architecture/memory/08_scope_and_discarded.md §2.11](08_scope_and_discarded.md) (new): permanent entry with 4 discard reasons + 3 alternatives if the signal is needed in the future + general lesson about "heuristic detectors with language-specific token lists are a red flag for any subsystem that has to serve multi-lingual workloads".
 
 **Doc 07 §8.1** updated with real payload shape + explanation of why `kind` and `recoverable` were trimmed vs the v1 spec.
 
@@ -993,7 +993,7 @@ All three are in the `EVENTS` registry and are emitted.
 
 ### B11 — Doc 06 §2 only mentions `## Memory` (incomplete) ✅ RESOLVED
 
-**Doc says** (`docs/memory/06_prompts_and_instructions.md` §2): reproduces only the `## Memory` block of identity.md.
+**Doc says** (`docs/architecture/memory/06_prompts_and_instructions.md` §2): reproduces only the `## Memory` block of identity.md.
 
 **Code says** (`durin/templates/agent/identity.md:35-46`): besides `## Memory`, there is `## Memory writing` that gives writing guidance (dedup, when NOT to call memory_store).
 
@@ -1007,7 +1007,7 @@ All three are in the `EVENTS` registry and are emitted.
 
 ### B12 — Cross-encoder model NOT validated against curated list ✅ RESOLVED
 
-**Doc says** (`docs/memory/03_search_pipeline.md` §9.5): *"dropdown for picking the model from the curated list (jina-v2, bge-base, bge-v2-m3, qwen3-reranker-0.6b)"*.
+**Doc says** (`docs/architecture/memory/03_search_pipeline.md` §9.5): *"dropdown for picking the model from the curated list (jina-v2, bge-base, bge-v2-m3, qwen3-reranker-0.6b)"*.
 
 **Code says** (`durin/config/schema.py:266-273`):
 
@@ -1051,7 +1051,7 @@ Tests:
 
 Doc:
 
-- [docs/memory/03_search_pipeline.md §9.5](03_search_pipeline.md): explicit clarification: "The model set is open. The four entries below are bundled in the install as suggestions… but the config field accepts any sentence_transformers compatible id. Validation is dynamic via the Test button."
+- [docs/architecture/memory/03_search_pipeline.md §9.5](03_search_pipeline.md): explicit clarification: "The model set is open. The four entries below are bundled in the install as suggestions… but the config field accepts any sentence_transformers compatible id. Validation is dynamic via the Test button."
 
 **Lessons applied**:
 - [[feedback-question-user-input]]: without your push-back I would have implemented Option A (soft validator with hardcoded list), which was exactly the user-restrictive anti-pattern you warned me about.
@@ -1070,7 +1070,7 @@ Doc:
 
 ### C1 — Doc 01 §4.3 references `STATEFUL_ATTRIBUTE_PATTERNS` which doesn't exist ✅ RESOLVED
 
-**Doc says** (`docs/memory/01_data_and_entities.md` §4.3): *"The pattern set lives in code as a single source of truth (`STATEFUL_ATTRIBUTE_PATTERNS`)"*.
+**Doc says** (`docs/architecture/memory/01_data_and_entities.md` §4.3): *"The pattern set lives in code as a single source of truth (`STATEFUL_ATTRIBUTE_PATTERNS`)"*.
 
 **Code says**: `grep -rn "STATEFUL_ATTRIBUTE_PATTERNS" durin/` → zero hits.
 
@@ -1084,7 +1084,7 @@ Doc:
 
 ### C2 — Doc 01 §4.4 "soft cap 50 / hard cap 200" entries-per-entity not enforced ✅ RESOLVED → re-opened and shipped as B-19
 
-**Doc says** (`docs/memory/01_data_and_entities.md` §4.4): *"Per-entity cap — Soft cap = 50 (warn only), Hard cap = 200"*.
+**Doc says** (`docs/architecture/memory/01_data_and_entities.md` §4.4): *"Per-entity cap — Soft cap = 50 (warn only), Hard cap = 200"*.
 
 **Code says**: `grep -rn "50\|200" durin/memory/dream.py durin/memory/entity_page.py | grep -iE "cap|limit"` → zero semantically relevant hits.
 
@@ -1983,7 +1983,7 @@ A dedicated `durin archive show / list` would duplicate these without a unique u
 
 **Counterfactual** (the close path): if Phase 8 shows < 5 such failures, §2.F moves from §5 backlog to §2 discarded with the Phase 8 evidence cited inline. The spec in §4.1 stays as design-history.
 
-**Why current behaviour might already suffice** (the question Phase 8 settles): HotLayer (`docs/memory/06_prompts_and_instructions.md` §8) already eager-injects canonical entity pages + recent fragments + entity name list on every prompt; the multi-query identity.md prompt pattern shipped 2026-05-25 bumped LoCoMo v2 by +3.9pp by teaching the agent to invoke `memory_search` itself on relevant turns. So query-specific pre-fetch would be incremental on top of an already-eager surface with an already-effective self-invocation pattern.
+**Why current behaviour might already suffice** (the question Phase 8 settles): HotLayer (`docs/architecture/memory/06_prompts_and_instructions.md` §8) already eager-injects canonical entity pages + recent fragments + entity name list on every prompt; the multi-query identity.md prompt pattern shipped 2026-05-25 bumped LoCoMo v2 by +3.9pp by teaching the agent to invoke `memory_search` itself on relevant turns. So query-specific pre-fetch would be incremental on top of an already-eager surface with an already-effective self-invocation pattern.
 
 **Estimated implementation cost when triggered**: ~150 LOC for the pre-LLM `memory_search` call in `AgentLoop._build_messages`, `<memory-context>` wrapper block format, ephemeral insertion (NOT persisted to session), failure-mode handling on `memory_search` errors; plus a new telemetry event `memory.eager_prefetch_invoked` with duration; plus a Phase-9 bench harness change to measure the +pp gain. Trigger latency cost per turn at run-time: +50-130ms + cache miss in upstream prompt cache (the user message changes per query, breaking cache reuse).
 

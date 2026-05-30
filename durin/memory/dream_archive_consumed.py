@@ -1,6 +1,6 @@
 """Archive episodic entries consumed by a successful Dream apply.
 
-Per `docs/memory/05_dream_cold_path.md` §7 + `docs/memory/01_data_and_entities.md` §3.6:
+Per `docs/architecture/memory/05_dream_cold_path.md` §7 + `docs/architecture/memory/01_data_and_entities.md` §3.6:
 
 After ``apply_dream_output`` writes a new entity-page version, the
 episodic entries cited in the patch's ``provenance`` fields are

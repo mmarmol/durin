@@ -1,6 +1,6 @@
 """Workspace ↔ FTS5 indexer.
 
-Per `docs/memory/02_indexing.md` §6: the indexer is the bridge between
+Per `docs/architecture/memory/02_indexing.md` §6: the indexer is the bridge between
 the markdown source-of-truth under ``memory/`` and the FTS5 sqlite
 database at ``.durin/index/fts.sqlite``.
 

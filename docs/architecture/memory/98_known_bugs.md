@@ -49,7 +49,7 @@ When you find a bug during corpus work, audits, or implementation:
 
 1. Add a new section here with severity, source, symptom, file:line, fix plan, status.
 2. Don't try to fix unrelated bugs while doing something else — that creates scope creep and confused commits. Note here and address it in the right commit.
-3. When fixing, reference this file's section ID in the commit message (e.g., "closes B1 from docs/memory/98_known_bugs.md").
+3. When fixing, reference this file's section ID in the commit message (e.g., "closes B1 from docs/architecture/memory/98_known_bugs.md").
 4. When fixed, change `**Status:** Pending` to `**Status:** Resolved — commit <sha>` and leave the entry in place (don't delete) for historical traceability.
 
 When this file accumulates too many resolved items, periodically prune to a `KNOWN_BUGS_ARCHIVE.md` to keep this file focused on live work.

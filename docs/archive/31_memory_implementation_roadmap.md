@@ -396,7 +396,7 @@ Listed between §4 (Phase 1) and §5 (Phase 2) in document order, but its real d
   - No entity quarantine triggered without justification.
   - Index size growth tracks workspace size.
   - No silent retrieval misses (telemetry shows healthy `recall.strategy` distribution).
-- Documentation pass: every doc in `docs/memory/` reflects implemented state.
+- Documentation pass: every doc in `docs/architecture/memory/` reflects implemented state.
 
 ### 11.2 Done criteria
 

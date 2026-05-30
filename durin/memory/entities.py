@@ -134,7 +134,7 @@ _SLUG_NON_ALNUM = re.compile(r"[^a-z0-9]+")
 def slugify_name(name: str) -> str:
     """Derive a canonical entity slug from a free-form name.
 
-    Pipeline per ``docs/memory/01_data_and_entities.md`` §4.5:
+    Pipeline per ``docs/architecture/memory/01_data_and_entities.md`` §4.5:
       1. Unicode NFC normalize
       2. Transliterate non-Latin scripts (CJK, Cyrillic, Arabic, ...)
          to Latin ASCII via :mod:`unidecode`.

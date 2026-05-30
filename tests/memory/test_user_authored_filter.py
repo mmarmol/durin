@@ -1,6 +1,6 @@
 """`author: user_authored` entries are protected from Dream consumption.
 
-Per `docs/memory/01_data_and_entities.md` §4.6.1:
+Per `docs/architecture/memory/01_data_and_entities.md` §4.6.1:
 
 A `user_authored` entry is intentional, durable, and human-curated.
 Dream must NOT consolidate it (would compete with the user's choice

@@ -1,6 +1,6 @@
 """Quarantine logic for entities that keep failing the Dream apply pipeline.
 
-Per `docs/memory/05_dream_cold_path.md` §12.5:
+Per `docs/architecture/memory/05_dream_cold_path.md` §12.5:
 
 - Structural failures (validation, patch_runtime, round_trip) on the
   same entity across consecutive passes increment

@@ -97,7 +97,7 @@ Inside the TUI:
 ## Documentation
 
 - [docs/INSTALL.md](docs/INSTALL.md) — prerequisites, optional extras
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — system layout
+- [docs/architecture/README.md](docs/architecture/README.md) — system layout
 - [docs/09_daily_driver_plan.md](docs/09_daily_driver_plan.md) — daily-driver roadmap
 - [docs/roadmap.md](docs/roadmap.md) / [docs/bitacora.md](docs/bitacora.md) — historical context
 

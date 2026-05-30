@@ -1,6 +1,6 @@
 """Index meta.json helper.
 
-Per `docs/memory/02_indexing.md` §2 + §7.2:
+Per `docs/architecture/memory/02_indexing.md` §2 + §7.2:
 
 - Lives at `<workspace>/.durin/index/meta.json`.
 - Carries `schema_version` (int) and `embedding_model_id` (str).

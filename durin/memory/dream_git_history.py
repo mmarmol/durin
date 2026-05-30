@@ -1,6 +1,6 @@
 """Format `git log` of a single entity page for the `{recent_history}` slot.
 
-Per `docs/memory/05_dream_cold_path.md` §5.1: the LLM sees the last
+Per `docs/architecture/memory/05_dream_cold_path.md` §5.1: the LLM sees the last
 30 days of git commits to its target entity page so it can avoid
 undoing its own recent decisions. The git source is the per-workspace
 memory repo at ``<workspace>/memory/.git/``.
