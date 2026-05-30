@@ -103,6 +103,9 @@ class CrossEncoderReranker:
             yield docs[i:i + self._batch_size]
 
 
+_RERANK_FALLBACK_LOGGED = False
+
+
 def rerank_hits(
     reranker: CrossEncoderReranker,
     *,
@@ -116,12 +119,28 @@ def rerank_hits(
     unavailable / crash), returns the input URIs in their original
     order — never raises, so the search pipeline keeps shipping
     results.
+
+    Audit H25 (2026-05-30): when the reranker returns ``None``
+    (model never loaded, scoring failed, etc.) we log ONCE per
+    process at WARNING level so the operator knows the rerank step
+    was a no-op for the rest of the session. The per-call fallback
+    stays silent after the first log to avoid spamming on every
+    search.
     """
     if not hits:
         return []
     docs = [d for _, d in hits]
     scores = reranker.score(query, docs)
     if scores is None or len(scores) != len(hits):
+        global _RERANK_FALLBACK_LOGGED
+        if not _RERANK_FALLBACK_LOGGED:
+            _RERANK_FALLBACK_LOGGED = True
+            logger.warning(
+                "cross_encoder: rerank returned None — every search "
+                "this process serves will fall through to the "
+                "RRF-only order. See earlier ERROR log for the load "
+                "failure root cause. Subsequent fallbacks suppressed."
+            )
         return [u for u, _ in hits][:top_n]
     paired = sorted(
         zip(hits, scores), key=lambda x: x[1], reverse=True,
@@ -225,21 +244,39 @@ def _load_default_scorer(model: str) -> Optional[Scorer]:
 
     Returns a :class:`Scorer` shim or ``None`` on failure (missing
     dep, model download failure, OOM, etc.).
+
+    Audit H25 (2026-05-30): failures escalate to ERROR-level logs
+    (was INFO / WARNING) so an operator who enabled the feature in
+    config sees a loud signal that the rerank step is disabled.
+    Search continues without rerank — pure RRF fusion still ships
+    results — but the operator's intent (enable rerank) silently
+    became no-op pre-H25, which masked the dead-code bug discovered
+    while investigating bench-100-prop chicken retrieval failures.
     """
     try:
         from sentence_transformers import CrossEncoder  # type: ignore[import-not-found]
     except ImportError:
-        logger.info(
-            "cross_encoder: sentence_transformers not installed; "
-            "rerank step disabled. Install durin[cross-encoder] "
-            "to enable."
+        logger.error(
+            "cross_encoder: sentence_transformers is NOT installed — "
+            "rerank step DISABLED, falling back to pure RRF fusion. "
+            "Search still works but ranking quality is reduced. "
+            "Install with `pip install durin-agent[cross-encoder]` "
+            "(or `pip install sentence-transformers`) to enable. "
+            "Set `cfg.memory.search.cross_encoder.enabled = false` "
+            "to silence this message if rerank is not desired."
         )
         return None
     try:
         model_obj = CrossEncoder(model)
     except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "cross_encoder: failed to load model %s: %s", model, exc,
+        logger.error(
+            "cross_encoder: failed to load model %r — rerank step "
+            "DISABLED, falling back to pure RRF fusion. Underlying "
+            "error: %s. Search still works but ranking quality is "
+            "reduced. Verify the model id is reachable from this "
+            "host (network / HuggingFace cache), or switch to a "
+            "different model via `cfg.memory.search.cross_encoder.model`.",
+            model, exc,
         )
         return None
 
