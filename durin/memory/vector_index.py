@@ -167,7 +167,9 @@ class VectorIndex:
             name=name, aliases=aliases, body=body,
             attributes=attributes, relations=relations,
         )
-        [vec] = self._provider.embed([text])
+        # Use embed_passages (not raw embed) so E5-family models get the
+        # required `passage: ` prefix. For non-E5 models this is a no-op.
+        [vec] = self._provider.embed_passages([text])
         try:
             rel_path = path.relative_to(self._workspace)
         except ValueError:
@@ -384,10 +386,15 @@ class VectorIndex:
         Convenience for callers (e.g. ``memory_store`` dedup check) that
         need to reuse the same embedding for both search and upsert
         (G5). Returns a single vector. ``text`` must be non-empty.
+
+        Uses passage-style embedding (E5 prefix when applicable) since
+        the primary caller (memory_store dedup) embeds content that is
+        about to be stored — passage-vs-passage similarity is the right
+        comparison for "is this content already in the index?".
         """
         if not text:
             raise ValueError("embed_text: text must be non-empty")
-        return self._provider.embed([text])[0]
+        return self._provider.embed_passages([text])[0]
 
     def search_by_vector(
         self,
@@ -521,7 +528,9 @@ class VectorIndex:
             )
             for page, _ in entity_pages
         ]
-        all_vectors = self._provider.embed(entry_texts + page_texts) if (
+        # Batch write — both entries and entity pages are passages, so
+        # use embed_passages to apply E5 prefix uniformly.
+        all_vectors = self._provider.embed_passages(entry_texts + page_texts) if (
             entry_texts or page_texts
         ) else []
         entry_vectors = all_vectors[: len(entry_texts)]
@@ -586,7 +595,8 @@ class VectorIndex:
         db = self._connect()
         if _TABLE_NAME not in db.list_tables().tables:
             return []
-        [vec] = self._provider.embed([query])
+        # Use embed_query so E5-family models get the `query: ` prefix.
+        vec = self._provider.embed_query(query)
         table = db.open_table(_TABLE_NAME)
         self._guard_dim_match(table, len(vec))
         rows = table.search(vec).limit(top_k).to_list()
@@ -606,7 +616,8 @@ class VectorIndex:
         class_name: str,
         path: Path,
     ) -> dict[str, Any]:
-        [vec] = self._provider.embed([self._embed_text(entry)])
+        # Single-entry write — passage context.
+        [vec] = self._provider.embed_passages([self._embed_text(entry)])
         return self._record_with_vector(entry, class_name, path, vec)
 
     def _record_with_vector(

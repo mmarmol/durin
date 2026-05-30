@@ -118,7 +118,12 @@ class MemoryEmbeddingConfig(Base):
     """
 
     provider: str = "fastembed"
-    model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    # Default model: multilingual-e5-small (registered as custom model
+    # in durin/memory/embedding.py::_CUSTOM_MODELS). 117M params, 384-
+    # dim, 100+ languages, MIT, retrieval-tuned. Replaced
+    # paraphrase-multilingual-MiniLM-L12-v2 on 2026-05-30 — see doc 02
+    # §indexing and the wizard `_EMBEDDING_CHOICES` for the rationale.
+    model: str = "intfloat/multilingual-e5-small"
     base_url: str | None = Field(
         default=None,
         validation_alias=AliasChoices("baseUrl", "base_url"),

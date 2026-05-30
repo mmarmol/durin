@@ -182,7 +182,7 @@ the specific module where the work landed.
 | Component | Current state | Notes |
 |---|---|---|
 | **Data types** | 5 classes (`stable`, `episodic`, `corpus`, `pending`, `session_summary`) + `entity_page` (separate model) | `MEMORY_CLASSES` in `durin/memory/paths.py`. `session_summary` was added in audit A10 (was 4 classes before). |
-| **Vector index** | LanceDB + MiniLM with v2.a embedding text for entity pages (name + aliases + rendered_frontmatter + body) | Shipped audit E9 (2026-05-28). Schema v4. |
+| **Vector index** | LanceDB + intfloat/multilingual-e5-small (default since 2026-05-30; replaced MiniLM-L12) with v2.a embedding text for entity pages (name + aliases + rendered_frontmatter + body) | Shipped audit E9 (2026-05-28). Schema v4. E5-family prefix (`passage: ` / `query: `) applied automatically by FastembedProvider. |
 | **Lexical** | FTS5 BM25 (`unicode61` + `trigram` + `like_substring` for short CJK) | Shipped Phase 3. Auto-detection of identifier tokens (P3.3) boosts lexical weight on URL/email/UUID/file-path queries (audit E14). |
 | **Fusion** | Cross-source RRF over per-source rank lists | Shipped Phase 3 (`durin/memory/rrf_fusion.py`). Score-scale invariant. |
 | **Reranking** | Entity-aware RRF (default ON) + cross-encoder (opt-in, default OFF) | Cross-encoder opt-in via `memory.search.cross_encoder.enabled`. Pre/post-cursor logic in entity_ranker restored audit E11. MMR deferred. |

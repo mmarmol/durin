@@ -119,25 +119,33 @@ DEFAULT_MODELS: dict[str, tuple[str, ...]] = {
 
 # (label, embedding-provider, embedding-model id, approx download size).
 # Every model listed here MUST exist in the fastembed version pinned in
-# pyproject.toml. See durin/memory/embedding.py::list_supported_models for
-# the live catalog and `tests/memory/test_embedding_catalog.py` for the
-# coherence test that pins this list against the runtime catalog.
+# pyproject.toml OR be registered as a custom model in
+# durin/memory/embedding.py (_CUSTOM_MODELS). See
+# `tests/memory/test_embedding_catalog.py` for the coherence test that
+# pins this list against the runtime catalog.
+#
+# Simplified to 2 tiers on 2026-05-30. Previous 3-tier wizard offered
+# `paraphrase-multilingual-MiniLM-L12-v2` (legacy default) and
+# `all-MiniLM-L6-v2` (English-only minimum). Both retired in favor of
+# the E5 family — `multilingual-e5-small` is fine-tuned from the same
+# base architecture as MiniLM-L12 (MiniLM-L12-H384) but with a
+# retrieval-specific contrastive objective; it strictly dominates the
+# older MiniLM-L12 on quality at comparable RAM (~200 MB int8 vs
+# ~280 MB fp32). MiniLM-L6 (English-only, 90 MB) was niche enough that
+# the wizard didn't justify the third row.
 _EMBEDDING_CHOICES: tuple[tuple[str, str, str, str], ...] = (
-    ("multilingual-MiniLM-L12 · 220 MB · default — Western languages "
-     "(English/Spanish/French/...) — fast install, ~1 ms per embed",
+    ("multilingual-e5-small · ~450 MB disk / ~200 MB RAM · default — "
+     "100+ languages (incl. Spanish/English/French/CJK), retrieval-"
+     "tuned, MIT license. Best balance for personal/laptop use.",
      "fastembed",
-     "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
-     "220 MB"),
-    ("multilingual-e5-large · 2.24 GB · pick if your notes mix in "
-     "Chinese / Japanese / Korean — slower install, better CJK recall",
+     "intfloat/multilingual-e5-small",
+     "450 MB"),
+    ("multilingual-e5-large · 2.24 GB disk / ~2.5 GB RAM · top quality, "
+     "pick if you have a large memory store or need maximum recall on "
+     "ambiguous queries — slower install, MIT license.",
      "fastembed",
      "intfloat/multilingual-e5-large",
      "2.24 GB"),
-    ("all-MiniLM-L6 · 90 MB · pick only if everything you write is in "
-     "English — smallest install",
-     "fastembed",
-     "sentence-transformers/all-MiniLM-L6-v2",
-     "90 MB"),
 )
 
 # Web-search backends durin supports (see durin/agent/tools/web.py).
