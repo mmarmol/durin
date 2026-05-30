@@ -411,8 +411,14 @@ Para cada commit:
 #### Estado
 
 - Diseño completo y validado contra código (2026-05-30)
-- Pendiente implementación (priorizar después de validar bench post-H28+H29)
-- Cambio 2 (slug filenames) DROPPED — Front Matter Title plugin elimina la necesidad
+- **Cambios 1+4 IMPLEMENTADOS** (2026-05-30, commit `03e333e`):
+  - Cambio 1: `.index.lance/` movido a `.durin/index/lance/`
+  - Cambio 4: `VAULT_README.md` autogenerado en workspace root con instrucciones de navegación, lista de viewers recomendados (Obsidian + webui MemoryGraphView), plugins sugeridos
+- **Cambios 3+5 IMPLEMENTADOS** (2026-05-30):
+  - Cambio 3: `source_refs` y `related` serializados como wikilinks `[[uri]]` en disco; loader tolerante backward-compat (acepta plain refs); zero impact search verificado (no van al embedding text)
+  - Cambio 5: `_INDEX.md` per-class generado en cada `memory/<class>/` con descripción + Dataview snippet; `walk_memory` filtra `_*` files/folders para no indexar navegación como entries
+- **Cambio 2 (slug filenames) DROPPED** — Front Matter Title plugin elimina la necesidad sin tocar código
+- **P9 100% completo** (excepto Cambio 2 deliberadamente droppeado)
 
 #### Referencias
 

@@ -110,6 +110,13 @@ def walk_memory(
             continue
         if parts and parts[0] == "archive" and not include_archive:
             continue
+        # P9 Cambio 5 (2026-05-30): files / folders whose name starts
+        # with `_` are skipped — reserved for navigational artefacts
+        # (per-class `_INDEX.md`, future `_README.md` style helpers)
+        # that exist for human consumption but should NOT be indexed
+        # by FTS or embedded in the vector store as memory entries.
+        if any(p.startswith("_") for p in parts):
+            continue
         yield path
 
 

@@ -22,9 +22,18 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["VAULT_README_FILENAME", "ensure_vault_readme"]
+__all__ = [
+    "CLASS_INDEX_FILENAME",
+    "VAULT_README_FILENAME",
+    "ensure_class_indices",
+    "ensure_vault_readme",
+]
 
 VAULT_README_FILENAME = "VAULT_README.md"
+# Per-class navigation helper. Prefixed with `_` so `walk_memory()`
+# skips it (P9 Cambio 5 — see `durin/memory/paths.py`). Lives inside
+# each `memory/<class>/` folder.
+CLASS_INDEX_FILENAME = "_INDEX.md"
 
 
 def ensure_vault_readme(workspace: Path) -> bool:
@@ -51,6 +60,45 @@ def ensure_vault_readme(workspace: Path) -> bool:
             target, exc,
         )
         return False
+
+
+def ensure_class_indices(workspace: Path) -> int:
+    """Write `_INDEX.md` inside each `memory/<class>/` folder if missing.
+
+    Returns the count of new index files written (0 if all already
+    exist). Idempotent + safe: existing files preserved, write errors
+    logged + degraded.
+
+    The `_` prefix in the filename matters: `walk_memory()` skips any
+    path whose components start with `_`, so these navigational helpers
+    are NOT indexed as memory entries.
+    """
+    # Import inside function to avoid module-cycle with paths.py during
+    # module init (paths.py is imported very early by other modules).
+    from durin.memory.paths import MEMORY_CLASSES
+
+    memory_root = workspace / "memory"
+    if not memory_root.is_dir():
+        return 0
+    written = 0
+    for class_name in MEMORY_CLASSES:
+        class_dir = memory_root / class_name
+        if not class_dir.is_dir():
+            continue
+        target = class_dir / CLASS_INDEX_FILENAME
+        if target.exists():
+            continue
+        content = _CLASS_INDEX_CONTENT.get(class_name, _CLASS_INDEX_DEFAULT)
+        try:
+            target.write_text(content, encoding="utf-8")
+            logger.info("class index written at %s", target)
+            written += 1
+        except OSError as exc:
+            logger.warning(
+                "failed to write class index at %s: %s — continuing",
+                target, exc,
+            )
+    return written
 
 
 _README_CONTENT = """\
@@ -151,3 +199,113 @@ installing Obsidian.
 - Search pipeline: `docs/memory/03_search_pipeline.md`
 - Data layout (this file's source of truth): `docs/memory/01_data_and_entities.md`
 """
+
+
+# Per-class `_INDEX.md` content. Each is short — meant as a one-screen
+# orientation when a human opens the class folder + a copy-pasteable
+# Dataview snippet for browsing.
+_CLASS_INDEX_DEFAULT = """\
+# Memory class
+
+The entries in this folder are markdown files with YAML frontmatter.
+See `../../VAULT_README.md` for full context.
+
+## Recommended view
+
+If you have the Dataview Obsidian plugin installed:
+
+```dataview
+TABLE headline, valid_from, entities
+FROM "memory"
+WHERE file.folder = this.file.folder
+SORT valid_from DESC
+LIMIT 30
+```
+"""
+
+_CLASS_INDEX_CONTENT = {
+    "stable": """\
+# stable — durable facts
+
+Entries the agent (or you) marked as durable. Preferences ("I always
+fly window seat"), persistent attributes ("primary email is X"),
+fundamental choices that don't drift week-to-week. Survive consolidation;
+the canonical entity pages tend to reference these.
+
+## Browse
+
+```dataview
+TABLE headline, valid_from, entities
+FROM "memory/stable"
+SORT valid_from DESC
+```
+""",
+    "episodic": """\
+# episodic — observations + conversation fragments
+
+Atomic memories from conversations and the agent's observations. These
+are the raw material Dream consolidates into canonical entity pages.
+Most numerous class; high turnover (entries get absorbed into entity
+pages and moved to `../archive/` over time).
+
+## Browse by entity
+
+```dataview
+TABLE headline, valid_from
+FROM "memory/episodic"
+WHERE contains(entities, "person:")
+SORT valid_from DESC
+LIMIT 30
+```
+
+## Recent (last 30 days)
+
+```dataview
+TABLE headline, entities
+FROM "memory/episodic"
+WHERE date(valid_from) > date(today) - dur(30 days)
+SORT valid_from DESC
+```
+""",
+    "corpus": """\
+# corpus — chunks of ingested documents
+
+When you (or the agent) ingest a PDF, article, or long document, it
+gets split into chunks; each chunk is a markdown file here. The chunks
+are searchable individually; the original artifact lives in
+`../../ingested/<id>/`.
+
+## Browse by source
+
+```dataview
+TABLE headline, source_refs
+FROM "memory/corpus"
+SORT source_refs ASC
+```
+""",
+    "pending": """\
+# pending — intake buffer (transient)
+
+New observations land here before Dream consolidates them into the
+appropriate class + canonical entity pages. **Often empty.** If you
+see entries, they'll be moved on the next Dream pass.
+
+Safe to ignore for browsing. Don't manually move/edit entries here —
+Dream owns this directory.
+""",
+    "session_summary": """\
+# session_summary — past conversation digests
+
+When a session ends, the agent produces a distilled summary and stores
+it here. Useful for "what did I talk to the agent about on date X?"
+queries.
+
+## Browse chronologically
+
+```dataview
+TABLE headline, valid_from
+FROM "memory/session_summary"
+SORT valid_from DESC
+```
+""",
+}
