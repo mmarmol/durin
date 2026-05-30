@@ -344,10 +344,89 @@ sesión 2026-05-25) — debe migrarse a `docs/arch/` si se aprueba.
 
 ---
 
+### P9 — Workspace navegable como Obsidian vault (read-only viewer)
+
+**Contexto**: el workspace de durin es 100% markdown + frontmatter YAML — técnicamente abrible en Obsidian, pero hoy con varias fricciones de UX (filenames hash ilegibles, binarios LanceDB mezclados con .md, sin wikilinks, sin orientación al usuario). Objetivo: hacerlo navegable como **viewer de memoria read-only** (el usuario consulta/explora; agente y Dream siguen siendo los únicos que escriben).
+
+**Beneficio multi-surface**: la limpieza del data layer no aplica solo a Obsidian — también beneficia:
+- **`MemoryGraphView` en webui actual** ([webui/src/components/MemoryGraphView.tsx](../webui/src/components/MemoryGraphView.tsx) + [hooks/useMemoryGraph.ts](../webui/src/hooks/useMemoryGraph.ts)): ya existe vista estilo Obsidian con D3 force-graph que consume `/api/memory/graph`. Wikilinks en source_refs (Cambio 3) le permiten construir el grafo entity→fragment automáticamente sin lógica especial. Filenames legibles via plugin Obsidian o headline-display en nuestra UI propia.
+- **Futura app de escritorio** (Tauri/Electron wrapping webui o nativa): consume el mismo data layer. Si el on-disk format es navegable + auto-documented (VAULT_README + per-class _INDEX), portar una app que renderice memoria es trivial — la fuente de verdad ya es self-describing.
+- **Third-party tools / plugins / SDK**: cualquier herramienta que quiera leer memoria de durin (export tool, backup viewer, analytics) hereda el mismo on-disk format. Las mejoras de P9 lo vuelven "vault-grade" portable.
+
+**Principio rector**: el on-disk format (markdown + frontmatter + wikilinks + folder structure) es el **contrato público** entre durin y cualquier consumidor (Obsidian, webui propio, desktop app, plugins, scripts). Hacerlo "vault-grade" es invertir en interoperabilidad, no en una integración específica con Obsidian.
+
+**Discovery clave 2026-05-30**: el plugin Obsidian community **"Front Matter Title"** resuelve el problema cosmético de filenames hash usando el campo `headline` del frontmatter como display name en sidebar/graph/search, **sin necesidad de renombrar archivos**. Esto eliminó la necesidad del cambio originalmente más invasivo (slug filenames) y reduce el alcance del plan a 4 cambios safe.
+
+#### Cambios planificados
+
+| # | Cambio | LOC | Riesgo search | Status |
+|---|---|---|---|---|
+| 1 | Mover `.index.lance/` a `.durin/index/lance/` | ~10 | 0 (solo path, sin tocar semántica) | pending |
+| 3 | `source_refs` y `related` → wikilinks `[[memory/episodic/<id>]]` | ~30 | 0 (verificado: NO se incluyen en embedding text ni en BM25 — solo presentación) | pending |
+| 4 | `<workspace>/VAULT_README.md` autogenerado en workspace root (no en `memory/` para evitar indexación) | ~50 + tests | 0 (additive) | pending |
+| 5 | `memory/<class>/_INDEX.md` por clase con Dataview snippets + recomendaciones de plugins | ~100 | 0 (si filename `_` se filtra de walk_memory) | pending |
+| ~~2~~ DROPPED | Slug en filenames | — | — | Front Matter Title plugin lo resuelve sin tocar código |
+
+#### Verificación pre-implementación (ya hecha)
+
+- ✅ `walk_memory` excluye `.index.lance/` por filtrar solo `*.md` → safe mover el path
+- ✅ `_embed_text` ([vector_index.py:687](../durin/memory/vector_index.py)) compone `headline + summary + entities + body`. **NO usa source_refs/related**
+- ✅ `_entry_text` ([indexer.py:483](../durin/memory/indexer.py)) hace lo mismo para FTS. Tampoco usa source_refs/related
+- ✅ `drill()` ([drill.py:52](../durin/memory/drill.py)) resuelve URI literalmente con `.md` append — no afectado por mover `.index.lance/`
+- ⚠ `walk_memory` HOY no filtra archivos con prefijo `_` — confirmado con test. Cambio 5 requiere agregar filtro `if name.startswith("_"): continue` en `walk_memory` y `walk_class`, o poner `_INDEX.md` solo en raíces no escaneadas.
+
+#### Touch points por cambio
+
+**Cambio 1**: `durin/memory/vector_index.py:49,110` + `durin/memory/health_check.py:184` + `durin/cli/footer.py:38` + docstrings + `docs/memory/02_indexing.md`.
+
+**Cambio 3**: serialización en `durin/memory/storage.py::save_entry` + parser tolerante en `load_entry` para backward compat (acepta tanto plain strings como wikilink-wrapped); tests en `tests/memory/test_storage.py`.
+
+**Cambio 4**: nuevo módulo `durin/memory/vault_readme.py` con template + función `ensure_vault_readme(workspace)` invocada en `AgentLoop` startup (idempotente).
+
+**Cambio 5**: extensión del módulo anterior con `ensure_class_index(workspace, class_name)` por cada `MEMORY_CLASSES` + opcional una `memory/entities/_INDEX.md`. Documentación de plugins recomendados:
+- **Front Matter Title** — resuelve cosmética de filenames hash
+- **Dataview** — queries sobre frontmatter
+- **Graph Analysis** — métricas de centralidad
+- **Folder Notes** (opcional) — folder-as-index navigation
+
+#### Decisiones explícitas sobre folders existentes
+
+- `memory/pending/` — **dejar visible**. Temporal por naturaleza; usuario lo verá vacío la mayoría del tiempo. Mencionar en VAULT_README que son "intake buffer" que Dream procesa.
+- `memory/archive/` — **dejar visible**. Tiene valor de recovery surface; usuario puede inspeccionar entries absorbidos. Mencionar en VAULT_README.
+- Ni pending ni archive necesitan ocultarse — el usuario es read-only viewer, no editor.
+
+#### Orden de rollout sugerido
+
+1. **Cambio 1 + 4** en un commit (mover LanceDB + crear VAULT_README al boot). Cero riesgo de search; smoke test + bench-mini para confirmar.
+2. **Cambio 3 + 5** en otro commit (wikilinks + per-class index notes). Requiere update al parser de `load_entry` y filter en `walk_memory`. Tests específicos para backward compat.
+3. **Recomendar plugins en VAULT_README** — texto, no código.
+
+#### Verificación post-implementación
+
+Para cada commit:
+- Full test suite (target: 5180+ pass)
+- Lab forensics en `conv-7-q113` — confirmar que fused top-10 sigue trayendo `9b6f1c81724a` (regresión de search rompería el principio "search is the product")
+- Si conservador: bench-100 mini (sólo single_hop, ~5 min) para confirmar score se mantiene; bench-100 completo no es necesario porque los cambios son orthogonales al pipeline de retrieval
+
+#### Estado
+
+- Diseño completo y validado contra código (2026-05-30)
+- Pendiente implementación (priorizar después de validar bench post-H28+H29)
+- Cambio 2 (slug filenames) DROPPED — Front Matter Title plugin elimina la necesidad
+
+#### Referencias
+
+- Memoria persistente: `[[feedback-search-is-the-product]]` (search no se puede romper por cambios cosméticos)
+- Memoria persistente: `[[feedback-search-faithful-retrieval]]` (search es solo retrieval, no juzga)
+- Discovery del plugin Front Matter Title: conversación 2026-05-30 sobre Obsidian compatibility
+- Lab que validó "no impacto en search": forensics sobre conv-7-q113
+
+---
+
 ## §3 — Resueltos
 
 (Vacío por ahora — items se mueven acá con fecha + commit al cerrarse.)
 
 ---
 
-## Last updated: 2026-05-30 (P8 added — bench-100 fail audit, 13 real bugs identified, H27 bench validation in progress)
+## Last updated: 2026-05-30 (P9 added — Obsidian-friendly read-only viewer plan, Cambio 2 dropped via Front Matter Title plugin)

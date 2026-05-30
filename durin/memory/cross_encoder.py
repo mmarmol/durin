@@ -38,7 +38,17 @@ __all__ = [
 ]
 
 
-DEFAULT_MODEL: str = "jinaai/jina-reranker-v2-base-multilingual"
+# Default cross-encoder reranker. H30 (2026-05-30): switched from
+# `jinaai/jina-reranker-v2-base-multilingual` to `BAAI/bge-reranker-
+# base` because:
+#   1. jina-v2 needs `trust_remote_code=True` + custom code that
+#      depends on private transformers APIs removed in 5.x
+#      (`create_position_ids_from_input_ids`). Breaks on a fresh
+#      install with current transformers.
+#   2. jina is CC-BY-NC-4.0 (non-commercial); BAAI is MIT.
+#   3. BAAI/bge-reranker-base is ~100M params (vs 278M for jina-v2),
+#      so faster + less RAM, while still strongly multilingual.
+DEFAULT_MODEL: str = "BAAI/bge-reranker-base"
 _DEFAULT_BATCH_SIZE: int = 32
 
 
@@ -267,7 +277,21 @@ def _load_default_scorer(model: str) -> Optional[Scorer]:
         )
         return None
     try:
-        model_obj = CrossEncoder(model)
+        # H30 (2026-05-30): pass trust_remote_code=True. Several
+        # production-grade rerankers (jina-reranker-v2, jina-reranker-v3,
+        # qwen-reranker) ship custom architecture code that lives in the
+        # HuggingFace repo, not in sentence-transformers — without this
+        # flag the load raises with "The repository contains custom code
+        # which must be executed to correctly load the model".
+        #
+        # Security note: trust_remote_code lets the model definition
+        # execute arbitrary code from the HF repo at load time. This is
+        # the standard pattern in the embedding / rerank ecosystem
+        # (jina, qwen, alibaba-gte all require it). Models we recommend
+        # in the wizard are from vetted publishers (jinaai, BAAI,
+        # mixedbread, intfloat); operators who configure custom models
+        # should be aware of this contract.
+        model_obj = CrossEncoder(model, trust_remote_code=True)
     except Exception as exc:  # noqa: BLE001
         logger.error(
             "cross_encoder: failed to load model %r — rerank step "

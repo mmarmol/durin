@@ -138,10 +138,9 @@ def prompt_memory_aux_model(
 CROSS_ENCODER_QUESTION_TEXT: str = dedent(
     """\
     Advanced retrieval option: durin can use a cross-encoder reranker
-    to improve search quality. This adds 300-1500ms latency per query
-    (depending on the model) and requires ~1GB additional RAM. The
-    default model is `jinaai/jina-reranker-v2-base-multilingual`
-    (multilingual, covers 100+ languages including CJK).
+    to improve search quality. This adds 300-800ms latency per query
+    and requires ~600MB additional RAM. The default model is
+    `BAAI/bge-reranker-base` (MIT, multilingual, ~100M params).
 
     Most users do NOT need this — the default search (without the
     reranker) works well for typical workloads. Enable it later via

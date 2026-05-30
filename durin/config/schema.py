@@ -269,10 +269,13 @@ class CrossEncoderConfig(Base):
     """
 
     enabled: bool = False
-    # Default model from doc 03 §9.1. Override to one of the curated
-    # alternatives (bge-base, bge-v2-m3, qwen3-reranker-0.6b) if you
+    # Default model: BAAI/bge-reranker-base (MIT, ~100M params,
+    # multilingual). Switched from jinaai/jina-reranker-v2-base-
+    # multilingual on 2026-05-30 — see H30 note in
+    # `durin/memory/cross_encoder.py`. Override to one of the curated
+    # alternatives (bge-v2-m3 for heavy multilingual, others) if you
     # want a different trade-off.
-    model: str = "jinaai/jina-reranker-v2-base-multilingual"
+    model: str = "BAAI/bge-reranker-base"
     batch_size: int = 32
     # Top-N to keep after the rerank step. Doc 03 §9.3 says 10.
     top_n: int = 10
