@@ -454,8 +454,17 @@ def main() -> int:
         ),
     )
     parser.add_argument(
-        "--timeout-s", type=float, default=90.0,
-        help="Hard per-QA wall-clock cap (default 90s).",
+        "--timeout-s", type=float, default=180.0,
+        help=(
+            "Hard per-QA wall-clock cap (default 180s, was 90s pre-H23). "
+            "Bench-100-prop conv-6-q34 hit a real failure mode: agent "
+            "completed 6 useful iterations, LLM wedged on iter 7, "
+            "provider's own retry budget (~63s with H8 backoff) "
+            "consumed the rest of the 90s window before producing a "
+            "final answer. The bigger cap absorbs one full provider "
+            "retry burst plus agent commit time without inflating "
+            "normal-case wall clock (passes still take 30-70s)."
+        ),
     )
     parser.add_argument(
         "--qa-id",
