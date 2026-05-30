@@ -95,20 +95,24 @@ def test_footer_text_counts_memory_entries(tmp_path: Path) -> None:
 
 
 def test_footer_text_detects_vector_index(tmp_path: Path) -> None:
-    mem = tmp_path / "memory"
-    mem.mkdir(parents=True)
-    (mem / ".index.lance").mkdir()
+    # P9: index path moved to `.durin/index/lance/`.
+    from durin.memory.vector_index import _INDEX_PATH
+    (tmp_path / "memory").mkdir(parents=True)
+    tmp_path.joinpath(*_INDEX_PATH).mkdir(parents=True)
     loop = _fake_loop(tmp_path)
     p = build_footer_text(loop, "cli", "direct")
     assert p["vec_index"] is True
 
 
 def test_footer_text_skips_dotted_paths_in_memory(tmp_path: Path) -> None:
-    """Files inside .index.lance/ or similar shouldn't bump the count."""
+    """Files inside dot-prefixed subdirs of memory/ shouldn't bump the
+    count. Defensive: even though no production component writes
+    dot-dirs into memory/ anymore (P9 moved `.index.lance` out of the
+    vault), guard the invariant in case future tooling adds them."""
     mem = tmp_path / "memory" / "stable"
     mem.mkdir(parents=True)
     (mem / "real.md").write_text("x", encoding="utf-8")
-    hidden = tmp_path / "memory" / ".index.lance"
+    hidden = tmp_path / "memory" / ".some_internal"
     hidden.mkdir(parents=True)
     (hidden / "internal.md").write_text("x", encoding="utf-8")  # bogus but possible
 

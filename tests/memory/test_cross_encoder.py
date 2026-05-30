@@ -29,7 +29,10 @@ class _FakeScorer:
 
 
 def test_default_model_constant() -> None:
-    assert DEFAULT_MODEL == "jinaai/jina-reranker-v2-base-multilingual"
+    # H30 (2026-05-30): switched from jina-reranker-v2 to bge-reranker-
+    # base. See `durin/memory/cross_encoder.py` for full rationale
+    # (license, transformers 5.x compat, footprint).
+    assert DEFAULT_MODEL == "BAAI/bge-reranker-base"
 
 
 def test_score_returns_floats_per_doc() -> None:

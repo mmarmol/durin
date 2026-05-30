@@ -109,7 +109,10 @@ async def test_store_without_embedding_model_skips_vector(
     out = await tool.execute(content="content", headline="h")
     assert "error" not in out
     # No vector index folder created on disk
-    assert not (tmp_path / "memory" / ".index.lance").exists()
+    # P9 (2026-05-30): index path moved to `.durin/index/lance/` from
+    # `memory/.index.lance` so the vault stays markdown-pure.
+    from durin.memory.vector_index import _INDEX_PATH
+    assert not tmp_path.joinpath(*_INDEX_PATH).exists()
 
 
 @pytest.mark.asyncio
