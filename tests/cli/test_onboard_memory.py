@@ -179,7 +179,11 @@ def test_none_answer_returns_current_value(
 def test_memory_enable_text_anchors() -> None:
     text = MEMORY_ENABLE_QUESTION_TEXT
     assert "memory system" in text.lower()
-    assert "~120MB" in text
+    # Default embedding model: multilingual-e5-small (~450MB) since
+    # 2026-05-30 (H27). The text mentions the size so the user knows
+    # what install cost to expect.
+    assert "~450MB" in text
+    assert "multilingual-e5-small" in text
     assert "[Y/n]" in text
 
 
