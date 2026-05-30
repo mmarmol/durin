@@ -98,17 +98,14 @@ def judge_answer(
     judge invocation per timeout / exception. Same for an obvious
     refusal pattern.
 
-    Audit H2 (2026-05-29): retry budget hardened. Previously
-    ``max_retries=2`` with no backoff and constant temperature meant
-    a ~30s upstream outage (z.ai returning empty completions) burned
-    all 3 attempts in <5s and the QA was marked
-    ``judge_error_possible``. H2 raises the default to 4 retries
-    (5 attempts total), adds exponential backoff (1, 2, 4, 8 s) so
-    the loop survives a transient outage, and varies temperature per
-    attempt (0.0, 0.2, 0.4, 0.6, 0.8) to break upstream wedges where
-    temp=0 reliably returns the same broken completion. Callers that
-    rely on the old budget for reproducibility can pin
-    ``max_retries=2``.
+    Audit H2 (2026-05-29) → H21 (2026-05-30): retry budget hardened
+    via 5 attempts + exponential backoff. The judge always calls at
+    ``temperature=0`` for score reproducibility — the earlier H2
+    design varied temperature on retries to "break LLM wedges", but
+    that was speculation and broke run-to-run determinism (a re-judge
+    of the same trace could score differently). For a JUDGE,
+    determinism > variance: if upstream is genuinely wedged at temp=0,
+    backoff + a fresh provider window is the right cure, not jitter.
     """
     if not got or not got.strip():
         return JudgeVerdict(
@@ -116,13 +113,22 @@ def judge_answer(
             reasoning="empty answer (agent produced no content)",
         )
 
-    # Audit H14 (2026-05-29): adversarial questions with the
-    # ``__REFUSE__`` sentinel score 1.0 when the agent refused
-    # (says it can't determine / no info), 0.0 when it
-    # hallucinated a positive answer. No LLM call needed — the
-    # detection is purely lexical.
+    # Audit H14 (2026-05-29) → H20 (2026-05-30): adversarial QAs with
+    # the ``__REFUSE__`` sentinel use the LLM judge with a refusal-
+    # specific prompt instead of lexical substring matching. The
+    # original H14 missed "stealth refusals" like *"it was actually X,
+    # not Y"* (3 of 11 fails on bench-100-prop were valid refusals
+    # the lexical matcher couldn't catch). H20 reuses the existing
+    # judge LLM infrastructure (retries / backoff / temperature
+    # jitter via judge_answer's machinery) — no separate retry budget
+    # needed because the judge function the caller already passed in
+    # carries that policy.
     if expected.strip() == "__REFUSE__":
-        return _score_refusal(got)
+        return _score_refusal_llm(
+            question=question, got=got,
+            llm_invoke=llm_invoke, model=model,
+            max_retries=max_retries,
+        )
 
     prompt = _PROMPT_TEMPLATE.format(
         question=question.strip(),
@@ -132,15 +138,17 @@ def judge_answer(
     accepts_temperature = _invoke_accepts_temperature(llm_invoke)
     last_error: Exception | None = None
     total_attempts = max_retries + 1
+    # H21 (2026-05-30): always temp=0 across attempts. Earlier H2
+    # design varied temperature per attempt; that broke score
+    # reproducibility (re-judge of the same trace could differ) and
+    # the original justification (breaking LLM wedges) was
+    # speculation not measurement.
+    JUDGE_TEMPERATURE = 0.0
     for attempt in range(total_attempts):
-        # H2: temperature jitter starts at 0.0 and steps by +0.2 per
-        # retry. Cap at 1.0 in case the budget grows past 5 attempts.
-        # ``round`` avoids float-binary surprises (0.2*3=0.6000…01).
-        temperature = round(min(1.0, 0.2 * attempt), 4)
         try:
             if accepts_temperature:
                 raw = llm_invoke(
-                    prompt, model=model, temperature=temperature,
+                    prompt, model=model, temperature=JUDGE_TEMPERATURE,
                 )
             else:
                 raw = llm_invoke(prompt, model=model)
@@ -182,10 +190,34 @@ def judge_answer(
     )
 
 
-# Audit H14 (2026-05-29): refusal patterns the LoCoMo adversarial
-# rubric counts as correct. Lowercased substring match — robust to
-# variations in agent wording across languages (English + Spanish
-# patterns covered; CJK can be added when a CJK bench arrives).
+_REFUSAL_JUDGE_PROMPT = """You are evaluating whether an AI agent correctly refused to answer an adversarial memory-recall question.
+
+ADVERSARIAL questions presuppose something FALSE — they ask about an event or fact that did NOT happen in the conversation the agent has access to. The CORRECT behavior is to REFUSE the false premise. Refusal can take ANY of these forms:
+- Explicitly say "I don't have info" / "no record" / equivalent in any language
+- Correct the false presupposition: "it was actually X (not Y) who did Z"
+- Point out the question's premise is wrong: "Y did not do Z"
+- Say the entity in question didn't do the action; attribute the action to whoever actually did it
+
+WRONG behavior (hallucination):
+- Affirmatively claim the false fact is true
+- Provide fabricated details about an event that didn't happen
+- Invent specifics that aren't in the conversation
+
+Question: {question}
+
+Agent answer:
+{got}
+
+Return JSON with two fields:
+  "refused": true if the agent refused in any form, false if it hallucinated a positive answer
+  "reasoning": one short sentence explaining
+
+Output ONLY the JSON object, no markdown wrapping, no other text."""
+
+
+# Legacy H14 lexical markers (kept for offline / batch re-judging when
+# the LLM judge is unavailable). Pre-H20 default; H20 replaces with
+# ``_score_refusal_llm``.
 _REFUSAL_MARKERS = (
     "i don't have",
     "i do not have",
@@ -209,7 +241,106 @@ _REFUSAL_MARKERS = (
 )
 
 
-def _score_refusal(got: str) -> "JudgeVerdict":
+def _score_refusal_llm(
+    *,
+    question: str,
+    got: str,
+    llm_invoke: LLMInvoke,
+    model: str,
+    max_retries: int,
+) -> "JudgeVerdict":
+    """H20 (2026-05-30): adversarial refusal rubric via LLM judge.
+
+    Uses the same retry / backoff / temperature-jitter loop as the
+    main judge (delegates to the existing pattern with a refusal-
+    specific prompt). Adversarial QAs typically take agents through
+    stealth-refusal phrasings ("it was actually X, not Y") that no
+    lexical matcher can cover across languages without an
+    ever-growing list of patterns. LLM judge handles it naturally.
+    """
+    import json as _json
+
+    accepts_temperature = _invoke_accepts_temperature(llm_invoke)
+    prompt = _REFUSAL_JUDGE_PROMPT.format(question=question, got=got)
+    last_error: object = None
+    total_attempts = max_retries + 1
+    # H21 (2026-05-30): refusal judge also runs at temp=0 for score
+    # reproducibility — same rationale as the main judge_answer loop.
+    JUDGE_TEMPERATURE = 0.0
+    for attempt in range(total_attempts):
+        try:
+            if accepts_temperature:
+                raw = llm_invoke(
+                    prompt, model=model, temperature=JUDGE_TEMPERATURE,
+                )
+            else:
+                raw = llm_invoke(prompt, model=model)
+        except TypeError:
+            accepts_temperature = False
+            try:
+                raw = llm_invoke(prompt, model=model)
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                _maybe_sleep_backoff(attempt, total_attempts)
+                continue
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            _maybe_sleep_backoff(attempt, total_attempts)
+            continue
+        text = _coerce_to_text(raw)
+        if not isinstance(text, str) or not text.strip():
+            last_error = "empty refusal-judge response"
+            _maybe_sleep_backoff(attempt, total_attempts)
+            continue
+        # Best-effort JSON parse: tolerate markdown fences if the
+        # model wraps the output despite the prompt.
+        body = text.strip()
+        if body.startswith("```"):
+            body = body.strip("`")
+            if body.lower().startswith("json"):
+                body = body[4:]
+            body = body.strip()
+        try:
+            parsed = _json.loads(body)
+        except _json.JSONDecodeError:
+            # Try to extract the first JSON object embedded in prose.
+            import re as _re
+            m = _re.search(r"\{.*\}", body, _re.DOTALL)
+            if not m:
+                last_error = f"unparseable refusal-judge response: {text[:120]!r}"
+                _maybe_sleep_backoff(attempt, total_attempts)
+                continue
+            try:
+                parsed = _json.loads(m.group(0))
+            except _json.JSONDecodeError as exc:
+                last_error = f"json error: {exc}"
+                _maybe_sleep_backoff(attempt, total_attempts)
+                continue
+        refused = bool(parsed.get("refused"))
+        reasoning = str(parsed.get("reasoning") or "(no reasoning)")
+        return JudgeVerdict(
+            score=1.0 if refused else 0.0,
+            confidence=90,
+            reasoning=(
+                ("adversarial: refusal detected — " if refused
+                 else "adversarial: hallucinated positive answer — ")
+                + reasoning[:160]
+            ),
+        )
+    # All attempts failed — fall back to the lexical legacy matcher
+    # so we don't lose total signal on this QA.
+    fallback = _score_refusal_lexical(got)
+    return JudgeVerdict(
+        score=fallback.score,
+        confidence=50,
+        reasoning=(
+            f"refusal-judge failed after {total_attempts} attempts "
+            f"({last_error}); lexical fallback → {fallback.reasoning}"
+        ),
+    )
+
+
+def _score_refusal_lexical(got: str) -> "JudgeVerdict":
     """H14: adversarial refusal rubric — agent earns 1.0 when its
     answer expresses 'I don't have / no info / cannot determine'
     rather than hallucinating a value."""

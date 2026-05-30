@@ -41,6 +41,13 @@ _REQUIRED_PHRASES = (
     "the fragment is",
     "more current",
     "For compound or multi-part questions, issue 2-3 searches",
+    # H22 (2026-05-30) anti-hallucination bullets — these are
+    # production defaults that ship with durin and are read by the
+    # agent every turn. Drift = the production agent loses honesty
+    # signal across reframing / multi-part / identifier-invention.
+    "Don't reframe to fit the question",
+    "Answer multi-part questions partially when needed",
+    "Never invent identifiers",
 )
 
 
