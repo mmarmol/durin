@@ -150,3 +150,108 @@ def test_skips_lance_when_unavailable(
     )
     result = HealthChecker(tmp_path).run_tick()
     assert result["components"]["lance"] == "skipped"
+
+
+# ---------------------------------------------------------------------------
+# P11 Fix B (2026-05-30): cross-encoder probe
+# ---------------------------------------------------------------------------
+
+
+def test_cross_encoder_probe_skipped_when_disabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CE disabled in config → probe reports `skipped`. Most users
+    don't enable CE; we shouldn't pepper their tick with warns."""
+    from durin.memory.health_check import HealthChecker
+
+    _seed(tmp_path)
+
+    class _FakeCE:
+        enabled = False
+        model = "x"
+
+    class _FakeSearch:
+        cross_encoder = _FakeCE()
+
+    class _FakeMem:
+        search = _FakeSearch()
+
+    class _FakeCfg:
+        memory = _FakeMem()
+
+    monkeypatch.setattr(
+        "durin.config.loader.load_config", lambda: _FakeCfg(),
+    )
+    result = HealthChecker(tmp_path).run_tick()
+    assert result["components"]["cross_encoder"] == "skipped"
+
+
+def test_cross_encoder_probe_ok_when_load_succeeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CE enabled + working load → probe `ok`."""
+    from durin.memory.health_check import HealthChecker
+
+    _seed(tmp_path)
+
+    class _FakeCE:
+        enabled = True
+        model = "fake/model"
+
+    class _FakeSearch:
+        cross_encoder = _FakeCE()
+
+    class _FakeMem:
+        search = _FakeSearch()
+
+    class _FakeCfg:
+        memory = _FakeMem()
+
+    monkeypatch.setattr(
+        "durin.config.loader.load_config", lambda: _FakeCfg(),
+    )
+    # Patch the loader so we don't actually pull the model
+    monkeypatch.setattr(
+        "durin.memory.cross_encoder._load_default_scorer",
+        lambda model: type(
+            "_S", (), {"score": lambda self, pairs: [0.5] * len(pairs)}
+        )(),
+    )
+    result = HealthChecker(tmp_path).run_tick()
+    assert result["components"]["cross_encoder"] == "ok"
+
+
+def test_cross_encoder_probe_fail_when_load_returns_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CE enabled + load returns None (sentence_transformers missing
+    OR model unreachable) → probe `fail`. The 3-strike escalation
+    fires after 3 consecutive failed ticks."""
+    from durin.memory.health_check import HealthChecker
+
+    _seed(tmp_path)
+
+    class _FakeCE:
+        enabled = True
+        model = "fake/model"
+
+    class _FakeSearch:
+        cross_encoder = _FakeCE()
+
+    class _FakeMem:
+        search = _FakeSearch()
+
+    class _FakeCfg:
+        memory = _FakeMem()
+
+    monkeypatch.setattr(
+        "durin.config.loader.load_config", lambda: _FakeCfg(),
+    )
+    monkeypatch.setattr(
+        "durin.memory.cross_encoder._load_default_scorer",
+        lambda model: None,  # simulate failed load
+    )
+    checker = HealthChecker(tmp_path)
+    result = checker.run_tick()
+    assert result["components"]["cross_encoder"] == "fail"
+    assert "cross-encoder" in result["errors"]["cross_encoder"].lower()

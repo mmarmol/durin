@@ -122,3 +122,85 @@ def test_lazy_load_when_no_scorer_provided() -> None:
     # We don't assert hard on None — the test box might have the dep.
     # The contract is: never raise, return list[float] | None.
     assert result is None or isinstance(result, list)
+
+
+# ---------------------------------------------------------------------------
+# P11 Fix C (2026-05-30): time-based reload retry + reset()
+# ---------------------------------------------------------------------------
+
+
+def test_reset_clears_load_state() -> None:
+    """`reset()` forces the next score() call to re-attempt the load.
+
+    Used by the HealthChecker probe to recover from transient load
+    failures (network blip, HF cache issue) without a process restart.
+    """
+    from durin.memory.cross_encoder import CrossEncoderReranker
+
+    r = CrossEncoderReranker(scorer=None)
+    # First call attempts load; in CI without the dep, fails.
+    r.score("q", ["d"])
+    assert r._load_attempted is True
+    r.reset()
+    assert r._load_attempted is False
+    assert r._scorer is None
+    assert r._last_failed_load_at == 0.0
+
+
+def test_failed_load_retries_after_retry_window() -> None:
+    """After a failed load, score() retries on the next call ONLY
+    after the retry window has elapsed. Inside the window, score()
+    returns None without re-attempting the load."""
+    from unittest.mock import patch
+    from durin.memory.cross_encoder import CrossEncoderReranker
+
+    load_attempts = []
+
+    def _fake_load(model: str):
+        load_attempts.append(model)
+        return None  # simulate persistent load failure
+
+    with patch(
+        "durin.memory.cross_encoder._load_default_scorer", _fake_load,
+    ):
+        r = CrossEncoderReranker(scorer=None, model="fake/model")
+        # First call → load attempted
+        assert r.score("q", ["d"]) is None
+        assert len(load_attempts) == 1
+        # Immediately after: should NOT retry (still within the
+        # retry window). _should_retry_load returns False.
+        assert r.score("q", ["d"]) is None
+        assert len(load_attempts) == 1
+        # Simulate enough time elapsed to retry
+        from durin.memory import cross_encoder as ce_mod
+        r._last_failed_load_at -= ce_mod._RELOAD_RETRY_SECONDS + 1
+        # Now next call should retry
+        assert r.score("q", ["d"]) is None
+        assert len(load_attempts) == 2
+
+
+def test_successful_load_does_not_retry() -> None:
+    """Once load succeeds, _should_retry_load returns False
+    indefinitely — we keep the loaded scorer."""
+
+    class _Fake:
+        def score(self, pairs): return [0.5] * len(pairs)
+
+    from unittest.mock import patch
+    from durin.memory.cross_encoder import CrossEncoderReranker
+
+    load_attempts = []
+
+    def _fake_load(model: str):
+        load_attempts.append(model)
+        return _Fake()
+
+    with patch(
+        "durin.memory.cross_encoder._load_default_scorer", _fake_load,
+    ):
+        r = CrossEncoderReranker(scorer=None, model="fake/model")
+        # Three calls: load fires only once.
+        r.score("q", ["d"])
+        r.score("q", ["d"])
+        r.score("q", ["d"])
+        assert len(load_attempts) == 1

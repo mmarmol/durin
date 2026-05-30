@@ -26,9 +26,19 @@ Two surfaces:
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Optional, Protocol
 
 logger = logging.getLogger(__name__)
+
+
+# P11 Fix C (2026-05-30): seconds to wait before retrying a failed
+# model load. Without this, a one-time load failure (network blip,
+# OOM at startup, HF rate limit) would keep cross-encoder OFF for the
+# entire process lifetime. With it, the reranker self-recovers
+# automatically — degrades to RRF for at most ~60 seconds, then
+# transparently re-tries the load on the next score call.
+_RELOAD_RETRY_SECONDS: float = 60.0
 
 __all__ = [
     "CrossEncoderReranker",
@@ -80,18 +90,55 @@ class CrossEncoderReranker:
         # the first ``score`` call. Set to True after the attempt
         # regardless of outcome so we don't retry on every call.
         self._load_attempted = scorer is not None
+        # P11 Fix C (2026-05-30): timestamp of the last failed load
+        # attempt. Used to gate retries — see `_should_retry_load`.
+        self._last_failed_load_at: float = 0.0
+
+    def reset(self) -> None:
+        """P11 Fix C (2026-05-30): force the next ``score`` call to
+        retry the model load.
+
+        Called by the HealthChecker probe when it detects the
+        reranker is dead. Without this, a transient load failure
+        (network blip, HF rate-limit, OOM at startup) would keep
+        cross-encoder OFF for the entire process lifetime — H25
+        documented this exact failure mode. With reset, the system
+        self-recovers transparently.
+        """
+        self._scorer = None
+        self._load_attempted = False
+        self._last_failed_load_at = 0.0
+
+    def _should_retry_load(self) -> bool:
+        """Time-based retry gate: enough seconds have passed since
+        the last failed load that we should try again."""
+        if not self._load_attempted:
+            return True
+        if self._scorer is not None:
+            return False
+        # _scorer is None AND we already attempted — retry only if
+        # the retry window has elapsed.
+        return (time.monotonic() - self._last_failed_load_at) >= _RELOAD_RETRY_SECONDS
 
     def score(
         self, query: str, docs: list[str],
     ) -> Optional[list[float]]:
         """Return a relevance score per document, OR ``None`` on
         model/load failure. Order matches ``docs``.
+
+        P11 Fix C: if a prior load attempt failed, retry the load
+        after ``_RELOAD_RETRY_SECONDS`` (default 60s). This keeps
+        the reranker self-healing without a process restart — a
+        transient failure (network/cache/OOM) degrades to RRF for
+        at most a minute, then transparently re-attempts.
         """
         if not docs:
             return []
-        if not self._load_attempted:
+        if self._should_retry_load():
             self._scorer = _load_default_scorer(self._model)
             self._load_attempted = True
+            if self._scorer is None:
+                self._last_failed_load_at = time.monotonic()
         if self._scorer is None:
             return None
         try:
