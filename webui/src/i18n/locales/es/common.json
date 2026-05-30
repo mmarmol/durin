@@ -132,6 +132,9 @@
         "missingCredential": "Añade la credencial requerida antes de guardar.",
         "saveHint": "Los cambios se aplican a nuevas solicitudes de web search."
       }
+    },
+    "models": {
+      "provAuto": "Auto"
     }
   },
   "chat": {

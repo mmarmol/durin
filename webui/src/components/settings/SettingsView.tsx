@@ -671,6 +671,7 @@ function GeneralSettings({
             token={token}
             model={form.model}
             provider={form.provider}
+            configuredProviders={configuredProviders}
           />
 
           {(dirty || saving || settings.requires_restart) ? (
@@ -760,17 +761,34 @@ function modelCapsSummary(
   return parts.join(" · ");
 }
 
-/** Compact vision/audio aux-model editor — model + provider + save. */
+/** Compact vision/audio aux-model editor — provider dropdown +
+ *  model autocomplete (free-input fallback) + save.
+ *
+ *  Provider: dropdown of providers the user has already configured
+ *  (API keys present), plus a special "Auto" option that lets the
+ *  agent loop decide based on model capabilities. Free typing isn't
+ *  exposed here — an unconfigured provider can't serve the aux call
+ *  anyway, so constraining to configured + auto is correct.
+ *
+ *  Model: reuses ModelPicker (same as the primary model field) —
+ *  searchable suggestions from the picked provider's curated
+ *  shortlist + the full capabilities catalog, plus free typing for
+ *  anything the catalog doesn't know yet.
+ */
 function AuxControl({
   current,
   busy,
   onSave,
   onClear,
+  configuredProviders,
+  token,
 }: {
   current: AuxModel | null;
   busy: boolean;
   onSave: (value: AuxModel) => void;
   onClear: () => void;
+  configuredProviders: Array<{ name: string; label: string }>;
+  token: string;
 }) {
   const { t } = useTranslation();
   const [model, setModel] = useState(current?.model ?? "");
@@ -782,19 +800,31 @@ function AuxControl({
   const dirty =
     model.trim() !== (current?.model ?? "") ||
     prov.trim() !== (current?.provider ?? (current ? "auto" : ""));
+  // "auto" head + the configured providers. ModelPicker needs a real
+  // provider key to fetch the curated shortlist; when "auto" is
+  // selected we pass an empty string so the picker falls back to the
+  // full capabilities catalog (suggested = []).
+  const providerOptions = useMemo(
+    () => [
+      { name: "auto", label: t("settings.models.provAuto") },
+      ...configuredProviders,
+    ],
+    [configuredProviders, t],
+  );
+  const pickerProvider = prov === "auto" ? "" : prov;
   return (
-    <div className="flex items-center gap-2">
-      <Input
-        value={model}
-        onChange={(e) => setModel(e.target.value)}
-        placeholder={t("settings.models.modelPlaceholder")}
-        className="h-8 w-[150px] rounded-full text-[13px]"
-      />
-      <Input
+    <div className="flex flex-wrap items-center gap-2">
+      <ProviderPicker
+        providers={providerOptions}
         value={prov}
-        onChange={(e) => setProv(e.target.value)}
-        placeholder={t("settings.models.providerPlaceholder")}
-        className="h-8 w-[96px] rounded-full text-[13px]"
+        emptyLabel={t("settings.byok.noConfiguredProviders")}
+        onChange={setProv}
+      />
+      <ModelPicker
+        token={token}
+        provider={pickerProvider}
+        value={model}
+        onChange={setModel}
       />
       <Button
         size="sm"
@@ -827,10 +857,12 @@ function ModelBlockRows({
   token,
   model,
   provider,
+  configuredProviders,
 }: {
   token: string;
   model: string;
   provider: string;
+  configuredProviders: Array<{ name: string; label: string }>;
 }) {
   const { t } = useTranslation();
   const [caps, setCaps] = useState<ModelCapabilities | null>(null);
@@ -910,6 +942,8 @@ function ModelBlockRows({
           busy={busy === "vision"}
           onSave={(v) => void saveAux("vision", v)}
           onClear={() => void saveAux("vision", null)}
+          configuredProviders={configuredProviders}
+          token={token}
         />
       </SettingsRow>
       <SettingsRow
@@ -921,6 +955,8 @@ function ModelBlockRows({
           busy={busy === "audio"}
           onSave={(v) => void saveAux("audio", v)}
           onClear={() => void saveAux("audio", null)}
+          configuredProviders={configuredProviders}
+          token={token}
         />
       </SettingsRow>
       <SettingsRow
@@ -932,6 +968,8 @@ function ModelBlockRows({
           busy={busy === "memory"}
           onSave={(v) => void saveAux("memory", v)}
           onClear={() => void saveAux("memory", null)}
+          configuredProviders={configuredProviders}
+          token={token}
         />
       </SettingsRow>
       <SettingsRow
