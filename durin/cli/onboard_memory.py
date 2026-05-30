@@ -59,8 +59,8 @@ AUTO_ABSORB_QUESTION_TEXT: str = dedent(
 MEMORY_ENABLE_QUESTION_TEXT: str = dedent(
     """\
     durin's memory system lets the agent remember facts across sessions.
-    Enabling it downloads a small embedding model (~120MB) and starts the
-    local consolidation process.
+    Enabling it downloads an embedding model (~450MB for the default
+    multilingual-e5-small) and starts the local consolidation process.
 
     Enable memory? [Y/n]:
     """

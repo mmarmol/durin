@@ -10,7 +10,7 @@ related: 03_search_pipeline.md, 05_dream_cold_path.md
 
 # Indexing
 
-This document specifies the two derived indices that accelerate retrieval over the markdown source of truth: a **vector index** (LanceDB + MiniLM) for semantic retrieval, and a **lexical index** (SQLite FTS5 with BM25) for keyword and phrase retrieval. Both are derived from `.md` files and reconstructible at any time.
+This document specifies the two derived indices that accelerate retrieval over the markdown source of truth: a **vector index** (LanceDB + intfloat E5) for semantic retrieval, and a **lexical index** (SQLite FTS5 with BM25) for keyword and phrase retrieval. Both are derived from `.md` files and reconstructible at any time.
 
 **Key invariant:** indices never hold information that isn't in the markdown layer. Deleting `.durin/index/` and rebuilding produces an identical search state. This is the operational guarantee that makes "markdown is source of truth" real.
 
@@ -68,7 +68,7 @@ Each row represents one indexable `.md` file under `memory/` (excluding `memory/
 | `class_name` | string | `episodic`, `stable`, `corpus`, or `entity_page`. FTS5 calls this `type` — asymmetry documented in §5.1. `pending` is in `MEMORY_CLASSES` but never reaches the index (walker/indexer skip it). |
 | `summary` | string | For entries: frontmatter `summary` (may be empty). For entity pages: `name (alias1, alias2)` derived at upsert time (audit F23, 2026-05-28 corrected the pre-F23 spec which claimed `name (also: alias1, alias2)` — the shipped composer at `vector_index.py:142` + `:516` joins aliases without an `also:` prefix). |
 | `headline` | string | For entries: frontmatter `headline`. For entity pages: the entity `name`. |
-| `vector` | fixed-size list of floats | Dim depends on the configured model — default `paraphrase-multilingual-MiniLM-L12-v2` → **384**; CJK-heavy users on `multilingual-e5-large` → 1024. Validated at startup via `VectorIndex._guard_dim_match`. |
+| `vector` | fixed-size list of floats | Dim depends on the configured model — default `intfloat/multilingual-e5-small` → **384**; heavy-recall users on `multilingual-e5-large` → 1024. Validated at startup via `VectorIndex._guard_dim_match`. |
 | `valid_from` | string | ISO date if the entry frontmatter carries one; empty string `""` when absent. |
 | `entities` | list[string] | For entries: frontmatter `entities` field (e.g. `["person:marcelo", "project:durin"]`). For entity pages: `[]` (a page IS the entity; the ranker treats `class_name="entity_page"` specially). Used by `entity_ranker` for the post-cursor boost. |
 | `path` | string | Relative path to the `.md` from workspace root. Used by consumers that need to read the body on demand. |
@@ -84,19 +84,27 @@ See `docs/memory/08_scope_and_discarded.md` §2.10 for the full rationale and th
 
 ### 3.2 Embedding model
 
-Single global choice per workspace (configurable via `memory.embedding.model`):
+Single global choice per workspace (configurable via `memory.embedding.model`). Default since 2026-05-30: `intfloat/multilingual-e5-small`.
 
 | Property | Default value |
 |---|---|
-| Model | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` |
+| Model | `intfloat/multilingual-e5-small` |
 | Dim | **384** (varies by model — see below) |
-| Size | 220 MB on disk |
+| Size | ~450 MB disk / ~200 MB RAM |
 | Max sequence | 512 tokens (~1500 chars) |
-| Multilingual | Yes (EN/ES/ZH/JA/KO and ~50 others) |
+| Multilingual | Yes — 100+ languages (intfloat training set) |
+| Training objective | InfoNCE contrastive retrieval (vs paraphrase generic of MiniLM-L12) |
+| License | MIT |
 
-Recommended overrides:
-- CJK-heavy workloads: `intfloat/multilingual-e5-large` (2.24 GB, 1024-dim).
-- English-only minimal: `sentence-transformers/all-MiniLM-L6-v2` (90 MB, 384-dim).
+Wizard offers 2 tiers (see `durin/cli/onboard_wizard.py::_EMBEDDING_CHOICES`):
+- **Default**: `intfloat/multilingual-e5-small` (above).
+- **Heavy**: `intfloat/multilingual-e5-large` (2.24 GB, 1024-dim, MIT) — top quality for large workspaces.
+
+**Why e5-small over the prior MiniLM-L12 default.** `multilingual-e5-small` is fine-tuned FROM the same backbone architecture as `paraphrase-multilingual-MiniLM-L12-v2` (`microsoft/Multilingual-MiniLM-L12-H384`) but with a modern retrieval-specific InfoNCE objective + larger training set. Same dim (384), comparable RAM (~200 MB int8 vs ~280 MB fp32), measurably better recall on MTEB retrieval tasks (+8 points avg). For durin's pattern — agent issues many short tool-call queries per turn — retrieval-tuned embeddings matter more than paraphrase-generic ones. The legacy `paraphrase-multilingual-MiniLM-L12-v2` and `all-MiniLM-L6-v2` (English-only minimum) were retired from the wizard in the same change; they're still loadable via `memory.embedding.model` if explicitly configured (fastembed catalog includes them), but no longer surfaced as options.
+
+**E5 query/passage prefix.** E5-family models were trained with asymmetric prompts: documents prefixed with `passage: ` and queries with `query: `. `FastembedProvider.embed_passages()` and `embed_query()` apply the prefix automatically when the model is detected as E5-family (see `_is_e5_family` in `durin/memory/embedding.py`). Skipping the prefix degrades recall measurably (~2-5pp on MTEB retrieval). For non-E5 models the methods pass through unchanged.
+
+**Custom model registration.** fastembed's default catalog does not include `multilingual-e5-small`. `durin/memory/embedding.py::_register_custom_models` calls `TextEmbedding.add_custom_model` at module load to register it (pointing to the official ONNX export at `intfloat/multilingual-e5-small/onnx/model.onnx`). Idempotent: if the model later lands in fastembed's catalog upstream, the registration becomes a no-op without code change here.
 
 The model is **not configurable per-row**. All vectors in the index share this model. Changing the model requires a full rebuild (`durin memory reindex`). The model identifier is stored in `<workspace>/.durin/index/meta.json`; `VectorIndex._guard_dim_match` checks the on-disk table's vector dim against the provider's reported dim at every read/write and raises `VectorIndexDimensionMismatch` if they differ, so the search pipeline can fall back to lexical instead of mixing 384-dim and 1024-dim rows.
 
@@ -375,7 +383,7 @@ When a tool writes a `.md` and expects the change to be searchable, the indexer 
 
 Reasoning:
 - Asynchronous queueing introduces races (a search right after `memory_store` may not see the new entry).
-- The MiniLM embed for a single document is fast (~10-30ms on modern hardware).
+- The e5-small embed for a single document is fast (~3-10ms on modern hardware).
 - FTS5 insertion is fast (~1ms).
 - Combined latency is well within tool-response budgets.
 
@@ -522,7 +530,7 @@ The system tolerates brief windows where `.md` and indices are not in sync (e.g.
 | Indices are not committed to git | `.durin/index/` in `.gitignore`. Reconstructible from `memory/`. |
 | Single-writer to indices at a time | Workspace lock held during writes; readers don't take the lock. |
 | No background re-indexing on idle | Rebuilds are explicit operator actions or triggered by writes. Avoids surprise CPU usage. |
-| Embedding model loaded lazily | First search may have a cold-start cost (~1-2s to load MiniLM); subsequent are fast. |
+| Embedding model loaded lazily | First search may have a cold-start cost (~1-2s to load e5-small); subsequent are fast. |
 
 ---
 
@@ -533,7 +541,7 @@ All open decisions for this module have been resolved (2026-05-27) in line with 
 | # | Decision | Resolution | Applied in |
 |---|---|---|---|
 | **1** | What gets indexed | Entity pages + entries (episodic/stable/corpus) + session summaries. NOT indexed: archive, pending, raw sessions/jsonl, raw ingested files. | §3.3 |
-| **2** | Single vs multiple embedding models | **Single model per workspace** (`paraphrase-multilingual-MiniLM-L12-v2`). Stored in `meta.json`; mismatch on startup forces rebuild. | §3.2, §7.2 |
+| **2** | Single vs multiple embedding models | **Single model per workspace** (default `intfloat/multilingual-e5-small` since 2026-05-30). Stored in `meta.json`; mismatch on startup forces rebuild. | §3.2, §7.2 |
 | **3** | Body in the vector row | **Not stored.** Body is read from disk on demand for cold-tier enrichment. Storing in LanceDB doubles index size for no retrieval benefit. | §3.1 |
 | **4** | Embedding text composition (entity pages) | **Shipped (v2.a, audit E9 2026-05-28):** `name` + `aliases` + `rendered_frontmatter` + `body`, hard cap 1500 chars. Frontmatter renders as prose; provenance + internal timestamps skipped; stateful attributes render `current` only. Optional `summary` slot **decided against** (audit G6, 2026-05-28; doc 08 §2.14). | §4.2 |
 | **5** | Embedding text composition (entries) | **Shipped v1; v2.b superseded (audit E9 2026-05-28):** `headline` + `summary` + `entities_list` + `body`. The originally-planned `entities_with_aliases` expansion is covered at query time by the entity-aware ranker (audit A1) — implementing it in the embedding text would duplicate the ranker's work without measurable benefit. | §4.3 |
@@ -562,7 +570,7 @@ Rebuilt from scratch — the original v1 table described a "current state" that 
 
 | Aspect | Status | Where |
 |---|---|---|
-| Vector index (LanceDB) | ✅ Active. MiniLM-L12-v2 (384-dim default). 8-column schema per §3.1 (no `body` column — see A4). | `durin/memory/vector_index.py` |
+| Vector index (LanceDB) | ✅ Active. `intfloat/multilingual-e5-small` (384-dim default since 2026-05-30; was MiniLM-L12-v2). 8-column schema per §3.1 (no `body` column — see A4). | `durin/memory/vector_index.py` |
 | Embedding text — entities | ✅ v2.a shipped (audit E9, 2026-05-28). `name + aliases + rendered_frontmatter + body`, 1500-char cap (`_compose_entity_page_text`). Attribute queries ("Marcelo's email", "X's spouse") now hit the centroid. Schema bumped to v4; rebuild forced. | `durin/memory/vector_index.py:_compose_entity_page_text` |
 | Embedding text — entries | ✅ v1 (final shape). `headline + summary + entities_list + body`, 1500-char cap (`_embed_text`). Originally-planned `entities_with_aliases` expansion superseded by entity-aware ranker (A1); decision recorded in audit E9. | `durin/memory/vector_index.py:_embed_text` |
 | Vector rebuild walks entity pages | ✅ Shipped (audit E9, 2026-05-28). `rebuild_from_workspace` now walks `memory/entities/<type>/*.md` in addition to `memory/<class>/*.md`, so a forced rebuild (e.g. schema bump) doesn't silently drop entity page rows. | `durin/memory/vector_index.py:rebuild_from_workspace` |
