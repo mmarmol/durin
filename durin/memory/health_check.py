@@ -181,7 +181,9 @@ class HealthChecker:
             return ("skipped", "vector_index module import failed")
         if not vector_index_available():
             return ("skipped", "lancedb not installed")
-        lance_dir = self._workspace / "memory" / ".index.lance"
+        # P9: path moved from memory/.index.lance to .durin/index/lance.
+        from durin.memory.vector_index import _INDEX_PATH
+        lance_dir = self._workspace.joinpath(*_INDEX_PATH)
         if not lance_dir.is_dir():
             # Lance index hasn't been built yet — that's fine, the
             # indexer creates it lazily.

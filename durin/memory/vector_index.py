@@ -1,10 +1,13 @@
 """LanceDB-backed vector index over memory entry summaries.
 
 Phase 2.2 of the memory subsystem. The index lives at
-``<workspace>/memory/.index.lance`` and holds one record per memory
-entry: ``(id, class_name, summary, headline, vector, valid_from, path)``.
-Vectors are produced by an :class:`~durin.memory.embedding.EmbeddingProvider`
-(``FastembedProvider`` in V1).
+``<workspace>/.durin/index/lance/`` (moved 2026-05-30 — P9 vault-
+friendly cleanup; was previously ``<workspace>/memory/.index.lance``
+where it polluted the markdown-vault folder layout). Holds one record
+per memory entry: ``(id, class_name, summary, headline, vector,
+valid_from, path)``. Vectors are produced by an
+:class:`~durin.memory.embedding.EmbeddingProvider` (``FastembedProvider``
+in V1).
 
 Two write paths:
 
@@ -46,7 +49,12 @@ __all__ = [
 
 
 _TABLE_NAME = "memory_entries"
-_INDEX_DIR = ".index.lance"
+# Relative path from workspace root. Moved 2026-05-30 (P9) from
+# `memory/.index.lance` to `.durin/index/lance/` so the `memory/`
+# folder stays pure markdown (vault-friendly: Obsidian and the
+# webui MemoryGraphView no longer see the binary blob mixed with
+# the .md files they render).
+_INDEX_PATH = (".durin", "index", "lance")
 
 
 class VectorIndexDimensionMismatch(RuntimeError):
@@ -107,7 +115,10 @@ class VectorIndex:
     def __init__(self, workspace: Path, provider: EmbeddingProvider) -> None:
         self._workspace = workspace
         self._provider = provider
-        self._uri = str(workspace / "memory" / _INDEX_DIR)
+        # P9 (2026-05-30): index lives at `.durin/index/lance/`, no
+        # longer inside `memory/`. Keeps the vault clean of binary
+        # files for Obsidian / MemoryGraphView consumers.
+        self._uri = str(workspace.joinpath(*_INDEX_PATH))
 
     # ------------------------------------------------------------------
     # write paths

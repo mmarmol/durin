@@ -35,7 +35,9 @@ def _memory_summary(workspace: Path) -> tuple[int, bool]:
         if any(part.startswith(".") for part in path.parts):
             continue
         count += 1
-    vec_present = (mem_dir / ".index.lance").exists()
+    # P9: lance index moved to .durin/index/lance (was memory/.index.lance).
+    from durin.memory.vector_index import _INDEX_PATH
+    vec_present = workspace.joinpath(*_INDEX_PATH).exists()
     return count, vec_present
 
 

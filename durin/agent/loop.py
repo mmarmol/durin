@@ -429,7 +429,9 @@ class AgentLoop:
 
     def _start_memory_background_services(self) -> None:
         """Start the optional memory file watcher and health-check
-        scheduler if the config enables them.
+        scheduler if the config enables them, and ensure the workspace
+        has a `VAULT_README.md` for human consumers (Obsidian users,
+        webui MemoryGraphView, anyone browsing files directly).
 
         Each service is constructed and started independently; a
         failure in one doesn't affect the other. Tests that build
@@ -441,6 +443,19 @@ class AgentLoop:
         mem_cfg = getattr(self.app_config, "memory", None)
         if mem_cfg is None:
             return
+
+        # P9 (2026-05-30): write the vault README at workspace root if
+        # missing. Idempotent + safe — never overwrites. This is the
+        # one-line "what is this folder?" handoff for any external
+        # viewer of the on-disk format.
+        try:
+            from durin.memory.vault_readme import ensure_vault_readme
+
+            ensure_vault_readme(self.workspace)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "vault readme init failed (continuing): {}", exc,
+            )
 
         fw_cfg = getattr(mem_cfg, "file_watcher", None)
         if fw_cfg is not None and getattr(fw_cfg, "enabled", False):

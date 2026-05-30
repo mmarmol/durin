@@ -126,8 +126,12 @@ def test_default_is_false_when_currently_disabled(
 def test_cross_encoder_question_anchors() -> None:
     text = CROSS_ENCODER_QUESTION_TEXT
     assert "cross-encoder" in text.lower()
-    assert "300-1500ms" in text
-    assert "~1GB" in text
+    # H30 (2026-05-30): updated latency + RAM figures for the new
+    # default model (BAAI/bge-reranker-base, ~100M params vs the
+    # prior jina-v2 278M).
+    assert "300-800ms" in text
+    assert "~600MB" in text
+    assert "BAAI/bge-reranker-base" in text
     assert "[y/N]" in text
 
 
