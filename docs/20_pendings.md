@@ -338,7 +338,7 @@ Step 2 doc 28 (source-priority weighting en vector index) es mejor
 ROI para single_hop.
 
 **Plan completo**: ver `/tmp/plan_ingest_threshold.md` (notas de
-sesión 2026-05-25) — debe migrarse a `docs/arch/` si se aprueba.
+sesión 2026-05-25) — debe migrarse a `docs/architecture/` si se aprueba.
 
 **Estado**: planeado, no priorizado. Esperando resultado bench v3.
 

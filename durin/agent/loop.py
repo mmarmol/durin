@@ -1085,7 +1085,7 @@ class AgentLoop:
                 telemetry_token = None
         # Sprint B / L3 — agent-mode provider, resolved per iteration so a
         # mid-run mode switch (via /plan or enter_plan_mode tool) takes
-        # effect at the very next iteration. See docs/07_external_agents_review.md §L3.
+        # effect at the very next iteration. See docs/archive/34_external_agents_review.md §L3.
         def _mode_provider():
             from durin.agent.agent_mode import get_active_mode
             return get_active_mode(session)

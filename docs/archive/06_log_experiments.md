@@ -406,7 +406,7 @@ positive signal. The direction is now backed by:
 4. Hermes Agent's skill-loop deployment (+40% speedup)
 5. Industry convergence (Cursor `.cursorrules`, Claude Code `CLAUDE.md`)
 
-This validates Horizon 1 of the roadmap (`01_roadmap.md`). The next
+This validates Horizon 1 of the roadmap (`roadmap.md`). The next
 step is V9b: capture the actual code generated, compare with Aider's
 own prompts as a literal-replication anchor, and assess code-quality
 deltas beyond pass/fail.
@@ -422,7 +422,7 @@ deltas beyond pass/fail.
 
 ### Goal
 
-Close the SOUL routing hypothesis (Phase 1a of `01_roadmap.md`) with statistical evidence. V9d had revealed the V9 +20pp signal was a `max_tokens=4096` artifact. V9e ran the corrected protocol (`max_tokens=131072`) on the complement of 110 exercises (the 30 from V9d already done, the remaining 110 here) to push N high enough to detect any real differential effect across conditions.
+Close the SOUL routing hypothesis (Phase 1a of `roadmap.md`) with statistical evidence. V9d had revealed the V9 +20pp signal was a `max_tokens=4096` artifact. V9e ran the corrected protocol (`max_tokens=131072`) on the complement of 110 exercises (the 30 from V9d already done, the remaining 110 here) to push N high enough to detect any real differential effect across conditions.
 
 ### Setup
 
@@ -525,5 +525,5 @@ What survives:
 
 - Script: `scripts/hypothesis_test/run_experiment_v9e_complement.py`
 - Results: `scripts/hypothesis_test/v9_runs/results_v9e_seed42.jsonl` (321 trials)
-- Roadmap closure: `01_roadmap.md` §Horizon 1a
-- Bitácora entry: `02_bitacora.md` §Discarded: Role-based SOUL.md routing
+- Roadmap closure: `roadmap.md` §Horizon 1a
+- Bitácora entry: `bitacora.md` §Discarded: Role-based SOUL.md routing

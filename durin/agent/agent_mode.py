@@ -1,10 +1,10 @@
-"""Agent modes — Sprint B / L3 (docs/07_external_agents_review.md).
+"""Agent modes — Sprint B / L3 (docs/archive/34_external_agents_review.md).
 
 Permission-as-data agent modes. The loop doesn't have any conditional logic
 about "what to do in plan mode vs build mode"; modes are pure data, applied by
 filtering the available tool set at the start of each turn.
 
-This avoids the V7/V8 PlanHook pitfall (refuted in 02_bitacora.md) — that
+This avoids the V7/V8 PlanHook pitfall (refuted in bitacora.md) — that
 design forced behavior (verify-before-complete) via code. Here we only
 restrict what tools the model can call. The model retains full agency within
 the filtered surface.

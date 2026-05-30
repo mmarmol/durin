@@ -253,7 +253,7 @@ rota en la frontera de delivery — silent quality loss.
    en lugar de (o junto a) las 4 clases viejas. Misma convención de
    markers.
 
-3. **Documentar el contrato** en `docs/arch/memory.md` para que future
+3. **Documentar el contrato** en `docs/archive/30_arch_memory_legacy.md` para que future
    tools (eager-inject §2.F, eviction §2.G) lo respeten.
 
 **Costo estimado**: ~150 LOC (extender Result + marker rendering +

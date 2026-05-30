@@ -6,7 +6,7 @@ yarn/bun), dependency files, and common entrypoints. NO embeddings, NO PageRank,
 NO AST — purely structural. Lets the model orient before diving in.
 
 Adapted from OpenCode's `repo_overview` tool (see
-`docs/07_external_agents_review.md` §T1). Adjustments vs OpenCode:
+`docs/archive/34_external_agents_review.md` §T1). Adjustments vs OpenCode:
 - Local path only (no git URL caching — Durin works in the active workspace)
 - Reuses `_FsTool._IGNORE_DIRS` pattern from filesystem.py for noise filtering
 - Emits `tool.repo_overview` telemetry via the inherited `_emit` helper

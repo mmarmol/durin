@@ -1,7 +1,7 @@
 ---
 title: Agent tools — memory_search, memory_store, memory_ingest, memory_drill
 version: 0.1-draft
-status: under construction
+status: current — describes the shipped system (P11 era, 2026-05-30)
 last_updated: 2026-05-27
 audience: humans and LLMs implementing or modifying this system
 depends_on: 00_overview.md, 01_data_and_entities.md, 02_indexing.md, 03_search_pipeline.md
