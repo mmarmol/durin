@@ -85,16 +85,43 @@ def archive_consumed_episodic(
             continue
         seen.add(provenance)
 
-        if not provenance.startswith("episodic/"):
-            # Stable / corpus / pending: per §5.3-§5.5 doc 01, do not
-            # auto-archive. Silently skip.
+        # Skip explicitly-typed non-episodic provenance (stable / corpus /
+        # pending — §5.3-§5.5 doc 01, never auto-archive).
+        if provenance.startswith(("stable/", "corpus/", "pending/")):
             continue
 
-        # Resolve to absolute path under the workspace.
-        rel = provenance
+        # Resolve to absolute path under the workspace. Tolerant of three
+        # shapes the LLM may emit (bug 2026-05-31 — prompt render was
+        # showing `[<ts> / <id>]` and the LLM mirrored that as provenance
+        # instead of the spec-mandated `episodic/<id>.md`):
+        #   - `episodic/<id>.md`  (spec form — happy path)
+        #   - `episodic/<id>`     (spec without extension)
+        #   - `<date>/<id>`       (date-prefix the broken render induced)
+        #   - `<id>`              (bare id, what `Sources:` trailers carry)
+        # We treat the last path segment as the id and look it up under
+        # memory/episodic/. If it isn't an episodic file on disk it will
+        # silently skip (file-not-found case below) — that protects us
+        # against accidentally archiving a stable/corpus entry whose id
+        # happened to collide.
+        explicit_episodic = provenance.startswith("episodic/")
+        if explicit_episodic:
+            rel = provenance if provenance.endswith(".md") else provenance + ".md"
+        else:
+            # Take the last segment as the id (handles bare id, date/id,
+            # or any other prefix shape).
+            id_part = provenance.rsplit("/", 1)[-1]
+            if id_part.endswith(".md"):
+                id_part = id_part[: -len(".md")]
+            rel = f"episodic/{id_part}.md"
         src = Path(workspace) / "memory" / rel
         if not src.is_file():
-            errors.append(f"source not found: {provenance}")
+            if explicit_episodic:
+                # Caller asked for a specific episodic that isn't there —
+                # surface as error (audit signal).
+                errors.append(f"source not found: {provenance}")
+            # Non-explicit shapes that don't resolve are silently
+            # skipped: they may have been a non-episodic ref the LLM
+            # cited with a legacy format, not a missing file.
             continue
 
         try:

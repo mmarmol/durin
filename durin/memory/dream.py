@@ -749,8 +749,16 @@ class DreamConsolidator:
         for entry in entries:
             entities_str = ", ".join(entry.entities) if entry.entities else ""
             tag_suffix = f" [tags: {entities_str}]" if entities_str else ""
+            # Surface the entry id as the spec-format provenance path
+            # the LLM is asked to cite (`episodic/<id>.md`). Bug
+            # 2026-05-31: showing `[<timestamp> / <bare_id>]` induced
+            # the LLM to mirror that visual format as
+            # `<timestamp>/<bare_id>`, which then failed to match
+            # `archive_consumed_episodic`'s `startswith("episodic/")`
+            # filter — consumed entries silently accumulated on disk.
             entries_lines.append(
-                f"[{entry.timestamp} / {entry.id}]{tag_suffix} {entry.text}"
+                f"[{entry.timestamp} | episodic/{entry.id}.md]"
+                f"{tag_suffix} {entry.text}"
             )
 
         # F7: parse the existing page so we can populate the schema
