@@ -767,7 +767,7 @@ Changes:
 
 ### B2 — Doc 99_phase_progress_review obsolete ✅ RESOLVED
 
-**Doc says** (`docs/memory/99_phase_progress_review.md:5`): "4885 tests passing".
+**Doc says** (`docs/archive/33_memory_phase_progress_review.md:5`): "4885 tests passing".
 
 **Doc says** (§2 D4): "Phase 1.9 deferred (v2 pipeline integration in DreamConsolidator)... Next step: Phase 1.9".
 

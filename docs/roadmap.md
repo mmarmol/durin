@@ -1,6 +1,6 @@
 # Roadmap
 
-> Forward plan after empirical refutation of the previous "smart layer" direction. See `02_bitacora.md` for what was discarded and why.
+> Forward plan after empirical refutation of the previous "smart layer" direction. See `bitacora.md` for what was discarded and why.
 
 ---
 
@@ -20,7 +20,7 @@ Durin is a clean Nanobot baseline + plumbing + the now-shipped **entity-centric 
   - `durin memory` CLI: dream, history, show, diff, revert, expand, absorb, absorb-suggest
   - 4365 tests passing, 16 skipped
 
-Forward planning and deferred items: see [25_post_t1_state_and_t2_horizon.md](25_post_t1_state_and_t2_horizon.md).
+Forward planning and deferred items: see [archive/36_post_t1_state_and_t2_horizon.md](archive/36_post_t1_state_and_t2_horizon.md).
 
 ---
 
@@ -30,7 +30,7 @@ Both directions have strong empirical or industrial precedent, unlike what we bu
 
 ### Horizon 1a — Role-based SOUL.md routing — REFUTED (2026-05-19)
 
-**Status**: closed. V9e ran 107 exercises × 3 conditions (none / specific / generic_agent), `max_tokens=131072`, glm-5.1. Pass rates: 69.2% / 71.0% / 73.8% — gap of 4.6pp within the noise floor (±4.4pp for N=107). The 23 divergent exercises distribute uniformly across the 6 possible patterns (chi² = 1.78, df=5, p≫0.05), and sign-test per-condition gives p=0.41–0.68 — **statistically indistinguishable from random model variance**. Error types are nearly identical across conditions (28/30/25 AssertionError, 1/1/2 setup errors). Jaccard similarity of fail-sets is 0.57–0.61 — most failures are shared difficulty, not differentiation. See `02_bitacora.md` and `06_log_experiments.md` for full V9e analysis.
+**Status**: closed. V9e ran 107 exercises × 3 conditions (none / specific / generic_agent), `max_tokens=131072`, glm-5.1. Pass rates: 69.2% / 71.0% / 73.8% — gap of 4.6pp within the noise floor (±4.4pp for N=107). The 23 divergent exercises distribute uniformly across the 6 possible patterns (chi² = 1.78, df=5, p≫0.05), and sign-test per-condition gives p=0.41–0.68 — **statistically indistinguishable from random model variance**. Error types are nearly identical across conditions (28/30/25 AssertionError, 1/1/2 setup errors). Jaccard similarity of fail-sets is 0.57–0.61 — most failures are shared difficulty, not differentiation. See `bitacora.md` and `06_log_experiments.md` for full V9e analysis.
 
 **What initially looked promising**:
 - Aider's published +33–41pp on GPT-4
@@ -106,7 +106,7 @@ Each subcomponent must demonstrate measurable lift before we layer more on top. 
 
 ## What we are explicitly NOT doing
 
-These have been tested or have strong reasons against. See `02_bitacora.md` for full rationale.
+These have been tested or have strong reasons against. See `bitacora.md` for full rationale.
 
 - ❌ Posture vector (5-axis dynamic behavioral state)
 - ❌ Plan tiers / phases / forced verification gate / cycle escalation
@@ -131,19 +131,19 @@ Steps:
 3. Decide if defaults need tightening (toward SWE-agent's 100-line / 50-result limits) or are already correct
 4. **No defaults change without supporting data** — the cost of dropping information the model needs is asymmetric vs the token savings
 
-External agents review (May 2026): see `07_external_agents_review.md` for code-level analysis of OpenHands, Hermes Agent, OpenCode, OpenClaude. That review surfaced concrete tool/loop adoption candidates with explicit weighing.
+External agents review (May 2026): see `archive/34_external_agents_review.md` for code-level analysis of OpenHands, Hermes Agent, OpenCode, OpenClaude. That review surfaced concrete tool/loop adoption candidates with explicit weighing.
 
 **Sprint A — Tool I/O hygiene (completed 2026-05-19)**: `repo_overview` tool, `read_file` suggestion-on-miss, block-anchor matcher in `edit_file`, `exec` output spill to disk. All 4 quick-wins shipped with telemetry. 35 new tests, full suite at 3,102.
 
 **Sprint B — Permission-as-data agent modes (completed 2026-05-19)**: `/plan`, `/build`, `/mode` slash commands work in every channel via the shared `CommandRouter`. `enter_plan_mode` / `exit_plan_mode` tools for the LLM. Read-only filtering in the runner. Telemetry covers turn-start mode, mode switches, tool denials, and plan presentation. 51 new tests, full suite at 3,153. See `docs/ARCHITECTURE.md` §"Sprint B" for the per-channel autocomplete improvements that remain as polish (CLI completer, Telegram BotCommand registration).
 
-**Subsequent pivot (May 2026)**: archive subsystem we'd been building was found redundant with `session.json` (which is now confirmed immutable, since TTL/autocompact was removed). Replaced with per-session `<safe_key>.meta.json` sidecar — single file per session indexing lifecycle events (plans today, extensible by `type` for future patterns). See `docs/02_bitacora.md` §"Pivot: session immutable + per-session meta file".
+**Subsequent pivot (May 2026)**: archive subsystem we'd been building was found redundant with `session.json` (which is now confirmed immutable, since TTL/autocompact was removed). Replaced with per-session `<safe_key>.meta.json` sidecar — single file per session indexing lifecycle events (plans today, extensible by `type` for future patterns). See `docs/bitacora.md` §"Pivot: session immutable + per-session meta file".
 
 ---
 
 ### Tools roadmap (May 2026 — 12-item plan)
 
-Compiled from the comparative review of OpenHands / Hermes / OpenCode / OpenClaude tools (`07_external_agents_review.md`) filtered through Marcelo's priorities. Each row is independent unless dependencies are noted. Order reflects: trivial-first, then user-flagged high-interest, then multimodal chain, then heavyweight investments, then memory-foundation skills.
+Compiled from the comparative review of OpenHands / Hermes / OpenCode / OpenClaude tools (`archive/34_external_agents_review.md`) filtered through Marcelo's priorities. Each row is independent unless dependencies are noted. Order reflects: trivial-first, then user-flagged high-interest, then multimodal chain, then heavyweight investments, then memory-foundation skills.
 
 | # | Tool | Complexity | Value | Adopters | Depends on | Rationale |
 |---|---|---|---|---|---|---|
@@ -207,7 +207,7 @@ Items that emerged from running the tools roadmap and turned out to be worth shi
 Hold until Phase 2 (memory) provides the natural substrate. Standalone implementation would duplicate work the memory system will subsume.
 
 **Phase 2 (Horizon 2 — Memory)**:
-Higher investment, higher potential differentiation. Now unblocked: Phase 2 was waiting on Phase 1c telemetry + the perf infra (anchored tokens + cache visibility) to make compaction decisions over real data, both of which are now in place. Build incrementally: start with flat skill docs (Hermes-style), then add structure as evidence warrants. **Before designing**, read `~/git_personal/hermes-agent/agent/background_review.py` + `curator.py` + `memory_manager.py` — Hermes ships an essentially-complete production implementation of the Doc 03 pattern (forked agent with tool whitelist, ContextVar-gated provenance, frozen 3-tier system prompt). See `07_external_agents_review.md` §L1, §L2.
+Higher investment, higher potential differentiation. Now unblocked: Phase 2 was waiting on Phase 1c telemetry + the perf infra (anchored tokens + cache visibility) to make compaction decisions over real data, both of which are now in place. Build incrementally: start with flat skill docs (Hermes-style), then add structure as evidence warrants. **Before designing**, read `~/git_personal/hermes-agent/agent/background_review.py` + `curator.py` + `memory_manager.py` — Hermes ships an essentially-complete production implementation of the Doc 03 pattern (forked agent with tool whitelist, ContextVar-gated provenance, frozen 3-tier system prompt). See `archive/34_external_agents_review.md` §L1, §L2.
 
 Once Phase 2 has retrieval, Phase 1b reduces to "use the memory retriever to fetch query-relevant context" — small additional work.
 
@@ -227,7 +227,7 @@ Once Phase 2 has retrieval, Phase 1b reduces to "use the memory retriever to fet
 ## Last updated: 2026-05-24 08:40 (§2.D auto-absorb shipped)
 
 > Post-T1 pass (2026-05-23): Phases 0-6 of the entity-centric memory plan
-> ([18_entity_centric_plan.md](18_entity_centric_plan.md) +
+> ([archive/35_entity_centric_plan.md](archive/35_entity_centric_plan.md) +
 > [archive/19_implementation_plan.md](archive/19_implementation_plan.md)) shipped, and
 > the T1 wiring sweep (W1-W4 in archived doc 24) closed the runtime
 > integration gap — `memory_search` now invokes the entity-aware ranker,
@@ -236,7 +236,7 @@ Once Phase 2 has retrieval, Phase 1b reduces to "use the memory retriever to fet
 > `absorb-suggest` are exposed in the CLI. 4 hermetic E2E tests cover
 > the wired path; 4365 tests pass. Deferred T2 items (auto-trigger dream,
 > identifier-based extraction, shared AliasIndex, auto-absorb) captured
-> in [25_post_t1_state_and_t2_horizon.md](25_post_t1_state_and_t2_horizon.md)
+> in [archive/36_post_t1_state_and_t2_horizon.md](archive/36_post_t1_state_and_t2_horizon.md)
 > without commitment. Six docs moved to archive (the Phase 2 proposal,
 > the typed-entities proposal, doc 21 integration plan, doc 22 critique
 > validation, doc 23 T1 implementation plan, doc 24 wiring + e2e plan).

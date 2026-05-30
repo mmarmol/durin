@@ -15,7 +15,7 @@ outside an active scope raises :class:`MissingAuthorScopeError` — a
 loud failure beats a silent mismarking. Rationale: the implicit
 default makes "forgot to wrap" indistinguishable from "intentional
 default", which has bitten benchmarks + tests already (see
-``docs/memory/99_phase_progress_review.md`` D2).
+``docs/archive/33_memory_phase_progress_review.md`` D2).
 
 Usage::
 

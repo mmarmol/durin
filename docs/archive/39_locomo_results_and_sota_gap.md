@@ -5,7 +5,7 @@
 > per-category breakdown, attribution of fails to specific SOTA gaps,
 > and a concrete shortlist of architectural changes worth prototyping.
 >
-> Compañion to [27_locomo_benchmark.md](27_locomo_benchmark.md) (the
+> Compañion to [archive/38_locomo_benchmark.md](archive/38_locomo_benchmark.md) (the
 > harness). This doc is about the **results**.
 
 ---
@@ -362,7 +362,7 @@ in the dominant-cause distribution from §4.1.
 ## §6 — The uncomfortable finding: entities aren't where the LoCoMo gap is
 
 **Durin's bet** (per [doc 16](research/16c_entities_academic_and_online.md)
-+ [doc 18](18_entity_centric_plan.md)): entity-centric memory is the
++ [doc 18](archive/35_entity_centric_plan.md)): entity-centric memory is the
 right substrate for cross-session coherence.
 
 **LoCoMo observation**: HyperMem (SOTA, 92.73%) **has no entity nodes**.
@@ -520,7 +520,7 @@ search already happened.
 
 **This is the structural lever that replaces failed Steps 1 + 3.**
 
-§2.F is already in [docs/25_post_t1_state_and_t2_horizon.md](25_post_t1_state_and_t2_horizon.md)
+§2.F is already in [docs/archive/36_post_t1_state_and_t2_horizon.md](archive/36_post_t1_state_and_t2_horizon.md)
 as planned-but-pending. Gate ("silent retrieval miss observable in
 telemetry") was met by the v1 LoCoMo bench (4-8 `no_retrieval` fails
 per 102 QAs). v3 still shows 7 no_retrieval fails — the gate is still

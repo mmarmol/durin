@@ -63,7 +63,7 @@ Y `search.py` matchea entidades por substring case-insensitive
 contra el query plano (`durin/memory/search.py:139`).
 
 **Qué se pierde**: `marcelo`, `durin`, `durin/agent/loop.py`,
-`docs/02_bitacora.md`, `glm-5.1`, `phase 2`, `release v0.1.0a7`,
+`docs/bitacora.md`, `glm-5.1`, `phase 2`, `release v0.1.0a7`,
 `autocompact`, `posture vector` son todos strings idénticos desde el
 punto de vista del schema. No hay forma de filtrar "dame las
 personas mencionadas" ni de saber si `marcelo` es una persona o un
@@ -492,7 +492,7 @@ prompt del consolidator.
 |---|---|
 | `person` | Cubre el caso canónico que el doc 08 §0c.5 ya usa: `usuario:marcelo`. Universal en todos los sistemas estudiados (LanceDB lo cubre con su `entity`; OpenViking con `profile`/`entity`). |
 | `project` | El doc 08 también lo ejemplifica: `proyecto:durin`. La bitácora habla de `durin`, `hermes-agent`, `openclaw` constantemente — son entidades de primera clase del corpus. |
-| `file` | `docs/02_bitacora.md:411` es un ejemplo típico de source_ref que aparece como entidad. Distinto de `symbol` porque el grano es el archivo entero, no la función. |
+| `file` | `docs/bitacora.md:411` es un ejemplo típico de source_ref que aparece como entidad. Distinto de `symbol` porque el grano es el archivo entero, no la función. |
 | `symbol` | El bitácora menciona `Consolidator.archive`, `MemoryEntry`, `format_summary_block` (líneas 417, 707) — funciones/clases con identidad estable. Distinto de `file` por granularidad. |
 | `topic` | Tema conceptual recurrente que no es ni código ni persona: `autocompact`, `posture vector`, `plan tier`, `phase 2`. El doc 08 separa `topics: list[str]` plano en meta.json, pero el _contexto del topic_ puede aparecer también como entidad nombrada en el frontmatter de una memoria. |
 | `decision` | Patrón muy común en bitácora (`Discarded: Posture Vector`, `Discarded: Plan System`). Importante distinguirlo de `event` porque una decisión tiene contraparte de "qué se descartó/adoptó" — Phase 3 KG querrá un edge `(decision, supersedes, decision)`. |

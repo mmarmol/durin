@@ -3,11 +3,11 @@
 > Durin's memory layer: how the agent records what it learns, consolidates
 > it into navigable entity pages, and retrieves it at query time.
 >
-> Design source of truth: [../18_entity_centric_plan.md](../18_entity_centric_plan.md)
+> Design source of truth: [../archive/35_entity_centric_plan.md](../archive/35_entity_centric_plan.md)
 > (principles + schema + retrieval) and
 > [../archive/19_implementation_plan.md](../archive/19_implementation_plan.md) (phases, ejecutado).
 > Forward-looking deferred items in
-> [../25_post_t1_state_and_t2_horizon.md](../25_post_t1_state_and_t2_horizon.md).
+> [../archive/36_post_t1_state_and_t2_horizon.md](../archive/36_post_t1_state_and_t2_horizon.md).
 
 ---
 
@@ -488,7 +488,7 @@ Per doc 19 §14, deferred until evidence justifies:
 - **User manual editing** — supported (markdown is markdown), but no UI to mediate.
 - **Sync remoto** — local-only.
 
-Roadmap for these items: [doc 25 §2](../25_post_t1_state_and_t2_horizon.md).
+Roadmap for these items: [doc 25 §2](../archive/36_post_t1_state_and_t2_horizon.md).
 
 ---
 

@@ -335,7 +335,7 @@ V7/V8's PlanHook was refuted: 0/24 hits, -2pp on scenario_3. The mechanism was *
 
 Sprint B is the opposite design: **modes are data, not code**. The loop has no conditional logic about "what plan mode does" — it only filters the tool surface using a frozenset declared in the `AgentMode` dataclass. The model retains full agency within the filtered surface. If it chooses to act outside plan mode, it can; the only constraint is which tools are exposed.
 
-Three external implementations validated this approach (`docs/07_external_agents_review.md`):
+Three external implementations validated this approach (`docs/archive/34_external_agents_review.md`):
 - **OpenCode**: per-tool ruleset with wildcards; modes selected by agent record
 - **OpenClaude (= Claude Code)**: enum-style modes with `prePlanMode` restore pattern
 - **Hermes**: thread-local tool whitelist for bg-review fork
@@ -506,7 +506,7 @@ After the archive/autocompact pivot landed (sessions are now immutable, meta sid
 
 ### The exercise
 
-Took the comparative review from `07_external_agents_review.md`, surfaced what each of the 4 reference agents (OpenHands, Hermes, OpenCode, OpenClaude) exposes as tools, then filtered through Marcelo's daily-driver priorities. Result: a 12-item ordered list of tools to add, captured in `01_roadmap.md` §"Tools roadmap".
+Took the comparative review from `archive/34_external_agents_review.md`, surfaced what each of the 4 reference agents (OpenHands, Hermes, OpenCode, OpenClaude) exposes as tools, then filtered through Marcelo's daily-driver priorities. Result: a 12-item ordered list of tools to add, captured in `roadmap.md` §"Tools roadmap".
 
 ### What Marcelo flagged as priority
 

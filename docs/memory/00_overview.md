@@ -1,10 +1,10 @@
 ---
 title: Memory system — architectural overview
 version: 0.1-draft
-status: under construction
+status: current — describes the shipped system (P11 era, 2026-05-30)
 last_updated: 2026-05-27
 audience: humans and LLMs implementing or modifying this system
-related: ../29_exploracion_datos_y_relaciones.md (prior exploration, Spanish)
+related: ../archive/40_exploracion_datos_y_relaciones.md (prior exploration, Spanish)
 ---
 
 # Memory system — architectural overview

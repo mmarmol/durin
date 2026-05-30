@@ -485,7 +485,7 @@ Forcing either into the other's shape produces a regression: the search renderer
 
 ## 3. Operational risks (from doc 18 §10)
 
-The entity-centric memory design carries known operational risks. They were enumerated in `docs/18_entity_centric_plan.md` §10 before the corpus was written. This section maps each risk to its status in v2 and identifies what (if anything) the corpus does to mitigate it.
+The entity-centric memory design carries known operational risks. They were enumerated in `docs/archive/35_entity_centric_plan.md` §10 before the corpus was written. This section maps each risk to its status in v2 and identifies what (if anything) the corpus does to mitigate it.
 
 | # | Risk | Status in v2 | Mitigation reference |
 |---|---|---|---|
@@ -737,7 +737,7 @@ Cases where mem0/graphiti/etc. do X, but we chose NOT X for explicit reasons. Us
 
 ## 7. Lessons learned (general)
 
-Distilled from the design process documented in `docs/29_exploracion_datos_y_relaciones.md` and prior iterations:
+Distilled from the design process documented in `docs/archive/40_exploracion_datos_y_relaciones.md` and prior iterations:
 
 ### Lesson 1 — Tool description is a weak signal
 
@@ -793,5 +793,5 @@ Building Dream right (consolidation, archive, dedup, drift control) eliminates m
 
 - Architectural decisions per module: each module's §10/§14/§16 (decisions tables).
 - Cross-corpus decisions: `00_overview.md` §10.
-- Prior exploration (Spanish, longer-form): `docs/29_exploracion_datos_y_relaciones.md`.
+- Prior exploration (Spanish, longer-form): `docs/archive/40_exploracion_datos_y_relaciones.md`.
 - Mem files documenting past failures: `~/.claude/projects/.../memory/feedback_*.md`, `project_g3b_query_rewriting_plan.md`.

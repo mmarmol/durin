@@ -407,7 +407,7 @@ Listed between §4 (Phase 1) and §5 (Phase 2) in document order, but its real d
 
 ### 11.3 Failure modes to track
 
-The bench harness emits a structured failure category per failed QA so regressions are diagnosable. Categories (from `docs/28_locomo_results_and_sota_gap.md` §4 — based on real LoCoMo failure audit over 43 fails):
+The bench harness emits a structured failure category per failed QA so regressions are diagnosable. Categories (from `docs/archive/39_locomo_results_and_sota_gap.md` §4 — based on real LoCoMo failure audit over 43 fails):
 
 | Category | Definition | Typical % (v2 baseline) |
 |---|---|---|
@@ -425,7 +425,7 @@ The bench harness emits a structured failure category per failed QA so regressio
 
 - The judge categorizer (or post-bench script) tags each failed QA with one dominant category (multi-attribution flagged separately for the 4 cases where two causes are equally strong).
 - Phase 8 success requires no single category to grow > 5pp from v2 baseline without an explicit cause documented.
-- Targeted improvements map to specific categories. See `docs/28_locomo_results_and_sota_gap.md` §5 (Mitigation roadmap) for the impact-effort matrix.
+- Targeted improvements map to specific categories. See `docs/archive/39_locomo_results_and_sota_gap.md` §5 (Mitigation roadmap) for the impact-effort matrix.
 
 ### 11.4 Specs consumed
 

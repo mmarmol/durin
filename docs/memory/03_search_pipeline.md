@@ -1,7 +1,7 @@
 ---
 title: Search pipeline — hot path retrieval
 version: 0.1-draft
-status: under construction
+status: current — describes the shipped system (P11 era, 2026-05-30)
 last_updated: 2026-05-27
 audience: humans and LLMs implementing or modifying this system
 depends_on: 00_overview.md, 01_data_and_entities.md, 02_indexing.md
@@ -447,7 +447,7 @@ Detailed specs for these UI surfaces live in `06_prompts_and_instructions.md` (o
 
 Search must be **faithful retrieval**: it surfaces hits that match the query, ranked by relevance signals derived from the query (vector similarity, lexical overlap, entity match). It must not pre-judge **which fact is "current"** without the LLM's question context — that decision belongs to the LLM, which has the full prompt and already receives `valid_from` on every hit.
 
-The trigger was [LoCoMo conv-5-q20](docs/memory/11_audit_reconciliation.md) ("Which meat does Audrey prefer eating more than others?"). The corpus contains 6 entries stating Audrey loves roasted chicken (dated 2023-07-03) and many entries about her also loving sushi (dated 2023-10-24). With wall-clock decay at 90-day half-life and "now" = 2026, all entries decayed to near zero — but the relative penalty (chicken 3.6× more decayed than sushi) was enough to push chicken out of top-10 across every Audrey-related query the agent tried. The agent reported "no record of preferred meat" with high confidence. Reproducing the search with decay disabled returned chicken at top-5.
+The trigger was [LoCoMo conv-5-q20](docs/archive/32_memory_audit_reconciliation.md) ("Which meat does Audrey prefer eating more than others?"). The corpus contains 6 entries stating Audrey loves roasted chicken (dated 2023-07-03) and many entries about her also loving sushi (dated 2023-10-24). With wall-clock decay at 90-day half-life and "now" = 2026, all entries decayed to near zero — but the relative penalty (chicken 3.6× more decayed than sushi) was enough to push chicken out of top-10 across every Audrey-related query the agent tried. The agent reported "no record of preferred meat" with high confidence. Reproducing the search with decay disabled returned chicken at top-5.
 
 The pathology is structural: decay assumes recency is the right tiebreaker, but the question's temporal nature (factual atemporal vs current state vs historical) determines that. Search cannot know which kind of question it's serving.
 

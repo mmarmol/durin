@@ -12,7 +12,7 @@ Examples valid:    ``person:marcelo``, ``project:durin``,
 
 The vocabulary of types is **open**: any well-formed type is accepted.
 :data:`SUGGESTED_TYPES` lists the 8 broad types from
-``docs/18_entity_centric_plan.md`` §4 — these are hints for the
+``docs/archive/35_entity_centric_plan.md`` §4 — these are hints for the
 consolidator/dream prompt, not an enforced enum. The LLM can introduce
 new types when content demands it (Phase 0.3 confirmed ``agent:``,
 ``org:`` emerge naturally).

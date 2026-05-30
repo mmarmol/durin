@@ -1,7 +1,7 @@
 ---
 title: Data types and entity model
 version: 0.1-draft
-status: under construction
+status: current — describes the shipped system (P11 era, 2026-05-30)
 last_updated: 2026-05-27
 audience: humans and LLMs implementing or modifying this system
 depends_on: 00_overview.md
@@ -304,7 +304,7 @@ Examples:
 
 ### 4.1.1 Suggested starter types
 
-The vocabulary is open, but Dream needs a starting set so it doesn't invent arbitrary types from the first observation. The following 8 types form the **suggested starter set** (from `docs/18_entity_centric_plan.md` §4, grounded in cognitive memory literature — Tulving tripartite, CoALA, Conway, Rosch prototype theory):
+The vocabulary is open, but Dream needs a starting set so it doesn't invent arbitrary types from the first observation. The following 8 types form the **suggested starter set** (from `docs/archive/35_entity_centric_plan.md` §4, grounded in cognitive memory literature — Tulving tripartite, CoALA, Conway, Rosch prototype theory):
 
 | Type | Tulving mapping | Cross-profession examples |
 |---|---|---|
@@ -818,4 +818,4 @@ When this module is locked, the migration tasks above will move into `09_impleme
 - How the search pipeline uses these structures: `03_search_pipeline.md` (pending)
 - Tools that create/modify these: `04_agent_tools.md` (pending)
 - Dream consolidation logic: `05_dream_cold_path.md` (pending)
-- Prior exploratory discussion: `../29_exploracion_datos_y_relaciones.md`
+- Prior exploratory discussion: `../archive/40_exploracion_datos_y_relaciones.md`

@@ -1,7 +1,7 @@
 ---
 title: Prompts and instructions
 version: 0.1-draft
-status: under construction
+status: current — describes the shipped system (P11 era, 2026-05-30)
 last_updated: 2026-05-27
 audience: humans and LLMs implementing or modifying this system
 depends_on: 00_overview.md, 04_agent_tools.md, 05_dream_cold_path.md

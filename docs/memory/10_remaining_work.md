@@ -293,7 +293,7 @@ Documented here for historical reference. Hooks in `memory_store.execute`, `memo
 ### P8.1 — LoCoMo bench run with v2 pipeline
 
 - **TYPE**: 🔴 integration + 📄 report
-- **DoD**: Run `scripts/benchmark/locomo_run.py` (exists) with per_category=25 → result documented in `docs/28_locomo_results_and_sota_gap.md`. Bar: ≥ 64.7% (previous v2 baseline) without cross-encoder; ≥ 70% with cross-encoder.
+- **DoD**: Run `scripts/benchmark/locomo_run.py` (exists) with per_category=25 → result documented in `docs/archive/39_locomo_results_and_sota_gap.md`. Bar: ≥ 64.7% (previous v2 baseline) without cross-encoder; ≥ 70% with cross-encoder.
 - **Refs**:
   - Script: `scripts/benchmark/locomo_run.py`.
   - Results: appended in doc 28.

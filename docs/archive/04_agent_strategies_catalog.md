@@ -243,7 +243,7 @@ Original research synthesized from:
 
 ## May 2026 addendum — observations from the windowed/capped review
 
-Re-reading this catalog with a filter for "language-agnostic, production-validated, small scope" surfaced that the two SWE-agent quick-wins (windowed file viewer, capped search) **are already implemented in Durin's `read_file` and `grep` tools**, just at more permissive defaults than SWE-agent's originals (2000 vs 100 lines; 250 vs 50 results). What we don't have is **telemetry to know if those defaults are correctly sized for 1M-context frontier models** — see `02_bitacora.md` for full rationale.
+Re-reading this catalog with a filter for "language-agnostic, production-validated, small scope" surfaced that the two SWE-agent quick-wins (windowed file viewer, capped search) **are already implemented in Durin's `read_file` and `grep` tools**, just at more permissive defaults than SWE-agent's originals (2000 vs 100 lines; 250 vs 50 results). What we don't have is **telemetry to know if those defaults are correctly sized for 1M-context frontier models** — see `bitacora.md` for full rationale.
 
 Three candidates per-language that we explicitly **rejected from the immediate plan** (May 2026):
 - Generate-test-repair loop (Aider) — requires per-language test runner integration
