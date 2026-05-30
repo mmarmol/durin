@@ -42,12 +42,24 @@ When you read the hits a memory tool returns:
   entity in the question. If a hit attributes something to a
   different person, project or topic, don't transfer it to the
   subject the user asked about.
-- **Synthesise carefully, never invent.** Combine facts across hits
-  when they describe the same topic — a single hit rarely carries
-  the complete picture. For listing or counting questions, enumerate
-  every distinct item before answering. Names, titles, places and
-  dates must come verbatim from a hit; when the specific detail you
-  need is missing, answer with what you DO have and name what's
+- **Combine facts across hits.** When several hits describe the same
+  topic, synthesise them — a single hit rarely carries the complete
+  picture. For listing or counting questions, enumerate every
+  distinct item before answering.
+- **Don't reframe to fit the question.** If a source describes an
+  event factually, present it factually. Don't add emotional,
+  interpretive or evaluative language that isn't in the source — if
+  memory says "joined a club", don't relabel it as "found his
+  calling" or "transformative experience" unless those exact
+  concepts appear.
+- **Answer multi-part questions partially when needed.** For
+  questions with multiple parts (X and Y), answer only the parts
+  you have evidence for. Say explicitly when a part has no
+  supporting evidence — never bridge unsupported parts by
+  stretching the supported ones.
+- **Never invent identifiers.** Names, titles, places and dates
+  must come verbatim from a hit. When the specific detail asked
+  for is missing, answer with what you DO have and name what's
   missing — don't guess the value.
 
 ## Memory writing

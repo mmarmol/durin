@@ -137,13 +137,15 @@ def test_exponential_backoff_schedule(monkeypatch) -> None:
     assert sleeps == [4.0, 8.0, 16.0, 32.0]
 
 
-def test_temperature_jitter_increases_across_attempts(monkeypatch) -> None:
-    """H2: each retry uses a higher temperature to break LLM wedge."""
-    # Skip backoff sleeps.
+def test_temperature_is_zero_across_all_attempts(monkeypatch) -> None:
+    """H21 (2026-05-30): every attempt runs at temperature=0 for score
+    reproducibility. The earlier H2 design varied temperature per
+    attempt; that broke determinism (re-judge of the same trace
+    could score differently) and the original "break LLM wedge"
+    justification was speculation, not measurement."""
     monkeypatch.setattr(
         _judge_mod.time, "sleep", lambda _: None,
     )
-
     temps: list[float | None] = []
 
     def _invoke(prompt, *, model, temperature=None, **_kw):
@@ -152,8 +154,9 @@ def test_temperature_jitter_increases_across_attempts(monkeypatch) -> None:
 
     with pytest.raises(JudgeError):
         judge_answer("q?", "e", "got", llm_invoke=_invoke)
-    # 5 attempts; first at 0.0, then each step +0.2.
-    assert temps == [0.0, 0.2, 0.4, 0.6, 0.8]
+    assert temps == [0.0, 0.0, 0.0, 0.0, 0.0], (
+        f"all 5 attempts must use temp=0; got {temps}"
+    )
 
 
 def test_tolerates_invoke_without_temperature_kwarg(monkeypatch) -> None:
@@ -293,51 +296,182 @@ def test_max_iterations_default_is_twelve() -> None:
 
 
 def test_refuse_sentinel_matches_english_refusal() -> None:
-    """An agent saying 'I don't have information' scores 1.0 against
-    the __REFUSE__ sentinel — that's the correct adversarial answer."""
+    """H20: the LLM judge receives the agent answer and decides
+    refused=true for plain English refusal patterns."""
+    def _judge_llm(prompt, *, model, **_kw):
+        return '{"refused": true, "reasoning": "agent says no info"}'
     verdict = judge_answer(
         question="What is X's secret password?",
         expected="__REFUSE__",
-        got=(
-            "I don't have information about X's password in memory. "
-            "Nothing in the conversation references it."
-        ),
-        llm_invoke=lambda *a, **kw: "",  # never called
+        got="I don't have information about X's password in memory.",
+        llm_invoke=_judge_llm,
     )
     assert verdict.score == 1.0
-    assert "refused" in verdict.reasoning.lower()
+    assert "refusal" in verdict.reasoning.lower()
 
 
 def test_refuse_sentinel_matches_spanish_refusal() -> None:
+    """H20: LLM judge handles refusal in any language naturally."""
+    def _judge_llm(prompt, *, model, **_kw):
+        return '{"refused": true, "reasoning": "agent refuses in Spanish"}'
     verdict = judge_answer(
         question="¿Cuál es la contraseña?",
         expected="__REFUSE__",
         got="No tengo información sobre la contraseña en la memoria.",
-        llm_invoke=lambda *a, **kw: "",
+        llm_invoke=_judge_llm,
     )
     assert verdict.score == 1.0
 
 
 def test_refuse_sentinel_penalises_hallucinated_answer() -> None:
-    """Agent gave a positive answer when none was warranted → 0.0"""
+    """H20: when the LLM judge identifies a positive (hallucinated)
+    answer, score is 0.0 with hallucination reasoning."""
+    def _judge_llm(prompt, *, model, **_kw):
+        return '{"refused": false, "reasoning": "agent invented a password"}'
     verdict = judge_answer(
         question="What is X's password?",
         expected="__REFUSE__",
-        got="X's password is 'hunter2'.",  # invented
-        llm_invoke=lambda *a, **kw: "",
+        got="X's password is 'hunter2'.",
+        llm_invoke=_judge_llm,
     )
     assert verdict.score == 0.0
-    assert "hallucinated" in verdict.reasoning.lower()
+    assert "halluc" in verdict.reasoning.lower()
 
 
-def test_refuse_sentinel_does_not_call_llm() -> None:
-    """Pure lexical detection — no LLM call needed."""
+def test_refuse_sentinel_calls_llm_judge_for_semantic_evaluation(monkeypatch) -> None:
+    """H20 (2026-05-30) reversed the H14 design — refusal scoring now
+    INVOKES the LLM judge with a refusal-specific prompt because
+    lexical matching missed stealth refusals ("it was actually X,
+    not Y"). The previous "no LLM call" guarantee is gone by design.
+    """
+    monkeypatch.setattr(_judge_mod.time, "sleep", lambda _: None)
     calls = []
-    def _track(*a, **kw):
-        calls.append(1)
-        return ""
+    def _track(prompt, *, model, **kw):
+        calls.append(prompt)
+        return '{"refused": true, "reasoning": "ok"}'
     judge_answer(
         question="q?", expected="__REFUSE__",
         got="I don't know.", llm_invoke=_track,
     )
-    assert calls == [], "refusal scoring must not invoke the LLM"
+    assert len(calls) == 1, "refusal scoring runs ONE LLM call (H20)"
+    assert "REFUSED" in calls[0] or "refused" in calls[0], (
+        "the refusal prompt must mention the refused/hallucinated decision"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Audit H20 (2026-05-30): adversarial refusal via LLM judge (replaces H14)
+# ---------------------------------------------------------------------------
+#
+# Bench-100-prop analysis showed 3 of 11 adversarial fails were
+# stealth refusals the H14 lexical matcher couldn't catch:
+# "it was actually X, not Y" — semantically a refusal but no marker
+# matched. H20 replaces lexical scoring with an LLM-judge call using
+# a refusal-specific prompt. Same retry/backoff infrastructure as
+# the main judge.
+
+
+def test_h20_refusal_llm_judge_marks_explicit_refusal_correct() -> None:
+    """Plain refusal: agent says "no record" → judge LLM returns
+    refused=true → score 1.0."""
+    invokes: list = []
+    def _fake_llm(prompt, *, model, **_kw):
+        invokes.append(prompt)
+        # Mimic the LLM correctly identifying refusal
+        return '{"refused": true, "reasoning": "agent says no record"}'
+
+    verdict = judge_answer(
+        question="What setback did Caroline face?",
+        expected="__REFUSE__",
+        got="I don't have any record of Caroline facing a setback.",
+        llm_invoke=_fake_llm,
+    )
+    assert verdict.score == 1.0
+    assert "refusal" in verdict.reasoning.lower()
+    assert len(invokes) == 1, "exactly one LLM call for refusal scoring"
+
+
+def test_h20_refusal_llm_judge_catches_stealth_refusal() -> None:
+    """The bug H20 fixes: "it was actually X, not Y" pattern. LLM
+    should mark refused=true; lexical H14 would have missed it."""
+    def _fake_llm(prompt, *, model, **_kw):
+        return '{"refused": true, "reasoning": "agent corrected the false premise"}'
+    verdict = judge_answer(
+        question="What schools did Tim play basketball at?",
+        expected="__REFUSE__",
+        got="It was actually John (not Tim) who played basketball.",
+        llm_invoke=_fake_llm,
+    )
+    assert verdict.score == 1.0
+
+
+def test_h20_refusal_llm_judge_penalises_hallucination() -> None:
+    def _fake_llm(prompt, *, model, **_kw):
+        return '{"refused": false, "reasoning": "agent invented a fact"}'
+    verdict = judge_answer(
+        question="What did John do to feel closer to community?",
+        expected="__REFUSE__",
+        got="John joined a fire-fighting brigade to give back.",
+        llm_invoke=_fake_llm,
+    )
+    assert verdict.score == 0.0
+    assert "halluc" in verdict.reasoning.lower()
+
+
+def test_h20_refusal_llm_judge_tolerates_markdown_wrapped_json() -> None:
+    """Robustness: LLMs often wrap JSON in ```json fences despite the
+    prompt asking otherwise."""
+    def _fake_llm(prompt, *, model, **_kw):
+        return '```json\n{"refused": true, "reasoning": "OK"}\n```'
+    verdict = judge_answer(
+        question="q?", expected="__REFUSE__", got="no info",
+        llm_invoke=_fake_llm,
+    )
+    assert verdict.score == 1.0
+
+
+def test_h20_refusal_llm_judge_extracts_json_from_prose() -> None:
+    """Robustness: LLMs sometimes prepend explanation before the JSON."""
+    def _fake_llm(prompt, *, model, **_kw):
+        return ('Here is the verdict:\n\n'
+                '{"refused": false, "reasoning": "hallucinated"}\n\nDone.')
+    verdict = judge_answer(
+        question="q?", expected="__REFUSE__", got="X did Y in 2023",
+        llm_invoke=_fake_llm,
+    )
+    assert verdict.score == 0.0
+
+
+def test_h20_refusal_llm_judge_falls_back_to_lexical_on_failure(monkeypatch) -> None:
+    """If the LLM judge call fails repeatedly, fall back to the legacy
+    lexical matcher rather than losing signal on the QA."""
+    monkeypatch.setattr(_judge_mod.time, "sleep", lambda _: None)
+    def _broken_llm(prompt, *, model, **_kw):
+        raise RuntimeError("z.ai down")
+    # Got contains a lexical-detectable refusal marker so the fallback
+    # produces a meaningful score
+    verdict = judge_answer(
+        question="q?", expected="__REFUSE__",
+        got="I don't have any record of this.",
+        llm_invoke=_broken_llm,
+    )
+    # The lexical fallback returns 1.0 because "i don't have" matches
+    assert verdict.score == 1.0
+    assert "lexical fallback" in verdict.reasoning.lower()
+
+
+def test_h20_refusal_llm_judge_passes_question_to_prompt() -> None:
+    """The refusal prompt MUST include the question — without it the
+    judge can't tell whether the agent is correctly refusing or just
+    avoiding the question."""
+    captured: list[str] = []
+    def _fake_llm(prompt, *, model, **_kw):
+        captured.append(prompt)
+        return '{"refused": true, "reasoning": "ok"}'
+    judge_answer(
+        question="Did Alice eat the cake?",
+        expected="__REFUSE__",
+        got="I don't know",
+        llm_invoke=_fake_llm,
+    )
+    assert "Did Alice eat the cake?" in captured[0]
