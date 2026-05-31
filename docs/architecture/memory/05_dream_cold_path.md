@@ -10,9 +10,29 @@ related: 03_search_pipeline.md, 04_agent_tools.md
 
 # Dream — cold-path consolidation
 
-This document specifies Dream, the cold-path process that consolidates raw observations (`memory/episodic/`, `memory/stable/`) into canonical entity pages (`memory/entities/<type>/<slug>.md`). Dream is the only place in the system where an LLM operates on memory; every step is asynchronous and may take seconds to minutes per pass.
+This document specifies **Dream**, the cold-path process that consolidates raw observations (`memory/episodic/`, `memory/stable/`) into canonical entity pages (`memory/entities/<type>/<slug>.md`). Every step is asynchronous and may take seconds to minutes per pass.
 
 **Invariant:** nothing Dream does blocks the hot path. The agent's search and tool calls run against whatever state Dream has produced so far. Dream improves the state over time.
+
+---
+
+## 0. Two-track consolidation — Dream is one of two
+
+durin runs **two parallel consolidation jobs**. They are conceptually distinct, write to disjoint storage, never race, and both are load-bearing. The architecture decision to keep them separate (and not merge MEMORY.md / SOUL.md / USER.md into the entity model) is recorded in `docs/bitacora.md` under "Architecture decision — MEMORY.md / SOUL.md / USER.md stay outside entity-centric (2026-05-31)".
+
+| | This doc — entity-centric Dream | Working-memory consolidator (legacy `dream` cron) |
+|---|---|---|
+| Cron id | `memory_dream` | `dream` |
+| Default schedule | `0 3 * * *` (daily 3am UTC) | every 2h |
+| Handler | `durin.memory.dream_runner.DreamRunner` + `DreamConsolidator` | `durin.agent.memory.Dream` |
+| Reads | `memory/episodic/*.md` post-cursor per entity | `memory/history.jsonl` post-cursor + `MEMORY.md` + `SOUL.md` + `USER.md` + `skills/` |
+| Writes | `memory/entities/<type>/<slug>.md` (JSON Patch + body delta) | `MEMORY.md` / `SOUL.md` / `USER.md` in-place + creates `skills/<name>/SKILL.md` |
+| Consumer | `memory_search`, Memory Graph view | The system prompt of every turn (`BOOTSTRAP_FILES`) + the SkillsLoader |
+| Cost gate | Empty-pending skip (built-in to discovery) | Token-floor pre-LLM gate (`min_tokens_to_run`, default 2000) |
+
+**Why both exist.** The entity-centric Dream maintains the knowledge graph the agent acquires about its world. The legacy `dream` maintains the agent's *own* working memory and identity — what to remember as facts, what to remember as user model, what soul/principles to apply, and what patterns to escalate as reusable skills. Those are different concerns and the architectural decision is to keep them separate.
+
+The rest of this document describes **only the entity-centric path**. For the working-memory cron, see `agent/memory.py::Dream` and the `agents.defaults.dream.*` config block. The two cronjobs are registered side-by-side in `cli/commands.py:1604` and `cli/commands.py:1617`.
 
 ---
 

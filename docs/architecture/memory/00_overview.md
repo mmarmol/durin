@@ -13,6 +13,8 @@ This document is the **entry point to the specification corpus**. It defines the
 
 **How to read this corpus:** start here. Then go to the doc covering the module you need to understand or modify. Each doc is the source of truth for its scope; no fact should be duplicated across docs (only referenced via `[[link]]`).
 
+> **Heads-up — two consolidation tracks.** This corpus describes the **entity-centric** memory subsystem (the knowledge graph the agent builds about its world). A second, older consolidator — the legacy `dream` cron registered in `cli/commands.py:1604` — runs in parallel to maintain `MEMORY.md` / `SOUL.md` / `USER.md` and create `skills/<name>/SKILL.md`. It's not duplication; it's a separate layer (the agent's *own* working memory and identity, not knowledge about the world). See `05_dream_cold_path.md::§0` for the side-by-side comparison and the rationale for keeping them separate.
+
 ---
 
 ## 1. Goals
