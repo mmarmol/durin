@@ -39,7 +39,7 @@ These were tried (in code or as proposals), evaluated against reality, and remov
 
 ### 2.1 G3.b — LLM query rewriter on hot path
 
-**What we tried:** an LLM call before every `memory_search` that generated 5 paraphrases, extracted entities and predicates, and merged results via RRF (`durin/memory/query_rewriter.py`, preserved as library, not active).
+**What we tried:** an LLM call before every `memory_search` that generated 5 paraphrases, extracted entities and predicates, and merged results via RRF (`durin/memory/query_rewriter.py`).
 
 **Why it failed:**
 - Saturated rate limits. Each agent turn → N searches → N LLM calls just to rewrite.
@@ -48,16 +48,11 @@ These were tried (in code or as proposals), evaluated against reality, and remov
 
 **Lesson:** when considering adding LLM in any frequent path, ask first what upstream weakness the LLM is compensating for. The rewriter compensated for: (a) frontmatter not entering the embedding, (b) 1500-char body truncation, (c) MiniLM-L12 being a small model, (d) no aliases in entries, (e) cross-lingual limits of the embedding model. The right fixes are all upstream (entered MVP via §6.6 doc 02 + alias expansion); the rewriter was a downstream patch.
 
-**Status:** discarded 2026-05-26. Module preserved as library for opt-in cold-path use (e.g., write-time extraction, async curation) if those use cases arise.
+**Status:** discarded 2026-05-26, module deleted 2026-05-31 (commit `482e2eb`). The post-discard "preserve as library" period accumulated zero callers in 5 days and created false signal of "ready to use"; deleted to match real intent.
 
-**Maintenance plan (decided 2026-05-27):** the module as a whole has no active caller and no concrete future plan. Two small pieces inside it ARE reusable for the upcoming Dream JSON Patch apply (H1 / `05_dream_cold_path.md` §6):
+The Dream apply v2 work (`05_dream_cold_path.md` §6 / `durin/memory/dream_patch_parser.py`) was the only concrete future user of the module's `_lenient_json_loads` + code-fence helpers; in practice it went with `json_repair` directly (see `dream_patch_parser.py:34`), so the planned extraction never had a real demand.
 
-- `_lenient_json_loads` — a `json_repair`-tolerant JSON parser (~30 LOC) for LLM outputs with trailing commas / unquoted keys / comments.
-- Code fence stripping regex — handles ``` / ```json / ~~~ wrappers (~10 LOC).
-
-When the Dream apply v2 commit is implemented, these two pieces should be **extracted into a shared utility module** (suggested: `durin/memory/_llm_parsing.py`) and the rest of `query_rewriter.py` deleted in the same commit. Total work ~10 minutes, embedded in the apply implementation task — not a standalone refactor. Other pieces deleted with the module: CJK normalization helpers, `build_memory_llm_invoke`, the `QueryRewrite` dataclass, and the **intent classification** field (`factual_lookup | list | temporal | comparison | open_ended`) — none of these have a planned caller. The intent classification specifically: the intent router in `03_search_pipeline.md` §3 routes by lexical patterns (regex, CJK detection), not LLM classification; if LLM-based intent classification surfaces as a future need, it is ~30 LOC to reimplement freshly rather than carry the dead one forward.
-
-Until that cleanup happens, the module sits unused. Importing from it is discouraged — anyone needing those utilities should trigger the cleanup commit rather than perpetuating the dead module as a dependency.
+The `aux_models.memory` config field — originally added to give the rewriter its own model knob — was repurposed (commit `70912b4`) to select the model for both dreams (`05_dream_cold_path.md`, `durin/memory/model_resolve.py`). That's its only role now.
 
 ### 2.2 Closed predicate catalog for attributes
 

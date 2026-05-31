@@ -124,69 +124,60 @@ state + history + sources).
 **Estado**: pendiente, post-Phase 5 (cuando la pipeline entity-centric
 esté implementada).
 
-### P7 — Threshold trigger para `memory_ingest` (simetría con `memory_store`)
+### ~~P7 — Threshold trigger para `memory_ingest`~~ (DROPPED 2026-05-31)
 
-**Contexto**: `memory_store` (durin/agent/tools/memory_store.py:282-363) ya
-dispara `DreamRunner` en daemon thread cuando una entity acumula
-≥ `threshold_entries` post-cursor entries — patrón shipped 2026-05-24
-(§2.A.1 β.2). `memory_ingest` **no** tiene el equivalente: un usuario que
-sube docs no dispara consolidación intermedia, solo el cron diario o un
-post-compaction/session-close hook eventual.
+**Decisión**: descartado, NO deferred. El material ingestado es
+encontrable vía FTS + vector desde el momento del write; la consolidación
+en página canónica espera al cron diario `memory_dream`. Aceptamos esa
+latencia.
 
-**Lo que cierra**: el "gap del ingest". Si el usuario carga 5 docs sobre
-Caroline y Caroline ya tenía 8 episodic + 4 corpus pendientes, ese es el
-momento natural de consolidar. Hoy se espera al cron diario o a que un
-`memory_store` posterior cruce el threshold por su cuenta.
+**Razón empírica** (bench LoCoMo): cargar 800+ docs en una sola pasada
+hace que un trigger per-write — aunque gateado por threshold por entity —
+explote en LLM calls inviables. Cualquier re-habilitación futura del
+path debe traer un throttle explícito (token-floor estilo
+`dream.min_tokens_to_run`, cron-batch separado, o per-session debounce),
+no "medimos en prod".
 
-**SOTA reference (verificado 2026-05-25)**: ni hermes ni openclaw hacen
-esto — ambos son "dumb pipes" para writes (hermes mirror a SQLite
-fact-store sin merge, openclaw search-then-decide pre-write pero nada
-post-write). Durin ya está por delante en este eje (3 de 4 trigger
-points wireados); esto completa el 4to.
+**Lo que queda en el código**: el wiring sigue en
+[memory_ingest.py:289+](../durin/agent/tools/memory_ingest.py#L289),
+short-circuita porque `memory_ingest` no taggea entities. Está
+documentado en el comment del propio call site para que un futuro
+mantainer no lo "active" sin agregar el throttle. La librería compartida
+`durin/memory/threshold_trigger.py` sigue viva — la usa `memory_store`
+(write desde el agent, donde sí tiene sentido per-write).
 
-**Diseño** (post-crítica glm-5.1 2026-05-25):
+**Cómo cerramos el "qué tan vieja está la consolidación"**: telemetría
+de los dos dreams — legacy `dream` ahora emite
+`memory.dream.legacy.{start,end,skipped}` (commit `f343ba8`); el
+entity-centric `memory_dream` ya emitía `memory.dream.{start,end,skipped}`
+desde `dream_runner`. Cuando esos eventos muestren latencias de consolidación
+inaceptables para entities con corpus pendiente, ese sería el trigger
+concreto para revivir esta idea — con throttle.
 
-- Nuevo módulo `durin/memory/threshold_trigger.py` con helper compartido
-  `maybe_dispatch_threshold_dream(workspace, entities, dream_config,
-  vector_index, source_trigger)`.
-- Refactor de `memory_store::_maybe_dispatch_threshold_dream` para
-  llamar al helper (preserva telemetry `trigger="threshold"` para
-  retrocompat).
-- `memory_ingest` acepta `dream_config` en constructor +
-  `create(ctx)`; llama al helper con `source_trigger="post_ingest_threshold"`
-  después de crear el corpus entry.
-- **El conteo del threshold cuenta episodic + corpus** (no solo
-  episodic). Razón: el ingest crea entries en `memory/corpus/`, y como
-  SEÑAL de "user activo sobre esta entity" el corpus debe contar
-  aunque Dream solo consolide episodic. Helper `_count_pending_for_trigger`
-  walkea ambos directorios.
-- **Sin dedup window global** (era over-engineering con race condition
-  y memory leak detectados por glm). Burst protection 100% delegada a
-  `DreamRunner` (lock + `min_seconds_between_runs=300s` + stale-lock
-  recovery). 20 threads spawnados que ven lock y mueren rápido es
-  cheap.
-- Tests: unitarios del helper + test de contención `test_concurrent_dispatches_serialize_via_lock`
-  (5 threads simultáneos → ≤1 Dream pass ejecutado).
+**No queda nada por hacer aquí**.
 
-**Costo**: ~215 LOC (75 código + 130 tests + 10 docs). ~3-4h dev.
-Riesgo: bajo (patrón ya validado en `memory_store`).
+---
 
-**Beneficio**:
-- Daily-driver: respuestas mejores post-ingest (canonical en vez de
-  fragments raw)
-- Cierra gap arquitectónico real
-- Activar `threshold_entries > 0` en bench LoCoMo podría sumar
-  +3-8pp en single_hop (especulativo, requiere medir)
+### ~~G3.b — LLM query rewriter para `memory_search`~~ (DROPPED 2026-05-31)
 
-**Cuándo elegir**: post-bench v3. Priorizar si v3 no muestra mejora
-grande por otro lado (top_k=20 + rank visible). Si v3 sube >+2pp,
-Step 2 doc 28 (source-priority weighting en vector index) es mejor
-ROI para single_hop.
+**Decisión**: descartado, NO deferred. El módulo
+`durin/memory/query_rewriter.py` existía con tests pero **nunca fue
+invocado** por `memory_search.execute()` — scaffolding muerto desde el
+día 1 del shipping. Removido en commit anterior junto con el field huérfano
+`aux_provider_handle` en `MemorySearchTool` y los comments `G3.b`.
 
-**Plan completo**: ver `/tmp/plan_ingest_threshold.md` (notas de
-sesión 2026-05-25) — debe migrarse a `docs/architecture/` si se aprueba.
+**Razón**: el wiring requerido era invasivo, el lift estimado (4-6pp en
+LoCoMo según el code-level diff vs mem0) no se midió, y mantener un
+módulo dormant con tests pasando creaba falsa señal de "ya casi". El
+multi-query a nivel agent (instrucción en el tool description para
+emitir 2-3 calls con phrasings distintos) cubre parcialmente el caso de
+uso sin acoplar el sistema a un rewriter LLM.
 
-**Estado**: planeado, no priorizado. Esperando resultado bench v3.
+**Lo único que sobrevivió**: el field `aux_models.memory` en
+`AuxModelsConfig`. Repurposed en commit `70912b4` para elegir el modelo
+de los dreams (no del rewriter). Esa es su única función ahora.
+
+**No queda nada por hacer aquí**.
 
 ---
 

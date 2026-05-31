@@ -127,15 +127,7 @@ Audit performed 2026-05-27 against `/Users/marcelo/git_personal/durin/durin/` (c
 
 ### M1. QueryRewriter implementation details under-documented
 
-**Evidence:**
-- `durin/memory/query_rewriter.py` exists (preserved as library, OFF in hot path).
-- Doc 03 mentions it briefly as "preserved utility" but does NOT detail: cache normalization (NFC, whitespace, fullwidth→halfwidth), threading.Lock pattern, intent classification output, retry/timeout semantics, JSON repair tolerance.
-
-**Question:** is QueryRewriter intended only as cold-path future tool, or could it surface again?
-
-**Action proposed:** add a short subsection in doc 08 documenting that the library is preserved + its capabilities (NFC + threading.Lock + intent classification + json_repair) for future use cases. Don't expand doc 03 since rewriter is no longer in hot path.
-
-**Affects:** doc 08 §2.1 (extend the G3.b entry).
+**Closed 2026-05-31:** the module was deleted (commit `482e2eb`) — the audit question "is QueryRewriter intended only as cold-path future tool, or could it surface again?" was answered "discarded, not deferred" after 5 days with zero callers. See doc 08 §2.1 for the closure narrative.
 
 **Status:** resolved
 **Decision:** 2026-05-27 — concluded that the module is mostly dead and the reusable pieces are short (~40 LOC total: json_repair wrapper + code fence stripping). Documenting full API would invite re-activation of a discarded approach. Instead: doc 08 §2.1 gained a "Maintenance plan" subsection stating that when Dream apply v2 (JSON Patch) is implemented, those two pieces should be extracted into a shared `durin/memory/_llm_parsing.py` and the rest of `query_rewriter.py` deleted in the same commit. Other utilities (CJK normalization, etc.) have no planned caller and get deleted along with the module. Importing from `query_rewriter.py` is discouraged in the meantime — trigger the cleanup rather than perpetuating a dead dependency.
