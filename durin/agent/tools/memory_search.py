@@ -134,22 +134,12 @@ class MemorySearchTool(Tool):
         embedding_model: str | None = None,
         *,
         app_config: Any | None = None,
-        aux_provider_handle: Any | None = None,
     ) -> None:
         self._workspace = Path(workspace).expanduser()
         self._embedding_model = embedding_model
         self._vector_index: Optional[VectorIndex] = None
         self._vector_index_attempted = False
-        # G3.b: stash refs needed to resolve the memory LLM model at
-        # rewrite time. ``app_config`` carries the full DurinConfig so
-        # we can pick aux_models.memory or fall back to the agent
-        # preset. ``aux_provider_handle`` is the pre-built handle from
-        # AgentLoop._build_aux_providers (avoids rebuilding the
-        # provider per search call). Both default to None so test
-        # paths that construct the tool directly keep working with
-        # the legacy default_llm_invoke fallback.
         self._app_config = app_config
-        self._aux_provider_handle = aux_provider_handle
         # Per doc 25 §2.C: alias index is shared process-wide via
         # durin.memory.aliases_cache, so DreamConsolidator and
         # EntityAbsorption see updates as soon as we (or they) call
@@ -251,18 +241,10 @@ class MemorySearchTool(Tool):
                 model = app.memory.embedding.model
         except (AttributeError, TypeError):
             model = None
-        # G3.b: forward the memory aux provider (if AgentLoop pre-built
-        # one) so the rewriter can avoid spinning up a fresh provider
-        # per search call.
-        aux_handle = None
-        aux_providers = getattr(ctx, "aux_providers", None)
-        if isinstance(aux_providers, dict):
-            aux_handle = aux_providers.get("memory")
         return cls(
             workspace=ctx.workspace,
             embedding_model=model,
             app_config=app,
-            aux_provider_handle=aux_handle,
         )
 
     def _get_vector_index(self) -> Optional[VectorIndex]:
