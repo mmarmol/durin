@@ -134,7 +134,9 @@
       }
     },
     "models": {
-      "pickProvider": "Elegir proveedor"
+      "pickProvider": "Elegir proveedor",
+      "testRow": "Probar",
+      "testRowHint": "Llamada real al modelo — verifica que la API key y el id del modelo funcionan juntos."
     }
   },
   "chat": {

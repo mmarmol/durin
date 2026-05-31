@@ -214,7 +214,9 @@
       "capsAudio": "audio",
       "capsContext": "{{tokens}} context",
       "capsUnknown": "Pick a model to see what it supports.",
-      "pickProvider": "Pick a provider"
+      "pickProvider": "Pick a provider",
+      "testRow": "Test",
+      "testRowHint": "Real round-trip to the configured model — verifies the API key and model id work together."
     },
     "channels": {
       "description": "Bridge durin to chat platforms. Enable a channel and set its credential — the token goes to the secret store, not config.json.",
