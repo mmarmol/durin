@@ -33,6 +33,10 @@ type BootState =
       client: DurinClient;
       token: string;
       modelName: string | null;
+      // True when this deploy gates bootstrap on a setup secret. The
+      // shell uses this to decide whether to surface the Logout
+      // affordance — see Shell + SettingsView.
+      requiresSecret: boolean;
     };
 
 const SIDEBAR_STORAGE_KEY = "durin-webui.sidebar";
@@ -136,6 +140,7 @@ export default function App() {
             client,
             token: boot.token,
             modelName: boot.model_name ?? null,
+            requiresSecret: Boolean(boot.requires_secret),
           });
         } catch (e) {
           if (cancelled) return;
@@ -232,12 +237,25 @@ export default function App() {
       token={state.token}
       modelName={state.modelName}
     >
-      <Shell onModelNameChange={handleModelNameChange} onLogout={handleLogout} />
+      <Shell
+        onModelNameChange={handleModelNameChange}
+        // Only expose Logout when the deploy actually requires a
+        // secret to bootstrap. In localhost-only mode, signing out
+        // would land the user on an auth form they can't fill (the
+        // gateway auto-mints tokens). Hide the affordance entirely.
+        onLogout={state.requiresSecret ? handleLogout : undefined}
+      />
     </ClientProvider>
   );
 }
 
-function Shell({ onModelNameChange, onLogout }: { onModelNameChange: (modelName: string | null) => void; onLogout: () => void }) {
+function Shell({
+  onModelNameChange,
+  onLogout,
+}: {
+  onModelNameChange: (modelName: string | null) => void;
+  onLogout?: () => void;
+}) {
   const { t, i18n } = useTranslation();
   const { client } = useClient();
   const { theme, toggle, palette, setPalette } = useTheme();

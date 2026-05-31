@@ -131,6 +131,12 @@ export interface BootstrapResponse {
   ws_path: string;
   expires_in: number;
   model_name?: string | null;
+  /** True when this deploy gates bootstrap on a setup secret. When
+   *  false, the gateway auto-mints tokens for localhost — there's
+   *  nothing for the user to "log out from", so the webui hides the
+   *  Logout button entirely (clicking it would otherwise strand the
+   *  user on an auth form they can't fill). */
+  requires_secret?: boolean;
 }
 
 export interface SettingsPayload {

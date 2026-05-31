@@ -48,6 +48,9 @@ vi.mock("@/lib/bootstrap", () => ({
     token: "tok",
     ws_path: "/",
     expires_in: 300,
+    // Simulate a secret-gated deploy so the Logout button is rendered.
+    // The "opens the settings view" test asserts on it.
+    requires_secret: true,
   }),
   deriveWsUrl: vi.fn(() => "ws://test"),
   loadSavedSecret: vi.fn(() => ""),
@@ -270,6 +273,31 @@ describe("App layout", () => {
     fireEvent.click(screen.getByRole("menuitem", { name: "Brave Search" }));
     expect(screen.getByText("BSAo••••ew20")).toBeInTheDocument();
     expect(screen.queryByDisplayValue("unsaved-brave-key")).not.toBeInTheDocument();
+  });
+
+  it("hides the Sign out button when the deploy does not require a secret", async () => {
+    // Override the default mock (which sets requires_secret: true for
+    // the "opens the settings view" test) to simulate localhost-only
+    // mode where the gateway auto-mints tokens. Logout would just
+    // strand the user on an auth form they can't fill, so the
+    // affordance must NOT render.
+    const bootstrap = await import("@/lib/bootstrap");
+    (bootstrap.fetchBootstrap as unknown as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({
+        token: "tok",
+        ws_path: "/",
+        expires_in: 300,
+        requires_secret: false,
+      });
+
+    render(<App />);
+    const newChat = await screen.findByRole("button", { name: "New chat" });
+    fireEvent.click(newChat);
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+
+    expect(
+      screen.queryByRole("button", { name: "Sign out" }),
+    ).not.toBeInTheDocument();
   });
 
   it("returns from settings to the blank start page when no session was active", async () => {

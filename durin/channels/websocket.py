@@ -829,6 +829,15 @@ class WebSocketChannel(BaseChannel):
                 "ws_path": self._expected_path(),
                 "expires_in": self.config.token_ttl_s,
                 "model_name": _resolve_bootstrap_model_name(self._runtime_model_name),
+                # True when this deploy gates bootstrap on a setup
+                # secret (token_issue_secret or static token). The
+                # webui uses this to decide whether to expose a
+                # "Logout" affordance — without a secret in play,
+                # logout would just strand the user on an auth form
+                # they have nothing to type into (the bootstrap
+                # auto-mints tokens for localhost). UX trap removed
+                # by hiding the button when requires_secret=false.
+                "requires_secret": bool(secret),
             }
         )
 
