@@ -18,6 +18,7 @@ from durin.config.paths import get_media_dir
 from durin.config.schema import Base
 from durin.providers.image_generation import (
     AIHubMixImageGenerationClient,
+    IMAGE_GEN_SUPPORTED_PROVIDERS,
     ImageGenerationError,
     OpenRouterImageGenerationClient,
 )
@@ -78,7 +79,19 @@ class ImageGenerationTool(Tool):
 
     @classmethod
     def enabled(cls, ctx: Any) -> bool:
-        return ctx.config.image_generation.enabled
+        cfg = ctx.config.image_generation
+        if not cfg.enabled:
+            return False
+        # Defensive: even if the user persisted enabled=true with a
+        # provider durin can't drive (e.g. stale config from before a
+        # provider was removed, or webui was tricked), don't expose the
+        # tool to the agent. The agent would otherwise call it and get
+        # "unsupported provider" back, which looks like a runtime bug.
+        # The webui's provider dropdown filters by the same whitelist
+        # (durin.providers.image_generation.IMAGE_GEN_SUPPORTED_PROVIDERS).
+        if cfg.provider not in IMAGE_GEN_SUPPORTED_PROVIDERS:
+            return False
+        return True
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:

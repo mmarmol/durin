@@ -48,6 +48,7 @@ import {
 import { Input } from "@/components/ui/input";
 import {
   deleteSecret,
+  fetchImageGenSupportedProviders,
   fetchSettings,
   getConfig,
   getModelCapabilities,
@@ -1353,12 +1354,52 @@ function ImageGenControl({
   const [prov, setProv] = useState<string>(typeof ig.provider === "string" ? ig.provider : "");
   const [model, setModel] = useState<string>(typeof ig.model === "string" ? ig.model : "");
   const [busy, setBusy] = useState<string | null>(null);
+  // Backend-shipped client whitelist. Until it loads we keep the
+  // dropdown empty (safer than briefly offering providers we can't
+  // serve). Fail-closed: any fetch error → empty list + empty-state.
+  const [supportedProviders, setSupportedProviders] = useState<string[] | null>(null);
   useEffect(() => {
     setEnabled(Boolean(ig.enabled));
     setProv(typeof ig.provider === "string" ? ig.provider : "");
     setModel(typeof ig.model === "string" ? ig.model : "");
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config]);
+  useEffect(() => {
+    let cancelled = false;
+    if (!token) return;
+    void (async () => {
+      try {
+        const providers = await fetchImageGenSupportedProviders(token);
+        if (!cancelled) setSupportedProviders(providers);
+      } catch {
+        if (!cancelled) setSupportedProviders([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+  // Intersection: providers the user has API keys for AND that durin
+  // has a concrete image-generation client for. This is what the
+  // dropdown shows — never a provider we can't actually drive.
+  const supportedSet = useMemo(
+    () => new Set(supportedProviders ?? []),
+    [supportedProviders],
+  );
+  const eligibleProviders = useMemo(
+    () => configuredProviders.filter((p) => supportedSet.has(p.name)),
+    [configuredProviders, supportedSet],
+  );
+  // If the persisted config still points at a provider that's no
+  // longer eligible (renamed, client removed, user revoked key), clear
+  // the local picker so we don't show stale state.
+  useEffect(() => {
+    if (supportedProviders === null) return;
+    if (prov && !supportedSet.has(prov)) {
+      setProv("");
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [supportedProviders]);
   const saveField = async (field: "enabled" | "provider" | "model", value: unknown) => {
     setBusy(field);
     try {
@@ -1384,11 +1425,37 @@ function ImageGenControl({
       setBusy(null);
     }
   };
+  // Empty-state: zero eligible providers means we should not let the
+  // user activate the tool at all. Show a friendly hint pointing to
+  // Providers / Secrets setup, and force-disable if the persisted
+  // config still has enabled=true.
+  if (supportedProviders !== null && eligibleProviders.length === 0) {
+    return (
+      <div className="flex flex-col items-end gap-2 text-right">
+        <p className="max-w-xs text-[11px] text-muted-foreground">
+          {t("settings.models.imageNoEligibleProviders", {
+            supported: (supportedProviders ?? []).join(", "),
+          })}
+        </p>
+        {enabled ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={busy === "enabled"}
+            onClick={() => void saveField("enabled", false)}
+            className="rounded-full text-destructive"
+          >
+            {t("settings.models.disableNow")}
+          </Button>
+        ) : null}
+      </div>
+    );
+  }
   return (
     <div className="flex flex-col items-end gap-2">
       <div className="flex flex-wrap items-center justify-end gap-2">
         <ProviderPicker
-          providers={configuredProviders}
+          providers={eligibleProviders}
           value={prov}
           emptyLabel={t("settings.models.pickProvider")}
           onChange={setProv}

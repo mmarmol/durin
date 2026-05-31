@@ -12,6 +12,17 @@ import httpx
 from durin.providers.registry import find_by_name
 from durin.utils.helpers import detect_image_mime
 
+# Providers for which durin ships a concrete image-generation client.
+# Single source of truth — the tool's branching in
+# ``durin.agent.tools.image_generation.ImageGenerationTool._provider_client``
+# MUST match this set, and the webui filters the provider dropdown by
+# the intersection of this set with the user's configured-providers list
+# (so users can never pick a provider that has no client implemented).
+#
+# Add a new entry here ONLY after the corresponding ``*ImageGenerationClient``
+# class lands in this module and the matching branch is added to the tool.
+IMAGE_GEN_SUPPORTED_PROVIDERS: tuple[str, ...] = ("openrouter", "aihubmix")
+
 _OPENROUTER_ATTRIBUTION_HEADERS = {
     "HTTP-Referer": "https://github.com/HKUDS/durin",
     "X-OpenRouter-Title": "durin",

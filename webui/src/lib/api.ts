@@ -392,6 +392,23 @@ export async function listModels(
   );
 }
 
+/** GET /api/image-gen/providers — providers for which durin ships a
+ *  concrete image-generation client. The webui filters the Image Model
+ *  provider dropdown by the intersection of this list with the user's
+ *  configured-providers list, so users can't pick a provider that has
+ *  no backend implementation.
+ */
+export async function fetchImageGenSupportedProviders(
+  token: string,
+  base: string = "",
+): Promise<string[]> {
+  const res = await request<{ providers: string[] }>(
+    `${base}/api/image-gen/providers`,
+    token,
+  );
+  return res.providers ?? [];
+}
+
 export interface ModelCapabilities {
   model: string;
   max_input_tokens: number | null;

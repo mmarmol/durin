@@ -716,6 +716,9 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/memory/cross-encoder/test":
             return await self._handle_cross_encoder_test(request, query)
 
+        if got == "/api/image-gen/providers":
+            return self._handle_image_gen_providers(request)
+
         m = re.match(r"^/api/sessions/([^/]+)/messages$", got)
         if m:
             return self._handle_session_messages(request, m.group(1))
@@ -1657,6 +1660,22 @@ class WebSocketChannel(BaseChannel):
                 ),
             }
         )
+
+    def _handle_image_gen_providers(self, request: WsRequest) -> Response:
+        """`GET /api/image-gen/providers` — providers durin has a client for.
+
+        The provider dropdown in Settings → AI → Image Model needs this so
+        users can never pick a provider that has no concrete client (e.g.
+        a stale config saying ``provider=gemini`` when no
+        ``GeminiImageGenerationClient`` exists). Returns the static
+        whitelist defined in ``durin.providers.image_generation`` — kept
+        in sync with the tool's branching logic by code review.
+        """
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from durin.providers.image_generation import IMAGE_GEN_SUPPORTED_PROVIDERS
+
+        return _http_json_response({"providers": list(IMAGE_GEN_SUPPORTED_PROVIDERS)})
 
     def _handle_channels_list(self, request: WsRequest) -> Response:
         """`GET /api/channels` — discovered channels + enabled state.
