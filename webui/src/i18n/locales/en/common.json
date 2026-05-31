@@ -569,5 +569,19 @@
     "stats": "{{nodes}} nodes · {{edges}} edges",
     "statsPhantom": "{{count}} phantom",
     "statsTruncated": "truncated"
+  },
+  "composer": {
+    "placeholder": "Type your message…",
+    "inputAria": "Message input",
+    "sendAria": "Send message",
+    "hint": "Enter to send · Shift+Enter for newline"
+  },
+  "empty": {
+    "noChatsTitle": "No chats yet",
+    "noChatsBody": "Start a conversation — your sessions are stored locally on the durin workspace and stay available across reloads.",
+    "newChat": "New chat"
+  },
+  "list": {
+    "scrollToBottom": "Scroll to bottom"
   }
 }

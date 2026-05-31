@@ -570,5 +570,19 @@
     "stats": "{{nodes}} nodos · {{edges}} enlaces",
     "statsPhantom": "{{count}} fantasma",
     "statsTruncated": "truncado"
+  },
+  "composer": {
+    "placeholder": "Escribe tu mensaje…",
+    "inputAria": "Entrada de mensaje",
+    "sendAria": "Enviar mensaje",
+    "hint": "Enter para enviar · Shift+Enter para nueva línea"
+  },
+  "empty": {
+    "noChatsTitle": "Aún no hay chats",
+    "noChatsBody": "Inicia una conversación — tus sesiones se almacenan localmente en el workspace de durin y siguen disponibles después de recargar.",
+    "newChat": "Nuevo chat"
+  },
+  "list": {
+    "scrollToBottom": "Bajar al final"
   }
 }

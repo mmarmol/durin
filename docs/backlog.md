@@ -190,27 +190,6 @@ sesión 2026-05-25) — debe migrarse a `docs/architecture/` si se aprueba.
 
 ---
 
-### P10 — Strings hardcoded restantes en componentes core (i18n gap)
-
-**Contexto**: el grueso del webui está internacionalizado (en/es/id al
-100% post-2026-05-31), pero tres componentes core todavía tienen
-strings literales que bypass-ean `t()`:
-
-- `Composer.tsx`: `placeholder="Type your message…"` (L23),
-  `aria-label="Message input"` (L95), `aria-label="Send message"` (L112)
-- `EmptyState.tsx`: `"No chats yet"` (L17), `"New chat"` (L23)
-- `MessageList.tsx`: `aria-label="Scroll to bottom"` (L102)
-
-**Problema**: con locale = es/id, esos labels muestran inglés. Aria
-labels son especialmente importantes para screen readers.
-
-**Costo**: ~30 min — 6 keys nuevas en `chat.*` o `composer.*` namespace,
-6 reemplazos por t().
-
-**Estado**: detectado durante audit 2026-05-31. Bajo, quick win.
-
----
-
 ### P11 — UI/CLI para gestionar cron jobs
 
 **Contexto**: durin tiene cron jobs (heartbeat, dream cada 2h,
