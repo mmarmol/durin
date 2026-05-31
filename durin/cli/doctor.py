@@ -54,6 +54,13 @@ class CheckResult:
     # When this result is a missing optional extra, record which extra it
     # belongs to so `--install-missing` can group + install correctly.
     extra: str | None = None
+    # When ONE check covers MULTIPLE missing extras (e.g. the
+    # "previously installed extras" warn that lists discord, oauth,
+    # slack in a single row), put them here so collect_missing_extras
+    # picks them all up. Bug pre-2026-05-31: this used to put the
+    # extras in the message only, and --install-missing silently
+    # noop'd because `extra` was None.
+    extras_list: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -527,12 +534,14 @@ def check_extras_drift() -> CheckResult:
     current = set(detect_installed_extras())
     missing = tracked - current
     if missing:
-        names = ", ".join(sorted(missing))
+        sorted_missing = tuple(sorted(missing))
+        names = ", ".join(sorted_missing)
         return CheckResult(
             "previously installed extras", "warn",
             f"{names} (you had it before but it's gone now)",
             fix=f"`durin doctor --install-missing -y` to restore {names}.",
             category="extras",
+            extras_list=sorted_missing,
         )
     return CheckResult(
         "previously installed extras", "ok",
@@ -1103,11 +1112,24 @@ def apply_safe_fixes() -> list[str]:
 
 
 def collect_missing_extras(report: DoctorReport) -> list[str]:
-    """Return the unique list of extras whose import failed in this report."""
+    """Return the unique list of extras whose import failed in this report.
+
+    Reads both the per-extra ``extra`` field (one extra per check, e.g.
+    the fastembed/lancedb/mcp probes) and the multi-extra ``extras_list``
+    field (one check covering several missing extras, e.g. the
+    "previously installed extras" warn that lists discord/oauth/slack).
+    """
     seen: list[str] = []
     for r in report.results:
-        if r.category == "extras" and r.status == "warn" and r.extra and r.extra not in seen:
-            seen.append(r.extra)
+        if r.category != "extras" or r.status != "warn":
+            continue
+        candidates: list[str] = []
+        if r.extra:
+            candidates.append(r.extra)
+        candidates.extend(r.extras_list)
+        for extra in candidates:
+            if extra and extra not in seen:
+                seen.append(extra)
     return seen
 
 
