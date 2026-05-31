@@ -183,7 +183,17 @@
       "capsUnknown": "Elige un modelo para ver qué soporta.",
       "pickProvider": "Elegir proveedor",
       "testRow": "Probar",
-      "testRowHint": "Llamada real al modelo configurado — verifica que la API key y el id del modelo funcionan juntos."
+      "testRowHint": "Llamada real al modelo configurado — verifica que la API key y el id del modelo funcionan juntos.",
+      "saving": "Guardando…",
+      "advanced": "Avanzado",
+      "contextWindow": "Ventana de contexto",
+      "contextWindowHint": "Tokens de entrada máximos por turno. Por defecto, el valor del catálogo del modelo.",
+      "temperature": "Temperatura",
+      "temperatureHint": "Temperatura de muestreo en [0, 2]. Menor = más determinístico.",
+      "maxTokens": "Tokens máximos de salida",
+      "maxTokensHint": "Tope por mensaje del asistente. Limitado por el modelo.",
+      "reasoningEffort": "Esfuerzo de razonamiento",
+      "reasoningEffortHint": "Para modelos de razonamiento: low | medium | high. Vacío = por defecto."
     },
     "channels": {
       "credentialPlaceholder": "{{field}}",

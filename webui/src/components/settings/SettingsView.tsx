@@ -659,12 +659,19 @@ function GeneralSettings({
             title={t("settings.rows.model")}
             description={t("settings.help.model")}
           >
-            <ModelPicker
-              token={token}
-              provider={form.provider}
-              value={form.model}
-              onChange={(model) => setForm((prev) => ({ ...prev, model }))}
-            />
+            <div className="flex flex-col items-end gap-2">
+              <ModelPicker
+                token={token}
+                provider={form.provider}
+                value={form.model}
+                onChange={(model) => setForm((prev) => ({ ...prev, model }))}
+              />
+              <ModelTestInline
+                token={token}
+                model={form.model}
+                provider={form.provider}
+              />
+            </div>
           </SettingsRow>
 
           <ModelBlockRows
@@ -801,6 +808,7 @@ function AuxControl({
   const [prov, setProv] = useState(initialProv);
   const [testing, setTesting] = useState(false);
   const [test, setTest] = useState<ModelTestResult | null>(null);
+  const [caps, setCaps] = useState<ModelCapabilities | null>(null);
   useEffect(() => {
     setModel(current?.model ?? "");
     setProv(
@@ -811,6 +819,26 @@ function AuxControl({
     // ✗ badge doesn't claim the new combo was tested.
     setTest(null);
   }, [current]);
+  // Fetch capabilities for the picked combo so the operator sees what
+  // the model supports (vision/audio/context size) without leaving the
+  // row — same info the main model's "Capacidades" row surfaces.
+  useEffect(() => {
+    if (!model.trim() || !prov.trim()) {
+      setCaps(null);
+      return;
+    }
+    let cancelled = false;
+    getModelCapabilities(token, model.trim(), prov.trim())
+      .then((c) => {
+        if (!cancelled) setCaps(c);
+      })
+      .catch(() => {
+        if (!cancelled) setCaps(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token, model, prov]);
   const dirty =
     model.trim() !== (current?.model ?? "") ||
     prov.trim() !== (current?.provider && current.provider !== "auto"
@@ -907,13 +935,265 @@ function AuxControl({
           </Button>
         ) : null}
       </div>
+      {caps && model.trim() && prov.trim() ? (
+        <span className="text-[11px] text-muted-foreground">
+          {modelCapsSummary(caps, t)}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+/** Inline test button + result for the main model — rendered next to
+ *  the ModelPicker in the "Modelo" row so the action sits with what it
+ *  acts on (same shape as each AuxControl row). Replaces the standalone
+ *  "Prueba" SettingsRow that used to live at the end of the AI block.
+ */
+function ModelTestInline({
+  token,
+  model,
+  provider,
+}: {
+  token: string;
+  model: string;
+  provider: string;
+}) {
+  const { t } = useTranslation();
+  const [testing, setTesting] = useState(false);
+  const [test, setTest] = useState<ModelTestResult | null>(null);
+  // Clear any prior result when the user changes the model/provider so
+  // a stale ✓ doesn't claim the new combo was tested.
+  useEffect(() => {
+    setTest(null);
+  }, [model, provider]);
+  const runTest = async () => {
+    if (!model.trim()) return;
+    setTesting(true);
+    setTest(null);
+    try {
+      setTest(await testModel(token, { model: model.trim(), provider: provider.trim() }));
+    } catch {
+      setTest({ status: "fail", message: t("settings.models.testError"), fix: "" });
+    } finally {
+      setTesting(false);
+    }
+  };
+  return (
+    <div className="flex flex-wrap items-center justify-end gap-2">
+      {test ? (
+        <span
+          className={cn(
+            "text-[12px]",
+            test.status === "ok" ? "text-emerald-600" : "text-destructive",
+          )}
+          title={test.message}
+        >
+          {test.status === "ok" ? "✓ " : "✗ "}
+          <span className="truncate max-w-[220px] inline-block align-bottom">
+            {test.message}
+          </span>
+        </span>
+      ) : null}
+      <Button
+        size="sm"
+        variant="ghost"
+        disabled={testing || !model.trim()}
+        onClick={() => void runTest()}
+        className="rounded-full"
+        title={t("settings.models.testRowHint")}
+      >
+        {testing ? t("settings.models.testing") : t("settings.models.testRow")}
+      </Button>
     </div>
   );
 }
 
 /** The model rows of the AI block: capabilities, vision/audio aux
- *  models, and a real round-trip test. Rendered as plain SettingsRows
- *  so it sits inside the AI SettingsGroup with consistent styling. */
+ *  models. The main-model test sits in the parent SettingsRow next to
+ *  the ModelPicker (see ModelTestInline) — keeping it close to what it
+ *  acts on. */
+/** Collapsible "Advanced" row exposing main-model knobs that don't fit
+ *  the primary picker rows: context window cap, temperature, max output
+ *  tokens, reasoning effort. Reads + writes individual paths in
+ *  `agents.defaults.*` via the generic `setConfigValue` API — same
+ *  contract as a `durin config set` invocation.
+ *
+ *  All four are optional / overridable: empty input clears the override
+ *  (config returns to schema default). Numeric inputs bound by the
+ *  schema (ge=, le=) — invalid values surface as a save error inline.
+ */
+function AdvancedModelRow({ token }: { token: string }) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const [values, setValues] = useState<{
+    contextWindowTokens: string;
+    temperature: string;
+    maxTokens: string;
+    reasoningEffort: string;
+  }>({ contextWindowTokens: "", temperature: "", maxTokens: "", reasoningEffort: "" });
+  const [saving, setSaving] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadValues = useCallback(async () => {
+    try {
+      const cfg = (await getConfig(token)).config;
+      const agents = cfg.agents as Record<string, unknown> | undefined;
+      const def = (agents?.defaults ?? {}) as Record<string, unknown>;
+      setValues({
+        contextWindowTokens: def.contextWindowTokens != null ? String(def.contextWindowTokens) : "",
+        temperature: def.temperature != null ? String(def.temperature) : "",
+        maxTokens: def.maxTokens != null ? String(def.maxTokens) : "",
+        reasoningEffort: typeof def.reasoningEffort === "string" ? def.reasoningEffort : "",
+      });
+    } catch {
+      // leave inputs blank on failure
+    }
+  }, [token]);
+  useEffect(() => {
+    if (open) void loadValues();
+  }, [open, loadValues]);
+
+  const saveOne = async (path: string, raw: string, parse: (s: string) => unknown) => {
+    setSaving(path);
+    setError(null);
+    try {
+      const trimmed = raw.trim();
+      const value = trimmed === "" ? null : parse(trimmed);
+      await setConfigValue(token, `agents.defaults.${path}`, value);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  return (
+    <div className="border-t border-border/30 px-4 py-3.5 sm:px-5">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center justify-between text-[13px] font-medium text-muted-foreground hover:text-foreground"
+      >
+        <span>{t("settings.models.advanced")}</span>
+        <span className="text-[11px]">{open ? "▾" : "▸"}</span>
+      </button>
+      {open ? (
+        <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <AdvancedField
+            label={t("settings.models.contextWindow")}
+            description={t("settings.models.contextWindowHint")}
+            value={values.contextWindowTokens}
+            onChange={(v) => setValues((s) => ({ ...s, contextWindowTokens: v }))}
+            onSave={() =>
+              void saveOne("contextWindowTokens", values.contextWindowTokens, (s) => {
+                const n = Number(s);
+                if (!Number.isFinite(n) || n <= 0) throw new Error("must be a positive integer");
+                return Math.floor(n);
+              })
+            }
+            saving={saving === "contextWindowTokens"}
+            placeholder="202800"
+            inputMode="numeric"
+          />
+          <AdvancedField
+            label={t("settings.models.temperature")}
+            description={t("settings.models.temperatureHint")}
+            value={values.temperature}
+            onChange={(v) => setValues((s) => ({ ...s, temperature: v }))}
+            onSave={() =>
+              void saveOne("temperature", values.temperature, (s) => {
+                const n = Number(s);
+                if (!Number.isFinite(n) || n < 0 || n > 2)
+                  throw new Error("must be in [0, 2]");
+                return n;
+              })
+            }
+            saving={saving === "temperature"}
+            placeholder="0.4"
+            inputMode="decimal"
+          />
+          <AdvancedField
+            label={t("settings.models.maxTokens")}
+            description={t("settings.models.maxTokensHint")}
+            value={values.maxTokens}
+            onChange={(v) => setValues((s) => ({ ...s, maxTokens: v }))}
+            onSave={() =>
+              void saveOne("maxTokens", values.maxTokens, (s) => {
+                const n = Number(s);
+                if (!Number.isFinite(n) || n <= 0) throw new Error("must be a positive integer");
+                return Math.floor(n);
+              })
+            }
+            saving={saving === "maxTokens"}
+            placeholder="8192"
+            inputMode="numeric"
+          />
+          <AdvancedField
+            label={t("settings.models.reasoningEffort")}
+            description={t("settings.models.reasoningEffortHint")}
+            value={values.reasoningEffort}
+            onChange={(v) => setValues((s) => ({ ...s, reasoningEffort: v }))}
+            onSave={() =>
+              void saveOne("reasoningEffort", values.reasoningEffort, (s) => s)
+            }
+            saving={saving === "reasoningEffort"}
+            placeholder="low | medium | high"
+          />
+          {error ? (
+            <div className="col-span-full text-[12px] text-destructive">{error}</div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function AdvancedField({
+  label,
+  description,
+  value,
+  onChange,
+  onSave,
+  saving,
+  placeholder,
+  inputMode,
+}: {
+  label: string;
+  description: string;
+  value: string;
+  onChange: (v: string) => void;
+  onSave: () => void;
+  saving: boolean;
+  placeholder?: string;
+  inputMode?: "numeric" | "decimal" | "text";
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="text-[12px] font-medium">{label}</div>
+      <div className="text-[11px] text-muted-foreground">{description}</div>
+      <div className="flex items-center gap-2">
+        <Input
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          inputMode={inputMode}
+          className="h-8 rounded-full text-[13px]"
+        />
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={saving}
+          onClick={onSave}
+          className="rounded-full"
+        >
+          {saving ? t("settings.models.saving") : t("settings.models.save")}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function ModelBlockRows({
   token,
   model,
@@ -929,8 +1209,6 @@ function ModelBlockRows({
   const [caps, setCaps] = useState<ModelCapabilities | null>(null);
   const [config, setConfig] = useState<Record<string, unknown> | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [test, setTest] = useState<ModelTestResult | null>(null);
-  const [testing, setTesting] = useState(false);
 
   useEffect(() => {
     if (!model) {
@@ -975,18 +1253,6 @@ function ModelBlockRows({
     [token],
   );
 
-  const runTest = useCallback(async () => {
-    setTesting(true);
-    setTest(null);
-    try {
-      setTest(await testModel(token));
-    } catch {
-      setTest({ status: "fail", message: t("settings.models.testError"), fix: "" });
-    } finally {
-      setTesting(false);
-    }
-  }, [token, t]);
-
   return (
     <>
       <SettingsRow title={t("settings.models.capabilities")}>
@@ -994,28 +1260,7 @@ function ModelBlockRows({
           {modelCapsSummary(caps, t)}
         </span>
       </SettingsRow>
-      {/* Main-model test sits next to Capabilities — both describe the
-        * primary model. Aux rows below have their own per-row Probar
-        * buttons; surfacing the main test at the end would suggest it
-        * tests everything, which is misleading. */}
-      <SettingsRow
-        title={t("settings.models.testTitle")}
-        description={
-          test
-            ? `${test.status === "ok" ? "✓" : "✗"} ${test.message}`
-            : t("settings.models.testHint")
-        }
-      >
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={testing}
-          onClick={() => void runTest()}
-          className="rounded-full"
-        >
-          {testing ? t("settings.models.testing") : t("settings.models.testButton")}
-        </Button>
-      </SettingsRow>
+      <AdvancedModelRow token={token} />
       <SettingsRow
         title={t("settings.models.vision")}
         description={t("settings.models.visionHint")}

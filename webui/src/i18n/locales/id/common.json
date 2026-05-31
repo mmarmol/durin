@@ -183,7 +183,17 @@
       "capsUnknown": "Pilih model untuk melihat dukungannya.",
       "pickProvider": "Pilih penyedia",
       "testRow": "Tes",
-      "testRowHint": "Round-trip nyata ke model — memverifikasi API key dan id model bekerja bersama."
+      "testRowHint": "Round-trip nyata ke model — memverifikasi API key dan id model bekerja bersama.",
+      "saving": "Menyimpan…",
+      "advanced": "Lanjutan",
+      "contextWindow": "Jendela konteks",
+      "contextWindowHint": "Token input maksimum per giliran. Default ke nilai katalog model.",
+      "temperature": "Suhu",
+      "temperatureHint": "Suhu sampling di [0, 2]. Lebih rendah = lebih deterministik.",
+      "maxTokens": "Token output maksimum",
+      "maxTokensHint": "Batas per pesan asisten. Dibatasi oleh model.",
+      "reasoningEffort": "Tingkat penalaran",
+      "reasoningEffortHint": "Untuk model penalaran: low | medium | high. Kosong = default."
     },
     "channels": {
       "credentialPlaceholder": "{{field}}",
