@@ -66,7 +66,7 @@ Dream runs in response to one of six trigger labels. Each is recorded in telemet
 | Trigger label | When | Source | Frequency (typical) |
 |---|---|---|---|
 | `threshold` | Per-entity pending count crossed `threshold_entries` after a `memory_store` write | `memory_store` tool | A few per day during active use |
-| `post_ingest_threshold` | Per-entity pending count crossed `threshold_entries` after a `memory_ingest` write | `memory_ingest` tool | A few per ingest burst |
+| `post_ingest_threshold` | Per-entity pending count crossed `threshold_entries` after a `memory_ingest` write. **Dormant by design** as of 2026-05-31 — `memory_ingest` doesn't tag entities, so the helper short-circuits. See §2.1.1. | `memory_ingest` tool | 0 today |
 | `cron_daily` | Daily scheduled run (default: 03:00 local). Picks up entities whose pending count is below threshold but non-zero, or which have been quiet for > X days. | Cron scheduler | Once per day |
 | `session_close` | At the end of a long session (> 50 turns), trigger a pass on all entities mentioned in the session. | AgentLoop teardown | Once per session close |
 | `post_compaction` | After conversation compaction emits a `_last_summary`, trigger a pass on entities mentioned in the new summary. | Compaction handler | A few per long session |
@@ -99,6 +99,14 @@ Implication: when `memory_store` returns to the agent, the threshold-triggered D
 If the process exits before the daemon thread completes, the partial pass is abandoned — but no data is lost because the cursor is only advanced after a full successful apply (§4.3). The next trigger picks up the same pending entries.
 
 The `cron_daily`, `session_close`, `post_compaction`, and `manual` triggers do NOT use daemon threading — they run in the foreground of whatever process invoked them (the cron scheduler, the agent loop teardown, etc.).
+
+### 2.1.1 Why `post_ingest_threshold` is dormant
+
+The wiring exists in `memory_ingest` (calls `maybe_dispatch_threshold_dream` after each successful corpus write) but the helper short-circuits because `memory_ingest` does NOT extract or tag entities on the corpus entry — entities is always `[]` and the dispatch never fires.
+
+This is deliberate. A single `memory_ingest` invocation during a bench-style ingest can produce 800+ corpus entries; per-write LLM dispatch, even gated by per-entity threshold, exploded the LLM budget in early experiments. Until a write-time entity tagger ships AND an explicit throttle is added (token-floor analogous to `dream.min_tokens_to_run`, cron-batched, or per-session debounce), this trigger stays at 0 frequency. Ingested material remains fully searchable via FTS + vector from write-time; the canonical entity page just waits for the daily `memory_dream` cron.
+
+The wiring is kept in place so the day a throttle exists, only one knob needs to change. See `memory_ingest.py:289+` for the in-code rationale and `project_ingest_dormant_rationale.md` (assistant memory) for the bench-derived constraint.
 
 ### 2.2 Threshold counting logic
 
@@ -135,7 +143,7 @@ Dream is organized in two layers, separated by concern:
 
 **In production, only `DreamRunner` is invoked.** Triggers from §2 dispatch to it; `memory_store` / `memory_ingest` call it via `threshold_trigger.py`; the CLI command `durin dream run` calls it. Nothing else in production talks to `DreamConsolidator` directly.
 
-**`dream.py` also exports** helper types used elsewhere (without going through Runner): `EntryRef` (referenced by CLI display code), `default_llm_invoke` (the LLM helper, also used by `query_rewriter.py`), `DreamError`.
+**`dream.py` also exports** helper types used elsewhere (without going through Runner): `EntryRef` (referenced by CLI display code), `default_llm_invoke` (the LLM helper used by both Dream paths), `DreamError`.
 
 The rest of §3-§6 describes what happens during a Runner pass; the LLM call, response parsing, and apply pipeline are implementation details delegated to `DreamConsolidator`.
 

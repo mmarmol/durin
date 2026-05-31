@@ -291,13 +291,21 @@ class MemoryIngestTool(Tool):
             },
         )
 
-        # P7 (doc 20): post-ingest threshold trigger. Reuses the same
-        # shared helper as memory_store. The corpus entry itself has
-        # no entity tags today (memory_ingest doesn't extract entities
-        # — that's G1 territory). The trigger only fires if a future
-        # change tags the corpus entry; in the meantime this is a
-        # no-op call that keeps the wiring in place and symmetrical
-        # with memory_store.
+        # Post-ingest threshold trigger — reuses the same shared helper
+        # as ``memory_store``. Dormant by design: ingest can produce 800+
+        # corpus entries in a single bench burst, and per-write LLM
+        # dispatch (even gated by per-entity threshold) is unacceptable
+        # at that scale. Ingested material stays fully searchable via
+        # FTS + vector and gets consolidated by the daily ``memory_dream``
+        # cron. Re-enabling this path (e.g. by extracting entities at
+        # ingest time) MUST introduce an explicit throttle (token-floor,
+        # cron-batched, or per-session debounce) before the dispatch can
+        # actually fire. See ``project_ingest_dormant_rationale.md`` for
+        # the bench-derived rationale.
+        #
+        # The call below is left wired so the day a throttle exists, only
+        # one knob has to change. Today entities is always [] so the
+        # helper short-circuits.
         try:
             from durin.memory.storage import load_entry as _load_entry
             from durin.memory.threshold_trigger import (
