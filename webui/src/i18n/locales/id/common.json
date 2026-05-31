@@ -133,7 +133,7 @@
       }
     },
     "models": {
-      "provAuto": "Auto"
+      "pickProvider": "Pilih penyedia"
     }
   },
   "chat": {

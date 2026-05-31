@@ -198,7 +198,6 @@
       "memoryHint": "Used by memory_search query rewriting. Falls back to the main model when unset.",
       "modelPlaceholder": "model id",
       "providerPlaceholder": "provider",
-      "provAuto": "Auto",
       "save": "Save",
       "clear": "Clear",
       "testTitle": "Test",
@@ -214,7 +213,8 @@
       "capsVision": "vision",
       "capsAudio": "audio",
       "capsContext": "{{tokens}} context",
-      "capsUnknown": "Pick a model to see what it supports."
+      "capsUnknown": "Pick a model to see what it supports.",
+      "pickProvider": "Pick a provider"
     },
     "channels": {
       "description": "Bridge durin to chat platforms. Enable a channel and set its credential — the token goes to the secret store, not config.json.",

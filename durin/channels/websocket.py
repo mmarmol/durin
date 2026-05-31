@@ -1294,31 +1294,100 @@ class WebSocketChannel(BaseChannel):
         )
 
     def _handle_models_list(self, request: WsRequest) -> Response:
-        """`GET /api/models?provider=X` — model catalog for the picker.
+        """`GET /api/models?provider=X&capability=Y` — model catalog for the picker.
 
-        ``suggested`` is the curated per-provider shortlist; ``models``
-        is the full known-model set for free search.
+        ``suggested`` is the curated per-provider shortlist
+        (``DEFAULT_MODELS[provider]``); ``models`` is the catalog filtered
+        by:
+
+        - ``capability``: ``vision`` keeps only models with
+          ``supports_vision`` truthy; ``audio`` keeps
+          ``supports_audio_input``; omit or ``text`` for no filter.
+        - ``provider``: keeps only models whose id matches a keyword of
+          the provider's ``ProviderSpec`` (the same heuristic
+          ``_match_provider`` uses to auto-route by model name). Empty
+          provider keeps the full catalog (filtered only by capability).
+          For providers with no keywords (e.g. ``custom``, gateways like
+          OpenRouter) we keep the full catalog too — they can route
+          anything, so there's nothing to filter against.
+
+        Image-generation models are always excluded — the picker is for
+        chat/completion bridges only.
         """
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         from durin.cli.onboard_wizard import DEFAULT_MODELS
+        from durin.providers.registry import find_by_name
 
-        provider = (_query_first(_parse_query(request.path), "provider") or "").strip()
+        query = _parse_query(request.path)
+        provider = (_query_first(query, "provider") or "").strip()
+        capability = (_query_first(query, "capability") or "").strip().lower()
         suggested = list(DEFAULT_MODELS.get(provider, ()))
+
+        # Resolve provider keywords once. Empty tuple means "don't filter"
+        # (gateway / custom / unknown provider).
+        provider_keywords: tuple[str, ...] = ()
+        if provider:
+            spec = find_by_name(provider)
+            if spec is not None:
+                provider_keywords = spec.keywords
+
+        def _capability_ok(info: object) -> bool:
+            if capability in ("", "text"):
+                return True
+            if not isinstance(info, dict):
+                # Without capability metadata we can't prove the model
+                # supports the modality — drop conservatively.
+                return False
+            if capability == "vision":
+                return bool(info.get("supports_vision"))
+            if capability == "audio":
+                return bool(info.get("supports_audio_input"))
+            return True
+
+        def _provider_ok(mid: str) -> bool:
+            if not provider_keywords:
+                return True
+            mid_lower = mid.lower()
+            mid_normalized = mid_lower.replace("-", "_")
+            for kw in provider_keywords:
+                kw_lower = kw.lower()
+                if kw_lower in mid_lower or kw_lower.replace("-", "_") in mid_normalized:
+                    return True
+            return False
+
         catalog: list[str] = []
         try:
             from durin.providers.capabilities import _load_capabilities_snapshot
 
-            # _load_capabilities_snapshot returns the models dict directly.
             models = _load_capabilities_snapshot() or {}
             catalog = sorted(
                 mid
                 for mid, info in models.items()
                 if isinstance(mid, str)
                 and (not isinstance(info, dict) or info.get("mode") != "image_generation")
+                and _capability_ok(info)
+                and _provider_ok(mid)
             )
         except Exception:  # noqa: BLE001
             catalog = []
+
+        # Trim suggested by the same capability filter so the curated
+        # shortlist doesn't surface (e.g.) a text-only model in the vision
+        # picker. Unknown ids in the snapshot stay (charity for fresh
+        # picks the catalog doesn't have yet).
+        if capability in ("vision", "audio"):
+            try:
+                from durin.providers.capabilities import _load_capabilities_snapshot
+
+                snapshot = _load_capabilities_snapshot() or {}
+            except Exception:  # noqa: BLE001
+                snapshot = {}
+            suggested = [
+                m for m in suggested
+                if m not in snapshot or _capability_ok(snapshot.get(m))
+            ]
+
         return _http_json_response({"suggested": suggested, "models": catalog})
 
     def _handle_model_capabilities(self, request: WsRequest) -> Response:

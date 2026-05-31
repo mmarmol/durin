@@ -134,7 +134,7 @@
       }
     },
     "models": {
-      "provAuto": "Auto"
+      "pickProvider": "Elegir proveedor"
     }
   },
   "chat": {
