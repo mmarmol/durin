@@ -293,7 +293,9 @@
       "earlier": "Anterior",
       "today": "Hoy",
       "yesterday": "Ayer"
-    }
+    },
+    "rename": "Cambiar nombre",
+    "renameAria": "Cambiar nombre del chat"
   },
   "deleteConfirm": {
     "title": "¿Eliminar este chat?",

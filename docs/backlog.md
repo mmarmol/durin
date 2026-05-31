@@ -48,32 +48,6 @@ no comunica intención.
 
 ---
 
-### P2 — Edición de nombres de sesiones
-
-**Contexto**: web (y posiblemente TUI). Cada sesión tiene un nombre
-auto-generado (timestamp o title-inferred del primer mensaje).
-
-**Problema**: no se puede renombrar la sesión. Al acumular muchas, se
-vuelve difícil distinguir cuál era cuál.
-
-**Propuesta tentativa**:
-
-- Web: click en el nombre de la sesión en el sidebar → inline edit (similar
-  a renombrar archivos en file explorer).
-- Endpoint: `PATCH /api/sessions/<key>` con `{title: "new name"}`.
-- Persistir el override en `<key>.meta.json` (campo `display_title`); si
-  no existe, fallback al auto-generated.
-- TUI: comando `/rename <new name>` para la sesión actual, o `/sessions
-  rename <key> <new name>`.
-
-**Estado**: **parcial** (2026-05-30) — backend shipped en
-`durin/channels/websocket.py::_handle_session_rename` (endpoint
-`POST /api/sessions/<key>/rename?title=...`). **UI pendiente** —
-ningún componente webui invoca el endpoint todavía. TUI tampoco
-expone un comando `/rename`.
-
----
-
 ### P3 — Comando para cambiar modelo es precario — autocompletion progresivo
 
 **Contexto**: TUI/web, comando `/model` (o equivalente) para cambiar el

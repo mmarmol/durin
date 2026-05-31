@@ -293,7 +293,9 @@
       "earlier": "Sebelumnya",
       "today": "Hari ini",
       "yesterday": "Kemarin"
-    }
+    },
+    "rename": "Ganti nama",
+    "renameAria": "Ganti nama chat"
   },
   "deleteConfirm": {
     "title": "Hapus obrolan ini?",
