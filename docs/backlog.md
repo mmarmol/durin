@@ -124,63 +124,6 @@ state + history + sources).
 **Estado**: pendiente, post-Phase 5 (cuando la pipeline entity-centric
 esté implementada).
 
-### ~~P7 — Threshold trigger para `memory_ingest`~~ (DROPPED 2026-05-31)
-
-**Decisión**: descartado, NO deferred. El material ingestado es
-encontrable vía FTS + vector desde el momento del write; la consolidación
-en página canónica espera al cron diario `memory_dream`. Aceptamos esa
-latencia.
-
-**Razón empírica** (bench LoCoMo): cargar 800+ docs en una sola pasada
-hace que un trigger per-write — aunque gateado por threshold por entity —
-explote en LLM calls inviables. Cualquier re-habilitación futura del
-path debe traer un throttle explícito (token-floor estilo
-`dream.min_tokens_to_run`, cron-batch separado, o per-session debounce),
-no "medimos en prod".
-
-**Lo que queda en el código**: el wiring sigue en
-[memory_ingest.py:289+](../durin/agent/tools/memory_ingest.py#L289),
-short-circuita porque `memory_ingest` no taggea entities. Está
-documentado en el comment del propio call site para que un futuro
-mantainer no lo "active" sin agregar el throttle. La librería compartida
-`durin/memory/threshold_trigger.py` sigue viva — la usa `memory_store`
-(write desde el agent, donde sí tiene sentido per-write).
-
-**Cómo cerramos el "qué tan vieja está la consolidación"**: telemetría
-de los dos dreams — legacy `dream` ahora emite
-`memory.dream.legacy.{start,end,skipped}` (commit `f343ba8`); el
-entity-centric `memory_dream` ya emitía `memory.dream.{start,end,skipped}`
-desde `dream_runner`. Cuando esos eventos muestren latencias de consolidación
-inaceptables para entities con corpus pendiente, ese sería el trigger
-concreto para revivir esta idea — con throttle.
-
-**No queda nada por hacer aquí**.
-
----
-
-### ~~G3.b — LLM query rewriter para `memory_search`~~ (DROPPED 2026-05-31)
-
-**Decisión**: descartado, NO deferred. El módulo
-`durin/memory/query_rewriter.py` existía con tests pero **nunca fue
-invocado** por `memory_search.execute()` — scaffolding muerto desde el
-día 1 del shipping. Removido en commit anterior junto con el field huérfano
-`aux_provider_handle` en `MemorySearchTool` y los comments `G3.b`.
-
-**Razón**: el wiring requerido era invasivo, el lift estimado (4-6pp en
-LoCoMo según el code-level diff vs mem0) no se midió, y mantener un
-módulo dormant con tests pasando creaba falsa señal de "ya casi". El
-multi-query a nivel agent (instrucción en el tool description para
-emitir 2-3 calls con phrasings distintos) cubre parcialmente el caso de
-uso sin acoplar el sistema a un rewriter LLM.
-
-**Lo único que sobrevivió**: el field `aux_models.memory` en
-`AuxModelsConfig`. Repurposed en commit `70912b4` para elegir el modelo
-de los dreams (no del rewriter). Esa es su única función ahora.
-
-**No queda nada por hacer aquí**.
-
----
-
 ### P12 — UI para gestionar entries de memoria individuales
 
 **Contexto**: el Memory Graph view muestra entity_pages como nodos +
