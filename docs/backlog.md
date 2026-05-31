@@ -17,37 +17,6 @@
 
 ## §1 — Pendientes activos
 
-### P1 — Edición de campos password/key en la web (secrets system)
-
-**Contexto**: web settings, sección de providers o channels que usan el
-sistema KEY/PASSWORD privado (`${secret:...}` refs).
-
-**Problema**: cuando se edita un campo password que tiene un secret ref
-(`${secret:openai_api_key}` o similar), el editor muestra **la variable
-literal** al editar. No queda claro qué hace si el user:
-- Escribe encima → ¿reemplaza el valor del secret o crea un nuevo secret?
-- Borra el contenido → ¿deja vacío o desconecta el ref?
-- Confirma sin cambios → ¿re-escribe lo mismo o no-op?
-
-El comportamiento actual probablemente es correcto en código pero la UI
-no comunica intención.
-
-**Propuesta tentativa**:
-
-- Mostrar dos representaciones distintas:
-  - Si el campo es un secret ref: badge tipo `🔒 secret:openai_api_key`
-    (no editable directamente). Click para "rotar" o "desconectar".
-  - Si es plaintext: input normal.
-- Botón "Edit secret value" abre un dialog separado que aclara: "Esto
-  reemplazará el valor almacenado para `openai_api_key`. Todas las refs
-  a `${secret:openai_api_key}` lo usarán."
-- Botón "Disconnect secret" reemplaza el ref por input plaintext.
-- Onboarding wizard ya tiene patrones para esto — alinear con esa UX.
-
-**Estado**: pendiente.
-
----
-
 ### P3 — Comando para cambiar modelo es precario — autocompletion progresivo
 
 **Contexto**: TUI/web, comando `/model` (o equivalente) para cambiar el

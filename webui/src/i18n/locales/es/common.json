@@ -220,7 +220,17 @@
       "off": "Desactivado",
       "on": "Activado",
       "save": "Guardar",
-      "saveError": "No se pudo guardar {{path}}."
+      "saveError": "No se pudo guardar {{path}}.",
+      "secretRotate": "Rotar valor",
+      "secretRotateHint": "Escribe un nuevo valor para el secret. Todas las refs del config a este nombre lo usarán.",
+      "secretDisconnect": "Desconectar",
+      "secretDisconnectHint": "Reemplaza esta ref por un input plano. El secret sigue en el almacén, sólo este campo se separa.",
+      "secretRotateTitle": "Rotar {{name}}",
+      "secretRotateDescription": "Reemplaza el valor guardado para {{name}}. Cada campo del config que referencia ${secret:{{name}}} lo usará inmediatamente. El valor nunca sale del almacén ni llega al chat.",
+      "secretRotatePlaceholder": "Nuevo valor del secret",
+      "secretRotateCancel": "Cancelar",
+      "secretRotateSave": "Guardar",
+      "secretRotateSaving": "Guardando…"
     },
     "memory": {
       "crossEncoderModelPlaceholder": "id del modelo (p. ej. BAAI/bge-reranker-base)",

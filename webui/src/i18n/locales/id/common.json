@@ -220,7 +220,17 @@
       "off": "Off",
       "on": "On",
       "save": "Simpan",
-      "saveError": "Tidak dapat menyimpan {{path}}."
+      "saveError": "Tidak dapat menyimpan {{path}}.",
+      "secretRotate": "Putar nilai",
+      "secretRotateHint": "Tulis nilai baru ke secret. Semua ref config ke nama ini akan menggunakannya.",
+      "secretDisconnect": "Putuskan",
+      "secretDisconnectHint": "Ganti ref dengan input teks polos. Secret tetap di store, hanya field ini yang diputus.",
+      "secretRotateTitle": "Putar {{name}}",
+      "secretRotateDescription": "Ganti nilai tersimpan untuk {{name}}. Setiap field config yang merujuk ${secret:{{name}}} akan langsung menggunakannya. Nilai tidak pernah keluar dari store dan tidak masuk chat.",
+      "secretRotatePlaceholder": "Nilai secret baru",
+      "secretRotateCancel": "Batal",
+      "secretRotateSave": "Simpan",
+      "secretRotateSaving": "Menyimpan…"
     },
     "memory": {
       "crossEncoderModelPlaceholder": "id model (mis. BAAI/bge-reranker-base)",
