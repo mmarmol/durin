@@ -200,7 +200,15 @@
       "enabled": "Activado",
       "disabled": "Desactivado",
       "imageNoEligibleProviders": "Ninguno de los providers que tenés configurados tiene cliente de generación de imágenes en esta build. Soportados: {{supported}}. Configurá una API key de alguno en Proveedores / Secrets para habilitar generación de imágenes.",
-      "disableNow": "Desactivar ahora"
+      "disableNow": "Desactivar ahora",
+      "disable": "Desactivar",
+      "imageProbing": "Probando…",
+      "imageReprobe": "Probar de nuevo",
+      "imageProbeAndActivate": "Probar y activar",
+      "imageProbeAndActivateHint": "Hace una generación real contra el provider configurado. Solo activa si vuelve una imagen de verdad.",
+      "imageSaveBeforeProbe": "Guardá primero provider/modelo, después probás.",
+      "imageProbeOk": "✓ ok · {{ms}}ms · imagen {{kb}}KB",
+      "imageProbeFail": "✗ falló: {{error}}"
     },
     "channels": {
       "credentialPlaceholder": "{{field}}",
