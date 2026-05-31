@@ -321,10 +321,17 @@ export interface ModelCatalog {
 export async function listModels(
   token: string,
   provider: string,
+  capability: string = "",
   base: string = "",
 ): Promise<ModelCatalog> {
-  const qs = provider ? `?provider=${encodeURIComponent(provider)}` : "";
-  return request<ModelCatalog>(`${base}/api/models${qs}`, token);
+  const params = new URLSearchParams();
+  if (provider) params.set("provider", provider);
+  if (capability) params.set("capability", capability);
+  const qs = params.toString();
+  return request<ModelCatalog>(
+    `${base}/api/models${qs ? `?${qs}` : ""}`,
+    token,
+  );
 }
 
 export interface ModelCapabilities {
