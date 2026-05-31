@@ -1930,3 +1930,57 @@ must opt in. Threshold 95 / quarantine 24h / model=dream model.
 - `memory.absorb.skipped`: every non-merge decision with reason.
 - `memory.absorb.reverted`: user undid an auto-merge (regret signal).
 
+## Architecture decision — MEMORY.md / SOUL.md / USER.md stay outside entity-centric (2026-05-31)
+
+**Context**: audit of the two `dream` / `memory_dream` crons (see
+the doc fix in `docs/architecture/memory/` landed the same day)
+surfaced that durin runs two parallel consolidation pipelines. The
+legacy `dream` (every 2h) writes `MEMORY.md` / `SOUL.md` / `USER.md`
+plus creates skills under `skills/`; the entity-centric
+`memory_dream` (daily 3am) writes `memory/entities/<type>/<slug>.md`.
+Both are load-bearing.
+
+**Question raised**: should `MEMORY.md` / `SOUL.md` / `USER.md`
+eventually migrate to the entity-centric model so durin runs a
+single track?
+
+**Decision (Marcelo, 2026-05-31): NO — keep the two tracks
+permanently separate.**
+
+**Reasons**:
+
+1. **These three files are the *core* of the agent's identity and
+   working memory**, not knowledge graph nodes. They sit in a
+   different conceptual layer than the entities the agent acquires
+   about its world.
+2. **No reason to share with the rest of the entity model.** A core
+   like SOUL.md isn't usefully related to `person:marcelo` or any
+   other graph node. Mixing them dilutes both layers.
+3. **They should NOT be findable by `memory_search`.** Search is for
+   facts the agent retrieves contextually; the cores are loaded
+   unconditionally into every system prompt. If a search could turn
+   them up, the agent might surface them as evidence in a reply,
+   confusing identity with knowledge.
+
+**Implication for the two `dream` jobs**: the two-track design is
+not technical debt. The legacy `dream` is the maintainer of the
+core layer (identity, working memory, escalated skills); the
+entity-centric `memory_dream` is the maintainer of the knowledge
+graph. Both stay.
+
+**Implication for naming (deferred)**: the "legacy" label on
+`dream` is misleading — it implies it should be deprecated. Better
+names would be `reflect` (hourly active reflection over current
+sessions) and `dream` (nightly deep consolidation of the knowledge
+graph). The rename of code / config / cron IDs is a separate item
+for when we're more mature; for now only the display labels in the
+UI get clarified.
+
+**Lesson — layer boundaries are deliberate**: when a system shows
+two parallel pipelines, the first instinct is "consolidate into
+one." But sometimes the parallelism reflects a real semantic
+boundary that the unified design would erase. Before merging
+parallel systems, name the boundary and check whether it should
+survive — here, "identity + working memory" vs "knowledge graph
+about the world" is a boundary we want.
+
