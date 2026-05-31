@@ -606,7 +606,29 @@
     "noConsolidatedHint": "Tagged in episodic entries but no consolidated page yet. Run <code>durin memory dream</code> to create one.",
     "stats": "{{nodes}} nodes · {{edges}} edges",
     "statsPhantom": "{{count}} phantom",
-    "statsTruncated": "truncated"
+    "statsTruncated": "truncated",
+    "tabEntries": "Entries",
+    "entries": {
+      "empty": "No entries reference this entity yet.",
+      "notFound": "Entry not found.",
+      "cantArchiveProtected": "Can't archive entity pages from here — use durin memory absorb / revert.",
+      "backToList": "Back to list",
+      "headline": "Headline",
+      "validFrom": "Valid from",
+      "author": "Author",
+      "entitiesField": "Entities",
+      "sourceRefs": "Source refs",
+      "related": "Related",
+      "body": "Body",
+      "backlinks": "Backlinks",
+      "truncated": "truncated",
+      "noBacklinks": "No backlinks.",
+      "archive": "Archive",
+      "archiving": "Archiving…",
+      "confirmArchive": "Archive this entry?",
+      "confirm": "Confirm",
+      "cancel": "Cancel"
+    }
   },
   "composer": {
     "placeholder": "Type your message…",

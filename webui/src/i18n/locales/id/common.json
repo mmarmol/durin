@@ -607,7 +607,29 @@
     "noConsolidatedHint": "Ditandai di entri episodik tetapi belum ada halaman terkonsolidasi. Jalankan <code>durin memory dream</code> untuk membuatnya.",
     "stats": "{{nodes}} node · {{edges}} edge",
     "statsPhantom": "{{count}} fantom",
-    "statsTruncated": "dipotong"
+    "statsTruncated": "dipotong",
+    "tabEntries": "Entri",
+    "entries": {
+      "empty": "Belum ada entri yang merujuk entitas ini.",
+      "notFound": "Entri tidak ditemukan.",
+      "cantArchiveProtected": "Halaman entitas tidak bisa diarsipkan dari sini — gunakan durin memory absorb / revert.",
+      "backToList": "Kembali ke daftar",
+      "headline": "Judul",
+      "validFrom": "Berlaku sejak",
+      "author": "Penulis",
+      "entitiesField": "Entitas",
+      "sourceRefs": "Referensi sumber",
+      "related": "Terkait",
+      "body": "Isi",
+      "backlinks": "Backlink",
+      "truncated": "terpotong",
+      "noBacklinks": "Tidak ada backlink.",
+      "archive": "Arsipkan",
+      "archiving": "Mengarsipkan…",
+      "confirmArchive": "Arsipkan entri ini?",
+      "confirm": "Konfirmasi",
+      "cancel": "Batal"
+    }
   },
   "composer": {
     "placeholder": "Ketik pesanmu…",

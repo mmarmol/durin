@@ -607,7 +607,29 @@
     "noConsolidatedHint": "Etiquetada en entradas episódicas pero aún sin página consolidada. Ejecuta <code>durin memory dream</code> para crear una.",
     "stats": "{{nodes}} nodos · {{edges}} enlaces",
     "statsPhantom": "{{count}} fantasma",
-    "statsTruncated": "truncado"
+    "statsTruncated": "truncado",
+    "tabEntries": "Entradas",
+    "entries": {
+      "empty": "Aún no hay entradas que referencien esta entidad.",
+      "notFound": "No se encontró la entrada.",
+      "cantArchiveProtected": "No se pueden archivar páginas de entidad desde acá — usá durin memory absorb / revert.",
+      "backToList": "Volver a la lista",
+      "headline": "Título",
+      "validFrom": "Válida desde",
+      "author": "Autor",
+      "entitiesField": "Entidades",
+      "sourceRefs": "Referencias fuente",
+      "related": "Relacionadas",
+      "body": "Cuerpo",
+      "backlinks": "Referencias hacia esta",
+      "truncated": "truncado",
+      "noBacklinks": "No hay referencias hacia esta entrada.",
+      "archive": "Archivar",
+      "archiving": "Archivando…",
+      "confirmArchive": "¿Archivar esta entrada?",
+      "confirm": "Confirmar",
+      "cancel": "Cancelar"
+    }
   },
   "composer": {
     "placeholder": "Escribe tu mensaje…",
