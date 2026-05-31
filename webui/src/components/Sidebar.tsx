@@ -146,7 +146,7 @@ export function Sidebar(props: SidebarProps) {
               aria-pressed={!!props.memoryGraphActive}
             >
               <Network className="h-3.5 w-3.5" aria-hidden />
-              Memory graph
+              {t("memoryGraph.title")}
             </Button>
           </div>
         </>
