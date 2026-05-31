@@ -1600,6 +1600,7 @@ def _run_gateway(
     agent.dream.max_batch_size = dream_cfg.max_batch_size
     agent.dream.max_iterations = dream_cfg.max_iterations
     agent.dream.annotate_line_ages = dream_cfg.annotate_line_ages
+    agent.dream.min_tokens_to_run = max(0, int(dream_cfg.min_tokens_to_run))
     from durin.cron.types import CronJob, CronPayload, CronSchedule
     cron.register_system_job(CronJob(
         id="dream",
