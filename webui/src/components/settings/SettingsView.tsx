@@ -54,10 +54,12 @@ import {
   getModelCapabilities,
   listSecrets,
   setConfigValue,
+  testImageGen,
   testModel,
   updateProviderSettings,
   updateSettings,
   updateWebSearchSettings,
+  type ImageGenTestResult,
   type ModelCapabilities,
   type ModelTestResult,
 } from "@/lib/api";
@@ -1358,10 +1360,17 @@ function ImageGenControl({
   // dropdown empty (safer than briefly offering providers we can't
   // serve). Fail-closed: any fetch error → empty list + empty-state.
   const [supportedProviders, setSupportedProviders] = useState<string[] | null>(null);
+  // Result of the last "Probar y activar" probe, displayed inline.
+  // Cleared when the user changes the provider/model combo so a stale
+  // green tick doesn't lie about a different config.
+  const [probe, setProbe] = useState<ImageGenTestResult | null>(null);
   useEffect(() => {
     setEnabled(Boolean(ig.enabled));
     setProv(typeof ig.provider === "string" ? ig.provider : "");
     setModel(typeof ig.model === "string" ? ig.model : "");
+    // Clear probe result when persisted config changes — a probe done
+    // against the old combo shouldn't authorise the new one.
+    setProbe(null);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [config]);
   useEffect(() => {
@@ -1469,15 +1478,75 @@ function ImageGenControl({
         />
       </div>
       <div className="flex flex-wrap items-center justify-end gap-2">
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={busy === "enabled"}
-          onClick={() => void saveField("enabled", !enabled)}
-          className="rounded-full"
-        >
-          {enabled ? t("settings.models.enabled") : t("settings.models.disabled")}
-        </Button>
+        {enabled ? (
+          <>
+            <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-400">
+              {t("settings.models.enabled")}
+            </span>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={busy === "probe" || busy === "enabled"}
+              onClick={async () => {
+                if (!prov.trim() || !model.trim()) return;
+                setBusy("probe");
+                try {
+                  setProbe(await testImageGen(token, prov.trim(), model.trim()));
+                } finally {
+                  setBusy(null);
+                }
+              }}
+              className="rounded-full"
+            >
+              {busy === "probe"
+                ? t("settings.models.imageProbing")
+                : t("settings.models.imageReprobe")}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={busy === "enabled"}
+              onClick={() => void saveField("enabled", false)}
+              className="rounded-full text-destructive"
+            >
+              {t("settings.models.disable")}
+            </Button>
+          </>
+        ) : (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={
+              busy !== null
+              || !prov.trim() || !model.trim()
+              || dirty  // must save the combo first; ensures the probe runs against persisted config
+            }
+            onClick={async () => {
+              setBusy("probe");
+              setProbe(null);
+              try {
+                const result = await testImageGen(token, prov.trim(), model.trim());
+                setProbe(result);
+                if (result.ok) {
+                  // Only persist enabled=true after a successful probe.
+                  await saveField("enabled", true);
+                }
+              } finally {
+                setBusy(null);
+              }
+            }}
+            className="rounded-full"
+            title={
+              dirty
+                ? t("settings.models.imageSaveBeforeProbe")
+                : t("settings.models.imageProbeAndActivateHint")
+            }
+          >
+            {busy === "probe"
+              ? t("settings.models.imageProbing")
+              : t("settings.models.imageProbeAndActivate")}
+          </Button>
+        )}
         <Button
           size="sm"
           variant="outline"
@@ -1488,6 +1557,23 @@ function ImageGenControl({
           {busy === "combo" ? t("settings.models.saving") : t("settings.models.save")}
         </Button>
       </div>
+      {probe ? (
+        <div
+          className={cn(
+            "max-w-xs rounded-md px-2 py-1 text-right text-[11px]",
+            probe.ok
+              ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+              : "bg-destructive/10 text-destructive",
+          )}
+        >
+          {probe.ok
+            ? t("settings.models.imageProbeOk", {
+                ms: probe.latency_ms ?? 0,
+                kb: Math.round((probe.image_size_bytes ?? 0) / 1024),
+              })
+            : t("settings.models.imageProbeFail", { error: probe.error ?? "?" })}
+        </div>
+      ) : null}
     </div>
   );
 }

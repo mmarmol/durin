@@ -409,6 +409,32 @@ export async function fetchImageGenSupportedProviders(
   return res.providers ?? [];
 }
 
+export interface ImageGenTestResult {
+  ok: boolean;
+  error?: string;
+  latency_ms?: number;
+  image_size_bytes?: number;
+  image_count?: number;
+}
+
+/** GET /api/image-gen/test?provider=…&model=… — live probe. Calls the
+ *  provider with a minimal prompt and reports whether a real image
+ *  came back. The "Probar y activar" UI flow gates the enabled=true
+ *  write on this returning ok=true. The probe never throws — provider
+ *  errors come back as ``{ok: false, error}`` so the UI surfaces them. */
+export async function testImageGen(
+  token: string,
+  provider: string,
+  model: string,
+  base: string = "",
+): Promise<ImageGenTestResult> {
+  const params = new URLSearchParams({ provider, model });
+  return request<ImageGenTestResult>(
+    `${base}/api/image-gen/test?${params}`,
+    token,
+  );
+}
+
 export interface ModelCapabilities {
   model: string;
   max_input_tokens: number | null;

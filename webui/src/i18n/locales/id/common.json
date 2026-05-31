@@ -200,7 +200,15 @@
       "enabled": "Aktif",
       "disabled": "Nonaktif",
       "imageNoEligibleProviders": "Tidak ada provider terkonfigurasi yang memiliki klien generasi gambar di build ini. Yang didukung: {{supported}}. Konfigurasikan API key salah satunya di Providers / Secrets untuk mengaktifkan generasi gambar.",
-      "disableNow": "Nonaktifkan sekarang"
+      "disableNow": "Nonaktifkan sekarang",
+      "disable": "Nonaktifkan",
+      "imageProbing": "Mengecek…",
+      "imageReprobe": "Cek ulang",
+      "imageProbeAndActivate": "Cek & aktifkan",
+      "imageProbeAndActivateHint": "Menjalankan generasi nyata terhadap provider. Hanya mengaktifkan jika gambar nyata kembali.",
+      "imageSaveBeforeProbe": "Simpan provider/model dulu, lalu cek.",
+      "imageProbeOk": "✓ ok · {{ms}}ms · gambar {{kb}}KB",
+      "imageProbeFail": "✗ gagal: {{error}}"
     },
     "channels": {
       "credentialPlaceholder": "{{field}}",
