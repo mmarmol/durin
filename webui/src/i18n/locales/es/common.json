@@ -71,7 +71,8 @@
       "secrets": "Secrets",
       "advanced": "All settings",
       "channels": "Channels",
-      "memory": "Memoria"
+      "memory": "Memoria",
+      "cron": "Cron"
     },
     "sections": {
       "interface": "Interfaz",
@@ -275,6 +276,19 @@
       "saving": "Guardando…",
       "stored": "Secrets guardados",
       "title": "Secrets"
+    },
+    "cron": {
+      "title": "Tareas programadas",
+      "description": "Tareas en segundo plano que el servicio cron ejecuta según un horario. Las tareas del sistema (dream, heartbeat, memory dream) no se pueden eliminar pero sí desactivar. Para agregar una nueva, usa la herramienta `cron` desde el chat.",
+      "loading": "Cargando tareas…",
+      "loadError": "No se pudieron cargar las tareas cron.",
+      "empty": "Sin tareas programadas.",
+      "emptyHint": "El agente puede crear una vía la herramienta `cron` desde el chat.",
+      "systemBadge": "sistema",
+      "fieldNext": "Próxima",
+      "fieldLast": "Última",
+      "remove": "Eliminar tarea",
+      "cantDeleteSystem": "Las tareas del sistema no se pueden eliminar."
     }
   },
   "chat": {

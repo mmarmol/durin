@@ -659,6 +659,15 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/secrets/delete":
             return self._handle_secret_delete(request)
 
+        if got == "/api/cron":
+            return self._handle_cron_list(request)
+
+        if got == "/api/cron/remove":
+            return self._handle_cron_remove(request)
+
+        if got == "/api/cron/toggle":
+            return self._handle_cron_toggle(request)
+
         if got == "/api/config":
             return self._handle_config_get(request)
 
@@ -1215,6 +1224,118 @@ class WebSocketChannel(BaseChannel):
         store.save()
         get_secret_store(reload=True)
         return _http_json_response({"ok": True})
+
+    # -- cron API (P11) ----------------------------------------------------
+
+    def _fresh_cron_service(self):
+        """Build a non-running CronService bound to the workspace's
+        store path. Read-only ops (`list_jobs`) work directly; mutating
+        ops (`remove_job`, `enable_job`) write to the action.jsonl log
+        which the gateway's running service drains on its next tick.
+        Avoids reaching across processes for a shared CronService
+        handle — mirrors how the SecretStore endpoints work.
+        """
+        from durin.config.loader import load_config
+        from durin.cron.service import CronService
+
+        cfg = load_config()
+        path = cfg.workspace_path / "cron" / "jobs.json"
+        return CronService(path)
+
+    def _cron_job_to_dict(self, job) -> dict:
+        sched = job.schedule
+        # Render a human label per schedule kind. The full structured
+        # data also goes out so the frontend can format dates locally.
+        if sched.kind == "every":
+            secs = (sched.every_ms or 0) // 1000
+            label = f"every {secs}s"
+        elif sched.kind == "cron":
+            tz = f" ({sched.tz})" if sched.tz else ""
+            label = f"{sched.expr}{tz}"
+        elif sched.kind == "at":
+            label = f"once at {sched.at_ms}"
+        else:
+            label = sched.kind
+        is_system = job.payload.kind == "system_event"
+        return {
+            "id": job.id,
+            "name": job.name,
+            "enabled": job.enabled,
+            "is_system": is_system,
+            "schedule": {
+                "kind": sched.kind,
+                "label": label,
+                "expr": sched.expr,
+                "every_ms": sched.every_ms,
+                "at_ms": sched.at_ms,
+                "tz": sched.tz,
+            },
+            # System jobs hide their message — usually internal references
+            # to consolidation prompts that aren't useful to surface.
+            "message": "" if is_system else job.payload.message,
+            "channel": job.payload.channel or "",
+            "state": {
+                "next_run_at_ms": job.state.next_run_at_ms,
+                "last_run_at_ms": job.state.last_run_at_ms,
+                "last_status": job.state.last_status,
+                "last_error": job.state.last_error,
+            },
+            "created_at_ms": job.created_at_ms,
+            "updated_at_ms": job.updated_at_ms,
+        }
+
+    def _handle_cron_list(self, request: WsRequest) -> Response:
+        """`GET /api/cron` — list all scheduled jobs (including disabled
+        + system jobs). System jobs are flagged so the UI can disable
+        the delete button for them."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            cron = self._fresh_cron_service()
+            jobs = cron.list_jobs(include_disabled=True)
+            return _http_json_response({
+                "jobs": [self._cron_job_to_dict(j) for j in jobs],
+            })
+        except Exception as exc:  # noqa: BLE001
+            return _http_error(500, f"could not load cron jobs: {exc}")
+
+    def _handle_cron_remove(self, request: WsRequest) -> Response:
+        """`GET /api/cron/remove?id=...` — remove a non-system job."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        job_id = (_query_first(_parse_query(request.path), "id") or "").strip()
+        if not job_id:
+            return _http_error(400, "id is required")
+        try:
+            cron = self._fresh_cron_service()
+            result = cron.remove_job(job_id)
+        except Exception as exc:  # noqa: BLE001
+            return _http_error(500, f"could not remove job: {exc}")
+        if result == "not_found":
+            return _http_error(404, "no such job")
+        if result == "protected":
+            return _http_error(403, "system job; cannot remove")
+        return _http_json_response({"result": result})
+
+    def _handle_cron_toggle(self, request: WsRequest) -> Response:
+        """`GET /api/cron/toggle?id=...&enabled=true|false` — enable
+        or disable a job without removing it."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        query = _parse_query(request.path)
+        job_id = (_query_first(query, "id") or "").strip()
+        enabled_raw = (_query_first(query, "enabled") or "").strip().lower()
+        if not job_id:
+            return _http_error(400, "id is required")
+        enabled = enabled_raw in ("1", "true", "yes")
+        try:
+            cron = self._fresh_cron_service()
+            job = cron.enable_job(job_id, enabled=enabled)
+        except Exception as exc:  # noqa: BLE001
+            return _http_error(500, f"could not toggle job: {exc}")
+        if job is None:
+            return _http_error(404, "no such job")
+        return _http_json_response({"job": self._cron_job_to_dict(job)})
 
     # -- generic config API (web parity Phase B) ---------------------------
 

@@ -71,7 +71,8 @@
       "secrets": "Secrets",
       "advanced": "All settings",
       "channels": "Channels",
-      "memory": "Memori"
+      "memory": "Memori",
+      "cron": "Cron"
     },
     "sections": {
       "interface": "Antarmuka",
@@ -275,6 +276,19 @@
       "saving": "Menyimpan…",
       "stored": "Secret tersimpan",
       "title": "Secret"
+    },
+    "cron": {
+      "title": "Tugas terjadwal",
+      "description": "Tugas latar belakang yang dijalankan layanan cron sesuai jadwal. Tugas sistem (dream, heartbeat, memory dream) tidak dapat dihapus tetapi bisa dinonaktifkan. Untuk menambah, gunakan tool `cron` dari chat.",
+      "loading": "Memuat tugas…",
+      "loadError": "Tidak dapat memuat tugas cron.",
+      "empty": "Tidak ada tugas terjadwal.",
+      "emptyHint": "Agen dapat membuat satu via tool `cron` dari chat.",
+      "systemBadge": "sistem",
+      "fieldNext": "Selanjutnya",
+      "fieldLast": "Terakhir",
+      "remove": "Hapus tugas",
+      "cantDeleteSystem": "Tugas sistem tidak dapat dihapus."
     }
   },
   "chat": {

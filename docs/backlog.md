@@ -190,29 +190,6 @@ sesión 2026-05-25) — debe migrarse a `docs/architecture/` si se aprueba.
 
 ---
 
-### P11 — UI/CLI para gestionar cron jobs
-
-**Contexto**: durin tiene cron jobs (heartbeat, dream cada 2h,
-memory_dream daily, etc.) registrados internamente, y un tool `cron`
-que el agente puede usar para crear/listar/borrar jobs desde el chat.
-Pero NO hay:
-
-- Subcomando `durin cron list/add/remove` en el CLI
-- Panel en webui Settings para ver/editar cron jobs configurados
-
-**Caso de uso**: user quiere ver qué jobs están corriendo, cuándo
-ejecutaron por última vez, agregar/quitar uno sin pedirle al agente.
-
-**Propuesta**:
-- CLI: `durin cron list/add/remove/show <id>`
-- Web: nuevo SettingsSection "Cron" con tabla (id, schedule, action,
-  last_run, next_run) + botón "Add cron job"
-
-**Estado**: detectado audit 2026-05-31. Funcionalidad existe en backend
-(via tool), pero faltan superficies humanas para administrarlo.
-
----
-
 ### P12 — UI para gestionar entries de memoria individuales
 
 **Contexto**: el Memory Graph view muestra entity_pages como nodos +
