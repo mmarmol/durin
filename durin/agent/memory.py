@@ -1238,10 +1238,17 @@ class Dream:
     async def run(self) -> bool:
         """Process unprocessed history entries. Returns True if work was done."""
         from durin.agent.skills import BUILTIN_SKILLS_DIR
+        from durin.agent.tools._telemetry import emit_tool_event
+        import time as _time
 
+        t0 = _time.perf_counter()
         last_cursor = self.store.get_last_dream_cursor()
         entries = self.store.read_unprocessed_history(since_cursor=last_cursor)
         if not entries:
+            emit_tool_event(
+                "memory.dream.legacy.skipped",
+                {"reason": "no_entries", "model": self.model},
+            )
             return False
 
         # Pre-LLM gate (2026-05-31): tokenize the unprocessed history tail
@@ -1252,19 +1259,37 @@ class Dream:
         # the LLM closely enough for a gate decision; the exact LLM prompt
         # also includes MEMORY.md/SOUL.md/USER.md previews but those don't
         # grow with history volume.
-        if self.min_tokens_to_run > 0:
-            tokens = _approx_tokens_for_entries(entries)
-            if tokens < self.min_tokens_to_run:
-                logger.info(
-                    "Dream: skipped — {} tokens < threshold {} ({} entries)",
-                    tokens, self.min_tokens_to_run, len(entries),
-                )
-                return False
+        tokens = _approx_tokens_for_entries(entries)
+        if self.min_tokens_to_run > 0 and tokens < self.min_tokens_to_run:
+            logger.info(
+                "Dream: skipped — {} tokens < threshold {} ({} entries)",
+                tokens, self.min_tokens_to_run, len(entries),
+            )
+            emit_tool_event(
+                "memory.dream.legacy.skipped",
+                {
+                    "reason": "below_token_threshold",
+                    "tokens": tokens,
+                    "threshold": self.min_tokens_to_run,
+                    "entries_count": len(entries),
+                    "model": self.model,
+                },
+            )
+            return False
 
         batch = entries[: self.max_batch_size]
         logger.info(
             "Dream: processing {} entries (cursor {}→{}), batch={}",
             len(entries), last_cursor, batch[-1]["cursor"], len(batch),
+        )
+        emit_tool_event(
+            "memory.dream.legacy.start",
+            {
+                "entries_count": len(entries),
+                "batch_size": len(batch),
+                "tokens": tokens,
+                "model": self.model,
+            },
         )
 
         # Build history text for LLM — cap each entry so a legacy oversized
@@ -1305,6 +1330,8 @@ class Dream:
             f"## Conversation History\n{history_text}\n\n{file_context}"
         )
 
+        phase1_prompt_tokens = 0
+        phase1_completion_tokens = 0
         try:
             phase1_response = await self.provider.chat_with_retry(
                 model=self.model,
@@ -1323,9 +1350,24 @@ class Dream:
                 tool_choice=None,
             )
             analysis = phase1_response.content or ""
+            usage = getattr(phase1_response, "usage", None) or {}
+            phase1_prompt_tokens = int(usage.get("prompt_tokens") or 0)
+            phase1_completion_tokens = int(usage.get("completion_tokens") or 0)
             logger.debug("Dream Phase 1 analysis ({} chars): {}", len(analysis), analysis[:500])
         except Exception:
             logger.exception("Dream Phase 1 failed")
+            emit_tool_event(
+                "memory.dream.legacy.end",
+                {
+                    "status": "phase1_failed",
+                    "duration_ms": int((_time.perf_counter() - t0) * 1000),
+                    "cursor_advanced": False,
+                    "changelog_count": 0,
+                    "phase1_prompt_tokens": phase1_prompt_tokens,
+                    "phase1_completion_tokens": phase1_completion_tokens,
+                    "model": self.model,
+                },
+            )
             return False
 
         # Phase 2: Delegate to AgentRunner with read_file / edit_file
@@ -1379,9 +1421,11 @@ class Dream:
                     changelog.append(f"{event['name']}: {event['detail']}")
 
         # Only advance cursor on successful completion to prevent silent loss
+        cursor_advanced = False
         if result and result.stop_reason == "completed":
             new_cursor = batch[-1]["cursor"]
             self.store.set_last_dream_cursor(new_cursor)
+            cursor_advanced = True
             logger.info(
                 "Dream done: {} change(s), cursor advanced to {}",
                 len(changelog), new_cursor,
@@ -1396,12 +1440,37 @@ class Dream:
         self.store.compact_history()
 
         # Git auto-commit (only when there are actual changes)
+        commit_sha: str | None = None
         if changelog and self.store.git.is_initialized():
             ts = batch[-1]["timestamp"]
             summary = f"dream: {ts}, {len(changelog)} change(s)"
             commit_msg = f"{summary}\n\n{analysis.strip()}"
             sha = self.store.git.auto_commit(commit_msg)
             if sha:
+                commit_sha = sha
                 logger.info("Dream commit: {}", sha)
+
+        if cursor_advanced:
+            end_status = "ok"
+        elif result is None:
+            end_status = "phase2_exception"
+        else:
+            end_status = f"phase2_{result.stop_reason}"
+        emit_tool_event(
+            "memory.dream.legacy.end",
+            {
+                "status": end_status,
+                "duration_ms": int((_time.perf_counter() - t0) * 1000),
+                "cursor_advanced": cursor_advanced,
+                "changelog_count": len(changelog),
+                "phase1_prompt_tokens": phase1_prompt_tokens,
+                "phase1_completion_tokens": phase1_completion_tokens,
+                "phase2_tool_events": (
+                    len(result.tool_events) if result and result.tool_events else 0
+                ),
+                "commit_sha": commit_sha,
+                "model": self.model,
+            },
+        )
 
         return True
