@@ -131,15 +131,31 @@ function CronRow({
   const next = formatTimestamp(job.state.next_run_at_ms, locale);
   const last = formatTimestamp(job.state.last_run_at_ms, locale);
   const status = job.state.last_status;
+  // System job ids are opaque (e.g. "dream", "memory_dream"); the user
+  // shouldn't have to know the internal name to understand what the job
+  // does. Map known system ids to a translated display label + a short
+  // explanation; for user-created jobs (or unknown system ones) we fall
+  // back to the raw job.name.
+  const displayName = job.is_system
+    ? t(`settings.cron.systemJobs.${job.id}.name`, { defaultValue: job.name })
+    : job.name;
+  const systemNote = job.is_system
+    ? t(`settings.cron.systemJobs.${job.id}.note`, { defaultValue: "" })
+    : "";
   return (
     <SettingsRow
       title={
         <span className="flex items-center gap-2">
           <Clock className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
-          <span>{job.name}</span>
+          <span>{displayName}</span>
           {job.is_system ? (
             <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
               {t("settings.cron.systemBadge")}
+            </span>
+          ) : null}
+          {job.is_system ? (
+            <span className="font-mono text-[10px] text-muted-foreground/60">
+              ({job.id})
             </span>
           ) : null}
         </span>
@@ -147,6 +163,7 @@ function CronRow({
       description={
         <span className="flex flex-col gap-0.5 text-[11px] text-muted-foreground">
           <span className="font-mono">{job.schedule.label}</span>
+          {systemNote ? <span>{systemNote}</span> : null}
           {job.message ? <span className="truncate">{job.message}</span> : null}
           <span>
             {t("settings.cron.fieldNext")}: <span className="tabular-nums">{next}</span>

@@ -292,7 +292,17 @@
       "fieldNext": "Next",
       "fieldLast": "Last",
       "remove": "Remove job",
-      "cantDeleteSystem": "System jobs cannot be removed."
+      "cantDeleteSystem": "System jobs cannot be removed.",
+      "systemJobs": {
+        "dream": {
+          "name": "Working memory consolidation",
+          "note": "Distills recent chat history into MEMORY.md / SOUL.md / USER.md and creates skills when patterns emerge. Skips trivial ticks (see \"Memoria viva → Minimum tokens\" in Memory settings)."
+        },
+        "memory_dream": {
+          "name": "Entity knowledge consolidation",
+          "note": "Nightly deep pass that turns episodic memory entries into canonical entity pages (knowledge graph)."
+        }
+      }
     }
   },
   "chat": {

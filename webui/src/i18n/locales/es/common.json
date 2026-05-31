@@ -292,7 +292,17 @@
       "fieldNext": "Próxima",
       "fieldLast": "Última",
       "remove": "Eliminar tarea",
-      "cantDeleteSystem": "Las tareas del sistema no se pueden eliminar."
+      "cantDeleteSystem": "Las tareas del sistema no se pueden eliminar.",
+      "systemJobs": {
+        "dream": {
+          "name": "Consolidación de memoria viva",
+          "note": "Destila el chat reciente en MEMORY.md / SOUL.md / USER.md y crea skills cuando aparecen patrones. Saltea ticks triviales (ver \"Memoria viva → Tokens mínimos\" en ajustes de Memoria)."
+        },
+        "memory_dream": {
+          "name": "Consolidación del grafo de entidades",
+          "note": "Pasada profunda nocturna que convierte las entradas episódicas de memoria en páginas canónicas de entidades (grafo de conocimiento)."
+        }
+      }
     }
   },
   "chat": {
