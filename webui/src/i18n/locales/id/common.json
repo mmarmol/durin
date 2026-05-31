@@ -240,19 +240,23 @@
       "help": {
         "crossEncoderEnabled": "Reranker second-pass opt-in. Menambahkan 300-1500 ms per query dan ~1 GB RAM tetapi meningkatkan kualitas pada query ambigu. Mati secara default.",
         "crossEncoderModel": "Model yang digunakan saat reranker aktif. Default bekerja baik untuk query multibahasa; alternatif menukar ukuran dengan latensi.",
-        "thresholdEntries": "Jalankan pass Dream entity-centric saat satu entitas mengumpulkan jumlah entri post-cursor ini. Set ke 0 untuk menonaktifkan trigger per-entity (trigger cron dan session-close tetap berlaku)."
+        "thresholdEntries": "Jalankan pass Dream entity-centric saat satu entitas mengumpulkan jumlah entri post-cursor ini. Set ke 0 untuk menonaktifkan trigger per-entity (trigger cron dan session-close tetap berlaku).",
+        "dreamMinTokens": "Lewati analisis LLM saat chat terakumulasi sejak pass terakhir di bawah nilai ini. Default 2000 menyaring pertukaran sepele / sosial; 0 menonaktifkan filter (setiap tick non-kosong berjalan)."
       },
       "loadError": "Tidak dapat memuat pengaturan memori.",
       "rows": {
         "crossEncoderEnabled": "Reranker cross-encoder",
         "crossEncoderModel": "Model reranker",
-        "thresholdEntries": "Ambang konsolidasi"
+        "thresholdEntries": "Ambang konsolidasi",
+        "dreamMinTokens": "Token minimum untuk berjalan"
       },
       "saveError": "Tidak dapat menyimpan {{path}}.",
       "sections": {
-        "dream": "Auto-konsolidasi Dream",
-        "rerank": "Reranking pencarian"
-      }
+        "dream": "Konsolidasi entitas (Dream)",
+        "rerank": "Reranking pencarian",
+        "workingMemory": "Memori aktif"
+      },
+      "workingMemoryDescription": "Konsolidasi tiap 2 jam riwayat chat ke MEMORY.md / SOUL.md / USER.md dan pembuatan skill on-the-fly. Hanya berjalan saat ada cukup percakapan baru untuk membenarkan pemanggilan LLM."
     },
     "secrets": {
       "addTitle": "Tambah secret",
