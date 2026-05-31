@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import {
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Focus,
   Maximize2,
@@ -9,6 +10,7 @@ import {
   Network,
   RefreshCw,
   Search as SearchIcon,
+  Trash2,
   X,
 } from "lucide-react";
 
@@ -16,16 +18,23 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { useMemoryGraph } from "@/hooks/useMemoryGraph";
 import { useClient } from "@/providers/ClientProvider";
+import MarkdownTextRenderer from "@/components/MarkdownTextRenderer";
 import {
   ApiError,
+  fetchMemoryBacklinks,
   fetchMemoryEdge,
   fetchMemoryEntity,
+  fetchMemoryEntry,
   fetchMemorySession,
+  forgetMemoryEntry,
   searchMemoryApi,
+  type MemoryBacklinksPayload,
   type MemoryEdgeDetail,
   type MemoryEntityDetail,
+  type MemoryEntryDetail,
   type MemoryGraphNode,
   type MemorySearchPayload,
+  type MemorySearchResult,
   type MemorySessionDetail,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -145,7 +154,7 @@ function tickForces(
   }
 }
 
-type TabName = "info" | "body" | "history" | "sources" | "archive";
+type TabName = "info" | "body" | "history" | "sources" | "archive" | "entries";
 type SessionTabName = "info" | "messages" | "events" | "memory_ops" | "entries";
 
 export function MemoryGraphView(_props: MemoryGraphViewProps) {
@@ -1031,6 +1040,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                     [
                       { id: "info", label: t("memoryGraph.tabInfo") },
                       { id: "body", label: t("memoryGraph.tabBody") },
+                      { id: "entries", label: t("memoryGraph.tabEntries") },
                       { id: "history", label: `History${detail?.history.length ? ` (${detail.history.length})` : ""}` },
                       { id: "sources", label: `Sources${detail?.entries.length ? ` (${detail.entries.length})` : ""}` },
                       { id: "archive", label: `Archive${detail?.archive.length ? ` (${detail.archive.length})` : ""}` },
@@ -1188,6 +1198,13 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                         ))}
                       </ul>
                     )
+                  ) : null}
+
+                  {activeTab === "entries" ? (
+                    <EntriesTab
+                      token={tokenRef.current ?? ""}
+                      entityRef={selected.id}
+                    />
                   ) : null}
 
                   {activeTab === "archive" ? (
@@ -1534,5 +1551,356 @@ function CommitItem({
         </div>
       ) : null}
     </li>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// EntriesTab (P12) — browse + read + archive memory entries that reference
+// the currently-selected entity. Each row is clickable; the active row's
+// frontmatter + body + backlinks render in a sub-panel below the list.
+// Wikilinks in the body navigate within the tab (replace the sub-panel).
+// ---------------------------------------------------------------------------
+
+
+function EntriesTab({
+  token,
+  entityRef,
+}: {
+  token: string;
+  entityRef: string;
+}) {
+  const { t } = useTranslation();
+  const [rows, setRows] = useState<MemorySearchResult[] | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
+  const [selectedUri, setSelectedUri] = useState<string | null>(null);
+  const [detail, setDetail] = useState<MemoryEntryDetail | null>(null);
+  const [backlinks, setBacklinks] = useState<MemoryBacklinksPayload | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const [confirmArchive, setConfirmArchive] = useState(false);
+  const [archiving, setArchiving] = useState(false);
+
+  // Load the row list whenever the selected entity changes. We use
+  // ``searchMemoryApi`` with the entity ref as the query — the FTS
+  // index matches the ref in frontmatter, so the result set IS the
+  // entries that tag this entity. We then drop:
+  //  - canonical entity_page rows (those have their own tabs)
+  //  - session rows (those have their own session view)
+  //  - any class outside the forgettable set (only those have a
+  //    detail endpoint + Archive button here)
+  useEffect(() => {
+    let cancelled = false;
+    setRows(null);
+    setListError(null);
+    setSelectedUri(null);
+    setDetail(null);
+    setBacklinks(null);
+    if (!token || !entityRef) return;
+    void (async () => {
+      try {
+        const r: MemorySearchPayload = await searchMemoryApi(token, entityRef);
+        if (cancelled) return;
+        const forgettable = new Set([
+          "episodic", "stable", "corpus", "session_summary",
+        ]);
+        const filtered = r.results.filter((res) =>
+          forgettable.has(res.class_name ?? "")
+          && res.uri.startsWith("memory/"),
+        );
+        setRows(filtered);
+      } catch (err) {
+        if (cancelled) return;
+        setListError(
+          err instanceof ApiError ? `HTTP ${err.status}` : (err as Error).message,
+        );
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token, entityRef]);
+
+  // Load detail + backlinks when the user opens a row.
+  useEffect(() => {
+    let cancelled = false;
+    setDetail(null);
+    setBacklinks(null);
+    setConfirmArchive(false);
+    setDetailError(null);
+    if (!token || !selectedUri) {
+      setDetailLoading(false);
+      return;
+    }
+    setDetailLoading(true);
+    void (async () => {
+      try {
+        const [d, bl] = await Promise.all([
+          fetchMemoryEntry(token, selectedUri),
+          fetchMemoryBacklinks(token, selectedUri),
+        ]);
+        if (cancelled) return;
+        if (d === null) {
+          setDetailError(t("memoryGraph.entries.notFound"));
+        } else {
+          setDetail(d);
+          setBacklinks(bl);
+        }
+      } catch (err) {
+        if (cancelled) return;
+        setDetailError(
+          err instanceof ApiError ? `HTTP ${err.status}` : (err as Error).message,
+        );
+      } finally {
+        if (!cancelled) setDetailLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token, selectedUri, t]);
+
+  const onArchive = useCallback(async () => {
+    if (!detail) return;
+    setArchiving(true);
+    try {
+      const out = await forgetMemoryEntry(token, detail.uri);
+      if (out.result === "archived") {
+        // Drop the row from the list, clear the sub-panel.
+        setRows((prev) => prev?.filter((r) => r.uri !== detail.uri) ?? null);
+        setSelectedUri(null);
+        setDetail(null);
+        setBacklinks(null);
+      } else if (out.result === "protected") {
+        setDetailError(t("memoryGraph.entries.cantArchiveProtected"));
+      } else if (out.result === "not_found") {
+        // Stale — drop from list anyway.
+        setRows((prev) => prev?.filter((r) => r.uri !== detail.uri) ?? null);
+        setSelectedUri(null);
+      } else {
+        setDetailError(out.detail || out.result);
+      }
+    } catch (err) {
+      setDetailError(
+        err instanceof ApiError ? `HTTP ${err.status}` : (err as Error).message,
+      );
+    } finally {
+      setArchiving(false);
+      setConfirmArchive(false);
+    }
+  }, [detail, token, t]);
+
+  if (listError) {
+    return <p className="text-destructive">{listError}</p>;
+  }
+  if (rows === null) {
+    return <p className="text-muted-foreground">{t("memoryGraph.loadingDetail")}</p>;
+  }
+  if (rows.length === 0 && !selectedUri) {
+    return <p className="text-muted-foreground">{t("memoryGraph.entries.empty")}</p>;
+  }
+
+  // Detail sub-panel takes over the tab when a row is open.
+  if (selectedUri) {
+    return (
+      <div className="space-y-2">
+        <button
+          type="button"
+          onClick={() => setSelectedUri(null)}
+          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-muted"
+        >
+          <ChevronLeft className="h-3 w-3" aria-hidden />
+          {t("memoryGraph.entries.backToList")}
+        </button>
+        {detailLoading ? (
+          <p className="text-muted-foreground">{t("memoryGraph.loadingDetail")}</p>
+        ) : null}
+        {detailError ? (
+          <p className="text-destructive">{detailError}</p>
+        ) : null}
+        {detail ? (
+          <div className="space-y-3">
+            <div className="rounded border border-border/40 bg-background/60 p-2">
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] uppercase">
+                  {detail.class_name}
+                </span>
+                <span className="font-mono text-[10px] text-muted-foreground">
+                  {detail.uri}
+                </span>
+              </div>
+              <dl className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1 text-[11px]">
+                <dt className="text-muted-foreground">{t("memoryGraph.entries.headline")}</dt>
+                <dd className="font-medium">{detail.frontmatter.headline}</dd>
+                {detail.frontmatter.valid_from ? (
+                  <>
+                    <dt className="text-muted-foreground">{t("memoryGraph.entries.validFrom")}</dt>
+                    <dd className="font-mono">{detail.frontmatter.valid_from}</dd>
+                  </>
+                ) : null}
+                {detail.frontmatter.author ? (
+                  <>
+                    <dt className="text-muted-foreground">{t("memoryGraph.entries.author")}</dt>
+                    <dd className="font-mono">{detail.frontmatter.author}</dd>
+                  </>
+                ) : null}
+                {detail.frontmatter.entities.length > 0 ? (
+                  <>
+                    <dt className="text-muted-foreground">{t("memoryGraph.entries.entitiesField")}</dt>
+                    <dd className="font-mono">
+                      {detail.frontmatter.entities.join(", ")}
+                    </dd>
+                  </>
+                ) : null}
+                {detail.frontmatter.source_refs.length > 0 ? (
+                  <>
+                    <dt className="text-muted-foreground">{t("memoryGraph.entries.sourceRefs")}</dt>
+                    <dd className="space-y-0.5 break-all font-mono text-[10.5px]">
+                      {detail.frontmatter.source_refs.map((s, i) => (
+                        <div key={`${s}-${i}`}>{s}</div>
+                      ))}
+                    </dd>
+                  </>
+                ) : null}
+                {detail.frontmatter.related.length > 0 ? (
+                  <>
+                    <dt className="text-muted-foreground">{t("memoryGraph.entries.related")}</dt>
+                    <dd className="space-y-0.5 break-all font-mono text-[10.5px]">
+                      {detail.frontmatter.related.map((s, i) => (
+                        <div key={`${s}-${i}`}>{s}</div>
+                      ))}
+                    </dd>
+                  </>
+                ) : null}
+              </dl>
+            </div>
+
+            {detail.body ? (
+              <div className="rounded border border-border/40 bg-background/60 p-2">
+                <div className="mb-1 text-[10.5px] uppercase tracking-wide text-muted-foreground">
+                  {t("memoryGraph.entries.body")}
+                </div>
+                <MarkdownTextRenderer
+                  onWikiLinkClick={(target) => {
+                    // Replace the sub-panel with the linked entry.
+                    // Only intercept memory/<class>/<id> targets; ignore
+                    // wikilinks pointing to entity pages or anything else.
+                    if (/^memory\/(episodic|stable|corpus|session_summary)\//.test(target)) {
+                      setSelectedUri(target);
+                    }
+                  }}
+                  className="text-[11.5px]"
+                >
+                  {detail.body}
+                </MarkdownTextRenderer>
+              </div>
+            ) : null}
+
+            {backlinks ? (
+              <div className="rounded border border-border/40 bg-background/60 p-2">
+                <div className="mb-1 text-[10.5px] uppercase tracking-wide text-muted-foreground">
+                  {t("memoryGraph.entries.backlinks")}
+                  {backlinks.truncated ? ` (${t("memoryGraph.entries.truncated")})` : ""}
+                </div>
+                {backlinks.backlinks.length === 0 ? (
+                  <p className="text-[11px] text-muted-foreground">
+                    {t("memoryGraph.entries.noBacklinks")}
+                  </p>
+                ) : (
+                  <ul className="space-y-1">
+                    {backlinks.backlinks.map((bl) => (
+                      <li key={bl.uri}>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedUri(bl.uri)}
+                          className="w-full rounded px-1 py-0.5 text-left text-[11px] text-primary hover:bg-muted"
+                        >
+                          <span className="font-mono text-[10px] text-muted-foreground">
+                            [{bl.context}]
+                          </span>{" "}
+                          {bl.headline || bl.uri}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            ) : null}
+
+            <div className="flex items-center justify-end gap-2 pt-1">
+              {confirmArchive ? (
+                <>
+                  <span className="text-[11px] text-muted-foreground">
+                    {t("memoryGraph.entries.confirmArchive")}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={archiving}
+                    onClick={() => setConfirmArchive(false)}
+                    className="rounded-full"
+                  >
+                    {t("memoryGraph.entries.cancel")}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={archiving}
+                    onClick={() => void onArchive()}
+                    className="rounded-full text-destructive hover:text-destructive"
+                  >
+                    <Trash2 className="mr-1 h-3 w-3" aria-hidden />
+                    {archiving
+                      ? t("memoryGraph.entries.archiving")
+                      : t("memoryGraph.entries.confirm")}
+                  </Button>
+                </>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setConfirmArchive(true)}
+                  className="rounded-full text-muted-foreground hover:text-destructive"
+                >
+                  <Trash2 className="mr-1 h-3 w-3" aria-hidden />
+                  {t("memoryGraph.entries.archive")}
+                </Button>
+              )}
+            </div>
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  return (
+    <ul className="space-y-1.5">
+      {rows.map((r) => (
+        <li key={r.uri}>
+          <button
+            type="button"
+            onClick={() => setSelectedUri(r.uri)}
+            className="block w-full rounded border border-border/40 bg-background/60 p-2 text-left hover:border-border/80"
+          >
+            <div className="flex items-center justify-between gap-2 text-[10.5px] text-muted-foreground">
+              <span className="rounded bg-muted px-1 font-mono uppercase">
+                {r.class_name ?? r.kind}
+              </span>
+              {r.valid_from ? (
+                <span className="font-mono">{r.valid_from.slice(0, 10)}</span>
+              ) : null}
+            </div>
+            {r.headline ? (
+              <div className="mt-0.5 text-[11.5px] font-medium">{r.headline}</div>
+            ) : null}
+            {r.snippet ? (
+              <div className="mt-0.5 text-[10.5px] text-muted-foreground line-clamp-2">
+                {r.snippet}
+              </div>
+            ) : null}
+          </button>
+        </li>
+      ))}
+    </ul>
   );
 }

@@ -567,6 +567,87 @@ export async function fetchMemoryEdge(
   return request<MemoryEdgeDetail>(url, token);
 }
 
+// ---------------------------------------------------------------------------
+// Individual entry browse / forget / backlinks (P12)
+// ---------------------------------------------------------------------------
+
+export interface MemoryEntryDetail {
+  uri: string;          // memory/<class>/<id>
+  class_name: string;   // episodic | stable | corpus | session_summary
+  frontmatter: {
+    id: string;
+    headline: string;
+    summary: string;
+    valid_from: string | null;
+    author: string;
+    entities: string[];
+    source_refs: string[];
+    related: string[];
+  };
+  body: string;
+  exists: boolean;
+}
+
+export interface MemoryBacklink {
+  uri: string;
+  context: string;    // "source_refs" | "related" | "body" (or comma-joined)
+  headline: string;
+}
+
+export interface MemoryBacklinksPayload {
+  uri: string;
+  backlinks: MemoryBacklink[];
+  truncated: boolean;
+}
+
+/** GET /api/memory/entry?uri=… — full frontmatter + body for one entry. */
+export async function fetchMemoryEntry(
+  token: string,
+  uri: string,
+  base: string = "",
+): Promise<MemoryEntryDetail | null> {
+  const url = `${base}/api/memory/entry?uri=${encodeURIComponent(uri)}`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+    credentials: "same-origin",
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new ApiError(res.status, `HTTP ${res.status}`);
+  return (await res.json()) as MemoryEntryDetail;
+}
+
+/** GET /api/memory/forget?uri=… — archive an entry. Returns the
+ *  backend's ``{result}`` payload verbatim so the UI can branch on
+ *  ``"archived" | "not_found" | "protected" | "invalid"``. */
+export async function forgetMemoryEntry(
+  token: string,
+  uri: string,
+  base: string = "",
+): Promise<{ result: string; detail?: string }> {
+  const url = `${base}/api/memory/forget?uri=${encodeURIComponent(uri)}`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+    credentials: "same-origin",
+  });
+  // 200, 400, 403 all carry a JSON body with `result` — surface it
+  // verbatim so the caller picks the message. Only network / 5xx
+  // errors throw.
+  if (res.status >= 500) {
+    throw new ApiError(res.status, `HTTP ${res.status}`);
+  }
+  return (await res.json()) as { result: string; detail?: string };
+}
+
+/** GET /api/memory/backlinks?uri=… — entries that reference this one. */
+export async function fetchMemoryBacklinks(
+  token: string,
+  uri: string,
+  base: string = "",
+): Promise<MemoryBacklinksPayload> {
+  const url = `${base}/api/memory/backlinks?uri=${encodeURIComponent(uri)}`;
+  return request<MemoryBacklinksPayload>(url, token);
+}
+
 export interface MemorySessionDetail {
   session_ref: string;
   session_key: string | null;
