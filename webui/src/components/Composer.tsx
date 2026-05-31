@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowUp } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -20,9 +21,11 @@ interface ComposerProps {
 export function Composer({
   onSend,
   disabled,
-  placeholder = "Type your message…",
+  placeholder,
   compact = false,
 }: ComposerProps) {
+  const { t } = useTranslation();
+  const resolvedPlaceholder = placeholder ?? t("composer.placeholder");
   const [value, setValue] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -90,9 +93,9 @@ export function Composer({
           onInput={onInput}
           onKeyDown={onKeyDown}
           rows={1}
-          placeholder={placeholder}
+          placeholder={resolvedPlaceholder}
           disabled={disabled}
-          aria-label="Message input"
+          aria-label={t("composer.inputAria")}
           className={cn(
             "min-h-[56px] w-full resize-none bg-transparent px-5 pt-4 pb-2 text-sm",
             "placeholder:text-muted-foreground",
@@ -102,14 +105,14 @@ export function Composer({
         />
         <div className="flex items-center justify-between gap-2 px-3 pb-2">
           <span className="hidden select-none text-[11px] text-muted-foreground/70 sm:inline">
-            Enter to send · Shift+Enter for newline
+            {t("composer.hint")}
           </span>
           <span className="sm:hidden" aria-hidden />
           <Button
             type="submit"
             size="icon"
             disabled={disabled || !value.trim()}
-            aria-label="Send message"
+            aria-label={t("composer.sendAria")}
             className={cn(
               "h-9 w-9 rounded-full shadow-sm transition-transform",
               value.trim() && !disabled && "hover:scale-[1.03] active:scale-95",

@@ -570,5 +570,19 @@
     "stats": "{{nodes}} node · {{edges}} edge",
     "statsPhantom": "{{count}} fantom",
     "statsTruncated": "dipotong"
+  },
+  "composer": {
+    "placeholder": "Ketik pesanmu…",
+    "inputAria": "Input pesan",
+    "sendAria": "Kirim pesan",
+    "hint": "Enter untuk kirim · Shift+Enter untuk baris baru"
+  },
+  "empty": {
+    "noChatsTitle": "Belum ada chat",
+    "noChatsBody": "Mulai percakapan — sesi-sesimu disimpan lokal di workspace durin dan tetap tersedia setelah reload.",
+    "newChat": "Chat baru"
+  },
+  "list": {
+    "scrollToBottom": "Gulir ke bawah"
   }
 }
