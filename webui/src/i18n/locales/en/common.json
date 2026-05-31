@@ -185,7 +185,17 @@
       "on": "On",
       "off": "Off",
       "managed": "Managed secret",
-      "empty": "No settings in this section."
+      "empty": "No settings in this section.",
+      "secretRotate": "Rotate value",
+      "secretRotateHint": "Write a new value to the stored secret. All config refs pointing to this name will use it.",
+      "secretDisconnect": "Disconnect",
+      "secretDisconnectHint": "Replace this ref with a plaintext input. The secret stays in the store, only this field is severed.",
+      "secretRotateTitle": "Rotate {{name}}",
+      "secretRotateDescription": "Replace the value stored for {{name}}. Every config field that references ${secret:{{name}}} will pick this up immediately. The value never leaves the secret store and never enters the chat.",
+      "secretRotatePlaceholder": "New secret value",
+      "secretRotateCancel": "Cancel",
+      "secretRotateSave": "Save",
+      "secretRotateSaving": "Saving…"
     },
     "models": {
       "auxTitle": "Vision & audio models",
