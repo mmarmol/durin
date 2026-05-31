@@ -840,65 +840,73 @@ function AuxControl({
       setTesting(false);
     }
   };
+  // Two-row layout: pickers on top (full-width on narrow, inline on
+  // wide), action buttons + result badge on the bottom row. Keeps the
+  // SettingsRow's title/description column from being squeezed when
+  // five controls share a single line.
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <ProviderPicker
-        providers={configuredProviders}
-        value={prov}
-        emptyLabel={t("settings.models.pickProvider")}
-        onChange={setProv}
-      />
-      <ModelPicker
-        token={token}
-        provider={prov}
-        value={model}
-        onChange={setModel}
-        capability={capability}
-      />
-      <Button
-        size="sm"
-        variant="outline"
-        disabled={!dirty || busy || !model.trim() || !prov.trim()}
-        onClick={() => onSave({ model: model.trim(), provider: prov.trim() })}
-        className="rounded-full"
-      >
-        {t("settings.models.save")}
-      </Button>
-      <Button
-        size="sm"
-        variant="ghost"
-        disabled={testing || busy || !model.trim() || !prov.trim()}
-        onClick={() => void runTest()}
-        className="rounded-full"
-        title={t("settings.models.testRowHint")}
-      >
-        {testing ? t("settings.models.testing") : t("settings.models.testRow")}
-      </Button>
-      {test ? (
-        <span
-          className={cn(
-            "text-[12px]",
-            test.status === "ok" ? "text-emerald-600" : "text-destructive",
-          )}
-          title={test.message}
-        >
-          {test.status === "ok" ? "✓ " : "✗ "}
-          <span className="truncate max-w-[180px] inline-block align-bottom">
-            {test.message}
+    <div className="flex flex-col items-end gap-2">
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <ProviderPicker
+          providers={configuredProviders}
+          value={prov}
+          emptyLabel={t("settings.models.pickProvider")}
+          onChange={setProv}
+        />
+        <ModelPicker
+          token={token}
+          provider={prov}
+          value={model}
+          onChange={setModel}
+          capability={capability}
+        />
+      </div>
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        {test ? (
+          <span
+            className={cn(
+              "text-[12px]",
+              test.status === "ok" ? "text-emerald-600" : "text-destructive",
+            )}
+            title={test.message}
+          >
+            {test.status === "ok" ? "✓ " : "✗ "}
+            <span className="truncate max-w-[220px] inline-block align-bottom">
+              {test.message}
+            </span>
           </span>
-        </span>
-      ) : null}
-      {current ? (
+        ) : null}
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!dirty || busy || !model.trim() || !prov.trim()}
+          onClick={() => onSave({ model: model.trim(), provider: prov.trim() })}
+          className="rounded-full"
+        >
+          {t("settings.models.save")}
+        </Button>
         <Button
           size="sm"
           variant="ghost"
-          disabled={busy}
-          onClick={onClear}
-          className="rounded-full text-muted-foreground"
+          disabled={testing || busy || !model.trim() || !prov.trim()}
+          onClick={() => void runTest()}
+          className="rounded-full"
+          title={t("settings.models.testRowHint")}
         >
-          {t("settings.models.clear")}
+          {testing ? t("settings.models.testing") : t("settings.models.testRow")}
         </Button>
-      ) : null}
+        {current ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={busy}
+            onClick={onClear}
+            className="rounded-full text-muted-foreground"
+          >
+            {t("settings.models.clear")}
+          </Button>
+        ) : null}
+      </div>
     </div>
   );
 }
