@@ -25,7 +25,7 @@
       "section": "System",
       "restartHint": "Restart durin to apply runtime changes.",
       "restart": "Restart durin",
-      "restarting": "Restarting..."
+      "restarting": "Restarting…"
     },
     "restart": {
       "completed": "Restart completed in {{seconds}}s."
@@ -101,7 +101,7 @@
       "notAvailable": "Not available"
     },
     "status": {
-      "loading": "Loading settings...",
+      "loading": "Loading settings…",
       "loadError": "Could not load settings",
       "unsaved": "Unsaved changes.",
       "savedRestart": "Saved. Restart durin to apply."
@@ -364,7 +364,7 @@
     },
     "composer": {
       "placeholderThread": "Type your message…",
-      "placeholderHero": "Ask anything...",
+      "placeholderHero": "Ask anything…",
       "placeholderOpening": "Opening a new chat…",
       "placeholderStreaming": "Model is responding…",
       "inputAria": "Message input",

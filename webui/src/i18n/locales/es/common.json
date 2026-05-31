@@ -13,7 +13,7 @@
       "section": "Sistema",
       "restartHint": "Reinicia durin para aplicar los cambios de ejecución.",
       "restart": "Reiniciar durin",
-      "restarting": "Reiniciando..."
+      "restarting": "Reiniciando…"
     },
     "restart": {
       "completed": "Reinicio completado en {{seconds}} s."
@@ -24,6 +24,18 @@
     },
     "meta": {
       "description": "Interfaz web de durin: conversa con tu espacio de trabajo de durin."
+    },
+    "account": {
+      "logout": "Cerrar sesión",
+      "logoutHint": "Desconecta este navegador del gateway.",
+      "section": "Cuenta"
+    },
+    "auth": {
+      "hint": "Ingresa el secret configurado como tokenIssueSecret en la configuración del gateway.",
+      "invalid": "Contraseña inválida. Inténtalo de nuevo.",
+      "placeholder": "Contraseña",
+      "submit": "Conectar",
+      "title": "Autenticación requerida"
     }
   },
   "sidebar": {
@@ -36,7 +48,14 @@
     "language": {
       "label": "Idioma",
       "ariaLabel": "Cambiar idioma"
-    }
+    },
+    "globalActions": "Acciones globales",
+    "home": "Inicio",
+    "navigation": "Navegación lateral",
+    "noSearchResults": "No hay chats que coincidan.",
+    "searchAria": "Buscar chats",
+    "searchPlaceholder": "Buscar chats",
+    "searchResults": "Resultados"
   },
   "settings": {
     "backToChat": "Volver al chat",
@@ -65,14 +84,16 @@
       "provider": "Proveedor",
       "model": "Modelo",
       "restart": "Reiniciar durin",
-      "configPath": "Ruta de configuración"
+      "configPath": "Ruta de configuración",
+      "palette": "Paleta"
     },
     "help": {
       "theme": "Cambia entre apariencia clara y oscura.",
       "language": "Elige el idioma usado por la WebUI.",
       "provider": "Selecciona el proveedor para nuevas solicitudes de modelo.",
       "model": "Define el nombre del modelo predeterminado que usa durin.",
-      "configPath": "El archivo de configuración que usa actualmente el gateway."
+      "configPath": "El archivo de configuración que usa actualmente el gateway.",
+      "palette": "La identidad visual de durin — Ithildin, Forge o Mithril."
     },
     "values": {
       "light": "Claro",
@@ -80,7 +101,7 @@
       "notAvailable": "No disponible"
     },
     "status": {
-      "loading": "Cargando configuración...",
+      "loading": "Cargando configuración…",
       "loadError": "No se pudo cargar la configuración",
       "unsaved": "Hay cambios sin guardar.",
       "savedRestart": "Guardado. Reinicia durin para aplicar."
@@ -134,9 +155,121 @@
       }
     },
     "models": {
+      "auxTitle": "Modelos de visión y audio",
+      "auxDescription": "durin los usa solo cuando el modelo principal no puede manejar imágenes o audio por sí mismo.",
+      "vision": "Modelo de visión",
+      "visionHint": "Usado por la herramienta interpret_image.",
+      "audio": "Modelo de audio",
+      "audioHint": "Usado por la herramienta interpret_audio.",
+      "memory": "Modelo de memoria",
+      "memoryHint": "Usado por la reescritura de queries de memory_search. Cae al modelo principal si no está configurado.",
+      "modelPlaceholder": "id del modelo",
+      "providerPlaceholder": "proveedor",
+      "save": "Guardar",
+      "clear": "Borrar",
+      "testTitle": "Prueba",
+      "testHint": "Ejecuta una llamada real al modelo configurado.",
+      "testButton": "Probar el modelo",
+      "testing": "Probando…",
+      "loadError": "No se pudo cargar la configuración del modelo.",
+      "saveError": "No se pudo guardar el modelo.",
+      "testError": "No se pudo ejecutar la prueba.",
+      "suggested": "sugerido",
+      "capabilities": "Capacidades",
+      "capsText": "texto",
+      "capsVision": "visión",
+      "capsAudio": "audio",
+      "capsContext": "{{tokens}} de contexto",
+      "capsUnknown": "Elige un modelo para ver qué soporta.",
       "pickProvider": "Elegir proveedor",
       "testRow": "Probar",
-      "testRowHint": "Llamada real al modelo — verifica que la API key y el id del modelo funcionan juntos."
+      "testRowHint": "Llamada real al modelo configurado — verifica que la API key y el id del modelo funcionan juntos."
+    },
+    "channels": {
+      "credentialPlaceholder": "{{field}}",
+      "description": "Conecta durin con plataformas de chat. Habilita un canal y configura su credencial — el token va al almacén de secrets, no a config.json.",
+      "disable": "Deshabilitar",
+      "disabled": "No habilitado",
+      "enable": "Habilitar",
+      "enabled": "Habilitado",
+      "loadError": "No se pudieron cargar los canales.",
+      "noCredential": "No requiere credencial.",
+      "reconfigure": "Reconfigurar",
+      "save": "Guardar",
+      "saveError": "No se pudo guardar el canal."
+    },
+    "config": {
+      "description": "Cada configuración de durin, agrupada por sección. Editar un valor lo escribe directamente al config — igual que durin config set. Las listas y secrets gestionados son de solo lectura aquí.",
+      "empty": "No hay configuraciones en esta sección.",
+      "loadError": "No se pudo cargar la configuración.",
+      "managed": "Secret gestionado",
+      "off": "Desactivado",
+      "on": "Activado",
+      "save": "Guardar",
+      "saveError": "No se pudo guardar {{path}}."
+    },
+    "memory": {
+      "crossEncoderModelPlaceholder": "id del modelo (p. ej. BAAI/bge-reranker-base)",
+      "crossEncoderTest": "Probar",
+      "decayClasses": {
+        "corpus": "Corpus",
+        "entity": "Entidad",
+        "episodic": "Episódico",
+        "session_summary": "Resumen de sesión",
+        "stable": "Estable"
+      },
+      "decayDays": "{{days}} días",
+      "decayHelp": {
+        "corpus": "Material importado. El mtime es la fecha de ingesta, no la edad del hecho.",
+        "entity": "Páginas canónicas de entidades. El mtime registra la última actualización de Dream, no la edad del hecho.",
+        "episodic": "Observaciones del día a día. Decaen porque la edad importa.",
+        "session_summary": "Resúmenes por sesión. Decaen más lento que los episódicos crudos.",
+        "stable": "Hechos de larga duración. No deben decaer con el tiempo."
+      },
+      "decayNever": "nunca decae",
+      "description": "Ajusta el subsistema de memoria — reranking de búsqueda, auto-consolidación de Dream y valores predeterminados de decaimiento temporal.",
+      "help": {
+        "crossEncoderEnabled": "Reranker opcional de segunda pasada. Agrega 300-1500 ms por consulta y ~1 GB de RAM, pero mejora la calidad en consultas ambiguas. Desactivado por defecto.",
+        "crossEncoderModel": "Modelo usado cuando el reranker está habilitado. El predeterminado funciona bien para consultas multilingües; las alternativas intercambian tamaño por latencia.",
+        "decayOverrides": "Sobrescribe el valor predeterminado de la clase por entrada estableciendo decay_half_life en el frontmatter. Establece evergreen: true para que la entrada nunca decaiga.",
+        "thresholdEntries": "Ejecuta una pasada Dream centrada en entidad cuando una entidad acumula esta cantidad de entradas posteriores al cursor. Establece 0 para desactivar el disparador por entidad (los disparadores cron y de cierre de sesión siguen activos)."
+      },
+      "loadError": "No se pudieron cargar los ajustes de memoria.",
+      "rows": {
+        "crossEncoderEnabled": "Reranker cross-encoder",
+        "crossEncoderModel": "Modelo del reranker",
+        "decayOverrides": "Overrides por entrada",
+        "thresholdEntries": "Umbral de consolidación"
+      },
+      "saveError": "No se pudo guardar {{path}}.",
+      "sections": {
+        "decay": "Decaimiento temporal (solo lectura)",
+        "dream": "Auto-consolidación del Dream",
+        "rerank": "Reranking de búsqueda"
+      }
+    },
+    "secrets": {
+      "addTitle": "Agregar un secret",
+      "confirmDelete": "¿Eliminar este secret?",
+      "delete": "Eliminar",
+      "description": "API keys y tokens, almacenados en ~/.durin/secrets.json (modo 0600), fuera de config.json. Los valores nunca se muestran aquí.",
+      "empty": "Aún no hay secrets guardados.",
+      "fieldAccount": "Cuenta",
+      "fieldDescription": "Descripción",
+      "fieldName": "Nombre",
+      "fieldScope": "Scope",
+      "fieldService": "Servicio",
+      "fieldValue": "Valor",
+      "hintName": "UPPER_SNAKE — también es el nombre de la variable de entorno en exec.",
+      "hintScope": "Tags de consumidor separados por coma: exec, skill:*, channel:telegram.",
+      "hintService": "Para qué es el secret, p. ej. atlassian o provider:openai.",
+      "hintValue": "Deja en blanco al editar para mantener el valor guardado.",
+      "loadError": "No se pudieron cargar los secrets.",
+      "optional": "opcional",
+      "save": "Guardar secret",
+      "saving": "Guardando…",
+      "stored": "Secrets guardados",
+      "title": "Secrets"
     }
   },
   "chat": {
@@ -145,7 +278,12 @@
     "noSessions": "Todavía no hay sesiones.",
     "actions": "Acciones del chat {{title}}",
     "delete": "Eliminar",
-    "newChat": "Nuevo chat"
+    "newChat": "Nuevo chat",
+    "groups": {
+      "earlier": "Anterior",
+      "today": "Hoy",
+      "yesterday": "Ayer"
+    }
   },
   "deleteConfirm": {
     "title": "¿Eliminar este chat?",
@@ -220,11 +358,14 @@
       }
     },
     "header": {
-      "toggleSidebar": "Mostrar u ocultar la barra lateral"
+      "toggleSidebar": "Mostrar u ocultar la barra lateral",
+      "newChat": "Iniciar un nuevo chat",
+      "settings": "Abrir configuración",
+      "toggleTheme": "Cambiar tema"
     },
     "composer": {
       "placeholderThread": "Escribe tu mensaje…",
-      "placeholderHero": "¿Qué tienes en mente?",
+      "placeholderHero": "Pregunta lo que quieras…",
       "placeholderOpening": "Abriendo un nuevo chat…",
       "placeholderStreaming": "El modelo está respondiendo…",
       "inputAria": "Entrada de mensaje",
@@ -312,7 +453,13 @@
           }
         }
       },
-      "goalStateCloseAria": "Cerrar objetivo"
+      "goalStateCloseAria": "Cerrar objetivo",
+      "tools": {
+        "deepResearch": "Investigación profunda",
+        "reason": "Razonar",
+        "search": "Buscar",
+        "voice": "Entrada de voz"
+      }
     },
     "scrollToBottom": "Desplazarse al final"
   },
@@ -333,7 +480,22 @@
     "agentActivityLiveSummary": "En curso… · {{reasoning}} pasos · {{tools}} llamadas a herramientas",
     "agentActivityLiveToolsOnly": "En curso… · {{tools}} llamadas a herramientas",
     "imageAttachment": "Imagen adjunta",
-    "turnLatencyTitle": "Tiempo de respuesta (extremo a extremo)"
+    "turnLatencyTitle": "Tiempo de respuesta (extremo a extremo)",
+    "askUser": {
+      "placeholder": "Escribe tu respuesta, o selecciona una opción para editar",
+      "send": "Enviar",
+      "sent": "Respuesta enviada"
+    },
+    "copiedReply": "Respuesta copiada",
+    "copyReply": "Copiar respuesta",
+    "reqSecret": {
+      "alreadyStored": "Ya está guardado — no hay nada que hacer",
+      "hint": "Se guarda directamente en el almacén de secrets de durin; el valor nunca llega al modelo ni al chat.",
+      "placeholder": "Pega el valor del secret",
+      "save": "Guardar",
+      "saving": "Guardando…",
+      "stored": "Guardado — el valor nunca llegó al modelo"
+    }
   },
   "lightbox": {
     "title": "Vista previa de imagen",
