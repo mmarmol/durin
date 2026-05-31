@@ -188,6 +188,24 @@ def _upgrade_pipx() -> int:
 
     The subprocess inherits a `UV_NO_CACHE=1` env var so a freshly-published
     release is visible even before uv's index cache expires.
+
+    DO NOT replace with ``pipx install --force`` or ``pipx reinstall``:
+
+    - ``pipx install --force`` is a SILENT NO-OP on the uv backend
+      (verified 2026-05-31, pipx 1.12.0 + uv): uv refuses to overwrite
+      an existing venv unless ``--clear`` is passed, pipx falls back
+      to "Installing to existing venv" and the entrypoint script never
+      gets refreshed. Wheel updates appear to succeed but the installed
+      binary stays at the old version — no visible error.
+    - ``pipx reinstall`` would work but drops every ``pipx inject``-ed
+      package silently (memory deps, mcp, web, slack, etc.). The user
+      would see all those extras flagged as missing post-upgrade with
+      no warning that the reinstall caused it.
+
+    ``pipx upgrade`` is the only path that preserves both the venv
+    layout and the injected extras. See ``doctor.install_missing_extras``
+    for the matching inject-don't-reinstall convention. Regression test:
+    ``tests/cli/test_pipx_subprocess_safety.py``.
     """
     return _run(["pipx", "upgrade", PYPI_DIST_NAME], env=pipx_subprocess_env())
 
