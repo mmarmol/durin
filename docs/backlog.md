@@ -239,4 +239,71 @@ sesión 2026-05-25) — debe migrarse a `docs/architecture/` si se aprueba.
 
 ---
 
-## Last updated: 2026-05-30 (cleanup — renamed file, removed shipped P6/P9, removed empty Resueltos section, updated P2/P5/P8 to partial)
+### P10 — Strings hardcoded restantes en componentes core (i18n gap)
+
+**Contexto**: el grueso del webui está internacionalizado (en/es/id al
+100% post-2026-05-31), pero tres componentes core todavía tienen
+strings literales que bypass-ean `t()`:
+
+- `Composer.tsx`: `placeholder="Type your message…"` (L23),
+  `aria-label="Message input"` (L95), `aria-label="Send message"` (L112)
+- `EmptyState.tsx`: `"No chats yet"` (L17), `"New chat"` (L23)
+- `MessageList.tsx`: `aria-label="Scroll to bottom"` (L102)
+
+**Problema**: con locale = es/id, esos labels muestran inglés. Aria
+labels son especialmente importantes para screen readers.
+
+**Costo**: ~30 min — 6 keys nuevas en `chat.*` o `composer.*` namespace,
+6 reemplazos por t().
+
+**Estado**: detectado durante audit 2026-05-31. Bajo, quick win.
+
+---
+
+### P11 — UI/CLI para gestionar cron jobs
+
+**Contexto**: durin tiene cron jobs (heartbeat, dream cada 2h,
+memory_dream daily, etc.) registrados internamente, y un tool `cron`
+que el agente puede usar para crear/listar/borrar jobs desde el chat.
+Pero NO hay:
+
+- Subcomando `durin cron list/add/remove` en el CLI
+- Panel en webui Settings para ver/editar cron jobs configurados
+
+**Caso de uso**: user quiere ver qué jobs están corriendo, cuándo
+ejecutaron por última vez, agregar/quitar uno sin pedirle al agente.
+
+**Propuesta**:
+- CLI: `durin cron list/add/remove/show <id>`
+- Web: nuevo SettingsSection "Cron" con tabla (id, schedule, action,
+  last_run, next_run) + botón "Add cron job"
+
+**Estado**: detectado audit 2026-05-31. Funcionalidad existe en backend
+(via tool), pero faltan superficies humanas para administrarlo.
+
+---
+
+### P12 — UI para gestionar entries de memoria individuales
+
+**Contexto**: el Memory Graph view muestra entity_pages como nodos +
+relaciones, pero NO permite ver/editar/borrar entries individuales de
+`memory/{episodic,corpus,stable,...}/`. Hoy hay que usar
+`durin memory show/forget/expand <uri>` desde CLI.
+
+**Caso de uso**:
+- "¿Qué memorias tengo sobre X?" (browse)
+- "Esta memoria es vieja/incorrecta, bórrala" (forget)
+- "Ver el contenido raw de este episodic" (read)
+
+**Propuesta**:
+- Backend ya tiene endpoints (`/api/memory/search` + `fetchMemoryEntity`)
+- Frontend: nueva sección "Memoria" con list + filtros + click → drawer
+  con contenido raw + botón forget
+- Posible reusar el side-panel del MemoryGraph para mostrar el entry
+  cuando el nodo es seleccionado (ya hay parte de esto)
+
+**Estado**: detectado audit 2026-05-31. Más complejo que P10/P11.
+
+---
+
+## Last updated: 2026-05-31 (cleanup — P1+P2 shipped; +P10 hardcoded strings; +P11 cron mgmt UI; +P12 memory entries UI)
