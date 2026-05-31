@@ -198,7 +198,9 @@
       "image": "Model gambar",
       "imageHint": "Digunakan oleh tool generate_image saat mode generasi gambar aktif.",
       "enabled": "Aktif",
-      "disabled": "Nonaktif"
+      "disabled": "Nonaktif",
+      "imageNoEligibleProviders": "Tidak ada provider terkonfigurasi yang memiliki klien generasi gambar di build ini. Yang didukung: {{supported}}. Konfigurasikan API key salah satunya di Providers / Secrets untuk mengaktifkan generasi gambar.",
+      "disableNow": "Nonaktifkan sekarang"
     },
     "channels": {
       "credentialPlaceholder": "{{field}}",

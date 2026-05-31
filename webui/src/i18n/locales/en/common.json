@@ -251,7 +251,9 @@
       "image": "Image model",
       "imageHint": "Used by the generate_image tool when image generation mode is on.",
       "enabled": "Enabled",
-      "disabled": "Disabled"
+      "disabled": "Disabled",
+      "imageNoEligibleProviders": "None of your configured providers ship an image-generation client in this build. Supported: {{supported}}. Configure an API key for one of them in Providers / Secrets to enable image generation.",
+      "disableNow": "Force-disable"
     },
     "channels": {
       "description": "Bridge durin to chat platforms. Enable a channel and set its credential — the token goes to the secret store, not config.json.",

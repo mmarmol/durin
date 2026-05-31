@@ -198,7 +198,9 @@
       "image": "Modelo de imagen",
       "imageHint": "Usado por la herramienta generate_image cuando el modo de generación de imagen está activo.",
       "enabled": "Activado",
-      "disabled": "Desactivado"
+      "disabled": "Desactivado",
+      "imageNoEligibleProviders": "Ninguno de los providers que tenés configurados tiene cliente de generación de imágenes en esta build. Soportados: {{supported}}. Configurá una API key de alguno en Proveedores / Secrets para habilitar generación de imágenes.",
+      "disableNow": "Desactivar ahora"
     },
     "channels": {
       "credentialPlaceholder": "{{field}}",
