@@ -124,55 +124,6 @@ state + history + sources).
 **Estado**: pendiente, post-Phase 5 (cuando la pipeline entity-centric
 esté implementada).
 
-### P8 — Bench-100 fail audit (2026-05-30) — 13 bugs reales identificados
-
-**Contexto**: bench-100 proporcional post-H26 (decay removal) → 68/100 oficial. Análisis QA-por-QA de los 30 fails reveló que ~17 son ruido del dataset (gold mal etiquetado, judge demasiado estricto, infra timeouts) y **~13 son fails reales del sistema**. Score "fair" estimado: ~85%.
-
-**Distribución de los 13 fails reales**:
-
-| Tipo | Cantidad | QAs |
-|---|---|---|
-| Retrieval miss (memoria no surfacea fact que SÍ existe) | 8 | conv-3-q169 (Tilly), conv-3-q91 (dragons), conv-9-q142 (party), conv-4-q40 (NC/TN), conv-5-q19 (cook treats), conv-9-q54 (documentaries), conv-8-q44 (paint subjects), conv-7-q113 (comfort) |
-| Synthesis fail (memoria OK, agente enumera/elige mal) | 4 | conv-3-q113 (fantasy AND sci-fi), conv-3-q116 (movies vs games), conv-2-q19 (windshield), conv-6-q2 (VR Club) |
-| Adversarial hallucination | 1 | conv-0-q188 (Caroline hike fabricated) |
-
-**Patrones identificados**:
-
-1. **Event_summary / observation entries no se rankean alto**: 4 de los 8 retrieval miss son facts presentes en `event_summary[events_session_N]` u `observation[session_N]` — entradas curator-derivadas. El bench las siembra pero las queries del agente no las priorizan. **Hipótesis**: el embedding upgrade a `multilingual-e5-small` (H27, commit d6a6e16) puede ayudar porque está retrieval-tuned y los summaries son frases cortas y abstractas. **Validación**: bench-100 post-H27 corriendo ahora — comparar el delta en este bucket específico.
-
-2. **Synthesis fail = el LLM no enumera todas las opciones cuando el corpus tiene varios matches**: conv-3-q113 ("fantasy AND sci-fi" → agente drop "fantasy"), conv-3-q116 (corpus tiene ambos pero agente picked uno arbitrariamente). El identity.md tiene "enumerate all" pero el LLM lo ignora bajo glm-5.1. **Soluciones a explorar**:
-   - (a) Reforzar el bullet en identity.md con ejemplo concreto
-   - (b) Cross-encoder rerank funcionando (actualmente OFF — sentence-transformers no instalado, ver H25). Cross-encoder podría surfacear mejor entries del mismo topic
-   - (c) Probar el LLM judge re-evaluando esos casos con prompt más liberal — confirmar que la respuesta SÍ contiene el fact aunque incompleta
-
-3. **Adversarial hallucination es difícil**: conv-0-q188 es el único de 23 adversarials. 22/23 = 96% accuracy en adversarial es realmente bueno. La respuesta es fabricación parcial sobre evidencia tangencial — el agente confundió "incident" (sí hubo) con "setback" (no encaja).
-
-**Acciones derivadas**:
-
-- [x] **Acción 1 — DONE**: bench-100 post-H27 corrido (75% vs 71% post-H26, +2pp). e5-small validado marginalmente; los 8 retrieval miss originales se redujeron a 4 reales (commit `d6a6e16` + análisis QA-by-QA).
-- [x] **Acción 2 — DONE**: `sentence-transformers` instalado + CE working con `BAAI/bge-reranker-base` (H30, commit `9b11b0c`). Bench post-CE corriendo en momento de esta actualización.
-- [ ] **Acción 3 — PENDIENTE**: si bench post-CE no cierra los synthesis fails, reforzar enumeration rule en `identity.md`. Esperando datos del bench actual.
-- [ ] **Acción 4 — PENDIENTE (out of scope inmediato)**: re-judge con prompt más liberal para validar empíricamente que los 5 "judge over-strict" son realmente over-strict. No bug del sistema; ayuda interpretación del bench.
-
-**Dataset issues identificados (informativo, no actionable)**:
-
-- conv-3-q39: gold "attended" pero corpus dice "hosted"
-- conv-3-q43: gold "four months" pero fechas dan ~2.8 meses
-- conv-1-q56: gold "dancing together" pero corpus dice "rollercoaster" literal
-- conv-4-q55: gold "May 2023" pero corpus dice "just under a year as of Dec 2023" (~Jan 2023)
-- conv-7-q35: gold "24 Feb" vs agente "25 Feb" — off by one, necesita verificar quién acierta
-- conv-2-q64: gold pide titles específicos que el corpus no tiene
-
-LoCoMo tiene ~10-12% de gold-noise (consistente con reportes de mem0, A-Mem, otros). No actionable de nuestro lado.
-
-**Referencias**:
-
-- Run dir: `bench-results/locomo/2026-05-30_094628_087ee40c/`
-- Análisis full: `/tmp/fail_analysis.txt` (regenerable con script en el reporte)
-- Commits relacionados: H25 (65d3a74), H26 (087ee40), H27 (d6a6e16)
-
----
-
 ### P7 — Threshold trigger para `memory_ingest` (simetría con `memory_store`)
 
 **Contexto**: `memory_store` (durin/agent/tools/memory_store.py:282-363) ya
@@ -306,4 +257,4 @@ relaciones, pero NO permite ver/editar/borrar entries individuales de
 
 ---
 
-## Last updated: 2026-05-31 (cleanup — P1+P2 shipped; +P10 hardcoded strings; +P11 cron mgmt UI; +P12 memory entries UI)
+## Last updated: 2026-05-31 (cleanup — P1/P2/P8 shipped; +P10 hardcoded strings; +P11 cron mgmt UI; +P12 memory entries UI; +pipx subprocess safety regression test)
