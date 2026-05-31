@@ -1356,6 +1356,16 @@ class WebSocketChannel(BaseChannel):
                 return bool(info.get("supports_vision"))
             if capability == "audio":
                 return bool(info.get("supports_audio_input"))
+            if capability == "image":
+                # Image-generation picker: keep models that publish image
+                # output (DALL-E, gpt-image, Imagen, Flux via gateways).
+                # Also accept the legacy `mode == image_generation` flag
+                # which the catalog emits for some pure-generators that
+                # don't set supports_image_output.
+                return (
+                    bool(info.get("supports_image_output"))
+                    or info.get("mode") == "image_generation"
+                )
             return True
 
         def _provider_ok(mid: str) -> bool:
@@ -1378,7 +1388,14 @@ class WebSocketChannel(BaseChannel):
                 mid
                 for mid, info in models.items()
                 if isinstance(mid, str)
-                and (not isinstance(info, dict) or info.get("mode") != "image_generation")
+                # Exclude pure image-generation models from chat pickers
+                # (vision/audio/text). But when the caller IS asking for
+                # the image picker, those are exactly what we want.
+                and (
+                    capability == "image"
+                    or not isinstance(info, dict)
+                    or info.get("mode") != "image_generation"
+                )
                 and _capability_ok(info)
                 and _provider_ok(mid)
             )
@@ -1389,7 +1406,7 @@ class WebSocketChannel(BaseChannel):
         # shortlist doesn't surface (e.g.) a text-only model in the vision
         # picker. Unknown ids in the snapshot stay (charity for fresh
         # picks the catalog doesn't have yet).
-        if capability in ("vision", "audio"):
+        if capability in ("vision", "audio", "image"):
             try:
                 from durin.providers.capabilities import _load_capabilities_snapshot
 

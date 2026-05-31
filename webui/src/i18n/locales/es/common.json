@@ -193,7 +193,11 @@
       "maxTokens": "Tokens máximos de salida",
       "maxTokensHint": "Tope por mensaje del asistente. Limitado por el modelo.",
       "reasoningEffort": "Esfuerzo de razonamiento",
-      "reasoningEffortHint": "Para modelos de razonamiento: low | medium | high. Vacío = por defecto."
+      "reasoningEffortHint": "Para modelos de razonamiento: low | medium | high. Vacío = por defecto.",
+      "image": "Modelo de imagen",
+      "imageHint": "Usado por la herramienta generate_image cuando el modo de generación de imagen está activo.",
+      "enabled": "Activado",
+      "disabled": "Desactivado"
     },
     "channels": {
       "credentialPlaceholder": "{{field}}",

@@ -193,7 +193,11 @@
       "maxTokens": "Token output maksimum",
       "maxTokensHint": "Batas per pesan asisten. Dibatasi oleh model.",
       "reasoningEffort": "Tingkat penalaran",
-      "reasoningEffortHint": "Untuk model penalaran: low | medium | high. Kosong = default."
+      "reasoningEffortHint": "Untuk model penalaran: low | medium | high. Kosong = default.",
+      "image": "Model gambar",
+      "imageHint": "Digunakan oleh tool generate_image saat mode generasi gambar aktif.",
+      "enabled": "Aktif",
+      "disabled": "Nonaktif"
     },
     "channels": {
       "credentialPlaceholder": "{{field}}",

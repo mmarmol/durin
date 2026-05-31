@@ -1303,7 +1303,119 @@ function ModelBlockRows({
           capability="text"
         />
       </SettingsRow>
+      <SettingsRow
+        title={t("settings.models.image")}
+        description={t("settings.models.imageHint")}
+      >
+        <ImageGenControl
+          config={config}
+          configuredProviders={configuredProviders}
+          token={token}
+          onConfigChange={setConfig}
+        />
+      </SettingsRow>
     </>
+  );
+}
+
+/** Image generation tool config row — picks the provider+model the
+ *  `generate_image` tool uses when the user enables image-gen mode in
+ *  the chat composer. Different shape from AuxControl: writes
+ *  `tools.imageGeneration.{provider,model}` (not `agents.auxModels`),
+ *  exposes an Enabled toggle (the tool is opt-in), and the capability
+ *  filter restricts to models that publish image output.
+ */
+function ImageGenControl({
+  config,
+  configuredProviders,
+  token,
+  onConfigChange,
+}: {
+  config: Record<string, unknown> | null;
+  configuredProviders: Array<{ name: string; label: string }>;
+  token: string;
+  onConfigChange: (cfg: Record<string, unknown>) => void;
+}) {
+  const { t } = useTranslation();
+  const tools = config?.tools as Record<string, unknown> | undefined;
+  const ig = (tools?.imageGeneration ?? {}) as {
+    enabled?: boolean;
+    provider?: string;
+    model?: string;
+  };
+  const [enabled, setEnabled] = useState<boolean>(Boolean(ig.enabled));
+  const [prov, setProv] = useState<string>(typeof ig.provider === "string" ? ig.provider : "");
+  const [model, setModel] = useState<string>(typeof ig.model === "string" ? ig.model : "");
+  const [busy, setBusy] = useState<string | null>(null);
+  useEffect(() => {
+    setEnabled(Boolean(ig.enabled));
+    setProv(typeof ig.provider === "string" ? ig.provider : "");
+    setModel(typeof ig.model === "string" ? ig.model : "");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config]);
+  const saveField = async (field: "enabled" | "provider" | "model", value: unknown) => {
+    setBusy(field);
+    try {
+      const next = await setConfigValue(token, `tools.image_generation.${field}`, value);
+      onConfigChange(next);
+    } finally {
+      setBusy(null);
+    }
+  };
+  const dirty =
+    prov.trim() !== (typeof ig.provider === "string" ? ig.provider : "") ||
+    model.trim() !== (typeof ig.model === "string" ? ig.model : "");
+  const saveCombo = async () => {
+    if (!prov.trim() || !model.trim()) return;
+    setBusy("combo");
+    try {
+      await setConfigValue(token, "tools.image_generation.provider", prov.trim());
+      const next = await setConfigValue(
+        token, "tools.image_generation.model", model.trim(),
+      );
+      onConfigChange(next);
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <div className="flex flex-col items-end gap-2">
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <ProviderPicker
+          providers={configuredProviders}
+          value={prov}
+          emptyLabel={t("settings.models.pickProvider")}
+          onChange={setProv}
+        />
+        <ModelPicker
+          token={token}
+          provider={prov}
+          value={model}
+          onChange={setModel}
+          capability="image"
+        />
+      </div>
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={busy === "enabled"}
+          onClick={() => void saveField("enabled", !enabled)}
+          className="rounded-full"
+        >
+          {enabled ? t("settings.models.enabled") : t("settings.models.disabled")}
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!dirty || busy !== null || !model.trim() || !prov.trim()}
+          onClick={() => void saveCombo()}
+          className="rounded-full"
+        >
+          {busy === "combo" ? t("settings.models.saving") : t("settings.models.save")}
+        </Button>
+      </div>
+    </div>
   );
 }
 
