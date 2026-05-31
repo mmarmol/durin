@@ -1173,7 +1173,11 @@ def install_missing_extras(extras: list[str], *, assume_yes: bool = False) -> in
         # Use `pipx inject` to add the extras' packages to the existing
         # pipx venv. This is non-destructive (no reinstall, no data loss,
         # no config touch) and avoids the broken `pipx install --force`
-        # path on the uv backend.
+        # path on the uv backend (silent no-op — see _upgrade_pipx
+        # docstring for the full diagnosis). Never replace with
+        # `pipx install --extras` or `pipx reinstall` — both would
+        # drop existing injections silently. Regression test:
+        # tests/cli/test_pipx_subprocess_safety.py.
         env = pipx_subprocess_env()
         pkgs = extras_to_packages(extras)
         if not pkgs:
