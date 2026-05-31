@@ -580,6 +580,7 @@ class ProvidersConfig(Base):
     deepseek: ProviderConfig = Field(default_factory=ProviderConfig)
     groq: ProviderConfig = Field(default_factory=ProviderConfig)
     zhipu: ProviderConfig = Field(default_factory=ProviderConfig)
+    zai_coding_plan: ProviderConfig = Field(default_factory=ProviderConfig)  # Z.ai Coding Plan (separate quota from zhipu)
     dashscope: ProviderConfig = Field(default_factory=ProviderConfig)
     vllm: ProviderConfig = Field(default_factory=ProviderConfig)
     ollama: ProviderConfig = Field(default_factory=ProviderConfig)  # Ollama local models

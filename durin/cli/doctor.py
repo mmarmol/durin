@@ -987,7 +987,7 @@ def check_provider_reachable(*, timeout: float = 3.0) -> CheckResult:
     if spec is None:
         return CheckResult("provider ping", "warn", f"unknown provider {spec_name!r}", category="providers")
     p = getattr(cfg.providers, spec.name, None)
-    base = p.api_base if p and getattr(p, "api_base", None) else getattr(spec, "default_base_url", None)
+    base = p.api_base if p and getattr(p, "api_base", None) else getattr(spec, "default_api_base", None)
     if not base:
         return CheckResult("provider ping", "warn", f"{spec.label}: no api_base set.", category="providers")
 
