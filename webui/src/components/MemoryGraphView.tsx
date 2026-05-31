@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import {
   ChevronDown,
   ChevronRight,
@@ -148,6 +149,7 @@ type TabName = "info" | "body" | "history" | "sources" | "archive";
 type SessionTabName = "info" | "messages" | "events" | "memory_ops" | "entries";
 
 export function MemoryGraphView(_props: MemoryGraphViewProps) {
+  const { t } = useTranslation();
   const { data, loading, error, refresh } = useMemoryGraph(_props.active);
   const { token } = useClient();
   const tokenRef = useRef(token);
@@ -634,15 +636,18 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
     <div className="flex h-full min-h-0 flex-col bg-background">
       <header className="flex shrink-0 items-center gap-2 border-b border-border/40 px-3 py-2">
         <Network className="h-4 w-4 text-muted-foreground" aria-hidden />
-        <h1 className="text-sm font-semibold">Memory graph</h1>
+        <h1 className="text-sm font-semibold">{t("memoryGraph.title")}</h1>
         {data ? (
           <span className="text-xs text-muted-foreground">
-            {data.stats.node_count} nodes · {data.stats.edge_count} edges
+            {t("memoryGraph.stats", {
+              nodes: data.stats.node_count,
+              edges: data.stats.edge_count,
+            })}
             {data.stats.phantom_count > 0
-              ? ` · ${data.stats.phantom_count} phantom`
+              ? ` · ${t("memoryGraph.statsPhantom", { count: data.stats.phantom_count })}`
               : ""}
             {data.stats.truncated_nodes || data.stats.truncated_edges
-              ? " · truncated"
+              ? ` · ${t("memoryGraph.statsTruncated")}`
               : ""}
           </span>
         ) : null}
@@ -659,7 +664,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                 setSearchOpen(true);
               }}
               onFocus={() => setSearchOpen(true)}
-              placeholder="Search memory (vector + grep)…"
+              placeholder={t("memoryGraph.searchPlaceholder")}
               className={cn(
                 "h-7 w-72 rounded-md border border-input bg-background pl-7 pr-2 text-[12.5px]",
                 "outline-none focus:ring-1 focus:ring-ring",
@@ -668,7 +673,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
             {search ? (
               <button
                 type="button"
-                aria-label="Clear"
+                aria-label={t("memoryGraph.clear")}
                 onClick={() => {
                   setSearch("");
                   setSearchResults(null);
@@ -686,13 +691,13 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
               onClick={() => setFocusRef(null)}
               className="h-7 gap-1 text-[11px]"
             >
-              <Focus className="h-3 w-3" /> Unfocus
+              <Focus className="h-3 w-3" /> {t("memoryGraph.unfocus")}
             </Button>
           ) : null}
           <Button
             variant="ghost"
             size="icon"
-            aria-label="Refresh"
+            aria-label={t("memoryGraph.refresh")}
             onClick={() => void refresh()}
             disabled={loading}
             className="h-7 w-7"
@@ -710,15 +715,17 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
         ) : null}
         {loading && !data ? (
           <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
-            Loading…
+            {t("memoryGraph.loadingGraph")}
           </div>
         ) : null}
         {data && data.nodes.length === 0 ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 text-sm text-muted-foreground">
-            <span>No entity pages yet.</span>
+            <span>{t("memoryGraph.empty")}</span>
             <span className="text-xs">
-              Run <code className="rounded bg-muted px-1">durin memory dream</code>{" "}
-              once entries accumulate.
+              <Trans
+                i18nKey="memoryGraph.emptyHint"
+                components={{ code: <code className="rounded bg-muted px-1" /> }}
+              />
             </span>
           </div>
         ) : null}
@@ -784,7 +791,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                 onClick={() => setHiddenTypes(new Set())}
                 className="ml-1 rounded border border-border/40 px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-muted"
               >
-                Show all
+                {t("memoryGraph.showAll")}
               </button>
             ) : null}
           </div>
@@ -806,7 +813,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                   size="icon"
                   className="h-5 w-5"
                   onClick={() => setSearchOpen(false)}
-                  aria-label="Close search panel"
+                  aria-label={t("memoryGraph.closeSearch")}
                 >
                   <X className="h-3 w-3" />
                 </Button>
@@ -814,14 +821,14 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
             </header>
             <div className="max-h-full overflow-y-auto">
               {searchLoading ? (
-                <div className="px-3 py-3 text-xs text-muted-foreground">Searching…</div>
+                <div className="px-3 py-3 text-xs text-muted-foreground">{t("memoryGraph.searching")}</div>
               ) : null}
               {searchError ? (
                 <div className="px-3 py-3 text-xs text-destructive">{searchError}</div>
               ) : null}
               {searchResults && searchResults.results.length === 0 && !searchLoading ? (
                 <div className="px-3 py-3 text-xs text-muted-foreground">
-                  No matches.
+                  {t("memoryGraph.noMatches")}
                 </div>
               ) : null}
               {searchResults?.results.slice(0, 40).map((r, idx) => {
@@ -897,13 +904,13 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                 size="icon"
                 className="h-5 w-5"
                 onClick={() => setEdgePopup(null)}
-                aria-label="Close edge popup"
+                aria-label={t("memoryGraph.closeEdge")}
               >
                 <X className="h-3 w-3" />
               </Button>
             </div>
             {edgePopup.loading ? (
-              <div className="text-muted-foreground">Loading…</div>
+              <div className="text-muted-foreground">{t("memoryGraph.loading")}</div>
             ) : edgePopup.detail ? (
               <>
                 <div className="mb-1 text-muted-foreground">
@@ -956,7 +963,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
               <Button
                 variant="ghost"
                 size="icon"
-                aria-label={focusRef === selected.id ? "Unfocus" : "Focus 1-hop"}
+                aria-label={focusRef === selected.id ? t("memoryGraph.unfocus") : t("memoryGraph.focusOneHop")}
                 onClick={() =>
                   setFocusRef((c) => (c === selected.id ? null : selected.id))
                 }
@@ -984,7 +991,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
               <Button
                 variant="ghost"
                 size="icon"
-                aria-label="Close"
+                aria-label={t("memoryGraph.close")}
                 onClick={() => {
                   setSelected(null);
                   if (focusRef) setFocusRef(null);
@@ -999,64 +1006,65 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
               {isSessionSelected
                 ? (
                     [
-                      { id: "info", label: "Info" },
+                      { id: "info", label: t("memoryGraph.tabInfo") },
                       { id: "messages", label: `Messages${sessionDetail?.recent_messages.length ? ` (${sessionDetail.recent_messages.length})` : ""}` },
                       { id: "events", label: `Events${sessionDetail?.events.length ? ` (${sessionDetail.events.length})` : ""}` },
                       { id: "memory_ops", label: `Memory ops${sessionDetail?.memory_ops.length ? ` (${sessionDetail.memory_ops.length})` : ""}` },
                       { id: "entries", label: `Entries${sessionDetail?.entries_linked.length ? ` (${sessionDetail.entries_linked.length})` : ""}` },
                     ] as const
-                  ).map((t) => (
+                  ).map((tab) => (
                     <button
-                      key={t.id}
+                      key={tab.id}
                       type="button"
-                      onClick={() => setSessionTab(t.id as SessionTabName)}
+                      onClick={() => setSessionTab(tab.id as SessionTabName)}
                       className={cn(
                         "rounded px-2 py-1 font-medium transition-colors",
-                        sessionTab === t.id
+                        sessionTab === tab.id
                           ? "bg-primary/10 text-primary"
                           : "text-muted-foreground hover:bg-muted",
                       )}
                     >
-                      {t.label}
+                      {tab.label}
                     </button>
                   ))
                 : (
                     [
-                      { id: "info", label: "Info" },
-                      { id: "body", label: "Body" },
+                      { id: "info", label: t("memoryGraph.tabInfo") },
+                      { id: "body", label: t("memoryGraph.tabBody") },
                       { id: "history", label: `History${detail?.history.length ? ` (${detail.history.length})` : ""}` },
                       { id: "sources", label: `Sources${detail?.entries.length ? ` (${detail.entries.length})` : ""}` },
                       { id: "archive", label: `Archive${detail?.archive.length ? ` (${detail.archive.length})` : ""}` },
                     ] as const
-                  ).map((t) => (
+                  ).map((tab) => (
                     <button
-                      key={t.id}
+                      key={tab.id}
                       type="button"
-                      onClick={() => setActiveTab(t.id as TabName)}
+                      onClick={() => setActiveTab(tab.id as TabName)}
                       className={cn(
                         "rounded px-2 py-1 font-medium transition-colors",
-                        activeTab === t.id
+                        activeTab === tab.id
                           ? "bg-primary/10 text-primary"
                           : "text-muted-foreground hover:bg-muted",
                       )}
                     >
-                      {t.label}
+                      {tab.label}
                     </button>
                   ))}
             </div>
 
             <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2 text-xs">
               {detailLoading ? (
-                <div className="text-muted-foreground">Loading detail…</div>
+                <div className="text-muted-foreground">{t("memoryGraph.loadingDetail")}</div>
               ) : null}
               {detailError ? (
                 <div className="text-destructive">{detailError}</div>
               ) : null}
               {!detail && !sessionDetail && !detailLoading && selected.phantom ? (
                 <p className="text-[11px] text-muted-foreground">
-                  Tagged in episodic entries but no consolidated page yet. Run{" "}
-                  <code className="rounded bg-muted px-1">durin memory dream</code>{" "}
-                  to create one.
+                  <Trans
+                    i18nKey="memoryGraph.noConsolidatedHint"
+                    components={{ code: <code className="rounded bg-muted px-1" /> }}
+                  />
                 </p>
               ) : null}
               {sessionDetail ? (
@@ -1070,18 +1078,18 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                   {activeTab === "info" ? (
                     <dl className="space-y-2">
                       <div className="flex justify-between gap-2">
-                        <dt className="text-muted-foreground">Type</dt>
+                        <dt className="text-muted-foreground">{t("memoryGraph.fieldType")}</dt>
                         <dd className="font-mono">{detail.page.type}</dd>
                       </div>
                       <div className="flex justify-between gap-2">
                         <dt className="text-muted-foreground">
-                          Entries referencing
+                          {t("memoryGraph.entriesReferencing")}
                         </dt>
                         <dd className="font-mono">{selected.weight}</dd>
                       </div>
                       {detail.page.dream_processed_through ? (
                         <div className="flex justify-between gap-2">
-                          <dt className="text-muted-foreground">Last dreamed</dt>
+                          <dt className="text-muted-foreground">{t("memoryGraph.fieldLastDreamed")}</dt>
                           <dd className="font-mono text-[11px]">
                             {detail.page.dream_processed_through}
                           </dd>
@@ -1089,7 +1097,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                       ) : null}
                       {detail.page.aliases.length > 0 ? (
                         <div>
-                          <dt className="text-muted-foreground">Aliases</dt>
+                          <dt className="text-muted-foreground">{t("memoryGraph.fieldAliases")}</dt>
                           <dd className="mt-0.5 flex flex-wrap gap-1">
                             {detail.page.aliases.map((a) => (
                               <span
@@ -1104,7 +1112,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                       ) : null}
                       {detail.page.identifiers ? (
                         <div>
-                          <dt className="text-muted-foreground">Identifiers</dt>
+                          <dt className="text-muted-foreground">{t("memoryGraph.fieldIdentifiers")}</dt>
                           <dd className="mt-0.5 space-y-0.5">
                             {Object.entries(detail.page.identifiers).map(
                               ([k, v]) => (
@@ -1128,13 +1136,13 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                         {detail.page.body}
                       </pre>
                     ) : (
-                      <p className="text-muted-foreground">No body content.</p>
+                      <p className="text-muted-foreground">{t("memoryGraph.noBody")}</p>
                     )
                   ) : null}
 
                   {activeTab === "history" ? (
                     detail.history.length === 0 ? (
-                      <p className="text-muted-foreground">No git history yet.</p>
+                      <p className="text-muted-foreground">{t("memoryGraph.noHistory")}</p>
                     ) : (
                       <ul className="space-y-2">
                         {detail.history.map((c) => (
@@ -1185,7 +1193,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                   {activeTab === "archive" ? (
                     detail.archive.length === 0 ? (
                       <p className="text-muted-foreground">
-                        No absorptions for this entity.
+                        {t("memoryGraph.noAbsorptions")}
                       </p>
                     ) : (
                       <ul className="space-y-2">
@@ -1240,6 +1248,7 @@ function SessionTabs({
   detail: MemorySessionDetail;
   tab: SessionTabName;
 }) {
+  const { t } = useTranslation();
   if (tab === "info") {
     const info = detail.info;
     const metaEnts = detail.entities_tagged.from_meta;
@@ -1247,40 +1256,40 @@ function SessionTabs({
     return (
       <dl className="space-y-2">
         <div className="flex justify-between gap-2">
-          <dt className="text-muted-foreground">Session key</dt>
+          <dt className="text-muted-foreground">{t("memoryGraph.fieldSessionKey")}</dt>
           <dd className="font-mono">{detail.session_key ?? detail.session_ref}</dd>
         </div>
         {info.channel ? (
           <div className="flex justify-between gap-2">
-            <dt className="text-muted-foreground">Channel</dt>
+            <dt className="text-muted-foreground">{t("memoryGraph.fieldChannel")}</dt>
             <dd className="font-mono">{info.channel}</dd>
           </div>
         ) : null}
         {info.model ? (
           <div className="flex justify-between gap-2">
-            <dt className="text-muted-foreground">Model</dt>
+            <dt className="text-muted-foreground">{t("memoryGraph.fieldModel")}</dt>
             <dd className="font-mono">{info.model}</dd>
           </div>
         ) : null}
         <div className="flex justify-between gap-2">
-          <dt className="text-muted-foreground">Messages</dt>
+          <dt className="text-muted-foreground">{t("memoryGraph.fieldMessages")}</dt>
           <dd className="font-mono">{info.message_count}</dd>
         </div>
         {info.created_at ? (
           <div className="flex justify-between gap-2">
-            <dt className="text-muted-foreground">Created</dt>
+            <dt className="text-muted-foreground">{t("memoryGraph.fieldCreated")}</dt>
             <dd className="font-mono text-[11px]">{info.created_at.slice(0, 19)}</dd>
           </div>
         ) : null}
         {info.updated_at ? (
           <div className="flex justify-between gap-2">
-            <dt className="text-muted-foreground">Updated</dt>
+            <dt className="text-muted-foreground">{t("memoryGraph.fieldUpdated")}</dt>
             <dd className="font-mono text-[11px]">{info.updated_at.slice(0, 19)}</dd>
           </div>
         ) : null}
         {metaEnts.length > 0 ? (
           <div>
-            <dt className="text-muted-foreground">Entities (from meta tags)</dt>
+            <dt className="text-muted-foreground">{t("memoryGraph.entitiesFromMeta")}</dt>
             <dd className="mt-0.5 flex flex-wrap gap-1">
               {metaEnts.map((e) => (
                 <span
@@ -1295,7 +1304,7 @@ function SessionTabs({
         ) : null}
         {refEnts.length > 0 ? (
           <div>
-            <dt className="text-muted-foreground">Entities (from entry source_refs)</dt>
+            <dt className="text-muted-foreground">{t("memoryGraph.entitiesFromSources")}</dt>
             <dd className="mt-0.5 flex flex-wrap gap-1">
               {refEnts.map((e) => (
                 <span
@@ -1314,7 +1323,7 @@ function SessionTabs({
 
   if (tab === "messages") {
     if (detail.recent_messages.length === 0) {
-      return <p className="text-muted-foreground">No recent messages.</p>;
+      return <p className="text-muted-foreground">{t("memoryGraph.noRecentMessages")}</p>;
     }
     return (
       <ul className="space-y-2">
@@ -1342,7 +1351,7 @@ function SessionTabs({
 
   if (tab === "events") {
     if (detail.events.length === 0) {
-      return <p className="text-muted-foreground">No lifecycle events recorded.</p>;
+      return <p className="text-muted-foreground">{t("memoryGraph.noLifecycleEvents")}</p>;
     }
     return (
       <ul className="space-y-1.5">
@@ -1421,7 +1430,7 @@ function SessionTabs({
   if (detail.entries_linked.length === 0) {
     return (
       <p className="text-muted-foreground">
-        No episodic entries linked back to this session via source_refs.
+        {t("memoryGraph.noSourceLinkedEntries")}
       </p>
     );
   }
