@@ -257,6 +257,99 @@ def test_dispatch_corpus_counts_toward_threshold(
     assert spawns == [("post_ingest_threshold", "person:alice")]
 
 
+def test_dispatch_uses_aux_models_memory_when_app_config_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When ``app_config`` is forwarded and ``aux_models.memory`` is
+    set, the spawned DreamRunner receives that model — overriding
+    ``dream.model_override``."""
+    captured: list[dict[str, Any]] = []
+
+    class _CapturingRunner:
+        def __init__(self, **kwargs: Any) -> None:
+            captured.append(kwargs)
+
+        def run(self, **_: Any) -> SimpleNamespace:
+            return SimpleNamespace(
+                ran=True, reason="ok",
+                entities_consolidated=1, entities_failed=0,
+                duration_s=0.0,
+            )
+
+    monkeypatch.setattr(
+        "durin.memory.dream_runner.DreamRunner", _CapturingRunner,
+    )
+    store_memory(
+        tmp_path, content="obs",
+        entities=["person:alice"],
+        valid_from=datetime.date(2026, 5, 23),
+    )
+    dream_cfg = _make_dream_config(threshold=1)
+    dream_cfg.model_override = "fallback-model"
+
+    fake_app_config = SimpleNamespace(
+        agents=SimpleNamespace(
+            aux_models=SimpleNamespace(
+                memory=SimpleNamespace(preset=None, model="aux-mem-model"),
+            ),
+        ),
+        memory=SimpleNamespace(dream=dream_cfg),
+    )
+
+    maybe_dispatch_threshold_dream(
+        workspace=tmp_path,
+        entities=["person:alice"],
+        dream_config=dream_cfg,
+        vector_index=None,
+        source_trigger="test_trigger",
+        app_config=fake_app_config,
+    )
+    _wait_for_spawn(captured)
+    assert len(captured) == 1
+    assert captured[0]["model"] == "aux-mem-model"
+
+
+def test_dispatch_without_app_config_falls_back_to_model_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Backward-compat: callers that don't pass ``app_config`` keep
+    the legacy ``dream.model_override`` behavior."""
+    captured: list[dict[str, Any]] = []
+
+    class _CapturingRunner:
+        def __init__(self, **kwargs: Any) -> None:
+            captured.append(kwargs)
+
+        def run(self, **_: Any) -> SimpleNamespace:
+            return SimpleNamespace(
+                ran=True, reason="ok",
+                entities_consolidated=1, entities_failed=0,
+                duration_s=0.0,
+            )
+
+    monkeypatch.setattr(
+        "durin.memory.dream_runner.DreamRunner", _CapturingRunner,
+    )
+    store_memory(
+        tmp_path, content="obs",
+        entities=["person:alice"],
+        valid_from=datetime.date(2026, 5, 23),
+    )
+    dream_cfg = _make_dream_config(threshold=1)
+    dream_cfg.model_override = "legacy-override"
+
+    maybe_dispatch_threshold_dream(
+        workspace=tmp_path,
+        entities=["person:alice"],
+        dream_config=dream_cfg,
+        vector_index=None,
+        source_trigger="test_trigger",
+    )
+    _wait_for_spawn(captured)
+    assert len(captured) == 1
+    assert captured[0]["model"] == "legacy-override"
+
+
 def test_dispatch_empty_entities_short_circuits(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

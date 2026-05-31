@@ -336,11 +336,12 @@ def cmd_dream(
             "entity pages will not be indexed[/yellow]"
         )
 
+    from durin.memory.model_resolve import resolve_memory_model
     runner = DreamRunner(
         workspace=workspace,
         min_seconds_between_runs=0,
         max_seconds_per_run=cfg.memory.dream.max_seconds_per_run,
-        model=cfg.memory.dream.model_override,
+        model=resolve_memory_model(cfg),
         vector_index=vi,
         # §2.D: opt-in auto-absorb post-dream. Manual `durin memory dream`
         # respects the same config as the auto-triggers — if the user

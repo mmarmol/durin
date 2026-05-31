@@ -425,11 +425,12 @@ class AuxModelsConfig(Base):
 
     vision: AuxModelConfig | None = None
     audio: AuxModelConfig | None = None
-    # G3.b: model used by memory_search's LLM query rewriter. Same
-    # shape as vision/audio. When unset, the rewriter falls back to
-    # the agent's active preset — keeps one knob ("which model do I
-    # use?") consistent unless the user explicitly opts into a
-    # cheaper/faster model for memory ops.
+    # Model used by memory subsystem operations — both dreams
+    # (working-memory `dream` and entity-centric `memory_dream`).
+    # When unset, dreams fall back to their own `model_override` (if
+    # any) and then to the agent's active preset. Lets the user pick
+    # a cheaper/faster model for the long offline consolidation runs
+    # without changing the chat model.
     memory: AuxModelConfig | None = None
 
 

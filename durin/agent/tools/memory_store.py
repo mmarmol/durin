@@ -120,6 +120,7 @@ class MemoryStoreTool(Tool):
         workspace: str | Path,
         embedding_model: str | None = None,
         dream_config: Any | None = None,
+        app_config: Any | None = None,
     ) -> None:
         self._workspace = Path(workspace).expanduser()
         self._embedding_model = embedding_model
@@ -132,6 +133,10 @@ class MemoryStoreTool(Tool):
         # background dream pass. None disables the trigger entirely
         # (tests, environments without the config).
         self._dream_config = dream_config
+        # Full DurinConfig. Forwarded to the threshold trigger so the
+        # spawned DreamRunner can resolve its model via aux_models.memory
+        # (else falls back to dream.model_override).
+        self._app_config = app_config
 
     @property
     def name(self) -> str:
@@ -169,6 +174,7 @@ class MemoryStoreTool(Tool):
             workspace=ctx.workspace,
             embedding_model=model,
             dream_config=dream_cfg,
+            app_config=app,
         )
 
     def _get_vector_index(self) -> Optional[VectorIndex]:
@@ -345,4 +351,5 @@ class MemoryStoreTool(Tool):
             dream_config=self._dream_config,
             vector_index=vector_index,
             source_trigger="threshold",
+            app_config=self._app_config,
         )

@@ -1341,11 +1341,12 @@ def _run_gateway(
                         "memory_dream cron: vector index unavailable (%s); "
                         "pages will not be indexed", exc,
                     )
+            from durin.memory.model_resolve import resolve_memory_model
             runner = DreamRunner(
                 workspace=workspace,
                 min_seconds_between_runs=mem_dream_cfg.min_seconds_between_runs,
                 max_seconds_per_run=mem_dream_cfg.max_seconds_per_run,
-                model=mem_dream_cfg.model_override,
+                model=resolve_memory_model(cfg),
                 vector_index=vi,
                 auto_absorb_enabled=mem_dream_cfg.auto_absorb.enabled,
                 auto_absorb_threshold=mem_dream_cfg.auto_absorb.confidence_threshold,
