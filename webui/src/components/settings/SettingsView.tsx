@@ -799,16 +799,47 @@ function AuxControl({
     ? current.provider : "";
   const [model, setModel] = useState(current?.model ?? "");
   const [prov, setProv] = useState(initialProv);
+  const [testing, setTesting] = useState(false);
+  const [test, setTest] = useState<ModelTestResult | null>(null);
   useEffect(() => {
     setModel(current?.model ?? "");
     setProv(
       current?.provider && current.provider !== "auto" ? current.provider : "",
     );
+    // Clear any prior result when the row's underlying config changes
+    // (e.g. another save lands or the row is cleared) so a stale ✓ /
+    // ✗ badge doesn't claim the new combo was tested.
+    setTest(null);
   }, [current]);
   const dirty =
     model.trim() !== (current?.model ?? "") ||
     prov.trim() !== (current?.provider && current.provider !== "auto"
       ? current.provider : "");
+  const runTest = async () => {
+    if (!model.trim() || !prov.trim()) return;
+    setTesting(true);
+    setTest(null);
+    try {
+      // Pass model+provider explicitly so the endpoint tests the
+      // in-flight combo even when the user hasn't saved yet — gives
+      // immediate feedback on whether a pick will work before
+      // committing it to config.
+      setTest(
+        await testModel(token, {
+          model: model.trim(),
+          provider: prov.trim(),
+        }),
+      );
+    } catch {
+      setTest({
+        status: "fail",
+        message: t("settings.models.testError"),
+        fix: "",
+      });
+    } finally {
+      setTesting(false);
+    }
+  };
   return (
     <div className="flex flex-wrap items-center gap-2">
       <ProviderPicker
@@ -833,6 +864,30 @@ function AuxControl({
       >
         {t("settings.models.save")}
       </Button>
+      <Button
+        size="sm"
+        variant="ghost"
+        disabled={testing || busy || !model.trim() || !prov.trim()}
+        onClick={() => void runTest()}
+        className="rounded-full"
+        title={t("settings.models.testRowHint")}
+      >
+        {testing ? t("settings.models.testing") : t("settings.models.testRow")}
+      </Button>
+      {test ? (
+        <span
+          className={cn(
+            "text-[12px]",
+            test.status === "ok" ? "text-emerald-600" : "text-destructive",
+          )}
+          title={test.message}
+        >
+          {test.status === "ok" ? "✓ " : "✗ "}
+          <span className="truncate max-w-[180px] inline-block align-bottom">
+            {test.message}
+          </span>
+        </span>
+      ) : null}
       {current ? (
         <Button
           size="sm"

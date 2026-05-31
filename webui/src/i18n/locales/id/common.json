@@ -133,7 +133,9 @@
       }
     },
     "models": {
-      "pickProvider": "Pilih penyedia"
+      "pickProvider": "Pilih penyedia",
+      "testRow": "Tes",
+      "testRowHint": "Round-trip nyata ke model — memverifikasi API key dan id model bekerja bersama."
     }
   },
   "chat": {
