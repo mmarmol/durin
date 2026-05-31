@@ -240,19 +240,23 @@
       "help": {
         "crossEncoderEnabled": "Reranker opcional de segunda pasada. Agrega 300-1500 ms por consulta y ~1 GB de RAM, pero mejora la calidad en consultas ambiguas. Desactivado por defecto.",
         "crossEncoderModel": "Modelo usado cuando el reranker está habilitado. El predeterminado funciona bien para consultas multilingües; las alternativas intercambian tamaño por latencia.",
-        "thresholdEntries": "Ejecuta una pasada Dream centrada en entidad cuando una entidad acumula esta cantidad de entradas posteriores al cursor. Establece 0 para desactivar el disparador por entidad (los disparadores cron y de cierre de sesión siguen activos)."
+        "thresholdEntries": "Ejecuta una pasada Dream centrada en entidad cuando una entidad acumula esta cantidad de entradas posteriores al cursor. Establece 0 para desactivar el disparador por entidad (los disparadores cron y de cierre de sesión siguen activos).",
+        "dreamMinTokens": "Salta el análisis LLM cuando el chat acumulado desde la última pasada está por debajo de este valor. 2000 por defecto filtra intercambios triviales / sociales; 0 desactiva el filtro (cada tick no vacío ejecuta)."
       },
       "loadError": "No se pudieron cargar los ajustes de memoria.",
       "rows": {
         "crossEncoderEnabled": "Reranker cross-encoder",
         "crossEncoderModel": "Modelo del reranker",
-        "thresholdEntries": "Umbral de consolidación"
+        "thresholdEntries": "Umbral de consolidación",
+        "dreamMinTokens": "Tokens mínimos para ejecutar"
       },
       "saveError": "No se pudo guardar {{path}}.",
       "sections": {
-        "dream": "Auto-consolidación del Dream",
-        "rerank": "Reranking de búsqueda"
-      }
+        "dream": "Consolidación de entidades (Dream)",
+        "rerank": "Reranking de búsqueda",
+        "workingMemory": "Memoria viva"
+      },
+      "workingMemoryDescription": "Consolidación cada 2 horas del historial de chat en MEMORY.md / SOUL.md / USER.md y creación de skills sobre la marcha. Solo dispara cuando hay material acumulado suficiente para justificar la llamada al LLM."
     },
     "secrets": {
       "addTitle": "Agregar un secret",

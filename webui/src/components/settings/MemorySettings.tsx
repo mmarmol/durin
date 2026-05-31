@@ -54,6 +54,24 @@ interface MemoryConfigShape {
   };
 }
 
+// Legacy dream lives at agents.defaults.dream — separate subsystem from
+// memory.dream (entity-centric). The legacy job is what consolidates the
+// chat history into MEMORY.md/SOUL.md/USER.md and creates skills; see
+// docs/bitacora.md "MEMORY.md/SOUL.md/USER.md stay outside entity-centric".
+interface AgentsConfigShape {
+  defaults?: {
+    dream?: {
+      minTokensToRun?: number;
+    };
+  };
+}
+
+function readDreamMinTokens(config: Record<string, unknown> | null): number {
+  const agents = config?.agents as AgentsConfigShape | undefined;
+  const value = agents?.defaults?.dream?.minTokensToRun;
+  return typeof value === "number" && Number.isFinite(value) ? value : 2000;
+}
+
 function readCrossEncoder(config: Record<string, unknown> | null): CrossEncoderState {
   const memory = config?.memory as MemoryConfigShape | undefined;
   const ce = memory?.search?.crossEncoder ?? {};
@@ -114,6 +132,7 @@ export function MemorySettings({ token }: { token: string }) {
 
   const crossEncoder = useMemo(() => readCrossEncoder(config), [config]);
   const thresholdEntries = useMemo(() => readThresholdEntries(config), [config]);
+  const dreamMinTokens = useMemo(() => readDreamMinTokens(config), [config]);
 
   if (loading) {
     return (
@@ -171,6 +190,22 @@ export function MemorySettings({ token }: { token: string }) {
       </section>
 
       <section>
+        <SettingsSectionTitle>{t("settings.memory.sections.workingMemory")}</SettingsSectionTitle>
+        <p className="px-1 pb-2 text-[12px] text-muted-foreground">
+          {t("settings.memory.workingMemoryDescription")}
+        </p>
+        <SettingsGroup>
+          <DreamMinTokensRow
+            value={dreamMinTokens}
+            saving={savingPath === "agents.defaults.dream.min_tokens_to_run"}
+            onSave={(n) =>
+              void onSave("agents.defaults.dream.min_tokens_to_run", n)
+            }
+          />
+        </SettingsGroup>
+      </section>
+
+      <section>
         <SettingsSectionTitle>{t("settings.memory.sections.dream")}</SettingsSectionTitle>
         <SettingsGroup>
           <ThresholdEntriesRow
@@ -181,6 +216,60 @@ export function MemorySettings({ token }: { token: string }) {
         </SettingsGroup>
       </section>
     </div>
+  );
+}
+
+/** Numeric input for `agents.defaults.dream.min_tokens_to_run` — the
+ *  pre-LLM gate on the legacy dream cron. Same UX shape as
+ *  ThresholdEntriesRow (local draft, commit on Enter or Save click). */
+function DreamMinTokensRow({
+  value,
+  saving,
+  onSave,
+}: {
+  value: number;
+  saving: boolean;
+  onSave: (n: number) => void;
+}) {
+  const { t } = useTranslation();
+  const [draft, setDraft] = useState(String(value));
+  useEffect(() => setDraft(String(value)), [value]);
+
+  const parsed = Number(draft);
+  const valid = Number.isFinite(parsed) && parsed >= 0 && Number.isInteger(parsed);
+  const dirty = valid && parsed !== value;
+
+  const commit = () => {
+    if (!dirty) return;
+    onSave(parsed);
+  };
+
+  return (
+    <SettingsRow
+      title={t("settings.memory.rows.dreamMinTokens")}
+      description={t("settings.memory.help.dreamMinTokens")}
+    >
+      <div className="flex items-center gap-2">
+        <Input
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commit();
+          }}
+          inputMode="numeric"
+          className="h-8 w-[120px] rounded-full text-[13px]"
+        />
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!dirty || saving}
+          onClick={commit}
+          className="rounded-full"
+        >
+          {t("settings.config.save")}
+        </Button>
+      </div>
+    </SettingsRow>
   );
 }
 

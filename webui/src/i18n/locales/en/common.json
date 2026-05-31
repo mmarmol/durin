@@ -262,20 +262,24 @@
       "saveError": "Could not save {{path}}.",
       "sections": {
         "rerank": "Search reranking",
-        "dream": "Dream auto-consolidation"
+        "dream": "Entity consolidation (Dream)",
+        "workingMemory": "Working memory"
       },
       "rows": {
         "crossEncoderEnabled": "Cross-encoder reranker",
         "crossEncoderModel": "Reranker model",
-        "thresholdEntries": "Consolidation threshold"
+        "thresholdEntries": "Consolidation threshold",
+        "dreamMinTokens": "Minimum tokens to run"
       },
       "help": {
         "crossEncoderEnabled": "Opt-in second-pass reranker. Adds 300-1500 ms per query and ~1 GB RAM but improves quality on ambiguous queries. Off by default.",
         "crossEncoderModel": "Model used when the reranker is enabled. The default works well for multilingual queries; alternatives trade size for latency.",
-        "thresholdEntries": "Run an entity-centric Dream pass once a single entity accumulates this many post-cursor entries. Set to 0 to disable the per-entity trigger (cron and session-close triggers still apply)."
+        "thresholdEntries": "Run an entity-centric Dream pass once a single entity accumulates this many post-cursor entries. Set to 0 to disable the per-entity trigger (cron and session-close triggers still apply).",
+        "dreamMinTokens": "Skip the pre-LLM analysis when accumulated chat since last run is below this. Default 2000 filters trivial / social exchanges; 0 disables the gate (every non-empty tick runs)."
       },
       "crossEncoderModelPlaceholder": "model id (e.g. BAAI/bge-reranker-base)",
-      "crossEncoderTest": "Test"
+      "crossEncoderTest": "Test",
+      "workingMemoryDescription": "Hourly consolidation of the chat history into MEMORY.md / SOUL.md / USER.md and on-the-fly skill creation. Runs every 2h and only triggers when there's enough new conversation to justify the LLM call."
     },
     "cron": {
       "title": "Scheduled jobs",
