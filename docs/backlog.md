@@ -124,27 +124,7 @@ state + history + sources).
 **Estado**: pendiente, post-Phase 5 (cuando la pipeline entity-centric
 esté implementada).
 
-### P12 — UI para gestionar entries de memoria individuales
-
-**Contexto**: el Memory Graph view muestra entity_pages como nodos +
-relaciones, pero NO permite ver/editar/borrar entries individuales de
-`memory/{episodic,corpus,stable,...}/`. Hoy hay que usar
-`durin memory show/forget/expand <uri>` desde CLI.
-
-**Caso de uso**:
-- "¿Qué memorias tengo sobre X?" (browse)
-- "Esta memoria es vieja/incorrecta, bórrala" (forget)
-- "Ver el contenido raw de este episodic" (read)
-
-**Propuesta**:
-- Backend ya tiene endpoints (`/api/memory/search` + `fetchMemoryEntity`)
-- Frontend: nueva sección "Memoria" con list + filtros + click → drawer
-  con contenido raw + botón forget
-- Posible reusar el side-panel del MemoryGraph para mostrar el entry
-  cuando el nodo es seleccionado (ya hay parte de esto)
-
-**Estado**: detectado audit 2026-05-31. Más complejo que P10/P11.
 
 ---
 
-## Last updated: 2026-05-31 (cleanup — P1/P2/P8 shipped; +P10 hardcoded strings; +P11 cron mgmt UI; +P12 memory entries UI; +pipx subprocess safety regression test)
+## Last updated: 2026-05-31 (P12 shipped: memory entries browser + Obsidian wikilinks + CLI forget)
