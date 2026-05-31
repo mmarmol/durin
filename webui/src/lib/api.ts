@@ -228,6 +228,64 @@ export async function deleteSecret(
   await request<{ ok: boolean }>(`${base}/api/secrets/delete?${query}`, token);
 }
 
+// -- cron jobs (P11) ---------------------------------------------------
+
+export interface CronJobRow {
+  id: string;
+  name: string;
+  enabled: boolean;
+  is_system: boolean;
+  schedule: {
+    kind: string;
+    label: string;
+    expr: string | null;
+    every_ms: number | null;
+    at_ms: number | null;
+    tz: string | null;
+  };
+  message: string;
+  channel: string;
+  state: {
+    next_run_at_ms: number | null;
+    last_run_at_ms: number | null;
+    last_status: "ok" | "error" | "skipped" | null;
+    last_error: string | null;
+  };
+  created_at_ms: number;
+  updated_at_ms: number;
+}
+
+export async function listCronJobs(
+  token: string,
+  base: string = "",
+): Promise<CronJobRow[]> {
+  const res = await request<{ jobs: CronJobRow[] }>(`${base}/api/cron`, token);
+  return res.jobs;
+}
+
+export async function removeCronJob(
+  token: string,
+  id: string,
+  base: string = "",
+): Promise<void> {
+  const query = new URLSearchParams({ id });
+  await request<{ result: string }>(`${base}/api/cron/remove?${query}`, token);
+}
+
+export async function toggleCronJob(
+  token: string,
+  id: string,
+  enabled: boolean,
+  base: string = "",
+): Promise<CronJobRow> {
+  const query = new URLSearchParams({ id, enabled: String(enabled) });
+  const res = await request<{ job: CronJobRow }>(
+    `${base}/api/cron/toggle?${query}`,
+    token,
+  );
+  return res.job;
+}
+
 export async function getConfig(
   token: string,
   base: string = "",
