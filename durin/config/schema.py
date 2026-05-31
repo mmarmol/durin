@@ -59,6 +59,19 @@ class DreamConfig(Base):
     # on — set to False to feed MEMORY.md raw if a specific LLM reacts poorly
     # to the `← Nd` suffix or you want deterministic, git-independent prompts.
     annotate_line_ages: bool = True
+    # Pre-LLM gate (2026-05-31): when the cron fires, tokenize the unprocessed
+    # history.jsonl tail and skip the Phase 1 LLM call entirely if total tokens
+    # are below this threshold. Cheap (a few ms with tiktoken) and bounds the
+    # cost of a cron that ticks during quiet periods — a few "ok" / social
+    # turns no longer trigger a multi-thousand-token analysis. Default 2000:
+    # filters trivial / social sessions, keeps anything substantive enough to
+    # produce a fact worth escalating to MEMORY.md / SOUL.md / skills.
+    # Set to 0 to disable the gate (every non-empty cron tick runs the LLM,
+    # the pre-2026-05-31 behaviour).
+    min_tokens_to_run: int = Field(
+        default=2000, ge=0,
+        validation_alias=AliasChoices("minTokensToRun", "min_tokens_to_run"),
+    )
 
     def build_schedule(self, timezone: str) -> CronSchedule:
         """Build the runtime schedule, preferring the legacy cron override if present."""

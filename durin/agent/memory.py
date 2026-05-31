@@ -1042,6 +1042,43 @@ class Consolidator:
 _STALE_THRESHOLD_DAYS = 14
 
 
+def _approx_tokens_for_entries(entries: list[dict[str, Any]]) -> int:
+    """Tokenize the user-visible payload of history.jsonl entries.
+
+    Used as a cheap pre-LLM gate to decide whether a Dream pass is
+    worth a Phase 1 LLM call. Counts `role` + `content` + the common
+    tool-call fields (anything the Phase 1 prompt would render).
+    Returns 0 on tokenizer failure — safer than blocking; the gate
+    just doesn't trigger.
+    """
+    try:
+        enc = tiktoken.get_encoding("cl100k_base")
+    except Exception:  # noqa: BLE001
+        return 0
+    parts: list[str] = []
+    for e in entries:
+        for key in ("role", "content", "name", "tool_call_id"):
+            v = e.get(key)
+            if isinstance(v, str) and v:
+                parts.append(v)
+        tcs = e.get("tool_calls")
+        if isinstance(tcs, list):
+            for tc in tcs:
+                if isinstance(tc, dict):
+                    fn = tc.get("function", {})
+                    if isinstance(fn, dict):
+                        for k in ("name", "arguments"):
+                            v = fn.get(k)
+                            if isinstance(v, str) and v:
+                                parts.append(v)
+    if not parts:
+        return 0
+    try:
+        return sum(len(enc.encode(p)) for p in parts)
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 class Dream:
     """Two-phase memory processor: analyze history.jsonl, then edit files via AgentRunner.
 
@@ -1068,6 +1105,7 @@ class Dream:
         max_iterations: int = 10,
         max_tool_result_chars: int = 16_000,
         annotate_line_ages: bool = True,
+        min_tokens_to_run: int = 2000,
     ):
         self.store = store
         self.provider = provider
@@ -1079,6 +1117,11 @@ class Dream:
         # Default True keeps the #3212 behavior; set False to feed MEMORY.md raw
         # (e.g. if a specific LLM reacts poorly to the `← Nd` suffix).
         self.annotate_line_ages = annotate_line_ages
+        # Pre-LLM gate: skip the whole Phase 1 LLM analysis when the
+        # unprocessed history.jsonl tail tokenizes to less than this. 0 =
+        # disabled (every non-empty cron tick runs the LLM, pre-fix
+        # behaviour). See DreamConfig.min_tokens_to_run for the rationale.
+        self.min_tokens_to_run = max(0, int(min_tokens_to_run))
         self._runner = AgentRunner(provider)
         self._tools = self._build_tools()
 
@@ -1200,6 +1243,23 @@ class Dream:
         entries = self.store.read_unprocessed_history(since_cursor=last_cursor)
         if not entries:
             return False
+
+        # Pre-LLM gate (2026-05-31): tokenize the unprocessed history tail
+        # and skip the whole Phase 1 LLM call when total tokens are under
+        # the user's threshold. Cheap (~ms with tiktoken) — bounds cron
+        # cost during quiet periods. Counting entry text (role + content
+        # + tool fields) approximates what Phase 1 will actually feed to
+        # the LLM closely enough for a gate decision; the exact LLM prompt
+        # also includes MEMORY.md/SOUL.md/USER.md previews but those don't
+        # grow with history volume.
+        if self.min_tokens_to_run > 0:
+            tokens = _approx_tokens_for_entries(entries)
+            if tokens < self.min_tokens_to_run:
+                logger.info(
+                    "Dream: skipped — {} tokens < threshold {} ({} entries)",
+                    tokens, self.min_tokens_to_run, len(entries),
+                )
+                return False
 
         batch = entries[: self.max_batch_size]
         logger.info(

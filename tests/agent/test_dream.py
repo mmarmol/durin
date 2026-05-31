@@ -35,7 +35,14 @@ def mock_runner():
 
 @pytest.fixture
 def dream(store, mock_provider, mock_runner):
-    d = Dream(store=store, provider=mock_provider, model="test-model", max_batch_size=5)
+    # min_tokens_to_run=0 disables the pre-LLM token gate so generic
+    # tests can exercise the runtime path with tiny stub entries. Tests
+    # that specifically cover the gate construct their own Dream with a
+    # non-zero threshold.
+    d = Dream(
+        store=store, provider=mock_provider, model="test-model",
+        max_batch_size=5, min_tokens_to_run=0,
+    )
     d._runner = mock_runner
     return d
 
@@ -125,6 +132,62 @@ class TestDreamRun:
 
         assert "Successfully wrote" in result
         assert (store.workspace / "skills" / "test-skill" / "SKILL.md").exists()
+
+    async def test_skips_llm_when_tokens_below_threshold(
+        self, store, mock_provider, mock_runner,
+    ):
+        """Pre-LLM gate: unprocessed history under min_tokens_to_run must
+        NOT invoke Phase 1. Cursor stays untouched so the next pass picks
+        up the same entries if more arrive."""
+        d = Dream(
+            store=store, provider=mock_provider, model="test",
+            max_batch_size=5, min_tokens_to_run=2000,
+        )
+        d._runner = mock_runner
+        # ~5 tokens — well under threshold
+        store.append_history("hola")
+        result = await d.run()
+        assert result is False
+        mock_provider.chat_with_retry.assert_not_called()
+        mock_runner.run.assert_not_called()
+        # cursor not advanced — entry remains pending
+        assert store.get_last_dream_cursor() == 0
+
+    async def test_runs_llm_when_tokens_meet_threshold(
+        self, store, mock_provider, mock_runner,
+    ):
+        """Threshold is a floor: total tokens >= threshold runs Phase 1.
+        Use a low threshold + a payload that empirically clears it under
+        cl100k_base so the assertion stays stable across tiktoken updates."""
+        d = Dream(
+            store=store, provider=mock_provider, model="test",
+            max_batch_size=5, min_tokens_to_run=5,  # easy to clear
+        )
+        d._runner = mock_runner
+        # ~8 tokens under cl100k_base — clears a 5-token floor
+        store.append_history("User prefers dark mode and writes Python primarily")
+        mock_provider.chat_with_retry.return_value = MagicMock(content="ok")
+        mock_runner.run = AsyncMock(return_value=_make_run_result())
+        result = await d.run()
+        assert result is True
+        mock_runner.run.assert_called_once()
+
+    async def test_min_tokens_zero_disables_gate(
+        self, store, mock_provider, mock_runner,
+    ):
+        """min_tokens_to_run=0 reverts to pre-fix behaviour: any non-empty
+        unprocessed history triggers Phase 1, regardless of size."""
+        d = Dream(
+            store=store, provider=mock_provider, model="test",
+            max_batch_size=5, min_tokens_to_run=0,
+        )
+        d._runner = mock_runner
+        store.append_history("ok")  # ~1 token, would be filtered if gate active
+        mock_provider.chat_with_retry.return_value = MagicMock(content="ok")
+        mock_runner.run = AsyncMock(return_value=_make_run_result())
+        result = await d.run()
+        assert result is True
+        mock_runner.run.assert_called_once()
 
     async def test_phase1_prompt_includes_line_age_annotations(self, dream, mock_provider, mock_runner, store):
         """Phase 1 prompt should have per-line age suffixes in MEMORY.md when git is available."""
