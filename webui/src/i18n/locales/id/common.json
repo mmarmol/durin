@@ -13,7 +13,7 @@
       "section": "Sistem",
       "restartHint": "Mulai ulang durin untuk menerapkan perubahan runtime.",
       "restart": "Mulai ulang durin",
-      "restarting": "Memulai ulang..."
+      "restarting": "Memulai ulang…"
     },
     "restart": {
       "completed": "Mulai ulang selesai dalam {{seconds}} dtk."
@@ -24,6 +24,18 @@
     },
     "meta": {
       "description": "UI web durin — ngobrol dengan workspace durin Anda."
+    },
+    "account": {
+      "logout": "Keluar",
+      "logoutHint": "Putuskan browser ini dari gateway.",
+      "section": "Akun"
+    },
+    "auth": {
+      "hint": "Masukkan secret yang dikonfigurasi sebagai tokenIssueSecret di config gateway.",
+      "invalid": "Password salah. Coba lagi.",
+      "placeholder": "Password",
+      "submit": "Hubungkan",
+      "title": "Autentikasi diperlukan"
     }
   },
   "sidebar": {
@@ -36,7 +48,14 @@
     "language": {
       "label": "Bahasa",
       "ariaLabel": "Ganti bahasa"
-    }
+    },
+    "globalActions": "Aksi global",
+    "home": "Beranda",
+    "navigation": "Navigasi sidebar",
+    "noSearchResults": "Tidak ada chat yang cocok.",
+    "searchAria": "Cari chat",
+    "searchPlaceholder": "Cari chat",
+    "searchResults": "Hasil"
   },
   "settings": {
     "backToChat": "Kembali ke obrolan",
@@ -51,7 +70,8 @@
       "web-search": "Web search",
       "secrets": "Secrets",
       "advanced": "All settings",
-      "channels": "Channels"
+      "channels": "Channels",
+      "memory": "Memori"
     },
     "sections": {
       "interface": "Antarmuka",
@@ -64,14 +84,16 @@
       "provider": "Penyedia",
       "model": "Model",
       "restart": "Mulai ulang durin",
-      "configPath": "Path konfigurasi"
+      "configPath": "Path konfigurasi",
+      "palette": "Palet"
     },
     "help": {
       "theme": "Beralih antara tampilan terang dan gelap.",
       "language": "Pilih bahasa yang digunakan WebUI.",
       "provider": "Pilih penyedia untuk permintaan model baru.",
       "model": "Atur nama model default yang digunakan durin.",
-      "configPath": "File konfigurasi gateway yang sedang digunakan."
+      "configPath": "File konfigurasi gateway yang sedang digunakan.",
+      "palette": "Identitas warna durin — Ithildin, Forge, atau Mithril."
     },
     "values": {
       "light": "Terang",
@@ -79,7 +101,7 @@
       "notAvailable": "Tidak tersedia"
     },
     "status": {
-      "loading": "Memuat pengaturan...",
+      "loading": "Memuat pengaturan…",
       "loadError": "Tidak dapat memuat pengaturan",
       "unsaved": "Ada perubahan yang belum disimpan.",
       "savedRestart": "Tersimpan. Mulai ulang durin untuk menerapkan."
@@ -133,9 +155,121 @@
       }
     },
     "models": {
+      "auxTitle": "Model visi & audio",
+      "auxDescription": "durin menggunakan ini hanya saat model utama tidak bisa menangani gambar atau audio sendiri.",
+      "vision": "Model visi",
+      "visionHint": "Digunakan oleh tool interpret_image.",
+      "audio": "Model audio",
+      "audioHint": "Digunakan oleh tool interpret_audio.",
+      "memory": "Model memori",
+      "memoryHint": "Digunakan untuk penulisan ulang query memory_search. Jatuh ke model utama jika tidak diset.",
+      "modelPlaceholder": "id model",
+      "providerPlaceholder": "penyedia",
+      "save": "Simpan",
+      "clear": "Hapus",
+      "testTitle": "Tes",
+      "testHint": "Jalankan round-trip nyata ke model yang dikonfigurasi.",
+      "testButton": "Tes model",
+      "testing": "Sedang menguji…",
+      "loadError": "Tidak dapat memuat konfigurasi model.",
+      "saveError": "Tidak dapat menyimpan model.",
+      "testError": "Tes tidak dapat dijalankan.",
+      "suggested": "disarankan",
+      "capabilities": "Kemampuan",
+      "capsText": "teks",
+      "capsVision": "visi",
+      "capsAudio": "audio",
+      "capsContext": "konteks {{tokens}}",
+      "capsUnknown": "Pilih model untuk melihat dukungannya.",
       "pickProvider": "Pilih penyedia",
       "testRow": "Tes",
       "testRowHint": "Round-trip nyata ke model — memverifikasi API key dan id model bekerja bersama."
+    },
+    "channels": {
+      "credentialPlaceholder": "{{field}}",
+      "description": "Hubungkan durin ke platform chat. Aktifkan channel dan set kredensialnya — token masuk ke secret store, bukan config.json.",
+      "disable": "Nonaktifkan",
+      "disabled": "Tidak aktif",
+      "enable": "Aktifkan",
+      "enabled": "Aktif",
+      "loadError": "Tidak dapat memuat channel.",
+      "noCredential": "Tidak perlu kredensial.",
+      "reconfigure": "Konfigurasi ulang",
+      "save": "Simpan",
+      "saveError": "Tidak dapat menyimpan channel."
+    },
+    "config": {
+      "description": "Setiap pengaturan durin, dikelompokkan per bagian. Mengedit nilai menuliskannya langsung ke config — sama seperti durin config set. Daftar dan secret yang dikelola hanya-baca di sini.",
+      "empty": "Tidak ada pengaturan di bagian ini.",
+      "loadError": "Tidak dapat memuat konfigurasi.",
+      "managed": "Secret dikelola",
+      "off": "Off",
+      "on": "On",
+      "save": "Simpan",
+      "saveError": "Tidak dapat menyimpan {{path}}."
+    },
+    "memory": {
+      "crossEncoderModelPlaceholder": "id model (mis. BAAI/bge-reranker-base)",
+      "crossEncoderTest": "Tes",
+      "decayClasses": {
+        "corpus": "Korpus",
+        "entity": "Entitas",
+        "episodic": "Episodik",
+        "session_summary": "Ringkasan sesi",
+        "stable": "Stabil"
+      },
+      "decayDays": "{{days}} hari",
+      "decayHelp": {
+        "corpus": "Materi sumber yang diimpor. mtime adalah tanggal ingest, bukan usia fakta.",
+        "entity": "Halaman entitas kanonikal. mtime melacak update Dream terakhir, bukan usia fakta.",
+        "episodic": "Observasi harian. Decay karena usia penting.",
+        "session_summary": "Ringkasan per sesi. Decay lebih lambat daripada episodik mentah.",
+        "stable": "Fakta berusia panjang. Tidak boleh decay seiring waktu."
+      },
+      "decayNever": "tidak pernah decay",
+      "description": "Atur subsistem memori — reranking pencarian, auto-konsolidasi Dream, dan default decay temporal.",
+      "help": {
+        "crossEncoderEnabled": "Reranker second-pass opt-in. Menambahkan 300-1500 ms per query dan ~1 GB RAM tetapi meningkatkan kualitas pada query ambigu. Mati secara default.",
+        "crossEncoderModel": "Model yang digunakan saat reranker aktif. Default bekerja baik untuk query multibahasa; alternatif menukar ukuran dengan latensi.",
+        "decayOverrides": "Override default kelas per entri dengan menyetel decay_half_life di frontmatter entri. Set evergreen: true agar entri tidak pernah decay.",
+        "thresholdEntries": "Jalankan pass Dream entity-centric saat satu entitas mengumpulkan jumlah entri post-cursor ini. Set ke 0 untuk menonaktifkan trigger per-entity (trigger cron dan session-close tetap berlaku)."
+      },
+      "loadError": "Tidak dapat memuat pengaturan memori.",
+      "rows": {
+        "crossEncoderEnabled": "Reranker cross-encoder",
+        "crossEncoderModel": "Model reranker",
+        "decayOverrides": "Override per entri",
+        "thresholdEntries": "Ambang konsolidasi"
+      },
+      "saveError": "Tidak dapat menyimpan {{path}}.",
+      "sections": {
+        "decay": "Decay temporal (hanya-baca)",
+        "dream": "Auto-konsolidasi Dream",
+        "rerank": "Reranking pencarian"
+      }
+    },
+    "secrets": {
+      "addTitle": "Tambah secret",
+      "confirmDelete": "Hapus secret ini?",
+      "delete": "Hapus",
+      "description": "API key dan token, disimpan di ~/.durin/secrets.json (mode 0600), di luar config.json. Nilai tidak pernah ditampilkan di sini.",
+      "empty": "Belum ada secret tersimpan.",
+      "fieldAccount": "Akun",
+      "fieldDescription": "Deskripsi",
+      "fieldName": "Nama",
+      "fieldScope": "Scope",
+      "fieldService": "Layanan",
+      "fieldValue": "Nilai",
+      "hintName": "UPPER_SNAKE — juga nama variabel lingkungan di exec.",
+      "hintScope": "Tag konsumer dipisah koma: exec, skill:*, channel:telegram.",
+      "hintService": "Untuk apa secret ini, mis. atlassian atau provider:openai.",
+      "hintValue": "Kosongkan saat edit untuk mempertahankan nilai tersimpan.",
+      "loadError": "Tidak dapat memuat secret.",
+      "optional": "opsional",
+      "save": "Simpan secret",
+      "saving": "Menyimpan…",
+      "stored": "Secret tersimpan",
+      "title": "Secret"
     }
   },
   "chat": {
@@ -144,7 +278,12 @@
     "noSessions": "Belum ada sesi.",
     "actions": "Aksi obrolan untuk {{title}}",
     "delete": "Hapus",
-    "newChat": "Obrolan baru"
+    "newChat": "Obrolan baru",
+    "groups": {
+      "earlier": "Sebelumnya",
+      "today": "Hari ini",
+      "yesterday": "Kemarin"
+    }
   },
   "deleteConfirm": {
     "title": "Hapus obrolan ini?",
@@ -219,11 +358,14 @@
       }
     },
     "header": {
-      "toggleSidebar": "Tampilkan atau sembunyikan sidebar"
+      "toggleSidebar": "Tampilkan atau sembunyikan sidebar",
+      "newChat": "Mulai chat baru",
+      "settings": "Buka pengaturan",
+      "toggleTheme": "Ganti tema dari header"
     },
     "composer": {
       "placeholderThread": "Ketik pesan Anda…",
-      "placeholderHero": "Apa yang sedang Anda pikirkan?",
+      "placeholderHero": "Tanya apa saja…",
       "placeholderOpening": "Membuka obrolan baru…",
       "placeholderStreaming": "Model sedang merespons…",
       "inputAria": "Input pesan",
@@ -311,7 +453,13 @@
           }
         }
       },
-      "goalStateCloseAria": "Tutup tujuan"
+      "goalStateCloseAria": "Tutup tujuan",
+      "tools": {
+        "deepResearch": "Riset mendalam",
+        "reason": "Bernalar",
+        "search": "Cari",
+        "voice": "Input suara"
+      }
     },
     "scrollToBottom": "Gulir ke bawah"
   },
@@ -332,7 +480,22 @@
     "agentActivityLiveSummary": "Berjalan… · {{reasoning}} langkah · {{tools}} panggilan alat",
     "agentActivityLiveToolsOnly": "Berjalan… · {{tools}} panggilan alat",
     "imageAttachment": "Lampiran gambar",
-    "turnLatencyTitle": "Waktu respons (ujung ke ujung)"
+    "turnLatencyTitle": "Waktu respons (ujung ke ujung)",
+    "askUser": {
+      "placeholder": "Ketik jawabanmu, atau pilih opsi untuk mengedit",
+      "send": "Kirim",
+      "sent": "Jawaban terkirim"
+    },
+    "copiedReply": "Balasan disalin",
+    "copyReply": "Salin balasan",
+    "reqSecret": {
+      "alreadyStored": "Sudah tersimpan — tidak ada yang perlu dilakukan",
+      "hint": "Tersimpan langsung ke secret store durin; nilainya tidak pernah mencapai model atau chat.",
+      "placeholder": "Tempel nilai secret",
+      "save": "Simpan",
+      "saving": "Menyimpan…",
+      "stored": "Tersimpan — nilainya tidak pernah mencapai model"
+    }
   },
   "lightbox": {
     "title": "Pratinjau gambar",

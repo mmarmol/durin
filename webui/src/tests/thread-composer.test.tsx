@@ -53,7 +53,7 @@ describe("ThreadComposer", () => {
       <ThreadComposer
         onSend={vi.fn()}
         modelLabel="claude-opus-4-5"
-        placeholder="Ask anything..."
+        placeholder="Ask anything…"
         variant="hero"
       />,
     );
@@ -63,7 +63,7 @@ describe("ThreadComposer", () => {
     expect(screen.queryByRole("button", { name: "Reason" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Deep research" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Voice input" })).not.toBeInTheDocument();
-    const input = screen.getByPlaceholderText("Ask anything...");
+    const input = screen.getByPlaceholderText("Ask anything…");
     expect(input).toBeInTheDocument();
     expect(input.className).toContain("min-h-[78px]");
     expect(input.parentElement?.className).toContain("max-w-[58rem]");
@@ -174,7 +174,7 @@ describe("ThreadComposer", () => {
     render(
       <ThreadComposer
         onSend={vi.fn()}
-        placeholder="Ask anything..."
+        placeholder="Ask anything…"
         slashCommands={COMMANDS}
         variant="hero"
       />,
@@ -283,7 +283,7 @@ describe("ThreadComposer", () => {
     render(
       <ThreadComposer
         onSend={vi.fn()}
-        placeholder="Ask anything..."
+        placeholder="Ask anything…"
         variant="hero"
         imageMode
       />,
