@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import {
   Bot,
   Brain,
@@ -2033,13 +2033,17 @@ const EMPTY_SECRET_FORM: SecretFormState = {
 };
 
 function SecretsSettings({ token }: { token: string }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { client } = useClient();
   const [secrets, setSecrets] = useState<SecretEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState<SecretFormState>(EMPTY_SECRET_FORM);
+  const [expandedName, setExpandedName] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState<string | null>(null);
+  // Anchor for scrolling to the form when the user enters edit mode.
+  const formAnchorRef = useRef<HTMLDivElement | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -2057,10 +2061,18 @@ function SecretsSettings({ token }: { token: string }) {
     void load();
   }, [load]);
 
+  // In edit mode, value is optional — the backend treats an empty
+  // value on an existing secret as a metadata-only update and
+  // preserves the stored value.
   const canSave =
     form.name.trim() !== "" && form.service.trim() !== "" && !busy;
 
-  const onAdd = useCallback(async () => {
+  const resetForm = useCallback(() => {
+    setForm(EMPTY_SECRET_FORM);
+    setEditingName(null);
+  }, []);
+
+  const onSubmit = useCallback(async () => {
     if (!canSave) return;
     setBusy(true);
     setError(null);
@@ -2076,14 +2088,34 @@ function SecretsSettings({ token }: { token: string }) {
           .filter(Boolean),
         value: form.value,
       });
-      setForm(EMPTY_SECRET_FORM);
+      resetForm();
       await load();
     } catch {
       setError(t("settings.secrets.loadError"));
     } finally {
       setBusy(false);
     }
-  }, [canSave, client, form, load, t]);
+  }, [canSave, client, form, load, resetForm, t]);
+
+  const onEdit = useCallback((secret: SecretEntry) => {
+    setEditingName(secret.name);
+    setForm({
+      name: secret.name,
+      service: secret.service,
+      account: secret.account || "",
+      description: secret.description || "",
+      scope: secret.scope.join(", "),
+      value: "",
+    });
+    setExpandedName(secret.name);
+    // Defer to next tick so the form section has re-rendered
+    // (the title/buttons swap to edit-mode copy) before scrolling.
+    setTimeout(() => {
+      formAnchorRef.current?.scrollIntoView({
+        behavior: "smooth", block: "start",
+      });
+    }, 0);
+  }, []);
 
   const onDelete = useCallback(
     async (name: string) => {
@@ -2092,6 +2124,9 @@ function SecretsSettings({ token }: { token: string }) {
       setError(null);
       try {
         await deleteSecret(token, name);
+        // If we were editing/expanding this one, clear that state.
+        if (editingName === name) resetForm();
+        if (expandedName === name) setExpandedName(null);
         await load();
       } catch {
         setError(t("settings.secrets.loadError"));
@@ -2099,12 +2134,26 @@ function SecretsSettings({ token }: { token: string }) {
         setBusy(false);
       }
     },
-    [token, load, t],
+    [token, load, t, editingName, expandedName, resetForm],
   );
 
   const field = (key: keyof SecretFormState) => (
     e: React.ChangeEvent<HTMLInputElement>,
   ) => setForm((prev) => ({ ...prev, [key]: e.target.value }));
+
+  const formatTimestamp = (iso: string): string => {
+    if (!iso) return "—";
+    const ms = Date.parse(iso);
+    if (Number.isNaN(ms)) return iso;
+    try {
+      return new Date(ms).toLocaleString(i18n.language, {
+        year: "numeric", month: "short", day: "numeric",
+        hour: "2-digit", minute: "2-digit",
+      });
+    } catch {
+      return new Date(ms).toISOString();
+    }
+  };
 
   return (
     <div className="space-y-5">
@@ -2126,37 +2175,122 @@ function SecretsSettings({ token }: { token: string }) {
           ) : secrets.length === 0 ? (
             <SettingsRow title={t("settings.secrets.empty")} />
           ) : (
-            secrets.map((secret) => (
-              <SettingsRow
-                key={secret.name}
-                title={secret.name}
-                description={[
-                  secret.service,
-                  secret.account ? `· ${secret.account}` : "",
-                  secret.scope.length ? `· ${secret.scope.join(", ")}` : "",
-                  secret.description ? `— ${secret.description}` : "",
-                ]
-                  .filter(Boolean)
-                  .join(" ")}
-              >
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={busy}
-                  onClick={() => onDelete(secret.name)}
-                  className="rounded-full text-destructive hover:text-destructive"
-                >
-                  <Trash2 className="mr-1.5 h-3.5 w-3.5" aria-hidden />
-                  {t("settings.secrets.delete")}
-                </Button>
-              </SettingsRow>
-            ))
+            secrets.map((secret) => {
+              const isExpanded = expandedName === secret.name;
+              const isEditing = editingName === secret.name;
+              return (
+                <div key={secret.name}>
+                  <SettingsRow
+                    title={
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setExpandedName(isExpanded ? null : secret.name)
+                        }
+                        className="flex w-full items-center gap-2 text-left hover:text-foreground/80"
+                        aria-expanded={isExpanded}
+                        aria-controls={`secret-detail-${secret.name}`}
+                      >
+                        <ChevronDown
+                          className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${
+                            isExpanded ? "" : "-rotate-90"
+                          }`}
+                          aria-hidden
+                        />
+                        <span>{secret.name}</span>
+                        {isEditing ? (
+                          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                            {t("settings.secrets.editingBadge")}
+                          </span>
+                        ) : null}
+                      </button>
+                    }
+                    description={[
+                      secret.service,
+                      secret.account ? `· ${secret.account}` : "",
+                      secret.scope.length ? `· ${secret.scope.join(", ")}` : "",
+                      secret.description ? `— ${secret.description}` : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                  >
+                    <div className="flex items-center gap-1">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={busy}
+                        onClick={() => onEdit(secret)}
+                        className="rounded-full"
+                      >
+                        <Pencil className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+                        {t("settings.secrets.edit")}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={busy}
+                        onClick={() => onDelete(secret.name)}
+                        className="rounded-full text-destructive hover:text-destructive"
+                      >
+                        <Trash2 className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+                        {t("settings.secrets.delete")}
+                      </Button>
+                    </div>
+                  </SettingsRow>
+                  {isExpanded ? (
+                    <div
+                      id={`secret-detail-${secret.name}`}
+                      className="grid grid-cols-[auto,1fr] gap-x-4 gap-y-1.5 bg-muted/30 px-5 py-3 text-[12px] leading-5"
+                    >
+                      <span className="text-muted-foreground">
+                        {t("settings.secrets.fieldService")}
+                      </span>
+                      <span className="font-mono">{secret.service || "—"}</span>
+                      <span className="text-muted-foreground">
+                        {t("settings.secrets.fieldAccount")}
+                      </span>
+                      <span className="font-mono">{secret.account || "—"}</span>
+                      <span className="text-muted-foreground">
+                        {t("settings.secrets.fieldDescription")}
+                      </span>
+                      <span>{secret.description || "—"}</span>
+                      <span className="text-muted-foreground">
+                        {t("settings.secrets.fieldScope")}
+                      </span>
+                      <span className="font-mono">
+                        {secret.scope.length ? secret.scope.join(", ") : "—"}
+                      </span>
+                      <span className="text-muted-foreground">
+                        {t("settings.secrets.fieldValue")}
+                      </span>
+                      <span className="font-mono text-muted-foreground">
+                        {secret.value_hint
+                          ? `●●●●●●●● (${secret.value_hint})`
+                          : t("settings.secrets.valueRedacted")}
+                      </span>
+                      <span className="text-muted-foreground">
+                        {t("settings.secrets.fieldOrigin")}
+                      </span>
+                      <span className="font-mono">{secret.origin || "—"}</span>
+                      <span className="text-muted-foreground">
+                        {t("settings.secrets.fieldCreated")}
+                      </span>
+                      <span>{formatTimestamp(secret.created_at)}</span>
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })
           )}
         </SettingsGroup>
       </section>
 
-      <section>
-        <SettingsSectionTitle>{t("settings.secrets.addTitle")}</SettingsSectionTitle>
+      <section ref={formAnchorRef}>
+        <SettingsSectionTitle>
+          {editingName
+            ? t("settings.secrets.editTitle", { name: editingName })
+            : t("settings.secrets.addTitle")}
+        </SettingsSectionTitle>
         <SettingsGroup>
           <SettingsRow
             title={t("settings.secrets.fieldName")}
@@ -2167,6 +2301,8 @@ function SecretsSettings({ token }: { token: string }) {
               onChange={field("name")}
               placeholder="ATLASSIAN_API_TOKEN"
               className="w-[260px]"
+              readOnly={editingName !== null}
+              disabled={editingName !== null}
             />
           </SettingsRow>
           <SettingsRow
@@ -2212,25 +2348,53 @@ function SecretsSettings({ token }: { token: string }) {
           </SettingsRow>
           <SettingsRow
             title={t("settings.secrets.fieldValue")}
-            description={t("settings.secrets.hintValue")}
+            description={
+              editingName
+                ? t("settings.secrets.hintValueEdit")
+                : t("settings.secrets.hintValue")
+            }
           >
             <Input
               type="password"
               value={form.value}
               onChange={field("value")}
+              placeholder={
+                editingName
+                  ? t("settings.secrets.valuePlaceholderEdit")
+                  : ""
+              }
               className="w-[260px]"
             />
           </SettingsRow>
-          <div className="flex items-center justify-end px-4 py-3 sm:px-5">
+          <div className="flex items-center justify-end gap-2 px-4 py-3 sm:px-5">
+            {editingName ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={resetForm}
+                disabled={busy}
+                className="rounded-full"
+              >
+                {t("settings.secrets.cancel")}
+              </Button>
+            ) : null}
             <Button
               size="sm"
               variant="outline"
-              onClick={() => void onAdd()}
+              onClick={() => void onSubmit()}
               disabled={!canSave}
               className="rounded-full"
             >
-              <Plus className="mr-1.5 h-3.5 w-3.5" aria-hidden />
-              {busy ? t("settings.secrets.saving") : t("settings.secrets.save")}
+              {editingName ? (
+                <Pencil className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+              ) : (
+                <Plus className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+              )}
+              {busy
+                ? t("settings.secrets.saving")
+                : editingName
+                  ? t("settings.secrets.saveEdit")
+                  : t("settings.secrets.save")}
             </Button>
           </div>
         </SettingsGroup>

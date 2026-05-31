@@ -176,7 +176,17 @@
       "save": "Save secret",
       "saving": "Saving…",
       "delete": "Delete",
-      "confirmDelete": "Delete this secret?"
+      "confirmDelete": "Delete this secret?",
+      "edit": "Edit",
+      "editTitle": "Editing {{name}}",
+      "editingBadge": "EDITING",
+      "cancel": "Cancel",
+      "saveEdit": "Save changes",
+      "hintValueEdit": "Leave blank to keep the current value. Provide a new value only when rotating the secret.",
+      "valuePlaceholderEdit": "(leave blank to keep current)",
+      "valueRedacted": "(no hint available)",
+      "fieldOrigin": "Origin",
+      "fieldCreated": "Created"
     },
     "config": {
       "description": "Every durin setting, grouped by section. Editing a value writes it straight to the config — the same as durin config set. Lists and managed secrets are read-only here.",
