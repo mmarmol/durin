@@ -224,3 +224,96 @@ def test_archive_episodic_with_reason(tmp_path: Path) -> None:
 
     content = dest.read_text(encoding="utf-8")
     assert "archived_reason: consolidated into entity page" in content
+
+
+# ---------------------------------------------------------------------------
+# archive_generic_entry — stable / corpus / session_summary classes
+# ---------------------------------------------------------------------------
+
+
+def _generic(ws: Path, klass: str, name: str, body: str = "body") -> Path:
+    p = ws / "memory" / klass / f"{name}.md"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(
+        f"---\nid: {name}\nheadline: {name} hl\n---\n\n{body}\n",
+        encoding="utf-8",
+    )
+    return p
+
+
+def test_archive_generic_stable_moves_file(tmp_path: Path) -> None:
+    """archive_generic_entry handles `stable/` entries."""
+    from durin.memory.archive import archive_generic_entry
+
+    src = _generic(tmp_path, "stable", "user-likes-dark-mode")
+    dest = archive_generic_entry(tmp_path, src, reason="user_forget")
+
+    assert not src.exists()
+    expected = tmp_path / "memory" / "archive" / "stable" / "user-likes-dark-mode.md"
+    assert dest == expected
+    assert dest.exists()
+    body = dest.read_text(encoding="utf-8")
+    assert "archived_at:" in body
+    assert "archived_reason: user_forget" in body
+    # No "archived_into" key — generic forgets don't have a target.
+    assert "archived_into" not in body
+
+
+def test_archive_generic_corpus(tmp_path: Path) -> None:
+    """archive_generic_entry handles `corpus/` entries."""
+    from durin.memory.archive import archive_generic_entry
+
+    src = _generic(tmp_path, "corpus", "doc-2026-05-31-abc")
+    dest = archive_generic_entry(tmp_path, src)
+
+    assert not src.exists()
+    assert dest == tmp_path / "memory" / "archive" / "corpus" / "doc-2026-05-31-abc.md"
+    assert dest.exists()
+
+
+def test_archive_generic_session_summary(tmp_path: Path) -> None:
+    """archive_generic_entry handles `session_summary/` entries."""
+    from durin.memory.archive import archive_generic_entry
+
+    src = _generic(tmp_path, "session_summary", "2026-05-31-uuid")
+    dest = archive_generic_entry(tmp_path, src)
+
+    assert not src.exists()
+    assert dest.exists()
+
+
+def test_archive_generic_rejects_episodic(tmp_path: Path) -> None:
+    """archive_generic_entry refuses `episodic/` — caller must use archive_episodic."""
+    from durin.memory.archive import archive_generic_entry
+
+    src = _episodic(tmp_path, "obs-1")
+    with pytest.raises(ValueError, match="unsupported class"):
+        archive_generic_entry(tmp_path, src)
+    assert src.exists(), "rejected paths must NOT be moved"
+
+
+def test_archive_generic_rejects_entities(tmp_path: Path) -> None:
+    """archive_generic_entry refuses `entities/` — caller must use archive_entity."""
+    from durin.memory.archive import archive_generic_entry
+
+    src = _entity(tmp_path, "person", "marcelo")
+    with pytest.raises(ValueError, match="unsupported class"):
+        archive_generic_entry(tmp_path, src)
+    assert src.exists()
+
+
+def test_archive_generic_raises_on_missing(tmp_path: Path) -> None:
+    from durin.memory.archive import archive_generic_entry
+
+    src = tmp_path / "memory" / "stable" / "ghost.md"
+    with pytest.raises(FileNotFoundError):
+        archive_generic_entry(tmp_path, src)
+
+
+def test_archive_generic_raises_on_outside_workspace(tmp_path: Path) -> None:
+    from durin.memory.archive import archive_generic_entry
+
+    src = tmp_path / "random.md"
+    src.write_text("---\nid: x\n---\nbody\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="not under"):
+        archive_generic_entry(tmp_path, src)
