@@ -82,6 +82,7 @@ class MemoryIngestTool(Tool):
         workspace: str | Path,
         embedding_model: str | None = None,
         dream_config: Any | None = None,
+        app_config: Any | None = None,
     ) -> None:
         self._workspace = Path(workspace).expanduser()
         self._embedding_model = embedding_model
@@ -91,6 +92,9 @@ class MemoryIngestTool(Tool):
         # config for post-ingest dream dispatch. None disables. See
         # ``durin.memory.threshold_trigger``.
         self._dream_config = dream_config
+        # Full DurinConfig. Forwarded to the threshold trigger so the
+        # spawned DreamRunner can resolve its model via aux_models.memory.
+        self._app_config = app_config
 
     @property
     def name(self) -> str:
@@ -125,6 +129,7 @@ class MemoryIngestTool(Tool):
             workspace=ctx.workspace,
             embedding_model=model,
             dream_config=dream_cfg,
+            app_config=app,
         )
 
     def _get_vector_index(self) -> Optional[VectorIndex]:
@@ -308,6 +313,7 @@ class MemoryIngestTool(Tool):
                     dream_config=self._dream_config,
                     vector_index=vi,
                     source_trigger="post_ingest_threshold",
+                    app_config=self._app_config,
                 )
         except Exception:  # noqa: BLE001
             logger.exception(

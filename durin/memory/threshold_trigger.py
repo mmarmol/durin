@@ -110,6 +110,7 @@ def maybe_dispatch_threshold_dream(
     dream_config: Any | None,
     vector_index: Optional["VectorIndex"],
     source_trigger: str,
+    app_config: Any | None = None,
 ) -> None:
     """Per-entity threshold check + background dispatch.
 
@@ -143,6 +144,11 @@ def maybe_dispatch_threshold_dream(
         Telemetry label written into ``memory.dream.start.trigger``.
         Use ``"threshold"`` for the legacy store-path (backward compat),
         ``"post_ingest_threshold"`` for the new ingest-path.
+    app_config
+        Optional full ``DurinConfig``. When provided, the dream's model
+        is resolved via :func:`durin.memory.model_resolve.resolve_memory_model`
+        (which honours ``aux_models.memory``). When ``None``, the legacy
+        ``dream_config.model_override`` is used directly.
     """
     if not entities:
         return
@@ -163,8 +169,13 @@ def maybe_dispatch_threshold_dream(
     import threading
 
     from durin.memory.dream_runner import DreamRunner
+    from durin.memory.model_resolve import resolve_memory_model
 
     auto_cfg = getattr(dream_config, "auto_absorb", None)
+    if app_config is not None:
+        resolved_model = resolve_memory_model(app_config)
+    else:
+        resolved_model = getattr(dream_config, "model_override", None)
     for ref in triggered_for:
         def _run(entity_ref: str = ref) -> None:
             try:
@@ -176,7 +187,7 @@ def maybe_dispatch_threshold_dream(
                     max_seconds_per_run=int(
                         getattr(dream_config, "max_seconds_per_run", 600),
                     ),
-                    model=getattr(dream_config, "model_override", None),
+                    model=resolved_model,
                     vector_index=vector_index,
                     auto_absorb_enabled=bool(
                         getattr(auto_cfg, "enabled", False),

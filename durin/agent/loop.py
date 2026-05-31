@@ -390,10 +390,17 @@ class AgentLoop:
             consolidation_ratio=consolidation_ratio,
             preemptive_compact_ratio=preemptive_compact_ratio,
         )
+        # Legacy `dream` honors aux_models.memory: when set, the dream
+        # phase 1/2 calls use that model instead of the agent's active
+        # one. The provider stays the agent's — i.e. the chosen model
+        # must be served by the same provider. Full provider override
+        # is not wired here (see durin/memory/model_resolve.py).
+        from durin.memory.model_resolve import resolve_memory_model
+        _dream_model = resolve_memory_model(self.app_config) or self.model
         self.dream = Dream(
             store=self.context.memory,
             provider=provider,
-            model=self.model,
+            model=_dream_model,
         )
         self.model_presets: dict[str, ModelPresetConfig] = model_presets or {}
         self._active_preset: str | None = None
@@ -628,7 +635,12 @@ class AgentLoop:
             context_window_tokens,
             preemptive_compact_ratio=snapshot.preemptive_compact_ratio,
         )
-        self.dream.set_provider(provider, model)
+        # Same precedence as construction: aux_models.memory > agent model.
+        from durin.memory.model_resolve import resolve_memory_model
+        self.dream.set_provider(
+            provider,
+            resolve_memory_model(self.app_config) or model,
+        )
         self._provider_signature = snapshot.signature
         if publish_update and self._runtime_model_publisher is not None:
             self._runtime_model_publisher(
