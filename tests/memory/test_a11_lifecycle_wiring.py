@@ -57,7 +57,9 @@ def test_memory_config_includes_a11_subsections() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_scheduler_ticks_on_start(tmp_path: Path) -> None:
+def test_scheduler_ticks_on_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """First tick fires immediately (within the wait timeout)."""
     from durin.memory.health_check import (
         HealthCheckScheduler,
@@ -65,6 +67,11 @@ def test_scheduler_ticks_on_start(tmp_path: Path) -> None:
     )
 
     checker = HealthChecker(workspace=tmp_path)
+    # Stub run_tick so the test exercises the scheduler timing
+    # without paying the cross-encoder / lance probe latency on a
+    # cold cache (P11 Fix B can take several seconds on first load,
+    # which exceeded this test's 2 s budget).
+    monkeypatch.setattr(checker, "run_tick", lambda: {})
     sched = HealthCheckScheduler(checker, interval_seconds=60)
     sched.start()
     try:
@@ -77,7 +84,9 @@ def test_scheduler_ticks_on_start(tmp_path: Path) -> None:
         sched.stop()
 
 
-def test_scheduler_stop_is_responsive(tmp_path: Path) -> None:
+def test_scheduler_stop_is_responsive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """`stop()` returns quickly even though the configured
     interval is large — the inner `wait()` short-circuits."""
     from durin.memory.health_check import (
@@ -86,6 +95,7 @@ def test_scheduler_stop_is_responsive(tmp_path: Path) -> None:
     )
 
     checker = HealthChecker(workspace=tmp_path)
+    monkeypatch.setattr(checker, "run_tick", lambda: {})
     sched = HealthCheckScheduler(checker, interval_seconds=3600)
     sched.start()
     # Wait for the first tick to settle.
