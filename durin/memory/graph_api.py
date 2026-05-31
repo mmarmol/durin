@@ -31,11 +31,16 @@ from durin.memory.search import search_memory
 from durin.memory.storage import load_entry
 
 __all__ = [
+    "forget_entry",
     "get_edge_detail",
     "get_entity_detail",
+    "get_entry_backlinks",
+    "get_entry_detail",
     "get_session_detail",
     "search_memory_api",
 ]
+
+_FORGETTABLE_CLASSES = ("episodic", "stable", "corpus", "session_summary")
 
 logger = logging.getLogger(__name__)
 
@@ -575,4 +580,225 @@ def get_edge_detail(
         "target": ref_b,
         "entries": [r[1] for r in rows[:limit]],
         "total": len(rows),
+    }
+
+
+# ---------------------------------------------------------------------------
+# P12 — individual entry browse / forget / backlinks
+# ---------------------------------------------------------------------------
+
+
+def _parse_entry_uri(uri: str) -> tuple[str, str] | None:
+    """Split ``memory/<class>/<id>`` → ``(class, id)``. Returns ``None``
+    on malformed input (URL was tampered with or junk). Tolerates a
+    trailing ``.md`` and a leading ``./``.
+    """
+    if not uri:
+        return None
+    cleaned = uri.strip().lstrip("./")
+    if cleaned.endswith(".md"):
+        cleaned = cleaned[:-3]
+    parts = cleaned.split("/")
+    if len(parts) != 3 or parts[0] != "memory":
+        return None
+    return parts[1], parts[2]
+
+
+def get_entry_detail(workspace: Path, uri: str) -> dict[str, Any] | None:
+    """Return one entry's frontmatter + body, or ``None`` on bad URI / 404.
+
+    Reads ``workspace/memory/<class>/<id>.md`` via
+    :func:`durin.memory.storage.load_entry`. Used by the webui's
+    Entries tab when the operator opens a row.
+    """
+    parsed = _parse_entry_uri(uri)
+    if parsed is None:
+        return None
+    class_name, entry_id = parsed
+    if class_name not in _FORGETTABLE_CLASSES:
+        return None
+    path = workspace / "memory" / class_name / f"{entry_id}.md"
+    if not path.is_file():
+        return None
+    try:
+        entry = load_entry(path)
+    except Exception:  # noqa: BLE001
+        logger.exception("get_entry_detail: load_entry failed for %s", path)
+        return None
+    return {
+        "uri": f"memory/{class_name}/{entry_id}",
+        "class_name": class_name,
+        "frontmatter": {
+            "id": entry.id,
+            "headline": entry.headline,
+            "summary": entry.summary,
+            "valid_from": entry.valid_from.isoformat() if entry.valid_from else None,
+            "author": entry.author,
+            "entities": list(entry.entities or ()),
+            "source_refs": list(entry.source_refs or ()),
+            "related": list(entry.related or ()),
+        },
+        "body": entry.body or "",
+        "exists": True,
+    }
+
+
+def forget_entry(workspace: Path, uri: str) -> dict[str, Any]:
+    """Archive an entry on behalf of the webui.
+
+    Returns ``{"result": "archived" | "not_found" | "protected" | "invalid"}``.
+
+    - ``protected`` for ``memory/entities/...`` (those have their own
+      absorb/revert lifecycle).
+    - ``invalid`` for unparseable URIs or unsupported classes.
+    - ``not_found`` when the file is missing.
+    - ``archived`` on success; best-effort cleans the vector + FTS rows.
+    """
+    parsed = _parse_entry_uri(uri)
+    if parsed is None:
+        # Maybe an `entities/...` URI got through — that has 4+ parts
+        # so the parser returned None; detect explicitly so the UI can
+        # surface "protected" instead of a generic invalid.
+        cleaned = (uri or "").strip().lstrip("./")
+        if cleaned.startswith("memory/entities/"):
+            return {"result": "protected"}
+        return {"result": "invalid"}
+    class_name, entry_id = parsed
+    if class_name == "entities":
+        return {"result": "protected"}
+    if class_name not in _FORGETTABLE_CLASSES:
+        return {"result": "invalid"}
+    path = workspace / "memory" / class_name / f"{entry_id}.md"
+    if not path.is_file():
+        return {"result": "not_found"}
+
+    from durin.memory.archive import (
+        archive_episodic,
+        archive_generic_entry,
+    )
+
+    try:
+        if class_name == "episodic":
+            archive_episodic(
+                workspace=workspace,
+                episodic_path=path,
+                into_uri="",
+                reason="user_forget",
+            )
+        else:
+            archive_generic_entry(
+                workspace=workspace,
+                entry_path=path,
+                reason="user_forget",
+            )
+    except FileNotFoundError:
+        # Raced with another archiver — already gone.
+        return {"result": "not_found"}
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("forget_entry archive failed for %s", uri)
+        return {"result": "error", "detail": str(exc)}
+
+    # Best-effort index cleanup. Mirrors what the CLI does. Failures
+    # are logged but don't change the result — the markdown move
+    # already succeeded.
+    try:
+        from durin.config.loader import load_config
+        from durin.memory.vector_index import (
+            VectorIndex,
+            vector_index_available,
+        )
+        cfg = load_config()
+        if (
+            vector_index_available()
+            and getattr(cfg.memory, "enabled", False)
+            and cfg.memory.embedding.model
+        ):
+            from durin.memory.embedding import FastembedProvider
+            vi = VectorIndex(
+                workspace,
+                FastembedProvider(model=cfg.memory.embedding.model),
+            )
+            vi.delete_by_id(entry_id)
+    except Exception:  # noqa: BLE001
+        logger.warning("forget_entry: vector cleanup skipped for %s", uri)
+
+    try:
+        from durin.memory.indexer import reindex_one_file
+        reindex_one_file(workspace, path, trigger="forget")
+    except Exception:  # noqa: BLE001
+        logger.warning("forget_entry: FTS cleanup skipped for %s", uri)
+
+    return {"result": "archived"}
+
+
+def get_entry_backlinks(
+    workspace: Path,
+    uri: str,
+    *,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """Find entries that reference ``uri`` via ``source_refs``, ``related``,
+    or body wikilinks.
+
+    Walks every entry under ``memory/`` (excluding ``archive/`` /
+    ``pending/`` — see :func:`walk_memory`). Synchronous because
+    workspaces have O(thousands) of entries max; well under 100 ms in
+    normal operation.
+
+    Returns ``{"uri": ..., "backlinks": [...], "truncated": bool}``.
+    Each backlink: ``{"uri", "context", "headline"}`` where ``context``
+    is one of ``"source_refs"``, ``"related"``, or ``"body"``.
+    """
+    parsed = _parse_entry_uri(uri)
+    if parsed is None:
+        return {"uri": uri, "backlinks": [], "truncated": False}
+    class_name, entry_id = parsed
+    target_path = f"memory/{class_name}/{entry_id}"
+
+    from durin.memory.paths import walk_memory
+
+    results: list[dict[str, Any]] = []
+    for md_path in walk_memory(workspace, include_archive=False):
+        # Skip the target itself (don't self-reference).
+        try:
+            rel = md_path.relative_to(workspace / "memory")
+        except ValueError:
+            continue
+        rel_no_ext = f"memory/{rel.with_suffix('').as_posix()}"
+        if rel_no_ext == target_path:
+            continue
+        try:
+            entry = load_entry(md_path)
+        except Exception:  # noqa: BLE001
+            continue
+
+        contexts: list[str] = []
+        # Frontmatter refs may carry the URI verbatim, wrapped in
+        # ``[[...]]``, or inside a markdown link like
+        # ``[turn](memory/...)``. We accept any occurrence.
+        for field_name, values in (
+            ("source_refs", entry.source_refs or ()),
+            ("related", entry.related or ()),
+        ):
+            if any(target_path in v for v in values):
+                contexts.append(field_name)
+        if f"[[{target_path}]]" in (entry.body or ""):
+            contexts.append("body")
+
+        if not contexts:
+            continue
+        results.append({
+            "uri": f"memory/{rel.parts[0]}/{md_path.stem}",
+            "context": ",".join(contexts),
+            "headline": entry.headline or "",
+        })
+        if len(results) >= limit + 1:
+            # We collected one extra to know we're truncating.
+            break
+
+    truncated = len(results) > limit
+    return {
+        "uri": f"memory/{class_name}/{entry_id}",
+        "backlinks": results[:limit],
+        "truncated": truncated,
     }

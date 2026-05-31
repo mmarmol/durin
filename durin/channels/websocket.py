@@ -698,6 +698,15 @@ class WebSocketChannel(BaseChannel):
         if m:
             return self._handle_memory_edge(request, m.group(1), m.group(2))
 
+        if got == "/api/memory/entry":
+            return self._handle_memory_entry(request, query)
+
+        if got == "/api/memory/forget":
+            return self._handle_memory_forget(request, query)
+
+        if got == "/api/memory/backlinks":
+            return self._handle_memory_backlinks(request, query)
+
         if got == "/api/model/test":
             return await self._handle_model_test(request)
 
@@ -888,6 +897,87 @@ class WebSocketChannel(BaseChannel):
             return _http_error(500, f"session detail failed: {exc}")
         if payload is None:
             return _http_error(404, f"session not found: {stem}")
+        return _http_json_response(payload)
+
+    def _handle_memory_entry(
+        self, request: WsRequest, query: dict[str, list[str]],
+    ) -> Response:
+        """GET /api/memory/entry?uri=memory/<class>/<id> — one entry's frontmatter + body.
+
+        Distinct from ``_handle_memory_entity`` (which serves entity
+        PAGES under ``memory/entities/``). This handler is for the
+        individual entries — episodic / stable / corpus /
+        session_summary — that the P12 Entries panel browses.
+        """
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from durin.config.loader import load_config
+        from durin.memory.graph_api import get_entry_detail
+
+        uri = (_query_first(query, "uri") or "").strip()
+        try:
+            workspace = load_config().workspace_path
+            payload = get_entry_detail(workspace, uri)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("memory entry detail failed for %s", uri)
+            return _http_error(500, f"entry detail failed: {exc}")
+        if payload is None:
+            return _http_error(404, f"entry not found: {uri}")
+        return _http_json_response(payload)
+
+    def _handle_memory_forget(
+        self, request: WsRequest, query: dict[str, list[str]],
+    ) -> Response:
+        """GET /api/memory/forget?uri=memory/<class>/<id> — archive an entry.
+
+        Returns ``{"result": "archived"|"not_found"|"protected"|"invalid"}``.
+        HTTP status mirrors the result: 200 archived/not_found,
+        403 protected, 400 invalid. (Operators can distinguish "URI
+        was malformed" from "URI named a real entry that's gone"
+        without parsing the body.)
+        """
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from durin.config.loader import load_config
+        from durin.memory.graph_api import forget_entry
+
+        uri = (_query_first(query, "uri") or "").strip()
+        try:
+            workspace = load_config().workspace_path
+            payload = forget_entry(workspace, uri)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("memory forget failed for %s", uri)
+            return _http_error(500, f"forget failed: {exc}")
+        result = payload.get("result")
+        if result == "protected":
+            # 403 + payload so the UI can switch on result text too.
+            return _http_json_response(payload, status=403)
+        if result == "invalid":
+            return _http_json_response(payload, status=400)
+        return _http_json_response(payload)
+
+    def _handle_memory_backlinks(
+        self, request: WsRequest, query: dict[str, list[str]],
+    ) -> Response:
+        """GET /api/memory/backlinks?uri=memory/<class>/<id> — entries that reference this one.
+
+        Walks ``memory/`` (excluding archive / pending) once and returns
+        up to 50 hits (``truncated`` flag indicates more were found).
+        Synchronous; benchmark target is < 100 ms over O(thousands) of
+        entries.
+        """
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from durin.config.loader import load_config
+        from durin.memory.graph_api import get_entry_backlinks
+
+        uri = (_query_first(query, "uri") or "").strip()
+        try:
+            workspace = load_config().workspace_path
+            payload = get_entry_backlinks(workspace, uri)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("memory backlinks failed for %s", uri)
+            return _http_error(500, f"backlinks failed: {exc}")
         return _http_json_response(payload)
 
     def _handle_memory_edge(
