@@ -180,13 +180,6 @@ export function MemorySettings({ token }: { token: string }) {
           />
         </SettingsGroup>
       </section>
-
-      <section>
-        <SettingsSectionTitle>{t("settings.memory.sections.decay")}</SettingsSectionTitle>
-        <SettingsGroup>
-          <DecayDefaultsRows />
-        </SettingsGroup>
-      </section>
     </div>
   );
 }
@@ -357,37 +350,3 @@ function ThresholdEntriesRow({
   );
 }
 
-/** Read-only mirror of `CLASS_HALF_LIFE_DEFAULTS`. Decay defaults are
- *  defined in code (durin/memory/decay.py); per-entry overrides live in
- *  individual entry frontmatter, not the global config. */
-function DecayDefaultsRows() {
-  const { t } = useTranslation();
-  const rows: Array<{ className: string; days: number | null }> = [
-    { className: "episodic", days: 90 },
-    { className: "session_summary", days: 120 },
-    { className: "entity", days: null },
-    { className: "stable", days: null },
-    { className: "corpus", days: null },
-  ];
-  return (
-    <>
-      {rows.map(({ className, days }) => (
-        <SettingsRow
-          key={className}
-          title={t(`settings.memory.decayClasses.${className}`)}
-          description={t(`settings.memory.decayHelp.${className}`)}
-        >
-          <span className="text-[12px] tabular-nums text-muted-foreground">
-            {days === null
-              ? t("settings.memory.decayNever")
-              : t("settings.memory.decayDays", { days })}
-          </span>
-        </SettingsRow>
-      ))}
-      <SettingsRow
-        title={t("settings.memory.rows.decayOverrides")}
-        description={t("settings.memory.help.decayOverrides")}
-      />
-    </>
-  );
-}

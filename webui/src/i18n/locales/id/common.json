@@ -235,39 +235,20 @@
     "memory": {
       "crossEncoderModelPlaceholder": "id model (mis. BAAI/bge-reranker-base)",
       "crossEncoderTest": "Tes",
-      "decayClasses": {
-        "corpus": "Korpus",
-        "entity": "Entitas",
-        "episodic": "Episodik",
-        "session_summary": "Ringkasan sesi",
-        "stable": "Stabil"
-      },
-      "decayDays": "{{days}} hari",
-      "decayHelp": {
-        "corpus": "Materi sumber yang diimpor. mtime adalah tanggal ingest, bukan usia fakta.",
-        "entity": "Halaman entitas kanonikal. mtime melacak update Dream terakhir, bukan usia fakta.",
-        "episodic": "Observasi harian. Decay karena usia penting.",
-        "session_summary": "Ringkasan per sesi. Decay lebih lambat daripada episodik mentah.",
-        "stable": "Fakta berusia panjang. Tidak boleh decay seiring waktu."
-      },
-      "decayNever": "tidak pernah decay",
-      "description": "Atur subsistem memori — reranking pencarian, auto-konsolidasi Dream, dan default decay temporal.",
+      "description": "Atur subsistem memori — reranking pencarian dan auto-konsolidasi Dream.",
       "help": {
         "crossEncoderEnabled": "Reranker second-pass opt-in. Menambahkan 300-1500 ms per query dan ~1 GB RAM tetapi meningkatkan kualitas pada query ambigu. Mati secara default.",
         "crossEncoderModel": "Model yang digunakan saat reranker aktif. Default bekerja baik untuk query multibahasa; alternatif menukar ukuran dengan latensi.",
-        "decayOverrides": "Override default kelas per entri dengan menyetel decay_half_life di frontmatter entri. Set evergreen: true agar entri tidak pernah decay.",
         "thresholdEntries": "Jalankan pass Dream entity-centric saat satu entitas mengumpulkan jumlah entri post-cursor ini. Set ke 0 untuk menonaktifkan trigger per-entity (trigger cron dan session-close tetap berlaku)."
       },
       "loadError": "Tidak dapat memuat pengaturan memori.",
       "rows": {
         "crossEncoderEnabled": "Reranker cross-encoder",
         "crossEncoderModel": "Model reranker",
-        "decayOverrides": "Override per entri",
         "thresholdEntries": "Ambang konsolidasi"
       },
       "saveError": "Tidak dapat menyimpan {{path}}.",
       "sections": {
-        "decay": "Decay temporal (hanya-baca)",
         "dream": "Auto-konsolidasi Dream",
         "rerank": "Reranking pencarian"
       }
