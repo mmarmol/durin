@@ -994,6 +994,28 @@ function ModelBlockRows({
           {modelCapsSummary(caps, t)}
         </span>
       </SettingsRow>
+      {/* Main-model test sits next to Capabilities — both describe the
+        * primary model. Aux rows below have their own per-row Probar
+        * buttons; surfacing the main test at the end would suggest it
+        * tests everything, which is misleading. */}
+      <SettingsRow
+        title={t("settings.models.testTitle")}
+        description={
+          test
+            ? `${test.status === "ok" ? "✓" : "✗"} ${test.message}`
+            : t("settings.models.testHint")
+        }
+      >
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={testing}
+          onClick={() => void runTest()}
+          className="rounded-full"
+        >
+          {testing ? t("settings.models.testing") : t("settings.models.testButton")}
+        </Button>
+      </SettingsRow>
       <SettingsRow
         title={t("settings.models.vision")}
         description={t("settings.models.visionHint")}
@@ -1035,24 +1057,6 @@ function ModelBlockRows({
           token={token}
           capability="text"
         />
-      </SettingsRow>
-      <SettingsRow
-        title={t("settings.models.testTitle")}
-        description={
-          test
-            ? `${test.status === "ok" ? "✓" : "✗"} ${test.message}`
-            : t("settings.models.testHint")
-        }
-      >
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={testing}
-          onClick={() => void runTest()}
-          className="rounded-full"
-        >
-          {testing ? t("settings.models.testing") : t("settings.models.testButton")}
-        </Button>
       </SettingsRow>
     </>
   );

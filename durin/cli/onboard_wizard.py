@@ -97,6 +97,7 @@ PROVIDER_CHOICES: tuple[tuple[str, str, str], ...] = (
 # hint; they never block the user.
 DEFAULT_MODELS: dict[str, tuple[str, ...]] = {
     "zhipu": ("glm-5.1", "glm-4.6", "glm-5-turbo", "glm-4.5v"),
+    "zai_coding_plan": ("glm-5.1", "glm-4.6", "glm-5-turbo"),
     "anthropic": ("claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"),
     "openai": ("gpt-5", "gpt-5-mini", "gpt-4.1", "gpt-4o", "gpt-4o-mini"),
     "gemini": ("gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"),

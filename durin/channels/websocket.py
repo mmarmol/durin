@@ -1326,9 +1326,22 @@ class WebSocketChannel(BaseChannel):
 
         # Resolve provider keywords once. Empty tuple means "don't filter"
         # (gateway / custom / unknown provider).
+        #
+        # Coding-plan variants (e.g. `zai_coding_plan` is the same
+        # backend as `zhipu`, just a different endpoint with separate
+        # quota) borrow their base provider's keywords so the catalog
+        # surfaces the same models. The plan's own keywords are
+        # intentionally rare (so auto-routing doesn't accidentally pick
+        # them) — they shouldn't double as a model-filter heuristic.
+        _PLAN_BASE = {
+            "zai_coding_plan": "zhipu",
+            "volcengine_coding_plan": "volcengine",
+            "byteplus_coding_plan": "byteplus",
+        }
         provider_keywords: tuple[str, ...] = ()
         if provider:
-            spec = find_by_name(provider)
+            lookup_name = _PLAN_BASE.get(provider, provider)
+            spec = find_by_name(lookup_name)
             if spec is not None:
                 provider_keywords = spec.keywords
 
