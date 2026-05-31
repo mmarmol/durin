@@ -3,6 +3,7 @@ import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
+import wikiLinkPlugin from "@flowershow/remark-wiki-link";
 
 import { CodeBlock } from "@/components/CodeBlock";
 import { cn } from "@/lib/utils";
@@ -12,15 +13,52 @@ import "katex/dist/katex.min.css";
 interface MarkdownTextRendererProps {
   children: string;
   className?: string;
+  /** Optional handler invoked when the user clicks a wikilink whose
+   *  target resolves to a memory URI (``memory/<class>/<id>``). When
+   *  unset, wikilinks render as plain anchors with the
+   *  ``#wikilink:<target>`` fragment href and no navigation — chat
+   *  bubbles intentionally leave this unset so wikilinks there don't
+   *  hijack navigation. The MemoryGraphView drawer passes a handler
+   *  that selects the linked entry in-place. */
+  onWikiLinkClick?: (target: string) => void;
 }
 
 /**
  * Heavy markdown stack (GFM, math, KaTeX, syntax highlighting) kept in a
  * separate chunk so the app shell can paint sooner on refresh.
  */
+// The wikilink plugin maps `[[target]]` to an `<a>` with this
+// href shape. We intercept anchors with this prefix in the `a`
+// component override to dispatch onWikiLinkClick instead of
+// navigating. Using a non-navigable `#wikilink:` prefix (rather
+// than `#memory/...`) so wikilinks without a handler are harmless
+// fragment refs, never accidental cross-app navigation.
+const WIKILINK_HREF_PREFIX = "#wikilink:";
+
+// @flowershow/remark-wiki-link option names (NOT the ones from
+// the older `remark-wiki-link` package): `className` (default
+// `"internal"`), `newClassName` (default `"new"`), `urlResolver`,
+// `format`. Since we don't pass a `permalinks` map, EVERY wikilink
+// is classified as "new" — so we set both class names to the same
+// value to get a single stable selector for the `<a>` override below.
+//
+// Note on `urlResolver` signature: the README documents it as
+// `(name: string) => string` but the actual implementation (per
+// `index.d.ts`) passes `{ filePath, isEmbed, heading }`. We use the
+// typed object form here — relying on the README would silently emit
+// `[object Object]` in the href.
+const WIKILINK_PLUGIN_OPTIONS = {
+  className: "wiki-link",
+  newClassName: "wiki-link",
+  format: "regular" as const,
+  urlResolver: (opts: { filePath: string; isEmbed: boolean; heading: string }) =>
+    `${WIKILINK_HREF_PREFIX}${opts.filePath}${opts.heading ? `#${opts.heading}` : ""}`,
+};
+
 export default function MarkdownTextRenderer({
   children,
   className,
+  onWikiLinkClick,
 }: MarkdownTextRendererProps) {
   return (
     <div
@@ -42,7 +80,11 @@ export default function MarkdownTextRenderer({
       style={{ lineHeight: "var(--cjk-line-height)" }}
     >
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath]}
+        remarkPlugins={[
+          remarkGfm,
+          remarkMath,
+          [wikiLinkPlugin, WIKILINK_PLUGIN_OPTIONS],
+        ]}
         rehypePlugins={[rehypeKatex]}
         components={{
           code({ className: cls, children: kids, ...props }) {
@@ -100,6 +142,33 @@ export default function MarkdownTextRenderer({
             );
           },
           a({ href, children: markdownChildren, ...props }) {
+            // Wikilink interception: the plugin emits hrefs prefixed
+            // with WIKILINK_HREF_PREFIX. When a handler is registered,
+            // click invokes it with the target (the bit after the
+            // prefix) and suppresses navigation. Without a handler,
+            // render as a plain non-navigating fragment anchor styled
+            // to look like a soft link — visible but inert.
+            if (href?.startsWith(WIKILINK_HREF_PREFIX)) {
+              const target = href.slice(WIKILINK_HREF_PREFIX.length);
+              const hasHandler = typeof onWikiLinkClick === "function";
+              return (
+                <a
+                  href={href}
+                  className={cn(
+                    "wiki-link text-primary underline decoration-dotted underline-offset-2",
+                    hasHandler ? "cursor-pointer hover:opacity-80" : "cursor-default opacity-80",
+                  )}
+                  onClick={(e) => {
+                    if (!hasHandler) return;
+                    e.preventDefault();
+                    onWikiLinkClick(target);
+                  }}
+                  {...props}
+                >
+                  {markdownChildren}
+                </a>
+              );
+            }
             return (
               <a
                 href={href}
