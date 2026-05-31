@@ -279,7 +279,17 @@
       "save": "Guardar secret",
       "saving": "Guardando…",
       "stored": "Secrets guardados",
-      "title": "Secrets"
+      "title": "Secrets",
+      "edit": "Editar",
+      "editTitle": "Editando {{name}}",
+      "editingBadge": "EDITANDO",
+      "cancel": "Cancelar",
+      "saveEdit": "Guardar cambios",
+      "hintValueEdit": "Dejá vacío para mantener el valor actual. Indicá un valor nuevo solo cuando estés rotando el secret.",
+      "valuePlaceholderEdit": "(vacío = mantener actual)",
+      "valueRedacted": "(sin hint disponible)",
+      "fieldOrigin": "Origen",
+      "fieldCreated": "Creado"
     },
     "cron": {
       "title": "Tareas programadas",

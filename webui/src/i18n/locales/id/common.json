@@ -279,7 +279,17 @@
       "save": "Simpan secret",
       "saving": "Menyimpan…",
       "stored": "Secret tersimpan",
-      "title": "Secret"
+      "title": "Secret",
+      "edit": "Ubah",
+      "editTitle": "Mengubah {{name}}",
+      "editingBadge": "MENGUBAH",
+      "cancel": "Batal",
+      "saveEdit": "Simpan perubahan",
+      "hintValueEdit": "Biarkan kosong untuk mempertahankan nilai saat ini. Isi nilai baru hanya saat merotasi secret.",
+      "valuePlaceholderEdit": "(kosong = pertahankan)",
+      "valueRedacted": "(tidak ada petunjuk)",
+      "fieldOrigin": "Asal",
+      "fieldCreated": "Dibuat"
     },
     "cron": {
       "title": "Tugas terjadwal",
