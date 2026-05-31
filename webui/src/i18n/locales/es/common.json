@@ -235,39 +235,20 @@
     "memory": {
       "crossEncoderModelPlaceholder": "id del modelo (p. ej. BAAI/bge-reranker-base)",
       "crossEncoderTest": "Probar",
-      "decayClasses": {
-        "corpus": "Corpus",
-        "entity": "Entidad",
-        "episodic": "Episódico",
-        "session_summary": "Resumen de sesión",
-        "stable": "Estable"
-      },
-      "decayDays": "{{days}} días",
-      "decayHelp": {
-        "corpus": "Material importado. El mtime es la fecha de ingesta, no la edad del hecho.",
-        "entity": "Páginas canónicas de entidades. El mtime registra la última actualización de Dream, no la edad del hecho.",
-        "episodic": "Observaciones del día a día. Decaen porque la edad importa.",
-        "session_summary": "Resúmenes por sesión. Decaen más lento que los episódicos crudos.",
-        "stable": "Hechos de larga duración. No deben decaer con el tiempo."
-      },
-      "decayNever": "nunca decae",
-      "description": "Ajusta el subsistema de memoria — reranking de búsqueda, auto-consolidación de Dream y valores predeterminados de decaimiento temporal.",
+      "description": "Ajusta el subsistema de memoria — reranking de búsqueda y auto-consolidación de Dream.",
       "help": {
         "crossEncoderEnabled": "Reranker opcional de segunda pasada. Agrega 300-1500 ms por consulta y ~1 GB de RAM, pero mejora la calidad en consultas ambiguas. Desactivado por defecto.",
         "crossEncoderModel": "Modelo usado cuando el reranker está habilitado. El predeterminado funciona bien para consultas multilingües; las alternativas intercambian tamaño por latencia.",
-        "decayOverrides": "Sobrescribe el valor predeterminado de la clase por entrada estableciendo decay_half_life en el frontmatter. Establece evergreen: true para que la entrada nunca decaiga.",
         "thresholdEntries": "Ejecuta una pasada Dream centrada en entidad cuando una entidad acumula esta cantidad de entradas posteriores al cursor. Establece 0 para desactivar el disparador por entidad (los disparadores cron y de cierre de sesión siguen activos)."
       },
       "loadError": "No se pudieron cargar los ajustes de memoria.",
       "rows": {
         "crossEncoderEnabled": "Reranker cross-encoder",
         "crossEncoderModel": "Modelo del reranker",
-        "decayOverrides": "Overrides por entrada",
         "thresholdEntries": "Umbral de consolidación"
       },
       "saveError": "No se pudo guardar {{path}}.",
       "sections": {
-        "decay": "Decaimiento temporal (solo lectura)",
         "dream": "Auto-consolidación del Dream",
         "rerank": "Reranking de búsqueda"
       }
