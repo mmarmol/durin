@@ -40,16 +40,23 @@ interface CrossEncoderState {
 
 interface MemoryConfigShape {
   search?: {
-    cross_encoder?: Partial<CrossEncoderState>;
+    // /api/config returns the on-disk alias shape (camelCase). Pre-fix
+    // 2026-05-31 this interface declared `cross_encoder` /
+    // `threshold_entries` (snake_case) and reads silently returned
+    // the defaults — the panel always rendered "Desactivado" no
+    // matter what was on disk. The setConfigValue *paths* keep
+    // working with snake_case because `_normalize_dotted_path` in
+    // the backend camelCases each segment before writing.
+    crossEncoder?: Partial<CrossEncoderState>;
   };
   dream?: {
-    threshold_entries?: number;
+    thresholdEntries?: number;
   };
 }
 
 function readCrossEncoder(config: Record<string, unknown> | null): CrossEncoderState {
   const memory = config?.memory as MemoryConfigShape | undefined;
-  const ce = memory?.search?.cross_encoder ?? {};
+  const ce = memory?.search?.crossEncoder ?? {};
   return {
     enabled: typeof ce.enabled === "boolean" ? ce.enabled : false,
     model: typeof ce.model === "string" && ce.model ? ce.model : DEFAULT_CROSS_ENCODER_MODEL,
@@ -58,7 +65,7 @@ function readCrossEncoder(config: Record<string, unknown> | null): CrossEncoderS
 
 function readThresholdEntries(config: Record<string, unknown> | null): number {
   const memory = config?.memory as MemoryConfigShape | undefined;
-  const value = memory?.dream?.threshold_entries;
+  const value = memory?.dream?.thresholdEntries;
   return typeof value === "number" && Number.isFinite(value) ? value : 5;
 }
 
