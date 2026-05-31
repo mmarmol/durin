@@ -226,7 +226,11 @@
       "maxTokens": "Max output tokens",
       "maxTokensHint": "Cap per assistant message. Bounded by the model.",
       "reasoningEffort": "Reasoning effort",
-      "reasoningEffortHint": "For reasoning models: low | medium | high. Leave blank for default."
+      "reasoningEffortHint": "For reasoning models: low | medium | high. Leave blank for default.",
+      "image": "Image model",
+      "imageHint": "Used by the generate_image tool when image generation mode is on.",
+      "enabled": "Enabled",
+      "disabled": "Disabled"
     },
     "channels": {
       "description": "Bridge durin to chat platforms. Enable a channel and set its credential — the token goes to the secret store, not config.json.",
