@@ -293,7 +293,9 @@
       "today": "Today",
       "yesterday": "Yesterday",
       "earlier": "Earlier"
-    }
+    },
+    "rename": "Rename",
+    "renameAria": "Rename chat"
   },
   "deleteConfirm": {
     "title": "Delete this chat?",
