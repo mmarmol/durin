@@ -179,7 +179,6 @@ class MemoryIngestTool(Tool):
         # entry doesn't roll back the ingest.
         corpus_id = self._maybe_create_corpus_entry(
             source_path=source,
-            ingested_id=result["id"],
             ingested_path=result["source"],
             content=result["content"],
         )
@@ -199,7 +198,6 @@ class MemoryIngestTool(Tool):
         self,
         *,
         source_path: Path,
-        ingested_id: str,
         ingested_path: str,
         content: str,
     ) -> str | None:

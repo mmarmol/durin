@@ -74,7 +74,6 @@ def build_memory_graph(
     workspace = Path(workspace)
     memory_root = workspace / "memory"
     entities_root = memory_root / "entities"
-    episodic_root = memory_root / "episodic"
     sessions_root = workspace / "sessions"
 
     # 1. Walk entity pages — `walk_class` excludes the top-level
