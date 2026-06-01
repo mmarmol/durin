@@ -66,7 +66,7 @@ class CronTool(Tool, ContextAware):
         self._default_timezone = default_timezone
         self._channel: ContextVar[str] = ContextVar("cron_channel", default="")
         self._chat_id: ContextVar[str] = ContextVar("cron_chat_id", default="")
-        self._metadata: ContextVar[dict] = ContextVar("cron_metadata", default={})
+        self._metadata: ContextVar[dict | None] = ContextVar("cron_metadata", default=None)
         self._session_key: ContextVar[str] = ContextVar("cron_session_key", default="")
         self._in_cron_context: ContextVar[bool] = ContextVar("cron_in_context", default=False)
 
@@ -225,7 +225,7 @@ class CronTool(Tool, ContextAware):
             channel=channel,
             to=chat_id,
             delete_after_run=delete_after,
-            channel_meta=self._metadata.get(),
+            channel_meta=self._metadata.get() or {},
             session_key=self._session_key.get() or None,
         )
         return f"Created job '{job.name}' (id: {job.id})"
