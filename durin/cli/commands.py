@@ -909,10 +909,6 @@ def serve(
         agent_loop = AgentLoop.from_config(
             runtime_config, bus,
             session_manager=session_manager,
-            image_generation_provider_configs={
-                "openrouter": runtime_config.providers.openrouter,
-                "aihubmix": runtime_config.providers.aihubmix,
-            },
         )
     except ValueError as exc:
         console.print(f"[red]Error: {exc}[/red]")
@@ -1246,10 +1242,6 @@ def _run_gateway(
         context_window_tokens=provider_snapshot.context_window_tokens,
         cron_service=cron,
         session_manager=session_manager,
-        image_generation_provider_configs={
-            "openrouter": config.providers.openrouter,
-            "aihubmix": config.providers.aihubmix,
-        },
         provider_snapshot_loader=load_provider_snapshot,
         runtime_model_publisher=lambda model, preset: publish_runtime_model_update(
             bus,

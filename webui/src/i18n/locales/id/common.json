@@ -195,20 +195,8 @@
       "maxTokensHint": "Batas per pesan asisten. Dibatasi oleh model.",
       "reasoningEffort": "Tingkat penalaran",
       "reasoningEffortHint": "Untuk model penalaran: low | medium | high. Kosong = default.",
-      "image": "Model gambar",
-      "imageHint": "Digunakan oleh tool generate_image saat mode generasi gambar aktif.",
       "enabled": "Aktif",
-      "disabled": "Nonaktif",
-      "imageNoEligibleProviders": "Tidak ada provider terkonfigurasi yang memiliki klien generasi gambar di build ini. Yang didukung: {{supported}}. Konfigurasikan API key salah satunya di Providers / Secrets untuk mengaktifkan generasi gambar.",
-      "disableNow": "Nonaktifkan sekarang",
-      "disable": "Nonaktifkan",
-      "imageProbing": "Mengecek…",
-      "imageReprobe": "Cek ulang",
-      "imageProbeAndActivate": "Cek & aktifkan",
-      "imageProbeAndActivateHint": "Menjalankan generasi nyata terhadap provider. Hanya mengaktifkan jika gambar nyata kembali.",
-      "imageSaveBeforeProbe": "Simpan provider/model dulu, lalu cek.",
-      "imageProbeOk": "✓ ok · {{ms}}ms · gambar {{kb}}KB",
-      "imageProbeFail": "✗ gagal: {{error}}"
+      "disabled": "Nonaktif"
     },
     "channels": {
       "credentialPlaceholder": "{{field}}",
@@ -433,21 +421,6 @@
       "send": "Kirim pesan",
       "stop": "Hentikan respons",
       "attachImage": "Lampirkan gambar",
-      "imageMode": {
-        "label": "Buat gambar",
-        "toggle": "Alihkan mode pembuatan gambar",
-        "placeholder": "Deskripsikan atau edit gambar…",
-        "aspectAria": "Rasio aspek gambar",
-        "aspectLabel": "Rasio gambar",
-        "aspect": {
-          "auto": "Otomatis",
-          "1_1": "Persegi 1:1",
-          "3_4": "Potret 3:4",
-          "9_16": "Story 9:16",
-          "4_3": "Lanskap 4:3",
-          "16_9": "Lebar 16:9"
-        }
-      },
       "encoding": "Memproses…",
       "remove": "Hapus lampiran",
       "normalizedSizeHint": "{{orig}} → {{current}} (auto)",

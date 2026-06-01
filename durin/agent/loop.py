@@ -37,7 +37,6 @@ from durin.session.goal_state import (
     runner_wall_llm_timeout_s,
 )
 from durin.session.manager import Session, SessionManager
-from durin.utils.artifacts import generated_image_paths_from_messages
 from durin.utils.document import extract_documents
 from durin.utils.helpers import image_placeholder_text
 from durin.utils.helpers import truncate_text as truncate_text_fn
@@ -55,7 +54,6 @@ def _truncate_tool_output(content: str, max_chars: int, tool_name: str | None) -
     """Truncate ``content`` choosing direction based on the tool name."""
     direction = "tail" if (tool_name in _TAIL_TRUNCATION_TOOLS) else "head"
     return truncate_text_fn(content, max_chars, direction=direction)
-from durin.utils.image_generation_intent import image_generation_prompt
 from durin.utils.runtime import EMPTY_FINAL_RESPONSE_MESSAGE
 from durin.utils.session_attachments import merge_turn_media_into_last_assistant
 from durin.utils.webui_titles import mark_webui_session, maybe_generate_webui_title_after_turn
@@ -64,7 +62,6 @@ from durin.utils.webui_turn_helpers import publish_turn_run_status
 if TYPE_CHECKING:
     from durin.config.schema import (
         ChannelsConfig,
-        ProviderConfig,
         ToolsConfig,
     )
     from durin.cron.service import CronService
@@ -261,8 +258,6 @@ class AgentLoop:
         unified_session: bool = False,
         disabled_skills: list[str] | None = None,
         tools_config: ToolsConfig | None = None,
-        image_generation_provider_config: ProviderConfig | None = None,
-        image_generation_provider_configs: dict[str, ProviderConfig] | None = None,
         aux_providers: dict[str, "AuxProviderHandle"] | None = None,
         provider_snapshot_loader: Callable[..., ProviderSnapshot] | None = None,
         provider_signature: tuple[object, ...] | None = None,
@@ -314,17 +309,11 @@ class AgentLoop:
         self.tools_config = _tc
         self.web_config = _tc.web
         self.exec_config = _tc.exec
-        self._image_generation_provider_configs = dict(image_generation_provider_configs or {})
         # Aux providers for capability bridges (vision/audio/...). Empty
         # dict ⇒ no bridge tools register. Built upstream by
         # ``from_config`` from ``config.agents.aux_models``; tests can
         # inject a custom dict directly.
         self._aux_providers: dict[str, AuxProviderHandle] = dict(aux_providers or {})
-        if (
-            image_generation_provider_config is not None
-            and "openrouter" not in self._image_generation_provider_configs
-        ):
-            self._image_generation_provider_configs["openrouter"] = image_generation_provider_config
         self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace
         self._start_time = time.time()
@@ -709,7 +698,6 @@ class AgentLoop:
             cron_service=self.cron_service,
             sessions=self.sessions,
             provider_snapshot_loader=self._provider_snapshot_loader,
-            image_generation_provider_configs=self._image_generation_provider_configs,
             timezone=self.context.timezone or "UTC",
             aux_providers=self._aux_providers,
             app_config=self.app_config,
@@ -922,7 +910,7 @@ class AgentLoop:
         """Build the initial message list for the LLM turn."""
         return self.context.build_messages(
             history=history,
-            current_message=image_generation_prompt(msg.content, msg.metadata),
+            current_message=msg.content,
             media=msg.media if msg.media else None,
             channel=msg.channel,
             chat_id=self._runtime_chat_id(msg),
@@ -1789,8 +1777,6 @@ class AgentLoop:
             ctx.final_content = EMPTY_FINAL_RESPONSE_MESSAGE
 
         ctx.save_skip = 1 + len(ctx.history) + (1 if ctx.user_persisted_early else 0)
-        skip_msgs = ctx.all_messages[ctx.save_skip:]
-        ctx.generated_media = generated_image_paths_from_messages(skip_msgs)
         mt = self.tools.get("message")
         extra = getattr(mt, "turn_delivered_media_paths", lambda: [])() if mt else []
         merge_turn_media_into_last_assistant(ctx.all_messages, ctx.generated_media, extra)

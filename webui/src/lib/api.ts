@@ -392,49 +392,6 @@ export async function listModels(
   );
 }
 
-/** GET /api/image-gen/providers — providers for which durin ships a
- *  concrete image-generation client. The webui filters the Image Model
- *  provider dropdown by the intersection of this list with the user's
- *  configured-providers list, so users can't pick a provider that has
- *  no backend implementation.
- */
-export async function fetchImageGenSupportedProviders(
-  token: string,
-  base: string = "",
-): Promise<string[]> {
-  const res = await request<{ providers: string[] }>(
-    `${base}/api/image-gen/providers`,
-    token,
-  );
-  return res.providers ?? [];
-}
-
-export interface ImageGenTestResult {
-  ok: boolean;
-  error?: string;
-  latency_ms?: number;
-  image_size_bytes?: number;
-  image_count?: number;
-}
-
-/** GET /api/image-gen/test?provider=…&model=… — live probe. Calls the
- *  provider with a minimal prompt and reports whether a real image
- *  came back. The "Probar y activar" UI flow gates the enabled=true
- *  write on this returning ok=true. The probe never throws — provider
- *  errors come back as ``{ok: false, error}`` so the UI surfaces them. */
-export async function testImageGen(
-  token: string,
-  provider: string,
-  model: string,
-  base: string = "",
-): Promise<ImageGenTestResult> {
-  const params = new URLSearchParams({ provider, model });
-  return request<ImageGenTestResult>(
-    `${base}/api/image-gen/test?${params}`,
-    token,
-  );
-}
-
 export interface ModelCapabilities {
   model: string;
   max_input_tokens: number | null;

@@ -231,21 +231,6 @@
       "send": "Envoyer le message",
       "stop": "Arrêter la réponse",
       "attachImage": "Joindre une image",
-      "imageMode": {
-        "label": "Génération d’image",
-        "toggle": "Activer ou désactiver le mode génération d’image",
-        "placeholder": "Décrire ou modifier une image…",
-        "aspectAria": "Format de l’image",
-        "aspectLabel": "Format de l’image",
-        "aspect": {
-          "auto": "Auto",
-          "1_1": "Carré 1:1",
-          "3_4": "Portrait 3:4",
-          "9_16": "Story 9:16",
-          "4_3": "Paysage 4:3",
-          "16_9": "Large 16:9"
-        }
-      },
       "encoding": "Traitement…",
       "remove": "Retirer la pièce jointe",
       "normalizedSizeHint": "{{orig}} → {{current}} (auto)",

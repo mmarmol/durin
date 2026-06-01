@@ -11,7 +11,6 @@ from pydantic_settings import BaseSettings
 from durin.cron.types import CronSchedule
 
 if TYPE_CHECKING:
-    from durin.agent.tools.image_generation import ImageGenerationToolConfig
     from durin.agent.tools.self import MyToolConfig
     from durin.agent.tools.shell import ExecToolConfig
     from durin.agent.tools.web import WebToolsConfig
@@ -709,9 +708,6 @@ class ToolsConfig(Base):
     web: WebToolsConfig = Field(default_factory=lambda: _lazy_default("durin.agent.tools.web", "WebToolsConfig"))
     exec: ExecToolConfig = Field(default_factory=lambda: _lazy_default("durin.agent.tools.shell", "ExecToolConfig"))
     my: MyToolConfig = Field(default_factory=lambda: _lazy_default("durin.agent.tools.self", "MyToolConfig"))
-    image_generation: ImageGenerationToolConfig = Field(
-        default_factory=lambda: _lazy_default("durin.agent.tools.image_generation", "ImageGenerationToolConfig"),
-    )
     restrict_to_workspace: bool = False  # restrict all tool access to workspace directory
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
     ssrf_whitelist: list[str] = Field(default_factory=list)  # CIDR ranges to exempt from SSRF blocking (e.g. ["100.64.0.0/10"] for Tailscale)
@@ -980,7 +976,6 @@ def _resolve_tool_config_refs() -> None:
     """
     import sys
 
-    from durin.agent.tools.image_generation import ImageGenerationToolConfig
     from durin.agent.tools.self import MyToolConfig
     from durin.agent.tools.shell import ExecToolConfig
     from durin.agent.tools.web import WebFetchConfig, WebSearchConfig, WebToolsConfig
@@ -992,7 +987,6 @@ def _resolve_tool_config_refs() -> None:
     mod.WebSearchConfig = WebSearchConfig  # type: ignore[attr-defined]
     mod.WebFetchConfig = WebFetchConfig  # type: ignore[attr-defined]
     mod.MyToolConfig = MyToolConfig  # type: ignore[attr-defined]
-    mod.ImageGenerationToolConfig = ImageGenerationToolConfig  # type: ignore[attr-defined]
 
     ToolsConfig.model_rebuild()
     Config.model_rebuild()
