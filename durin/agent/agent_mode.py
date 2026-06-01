@@ -380,6 +380,31 @@ def executing_plan_runtime_lines(metadata: Any) -> list[str]:
     ]
 
 
+def clear_executing_plan_if_todos_done(metadata: Any) -> bool:
+    """Clear the executing-plan pointer once the plan's work is finished.
+
+    The todo list is the execution cursor (see ``executing_plan_runtime_lines``):
+    the plan is done when that list is non-empty and every item is
+    ``completed``. At that point pop ``executing_plan_path`` so the pointer
+    stops re-injecting on later, unrelated turns. With no todos, or any
+    pending/in_progress item, the pointer stays (the work isn't done, or we
+    can't tell). A new ``/plan`` supersedes it independently.
+
+    Returns ``True`` if it cleared the pointer.
+    """
+    if not isinstance(metadata, dict) or not metadata.get(EXECUTING_PLAN_PATH_KEY):
+        return False
+    from durin.session.todo_state import parse_todos, todos_raw
+
+    todos = parse_todos(todos_raw(metadata))
+    if not todos:
+        return False
+    if all(t.get("status") == "completed" for t in todos):
+        metadata.pop(EXECUTING_PLAN_PATH_KEY, None)
+        return True
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Tool filtering
 # ---------------------------------------------------------------------------

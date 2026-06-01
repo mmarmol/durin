@@ -1777,6 +1777,11 @@ class AgentLoop:
         mt = self.tools.get("message")
         extra = getattr(mt, "turn_delivered_media_paths", lambda: [])() if mt else []
         merge_turn_media_into_last_assistant(ctx.all_messages, extra)
+        # Stop re-injecting the executing-plan pointer once the plan's todos
+        # are all completed (the cursor reached the end), so it doesn't linger
+        # into unrelated turns.
+        from durin.agent.agent_mode import clear_executing_plan_if_todos_done
+        clear_executing_plan_if_todos_done(ctx.session.metadata)
 
         ctx.turn_latency_ms = max(0, int((time.time() - ctx.turn_wall_started_at) * 1000))
         self._save_turn(
