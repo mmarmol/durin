@@ -128,9 +128,9 @@ Documented here for historical reference. Hooks in `memory_store.execute`, `memo
 - **Refs**:
   - New: `durin/memory/cross_encoder.py`.
   - Dependency: `sentence-transformers` or `FlagEmbedding` (verify). Optional dep via `durin[cross-encoder]` extra.
-  - Default model: `jinaai/jina-reranker-v2-base-multilingual` per doc 03 §9.1.
+  - Default model: `BAAI/bge-reranker-base` (~100M, MIT, lower RAM) per doc 03 §9.1; `jinaai/jina-reranker-v2-base-multilingual` remains a curated alternative.
 - **LOC**: ~100 (module + lazy load + batching + 5 tests).
-- **Risk**: model download ~1.1GB on first invocation. Mitigation: progress log + consider pre-download in onboarding (P6.1).
+- **Risk**: model download on first invocation (bge-reranker-base is ~100M, far smaller than jina's ~1.1GB). Mitigation: progress log + consider pre-download in onboarding (P6.1).
 - **Test**: mock model with stub `score(query, docs) → [random]`; verify batching of 32; verify failure handling.
 
 ### P4.2 — Integration in search_pipeline step 5 ✅ DONE (commit `b3c50c6`)

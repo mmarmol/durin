@@ -131,7 +131,7 @@ The `aux_models.memory` config field — originally added to give the rewriter i
 - Comparable systems (mem0 opt-in, graphiti opt-in) ship the same way.
 - The default RRF + entity-aware rerank already produces useful retrieval.
 
-**Status:** in MVP as opt-in, OFF by default. Default model when enabled: `jinaai/jina-reranker-v2-base-multilingual`.
+**Status:** in MVP as opt-in, OFF by default. Default model when enabled: `BAAI/bge-reranker-base` (~100M, MIT, lower RAM); `jinaai/jina-reranker-v2-base-multilingual` remains a curated alternative the operator can configure.
 
 ---
 
@@ -376,7 +376,7 @@ Forcing either into the other's shape produces a regression: the search renderer
 
 **Why we are not implementing it** (audit B-2, 2026-05-28):
 
-1. **Default OFF is the right choice for the system's primary deployment shape.** durin is a personal assistant running on the operator's own hardware (laptop / small server). Cross-encoder adds 300-1500 ms p95 latency in CPU and ~1.1 GB resident memory for the jina-reranker-v2-base-multilingual model. Default ON would break the search budget (~30-130 ms p95 today, doc 03 §13) and the RAM budget for embedded / edge deployments without giving the operator a choice.
+1. **Default OFF is the right choice for the system's primary deployment shape.** durin is a personal assistant running on the operator's own hardware (laptop / small server). Cross-encoder adds 300-1500 ms p95 latency in CPU and additional resident memory for the model — the shipped default `BAAI/bge-reranker-base` (~100M, lower RAM) is lighter than the curated `jina-reranker-v2-base-multilingual` alternative (278M, ~1.1 GB), but the latency cost alone still justifies opt-in. Default ON would break the search budget (~30-130 ms p95 today, doc 03 §13) and the RAM budget for embedded / edge deployments without giving the operator a choice.
 
 2. **The configurability the operator needs already exists.** Three surfaces let the operator turn the cross-encoder on without code changes:
    - **Onboarding wizard** asks at install time whether to enable cross-encoder (with the latency + RAM cost stated explicitly).
@@ -776,7 +776,7 @@ Recoverability is cheap when designed in; expensive when bolted on.
 
 When index and SoT diverge, SoT must win. This requires the index to be a derivative reconstructible from SoT.
 
-**Evidence:** every index in this corpus (LanceDB, FTS5, eventual structural SQLite) is reconstructible from `.md` files. `durin reindex` is always available.
+**Evidence:** every index in this corpus (LanceDB, FTS5, eventual structural SQLite) is reconstructible from `.md` files. `durin memory reindex` is always available.
 
 **Implication:** never store data in an index that doesn't also exist in markdown. The index is acceleration; markdown is truth.
 

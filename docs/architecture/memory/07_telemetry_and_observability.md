@@ -302,7 +302,7 @@ Already exist (`memory.absorb.*`). Reproduced briefly for completeness:
 
 | Event | When |
 |---|---|
-| `memory.absorb.judged` | A pair was judged (merge / keep_separate / unsure) |
+| `memory.absorb.judged` | A pair was judged (same / different / unclear) |
 | `memory.absorb.auto_merged` | The pair was merged |
 | `memory.absorb.skipped` | Pair was skipped (quarantine, cross-type, etc.) |
 | `memory.absorb.reverted` | A merge was undone (manual operator action) |
@@ -352,7 +352,7 @@ this layer:
 
 - `tool_write` — agent writes go through `reindex_one_file` via the
   file watcher; no tool calls the indexer directly.
-- `manual_rebuild` — `durin reindex` CLI invokes `rebuild_fts_index`
+- `manual_rebuild` — `durin memory reindex` CLI invokes `rebuild_fts_index`
   which emits `memory.index.rebuild` (§9.2), not `.write`.
 
 The real triggers are:

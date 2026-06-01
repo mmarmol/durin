@@ -37,7 +37,7 @@ All four are exposed as MCP/tool calls to the agent. None invokes an LLM interna
 {
   "query": "string (required)",
   "keywords": "string | null (optional)",
-  "scope": "dreamed | undreamed | all (default: all)",
+  "scope": "dreamed | undreamed | all | archive (default: all)",
   "level": "warm | cold (default: warm)",
   "limit": "integer (default: 10, max: 50)"
 }
@@ -49,7 +49,7 @@ All four are exposed as MCP/tool calls to the agent. None invokes an LLM interna
 |---|---|
 | `query` | Natural-language query. Used for both vector embedding and FTS5 lexical search. |
 | `keywords` | Optional literal-match string. When provided, the lexical RRF weight is boosted (§7.2 of doc 03) — useful when the agent wants exact match on emails, IDs, URLs, etc. |
-| `scope` | `dreamed` = structured memory (entities + episodic + stable + corpus + session summaries). `undreamed` = raw sessions + raw ingested via grep fallback. `all` = both, with results from each appearing in the sectioned output. |
+| `scope` | `dreamed` = structured memory (entities + episodic + stable + corpus + session summaries). `undreamed` = raw sessions + raw ingested via grep fallback. `all` = both, with results from each appearing in the sectioned output. `archive` = on-demand walk of `memory/archive/**` for recovery / diagnostic queries (audit F2). |
 | `level` | `warm` returns headline+summary+metadata per hit. `cold` enriches each hit with full body (more tokens, more cost — used when the agent needs full content). |
 | `limit` | Final result count. Cap at 50 to prevent token blowup. |
 
@@ -154,7 +154,7 @@ State the source of any fact you cite (uri or section marker) in parentheses.
 Do not claim facts that are not in the search results.
 ```
 
-This description is exact text from `templates/agent/identity.md::Memory` and `tools/memory_search.py::DESCRIPTION`. The two must stay in sync (see `06_prompts_and_instructions.md`).
+This description is exact text from `templates/agent/identity.md::Memory` and `tools/memory_search.py::_PARAMETERS["description"]` (there is no `DESCRIPTION` constant — the `.description` property delegates to `_PARAMETERS["description"]`). The two must stay in sync (see `06_prompts_and_instructions.md`).
 
 ### 2.4 When to call (guidance baked into description)
 
@@ -343,9 +343,16 @@ on disk where preserving the original artifact matters.
 
 ```json
 {
-  "uri": "string (required)"
+  "uri": "string (one of uri | uris required)",
+  "uris": "array of strings (one of uri | uris required, max 10)"
 }
 ```
+
+`memory_drill` accepts **either** a single `uri` **or** a batch `uris`
+(list, max 10) — the two are mutually exclusive (passing both errors).
+The `uris` batch form merged the old standalone `memory_drill_batch`
+tool into this one (H9 consolidation, 2026-05-29; verified
+`durin/agent/tools/memory_drill.py:99-100`).
 
 ### 5.2 Return shape
 
@@ -373,20 +380,14 @@ on disk where preserving the original artifact matters.
 
 ### 5.3 Tool description
 
-Verbatim from `durin/agent/tools/memory_drill.py::_PARAMETERS["description"]`
-(audit F15, 2026-05-28 corrected this section after the pre-F15 spec
-diverged from the shipped string — the read-only line moved and the
-"related context" hint was reworded).
-
-```
-Read the full content of a memory item by URI. Use this when
-memory_search returned a hit and you need to see the full body,
-including any structured data in the frontmatter.
-
-This tool is read-only. For related context about an entity
-(recent observations, sessions mentioning it), use memory_search
-with the entity's name or URI as the query instead.
-```
+The live description is the single source of truth in
+`durin/agent/tools/memory_drill.py::_PARAMETERS["description"]`. It
+covers the `uri` (single) and `uris` (batch, max 10) surfaces plus the
+`complete` / `preview N/M` body qualifiers. Rather than re-pasting it
+here (it drifts), read the constant in the source. Audit F15
+(2026-05-28) and the H9 consolidation (2026-05-29) both touched this
+text; the read-only line and the "related context" hint live in that
+same string.
 
 ---
 
@@ -499,7 +500,7 @@ The web dashboard also consumes three read-only endpoints exposed by the memory 
 | **`get_entity_detail(uri)`** | `durin/memory/graph_api.py` | Returns an entity page's full content + recent history (default last 20 commits) for the dashboard sidebar |
 | **`get_edge_detail(from_uri, to_uri)`** | `durin/memory/graph_api.py` | Returns the co-mention evidence between two entities (which sessions/entries mention both) |
 | **`search_memory_api(query, ...)`** | `durin/memory/graph_api.py` | Webui equivalent of `memory_search`. Same pipeline; different return shape (paginated, with stable IDs for UI rendering) |
-| **Graph canvas data** | `durin/memory/graph.py::GraphBuilder` | Builds `{nodes: [...], edges: [...]}` for an Obsidian-style canvas view. Includes session nodes + entity nodes; edges from co-mention counts. Caps at 500 nodes / 2000 edges to keep the canvas usable. |
+| **Graph canvas data** | `durin/memory/graph.py::build_memory_graph` | Builds `{nodes: [...], edges: [...]}` for an Obsidian-style canvas view. Includes session nodes + entity nodes; edges from co-mention counts. Caps at 500 nodes / 2000 edges to keep the canvas usable. |
 
 Read-only by design — no mutation through these surfaces. Mutations flow through the agent tools (§2-§5) or direct `.md` editing.
 
@@ -533,7 +534,7 @@ All decisions are consistent with cross-corpus decisions in `00_overview.md` and
 | 5b | `memory_store` enum excludes `pending` and `session_summary` | `MEMORY_CLASSES` has **5** values today (`stable`, `episodic`, `corpus`, `pending`, `session_summary` — `session_summary` added in audit A10, 2026-05-28). The agent-facing enum offers only `stable`/`episodic`/`corpus`. Reasons: (a) `pending` is the compaction intake buffer — walker, indexer, and file_watcher all skip `memory/pending/**`, so exposing it would let the LLM write entries the rest of the system silently ignores; (b) `session_summary` is produced by the compactor (`_persist_last_summary`), not by the agent — exposing it would let the LLM forge synthetic session summaries that bypass the compaction provenance trail. Internal callers that need to write to `pending` use the pure `store_memory` function; callers that need to persist a session summary use `session_summary_store.write_session_summary`. Audit E28 (2026-05-28) updated the count from "4 values" + omitted `session_summary` from the exclusion list. | §3.1, `durin/agent/tools/memory_store.py::_AGENT_FACING_CLASSES` |
 | 6 | `memory_ingest` chunking | Always on (1500-char chunks with 200-char overlap, recursive paragraph→line→sentence→word split per P5.3). Re-ingest is idempotent on `(filename, content)` — renaming the file before re-ingest yields a different id. Docs shorter than `chunk_size` collapse to one entry naturally. | §4.1 |
 | 6b | `memory_ingest` scope = local files only | URL fetch and inline content branches deliberately not supported. `web_fetch` already handles URLs (with Jina/readability, SSRF protection, image detection); `memory_store(class_name="corpus")` handles inline text. Avoiding duplication of those policies. See `08_scope_and_discarded.md` for full rationale. | §4.1, §10 |
-| 7 | `memory_drill` purpose | Read full body of a single URI by reference. Read-only. Single `uri` parameter — for related context use `memory_search`. | §5 |
+| 7 | `memory_drill` purpose | Read full body of memory items by reference. Read-only. Takes `uri` (single) **or** `uris` (batch, max 10) — H9 consolidation (2026-05-29) merged the old `memory_drill_batch` tool in. For related context use `memory_search`. | §5 |
 | 8 | Tool description as source of truth | The text in this doc is canonical; code and identity.md must match. | §8 |
 | 9 | Configuration surface | Cross-encoder opt-in exposed in config file + onboarding wizard + web dashboard. Other settings config-file-only. | §7 |
 
@@ -552,7 +553,7 @@ None at the module level.
 | Result rendering | CANONICAL/FRAGMENT markers exist | Extend to SESSION + INGESTED; per-source cap | Update renderer; integrate cap |
 | `memory_store` parameters | `content` (req), `class_name` (enum 3 values), `headline`, `summary`, `source_refs`, `entities`, `force` | Same | None — earlier doc-04 draft proposed `body` (vs `content`), `headline` required, `valid_from` exposed, and a 2-value enum; reconciled in audit A2 (see doc 11) |
 | `memory_ingest` parameters | Active (`path` only) | Same (`path` only) | None — earlier spec proposed `source`/URL/`inline` branches; removed because `web_fetch` + `memory_store(class_name="corpus")` already cover those workflows (see decision 6b + doc 08) |
-| `memory_drill` | Active (single `uri` param) | Same | None — earlier draft proposed an `include_context` flag; removed because `memory_search` already covers that need with sectioned output |
+| `memory_drill` | Active (`uri` single **or** `uris` batch, max 10) | Same | None — `uris` batch merged the old `memory_drill_batch` tool in (H9, 2026-05-29); an earlier `include_context` flag was dropped because `memory_search` already covers that need with sectioned output |
 | Tool descriptions | In code, partially in identity.md | Canonical in this doc; sync to code + identity.md | Audit and reconcile |
 | Cross-encoder UI surface | Not implemented | Onboarding wizard + dashboard | New onboarding step; new webui setting |
 
@@ -564,9 +565,8 @@ The agent invokes the four tools in §2-§5. Separately, the **operator** has CL
 
 | Command | Purpose | Doc reference |
 |---|---|---|
-| `durin reindex [--target lancedb|fts5|all]` | Wipe `.durin/index/` and rebuild from `.md` files | `02_indexing.md` §7.1, `09` Phase 2 |
-| `durin embed-migrate --to <model_id>` | Switch embedding model with safe migration (backup + rebuild) | `02_indexing.md` §7.2.1 |
-| `durin dream run [--entity <uri>]` | Manually trigger a Dream consolidation pass, optionally filtered to one entity | `05_dream_cold_path.md` §2 |
+| `durin memory reindex [--target lancedb|fts|all]` | Wipe `.durin/index/` and rebuild from `.md` files | `02_indexing.md` §7.1, `09` Phase 2 |
+| `durin memory dream [--entity <uri>]` | Manually trigger a Dream consolidation pass, optionally filtered to one entity | `05_dream_cold_path.md` §2 |
 | `durin memory absorb [--auto|--interactive]` | Run absorb-judge over alias-overlap candidates and merge approved pairs | `05_dream_cold_path.md` §8 |
 | **Not implemented**: `durin archive show <uri>` / `durin archive list` | Audit G2 (2026-05-28) decided against — three existing surfaces already cover archive recovery: `memory_search(scope='archive')` for agent-visible semantic recovery (audit F2), `durin memory expand <entity>` for per-entity rendering, and `cat memory/archive/<class>/<id>.md` / `find memory/archive -name '*.md'` for direct shell access. A dedicated CLI command would duplicate these without a unique use case. Discarded in `08_scope_and_discarded.md` §2.12 (not deferred). | doc 08 §2.12 |
 | `durin memory health [restore --component <name>]` | Inspect health-check cron state; manually retry restoration for a paused component | `03_search_pipeline.md` §14.4 |

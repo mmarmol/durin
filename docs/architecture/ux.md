@@ -145,7 +145,7 @@ User submission goes through the same pipeline as the legacy CLI: surrogate-sani
 | `Ctrl+Q` / `Ctrl+D` | quit |
 | `Escape` | abort: calls `agent_loop._cancel_active_tasks` and clears the open assistant bubble |
 | `Ctrl+T` | toggle dark/light theme |
-| `Ctrl+L` | pre-fill input with `/model ` so the suggester surfaces presets |
+| `Ctrl+L` | open the model picker modal (`open_model_picker` pushes `ModelPickerScreen`) |
 
 ### 2.5 TUI Pilot harness
 
@@ -302,7 +302,7 @@ The wheel bundles the webui under `durin/web/dist/` via `hatch_build.py`; editab
 
 `.github/workflows/release.yml` fires on tags matching `v[0-9]+.[0-9]+.[0-9]+*`. The workflow:
 
-1. **build** — checks out the repo, installs Python 3.11 + bun, asserts the tag matches `pyproject.toml`'s version, runs `python -m build`, uploads artifacts.
+1. **build** — checks out the repo, installs Python 3.11 + Node 20 (npm), asserts the tag matches `pyproject.toml`'s version, runs `python -m build`, uploads artifacts.
 2. **github-release** — downloads artifacts and creates a GitHub Release with auto-generated notes. Marked `prerelease: true` when the tag carries an `aN`/`bN`/`rcN`/`devN` suffix (PEP 440).
 3. **pypi-publish** — downloads the same artifacts and publishes them via `pypa/gh-action-pypi-publish` (OIDC trusted publishing — no API tokens stored in the repo). Marked `continue-on-error: true` so a misconfigured PyPI publisher doesn't block the GitHub Release.
 

@@ -10,7 +10,7 @@
 
 ```mermaid
 flowchart LR
-    L["AgentLoop._dispatch_message"] -->|bind_telemetry| CV[("ContextVar:<br/>current_telemetry")]
+    L["AgentLoop._run_agent_loop"] -->|bind_telemetry| CV[("ContextVar:<br/>current_telemetry")]
     L --> R["AgentRunner.run"]
     R --> T1["Tool.execute"]
     T1 -->|emit_tool_event| CV
@@ -33,7 +33,7 @@ flowchart LR
 Wiring points:
 
 - **Provider rate limits**: `provider.set_telemetry()` is called in `AgentLoop.from_config`; the provider emits `provider.rate_limit{,_exhausted}` events directly.
-- **Per-task tool events**: `AgentLoop._dispatch_message` calls `bind_telemetry(get_session_logger(session_key))` before invoking the runner and `reset_telemetry(token)` in the finally block.
+- **Per-task tool events**: `AgentLoop._run_agent_loop` calls `bind_telemetry(get_session_logger(session_key))` before invoking the runner and `reset_telemetry(token)` in the finally block.
 
 Tool-level instrumentation:
 

@@ -110,8 +110,9 @@ boundary" below the table.
 | `limit` | int | no (default 10) | Max results returned after sectioning. |
 
 **Tool vs pipeline boundary** (audit E10): the `run_search_pipeline`
-function signature only takes `query`, `keywords`, `vector_index`,
-`limit`, `cross_encoder`, `cross_encoder_top_n`. The other tool
+function signature takes `workspace` (first positional), `query`,
+`keywords`, `vector_index`, `limit`, `cross_encoder`,
+`cross_encoder_top_n`, and `max_per_source`. The other tool
 inputs are handled around the call:
 
 - `scope=undreamed` → the tool passes `vector_index=None` so the
@@ -393,24 +394,24 @@ When OFF (default), the pipeline jumps from step 4 directly to step 6 (sectionin
 
 **The model set is open** (audit B12, 2026-05-28). The four entries below are bundled in the install as suggestions surfaced in the webui datalist and the onboarding wizard, but the config field accepts any `sentence_transformers.CrossEncoder` compatible id — HuggingFace handles, local paths, future ollama / API-served models. Validation is dynamic: the operator clicks "Test" in Settings → Memory (or runs `durin doctor`) and the backend loads + scores a trivial pair, surfacing the result before the value is committed. No closed enum is enforced in the backend or in the frontend dropdown.
 
-When the user enables the cross-encoder, the default model is **`jinaai/jina-reranker-v2-base-multilingual`**:
+When the user enables the cross-encoder, the default model is **`BAAI/bge-reranker-base`** (switched 2026-05-30 per H30 — MIT license, ~100M params, lower RAM, no `trust_remote_code` required):
 
 | Property | Value |
 |---|---|
-| Params | 278M |
-| RAM | ~1.1GB |
-| Multilingual | Yes (100+ languages incl. CJK) |
-| Context length | 1024 tokens |
+| Params | ~100M |
+| RAM | lower (vs jina-v2's ~1.1GB) |
+| License | MIT |
+| Multilingual | Yes |
 | CPU latency (50 docs, batched) | ~300-800ms |
-| HuggingFace | `jinaai/jina-reranker-v2-base-multilingual` |
+| HuggingFace | `BAAI/bge-reranker-base` |
 
 Why this choice (over alternatives, see also §16 #4):
 
 | Alternative | Why not default |
 |---|---|
 | `cross-encoder/ms-marco-MiniLM-L-6-v2` (22M, ~80ms CPU) | English-only; fails silently on multilingual queries. Anti-UX for durin's multi-channel reality. |
-| `BAAI/bge-reranker-base` (278M) | Comparable size; older training. Used by mem0 as their default. Slightly weaker multilingual than jina-v2. |
-| `BAAI/bge-reranker-v2-m3` (568M, ~2.3GB RAM, ~1500ms CPU) | Top-tier multilingual but 2x RAM and 2x latency vs jina-v2. Used by graphiti as their default. Available as an opt-in upgrade. |
+| `jinaai/jina-reranker-v2-base-multilingual` (278M, ~1.1GB, CC-BY-NC) | Strong multilingual (100+ languages incl. CJK), but requires `trust_remote_code`, is CC-BY-NC (non-commercial), and 278M/~1.1GB RAM. Remains a curated alternative the operator can configure. |
+| `BAAI/bge-reranker-v2-m3` (568M, ~2.3GB RAM, ~1500ms CPU) | Top-tier multilingual but 2x RAM and 2x latency vs bge-base. Used by graphiti as their default. Available as an opt-in upgrade. |
 | `Qwen3-Reranker-0.6B` (600M, ~2.4GB RAM) | Top MTEB 2026; very new. Available as an opt-in upgrade for power users. |
 
 The configuration also exposes a `model` field so users can pick any of the alternatives without code changes.
@@ -549,7 +550,7 @@ When cross-encoder is enabled by the user, latency increases as follows:
 
 | Model | Cross-encoder step | Total p95 |
 |---|---|---|
-| `jina-reranker-v2-base-multilingual` (default when enabled) | 300-800ms | ~400-900ms p95 |
+| `bge-reranker-base` (default when enabled, ~100M, lower RAM) | 300-800ms | ~400-900ms p95 |
 | `bge-reranker-v2-m3` (heavy multilingual upgrade) | 600-1500ms | ~700-1600ms p95 |
 | `qwen3-reranker-0.6b` (top MTEB) | 700-1500ms | ~800-1600ms p95 |
 
@@ -621,7 +622,7 @@ The cron does not have to wait its 15-min tick when a hot-path failure occurs. W
 
 If 3 restoration attempts within 1h all fail for the same component, the cron:
 - Emits `memory.health.critical` event.
-- Stops attempting that component until an operator manually triggers a recovery (`durin reindex` or `durin memory health restore --component <name>`).
+- Stops attempting that component until an operator manually triggers a recovery (`durin memory reindex` or `durin memory health restore --component <name>`).
 - Other components continue normal probing.
 
 This prevents wasteful retry loops on a fundamentally broken state (e.g., disk full, missing files).
@@ -691,7 +692,7 @@ The actual configuration surface in `MemorySearchConfig` (`durin/config/schema.p
 ```toml
 [memory.search.cross_encoder]
 enabled = false
-model = "jinaai/jina-reranker-v2-base-multilingual"
+model = "BAAI/bge-reranker-base"
 batch_size = 32
 top_n = 10
 
@@ -703,8 +704,8 @@ max_per_source = 3
 
 | Hardcoded knob | Value | Where | Why no config? |
 |---|---|---|---|
-| `vector_top_k` | 50 | `search_pipeline.py:444` (audit F21 verified, 2026-05-28) | Sane default; tuning never asked for |
-| `lexical_top_k` | 50 | `search_pipeline.py:459` (audit F21 verified) | Sane default |
+| `vector_top_k` | 50 | `search_pipeline.py:450` (audit F21 verified, 2026-05-28) | Sane default; tuning never asked for |
+| `lexical_top_k` | 50 | `search_pipeline.py:514` (audit F21 verified) | Sane default |
 | `rrf_constant` | 60 | `rrf_fusion.py::DEFAULT_K` | Textbook value (Cormack/Clarke/Buettcher 2009); no operator has requested override |
 | `rrf_weights` | `{vector: 1.0, lexical: 0.7→2.5 boosted, grep: 0.3}` | `rrf_fusion.py::DEFAULT_W_*` | Already adaptive (lexical boost on identifier queries) |
 | `max_per_source` (sectioning) — default | 3 | `sectioned_output.py::DEFAULT_MAX_PER_SOURCE` | Audit G1 (2026-05-28) promoted this to a configurable knob via `memory.search.sectioning.max_per_source`; the hard-coded constant is only the default when nothing in config overrides. |
@@ -725,7 +726,7 @@ All decisions consistent with cross-corpus decisions in `00_overview.md` §10 an
 | 1 | Vector top-K vs final top-K | 50 candidates from vector + 50 from lexical; reranked down to final 10. Wide enough for rerank to operate. | §4.2, §5.1 |
 | 2 | Fusion algorithm + dynamic boost | **RRF (Reciprocal Rank Fusion)** with cross-source weights. Defaults: vector 1.0, lexical 0.7, grep 0.3, k=60. **Dynamic boost:** when the agent passes `keywords` explicitly, `w_lexical` is raised to 2.5 for that call. No pin-by-modality mechanism — pin requires keyword specificity measurement which adds complexity without justification (no mainstream system does it). | §7 |
 | 3 | Entity-aware rerank | Reuse existing `entity_ranker`. Pre/post-cursor boost logic preserved. | §8 |
-| 4 | Cross-encoder default state + model | **Opt-in, OFF by default.** When enabled, default model is `jinaai/jina-reranker-v2-base-multilingual` (278M, ~1.1GB RAM, ~300-800ms CPU). Selected over English-only MiniLM (silent multilingual failure), bge-base (older training), bge-v2-m3 (2x latency), and qwen3-reranker (very new). Pattern matches mem0/graphiti (opt-in). Configurable model field allows switching to bge-base, bge-v2-m3, or qwen3-reranker-0.6b without code changes. | §9, §9.1, §9.5 |
+| 4 | Cross-encoder default state + model | **Opt-in, OFF by default.** When enabled, default model is `BAAI/bge-reranker-base` (~100M, MIT, lower RAM, ~300-800ms CPU; switched 2026-05-30 per H30). Selected over English-only MiniLM (silent multilingual failure), jina-v2 (CC-BY-NC + `trust_remote_code` + 278M/~1.1GB), bge-v2-m3 (2x latency), and qwen3-reranker (very new). Pattern matches mem0/graphiti (opt-in). Configurable model field allows switching to jina-reranker-v2-base-multilingual, bge-v2-m3, or qwen3-reranker-0.6b without code changes. | §9, §9.1, §9.5 |
 | 5 | Cross-encoder graceful degradation + UI exposure | Failure to load model logs warning; pipeline continues at default latency. **Exposed in onboarding wizard (CLI question with trade-off explanation) + web dashboard (toggle + model picker dropdown).** Workspace config file is the canonical source; UIs are surfaces over it. | §9.4, §9.5 |
 | 6 | Temporal decay removed (2026-05-30) | **Search must not pre-judge recency without the question's context** — that's the LLM's job, and it already receives `valid_from` on every hit. The previous decay step penalised factual atemporal queries (LoCoMo conv-5-q20: chicken-vs-sushi). See §10. | §10 |
 | 7 | MMR deferred to backlog | **Not in MVP.** Archive of consolidated episodic (§3.6 doc 01) eliminates the primary duplication that MMR would address; the remaining typical pattern is triangulation (entity + fragment + session), not redundancy. Mainstream systems (mem0, graphiti, hermes, letta) don't implement MMR. If post-MVP bench shows residual duplication, MMR is a standalone algorithm easy to add later. | §11 |
@@ -753,7 +754,7 @@ where the work lives.
 | Grep fallback | ✅ Used only for sessions/ingested; feeds RRF as third source | `durin/memory/search.py::search_undreamed` |
 | Fusion | ✅ Cross-source RRF with weighted sources (vector=1.0, lexical=0.7→2.5 boosted, grep=0.3) | `durin/memory/rrf_fusion.py` |
 | Entity-aware rerank | ✅ After RRF fusion; pre/post-cursor partition restored in audit E11 (2026-05-28) | `durin/memory/entity_ranker.py` + `durin/memory/search_pipeline.py::_entity_aware_rerank` |
-| Cross-encoder rerank | ✅ Shipped (Phase 4). Default OFF, opt-in via `memory.search.cross_encoder.enabled`. Default model `jinaai/jina-reranker-v2-base-multilingual` when enabled. | `durin/memory/cross_encoder.py` |
+| Cross-encoder rerank | ✅ Shipped (Phase 4). Default OFF, opt-in via `memory.search.cross_encoder.enabled`. Default model `BAAI/bge-reranker-base` when enabled. | `durin/memory/cross_encoder.py` |
 | Temporal decay | ❌ Removed (2026-05-30). The LLM does temporal reasoning with `valid_from` already on every hit. See §10. | — |
 | MMR | Removed from MVP (see §11). Re-add post-MVP only if bench shows residual duplication. | — |
 | Sectioning | ✅ CANONICAL / FRAGMENT / SESSION / INGESTED markers active; empty sections omitted | `durin/memory/sectioned_output.py` |
