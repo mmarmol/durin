@@ -624,7 +624,7 @@ def onboard(
         except Exception as e:
             console.print(f"[red]✗[/red] Error during configuration: {e}")
             console.print("[yellow]Please run 'durin onboard' again to complete setup.[/yellow]")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from None
     elif wizard_mode:
         # New default: task-oriented wizard. A section runs just one part.
         from durin.cli.onboard_wizard import run_section, run_wizard
@@ -643,7 +643,7 @@ def onboard(
                 "[yellow]Tip: re-run with `durin onboard --advanced` "
                 "for the legacy walker.[/yellow]"
             )
-            raise typer.Exit(1)
+            raise typer.Exit(1) from None
         if result.cancelled:
             console.print("[yellow]Wizard cancelled; nothing was saved.[/yellow]")
             return
@@ -827,7 +827,7 @@ def _load_runtime_config(config: str | None = None, workspace: str | None = None
         loaded = resolve_config_env_vars(load_config(config_path))
     except ValueError as e:
         console.print(f"[red]Error: {e}[/red]")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
     _warn_deprecated_config_keys(config_path)
     if workspace:
         loaded.agents.defaults.workspace = workspace
@@ -884,7 +884,7 @@ def serve(
         from aiohttp import web  # noqa: F401
     except ImportError:
         console.print("[red]aiohttp is required. Install with: pip install 'durin-ai[api]'[/red]")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
     from loguru import logger
 
@@ -1015,7 +1015,7 @@ def gateway_root(
                 f"[yellow]Gateway already running (pid {e.pid}). "
                 "Use `durin gateway stop` first if you want a fresh start.[/yellow]"
             )
-            raise typer.Exit(1)
+            raise typer.Exit(1) from None
         from durin.cli.gateway_daemon import daemon_logs_path
 
         console.print(f"[green]✓[/green] Gateway started (pid {pid}, daemon mode)")
@@ -1074,7 +1074,7 @@ def gateway_start(ctx: typer.Context) -> None:
             f"[yellow]Gateway already running (pid {e.pid}). "
             "Run `durin gateway restart` to bounce it.[/yellow]"
         )
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
     console.print(f"[green]✓[/green] Gateway started in background (pid {pid})")
     url = _resolved_webui_url()
     if url:
@@ -2479,7 +2479,7 @@ def _login_openai_codex() -> None:
         console.print(f"[green]✓ Authenticated with OpenAI Codex[/green]  [dim]{token.account_id}[/dim]")
     except ImportError:
         console.print("[red]oauth_cli_kit not installed. Run: pip install oauth-cli-kit[/red]")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
 @_register_logout("openai_codex")
@@ -2490,7 +2490,7 @@ def _logout_openai_codex() -> None:
         from oauth_cli_kit.storage import FileTokenStorage
     except ImportError:
         console.print("[red]oauth_cli_kit not installed. Run: pip install oauth-cli-kit[/red]")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
     storage = FileTokenStorage(token_filename=OPENAI_CODEX_PROVIDER.token_filename)
     _delete_oauth_files(storage.get_token_path(), _PROVIDER_DISPLAY["openai_codex"])
@@ -2503,7 +2503,7 @@ def _logout_github_copilot() -> None:
         from durin.providers.github_copilot_provider import get_storage
     except ImportError:
         console.print("[red]GitHub Copilot provider unavailable. Ensure oauth-cli-kit is installed.[/red]")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
     storage = get_storage()
     _delete_oauth_files(storage.get_token_path(), _PROVIDER_DISPLAY["github_copilot"])
@@ -2549,7 +2549,7 @@ def _login_github_copilot() -> None:
         console.print(f"[green]✓ Authenticated with GitHub Copilot[/green]  [dim]{account}[/dim]")
     except Exception as e:
         console.print(f"[red]Authentication error: {e}[/red]")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
 # Register lifecycle / diagnostic commands last so they sort below the
