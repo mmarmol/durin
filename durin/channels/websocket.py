@@ -1908,13 +1908,13 @@ class WebSocketChannel(BaseChannel):
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         import asyncio
-        from durin.memory.cross_encoder import test_model as ce_test_model
+        from durin.memory.cross_encoder import probe_model
 
         model = (_query_first(query, "model") or "").strip()
         if not model:
             return _http_error(400, "missing required `model` query param")
         try:
-            result = await asyncio.to_thread(ce_test_model, model)
+            result = await asyncio.to_thread(probe_model, model)
         except Exception as exc:  # noqa: BLE001
             return _http_json_response(
                 {
