@@ -162,7 +162,6 @@ class TurnContext:
     save_skip: int = 0
 
     outbound: OutboundMessage | None = None
-    generated_media: list[str] = field(default_factory=list)
 
     on_progress: Callable[..., Awaitable[None]] | None = None
     on_stream: Callable[[str], Awaitable[None]] | None = None
@@ -1628,7 +1627,6 @@ class AgentLoop:
         all_msgs: list[dict[str, Any]],
         stop_reason: str,
         had_injections: bool,
-        generated_media: list[str],
         on_stream: Callable[[str], Awaitable[None]] | None,
         *,
         turn_latency_ms: int | None = None,
@@ -1652,7 +1650,6 @@ class AgentLoop:
             channel=msg.channel,
             chat_id=msg.chat_id,
             content=final_content,
-            media=generated_media,
             metadata=meta,
         )
 
@@ -1779,7 +1776,7 @@ class AgentLoop:
         ctx.save_skip = 1 + len(ctx.history) + (1 if ctx.user_persisted_early else 0)
         mt = self.tools.get("message")
         extra = getattr(mt, "turn_delivered_media_paths", lambda: [])() if mt else []
-        merge_turn_media_into_last_assistant(ctx.all_messages, ctx.generated_media, extra)
+        merge_turn_media_into_last_assistant(ctx.all_messages, extra)
 
         ctx.turn_latency_ms = max(0, int((time.time() - ctx.turn_wall_started_at) * 1000))
         self._save_turn(
@@ -1808,7 +1805,6 @@ class AgentLoop:
             ctx.all_messages,
             ctx.stop_reason,
             ctx.had_injections,
-            ctx.generated_media,
             ctx.on_stream,
             turn_latency_ms=ctx.turn_latency_ms,
         )
