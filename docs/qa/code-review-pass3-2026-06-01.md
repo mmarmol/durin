@@ -49,11 +49,6 @@
   - **Recovery-only.** The full rebuild fires only when the lance probe already detected breakage (`health_check.py:129` `components["lance"] == "fail"` → `_rebuild_lance`), not on the normal write path.
 - **Decision:** docstring fixed; the non-atomic window is **accepted**. A temp-table + `rename_table` swap is feasible (LanceDB 0.30.2 supports it) but its cost — risk on the recovery path, a non-deterministic race test — is not justified for a symptom (transient empty vector results → grep) that is already gracefully degraded and only occurs during an already-broken-index recovery.
 
-### B2 🐞 MED — Session rename lost-update: operates on a `_load` snapshot, not the cached `Session`
-- **Where:** `durin/channels/websocket.py:2047` (`_handle_session_rename` calls `self._session_manager._load(decoded_key)` — fresh disk read, bypasses `_cache`), mutates `metadata`, `save`s.
-- **Verified:** read both paths. The agent loop holds the **cached** `Session` (via `get_or_create`) and appends messages during a turn, then `save`s. `save` rewrites the whole `.jsonl` (last-writer-wins). The two paths hold different `Session` objects → rename's save loses in-flight messages, or the loop's save loses the title.
-- **Fix:** rename/delete should mutate the cached instance (`get_or_create`) so both share one object. Same class of bug for any out-of-band `_load`+`save`.
-
 ### B3 🏗 MED — `_dispatch` registers its pending-queue inside the task, racing the inbound consumer
 - **Where:** `durin/agent/loop.py:1229` (consumer: `if effective_key in self._pending_queues`) vs `:1259` (`create_task(self._dispatch(msg))`) and `:1276` (`self._pending_queues[session_key] = pending`, inside the task body).
 - **Verified:** registration happens inside the dispatch task, which runs after `create_task` yields back to the consumer. A second same-session message consumed in that window finds the key unregistered → spawns a **second** dispatch task; the per-session lock serializes processing (no concurrency/corruption), but the second registration overwrites the first and follow-up routing / mid-turn injection is mis-ordered for that window.
