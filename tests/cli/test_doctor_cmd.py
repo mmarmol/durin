@@ -402,6 +402,28 @@ def test_cli_doctor_fix_creates_missing_workspace(valid_config: Path, fake_home:
     assert ws.exists()
 
 
+def test_embedding_model_load_skips_when_fastembed_absent(
+    valid_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CI runs without the ``[memory]`` extra. A missing fastembed must be a
+    *skip*, not a ``fail`` — otherwise ``durin doctor`` exits 1 (and the whole
+    CI suite goes red) for every install that didn't opt into memory."""
+    import builtins
+
+    from durin.cli.doctor import check_embedding_model_loads
+
+    _real_import = builtins.__import__
+
+    def _no_fastembed(name: str, *args: object, **kwargs: object):
+        if name.split(".")[0] == "fastembed":
+            raise ImportError("simulated: fastembed not installed")
+        return _real_import(name, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(builtins, "__import__", _no_fastembed)
+    result = check_embedding_model_loads()
+    assert result.status != "fail", result.message
+
+
 def test_cli_doctor_exits_one_when_config_invalid(fake_home: Path) -> None:
     cfg = fake_home / ".durin" / "config.json"
     cfg.parent.mkdir(parents=True)

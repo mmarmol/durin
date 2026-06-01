@@ -20,9 +20,26 @@ the convention discoverable + grep-able instead of hidden inside a
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from durin.memory.provenance import author_scope
+
+# Deterministic CLI rendering for the whole suite.
+#
+# CI exports FORCE_COLOR (and runs with no TTY → 80-column default), which
+# makes Typer/Rich inject ANSI color codes *inside* tokens and word-wrap
+# output at 80 columns. That breaks substring assertions in CLI tests
+# (`port 18791`, `memory/<class>/<id>`, `Health endpoint: http://…`) which
+# are about content, not layout — they pass locally only because the dev
+# shell happens to render plain + wide. Pin that rendering for everyone so
+# the suite never depends on the terminal environment. Set at import time,
+# before any Typer CliRunner is constructed or Rich reads the env.
+os.environ.pop("FORCE_COLOR", None)
+os.environ["NO_COLOR"] = "1"
+os.environ["TERM"] = "dumb"
+os.environ["COLUMNS"] = "200"
 
 
 @pytest.fixture(autouse=True)
