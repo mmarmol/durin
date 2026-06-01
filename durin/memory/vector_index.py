@@ -761,11 +761,14 @@ class VectorIndex:
         try:
             schema.field("entities")
         except Exception:  # noqa: BLE001
+            # Translate the cryptic lance schema-lookup error into an
+            # actionable domain error; the message is self-explanatory so we
+            # suppress the original cause (B904).
             raise VectorIndexDimensionMismatch(
                 "On-disk vector index is missing the 'entities' column "
                 "(table schema predates the ranker integration). Run "
                 "`durin memory reindex` to rebuild from markdown sources."
-            )
+            ) from None
 
 
 def _escape(value: str) -> str:
