@@ -286,6 +286,84 @@ async def test_session_routes_reject_non_websocket_keys(
 
 
 @pytest.mark.asyncio
+async def test_rename_during_active_turn_preserves_title_and_messages(
+    bus: MagicMock, tmp_path: Path
+) -> None:
+    """B2: a rename concurrent with an active turn must not lose-update.
+
+    The agent loop holds the cached Session and appends an in-flight
+    (unsaved) message; the user renames mid-turn. With the old `_load`
+    path the rename mutated a separate object, so the loop's end-of-turn
+    save clobbered the title. Sharing the cached instance keeps both.
+    """
+    from durin.utils.webui_titles import WEBUI_TITLE_METADATA_KEY
+
+    sm = _seed_session(tmp_path, key="websocket:test")
+    channel = _ch(bus, session_manager=sm, port=29920)
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+    try:
+        boot = await _http_get("http://127.0.0.1:29920/webui/bootstrap")
+        auth = {"Authorization": f"Bearer {boot.json()['token']}"}
+
+        # Loop obtains the cached session and appends an unsaved message.
+        cached = sm.get_or_create("websocket:test")
+        cached.add_message("user", "in-flight-msg")
+
+        resp = await _http_get(
+            "http://127.0.0.1:29920/api/sessions/websocket:test/rename?title=Renamed",
+            headers=auth,
+        )
+        assert resp.status_code == 200
+
+        # Loop finishes the turn and saves its (cached) session.
+        sm.save(cached)
+
+        # Disk truth (fresh manager, no cache): both must survive.
+        fresh = SessionManager(tmp_path)._load("websocket:test")
+        assert fresh is not None
+        assert fresh.metadata.get(WEBUI_TITLE_METADATA_KEY) == "Renamed"
+        assert any(m.get("content") == "in-flight-msg" for m in fresh.messages)
+    finally:
+        await channel.stop()
+        await server_task
+
+
+@pytest.mark.asyncio
+async def test_delete_during_active_turn_is_not_resurrected(
+    bus: MagicMock, tmp_path: Path
+) -> None:
+    """Adjacent to B2: deleting a session while a turn holds it cached
+    must stay deleted — the loop's end-of-turn save must not resurrect
+    the file."""
+    sm = _seed_session(tmp_path, key="websocket:doomed")
+    channel = _ch(bus, session_manager=sm, port=29921)
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+    try:
+        boot = await _http_get("http://127.0.0.1:29921/webui/bootstrap")
+        auth = {"Authorization": f"Bearer {boot.json()['token']}"}
+
+        cached = sm.get_or_create("websocket:doomed")
+        cached.add_message("user", "mid-turn")
+
+        resp = await _http_get(
+            "http://127.0.0.1:29921/api/sessions/websocket:doomed/delete",
+            headers=auth,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["deleted"] is True
+
+        # Loop finishes and tries to save its now-deleted cached session.
+        sm.save(cached)
+
+        assert not sm._get_session_path("websocket:doomed").exists()
+    finally:
+        await channel.stop()
+        await server_task
+
+
+@pytest.mark.asyncio
 async def test_session_routes_reject_invalid_key(
     bus: MagicMock, tmp_path: Path
 ) -> None:

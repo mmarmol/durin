@@ -89,6 +89,9 @@ class Session:
     updated_at: datetime = field(default_factory=datetime.now)
     metadata: dict[str, Any] = field(default_factory=dict)
     last_consolidated: int = 0  # Number of messages already consolidated to files
+    # Tombstone: set by ``delete_session`` so a stale reference held by an
+    # in-flight turn cannot resurrect the file via a late ``save()``.
+    _deleted: bool = field(default=False, repr=False, compare=False)
 
     @staticmethod
     def _annotate_message_time(message: dict[str, Any], content: Any) -> Any:
@@ -338,6 +341,15 @@ class SessionManager:
         """Legacy global session path (~/.durin/sessions/)."""
         return self.legacy_sessions_dir / f"{self.safe_key(key)}.jsonl"
 
+    def exists(self, key: str) -> bool:
+        """True when the session is cached or present on disk.
+
+        Lets out-of-band mutators (rename) keep their 404-on-missing
+        behaviour while still routing through :meth:`get_or_create` to
+        share the cached instance.
+        """
+        return key in self._cache or self._get_session_path(key).exists()
+
     def get_or_create(self, key: str) -> Session:
         """
         Get an existing session or create a new one.
@@ -525,6 +537,10 @@ class SessionManager:
         write-back caching (e.g. rclone VFS, NFS, FUSE mounts) do not lose
         the most recent writes.
         """
+        if getattr(session, "_deleted", False):
+            logger.debug("Skipping save of deleted session {}", session.key)
+            return
+
         path = self._get_session_path(session.key)
         tmp_path = path.with_suffix(".jsonl.tmp")
 
@@ -633,6 +649,11 @@ class SessionManager:
         """
         path = self._get_session_path(key)
         meta_path = meta_path_for(key, self.sessions_dir)
+        # Tombstone any cached instance first: a turn still holding this
+        # object would otherwise resurrect the file on its end-of-turn save.
+        cached = self._cache.get(key)
+        if cached is not None:
+            cached._deleted = True
         self.invalidate(key)
         # Sidecar may exist even when the jsonl is already gone (orphan
         # from a prior crash) — best-effort cleanup either way.

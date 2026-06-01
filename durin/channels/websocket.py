@@ -2044,9 +2044,12 @@ class WebSocketChannel(BaseChannel):
         if len(title) > TITLE_MAX_CHARS:
             title = title[: TITLE_MAX_CHARS - 1].rstrip() + "…"
 
-        session = self._session_manager._load(decoded_key)
-        if session is None:
+        if not self._session_manager.exists(decoded_key):
             return _http_error(404, "session not found")
+        # Mutate the cached instance (not a fresh `_load` snapshot) so an
+        # in-flight turn holding the same session sees the title and its
+        # end-of-turn save does not clobber it — and vice versa (B2).
+        session = self._session_manager.get_or_create(decoded_key)
         session.metadata[WEBUI_TITLE_METADATA_KEY] = title
         session.metadata[WEBUI_TITLE_USER_EDITED_METADATA_KEY] = True
         self._session_manager.save(session)
