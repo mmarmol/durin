@@ -40,11 +40,14 @@
 
 > Reachability fact (verified): `MemoryFileWatcherConfig.enabled` and `MemoryHealthCheckConfig.enabled` both default **True**, and memory is now ON by default. So a default `durin agent` run has the event loop + file-watcher thread + health-check scheduler thread + per-write threshold-Dream daemon threads all touching the same workspace LanceDB table.
 
-### B1 🐞 HIGH — `VectorIndex` rebuild drops-then-creates the table (docstring lies); concurrent readers crash
-- **Where:** `durin/memory/vector_index.py:524` (`_drop_if_exists(db)` **then** `db.create_table(...)`). The docstring at `:442-443` claims *"the existing table is dropped only after the new one is built successfully."*
-- **Verified:** the code does drop-then-create — the opposite of the docstring. There is a real window with no table. `search` (`:569`) does `if _TABLE_NAME not in db.list_tables(): return []`, then spends ~tens of ms in `embed_query`, then `open_table` — if a rebuild thread drops the table in that gap, `open_table` raises table-not-found. `upsert`/`upsert_entity_page` have the same TOCTOU.
-- **Risk:** unhandled exception reachable in default config (the health-check/Dream threads rebuild/reindex concurrently with loop reads). `memory_search` catches `VectorIndexDimensionMismatch`, not arbitrary table-missing errors.
-- **Fix:** build the new table under a temp name then swap, or serialize rebuilds with a lock and wrap `search`/`upsert` table access in a tolerant retry. Also correct the false docstring.
+### B1 🐞 LOW — `VectorIndex` rebuild is non-atomic (drop-then-create); readers degrade, not crash
+- **Where:** `durin/memory/vector_index.py` `rebuild_from_workspace` — `_drop_if_exists(db)` **then** `db.create_table(...)`, a brief no-table window.
+- **Re-verified (B1 downgraded HIGH→LOW):** the mechanism is real but the original HIGH risk does not hold.
+  - **Docstring did lie** (claimed "dropped only after the new one is built successfully") — **corrected** in the same pass to describe the real drop-then-create + graceful degradation.
+  - **No crash.** The *only* `VectorIndex.search()` caller is `_safe_vector_search` (`search_pipeline.py:447-455`), wrapped in `except Exception` → a table-missing error is caught, `search` returns `[]`, and callers fall back to grep. `memory_search` routes through this (`run_search_pipeline`). No unguarded `vi.search()` exists. (The report's own NON-findings already note `_safe_*` degradation is intentional.)
+  - **`upsert` window is microscopic** — the embed (`_record_for`) runs *before* the `list_tables` check; the check→`open_table` gap is an `if`. All `reindex_one_file` callers are `except Exception`-guarded (`file_watcher.py:160`, …).
+  - **Recovery-only.** The full rebuild fires only when the lance probe already detected breakage (`health_check.py:129` `components["lance"] == "fail"` → `_rebuild_lance`), not on the normal write path.
+- **Decision:** docstring fixed; the non-atomic window is **accepted**. A temp-table + `rename_table` swap is feasible (LanceDB 0.30.2 supports it) but its cost — risk on the recovery path, a non-deterministic race test — is not justified for a symptom (transient empty vector results → grep) that is already gracefully degraded and only occurs during an already-broken-index recovery.
 
 ### B2 🐞 MED — Session rename lost-update: operates on a `_load` snapshot, not the cached `Session`
 - **Where:** `durin/channels/websocket.py:2047` (`_handle_session_rename` calls `self._session_manager._load(decoded_key)` — fresh disk read, bypasses `_cache`), mutates `metadata`, `save`s.
