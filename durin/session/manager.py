@@ -30,7 +30,7 @@ from durin.utils.subagent_channel_display import scrub_subagent_announce_body
 FILE_MAX_MESSAGES = 2000
 _MESSAGE_TIME_PREFIX_RE = re.compile(r"^\[Message Time: [^\]]+\]\n?")
 _LOCAL_IMAGE_BREADCRUMB_RE = re.compile(r"^\[image: (?:/|~)[^\]]+\]\s*$")
-_TOOL_CALL_ECHO_RE = re.compile(r'^\s*(?:generate_image|message)\([^)]*\)\s*$')
+_TOOL_CALL_ECHO_RE = re.compile(r'^\s*message\([^)]*\)\s*$')
 _SESSION_PREVIEW_MAX_CHARS = 120
 
 

@@ -340,11 +340,6 @@ export interface OutboundMedia {
   name?: string;
 }
 
-export interface OutboundImageGeneration {
-  enabled: true;
-  aspect_ratio?: string | null;
-}
-
 /** Response shape for ``GET .../webui-thread`` (server-built transcript replay). */
 export interface WebuiThreadPersistedPayload {
   schemaVersion: number;
@@ -361,7 +356,6 @@ export type Outbound =
       chat_id: string;
       content: string;
       media?: OutboundMedia[];
-      image_generation?: OutboundImageGeneration;
       /** Marks messages sent by the embedded WebUI, without changing the
        * generic websocket protocol for other clients. */
       webui?: true;

@@ -231,21 +231,6 @@
       "send": "메시지 보내기",
       "stop": "응답 중지",
       "attachImage": "이미지 첨부",
-      "imageMode": {
-        "label": "이미지 생성",
-        "toggle": "이미지 생성 모드 전환",
-        "placeholder": "이미지를 설명하거나 편집하세요…",
-        "aspectAria": "이미지 화면 비율",
-        "aspectLabel": "이미지 비율",
-        "aspect": {
-          "auto": "자동",
-          "1_1": "정사각형 1:1",
-          "3_4": "세로 3:4",
-          "9_16": "스토리 9:16",
-          "4_3": "가로 4:3",
-          "16_9": "와이드 16:9"
-        }
-      },
       "encoding": "처리 중…",
       "remove": "첨부 제거",
       "normalizedSizeHint": "{{orig}} → {{current}} (자동 압축)",

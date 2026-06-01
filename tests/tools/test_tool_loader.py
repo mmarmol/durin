@@ -59,7 +59,7 @@ def test_tool_context_has_required_fields():
     required = {
         "config", "workspace", "bus", "subagent_manager",
         "cron_service", "file_state_store", "provider_snapshot_loader",
-        "image_generation_provider_configs", "timezone",
+        "timezone",
     }
     assert required <= field_names
 
@@ -70,7 +70,6 @@ def test_tool_context_defaults():
     assert ctx.subagent_manager is None
     assert ctx.cron_service is None
     assert ctx.provider_snapshot_loader is None
-    assert ctx.image_generation_provider_configs is None
     assert ctx.timezone == "UTC"
 
 
@@ -196,7 +195,7 @@ def test_cron_tool_create():
     assert isinstance(tool, CronTool)
 
 
-# --- Task 6: ExecTool, WebTools, ImageGenerationTool ---
+# --- Task 6: ExecTool, WebTools ---
 
 
 def test_exec_tool_config_cls():
@@ -273,48 +272,6 @@ def test_web_fetch_tool_create():
     assert isinstance(tool, WebFetchTool)
 
 
-def test_image_gen_tool_config_cls():
-    from durin.agent.tools.image_generation import ImageGenerationTool, ImageGenerationToolConfig
-    assert ImageGenerationTool.config_key == "image_generation"
-    assert ImageGenerationTool.config_cls() is ImageGenerationToolConfig
-
-
-def test_image_gen_tool_enabled():
-    from durin.agent.tools.image_generation import ImageGenerationTool
-
-    # enabled requires BOTH the flag AND a provider durin can actually
-    # drive (whitelist gate added with the probe-gated activation flow,
-    # commit 6cadbff). A MagicMock provider is not a real supported
-    # string, so the test must pin a valid one.
-    mock_config = MagicMock()
-    mock_config.image_generation.enabled = True
-    mock_config.image_generation.provider = "openrouter"
-    ctx = ToolContext(config=mock_config, workspace="/tmp")
-    assert ImageGenerationTool.enabled(ctx) is True
-
-    # Flag off → off, regardless of provider.
-    mock_config.image_generation.enabled = False
-    assert ImageGenerationTool.enabled(ctx) is False
-
-    # Flag on but provider not in IMAGE_GEN_SUPPORTED_PROVIDERS → off,
-    # so a stale/unsupported provider never exposes the tool to the agent.
-    mock_config.image_generation.enabled = True
-    mock_config.image_generation.provider = "unsupported-provider"
-    assert ImageGenerationTool.enabled(ctx) is False
-
-
-def test_image_gen_tool_create():
-    from durin.agent.tools.image_generation import ImageGenerationTool
-    mock_config = MagicMock()
-    mock_config.image_generation = MagicMock()
-    ctx = ToolContext(
-        config=mock_config, workspace="/tmp",
-        image_generation_provider_configs={"openrouter": MagicMock()},
-    )
-    tool = ImageGenerationTool.create(ctx)
-    assert isinstance(tool, ImageGenerationTool)
-
-
 # --- Task 7: MyToolConfig + MCP wrappers ---
 
 
@@ -353,14 +310,12 @@ def test_config_round_trip():
             "web": {"enable": True, "search": {"provider": "brave", "api_key": "test"}},
             "exec": {"enable": False, "timeout": 120},
             "my": {"allowSet": True},
-            "imageGeneration": {"enabled": True, "provider": "openrouter"},
         }
     }
     config = Config.model_validate(config_dict)
     dumped = config.model_dump(mode="json", by_alias=True)
 
     assert dumped["tools"]["my"]["allowSet"] is True
-    assert dumped["tools"]["imageGeneration"]["enabled"] is True
     assert config.tools.exec.enable is False
     assert config.tools.exec.timeout == 120
     assert config.tools.web.search.provider == "brave"
@@ -377,7 +332,6 @@ def test_config_defaults():
     assert config.tools.web.search.provider == "duckduckgo"
     assert config.tools.my.enable is True
     assert config.tools.my.allow_set is False
-    assert config.tools.image_generation.enabled is False
     assert config.tools.restrict_to_workspace is False
 
 
@@ -403,7 +357,6 @@ def test_loader_registers_same_tools_as_old_hardcoded():
     mock_config.web.fetch = MagicMock()
     mock_config.web.proxy = None
     mock_config.web.user_agent = None
-    mock_config.image_generation.enabled = False
     mock_config.my.enable = True
 
     ctx = ToolContext(

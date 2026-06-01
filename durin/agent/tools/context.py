@@ -49,7 +49,6 @@ class ToolContext:
     sessions: Any | None = None
     file_state_store: Any = field(default=None)
     provider_snapshot_loader: Callable[[], Any] | None = None
-    image_generation_provider_configs: dict[str, Any] | None = None
     timezone: str = "UTC"
     # Auxiliary providers for capability bridges (vision / audio / …).
     # Populated when ``config.agents.aux_models`` has the corresponding

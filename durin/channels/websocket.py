@@ -716,12 +716,6 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/memory/cross-encoder/test":
             return await self._handle_cross_encoder_test(request, query)
 
-        if got == "/api/image-gen/providers":
-            return self._handle_image_gen_providers(request)
-
-        if got == "/api/image-gen/test":
-            return await self._handle_image_gen_test(request, query)
-
         m = re.match(r"^/api/sessions/([^/]+)/messages$", got)
         if m:
             return self._handle_session_messages(request, m.group(1))
@@ -1673,147 +1667,6 @@ class WebSocketChannel(BaseChannel):
             }
         )
 
-    def _handle_image_gen_providers(self, request: WsRequest) -> Response:
-        """`GET /api/image-gen/providers` — providers durin has a client for.
-
-        The provider dropdown in Settings → AI → Image Model needs this so
-        users can never pick a provider that has no concrete client (e.g.
-        a stale config saying ``provider=gemini`` when no
-        ``GeminiImageGenerationClient`` exists). Returns the static
-        whitelist defined in ``durin.providers.image_generation`` — kept
-        in sync with the tool's branching logic by code review.
-        """
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        from durin.providers.image_generation import IMAGE_GEN_SUPPORTED_PROVIDERS
-
-        return _http_json_response({"providers": list(IMAGE_GEN_SUPPORTED_PROVIDERS)})
-
-    async def _handle_image_gen_test(
-        self, request: WsRequest, query: dict[str, list[str]],
-    ) -> Response:
-        """`GET /api/image-gen/test?provider=X&model=Y` — live probe.
-
-        Calls the configured image-generation client with a minimal
-        prompt and returns whether a real image came back. The webui's
-        "Probar y activar" flow gates the ``enabled=true`` write on a
-        successful probe — so a user can never activate a combination
-        the provider can't actually serve (wrong model id, missing
-        API key, model decommissioned, etc.).
-
-        The generated image is NOT saved as an artifact (this is a
-        probe, not real output); only the size and latency are
-        reported back.
-
-        Errors don't throw — they're surfaced as ``{ok: false, error}``
-        so the UI can display the provider's message verbatim.
-        """
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        import base64 as _b64
-        import time as _time
-
-        from durin.config.loader import load_config
-        from durin.providers.image_generation import (
-            IMAGE_GEN_SUPPORTED_PROVIDERS,
-            AIHubMixImageGenerationClient,
-            ImageGenerationError,
-            OpenRouterImageGenerationClient,
-        )
-
-        provider = (_query_first(query, "provider") or "").strip()
-        model = (_query_first(query, "model") or "").strip()
-        if not provider or not model:
-            return _http_error(400, "provider and model are required")
-        if provider not in IMAGE_GEN_SUPPORTED_PROVIDERS:
-            return _http_json_response({
-                "ok": False,
-                "error": (
-                    f"provider {provider!r} is not in this build's "
-                    f"supported set ({list(IMAGE_GEN_SUPPORTED_PROVIDERS)})"
-                ),
-            })
-
-        try:
-            cfg = load_config()
-        except Exception as exc:  # noqa: BLE001
-            return _http_json_response({
-                "ok": False, "error": f"config load failed: {exc}",
-            })
-
-        provider_cfg = getattr(cfg.providers, provider, None)
-        if provider_cfg is None or not provider_cfg.api_key:
-            return _http_json_response({
-                "ok": False,
-                "error": f"providers.{provider}.api_key is not configured",
-            })
-
-        kwargs = {
-            "api_key": provider_cfg.api_key,
-            "api_base": provider_cfg.api_base,
-            "extra_headers": provider_cfg.extra_headers,
-            "extra_body": provider_cfg.extra_body,
-        }
-        if provider == "openrouter":
-            client = OpenRouterImageGenerationClient(**kwargs)
-        elif provider == "aihubmix":
-            client = AIHubMixImageGenerationClient(**kwargs)
-        else:
-            # Whitelist is checked above; unreachable in practice but
-            # keeps mypy honest and protects against future drift.
-            return _http_json_response({
-                "ok": False,
-                "error": f"no client implementation for provider {provider!r}",
-            })
-
-        # Minimal prompt — small enough to be cheap, concrete enough
-        # to produce a real image (avoid prompts the provider may
-        # filter as nonsense).
-        t0 = _time.monotonic()
-        try:
-            response = await client.generate(
-                prompt="A small red circle on a white background.",
-                model=model,
-                aspect_ratio="1:1",
-                image_size="1024x1024",
-            )
-        except ImageGenerationError as exc:
-            return _http_json_response({
-                "ok": False,
-                "error": str(exc),
-                "latency_ms": int((_time.monotonic() - t0) * 1000),
-            })
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("image-gen probe crashed for %s/%s", provider, model)
-            return _http_json_response({
-                "ok": False,
-                "error": f"probe crashed: {exc}",
-                "latency_ms": int((_time.monotonic() - t0) * 1000),
-            })
-
-        latency_ms = int((_time.monotonic() - t0) * 1000)
-        if not response.images:
-            return _http_json_response({
-                "ok": False,
-                "error": "provider returned no images",
-                "latency_ms": latency_ms,
-            })
-        # Report the base64 payload size so the UI can show "a real
-        # PNG came back", not "the API said OK with no bytes".
-        first = response.images[0]
-        size_bytes = 0
-        if "," in first:
-            try:
-                size_bytes = len(_b64.b64decode(first.split(",", 1)[1]))
-            except Exception:  # noqa: BLE001
-                size_bytes = 0
-        return _http_json_response({
-            "ok": True,
-            "latency_ms": latency_ms,
-            "image_size_bytes": size_bytes,
-            "image_count": len(response.images),
-        })
-
     def _handle_channels_list(self, request: WsRequest) -> Response:
         """`GET /api/channels` — discovered channels + enabled state.
 
@@ -2518,13 +2371,6 @@ class WebSocketChannel(BaseChannel):
             metadata: dict[str, Any] = {"remote": getattr(connection, "remote_address", None)}
             if envelope.get("webui") is True:
                 metadata["webui"] = True
-            image_generation = envelope.get("image_generation")
-            if isinstance(image_generation, dict) and image_generation.get("enabled") is True:
-                aspect_ratio = image_generation.get("aspect_ratio")
-                metadata["image_generation"] = {
-                    "enabled": True,
-                    "aspect_ratio": aspect_ratio if isinstance(aspect_ratio, str) else None,
-                }
             await self._handle_message(
                 sender_id=client_id,
                 chat_id=cid,

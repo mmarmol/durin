@@ -248,20 +248,8 @@
       "maxTokensHint": "Cap per assistant message. Bounded by the model.",
       "reasoningEffort": "Reasoning effort",
       "reasoningEffortHint": "For reasoning models: low | medium | high. Leave blank for default.",
-      "image": "Image model",
-      "imageHint": "Used by the generate_image tool when image generation mode is on.",
       "enabled": "Enabled",
-      "disabled": "Disabled",
-      "imageNoEligibleProviders": "None of your configured providers ship an image-generation client in this build. Supported: {{supported}}. Configure an API key for one of them in Providers / Secrets to enable image generation.",
-      "disableNow": "Force-disable",
-      "disable": "Disable",
-      "imageProbing": "Probing…",
-      "imageReprobe": "Re-probe",
-      "imageProbeAndActivate": "Test & activate",
-      "imageProbeAndActivateHint": "Runs a real generation against the configured provider. Only activates if a real image comes back.",
-      "imageSaveBeforeProbe": "Save the provider/model first, then probe.",
-      "imageProbeOk": "✓ ok · {{ms}}ms · {{kb}}KB image",
-      "imageProbeFail": "✗ failed: {{error}}"
+      "disabled": "Disabled"
     },
     "channels": {
       "description": "Bridge durin to chat platforms. Enable a channel and set its credential — the token goes to the secret store, not config.json.",
@@ -433,21 +421,6 @@
       "send": "Send message",
       "stop": "Stop response",
       "attachImage": "Attach image",
-      "imageMode": {
-        "label": "Image Generation",
-        "toggle": "Toggle image generation mode",
-        "placeholder": "Describe or edit an image…",
-        "aspectAria": "Image aspect ratio",
-        "aspectLabel": "Image aspect",
-        "aspect": {
-          "auto": "Auto",
-          "1_1": "Square 1:1",
-          "3_4": "Portrait 3:4",
-          "9_16": "Story 9:16",
-          "4_3": "Landscape 4:3",
-          "16_9": "Wide 16:9"
-        }
-      },
       "tools": {
         "search": "Search",
         "reason": "Reason",
