@@ -661,6 +661,19 @@ def check_embedding_model_loads() -> CheckResult:
             "fastembed not importable — covered by extras check",
             category="state",
         )
+    # The provider class imports even without the `[memory]` extra
+    # (fastembed loads lazily inside it), so the import above does not
+    # catch a missing dependency. Probe fastembed directly: a not-installed
+    # extra is a skip, not a doctor failure — CI deliberately runs without
+    # `[memory]` (fastembed downloads ~2GB of models).
+    try:
+        import fastembed  # noqa: F401, PLC0415
+    except ImportError:
+        return CheckResult(
+            "embedding model load", "ok",
+            "fastembed not installed — covered by extras check",
+            category="state",
+        )
     try:
         provider = FastembedProvider(model=model_id)
         vec = provider.embed(["health probe"])[0]

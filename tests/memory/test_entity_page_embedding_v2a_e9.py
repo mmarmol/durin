@@ -150,6 +150,13 @@ def test_rebuild_includes_entity_pages(tmp_path: Path) -> None:
     Fix: rebuild now walks entity pages and re-upserts each via
     `upsert_entity_page` so the index is complete post-rebuild.
     """
+    import pytest
+
+    # Exercises VectorIndex.rebuild_from_workspace, which opens a real
+    # LanceDB table — skip when the [memory] extra is absent (CI runs
+    # without it; the embedding side is faked but lancedb is not).
+    pytest.importorskip("lancedb")
+
     from durin.memory.embedding import EmbeddingProvider
 
     class _FakeProvider(EmbeddingProvider):
