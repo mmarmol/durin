@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import {
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Focus,
   Maximize2,
@@ -8,6 +10,7 @@ import {
   Network,
   RefreshCw,
   Search as SearchIcon,
+  Trash2,
   X,
 } from "lucide-react";
 
@@ -15,16 +18,23 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { useMemoryGraph } from "@/hooks/useMemoryGraph";
 import { useClient } from "@/providers/ClientProvider";
+import MarkdownTextRenderer from "@/components/MarkdownTextRenderer";
 import {
   ApiError,
+  fetchMemoryBacklinks,
   fetchMemoryEdge,
   fetchMemoryEntity,
+  fetchMemoryEntry,
   fetchMemorySession,
+  forgetMemoryEntry,
   searchMemoryApi,
+  type MemoryBacklinksPayload,
   type MemoryEdgeDetail,
   type MemoryEntityDetail,
+  type MemoryEntryDetail,
   type MemoryGraphNode,
   type MemorySearchPayload,
+  type MemorySearchResult,
   type MemorySessionDetail,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -144,10 +154,11 @@ function tickForces(
   }
 }
 
-type TabName = "info" | "body" | "history" | "sources" | "archive";
+type TabName = "info" | "body" | "history" | "sources" | "archive" | "entries";
 type SessionTabName = "info" | "messages" | "events" | "memory_ops" | "entries";
 
 export function MemoryGraphView(_props: MemoryGraphViewProps) {
+  const { t } = useTranslation();
   const { data, loading, error, refresh } = useMemoryGraph(_props.active);
   const { token } = useClient();
   const tokenRef = useRef(token);
@@ -634,15 +645,18 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
     <div className="flex h-full min-h-0 flex-col bg-background">
       <header className="flex shrink-0 items-center gap-2 border-b border-border/40 px-3 py-2">
         <Network className="h-4 w-4 text-muted-foreground" aria-hidden />
-        <h1 className="text-sm font-semibold">Memory graph</h1>
+        <h1 className="text-sm font-semibold">{t("memoryGraph.title")}</h1>
         {data ? (
           <span className="text-xs text-muted-foreground">
-            {data.stats.node_count} nodes · {data.stats.edge_count} edges
+            {t("memoryGraph.stats", {
+              nodes: data.stats.node_count,
+              edges: data.stats.edge_count,
+            })}
             {data.stats.phantom_count > 0
-              ? ` · ${data.stats.phantom_count} phantom`
+              ? ` · ${t("memoryGraph.statsPhantom", { count: data.stats.phantom_count })}`
               : ""}
             {data.stats.truncated_nodes || data.stats.truncated_edges
-              ? " · truncated"
+              ? ` · ${t("memoryGraph.statsTruncated")}`
               : ""}
           </span>
         ) : null}
@@ -659,7 +673,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                 setSearchOpen(true);
               }}
               onFocus={() => setSearchOpen(true)}
-              placeholder="Search memory (vector + grep)…"
+              placeholder={t("memoryGraph.searchPlaceholder")}
               className={cn(
                 "h-7 w-72 rounded-md border border-input bg-background pl-7 pr-2 text-[12.5px]",
                 "outline-none focus:ring-1 focus:ring-ring",
@@ -668,7 +682,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
             {search ? (
               <button
                 type="button"
-                aria-label="Clear"
+                aria-label={t("memoryGraph.clear")}
                 onClick={() => {
                   setSearch("");
                   setSearchResults(null);
@@ -686,13 +700,13 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
               onClick={() => setFocusRef(null)}
               className="h-7 gap-1 text-[11px]"
             >
-              <Focus className="h-3 w-3" /> Unfocus
+              <Focus className="h-3 w-3" /> {t("memoryGraph.unfocus")}
             </Button>
           ) : null}
           <Button
             variant="ghost"
             size="icon"
-            aria-label="Refresh"
+            aria-label={t("memoryGraph.refresh")}
             onClick={() => void refresh()}
             disabled={loading}
             className="h-7 w-7"
@@ -710,15 +724,17 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
         ) : null}
         {loading && !data ? (
           <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
-            Loading…
+            {t("memoryGraph.loadingGraph")}
           </div>
         ) : null}
         {data && data.nodes.length === 0 ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 text-sm text-muted-foreground">
-            <span>No entity pages yet.</span>
+            <span>{t("memoryGraph.empty")}</span>
             <span className="text-xs">
-              Run <code className="rounded bg-muted px-1">durin memory dream</code>{" "}
-              once entries accumulate.
+              <Trans
+                i18nKey="memoryGraph.emptyHint"
+                components={{ code: <code className="rounded bg-muted px-1" /> }}
+              />
             </span>
           </div>
         ) : null}
@@ -784,7 +800,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                 onClick={() => setHiddenTypes(new Set())}
                 className="ml-1 rounded border border-border/40 px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-muted"
               >
-                Show all
+                {t("memoryGraph.showAll")}
               </button>
             ) : null}
           </div>
@@ -806,7 +822,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                   size="icon"
                   className="h-5 w-5"
                   onClick={() => setSearchOpen(false)}
-                  aria-label="Close search panel"
+                  aria-label={t("memoryGraph.closeSearch")}
                 >
                   <X className="h-3 w-3" />
                 </Button>
@@ -814,14 +830,14 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
             </header>
             <div className="max-h-full overflow-y-auto">
               {searchLoading ? (
-                <div className="px-3 py-3 text-xs text-muted-foreground">Searching…</div>
+                <div className="px-3 py-3 text-xs text-muted-foreground">{t("memoryGraph.searching")}</div>
               ) : null}
               {searchError ? (
                 <div className="px-3 py-3 text-xs text-destructive">{searchError}</div>
               ) : null}
               {searchResults && searchResults.results.length === 0 && !searchLoading ? (
                 <div className="px-3 py-3 text-xs text-muted-foreground">
-                  No matches.
+                  {t("memoryGraph.noMatches")}
                 </div>
               ) : null}
               {searchResults?.results.slice(0, 40).map((r, idx) => {
@@ -897,13 +913,13 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                 size="icon"
                 className="h-5 w-5"
                 onClick={() => setEdgePopup(null)}
-                aria-label="Close edge popup"
+                aria-label={t("memoryGraph.closeEdge")}
               >
                 <X className="h-3 w-3" />
               </Button>
             </div>
             {edgePopup.loading ? (
-              <div className="text-muted-foreground">Loading…</div>
+              <div className="text-muted-foreground">{t("memoryGraph.loading")}</div>
             ) : edgePopup.detail ? (
               <>
                 <div className="mb-1 text-muted-foreground">
@@ -956,7 +972,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
               <Button
                 variant="ghost"
                 size="icon"
-                aria-label={focusRef === selected.id ? "Unfocus" : "Focus 1-hop"}
+                aria-label={focusRef === selected.id ? t("memoryGraph.unfocus") : t("memoryGraph.focusOneHop")}
                 onClick={() =>
                   setFocusRef((c) => (c === selected.id ? null : selected.id))
                 }
@@ -984,7 +1000,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
               <Button
                 variant="ghost"
                 size="icon"
-                aria-label="Close"
+                aria-label={t("memoryGraph.close")}
                 onClick={() => {
                   setSelected(null);
                   if (focusRef) setFocusRef(null);
@@ -999,64 +1015,66 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
               {isSessionSelected
                 ? (
                     [
-                      { id: "info", label: "Info" },
+                      { id: "info", label: t("memoryGraph.tabInfo") },
                       { id: "messages", label: `Messages${sessionDetail?.recent_messages.length ? ` (${sessionDetail.recent_messages.length})` : ""}` },
                       { id: "events", label: `Events${sessionDetail?.events.length ? ` (${sessionDetail.events.length})` : ""}` },
                       { id: "memory_ops", label: `Memory ops${sessionDetail?.memory_ops.length ? ` (${sessionDetail.memory_ops.length})` : ""}` },
                       { id: "entries", label: `Entries${sessionDetail?.entries_linked.length ? ` (${sessionDetail.entries_linked.length})` : ""}` },
                     ] as const
-                  ).map((t) => (
+                  ).map((tab) => (
                     <button
-                      key={t.id}
+                      key={tab.id}
                       type="button"
-                      onClick={() => setSessionTab(t.id as SessionTabName)}
+                      onClick={() => setSessionTab(tab.id as SessionTabName)}
                       className={cn(
                         "rounded px-2 py-1 font-medium transition-colors",
-                        sessionTab === t.id
+                        sessionTab === tab.id
                           ? "bg-primary/10 text-primary"
                           : "text-muted-foreground hover:bg-muted",
                       )}
                     >
-                      {t.label}
+                      {tab.label}
                     </button>
                   ))
                 : (
                     [
-                      { id: "info", label: "Info" },
-                      { id: "body", label: "Body" },
+                      { id: "info", label: t("memoryGraph.tabInfo") },
+                      { id: "body", label: t("memoryGraph.tabBody") },
+                      { id: "entries", label: t("memoryGraph.tabEntries") },
                       { id: "history", label: `History${detail?.history.length ? ` (${detail.history.length})` : ""}` },
                       { id: "sources", label: `Sources${detail?.entries.length ? ` (${detail.entries.length})` : ""}` },
                       { id: "archive", label: `Archive${detail?.archive.length ? ` (${detail.archive.length})` : ""}` },
                     ] as const
-                  ).map((t) => (
+                  ).map((tab) => (
                     <button
-                      key={t.id}
+                      key={tab.id}
                       type="button"
-                      onClick={() => setActiveTab(t.id as TabName)}
+                      onClick={() => setActiveTab(tab.id as TabName)}
                       className={cn(
                         "rounded px-2 py-1 font-medium transition-colors",
-                        activeTab === t.id
+                        activeTab === tab.id
                           ? "bg-primary/10 text-primary"
                           : "text-muted-foreground hover:bg-muted",
                       )}
                     >
-                      {t.label}
+                      {tab.label}
                     </button>
                   ))}
             </div>
 
             <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2 text-xs">
               {detailLoading ? (
-                <div className="text-muted-foreground">Loading detail…</div>
+                <div className="text-muted-foreground">{t("memoryGraph.loadingDetail")}</div>
               ) : null}
               {detailError ? (
                 <div className="text-destructive">{detailError}</div>
               ) : null}
               {!detail && !sessionDetail && !detailLoading && selected.phantom ? (
                 <p className="text-[11px] text-muted-foreground">
-                  Tagged in episodic entries but no consolidated page yet. Run{" "}
-                  <code className="rounded bg-muted px-1">durin memory dream</code>{" "}
-                  to create one.
+                  <Trans
+                    i18nKey="memoryGraph.noConsolidatedHint"
+                    components={{ code: <code className="rounded bg-muted px-1" /> }}
+                  />
                 </p>
               ) : null}
               {sessionDetail ? (
@@ -1070,18 +1088,18 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                   {activeTab === "info" ? (
                     <dl className="space-y-2">
                       <div className="flex justify-between gap-2">
-                        <dt className="text-muted-foreground">Type</dt>
+                        <dt className="text-muted-foreground">{t("memoryGraph.fieldType")}</dt>
                         <dd className="font-mono">{detail.page.type}</dd>
                       </div>
                       <div className="flex justify-between gap-2">
                         <dt className="text-muted-foreground">
-                          Entries referencing
+                          {t("memoryGraph.entriesReferencing")}
                         </dt>
                         <dd className="font-mono">{selected.weight}</dd>
                       </div>
                       {detail.page.dream_processed_through ? (
                         <div className="flex justify-between gap-2">
-                          <dt className="text-muted-foreground">Last dreamed</dt>
+                          <dt className="text-muted-foreground">{t("memoryGraph.fieldLastDreamed")}</dt>
                           <dd className="font-mono text-[11px]">
                             {detail.page.dream_processed_through}
                           </dd>
@@ -1089,7 +1107,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                       ) : null}
                       {detail.page.aliases.length > 0 ? (
                         <div>
-                          <dt className="text-muted-foreground">Aliases</dt>
+                          <dt className="text-muted-foreground">{t("memoryGraph.fieldAliases")}</dt>
                           <dd className="mt-0.5 flex flex-wrap gap-1">
                             {detail.page.aliases.map((a) => (
                               <span
@@ -1104,7 +1122,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                       ) : null}
                       {detail.page.identifiers ? (
                         <div>
-                          <dt className="text-muted-foreground">Identifiers</dt>
+                          <dt className="text-muted-foreground">{t("memoryGraph.fieldIdentifiers")}</dt>
                           <dd className="mt-0.5 space-y-0.5">
                             {Object.entries(detail.page.identifiers).map(
                               ([k, v]) => (
@@ -1128,13 +1146,13 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                         {detail.page.body}
                       </pre>
                     ) : (
-                      <p className="text-muted-foreground">No body content.</p>
+                      <p className="text-muted-foreground">{t("memoryGraph.noBody")}</p>
                     )
                   ) : null}
 
                   {activeTab === "history" ? (
                     detail.history.length === 0 ? (
-                      <p className="text-muted-foreground">No git history yet.</p>
+                      <p className="text-muted-foreground">{t("memoryGraph.noHistory")}</p>
                     ) : (
                       <ul className="space-y-2">
                         {detail.history.map((c) => (
@@ -1182,10 +1200,17 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                     )
                   ) : null}
 
+                  {activeTab === "entries" ? (
+                    <EntriesTab
+                      token={tokenRef.current ?? ""}
+                      entityRef={selected.id}
+                    />
+                  ) : null}
+
                   {activeTab === "archive" ? (
                     detail.archive.length === 0 ? (
                       <p className="text-muted-foreground">
-                        No absorptions for this entity.
+                        {t("memoryGraph.noAbsorptions")}
                       </p>
                     ) : (
                       <ul className="space-y-2">
@@ -1198,14 +1223,14 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                             <div className="font-mono text-[10.5px] text-muted-foreground">
                               {a.slug}
                             </div>
-                            {a.absorbed_at ? (
+                            {a.archived_at ? (
                               <div className="mt-0.5 text-[10.5px] text-muted-foreground">
-                                Absorbed: {a.absorbed_at.slice(0, 19)}
+                                Archived: {a.archived_at.slice(0, 19)}
                               </div>
                             ) : null}
-                            {a.absorbed_reason ? (
+                            {a.archived_reason ? (
                               <div className="text-[10.5px] text-muted-foreground">
-                                Reason: {a.absorbed_reason}
+                                Reason: {a.archived_reason}
                               </div>
                             ) : null}
                           </li>
@@ -1240,6 +1265,7 @@ function SessionTabs({
   detail: MemorySessionDetail;
   tab: SessionTabName;
 }) {
+  const { t } = useTranslation();
   if (tab === "info") {
     const info = detail.info;
     const metaEnts = detail.entities_tagged.from_meta;
@@ -1247,40 +1273,40 @@ function SessionTabs({
     return (
       <dl className="space-y-2">
         <div className="flex justify-between gap-2">
-          <dt className="text-muted-foreground">Session key</dt>
+          <dt className="text-muted-foreground">{t("memoryGraph.fieldSessionKey")}</dt>
           <dd className="font-mono">{detail.session_key ?? detail.session_ref}</dd>
         </div>
         {info.channel ? (
           <div className="flex justify-between gap-2">
-            <dt className="text-muted-foreground">Channel</dt>
+            <dt className="text-muted-foreground">{t("memoryGraph.fieldChannel")}</dt>
             <dd className="font-mono">{info.channel}</dd>
           </div>
         ) : null}
         {info.model ? (
           <div className="flex justify-between gap-2">
-            <dt className="text-muted-foreground">Model</dt>
+            <dt className="text-muted-foreground">{t("memoryGraph.fieldModel")}</dt>
             <dd className="font-mono">{info.model}</dd>
           </div>
         ) : null}
         <div className="flex justify-between gap-2">
-          <dt className="text-muted-foreground">Messages</dt>
+          <dt className="text-muted-foreground">{t("memoryGraph.fieldMessages")}</dt>
           <dd className="font-mono">{info.message_count}</dd>
         </div>
         {info.created_at ? (
           <div className="flex justify-between gap-2">
-            <dt className="text-muted-foreground">Created</dt>
+            <dt className="text-muted-foreground">{t("memoryGraph.fieldCreated")}</dt>
             <dd className="font-mono text-[11px]">{info.created_at.slice(0, 19)}</dd>
           </div>
         ) : null}
         {info.updated_at ? (
           <div className="flex justify-between gap-2">
-            <dt className="text-muted-foreground">Updated</dt>
+            <dt className="text-muted-foreground">{t("memoryGraph.fieldUpdated")}</dt>
             <dd className="font-mono text-[11px]">{info.updated_at.slice(0, 19)}</dd>
           </div>
         ) : null}
         {metaEnts.length > 0 ? (
           <div>
-            <dt className="text-muted-foreground">Entities (from meta tags)</dt>
+            <dt className="text-muted-foreground">{t("memoryGraph.entitiesFromMeta")}</dt>
             <dd className="mt-0.5 flex flex-wrap gap-1">
               {metaEnts.map((e) => (
                 <span
@@ -1295,7 +1321,7 @@ function SessionTabs({
         ) : null}
         {refEnts.length > 0 ? (
           <div>
-            <dt className="text-muted-foreground">Entities (from entry source_refs)</dt>
+            <dt className="text-muted-foreground">{t("memoryGraph.entitiesFromSources")}</dt>
             <dd className="mt-0.5 flex flex-wrap gap-1">
               {refEnts.map((e) => (
                 <span
@@ -1314,7 +1340,7 @@ function SessionTabs({
 
   if (tab === "messages") {
     if (detail.recent_messages.length === 0) {
-      return <p className="text-muted-foreground">No recent messages.</p>;
+      return <p className="text-muted-foreground">{t("memoryGraph.noRecentMessages")}</p>;
     }
     return (
       <ul className="space-y-2">
@@ -1342,7 +1368,7 @@ function SessionTabs({
 
   if (tab === "events") {
     if (detail.events.length === 0) {
-      return <p className="text-muted-foreground">No lifecycle events recorded.</p>;
+      return <p className="text-muted-foreground">{t("memoryGraph.noLifecycleEvents")}</p>;
     }
     return (
       <ul className="space-y-1.5">
@@ -1421,7 +1447,7 @@ function SessionTabs({
   if (detail.entries_linked.length === 0) {
     return (
       <p className="text-muted-foreground">
-        No episodic entries linked back to this session via source_refs.
+        {t("memoryGraph.noSourceLinkedEntries")}
       </p>
     );
   }
@@ -1525,5 +1551,356 @@ function CommitItem({
         </div>
       ) : null}
     </li>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// EntriesTab (P12) — browse + read + archive memory entries that reference
+// the currently-selected entity. Each row is clickable; the active row's
+// frontmatter + body + backlinks render in a sub-panel below the list.
+// Wikilinks in the body navigate within the tab (replace the sub-panel).
+// ---------------------------------------------------------------------------
+
+
+function EntriesTab({
+  token,
+  entityRef,
+}: {
+  token: string;
+  entityRef: string;
+}) {
+  const { t } = useTranslation();
+  const [rows, setRows] = useState<MemorySearchResult[] | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
+  const [selectedUri, setSelectedUri] = useState<string | null>(null);
+  const [detail, setDetail] = useState<MemoryEntryDetail | null>(null);
+  const [backlinks, setBacklinks] = useState<MemoryBacklinksPayload | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const [confirmArchive, setConfirmArchive] = useState(false);
+  const [archiving, setArchiving] = useState(false);
+
+  // Load the row list whenever the selected entity changes. We use
+  // ``searchMemoryApi`` with the entity ref as the query — the FTS
+  // index matches the ref in frontmatter, so the result set IS the
+  // entries that tag this entity. We then drop:
+  //  - canonical entity_page rows (those have their own tabs)
+  //  - session rows (those have their own session view)
+  //  - any class outside the forgettable set (only those have a
+  //    detail endpoint + Archive button here)
+  useEffect(() => {
+    let cancelled = false;
+    setRows(null);
+    setListError(null);
+    setSelectedUri(null);
+    setDetail(null);
+    setBacklinks(null);
+    if (!token || !entityRef) return;
+    void (async () => {
+      try {
+        const r: MemorySearchPayload = await searchMemoryApi(token, entityRef);
+        if (cancelled) return;
+        const forgettable = new Set([
+          "episodic", "stable", "corpus", "session_summary",
+        ]);
+        const filtered = r.results.filter((res) =>
+          forgettable.has(res.class_name ?? "")
+          && res.uri.startsWith("memory/"),
+        );
+        setRows(filtered);
+      } catch (err) {
+        if (cancelled) return;
+        setListError(
+          err instanceof ApiError ? `HTTP ${err.status}` : (err as Error).message,
+        );
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token, entityRef]);
+
+  // Load detail + backlinks when the user opens a row.
+  useEffect(() => {
+    let cancelled = false;
+    setDetail(null);
+    setBacklinks(null);
+    setConfirmArchive(false);
+    setDetailError(null);
+    if (!token || !selectedUri) {
+      setDetailLoading(false);
+      return;
+    }
+    setDetailLoading(true);
+    void (async () => {
+      try {
+        const [d, bl] = await Promise.all([
+          fetchMemoryEntry(token, selectedUri),
+          fetchMemoryBacklinks(token, selectedUri),
+        ]);
+        if (cancelled) return;
+        if (d === null) {
+          setDetailError(t("memoryGraph.entries.notFound"));
+        } else {
+          setDetail(d);
+          setBacklinks(bl);
+        }
+      } catch (err) {
+        if (cancelled) return;
+        setDetailError(
+          err instanceof ApiError ? `HTTP ${err.status}` : (err as Error).message,
+        );
+      } finally {
+        if (!cancelled) setDetailLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token, selectedUri, t]);
+
+  const onArchive = useCallback(async () => {
+    if (!detail) return;
+    setArchiving(true);
+    try {
+      const out = await forgetMemoryEntry(token, detail.uri);
+      if (out.result === "archived") {
+        // Drop the row from the list, clear the sub-panel.
+        setRows((prev) => prev?.filter((r) => r.uri !== detail.uri) ?? null);
+        setSelectedUri(null);
+        setDetail(null);
+        setBacklinks(null);
+      } else if (out.result === "protected") {
+        setDetailError(t("memoryGraph.entries.cantArchiveProtected"));
+      } else if (out.result === "not_found") {
+        // Stale — drop from list anyway.
+        setRows((prev) => prev?.filter((r) => r.uri !== detail.uri) ?? null);
+        setSelectedUri(null);
+      } else {
+        setDetailError(out.detail || out.result);
+      }
+    } catch (err) {
+      setDetailError(
+        err instanceof ApiError ? `HTTP ${err.status}` : (err as Error).message,
+      );
+    } finally {
+      setArchiving(false);
+      setConfirmArchive(false);
+    }
+  }, [detail, token, t]);
+
+  if (listError) {
+    return <p className="text-destructive">{listError}</p>;
+  }
+  if (rows === null) {
+    return <p className="text-muted-foreground">{t("memoryGraph.loadingDetail")}</p>;
+  }
+  if (rows.length === 0 && !selectedUri) {
+    return <p className="text-muted-foreground">{t("memoryGraph.entries.empty")}</p>;
+  }
+
+  // Detail sub-panel takes over the tab when a row is open.
+  if (selectedUri) {
+    return (
+      <div className="space-y-2">
+        <button
+          type="button"
+          onClick={() => setSelectedUri(null)}
+          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-muted"
+        >
+          <ChevronLeft className="h-3 w-3" aria-hidden />
+          {t("memoryGraph.entries.backToList")}
+        </button>
+        {detailLoading ? (
+          <p className="text-muted-foreground">{t("memoryGraph.loadingDetail")}</p>
+        ) : null}
+        {detailError ? (
+          <p className="text-destructive">{detailError}</p>
+        ) : null}
+        {detail ? (
+          <div className="space-y-3">
+            <div className="rounded border border-border/40 bg-background/60 p-2">
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] uppercase">
+                  {detail.class_name}
+                </span>
+                <span className="font-mono text-[10px] text-muted-foreground">
+                  {detail.uri}
+                </span>
+              </div>
+              <dl className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1 text-[11px]">
+                <dt className="text-muted-foreground">{t("memoryGraph.entries.headline")}</dt>
+                <dd className="font-medium">{detail.frontmatter.headline}</dd>
+                {detail.frontmatter.valid_from ? (
+                  <>
+                    <dt className="text-muted-foreground">{t("memoryGraph.entries.validFrom")}</dt>
+                    <dd className="font-mono">{detail.frontmatter.valid_from}</dd>
+                  </>
+                ) : null}
+                {detail.frontmatter.author ? (
+                  <>
+                    <dt className="text-muted-foreground">{t("memoryGraph.entries.author")}</dt>
+                    <dd className="font-mono">{detail.frontmatter.author}</dd>
+                  </>
+                ) : null}
+                {detail.frontmatter.entities.length > 0 ? (
+                  <>
+                    <dt className="text-muted-foreground">{t("memoryGraph.entries.entitiesField")}</dt>
+                    <dd className="font-mono">
+                      {detail.frontmatter.entities.join(", ")}
+                    </dd>
+                  </>
+                ) : null}
+                {detail.frontmatter.source_refs.length > 0 ? (
+                  <>
+                    <dt className="text-muted-foreground">{t("memoryGraph.entries.sourceRefs")}</dt>
+                    <dd className="space-y-0.5 break-all font-mono text-[10.5px]">
+                      {detail.frontmatter.source_refs.map((s, i) => (
+                        <div key={`${s}-${i}`}>{s}</div>
+                      ))}
+                    </dd>
+                  </>
+                ) : null}
+                {detail.frontmatter.related.length > 0 ? (
+                  <>
+                    <dt className="text-muted-foreground">{t("memoryGraph.entries.related")}</dt>
+                    <dd className="space-y-0.5 break-all font-mono text-[10.5px]">
+                      {detail.frontmatter.related.map((s, i) => (
+                        <div key={`${s}-${i}`}>{s}</div>
+                      ))}
+                    </dd>
+                  </>
+                ) : null}
+              </dl>
+            </div>
+
+            {detail.body ? (
+              <div className="rounded border border-border/40 bg-background/60 p-2">
+                <div className="mb-1 text-[10.5px] uppercase tracking-wide text-muted-foreground">
+                  {t("memoryGraph.entries.body")}
+                </div>
+                <MarkdownTextRenderer
+                  onWikiLinkClick={(target) => {
+                    // Replace the sub-panel with the linked entry.
+                    // Only intercept memory/<class>/<id> targets; ignore
+                    // wikilinks pointing to entity pages or anything else.
+                    if (/^memory\/(episodic|stable|corpus|session_summary)\//.test(target)) {
+                      setSelectedUri(target);
+                    }
+                  }}
+                  className="text-[11.5px]"
+                >
+                  {detail.body}
+                </MarkdownTextRenderer>
+              </div>
+            ) : null}
+
+            {backlinks ? (
+              <div className="rounded border border-border/40 bg-background/60 p-2">
+                <div className="mb-1 text-[10.5px] uppercase tracking-wide text-muted-foreground">
+                  {t("memoryGraph.entries.backlinks")}
+                  {backlinks.truncated ? ` (${t("memoryGraph.entries.truncated")})` : ""}
+                </div>
+                {backlinks.backlinks.length === 0 ? (
+                  <p className="text-[11px] text-muted-foreground">
+                    {t("memoryGraph.entries.noBacklinks")}
+                  </p>
+                ) : (
+                  <ul className="space-y-1">
+                    {backlinks.backlinks.map((bl) => (
+                      <li key={bl.uri}>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedUri(bl.uri)}
+                          className="w-full rounded px-1 py-0.5 text-left text-[11px] text-primary hover:bg-muted"
+                        >
+                          <span className="font-mono text-[10px] text-muted-foreground">
+                            [{bl.context}]
+                          </span>{" "}
+                          {bl.headline || bl.uri}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            ) : null}
+
+            <div className="flex items-center justify-end gap-2 pt-1">
+              {confirmArchive ? (
+                <>
+                  <span className="text-[11px] text-muted-foreground">
+                    {t("memoryGraph.entries.confirmArchive")}
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={archiving}
+                    onClick={() => setConfirmArchive(false)}
+                    className="rounded-full"
+                  >
+                    {t("memoryGraph.entries.cancel")}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={archiving}
+                    onClick={() => void onArchive()}
+                    className="rounded-full text-destructive hover:text-destructive"
+                  >
+                    <Trash2 className="mr-1 h-3 w-3" aria-hidden />
+                    {archiving
+                      ? t("memoryGraph.entries.archiving")
+                      : t("memoryGraph.entries.confirm")}
+                  </Button>
+                </>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setConfirmArchive(true)}
+                  className="rounded-full text-muted-foreground hover:text-destructive"
+                >
+                  <Trash2 className="mr-1 h-3 w-3" aria-hidden />
+                  {t("memoryGraph.entries.archive")}
+                </Button>
+              )}
+            </div>
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  return (
+    <ul className="space-y-1.5">
+      {rows.map((r) => (
+        <li key={r.uri}>
+          <button
+            type="button"
+            onClick={() => setSelectedUri(r.uri)}
+            className="block w-full rounded border border-border/40 bg-background/60 p-2 text-left hover:border-border/80"
+          >
+            <div className="flex items-center justify-between gap-2 text-[10.5px] text-muted-foreground">
+              <span className="rounded bg-muted px-1 font-mono uppercase">
+                {r.class_name ?? r.kind}
+              </span>
+              {r.valid_from ? (
+                <span className="font-mono">{r.valid_from.slice(0, 10)}</span>
+              ) : null}
+            </div>
+            {r.headline ? (
+              <div className="mt-0.5 text-[11.5px] font-medium">{r.headline}</div>
+            ) : null}
+            {r.snippet ? (
+              <div className="mt-0.5 text-[10.5px] text-muted-foreground line-clamp-2">
+                {r.snippet}
+              </div>
+            ) : null}
+          </button>
+        </li>
+      ))}
+    </ul>
   );
 }

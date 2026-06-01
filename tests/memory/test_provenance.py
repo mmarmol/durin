@@ -1,4 +1,13 @@
-"""Tests for the memory provenance ContextVar."""
+"""Tests for the memory provenance ContextVar.
+
+Contract per `durin/memory/provenance.py`: NO implicit default.
+Every memory write must wrap in :func:`author_scope`. The
+"raises outside scope" assertions live in
+``test_provenance_no_default.py`` (which opts out of the conftest's
+test-default scope). The tests here cover the scope-management
+semantics (set, nest, propagate across await) using *explicit*
+scopes throughout.
+"""
 
 from __future__ import annotations
 
@@ -9,35 +18,18 @@ import pytest
 from durin.memory.provenance import author_scope, current_author
 
 
-def test_default_is_user_authored() -> None:
-    assert current_author() == "user_authored"
-
-
 def test_scope_sets_author() -> None:
     with author_scope("agent_created"):
         assert current_author() == "agent_created"
 
 
-def test_scope_resets_on_exit() -> None:
-    with author_scope("agent_created"):
-        pass
-    assert current_author() == "user_authored"
-
-
 def test_nested_scopes() -> None:
+    """Inner scope overrides outer; outer is restored on exit."""
     with author_scope("agent_created"):
         assert current_author() == "agent_created"
         with author_scope("user_authored"):
             assert current_author() == "user_authored"
         assert current_author() == "agent_created"
-    assert current_author() == "user_authored"
-
-
-def test_scope_resets_on_exception() -> None:
-    with pytest.raises(RuntimeError):
-        with author_scope("agent_created"):
-            raise RuntimeError("boom")
-    assert current_author() == "user_authored"
 
 
 @pytest.mark.asyncio

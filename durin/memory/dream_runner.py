@@ -74,6 +74,25 @@ class DreamRunResult:
     duration_s: float
 
 
+@dataclass
+class _ConsolidateTotals:
+    """Mutable accumulator for one ``_consolidate`` invocation.
+
+    A5: dream cost telemetry needs per-pass totals (sum across all
+    entities) for `memory.dream.end`. The runner builds this as the
+    iteration progresses, then folds the values into both the
+    DreamRunResult (consolidated/failed for back-compat) and the
+    telemetry payload (the four A5 fields).
+    """
+
+    consolidated: int = 0
+    failed: int = 0
+    quarantined: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    llm_calls: int = 0
+
+
 class DreamRunner:
     """Coordinates one entity-centric dream pass with lock + throttle."""
 
@@ -82,6 +101,7 @@ class DreamRunner:
         workspace: Path,
         *,
         min_seconds_between_runs: int = 300,
+        max_seconds_per_run: int = 600,
         model: str | None = None,
         vector_index: object | None = None,
         llm_invoke: Callable[..., str] | None = None,
@@ -93,6 +113,17 @@ class DreamRunner:
         self.workspace = Path(workspace)
         self.memory_root = self.workspace / "memory"
         self.min_seconds_between_runs = max(0, int(min_seconds_between_runs))
+        # max_seconds_per_run: hard cap on wall-clock time for one
+        # dream pass (fix 2026-05-30 for data-loss bug). With FIFO
+        # oldest-first batching + a re-discovery loop, the runner
+        # drains an entity's backlog across multiple LLM calls within
+        # one pass — this budget bounds how long that drain runs
+        # before yielding to the next trigger. Per-pass not per-entity:
+        # one greedy entity will consume the budget; remainder fires
+        # `memory.dream.budget_exhausted` so operators see what got
+        # deferred. Zero/negative = effectively "single batch per
+        # entity then bail" (tests use 0; production default 600s).
+        self.max_seconds_per_run = max(0, int(max_seconds_per_run))
         self.model = model
         self._vector_index = vector_index
         self._llm_invoke = llm_invoke
@@ -167,17 +198,18 @@ class DreamRunner:
                 duration_s=time.monotonic() - start,
             )
 
-        consolidated = 0
-        failed = 0
+        totals = _ConsolidateTotals()
         try:
             self._emit_start(trigger, entity_filter, len(pending))
-            consolidated, failed = self._consolidate(pending, on_progress)
+            totals = self._consolidate(pending, on_progress, trigger=trigger)
         finally:
             self._release_lock()
             self._touch_last_run()
 
         duration = time.monotonic() - start
-        self._emit_end(trigger, entity_filter, consolidated, failed, duration)
+        self._emit_end(trigger, entity_filter, totals, duration)
+        consolidated = totals.consolidated
+        failed = totals.failed
 
         # §2.D: auto-absorb post-dream. Runs only when at least one
         # entity was consolidated (no point re-judging pairs that
@@ -216,7 +248,8 @@ class DreamRunner:
         self,
         pending: dict[str, list[Any]],
         on_progress: Callable[[str, str], None] | None,
-    ) -> tuple[int, int]:
+        trigger: str = "manual",
+    ) -> "_ConsolidateTotals":
         from durin.memory.dream import DreamConsolidator, DreamError
 
         kwargs: dict[str, Any] = {"workspace": self.workspace}
@@ -228,27 +261,114 @@ class DreamRunner:
             kwargs["llm_invoke"] = self._llm_invoke
         consolidator = DreamConsolidator(**kwargs)
 
-        consolidated = 0
-        failed = 0
+        # Wall-clock anchor for the per-pass time budget. A long-running
+        # entity drain checks `time.monotonic() - started` against
+        # `self.max_seconds_per_run` between batches and yields once
+        # exhausted (next trigger picks up the rest — cursor has
+        # advanced through whatever drained).
+        started = time.monotonic()
+        totals = _ConsolidateTotals()
         for ent_ref, entries in pending.items():
             try:
-                result = consolidator.consolidate_entity(ent_ref, entries)
-                sha = consolidator.apply(ent_ref, result)
-                consolidated += 1
-                if on_progress is not None:
-                    msg = f"→ {sha[:8]}" if sha else "= no changes"
-                    on_progress(ent_ref, msg)
+                drained = self._drain_entity(
+                    consolidator, ent_ref, entries,
+                    started=started, totals=totals,
+                    on_progress=on_progress, trigger=trigger,
+                )
+                if drained:
+                    totals.consolidated += 1
+                if not drained and (time.monotonic() - started) >= self.max_seconds_per_run:
+                    # Budget exhausted mid-entity → stop the outer loop
+                    # too. Remaining entities are still pending; the
+                    # next trigger will pick them up.
+                    break
             except DreamError as exc:
-                failed += 1
+                totals.failed += 1
+                # A5: distinguish "failed and got quarantined" from
+                # "failed but still has strikes left".
+                if getattr(exc, "triggered_quarantine", False):
+                    totals.quarantined += 1
                 logger.warning("dream consolidate %s failed: %s", ent_ref, exc)
                 if on_progress is not None:
                     on_progress(ent_ref, f"✗ {exc}")
             except Exception as exc:  # noqa: BLE001
-                failed += 1
+                totals.failed += 1
                 logger.exception("dream consolidate %s unexpected error", ent_ref)
                 if on_progress is not None:
                     on_progress(ent_ref, f"✗ unexpected: {exc}")
-        return consolidated, failed
+        return totals
+
+    def _drain_entity(
+        self,
+        consolidator: Any,
+        ent_ref: str,
+        entries: list[Any],
+        *,
+        started: float,
+        totals: "_ConsolidateTotals",
+        on_progress: Callable[[str, str], None] | None,
+        trigger: str,
+    ) -> bool:
+        """Process batches of *entries* for *ent_ref* until drained or
+        the per-pass budget is exhausted. Returns True iff fully drained.
+
+        Each iteration:
+          1. Consolidate one batch (consolidator's G11 cap takes the
+             50 oldest), apply (cursor advances to batch_last_ts).
+          2. Re-discover pending for this entity only — the cursor
+             move filters the just-processed entries out, leaving
+             whatever remained newer than batch_last_ts.
+          3. If nothing left → drained, return True.
+          4. If budget exhausted → emit `memory.dream.budget_exhausted`
+             with the remaining count and return False so the caller
+             stops touching this and any subsequent entity.
+        """
+        from durin.cli.memory_cmd import _discover_pending_consolidations
+
+        remaining = list(entries)
+        last_sha: str | None = None
+        while remaining:
+            result = consolidator.consolidate_entity(ent_ref, remaining)
+            # A5: token usage accumulates across every batch of this drain.
+            totals.prompt_tokens += int(getattr(result, "prompt_tokens", 0) or 0)
+            totals.completion_tokens += int(getattr(result, "completion_tokens", 0) or 0)
+            totals.llm_calls += int(getattr(result, "llm_call_count", 0) or 0)
+            sha = consolidator.apply(ent_ref, result)
+            if sha:
+                last_sha = sha
+
+            # Re-discover this entity's pending after the cursor advanced.
+            refreshed = _discover_pending_consolidations(
+                self.memory_root, entity_filter=ent_ref,
+            )
+            remaining = refreshed.get(ent_ref, [])
+            if not remaining:
+                if on_progress is not None:
+                    msg = f"→ {last_sha[:8]}" if last_sha else "= no changes"
+                    on_progress(ent_ref, msg)
+                return True
+
+            # Budget check — only AFTER a successful batch (so we always
+            # make at least one batch of forward progress per entity).
+            elapsed = time.monotonic() - started
+            if elapsed >= self.max_seconds_per_run:
+                emit_tool_event(
+                    "memory.dream.budget_exhausted",
+                    {
+                        "trigger": trigger,
+                        "entity_ref": ent_ref,
+                        "pending_remaining": len(remaining),
+                        "elapsed_s": round(elapsed, 3),
+                        "budget_s": self.max_seconds_per_run,
+                    },
+                )
+                if on_progress is not None:
+                    on_progress(
+                        ent_ref,
+                        f"⏱ budget exhausted — {len(remaining)} entries deferred",
+                    )
+                return False
+        return True
 
     # ------------------------------------------------------------------
     # lock + throttle
@@ -338,18 +458,26 @@ class DreamRunner:
         self,
         trigger: str,
         entity_filter: Optional[str],
-        consolidated: int,
-        failed: int,
+        totals: _ConsolidateTotals,
         duration_s: float,
     ) -> None:
+        # A5: payload now carries the per-pass token totals + the
+        # quarantine counter + duration in ms (not s). Doc 07 §6.2
+        # specifies this shape; doc 08 §3 R3 alarm
+        # (`dream_llm_cost_per_day_usd > $5/day`) depends on the
+        # `llm_input_tokens_total` + `llm_output_tokens_total` fields.
         emit_tool_event(
             "memory.dream.end",
             {
                 "trigger": trigger,
                 "entity_filter": entity_filter or "",
-                "entities_consolidated": consolidated,
-                "entities_failed": failed,
-                "duration_s": duration_s,
+                "entities_consolidated": totals.consolidated,
+                "entities_failed": totals.failed,
+                "entities_quarantined": totals.quarantined,
+                "llm_call_count": totals.llm_calls,
+                "llm_input_tokens_total": totals.prompt_tokens,
+                "llm_output_tokens_total": totals.completion_tokens,
+                "duration_ms": duration_s * 1000.0,
             },
         )
 
@@ -417,7 +545,22 @@ class DreamRunner:
                 self._emit_absorb_skipped(ref_a, ref_b, 0, "page_load_failed")
                 continue
 
-            # 3. Quarantine — both pages must be older than the window.
+            # 3. User-authored protection (audit E19, doc 01 §4.6.1).
+            # Auto-absorb must NOT touch entity pages the user wrote
+            # by hand — they carry deliberate intent that the LLM
+            # judge cannot recover. The check fires for either side
+            # of the pair: a user-authored canonical and a user-
+            # authored absorbed both protect the page from merging.
+            if (
+                page_a.author == "user_authored"
+                or page_b.author == "user_authored"
+            ):
+                self._emit_absorb_skipped(
+                    ref_a, ref_b, 0, "user_authored",
+                )
+                continue
+
+            # 4. Quarantine — both pages must be older than the window.
             if self._is_quarantined(mtime_a, mtime_b):
                 self._emit_absorb_skipped(ref_a, ref_b, 0, "quarantine")
                 continue
@@ -614,13 +757,11 @@ class DreamRunner:
         this only fires when we're already about to commit a merge
         (rare, plus the dream pass just walked these entries anyway).
         """
-        episodic_dir = self.memory_root / "episodic"
-        if not episodic_dir.is_dir():
-            return 0
+        from durin.memory.paths import walk_class
         from durin.memory.storage import load_entry
 
         count = 0
-        for path in episodic_dir.glob("*.md"):
+        for path in walk_class(self.workspace, "episodic"):
             try:
                 entry = load_entry(path)
             except Exception:  # noqa: BLE001

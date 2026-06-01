@@ -23,6 +23,8 @@ from durin.agent.agent_mode import (
     SESSION_PRE_PLAN_KEY,
     AgentMode,
     enter_plan_mode,
+    clear_executing_plan_if_todos_done,
+    executing_plan_runtime_lines,
     exit_plan_mode,
     filter_tools,
     get_active_mode,
@@ -442,3 +444,98 @@ class TestApprovedPlanPathHandoff:
         last = msgs2[-1]
         text = last["content"] if isinstance(last["content"], str) else str(last["content"])
         assert "Approved plan ready at" not in text
+
+
+class TestExecutingPlanRuntimeLines:
+    """`executing_plan_path` is the persistent counterpart to the one-shot
+    `approved_plan_path`: it is re-injected every turn so the "you are
+    executing an approved plan" frame survives compaction (the path lives in
+    session.metadata, which survives, but the model only sees it if rendered
+    back each turn). Mirrors how `todos_runtime_lines` keeps the todo list
+    alive across compaction.
+    """
+
+    def test_emits_pointer_when_set(self):
+        lines = executing_plan_runtime_lines(
+            {"executing_plan_path": "/ws/.durin/plans/plan_x.md"}
+        )
+        text = "\n".join(lines)
+        assert "/ws/.durin/plans/plan_x.md" in text
+        # It points at the plan + defers progress to the todo list (so the
+        # agent does not re-run completed steps — progress is the cursor).
+        assert "todo_write" in text
+
+    def test_empty_when_absent_or_invalid(self):
+        assert executing_plan_runtime_lines({}) == []
+        assert executing_plan_runtime_lines(None) == []
+        assert executing_plan_runtime_lines({"executing_plan_path": ""}) == []
+        assert executing_plan_runtime_lines({"executing_plan_path": "  "}) == []
+
+    def test_not_one_shot_does_not_mutate_metadata(self):
+        meta = {"executing_plan_path": "/ws/plan.md"}
+        executing_plan_runtime_lines(meta)
+        executing_plan_runtime_lines(meta)
+        # Unlike approved_plan_path, the key is NOT consumed.
+        assert meta["executing_plan_path"] == "/ws/plan.md"
+
+    def test_survives_compaction_persistently_in_build_messages(self, tmp_path):
+        """Two successive build_messages calls with the same executing plan
+        both inject the pointer — i.e. it survives an intervening compaction,
+        unlike the one-shot approved_plan_path."""
+        from durin.agent.context import ContextBuilder
+
+        cb = ContextBuilder(workspace=tmp_path, timezone="UTC")
+        meta = {"executing_plan_path": "/ws/.durin/plans/plan_y.md"}
+        for turn in ("turn before compaction", "turn after compaction"):
+            msgs = cb.build_messages(
+                history=[],
+                current_message=turn,
+                channel="cli",
+                chat_id="c1",
+                session_metadata=meta,
+            )
+            last = msgs[-1]
+            text = (
+                last["content"]
+                if isinstance(last["content"], str)
+                else str(last["content"])
+            )
+            assert "/ws/.durin/plans/plan_y.md" in text
+        # Key was never consumed.
+        assert meta["executing_plan_path"] == "/ws/.durin/plans/plan_y.md"
+
+
+class TestClearExecutingPlanWhenDone:
+    """The plan pointer must stop re-injecting once the plan's todos (the
+    execution cursor) are all completed — otherwise it lingers into later,
+    unrelated turns."""
+
+    @staticmethod
+    def _todo(content, status):
+        return {"content": content, "status": status, "activeForm": content}
+
+    def test_clears_when_all_todos_completed(self):
+        meta = {
+            "executing_plan_path": "/ws/plan.md",
+            "todos": [self._todo("a", "completed"), self._todo("b", "completed")],
+        }
+        assert clear_executing_plan_if_todos_done(meta) is True
+        assert "executing_plan_path" not in meta
+
+    def test_keeps_when_a_todo_is_pending_or_in_progress(self):
+        meta = {
+            "executing_plan_path": "/ws/plan.md",
+            "todos": [self._todo("a", "completed"), self._todo("b", "in_progress")],
+        }
+        assert clear_executing_plan_if_todos_done(meta) is False
+        assert meta["executing_plan_path"] == "/ws/plan.md"
+
+    def test_keeps_when_no_todos(self):
+        meta = {"executing_plan_path": "/ws/plan.md"}
+        assert clear_executing_plan_if_todos_done(meta) is False
+        assert meta["executing_plan_path"] == "/ws/plan.md"
+
+    def test_noop_when_no_executing_plan(self):
+        meta = {"todos": [self._todo("a", "completed")]}
+        assert clear_executing_plan_if_todos_done(meta) is False
+        assert clear_executing_plan_if_todos_done(None) is False

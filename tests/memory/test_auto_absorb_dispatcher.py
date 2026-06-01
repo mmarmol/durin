@@ -50,14 +50,22 @@ def _write_page(
     body: str = "",
     cursor: str | None = None,
     mtime_offset_hours: float = -48,
+    author: str = "agent_created",
 ) -> Path:
-    """Write a page + backdate mtime so default quarantine doesn't trip."""
+    """Write a page + backdate mtime so default quarantine doesn't trip.
+
+    E19: dispatcher tests simulate Dream-created pages that auto-
+    absorb is allowed to manage. The default `agent_created` keeps
+    these tests valid post-E19 (where EntityPage's own default is
+    `user_authored` for safety on hand-written pages).
+    """
     page = EntityPage(
         type=type_,
         name=slug.title(),
         aliases=aliases,
         body=body,
         dream_processed_through=cursor,
+        author=author,
     )
     path = workspace / "memory" / "entities" / type_ / f"{slug}.md"
     page.save(path)
@@ -342,10 +350,14 @@ def test_absorb_re_upserts_canonical_to_vector_index(tmp_path: Path) -> None:
 
     class _StubVI:
         def upsert_entity_page(self, *, entity_ref: str, name: str,
-                                aliases: list[str], body: str, path: Path) -> None:
+                                aliases: list[str], body: str, path: Path,
+                                attributes: dict[str, Any] | None = None,
+                                relations: list[dict[str, Any]] | None = None) -> None:
             upserts.append({
                 "entity_ref": entity_ref, "name": name,
                 "aliases": list(aliases), "body": body, "path": str(path),
+                "attributes": dict(attributes or {}),
+                "relations": list(relations or []),
             })
         def delete_by_id(self, ref: str) -> bool:
             deletes.append(ref)

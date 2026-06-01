@@ -24,8 +24,8 @@ from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.schema import StringSchema, tool_parameters_schema
 from durin.memory.ingestion import IngestError, ingest_artifact
 from durin.memory.provenance import author_scope
-from durin.memory.store import StoreError, store_memory
 from durin.memory.storage import load_entry
+from durin.memory.store import StoreError, store_memory
 from durin.memory.vector_index import (
     VectorIndex,
     VectorIndexDimensionMismatch,
@@ -46,8 +46,27 @@ _PARAMETERS = tool_parameters_schema(
     ),
     required=["path"],
     description=(
-        "Persist a user-supplied document into the agent's memory store. "
-        "Markdown and plain-text only."
+        # Canonical text per `docs/architecture/memory/06_prompts_and_instructions.md` §3.3.
+        "Add a local document (markdown or plain text) to durin's memory "
+        "corpus. Use this when the user wants a file on disk remembered "
+        "as reference material — research notes, transcripts, technical "
+        "specs, exported pages, markdown books, etc.\n\n"
+        "`path` is the absolute or workspace-relative path to the file. "
+        "The file is copied to `ingested/<id>/` for preservation (so the "
+        "original is recoverable verbatim) and the content is chunked "
+        "into searchable `memory/corpus/*.md` entries. Re-ingesting the "
+        "same file is idempotent — the id is derived from a hash of "
+        "(filename + content), so renaming the file before re-ingesting "
+        "produces a different id.\n\n"
+        "For web content, use `web_fetch(url=...)` first to get clean "
+        "markdown, then `memory_store(content=..., class_name=\"corpus\", "
+        "source_refs=[url])`. `web_fetch` already handles URL extraction "
+        "(Jina/readability), SSRF protection, redirects, and image "
+        "detection.\n\n"
+        "For short inline text (a paragraph or two), call `memory_store` "
+        "directly with `class_name=\"corpus\"` — `memory_ingest` is "
+        "specifically for files on disk where preserving the original "
+        "artifact matters."
     ),
 )
 
@@ -63,6 +82,7 @@ class MemoryIngestTool(Tool):
         workspace: str | Path,
         embedding_model: str | None = None,
         dream_config: Any | None = None,
+        app_config: Any | None = None,
     ) -> None:
         self._workspace = Path(workspace).expanduser()
         self._embedding_model = embedding_model
@@ -72,6 +92,9 @@ class MemoryIngestTool(Tool):
         # config for post-ingest dream dispatch. None disables. See
         # ``durin.memory.threshold_trigger``.
         self._dream_config = dream_config
+        # Full DurinConfig. Forwarded to the threshold trigger so the
+        # spawned DreamRunner can resolve its model via aux_models.memory.
+        self._app_config = app_config
 
     @property
     def name(self) -> str:
@@ -79,15 +102,11 @@ class MemoryIngestTool(Tool):
 
     @property
     def description(self) -> str:
-        return (
-            "Persist a markdown or plain-text file into the agent's memory "
-            "store. The file is copied to a stable location keyed by content "
-            "hash; a derived corpus memory entry is created so the document "
-            "is searchable immediately (full content stays in the original "
-            "ingested file, accessible via memory_drill). The file's content "
-            "is returned in the result so the agent can read it in the same "
-            "turn."
-        )
+        # Canonical text per `docs/architecture/memory/06_prompts_and_instructions.md` §3.3.
+        # Reads via `Tool.to_schema()` → `function.description` in the
+        # OpenAI spec — what the LLM sees. Audit B1 (2026-05-28) caught
+        # the prior short text drifted from the canonical doc.
+        return _PARAMETERS["description"]
 
     @classmethod
     def create(cls, ctx: Any) -> Tool:
@@ -110,6 +129,7 @@ class MemoryIngestTool(Tool):
             workspace=ctx.workspace,
             embedding_model=model,
             dream_config=dream_cfg,
+            app_config=app,
         )
 
     def _get_vector_index(self) -> Optional[VectorIndex]:
@@ -159,7 +179,6 @@ class MemoryIngestTool(Tool):
         # entry doesn't roll back the ingest.
         corpus_id = self._maybe_create_corpus_entry(
             source_path=source,
-            ingested_id=result["id"],
             ingested_path=result["source"],
             content=result["content"],
         )
@@ -179,7 +198,6 @@ class MemoryIngestTool(Tool):
         self,
         *,
         source_path: Path,
-        ingested_id: str,
         ingested_path: str,
         content: str,
     ) -> str | None:
@@ -194,38 +212,72 @@ class MemoryIngestTool(Tool):
         except ValueError:
             pass
         source_ref = f"[ingested {source_path.name}]({ingested_rel})"
-        body = content[:_CORPUS_BODY_BUDGET_CHARS]
 
-        try:
-            with author_scope("agent_created"):
-                stored = store_memory(
-                    self._workspace,
-                    content=body,
-                    class_name="corpus",
-                    headline=f"Ingested: {source_path.name}",
-                    summary="",
-                    source_refs=[source_ref],
-                )
-        except (StoreError, OSError) as exc:
-            logger.warning(
-                "memory_ingest: derived corpus entry failed for %s: %s",
-                source_path.name, exc,
-            )
-            return None
-
-        vi = self._get_vector_index()
-        if vi is not None:
+        # P5.3: recursive character splitter — paragraph > line >
+        # sentence > word > char preference, ~1500 chars per chunk
+        # with ~200 chars overlap so a fact straddling a cut still
+        # surfaces in both chunks.
+        from durin.memory.text_splitter import split_text
+        chunks = split_text(content) or [content[:_CORPUS_BODY_BUDGET_CHARS]]
+        # Multi-chunk ingest: each chunk is its own corpus entry so
+        # the search pipeline can rank them independently + the per-
+        # source cap (doc 03 §12.4) limits top-K to 3 chunks per
+        # source. We return the FIRST chunk's id for backward-compat
+        # with callers that expect a single id.
+        first_id: str | None = None
+        for idx, chunk in enumerate(chunks):
             try:
-                entry_path = Path(stored["path"])
-                entry = load_entry(entry_path)
-                vi.upsert(entry, stored["class"], entry_path)
-            except VectorIndexDimensionMismatch as exc:
-                logger.warning("ingest vector upsert: %s", exc)
+                with author_scope("agent_created"):
+                    stored = store_memory(
+                        self._workspace,
+                        content=chunk,
+                        class_name="corpus",
+                        headline=(
+                            f"Ingested: {source_path.name}"
+                            + (f" (chunk {idx + 1}/{len(chunks)})"
+                               if len(chunks) > 1 else "")
+                        ),
+                        summary="",
+                        source_refs=[source_ref],
+                    )
+            except (StoreError, OSError) as exc:
+                logger.warning(
+                    "memory_ingest: chunk %d/%d failed for %s: %s",
+                    idx + 1, len(chunks), source_path.name, exc,
+                )
+                continue
+            if first_id is None:
+                first_id = stored["id"]
+
+            vi = self._get_vector_index()
+            if vi is not None:
+                try:
+                    entry_path = Path(stored["path"])
+                    entry = load_entry(entry_path)
+                    vi.upsert(entry, stored["class"], entry_path)
+                except VectorIndexDimensionMismatch as exc:
+                    logger.warning("ingest vector upsert: %s", exc)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "ingest vector upsert failed for %s: %s",
+                        stored["id"], exc,
+                    )
+
+            try:
+                from durin.memory.indexer import reindex_one_file
+                reindex_one_file(
+                    self._workspace, Path(stored["path"]),
+                )
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
-                    "ingest vector upsert failed for %s: %s",
+                    "memory_ingest FTS reindex failed for %s: %s",
                     stored["id"], exc,
                 )
+
+        if first_id is None:
+            # Every chunk failed; nothing to emit, return None to
+            # signal the failure.
+            return None
 
         emit_tool_event(
             "memory.store",
@@ -237,13 +289,21 @@ class MemoryIngestTool(Tool):
             },
         )
 
-        # P7 (doc 20): post-ingest threshold trigger. Reuses the same
-        # shared helper as memory_store. The corpus entry itself has
-        # no entity tags today (memory_ingest doesn't extract entities
-        # — that's G1 territory). The trigger only fires if a future
-        # change tags the corpus entry; in the meantime this is a
-        # no-op call that keeps the wiring in place and symmetrical
-        # with memory_store.
+        # Post-ingest threshold trigger — reuses the same shared helper
+        # as ``memory_store``. Dormant by design: ingest can produce 800+
+        # corpus entries in a single bench burst, and per-write LLM
+        # dispatch (even gated by per-entity threshold) is unacceptable
+        # at that scale. Ingested material stays fully searchable via
+        # FTS + vector and gets consolidated by the daily ``memory_dream``
+        # cron. Re-enabling this path (e.g. by extracting entities at
+        # ingest time) MUST introduce an explicit throttle (token-floor,
+        # cron-batched, or per-session debounce) before the dispatch can
+        # actually fire. See ``project_ingest_dormant_rationale.md`` for
+        # the bench-derived rationale.
+        #
+        # The call below is left wired so the day a throttle exists, only
+        # one knob has to change. Today entities is always [] so the
+        # helper short-circuits.
         try:
             from durin.memory.storage import load_entry as _load_entry
             from durin.memory.threshold_trigger import (
@@ -259,6 +319,7 @@ class MemoryIngestTool(Tool):
                     dream_config=self._dream_config,
                     vector_index=vi,
                     source_trigger="post_ingest_threshold",
+                    app_config=self._app_config,
                 )
         except Exception:  # noqa: BLE001
             logger.exception(
@@ -266,4 +327,4 @@ class MemoryIngestTool(Tool):
                 stored.get("id"),
             )
 
-        return stored["id"]
+        return first_id

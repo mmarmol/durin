@@ -184,7 +184,7 @@ def cmd_show(
             payload = get_at(data, _normalize_dotted_path(section))
         except KeyError:
             console.print(f"[red]No such key: {section}[/red]")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from None
     if not raw:
         payload = mask_secrets(payload)
     text = json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True)
@@ -225,7 +225,7 @@ def cmd_get(
         value = get_at(data, _normalize_dotted_path(key))
     except KeyError:
         console.print(f"[red]No such key: {key}[/red]")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
     if isinstance(value, (dict, list)):
         console.print(json.dumps(value, indent=2, ensure_ascii=False, sort_keys=True))
     elif value is None:
@@ -254,16 +254,16 @@ def cmd_set(
     try:
         canonical = validate_dict(raw).model_dump(mode="json", by_alias=True)
     except pydantic.ValidationError as e:
-        console.print(f"[red]On-disk config is invalid; refusing to edit.[/red]")
+        console.print("[red]On-disk config is invalid; refusing to edit.[/red]")
         console.print(str(e))
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
     new_data = set_at(canonical, _normalize_dotted_path(key), parse_value(value))
     try:
         config = validate_dict(new_data)
     except pydantic.ValidationError as e:
-        console.print(f"[red]Validation failed; config not modified.[/red]")
+        console.print("[red]Validation failed; config not modified.[/red]")
         console.print(str(e))
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
     save_config(config, path)
     if bootstrapped:
         console.print(f"[green]✓[/green] Created config at {path}")
@@ -319,7 +319,7 @@ def cmd_import(
         imported = load_config(src_config)
     except Exception as e:  # noqa: BLE001
         console.print(f"[red]Could not read config from {source}: {e}[/red]")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
     dest = get_config_path()
     backup = backup_config(dest)
@@ -368,7 +368,7 @@ def cmd_edit() -> None:
         except (json.JSONDecodeError, pydantic.ValidationError) as e:
             console.print("[red]Edit rejected; config left untouched.[/red]")
             console.print(str(e))
-            raise typer.Exit(1)
+            raise typer.Exit(1) from None
         save_config(config, path)
         console.print(f"[green]✓[/green] Config updated at {path}.")
     finally:

@@ -231,21 +231,6 @@
       "send": "送出訊息",
       "stop": "停止回覆",
       "attachImage": "附加圖片",
-      "imageMode": {
-        "label": "圖片生成",
-        "toggle": "切換圖片生成模式",
-        "placeholder": "描述或編輯圖片…",
-        "aspectAria": "圖片畫幅",
-        "aspectLabel": "圖片畫幅",
-        "aspect": {
-          "auto": "自動",
-          "1_1": "方形 1:1",
-          "3_4": "直式 3:4",
-          "9_16": "故事版 9:16",
-          "4_3": "橫式 4:3",
-          "16_9": "寬螢幕 16:9"
-        }
-      },
       "encoding": "處理中…",
       "remove": "移除附件",
       "normalizedSizeHint": "{{orig}} → {{current}}（已自動壓縮）",

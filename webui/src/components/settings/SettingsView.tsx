@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import {
   Bot,
   Brain,
   ChevronLeft,
   ChevronDown,
   Check,
+  Clock,
   Cloud,
   Cpu,
   Database,
@@ -61,6 +62,8 @@ import {
 } from "@/lib/api";
 import { ChannelsSettings } from "@/components/settings/ChannelsSettings";
 import { ConfigSettings } from "@/components/settings/ConfigSettings";
+import { CronSettings } from "@/components/settings/CronSettings";
+import { MemorySettings } from "@/components/settings/MemorySettings";
 import { ModelPicker } from "@/components/settings/ModelPicker";
 import {
   SettingsGroup,
@@ -77,6 +80,8 @@ type SettingsSectionKey =
   | "providers"
   | "web-search"
   | "channels"
+  | "memory"
+  | "cron"
   | "secrets"
   | "advanced";
 type ByokPaneKey = "llm" | "web-search";
@@ -400,6 +405,10 @@ export function SettingsView({
                 />
               ) : activeSection === "channels" ? (
                 <ChannelsSettings token={token} />
+              ) : activeSection === "memory" ? (
+                <MemorySettings token={token} />
+              ) : activeSection === "cron" ? (
+                <CronSettings token={token} />
               ) : activeSection === "secrets" ? (
                 <SecretsSettings token={token} />
               ) : activeSection === "advanced" ? (
@@ -457,6 +466,8 @@ const SETTINGS_NAV_ITEMS = [
   { key: "providers", icon: KeyRound },
   { key: "web-search", icon: Globe },
   { key: "channels", icon: MessagesSquare },
+  { key: "memory", icon: Brain },
+  { key: "cron", icon: Clock },
   { key: "secrets", icon: Lock },
   { key: "advanced", icon: Sliders },
 ] as const;
@@ -654,18 +665,26 @@ function GeneralSettings({
             title={t("settings.rows.model")}
             description={t("settings.help.model")}
           >
-            <ModelPicker
-              token={token}
-              provider={form.provider}
-              value={form.model}
-              onChange={(model) => setForm((prev) => ({ ...prev, model }))}
-            />
+            <div className="flex flex-col items-end gap-2">
+              <ModelPicker
+                token={token}
+                provider={form.provider}
+                value={form.model}
+                onChange={(model) => setForm((prev) => ({ ...prev, model }))}
+              />
+              <ModelTestInline
+                token={token}
+                model={form.model}
+                provider={form.provider}
+              />
+            </div>
           </SettingsRow>
 
           <ModelBlockRows
             token={token}
             model={form.model}
             provider={form.provider}
+            configuredProviders={configuredProviders}
           />
 
           {(dirty || saving || settings.requires_restart) ? (
@@ -755,70 +774,188 @@ function modelCapsSummary(
   return parts.join(" · ");
 }
 
-/** Compact vision/audio aux-model editor — model + provider + save. */
+/** Compact vision/audio aux-model editor — provider dropdown +
+ *  model autocomplete + save.
+ *
+ *  Provider: REQUIRED dropdown of providers the user has already
+ *  configured (API keys present). No "Auto" option — the operator
+ *  picks the provider explicitly. Legacy configs that carry
+ *  ``provider: "auto"`` render as "no selection" and stay unsaveable
+ *  until the user picks one, prompting migration.
+ *
+ *  Model: ModelPicker (autocomplete + free input) filtered server-side
+ *  by the selected provider and by ``capability`` so the vision aux
+ *  picker only surfaces vision-capable models, audio aux only audio,
+ *  etc. Save is disabled until both provider and model are set.
+ */
 function AuxControl({
   current,
   busy,
   onSave,
   onClear,
+  configuredProviders,
+  token,
+  capability,
 }: {
   current: AuxModel | null;
   busy: boolean;
   onSave: (value: AuxModel) => void;
   onClear: () => void;
+  configuredProviders: Array<{ name: string; label: string }>;
+  token: string;
+  capability: string;
 }) {
   const { t } = useTranslation();
+  // Treat legacy "auto" as no selection so the user is prompted to
+  // pick a real provider on next save.
+  const initialProv = current?.provider && current.provider !== "auto"
+    ? current.provider : "";
   const [model, setModel] = useState(current?.model ?? "");
-  const [prov, setProv] = useState(current?.provider ?? "auto");
+  const [prov, setProv] = useState(initialProv);
+  const [testing, setTesting] = useState(false);
+  const [test, setTest] = useState<ModelTestResult | null>(null);
+  const [caps, setCaps] = useState<ModelCapabilities | null>(null);
   useEffect(() => {
     setModel(current?.model ?? "");
-    setProv(current?.provider ?? "auto");
+    setProv(
+      current?.provider && current.provider !== "auto" ? current.provider : "",
+    );
+    // Clear any prior result when the row's underlying config changes
+    // (e.g. another save lands or the row is cleared) so a stale ✓ /
+    // ✗ badge doesn't claim the new combo was tested.
+    setTest(null);
   }, [current]);
+  // Fetch capabilities for the picked combo so the operator sees what
+  // the model supports (vision/audio/context size) without leaving the
+  // row — same info the main model's "Capacidades" row surfaces.
+  useEffect(() => {
+    if (!model.trim() || !prov.trim()) {
+      setCaps(null);
+      return;
+    }
+    let cancelled = false;
+    getModelCapabilities(token, model.trim(), prov.trim())
+      .then((c) => {
+        if (!cancelled) setCaps(c);
+      })
+      .catch(() => {
+        if (!cancelled) setCaps(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token, model, prov]);
   const dirty =
     model.trim() !== (current?.model ?? "") ||
-    prov.trim() !== (current?.provider ?? (current ? "auto" : ""));
+    prov.trim() !== (current?.provider && current.provider !== "auto"
+      ? current.provider : "");
+  const runTest = async () => {
+    if (!model.trim() || !prov.trim()) return;
+    setTesting(true);
+    setTest(null);
+    try {
+      // Pass model+provider explicitly so the endpoint tests the
+      // in-flight combo even when the user hasn't saved yet — gives
+      // immediate feedback on whether a pick will work before
+      // committing it to config.
+      setTest(
+        await testModel(token, {
+          model: model.trim(),
+          provider: prov.trim(),
+        }),
+      );
+    } catch {
+      setTest({
+        status: "fail",
+        message: t("settings.models.testError"),
+        fix: "",
+      });
+    } finally {
+      setTesting(false);
+    }
+  };
+  // Two-row layout: pickers on top (full-width on narrow, inline on
+  // wide), action buttons + result badge on the bottom row. Keeps the
+  // SettingsRow's title/description column from being squeezed when
+  // five controls share a single line.
   return (
-    <div className="flex items-center gap-2">
-      <Input
-        value={model}
-        onChange={(e) => setModel(e.target.value)}
-        placeholder={t("settings.models.modelPlaceholder")}
-        className="h-8 w-[150px] rounded-full text-[13px]"
-      />
-      <Input
-        value={prov}
-        onChange={(e) => setProv(e.target.value)}
-        placeholder={t("settings.models.providerPlaceholder")}
-        className="h-8 w-[96px] rounded-full text-[13px]"
-      />
-      <Button
-        size="sm"
-        variant="outline"
-        disabled={!dirty || busy || !model.trim()}
-        onClick={() => onSave({ model: model.trim(), provider: prov.trim() || "auto" })}
-        className="rounded-full"
-      >
-        {t("settings.models.save")}
-      </Button>
-      {current ? (
+    <div className="flex flex-col items-end gap-2">
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <ProviderPicker
+          providers={configuredProviders}
+          value={prov}
+          emptyLabel={t("settings.models.pickProvider")}
+          onChange={setProv}
+        />
+        <ModelPicker
+          token={token}
+          provider={prov}
+          value={model}
+          onChange={setModel}
+          capability={capability}
+        />
+      </div>
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        {test ? (
+          <span
+            className={cn(
+              "text-[12px]",
+              test.status === "ok" ? "text-emerald-600" : "text-destructive",
+            )}
+            title={test.message}
+          >
+            {test.status === "ok" ? "✓ " : "✗ "}
+            <span className="truncate max-w-[220px] inline-block align-bottom">
+              {test.message}
+            </span>
+          </span>
+        ) : null}
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!dirty || busy || !model.trim() || !prov.trim()}
+          onClick={() => onSave({ model: model.trim(), provider: prov.trim() })}
+          className="rounded-full"
+        >
+          {t("settings.models.save")}
+        </Button>
         <Button
           size="sm"
           variant="ghost"
-          disabled={busy}
-          onClick={onClear}
-          className="rounded-full text-muted-foreground"
+          disabled={testing || busy || !model.trim() || !prov.trim()}
+          onClick={() => void runTest()}
+          className="rounded-full"
+          title={t("settings.models.testRowHint")}
         >
-          {t("settings.models.clear")}
+          {testing ? t("settings.models.testing") : t("settings.models.testRow")}
         </Button>
+        {current ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={busy}
+            onClick={onClear}
+            className="rounded-full text-muted-foreground"
+          >
+            {t("settings.models.clear")}
+          </Button>
+        ) : null}
+      </div>
+      {caps && model.trim() && prov.trim() ? (
+        <span className="text-[11px] text-muted-foreground">
+          {modelCapsSummary(caps, t)}
+        </span>
       ) : null}
     </div>
   );
 }
 
-/** The model rows of the AI block: capabilities, vision/audio aux
- *  models, and a real round-trip test. Rendered as plain SettingsRows
- *  so it sits inside the AI SettingsGroup with consistent styling. */
-function ModelBlockRows({
+/** Inline test button + result for the main model — rendered next to
+ *  the ModelPicker in the "Modelo" row so the action sits with what it
+ *  acts on (same shape as each AuxControl row). Replaces the standalone
+ *  "Prueba" SettingsRow that used to live at the end of the AI block.
+ */
+function ModelTestInline({
   token,
   model,
   provider,
@@ -828,11 +965,256 @@ function ModelBlockRows({
   provider: string;
 }) {
   const { t } = useTranslation();
+  const [testing, setTesting] = useState(false);
+  const [test, setTest] = useState<ModelTestResult | null>(null);
+  // Clear any prior result when the user changes the model/provider so
+  // a stale ✓ doesn't claim the new combo was tested.
+  useEffect(() => {
+    setTest(null);
+  }, [model, provider]);
+  const runTest = async () => {
+    if (!model.trim()) return;
+    setTesting(true);
+    setTest(null);
+    try {
+      setTest(await testModel(token, { model: model.trim(), provider: provider.trim() }));
+    } catch {
+      setTest({ status: "fail", message: t("settings.models.testError"), fix: "" });
+    } finally {
+      setTesting(false);
+    }
+  };
+  return (
+    <div className="flex flex-wrap items-center justify-end gap-2">
+      {test ? (
+        <span
+          className={cn(
+            "text-[12px]",
+            test.status === "ok" ? "text-emerald-600" : "text-destructive",
+          )}
+          title={test.message}
+        >
+          {test.status === "ok" ? "✓ " : "✗ "}
+          <span className="truncate max-w-[220px] inline-block align-bottom">
+            {test.message}
+          </span>
+        </span>
+      ) : null}
+      <Button
+        size="sm"
+        variant="ghost"
+        disabled={testing || !model.trim()}
+        onClick={() => void runTest()}
+        className="rounded-full"
+        title={t("settings.models.testRowHint")}
+      >
+        {testing ? t("settings.models.testing") : t("settings.models.testRow")}
+      </Button>
+    </div>
+  );
+}
+
+/** The model rows of the AI block: capabilities, vision/audio aux
+ *  models. The main-model test sits in the parent SettingsRow next to
+ *  the ModelPicker (see ModelTestInline) — keeping it close to what it
+ *  acts on. */
+/** Collapsible "Advanced" row exposing main-model knobs that don't fit
+ *  the primary picker rows: context window cap, temperature, max output
+ *  tokens, reasoning effort. Reads + writes individual paths in
+ *  `agents.defaults.*` via the generic `setConfigValue` API — same
+ *  contract as a `durin config set` invocation.
+ *
+ *  All four are optional / overridable: empty input clears the override
+ *  (config returns to schema default). Numeric inputs bound by the
+ *  schema (ge=, le=) — invalid values surface as a save error inline.
+ */
+function AdvancedModelRow({ token }: { token: string }) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const [values, setValues] = useState<{
+    contextWindowTokens: string;
+    temperature: string;
+    maxTokens: string;
+    reasoningEffort: string;
+  }>({ contextWindowTokens: "", temperature: "", maxTokens: "", reasoningEffort: "" });
+  const [saving, setSaving] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadValues = useCallback(async () => {
+    try {
+      const cfg = (await getConfig(token)).config;
+      const agents = cfg.agents as Record<string, unknown> | undefined;
+      const def = (agents?.defaults ?? {}) as Record<string, unknown>;
+      setValues({
+        contextWindowTokens: def.contextWindowTokens != null ? String(def.contextWindowTokens) : "",
+        temperature: def.temperature != null ? String(def.temperature) : "",
+        maxTokens: def.maxTokens != null ? String(def.maxTokens) : "",
+        reasoningEffort: typeof def.reasoningEffort === "string" ? def.reasoningEffort : "",
+      });
+    } catch {
+      // leave inputs blank on failure
+    }
+  }, [token]);
+  useEffect(() => {
+    if (open) void loadValues();
+  }, [open, loadValues]);
+
+  const saveOne = async (path: string, raw: string, parse: (s: string) => unknown) => {
+    setSaving(path);
+    setError(null);
+    try {
+      const trimmed = raw.trim();
+      const value = trimmed === "" ? null : parse(trimmed);
+      await setConfigValue(token, `agents.defaults.${path}`, value);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  return (
+    <div className="border-t border-border/30 px-4 py-3.5 sm:px-5">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center justify-between text-[13px] font-medium text-muted-foreground hover:text-foreground"
+      >
+        <span>{t("settings.models.advanced")}</span>
+        <span className="text-[11px]">{open ? "▾" : "▸"}</span>
+      </button>
+      {open ? (
+        <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <AdvancedField
+            label={t("settings.models.contextWindow")}
+            description={t("settings.models.contextWindowHint")}
+            value={values.contextWindowTokens}
+            onChange={(v) => setValues((s) => ({ ...s, contextWindowTokens: v }))}
+            onSave={() =>
+              void saveOne("contextWindowTokens", values.contextWindowTokens, (s) => {
+                const n = Number(s);
+                if (!Number.isFinite(n) || n <= 0) throw new Error("must be a positive integer");
+                return Math.floor(n);
+              })
+            }
+            saving={saving === "contextWindowTokens"}
+            placeholder="202800"
+            inputMode="numeric"
+          />
+          <AdvancedField
+            label={t("settings.models.temperature")}
+            description={t("settings.models.temperatureHint")}
+            value={values.temperature}
+            onChange={(v) => setValues((s) => ({ ...s, temperature: v }))}
+            onSave={() =>
+              void saveOne("temperature", values.temperature, (s) => {
+                const n = Number(s);
+                if (!Number.isFinite(n) || n < 0 || n > 2)
+                  throw new Error("must be in [0, 2]");
+                return n;
+              })
+            }
+            saving={saving === "temperature"}
+            placeholder="0.4"
+            inputMode="decimal"
+          />
+          <AdvancedField
+            label={t("settings.models.maxTokens")}
+            description={t("settings.models.maxTokensHint")}
+            value={values.maxTokens}
+            onChange={(v) => setValues((s) => ({ ...s, maxTokens: v }))}
+            onSave={() =>
+              void saveOne("maxTokens", values.maxTokens, (s) => {
+                const n = Number(s);
+                if (!Number.isFinite(n) || n <= 0) throw new Error("must be a positive integer");
+                return Math.floor(n);
+              })
+            }
+            saving={saving === "maxTokens"}
+            placeholder="8192"
+            inputMode="numeric"
+          />
+          <AdvancedField
+            label={t("settings.models.reasoningEffort")}
+            description={t("settings.models.reasoningEffortHint")}
+            value={values.reasoningEffort}
+            onChange={(v) => setValues((s) => ({ ...s, reasoningEffort: v }))}
+            onSave={() =>
+              void saveOne("reasoningEffort", values.reasoningEffort, (s) => s)
+            }
+            saving={saving === "reasoningEffort"}
+            placeholder="low | medium | high"
+          />
+          {error ? (
+            <div className="col-span-full text-[12px] text-destructive">{error}</div>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function AdvancedField({
+  label,
+  description,
+  value,
+  onChange,
+  onSave,
+  saving,
+  placeholder,
+  inputMode,
+}: {
+  label: string;
+  description: string;
+  value: string;
+  onChange: (v: string) => void;
+  onSave: () => void;
+  saving: boolean;
+  placeholder?: string;
+  inputMode?: "numeric" | "decimal" | "text";
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="text-[12px] font-medium">{label}</div>
+      <div className="text-[11px] text-muted-foreground">{description}</div>
+      <div className="flex items-center gap-2">
+        <Input
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          inputMode={inputMode}
+          className="h-8 rounded-full text-[13px]"
+        />
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={saving}
+          onClick={onSave}
+          className="rounded-full"
+        >
+          {saving ? t("settings.models.saving") : t("settings.models.save")}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function ModelBlockRows({
+  token,
+  model,
+  provider,
+  configuredProviders,
+}: {
+  token: string;
+  model: string;
+  provider: string;
+  configuredProviders: Array<{ name: string; label: string }>;
+}) {
+  const { t } = useTranslation();
   const [caps, setCaps] = useState<ModelCapabilities | null>(null);
   const [config, setConfig] = useState<Record<string, unknown> | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [test, setTest] = useState<ModelTestResult | null>(null);
-  const [testing, setTesting] = useState(false);
 
   useEffect(() => {
     if (!model) {
@@ -877,18 +1259,6 @@ function ModelBlockRows({
     [token],
   );
 
-  const runTest = useCallback(async () => {
-    setTesting(true);
-    setTest(null);
-    try {
-      setTest(await testModel(token));
-    } catch {
-      setTest({ status: "fail", message: t("settings.models.testError"), fix: "" });
-    } finally {
-      setTesting(false);
-    }
-  }, [token, t]);
-
   return (
     <>
       <SettingsRow title={t("settings.models.capabilities")}>
@@ -896,6 +1266,7 @@ function ModelBlockRows({
           {modelCapsSummary(caps, t)}
         </span>
       </SettingsRow>
+      <AdvancedModelRow token={token} />
       <SettingsRow
         title={t("settings.models.vision")}
         description={t("settings.models.visionHint")}
@@ -905,6 +1276,9 @@ function ModelBlockRows({
           busy={busy === "vision"}
           onSave={(v) => void saveAux("vision", v)}
           onClear={() => void saveAux("vision", null)}
+          configuredProviders={configuredProviders}
+          token={token}
+          capability="vision"
         />
       </SettingsRow>
       <SettingsRow
@@ -916,6 +1290,9 @@ function ModelBlockRows({
           busy={busy === "audio"}
           onSave={(v) => void saveAux("audio", v)}
           onClear={() => void saveAux("audio", null)}
+          configuredProviders={configuredProviders}
+          token={token}
+          capability="audio"
         />
       </SettingsRow>
       <SettingsRow
@@ -927,25 +1304,10 @@ function ModelBlockRows({
           busy={busy === "memory"}
           onSave={(v) => void saveAux("memory", v)}
           onClear={() => void saveAux("memory", null)}
+          configuredProviders={configuredProviders}
+          token={token}
+          capability="text"
         />
-      </SettingsRow>
-      <SettingsRow
-        title={t("settings.models.testTitle")}
-        description={
-          test
-            ? `${test.status === "ok" ? "✓" : "✗"} ${test.message}`
-            : t("settings.models.testHint")
-        }
-      >
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={testing}
-          onClick={() => void runTest()}
-          className="rounded-full"
-        >
-          {testing ? t("settings.models.testing") : t("settings.models.testButton")}
-        </Button>
       </SettingsRow>
     </>
   );
@@ -1559,13 +1921,17 @@ const EMPTY_SECRET_FORM: SecretFormState = {
 };
 
 function SecretsSettings({ token }: { token: string }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { client } = useClient();
   const [secrets, setSecrets] = useState<SecretEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState<SecretFormState>(EMPTY_SECRET_FORM);
+  const [expandedName, setExpandedName] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState<string | null>(null);
+  // Anchor for scrolling to the form when the user enters edit mode.
+  const formAnchorRef = useRef<HTMLDivElement | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1583,10 +1949,18 @@ function SecretsSettings({ token }: { token: string }) {
     void load();
   }, [load]);
 
+  // In edit mode, value is optional — the backend treats an empty
+  // value on an existing secret as a metadata-only update and
+  // preserves the stored value.
   const canSave =
     form.name.trim() !== "" && form.service.trim() !== "" && !busy;
 
-  const onAdd = useCallback(async () => {
+  const resetForm = useCallback(() => {
+    setForm(EMPTY_SECRET_FORM);
+    setEditingName(null);
+  }, []);
+
+  const onSubmit = useCallback(async () => {
     if (!canSave) return;
     setBusy(true);
     setError(null);
@@ -1602,14 +1976,34 @@ function SecretsSettings({ token }: { token: string }) {
           .filter(Boolean),
         value: form.value,
       });
-      setForm(EMPTY_SECRET_FORM);
+      resetForm();
       await load();
     } catch {
       setError(t("settings.secrets.loadError"));
     } finally {
       setBusy(false);
     }
-  }, [canSave, client, form, load, t]);
+  }, [canSave, client, form, load, resetForm, t]);
+
+  const onEdit = useCallback((secret: SecretEntry) => {
+    setEditingName(secret.name);
+    setForm({
+      name: secret.name,
+      service: secret.service,
+      account: secret.account || "",
+      description: secret.description || "",
+      scope: secret.scope.join(", "),
+      value: "",
+    });
+    setExpandedName(secret.name);
+    // Defer to next tick so the form section has re-rendered
+    // (the title/buttons swap to edit-mode copy) before scrolling.
+    setTimeout(() => {
+      formAnchorRef.current?.scrollIntoView({
+        behavior: "smooth", block: "start",
+      });
+    }, 0);
+  }, []);
 
   const onDelete = useCallback(
     async (name: string) => {
@@ -1618,6 +2012,9 @@ function SecretsSettings({ token }: { token: string }) {
       setError(null);
       try {
         await deleteSecret(token, name);
+        // If we were editing/expanding this one, clear that state.
+        if (editingName === name) resetForm();
+        if (expandedName === name) setExpandedName(null);
         await load();
       } catch {
         setError(t("settings.secrets.loadError"));
@@ -1625,12 +2022,26 @@ function SecretsSettings({ token }: { token: string }) {
         setBusy(false);
       }
     },
-    [token, load, t],
+    [token, load, t, editingName, expandedName, resetForm],
   );
 
   const field = (key: keyof SecretFormState) => (
     e: React.ChangeEvent<HTMLInputElement>,
   ) => setForm((prev) => ({ ...prev, [key]: e.target.value }));
+
+  const formatTimestamp = (iso: string): string => {
+    if (!iso) return "—";
+    const ms = Date.parse(iso);
+    if (Number.isNaN(ms)) return iso;
+    try {
+      return new Date(ms).toLocaleString(i18n.language, {
+        year: "numeric", month: "short", day: "numeric",
+        hour: "2-digit", minute: "2-digit",
+      });
+    } catch {
+      return new Date(ms).toISOString();
+    }
+  };
 
   return (
     <div className="space-y-5">
@@ -1652,37 +2063,122 @@ function SecretsSettings({ token }: { token: string }) {
           ) : secrets.length === 0 ? (
             <SettingsRow title={t("settings.secrets.empty")} />
           ) : (
-            secrets.map((secret) => (
-              <SettingsRow
-                key={secret.name}
-                title={secret.name}
-                description={[
-                  secret.service,
-                  secret.account ? `· ${secret.account}` : "",
-                  secret.scope.length ? `· ${secret.scope.join(", ")}` : "",
-                  secret.description ? `— ${secret.description}` : "",
-                ]
-                  .filter(Boolean)
-                  .join(" ")}
-              >
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={busy}
-                  onClick={() => onDelete(secret.name)}
-                  className="rounded-full text-destructive hover:text-destructive"
-                >
-                  <Trash2 className="mr-1.5 h-3.5 w-3.5" aria-hidden />
-                  {t("settings.secrets.delete")}
-                </Button>
-              </SettingsRow>
-            ))
+            secrets.map((secret) => {
+              const isExpanded = expandedName === secret.name;
+              const isEditing = editingName === secret.name;
+              return (
+                <div key={secret.name}>
+                  <SettingsRow
+                    title={
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setExpandedName(isExpanded ? null : secret.name)
+                        }
+                        className="flex w-full items-center gap-2 text-left hover:text-foreground/80"
+                        aria-expanded={isExpanded}
+                        aria-controls={`secret-detail-${secret.name}`}
+                      >
+                        <ChevronDown
+                          className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${
+                            isExpanded ? "" : "-rotate-90"
+                          }`}
+                          aria-hidden
+                        />
+                        <span>{secret.name}</span>
+                        {isEditing ? (
+                          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                            {t("settings.secrets.editingBadge")}
+                          </span>
+                        ) : null}
+                      </button>
+                    }
+                    description={[
+                      secret.service,
+                      secret.account ? `· ${secret.account}` : "",
+                      secret.scope.length ? `· ${secret.scope.join(", ")}` : "",
+                      secret.description ? `— ${secret.description}` : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                  >
+                    <div className="flex items-center gap-1">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={busy}
+                        onClick={() => onEdit(secret)}
+                        className="rounded-full"
+                      >
+                        <Pencil className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+                        {t("settings.secrets.edit")}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={busy}
+                        onClick={() => onDelete(secret.name)}
+                        className="rounded-full text-destructive hover:text-destructive"
+                      >
+                        <Trash2 className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+                        {t("settings.secrets.delete")}
+                      </Button>
+                    </div>
+                  </SettingsRow>
+                  {isExpanded ? (
+                    <div
+                      id={`secret-detail-${secret.name}`}
+                      className="grid grid-cols-[auto,1fr] gap-x-4 gap-y-1.5 bg-muted/30 px-5 py-3 text-[12px] leading-5"
+                    >
+                      <span className="text-muted-foreground">
+                        {t("settings.secrets.fieldService")}
+                      </span>
+                      <span className="font-mono">{secret.service || "—"}</span>
+                      <span className="text-muted-foreground">
+                        {t("settings.secrets.fieldAccount")}
+                      </span>
+                      <span className="font-mono">{secret.account || "—"}</span>
+                      <span className="text-muted-foreground">
+                        {t("settings.secrets.fieldDescription")}
+                      </span>
+                      <span>{secret.description || "—"}</span>
+                      <span className="text-muted-foreground">
+                        {t("settings.secrets.fieldScope")}
+                      </span>
+                      <span className="font-mono">
+                        {secret.scope.length ? secret.scope.join(", ") : "—"}
+                      </span>
+                      <span className="text-muted-foreground">
+                        {t("settings.secrets.fieldValue")}
+                      </span>
+                      <span className="font-mono text-muted-foreground">
+                        {secret.value_hint
+                          ? `●●●●●●●● (${secret.value_hint})`
+                          : t("settings.secrets.valueRedacted")}
+                      </span>
+                      <span className="text-muted-foreground">
+                        {t("settings.secrets.fieldOrigin")}
+                      </span>
+                      <span className="font-mono">{secret.origin || "—"}</span>
+                      <span className="text-muted-foreground">
+                        {t("settings.secrets.fieldCreated")}
+                      </span>
+                      <span>{formatTimestamp(secret.created_at)}</span>
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })
           )}
         </SettingsGroup>
       </section>
 
-      <section>
-        <SettingsSectionTitle>{t("settings.secrets.addTitle")}</SettingsSectionTitle>
+      <section ref={formAnchorRef}>
+        <SettingsSectionTitle>
+          {editingName
+            ? t("settings.secrets.editTitle", { name: editingName })
+            : t("settings.secrets.addTitle")}
+        </SettingsSectionTitle>
         <SettingsGroup>
           <SettingsRow
             title={t("settings.secrets.fieldName")}
@@ -1693,6 +2189,8 @@ function SecretsSettings({ token }: { token: string }) {
               onChange={field("name")}
               placeholder="ATLASSIAN_API_TOKEN"
               className="w-[260px]"
+              readOnly={editingName !== null}
+              disabled={editingName !== null}
             />
           </SettingsRow>
           <SettingsRow
@@ -1738,25 +2236,53 @@ function SecretsSettings({ token }: { token: string }) {
           </SettingsRow>
           <SettingsRow
             title={t("settings.secrets.fieldValue")}
-            description={t("settings.secrets.hintValue")}
+            description={
+              editingName
+                ? t("settings.secrets.hintValueEdit")
+                : t("settings.secrets.hintValue")
+            }
           >
             <Input
               type="password"
               value={form.value}
               onChange={field("value")}
+              placeholder={
+                editingName
+                  ? t("settings.secrets.valuePlaceholderEdit")
+                  : ""
+              }
               className="w-[260px]"
             />
           </SettingsRow>
-          <div className="flex items-center justify-end px-4 py-3 sm:px-5">
+          <div className="flex items-center justify-end gap-2 px-4 py-3 sm:px-5">
+            {editingName ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={resetForm}
+                disabled={busy}
+                className="rounded-full"
+              >
+                {t("settings.secrets.cancel")}
+              </Button>
+            ) : null}
             <Button
               size="sm"
               variant="outline"
-              onClick={() => void onAdd()}
+              onClick={() => void onSubmit()}
               disabled={!canSave}
               className="rounded-full"
             >
-              <Plus className="mr-1.5 h-3.5 w-3.5" aria-hidden />
-              {busy ? t("settings.secrets.saving") : t("settings.secrets.save")}
+              {editingName ? (
+                <Pencil className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+              ) : (
+                <Plus className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+              )}
+              {busy
+                ? t("settings.secrets.saving")
+                : editingName
+                  ? t("settings.secrets.saveEdit")
+                  : t("settings.secrets.save")}
             </Button>
           </div>
         </SettingsGroup>

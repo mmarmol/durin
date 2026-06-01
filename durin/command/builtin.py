@@ -5,17 +5,27 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import subprocess
 import sys
 import time
 from contextlib import suppress
 from dataclasses import dataclass
+from pathlib import Path
 
 from durin import __version__
 from durin.bus.events import OutboundMessage
 from durin.command.router import CommandContext, CommandRouter
 from durin.utils.helpers import build_status_content
 from durin.utils.restart import set_restart_notice_to_env
+
+# Strong refs to fire-and-forget command tasks (restart, background dream)
+# so the event loop can't GC them before they run (RUF006).
+_BACKGROUND_TASKS: set[asyncio.Task] = set()
+
+
+def _spawn_background(coro) -> None:
+    task = asyncio.create_task(coro)
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
 
 
 @dataclass(frozen=True)
@@ -252,7 +262,7 @@ async def cmd_restart(ctx: CommandContext) -> OutboundMessage:
         await asyncio.sleep(1)
         os.execv(sys.executable, [sys.executable, "-m", "durin"] + sys.argv[1:])
 
-    asyncio.create_task(_do_restart())
+    _spawn_background(_do_restart())
     return OutboundMessage(
         channel=msg.channel, chat_id=msg.chat_id, content="Restarting...",
         metadata=dict(msg.metadata or {})
@@ -446,7 +456,7 @@ async def cmd_dream(ctx: CommandContext) -> OutboundMessage:
             channel=msg.channel, chat_id=msg.chat_id, content=content,
         ))
 
-    asyncio.create_task(_run_dream())
+    _spawn_background(_run_dream())
     return OutboundMessage(
         channel=msg.channel, chat_id=msg.chat_id, content="Dreaming...",
     )
@@ -1326,7 +1336,6 @@ def _resolve_workspace(loop) -> "Path":
 
 def _find_memory_entry(workspace, id_needle: str):
     """Walk memory/<class>/*.md; return list of (class_name, path) matching the id."""
-    from pathlib import Path
 
     from durin.memory.paths import MEMORY_CLASSES
 
@@ -1349,10 +1358,10 @@ def _find_memory_entry(workspace, id_needle: str):
 
 async def cmd_memory(ctx: CommandContext) -> OutboundMessage:
     """Memory operations dispatcher: list, show, search, drill."""
+    from durin.memory.drill import DrillError, drill
     from durin.memory.paths import MEMORY_CLASSES
     from durin.memory.search import search_memory
-    from durin.memory.drill import DrillError, drill
-    from durin.memory.storage import load_entry, FrontmatterError
+    from durin.memory.storage import FrontmatterError, load_entry
 
     loop = ctx.loop
     workspace = _resolve_workspace(loop)
@@ -1563,11 +1572,14 @@ async def _memory_reindex(
 
 
 async def cmd_remember(ctx: CommandContext) -> OutboundMessage:
-    """Store a fact in episodic memory as user_authored.
+    """Store a fact in episodic memory as ``user_authored``.
 
-    The curator + dream never touch user_authored entries (the
-    ContextVar default is user_authored, so no explicit scope needed).
+    The curator + dream never touch user_authored entries. We wrap
+    the write in an explicit ``author_scope("user_authored")`` —
+    per ``durin/memory/provenance.py`` there is no implicit default;
+    every write declares its author.
     """
+    from durin.memory.provenance import author_scope
     from durin.memory.store import StoreError, store_memory
 
     fact = (ctx.args or "").strip()
@@ -1579,7 +1591,10 @@ async def cmd_remember(ctx: CommandContext) -> OutboundMessage:
         )
     workspace = _resolve_workspace(ctx.loop)
     try:
-        result = store_memory(workspace, content=fact, class_name="episodic")
+        with author_scope("user_authored"):
+            result = store_memory(
+                workspace, content=fact, class_name="episodic",
+            )
     except (StoreError, OSError) as exc:
         return OutboundMessage(
             channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,

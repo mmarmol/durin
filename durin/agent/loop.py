@@ -37,11 +37,9 @@ from durin.session.goal_state import (
     runner_wall_llm_timeout_s,
 )
 from durin.session.manager import Session, SessionManager
-from durin.utils.artifacts import generated_image_paths_from_messages
 from durin.utils.document import extract_documents
 from durin.utils.helpers import image_placeholder_text
 from durin.utils.helpers import truncate_text as truncate_text_fn
-
 
 # Tools whose output is error-dense at the END of the buffer (build
 # logs, shell stderr/stdout, test runners). For these we truncate from
@@ -56,7 +54,6 @@ def _truncate_tool_output(content: str, max_chars: int, tool_name: str | None) -
     """Truncate ``content`` choosing direction based on the tool name."""
     direction = "tail" if (tool_name in _TAIL_TRUNCATION_TOOLS) else "head"
     return truncate_text_fn(content, max_chars, direction=direction)
-from durin.utils.image_generation_intent import image_generation_prompt
 from durin.utils.runtime import EMPTY_FINAL_RESPONSE_MESSAGE
 from durin.utils.session_attachments import merge_turn_media_into_last_assistant
 from durin.utils.webui_titles import mark_webui_session, maybe_generate_webui_title_after_turn
@@ -65,7 +62,6 @@ from durin.utils.webui_turn_helpers import publish_turn_run_status
 if TYPE_CHECKING:
     from durin.config.schema import (
         ChannelsConfig,
-        ProviderConfig,
         ToolsConfig,
     )
     from durin.cron.service import CronService
@@ -107,8 +103,8 @@ def _build_aux_providers(config: Any) -> dict[str, AuxProviderHandle]:
     Returns an empty dict when no aux models are configured; bridge
     tools then see no entry and stay hidden from the LLM's tool list.
     """
-    from durin.providers.factory import make_provider
     from durin.config.schema import ModelPresetConfig
+    from durin.providers.factory import make_provider
 
     out: dict[str, AuxProviderHandle] = {}
     aux = getattr(getattr(config, "agents", None), "aux_models", None)
@@ -166,7 +162,6 @@ class TurnContext:
     save_skip: int = 0
 
     outbound: OutboundMessage | None = None
-    generated_media: list[str] = field(default_factory=list)
 
     on_progress: Callable[..., Awaitable[None]] | None = None
     on_stream: Callable[[str], Awaitable[None]] | None = None
@@ -197,6 +192,25 @@ class AgentLoop:
     @property
     def current_iteration(self) -> int:
         return self._current_iteration
+
+    def _on_iteration(self, iteration: int) -> None:
+        """Single callback for per-turn iteration updates.
+
+        Audit F20 (2026-05-28): also pushes the counter into the bound
+        TelemetryLogger so `emit_tool_event` can auto-inject
+        ``iteration`` into every event payload (doc 07 §4.1). Pre-F20
+        the field was declared NotRequired in the TypedDicts but no
+        callsite ever populated it.
+        """
+        self._current_iteration = iteration
+        try:
+            from durin.telemetry.logger import current_telemetry
+            tel = current_telemetry()
+            if tel is not None:
+                tel.set_iteration(iteration)
+        except Exception:  # noqa: BLE001
+            # Telemetry must never break the agent loop. Best-effort.
+            pass
 
     @property
     def tool_names(self) -> list[str]:
@@ -243,8 +257,6 @@ class AgentLoop:
         unified_session: bool = False,
         disabled_skills: list[str] | None = None,
         tools_config: ToolsConfig | None = None,
-        image_generation_provider_config: ProviderConfig | None = None,
-        image_generation_provider_configs: dict[str, ProviderConfig] | None = None,
         aux_providers: dict[str, "AuxProviderHandle"] | None = None,
         provider_snapshot_loader: Callable[..., ProviderSnapshot] | None = None,
         provider_signature: tuple[object, ...] | None = None,
@@ -296,17 +308,11 @@ class AgentLoop:
         self.tools_config = _tc
         self.web_config = _tc.web
         self.exec_config = _tc.exec
-        self._image_generation_provider_configs = dict(image_generation_provider_configs or {})
         # Aux providers for capability bridges (vision/audio/...). Empty
         # dict ⇒ no bridge tools register. Built upstream by
         # ``from_config`` from ``config.agents.aux_models``; tests can
         # inject a custom dict directly.
         self._aux_providers: dict[str, AuxProviderHandle] = dict(aux_providers or {})
-        if (
-            image_generation_provider_config is not None
-            and "openrouter" not in self._image_generation_provider_configs
-        ):
-            self._image_generation_provider_configs["openrouter"] = image_generation_provider_config
         self.cron_service = cron_service
         self.restrict_to_workspace = restrict_to_workspace
         self._start_time = time.time()
@@ -371,10 +377,17 @@ class AgentLoop:
             consolidation_ratio=consolidation_ratio,
             preemptive_compact_ratio=preemptive_compact_ratio,
         )
+        # Legacy `dream` honors aux_models.memory: when set, the dream
+        # phase 1/2 calls use that model instead of the agent's active
+        # one. The provider stays the agent's — i.e. the chosen model
+        # must be served by the same provider. Full provider override
+        # is not wired here (see durin/memory/model_resolve.py).
+        from durin.memory.model_resolve import resolve_memory_model
+        _dream_model = resolve_memory_model(self.app_config) or self.model
         self.dream = Dream(
             store=self.context.memory,
             provider=provider,
-            model=self.model,
+            model=_dream_model,
         )
         self.model_presets: dict[str, ModelPresetConfig] = model_presets or {}
         self._active_preset: str | None = None
@@ -394,6 +407,122 @@ class AgentLoop:
         # may want post-compaction off (too aggressive) but
         # session-close on (low frequency, safe).
         self.on_session_close: Callable[[str], None] | None = None
+
+        # A11 (2026-05-28) — wire memory background services. Both
+        # default ON; opt-out per `cfg.memory.{file_watcher,
+        # health_check}.enabled`. Failures here are isolated — the
+        # agent loop still functions; only the optional background
+        # work is skipped.
+        self._memory_file_watcher: Any | None = None
+        self._memory_health_scheduler: Any | None = None
+        self._start_memory_background_services()
+
+    # ------------------------------------------------------------------
+    # A11 — memory background services lifecycle
+    # ------------------------------------------------------------------
+
+    def _start_memory_background_services(self) -> None:
+        """Start the optional memory file watcher and health-check
+        scheduler if the config enables them, and ensure the workspace
+        has a `VAULT_README.md` for human consumers (Obsidian users,
+        webui MemoryGraphView, anyone browsing files directly).
+
+        Each service is constructed and started independently; a
+        failure in one doesn't affect the other. Tests that build
+        an AgentLoop with ``app_config=None`` (most of them) get
+        no services — keeps test isolation tight.
+        """
+        if self.app_config is None:
+            return
+        mem_cfg = getattr(self.app_config, "memory", None)
+        if mem_cfg is None:
+            return
+
+        # P9 (2026-05-30): write the vault README at workspace root if
+        # missing, plus per-class `_INDEX.md` navigation helpers inside
+        # each `memory/<class>/`. Idempotent + safe — never overwrites.
+        # Files starting with `_` are skipped by `walk_memory()` so the
+        # indices are NOT picked up as memory entries.
+        try:
+            from durin.memory.vault_readme import (
+                ensure_class_indices,
+                ensure_vault_readme,
+            )
+
+            ensure_vault_readme(self.workspace)
+            ensure_class_indices(self.workspace)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "vault navigation files init failed (continuing): {}", exc,
+            )
+
+        fw_cfg = getattr(mem_cfg, "file_watcher", None)
+        if fw_cfg is not None and getattr(fw_cfg, "enabled", False):
+            try:
+                from durin.memory.file_watcher import MemoryFileWatcher
+
+                watcher = MemoryFileWatcher(self.workspace)
+                watcher.start()
+                self._memory_file_watcher = watcher
+                logger.info(
+                    "memory file watcher started for {}", self.workspace,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "memory file watcher failed to start "
+                    "(continuing without): {}", exc,
+                )
+
+        hc_cfg = getattr(mem_cfg, "health_check", None)
+        if hc_cfg is not None and getattr(hc_cfg, "enabled", False):
+            try:
+                from durin.memory.health_check import (
+                    HealthChecker,
+                    HealthCheckScheduler,
+                )
+
+                checker = HealthChecker(self.workspace)
+                scheduler = HealthCheckScheduler(
+                    checker,
+                    interval_seconds=int(
+                        getattr(hc_cfg, "interval_seconds", 900),
+                    ),
+                )
+                scheduler.start()
+                self._memory_health_scheduler = scheduler
+                logger.info(
+                    "memory health check scheduler started "
+                    "(interval={}s)",
+                    getattr(hc_cfg, "interval_seconds", 900),
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "memory health check failed to start "
+                    "(continuing without): {}", exc,
+                )
+
+    def _stop_memory_background_services(self) -> None:
+        """Stop the memory background services. Safe to call when
+        they were never started — each is None-guarded."""
+        watcher = self._memory_file_watcher
+        if watcher is not None:
+            try:
+                watcher.stop()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "memory file watcher stop raised: {}", exc,
+                )
+            self._memory_file_watcher = None
+
+        scheduler = self._memory_health_scheduler
+        if scheduler is not None:
+            try:
+                scheduler.stop()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "memory health scheduler stop raised: {}", exc,
+                )
+            self._memory_health_scheduler = None
 
     @classmethod
     def from_config(
@@ -494,7 +623,12 @@ class AgentLoop:
             context_window_tokens,
             preemptive_compact_ratio=snapshot.preemptive_compact_ratio,
         )
-        self.dream.set_provider(provider, model)
+        # Same precedence as construction: aux_models.memory > agent model.
+        from durin.memory.model_resolve import resolve_memory_model
+        self.dream.set_provider(
+            provider,
+            resolve_memory_model(self.app_config) or model,
+        )
         self._provider_signature = snapshot.signature
         if publish_update and self._runtime_model_publisher is not None:
             self._runtime_model_publisher(
@@ -563,7 +697,6 @@ class AgentLoop:
             cron_service=self.cron_service,
             sessions=self.sessions,
             provider_snapshot_loader=self._provider_snapshot_loader,
-            image_generation_provider_configs=self._image_generation_provider_configs,
             timezone=self.context.timezone or "UTC",
             aux_providers=self._aux_providers,
             app_config=self.app_config,
@@ -619,6 +752,24 @@ class AgentLoop:
             if not getattr(self.app_config.memory, "enabled", False):
                 return
         except AttributeError:
+            return
+        # Resilience: memory is enabled but the optional `[memory]` extra
+        # (fastembed + lancedb) may be absent — a headless install, or one
+        # where `durin onboard` was skipped. Don't degrade silently: warn
+        # with the exact fix and fall back to grep-level recall. We do NOT
+        # pip-install at runtime (the deliberate paths are `durin onboard`
+        # and `durin doctor --install-missing`). Once the extra IS present,
+        # the model weights auto-download on first use via fastembed, so no
+        # separate fetch is needed here.
+        from durin.memory.vector_index import vector_index_available
+
+        if not vector_index_available():
+            logger.warning(
+                "Vector memory is enabled (memory.enabled=true) but the "
+                "[memory] extra is not installed — falling back to grep-level "
+                "recall. Install it with `durin doctor --install-missing` or "
+                "`pip install 'durin-agent[memory]'`."
+            )
             return
         model_name = self.app_config.memory.embedding.model
         try:
@@ -758,7 +909,7 @@ class AgentLoop:
         """Build the initial message list for the LLM turn."""
         return self.context.build_messages(
             history=history,
-            current_message=image_generation_prompt(msg.content, msg.metadata),
+            current_message=msg.content,
             media=msg.media if msg.media else None,
             channel=msg.channel,
             chat_id=self._runtime_chat_id(msg),
@@ -797,6 +948,17 @@ class AgentLoop:
                 await t
         sub_cancelled = await self.subagents.cancel_by_session(key)
         return cancelled + sub_cancelled
+
+    def _drop_active_task(self, task: asyncio.Task, key: str) -> None:
+        """Done-callback: drop a finished task from its session's list.
+
+        KeyError-safe (the key may already have been popped by
+        ``_cancel_active_tasks``) and ValueError-safe (membership-checked
+        before remove).
+        """
+        tasks = self._active_tasks.get(key)
+        if tasks is not None and task in tasks:
+            tasks.remove(task)
 
     def _effective_session_key(self, msg: InboundMessage) -> str:
         """Return the session key used for task routing and mid-turn injections."""
@@ -858,7 +1020,7 @@ class AgentLoop:
             session_key=session_key,
             tool_hint_max_length=self.tool_hint_max_length,
             set_tool_context=self._set_tool_context,
-            on_iteration=lambda iteration: setattr(self, "_current_iteration", iteration),
+            on_iteration=lambda iteration: self._on_iteration(iteration),
             on_cache_usage=lambda payload: setattr(self, "_last_cache_usage", payload),
         )
         hook: AgentHook = (
@@ -924,15 +1086,34 @@ class AgentLoop:
         active_session_key = session.key if session else session_key
         file_state_token = bind_file_states(self._file_state_store.for_session(active_session_key))
         telemetry_token = None
+        # A8: optional HTTPS push sink. Default OFF; opt-in via
+        # cfg.telemetry.push.enabled. Captured here so the cleanup
+        # path can call flush() before the process exits.
+        push_sink_for_cleanup = None
         if active_session_key:
             try:
                 from durin.telemetry.logger import bind_telemetry, get_session_logger
-                telemetry_token = bind_telemetry(get_session_logger(active_session_key))
+                session_logger = get_session_logger(active_session_key)
+                try:
+                    from durin.telemetry.wiring import wire_push_sink
+                    push_sink_for_cleanup = wire_push_sink(
+                        session_logger,
+                        getattr(
+                            getattr(self.app_config, "telemetry", None),
+                            "push", None,
+                        ),
+                    )
+                except Exception:  # noqa: BLE001
+                    # Push wiring failure must NEVER affect the JSONL
+                    # path. Log via the session_logger so the failure
+                    # is itself recorded; the local sink keeps working.
+                    push_sink_for_cleanup = None
+                telemetry_token = bind_telemetry(session_logger)
             except Exception:
                 telemetry_token = None
         # Sprint B / L3 — agent-mode provider, resolved per iteration so a
         # mid-run mode switch (via /plan or enter_plan_mode tool) takes
-        # effect at the very next iteration. See docs/07_external_agents_review.md §L3.
+        # effect at the very next iteration. See docs/archive/34_external_agents_review.md §L3.
         def _mode_provider():
             from durin.agent.agent_mode import get_active_mode
             return get_active_mode(session)
@@ -982,6 +1163,14 @@ class AgentLoop:
             ))
         finally:
             reset_file_states(file_state_token)
+            # A8: drain the push sink BEFORE we let the logger go out
+            # of scope. A partial buffer that's never drained loses
+            # those events — flush is best-effort but worth the call.
+            if push_sink_for_cleanup is not None:
+                try:
+                    push_sink_for_cleanup.flush()
+                except Exception:  # noqa: BLE001
+                    pass
             if telemetry_token is not None:
                 from durin.telemetry.logger import reset_telemetry
                 reset_telemetry(telemetry_token)
@@ -1070,10 +1259,7 @@ class AgentLoop:
             task = asyncio.create_task(self._dispatch(msg))
             self._active_tasks.setdefault(effective_key, []).append(task)
             task.add_done_callback(
-                lambda t, k=effective_key: self._active_tasks.get(k, [])
-                and self._active_tasks[k].remove(t)
-                if t in self._active_tasks.get(k, [])
-                else None
+                lambda t, k=effective_key: self._drop_active_task(t, k)
             )
 
     async def _dispatch(self, msg: InboundMessage) -> None:
@@ -1243,6 +1429,9 @@ class AgentLoop:
     def stop(self) -> None:
         """Stop the agent loop."""
         self._running = False
+        # A11: drain memory background services so the watchdog
+        # Observer and health-check thread terminate cleanly.
+        self._stop_memory_background_services()
         logger.info("Agent loop stopping")
 
     async def _process_system_message(
@@ -1438,7 +1627,6 @@ class AgentLoop:
         all_msgs: list[dict[str, Any]],
         stop_reason: str,
         had_injections: bool,
-        generated_media: list[str],
         on_stream: Callable[[str], Awaitable[None]] | None,
         *,
         turn_latency_ms: int | None = None,
@@ -1462,7 +1650,6 @@ class AgentLoop:
             channel=msg.channel,
             chat_id=msg.chat_id,
             content=final_content,
-            media=generated_media,
             metadata=meta,
         )
 
@@ -1587,11 +1774,14 @@ class AgentLoop:
             ctx.final_content = EMPTY_FINAL_RESPONSE_MESSAGE
 
         ctx.save_skip = 1 + len(ctx.history) + (1 if ctx.user_persisted_early else 0)
-        skip_msgs = ctx.all_messages[ctx.save_skip:]
-        ctx.generated_media = generated_image_paths_from_messages(skip_msgs)
         mt = self.tools.get("message")
         extra = getattr(mt, "turn_delivered_media_paths", lambda: [])() if mt else []
-        merge_turn_media_into_last_assistant(ctx.all_messages, ctx.generated_media, extra)
+        merge_turn_media_into_last_assistant(ctx.all_messages, extra)
+        # Stop re-injecting the executing-plan pointer once the plan's todos
+        # are all completed (the cursor reached the end), so it doesn't linger
+        # into unrelated turns.
+        from durin.agent.agent_mode import clear_executing_plan_if_todos_done
+        clear_executing_plan_if_todos_done(ctx.session.metadata)
 
         ctx.turn_latency_ms = max(0, int((time.time() - ctx.turn_wall_started_at) * 1000))
         self._save_turn(
@@ -1620,7 +1810,6 @@ class AgentLoop:
             ctx.all_messages,
             ctx.stop_reason,
             ctx.had_injections,
-            ctx.generated_media,
             ctx.on_stream,
             turn_latency_ms=ctx.turn_latency_ms,
         )
@@ -1826,24 +2015,44 @@ class AgentLoop:
             message.get("thinking_blocks"),
         )
 
-    @staticmethod
-    def _format_pending_summary(session: Session) -> str | None:
-        """Read the consolidator's last summary from session.metadata and wrap
-        it with the archive marker so the next turn can distinguish "this is
-        a summary, not real conversation".
+    def _format_pending_summary(self, session: Session) -> str | None:
+        """Read the consolidator's last summary and wrap it with an
+        archive marker so the next turn can distinguish "this is a
+        summary" from "this is real conversation".
 
         Returns ``None`` when no summary has been persisted yet (fresh
         session or no consolidation rounds have run).
+
+        A10 (2026-05-28): the summary primarily lives at
+        ``memory/session_summary/<sanitized_key>.md`` (single source
+        of truth). For backward compatibility with pre-A10 sessions
+        whose metadata still carries the legacy ``_last_summary``
+        dict, we fall through to that path when the markdown isn't
+        there yet (the next compaction migrates it).
         """
-        meta = session.metadata.get("_last_summary")
-        if not isinstance(meta, dict):
-            return None
-        text = meta.get("text")
-        last_active = meta.get("last_active")
-        if not isinstance(text, str) or not text:
+        from durin.memory.session_summary_store import get_session_summary
+
+        text: str | None = None
+        last_active: str | None = None
+
+        md_text, md_last_active = get_session_summary(self.workspace, session.key)
+        if md_text:
+            text = md_text
+            last_active = md_last_active.isoformat() if md_last_active else None
+        else:
+            # Legacy fallback: pre-A10 metadata. Gets migrated next compaction.
+            meta = session.metadata.get("_last_summary")
+            if isinstance(meta, dict):
+                cand = meta.get("text")
+                if isinstance(cand, str) and cand:
+                    text = cand
+                    raw_last = meta.get("last_active")
+                    last_active = raw_last if isinstance(raw_last, str) else None
+
+        if not text:
             return None
         header = "consolidator"
-        if isinstance(last_active, str) and last_active:
+        if last_active:
             header = f"consolidator, last active {last_active}"
         return (
             f"=== ARCHIVED SUMMARY ({header}) ===\n"

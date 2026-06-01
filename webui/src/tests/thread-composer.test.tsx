@@ -53,7 +53,7 @@ describe("ThreadComposer", () => {
       <ThreadComposer
         onSend={vi.fn()}
         modelLabel="claude-opus-4-5"
-        placeholder="Ask anything..."
+        placeholder="Ask anything…"
         variant="hero"
       />,
     );
@@ -63,7 +63,7 @@ describe("ThreadComposer", () => {
     expect(screen.queryByRole("button", { name: "Reason" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Deep research" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Voice input" })).not.toBeInTheDocument();
-    const input = screen.getByPlaceholderText("Ask anything...");
+    const input = screen.getByPlaceholderText("Ask anything…");
     expect(input).toBeInTheDocument();
     expect(input.className).toContain("min-h-[78px]");
     expect(input.parentElement?.className).toContain("max-w-[58rem]");
@@ -174,7 +174,7 @@ describe("ThreadComposer", () => {
     render(
       <ThreadComposer
         onSend={vi.fn()}
-        placeholder="Ask anything..."
+        placeholder="Ask anything…"
         slashCommands={COMMANDS}
         variant="hero"
       />,
@@ -212,29 +212,6 @@ describe("ThreadComposer", () => {
     expect(screen.queryByRole("listbox", { name: "Slash commands" })).not.toBeInTheDocument();
   });
 
-  it("sends image generation mode with automatic aspect ratio", () => {
-    const onSend = vi.fn();
-    render(
-      <ThreadComposer
-        onSend={onSend}
-        placeholder="Type your message..."
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Toggle image generation mode" }));
-    expect(screen.getByPlaceholderText("Describe or edit an image…")).toBeInTheDocument();
-
-    const input = screen.getByLabelText("Message input");
-    fireEvent.change(input, { target: { value: "Draw a friendly robot" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
-
-    expect(onSend).toHaveBeenCalledWith(
-      "Draw a friendly robot",
-      undefined,
-      { imageGeneration: { enabled: true, aspect_ratio: null } },
-    );
-  });
-
   it("shows a stop button while streaming", () => {
     const onStop = vi.fn();
     render(
@@ -250,77 +227,5 @@ describe("ThreadComposer", () => {
 
     expect(onStop).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("button", { name: "Send message" })).not.toBeInTheDocument();
-  });
-
-  it("lets users select a concrete image aspect ratio", () => {
-    const onSend = vi.fn();
-    render(
-      <ThreadComposer
-        onSend={onSend}
-        placeholder="Type your message..."
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Toggle image generation mode" }));
-    fireEvent.click(screen.getByRole("button", { name: "Image aspect ratio" }));
-    expect(screen.getByRole("listbox", { name: "Image aspect ratio" }).className).toContain(
-      "bottom-full",
-    );
-    fireEvent.mouseDown(screen.getByRole("option", { name: "Wide 16:9" }));
-
-    const input = screen.getByLabelText("Message input");
-    fireEvent.change(input, { target: { value: "Draw a banner" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
-
-    expect(onSend).toHaveBeenCalledWith(
-      "Draw a banner",
-      undefined,
-      { imageGeneration: { enabled: true, aspect_ratio: "16:9" } },
-    );
-  });
-
-  it("opens the hero image aspect menu downward", () => {
-    render(
-      <ThreadComposer
-        onSend={vi.fn()}
-        placeholder="Ask anything..."
-        variant="hero"
-        imageMode
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Image aspect ratio" }));
-
-    expect(screen.getByRole("listbox", { name: "Image aspect ratio" }).className).toContain(
-      "top-full",
-    );
-  });
-
-  it("dismisses the image aspect menu on outside click, escape, and wheel", () => {
-    render(
-      <div>
-        <button type="button">outside</button>
-        <ThreadComposer
-          onSend={vi.fn()}
-          placeholder="Type your message..."
-          imageMode
-        />
-      </div>,
-    );
-
-    const aspectButton = screen.getByRole("button", { name: "Image aspect ratio" });
-    fireEvent.click(aspectButton);
-    expect(screen.getByRole("listbox", { name: "Image aspect ratio" })).toBeInTheDocument();
-
-    fireEvent.pointerDown(screen.getByRole("button", { name: "outside" }));
-    expect(screen.queryByRole("listbox", { name: "Image aspect ratio" })).not.toBeInTheDocument();
-
-    fireEvent.click(aspectButton);
-    fireEvent.keyDown(document, { key: "Escape" });
-    expect(screen.queryByRole("listbox", { name: "Image aspect ratio" })).not.toBeInTheDocument();
-
-    fireEvent.click(aspectButton);
-    fireEvent.wheel(screen.getByRole("listbox", { name: "Image aspect ratio" }), { deltaY: 120 });
-    expect(screen.queryByRole("listbox", { name: "Image aspect ratio" })).not.toBeInTheDocument();
   });
 });

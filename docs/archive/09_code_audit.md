@@ -58,7 +58,7 @@
 
 ### Inventory (full event list)
 
-26 distinct event types emitted from `durin/`. Documented vs. undocumented in `docs/ARCHITECTURE.md`:
+26 distinct event types emitted from `durin/`. Documented vs. undocumented in `docs/architecture/README.md`:
 
 | Event | Source | Documented? |
 |---|---|---|
@@ -151,7 +151,7 @@ No dead constants, no half-finished implementations, no commented-out paths, no 
 
 ### P1 — Address before next major change
 
-1. **Document the 4 orphan-event families** (`ask_user`, `ask_vision`, `ask_audio`, `sleep`) in `docs/ARCHITECTURE.md` §5. Documentation-only, ~10 minutes.
+1. **Document the 4 orphan-event families** (`ask_user`, `ask_vision`, `ask_audio`, `sleep`) in `docs/architecture/README.md` §5. Documentation-only, ~10 minutes.
 2. **Emit telemetry for Tier 1 2G (`parallel_tool_calls`) and Tier 2 B3 (history media prune)**. Two one-liners with one-line tests each. ~30 minutes.
 
 ### P2 — Quality of life

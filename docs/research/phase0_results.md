@@ -139,7 +139,7 @@ reveladas. Doc 19 §12 ya marcó Phase 0.2 con incertidumbre media.
 
 **Fecha**: 2026-05-23
 
-**Script**: `scripts/dream_dryrun.py`
+**Script**: `scripts/dream_dryrun.py` (one-off Phase-0 tool, since removed).
 
 **Modelo**: `glm-5.1` via z.ai coding plan (`api_base:
 https://api.z.ai/api/coding/paas/v4`).
@@ -232,11 +232,11 @@ Cosas que el dry-run reveló y que el dream real debe manejar:
 
 ### Artifacts
 
-- `scripts/dream_dryrun.py` — script de extracción + invocación
 - `durin/templates/dream/consolidator.md` — prompt v1 versionado
-- `docs/research/dream_dryrun_project_mxhero.md` — output completo
-- `docs/research/dream_dryrun_person_marcelo.md` — output completo
-- `docs/research/dream_dryrun_topic_helpjuice.md` — output completo
+- The one-off dry-run script (`scripts/dream_dryrun.py`) and its three
+  saved outputs (`dream_dryrun_{person_marcelo,project_mxhero,topic_helpjuice}.md`)
+  were removed in cleanup — they were Phase-0 inspection artifacts, not
+  product. The findings above are the durable record.
 
 ### Próximo paso
 

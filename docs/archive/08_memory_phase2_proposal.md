@@ -1312,9 +1312,9 @@ Before any horizon is picked, these are the points worth weighing:
 ## 8. Next step
 
 Marcelo reads this point-by-point. Comments / corrections go into a new
-bitácora entry (`02_bitacora.md`). Once horizon is chosen (Option A, B,
+bitácora entry (`bitacora.md`). Once horizon is chosen (Option A, B,
 C, or some variant), the corresponding implementation roadmap is added
-to `01_roadmap.md` as a new horizon section with phase boundaries +
+to `roadmap.md` as a new horizon section with phase boundaries +
 acceptance criteria.
 
 **No work proceeds before the horizon decision.**

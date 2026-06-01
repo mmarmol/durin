@@ -35,7 +35,6 @@ from __future__ import annotations
 
 from typing import NotRequired, TypedDict
 
-
 # ===========================================================================
 # Loop-control events
 # ===========================================================================
@@ -439,12 +438,26 @@ class SleepEndEvent(TypedDict):
 
 
 class MemoryRecallEvent(TypedDict):
-    """memory_search invocation. Logged once per call (not per result)."""
+    """memory_search invocation. Logged once per call (not per result).
+
+    Audit E1 (2026-05-28): payload extended to match docs/architecture/memory/07
+    §4.1. Diagnostic fields (`strategy`, `duration_ms`,
+    `total_candidates`) emit on every call. `keywords` carries the
+    LLM-supplied hint string (None when omitted). `recovered_from` +
+    `recovery_duration_ms` only emit on degraded runs — matches the
+    tool response shape, which omits them on clean runs.
+    """
 
     query: str
     scope: str
     level: str
     result_count: int
+    strategy: str
+    duration_ms: float
+    total_candidates: int
+    keywords: NotRequired[str | None]
+    recovered_from: NotRequired[list[str]]
+    recovery_duration_ms: NotRequired[float]
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
 
@@ -533,19 +546,29 @@ class MemoryDreamStartEvent(TypedDict):
 
 
 class MemoryDreamEndEvent(TypedDict):
-    """Entity-centric dream pass completed (doc 25 §2.A.1).
+    """Entity-centric dream pass completed (doc 25 §2.A.1, audit A5).
 
     Mirrors :class:`MemoryDreamStartEvent` with the outcome counters
     and wall-clock duration. ``entities_failed`` counts entities whose
     consolidate_entity raised — the rest of the pass still runs, so a
     non-zero failed value is a soft signal, not a stop condition.
+
+    Audit A5 (2026-05-28) added the four cost-telemetry fields below
+    so doc 08 §3 R3's alarm (`dream_llm_cost_per_day_usd > $5/day`)
+    can be computed. Pre-A5 emit payloads used `duration_s`; that
+    name is gone — consumers should read `duration_ms`.
     """
 
     trigger: str
     entity_filter: str
     entities_consolidated: int
     entities_failed: int
-    duration_s: float
+    # A5: NEW fields per doc 07 §6.2.
+    entities_quarantined: int
+    llm_call_count: int
+    llm_input_tokens_total: int
+    llm_output_tokens_total: int
+    duration_ms: float
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
 
@@ -566,6 +589,76 @@ class MemoryDreamSkippedEvent(TypedDict):
     entity_filter: str
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
+
+
+class MemoryDreamBudgetExhaustedEvent(TypedDict):
+    """Per-pass time budget hit mid-drain (FIFO drain loop).
+
+    Emitted by :class:`durin.memory.dream_runner.DreamRunner` when an
+    entity's accumulated wall-clock crosses ``max_seconds_per_run``
+    *after* a successful batch (so each entity always makes at least one
+    batch of forward progress). ``pending_remaining`` is how many entries
+    were deferred to the next pass.
+    """
+
+    trigger: str
+    entity_ref: str
+    pending_remaining: int
+    elapsed_s: float
+    budget_s: int
+
+
+class MemoryDreamLegacyStartEvent(TypedDict):
+    """Legacy (session-history) dream pass began.
+
+    Emitted by the legacy :class:`durin.agent.memory.Dream` consolidator
+    wired at ``AgentLoop`` startup — distinct from the entity-centric
+    ``memory.dream.*`` runner. Tracks the batch about to be fed to the
+    Phase-1 LLM.
+    """
+
+    entries_count: int
+    batch_size: int
+    tokens: int
+    model: str | None
+
+
+class MemoryDreamLegacyEndEvent(TypedDict):
+    """Legacy dream pass finished (success or per-phase failure).
+
+    ``status`` carries the outcome: ``"phase1_failed"``,
+    ``"phase2_exception"``, or ``"phase2_<stop_reason>"``. The cost +
+    cursor fields let dashboards split a productive pass
+    (``cursor_advanced`` true) from a no-op or failed one. The two
+    ``phase2_*`` / ``commit_sha`` fields are present only when Phase 2
+    ran.
+    """
+
+    status: str
+    duration_ms: int
+    cursor_advanced: bool
+    changelog_count: int
+    phase1_prompt_tokens: int
+    phase1_completion_tokens: int
+    model: str | None
+    phase2_tool_events: NotRequired[int]
+    commit_sha: NotRequired[str | None]
+
+
+class MemoryDreamLegacySkippedEvent(TypedDict):
+    """Legacy dream trigger fired but did no work.
+
+    ``reason`` is ``"no_entries"`` (nothing unprocessed) or
+    ``"below_token_threshold"`` (unprocessed tail under
+    ``min_tokens_to_run``). The token fields are present only for the
+    threshold case.
+    """
+
+    reason: str
+    model: str | None
+    tokens: NotRequired[int]
+    threshold: NotRequired[int]
+    entries_count: NotRequired[int]
 
 
 class MemoryAbsorbJudgedEvent(TypedDict):
@@ -661,6 +754,324 @@ class MemoryStoreBlockedNearDuplicateEvent(TypedDict):
     session_key: NotRequired[str | None]
 
 
+class MemoryDreamPatchAppliedEvent(TypedDict):
+    """A Dream apply for one entity completed successfully (doc 07 §6.5).
+
+    Counts the ops that landed plus the diagnostics dashboards need
+    to spot drift (cursor advanced, body delta length, sources count).
+    ``failure_kind`` is always empty here — the failure variant lands
+    in :class:`MemoryDreamEntityFailedEvent`.
+    """
+
+    entity_ref: str
+    trigger: str
+    ops_applied: int
+    sources_count: int
+    body_delta_chars: int
+    cursor_after: str  # ISO timestamp the runner stamped on the page
+    duration_ms: float
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
+class MemoryDreamEntityFailedEvent(TypedDict):
+    """A Dream apply for one entity failed (doc 07 §6.4).
+
+    Emitted on every failed entity (no batching) by
+    ``durin.memory.dream_apply._emit_apply_telemetry``. ``kind``
+    carries one of the four
+    :class:`durin.memory.dream_apply.DreamApplyFailureKind` values
+    (``validation`` / ``patch_runtime`` / ``round_trip`` / ``io``).
+    Only the structural kinds (validation / patch_runtime /
+    round_trip) contribute to the 3-strike quarantine counter —
+    enforced in :mod:`durin.memory.dream_quarantine`, not here.
+
+    Upstream LLM call failures (rate limit, timeout, network) happen
+    BEFORE ``dream_apply`` runs and bubble up to the runner; they do
+    NOT emit this event. Audit F6 (2026-05-28) corrected this
+    docstring after the third-pass audit caught a pre-F6 claim that
+    ``llm_call_failed`` / ``parse_failed`` were valid ``kind``
+    values here — neither string is ever emitted in production.
+    """
+
+    entity_ref: str
+    trigger: str
+    kind: str
+    error_message: str  # bounded; caller truncates if huge
+    failure_count_now: int  # post-increment value, 0 for ambient
+    quarantined_until: NotRequired[str]  # ISO timestamp when 3-strike trip
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
+class MemoryEntityRelationCapWarnedEvent(TypedDict):
+    """A Dream apply took an entity's relation count across the soft
+    cap (50). The apply proceeded; this event lets dashboards spot
+    mega-hub formation before sub-paging (audit B-14) becomes
+    necessary. Audit B-19 (2026-05-29) shipped this event alongside
+    the cap enforcement in `dream_apply.py`.
+    """
+
+    entity_ref: str
+    current_count: int  # before the apply
+    new_count: int  # after the apply
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
+class MemoryEntityRelationCapRejectedEvent(TypedDict):
+    """A Dream apply was rejected because it would have taken an
+    entity's relation count over the hard cap (200). The apply was
+    rolled back and the entity surfaced as a
+    `DreamApplyFailureKind.VALIDATION` failure. Audit B-19
+    (2026-05-29).
+    """
+
+    entity_ref: str
+    current_count: int  # before the rejected apply
+    new_count: int  # the count the apply would have reached
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
+class MemoryIndexWriteEvent(TypedDict):
+    """One upsert into the FTS5 lexical index (doc 07 §9.1).
+
+    Fires per file written, so dashboards can detect bursty writes
+    (e.g., during dream consolidations or drift repairs) vs
+    steady-state agent activity. ``index`` is either ``"fts"``
+    (lexical) or ``"lancedb"`` (vector); only ``"fts"`` is emitted
+    today since `reindex_one_file` only writes the FTS row.
+
+    Audit E5 (2026-05-28) added ``trigger`` + ``duration_ms`` to
+    close the two documented dashboards: doc 07 §10.3
+    (``index_write_p95_ms`` < 50ms per row) and doc 09 §216
+    (FTS5 trigram capacity monitoring needs to split watcher steady
+    state from dream/drift bursts).
+    """
+
+    uri: str
+    index: str  # "fts" | "lancedb"
+    op: str  # "upsert" | "delete"
+    trigger: str  # "watcher" | "dream_apply" | "drift_repair"
+    duration_ms: float
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
+class MemoryIndexRebuildEvent(TypedDict):
+    """A full index rebuild completed (doc 07 §9.2).
+
+    Emitted by ``durin reindex``. ``target`` is ``"fts"``,
+    ``"lancedb"``, or ``"all"``. ``indexed`` + ``errors`` mirror
+    :class:`durin.memory.indexer.IndexStats`.
+    """
+
+    target: str
+    indexed: int
+    errors: int
+    duration_ms: float
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
+class MemoryIndexStalenessDetectedEvent(TypedDict):
+    """The on-disk index disagrees with the markdown source (doc 07 §9.3).
+
+    Emitted by the health-check cron when it spots a uri whose
+    ``fts_meta.mtime`` lags behind the file's mtime, or a file under
+    ``memory/`` that has no row in the index. ``reason`` captures the
+    detection signal so dashboards can split "missing row" vs "stale
+    mtime" trends.
+
+    Audit G3 (2026-05-28): ``delta_seconds`` ships the staleness
+    magnitude (``current_file_mtime - indexed_mtime``) but only on
+    ``reason='mtime_lag'`` — the other two reasons have no
+    indexed_mtime to compare against. Dashboards graph p50/p95 of
+    ``delta_seconds`` to detect watcher gap regressions; pre-G3 they
+    could only count events without knowing how far behind the
+    watcher fell. F11 wrongly justified dropping the field as
+    "implicit in the join with memory.index.write" — recovery
+    latency (write_time - detect_time) and staleness magnitude are
+    different metrics.
+    """
+
+    uri: str
+    reason: str  # "missing_row" | "mtime_lag" | "row_for_missing_file"
+    delta_seconds: NotRequired[float]
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
+class MemoryRecallLexicalEvent(TypedDict):
+    """One FTS5 lexical search ran (doc 07 §4.3).
+
+    ``route`` is the value of
+    :class:`durin.memory.query_router.LexicalRoute`
+    (``unicode61`` | ``trigram`` | ``like_substring``). Dashboards
+    use ``route`` distribution + ``hit_count`` to spot when CJK
+    queries are falling into the LIKE fallback instead of trigram.
+    """
+
+    route: str
+    query_chars: int
+    cjk_chars: int
+    hit_count: int
+    duration_ms: float
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
+class MemoryRecallRRFEvent(TypedDict):
+    """Cross-source RRF fusion completed (doc 07 §4.5).
+
+    Logs the per-source contribution so dashboards can see whether the
+    vector / lexical / grep paths each surfaced anything. ``boosted``
+    is True when the caller passed ``keywords`` and the lexical weight
+    was bumped to 2.5.
+    """
+
+    vector_count: int
+    lexical_count: int
+    grep_count: int
+    fused_count: int
+    boosted: bool
+    duration_ms: float
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
+class MemoryRecallRerankEvent(TypedDict):
+    """Cross-encoder rerank step completed (doc 07 §4.4 / doc 03 §9).
+
+    Emitted whenever the opt-in reranker ran. ``output_count``
+    reflects the top-N the pipeline carries forward.
+    """
+
+    input_count: int
+    output_count: int
+    duration_ms: float
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
+class MemoryRecallFailureEvent(TypedDict):
+    """A search-path component failed and the pipeline recovered or
+    degraded (audit B9 / doc 07 §8.1).
+
+    Emitted once per `run_search_pipeline` invocation where at least
+    one of the safe wrappers (`_safe_vector_search`,
+    `_safe_lexical_search`, `_safe_grep_fallback`) caught an
+    exception. ``component`` carries the comma-separated list of
+    affected sources; ``degraded_to`` describes which sources still
+    produced hits.
+
+    ``recovery_succeeded`` is True iff the pipeline returned a
+    non-empty result set despite the failure — i.e. the surviving
+    sources covered the loss. False means everything failed AND no
+    hits surfaced (rare; usually one source's failure is masked by
+    the others).
+    """
+
+    component: str  # comma-joined affected sources
+    recovery_attempted: bool
+    recovery_succeeded: bool
+    recovery_duration_ms: float
+    degraded_to: str  # one of: vector_only | lexical_only | grep_only | none | full
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
+class MemoryHealthCheckEvent(TypedDict):
+    """One health-check tick completed (doc 02 §5.1 + doc 07 §9.4).
+
+    ``status`` is the aggregate label (``ok`` / ``degraded`` /
+    ``critical``); ``components`` carries per-probe status
+    (``fts`` / ``lance`` / future additions).
+
+    Audit A6 (2026-05-28) added ``tick_id`` (per-tick UUID hex for
+    log correlation) and ``duration_ms`` (wall-clock of the tick).
+    Both fields are required — adding them is additive vs. the
+    pre-A6 payload, and no consumer pinned to the prior shape.
+    """
+
+    tick_id: str
+    status: str
+    components: dict[str, str]
+    drift_count: int
+    duration_ms: float
+    errors: NotRequired[dict[str, str]]
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
+class MemoryHealthCriticalEvent(TypedDict):
+    """A component crossed the consecutive-failure threshold (doc 02
+    §5.1 escalation rule; doc 07 §9.5).
+
+    Emitted once per component per failure burst. Reset on the next
+    successful tick.
+
+    Audit A7 (2026-05-28) added ``manual_recovery_hint`` — the CLI
+    command an operator runs to rebuild the failed component
+    (informational; nothing executes it automatically).
+    """
+
+    component: str
+    consecutive_failures: int
+    last_error: str
+    manual_recovery_hint: str
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
+class MemoryFallbackToolUsedEvent(TypedDict):
+    """Agent invoked a non-memory tool (grep / list_dir / read_file /
+    etc.) while a memory-enabled workspace was active (audit H17,
+    2026-05-29).
+
+    Pattern observed in bench-100 v8: 27 / 102 traces (26%) fell to
+    grep after exhausting memory_search/memory_drill candidates.
+    The agent's fallback is rational — try the curated tool, fall
+    back to raw search — but the high rate masks a memory_search
+    recall gap. This event lets dashboards quantify the rate
+    longitudinally without re-instrumenting per-tool.
+
+    ``is_bench_relevant`` is True when the tool is one of the
+    filesystem-scanning fallbacks (grep / list_dir / read_file /
+    edit_file / exec / write_file). Other non-memory tools (web_*,
+    message, etc.) emit too but with the flag False so analysis
+    can filter.
+    """
+
+    tool_name: str
+    is_bench_relevant: bool
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
+class MemoryHotLayerFailureEvent(TypedDict):
+    """Hot-layer assembly failed for one component (per doc 06 §8.7).
+
+    The hot layer renders five sections (identity / canonical / fragments /
+    headlines / entities). If any section's disk read or parse raises,
+    the renderer logs this event and degrades that section to empty so
+    the agent prompt still builds. The whole layer never fails hard.
+
+    ``component`` identifies which section degraded. For per-page parse
+    failures (one malformed entity page in an otherwise-healthy walk),
+    the value includes the filename suffix (e.g.
+    ``"canonical_blocks:broken.md"``) so dashboards can tell systemic
+    failures apart from one-off bad files.
+    """
+
+    component: str  # "canonical_blocks" | "fragment_blocks" | "identity" |
+                    # "headlines" | "entities" | "canonical_blocks:<file>"
+    error: str
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
 # ===========================================================================
 # Catalog — single source of truth
 # ===========================================================================
@@ -723,10 +1134,29 @@ EVENTS: dict[str, type] = {
     "memory.dream.start": MemoryDreamStartEvent,
     "memory.dream.end": MemoryDreamEndEvent,
     "memory.dream.skipped": MemoryDreamSkippedEvent,
+    "memory.dream.patch_applied": MemoryDreamPatchAppliedEvent,
+    "memory.dream.entity_failed": MemoryDreamEntityFailedEvent,
+    "memory.dream.budget_exhausted": MemoryDreamBudgetExhaustedEvent,
+    "memory.dream.legacy.start": MemoryDreamLegacyStartEvent,
+    "memory.dream.legacy.end": MemoryDreamLegacyEndEvent,
+    "memory.dream.legacy.skipped": MemoryDreamLegacySkippedEvent,
+    "memory.entity_relation_cap_warned": MemoryEntityRelationCapWarnedEvent,
+    "memory.entity_relation_cap_rejected": MemoryEntityRelationCapRejectedEvent,
     "memory.absorb.judged": MemoryAbsorbJudgedEvent,
     "memory.absorb.auto_merged": MemoryAbsorbAutoMergedEvent,
     "memory.absorb.skipped": MemoryAbsorbSkippedEvent,
     "memory.absorb.reverted": MemoryAbsorbRevertedEvent,
+    "memory.hot_layer.failure": MemoryHotLayerFailureEvent,
+    "memory.index.write": MemoryIndexWriteEvent,
+    "memory.index.rebuild": MemoryIndexRebuildEvent,
+    "memory.index.staleness_detected": MemoryIndexStalenessDetectedEvent,
+    "memory.recall.lexical": MemoryRecallLexicalEvent,
+    "memory.recall.rrf": MemoryRecallRRFEvent,
+    "memory.recall.rerank": MemoryRecallRerankEvent,
+    "memory.search.failure": MemoryRecallFailureEvent,
+    "memory.health_check": MemoryHealthCheckEvent,
+    "memory.health.critical": MemoryHealthCriticalEvent,
+    "memory.fallback_tool_used": MemoryFallbackToolUsedEvent,
 }
 
 
@@ -782,4 +1212,19 @@ __all__ = [
     "MemoryEmbeddingLoadEvent",
     "MemoryEmbeddingEmbedEvent",
     "MemoryRecallVectorEvent",
+    "MemoryDreamPatchAppliedEvent",
+    "MemoryDreamEntityFailedEvent",
+    "MemoryEntityRelationCapWarnedEvent",
+    "MemoryEntityRelationCapRejectedEvent",
+    "MemoryHealthCheckEvent",
+    "MemoryFallbackToolUsedEvent",
+    "MemoryHealthCriticalEvent",
+    "MemoryHotLayerFailureEvent",
+    "MemoryRecallLexicalEvent",
+    "MemoryRecallRRFEvent",
+    "MemoryRecallRerankEvent",
+    "MemoryRecallFailureEvent",
+    "MemoryIndexWriteEvent",
+    "MemoryIndexRebuildEvent",
+    "MemoryIndexStalenessDetectedEvent",
 ]

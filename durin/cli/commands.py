@@ -125,9 +125,9 @@ app = typer.Typer(
 # everyday commands (onboard, agent, gateway, …) sort above the
 # lifecycle/diagnostic ones in `durin --help`.
 from durin.cli.config_cmd import config_app as _config_app  # noqa: E402
-from durin.cli.upgrade import register as _register_upgrade  # noqa: E402
-from durin.cli.uninstall import register as _register_uninstall  # noqa: E402
 from durin.cli.doctor import register as _register_doctor  # noqa: E402
+from durin.cli.uninstall import register as _register_uninstall  # noqa: E402
+from durin.cli.upgrade import register as _register_upgrade  # noqa: E402
 
 console = Console()
 EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit", ":q"}
@@ -201,8 +201,8 @@ def _init_prompt_session(
     history_file.parent.mkdir(parents=True, exist_ok=True)
 
     from prompt_toolkit.completion import merge_completers
-    from prompt_toolkit.key_binding import KeyBindings
     from prompt_toolkit.document import Document as _PtkDocument
+    from prompt_toolkit.key_binding import KeyBindings
 
     completers = []
     if workspace is not None:
@@ -624,7 +624,7 @@ def onboard(
         except Exception as e:
             console.print(f"[red]✗[/red] Error during configuration: {e}")
             console.print("[yellow]Please run 'durin onboard' again to complete setup.[/yellow]")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from None
     elif wizard_mode:
         # New default: task-oriented wizard. A section runs just one part.
         from durin.cli.onboard_wizard import run_section, run_wizard
@@ -643,7 +643,7 @@ def onboard(
                 "[yellow]Tip: re-run with `durin onboard --advanced` "
                 "for the legacy walker.[/yellow]"
             )
-            raise typer.Exit(1)
+            raise typer.Exit(1) from None
         if result.cancelled:
             console.print("[yellow]Wizard cancelled; nothing was saved.[/yellow]")
             return
@@ -718,7 +718,7 @@ def onboard(
     console.print(f"\n{__logo__} durin is ready!")
     console.print("\nNext steps:")
     if wizard_mode:
-        console.print(f"  1. Verify: [cyan]durin doctor[/cyan]")
+        console.print("  1. Verify: [cyan]durin doctor[/cyan]")
         console.print(f"  2. Chat: [cyan]{agent_cmd}[/cyan]")
         console.print(f"  3. (optional) Chat apps: [cyan]{gateway_cmd}[/cyan]")
     else:
@@ -827,7 +827,7 @@ def _load_runtime_config(config: str | None = None, workspace: str | None = None
         loaded = resolve_config_env_vars(load_config(config_path))
     except ValueError as e:
         console.print(f"[red]Error: {e}[/red]")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
     _warn_deprecated_config_keys(config_path)
     if workspace:
         loaded.agents.defaults.workspace = workspace
@@ -884,7 +884,7 @@ def serve(
         from aiohttp import web  # noqa: F401
     except ImportError:
         console.print("[red]aiohttp is required. Install with: pip install 'durin-ai[api]'[/red]")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
     from loguru import logger
 
@@ -909,10 +909,6 @@ def serve(
         agent_loop = AgentLoop.from_config(
             runtime_config, bus,
             session_manager=session_manager,
-            image_generation_provider_configs={
-                "openrouter": runtime_config.providers.openrouter,
-                "aihubmix": runtime_config.providers.aihubmix,
-            },
         )
     except ValueError as exc:
         console.print(f"[red]Error: {exc}[/red]")
@@ -1019,7 +1015,7 @@ def gateway_root(
                 f"[yellow]Gateway already running (pid {e.pid}). "
                 "Use `durin gateway stop` first if you want a fresh start.[/yellow]"
             )
-            raise typer.Exit(1)
+            raise typer.Exit(1) from None
         from durin.cli.gateway_daemon import daemon_logs_path
 
         console.print(f"[green]✓[/green] Gateway started (pid {pid}, daemon mode)")
@@ -1078,7 +1074,7 @@ def gateway_start(ctx: typer.Context) -> None:
             f"[yellow]Gateway already running (pid {e.pid}). "
             "Run `durin gateway restart` to bounce it.[/yellow]"
         )
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
     console.print(f"[green]✓[/green] Gateway started in background (pid {pid})")
     url = _resolved_webui_url()
     if url:
@@ -1246,10 +1242,6 @@ def _run_gateway(
         context_window_tokens=provider_snapshot.context_window_tokens,
         cron_service=cron,
         session_manager=session_manager,
-        image_generation_provider_configs={
-            "openrouter": config.providers.openrouter,
-            "aihubmix": config.providers.aihubmix,
-        },
         provider_snapshot_loader=load_provider_snapshot,
         runtime_model_publisher=lambda model, preset: publish_runtime_model_update(
             bus,
@@ -1341,10 +1333,12 @@ def _run_gateway(
                         "memory_dream cron: vector index unavailable (%s); "
                         "pages will not be indexed", exc,
                     )
+            from durin.memory.model_resolve import resolve_memory_model
             runner = DreamRunner(
                 workspace=workspace,
                 min_seconds_between_runs=mem_dream_cfg.min_seconds_between_runs,
-                model=mem_dream_cfg.model_override,
+                max_seconds_per_run=mem_dream_cfg.max_seconds_per_run,
+                model=resolve_memory_model(config),
                 vector_index=vi,
                 auto_absorb_enabled=mem_dream_cfg.auto_absorb.enabled,
                 auto_absorb_threshold=mem_dream_cfg.auto_absorb.confidence_threshold,
@@ -1599,6 +1593,7 @@ def _run_gateway(
     agent.dream.max_batch_size = dream_cfg.max_batch_size
     agent.dream.max_iterations = dream_cfg.max_iterations
     agent.dream.annotate_line_ages = dream_cfg.annotate_line_ages
+    agent.dream.min_tokens_to_run = max(0, int(dream_cfg.min_tokens_to_run))
     from durin.cron.types import CronJob, CronPayload, CronSchedule
     cron.register_system_job(CronJob(
         id="dream",
@@ -2484,7 +2479,7 @@ def _login_openai_codex() -> None:
         console.print(f"[green]✓ Authenticated with OpenAI Codex[/green]  [dim]{token.account_id}[/dim]")
     except ImportError:
         console.print("[red]oauth_cli_kit not installed. Run: pip install oauth-cli-kit[/red]")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
 @_register_logout("openai_codex")
@@ -2495,7 +2490,7 @@ def _logout_openai_codex() -> None:
         from oauth_cli_kit.storage import FileTokenStorage
     except ImportError:
         console.print("[red]oauth_cli_kit not installed. Run: pip install oauth-cli-kit[/red]")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
     storage = FileTokenStorage(token_filename=OPENAI_CODEX_PROVIDER.token_filename)
     _delete_oauth_files(storage.get_token_path(), _PROVIDER_DISPLAY["openai_codex"])
@@ -2508,7 +2503,7 @@ def _logout_github_copilot() -> None:
         from durin.providers.github_copilot_provider import get_storage
     except ImportError:
         console.print("[red]GitHub Copilot provider unavailable. Ensure oauth-cli-kit is installed.[/red]")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
     storage = get_storage()
     _delete_oauth_files(storage.get_token_path(), _PROVIDER_DISPLAY["github_copilot"])
@@ -2554,7 +2549,7 @@ def _login_github_copilot() -> None:
         console.print(f"[green]✓ Authenticated with GitHub Copilot[/green]  [dim]{account}[/dim]")
     except Exception as e:
         console.print(f"[red]Authentication error: {e}[/red]")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
 # Register lifecycle / diagnostic commands last so they sort below the

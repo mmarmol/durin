@@ -12,7 +12,6 @@ from pathlib import Path
 
 from durin.config.paths import get_media_dir
 
-
 # --- Docker sandbox registry ---
 # Maps workspace path (resolved) → container_id.
 # The eval harness registers a container before running the agent;

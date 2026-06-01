@@ -17,10 +17,10 @@ from loguru import logger
 
 from durin.agent.runner import AgentRunner, AgentRunSpec
 from durin.agent.tools.registry import ToolRegistry
+from durin.memory.consolidator_tags import parse_consolidator_response
 from durin.session.manager import Session
 from durin.telemetry.logger import current_telemetry
 from durin.utils.gitstore import GitStore
-from durin.utils.post_compaction_guard import PostCompactionLoopGuard
 from durin.utils.helpers import (
     ensure_dir,
     estimate_message_tokens,
@@ -29,8 +29,8 @@ from durin.utils.helpers import (
     strip_think,
     truncate_text,
 )
+from durin.utils.post_compaction_guard import PostCompactionLoopGuard
 from durin.utils.prompt_templates import render_template
-from durin.memory.consolidator_tags import parse_consolidator_response
 
 if TYPE_CHECKING:
     from durin.providers.base import LLMProvider
@@ -672,12 +672,52 @@ class Consolidator:
         }
 
     def _persist_last_summary(self, session: Session, summary: str | None) -> None:
+        """Persist the session summary as the single source of truth.
+
+        A10 (2026-05-28): the summary lives as a markdown projection
+        under ``memory/session_summary/<sanitized_key>.md`` — NOT in
+        ``session.metadata["_last_summary"]`` anymore. The walker /
+        indexer pick it up automatically, and the search pipeline
+        can return it as a hit (`class_name=session_summary`, decay
+        120d per A9).
+
+        Backward-compat: if the session's metadata still carries a
+        legacy ``_last_summary`` dict (pre-A10 persistence), we drop
+        it here so the JSON and the markdown can't drift apart. The
+        markdown is the source of truth going forward.
+        """
         if summary and summary != "(nothing)":
-            session.metadata["_last_summary"] = {
-                "text": summary,
-                "last_active": session.updated_at.isoformat(),
-            }
-            self.sessions.save(session)
+            from durin.memory.session_summary_store import (
+                write_session_summary,
+            )
+            try:
+                write_session_summary(
+                    self.store.workspace,
+                    session.key,
+                    summary,
+                    last_active=session.updated_at,
+                )
+            except Exception as exc:  # noqa: BLE001
+                # The persistence must NEVER break the compaction
+                # path — the summary will be regenerated next time
+                # if this write fails. Log loudly so the failure
+                # surfaces in operator review.
+                logger.warning(
+                    "session_summary: write for %s failed: %s",
+                    session.key, exc,
+                )
+        # Drop the legacy field from metadata if it was carrying a
+        # pre-A10 summary. Saves the session so the JSON reflects
+        # the new state (single source of truth principle).
+        legacy = session.metadata.pop("_last_summary", None)
+        if legacy is not None:
+            try:
+                self.sessions.save(session)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "session_summary: failed to drop legacy "
+                    "metadata for %s: %s", session.key, exc,
+                )
 
     def estimate_session_prompt_tokens(
         self,
@@ -687,8 +727,18 @@ class Consolidator:
         history = self._full_unconsolidated_history(session, include_timestamps=True)
         channel, chat_id = (session.key.split(":", 1) if ":" in session.key else (None, None))
         # Include archived summary in estimation so the budget accounts for it.
-        meta = session.metadata.get("_last_summary")
-        summary = meta.get("text") if isinstance(meta, dict) else (meta if isinstance(meta, str) else None)
+        # A10: summary lives in `memory/session_summary/<key>.md` now (single
+        # source of truth); the legacy `session.metadata["_last_summary"]` is
+        # kept as a backward-compat fallback for pre-A10 sessions until they
+        # next compact (at which point `_persist_last_summary` migrates).
+        from durin.memory.session_summary_store import get_session_summary
+        summary, _ = get_session_summary(self.store.workspace, session.key)
+        if summary is None:
+            legacy = session.metadata.get("_last_summary")
+            if isinstance(legacy, dict):
+                summary = legacy.get("text") if isinstance(legacy.get("text"), str) else None
+            elif isinstance(legacy, str):
+                summary = legacy
         probe_messages = self._build_messages(
             history=history,
             current_message="[token-probe]",
@@ -992,6 +1042,43 @@ class Consolidator:
 _STALE_THRESHOLD_DAYS = 14
 
 
+def _approx_tokens_for_entries(entries: list[dict[str, Any]]) -> int:
+    """Tokenize the user-visible payload of history.jsonl entries.
+
+    Used as a cheap pre-LLM gate to decide whether a Dream pass is
+    worth a Phase 1 LLM call. Counts `role` + `content` + the common
+    tool-call fields (anything the Phase 1 prompt would render).
+    Returns 0 on tokenizer failure — safer than blocking; the gate
+    just doesn't trigger.
+    """
+    try:
+        enc = tiktoken.get_encoding("cl100k_base")
+    except Exception:  # noqa: BLE001
+        return 0
+    parts: list[str] = []
+    for e in entries:
+        for key in ("role", "content", "name", "tool_call_id"):
+            v = e.get(key)
+            if isinstance(v, str) and v:
+                parts.append(v)
+        tcs = e.get("tool_calls")
+        if isinstance(tcs, list):
+            for tc in tcs:
+                if isinstance(tc, dict):
+                    fn = tc.get("function", {})
+                    if isinstance(fn, dict):
+                        for k in ("name", "arguments"):
+                            v = fn.get(k)
+                            if isinstance(v, str) and v:
+                                parts.append(v)
+    if not parts:
+        return 0
+    try:
+        return sum(len(enc.encode(p)) for p in parts)
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 class Dream:
     """Two-phase memory processor: analyze history.jsonl, then edit files via AgentRunner.
 
@@ -1018,6 +1105,7 @@ class Dream:
         max_iterations: int = 10,
         max_tool_result_chars: int = 16_000,
         annotate_line_ages: bool = True,
+        min_tokens_to_run: int = 2000,
     ):
         self.store = store
         self.provider = provider
@@ -1029,6 +1117,11 @@ class Dream:
         # Default True keeps the #3212 behavior; set False to feed MEMORY.md raw
         # (e.g. if a specific LLM reacts poorly to the `← Nd` suffix).
         self.annotate_line_ages = annotate_line_ages
+        # Pre-LLM gate: skip the whole Phase 1 LLM analysis when the
+        # unprocessed history.jsonl tail tokenizes to less than this. 0 =
+        # disabled (every non-empty cron tick runs the LLM, pre-fix
+        # behaviour). See DreamConfig.min_tokens_to_run for the rationale.
+        self.min_tokens_to_run = max(0, int(min_tokens_to_run))
         self._runner = AgentRunner(provider)
         self._tools = self._build_tools()
 
@@ -1144,17 +1237,60 @@ class Dream:
 
     async def run(self) -> bool:
         """Process unprocessed history entries. Returns True if work was done."""
-        from durin.agent.skills import BUILTIN_SKILLS_DIR
+        import time as _time
 
+        from durin.agent.skills import BUILTIN_SKILLS_DIR
+        from durin.agent.tools._telemetry import emit_tool_event
+
+        t0 = _time.perf_counter()
         last_cursor = self.store.get_last_dream_cursor()
         entries = self.store.read_unprocessed_history(since_cursor=last_cursor)
         if not entries:
+            emit_tool_event(
+                "memory.dream.legacy.skipped",
+                {"reason": "no_entries", "model": self.model},
+            )
+            return False
+
+        # Pre-LLM gate (2026-05-31): tokenize the unprocessed history tail
+        # and skip the whole Phase 1 LLM call when total tokens are under
+        # the user's threshold. Cheap (~ms with tiktoken) — bounds cron
+        # cost during quiet periods. Counting entry text (role + content
+        # + tool fields) approximates what Phase 1 will actually feed to
+        # the LLM closely enough for a gate decision; the exact LLM prompt
+        # also includes MEMORY.md/SOUL.md/USER.md previews but those don't
+        # grow with history volume.
+        tokens = _approx_tokens_for_entries(entries)
+        if self.min_tokens_to_run > 0 and tokens < self.min_tokens_to_run:
+            logger.info(
+                "Dream: skipped — {} tokens < threshold {} ({} entries)",
+                tokens, self.min_tokens_to_run, len(entries),
+            )
+            emit_tool_event(
+                "memory.dream.legacy.skipped",
+                {
+                    "reason": "below_token_threshold",
+                    "tokens": tokens,
+                    "threshold": self.min_tokens_to_run,
+                    "entries_count": len(entries),
+                    "model": self.model,
+                },
+            )
             return False
 
         batch = entries[: self.max_batch_size]
         logger.info(
             "Dream: processing {} entries (cursor {}→{}), batch={}",
             len(entries), last_cursor, batch[-1]["cursor"], len(batch),
+        )
+        emit_tool_event(
+            "memory.dream.legacy.start",
+            {
+                "entries_count": len(entries),
+                "batch_size": len(batch),
+                "tokens": tokens,
+                "model": self.model,
+            },
         )
 
         # Build history text for LLM — cap each entry so a legacy oversized
@@ -1195,6 +1331,8 @@ class Dream:
             f"## Conversation History\n{history_text}\n\n{file_context}"
         )
 
+        phase1_prompt_tokens = 0
+        phase1_completion_tokens = 0
         try:
             phase1_response = await self.provider.chat_with_retry(
                 model=self.model,
@@ -1213,9 +1351,24 @@ class Dream:
                 tool_choice=None,
             )
             analysis = phase1_response.content or ""
+            usage = getattr(phase1_response, "usage", None) or {}
+            phase1_prompt_tokens = int(usage.get("prompt_tokens") or 0)
+            phase1_completion_tokens = int(usage.get("completion_tokens") or 0)
             logger.debug("Dream Phase 1 analysis ({} chars): {}", len(analysis), analysis[:500])
         except Exception:
             logger.exception("Dream Phase 1 failed")
+            emit_tool_event(
+                "memory.dream.legacy.end",
+                {
+                    "status": "phase1_failed",
+                    "duration_ms": int((_time.perf_counter() - t0) * 1000),
+                    "cursor_advanced": False,
+                    "changelog_count": 0,
+                    "phase1_prompt_tokens": phase1_prompt_tokens,
+                    "phase1_completion_tokens": phase1_completion_tokens,
+                    "model": self.model,
+                },
+            )
             return False
 
         # Phase 2: Delegate to AgentRunner with read_file / edit_file
@@ -1269,9 +1422,11 @@ class Dream:
                     changelog.append(f"{event['name']}: {event['detail']}")
 
         # Only advance cursor on successful completion to prevent silent loss
+        cursor_advanced = False
         if result and result.stop_reason == "completed":
             new_cursor = batch[-1]["cursor"]
             self.store.set_last_dream_cursor(new_cursor)
+            cursor_advanced = True
             logger.info(
                 "Dream done: {} change(s), cursor advanced to {}",
                 len(changelog), new_cursor,
@@ -1286,12 +1441,37 @@ class Dream:
         self.store.compact_history()
 
         # Git auto-commit (only when there are actual changes)
+        commit_sha: str | None = None
         if changelog and self.store.git.is_initialized():
             ts = batch[-1]["timestamp"]
             summary = f"dream: {ts}, {len(changelog)} change(s)"
             commit_msg = f"{summary}\n\n{analysis.strip()}"
             sha = self.store.git.auto_commit(commit_msg)
             if sha:
+                commit_sha = sha
                 logger.info("Dream commit: {}", sha)
+
+        if cursor_advanced:
+            end_status = "ok"
+        elif result is None:
+            end_status = "phase2_exception"
+        else:
+            end_status = f"phase2_{result.stop_reason}"
+        emit_tool_event(
+            "memory.dream.legacy.end",
+            {
+                "status": end_status,
+                "duration_ms": int((_time.perf_counter() - t0) * 1000),
+                "cursor_advanced": cursor_advanced,
+                "changelog_count": len(changelog),
+                "phase1_prompt_tokens": phase1_prompt_tokens,
+                "phase1_completion_tokens": phase1_completion_tokens,
+                "phase2_tool_events": (
+                    len(result.tool_events) if result and result.tool_events else 0
+                ),
+                "commit_sha": commit_sha,
+                "model": self.model,
+            },
+        )
 
         return True

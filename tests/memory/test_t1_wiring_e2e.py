@@ -30,6 +30,8 @@ from typer.testing import CliRunner
 
 from durin.memory.vector_index import vector_index_available
 
+# Default `agent_created` scope opened by `tests/conftest.py` (autouse).
+
 pytestmark = pytest.mark.skipif(
     not vector_index_available(),
     reason="lancedb not installed; install durin[memory] to run these tests",
@@ -54,6 +56,15 @@ class _FakeTextEmbedding:
     @staticmethod
     def list_supported_models():
         return list(_STUB_CATALOG)
+
+    @staticmethod
+    def add_custom_model(**_kwargs) -> None:
+        # No-op: production `_register_custom_models()` calls this on the
+        # real fastembed. The stub catalog already covers the model, so we
+        # skip the side effect. Without this the test is order-dependent —
+        # it only passes when a prior test (e.g. test_embedding) populated
+        # the module-level `_REGISTERED_CUSTOM` set first.
+        pass
 
     def __init__(self, model_name=None, **_):
         self.model_name = model_name
@@ -89,11 +100,14 @@ def _stub_fastembed():
 async def test_e2e1_memory_search_invokes_entity_aware_ranker(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Query mentioning a known entity → telemetry shows entity_aware ranking.
+    """v2 contract: query mentioning a known entity surfaces
+    `ranking="entity_aware"` in both the response dict and the
+    `memory.recall.vector` telemetry payload.
 
-    Setup: 1 entity page + 3 tagged entries + 2 noise entries, all indexed.
-    Action: query "what does Marcelo prefer".
-    Assert: ranking=="entity_aware", query_entities_count>=1, results non-empty.
+    The v2 pipeline applies the rerank one layer above the v1 path
+    (over FusedHit results, not raw LanceDB rows), but the
+    observable contract is the same: the agent gets a clear signal
+    that entity-aware ranking ran.
     """
     from durin.agent.tools.memory_search import MemorySearchTool
     from durin.memory.embedding import FastembedProvider
@@ -156,8 +170,11 @@ async def test_e2e1_memory_search_invokes_entity_aware_ranker(
         )
 
         tool = MemorySearchTool(workspace=tmp_path, embedding_model=_TEST_MODEL)
+        # Simpler query — FTS AND-tokenization needs all tokens
+        # present in some doc, so a single-token query is the
+        # easiest way to assert non-zero hits with the stub embedder.
         out = await tool.execute(
-            query="what does Marcelo prefer", scope="dreamed", level="warm",
+            query="Marcelo", scope="dreamed", level="warm",
         )
 
     assert out["total"] > 0
@@ -177,30 +194,27 @@ async def test_e2e1_memory_search_invokes_entity_aware_ranker(
 
 
 def _stub_consolidation_response(entity_ref: str) -> str:
-    """Well-formed dream LLM response for an entity (page + commit blocks)."""
+    """v2 dream LLM response for an entity."""
+    import json as _json
     type_, slug = entity_ref.split(":", 1)
+    ops = [
+        {"op": "add", "path": "/aliases/-", "value": slug,
+         "provenance": "episodic/e1.md"},
+        {"op": "add", "path": "/aliases/-", "value": slug.title(),
+         "provenance": "episodic/e1.md"},
+    ]
     return (
-        "===PAGE===\n"
-        "---\n"
-        f"type: {type_}\n"
-        f"name: {slug.title()}\n"
-        f"aliases: [{slug}, {slug.title()}]\n"
-        "dream_processed_through: 2026-05-20\n"
-        "---\n"
-        "\n"
-        f"# {slug.title()}\n"
-        "\n"
-        "## Current State\n"
-        "First consolidation pass.\n"
-        "===COMMIT===\n"
-        f"Consolidate {entity_ref} (rev 1)\n"
-        "\n"
-        "Initial pass.\n"
-        "\n"
-        f"Sources: e1, e2, e3\n"
-        f"Entities-touched: {entity_ref}\n"
-        "Cursor-after: 2026-05-20\n"
-        "===END===\n"
+        "===PATCH===\n"
+        + _json.dumps(ops, indent=2) + "\n"
+        + "===BODY_DELTA===\n"
+        + "First consolidation pass.\n"
+        + "===COMMIT===\n"
+        + f"Consolidate {entity_ref} (rev 1)\n"
+        + "\nInitial pass.\n"
+        + f"\nSources: episodic/e1.md, episodic/e2.md, episodic/e3.md\n"
+        + f"Entities-touched: {entity_ref}\n"
+        + "Cursor-after: 2026-05-20\n"
+        + "===END===\n"
     )
 
 
@@ -398,14 +412,14 @@ def test_e2e5_absorb_full_pipeline(tmp_path: Path) -> None:
         assert merged is not None
         assert any(a.lower() == "marcelo m" for a in merged.aliases)
 
-        # Absorbed archived.
+        # Absorbed archived. Phase 0 deliverable 5: top-level archive.
         absorbed_orig = (
             tmp_path / "memory" / "entities" / "person" / "marcelo_m.md"
         )
         assert not absorbed_orig.exists()
         archived = (
-            tmp_path / "memory" / "entities" / "person" / "marcelo"
-            / "archive" / "marcelo_m.md"
+            tmp_path / "memory" / "archive" / "entities" / "person"
+            / "marcelo_m.md"
         )
         assert archived.exists()
 

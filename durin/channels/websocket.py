@@ -659,6 +659,15 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/secrets/delete":
             return self._handle_secret_delete(request)
 
+        if got == "/api/cron":
+            return self._handle_cron_list(request)
+
+        if got == "/api/cron/remove":
+            return self._handle_cron_remove(request)
+
+        if got == "/api/cron/toggle":
+            return self._handle_cron_toggle(request)
+
         if got == "/api/config":
             return self._handle_config_get(request)
 
@@ -689,11 +698,23 @@ class WebSocketChannel(BaseChannel):
         if m:
             return self._handle_memory_edge(request, m.group(1), m.group(2))
 
+        if got == "/api/memory/entry":
+            return self._handle_memory_entry(request, query)
+
+        if got == "/api/memory/forget":
+            return self._handle_memory_forget(request, query)
+
+        if got == "/api/memory/backlinks":
+            return self._handle_memory_backlinks(request, query)
+
         if got == "/api/model/test":
             return await self._handle_model_test(request)
 
         if got == "/api/model/capabilities":
             return self._handle_model_capabilities(request)
+
+        if got == "/api/memory/cross-encoder/test":
+            return await self._handle_cross_encoder_test(request, query)
 
         m = re.match(r"^/api/sessions/([^/]+)/messages$", got)
         if m:
@@ -802,6 +823,15 @@ class WebSocketChannel(BaseChannel):
                 "ws_path": self._expected_path(),
                 "expires_in": self.config.token_ttl_s,
                 "model_name": _resolve_bootstrap_model_name(self._runtime_model_name),
+                # True when this deploy gates bootstrap on a setup
+                # secret (token_issue_secret or static token). The
+                # webui uses this to decide whether to expose a
+                # "Logout" affordance — without a secret in play,
+                # logout would just strand the user on an auth form
+                # they have nothing to type into (the bootstrap
+                # auto-mints tokens for localhost). UX trap removed
+                # by hiding the button when requires_secret=false.
+                "requires_secret": bool(secret),
             }
         )
 
@@ -876,6 +906,87 @@ class WebSocketChannel(BaseChannel):
             return _http_error(500, f"session detail failed: {exc}")
         if payload is None:
             return _http_error(404, f"session not found: {stem}")
+        return _http_json_response(payload)
+
+    def _handle_memory_entry(
+        self, request: WsRequest, query: dict[str, list[str]],
+    ) -> Response:
+        """GET /api/memory/entry?uri=memory/<class>/<id> — one entry's frontmatter + body.
+
+        Distinct from ``_handle_memory_entity`` (which serves entity
+        PAGES under ``memory/entities/``). This handler is for the
+        individual entries — episodic / stable / corpus /
+        session_summary — that the P12 Entries panel browses.
+        """
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from durin.config.loader import load_config
+        from durin.memory.graph_api import get_entry_detail
+
+        uri = (_query_first(query, "uri") or "").strip()
+        try:
+            workspace = load_config().workspace_path
+            payload = get_entry_detail(workspace, uri)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("memory entry detail failed for %s", uri)
+            return _http_error(500, f"entry detail failed: {exc}")
+        if payload is None:
+            return _http_error(404, f"entry not found: {uri}")
+        return _http_json_response(payload)
+
+    def _handle_memory_forget(
+        self, request: WsRequest, query: dict[str, list[str]],
+    ) -> Response:
+        """GET /api/memory/forget?uri=memory/<class>/<id> — archive an entry.
+
+        Returns ``{"result": "archived"|"not_found"|"protected"|"invalid"}``.
+        HTTP status mirrors the result: 200 archived/not_found,
+        403 protected, 400 invalid. (Operators can distinguish "URI
+        was malformed" from "URI named a real entry that's gone"
+        without parsing the body.)
+        """
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from durin.config.loader import load_config
+        from durin.memory.graph_api import forget_entry
+
+        uri = (_query_first(query, "uri") or "").strip()
+        try:
+            workspace = load_config().workspace_path
+            payload = forget_entry(workspace, uri)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("memory forget failed for %s", uri)
+            return _http_error(500, f"forget failed: {exc}")
+        result = payload.get("result")
+        if result == "protected":
+            # 403 + payload so the UI can switch on result text too.
+            return _http_json_response(payload, status=403)
+        if result == "invalid":
+            return _http_json_response(payload, status=400)
+        return _http_json_response(payload)
+
+    def _handle_memory_backlinks(
+        self, request: WsRequest, query: dict[str, list[str]],
+    ) -> Response:
+        """GET /api/memory/backlinks?uri=memory/<class>/<id> — entries that reference this one.
+
+        Walks ``memory/`` (excluding archive / pending) once and returns
+        up to 50 hits (``truncated`` flag indicates more were found).
+        Synchronous; benchmark target is < 100 ms over O(thousands) of
+        entries.
+        """
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from durin.config.loader import load_config
+        from durin.memory.graph_api import get_entry_backlinks
+
+        uri = (_query_first(query, "uri") or "").strip()
+        try:
+            workspace = load_config().workspace_path
+            payload = get_entry_backlinks(workspace, uri)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("memory backlinks failed for %s", uri)
+            return _http_error(500, f"backlinks failed: {exc}")
         return _http_json_response(payload)
 
     def _handle_memory_edge(
@@ -1213,6 +1324,118 @@ class WebSocketChannel(BaseChannel):
         get_secret_store(reload=True)
         return _http_json_response({"ok": True})
 
+    # -- cron API (P11) ----------------------------------------------------
+
+    def _fresh_cron_service(self):
+        """Build a non-running CronService bound to the workspace's
+        store path. Read-only ops (`list_jobs`) work directly; mutating
+        ops (`remove_job`, `enable_job`) write to the action.jsonl log
+        which the gateway's running service drains on its next tick.
+        Avoids reaching across processes for a shared CronService
+        handle — mirrors how the SecretStore endpoints work.
+        """
+        from durin.config.loader import load_config
+        from durin.cron.service import CronService
+
+        cfg = load_config()
+        path = cfg.workspace_path / "cron" / "jobs.json"
+        return CronService(path)
+
+    def _cron_job_to_dict(self, job) -> dict:
+        sched = job.schedule
+        # Render a human label per schedule kind. The full structured
+        # data also goes out so the frontend can format dates locally.
+        if sched.kind == "every":
+            secs = (sched.every_ms or 0) // 1000
+            label = f"every {secs}s"
+        elif sched.kind == "cron":
+            tz = f" ({sched.tz})" if sched.tz else ""
+            label = f"{sched.expr}{tz}"
+        elif sched.kind == "at":
+            label = f"once at {sched.at_ms}"
+        else:
+            label = sched.kind
+        is_system = job.payload.kind == "system_event"
+        return {
+            "id": job.id,
+            "name": job.name,
+            "enabled": job.enabled,
+            "is_system": is_system,
+            "schedule": {
+                "kind": sched.kind,
+                "label": label,
+                "expr": sched.expr,
+                "every_ms": sched.every_ms,
+                "at_ms": sched.at_ms,
+                "tz": sched.tz,
+            },
+            # System jobs hide their message — usually internal references
+            # to consolidation prompts that aren't useful to surface.
+            "message": "" if is_system else job.payload.message,
+            "channel": job.payload.channel or "",
+            "state": {
+                "next_run_at_ms": job.state.next_run_at_ms,
+                "last_run_at_ms": job.state.last_run_at_ms,
+                "last_status": job.state.last_status,
+                "last_error": job.state.last_error,
+            },
+            "created_at_ms": job.created_at_ms,
+            "updated_at_ms": job.updated_at_ms,
+        }
+
+    def _handle_cron_list(self, request: WsRequest) -> Response:
+        """`GET /api/cron` — list all scheduled jobs (including disabled
+        + system jobs). System jobs are flagged so the UI can disable
+        the delete button for them."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            cron = self._fresh_cron_service()
+            jobs = cron.list_jobs(include_disabled=True)
+            return _http_json_response({
+                "jobs": [self._cron_job_to_dict(j) for j in jobs],
+            })
+        except Exception as exc:  # noqa: BLE001
+            return _http_error(500, f"could not load cron jobs: {exc}")
+
+    def _handle_cron_remove(self, request: WsRequest) -> Response:
+        """`GET /api/cron/remove?id=...` — remove a non-system job."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        job_id = (_query_first(_parse_query(request.path), "id") or "").strip()
+        if not job_id:
+            return _http_error(400, "id is required")
+        try:
+            cron = self._fresh_cron_service()
+            result = cron.remove_job(job_id)
+        except Exception as exc:  # noqa: BLE001
+            return _http_error(500, f"could not remove job: {exc}")
+        if result == "not_found":
+            return _http_error(404, "no such job")
+        if result == "protected":
+            return _http_error(403, "system job; cannot remove")
+        return _http_json_response({"result": result})
+
+    def _handle_cron_toggle(self, request: WsRequest) -> Response:
+        """`GET /api/cron/toggle?id=...&enabled=true|false` — enable
+        or disable a job without removing it."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        query = _parse_query(request.path)
+        job_id = (_query_first(query, "id") or "").strip()
+        enabled_raw = (_query_first(query, "enabled") or "").strip().lower()
+        if not job_id:
+            return _http_error(400, "id is required")
+        enabled = enabled_raw in ("1", "true", "yes")
+        try:
+            cron = self._fresh_cron_service()
+            job = cron.enable_job(job_id, enabled=enabled)
+        except Exception as exc:  # noqa: BLE001
+            return _http_error(500, f"could not toggle job: {exc}")
+        if job is None:
+            return _http_error(404, "no such job")
+        return _http_json_response({"job": self._cron_job_to_dict(job)})
+
     # -- generic config API (web parity Phase B) ---------------------------
 
     def _handle_config_get(self, request: WsRequest) -> Response:
@@ -1291,31 +1514,118 @@ class WebSocketChannel(BaseChannel):
         )
 
     def _handle_models_list(self, request: WsRequest) -> Response:
-        """`GET /api/models?provider=X` — model catalog for the picker.
+        """`GET /api/models?provider=X&capability=Y` — model catalog for the picker.
 
-        ``suggested`` is the curated per-provider shortlist; ``models``
-        is the full known-model set for free search.
+        ``suggested`` is the curated per-provider shortlist
+        (``DEFAULT_MODELS[provider]``); ``models`` is the catalog filtered
+        by:
+
+        - ``capability``: ``vision`` keeps only models with
+          ``supports_vision`` truthy; ``audio`` keeps
+          ``supports_audio_input``; omit or ``text`` for no filter.
+        - ``provider``: keeps only models whose id matches a keyword of
+          the provider's ``ProviderSpec`` (the same heuristic
+          ``_match_provider`` uses to auto-route by model name). Empty
+          provider keeps the full catalog (filtered only by capability).
+          For providers with no keywords (e.g. ``custom``, gateways like
+          OpenRouter) we keep the full catalog too — they can route
+          anything, so there's nothing to filter against.
+
+        Image-generation models are always excluded — the picker is for
+        chat/completion bridges only.
         """
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         from durin.cli.onboard_wizard import DEFAULT_MODELS
+        from durin.providers.registry import find_by_name
 
-        provider = (_query_first(_parse_query(request.path), "provider") or "").strip()
+        query = _parse_query(request.path)
+        provider = (_query_first(query, "provider") or "").strip()
+        capability = (_query_first(query, "capability") or "").strip().lower()
         suggested = list(DEFAULT_MODELS.get(provider, ()))
+
+        # Resolve provider keywords once. Empty tuple means "don't filter"
+        # (gateway / custom / unknown provider).
+        #
+        # Coding-plan variants (e.g. `zai_coding_plan` is the same
+        # backend as `zhipu`, just a different endpoint with separate
+        # quota) borrow their base provider's keywords so the catalog
+        # surfaces the same models. The plan's own keywords are
+        # intentionally rare (so auto-routing doesn't accidentally pick
+        # them) — they shouldn't double as a model-filter heuristic.
+        _PLAN_BASE = {
+            "zai_coding_plan": "zhipu",
+            "volcengine_coding_plan": "volcengine",
+            "byteplus_coding_plan": "byteplus",
+        }
+        provider_keywords: tuple[str, ...] = ()
+        if provider:
+            lookup_name = _PLAN_BASE.get(provider, provider)
+            spec = find_by_name(lookup_name)
+            if spec is not None:
+                provider_keywords = spec.keywords
+
+        def _capability_ok(info: object) -> bool:
+            if capability in ("", "text"):
+                return True
+            if not isinstance(info, dict):
+                # Without capability metadata we can't prove the model
+                # supports the modality — drop conservatively.
+                return False
+            if capability == "vision":
+                return bool(info.get("supports_vision"))
+            if capability == "audio":
+                return bool(info.get("supports_audio_input"))
+            return True
+
+        def _provider_ok(mid: str) -> bool:
+            if not provider_keywords:
+                return True
+            mid_lower = mid.lower()
+            mid_normalized = mid_lower.replace("-", "_")
+            for kw in provider_keywords:
+                kw_lower = kw.lower()
+                if kw_lower in mid_lower or kw_lower.replace("-", "_") in mid_normalized:
+                    return True
+            return False
+
         catalog: list[str] = []
         try:
             from durin.providers.capabilities import _load_capabilities_snapshot
 
-            # _load_capabilities_snapshot returns the models dict directly.
             models = _load_capabilities_snapshot() or {}
             catalog = sorted(
                 mid
                 for mid, info in models.items()
                 if isinstance(mid, str)
-                and (not isinstance(info, dict) or info.get("mode") != "image_generation")
+                # Exclude pure image-generation models from the chat pickers
+                # (vision / audio / text) — durin has no image-gen feature.
+                and (
+                    not isinstance(info, dict)
+                    or info.get("mode") != "image_generation"
+                )
+                and _capability_ok(info)
+                and _provider_ok(mid)
             )
         except Exception:  # noqa: BLE001
             catalog = []
+
+        # Trim suggested by the same capability filter so the curated
+        # shortlist doesn't surface (e.g.) a text-only model in the vision
+        # picker. Unknown ids in the snapshot stay (charity for fresh
+        # picks the catalog doesn't have yet).
+        if capability in ("vision", "audio", "image"):
+            try:
+                from durin.providers.capabilities import _load_capabilities_snapshot
+
+                snapshot = _load_capabilities_snapshot() or {}
+            except Exception:  # noqa: BLE001
+                snapshot = {}
+            suggested = [
+                m for m in suggested
+                if m not in snapshot or _capability_ok(snapshot.get(m))
+            ]
+
         return _http_json_response({"suggested": suggested, "models": catalog})
 
     def _handle_model_capabilities(self, request: WsRequest) -> Response:
@@ -1421,6 +1731,42 @@ class WebSocketChannel(BaseChannel):
                 "fix": result.fix or "",
             }
         )
+
+    async def _handle_cross_encoder_test(
+        self, request: WsRequest, query: dict,
+    ) -> Response:
+        """`GET /api/memory/cross-encoder/test?model=<id>` — probe a
+        cross-encoder model id by loading + running a trivial score.
+
+        Audit B12 (2026-05-28). Replaces the previously-considered
+        hardcoded enum: any model id that the user wants to evaluate
+        can be tested live, with the result surfaced to the webui
+        before the value is committed to config.
+
+        The load is potentially slow (model download + warmup). Run
+        it in a thread so the gateway event loop stays responsive.
+        """
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        import asyncio
+
+        from durin.memory.cross_encoder import probe_model
+
+        model = (_query_first(query, "model") or "").strip()
+        if not model:
+            return _http_error(400, "missing required `model` query param")
+        try:
+            result = await asyncio.to_thread(probe_model, model)
+        except Exception as exc:  # noqa: BLE001
+            return _http_json_response(
+                {
+                    "status": "fail",
+                    "message": f"unexpected error: {type(exc).__name__}: {exc}",
+                    "model_id": model,
+                    "duration_ms": 0.0,
+                },
+            )
+        return _http_json_response(result)
 
     @staticmethod
     def _is_websocket_channel_session_key(key: str) -> bool:
@@ -2013,13 +2359,6 @@ class WebSocketChannel(BaseChannel):
             metadata: dict[str, Any] = {"remote": getattr(connection, "remote_address", None)}
             if envelope.get("webui") is True:
                 metadata["webui"] = True
-            image_generation = envelope.get("image_generation")
-            if isinstance(image_generation, dict) and image_generation.get("enabled") is True:
-                aspect_ratio = image_generation.get("aspect_ratio")
-                metadata["image_generation"] = {
-                    "enabled": True,
-                    "aspect_ratio": aspect_ratio if isinstance(aspect_ratio, str) else None,
-                }
             await self._handle_message(
                 sender_id=client_id,
                 chat_id=cid,

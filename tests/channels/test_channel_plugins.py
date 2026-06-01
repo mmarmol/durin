@@ -1270,16 +1270,28 @@ async def test_notify_restart_done_enqueues_outbound_message():
     mgr.bus = MessageBus()
     mgr.channels = {"feishu": _StartableChannel(fake_config, mgr.bus)}
     mgr._dispatch_task = None
+    mgr._background_tasks = set()
     mgr._send_with_retry = AsyncMock()
 
     notice = RestartNotice(channel="feishu", chat_id="oc_123", started_at_raw="100.0")
     with patch("durin.channels.manager.consume_restart_notice_from_env", return_value=notice):
         mgr._notify_restart_done_if_needed()
 
-    await asyncio.sleep(0)
+    # The fire-and-forget task must be parked in _background_tasks so the
+    # event loop keeps a strong reference and cannot GC it before it runs.
+    assert len(mgr._background_tasks) == 1
+    task = next(iter(mgr._background_tasks))
+
+    await task
     mgr._send_with_retry.assert_awaited_once()
     sent_channel, sent_msg = mgr._send_with_retry.await_args.args
     assert sent_channel is mgr.channels["feishu"]
     assert sent_msg.channel == "feishu"
     assert sent_msg.chat_id == "oc_123"
     assert sent_msg.content.startswith("Restart completed")
+
+    # Once the task finishes, the done-callback (scheduled via call_soon,
+    # so it runs on the next loop turn) evicts it from the set so it does
+    # not leak across the manager's lifetime.
+    await asyncio.sleep(0)
+    assert mgr._background_tasks == set()

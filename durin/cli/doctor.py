@@ -54,6 +54,13 @@ class CheckResult:
     # When this result is a missing optional extra, record which extra it
     # belongs to so `--install-missing` can group + install correctly.
     extra: str | None = None
+    # When ONE check covers MULTIPLE missing extras (e.g. the
+    # "previously installed extras" warn that lists discord, oauth,
+    # slack in a single row), put them here so collect_missing_extras
+    # picks them all up. Bug pre-2026-05-31: this used to put the
+    # extras in the message only, and --install-missing silently
+    # noop'd because `extra` was None.
+    extras_list: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -362,6 +369,62 @@ def check_optional_extra(import_name: str, *, extra: str, purpose: str) -> Check
         )
 
 
+def check_cross_encoder_dep() -> CheckResult:
+    """P11 Fix A (2026-05-30): conditional check for `sentence_transformers`
+    when the user has cross-encoder rerank enabled in config.
+
+    Pattern: the H25 audit found that durin shipped with cross-encoder
+    rerank in the code path but `sentence-transformers` was never in
+    any default extra — operators who flipped the toggle silently saw
+    no improvement (CE failed to load, RRF fallback engaged). This
+    check makes the gap loud the next time someone runs `durin doctor`.
+
+    States:
+    - CE disabled in config → status "ok" (silent — most users don't
+      need CE, no point in warn clutter).
+    - CE enabled + sentence_transformers OK → status "ok".
+    - CE enabled + sentence_transformers missing → status "warn" with
+      `pip install durin-agent[cross-encoder]` hint; doctor's
+      `--install-missing` can auto-fix.
+    """
+    try:
+        cfg = load_config()
+        ce_enabled = bool(cfg.memory.search.cross_encoder.enabled)
+    except Exception:  # noqa: BLE001
+        # If config can't load, other checks will surface that;
+        # don't double-report here.
+        return CheckResult(
+            "cross-encoder dep", "ok",
+            "config not loaded yet — skipped",
+            category="extras", extra="cross-encoder",
+        )
+    if not ce_enabled:
+        return CheckResult(
+            "cross-encoder dep", "ok",
+            "cross-encoder disabled in config — skipped",
+            category="extras", extra="cross-encoder",
+        )
+    try:
+        importlib.import_module("sentence_transformers")
+        return CheckResult(
+            "cross-encoder dep", "ok",
+            "sentence_transformers importable (cross-encoder rerank active)",
+            category="extras", extra="cross-encoder",
+        )
+    except ImportError:
+        from durin.cli.upgrade import install_hint
+
+        return CheckResult(
+            "cross-encoder dep", "warn",
+            "sentence_transformers NOT installed but "
+            "memory.search.cross_encoder.enabled=true. Search will "
+            "fall through to pure RRF (no rerank). Install the "
+            "cross-encoder extra to enable the rerank step.",
+            fix=install_hint(["cross-encoder"]),
+            category="extras", extra="cross-encoder",
+        )
+
+
 def check_cache_size() -> CheckResult:
     cache = Path.home() / ".cache" / "durin"
     if not cache.exists():
@@ -471,12 +534,14 @@ def check_extras_drift() -> CheckResult:
     current = set(detect_installed_extras())
     missing = tracked - current
     if missing:
-        names = ", ".join(sorted(missing))
+        sorted_missing = tuple(sorted(missing))
+        names = ", ".join(sorted_missing)
         return CheckResult(
             "previously installed extras", "warn",
             f"{names} (you had it before but it's gone now)",
             fix=f"`durin doctor --install-missing -y` to restore {names}.",
             category="extras",
+            extras_list=sorted_missing,
         )
     return CheckResult(
         "previously installed extras", "ok",
@@ -550,6 +615,140 @@ def check_embedding_model() -> CheckResult:
             "Set memory.embedding.model to one of the wizard options, or "
             "rerun `durin onboard` and pick a model from the menu."
         ),
+        category="state",
+    )
+
+
+def check_embedding_model_loads() -> CheckResult:
+    """P11 Fix E (2026-05-30): smoke-test that the configured embedding
+    model actually loads + produces a vector.
+
+    `check_embedding_model` validates the model id against fastembed's
+    catalog at the boundary; this check goes further — it does a real
+    load + embed of a trivial input. Catches:
+
+    - Corrupt fastembed cache (`~/.cache/fastembed/` partially
+      downloaded after a failed first run)
+    - Network unreachable at install time (model exists in catalog
+      but isn't on disk yet, no internet to fetch)
+    - ONNX runtime mismatch (rare; fastembed pinned narrowly to
+      avoid this — see `pyproject.toml` comment)
+
+    Skip cases (status="skipped") to avoid noise:
+    - memory.enabled = false (most users)
+    - fastembed not installed (already covered by check_optional_extra)
+    """
+    try:
+        cfg = load_config()
+        if not cfg.memory.enabled:
+            return CheckResult(
+                "embedding model load", "ok",
+                "memory disabled in config — skipped",
+                category="state",
+            )
+        model_id = cfg.memory.embedding.model
+    except Exception as exc:  # noqa: BLE001
+        return CheckResult(
+            "embedding model load", "ok",
+            f"config load failed: {exc}",
+            category="state",
+        )
+    try:
+        from durin.memory.embedding import FastembedProvider
+    except Exception:  # noqa: BLE001
+        return CheckResult(
+            "embedding model load", "ok",
+            "fastembed not importable — covered by extras check",
+            category="state",
+        )
+    try:
+        provider = FastembedProvider(model=model_id)
+        vec = provider.embed(["health probe"])[0]
+    except Exception as exc:  # noqa: BLE001
+        return CheckResult(
+            "embedding model load", "fail",
+            f"load+embed raised: {type(exc).__name__}: {exc}",
+            fix=(
+                "Check `~/.cache/fastembed/` for partial downloads "
+                "(rm -rf and re-run); confirm internet reachable; or "
+                "switch model via `durin onboard` memory submenu."
+            ),
+            category="state",
+        )
+    if not isinstance(vec, list) or len(vec) == 0:
+        return CheckResult(
+            "embedding model load", "fail",
+            f"embed returned unusable result: {type(vec).__name__}({vec!r})",
+            category="state",
+        )
+    return CheckResult(
+        "embedding model load", "ok",
+        f"{model_id} produced {len(vec)}-dim vector",
+        category="state",
+    )
+
+
+def check_cross_encoder_loads() -> CheckResult:
+    """P11 Fix E (2026-05-30): smoke-test that the configured
+    cross-encoder model actually loads + scores a pair.
+
+    Skip cases:
+    - `memory.search.cross_encoder.enabled = false` (most users)
+    - sentence_transformers not installed (covered by
+      `check_cross_encoder_dep`)
+    """
+    try:
+        cfg = load_config()
+        ce_cfg = cfg.memory.search.cross_encoder
+        if not ce_cfg.enabled:
+            return CheckResult(
+                "cross-encoder load", "ok",
+                "cross-encoder disabled in config — skipped",
+                category="state",
+            )
+        model_id = ce_cfg.model
+    except Exception as exc:  # noqa: BLE001
+        return CheckResult(
+            "cross-encoder load", "ok",
+            f"config load failed: {exc}",
+            category="state",
+        )
+    try:
+        importlib.import_module("sentence_transformers")
+    except ImportError:
+        return CheckResult(
+            "cross-encoder load", "ok",
+            "sentence_transformers missing — covered by extras check",
+            category="state",
+        )
+    try:
+        from durin.memory.cross_encoder import CrossEncoderReranker
+        probe = CrossEncoderReranker(model=model_id)
+        scores = probe.score("health probe", ["dummy doc"])
+    except Exception as exc:  # noqa: BLE001
+        return CheckResult(
+            "cross-encoder load", "fail",
+            f"load+score raised: {type(exc).__name__}: {exc}",
+            fix=(
+                "Check `~/.cache/huggingface/` for partial downloads; "
+                "confirm internet reachable; or switch model via the "
+                "webui memory settings (model picker)."
+            ),
+            category="state",
+        )
+    if not scores:
+        return CheckResult(
+            "cross-encoder load", "fail",
+            "load returned no scores (see ERROR log for root cause)",
+            fix=(
+                "Likely sentence_transformers missing or model "
+                "unreachable. `pip install durin-agent[cross-encoder]`."
+            ),
+            category="state",
+        )
+    return CheckResult(
+        "cross-encoder load", "ok",
+        f"{model_id} produced score {float(scores[0]):.3f}",
         category="state",
     )
 
@@ -797,7 +996,7 @@ def check_provider_reachable(*, timeout: float = 3.0) -> CheckResult:
     if spec is None:
         return CheckResult("provider ping", "warn", f"unknown provider {spec_name!r}", category="providers")
     p = getattr(cfg.providers, spec.name, None)
-    base = p.api_base if p and getattr(p, "api_base", None) else getattr(spec, "default_base_url", None)
+    base = p.api_base if p and getattr(p, "api_base", None) else getattr(spec, "default_api_base", None)
     if not base:
         return CheckResult("provider ping", "warn", f"{spec.label}: no api_base set.", category="providers")
 
@@ -861,6 +1060,7 @@ def run_checks(*, ping: bool = False, ping_model: bool = False) -> DoctorReport:
     report.add(check_executable("git", required=False, hint="Install git so `durin upgrade` can pull editable installs."))
     report.add(check_optional_extra("fastembed", extra="memory", purpose="vector recall over memory/"))
     report.add(check_optional_extra("lancedb", extra="memory", purpose="vector index storage"))
+    report.add(check_cross_encoder_dep())
     report.add(check_optional_extra("mcp", extra="mcp", purpose="MCP server mode"))
     report.add(check_optional_extra("ddgs", extra="web", purpose="DuckDuckGo web_search"))
     report.add(check_optional_extra("readability", extra="web", purpose="web_fetch article extraction"))
@@ -877,6 +1077,11 @@ def run_checks(*, ping: bool = False, ping_model: bool = False) -> DoctorReport:
         pass
     report.add(check_extras_drift())
     report.add(check_embedding_model())
+    # P11 Fix E (2026-05-30): smoke-test the configured models
+    # actually load + work. Goes beyond `check_embedding_model` which
+    # only validates the id against the catalog.
+    report.add(check_embedding_model_loads())
+    report.add(check_cross_encoder_loads())
     report.add(check_memory_summary())
     report.add(check_cache_size())
     if ping:
@@ -907,11 +1112,24 @@ def apply_safe_fixes() -> list[str]:
 
 
 def collect_missing_extras(report: DoctorReport) -> list[str]:
-    """Return the unique list of extras whose import failed in this report."""
+    """Return the unique list of extras whose import failed in this report.
+
+    Reads both the per-extra ``extra`` field (one extra per check, e.g.
+    the fastembed/lancedb/mcp probes) and the multi-extra ``extras_list``
+    field (one check covering several missing extras, e.g. the
+    "previously installed extras" warn that lists discord/oauth/slack).
+    """
     seen: list[str] = []
     for r in report.results:
-        if r.category == "extras" and r.status == "warn" and r.extra and r.extra not in seen:
-            seen.append(r.extra)
+        if r.category != "extras" or r.status != "warn":
+            continue
+        candidates: list[str] = []
+        if r.extra:
+            candidates.append(r.extra)
+        candidates.extend(r.extras_list)
+        for extra in candidates:
+            if extra and extra not in seen:
+                seen.append(extra)
     return seen
 
 
@@ -955,7 +1173,11 @@ def install_missing_extras(extras: list[str], *, assume_yes: bool = False) -> in
         # Use `pipx inject` to add the extras' packages to the existing
         # pipx venv. This is non-destructive (no reinstall, no data loss,
         # no config touch) and avoids the broken `pipx install --force`
-        # path on the uv backend.
+        # path on the uv backend (silent no-op — see _upgrade_pipx
+        # docstring for the full diagnosis). Never replace with
+        # `pipx install --extras` or `pipx reinstall` — both would
+        # drop existing injections silently. Regression test:
+        # tests/cli/test_pipx_subprocess_safety.py.
         env = pipx_subprocess_env()
         pkgs = extras_to_packages(extras)
         if not pkgs:

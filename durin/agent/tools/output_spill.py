@@ -10,14 +10,13 @@ Inspired by OpenCode's ``TOOL_OUTPUT_MAX_CHARS`` (2000-char compaction cap in
 than post-hoc: spill happens at the moment of overflow, not retroactively
 during compaction. This keeps the model's context lean from the start.
 
-See ``docs/07_external_agents_review.md`` §T4.
+See ``docs/archive/34_external_agents_review.md`` §T4.
 """
 
 from __future__ import annotations
 
 import hashlib
 import time
-from contextlib import suppress
 from pathlib import Path
 from typing import Any
 

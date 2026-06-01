@@ -11,7 +11,6 @@ from pydantic_settings import BaseSettings
 from durin.cron.types import CronSchedule
 
 if TYPE_CHECKING:
-    from durin.agent.tools.image_generation import ImageGenerationToolConfig
     from durin.agent.tools.self import MyToolConfig
     from durin.agent.tools.shell import ExecToolConfig
     from durin.agent.tools.web import WebToolsConfig
@@ -59,6 +58,19 @@ class DreamConfig(Base):
     # on — set to False to feed MEMORY.md raw if a specific LLM reacts poorly
     # to the `← Nd` suffix or you want deterministic, git-independent prompts.
     annotate_line_ages: bool = True
+    # Pre-LLM gate (2026-05-31): when the cron fires, tokenize the unprocessed
+    # history.jsonl tail and skip the Phase 1 LLM call entirely if total tokens
+    # are below this threshold. Cheap (a few ms with tiktoken) and bounds the
+    # cost of a cron that ticks during quiet periods — a few "ok" / social
+    # turns no longer trigger a multi-thousand-token analysis. Default 2000:
+    # filters trivial / social sessions, keeps anything substantive enough to
+    # produce a fact worth escalating to MEMORY.md / SOUL.md / skills.
+    # Set to 0 to disable the gate (every non-empty cron tick runs the LLM,
+    # the pre-2026-05-31 behaviour).
+    min_tokens_to_run: int = Field(
+        default=2000, ge=0,
+        validation_alias=AliasChoices("minTokensToRun", "min_tokens_to_run"),
+    )
 
     def build_schedule(self, timezone: str) -> CronSchedule:
         """Build the runtime schedule, preferring the legacy cron override if present."""
@@ -118,7 +130,12 @@ class MemoryEmbeddingConfig(Base):
     """
 
     provider: str = "fastembed"
-    model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    # Default model: multilingual-e5-small (registered as custom model
+    # in durin/memory/embedding.py::_CUSTOM_MODELS). 117M params, 384-
+    # dim, 100+ languages, MIT, retrieval-tuned. Replaced
+    # paraphrase-multilingual-MiniLM-L12-v2 on 2026-05-30 — see doc 02
+    # §indexing and the wizard `_EMBEDDING_CHOICES` for the rationale.
+    model: str = "intfloat/multilingual-e5-small"
     base_url: str | None = Field(
         default=None,
         validation_alias=AliasChoices("baseUrl", "base_url"),
@@ -189,6 +206,20 @@ class MemoryDreamConfig(Base):
         validation_alias=AliasChoices("minSecondsBetweenRuns", "min_seconds_between_runs"),
     )
 
+    # Hard wall-clock cap per dream pass. The runner drains an entity's
+    # backlog across multiple consolidate batches (FIFO oldest-first,
+    # cursor advances per batch); this caps how long that drain runs
+    # before yielding. Remainder fires `memory.dream.budget_exhausted`
+    # telemetry and is picked up by the next trigger. Default 600s
+    # (10 min) covers ~10 oldest-first batches per entity at glm-5.1
+    # speeds; bump up for bootstraps of large entities, down for
+    # tighter cron windows.
+    max_seconds_per_run: int = Field(
+        default=600,
+        ge=0,
+        validation_alias=AliasChoices("maxSecondsPerRun", "max_seconds_per_run"),
+    )
+
     # §2.D auto-absorb config nested under dream.
     auto_absorb: "AutoAbsorbConfig" = Field(
         default_factory=lambda: AutoAbsorbConfig(),
@@ -254,22 +285,130 @@ class AutoAbsorbConfig(Base):
     )
 
 
+class CrossEncoderConfig(Base):
+    """Cross-encoder reranker config (doc 03 §9, doc 10 P4).
+
+    OFF by default per spec — the model adds 300-1500ms latency and
+    requires ~1GB additional RAM. Power users with quality-sensitive
+    workloads enable it; the default pipeline already produces useful
+    retrieval.
+    """
+
+    enabled: bool = False
+    # Default model: BAAI/bge-reranker-base (MIT, ~100M params,
+    # multilingual). Switched from jinaai/jina-reranker-v2-base-
+    # multilingual on 2026-05-30 — see H30 note in
+    # `durin/memory/cross_encoder.py`. Override to one of the curated
+    # alternatives (bge-v2-m3 for heavy multilingual, others) if you
+    # want a different trade-off.
+    model: str = "BAAI/bge-reranker-base"
+    batch_size: int = 32
+    # Top-N to keep after the rerank step. Doc 03 §9.3 says 10.
+    top_n: int = 10
+
+
+class MemorySearchSectioningConfig(Base):
+    """Sectioning step configuration (audit G1, 2026-05-28).
+
+    ``max_per_source`` caps how many `corpus` hits sharing the same
+    `ingest_id` can survive the sectioning step. Default 3 — set
+    when an ingested document is chunked into many corpus entries
+    and a single semantic query would otherwise monopolise the
+    top-K with consecutive chunks of the same source. Doc 03 §12.4.
+
+    Pre-G1 the value was hard-coded at
+    `durin.memory.sectioned_output.DEFAULT_MAX_PER_SOURCE`. Doc 03
+    §16 row 8 had promised configurability since Phase 3 but the
+    field never landed. G1 ships it; default unchanged so existing
+    workspaces see zero behaviour change.
+    """
+
+    max_per_source: int = 3
+
+
+class MemorySearchConfig(Base):
+    """Search-pipeline configuration root."""
+
+    cross_encoder: CrossEncoderConfig = Field(
+        default_factory=CrossEncoderConfig,
+    )
+    sectioning: MemorySearchSectioningConfig = Field(
+        default_factory=MemorySearchSectioningConfig,
+    )
+
+
+class MemoryFileWatcherConfig(Base):
+    """Background filesystem watcher for ``memory/`` (audit A11 / doc 02 §6.3).
+
+    Default ON. When enabled, the agent loop starts a
+    :class:`durin.memory.file_watcher.MemoryFileWatcher` that listens
+    for ``.md`` modifications under the workspace's ``memory/``
+    directory and triggers ``reindex_one_file`` on each change. Lets
+    the user edit memory entries with vim and have the next
+    ``memory_search`` see the change without running ``durin memory
+    reindex`` manually.
+
+    Disable to skip the watcher (one less background thread + no
+    watchdog Observer). Indices stay in sync via the per-tool
+    re-index-on-write hooks (memory_store / memory_ingest / Dream).
+    """
+
+    enabled: bool = True
+
+
+class MemoryHealthCheckConfig(Base):
+    """Periodic memory subsystem health probe (audit A11 / doc 02 §5.1).
+
+    Default ON. When enabled, the agent loop starts a daemon thread
+    that calls :meth:`durin.memory.health_check.HealthChecker.run_tick`
+    every ``interval_seconds``. Each tick emits
+    ``memory.health_check`` (per A6 — `tick_id`, `duration_ms`,
+    `components`, `drift_count`, `errors`) and runs the retention
+    pass for telemetry files (P7.2 piggyback).
+
+    Disable to skip the cron (one less background thread). Health
+    can still be probed on demand by calling ``run_tick()`` directly
+    from a CLI command.
+    """
+
+    enabled: bool = True
+    interval_seconds: int = Field(default=900, ge=60, le=86_400)
+
+
 class MemoryConfig(Base):
     """Memory subsystem configuration root.
 
-    ``enabled`` gates vector retrieval. When false the memory tools
-    still work over the markdown files (grep-level recall) but skip the
-    vector index entirely — no embedding model is loaded. It's opt-in
-    because the embedding model is a multi-hundred-MB download.
+    ``enabled`` gates vector retrieval. On by default — durin is a
+    memory product, so the semantic layer is the default experience.
+    `durin onboard` installs the `[memory]` extra and pre-downloads the
+    embedding model so it works out of the box; the user can opt out in
+    the wizard. When false (or when the `[memory]` extra is missing) the
+    memory tools still work over the markdown files (grep-level recall)
+    but skip the vector index entirely — no embedding model is loaded,
+    and the agent loop warns once at startup so the degradation isn't
+    silent (resilient: the embedding model itself auto-downloads on first
+    use via fastembed; only the Python extra can't self-install).
 
     ``dream`` configures auto-trigger of the entity-centric
     :class:`DreamConsolidator` (doc 25 §2.A.1). Independent of
     ``enabled`` — manual ``durin memory dream`` works either way.
+
+    ``search`` configures the search pipeline (cross-encoder etc.).
+
+    ``file_watcher`` and ``health_check`` (audit A11) wire the
+    background services the agent loop runs.
     """
 
-    enabled: bool = False
+    enabled: bool = True
     embedding: MemoryEmbeddingConfig = Field(default_factory=MemoryEmbeddingConfig)
     dream: MemoryDreamConfig = Field(default_factory=MemoryDreamConfig)
+    search: MemorySearchConfig = Field(default_factory=MemorySearchConfig)
+    file_watcher: MemoryFileWatcherConfig = Field(
+        default_factory=MemoryFileWatcherConfig,
+    )
+    health_check: MemoryHealthCheckConfig = Field(
+        default_factory=MemoryHealthCheckConfig,
+    )
 
 
 class AuxModelsConfig(Base):
@@ -291,11 +430,12 @@ class AuxModelsConfig(Base):
 
     vision: AuxModelConfig | None = None
     audio: AuxModelConfig | None = None
-    # G3.b: model used by memory_search's LLM query rewriter. Same
-    # shape as vision/audio. When unset, the rewriter falls back to
-    # the agent's active preset — keeps one knob ("which model do I
-    # use?") consistent unless the user explicitly opts into a
-    # cheaper/faster model for memory ops.
+    # Model used by memory subsystem operations — both dreams
+    # (working-memory `dream` and entity-centric `memory_dream`).
+    # When unset, dreams fall back to their own `model_override` (if
+    # any) and then to the agent's active preset. Lets the user pick
+    # a cheaper/faster model for the long offline consolidation runs
+    # without changing the chat model.
     memory: AuxModelConfig | None = None
 
 
@@ -459,6 +599,7 @@ class ProvidersConfig(Base):
     deepseek: ProviderConfig = Field(default_factory=ProviderConfig)
     groq: ProviderConfig = Field(default_factory=ProviderConfig)
     zhipu: ProviderConfig = Field(default_factory=ProviderConfig)
+    zai_coding_plan: ProviderConfig = Field(default_factory=ProviderConfig)  # Z.ai Coding Plan (separate quota from zhipu)
     dashscope: ProviderConfig = Field(default_factory=ProviderConfig)
     vllm: ProviderConfig = Field(default_factory=ProviderConfig)
     ollama: ProviderConfig = Field(default_factory=ProviderConfig)  # Ollama local models
@@ -567,9 +708,6 @@ class ToolsConfig(Base):
     web: WebToolsConfig = Field(default_factory=lambda: _lazy_default("durin.agent.tools.web", "WebToolsConfig"))
     exec: ExecToolConfig = Field(default_factory=lambda: _lazy_default("durin.agent.tools.shell", "ExecToolConfig"))
     my: MyToolConfig = Field(default_factory=lambda: _lazy_default("durin.agent.tools.self", "MyToolConfig"))
-    image_generation: ImageGenerationToolConfig = Field(
-        default_factory=lambda: _lazy_default("durin.agent.tools.image_generation", "ImageGenerationToolConfig"),
-    )
     restrict_to_workspace: bool = False  # restrict all tool access to workspace directory
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
     ssrf_whitelist: list[str] = Field(default_factory=list)  # CIDR ranges to exempt from SSRF blocking (e.g. ["100.64.0.0/10"] for Tailscale)
@@ -600,6 +738,46 @@ class AppearanceConfig(Base):
     mode: str = "auto"  # auto | light | dark
 
 
+class TelemetryPushConfig(Base):
+    """Opt-in HTTPS push of telemetry events (audit A8 / doc 07 §12.2).
+
+    Default OFF. When enabled, every event emitted locally also POSTs
+    to ``url`` (buffered, batched per ``batch_size``). The local JSONL
+    persistence under ``~/.cache/durin/telemetry/`` runs UNCHANGED —
+    push is an ADDITIONAL sink, never a replacement.
+
+    **Privacy**: events carry truncated user content (queries,
+    snippets, needles — 200 chars max via ``_truncate_freetext`` in
+    ``durin/agent/tools/_telemetry.py``). Enable this only when
+    exporting to YOUR OWN infrastructure (Grafana/Loki/Datadog/custom
+    endpoint). Read doc 07 §12.2 + §13 before enabling.
+
+    **Auth**: ``token_secret_name`` references a secret stored in
+    ``~/.durin/secrets.json`` — NEVER put the bearer token directly
+    in ``config.json``. Use ``durin secrets set <name> <token>``.
+    """
+
+    enabled: bool = False
+    url: str | None = None
+    token_secret_name: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "tokenSecretName", "token_secret_name",
+        ),
+    )
+    batch_size: int = Field(default=10, ge=1, le=1000)
+
+
+class TelemetryConfig(Base):
+    """Telemetry subsystem configuration (audit A8).
+
+    Events emit locally to JSONL by default; optional fan-out to an
+    HTTPS endpoint via :class:`TelemetryPushConfig`.
+    """
+
+    push: TelemetryPushConfig = Field(default_factory=TelemetryPushConfig)
+
+
 class Config(BaseSettings):
     """Root configuration for durin."""
 
@@ -608,6 +786,7 @@ class Config(BaseSettings):
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
+    telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     api: ApiConfig = Field(default_factory=ApiConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
@@ -797,7 +976,6 @@ def _resolve_tool_config_refs() -> None:
     """
     import sys
 
-    from durin.agent.tools.image_generation import ImageGenerationToolConfig
     from durin.agent.tools.self import MyToolConfig
     from durin.agent.tools.shell import ExecToolConfig
     from durin.agent.tools.web import WebFetchConfig, WebSearchConfig, WebToolsConfig
@@ -809,7 +987,6 @@ def _resolve_tool_config_refs() -> None:
     mod.WebSearchConfig = WebSearchConfig  # type: ignore[attr-defined]
     mod.WebFetchConfig = WebFetchConfig  # type: ignore[attr-defined]
     mod.MyToolConfig = MyToolConfig  # type: ignore[attr-defined]
-    mod.ImageGenerationToolConfig = ImageGenerationToolConfig  # type: ignore[attr-defined]
 
     ToolsConfig.model_rebuild()
     Config.model_rebuild()

@@ -34,7 +34,6 @@ from __future__ import annotations
 
 from typing import Any
 
-
 # Aligned with OpenClaw's "100KB details / 5MB image" pattern. Audio cap is
 # a durin addition for ``interpret_audio``-style tool results.
 MAX_BLOCK_TEXT_CHARS = 100_000

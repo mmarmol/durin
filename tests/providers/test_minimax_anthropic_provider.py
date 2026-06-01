@@ -1,13 +1,6 @@
 """Tests for the MiniMax Anthropic provider registration."""
 
-from durin.config.schema import ProvidersConfig
 from durin.providers.registry import PROVIDERS
-
-
-def test_minimax_anthropic_config_field_exists():
-    """ProvidersConfig should expose a minimax_anthropic field."""
-    config = ProvidersConfig()
-    assert hasattr(config, "minimax_anthropic")
 
 
 def test_minimax_anthropic_provider_in_registry():

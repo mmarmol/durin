@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowDown } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { MessageBubble } from "@/components/MessageBubble";
 import { Button } from "@/components/ui/button";
@@ -20,6 +21,7 @@ const NEAR_BOTTOM_PX = 48;
  * "scroll to bottom" button appears whenever we're detached from the bottom.
  */
 export function MessageList({ messages, isStreaming }: MessageListProps) {
+  const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
   const [atBottom, setAtBottom] = useState(true);
 
@@ -99,7 +101,7 @@ export function MessageList({ messages, isStreaming }: MessageListProps) {
             "bg-background/90 backdrop-blur",
             "animate-in fade-in-0 zoom-in-95",
           )}
-          aria-label="Scroll to bottom"
+          aria-label={t("list.scrollToBottom")}
         >
           <ArrowDown className="h-4 w-4" />
         </Button>

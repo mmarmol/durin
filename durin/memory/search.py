@@ -21,9 +21,9 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Literal
+from typing import Literal
 
-from durin.memory.paths import MEMORY_CLASSES
+from durin.memory.paths import MEMORY_CLASSES, walk_class
 from durin.memory.schema import MemoryEntry
 from durin.memory.storage import FrontmatterError, load_entry
 
@@ -114,39 +114,14 @@ class Result:
             d["entities"] = list(self.entities)
         return d
 
-    def render_block(self) -> str:
-        """Wrap the result in a `=== KIND: ... ===` block (§2.H).
-
-        Mirrors the compaction summary marker convention
-        (``=== ARCHIVED SUMMARY ===``): an explicit ASCII delimiter the
-        LLM can pattern-match without relying on field structure. The
-        header line carries the kind, ref/uri, and a time hint when
-        available.
-
-        The body inside the block prefers ``summary`` over ``body``
-        over ``snippet`` so the rendered block stays compact in warm-
-        tier responses; cold-tier consumers can read ``body`` directly
-        off ``to_dict()`` if they need the full text.
-        """
-        kind = self.kind.upper()
-        header = f"=== {kind}: {self.uri}"
-        if self.valid_from:
-            header += f" (ts: {self.valid_from})"
-        elif kind == "CANONICAL":
-            # Pages don't carry valid_from; mark them as authoritative.
-            header += " (canonical entity page)"
-        header += " ==="
-
-        body = self.summary or self.body or self.snippet or ""
-        tail_bits: list[str] = []
-        if self.entities and kind != "CANONICAL":
-            tail_bits.append(f"Entities: {', '.join(self.entities)}")
-        tail = "\n".join(tail_bits)
-        parts = [header, body]
-        if tail:
-            parts.append(tail)
-        parts.append(f"=== END {kind} ===")
-        return "\n".join(parts)
+    # Audit F4 (2026-05-28): `render_block` retired. The LLM-facing
+    # rendering moved to `durin.memory.sectioned_output.render_sectioned`,
+    # which groups hits by section, adds intros, applies the
+    # per-source cap (doc 03 §12.4), and emits per-block markers
+    # with the same END / body-preference / entities-tail semantics
+    # this method used to provide. Direct callers should consume
+    # `to_dict()` for raw fields and `sectioned_rendered` from the
+    # tool response for the marker output.
 
 
 def search_memory(
@@ -195,10 +170,7 @@ def search_dreamed(
     if not memory_root.is_dir():
         return results
     for class_name in MEMORY_CLASSES:
-        class_dir = memory_root / class_name
-        if not class_dir.is_dir():
-            continue
-        for path in sorted(class_dir.glob("*.md")):
+        for path in walk_class(workspace, class_name):
             try:
                 entry = load_entry(path)
             except (FrontmatterError, Exception):
@@ -245,48 +217,42 @@ def _search_entity_pages(
     """
     from durin.memory.entity_page import EntityPage
 
-    entities_root = memory_root / "entities"
-    if not entities_root.is_dir():
-        return []
-
+    workspace = memory_root.parent
     out: list[Result] = []
-    for type_dir in sorted(entities_root.iterdir()):
-        if not type_dir.is_dir():
+    for page_path in walk_class(workspace, "entities"):
+        page = EntityPage.from_file(page_path)
+        if page is None:
             continue
-        for page_path in sorted(type_dir.glob("*.md")):
-            page = EntityPage.from_file(page_path)
-            if page is None:
-                continue
-            haystack_parts = [
-                page.name,
-                " ".join(page.aliases or []),
-                page.body or "",
-            ]
-            haystack = " ".join(haystack_parts).lower()
-            if needle_low not in haystack:
-                continue
-            slug = page_path.stem
-            ref = f"{page.type}:{slug}"
-            summary = (
-                f"{page.name}"
-                + (f" — aliases: {', '.join(page.aliases)}" if page.aliases else "")
+        haystack_parts = [
+            page.name,
+            " ".join(page.aliases or []),
+            page.body or "",
+        ]
+        haystack = " ".join(haystack_parts).lower()
+        if needle_low not in haystack:
+            continue
+        slug = page_path.stem
+        ref = f"{page.type}:{slug}"
+        summary = (
+            f"{page.name}"
+            + (f" — aliases: {', '.join(page.aliases)}" if page.aliases else "")
+        )
+        out.append(
+            Result(
+                source="memory",
+                uri=f"memory/entity_page/{ref}",
+                headline=page.name,
+                snippet=summary[:160],
+                summary=summary if level == "warm" else "",
+                body=page.body if level == "cold" else "",
+                class_name="entity_page",
+                # Entity pages don't carry a single valid_from; the
+                # body uses prose ("since 2026-03-15...") for
+                # temporal claims, per doc 18 §6 protocol α.
+                valid_from="",
+                entities=(ref,),
             )
-            out.append(
-                Result(
-                    source="memory",
-                    uri=f"memory/entity_page/{ref}",
-                    headline=page.name,
-                    snippet=summary[:160],
-                    summary=summary if level == "warm" else "",
-                    body=page.body if level == "cold" else "",
-                    class_name="entity_page",
-                    # Entity pages don't carry a single valid_from; the
-                    # body uses prose ("since 2026-03-15...") for
-                    # temporal claims, per doc 18 §6 protocol α.
-                    valid_from="",
-                    entities=(ref,),
-                )
-            )
+        )
     return out
 
 
@@ -480,7 +446,3 @@ def _make_snippet(text: str, needle_low: str) -> str:
     prefix = "…" if start > 0 else ""
     suffix = "…" if end < len(text) else ""
     return f"{prefix}{snippet}{suffix}"
-
-
-def _all_classes_iter() -> Iterable[str]:
-    return MEMORY_CLASSES

@@ -41,6 +41,19 @@ dependencies = [
     # it explicit guarantees the wizard always works after a fresh
     # install instead of failing with "needs the 'questionary' package".
     "questionary>=2.0.0,<3.0.0",
+    # Used by `entities.slugify_name` for transliterating non-Latin
+    # scripts (CJK, Cyrillic, Arabic, etc.) into ASCII slugs per
+    # doc memory §4.5. Pure Python, no native deps.
+    "unidecode>=1.4,<2.0",
+    # RFC 6902 JSON Patch — used by Dream apply pipeline (doc memory
+    # §6) to apply LLM-emitted ops to an entity page's frontmatter.
+    # Pure Python.
+    "jsonpatch>=1.33,<2.0",
+    # File-system watcher for the memory subsystem: detects manual
+    # edits to `memory/**/*.md` (vim, git checkout, etc.) and triggers
+    # a synchronous re-index. Doc 02 §6.3. macOS uses FSEvents,
+    # Linux uses inotify; both via this wrapper.
+    "watchdog>=4.0,<7.0",
 ]
 
 [project.optional-dependencies]
@@ -81,6 +94,19 @@ memory = [
     # daemon, optional cloud backends. Phase 2.2.
     "lancedb>=0.30.0,<1.0.0",
 ]
+cross-encoder = [
+    # Cross-encoder reranker for the memory search pipeline (doc 03 §9 /
+    # P4.1). OFF by default — operator opts in via
+    # `cfg.memory.search.cross_encoder.enabled = true`. When the flag is
+    # on but this extra is NOT installed, `durin.memory.cross_encoder`
+    # logs ERROR and falls back to pure RRF fusion (search still ships,
+    # ranking quality reduced). H25 (2026-05-30) made the silent-disable
+    # loud so operators know their config intent became a no-op.
+    #
+    # sentence-transformers pulls in torch (~1 GB) — large dep, hence
+    # gated behind the extra rather than in `memory`.
+    "sentence-transformers>=3.0,<6.0",
+]
 dev = [
     "pytest>=9.0.0,<10.0.0",
     "pytest-asyncio>=1.3.0,<2.0.0",
@@ -114,7 +140,16 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+filterwarnings = [
+    # Third-party: the lark_oapi (Feishu) SDK still uses the deprecated
+    # pkg_resources namespace API on import. Not our code; nothing to fix
+    # until the SDK migrates. Scoped to the exact messages so our own
+    # deprecations still surface.
+    "ignore:Deprecated call to `pkg_resources.declare_namespace:DeprecationWarning",
+    "ignore:pkg_resources is deprecated as an API:DeprecationWarning",
+]
 markers = [
     "ollama: requires running Ollama instance with a local model",
     "local_llm: requires llama-cpp-python and a cached GGUF model",
+    "slow: marks slow / live-LLM end-to-end tests (opt-in via env)",
 ]

@@ -94,17 +94,19 @@ def test_entity_detail_post_cursor_entries_filter(tmp_path: Path) -> None:
 
 
 def test_entity_detail_includes_archive(tmp_path: Path) -> None:
+    """Spec layout (doc memory §3.2): archives live at
+    `memory/archive/entities/<type>/<absorbed_slug>.md` and carry
+    `archived_into = <type>:<canonical_slug>`.
+    """
     _write_page(tmp_path, "person", "marcelo")
-    archive_dir = (
-        tmp_path / "memory" / "entities" / "person" / "marcelo" / "archive"
-    )
+    archive_dir = tmp_path / "memory" / "archive" / "entities" / "person"
     archive_dir.mkdir(parents=True)
     EntityPage(
         type="person", name="Old M", aliases=[],
         extra={
-            "absorbed_into": "../../marcelo.md",
-            "absorbed_at": "2026-05-23T18:00:00+00:00",
-            "absorbed_reason": "auto",
+            "archived_into": "person:marcelo",
+            "archived_at": "2026-05-23T18:00:00+00:00",
+            "archived_reason": "auto",
         },
     ).save(archive_dir / "marcelo_old.md")
     d = get_entity_detail(tmp_path, "person:marcelo")
@@ -113,8 +115,9 @@ def test_entity_detail_includes_archive(tmp_path: Path) -> None:
     a = d["archive"][0]
     assert a["slug"] == "marcelo_old"
     assert a["name"] == "Old M"
-    assert a["absorbed_reason"] == "auto"
-    assert a["absorbed_at"] is not None
+    assert a["archived_reason"] == "auto"
+    assert a["archived_at"] is not None
+    assert a["archived_into"] == "person:marcelo"
 
 
 def test_entity_detail_bad_ref_returns_none(tmp_path: Path) -> None:

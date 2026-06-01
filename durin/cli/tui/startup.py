@@ -118,7 +118,6 @@ _TOOL_CATEGORY: dict[str, str] = {
     # multimodal
     "interpret_image": "media",
     "interpret_audio": "media",
-    "image_generate": "media",
     # comms
     "message": "comms",
     "ask_user_question": "comms",

@@ -12,14 +12,12 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from durin.agent.loop import AgentLoop
 from durin.bus.queue import MessageBus
-from durin.providers.base import LLMProvider
 
 
 def _make_provider():
@@ -46,15 +44,12 @@ def _make_loop(tmp_path: Path) -> AgentLoop:
 class TestStopPreservesContext:
     """Verify that /stop restores partial context via checkpoint."""
 
-    def test_restore_checkpoint_method_exists(self, tmp_path):
-        """AgentLoop should have _restore_runtime_checkpoint."""
-        loop = _make_loop(tmp_path)
-        assert hasattr(loop, "_restore_runtime_checkpoint")
-
-    def test_checkpoint_key_constant(self, tmp_path):
-        """The runtime checkpoint key should be defined."""
-        loop = _make_loop(tmp_path)
-        assert loop._RUNTIME_CHECKPOINT_KEY == "runtime_checkpoint"
+    # Note: a `hasattr(_restore_runtime_checkpoint)` smoke test and a
+    # `_RUNTIME_CHECKPOINT_KEY == "runtime_checkpoint"` constant test used
+    # to live here. They were tautological — both are exercised end-to-end
+    # by test_cancel_dispatch_restores_checkpoint below (which calls the
+    # method and asserts the literal key is consumed), so they added no
+    # coverage and were removed (QA review P3).
 
     def test_cancel_dispatch_restores_checkpoint(self, tmp_path):
         """When a task is cancelled, the checkpoint should be restored."""

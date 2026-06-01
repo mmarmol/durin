@@ -61,3 +61,6 @@ gold.*.json
 # Exercism dataset (clone only)
 scripts/hypothesis_test/exercism_python/
 scripts/hypothesis_test/v9_runs/
+
+# Playwright MCP debugging artifacts
+.playwright-mcp/

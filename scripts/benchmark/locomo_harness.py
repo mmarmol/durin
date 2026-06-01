@@ -33,7 +33,25 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+import functools
+
+from durin.memory.provenance import author_scope
 from durin.memory.store import store_memory
+
+
+def _agent_seeded(fn):
+    """Decorator: wrap a seeder function in author_scope("agent_created").
+
+    LoCoMo bulk seeders model agent observations (the conversation
+    turns we replay as if the agent stored them via memory_store).
+    Per ``durin/memory/provenance.py`` every write must declare its
+    author; this decorator carries that declaration once per seeder.
+    """
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with author_scope("agent_created"):
+            return fn(*args, **kwargs)
+    return wrapper
 from durin.telemetry.logger import TelemetryLogger, bind_telemetry, reset_telemetry
 
 from scripts.benchmark.locomo_dataset import QA, Conversation
@@ -113,12 +131,19 @@ async def run_qa(
     # much the memory layer actually contributes vs. answering cold).
     if enable_memory and qa.conversation is not None:
         _seed_memory_from_conversation(workspace_root, qa.conversation)
-        # Build the vector index over the seeded files. Without this
-        # `memory_search` falls to substring grep over the full natural-
-        # language query and returns 0 for queries like "Calvin Japan
-        # stay" (verified in 12cc1897 run). The bench is not a clean
-        # install — we want the full retrieval stack active.
+        # Build BOTH indices over the seeded files. In production, the
+        # file-watcher's `reindex_one_file` populates LanceDB + FTS5
+        # whenever a memory entry is written; in the bench we bypass
+        # the tool layer and write .md files directly via
+        # `store_memory()`, so neither index gets touched automatically.
+        # Without these calls, `memory_search` falls back to substring
+        # grep — measurably worse for natural-language queries.
+        #
+        # Audit (2026-05-30): missing FTS rebuild was silently dropping
+        # the lexical retrieval channel across every bench run. Fixed
+        # by adding `_build_fts_index(workspace_root)` here.
         _build_vector_index(workspace_root)
+        _build_fts_index(workspace_root)
 
     # Bind per-QA telemetry. Every memory.recall / memory.store /
     # tool.* / cache.usage / compaction.* event durin emits while
@@ -157,9 +182,51 @@ async def run_qa(
     finally:
         reset_telemetry(token)
         trace.duration_s = time.monotonic() - started
+        # Audit H3 (2026-05-29): the AgentLoop overrides our
+        # `bench_logger` binding with its own per-session logger
+        # (`durin/agent/loop.py::_main_loop` calls
+        # ``bind_telemetry(session_logger)`` unconditionally), so every
+        # memory.recall / memory.store / cache.usage event lands in
+        # ``~/.cache/durin/telemetry/bench_<qa_id>_<date>.jsonl`` rather
+        # than the per-QA bench file. Without this merge the run_dir's
+        # ``telemetry/`` directory carries only the harness's own bind
+        # window (embedding load + index rebuild + 2 composition rows)
+        # and post-bench analysis has to chase events across two
+        # directories. Append the session log into the per-QA file so
+        # the bench artefact is self-contained.
+        _merge_session_telemetry_into(telemetry_path, qa.qa_id, started)
     return trace
 
 
+def _merge_session_telemetry_into(
+    telemetry_path: Path, qa_id: str, started_monotonic: float,
+) -> None:
+    """Append events from the session-scoped telemetry file into the
+    per-QA bench file. Best-effort: failures degrade silently.
+    """
+    try:
+        from durin.telemetry.logger import get_session_logger
+        # `get_session_logger` is the same path the AgentLoop uses,
+        # so we reuse it to compute the exact destination filename
+        # rather than reconstructing the sanitiser by hand.
+        session_logger = get_session_logger(f"bench:{qa_id}")
+        session_path = Path(session_logger.path)
+    except Exception:  # noqa: BLE001
+        return
+    if not session_path.is_file() or session_path == telemetry_path:
+        return
+    try:
+        existing = telemetry_path.read_text(encoding="utf-8") \
+            if telemetry_path.exists() else ""
+        with session_path.open("r", encoding="utf-8") as src:
+            lines = src.readlines()
+        merged = existing + "".join(lines)
+        telemetry_path.write_text(merged, encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        return
+
+
+@_agent_seeded
 def _seed_memory_from_conversation(
     workspace_root: Path, conv: Conversation,
 ) -> None:
@@ -243,6 +310,7 @@ def _enrich_turn_with_visuals(turn: dict, text: str) -> str:
     return "\n".join(parts)
 
 
+@_agent_seeded
 def _seed_event_summaries(
     workspace_root: Path, conv: Conversation,
     speaker_slugs: dict[str, str],
@@ -288,6 +356,7 @@ def _seed_event_summaries(
                                      conv.conv_id, n)
 
 
+@_agent_seeded
 def _seed_observations(
     workspace_root: Path, conv: Conversation,
     speaker_slugs: dict[str, str],
@@ -324,6 +393,7 @@ def _seed_observations(
                     logger.exception("observation seed failure %s", conv.conv_id)
 
 
+@_agent_seeded
 def _seed_session_summaries(workspace_root: Path, conv: Conversation) -> None:
     """Seed ``session_summary`` block — one per session with a brief
     summary of what was discussed."""
@@ -400,6 +470,37 @@ def _build_vector_index(workspace: Path) -> None:
         logger.exception("vector index build failed for %s", workspace)
 
 
+def _build_fts_index(workspace: Path) -> None:
+    """Populate the FTS5 lexical index over the seeded `memory/<class>/*.md`.
+
+    Mirrors `_build_vector_index` but for SQLite FTS5. Both bulk-seeded
+    entries (`store_memory()`) and bench bypass the file-watcher that
+    normally drives `reindex_one_file`, so FTS would be empty without
+    this rebuild — and the lexical channel contributes 0 hits to the
+    search pipeline, halving the retrieval signal.
+
+    Discovery context: lab on conv-7-q113 (Deborah/Karlie) found that
+    the FTS index had 0 rows post-seed across every bench run since
+    Phase 3 shipped. Query 'Deborah garden' returned the exact answer
+    entry as FTS top-1 immediately after this rebuild — the info was
+    always reachable, the bench was just disabling lexical search.
+
+    Failure-mode: log + degrade silently. The agent still has vector
+    + grep fallback, but the bench is no longer apples-to-apples vs
+    production unless this populates successfully.
+    """
+    try:
+        from durin.memory.indexer import rebuild_fts_index
+
+        stats = rebuild_fts_index(workspace)
+        logger.info(
+            "fts index built: indexed=%d errors=%d in %s",
+            stats.indexed, stats.errors, workspace,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("fts index build failed for %s", workspace)
+
+
 def _slug(name: str) -> str:
     """Lowercase + non-alphanum → underscore. Stable across runs."""
     out: list[str] = []
@@ -474,6 +575,18 @@ async def _ask_agent(
     # semantic similarity instead of literal substring match.
     if enable_memory:
         cfg.memory.enabled = True
+        # Audit H7 (2026-05-29): activate the cross-encoder reranker
+        # for benchmark runs. The default is OFF (model is ~300MB +
+        # 300-1500ms latency per query) so production stays opt-in,
+        # but the bench measures the system at its best retrieval
+        # config — without the reranker, top-K hits are pure RRF
+        # fusion which is brittle for ambiguous queries. Bench-29
+        # (2026-05-29) showed retrieval-only misses for QAs like
+        # ``conv-1-q15`` ("when did Jon host a dance competition")
+        # where the fact was indexed but didn't surface high enough
+        # in the warm-tier; cross-encoder reranking targets exactly
+        # that gap.
+        cfg.memory.search.cross_encoder.enabled = True
 
     bus = MessageBus()
     loop_agent = AgentLoop.from_config(cfg, bus=bus)

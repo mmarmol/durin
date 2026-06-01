@@ -231,21 +231,6 @@
       "send": "メッセージを送信",
       "stop": "応答を停止",
       "attachImage": "画像を添付",
-      "imageMode": {
-        "label": "画像生成",
-        "toggle": "画像生成モードを切り替え",
-        "placeholder": "画像を説明または編集…",
-        "aspectAria": "画像のアスペクト比",
-        "aspectLabel": "画像の比率",
-        "aspect": {
-          "auto": "自動",
-          "1_1": "正方形 1:1",
-          "3_4": "縦長 3:4",
-          "9_16": "ストーリー 9:16",
-          "4_3": "横長 4:3",
-          "16_9": "ワイド 16:9"
-        }
-      },
       "encoding": "処理中…",
       "remove": "添付を削除",
       "normalizedSizeHint": "{{orig}} → {{current}}（自動圧縮）",

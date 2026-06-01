@@ -59,7 +59,7 @@ def _resolve_entity_path(entity_ref: str) -> Path:
 
 def _open_repo():
     """Construct a :class:`GitRepo` rooted at ``memory/`` if it exists."""
-    from durin.utils.git_repo import GitRepo, GitRepoError
+    from durin.utils.git_repo import GitRepo
 
     workspace = _workspace_root()
     repo = GitRepo(workspace / "memory")
@@ -144,6 +144,11 @@ def _discover_pending_consolidations(
             entry = load_entry(entry_path)
         except Exception:  # noqa: BLE001
             continue
+        # Doc memory §4.6.1: user-authored entries are protected from
+        # Dream consumption — they carry deliberate human choice and
+        # must not get folded into a Dream-managed canonical page.
+        if entry.author == "user_authored":
+            continue
         ts = entry.valid_from.isoformat() if entry.valid_from else ""
         for ent_ref in entry.entities:
             if entity_filter and ent_ref != entity_filter:
@@ -164,6 +169,98 @@ def _discover_pending_consolidations(
     for ref in pending:
         pending[ref].sort(key=lambda e: e.timestamp)
     return pending
+
+
+# Exposed for the health-check recovery-hint anti-drift test
+# (tests/memory/test_health_critical_a7_recovery_hint.py). If this
+# tuple changes, the `_RECOVERY_HINTS` dict in
+# `durin/memory/health_check.py` must be updated or the test fails.
+VALID_REINDEX_TARGETS: tuple[str, ...] = ("all", "fts", "lancedb")
+
+
+@memory_app.command("reindex")
+def cmd_reindex(
+    target: str = typer.Option(
+        "all",
+        "--target",
+        help="Which index to rebuild: 'fts' | 'lancedb' | 'all' (default).",
+    ),
+) -> None:
+    """Wipe `.durin/index/` and rebuild from `memory/`.
+
+    Markdown is the source of truth. After a corruption / migration /
+    suspected staleness, this command rebuilds both the FTS5 lexical
+    tables and (when available) the LanceDB vector table from scratch.
+
+    The walk respects `walk_memory(workspace)` — `memory/archive/**`
+    and `memory/pending/**` are excluded, same rule as production.
+    """
+    from durin.memory.indexer import rebuild_fts_index
+
+    workspace = _workspace_root()
+    if not (workspace / "memory").is_dir():
+        console.print(
+            f"[yellow]No memory/ directory at {workspace} — nothing to "
+            f"index.[/yellow]"
+        )
+        raise typer.Exit(code=0)
+
+    target = target.lower()
+    if target not in VALID_REINDEX_TARGETS:
+        raise typer.BadParameter(
+            f"--target must be one of {VALID_REINDEX_TARGETS} "
+            f"(got {target!r})"
+        )
+
+    if target in ("all", "fts"):
+        console.print("[bold]Rebuilding FTS5 lexical index…[/bold]")
+        stats = rebuild_fts_index(workspace)
+        console.print(
+            f"  Indexed: [green]{stats.indexed}[/green]  "
+            f"Errors: "
+            f"[{'red' if stats.errors else 'green'}]{stats.errors}[/]"
+        )
+
+    if target in ("all", "lancedb"):
+        try:
+            from durin.memory.vector_index import (
+                VectorIndex,
+                vector_index_available,
+            )
+        except ImportError:
+            console.print(
+                "[yellow]LanceDB optional dependency missing; "
+                "skipping vector rebuild. "
+                "Install with `pip install durin[memory]`.[/yellow]"
+            )
+        else:
+            if not vector_index_available():
+                console.print(
+                    "[yellow]LanceDB not available; skipping vector "
+                    "rebuild.[/yellow]"
+                )
+            else:
+                console.print(
+                    "[bold]Rebuilding LanceDB vector index…[/bold]"
+                )
+                # Vector rebuild uses whichever embedding provider is
+                # configured. Reuse the same construction path the
+                # search tool uses.
+                try:
+                    from durin.memory.embedding import FastembedProvider
+                    provider = FastembedProvider()
+                    vi = VectorIndex(workspace, provider)
+                    count = vi.rebuild_from_workspace()
+                    console.print(
+                        f"  Indexed: [green]{count}[/green] rows"
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    console.print(
+                        f"[red]Vector rebuild failed:[/red] {exc}"
+                    )
+                    raise typer.Exit(code=1) from exc
+
+    console.print("[green]Reindex complete.[/green]")
 
 
 @memory_app.command("dream")
@@ -240,10 +337,12 @@ def cmd_dream(
             "entity pages will not be indexed[/yellow]"
         )
 
+    from durin.memory.model_resolve import resolve_memory_model
     runner = DreamRunner(
         workspace=workspace,
         min_seconds_between_runs=0,
-        model=cfg.memory.dream.model_override,
+        max_seconds_per_run=cfg.memory.dream.max_seconds_per_run,
+        model=resolve_memory_model(cfg),
         vector_index=vi,
         # §2.D: opt-in auto-absorb post-dream. Manual `durin memory dream`
         # respects the same config as the auto-triggers — if the user
@@ -679,7 +778,7 @@ def cmd_absorb(
         console.print(f"[green]✓[/green] Absorbed {absorbed} → {canonical} ({sha[:8]})")
     else:
         console.print(
-            f"[dim]= No-op (absorbed page already archived or nothing to commit)[/dim]"
+            "[dim]= No-op (absorbed page already archived or nothing to commit)[/dim]"
         )
 
 
@@ -723,7 +822,7 @@ def cmd_stats(
     window = f"last {days} days" if days else "all-time"
 
     fs_table = Table(
-        title=f"Filesystem (current snapshot)",
+        title="Filesystem (current snapshot)",
         show_header=True,
         header_style="bold cyan",
     )
@@ -834,4 +933,144 @@ def cmd_absorb_suggest() -> None:
     console.print(
         "\n[dim]To merge: durin memory absorb <canonical> <absorbed> "
         "--reason <why>[/dim]"
+    )
+
+
+
+# ---------------------------------------------------------------------------
+# forget — archive an individual memory entry (matches VAULT_README promise)
+# ---------------------------------------------------------------------------
+
+_FORGETTABLE_CLASSES = ("episodic", "stable", "corpus", "session_summary")
+
+
+def _parse_memory_uri(uri: str) -> tuple[str, str]:
+    """Split ``memory/<class>/<id>`` into ``(class_name, entry_id)``.
+
+    Tolerates a leading ``./`` or trailing ``.md`` (operators paste either form).
+    Raises ``typer.BadParameter`` on any other shape.
+    """
+    cleaned = uri.strip().lstrip("./")
+    if cleaned.endswith(".md"):
+        cleaned = cleaned[:-3]
+    parts = cleaned.split("/")
+    if len(parts) != 3 or parts[0] != "memory":
+        raise typer.BadParameter(
+            f"expected 'memory/<class>/<id>', got: {uri!r}"
+        )
+    return parts[1], parts[2]
+
+
+@memory_app.command("forget")
+def cmd_forget(
+    uri: str = typer.Argument(
+        ...,
+        help="Entry URI in 'memory/<class>/<id>' form (the same shape memory_search returns).",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip the interactive confirmation prompt.",
+    ),
+) -> None:
+    """Archive a single memory entry: moves it to ``memory/archive/<class>/<id>.md``
+    and removes its vector + FTS index rows.
+
+    Refuses to forget ``memory/entities/...`` URIs — entity pages have
+    their own absorb/revert lifecycle (see ``durin memory absorb`` /
+    ``durin memory revert``). Use those instead.
+    """
+    class_name, entry_id = _parse_memory_uri(uri)
+    workspace = _workspace_root()
+
+    if class_name == "entities":
+        console.print(
+            "[red]Refusing to forget entity pages.[/red] "
+            "Entities have their own lifecycle: use "
+            "[bold]durin memory absorb[/bold] (merge) or "
+            "[bold]durin memory revert[/bold] (undo a consolidation)."
+        )
+        raise typer.Exit(code=2)
+
+    if class_name not in _FORGETTABLE_CLASSES:
+        console.print(
+            f"[red]Unsupported class '{class_name}'.[/red] "
+            f"Supported: {', '.join(_FORGETTABLE_CLASSES)}."
+        )
+        raise typer.Exit(code=2)
+
+    entry_path = workspace / "memory" / class_name / f"{entry_id}.md"
+    if not entry_path.is_file():
+        console.print(f"[red]Entry not found:[/red] {entry_path}")
+        raise typer.Exit(code=1)
+
+    if not yes:
+        confirm = typer.confirm(
+            f"Archive {uri} → memory/archive/{class_name}/{entry_id}.md?",
+            default=False,
+        )
+        if not confirm:
+            console.print("[yellow]Aborted.[/yellow]")
+            raise typer.Exit(code=1)
+
+    from durin.memory.archive import (
+        archive_episodic,
+        archive_generic_entry,
+    )
+
+    try:
+        if class_name == "episodic":
+            archive_episodic(
+                workspace=workspace,
+                episodic_path=entry_path,
+                into_uri="",
+                reason="user_forget",
+            )
+        else:
+            archive_generic_entry(
+                workspace=workspace,
+                entry_path=entry_path,
+                reason="user_forget",
+            )
+    except FileNotFoundError:
+        console.print(f"[red]Entry vanished mid-operation:[/red] {entry_path}")
+        raise typer.Exit(code=1) from None
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]Archive failed:[/red] {exc}")
+        raise typer.Exit(code=1) from None
+
+    # Best-effort index cleanup. Failures here log + continue: the
+    # markdown file is the source of truth; stale index rows are
+    # cosmetic and the next reindex will reconcile.
+    try:
+        from durin.memory.vector_index import (
+            VectorIndex,
+            vector_index_available,
+        )
+        cfg = load_config()
+        if (
+            vector_index_available()
+            and cfg.memory.enabled
+            and cfg.memory.embedding.model
+        ):
+            from durin.memory.embedding import FastembedProvider
+            provider = FastembedProvider(model=cfg.memory.embedding.model)
+            vi = VectorIndex(workspace, provider)
+            vi.delete_by_id(entry_id)
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[dim]vector index cleanup skipped: {exc}[/dim]")
+
+    try:
+        # FTS unindex: the indexer reindexes a path on demand; for a
+        # deleted entry, a reindex re-checks existence and removes the
+        # row. ``reindex_one_file`` is the public surface.
+        from durin.memory.indexer import reindex_one_file
+        reindex_one_file(workspace, entry_path, trigger="forget")
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[dim]FTS index cleanup skipped: {exc}[/dim]")
+
+    console.print(
+        f"[green]Forgot[/green] {uri} "
+        f"→ memory/archive/{class_name}/{entry_id}.md"
     )

@@ -197,6 +197,61 @@ def test_concurrent_first_call_builds_once(tmp_path: Path) -> None:
     assert _cache_size() == 1
 
 
+def test_concurrent_read_and_mutate_on_shared_instance(tmp_path: Path) -> None:
+    """Readers and writers hammer the SAME cached instance — no crash.
+
+    `AliasIndex` itself is unit-tested for thread safety in
+    test_aliases_index.py. This is the integration-level guard for the
+    §2.C contract: the instance handed out by ``get_shared_alias_index``
+    is the shared, mutation-visible one, so a search thread calling
+    ``lookup``/``all_entities`` while a Dream/absorb thread calls
+    ``refresh_for``/``remove`` on the cache handle must not raise (the
+    P0 race fixed in `4e2c55d`). A future cache change that handed out
+    per-thread copies would still pass the unit test but fail here.
+    """
+    mem = tmp_path / "memory"
+    for i in range(50):
+        _write_page(mem, "person", f"p{i}", [f"alias{i}", f"name {i}"])
+    # Prime the cache so every thread gets the same built instance.
+    get_shared_alias_index(mem)
+
+    errors: list[BaseException] = []
+    stop = threading.Event()
+
+    def reader() -> None:
+        try:
+            while not stop.is_set():
+                idx = get_shared_alias_index(mem)
+                idx.all_entities()
+                idx.lookup("alias5")
+        except BaseException as exc:  # noqa: BLE001 - capture for assert
+            errors.append(exc)
+
+    def writer() -> None:
+        try:
+            for i in range(1500):
+                idx = get_shared_alias_index(mem)
+                idx.refresh_for(
+                    EntityPage(type="person", name=f"P{i}", aliases=[f"alias{i}"]),
+                    slug=f"p{i}",
+                )
+                idx.remove(f"person:p{i % 50}")
+        except BaseException as exc:  # noqa: BLE001 - capture for assert
+            errors.append(exc)
+
+    readers = [threading.Thread(target=reader) for _ in range(3)]
+    writers = [threading.Thread(target=writer) for _ in range(2)]
+    for t in readers + writers:
+        t.start()
+    for t in writers:
+        t.join()
+    stop.set()
+    for t in readers:
+        t.join()
+
+    assert not errors, f"shared-instance thread-safety violation: {errors[:3]}"
+
+
 # ---------------------------------------------------------------------------
 # consumer wiring smoke — the 3 real consumers all hit the shared instance
 # ---------------------------------------------------------------------------

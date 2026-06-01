@@ -1,0 +1,274 @@
+# Plan — Skills evolutivas (crear · importar · adaptar · evolucionar)
+
+> **Fuente de inicio**, no decisión final. Captura la discusión sobre darle a
+> durin un sistema de skills que el usuario crea bajo demanda, importa de
+> marketplaces, y que evolucionan con el uso — estilo Hermes, con la
+> disciplina de mecanismo de Microsoft SkillOpt. Marca explícitamente los
+> puntos abiertos para resolver en sus fases. No reemplaza un plan de
+> implementación por fases; lo antecede.
+>
+> Refs externas al pie. Refs internas: `docs/research/16a_entities_in_cloned_systems.md`
+> (Hermes modela skills como entidades con lifecycle state machine).
+
+---
+
+## §1 — La idea
+
+durin debe dar al usuario las herramientas para que, **mientras usa durin**:
+
+1. **Cree** skills bajo demanda (incluido código).
+2. **Importe** skills de marketplaces remotos, conservando origen y original.
+3. **Adapte** lo importado a las herramientas propias de durin.
+4. **Evolucione** esas skills con el uso, registrando cada decisión y su
+   porqué, reversible.
+5. **Adquiera** skills de repos remotos por iniciativa propia cuando enfrenta
+   algo complejo y no tiene skill — buscando varias, comparándolas, y
+   usándolas como semilla.
+
+Es la forma de **aprender comportamiento**: no repetir desde cero lo que ya
+se resolvió. El modelo de referencia es **Hermes** (creación experiencial +
+evolución en uso); **SkillOpt** entra como *disciplina de cómo editar el
+documento sin romperlo*, no como su harness de entrenamiento.
+
+---
+
+## §2 — Concepto unificado: skill = plugin
+
+En durin **skill y plugin son el mismo concepto**. Una skill es un
+procedimiento multipaso (pasos para hacer X de manera Y/Z). Un "plugin" es
+simplemente la skill que cruzó el gradiente y ahora **carga/instala/ejecuta
+código**.
+
+Consecuencia: una sola entidad, una sola tubería. "Instala código" no es otro
+tipo de objeto — es el **flag de capacidad de mayor riesgo** de una skill, y
+es justo lo que el piso de seguridad (§8.C) vigila. La evolución cruza ese
+gradiente sola: cuando una skill automatiza una tarea repetitiva con un
+script, *crece código* y se vuelve plugin.
+
+---
+
+## §3 — Cómo lo hace Hermes (modelo de referencia)
+
+Hermes tiene **dos capas** de evolución de skills:
+
+**Capa A — online, dentro del loop.** Evolución barata y continua:
+- **Auto-creación:** tras una tarea compleja (reportado por terceros como
+  ≥5 tool calls — *no confirmado en doc oficial*), el agente genera un
+  `SKILL.md` capturando procedimiento, *pitfalls* y pasos de verificación.
+- **Loop:** Observe → Plan → Execute → Evaluate → **Crystallize Skill** →
+  Reuse. Evalúa si el workflow vale la pena guardar; si sí, lo retiene.
+- **Refinamiento en uso:** si durante la ejecución encuentra un mejor enfoque
+  que el que describe la skill, edita el doc sin que se lo pidan.
+- Sin score ni validation set. Experience-driven.
+- Formato bajo estándar abierto (`agentskills.io`), portable/compartible vía
+  Skills Hub. Importa de OpenClaw a `~/.hermes/skills/openclaw-imports/`.
+- **Skills como entidades con lifecycle state machine** (`agent/curator.py`,
+  `tools/skill_usage.py`, `agent/background_review.py`) — ver `16a`.
+
+**Capa B — offline, batch.** Optimización con score real vía **DSPy + GEPA**
+(Genetic-Pareto), repo aparte `hermes-agent-self-evolution`:
+- Lee trazas de ejecución para entender *por qué* falla, no solo *que* falló.
+- Loop: leer config → generar dataset → mutar (trace-aware) → evaluar →
+  gates (tests, tamaño, benchmarks) → seleccionar → PR.
+- Fasado: Fase 1 `SKILL.md` (hecho) → tool descriptions → system prompts →
+  código de tools (*Darwinian Evolver*).
+- Sin GPU, solo API, ~$2-10/run, CLI offline.
+
+**Retrieval context-efficient:** Hermes busca skills e inyecta **solo las
+necesarias, solo cuando se necesitan**. Clave para eficiencia de contexto.
+
+---
+
+## §4 — Cómo entra SkillOpt (Microsoft)
+
+SkillOpt trata **el documento de skill como el "estado entrenable" de un
+agente congelado**. Loop: rollouts puntuados → un *modelo optimizador*
+propone ediciones acotadas `add/delete/replace` → **se aceptan solo si suben
+un score de validación held-out** (nunca degrada). Estabilizadores tipo DL:
+learning-rate textual + cosine decay + rejected-edit buffer + slow/meta
+updates por época. Deploy = un `best_skill.md` estático, cero costo en
+inference. Código MIT corrible (backend Anthropic incluido). Bate a GEPA en
+las 52 celdas del paper.
+
+**Qué aporta a durin — y qué no:**
+
+| | |
+|---|---|
+| **SkillOpt-como-harness** (train/val splits, batch, reward checkeable) | **No encaja** para skills personales on-demand: el usuario no tiene benchmark |
+| **SkillOpt-como-disciplina** (bounded edit + gate + rollback + rejected-buffer) | **Sí suma**: tapa los huecos que deja la evolución estilo Hermes (drift, bloat, sobreescritura ciega) |
+
+**Síntesis clave:** lo que SkillOpt llama *versionado + rollback +
+rejected-edit buffer* **es literalmente git** — el historial es el buffer de
+rechazos, el rollback es `git revert`, el "por qué" es el commit message.
+durin **ya corre git para memoria**; no hay que construir el mecanismo.
+
+Y el *validation set* deja de ser un benchmark: en durin la señal es **el uso
+real** (replay contra invocaciones pasadas exitosas / canary en los próximos
+N usos / feedback del usuario). El gate monótono estricto se vuelve **gate
+blando**: requiere corroboración, default = conservar versión vieja, usuario
+puede vetar. Se cambia "nunca degrada" por "raramente degrada y siempre
+reversible" — trade-off correcto para producto.
+
+---
+
+## §5 — El modelo durin
+
+### 5.1 — Tres fuentes-semilla, una tubería
+
+```
+FUENTES (semilla)                        TUBERÍA ÚNICA
+importar (inicia usuario) ───────┐
+crystallize (desde experiencia) ─┼─→ adapted/ → git-tracked → evoluciona → retrieval
+adquirir-on-gap (remoto, ────────┘
+  confirmado por usuario)
+```
+
+Las tres terminan iguales: versión adaptada, versionada en git, que evoluciona
+y se recupera bajo demanda. **Solo las distingue la `provenance`**:
+`source = "marketplace:agentskills.io/..."` · `"experience:2026-06-01"` ·
+`"experience+remote[hub/x, hub/y]"`. No son tres sistemas — son tres
+*entradas* a uno.
+
+### 5.2 — Tres capas por skill
+
+- `original/` — inmutable, tal como llegó (formato abierto). No se toca.
+- `provenance` — de qué marketplace, URL, fecha, hash del original (o
+  `experience` si es auto-creada).
+- `adapted/` — la que durin **realmente usa**: traducida a sus tools, con
+  scripts donde había repetición. La única que evoluciona.
+
+### 5.3 — Pipeline de dos etapas
+
+- **Etapa 1 — traducción mínima (siempre):** hacer que corra en durin
+  (mapear tools, arreglar paths, lo imprescindible). Piso obligatorio.
+- **Etapa 2 — evolución (opcional):** hacia el **reward** = *tools-nativas
+  primero + automatizar lo repetitivo con bash/python*. Es checkeable
+  localmente (detectar loops manuales, tools genéricas con equivalente
+  nativo). **El opt-out "importar sin evolucionar" = parar tras la Etapa 1.**
+
+### 5.4 — Git como columna vertebral
+
+Reutiliza el git de memoria. Cada cambio/decisión = commit con rationale.
+Rollback = `git revert`. Buffer de rechazos = historial. Permite siempre ir
+para atrás o cuestionar decisiones.
+
+### 5.5 — Retrieval de dos niveles (eficiencia de contexto)
+
+- **Nivel 1 — local:** skills indexadas en el motor de búsqueda de memoria
+  (vector + FTS5 + RRF). Inyección **híbrida**: las `always:true` quedan en
+  el tier cacheado (piso), la cola larga se recupera **on-demand**. El flag
+  `always` ya existente es la línea divisoria.
+- **Nivel 2 — remoto:** al fallar el nivel 1 en una tarea compleja, federar
+  la búsqueda a marketplaces (§6.C). Caro, red, runtime.
+
+### 5.6 — Meta-skill (el sistema se auto-hospeda)
+
+El proceso de buscar/adquirir/preguntar **es a su vez una skill propia** que
+mejora y se adapta al usuario (qué/cómo/cuándo preguntar):
+- Sigue el mismo esquema `original(builtin)/adapted/provenance`. La semilla
+  inmutable es el builtin de durin (descendiente del `skill-creator` actual).
+- **Procedimiento en la skill; preferencias aprendidas en `USER.md`** (que
+  Dream ya gestiona observando qué aprobó/rechazó el usuario). Equivale al
+  "Honcho user modeling" de Hermes con piezas que durin ya corre.
+- **Dos capas dentro del meta-skill:**
+  - *Afinable* (evoluciona libre): estilo de interrupción, default
+    merge-vs-single, verbosidad de candidatos, cuándo molestar en cosas
+    reversibles.
+  - *Piso invariante* (NO puede optimizar para abajo): ver §8.C.
+
+---
+
+## §6 — Flujo de trabajo (etapas end-to-end)
+
+### A. Crear / cristalizar (desde experiencia)
+1. Detectar candidato (trigger: §8.A).
+2. Autorear `SKILL.md` con procedimiento + pitfalls + verificación. Si la
+   tarea es mecánica/repetitiva → emitir script (skill→plugin).
+3. Etapa 1 (ya nativa) → commit con rationale.
+
+### B. Importar (inicia el usuario)
+1. Traer original + provenance.
+2. Etapa 1 (traducción mínima) → commit.
+3. Si el usuario quiere evolución → Etapa 2; si no → congelar.
+
+### C. Adquirir-on-gap (inicia el agente, confirma el usuario)
+1. Tarea compleja ∧ miss en nivel 1 ∧ "huele estándar".
+2. Federar búsqueda a marketplaces → traer **varios** candidatos.
+3. **Avisar al usuario y pedir confirmación con `AskUserQuestion`:**
+   - candidatos como items (de dónde, cómo);
+   - **opinión** (opción recomendada primero);
+   - opciones: *merge de A+B y adaptar* / *usar A* / *usar B* / *otra*;
+   - **antes de integrar: avisar qué candidatos exigen instalar
+     herramientas** y cuáles, para que el usuario decida;
+   - usar `preview` para comparar contenidos lado a lado.
+4. Sintetizar desde la(s) semilla(s) elegida(s) → Etapa 1 → commit.
+
+### D. Evolucionar (en uso)
+1. Edición acotada hacia el reward (§5.3).
+2. Gate blando contra señal de uso (replay / canary / feedback).
+3. Aceptar o `git revert`. Todo commiteado con porqué.
+
+### E. Recuperar (cada turno)
+Nivel 1 local híbrido; nivel 2 remoto solo on-gap (→ C).
+
+---
+
+## §7 — Reuso de lo que durin ya tiene
+
+| Pieza durin | Rol en este plan |
+|---|---|
+| **Dream** (`agent/memory.py`, Fase 1/2) | Auto-creación (cristalizar) + edición de docs; ya detecta workflows recurrentes y escribe skills |
+| **SkillsLoader** (`agent/skills.py`) | Carga, frontmatter, flag `always` (= divisoria de retrieval) |
+| **ContextBuilder** (`agent/context.py`) | Punto de inyección; mover cola larga de stable→on-demand |
+| **git de memoria** | Versionado/rollback/rationale de skills (= mecanismo SkillOpt) |
+| **search pipeline** (`memory/search_pipeline.py`) | Motor de retrieval nivel 1; corpus de skills |
+| **USER.md** (Dream-managed) | Preferencias aprendidas del meta-skill |
+| **builtin `skill-creator`** | Semilla inmutable del meta-skill |
+| **`AskUserQuestion`** | Flujo de confirmación de adquisición (§6.C) |
+
+---
+
+## §8 — Puntos abiertos (resolver en sus fases)
+
+- **A. Trigger de cristalización.** ¿*Eager* estilo Hermes (online, por
+  complejidad, justo tras la tarea — reactivo, arriesga bloat), *lazy* estilo
+  Dream actual (batch, por frecuencia — limpio pero tardío), o *híbrido*
+  (online marca candidato "pending", batch confirma si recurre)?
+
+- **B. Estándar de interop.** ¿`agentskills.io` (donde está el Hub de Hermes,
+  habilita buscar/comparar en varios marketplaces con una query) vs nativo
+  Claude-Code (donde el formato de durin ya está casi nativo)? **Load-bearing**:
+  sin esto no hay §6.C. ¿Adoptar estándar o escribir adaptadores por
+  marketplace?
+
+- **C. Piso de seguridad invariante** (el meta-skill no puede bajarlo).
+  Propuesta de arranque, a confirmar: *(1) instalar/ejecutar código de una
+  skill-plugin* y *(2) traer de una fuente fuera del allowlist* siempre piden
+  confirmación. ¿Se agrega/saca algo?
+
+- **D. Drift de upstream.** Cuando el marketplace publique v2 del original,
+  ¿re-adaptar desde v2 o seguir con el fork? La provenance lo habilita; la
+  política de merge queda pendiente.
+
+- **E. Latencia de adquisición.** §6.C ocurre mid-tarea. Política:
+  ¿bloquear / intentar one-shot y escalar / proponer? (Resuelto parcialmente:
+  se propone al usuario, pero falta el umbral de cuándo escalar.)
+
+- **F. ¿GEPA, SkillOpt, o ambos?** Para la eventual Capa B con score (donde
+  exista reward: código con tests, adaptación checkeable). Coarse-to-fine
+  posible: GEPA explora/adapta (trace-aware, multi-objetivo Pareto) →
+  SkillOpt pule/mantiene sano (gate monótono). Decisión diferida; el
+  substrato compartido (skill-slot + scorer + atribución + edit/rollback) es
+  lo que paga primero.
+
+---
+
+## §9 — Referencias
+
+- SkillOpt — <https://github.com/microsoft/SkillOpt> · paper arXiv:2605.23904
+  · <https://microsoft.github.io/SkillOpt/>
+- GEPA / Hermes self-evolution — <https://github.com/NousResearch/hermes-agent-self-evolution>
+- Hermes Agent — <https://github.com/nousresearch/hermes-agent> ·
+  <https://hermes-agent.nousresearch.com/docs/>
+- ProcMEM (procedural memory desde experiencia) — arXiv:2602.01869
+- Interno — `docs/research/16a_entities_in_cloned_systems.md`

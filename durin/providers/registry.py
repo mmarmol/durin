@@ -308,6 +308,21 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         env_extras=(("ZHIPUAI_API_KEY", "{api_key}"),),
         default_api_base="https://open.bigmodel.cn/api/paas/v4",
     ),
+    # Z.ai Coding Plan — Zhipu's subscription-based endpoint for coding
+    # workloads (separate quota from the general bigmodel.cn account).
+    # Same backend + same model ids (glm-5.1, glm-4.6, ...), different
+    # api_base + separate API key. Keyword 'zai-coding' is intentionally
+    # rare so auto-routing by model name keeps falling through to the
+    # plain `zhipu` provider — operators pick this one explicitly when
+    # they have a coding-plan subscription.
+    ProviderSpec(
+        name="zai_coding_plan",
+        keywords=("zai-coding",),
+        env_key="ZAI_CODING_API_KEY",
+        display_name="Z.ai Coding Plan",
+        backend="openai_compat",
+        default_api_base="https://api.z.ai/api/coding/paas/v4",
+    ),
     # DashScope (通义): Qwen models, OpenAI-compatible endpoint
     ProviderSpec(
         name="dashscope",

@@ -401,7 +401,6 @@ def test_get_history_sanitizes_existing_assistant_replay_artifacts():
                 "[Message Time: 2026-05-09 00:33:48]\n"
                 "来了 🎨\n"
                 "[image: /home/user/.durin/media/generated/img_old.png]\n\n"
-                "generate_image(\"16:9\")\n"
                 "message(\"来了 🎨\")"
             ),
         }
