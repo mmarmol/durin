@@ -26,7 +26,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from durin.memory.aliases_index import AliasIndex
 from durin.memory.dream_git_history import format_recent_history
