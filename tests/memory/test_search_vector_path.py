@@ -42,6 +42,15 @@ class _FakeTextEmbedding:
     def list_supported_models():
         return list(_STUB_CATALOG)
 
+    @staticmethod
+    def add_custom_model(**_kwargs) -> None:
+        # No-op: production `_register_custom_models()` calls this on the
+        # real fastembed. The stub catalog already covers the model, so we
+        # skip the side effect. Without this the test is order-dependent —
+        # it only passes when a prior test (e.g. test_embedding) populated
+        # the module-level `_REGISTERED_CUSTOM` set first.
+        pass
+
     def __init__(self, model_name=None, **_):
         self.model_name = model_name
 
