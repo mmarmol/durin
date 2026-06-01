@@ -49,11 +49,6 @@
   - **Recovery-only.** The full rebuild fires only when the lance probe already detected breakage (`health_check.py:129` `components["lance"] == "fail"` → `_rebuild_lance`), not on the normal write path.
 - **Decision:** docstring fixed; the non-atomic window is **accepted**. A temp-table + `rename_table` swap is feasible (LanceDB 0.30.2 supports it) but its cost — risk on the recovery path, a non-deterministic race test — is not justified for a symptom (transient empty vector results → grep) that is already gracefully degraded and only occurs during an already-broken-index recovery.
 
-### B3 🏗 MED — `_dispatch` registers its pending-queue inside the task, racing the inbound consumer
-- **Where:** `durin/agent/loop.py:1229` (consumer: `if effective_key in self._pending_queues`) vs `:1259` (`create_task(self._dispatch(msg))`) and `:1276` (`self._pending_queues[session_key] = pending`, inside the task body).
-- **Verified:** registration happens inside the dispatch task, which runs after `create_task` yields back to the consumer. A second same-session message consumed in that window finds the key unregistered → spawns a **second** dispatch task; the per-session lock serializes processing (no concurrency/corruption), but the second registration overwrites the first and follow-up routing / mid-turn injection is mis-ordered for that window.
-- **Approach:** register the pending queue synchronously before `create_task` (or via `setdefault` keyed on the effective session key) so the consumer sees it immediately.
-
 ### B4 🏗 MED — Shared `FastembedProvider` used by the loop and the Dream daemon thread concurrently
 - **Where:** `durin/agent/tools/memory_store.py:328` passes the store tool's cached `vi` (one `FastembedProvider`) into `_maybe_dispatch_threshold_dream` → `threshold_trigger.py:205` → `DreamRunner.run` on a `threading.Thread`.
 - **Verified:** confirmed the same provider instance is reachable from the loop (`memory_store.execute`) and the daemon thread simultaneously. fastembed/ONNX `embed` isn't guaranteed thread-safe on one session, and lazy `if self._model is None: self._load()` (embedding.py:304) is check-then-act.
