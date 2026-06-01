@@ -28,7 +28,7 @@ from durin.memory.storage import load_entry
 from durin.memory.store import StoreError, store_memory
 from durin.memory.vector_index import (
     VectorIndex,
-    VectorIndexDimensionMismatch,
+    VectorIndexDimensionMismatchError,
     vector_index_available,
 )
 
@@ -255,7 +255,7 @@ class MemoryIngestTool(Tool):
                     entry_path = Path(stored["path"])
                     entry = load_entry(entry_path)
                     vi.upsert(entry, stored["class"], entry_path)
-                except VectorIndexDimensionMismatch as exc:
+                except VectorIndexDimensionMismatchError as exc:
                     logger.warning("ingest vector upsert: %s", exc)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(

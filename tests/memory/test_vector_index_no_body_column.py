@@ -97,12 +97,21 @@ def test_entity_page_record_has_no_body_column(tmp_path: Path) -> None:
     captured: dict = {}
 
     def _fake_connect():
-        class _FakeTable:
-            def delete(self, *_a, **_kw):
-                return None
+        class _FakeMergeInsert:
+            """Mirrors LanceDB's merge_insert builder (see VectorIndex._atomic_upsert)."""
 
-            def add(self, rows):
+            def when_matched_update_all(self):
+                return self
+
+            def when_not_matched_insert_all(self):
+                return self
+
+            def execute(self, rows):
                 captured["rows"] = rows
+
+        class _FakeTable:
+            def merge_insert(self, _on):
+                return _FakeMergeInsert()
 
         class _FakeTables:
             tables = ["memory_entries"]

@@ -34,6 +34,7 @@ than guessing.
 
 from __future__ import annotations
 
+import threading
 import time
 from abc import ABC, abstractmethod
 from typing import Any
@@ -84,6 +85,14 @@ _CUSTOM_MODELS: dict[str, dict[str, Any]] = {
 # call it once per model per process.
 _REGISTERED_CUSTOM: set[str] = set()
 
+# Serialises the registration / catalog-cache mutations below. The embedding
+# provider is shared between the agent loop and the Dream daemon thread (B4),
+# so two threads can hit the lazy first-use path at once; without this lock
+# both pass the `model_id in _REGISTERED_CUSTOM` check and the second
+# `add_custom_model` raises ValueError (B5). Reentrant because
+# `list_supported_models` holds it across its call to `_register_custom_models`.
+_REGISTRATION_LOCK = threading.RLock()
+
 
 def _register_custom_models() -> None:
     """Idempotently register :data:`_CUSTOM_MODELS` with fastembed.
@@ -107,21 +116,22 @@ def _register_custom_models() -> None:
         return
 
     catalog_names = {m["model"] for m in TextEmbedding.list_supported_models()}
-    for model_id, kwargs in _CUSTOM_MODELS.items():
-        if model_id in _REGISTERED_CUSTOM or model_id in catalog_names:
-            continue
-        TextEmbedding.add_custom_model(
-            model=model_id,
-            pooling=getattr(PoolingType, kwargs["pooling"]),
-            normalization=kwargs["normalization"],
-            sources=ModelSource(hf=kwargs["hf_source"]),
-            dim=kwargs["dim"],
-            model_file=kwargs.get("model_file", "onnx/model.onnx"),
-            description=kwargs.get("description", ""),
-            license=kwargs.get("license", ""),
-            size_in_gb=kwargs.get("size_in_gb", 0.0),
-        )
-        _REGISTERED_CUSTOM.add(model_id)
+    with _REGISTRATION_LOCK:
+        for model_id, kwargs in _CUSTOM_MODELS.items():
+            if model_id in _REGISTERED_CUSTOM or model_id in catalog_names:
+                continue
+            TextEmbedding.add_custom_model(
+                model=model_id,
+                pooling=getattr(PoolingType, kwargs["pooling"]),
+                normalization=kwargs["normalization"],
+                sources=ModelSource(hf=kwargs["hf_source"]),
+                dim=kwargs["dim"],
+                model_file=kwargs.get("model_file", "onnx/model.onnx"),
+                description=kwargs.get("description", ""),
+                license=kwargs.get("license", ""),
+                size_in_gb=kwargs.get("size_in_gb", 0.0),
+            )
+            _REGISTERED_CUSTOM.add(model_id)
 
 
 # Cached catalog from fastembed.TextEmbedding.list_supported_models().
@@ -152,9 +162,14 @@ def list_supported_models() -> dict[str, dict[str, Any]]:
             "fastembed is required for vector retrieval. "
             "Install the memory extra: pip install durin-agent[memory]"
         ) from exc
-    _register_custom_models()
-    _CATALOG_CACHE = {m["model"]: m for m in TextEmbedding.list_supported_models()}
-    return _CATALOG_CACHE
+    # Double-checked under the lock: a concurrent caller may have populated
+    # the cache (and registered) while we were importing (B5).
+    with _REGISTRATION_LOCK:
+        if _CATALOG_CACHE is not None:
+            return _CATALOG_CACHE
+        _register_custom_models()
+        _CATALOG_CACHE = {m["model"]: m for m in TextEmbedding.list_supported_models()}
+        return _CATALOG_CACHE
 
 
 # E5-family model prefixes (per `intfloat/multilingual-e5-*` model
@@ -266,6 +281,9 @@ class FastembedProvider(EmbeddingProvider):
         if self._model_name not in catalog:
             raise ValueError(_unknown_model_error(self._model_name, catalog))
         self._model: Any = None
+        # The loop and the Dream daemon thread share one provider (B4); guard
+        # the lazy first load so the heavy ONNX model is constructed once.
+        self._load_lock = threading.Lock()
 
     @property
     def model_name(self) -> str:
@@ -302,7 +320,9 @@ class FastembedProvider(EmbeddingProvider):
         if not texts:
             return []
         if self._model is None:
-            self._load()
+            with self._load_lock:
+                if self._model is None:
+                    self._load()
         assert self._model is not None
         t0 = time.monotonic()
         # fastembed.embed() returns an iterator of numpy arrays.

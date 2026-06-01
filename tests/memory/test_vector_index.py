@@ -9,7 +9,6 @@ results are predictable.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Iterable
 
 import pytest
 
@@ -494,3 +493,41 @@ def test_embed_text_includes_summary_when_authoritative() -> None:
     text = VectorIndex._embed_text(entry)
     assert "distinct semantic summary" in text
     assert "entirely different body text" in text
+
+
+def test_upsert_is_atomic_keeps_existing_row_when_insert_fails(
+    tmp_path: Path, provider: _FakeEmbeddingProvider, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """B6: upsert must not lose a pre-existing row if the write fails midway.
+
+    The old delete-then-add did two commits, so a failure after the delete
+    left the row gone. An atomic ``merge_insert`` never calls ``table.add``
+    and applies as a single commit, so a forced ``add`` failure can't strand
+    the index. Patching ``add`` to raise reproduces the old data-loss window
+    (RED) and is a no-op once the write is atomic (GREEN).
+    """
+    from durin.memory.storage import load_entry
+    from durin.memory.vector_index import _TABLE_NAME
+
+    workspace = tmp_path
+    result = store_memory(workspace, content="alpha body", headline="alpha")
+    entry_path = Path(result["path"])
+    entry = load_entry(entry_path)
+
+    index = VectorIndex(workspace, provider)
+    index.upsert(entry, result["class"], entry_path)
+    assert index.search("alpha query", top_k=5), "row should be present after first upsert"
+
+    table_cls = type(index._connect().open_table(_TABLE_NAME))
+
+    def _boom(self, *args, **kwargs):  # noqa: ANN001
+        raise RuntimeError("simulated insert failure")
+
+    monkeypatch.setattr(table_cls, "add", _boom)
+
+    try:
+        index.upsert(entry, result["class"], entry_path)
+    except RuntimeError:
+        pass  # old path raises after the destructive delete; new path won't
+
+    assert index.search("alpha query", top_k=5), "existing row must survive a failed re-upsert"
