@@ -345,7 +345,10 @@ class ContextBuilder:
         iteration: int | None = None,
     ) -> list[dict[str, Any]]:
         """Build the complete message list for an LLM call."""
-        from durin.agent.agent_mode import plan_mode_runtime_lines
+        from durin.agent.agent_mode import (
+            executing_plan_runtime_lines,
+            plan_mode_runtime_lines,
+        )
 
         extra = goal_state_runtime_lines(session_metadata)
         # Echo the agent's todo list so it survives compaction. Without
@@ -358,13 +361,18 @@ class ContextBuilder:
         # turns the way it does when the constraint lives only in the
         # system prompt.
         extra = list(extra) + plan_mode_runtime_lines(session_metadata)
+        # Per-turn pointer to the approved plan currently executing. Re-
+        # derived from session.metadata every turn (same store + cadence as
+        # the todo echo above) so the "executing an approved plan" frame
+        # survives compaction. This replaces the carry-over the refuted
+        # `autocompact` module used to do by splicing plan content into the
+        # summary — here it's a lightweight pointer; progress lives in the
+        # todo list, so it does not make the model re-run completed steps.
+        extra = list(extra) + executing_plan_runtime_lines(session_metadata)
         # Sprint B / file-based plans — after /build approves a plan,
-        # surface the path so the next turn can read it without the
-        # user having to copy/paste it. The session metadata is cleared
-        # after first surfacing to avoid noise on subsequent turns.
-        # Persistence across compaction is handled separately by the
-        # autocompact path (see autocompact.py — `executing_plan_path`
-        # injects the full plan content into the summary).
+        # surface the path so the next turn can read it without the user
+        # having to copy/paste it. One-shot (consumed below); the persistent
+        # counterpart is the executing-plan pointer injected just above.
         if session_metadata is not None:
             approved_path = session_metadata.get("approved_plan_path")
             if approved_path:

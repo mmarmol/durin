@@ -115,9 +115,9 @@ Session state lives in `session.metadata`:
 |---|---|
 | `/plan` activates | Mode = plan. Prior `executing_plan_path` cleared. |
 | `exit_plan_mode(plan)` | Writes plan + sets `session.metadata.active_plan_path`. |
-| `/build` approves | `active_plan_path` → `approved_plan_path` (one-shot reminder) AND `executing_plan_path` (persistent for autocompact). Mode restored. |
-| Next turn after /build | `ContextBuilder.build_messages` injects one-shot reminder; `approved_plan_path` popped. |
-| Autocompact archives | `autocompact._read_plan_carryover` reads `executing_plan_path` and splices plan content into the summary block (cap 6000 chars). |
+| `/build` approves | `active_plan_path` → `approved_plan_path` (one-shot reminder) AND `executing_plan_path` (persistent pointer). Mode restored. |
+| Next turn after /build | `ContextBuilder.build_messages` injects the one-shot `approved_plan_path` reminder, then pops it. |
+| Every subsequent turn | `executing_plan_runtime_lines` re-derives a lightweight pointer from `session.metadata["executing_plan_path"]` and injects it into the runtime-context block — same store + cadence as the todo echo, so the "executing an approved plan" frame survives compaction. It points at the plan file (progress is tracked by the todo list); it does **not** splice plan content. A new `/plan` clears the pointer. |
 
 **Telemetry**: `agent_mode.turn_start`, `agent_mode.switch` (`{from, to, trigger}`), `agent_mode.tool_denied` (`{tool, mode}`), `plan_mode.presented` (`{plan_chars, from_mode}`).
 
