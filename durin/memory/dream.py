@@ -215,8 +215,19 @@ def default_llm_invoke(
     if usage is not None:
         prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
         completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+    content = response.choices[0].message.content
+    if content is None:
+        # Providers return content=None on refusals / empty / tool-call
+        # turns. Without this guard, None propagates into LLMResponse.text
+        # (typed str) and surfaces downstream only as a generic
+        # DreamPatchParseError("not a string") in the retry loop, masking
+        # the real cause. Log it here and coerce to "" so the type holds.
+        logger.warning(
+            "dream LLM (%s) returned no content (refusal or empty "
+            "response); treating as empty", model,
+        )
     return LLMResponse(
-        text=response.choices[0].message.content,
+        text=content or "",
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
     )
