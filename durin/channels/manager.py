@@ -83,6 +83,11 @@ class ChannelManager:
         self.channels: dict[str, BaseChannel] = {}
         self._dispatch_task: asyncio.Task | None = None
         self._origin_reply_fingerprints: dict[tuple[str, str, str], str] = {}
+        # Fire-and-forget tasks (e.g. the restart-completion notice) are
+        # parked here so the event loop keeps a strong reference and does
+        # not garbage-collect them mid-flight. Same pattern the channels
+        # use (see dingtalk._background_tasks).
+        self._background_tasks: set[asyncio.Task] = set()
 
         self._init_channels()
 
@@ -235,7 +240,7 @@ class ChannelManager:
         target = self.channels.get(notice.channel)
         if not target:
             return
-        asyncio.create_task(self._send_with_retry(
+        task = asyncio.create_task(self._send_with_retry(
             target,
             OutboundMessage(
                 channel=notice.channel,
@@ -244,6 +249,8 @@ class ChannelManager:
                 metadata=dict(notice.metadata or {}),
             ),
         ))
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
 
     async def stop_all(self) -> None:
         """Stop all channels and the dispatcher."""
