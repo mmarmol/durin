@@ -24,10 +24,8 @@ __all__ = [
     "AUTO_ABSORB_QUESTION_TEXT",
     "AUX_MODEL_QUESTION_TEXT",
     "CROSS_ENCODER_QUESTION_TEXT",
-    "MEMORY_ENABLE_QUESTION_TEXT",
     "prompt_enable_auto_absorb",
     "prompt_enable_cross_encoder",
-    "prompt_enable_memory_subsystem",
     "prompt_memory_aux_model",
 ]
 
@@ -53,34 +51,6 @@ AUTO_ABSORB_QUESTION_TEXT: str = dedent(
     Enable auto-absorb now? [y/N]:
     """
 )
-
-
-# Verbatim from `docs/architecture/memory/06_prompts_and_instructions.md` §6.1.
-MEMORY_ENABLE_QUESTION_TEXT: str = dedent(
-    """\
-    durin's memory system lets the agent remember facts across sessions.
-    Enabling it downloads an embedding model (~450MB for the default
-    multilingual-e5-small) and starts the local consolidation process.
-
-    Enable memory? [Y/n]:
-    """
-)
-
-
-def prompt_enable_memory_subsystem(current: bool = True) -> bool:
-    """Q6.1 — defaults to True per spec.
-
-    Same idempotency contract as the other prompts: re-prompts
-    preserve the previous opt-out, aborts (Ctrl+C) preserve current.
-    """
-    questionary = _get_questionary()
-    answer: Any = questionary.confirm(
-        MEMORY_ENABLE_QUESTION_TEXT,
-        default=bool(current),
-    ).ask()
-    if answer is None:
-        return bool(current)
-    return bool(answer)
 
 
 # Verbatim from `docs/architecture/memory/06_prompts_and_instructions.md` §6.4.

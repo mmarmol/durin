@@ -232,20 +232,26 @@ Documented here for historical reference. Hooks in `memory_store.execute`, `memo
 
 ## Phase 6 — Prompts v2 (4 pending items, ~100 LOC)
 
-### P6.1 — Onboarding wizard: memory subsystem enable ✅ DONE (commit `572d5cf`)
+> **Wiring note (corrected 2026-06-01).** P4.3 / P6.1 / P6.2 are DONE, but
+> they were planned to wire into `onboard.py::run_onboard`. The actual
+> wiring landed in the default task-oriented wizard
+> `durin/cli/onboard_wizard.py::_configure_memory` (P10, 2026-05-30) — which
+> calls the `onboard_memory.py` prompt functions. `onboard.py` is the legacy
+> `--advanced` field-walker, not the default path.
+
+### P6.1 — Onboarding wizard: memory subsystem enable ✅ DONE (commit `572d5cf`, rewired P10)
 
 - **TYPE**: 🟢 module (~30 LOC)
-- **DoD**: `prompt_enable_memory_subsystem(current: bool) -> bool` with verbatim text from doc 06 §6.1. Wired into `durin onboard` flow.
+- **DoD**: enable vector memory during onboarding. **Shipped as a toggle**, not the originally-planned `prompt_enable_memory_subsystem` confirm: `onboard_wizard.py::_configure_memory` shows an "Enable vector memory" choice (ON by default since 2026-06-01). The standalone `prompt_enable_memory_subsystem` + its `MEMORY_ENABLE_QUESTION_TEXT` were never wired and were removed as dead code (the toggle is the live path).
 - **Refs**:
-  - `durin/cli/onboard_memory.py` (already exists, add function).
-  - Wizard wiring: `durin/cli/onboard.py::run_onboard` — add "Memory" step before the config provider.
+  - `durin/cli/onboard_wizard.py::_configure_memory` (the toggle + submenu).
 
 ### P6.2 — Onboarding: aux model for memory (doc 06 §6.4) ✅ DONE (commit `572d5cf`)
 
 - **TYPE**: 🟢 module (~30 LOC)
 - **DoD**: `prompt_memory_aux_model(current_agent_model: str, current: str | None) -> str` offers "same / specify / skip". Sets `config.aux_models.memory`.
 - **Refs**:
-  - `durin/cli/onboard_memory.py`.
+  - `durin/cli/onboard_memory.py::prompt_memory_aux_model`, called from `onboard_wizard.py::_configure_memory`.
 
 ### P6.3 — Tool description constants per doc 06 §3 ✅ DONE (commit `572d5cf`)
 
