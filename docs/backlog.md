@@ -186,4 +186,4 @@ latencia per-write medible (medir antes de diseñar).
 
 ---
 
-## Last updated: 2026-06-01 (QA review P1: agregado item perf de threshold_trigger full-walk)
+## Last updated: 2026-06-01 (S1 redacción A4+A5 implementado y removido; ver commit)

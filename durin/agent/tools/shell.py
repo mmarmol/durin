@@ -245,6 +245,7 @@ class ExecTool(Tool):
             # spill file under <workspace>/.durin/spills/ that it can read
             # with read_file when it needs the omitted middle.
             from durin.agent.tools.output_spill import truncate_with_spill
+            from durin.security.secrets import redact_secrets
             from durin.telemetry.logger import current_telemetry
 
             workspace_path = Path(self.working_dir) if self.working_dir else None
@@ -253,6 +254,7 @@ class ExecTool(Tool):
                 tool_name="exec",
                 workspace=workspace_path,
                 max_chars=self._MAX_OUTPUT,
+                redact=redact_secrets,
             )
             if spill_meta.get("original_chars", 0) != spill_meta.get("rendered_chars", 0):
                 logger_obj = current_telemetry()

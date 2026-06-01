@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +55,7 @@ def truncate_with_spill(
     max_chars: int,
     *,
     head_ratio: float = 0.7,
+    redact: Callable[[str], str] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Truncate ``content`` if it exceeds ``max_chars``; spill original to disk.
 
@@ -62,12 +64,23 @@ def truncate_with_spill(
     truncated rendering keeps ``head_ratio`` of the budget as head, the rest
     minus the footer as tail, and inserts a reference to the spill file.
 
+    ``redact``, when given, is applied to ``content`` *before* the spill is
+    written so secret values never reach the spill file on disk (A4). The
+    short-circuit (no-spill) path skips it — that content is returned to the
+    caller, which redacts it before it reaches the model.
+
     Spill write failures fall back to plain head/tail truncation (no spill ref)
     — the tool call must never break because a temp dir was un-writable.
     """
     n = len(content)
     if n <= max_chars:
         return content, {"spilled": False, "original_chars": n, "rendered_chars": n}
+
+    # Redact before anything touches disk — closes the spill-before-redact
+    # leak (A4). Recompute length so head/tail math uses the redacted text.
+    if redact is not None:
+        content = redact(content)
+        n = len(content)
 
     root = _spill_root(workspace)
     spill_path: Path | None = None

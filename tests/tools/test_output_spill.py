@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 from pathlib import Path
 
@@ -18,7 +17,6 @@ from durin.telemetry.logger import (
     bind_telemetry,
     reset_telemetry,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helper unit tests
@@ -85,7 +83,6 @@ class TestTruncateWithSpill:
 
     def test_spill_write_failure_falls_back_gracefully(self, tmp_path: Path, monkeypatch):
         """When the spill write raises, content is still truncated, just w/o ref."""
-        from durin.agent.tools import output_spill as os_mod
 
         # Patch Path.write_text to raise.
         def boom(*args, **kwargs):
@@ -99,6 +96,78 @@ class TestTruncateWithSpill:
         assert "spill write failed" in rendered
         # Truncation still applied so context doesn't blow up.
         assert len(rendered) < 5000
+
+
+# ---------------------------------------------------------------------------
+# A4 — redaction happens before the spill write
+# ---------------------------------------------------------------------------
+
+
+class TestSpillRedaction:
+
+    def test_redact_applied_before_spill_write(self, tmp_path: Path):
+        """When a redactor is supplied, the spilled file is redacted — the
+        raw secret never lands on disk (A4)."""
+        secret = "supersecretvalue123456"
+        content = secret + "X" * 6000
+
+        def fake_redact(text: str) -> str:
+            return text.replace(secret, "«redacted:K»")
+
+        rendered, meta = truncate_with_spill(
+            content, "exec", tmp_path, max_chars=200, redact=fake_redact
+        )
+        assert meta["spilled"] is True
+        spill_text = Path(meta["spill_path"]).read_text()
+        assert secret not in spill_text            # not leaked to disk
+        assert "«redacted:K»" in spill_text
+        assert secret not in rendered              # nor in the returned head/tail
+
+    def test_no_redactor_keeps_content_verbatim(self, tmp_path: Path):
+        """Default (no redact) preserves the original spill behaviour."""
+        content = "Z" * 6000
+        _, meta = truncate_with_spill(content, "exec", tmp_path, max_chars=200)
+        assert Path(meta["spill_path"]).read_text() == content
+
+
+class TestExecToolSpillRedactionIntegration:
+
+    @pytest.mark.asyncio
+    async def test_exec_spill_redacts_stored_exec_secret(self, tmp_path, monkeypatch):
+        """End-to-end: an exec-scoped secret echoed into a spilled exec output
+        is redacted on disk, not just in the returned string (A4)."""
+        import shlex
+        import sys
+
+        from durin.security import secrets as _secrets
+        from durin.security.secrets import SecretStore
+
+        config_path = tmp_path / "config.json"
+        _secrets._STORE = None
+        monkeypatch.setattr(
+            "durin.config.loader.get_config_path", lambda: config_path
+        )
+        secret_val = "deploytokenSUPERsecretvalue123456"
+        store = SecretStore(path=tmp_path / "secrets.json")
+        store.put("DEPLOY_TOKEN", value=secret_val, service="x", scope=["exec"])
+        store.save()
+        _secrets.get_secret_store(reload=True)
+
+        script = tmp_path / "leak.py"
+        script.write_text(
+            "import os\nprint(os.environ['DEPLOY_TOKEN'])\nprint('A' * 14000)\n"
+        )
+        cmd = f"{shlex.quote(sys.executable)} {shlex.quote(str(script))}"
+
+        tool = ExecTool(working_dir=str(tmp_path))
+        result = await tool.execute(command=cmd)
+
+        spills = list((tmp_path / _SPILL_SUBDIR).glob("*.txt"))
+        assert spills, "expected the large output to spill"
+        spill_text = spills[0].read_text()
+        assert secret_val not in spill_text      # A4: not on disk
+        assert secret_val not in result          # nor in the model-facing result
+        _secrets._STORE = None
 
 
 # ---------------------------------------------------------------------------
