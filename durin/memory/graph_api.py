@@ -20,14 +20,12 @@ expects.
 from __future__ import annotations
 
 import logging
-from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from durin.memory.entity_page import EntityPage
 from durin.memory.paths import walk_class
-from durin.memory.search import search_memory
 from durin.memory.storage import load_entry
 
 __all__ = [

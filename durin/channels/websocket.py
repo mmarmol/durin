@@ -1715,8 +1715,8 @@ class WebSocketChannel(BaseChannel):
 
         from durin.config.loader import load_config
         from durin.providers.image_generation import (
-            AIHubMixImageGenerationClient,
             IMAGE_GEN_SUPPORTED_PROVIDERS,
+            AIHubMixImageGenerationClient,
             ImageGenerationError,
             OpenRouterImageGenerationClient,
         )
@@ -1908,6 +1908,7 @@ class WebSocketChannel(BaseChannel):
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         import asyncio
+
         from durin.memory.cross_encoder import probe_model
 
         model = (_query_first(query, "model") or "").strip()

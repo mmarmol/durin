@@ -224,8 +224,10 @@ def _marker_for(
     # composition stays here — only the header strings are shared.
     # H5 (2026-05-29): pass through the completeness qualifier.
     from durin.memory.section_markers import (
-        canonical_marker, fragment_marker,
-        ingested_marker, session_marker,
+        canonical_marker,
+        fragment_marker,
+        ingested_marker,
+        session_marker,
     )
     if section == "canonical":
         return canonical_marker(

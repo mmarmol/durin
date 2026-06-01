@@ -46,9 +46,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
-
 from pathlib import Path
+from typing import Any
 
 from durin.memory.aliases_index import AliasIndex
 from durin.memory.entity_page import EntityPage

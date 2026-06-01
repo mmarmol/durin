@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
-
 import logging
 import time
-from typing import Optional
+from pathlib import Path
+from typing import Any, Optional
 
 from durin.agent.tools._telemetry import emit_tool_event
 from durin.agent.tools.base import Tool, tool_parameters
@@ -19,9 +17,8 @@ from durin.agent.tools.schema import (
 from durin.memory.aliases_index import AliasIndex
 from durin.memory.entity_ranker import (
     extract_query_entities,
-    rank_with_entities,
 )
-from durin.memory.search import Result, search_memory
+from durin.memory.search import Result
 from durin.memory.vector_index import VectorIndex, vector_index_available
 
 logger = logging.getLogger(__name__)
@@ -425,7 +422,9 @@ class MemorySearchTool(Tool):
 
         # F4: apply per-source cap + render sectioned output.
         from durin.memory.sectioned_output import (
-            SectionedHit, apply_per_source_cap, render_sectioned,
+            SectionedHit,
+            apply_per_source_cap,
+            render_sectioned,
         )
         _TYPE_FROM_CLASS = {
             "entity_page": "entity",
@@ -524,8 +523,10 @@ class MemorySearchTool(Tool):
         agent renders it the same way (`results`, `total`, `strategy`).
         """
         import re
+
         from durin.memory.storage import (
-            FrontmatterError, split_frontmatter,
+            FrontmatterError,
+            split_frontmatter,
         )
 
         archive_root = self._workspace / "memory" / "archive"
@@ -625,7 +626,9 @@ class MemorySearchTool(Tool):
         # call render_sectioned. Per-source cap rarely triggers on
         # archive but applying it keeps the path uniform.
         from durin.memory.sectioned_output import (
-            SectionedHit, apply_per_source_cap, render_sectioned,
+            SectionedHit,
+            apply_per_source_cap,
+            render_sectioned,
         )
         _ARCHIVE_TYPE_FROM_CLASS = {
             "entity_page": "entity",

@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import subprocess
 import sys
 import time
 from contextlib import suppress
@@ -1326,7 +1325,6 @@ def _resolve_workspace(loop) -> "Path":
 
 def _find_memory_entry(workspace, id_needle: str):
     """Walk memory/<class>/*.md; return list of (class_name, path) matching the id."""
-    from pathlib import Path
 
     from durin.memory.paths import MEMORY_CLASSES
 
@@ -1349,10 +1347,10 @@ def _find_memory_entry(workspace, id_needle: str):
 
 async def cmd_memory(ctx: CommandContext) -> OutboundMessage:
     """Memory operations dispatcher: list, show, search, drill."""
+    from durin.memory.drill import DrillError, drill
     from durin.memory.paths import MEMORY_CLASSES
     from durin.memory.search import search_memory
-    from durin.memory.drill import DrillError, drill
-    from durin.memory.storage import load_entry, FrontmatterError
+    from durin.memory.storage import FrontmatterError, load_entry
 
     loop = ctx.loop
     workspace = _resolve_workspace(loop)

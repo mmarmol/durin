@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Optional, Sequence
+from typing import Optional
 
 from durin.memory.fts_index import FTSHit, FTSIndex
 from durin.memory.query_router import LexicalRoute, RoutingDecision

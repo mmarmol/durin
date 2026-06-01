@@ -17,10 +17,10 @@ from loguru import logger
 
 from durin.agent.runner import AgentRunner, AgentRunSpec
 from durin.agent.tools.registry import ToolRegistry
+from durin.memory.consolidator_tags import parse_consolidator_response
 from durin.session.manager import Session
 from durin.telemetry.logger import current_telemetry
 from durin.utils.gitstore import GitStore
-from durin.utils.post_compaction_guard import PostCompactionLoopGuard
 from durin.utils.helpers import (
     ensure_dir,
     estimate_message_tokens,
@@ -29,8 +29,8 @@ from durin.utils.helpers import (
     strip_think,
     truncate_text,
 )
+from durin.utils.post_compaction_guard import PostCompactionLoopGuard
 from durin.utils.prompt_templates import render_template
-from durin.memory.consolidator_tags import parse_consolidator_response
 
 if TYPE_CHECKING:
     from durin.providers.base import LLMProvider
@@ -1237,9 +1237,10 @@ class Dream:
 
     async def run(self) -> bool:
         """Process unprocessed history entries. Returns True if work was done."""
+        import time as _time
+
         from durin.agent.skills import BUILTIN_SKILLS_DIR
         from durin.agent.tools._telemetry import emit_tool_event
-        import time as _time
 
         t0 = _time.perf_counter()
         last_cursor = self.store.get_last_dream_cursor()

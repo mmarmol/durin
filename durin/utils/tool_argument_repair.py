@@ -128,6 +128,7 @@ def parse_tool_call_arguments(raw: str | dict) -> dict:
         # never break tool-call parsing.
         try:
             from contextlib import suppress
+
             from durin.telemetry.logger import current_telemetry
             logger_obj = current_telemetry()
             if logger_obj is not None:

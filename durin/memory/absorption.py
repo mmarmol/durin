@@ -27,11 +27,10 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable
 
 from durin.memory.aliases_index import AliasIndex
 from durin.memory.entity_page import EntityPage
-from durin.utils.git_repo import GitRepo, GitRepoError, NothingToCommitError
+from durin.utils.git_repo import GitRepo, NothingToCommitError
 
 __all__ = [
     "AbsorptionError",

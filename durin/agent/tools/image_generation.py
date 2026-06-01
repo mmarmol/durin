@@ -17,8 +17,8 @@ from durin.agent.tools.schema import (
 from durin.config.paths import get_media_dir
 from durin.config.schema import Base
 from durin.providers.image_generation import (
-    AIHubMixImageGenerationClient,
     IMAGE_GEN_SUPPORTED_PROVIDERS,
+    AIHubMixImageGenerationClient,
     ImageGenerationError,
     OpenRouterImageGenerationClient,
 )

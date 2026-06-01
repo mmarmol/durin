@@ -125,9 +125,9 @@ app = typer.Typer(
 # everyday commands (onboard, agent, gateway, …) sort above the
 # lifecycle/diagnostic ones in `durin --help`.
 from durin.cli.config_cmd import config_app as _config_app  # noqa: E402
-from durin.cli.upgrade import register as _register_upgrade  # noqa: E402
-from durin.cli.uninstall import register as _register_uninstall  # noqa: E402
 from durin.cli.doctor import register as _register_doctor  # noqa: E402
+from durin.cli.uninstall import register as _register_uninstall  # noqa: E402
+from durin.cli.upgrade import register as _register_upgrade  # noqa: E402
 
 console = Console()
 EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit", ":q"}
@@ -201,8 +201,8 @@ def _init_prompt_session(
     history_file.parent.mkdir(parents=True, exist_ok=True)
 
     from prompt_toolkit.completion import merge_completers
-    from prompt_toolkit.key_binding import KeyBindings
     from prompt_toolkit.document import Document as _PtkDocument
+    from prompt_toolkit.key_binding import KeyBindings
 
     completers = []
     if workspace is not None:
@@ -718,7 +718,7 @@ def onboard(
     console.print(f"\n{__logo__} durin is ready!")
     console.print("\nNext steps:")
     if wizard_mode:
-        console.print(f"  1. Verify: [cyan]durin doctor[/cyan]")
+        console.print("  1. Verify: [cyan]durin doctor[/cyan]")
         console.print(f"  2. Chat: [cyan]{agent_cmd}[/cyan]")
         console.print(f"  3. (optional) Chat apps: [cyan]{gateway_cmd}[/cyan]")
     else:

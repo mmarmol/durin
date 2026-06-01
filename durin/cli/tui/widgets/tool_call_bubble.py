@@ -19,8 +19,6 @@ import difflib
 import json
 from typing import Any
 
-from rich.markdown import Markdown
-from rich.syntax import Syntax
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical

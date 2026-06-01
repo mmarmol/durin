@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import inspect
 import json
+from contextlib import suppress
 from typing import Any, Awaitable, Callable
 
 from loguru import logger
-
-from contextlib import suppress
 
 from durin.agent.hook import AgentHook, AgentHookContext
 from durin.telemetry.logger import current_telemetry

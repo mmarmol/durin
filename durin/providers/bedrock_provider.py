@@ -12,9 +12,8 @@ from typing import Any
 
 import json_repair
 
-from durin.utils.tool_argument_repair import parse_tool_call_arguments
-
 from durin.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from durin.utils.tool_argument_repair import parse_tool_call_arguments
 
 _IMAGE_DATA_URL = re.compile(r"^data:image/([a-zA-Z0-9.+-]+);base64,(.*)$", re.DOTALL)
 _TEXT_BLOCK_TYPES = {"text", "input_text", "output_text"}

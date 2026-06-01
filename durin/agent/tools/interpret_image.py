@@ -48,7 +48,6 @@ from durin.agent.tools.schema import StringSchema, tool_parameters_schema
 from durin.telemetry.logger import current_telemetry
 from durin.utils.helpers import build_image_content_blocks, detect_image_mime
 
-
 _MAX_RESPONSE_TOKENS = 2048
 _DEFAULT_QUESTION = "Describe this image in detail, including any text visible in it."
 
