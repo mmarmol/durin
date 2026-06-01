@@ -46,18 +46,18 @@ Each candidate investigated under maximum forensic lens (git `-S` history + intr
 | 15 | [providers/github_copilot_provider.py](../../durin/providers/github_copilot_provider.py) | Dead — redundant public wrapper over `_load_github_token()`; live auth calls it directly, no login-status surface exists, no `get_*_login_status` convention. Deleted. `d1adbf6`. |
 | F841 | absorption / graph / memory_ingest | 3 unused locals/param, each traced to confirm not-a-forgotten-usage: `archived_path` (side-effect call), `episodic_root` (flat walk via `walk_class`), `ingested_id` param (backlink via path). Removed. `9c0c784`. |
 
-## P3 — Test gaps & hygiene
+## P3 — Test gaps & hygiene — ✅ ALL RESOLVED (2026-06-01)
 
-| # | Location | Problem | Fix |
-|---|----------|---------|-----|
-| 16 | [pyproject.toml:143](../../pyproject.toml#L143) | `@pytest.mark.slow` used (test_dream.py:501) but `slow` **not registered** → `pytest -m "not slow"` does NOT exclude it; `--strict-markers` would error. | Register `slow` in `markers`. |
-| 17 | tests/memory/test_aliases_cache.py | Only concurrency test covers cache *construction*; nothing exercises `lookup()` + `refresh_for()`/`build()` on the shared instance — exactly the P0#2 race. | Add reader/writer stress test. |
-| 18 | [agent/tools/memory_search.py — tests](../../tests/agent/test_stop_preserves_context.py#L49) | `test_restore_checkpoint_method_exists` / `test_checkpoint_key_constant` assert only `hasattr`/string equality — pass even if logic is broken. Behavioral coverage already exists adjacently. | Drop the two tautological tests. |
-| 19 | [channels/mochat.py](../../durin/channels/mochat.py) (943 LOC) | **No test file** (`grep -i mochat tests/` empty) while sibling channels each have suites. Non-trivial buffering/delay/mention logic untested. | Add tests/channels/test_mochat_channel.py. |
+| # | Location | Verdict + resolution |
+|---|----------|---------------------|
+| 16 | [pyproject.toml](../../pyproject.toml) | Registered `slow` marker. (Report claim corrected: `-m "not slow"` *did* already exclude it — pytest filters unregistered marks, just warns; the fix removes the warning + future-proofs `--strict-markers`.) `0799da4`. |
+| 17 | [tests/memory/test_aliases_cache.py](../../tests/memory/test_aliases_cache.py) | Mostly covered by the P0#2 `TestThreadSafety` (on `AliasIndex` directly). Added an integration-level reader/writer stress test on the **shared cache handle** (`get_shared_alias_index`) — catches a regression that handed out per-thread copies, which the unit test wouldn't. `aa728f3`. |
+| 18 | [tests/agent/test_stop_preserves_context.py](../../tests/agent/test_stop_preserves_context.py) | Dropped the two tautological tests (`hasattr` / string-`==`); both are subsumed by `test_cancel_dispatch_restores_checkpoint`. Cleaned the file's now-unused imports. `983c2e0`. |
+| 19 | [channels/mochat.py](../../durin/channels/mochat.py) (943 LOC) | Added `tests/channels/test_mochat_channel.py` — 52 unit tests over the pure logic (content/target/timestamp/mention parsing, buffered-body builder, mention-requirement precedence, id-list/group-id helpers). Transport (websocket/polling) scoped out. `bdac416`. |
 
-## Bulk lint (mechanical, `ruff --fix`)
+## Bulk lint (mechanical, `ruff --fix`) — ✅ DONE
 
-`ruff check durin/` (current config): **124 errors, 83 auto-fixable** — 49 unsorted imports (I001), 29 unused imports (F401), 21 E402, 5 empty f-strings (F541). Extended ruleset surfaces **1239** more (UP/SIM/RET/PTH/PERF/TRY) if the team wants to adopt them. Recommend running `ruff check durin/ --fix` for the safe 83, then reviewing the 4 F821-in-annotations below.
+`ruff check durin/ --fix` applied: **83 auto-fixable fixes across 51 files** (49 I001 import sorts, 29 F401 unused imports, 5 F541 empty f-strings), full suite green. Commit `648fd70`. The 40 remaining (E402, annotation-only F821, N806, etc.) need manual judgment — left for a separate pass. The extended ruleset (UP/SIM/RET/PTH/PERF/TRY, ~1239) was **not** adopted; that's an opt-in decision for the team.
 
 ## Filtered as NON-issues (don't re-investigate)
 
