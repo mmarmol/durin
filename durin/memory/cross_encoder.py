@@ -44,7 +44,7 @@ __all__ = [
     "CrossEncoderReranker",
     "DEFAULT_MODEL",
     "rerank_hits",
-    "test_model",
+    "probe_model",
 ]
 
 
@@ -205,7 +205,7 @@ def rerank_hits(
     return [u for (u, _), _ in paired[:top_n]]
 
 
-def test_model(
+def probe_model(
     model_id: str,
     *,
     loader: Optional[Any] = None,

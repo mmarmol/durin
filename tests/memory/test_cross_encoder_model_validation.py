@@ -20,9 +20,7 @@ from typing import Any
 
 import pytest
 
-# Aliased import: the function name `test_model` would otherwise be
-# picked up by pytest's name-based collection and run as a test.
-from durin.memory.cross_encoder import test_model as probe_model
+from durin.memory.cross_encoder import probe_model
 
 
 _SENTINEL = object()
