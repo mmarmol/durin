@@ -124,41 +124,24 @@ Top-level fields:
 
 ### 2.3 Tool description (what the LLM sees)
 
-```
-Search durin's memory for content relevant to your question. Searches across
-canonical entity pages, recent observations, session summaries, and ingested
-documents in one call.
+The exact wording the LLM reads (the tool's `.description`, emitted as
+`function.description`) is **not duplicated here** — that would be a third,
+unguarded copy that silently drifts. The **canonical text lives in
+[`06_prompts_and_instructions.md` §3.1](06_prompts_and_instructions.md)**,
+and `tests/memory/test_tool_description_sync.py` enforces that
+`memory_search.py`'s `.description` matches it verbatim (`.description`
+delegates to `_PARAMETERS["description"]`; there is no `DESCRIPTION`
+constant). Edit the spec in doc 06; the test forces the code to follow.
 
-Usage:
-- For most queries, use a single call with a natural-language `query`.
-- For multi-part questions, issue 2-3 calls with different phrasings rather
-  than one long query.
-- For literal-match queries (emails, IDs, URLs), pass the literal string in
-  `keywords` in addition to a natural-language `query`. This biases the search
-  toward exact matches.
-- Use `level: "cold"` only when you need full body content (verbose; consumes
-  many tokens). `warm` (default) returns headline + summary, enough for most
-  tasks.
-
-Results come pre-sectioned with structural markers:
-- `=== CANONICAL: <uri> ===` — consolidated entity pages (durable knowledge)
-- `=== FRAGMENT: <path> ===` — recent observations not yet consolidated
-- `=== SESSION: <id> ===` — conversation summaries
-- `=== INGESTED: <id> ===` — chunks of documents the user has loaded
-
-When sources disagree, more recent fragments may reflect updates that have
-not yet been consolidated into the canonical entity page. Use timestamps in
-the markers to reason about recency.
-
-State the source of any fact you cite (uri or section marker) in parentheses.
-Do not claim facts that are not in the search results.
-```
-
-This description is exact text from `templates/agent/identity.md::Memory` and `tools/memory_search.py::_PARAMETERS["description"]` (there is no `DESCRIPTION` constant — the `.description` property delegates to `_PARAMETERS["description"]`). The two must stay in sync (see `06_prompts_and_instructions.md`).
+For reference, the description covers: a one-line purpose; single- vs
+multi-call usage; the `keywords` literal-match hint; the `level: "cold"`
+cost note; the four structural markers (CANONICAL / FRAGMENT / SESSION /
+INGESTED, defined in `03_search_pipeline.md` §12); recency reasoning from
+marker timestamps; and the cite-your-source rule.
 
 ### 2.4 When to call (guidance baked into description)
 
-The description above embeds these patterns based on what worked in the LoCoMo v2 prompts (+3.9pp result):
+The canonical description (doc 06 §3.1) embeds these patterns based on what worked in the LoCoMo v2 prompts (+3.9pp result):
 
 - "Don't answer from cold recall." If you might need a fact, call.
 - "Multi-query for compound questions." 2-3 calls with phrasings beat one long query.

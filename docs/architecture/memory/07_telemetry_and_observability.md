@@ -73,6 +73,8 @@ The `event` name is the registry key. Payload schemas are validated against the 
 
 Audit B10 (2026-05-28) added the `Embedding`, `Hot layer`, and `Health` rows — these events are emitted by the code but the original §3 table omitted them. The TypedDicts live in `durin/telemetry/schema.py`.
 
+> **Source of truth.** The exhaustive, authoritative list of event types is `durin/telemetry/schema.py::EVENTS` — `tests/telemetry/test_schema_catalog.py` enforces, in both directions, that every event emitted in the source tree has a catalog entry and vice versa. **This document annotates the events whose fields or usage need explanation; it does not mirror the catalog event-for-event.** A new event shipping without a subsection here is expected, not drift — consult `schema.py` for the complete set. (For example `memory.dream.budget_exhausted` — §6.6 below — plus the `memory.dream.legacy.*` family and `memory.fallback_tool_used` all exist in the catalog.)
+
 ---
 
 ## 4. Recall events (hot path)
@@ -293,6 +295,22 @@ production callsite ever emits (`entity_uri`, `op_count`,
 | `duration_ms` | float | Wall-clock of the apply step |
 
 The commit SHA is deliberately not emitted. F8 (2026-05-28) framed this as "dashboards can join via `entity_ref + cursor_after`"; G8 (2026-05-28) corrected the rationale because that join is fragile (requires parsing commit-message trailers, ambiguous when two entity touches share a cursor in the same pass). The real reason the field stays out: the realistic consumers (operator forensics, audit) use `git log memory/entities/<type>/<slug>.md` directly — the file path is known from the event's `entity_ref`, and `git log` carries the trailers per doc 05 §6. A debug dashboard would benefit from the SHA in telemetry but no such consumer exists. If one ever does, the cheap path is a NEW event `memory.dream.commit_recorded` fired after `repo.commit(...)` returns in `dream.py::apply()`, joining to `memory.dream.patch_applied` on `(session_key, iteration, entity_ref)`. See doc 08 §2.16 for the full reasoning.
+
+### 6.6 `memory.dream.budget_exhausted`
+
+Emitted by `DreamRunner` when an entity's accumulated wall-clock crosses `max_seconds_per_run` *after* a successful batch in the FIFO drain loop (so each entity always makes at least one batch of forward progress; doc 05 §4.4). The remaining pending entries are deferred to the next pass.
+
+| Field | Type | Description |
+|---|---|---|
+| `trigger` | string | Pass trigger (same vocabulary as §6.1) |
+| `entity_ref` | string | Entity whose drain was cut short |
+| `pending_remaining` | int | Entries left unconsolidated, deferred to the next pass |
+| `elapsed_s` | float | Wall-clock spent on this entity when the budget tripped |
+| `budget_s` | int | The `max_seconds_per_run` ceiling |
+
+Use to detect entities whose backlog consistently outruns the per-pass budget (a signal to raise `max_seconds_per_run` or investigate why one entity accumulates so many entries).
+
+*The legacy `Dream` consolidator (`durin/agent/memory.py`) emits its own `memory.dream.legacy.{start,end,skipped}` family — see `schema.py` for those shapes; they mirror the entity-centric events but for the session-history consolidation path.*
 
 ---
 
