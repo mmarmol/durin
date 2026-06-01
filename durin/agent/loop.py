@@ -40,6 +40,10 @@ from durin.session.manager import Session, SessionManager
 from durin.utils.document import extract_documents
 from durin.utils.helpers import image_placeholder_text
 from durin.utils.helpers import truncate_text as truncate_text_fn
+from durin.utils.runtime import EMPTY_FINAL_RESPONSE_MESSAGE
+from durin.utils.session_attachments import merge_turn_media_into_last_assistant
+from durin.utils.webui_titles import mark_webui_session, maybe_generate_webui_title_after_turn
+from durin.utils.webui_turn_helpers import publish_turn_run_status
 
 # Tools whose output is error-dense at the END of the buffer (build
 # logs, shell stderr/stdout, test runners). For these we truncate from
@@ -54,10 +58,7 @@ def _truncate_tool_output(content: str, max_chars: int, tool_name: str | None) -
     """Truncate ``content`` choosing direction based on the tool name."""
     direction = "tail" if (tool_name in _TAIL_TRUNCATION_TOOLS) else "head"
     return truncate_text_fn(content, max_chars, direction=direction)
-from durin.utils.runtime import EMPTY_FINAL_RESPONSE_MESSAGE
-from durin.utils.session_attachments import merge_turn_media_into_last_assistant
-from durin.utils.webui_titles import mark_webui_session, maybe_generate_webui_title_after_turn
-from durin.utils.webui_turn_helpers import publish_turn_run_status
+
 
 if TYPE_CHECKING:
     from durin.config.schema import (
@@ -1254,26 +1255,43 @@ class AgentLoop:
                         effective_key,
                     )
                     continue
+            # Register the pending queue synchronously, *before* create_task,
+            # so a same-session message consumed before the dispatch task
+            # starts is routed here (mid-turn injection) instead of spawning a
+            # competing task (B3). `create_task` only schedules the coroutine —
+            # it does not run it — so registering inside `_dispatch` left a
+            # window the consumer could re-enter for the same session.
+            pending: asyncio.Queue = asyncio.Queue(maxsize=20)
+            self._pending_queues[effective_key] = pending
             # Compute the effective session key before dispatching
             # This ensures /stop command can find tasks correctly when unified session is enabled
-            task = asyncio.create_task(self._dispatch(msg))
+            task = asyncio.create_task(self._dispatch(msg, pending))
             self._active_tasks.setdefault(effective_key, []).append(task)
             task.add_done_callback(
                 lambda t, k=effective_key: self._drop_active_task(t, k)
             )
 
-    async def _dispatch(self, msg: InboundMessage) -> None:
-        """Process a message: per-session serial, cross-session concurrent."""
+    async def _dispatch(
+        self, msg: InboundMessage, pending: asyncio.Queue | None = None,
+    ) -> None:
+        """Process a message: per-session serial, cross-session concurrent.
+
+        ``pending`` is the mid-turn injection queue the consumer registers for
+        this session (under the same effective key) *before* spawning this
+        task, so a follow-up is visible the instant it arrives (B3). When
+        called directly without it (a unit test, or any non-consumer caller)
+        the task self-provisions and registers one. Either way this task owns
+        the queue's lifecycle — it drains and unregisters it in the ``finally``.
+        """
         session_key = self._effective_session_key(msg)
         if session_key != msg.session_key:
             msg = dataclasses.replace(msg, session_key_override=session_key)
         lock = self._session_locks.setdefault(session_key, asyncio.Lock())
         gate = self._concurrency_gate or nullcontext()
 
-        # Register a pending queue so follow-up messages for this session are
-        # routed here (mid-turn injection) instead of spawning a new task.
-        pending = asyncio.Queue(maxsize=20)
-        self._pending_queues[session_key] = pending
+        if pending is None:
+            pending = asyncio.Queue(maxsize=20)
+            self._pending_queues[session_key] = pending
 
         try:
             async with lock, gate:
