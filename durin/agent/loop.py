@@ -766,6 +766,24 @@ class AgentLoop:
                 return
         except AttributeError:
             return
+        # Resilience: memory is enabled but the optional `[memory]` extra
+        # (fastembed + lancedb) may be absent — a headless install, or one
+        # where `durin onboard` was skipped. Don't degrade silently: warn
+        # with the exact fix and fall back to grep-level recall. We do NOT
+        # pip-install at runtime (the deliberate paths are `durin onboard`
+        # and `durin doctor --install-missing`). Once the extra IS present,
+        # the model weights auto-download on first use via fastembed, so no
+        # separate fetch is needed here.
+        from durin.memory.vector_index import vector_index_available
+
+        if not vector_index_available():
+            logger.warning(
+                "Vector memory is enabled (memory.enabled=true) but the "
+                "[memory] extra is not installed — falling back to grep-level "
+                "recall. Install it with `durin doctor --install-missing` or "
+                "`pip install 'durin-agent[memory]'`."
+            )
+            return
         model_name = self.app_config.memory.embedding.model
         try:
             from durin.memory.embedding import FastembedProvider

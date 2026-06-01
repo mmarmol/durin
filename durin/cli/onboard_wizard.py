@@ -260,6 +260,23 @@ def _load_questionary(q: Any | None) -> Any:
     return _StyledQuestionary(questionary, _durin_questionary_style(questionary))
 
 
+def _reconcile_extras_from_config(config: Config, extras: set[str]) -> None:
+    """Make ``extras`` reflect the final config's optional features, however
+    the user navigated.
+
+    Vector memory is ON by default, so a user who clicks straight through —
+    without ever opening the memory submenu to toggle it — must still get the
+    ``[memory]`` extra installed; otherwise the config says enabled but the
+    deps are absent and it would silently degrade to grep recall. Same for the
+    cross-encoder. The wizard's toggle handlers add these on explicit action;
+    this reconcile covers the no-action (accept-the-default) path.
+    """
+    if getattr(config.memory, "enabled", False):
+        extras.add("memory")
+    if getattr(config.memory.search.cross_encoder, "enabled", False):
+        extras.add("cross-encoder")
+
+
 def run_wizard(initial_config: Config, *, q: Any | None = None) -> WizardResult:
     """Run the full wizard: direct setup (if needed) then the hub.
 
@@ -281,6 +298,7 @@ def run_wizard(initial_config: Config, *, q: Any | None = None) -> WizardResult:
 
     _run_hub(config, extras, q, summary)
 
+    _reconcile_extras_from_config(config, extras)
     return WizardResult(
         config=config,
         extras_to_install=sorted(extras),
@@ -324,6 +342,7 @@ def run_section(
     elif section == "workspace":
         _submenu_workspace(config, q, summary)
 
+    _reconcile_extras_from_config(config, extras)
     return WizardResult(
         config=config,
         extras_to_install=sorted(extras),
