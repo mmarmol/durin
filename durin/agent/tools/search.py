@@ -68,16 +68,6 @@ def _paginate(items: list[T], limit: int | None, offset: int) -> tuple[list[T], 
     return sliced, truncated
 
 
-def _pagination_note(limit: int | None, offset: int, truncated: bool) -> str | None:
-    if truncated:
-        if limit is None:
-            return f"(pagination: offset={offset})"
-        return f"(pagination: limit={limit}, offset={offset})"
-    if offset > 0:
-        return f"(pagination: offset={offset})"
-    return None
-
-
 def _matches_type(name: str, file_type: str | None) -> bool:
     if not file_type:
         return True

@@ -54,11 +54,6 @@ def _load_github_token():
     return token
 
 
-def get_github_copilot_login_status():
-    """Return the persisted GitHub OAuth token if available."""
-    return _load_github_token()
-
-
 def login_github_copilot(
     print_fn: Callable[[str], None] | None = None,
     prompt_fn: Callable[[str], str] | None = None,
