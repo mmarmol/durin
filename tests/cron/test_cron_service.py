@@ -43,6 +43,22 @@ def test_add_job_accepts_valid_timezone(tmp_path) -> None:
     assert job.state.next_run_at_ms is not None
 
 
+def test_add_job_rejects_malformed_cron_expr(tmp_path) -> None:
+    """C4: a malformed cron expr must be rejected at add-time, not silently
+    accepted and then never scheduled (``_compute_next_run`` swallowed the
+    croniter error and returned None — the job would never fire, no log)."""
+    service = CronService(tmp_path / "cron" / "jobs.json")
+
+    with pytest.raises(ValueError):
+        service.add_job(
+            name="bad expr",
+            schedule=CronSchedule(kind="cron", expr="not a valid cron expr"),
+            message="hello",
+        )
+
+    assert service.list_jobs(include_disabled=True) == []
+
+
 def test_add_job_preserves_channel_meta_and_session_key(tmp_path) -> None:
     service = CronService(tmp_path / "cron" / "jobs.json")
     meta = {"slack": {"thread_ts": "1234567890.123456", "channel_type": "channel"}}

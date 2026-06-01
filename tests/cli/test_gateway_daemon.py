@@ -11,7 +11,6 @@ from __future__ import annotations
 import os
 import signal
 import subprocess
-import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -19,8 +18,6 @@ import pytest
 
 from durin.cli.gateway_daemon import (
     AlreadyRunningError,
-    DaemonStatus,
-    daemon_logs_path,
     daemon_pid_path,
     daemon_status,
     start_daemon,
@@ -95,7 +92,6 @@ def test_daemon_status_stale_pid_when_garbage_contents(isolated_home: Path) -> N
 def test_start_daemon_writes_pid_and_returns_alive_process(isolated_home: Path) -> None:
     """Mock _resolve_durin_binary so start_daemon spawns a sleep instead of durin itself."""
     fake_bin = "/bin/sh"
-    fake_args = ["-c", "sleep 30 & echo $! > /dev/null"]
 
     # Monkeypatch the subprocess invocation: capture what would be spawned,
     # but actually spawn `sleep`.
@@ -266,3 +262,34 @@ def test_doctor_flags_unreachable_webui(isolated_home: Path) -> None:
     assert r.status == "fail"
     assert "not reachable" in r.message.lower()
     assert r.fix and "gateway" in r.fix
+
+
+def test_start_daemon_closes_log_fd_when_popen_fails(tmp_path, monkeypatch):
+    """C5: a Popen failure must not leak the log file descriptor."""
+    from types import SimpleNamespace
+
+    import durin.cli.gateway_daemon as gd
+
+    monkeypatch.setattr(gd, "daemon_status", lambda: SimpleNamespace(state="none"))
+    monkeypatch.setattr(gd, "daemon_logs_path", lambda: tmp_path / "daemon.log")
+
+    opened: list = []
+    real_open = open
+
+    def _spy_open(*args, **kwargs):
+        f = real_open(*args, **kwargs)
+        opened.append(f)
+        return f
+
+    monkeypatch.setattr("builtins.open", _spy_open)
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("popen failed")
+
+    monkeypatch.setattr(gd.subprocess, "Popen", _boom)
+
+    with pytest.raises(RuntimeError):
+        gd.start_daemon()
+
+    assert opened, "expected the log file to be opened"
+    assert all(f.closed for f in opened), "log fd leaked when Popen raised"

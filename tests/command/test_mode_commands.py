@@ -9,8 +9,6 @@ from types import SimpleNamespace
 import pytest
 
 from durin.agent.agent_mode import (
-    BUILD_MODE,
-    PLAN_MODE,
     SESSION_MODE_KEY,
     SESSION_PRE_PLAN_KEY,
 )
@@ -21,9 +19,9 @@ from durin.command.builtin import (
     cmd_build,
     cmd_mode,
     cmd_plan,
+    register_builtin_commands,
 )
 from durin.command.router import CommandContext, CommandRouter
-from durin.command.builtin import register_builtin_commands
 from durin.telemetry.logger import (
     TelemetryLogger,
     bind_telemetry,
@@ -45,7 +43,7 @@ def _session(meta: dict | None = None):
 def _read_events(p: Path) -> list[dict]:
     if not p.exists():
         return []
-    return [json.loads(l) for l in p.read_text().splitlines() if l]
+    return [json.loads(line) for line in p.read_text().splitlines() if line]
 
 
 # ---------------------------------------------------------------------------
@@ -171,7 +169,6 @@ class TestCmdPlan:
         """`/plan <task>` activates mode AND re-publishes the task as a
         regular inbound message so the agent processes it in the same turn.
         Mirrors Claude Code's UX."""
-        from dataclasses import dataclass, field
         from types import SimpleNamespace
 
         published: list = []
@@ -206,6 +203,39 @@ class TestCmdPlan:
         # produces a response — otherwise the prompt returns and the user
         # has no signal that work is in flight.
         assert result.metadata.get("_block_input_until_response") is True
+
+    @pytest.mark.asyncio
+    async def test_plan_with_args_logs_when_forwarding_fails(self, caplog):
+        """C2: a failure forwarding the task must be logged (not silently
+        swallowed) while the command still degrades gracefully."""
+        import logging
+        from types import SimpleNamespace
+
+        class _BoomBus:
+            async def publish_inbound(self, m):
+                raise RuntimeError("bus is down")
+
+        session = _session({SESSION_MODE_KEY: "build"})
+        loop = SimpleNamespace(bus=_BoomBus())
+        msg = InboundMessage(
+            channel="cli", sender_id="u1", chat_id="direct",
+            content="/plan do the thing",
+        )
+        ctx = CommandContext(
+            msg=msg, session=session, key=msg.session_key,
+            raw="/plan do the thing", args="do the thing", loop=loop,
+        )
+
+        with caplog.at_level(logging.ERROR, logger="durin.command.builtin"):
+            result = await cmd_plan(ctx)
+
+        # Degrades gracefully — still announces the mode switch.
+        assert "PLAN MODE" in result.content
+        # The swallowed failure is now surfaced in the logs.
+        assert any(
+            r.name == "durin.command.builtin" and r.levelno >= logging.ERROR
+            for r in caplog.records
+        ), f"expected an error log for the failed forward, got {caplog.records}"
 
     @pytest.mark.asyncio
     async def test_plan_without_args_does_not_publish(self):

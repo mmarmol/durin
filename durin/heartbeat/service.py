@@ -97,7 +97,9 @@ class HeartbeatService:
         if self.heartbeat_file.exists():
             try:
                 return self.heartbeat_file.read_text(encoding="utf-8")
-            except Exception:
+            except (OSError, UnicodeDecodeError):
+                # read_text can only fail this way; a broader catch would
+                # mask real bugs (C6). Matches session_meta's pattern.
                 return None
         return None
 

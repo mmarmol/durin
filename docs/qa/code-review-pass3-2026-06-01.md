@@ -51,34 +51,6 @@
 
 ---
 
-## C. Error handling & resources
-
-### C1 🐞 — `Queue.get` never-awaited warning: root cause is a test that mocks `wait_for`
-- **Where:** `tests/agent/tools/test_subagent_tools.py:438` patches `durin.agent.loop.asyncio.wait_for` with `side_effect=asyncio.TimeoutError`; production is `asyncio.wait_for(pending_queue.get(), 300)` (loop.py:1070).
-- **Verified:** mocking `wait_for` to raise immediately leaves the already-constructed `pending_queue.get()` coroutine unconsumed → GC'd unawaited → the lone suite warning. Production is fine (real `wait_for` cancels the coroutine). Test artifact only.
-- **Fix:** don't patch `wait_for`; patch the timeout constant (or close the passed coroutine before raising). **Closes the last remaining suite warning.**
-
-### C2 🐞 MED — `/plan <task>` swallows a publish failure with no log
-- **Where:** `durin/command/builtin.py:879` — `await ...publish_inbound(follow_up)` wrapped in `except Exception: pass` (comment only, no logging). The sibling at `:339` logs via `logger.exception`.
-- **Verified:** confirmed silent `pass`. A real bus/dataclass error degrades to "re-type your task" with no diagnostic trail. **Fix:** `logger.exception(...)` before the graceful fallback.
-
-### C3 🐞 MED — `estimate_prompt_tokens` returns 0 on any error (over-broad try)
-- **Where:** `durin/utils/helpers.py:480` — `try:` wraps `tiktoken.get_encoding` AND the whole message loop; `except Exception: return 0`.
-- **Verified:** confirmed the try spans the dict-access / json.dumps loop, not just the encode. A logic bug (non-dict message, unserializable tool payload) is swallowed → 0 tokens, indistinguishable from an empty prompt, silently corrupting budget/telemetry arithmetic. **Fix:** narrow the try to the `tiktoken` encode call.
-
-### C4 🐞 MED — cron `_compute_next_run` returns `None` on broad except, no log → job silently never fires
-- **Where:** `durin/cron/service.py:54` — `except Exception: return None` around croniter, no logging; the cron `expr` isn't validated at add-time.
-- **Verified:** confirmed. A malformed cron expression makes the job never schedule, with no warning anywhere — a hard-to-diagnose silent failure in a scheduling subsystem. **Fix:** narrow to expected `croniter`/`ValueError`, `logger.warning` the bad expr, and validate `expr` at add-time.
-
-### C5 🐞 LOW — `gateway_daemon` leaks `log_fd` if `Popen` raises
-- **Where:** `durin/cli/gateway_daemon.py:152` (`log_fd = open(...)`) closed at `:164` only on success.
-- **Verified:** confirmed — if `subprocess.Popen` (between 152 and 164) raises, the fd leaks. Single-shot spawn, minimal impact. **Fix:** `try/finally`.
-
-### C6 🐞 LOW — over-broad catch on `Path.read_text` readers
-- **Where:** `durin/heartbeat/service.py:96` (and similar) catch bare `Exception` around `read_text`, which can only raise `OSError`/`UnicodeDecodeError`. Over-broad; low impact. **Fix:** catch `(OSError, UnicodeDecodeError)` (matches the disciplined pattern in `session/session_meta.py:83`).
-
----
-
 ## Verified NON-findings (checked, ruled out — don't re-investigate)
 - **Webhook forgery:** feishu/wecom/qq/dingtalk/weixin/mochat use outbound WebSocket long-connections to vendor servers — no forgeable inbound HTTP surface. msteams validates JWT signing keys; WhatsApp uses a local bridge gated by a random token. `allow_from` enforced centrally in `BaseChannel._handle_message`.
 - **Websocket REST auth:** every sensitive handler checks `_check_api_token`; bootstrap/handshake compares use `hmac.compare_digest`; tokens are 32-byte randoms.

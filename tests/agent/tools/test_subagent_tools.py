@@ -16,8 +16,8 @@ _MAX_TOOL_RESULT_CHARS = AgentDefaults().max_tool_result_chars
 async def test_subagent_exec_tool_receives_allowed_env_keys(tmp_path):
     """allowed_env_keys from ExecToolConfig must be forwarded to the subagent's ExecTool."""
     from durin.agent.subagent import SubagentManager, SubagentStatus
-    from durin.bus.queue import MessageBus
     from durin.agent.tools.shell import ExecToolConfig
+    from durin.bus.queue import MessageBus
     from durin.config.schema import ToolsConfig
 
     bus = MessageBus()
@@ -434,9 +434,16 @@ async def test_drain_pending_timeout(tmp_path):
 
     assert injection_callback is not None
 
-    # Patch the timeout to be very short for testing
-    with patch("durin.agent.loop.asyncio.wait_for") as mock_wait:
-        mock_wait.side_effect = asyncio.TimeoutError
+    # Simulate the injection wait timing out. Close the coroutine that
+    # production passes to `wait_for` (`pending_queue.get()`) before raising
+    # so it isn't garbage-collected un-awaited — that GC'd coroutine was the
+    # lone "coroutine 'Queue.get' was never awaited" suite warning (C1).
+    def _timeout(coro, *args, **kwargs):
+        if hasattr(coro, "close"):
+            coro.close()
+        raise asyncio.TimeoutError
+
+    with patch("durin.agent.loop.asyncio.wait_for", side_effect=_timeout):
         results = await injection_callback()
         assert results == []
 

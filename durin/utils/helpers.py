@@ -477,40 +477,47 @@ def estimate_prompt_tokens(
     Counts all fields that providers send to the LLM: content, tool_calls,
     reasoning_content, tool_call_id, name, plus per-message framing overhead.
     """
+    parts: list[str] = []
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, str):
+            parts.append(content)
+        elif isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    txt = part.get("text", "")
+                    if txt:
+                        parts.append(txt)
+
+        tc = msg.get("tool_calls")
+        if tc:
+            # default=str keeps a quirky-but-present payload counted instead
+            # of raising — the field still contributes to the estimate.
+            parts.append(json.dumps(tc, ensure_ascii=False, default=str))
+
+        rc = msg.get("reasoning_content")
+        if isinstance(rc, str) and rc:
+            parts.append(rc)
+
+        for key in ("name", "tool_call_id"):
+            value = msg.get(key)
+            if isinstance(value, str) and value:
+                parts.append(value)
+
+    if tools:
+        parts.append(json.dumps(tools, ensure_ascii=False, default=str))
+
+    text = "\n".join(parts)
+    per_message_overhead = len(messages) * 4
+    # Narrow guard: only the tiktoken load/encode may fail — and it falls back
+    # to a char-based estimate, never a silent 0 that reads as an empty prompt
+    # and corrupts budget/telemetry arithmetic (C3). A genuinely malformed
+    # message shape now surfaces from the loop above instead of being swallowed.
     try:
         enc = tiktoken.get_encoding("cl100k_base")
-        parts: list[str] = []
-        for msg in messages:
-            content = msg.get("content")
-            if isinstance(content, str):
-                parts.append(content)
-            elif isinstance(content, list):
-                for part in content:
-                    if isinstance(part, dict) and part.get("type") == "text":
-                        txt = part.get("text", "")
-                        if txt:
-                            parts.append(txt)
-
-            tc = msg.get("tool_calls")
-            if tc:
-                parts.append(json.dumps(tc, ensure_ascii=False))
-
-            rc = msg.get("reasoning_content")
-            if isinstance(rc, str) and rc:
-                parts.append(rc)
-
-            for key in ("name", "tool_call_id"):
-                value = msg.get(key)
-                if isinstance(value, str) and value:
-                    parts.append(value)
-
-        if tools:
-            parts.append(json.dumps(tools, ensure_ascii=False))
-
-        per_message_overhead = len(messages) * 4
-        return len(enc.encode("\n".join(parts))) + per_message_overhead
+        return len(enc.encode(text)) + per_message_overhead
     except Exception:
-        return 0
+        return len(text) // 4 + per_message_overhead
 
 
 def estimate_message_tokens(message: dict[str, Any]) -> int:
