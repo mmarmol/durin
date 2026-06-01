@@ -1553,14 +1553,14 @@ class WebSocketChannel(BaseChannel):
         # surfaces the same models. The plan's own keywords are
         # intentionally rare (so auto-routing doesn't accidentally pick
         # them) — they shouldn't double as a model-filter heuristic.
-        _PLAN_BASE = {
+        _plan_base = {
             "zai_coding_plan": "zhipu",
             "volcengine_coding_plan": "volcengine",
             "byteplus_coding_plan": "byteplus",
         }
         provider_keywords: tuple[str, ...] = ()
         if provider:
-            lookup_name = _PLAN_BASE.get(provider, provider)
+            lookup_name = _plan_base.get(provider, provider)
             spec = find_by_name(lookup_name)
             if spec is not None:
                 provider_keywords = spec.keywords
