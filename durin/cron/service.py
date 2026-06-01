@@ -51,7 +51,14 @@ def _compute_next_run(schedule: CronSchedule, now_ms: int) -> int | None:
             cron = croniter(schedule.expr, base_dt)
             next_dt = cron.get_next(datetime)
             return int(next_dt.timestamp() * 1000)
-        except Exception:
+        except (ValueError, KeyError, ImportError) as exc:
+            # Add-time validation (`_validate_schedule_for_add`) should reject
+            # a bad expr/tz before we get here; if one slips through, log it
+            # loudly instead of silently never scheduling the job (C4).
+            logger.warning(
+                "cron: could not compute next run for expr {!r} (tz={!r}): {}",
+                schedule.expr, schedule.tz, exc,
+            )
             return None
 
     return None
@@ -61,6 +68,23 @@ def _validate_schedule_for_add(schedule: CronSchedule) -> None:
     """Validate schedule fields that would otherwise create non-runnable jobs."""
     if schedule.tz and schedule.kind != "cron":
         raise ValueError("tz can only be used with cron schedules")
+
+    if schedule.kind == "cron":
+        if not schedule.expr:
+            raise ValueError("cron schedule requires an 'expr'")
+        # Validate the expression here so a typo is rejected loudly at add-time
+        # instead of silently never firing in `_compute_next_run` (C4).
+        try:
+            from croniter import croniter
+        except ImportError:
+            croniter = None  # type: ignore[assignment]
+        if croniter is not None:
+            try:
+                croniter(schedule.expr)
+            except (ValueError, KeyError) as exc:
+                raise ValueError(
+                    f"invalid cron expression '{schedule.expr}': {exc}"
+                ) from None
 
     if schedule.kind == "cron" and schedule.tz:
         try:

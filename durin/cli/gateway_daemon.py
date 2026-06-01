@@ -150,18 +150,21 @@ def start_daemon(
     log_path = daemon_logs_path()
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_fd = open(log_path, "ab", buffering=0)  # noqa: SIM115 — kept open for the child
-
-    binary = durin_executable or _resolve_durin_binary()
-    cmd = [binary, "gateway", "--foreground", *(extra_args or [])]
-    proc = subprocess.Popen(  # noqa: S603 — durin invokes its own binary; no shell
-        cmd,
-        stdin=subprocess.DEVNULL,
-        stdout=log_fd,
-        stderr=log_fd,
-        start_new_session=True,
-        close_fds=True,
-    )
-    log_fd.close()
+    # try/finally so the fd is closed even if Popen raises (C5): the child
+    # has already dup'd it, so the parent always drops its copy.
+    try:
+        binary = durin_executable or _resolve_durin_binary()
+        cmd = [binary, "gateway", "--foreground", *(extra_args or [])]
+        proc = subprocess.Popen(  # noqa: S603 — durin invokes its own binary; no shell
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=log_fd,
+            stderr=log_fd,
+            start_new_session=True,
+            close_fds=True,
+        )
+    finally:
+        log_fd.close()
 
     pid_path = daemon_pid_path()
     pid_path.write_text(str(proc.pid), encoding="utf-8")

@@ -878,8 +878,12 @@ async def cmd_plan(ctx: CommandContext) -> OutboundMessage:
             expects_followup = True
         except Exception:
             # If forwarding fails, fall back to just announcing the mode
-            # switch — the user can re-type the task manually.
-            pass
+            # switch — the user can re-type the task manually. Log it so the
+            # degradation isn't silent (C2; mirrors the session_close sibling).
+            import logging
+            logging.getLogger(__name__).exception(
+                "plan: failed to forward task to bus for %s", ctx.key,
+            )
 
     out_metadata = dict(ctx.msg.metadata or {})
     if expects_followup:
