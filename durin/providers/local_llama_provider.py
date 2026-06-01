@@ -50,7 +50,7 @@ def _ensure_model(spec: ModelSpec, cache_dir: Path | None = None) -> Path:
         raise ImportError(
             "huggingface-hub is required for local models. "
             "Install with: pip install 'durin[local]'"
-        )
+        ) from None
 
     target_dir = cache_dir or _DEFAULT_CACHE_DIR
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -177,7 +177,7 @@ class LocalLlamaProvider(LLMProvider):
             raise ImportError(
                 "llama-cpp-python is required for local models. "
                 "Install with: pip install 'durin[local]'"
-            )
+            ) from None
 
         logger.info("Loading model '{}': {} (n_gpu_layers={})", name, model_path, self._n_gpu_layers)
         return Llama(
