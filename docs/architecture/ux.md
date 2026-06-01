@@ -170,13 +170,15 @@ Mode dispatch (`/plan`, `/build`, `/mode`) works in every channel. Native autoco
 
 Full design: archived `docs/archive/11_secrets_design.md`. API keys are no longer stored inline in `config.json`. The store is `~/.durin/secrets.json` (mode `0600`, outside the config tree). Each entry has two axes — `service` (classification, non-unique) and `scope` (consumer authorization) — plus account/description/origin.
 
+**At-rest threat model — isolation, not encryption.** The store is plaintext on a `0600` file, deliberately *not* encrypted. A passphrase-encrypted store would buy little: `$HOME` is already user-readable and the agent needs the value in clear to use it, so encryption-at-rest is theatre unless backed by an OS keyring or an external manager (see §4.3). What actually moves the needle is the value living **only** in the store and in the env of the one subprocess that needs it — never in `config.*`, the model context, or the chat. The same posture is used by hermes (`~/.hermes/.env`, 0600) and openclaw (`~/.openclaw/*.json`, 0600); neither encrypts at rest either.
+
 Config fields hold a `${secret:NAME}` reference; `resolve_secret()` turns it into plaintext lazily at the point of use, so the value never re-enters the `Config` object, logs, or telemetry. Wired into `Config.get_api_key()` and the provider factory.
 
 `durin secret` manages the store; `durin secret migrate` moves pre-existing plaintext provider keys in. The onboard wizard writes new keys straight to the store as references.
 
 Resolution is wired into providers, the web-search tool, and channel construction — secrets work everywhere config expects a credential.
 
-**Phase 2 — redaction + exec injection**: the agent runner redacts stored secret values out of every tool result before it reaches the model (`SecretRedactor`); `ExecTool` injects `exec`-scoped secrets into the subprocess env so scripts use them without the agent ever seeing the values.
+**Phase 2 — redaction + exec injection**: before any tool result reaches the model the agent runner redacts it through `SecretRedactor`, two layers — **value-based** (exact stored values → `«redacted:NAME»`) and **pattern-based** (credential-*shaped* strings → `«redacted»`: vendor prefixes `sk-`/`ghp_`/`AKIA`/…, JWTs, PEM blocks, and `KEY=value`/JSON secret fields). The pattern layer (`_apply_patterns` in `security/secrets.py`) catches credentials the store does not know — notably ambient values surfaced via `exec.allowed_env_keys`. `exec` output is redacted **before** it is spilled to `<ws>/.durin/spills/` (the `redact=` hook in `output_spill.py`), so secret values never land on disk. `ExecTool` injects `exec`-scoped secrets into the subprocess env so scripts use them without the agent ever seeing the values.
 
 **Agent tools** (`agent/tools/secrets.py`): `list_secrets` lets the agent discover available credentials (metadata only); `request_secret` declares one the agent needs. `durin doctor` flags dangling `${secret:}` references.
 
@@ -208,6 +210,20 @@ When the agent calls `request_secret`, the TUI and web render a purpose-built pa
 - **Secret channel** — a masked input → client code → `SecretStore`. Only the value, and it stops at the store.
 
 The web sends the value over the authenticated **websocket** as a `secret_store` frame (never a URL query — a GET query string leaks into history, proxies and logs); the gateway writes the store and replies with an ack. The TUI opens a masked `ModalScreen` and writes `SecretStore` directly. After a successful store the agent receives a metadata note (`name` / `service` / `scope`) so it knows the secret is available — as `$NAME` to `exec` — but is never told the value.
+
+### 4.2 Managing stored secrets
+
+Three write surfaces, all landing in the one `SecretStore`:
+
+- **CLI** — `durin secret set / list / show / rm / grant / revoke / migrate` (`durin/cli/secret_cmd.py:39-196`); the value is typed at a hidden prompt. As a separate process the CLI just `save()`s — the next `durin` invocation loads it fresh, so no in-process reload is needed.
+- **Web Settings** — the config view renders each `${secret:NAME}` reference as a `SecretRefRow` (`webui/src/components/settings/ConfigSettings.tsx:123`). *Rotate* opens a masked dialog that writes the new value over the same `secret_store` websocket frame as `request_secret`, never a query string (`ConfigSettings.tsx:154`). `GET /api/secrets` lists entries (metadata only — `_handle_secrets_list` never returns a value, `durin/channels/websocket.py:1287`); `/api/secrets/delete` removes one (`websocket.py:1313`).
+- **TUI** — the masked `SecretPromptScreen` modal (`durin/cli/tui/screens/secret_prompt.py`), shared with the `request_secret` flow above.
+
+Every **in-process** writer — `store_secret` (provider keys / onboard wizard), the `secret_store` envelope, and the TUI modal — calls `get_secret_store(reload=True)` after saving (`durin/security/secrets.py:350`, `websocket.py:2438`, `secret_prompt.py:112`), so resolution and redaction see a freshly stored secret on the very next use: `build_redactor()` rebuilds from the reloaded store (`secrets.py:408`). The CLI path does not reload — it is a separate process.
+
+### 4.3 Future: third-party password managers
+
+The store is intentionally one thin mechanism — the value always lives in `secrets.json`. A natural future extension, modelled on openclaw's `SecretRef {source, provider, id}` indirection, would let a `${secret:NAME}` reference resolve from an **external manager** instead of the local store: a `source` of `exec` (run `op read`, `pass show`, `security find-generic-password`, or a Vault client) or `file` (read a path managed elsewhere). Operators already running 1Password, `pass`, gopass, the macOS Keychain, or HashiCorp Vault could then keep the value out of durin's own files entirely, while the plaintext-`0600` store stays the zero-config default. It would be a user-configurable opt-in, not a replacement — and is **not implemented today**.
 
 ---
 

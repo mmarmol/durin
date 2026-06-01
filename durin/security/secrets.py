@@ -351,15 +351,86 @@ def store_secret(
     return make_ref(secret_name)
 
 
-class SecretRedactor:
-    """Replaces stored secret values with ``«redacted:NAME»`` markers.
+# -- A5: pattern-based redaction ---------------------------------------------
+# The value-based redactor only knows secrets in the store. Credentials
+# surfaced via `exec.allowed_env_keys` (ambient os.environ) — or otherwise
+# echoed into output — are invisible to it. This second layer catches
+# credential-*shaped* strings by format, regardless of the store. Modelled on
+# hermes (`agent/redact.py`) and openclaw (`src/logging/redact.ts`): vendor
+# prefixes + conservative key=value heuristics. Format-based, language-
+# agnostic (no NLP token lists). Pattern matches mask to a bare `«redacted»`.
 
-    Built from the store; used to keep secret values out of anything
-    the model or the user sees (tool results, output). Values shorter
-    than :data:`_MIN_REDACTABLE_LEN` are ignored.
+_PATTERN_MARKER = "«redacted»"
+
+# Vendor-prefixed credentials — high confidence, low false-positive.
+_VENDOR_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"sk-[A-Za-z0-9_-]{20,}"),                       # OpenAI / Anthropic / OpenRouter
+    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{59,}"),              # GitHub fine-grained PAT
+    re.compile(r"\bgh[opsur]_[A-Za-z0-9]{36,}"),                # GitHub PAT / OAuth / refresh
+    re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}"),              # Slack
+    re.compile(r"\bAIza[A-Za-z0-9_-]{35}\b"),                   # Google API key
+    re.compile(r"\bya29\.[A-Za-z0-9_-]{20,}"),                  # Google OAuth access token
+    re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b"),               # AWS access key id
+    re.compile(r"\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{20,}"),  # Stripe
+    re.compile(r"\bSG\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}"),  # SendGrid
+    re.compile(r"\bnpm_[A-Za-z0-9]{36}"),                       # npm
+    re.compile(r"\bpypi-[A-Za-z0-9_-]{16,}"),                   # PyPI
+    re.compile(                                                 # JWT (three base64url segments)
+        r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"
+    ),
+)
+
+# PEM private-key blocks (multi-line).
+_PEM_PATTERN = re.compile(
+    r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
+    re.DOTALL,
+)
+
+# `Authorization: Bearer <token>` — keep the scheme word, mask the credential.
+_BEARER_PATTERN = re.compile(r"(?i)\b(bearer\s+)([A-Za-z0-9._~+/=-]{12,})")
+
+# env-style assignment with an UPPER_SNAKE key naming a credential (the exact
+# shape an `env` dump or `allowed_env_keys` leak takes). Case-sensitive on the
+# key so common lowercase words ("Total tokens: 123") are not matched.
+_ENV_KV_PATTERN = re.compile(
+    r"\b([A-Z][A-Z0-9_]*"
+    r"(?:API_?KEY|SECRET|TOKEN|PASSWORD|PASSWD|PASSPHRASE|ACCESS_?KEY"
+    r"|PRIVATE_?KEY|CLIENT_?SECRET|CREDENTIALS?|AUTH)"
+    r"[A-Z0-9_]*)(\s*[:=]\s*)([^\s\"']{8,})"
+)
+
+# Quoted JSON-style `"apiKey": "value"` — mask the value, keep the key.
+_JSON_KV_PATTERN = re.compile(
+    r"(?i)([\"']\s*[a-z0-9_]*"
+    r"(?:api_?key|secret|token|password|passwd|passphrase|access_?key"
+    r"|private_?key|client_?secret|credentials?)"
+    r"[a-z0-9_]*\s*[\"']\s*:\s*[\"'])([^\"']{8,})"
+)
+
+
+def _apply_patterns(text: str) -> str:
+    """Mask credential-shaped substrings by format (A5)."""
+    text = _PEM_PATTERN.sub(_PATTERN_MARKER, text)
+    for pat in _VENDOR_PATTERNS:
+        text = pat.sub(_PATTERN_MARKER, text)
+    text = _BEARER_PATTERN.sub(lambda m: m.group(1) + _PATTERN_MARKER, text)
+    text = _ENV_KV_PATTERN.sub(lambda m: m.group(1) + m.group(2) + _PATTERN_MARKER, text)
+    text = _JSON_KV_PATTERN.sub(lambda m: m.group(1) + _PATTERN_MARKER, text)
+    return text
+
+
+class SecretRedactor:
+    """Replaces secret values with ``«redacted…»`` markers.
+
+    Two layers. **Value-based** (always): exact stored values become
+    ``«redacted:NAME»``; values shorter than :data:`_MIN_REDACTABLE_LEN`
+    are ignored. **Pattern-based** (opt-in via ``patterns=True``, A5):
+    credential-shaped substrings become ``«redacted»`` regardless of the
+    store — this is what covers ambient ``allowed_env_keys`` values.
     """
 
-    def __init__(self, secrets: dict[str, str]) -> None:
+    def __init__(self, secrets: dict[str, str], *, patterns: bool = False) -> None:
+        self._patterns = patterns
         # Longest values first so a value that is a substring of another
         # is not masked prematurely.
         self._items: list[tuple[str, str]] = sorted(
@@ -374,17 +445,19 @@ class SecretRedactor:
 
     @property
     def active(self) -> bool:
-        return bool(self._items)
+        return bool(self._items) or self._patterns
 
     def redact_text(self, text: str) -> str:
         for value, name in self._items:
             if value in text:
                 text = text.replace(value, f"«redacted:{name}»")
+        if self._patterns:
+            text = _apply_patterns(text)
         return text
 
     def redact(self, content: Any) -> Any:
         """Redact a tool-result content — a string or a list of blocks."""
-        if not self._items:
+        if not self._items and not self._patterns:
             return content
         if isinstance(content, str):
             return self.redact_text(content)
@@ -406,10 +479,11 @@ class SecretRedactor:
 
 
 def build_redactor() -> SecretRedactor:
-    """Build a redactor from every value in the process-wide store."""
+    """Build a redactor from the store, with the pattern layer (A5) on."""
     store = get_secret_store()
     return SecretRedactor(
-        {name: entry.value for name, entry in store.all().items()}
+        {name: entry.value for name, entry in store.all().items()},
+        patterns=True,
     )
 
 
