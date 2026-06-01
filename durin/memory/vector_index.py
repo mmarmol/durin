@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "VectorIndex",
-    "VectorIndexDimensionMismatch",
+    "VectorIndexDimensionMismatchError",
     "vector_index_available",
 ]
 
@@ -57,7 +57,7 @@ _TABLE_NAME = "memory_entries"
 _INDEX_PATH = (".durin", "index", "lance")
 
 
-class VectorIndexDimensionMismatch(RuntimeError):
+class VectorIndexDimensionMismatchError(RuntimeError):
     """The on-disk index has a vector dimension that disagrees with the
     embedding provider currently configured. Caller must rebuild via
     :meth:`VectorIndex.rebuild_from_workspace` or pick a model that
@@ -124,12 +124,28 @@ class VectorIndex:
     # write paths
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _atomic_upsert(table: Any, record: dict[str, Any]) -> None:
+        """Replace-or-insert ``record`` by ``id`` in a single commit (B6).
+
+        Supersedes a ``delete`` + ``add`` pair, which committed twice and
+        left a window where a concurrent reader — or a failure between the
+        two commits — saw the row missing. ``merge_insert`` applies as one
+        atomic LanceDB commit.
+        """
+        (
+            table.merge_insert("id")
+            .when_matched_update_all()
+            .when_not_matched_insert_all()
+            .execute([record])
+        )
+
     def upsert(self, entry: MemoryEntry, class_name: str, path: Path) -> None:
         """Add or replace one memory entry in the index.
 
         Idempotent on ``entry.id``: a prior row with the same id is
         deleted before the new one is inserted. Raises
-        :class:`VectorIndexDimensionMismatch` if the on-disk table
+        :class:`VectorIndexDimensionMismatchError` if the on-disk table
         carries a different vector dim than the current provider —
         caller should rebuild via :meth:`rebuild_from_workspace` or
         revert the model change.
@@ -140,8 +156,7 @@ class VectorIndex:
         if _TABLE_NAME in names:
             table = db.open_table(_TABLE_NAME)
             self._guard_dim_match(table, len(record["vector"]))
-            table.delete(f"id = '{_escape(entry.id)}'")
-            table.add([record])
+            self._atomic_upsert(table, record)
         else:
             db.create_table(_TABLE_NAME, data=[record])
 
@@ -215,8 +230,7 @@ class VectorIndex:
         if _TABLE_NAME in names:
             table = db.open_table(_TABLE_NAME)
             self._guard_dim_match(table, len(vec))
-            table.delete(f"id = '{_escape(entity_ref)}'")
-            table.add([record])
+            self._atomic_upsert(table, record)
         else:
             db.create_table(_TABLE_NAME, data=[record])
 
@@ -415,8 +429,7 @@ class VectorIndex:
         if _TABLE_NAME in names:
             table = db.open_table(_TABLE_NAME)
             self._guard_dim_match(table, len(precomputed_vector))
-            table.delete(f"id = '{_escape(entry.id)}'")
-            table.add([record])
+            self._atomic_upsert(table, record)
         else:
             db.create_table(_TABLE_NAME, data=[record])
 
@@ -565,7 +578,7 @@ class VectorIndex:
     def search(self, query: str, *, top_k: int = 10) -> list[dict[str, Any]]:
         """Return the top-K nearest records to ``query`` (warm-tier shape).
 
-        Raises :class:`VectorIndexDimensionMismatch` if the on-disk
+        Raises :class:`VectorIndexDimensionMismatchError` if the on-disk
         table's vector dim doesn't match the current provider — the
         ``memory_search`` tool catches this and falls back to grep.
         """
@@ -755,7 +768,7 @@ class VectorIndex:
             # Unknown schema shape — let downstream LanceDB raise.
             return
         if actual_dim != expected_dim:
-            raise VectorIndexDimensionMismatch(
+            raise VectorIndexDimensionMismatchError(
                 f"On-disk vector index uses {actual_dim}-dim vectors but the "
                 f"current embedding model produces {expected_dim}-dim. The "
                 f"model was probably changed in config. Run `/memory reindex` "
@@ -770,7 +783,7 @@ class VectorIndex:
             # Translate the cryptic lance schema-lookup error into an
             # actionable domain error; the message is self-explanatory so we
             # suppress the original cause (B904).
-            raise VectorIndexDimensionMismatch(
+            raise VectorIndexDimensionMismatchError(
                 "On-disk vector index is missing the 'entities' column "
                 "(table schema predates the ranker integration). Run "
                 "`durin memory reindex` to rebuild from markdown sources."

@@ -49,20 +49,6 @@
   - **Recovery-only.** The full rebuild fires only when the lance probe already detected breakage (`health_check.py:129` `components["lance"] == "fail"` → `_rebuild_lance`), not on the normal write path.
 - **Decision:** docstring fixed; the non-atomic window is **accepted**. A temp-table + `rename_table` swap is feasible (LanceDB 0.30.2 supports it) but its cost — risk on the recovery path, a non-deterministic race test — is not justified for a symptom (transient empty vector results → grep) that is already gracefully degraded and only occurs during an already-broken-index recovery.
 
-### B4 🏗 MED — Shared `FastembedProvider` used by the loop and the Dream daemon thread concurrently
-- **Where:** `durin/agent/tools/memory_store.py:328` passes the store tool's cached `vi` (one `FastembedProvider`) into `_maybe_dispatch_threshold_dream` → `threshold_trigger.py:205` → `DreamRunner.run` on a `threading.Thread`.
-- **Verified:** confirmed the same provider instance is reachable from the loop (`memory_store.execute`) and the daemon thread simultaneously. fastembed/ONNX `embed` isn't guaranteed thread-safe on one session, and lazy `if self._model is None: self._load()` (embedding.py:304) is check-then-act.
-- **Approach:** give the daemon path its own provider/index, or guard embed with a lock. (Inference is mostly stateless so corruption is unlikely; the real exposure is the first-use `_load`/registration window — see B5.)
-
-### B5 🐞 MED — Unguarded module globals in `embedding.py` (`_REGISTERED_CUSTOM`, `_CATALOG_CACHE`)
-- **Where:** `durin/memory/embedding.py:124` (mutates `_REGISTERED_CUSTOM`), `:156` (assigns `_CATALOG_CACHE`), no lock; on the embed hot path via `_load` → `_register_custom_models`.
-- **Verified:** confirmed unguarded (this is the same global pair behind the order-dependent test bug fixed in pass 1). Two threads can both pass the `model_id in _REGISTERED_CUSTOM` check and both call `TextEmbedding.add_custom_model`, which raises `ValueError` on re-registration — caught only for `ImportError`, so it propagates out of provider init.
-- **Fix:** a module lock around register + catalog-cache assignment (mirror the `aliases_cache` pattern).
-
-### B6 🏗 MED — `VectorIndex.upsert` delete+add is non-atomic
-- **Where:** `durin/memory/vector_index.py:143-144` (`table.delete(...)` then `table.add([record])` — two LanceDB commits).
-- **Verified:** confirmed two separate commits. A concurrent reader can observe the row deleted-but-not-yet-re-added (a recently-written memory momentarily vanishing from search); the health-check thread reaches this via `_repair_drift → reindex_one_file` on common mtime-lag drift. No permanent corruption (Lance per-commit atomic), but transient missing rows during heal ticks.
-
 ---
 
 ## C. Error handling & resources
