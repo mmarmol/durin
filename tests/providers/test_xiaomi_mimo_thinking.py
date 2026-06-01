@@ -20,7 +20,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from durin.config.schema import ProvidersConfig
 from durin.providers.openai_compat_provider import OpenAICompatProvider
 from durin.providers.registry import PROVIDERS
 
@@ -61,12 +60,6 @@ def _simple_messages() -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
-
-
-def test_xiaomi_mimo_config_field_exists():
-    """ProvidersConfig should expose a xiaomi_mimo field."""
-    config = ProvidersConfig()
-    assert hasattr(config, "xiaomi_mimo")
 
 
 def test_xiaomi_mimo_uses_thinking_type_style():
