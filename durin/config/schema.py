@@ -379,10 +379,16 @@ class MemoryHealthCheckConfig(Base):
 class MemoryConfig(Base):
     """Memory subsystem configuration root.
 
-    ``enabled`` gates vector retrieval. When false the memory tools
-    still work over the markdown files (grep-level recall) but skip the
-    vector index entirely — no embedding model is loaded. It's opt-in
-    because the embedding model is a multi-hundred-MB download.
+    ``enabled`` gates vector retrieval. On by default — durin is a
+    memory product, so the semantic layer is the default experience.
+    `durin onboard` installs the `[memory]` extra and pre-downloads the
+    embedding model so it works out of the box; the user can opt out in
+    the wizard. When false (or when the `[memory]` extra is missing) the
+    memory tools still work over the markdown files (grep-level recall)
+    but skip the vector index entirely — no embedding model is loaded,
+    and the agent loop warns once at startup so the degradation isn't
+    silent (resilient: the embedding model itself auto-downloads on first
+    use via fastembed; only the Python extra can't self-install).
 
     ``dream`` configures auto-trigger of the entity-centric
     :class:`DreamConsolidator` (doc 25 §2.A.1). Independent of
@@ -394,7 +400,7 @@ class MemoryConfig(Base):
     background services the agent loop runs.
     """
 
-    enabled: bool = False
+    enabled: bool = True
     embedding: MemoryEmbeddingConfig = Field(default_factory=MemoryEmbeddingConfig)
     dream: MemoryDreamConfig = Field(default_factory=MemoryDreamConfig)
     search: MemorySearchConfig = Field(default_factory=MemorySearchConfig)

@@ -595,17 +595,29 @@ Output envelope mirrors the consolidator's: `===VERDICT===` + `===CONFIDENCE===`
 
 The durin install wizard (`durin init` CLI command + the web onboarding flow) asks the operator a few questions. The memory-related questions:
 
-### 6.1 Memory subsystem enable
+### 6.1 Vector memory enable
+
+The wizard surfaces this as an **"Enable vector memory"** toggle in the
+memory submenu, **ON by default** — durin is a memory product, so the
+semantic layer is the default experience. Accepting installs the `[memory]`
+extra (fastembed + lancedb) and pre-downloads the embedding model so it
+works out of the box; the model weights also auto-download on first use, so
+the runtime self-heals even on a headless install once the extra is present.
 
 ```
-durin's memory system lets the agent remember facts across sessions.
-Enabling it downloads a small embedding model (~120MB) and starts the
-local consolidation process.
-
-Enable memory? [Y/n]:
+Vector memory — ON  (embedding: intfloat/multilingual-e5-small)
+  > Disable vector memory     ← opt-out here
+    Change embedding model
+    ...
 ```
 
-Default: yes. If the operator declines, durin runs without memory (degraded but functional).
+**The toggle gates the VECTOR layer only.** When it's off (or the `[memory]`
+extra is missing), the memory tools still work over the markdown files
+(grep-level recall) — `memory_store`/`memory_search`/`memory_ingest` are
+always available; only the embedding index is skipped. If `memory.enabled`
+is true but the extra is absent, the agent loop warns once at startup
+(actionable: `durin doctor --install-missing`) and degrades to grep rather
+than failing.
 
 ### 6.2 Cross-encoder reranker (opt-in)
 
@@ -839,7 +851,7 @@ None at the module level.
 | Tool descriptions | ✅ Sync'd. Each tool's `.description` property delegates to `_PARAMETERS["description"]` which carries the verbatim doc §3 text. `test_tool_description_sync.py` guards both string equality and the `to_schema()` invariant (audit B1, 2026-05-28). | — | — |
 | `templates/dream/consolidator.md` | v2 — skill package multi-file per §4. **Shipped in Phase 1.9 (commit `6aafc3f`).** | — | — |
 | `templates/dream/absorb_judge.md` | Active | Same | None |
-| Onboarding wizard text | **Partial.** `durin/cli/onboard.py` exists (1169 LOC wizard) but contains no memory-related questions today — grep for `memory` returns zero. Doc §6 specifies three blocks (memory enable, cross-encoder, auto-absorb) yet to land. | Add §6 questions | Wizard CLI + webui changes |
+| Onboarding wizard text | **Shipped.** The default wizard `durin/cli/onboard_wizard.py` has a memory submenu (`_configure_memory`, P10 2026-05-30): vector-memory toggle (ON by default), embedding-model pick (with pre-download warmup), cross-encoder, Dream auto-absorb, and aux-model — wired from `onboard_memory.py`. (`onboard.py` is the legacy `--advanced` field-walker, not the default path.) | Done | — |
 | Structural markers | CANONICAL/FRAGMENT in code | + SESSION + INGESTED | Renderer extension |
 
 ---
