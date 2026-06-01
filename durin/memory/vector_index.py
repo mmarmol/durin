@@ -439,8 +439,14 @@ class VectorIndex:
         ``memory/entities/<type>/<slug>.md`` page; returns total count
         rebuilt.
 
-        Atomic from the consumer's perspective: the existing table is
-        dropped only after the new one is built successfully.
+        NOT atomic: the existing table is dropped, then the new one is
+        created (`_drop_if_exists` then `create_table`), so there is a
+        brief window with no table. Concurrent readers tolerate it —
+        `search` returns `[]` and the only caller (`_safe_vector_search`)
+        degrades to grep; `upsert` callers are likewise guarded. This
+        path runs only on a forced reindex or the health-check rebuild
+        after the lance probe detects breakage, never on the normal
+        write path, so the window is accepted rather than swapped out.
 
         Audit E9 (2026-05-28) extended this to also walk entity pages.
         Pre-E9, only memory entries (`memory/<class>/*.md`) were walked
