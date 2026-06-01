@@ -143,4 +143,5 @@ testpaths = ["tests"]
 markers = [
     "ollama: requires running Ollama instance with a local model",
     "local_llm: requires llama-cpp-python and a cached GGUF model",
+    "slow: marks slow / live-LLM end-to-end tests (opt-in via env)",
 ]
