@@ -21,7 +21,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Literal
+from typing import Literal
 
 from durin.memory.paths import MEMORY_CLASSES, walk_class
 from durin.memory.schema import MemoryEntry
@@ -446,7 +446,3 @@ def _make_snippet(text: str, needle_low: str) -> str:
     prefix = "…" if start > 0 else ""
     suffix = "…" if end < len(text) else ""
     return f"{prefix}{snippet}{suffix}"
-
-
-def _all_classes_iter() -> Iterable[str]:
-    return MEMORY_CLASSES
