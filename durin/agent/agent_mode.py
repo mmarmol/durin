@@ -343,6 +343,43 @@ def plan_mode_runtime_lines(metadata: Any) -> list[str]:
     ]
 
 
+# Key under which `/build` stashes the path of the approved plan currently
+# executing (written in command.builtin on approval, cleared when a new
+# `/plan` supersedes it). Lives in session.metadata — which survives
+# compaction, the same store as the todo list.
+EXECUTING_PLAN_PATH_KEY = "executing_plan_path"
+
+
+def executing_plan_runtime_lines(metadata: Any) -> list[str]:
+    """Per-turn pointer to the approved plan currently being executed.
+
+    Re-injected every turn (mirroring ``todos_runtime_lines``) so the
+    "you are executing an approved plan" frame survives compaction: the
+    path lives in ``session.metadata`` and survives, but the model only
+    sees it if we render it back into the runtime-context block each turn.
+    This restores the carry-over that the (refuted) ``autocompact`` module
+    used to provide by splicing plan content into the summary — but as a
+    lightweight pointer, not the content.
+
+    Crucially this is a POINTER, not the plan body: progress is tracked by
+    the todo list (the execution cursor, which only moves forward), so
+    re-surfacing the plan reference every turn does NOT make the model
+    re-run completed steps. The model re-reads the plan file on demand for
+    full detail.
+    """
+    if not metadata or not isinstance(metadata, dict):
+        return []
+    plan_path = metadata.get(EXECUTING_PLAN_PATH_KEY)
+    if not isinstance(plan_path, str) or not plan_path.strip():
+        return []
+    return [
+        f"📋 Executing approved plan: `{plan_path.strip()}`. Track step "
+        "progress with your todo list (todo_write) — it is the source of "
+        "truth for what's done; re-read the plan file for the full steps "
+        "if needed.",
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Tool filtering
 # ---------------------------------------------------------------------------
