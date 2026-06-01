@@ -23,6 +23,7 @@ from durin.agent.agent_mode import (
     SESSION_PRE_PLAN_KEY,
     AgentMode,
     enter_plan_mode,
+    clear_executing_plan_if_todos_done,
     executing_plan_runtime_lines,
     exit_plan_mode,
     filter_tools,
@@ -502,3 +503,39 @@ class TestExecutingPlanRuntimeLines:
             assert "/ws/.durin/plans/plan_y.md" in text
         # Key was never consumed.
         assert meta["executing_plan_path"] == "/ws/.durin/plans/plan_y.md"
+
+
+class TestClearExecutingPlanWhenDone:
+    """The plan pointer must stop re-injecting once the plan's todos (the
+    execution cursor) are all completed — otherwise it lingers into later,
+    unrelated turns."""
+
+    @staticmethod
+    def _todo(content, status):
+        return {"content": content, "status": status, "activeForm": content}
+
+    def test_clears_when_all_todos_completed(self):
+        meta = {
+            "executing_plan_path": "/ws/plan.md",
+            "todos": [self._todo("a", "completed"), self._todo("b", "completed")],
+        }
+        assert clear_executing_plan_if_todos_done(meta) is True
+        assert "executing_plan_path" not in meta
+
+    def test_keeps_when_a_todo_is_pending_or_in_progress(self):
+        meta = {
+            "executing_plan_path": "/ws/plan.md",
+            "todos": [self._todo("a", "completed"), self._todo("b", "in_progress")],
+        }
+        assert clear_executing_plan_if_todos_done(meta) is False
+        assert meta["executing_plan_path"] == "/ws/plan.md"
+
+    def test_keeps_when_no_todos(self):
+        meta = {"executing_plan_path": "/ws/plan.md"}
+        assert clear_executing_plan_if_todos_done(meta) is False
+        assert meta["executing_plan_path"] == "/ws/plan.md"
+
+    def test_noop_when_no_executing_plan(self):
+        meta = {"todos": [self._todo("a", "completed")]}
+        assert clear_executing_plan_if_todos_done(meta) is False
+        assert clear_executing_plan_if_todos_done(None) is False
