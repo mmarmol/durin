@@ -1465,8 +1465,8 @@ class FeishuChannel(BaseChannel):
                 fallback_msg_id = self._thread_reply_target(meta)
                 if fallback_msg_id:
                     await loop.run_in_executor(
-                        None, lambda: self._reply_message_sync(
-                            fallback_msg_id, "interactive", card,
+                        None, lambda c=card, m=fallback_msg_id: self._reply_message_sync(
+                            m, "interactive", c,
                             reply_in_thread=self._should_use_reply_in_thread(meta),
                         ),
                     )
