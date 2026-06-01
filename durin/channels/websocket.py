@@ -1576,16 +1576,6 @@ class WebSocketChannel(BaseChannel):
                 return bool(info.get("supports_vision"))
             if capability == "audio":
                 return bool(info.get("supports_audio_input"))
-            if capability == "image":
-                # Image-generation picker: keep models that publish image
-                # output (DALL-E, gpt-image, Imagen, Flux via gateways).
-                # Also accept the legacy `mode == image_generation` flag
-                # which the catalog emits for some pure-generators that
-                # don't set supports_image_output.
-                return (
-                    bool(info.get("supports_image_output"))
-                    or info.get("mode") == "image_generation"
-                )
             return True
 
         def _provider_ok(mid: str) -> bool:
@@ -1608,12 +1598,10 @@ class WebSocketChannel(BaseChannel):
                 mid
                 for mid, info in models.items()
                 if isinstance(mid, str)
-                # Exclude pure image-generation models from chat pickers
-                # (vision/audio/text). But when the caller IS asking for
-                # the image picker, those are exactly what we want.
+                # Exclude pure image-generation models from the chat pickers
+                # (vision / audio / text) — durin has no image-gen feature.
                 and (
-                    capability == "image"
-                    or not isinstance(info, dict)
+                    not isinstance(info, dict)
                     or info.get("mode") != "image_generation"
                 )
                 and _capability_ok(info)
