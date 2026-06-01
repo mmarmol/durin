@@ -69,9 +69,9 @@ class MessageTool(Tool, ContextAware):
             "message_default_message_id",
             default=default_message_id,
         )
-        self._default_metadata: ContextVar[dict[str, Any]] = ContextVar(
+        self._default_metadata: ContextVar[dict[str, Any] | None] = ContextVar(
             "message_default_metadata",
-            default={},
+            default=None,
         )
         self._sent_in_turn_var: ContextVar[bool] = ContextVar("message_sent_in_turn", default=False)
         self._turn_delivered_media_var: ContextVar[tuple[str, ...]] = ContextVar(
@@ -221,7 +221,7 @@ class MessageTool(Tool, ContextAware):
             except (OSError, PermissionError, ValueError) as e:
                 return f"Error: media path is not allowed: {str(e)}"
 
-        metadata = dict(self._default_metadata.get()) if same_target else {}
+        metadata = dict(self._default_metadata.get() or {}) if same_target else {}
         if message_id:
             metadata["message_id"] = message_id
         if self._record_channel_delivery_var.get() or media:
