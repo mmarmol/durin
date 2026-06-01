@@ -281,11 +281,25 @@ def test_image_gen_tool_config_cls():
 
 def test_image_gen_tool_enabled():
     from durin.agent.tools.image_generation import ImageGenerationTool
+
+    # enabled requires BOTH the flag AND a provider durin can actually
+    # drive (whitelist gate added with the probe-gated activation flow,
+    # commit 6cadbff). A MagicMock provider is not a real supported
+    # string, so the test must pin a valid one.
     mock_config = MagicMock()
     mock_config.image_generation.enabled = True
+    mock_config.image_generation.provider = "openrouter"
     ctx = ToolContext(config=mock_config, workspace="/tmp")
     assert ImageGenerationTool.enabled(ctx) is True
+
+    # Flag off → off, regardless of provider.
     mock_config.image_generation.enabled = False
+    assert ImageGenerationTool.enabled(ctx) is False
+
+    # Flag on but provider not in IMAGE_GEN_SUPPORTED_PROVIDERS → off,
+    # so a stale/unsupported provider never exposes the tool to the agent.
+    mock_config.image_generation.enabled = True
+    mock_config.image_generation.provider = "unsupported-provider"
     assert ImageGenerationTool.enabled(ctx) is False
 
 
