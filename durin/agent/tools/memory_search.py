@@ -750,32 +750,3 @@ class MemorySearchTool(Tool):
         if level == "cold" and not result.body:
             result = self._enrich_body(result)
         return result
-
-
-def _vector_row_to_result(row: dict) -> Result:
-    """Shape a LanceDB row to match the grep Result schema.
-
-    Per doc 25 §2.H: preserve ``class_name`` / ``valid_from`` /
-    ``entities`` so the canonical-vs-fragment contract holds. Audit
-    F4 (2026-05-28) moved the LLM-facing marker rendering to
-    ``sectioned_output.render_sectioned``; the fields still need to
-    flow through here so the sectioned renderer has the data.
-    """
-    class_name = row.get("class_name", "")
-    entry_id = row.get("id", "")
-    summary = row.get("summary", "") or ""
-    headline = row.get("headline", "") or ""
-    valid_from = row.get("valid_from", "") or ""
-    raw_entities = row.get("entities") or []
-    entities = tuple(str(e) for e in raw_entities)
-    return Result(
-        source="memory",
-        uri=f"memory/{class_name}/{entry_id}",
-        headline=headline,
-        snippet=(summary[:160] if summary else headline)[:160],
-        summary=summary,
-        body="",
-        class_name=class_name,
-        valid_from=valid_from,
-        entities=entities,
-    )
