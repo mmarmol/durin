@@ -9,12 +9,23 @@ import sys
 import time
 from contextlib import suppress
 from dataclasses import dataclass
+from pathlib import Path
 
 from durin import __version__
 from durin.bus.events import OutboundMessage
 from durin.command.router import CommandContext, CommandRouter
 from durin.utils.helpers import build_status_content
 from durin.utils.restart import set_restart_notice_to_env
+
+# Strong refs to fire-and-forget command tasks (restart, background dream)
+# so the event loop can't GC them before they run (RUF006).
+_BACKGROUND_TASKS: set[asyncio.Task] = set()
+
+
+def _spawn_background(coro) -> None:
+    task = asyncio.create_task(coro)
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
 
 
 @dataclass(frozen=True)
@@ -251,7 +262,7 @@ async def cmd_restart(ctx: CommandContext) -> OutboundMessage:
         await asyncio.sleep(1)
         os.execv(sys.executable, [sys.executable, "-m", "durin"] + sys.argv[1:])
 
-    asyncio.create_task(_do_restart())
+    _spawn_background(_do_restart())
     return OutboundMessage(
         channel=msg.channel, chat_id=msg.chat_id, content="Restarting...",
         metadata=dict(msg.metadata or {})
@@ -445,7 +456,7 @@ async def cmd_dream(ctx: CommandContext) -> OutboundMessage:
             channel=msg.channel, chat_id=msg.chat_id, content=content,
         ))
 
-    asyncio.create_task(_run_dream())
+    _spawn_background(_run_dream())
     return OutboundMessage(
         channel=msg.channel, chat_id=msg.chat_id, content="Dreaming...",
     )
