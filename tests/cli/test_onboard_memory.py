@@ -16,10 +16,8 @@ from durin.cli.onboard_memory import (
     AUTO_ABSORB_QUESTION_TEXT,
     AUX_MODEL_QUESTION_TEXT,
     CROSS_ENCODER_QUESTION_TEXT,
-    MEMORY_ENABLE_QUESTION_TEXT,
     prompt_enable_auto_absorb,
     prompt_enable_cross_encoder,
-    prompt_enable_memory_subsystem,
     prompt_memory_aux_model,
 )
 
@@ -175,31 +173,9 @@ def test_none_answer_returns_current_value(
     assert prompt_enable_auto_absorb(current=False) is False
 
 
-# ---------------------------------------------------------------------------
-# Q6.1 — Memory subsystem enable
-# ---------------------------------------------------------------------------
-
-
-def test_memory_enable_text_anchors() -> None:
-    text = MEMORY_ENABLE_QUESTION_TEXT
-    assert "memory system" in text.lower()
-    # Default embedding model: multilingual-e5-small (~450MB) since
-    # 2026-05-30 (H27). The text mentions the size so the user knows
-    # what install cost to expect.
-    assert "~450MB" in text
-    assert "multilingual-e5-small" in text
-    assert "[Y/n]" in text
-
-
-def test_memory_enable_default_is_true(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    fake = _FakeQuestionary(answer=True)
-    monkeypatch.setattr(
-        "durin.cli.onboard_memory._get_questionary", lambda: fake,
-    )
-    prompt_enable_memory_subsystem()  # default current=True
-    assert fake._default is True
+# Q6.1 "Enable memory? [Y/n]" prompt (prompt_enable_memory_subsystem +
+# MEMORY_ENABLE_QUESTION_TEXT) was removed — the wizard enables vector memory
+# via the "Enable vector memory" toggle (ON by default), never that prompt.
 
 
 # ---------------------------------------------------------------------------
