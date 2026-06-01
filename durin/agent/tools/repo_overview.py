@@ -18,14 +18,13 @@ import os
 from pathlib import Path
 from typing import Any
 
-from durin.agent.tools.base import Tool, tool_parameters
+from durin.agent.tools.base import tool_parameters
 from durin.agent.tools.filesystem import ListDirTool, _FsTool
 from durin.agent.tools.schema import (
     IntegerSchema,
     StringSchema,
     tool_parameters_schema,
 )
-
 
 _STRUCTURE_LIMIT = 200
 _MAX_DEPTH = 6

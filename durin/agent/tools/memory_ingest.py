@@ -24,8 +24,8 @@ from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.schema import StringSchema, tool_parameters_schema
 from durin.memory.ingestion import IngestError, ingest_artifact
 from durin.memory.provenance import author_scope
-from durin.memory.store import StoreError, store_memory
 from durin.memory.storage import load_entry
+from durin.memory.store import StoreError, store_memory
 from durin.memory.vector_index import (
     VectorIndex,
     VectorIndexDimensionMismatch,

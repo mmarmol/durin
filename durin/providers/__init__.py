@@ -32,8 +32,8 @@ if TYPE_CHECKING:
     from durin.providers.azure_openai_provider import AzureOpenAIProvider
     from durin.providers.bedrock_provider import BedrockProvider
     from durin.providers.github_copilot_provider import GitHubCopilotProvider
-    from durin.providers.openai_compat_provider import OpenAICompatProvider
     from durin.providers.openai_codex_provider import OpenAICodexProvider
+    from durin.providers.openai_compat_provider import OpenAICompatProvider
 
 
 def __getattr__(name: str):

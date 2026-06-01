@@ -339,10 +339,10 @@ class ExitPlanModeTool(Tool, _PlanModeToolBase):
         # tool result.
         with suppress(Exception):
             from durin.session.session_meta import (
+                append_event,
                 extract_markdown_title,
                 make_plan_event,
                 meta_path_for,
-                append_event,
             )
 
             sessions_dir = self._workspace / "sessions" if self._workspace else None

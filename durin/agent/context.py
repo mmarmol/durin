@@ -449,12 +449,13 @@ class ContextBuilder:
         never affect the user-facing turn.
         """
         try:
+            import json
+
             from durin.telemetry.logger import current_telemetry
             from durin.utils.helpers import (
                 estimate_message_tokens,
                 estimate_text_tokens,
             )
-            import json
 
             logger_obj = current_telemetry()
             if logger_obj is None:

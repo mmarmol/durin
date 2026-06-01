@@ -14,7 +14,9 @@ from typing import Any
 
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.schema import (
-    ArraySchema, StringSchema, tool_parameters_schema,
+    ArraySchema,
+    StringSchema,
+    tool_parameters_schema,
 )
 from durin.memory.drill import DrillError, drill
 

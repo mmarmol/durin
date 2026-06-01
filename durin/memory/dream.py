@@ -23,12 +23,10 @@ to litellm + the provider config from ``durin.security.secrets`` +
 from __future__ import annotations
 
 import logging
-import os
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Iterable, Protocol
+from typing import Protocol
 
 from durin.memory.aliases_index import AliasIndex
 from durin.memory.dream_git_history import format_recent_history
@@ -519,7 +517,6 @@ class DreamConsolidator:
         (idempotent re-run on identical content).
         """
         from durin.memory.dream_apply import (
-            DreamApplyError,
             DreamApplyFailureKind,
             apply_dream_output,
         )

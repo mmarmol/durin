@@ -30,6 +30,7 @@ from durin.utils.helpers import (
     strip_think,
     truncate_text,
 )
+from durin.utils.history_image_prune import prune_processed_history_images
 from durin.utils.prompt_templates import render_template
 from durin.utils.runtime import (
     EMPTY_FINAL_RESPONSE_MESSAGE,
@@ -41,7 +42,6 @@ from durin.utils.runtime import (
     repeated_external_lookup_error,
     repeated_workspace_violation_error,
 )
-from durin.utils.history_image_prune import prune_processed_history_images
 from durin.utils.tool_result_validation import validate_tool_result_blocks
 
 _DEFAULT_ERROR_MESSAGE = "Sorry, I encountered an error calling the AI model."
@@ -750,7 +750,9 @@ class AgentRunner:
                     ):
                         try:
                             from durin.utils.post_compaction_guard import (
-                                Observation, hash_args, hash_result,
+                                Observation,
+                                hash_args,
+                                hash_result,
                             )
                             obs = Observation(
                                 tool_name=tool_call.name,

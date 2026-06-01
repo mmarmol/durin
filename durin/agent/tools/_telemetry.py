@@ -21,7 +21,6 @@ from typing import Any
 
 from durin.telemetry.logger import current_telemetry
 
-
 # Privacy bound for free-text fields (doc 07 §13). The full query is
 # never persisted to telemetry — only the first N chars, enough to
 # debug + bucket without exposing user content. Applied to any field

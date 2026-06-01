@@ -326,7 +326,9 @@ class HealthChecker:
         """
         try:
             from durin.memory.vector_index import (
-                VectorIndex, _INDEX_PATH, vector_index_available,
+                _INDEX_PATH,
+                VectorIndex,
+                vector_index_available,
             )
         except Exception:
             return False

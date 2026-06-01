@@ -254,14 +254,14 @@ def cmd_set(
     try:
         canonical = validate_dict(raw).model_dump(mode="json", by_alias=True)
     except pydantic.ValidationError as e:
-        console.print(f"[red]On-disk config is invalid; refusing to edit.[/red]")
+        console.print("[red]On-disk config is invalid; refusing to edit.[/red]")
         console.print(str(e))
         raise typer.Exit(1)
     new_data = set_at(canonical, _normalize_dotted_path(key), parse_value(value))
     try:
         config = validate_dict(new_data)
     except pydantic.ValidationError as e:
-        console.print(f"[red]Validation failed; config not modified.[/red]")
+        console.print("[red]Validation failed; config not modified.[/red]")
         console.print(str(e))
         raise typer.Exit(1)
     save_config(config, path)

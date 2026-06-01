@@ -385,8 +385,8 @@ def _cross_encoder_rerank(
     re-introducing a body column in LanceDB (audit A4).
     """
     import time as _time
+
     from durin.memory.cross_encoder import rerank_hits
-    from durin.memory.rrf_fusion import FusedHit
 
     by_uri = {h.uri: h for h in fused}
     pairs: list[tuple[str, str]] = []

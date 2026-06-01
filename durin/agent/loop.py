@@ -42,7 +42,6 @@ from durin.utils.document import extract_documents
 from durin.utils.helpers import image_placeholder_text
 from durin.utils.helpers import truncate_text as truncate_text_fn
 
-
 # Tools whose output is error-dense at the END of the buffer (build
 # logs, shell stderr/stdout, test runners). For these we truncate from
 # the head so the model sees the tail. Everything else (file reads,
@@ -107,8 +106,8 @@ def _build_aux_providers(config: Any) -> dict[str, AuxProviderHandle]:
     Returns an empty dict when no aux models are configured; bridge
     tools then see no entry and stay hidden from the LLM's tool list.
     """
-    from durin.providers.factory import make_provider
     from durin.config.schema import ModelPresetConfig
+    from durin.providers.factory import make_provider
 
     out: dict[str, AuxProviderHandle] = {}
     aux = getattr(getattr(config, "agents", None), "aux_models", None)
@@ -458,7 +457,8 @@ class AgentLoop:
         # indices are NOT picked up as memory entries.
         try:
             from durin.memory.vault_readme import (
-                ensure_class_indices, ensure_vault_readme,
+                ensure_class_indices,
+                ensure_vault_readme,
             )
 
             ensure_vault_readme(self.workspace)
@@ -489,8 +489,8 @@ class AgentLoop:
         if hc_cfg is not None and getattr(hc_cfg, "enabled", False):
             try:
                 from durin.memory.health_check import (
-                    HealthCheckScheduler,
                     HealthChecker,
+                    HealthCheckScheduler,
                 )
 
                 checker = HealthChecker(self.workspace)

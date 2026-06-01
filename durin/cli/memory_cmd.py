@@ -59,7 +59,7 @@ def _resolve_entity_path(entity_ref: str) -> Path:
 
 def _open_repo():
     """Construct a :class:`GitRepo` rooted at ``memory/`` if it exists."""
-    from durin.utils.git_repo import GitRepo, GitRepoError
+    from durin.utils.git_repo import GitRepo
 
     workspace = _workspace_root()
     repo = GitRepo(workspace / "memory")
@@ -224,7 +224,8 @@ def cmd_reindex(
     if target in ("all", "lancedb"):
         try:
             from durin.memory.vector_index import (
-                VectorIndex, vector_index_available,
+                VectorIndex,
+                vector_index_available,
             )
         except ImportError:
             console.print(
@@ -777,7 +778,7 @@ def cmd_absorb(
         console.print(f"[green]✓[/green] Absorbed {absorbed} → {canonical} ({sha[:8]})")
     else:
         console.print(
-            f"[dim]= No-op (absorbed page already archived or nothing to commit)[/dim]"
+            "[dim]= No-op (absorbed page already archived or nothing to commit)[/dim]"
         )
 
 
@@ -821,7 +822,7 @@ def cmd_stats(
     window = f"last {days} days" if days else "all-time"
 
     fs_table = Table(
-        title=f"Filesystem (current snapshot)",
+        title="Filesystem (current snapshot)",
         show_header=True,
         header_style="bold cyan",
     )
