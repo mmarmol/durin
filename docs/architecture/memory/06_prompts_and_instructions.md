@@ -612,9 +612,8 @@ Default: yes. If the operator declines, durin runs without memory (degraded but 
 ```
 Advanced retrieval option: durin can use a cross-encoder reranker to
 improve search quality. This adds 300-1500ms latency per query (depending
-on the model) and requires ~1GB additional RAM. The default model is
-`jinaai/jina-reranker-v2-base-multilingual` (multilingual, covers 100+
-languages including CJK).
+on the model) and requires additional RAM. The default model is
+`BAAI/bge-reranker-base` (~100M params, MIT license, multilingual).
 
 Most users do NOT need this — the default search (without the reranker)
 works well for typical workloads. Enable it later via the web dashboard

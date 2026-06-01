@@ -15,7 +15,7 @@
 
 ```mermaid
 flowchart TD
-    Start([InboundMessage]) --> Disp[AgentLoop _dispatch_message]
+    Start([InboundMessage]) --> Disp[AgentLoop _dispatch]
     Disp --> Run[AgentRunner run]
     Run --> Iter{iteration under max?}
     Iter -- no --> Done([OutboundMessage])

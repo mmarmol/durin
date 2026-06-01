@@ -671,7 +671,7 @@ Whenever an entity page or memory entry is written, deleted, or moved, the indic
 | Dream apply writes entity page | Re-embed entity; update LanceDB + FTS5 row |
 | Dream archives episodic | Remove from LanceDB + FTS5; insert in archive index (separate, optional) |
 | User edits `.md` manually | File watcher detects mtime change; re-derive that row |
-| `durin reindex` command | Wipe `.durin/index/` and rebuild from all `.md` files |
+| `durin memory reindex` command | Wipe `.durin/index/` and rebuild from all `.md` files |
 
 The "user edits manually" path is what makes "markdown is source of truth" real. If the user opens an entity page and edits, the index catches up automatically.
 

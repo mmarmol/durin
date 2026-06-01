@@ -32,7 +32,7 @@ durin runs **two parallel consolidation jobs**. They are conceptually distinct, 
 
 **Why both exist.** The entity-centric Dream maintains the knowledge graph the agent acquires about its world. The legacy `dream` maintains the agent's *own* working memory and identity — what to remember as facts, what to remember as user model, what soul/principles to apply, and what patterns to escalate as reusable skills. Those are different concerns and the architectural decision is to keep them separate.
 
-The rest of this document describes **only the entity-centric path**. For the working-memory cron, see `agent/memory.py::Dream` and the `agents.defaults.dream.*` config block. The two cronjobs are registered side-by-side in `cli/commands.py:1604` and `cli/commands.py:1617`.
+The rest of this document describes **only the entity-centric path**. For the working-memory cron, see `agent/memory.py::Dream` and the `agents.defaults.dream.*` config block. The two cronjobs are registered side-by-side in `cli/commands.py:1607` (id="dream") and `cli/commands.py:1620` (id="memory_dream").
 
 ---
 
@@ -70,7 +70,7 @@ Dream runs in response to one of six trigger labels. Each is recorded in telemet
 | `cron_daily` | Daily scheduled run (default: 03:00 local). Picks up entities whose pending count is below threshold but non-zero, or which have been quiet for > X days. | Cron scheduler | Once per day |
 | `session_close` | At the end of a long session (> 50 turns), trigger a pass on all entities mentioned in the session. | AgentLoop teardown | Once per session close |
 | `post_compaction` | After conversation compaction emits a `_last_summary`, trigger a pass on entities mentioned in the new summary. | Compaction handler | A few per long session |
-| `manual` | Operator command: `durin dream run` (optionally with `--entity <uri>` filter). | CLI | On demand |
+| `manual` | Operator command: `durin memory dream` (optionally with `--entity <uri>` filter). | CLI | On demand |
 
 The two threshold labels (`threshold` and `post_ingest_threshold`) exist as separate strings so telemetry can distinguish which write surface triggered the consolidation. Behavior of the consolidation itself is identical — the labels only differ for diagnostics.
 
@@ -141,7 +141,7 @@ Dream is organized in two layers, separated by concern:
 | `DreamConsolidator` | `durin/memory/dream.py` | **Pure consolidation logic.** Takes one entity + a batch of post-cursor entries, returns a `ConsolidationResult` (page diff + commit message). Stateless. No lock, no throttle, no telemetry. Tests use this directly to validate logic without operational scaffolding. |
 | `DreamRunner` | `durin/memory/dream_runner.py` | **Production orchestrator.** Holds the lock, throttle, telemetry, batching, and the optional absorb-judge pass. Wraps `DreamConsolidator` — instantiates one per entity and delegates the actual LLM call + parse + apply. |
 
-**In production, only `DreamRunner` is invoked.** Triggers from §2 dispatch to it; `memory_store` / `memory_ingest` call it via `threshold_trigger.py`; the CLI command `durin dream run` calls it. Nothing else in production talks to `DreamConsolidator` directly.
+**In production, only `DreamRunner` is invoked.** Triggers from §2 dispatch to it; `memory_store` / `memory_ingest` call it via `threshold_trigger.py`; the CLI command `durin memory dream` calls it. Nothing else in production talks to `DreamConsolidator` directly.
 
 **`dream.py` also exports** helper types used elsewhere (without going through Runner): `EntryRef` (referenced by CLI display code), `default_llm_invoke` (the LLM helper used by both Dream paths), `DreamError`.
 

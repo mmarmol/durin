@@ -128,7 +128,7 @@ scripts/
 flowchart LR
     U["User input<br/>(CLI / TUI / Channel)"] --> CH["Channel adapter"]
     CH --> BUS["MessageBus<br/>InboundMessage"]
-    BUS --> LOOP["AgentLoop._dispatch_message"]
+    BUS --> LOOP["AgentLoop._dispatch"]
     LOOP --> RUN["AgentRunner.run<br/>(see arch/loop.md)"]
     RUN --> SESS["sessions/KEY.jsonl<br/>append-only"]
     RUN --> TOOLS["Tools<br/>(filesystem, memory, ...)"]
@@ -162,7 +162,7 @@ tests/
 └── telemetry/      # Generic logger + schema catalog + cache.usage event
 ```
 
-Current: **4365 tests passing, 16 skipped** (Python) + **~140** (webui).
+Current: **~5290 tests passing, 16 skipped** (Python) + **~140** (webui).
 
 ---
 
