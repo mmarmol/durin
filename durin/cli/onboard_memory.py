@@ -18,7 +18,7 @@ features in Phases 6, 4, and 6 respectively.
 from __future__ import annotations
 
 from textwrap import dedent
-from typing import Any
+from typing import Any, Optional
 
 __all__ = [
     "AUTO_ABSORB_QUESTION_TEXT",
