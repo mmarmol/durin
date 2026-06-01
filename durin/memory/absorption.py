@@ -183,7 +183,7 @@ class EntityAbsorption:
         # Helper writes archived_at + archived_into + archived_reason.
         from durin.memory.archive import archive_entity
 
-        archived_path = archive_entity(
+        archive_entity(
             self.workspace,
             absorbed_path,
             into_uri=canonical,
