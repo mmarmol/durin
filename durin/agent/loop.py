@@ -944,6 +944,17 @@ class AgentLoop:
         sub_cancelled = await self.subagents.cancel_by_session(key)
         return cancelled + sub_cancelled
 
+    def _drop_active_task(self, task: asyncio.Task, key: str) -> None:
+        """Done-callback: drop a finished task from its session's list.
+
+        KeyError-safe (the key may already have been popped by
+        ``_cancel_active_tasks``) and ValueError-safe (membership-checked
+        before remove).
+        """
+        tasks = self._active_tasks.get(key)
+        if tasks is not None and task in tasks:
+            tasks.remove(task)
+
     def _effective_session_key(self, msg: InboundMessage) -> str:
         """Return the session key used for task routing and mid-turn injections."""
         if self._unified_session and not msg.session_key_override:
@@ -1243,10 +1254,7 @@ class AgentLoop:
             task = asyncio.create_task(self._dispatch(msg))
             self._active_tasks.setdefault(effective_key, []).append(task)
             task.add_done_callback(
-                lambda t, k=effective_key: self._active_tasks.get(k, [])
-                and self._active_tasks[k].remove(t)
-                if t in self._active_tasks.get(k, [])
-                else None
+                lambda t, k=effective_key: self._drop_active_task(t, k)
             )
 
     async def _dispatch(self, msg: InboundMessage) -> None:
