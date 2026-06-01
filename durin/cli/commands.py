@@ -1346,7 +1346,7 @@ def _run_gateway(
                 workspace=workspace,
                 min_seconds_between_runs=mem_dream_cfg.min_seconds_between_runs,
                 max_seconds_per_run=mem_dream_cfg.max_seconds_per_run,
-                model=resolve_memory_model(cfg),
+                model=resolve_memory_model(config),
                 vector_index=vi,
                 auto_absorb_enabled=mem_dream_cfg.auto_absorb.enabled,
                 auto_absorb_threshold=mem_dream_cfg.auto_absorb.confidence_threshold,
