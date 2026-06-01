@@ -478,6 +478,20 @@ Forcing either into the other's shape produces a regression: the search renderer
 
 ---
 
+### 2.22 Unified `compose_embedding_text` dispatcher (F12, reverted)
+
+**What was proposed**: a single public `VectorIndex.compose_embedding_text(item, ...)` classmethod as "the single source of truth for embedding composition", routing on input type to the two specialised composers. Audit F12 (2026-05-28) added it because doc 02 §4 promised that public name but only the two private specialists existed — F12 read the gap as "doc promises a function the code lacks" and closed it by adding the function.
+
+**Why it was reverted** (QA review 2026-06-01): the dispatcher was never called — not once in its entire git history, no caller in `durin/`, `tests/`, or `webui/`, and it is not in `vector_index.__all__`. It could not have unified anything meaningful: an `EntityPage` and a `MemoryEntry` embed structurally different fields, so the two composers are genuinely divergent, not two implementations of one rule. Every real caller (all internal to `vector_index.py`) already holds a concrete type, so routing through an `isinstance` dispatcher is pure indirection — slower and less clear than calling the specialist directly.
+
+**What the anti-drift intent really requires**: F12's underlying concern — "the entity-page path and the entry path must not drift" — is satisfied structurally by having exactly **one composer per indexable type** (`_compose_entity_page_text`, `_embed_text`), each the sole authority for its type. Doc 02 §4 now documents the per-type rules as the source of truth instead of pointing at a unified function. This is the same shape as §2.15: share the genuinely-common surface, do not merge divergent per-type logic behind one entry.
+
+**The concrete trigger that would change this**: an *external* caller (outside `vector_index.py`) that must compose embedding text without knowing the item's concrete type. None exists; if one ever does, add the dispatcher back at that point — not preemptively to satisfy a doc string.
+
+**Status**: dispatcher removed from `vector_index.py`; doc 02 §4 rewritten to document the per-type composers directly. The F12 entry in the archived audit (`docs/archive/32_memory_audit_reconciliation.md` §F12) is now superseded by this reversal.
+
+---
+
 ## 3. Operational risks (from doc 18 §10)
 
 The entity-centric memory design carries known operational risks. They were enumerated in `docs/archive/35_entity_centric_plan.md` §10 before the corpus was written. This section maps each risk to its status in v2 and identifies what (if anything) the corpus does to mitigate it.

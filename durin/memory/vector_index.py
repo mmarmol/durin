@@ -298,44 +298,6 @@ class VectorIndex:
         return " ".join(part.capitalize() for part in str(key).split("_"))
 
     @classmethod
-    def compose_embedding_text(
-        cls,
-        item: Any,
-        *,
-        attributes: dict[str, Any] | None = None,
-        relations: list[dict[str, Any]] | None = None,
-        budget_chars: int | None = None,
-    ) -> str:
-        """Single public API for composing the embedding text.
-
-        Audit F12 (2026-05-28): doc 02 §4 promised this method as the
-        single source of truth for embedding composition. Pre-F12 the
-        two specialised composers (`_compose_entity_page_text` for
-        EntityPage objects and `_embed_text` for MemoryEntry rows)
-        were the only entry points, leaving the documented public
-        name unimplemented. The function exists now as a dispatcher
-        — it routes to the correct specialist based on the input
-        type so callers can stop guessing.
-        """
-        from durin.memory.entity_page import EntityPage as _EntityPage
-        from durin.memory.storage import MemoryEntry as _MemoryEntry
-
-        if isinstance(item, _EntityPage):
-            return cls._compose_entity_page_text(
-                name=item.name,
-                aliases=list(item.aliases or []),
-                body=item.body,
-                attributes=item.attributes if attributes is None else attributes,
-                relations=item.relations if relations is None else relations,
-            )
-        if isinstance(item, _MemoryEntry):
-            return cls._embed_text(item, budget_chars=budget_chars)
-        raise TypeError(
-            f"compose_embedding_text: unsupported item type {type(item).__name__}; "
-            "expected EntityPage or MemoryEntry"
-        )
-
-    @classmethod
     def _compose_entity_page_text(
         cls,
         *,

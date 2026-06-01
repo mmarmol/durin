@@ -128,12 +128,12 @@ The shared workspace walker (`walk_memory(workspace, include_archive=False)`) is
 
 ## 4. Embedding text composition
 
-The text passed to the embedding model determines what the vector represents. This section specifies exactly what gets composed for each indexable `.md`. **Single source of truth: `VectorIndex.compose_embedding_text(item, ...)`** (audit F12, 2026-05-28). The dispatcher routes on input type:
+The text passed to the embedding model determines what the vector represents. This section specifies exactly what gets composed for each indexable `.md`. Composition is **type-specific** — an entity page and a memory entry embed structurally different fields — so there is exactly **one authoritative composer per indexable type**, and this section is the single source of truth for their rules:
 
-- `EntityPage` → `_compose_entity_page_text` (name + aliases + rendered_frontmatter + body, 1500 chars).
-- `MemoryEntry` → `_embed_text` (headline + summary + entities + body, 1500 chars).
+- `EntityPage` → `VectorIndex._compose_entity_page_text` (name + aliases + rendered_frontmatter + body, 1500 chars). See §4.2.
+- `MemoryEntry` → `VectorIndex._embed_text` (headline + summary + entities + body, 1500 chars). See §4.3.
 
-Pre-F12 the two specialised composers were the only entry points, leaving the documented public name unimplemented; the dispatcher closes the gap so callers have one obvious method to call.
+Each composer is the sole place that builds embedding text for its type, so the entity-page path and the entry path cannot drift — that is the anti-drift intent originally tracked as audit F12. A unified `compose_embedding_text(item)` dispatcher over the two was tried and reverted: it added an `isinstance` indirection over genuinely-divergent per-type logic without unifying anything (every caller already holds a concrete type). See doc 08 §2.22.
 
 ### 4.1 Common rules
 
