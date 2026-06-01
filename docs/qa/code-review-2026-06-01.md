@@ -33,16 +33,18 @@ Each investigated forensically (git blame → introducing commit, docs/archive, 
 | 9 | [agent/loop.py:1245](../../durin/agent/loop.py#L1245) | `add_done_callback` nested ternary-and lambda — correct but unreadable precedence footgun. | ✅ FIXED — extracted `_drop_active_task(task, key)`; callback delegates. Behavior identical (AST precedence check + 65 lifecycle tests). `06104bf`. |
 | 10 | [memory/threshold_trigger.py:161](../../durin/memory/threshold_trigger.py#L161) | `count_pending_for_trigger(workspace)` walks the whole corpus + episodic + entity pages on every qualifying write, uses only a few keys. | ➡️ BACKLOG — the report's suggested fix ("pass `entity_filter`") is **ineffective**: verified the filter is applied post-`load_entry`, so it saves no I/O, and per-entity calls would multiply the walk. Real fix is a structural pending-count index. See [docs/backlog.md](../backlog.md) §2 + `d85886d`. |
 
-## P2 — Dead code (verified zero call sites, incl. dynamic dispatch)
+## P2 — Dead code — ✅ ALL RESOLVED (2026-06-01)
 
-| # | Location | Note |
-|---|----------|------|
-| 11 | [memory/vector_index.py:300](../../durin/memory/vector_index.py#L300) | `compose_embedding_text` classmethod — never called; docstring admits it exists only to satisfy a doc-promise. Callers use `_compose_entity_page_text`/`_embed_text` directly. Delete, or route the two callers through it. |
-| 12 | [memory/search.py:451](../../durin/memory/search.py#L451) | `_all_classes_iter()` — never referenced. Delete. |
-| 13 | [agent/tools/memory_search.py:752](../../durin/agent/tools/memory_search.py#L752) | `_vector_row_to_result` — orphaned; live path uses `_sectioned_to_result` (L682). Delete. |
-| 14 | [agent/tools/search.py:71](../../durin/agent/tools/search.py#L71) | `_pagination_note` — never called (companion `_paginate` is used). Delete or wire in. |
-| 15 | [providers/github_copilot_provider.py:57](../../durin/providers/github_copilot_provider.py#L57) | `get_github_copilot_login_status()` — zero refs across durin/tests/webui. Delete or wire into OAuth status. |
-| — | [memory/absorption.py:187](../../durin/memory/absorption.py#L187), [memory/graph.py:77](../../durin/memory/graph.py#L77), [agent/tools/memory_ingest.py:202](../../durin/agent/tools/memory_ingest.py#L202) | F841 unused locals (`archived_path`, `episodic_root`, `ingested_id`). Remove. |
+Each candidate investigated under maximum forensic lens (git `-S` history + introducing/orphaning commit, docs/ + archive/ refs, dynamic-dispatch check) **before** deleting — because in an iterated codebase, apparently-dead code may be intentionally staged or doc-backed. The lens earned its keep: #11 looked dead but was a live architecture-doc API promise (deleted *with* a doc rewrite + a discarded-decision note, not blindly). It also surfaced a latent order-dependent test-isolation bug, fixed in passing (`7c7082d`).
+
+| # | Location | Verdict + resolution |
+|---|----------|---------------------|
+| 11 | [memory/vector_index.py](../../durin/memory/vector_index.py) | **NOT plain dead** — backed a live doc 02 §4 "single source of truth" promise (audit F12), though never called once in its history. Deleted the dispatcher **+** rewrote doc 02 §4 to the real per-type-composer architecture **+** recorded the reversal in doc 08 §2.22 so F12 isn't re-litigated. `e97f3cc`. |
+| 12 | [memory/search.py](../../durin/memory/search.py) | Dead — trivial `return MEMORY_CLASSES` wrapper, redundant with direct `MEMORY_CLASSES` use (L172), never called. Deleted (+ now-unused `Iterable` import). `8b9d1cf`. |
+| 13 | [agent/tools/memory_search.py](../../durin/agent/tools/memory_search.py) | Dead — orphaned by the Phase 5 `run_search_pipeline` migration (`c820447` removed its caller, replaced by `_sectioned_to_result`). Doc refs historical only. Deleted. `d1adbf6`. |
+| 14 | [agent/tools/search.py](../../durin/agent/tools/search.py) | Dead — superseded from the initial commit by richer inline note-building (handles `output_mode` + `size_truncated`); wiring it in would be a worse fit. Deleted. `d1adbf6`. |
+| 15 | [providers/github_copilot_provider.py](../../durin/providers/github_copilot_provider.py) | Dead — redundant public wrapper over `_load_github_token()`; live auth calls it directly, no login-status surface exists, no `get_*_login_status` convention. Deleted. `d1adbf6`. |
+| F841 | absorption / graph / memory_ingest | 3 unused locals/param, each traced to confirm not-a-forgotten-usage: `archived_path` (side-effect call), `episodic_root` (flat walk via `walk_class`), `ingested_id` param (backlink via path). Removed. `9c0c784`. |
 
 ## P3 — Test gaps & hygiene
 
