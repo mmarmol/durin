@@ -226,3 +226,73 @@ class TestLookup:
         result = idx.lookup("marcelo")
         result.append("bogus")
         assert idx.lookup("marcelo") == ["person:marcelo"]
+
+
+# ---------------------------------------------------------------------------
+# thread safety (shared instance, doc 25 §2.C)
+# ---------------------------------------------------------------------------
+
+
+class TestThreadSafety:
+    """`aliases_cache.get_shared_alias_index` hands the *same* instance to
+    every thread. Search/recall threads call `lookup()`/`all_entities()`
+    (which iterate `self._map`) while a threshold-triggered Dream daemon
+    thread calls `refresh_for()`/`remove()` (which mutate it, and `build()`
+    does `self._map.clear()`). Without internal locking, a reader iterating
+    `_map` while a writer changes its size raises
+    ``RuntimeError: dictionary changed size during iteration``.
+    """
+
+    def test_concurrent_read_and_mutate_does_not_raise(
+        self, tmp_path: Path
+    ) -> None:
+        import threading
+
+        idx = AliasIndex(tmp_path)
+        for i in range(200):
+            idx.add(
+                EntityPage(
+                    type="person",
+                    name=f"Person {i}",
+                    aliases=[f"alias{i}", f"p{i}"],
+                ),
+                slug=f"slug{i}",
+            )
+
+        errors: list[BaseException] = []
+        stop = threading.Event()
+
+        def reader() -> None:
+            try:
+                while not stop.is_set():
+                    idx.all_entities()
+                    idx.lookup("alias5")
+            except BaseException as exc:  # noqa: BLE001 - capture for assert
+                errors.append(exc)
+
+        def writer() -> None:
+            try:
+                for i in range(3000):
+                    idx.refresh_for(
+                        EntityPage(
+                            type="person",
+                            name=f"Person {i}",
+                            aliases=[f"alias{i}", f"q{i}"],
+                        ),
+                        slug=f"slug{i}",
+                    )
+                    idx.remove(f"person:slug{i % 200}")
+            except BaseException as exc:  # noqa: BLE001 - capture for assert
+                errors.append(exc)
+
+        readers = [threading.Thread(target=reader) for _ in range(3)]
+        writers = [threading.Thread(target=writer) for _ in range(3)]
+        for t in readers + writers:
+            t.start()
+        for t in writers:
+            t.join()
+        stop.set()
+        for t in readers:
+            t.join()
+
+        assert not errors, f"thread-safety violation: {errors[:3]}"

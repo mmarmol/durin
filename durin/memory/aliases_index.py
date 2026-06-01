@@ -34,6 +34,7 @@ are intentionally de-indexed per doc 18 §3 + §10 R6.
 from __future__ import annotations
 
 import logging
+import threading
 from collections import defaultdict
 from pathlib import Path
 from typing import Iterable
@@ -61,6 +62,14 @@ class AliasIndex:
     def __init__(self, memory_root: Path) -> None:
         self.memory_root = Path(memory_root)
         self._map: dict[str, list[str]] = defaultdict(list)
+        # Doc 25 §2.C: a single instance is shared process-wide via
+        # `aliases_cache.get_shared_alias_index`. Read paths (search /
+        # recall threads calling `lookup`/`all_entities`) run concurrently
+        # with the threshold-triggered Dream daemon thread mutating the
+        # map via `refresh_for`/`remove`/`build`. Reentrant because
+        # `refresh_for` nests `remove` + `add`, and `build` calls
+        # `_populate`, each of which also takes the lock.
+        self._lock = threading.RLock()
 
     # ------------------------------------------------------------------
     # build (rebuild-only — no disk persistence)
@@ -80,7 +89,6 @@ class AliasIndex:
         aliases take precedence (richer info), the episodic-derived
         aliases are append-only and only add the bare slug.
         """
-        self._map.clear()
         # Walk memory_root/entities/ directly. We skip any path that
         # contains an `archive/` component anywhere in its parts — that
         # covers both the spec's top-level `memory/archive/entities/...`
@@ -88,6 +96,12 @@ class AliasIndex:
         # workspace root) and the legacy nested `<slug>/archive/...`
         # layout that may still exist in older workspaces.
         from durin.memory.paths import MEMORY_CLASSES
+
+        # Build into a fresh map and swap it in atomically under the lock
+        # so concurrent readers never observe the post-clear / partially
+        # repopulated state. The disk walk (sub-second but not free) runs
+        # outside the lock; only the final swap is guarded.
+        new_map: dict[str, list[str]] = defaultdict(list)
 
         entities_root = self.memory_root / "entities"
         if entities_root.is_dir():
@@ -106,7 +120,7 @@ class AliasIndex:
                     continue
                 slug = EntityPage.slug_from_path(md_file)
                 entity_ref = f"{page.type}:{slug}"
-                self._populate(page.identifying_strings(), entity_ref)
+                self._populate_into(new_map, page.identifying_strings(), entity_ref)
 
         # G3.e: derive minimal aliases from episodic / stable / corpus
         # / pending entries. We only index the *slug* portion of each
@@ -141,7 +155,10 @@ class AliasIndex:
                         continue
                     # _populate dedups: if entity_page already mapped
                     # this slug to this ref, it's a no-op.
-                    self._populate([slug], entity_ref)
+                    self._populate_into(new_map, [slug], entity_ref)
+
+        with self._lock:
+            self._map = new_map
 
     # ------------------------------------------------------------------
     # lookup (case-insensitive, returns LIST per doc 18 §7 + R6)
@@ -157,21 +174,29 @@ class AliasIndex:
         """
         if not isinstance(query, str):
             return []
-        return list(self._map.get(query.lower().strip(), []))
+        with self._lock:
+            return list(self._map.get(query.lower().strip(), []))
 
     def keys(self) -> Iterable[str]:
-        """Iterate alias keys (for debugging / dashboards)."""
-        return self._map.keys()
+        """Iterate alias keys (for debugging / dashboards).
+
+        Returns a snapshot ``list`` (not a live view) so the caller can
+        iterate without holding the lock while a writer mutates the map.
+        """
+        with self._lock:
+            return list(self._map.keys())
 
     def all_entities(self) -> set[str]:
         """Set of all entity refs known to the index."""
         out: set[str] = set()
-        for refs in self._map.values():
-            out.update(refs)
+        with self._lock:
+            for refs in self._map.values():
+                out.update(refs)
         return out
 
     def size(self) -> int:
-        return len(self._map)
+        with self._lock:
+            return len(self._map)
 
     # ------------------------------------------------------------------
     # incremental updates (for use when a page is saved/changed)
@@ -183,30 +208,48 @@ class AliasIndex:
         ``remove()`` first if doing a full refresh.
         """
         entity_ref = f"{page.type}:{slug}"
-        self._populate(page.identifying_strings(), entity_ref)
+        with self._lock:
+            self._populate_into(self._map, page.identifying_strings(), entity_ref)
 
     def remove(self, entity_ref: str) -> None:
         """Drop all alias entries pointing to *entity_ref*. O(N) in keys."""
-        to_delete: list[str] = []
-        for key, refs in self._map.items():
-            if entity_ref in refs:
-                refs[:] = [r for r in refs if r != entity_ref]
-                if not refs:
-                    to_delete.append(key)
-        for key in to_delete:
-            del self._map[key]
+        with self._lock:
+            to_delete: list[str] = []
+            for key, refs in self._map.items():
+                if entity_ref in refs:
+                    refs[:] = [r for r in refs if r != entity_ref]
+                    if not refs:
+                        to_delete.append(key)
+            for key in to_delete:
+                del self._map[key]
 
     def refresh_for(self, page: EntityPage, slug: str) -> None:
         """Atomic ``remove(entity_ref) + add(page)``. Convenient for saves."""
         entity_ref = f"{page.type}:{slug}"
-        self.remove(entity_ref)
-        self.add(page, slug)
+        # Reentrant lock makes the remove+add pair atomic w.r.t. readers:
+        # a concurrent `lookup` sees either the old or the new state,
+        # never the empty gap between remove and add.
+        with self._lock:
+            self.remove(entity_ref)
+            self.add(page, slug)
 
     # ------------------------------------------------------------------
     # internals
     # ------------------------------------------------------------------
 
-    def _populate(self, identifying_strings: list[str], entity_ref: str) -> None:
+    def _populate_into(
+        self,
+        target: dict[str, list[str]],
+        identifying_strings: list[str],
+        entity_ref: str,
+    ) -> None:
+        """Add ``entity_ref`` under every identifying string into *target*.
+
+        Lock-free: callers (``build`` on a thread-local map, ``add`` while
+        holding ``self._lock``) own the synchronization. Operating on an
+        explicit target lets ``build`` populate a fresh map off-lock and
+        swap it in atomically.
+        """
         seen: set[str] = set()
         for raw in identifying_strings:
             if not isinstance(raw, str):
@@ -215,6 +258,6 @@ class AliasIndex:
             if not key or key in seen:
                 continue
             seen.add(key)
-            existing = self._map[key]
+            existing = target[key]
             if entity_ref not in existing:
                 existing.append(entity_ref)
