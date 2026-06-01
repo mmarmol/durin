@@ -62,8 +62,27 @@ def split_frontmatter(text: str) -> tuple[dict[str, Any], str]:
 
 
 def save_entry(entry: MemoryEntry, path: Path) -> None:
-    """Write a memory entry to ``path`` as markdown + YAML frontmatter."""
+    """Write a memory entry to ``path`` as markdown + YAML frontmatter.
+
+    P9 Cambio 3 (2026-05-30): `source_refs` and `related` are
+    serialised as Obsidian wikilinks (`[[uri]]`) so Obsidian's graph
+    view + backlinks pane render automatically when the vault is
+    opened. The in-memory `MemoryEntry` keeps plain string refs; the
+    wikilink wrap lives at the storage boundary only. Other consumers
+    (memory_drill, sectioned_output, the agent's tool results) keep
+    seeing the plain URIs.
+
+    Verified safe for search: source_refs/related are NOT included in
+    vector embedding text (`_embed_text`) or FTS text (`_entry_text`),
+    so wikilink wrapping is purely cosmetic. See doc 20 §P9 for the
+    audit trail.
+    """
     payload = entry.model_dump(exclude={"body"}, mode="json")
+    # Wrap source_refs and related as Obsidian wikilinks on the way out.
+    if "source_refs" in payload:
+        payload["source_refs"] = [_to_wikilink(r) for r in payload["source_refs"]]
+    if "related" in payload:
+        payload["related"] = [_to_wikilink(r) for r in payload["related"]]
     yaml_block = yaml.safe_dump(
         payload,
         sort_keys=False,
@@ -82,10 +101,44 @@ def load_entry(path: Path) -> MemoryEntry:
 
     Raises :class:`FrontmatterError` for parse-level issues and
     :class:`pydantic.ValidationError` for schema violations.
+
+    Tolerant on the wikilink boundary: accepts both `[[uri]]` (new
+    P9 format) and plain `uri` (legacy) in `source_refs` / `related`.
+    Strips wikilink wrappers so the in-memory representation stays as
+    plain strings (matches what callers expect).
     """
     text = path.read_text(encoding="utf-8")
     fm, body = split_frontmatter(text)
+    # Strip wikilink wrappers so the in-memory MemoryEntry exposes
+    # plain URIs to the rest of the system.
+    for field in ("source_refs", "related"):
+        if field in fm and isinstance(fm[field], list):
+            fm[field] = [_from_wikilink(r) for r in fm[field]]
     try:
         return MemoryEntry(**fm, body=body)
     except ValidationError:
         raise
+
+
+def _to_wikilink(ref: str) -> str:
+    """Wrap a plain ref in Obsidian wikilink syntax (`[[ref]]`).
+    Idempotent: already-wikilinked refs pass through unchanged."""
+    if not isinstance(ref, str):
+        return ref
+    s = ref.strip()
+    if not s:
+        return s
+    if s.startswith("[[") and s.endswith("]]"):
+        return s
+    return f"[[{s}]]"
+
+
+def _from_wikilink(ref: str) -> str:
+    """Strip Obsidian wikilink wrapper, returning the plain ref.
+    Tolerant: plain (un-wrapped) strings pass through unchanged."""
+    if not isinstance(ref, str):
+        return ref
+    s = ref.strip()
+    if s.startswith("[[") and s.endswith("]]"):
+        return s[2:-2]
+    return s

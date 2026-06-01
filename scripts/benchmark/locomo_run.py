@@ -80,6 +80,7 @@ def _new_run_dir(model: str, *, no_memory: bool = False) -> Path:
 
 def _write_manifest(
     run_dir: Path, *, args: argparse.Namespace, subset_size: int,
+    subset: list[Any] | None = None,
 ) -> None:
     """Write the manifest BEFORE the first QA runs so even a crashed
     run is traceable. Includes commit SHA, timestamps, the exact CLI
@@ -93,16 +94,44 @@ def _write_manifest(
     except Exception:  # noqa: BLE001
         model_resolved = args.model
 
+    # H19 (2026-05-29): sampling block makes the bench reproducible —
+    # operator can grep ``manifest.json`` to know exactly which mode
+    # and parameters produced this run dir. ``sampling.target_total``
+    # is the requested N for proportional mode (subset_size may
+    # diverge by ±N_cats due to the largest-remainder allocation but
+    # is also recorded). ``sampling.per_category_breakdown`` records
+    # the actual per-category counts so a re-sampler can verify a
+    # historical run picked from the same distribution.
+    import collections as _collections
+    if args.proportional_total:
+        sampling_mode = "proportional"
+        sampling_target = args.proportional_total
+    elif args.qa_id:
+        sampling_mode = "single_qa"
+        sampling_target = 1
+    else:
+        sampling_mode = "stratified"
+        sampling_target = args.per_category
+    per_cat_actual = dict(_collections.Counter(
+        qa.category for qa in (subset or [])
+    ))
     manifest = {
         "started_at": datetime.now(timezone.utc).isoformat(),
         "commit": _git_commit_sha(),
         "args": vars(args),
         "subset_size": subset_size,
+        "sampling": {
+            "mode": sampling_mode,
+            "target": sampling_target,
+            "seed": args.seed,
+            "per_category_actual": per_cat_actual,
+        },
         "config_snapshot": {
             "model_resolved": model_resolved,
             "judge_model": args.judge_model,
             "data_path": args.data_path,
             "per_category": args.per_category,
+            "proportional_total": args.proportional_total,
             "seed": args.seed,
         },
         "durin_version": _durin_version(),
@@ -112,19 +141,35 @@ def _write_manifest(
     )
 
 
+# Audit H15 (2026-05-29): the "iteration cap" marker was REMOVED
+# from this list. Pre-H15 a trace whose got started with "I reached
+# the maximum number of tool call iterations" was classified as
+# infra — which queued it for a retry pass that always re-ran the
+# same agent against the same workspace, hitting the same cap. The
+# bench-100 v8 analysis confirmed: 4 of 5 iter-cap traces were
+# agents falling back to grep/list_dir because memory_search didn't
+# surface the answer. That's agent behaviour, not LLM provider
+# instability — it deserves to be counted as a real fail so the
+# next durin change has measurable signal to optimise against.
 _INFRA_GOT_MARKERS = (
     "Error calling LLM",
     "Connection error",
-    "I reached the maximum number of tool call iterations",
 )
 
 
 def _is_infra_fail(trace: Any, verdict: dict[str, Any]) -> bool:
-    """True when this fail is environmental (LLM provider error, timeout,
-    iteration cap), not a real agent/memory failure.
+    """True when this fail is environmental (LLM provider error or
+    timeout) rather than an agent/memory failure.
 
-    These should be retried once before being reported as fails — they
+    These get retried once before being reported as fails — they
     inflate the error rate of durin without being durin's fault.
+
+    Audit H15 (2026-05-29): iteration-cap fails are NO LONGER
+    treated as infra. They reflect the agent burning its iteration
+    budget without finding the answer — a real durin signal. Letta's
+    public LoCoMo benchmark uses a similar policy: only LLM-provider
+    transient errors are retried; iteration / budget exhaustion
+    counts as a fail.
     """
     if verdict.get("score", 0) >= 1.0:
         return False
@@ -148,6 +193,7 @@ async def _main_async(args: argparse.Namespace) -> int:
     from scripts.benchmark.locomo_dataset import (
         LoCoMoDatasetError,
         load_dataset,
+        proportional_subset,
         stratified_subset,
     )
     from scripts.benchmark.locomo_harness import run_qa
@@ -164,6 +210,17 @@ async def _main_async(args: argparse.Namespace) -> int:
         if not subset:
             print(f"[locomo_run] no QA matching {args.qa_id!r}", file=sys.stderr)
             return 2
+    elif args.proportional_total:
+        # H19 (2026-05-29): proportional sampling — N total allocated
+        # to each category by its share of the corpus. Use this for
+        # scores comparable to mem0 / Letta / MemMachine (all run
+        # against the full 1986 corpus with natural distribution,
+        # not stratified). Sample composition is deterministic per
+        # ``(--proportional-total, --seed)`` and persisted in the
+        # manifest under ``sampling`` for reproducibility audits.
+        subset = proportional_subset(
+            all_qas, total_n=args.proportional_total, seed=args.seed,
+        )
     else:
         try:
             subset = stratified_subset(
@@ -181,7 +238,9 @@ async def _main_async(args: argparse.Namespace) -> int:
             return 2
     else:
         run_dir = _new_run_dir(args.model, no_memory=args.no_memory)
-        _write_manifest(run_dir, args=args, subset_size=len(subset))
+        _write_manifest(
+            run_dir, args=args, subset_size=len(subset), subset=subset,
+        )
 
     traces_dir = run_dir / "traces"
     telemetry_dir = run_dir / "telemetry"
@@ -276,23 +335,59 @@ async def _main_async(args: argparse.Namespace) -> int:
             tag = " [infra-retry-queued]" if is_infra else ""
             print(f"  ✗ fail ({trace.duration_s:.1f}s, iter={trace.iterations}) — {short_reason}{tag}")
 
-    # B1: re-run infrastructure fails once (LLM connection error, max-iter,
-    # timeout). These are environmental, not durin/agent issues — counting
-    # them as fails inflates the apparent error rate of the memory layer.
+    # B1+H18: re-run infrastructure fails (LLM provider transient errors,
+    # exception, timeout). Two retry passes with a backoff between them so
+    # a sustained upstream outage has a chance to recover. Pre-H18 the
+    # bench used ONE retry pass; bench-100 v8 showed 9/15 infra-fails
+    # didn't recover, partly because the upstream window hadn't closed by
+    # the time the lone retry fired. The two-pass schedule (5s before
+    # pass 1, 30s before pass 2) is a compromise: short enough that a
+    # healthy provider sees no extra wall-clock, long enough to ride out
+    # an outage burst.
+    import asyncio as _asyncio_for_backoff
     if infra_fail_qas:
-        print(f"\n[locomo_run] re-running {len(infra_fail_qas)} infra-fail QAs (one retry)…")
         recovered = 0
-        for qa in infra_fail_qas:
-            print(f"  [retry] {qa.qa_id} [{qa.category}] running…", end="", flush=True)
-            trace, verdict_dict, is_infra = await _run_one(qa, prefix="[retry]")
-            if verdict_dict["score"] >= 1.0:
-                pass_count += 1
-                fail_count -= 1
-                recovered += 1
-                print(f"  ✓ recovered ({trace.duration_s:.1f}s)")
-            else:
-                short_reason = verdict_dict["reasoning"][:60]
-                print(f"  ✗ still fail — {short_reason}")
+        retry_delays_s = (5.0, 30.0)  # H18: 2 passes with widening backoff
+        remaining = list(infra_fail_qas)
+        for pass_idx, delay_s in enumerate(retry_delays_s, start=1):
+            if not remaining:
+                break
+            print(
+                f"\n[locomo_run] retry pass {pass_idx}/{len(retry_delays_s)} "
+                f"— {len(remaining)} QAs queued, sleeping {delay_s:.0f}s "
+                f"to let upstream recover…"
+            )
+            await _asyncio_for_backoff.sleep(delay_s)
+            next_remaining: list = []
+            for qa in remaining:
+                print(
+                    f"  [retry-{pass_idx}] {qa.qa_id} [{qa.category}] running…",
+                    end="", flush=True,
+                )
+                trace, verdict_dict, is_infra = await _run_one(
+                    qa, prefix=f"[retry-{pass_idx}]",
+                )
+                if verdict_dict["score"] >= 1.0:
+                    pass_count += 1
+                    fail_count -= 1
+                    recovered += 1
+                    print(f"  ✓ recovered ({trace.duration_s:.1f}s)")
+                elif is_infra:
+                    # Still infra-fail: queue for next pass (if any).
+                    next_remaining.append(qa)
+                    short_reason = verdict_dict["reasoning"][:60]
+                    print(
+                        f"  ⟳ still infra (will retry again) — {short_reason}"
+                    )
+                else:
+                    short_reason = verdict_dict["reasoning"][:60]
+                    print(f"  ✗ still fail — {short_reason}")
+            remaining = next_remaining
+        if remaining:
+            print(
+                f"[locomo_run] {len(remaining)} QAs remain infra-failed "
+                f"after {len(retry_delays_s)} retry passes — counted as fails"
+            )
         print(f"[locomo_run] recovered via retry: {recovered}/{len(infra_fail_qas)}")
 
     print(f"\n[locomo_run] done: {pass_count} pass · {fail_count} fail · {skip_count} skip")
@@ -320,6 +415,19 @@ def main() -> int:
         help="Stratified subset size per category (default 5 → 25 total).",
     )
     parser.add_argument(
+        "--proportional-total", type=int, default=None,
+        help=(
+            "H19 (2026-05-29): proportional sample mode — N total QAs "
+            "allocated to each category by its share of the corpus "
+            "(single_hop ~42%%, adversarial ~23%%, temporal ~16%%, "
+            "multi_hop ~14%%, open_domain ~5%% in locomo10). "
+            "Use this for scores comparable to mem0 / Letta / MemMachine "
+            "which all benchmark against the full corpus distribution, "
+            "not stratified. Overrides --per-category when set. "
+            "Reproducible per (--proportional-total, --seed)."
+        ),
+    )
+    parser.add_argument(
         "--seed", type=int, default=42,
         help="Random seed for stratified sampling (default 42 — change "
              "to evaluate variance, keep to compare across commits).",
@@ -333,12 +441,30 @@ def main() -> int:
         help="LLM-as-judge model. Same z.ai plan.",
     )
     parser.add_argument(
-        "--max-iterations", type=int, default=8,
-        help="Cap on agent iterations per QA (default 8).",
+        "--max-iterations", type=int, default=12,
+        help=(
+            "Cap on agent iterations per QA (default 12). Bumped from 8 "
+            "in audit H16 (2026-05-29) after bench-100 v8 analysis "
+            "showed iter-cap fails where the agent FOUND the answer at "
+            "iteration 9-13 but ran out of budget — e.g. conv-3-q32 "
+            "reached the correct ``Woodhaven`` URI on iteration 13. The "
+            "default tracks the LoCoMo paper §4.2's `max_tool_calls=10` "
+            "with margin for the multi-search + drill pattern memory-"
+            "augmented agents use."
+        ),
     )
     parser.add_argument(
-        "--timeout-s", type=float, default=90.0,
-        help="Hard per-QA wall-clock cap (default 90s).",
+        "--timeout-s", type=float, default=180.0,
+        help=(
+            "Hard per-QA wall-clock cap (default 180s, was 90s pre-H23). "
+            "Bench-100-prop conv-6-q34 hit a real failure mode: agent "
+            "completed 6 useful iterations, LLM wedged on iter 7, "
+            "provider's own retry budget (~63s with H8 backoff) "
+            "consumed the rest of the 90s window before producing a "
+            "final answer. The bigger cap absorbs one full provider "
+            "retry burst plus agent commit time without inflating "
+            "normal-case wall clock (passes still take 30-70s)."
+        ),
     )
     parser.add_argument(
         "--qa-id",

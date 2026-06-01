@@ -2,7 +2,6 @@ import type {
   ConnectionStatus,
   InboundEvent,
   Outbound,
-  OutboundImageGeneration,
   OutboundMedia,
   GoalStateWsPayload,
 } from "./types";
@@ -308,7 +307,6 @@ export class DurinClient {
     chatId: string,
     content: string,
     media?: OutboundMedia[],
-    options?: { imageGeneration?: OutboundImageGeneration },
   ): void {
     this.knownChats.add(chatId);
     const frame: Outbound = {
@@ -316,7 +314,6 @@ export class DurinClient {
       chat_id: chatId,
       content,
       ...(media && media.length > 0 ? { media } : {}),
-      ...(options?.imageGeneration ? { image_generation: options.imageGeneration } : {}),
       webui: true,
     };
     this.queueSend(frame);

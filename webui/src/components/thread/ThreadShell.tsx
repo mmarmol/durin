@@ -7,7 +7,7 @@ import { ThreadHeader } from "@/components/thread/ThreadHeader";
 import { ApiStatusBanner } from "@/components/thread/ApiStatusBanner";
 import { StreamErrorNotice } from "@/components/thread/StreamErrorNotice";
 import { ThreadViewport } from "@/components/thread/ThreadViewport";
-import { useDurinStream, type SendImage, type SendOptions } from "@/hooks/useDurinStream";
+import { useDurinStream, type SendImage } from "@/hooks/useDurinStream";
 import { useSessionHistory } from "@/hooks/useSessions";
 import { listSlashCommands } from "@/lib/api";
 import type { ChatSummary, SlashCommand, UIMessage } from "@/lib/types";
@@ -43,7 +43,6 @@ function toModelBadgeLabel(modelName: string | null): string | null {
 interface PendingFirstMessage {
   content: string;
   images?: SendImage[];
-  options?: SendOptions;
 }
 
 export function ThreadShell({
@@ -69,7 +68,6 @@ export function ThreadShell({
   const { client, modelName, token } = useClient();
   const [booting, setBooting] = useState(false);
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>([]);
-  const [heroImageMode, setHeroImageMode] = useState(false);
   const [scrollToBottomSignal, setScrollToBottomSignal] = useState(0);
   const pendingFirstRef = useRef<PendingFirstMessage | null>(null);
   const messageCacheRef = useRef<Map<string, UIMessage[]>>(new Map());
@@ -201,7 +199,7 @@ export function ThreadShell({
     if (!pending) return;
     pendingFirstRef.current = null;
     setScrollToBottomSignal((value) => value + 1);
-    send(pending.content, pending.images, pending.options);
+    send(pending.content, pending.images);
     setBooting(false);
   }, [chatId, send]);
 
@@ -221,10 +219,10 @@ export function ThreadShell({
   }, [token]);
 
   const handleWelcomeSend = useCallback(
-    async (content: string, images?: SendImage[], options?: SendOptions) => {
+    async (content: string, images?: SendImage[]) => {
       if (booting) return;
       setBooting(true);
-      pendingFirstRef.current = { content, images, options };
+      pendingFirstRef.current = { content, images };
       const newId = await onCreateChat?.();
       if (!newId) {
         pendingFirstRef.current = null;
@@ -235,9 +233,9 @@ export function ThreadShell({
   );
 
   const handleThreadSend = useCallback(
-    (content: string, images?: SendImage[], options?: SendOptions) => {
+    (content: string, images?: SendImage[]) => {
       setScrollToBottomSignal((value) => value + 1);
-      send(content, images, options);
+      send(content, images);
     },
     [send],
   );
@@ -285,8 +283,6 @@ export function ThreadShell({
           modelLabel={toModelBadgeLabel(modelName)}
           variant={showHeroComposer ? "hero" : "thread"}
           slashCommands={slashCommands}
-          imageMode={showHeroComposer ? heroImageMode : undefined}
-          onImageModeChange={showHeroComposer ? setHeroImageMode : undefined}
           onStop={stop}
           runStartedAt={runStartedAt}
           goalState={goalState}
@@ -304,8 +300,6 @@ export function ThreadShell({
           modelLabel={toModelBadgeLabel(modelName)}
           variant="hero"
           slashCommands={slashCommands}
-          imageMode={heroImageMode}
-          onImageModeChange={setHeroImageMode}
           runStartedAt={runStartedAt}
           goalState={goalState}
         />

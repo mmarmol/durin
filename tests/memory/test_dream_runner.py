@@ -31,24 +31,25 @@ from durin.memory.store import store_memory
 
 
 def _make_stub_llm(slug: str = "marcelo"):
-    """Return an LLM stub that produces a well-formed dream response."""
+    """Return a v2 LLM stub for Dream tests."""
+    import json as _json
+    ops = [
+        {"op": "add", "path": "/aliases/-", "value": slug,
+         "provenance": "episodic/e1.md"},
+        {"op": "add", "path": "/attributes/note", "value": "observed",
+         "provenance": "episodic/e1.md"},
+    ]
     response = (
-        "===PAGE===\n"
-        "---\n"
-        "type: person\n"
-        f"name: {slug.title()}\n"
-        f"aliases: [{slug}]\n"
-        "dream_processed_through: 2026-05-23T00:00:00\n"
-        "---\n"
-        "\n"
-        f"# {slug.title()}\n"
-        "\n## Current State\nObserved.\n"
-        "===COMMIT===\n"
-        f"Consolidate person:{slug} (rev 1)\n"
-        "\nInitial pass.\n"
-        f"\nSources: e1\nEntities-touched: person:{slug}\n"
-        "Cursor-after: 2026-05-23T00:00:00\n"
-        "===END===\n"
+        "===PATCH===\n"
+        + _json.dumps(ops, indent=2) + "\n"
+        + "===BODY_DELTA===\n"
+        + "Observed.\n"
+        + "===COMMIT===\n"
+        + f"Consolidate person:{slug} (rev 1)\n"
+        + "\nInitial pass.\n"
+        + f"\nSources: episodic/e1.md\nEntities-touched: person:{slug}\n"
+        + "Cursor-after: 2026-05-23T00:00:00\n"
+        + "===END===\n"
     )
 
     def stub(prompt, *, model):
@@ -58,6 +59,7 @@ def _make_stub_llm(slug: str = "marcelo"):
 
 
 def _seed_pending_entry(workspace: Path, slug: str = "marcelo") -> None:
+    # `agent_created` scope is opened by tests/conftest.py (autouse).
     store_memory(
         workspace, content=f"{slug} observation",
         entities=[f"person:{slug}"],
@@ -333,3 +335,101 @@ def test_telemetry_no_start_event_when_no_pending(
     assert "memory.dream.start" not in types
     assert "memory.dream.end" not in types
     assert "memory.dream.skipped" in types
+
+
+# ---------------------------------------------------------------------------
+# drain loop with time budget (fix 2026-05-30 for silent data loss)
+# ---------------------------------------------------------------------------
+
+
+def _seed_many_pending(workspace: Path, n: int, slug: str = "marcelo") -> None:
+    """Seed *n* episodic entries for one entity with distinct timestamps."""
+    base = datetime.date(2026, 1, 1)
+    for i in range(n):
+        store_memory(
+            workspace,
+            content=f"observation {i}",
+            entities=[f"person:{slug}"],
+            valid_from=base + datetime.timedelta(days=i),
+        )
+
+
+def test_runner_drains_entity_in_multiple_batches_under_budget(
+    tmp_path: Path,
+) -> None:
+    """When an entity has > MAX_ENTRIES_PER_CALL pending entries, the
+    runner must re-invoke the consolidator until drained (or budget
+    exhausted). Pre-fix bug: single call drained 50 and the cursor jump
+    silently dropped the remainder.
+    """
+    _seed_many_pending(tmp_path, n=75)
+
+    call_count = {"n": 0}
+    stub = _make_stub_llm()
+
+    def counting_stub(prompt, *, model):
+        call_count["n"] += 1
+        return stub(prompt, model=model)
+
+    runner = DreamRunner(
+        workspace=tmp_path,
+        llm_invoke=counting_stub,
+        min_seconds_between_runs=0,
+        max_seconds_per_run=3600,  # plenty of budget
+    )
+    result = runner.run(trigger="cron_daily")
+    assert result.ran
+    # 75 entries / 50 per batch = 2 batches.
+    assert call_count["n"] == 2, (
+        f"expected 2 batches to drain 75 entries, got {call_count['n']}"
+    )
+    # Post-run discovery: nothing left.
+    from durin.cli.memory_cmd import _discover_pending_consolidations
+    pending = _discover_pending_consolidations(tmp_path / "memory")
+    assert pending == {}, f"residual pending after drain: {pending}"
+
+
+def test_runner_stops_at_budget_and_emits_budget_exhausted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With a tight budget, the runner processes one batch, observes
+    elapsed > budget, and stops — leaving the remainder pending for the
+    next pass. Must emit `memory.dream.budget_exhausted` telemetry so
+    the operator knows there is leftover work.
+    """
+    _seed_many_pending(tmp_path, n=75)
+
+    events: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        "durin.memory.dream_runner.emit_tool_event",
+        lambda t, d: events.append((t, d)),
+    )
+
+    runner = DreamRunner(
+        workspace=tmp_path,
+        llm_invoke=_make_stub_llm(),
+        min_seconds_between_runs=0,
+        max_seconds_per_run=0,  # zero budget → exit after first batch
+    )
+    runner.run(trigger="cron_daily")
+
+    # First batch ran; budget_exhausted fired; second batch did NOT.
+    types = [t for t, _ in events]
+    assert "memory.dream.budget_exhausted" in types, (
+        f"missing budget_exhausted event in {types}"
+    )
+    payload = next(d for t, d in events if t == "memory.dream.budget_exhausted")
+    assert payload["trigger"] == "cron_daily"
+    assert payload["entity_ref"] == "person:marcelo"
+    # 25 entries remain pending — must be reported so operators see
+    # what got dropped from this pass.
+    assert payload["pending_remaining"] == 25, (
+        f"expected 25 remaining, payload={payload}"
+    )
+
+    # Post-run discovery: 25 entries still pending (cursor advanced
+    # past the first 50, but the rest are still discoverable).
+    from durin.cli.memory_cmd import _discover_pending_consolidations
+    pending = _discover_pending_consolidations(tmp_path / "memory")
+    assert "person:marcelo" in pending
+    assert len(pending["person:marcelo"]) == 25

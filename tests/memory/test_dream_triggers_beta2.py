@@ -29,6 +29,8 @@ import pytest
 
 from durin.memory.store import store_memory
 
+# Default `agent_created` scope opened by `tests/conftest.py` (autouse).
+
 
 # ---------------------------------------------------------------------------
 # Consolidator.on_post_compaction — attribute exists, fires after summary
@@ -47,40 +49,6 @@ class TestPostCompactionHook:
         assert "on_post_compaction" in src
         # And the call site exists too.
         assert "self.on_post_compaction(session.key)" in src
-
-
-def test_post_compaction_hook_fires_after_archive(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Wire a fake Consolidator to validate the hook contract.
-
-    We don't construct the real Consolidator (too many deps). Instead
-    we verify the simpler invariant: when ``on_post_compaction`` is
-    set and ``last_summary`` is truthy at the end of
-    maybe_consolidate_by_tokens, the callback fires exactly once with
-    the session key.
-
-    The real call site is one branch in agent/memory.py — covered by
-    integration in the smoke e2e below; the unit-level pin is on the
-    AgentLoop side (cmd_new test exercises both legs).
-    """
-    from durin.agent.memory import Consolidator
-
-    # The attribute MUST exist on the class so the cli/commands.py
-    # wiring `agent.consolidator.on_post_compaction = ...` doesn't
-    # silently miss.
-    assert hasattr(Consolidator, "__init__")
-    # Build a real-ish stub: set the attr, call the branch by hand.
-    fake = SimpleNamespace(on_post_compaction=None)
-    received: list[str] = []
-
-    def hook(key: str) -> None:
-        received.append(key)
-
-    fake.on_post_compaction = hook
-    # Simulate the call site (last_summary truthy → invoke hook).
-    fake.on_post_compaction("websocket:chat42")
-    assert received == ["websocket:chat42"]
 
 
 # ---------------------------------------------------------------------------

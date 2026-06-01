@@ -1,13 +1,6 @@
 """Tests for the Mistral provider registration."""
 
-from durin.config.schema import ProvidersConfig
 from durin.providers.registry import PROVIDERS
-
-
-def test_mistral_config_field_exists():
-    """ProvidersConfig should have a mistral field."""
-    config = ProvidersConfig()
-    assert hasattr(config, "mistral")
 
 
 def test_mistral_provider_in_registry():

@@ -38,7 +38,6 @@ from durin.agent.tools.path_utils import resolve_workspace_path
 from durin.agent.tools.schema import StringSchema, tool_parameters_schema
 from durin.telemetry.logger import current_telemetry
 
-
 _MAX_RESPONSE_TOKENS = 2048
 _DEFAULT_QUESTION = "Transcribe and describe the audio in detail."
 _MAX_AUDIO_BYTES = 25 * 1024 * 1024  # 25 MB — matches typical provider limits

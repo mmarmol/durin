@@ -31,8 +31,7 @@ from durin.config.paths import get_workspace_path
         media=ArraySchema(
             StringSchema(""),
             description=(
-                "Optional list of existing file paths to attach for proactive or cross-channel delivery. "
-                "Do not use this to resend generate_image outputs in the current chat."
+                "Optional list of existing file paths to attach for proactive or cross-channel delivery."
             ),
         ),
         buttons=ArraySchema(
@@ -69,9 +68,9 @@ class MessageTool(Tool, ContextAware):
             "message_default_message_id",
             default=default_message_id,
         )
-        self._default_metadata: ContextVar[dict[str, Any]] = ContextVar(
+        self._default_metadata: ContextVar[dict[str, Any] | None] = ContextVar(
             "message_default_metadata",
-            default={},
+            default=None,
         )
         self._sent_in_turn_var: ContextVar[bool] = ContextVar("message_sent_in_turn", default=False)
         self._turn_delivered_media_var: ContextVar[tuple[str, ...]] = ContextVar(
@@ -140,8 +139,6 @@ class MessageTool(Tool, ContextAware):
             "Do not use this for the normal reply in the current chat: answer naturally instead. "
             "If channel/chat_id would target the current runtime conversation, do not call this tool "
             "unless the user explicitly asked you to proactively send an existing file attachment. "
-            "When generate_image creates images in the current chat, the final assistant reply "
-            "automatically attaches them; do not call message just to announce or resend them. "
             "For proactive attachment delivery, use the 'media' parameter with file paths. "
             "Do NOT use read_file to send files — that only reads content for your own analysis."
         )
@@ -221,7 +218,7 @@ class MessageTool(Tool, ContextAware):
             except (OSError, PermissionError, ValueError) as e:
                 return f"Error: media path is not allowed: {str(e)}"
 
-        metadata = dict(self._default_metadata.get()) if same_target else {}
+        metadata = dict(self._default_metadata.get() or {}) if same_target else {}
         if message_id:
             metadata["message_id"] = message_id
         if self._record_channel_delivery_var.get() or media:

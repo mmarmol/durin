@@ -7,7 +7,6 @@ import type { StreamError } from "@/lib/durin-client";
 import type {
   ApiRetryStatus,
   InboundEvent,
-  OutboundImageGeneration,
   OutboundMedia,
   GoalStateWsPayload,
   UIImage,
@@ -200,10 +199,6 @@ export interface SendImage {
   preview: UIImage;
 }
 
-export interface SendOptions {
-  imageGeneration?: OutboundImageGeneration;
-}
-
 export function useDurinStream(
   chatId: string | null,
   initialMessages: UIMessage[] = [],
@@ -216,7 +211,7 @@ export function useDurinStream(
   runStartedAt: number | null;
   /** Latest sustained goal for this ``chatId`` (``goal_state`` WS events). */
   goalState: GoalStateWsPayload | undefined;
-  send: (content: string, images?: SendImage[], options?: SendOptions) => void;
+  send: (content: string, images?: SendImage[]) => void;
   stop: () => void;
   setMessages: React.Dispatch<React.SetStateAction<UIMessage[]>>;
   /** Latest transport-level fault raised since the last ``dismissStreamError``.
@@ -545,7 +540,7 @@ export function useDurinStream(
   }, [chatId, client, onTurnEnd]);
 
   const send = useCallback(
-    (content: string, images?: SendImage[], options?: SendOptions) => {
+    (content: string, images?: SendImage[]) => {
       if (!chatId) return;
       const hasImages = !!images && images.length > 0;
       // Text is optional when images are attached — the agent will still see
@@ -567,11 +562,7 @@ export function useDurinStream(
       // right away, before the first delta arrives from the server.
       setIsStreaming(true);
       const wireMedia = hasImages ? images!.map((i) => i.media) : undefined;
-      if (options) {
-        client.sendMessage(chatId, content, wireMedia, options);
-      } else {
-        client.sendMessage(chatId, content, wireMedia);
-      }
+      client.sendMessage(chatId, content, wireMedia);
     },
     [chatId, client],
   );

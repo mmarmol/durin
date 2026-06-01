@@ -5,7 +5,7 @@ git history of its content without depending on the system ``git``
 binary. Used by memory (entity pages) and conceptually applicable to
 skills, future X — any subsystem with versionable artifacts.
 
-Design — see ``docs/18_entity_centric_plan.md`` §5:
+Design — see ``docs/archive/35_entity_centric_plan.md`` §5:
 
 - ``memory/.git/`` (or ``skills/.git/`` etc.) — strictly **local**, no
   remote.  durin never configures sync; that's user opt-in outside our
@@ -25,12 +25,10 @@ Design — see ``docs/18_entity_centric_plan.md`` §5:
 
 from __future__ import annotations
 
-import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable
 
 from dulwich import porcelain
 from dulwich.errors import NotGitRepository

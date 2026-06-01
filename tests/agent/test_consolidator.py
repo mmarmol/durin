@@ -164,7 +164,14 @@ class TestConsolidatorTokenBudget:
         assert archived_chunk[0]["content"] == "u0"
         assert archived_chunk[-1]["content"] == "a6"
         assert session.last_consolidated == 14
-        assert session.metadata["_last_summary"]["text"] == "old conversation summary"
+        # A10: summary now lives in `memory/session_summary/<key>.md`,
+        # NOT in `session.metadata["_last_summary"]`. Read via the
+        # canonical store helper.
+        from durin.memory.session_summary_store import get_session_summary
+        text, _ = get_session_summary(
+            consolidator.store.workspace, session.key,
+        )
+        assert text == "old conversation summary"
         consolidator.sessions.save.assert_called()
 
     async def test_replay_window_overflow_matches_history_tool_boundary(

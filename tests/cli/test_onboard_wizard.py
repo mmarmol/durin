@@ -532,8 +532,19 @@ def test_wizard_result_carries_availability_matrix() -> None:
     memory_line = next(
         ln for ln in result.availability_lines if "memory" in ln.lower()
     )
-    assert memory_line.startswith("✗")
-    assert "durin onboard memory" in memory_line
+    # Vector memory is ON by default now (durin is a memory product); a user
+    # who clicks straight through gets it available, not the old ✗ + hint.
+    assert memory_line.startswith("✓")
+
+
+def test_wizard_default_on_reconciles_memory_extra() -> None:
+    """Clicking straight through (no memory submenu) still queues the
+    `[memory]` extra to install, because memory is enabled by default."""
+    answers = ["Zhipu AI", "sk-x", "glm-5.1", _FINISH]
+    q = _ScriptedQuestionary(answers)
+    result = run_wizard(Config(), q=q)
+    assert result.config.memory.enabled is True
+    assert "memory" in result.extras_to_install
 
 
 def test_availability_matrix_shows_vision_audio_rows() -> None:

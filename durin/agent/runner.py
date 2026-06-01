@@ -30,6 +30,7 @@ from durin.utils.helpers import (
     strip_think,
     truncate_text,
 )
+from durin.utils.history_image_prune import prune_processed_history_images
 from durin.utils.prompt_templates import render_template
 from durin.utils.runtime import (
     EMPTY_FINAL_RESPONSE_MESSAGE,
@@ -41,7 +42,6 @@ from durin.utils.runtime import (
     repeated_external_lookup_error,
     repeated_workspace_violation_error,
 )
-from durin.utils.history_image_prune import prune_processed_history_images
 from durin.utils.tool_result_validation import validate_tool_result_blocks
 
 _DEFAULT_ERROR_MESSAGE = "Sorry, I encountered an error calling the AI model."
@@ -235,7 +235,7 @@ class AgentRunSpec:
     # runner calls this each iteration to obtain the active mode and filters
     # the tool definitions sent to the LLM. Returns None → no filtering
     # (equivalent to BUILD_MODE = full access). See durin/agent/agent_mode.py
-    # and docs/07_external_agents_review.md §L3.
+    # and docs/archive/34_external_agents_review.md §L3.
     mode_provider: Any | None = None
     # Inspired by pi's ``transformContext``: an optional callback that
     # receives the full message list right before it is sent to the
@@ -750,7 +750,9 @@ class AgentRunner:
                     ):
                         try:
                             from durin.utils.post_compaction_guard import (
-                                Observation, hash_args, hash_result,
+                                Observation,
+                                hash_args,
+                                hash_result,
                             )
                             obs = Observation(
                                 tool_name=tool_call.name,

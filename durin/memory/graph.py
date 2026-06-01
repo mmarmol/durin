@@ -74,36 +74,34 @@ def build_memory_graph(
     workspace = Path(workspace)
     memory_root = workspace / "memory"
     entities_root = memory_root / "entities"
-    episodic_root = memory_root / "episodic"
     sessions_root = workspace / "sessions"
 
-    # 1. Walk entity pages (skip archived).
+    # 1. Walk entity pages — `walk_class` excludes the top-level
+    # archive folder by default (Phase 0 deliverables 1 + 5).
+    from durin.memory.paths import walk_class
+
     nodes_by_ref: dict[str, dict[str, Any]] = {}
-    if entities_root.is_dir():
-        for type_dir in sorted(entities_root.iterdir()):
-            if not type_dir.is_dir():
-                continue
-            type_name = type_dir.name
-            for page_path in sorted(type_dir.glob("*.md")):
-                # Skip pages under <slug>/archive/<absorbed>.md — those
-                # are intentionally de-indexed by EntityAbsorption.
-                if "archive" in page_path.relative_to(entities_root).parts:
-                    continue
-                try:
-                    page = EntityPage.from_file(page_path)
-                except Exception:  # noqa: BLE001
-                    continue
-                if page is None:
-                    continue
-                slug = page_path.stem
-                ref = f"{type_name}:{slug}"
-                nodes_by_ref[ref] = {
-                    "id": ref,
-                    "type": type_name,
-                    "name": page.name or slug,
-                    "aliases": list(page.aliases or []),
-                    "weight": 0,  # filled from episodic count below
-                }
+    for page_path in walk_class(workspace, "entities"):
+        # `entities/<type>/<slug>.md` — derive `<type>` from the path.
+        rel = page_path.relative_to(entities_root)
+        if len(rel.parts) < 2:
+            continue
+        type_name = rel.parts[0]
+        try:
+            page = EntityPage.from_file(page_path)
+        except Exception:  # noqa: BLE001
+            continue
+        if page is None:
+            continue
+        slug = page_path.stem
+        ref = f"{type_name}:{slug}"
+        nodes_by_ref[ref] = {
+            "id": ref,
+            "type": type_name,
+            "name": page.name or slug,
+            "aliases": list(page.aliases or []),
+            "weight": 0,  # filled from episodic count below
+        }
 
     # 2. Walk episodic entries: accumulate per-ref entry count + pairwise
     # co-occurrence counts. Skip refs not present as an entity page (the
@@ -120,34 +118,33 @@ def build_memory_graph(
     session_entity_evidence: dict[str, dict[str, int]] = defaultdict(
         lambda: defaultdict(int),
     )
-    if episodic_root.is_dir():
-        for entry_path in episodic_root.glob("*.md"):
-            try:
-                entry = load_entry(entry_path)
-            except Exception:  # noqa: BLE001
-                continue
-            refs = sorted({r for r in (entry.entities or []) if ":" in r})
-            for ref in refs:
-                node = nodes_by_ref.get(ref)
-                if node is not None:
-                    node["weight"] += 1
-                else:
-                    phantom_refs[ref] += 1
-            # Co-occurrence: every pair within this entry gets +1.
-            for a, b in combinations(refs, 2):
-                key = (a, b) if a < b else (b, a)
-                edge_counts[key] += 1
-            # Session evidence: parse source_refs for sessions/<key>.md
-            # (doc 18 §5.3 link format). Tracks per-(session,entity)
-            # co-mentions so the resulting edge weight is meaningful.
-            if include_sessions:
-                for src in (entry.source_refs or []):
-                    m = _SESSION_REF_RE.search(str(src))
-                    if m is None:
-                        continue
-                    sess_ref = f"session:{m.group(1)}"
-                    for ref in refs:
-                        session_entity_evidence[sess_ref][ref] += 1
+    for entry_path in walk_class(workspace, "episodic"):
+        try:
+            entry = load_entry(entry_path)
+        except Exception:  # noqa: BLE001
+            continue
+        refs = sorted({r for r in (entry.entities or []) if ":" in r})
+        for ref in refs:
+            node = nodes_by_ref.get(ref)
+            if node is not None:
+                node["weight"] += 1
+            else:
+                phantom_refs[ref] += 1
+        # Co-occurrence: every pair within this entry gets +1.
+        for a, b in combinations(refs, 2):
+            key = (a, b) if a < b else (b, a)
+            edge_counts[key] += 1
+        # Session evidence: parse source_refs for sessions/<key>.md
+        # (doc 18 §5.3 link format). Tracks per-(session,entity)
+        # co-mentions so the resulting edge weight is meaningful.
+        if include_sessions:
+            for src in (entry.source_refs or []):
+                m = _SESSION_REF_RE.search(str(src))
+                if m is None:
+                    continue
+                sess_ref = f"session:{m.group(1)}"
+                for ref in refs:
+                    session_entity_evidence[sess_ref][ref] += 1
 
     # 3. Phantom nodes — entity refs tagged in entries but with no
     # consolidated page. Render them with a flag so the frontend can

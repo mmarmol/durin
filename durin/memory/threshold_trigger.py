@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:  # pragma: no cover
     from durin.memory.vector_index import VectorIndex
@@ -84,22 +84,21 @@ def count_pending_for_trigger(
     # 2) Corpus entries tagged with the entity. Cursor doesn't apply
     # to corpus (no consolidation pass over it). Best-effort walk; a
     # malformed file is skipped, not propagated.
-    corpus_dir = workspace / "memory" / "corpus"
-    if corpus_dir.is_dir():
-        try:
-            from durin.memory.storage import load_entry
+    try:
+        from durin.memory.paths import walk_class
+        from durin.memory.storage import load_entry
 
-            for path in corpus_dir.glob("*.md"):
-                try:
-                    entry = load_entry(path)
-                except Exception:
+        for path in walk_class(workspace, "corpus"):
+            try:
+                entry = load_entry(path)
+            except Exception:
+                continue
+            for ref in entry.entities or ():
+                if entity_filter is not None and ref != entity_filter:
                     continue
-                for ref in entry.entities or ():
-                    if entity_filter is not None and ref != entity_filter:
-                        continue
-                    counts[ref] = counts.get(ref, 0) + 1
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("threshold trigger: walk corpus failed: %s", exc)
+                counts[ref] = counts.get(ref, 0) + 1
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("threshold trigger: walk corpus failed: %s", exc)
 
     return counts
 
@@ -111,6 +110,7 @@ def maybe_dispatch_threshold_dream(
     dream_config: Any | None,
     vector_index: Optional["VectorIndex"],
     source_trigger: str,
+    app_config: Any | None = None,
 ) -> None:
     """Per-entity threshold check + background dispatch.
 
@@ -144,6 +144,11 @@ def maybe_dispatch_threshold_dream(
         Telemetry label written into ``memory.dream.start.trigger``.
         Use ``"threshold"`` for the legacy store-path (backward compat),
         ``"post_ingest_threshold"`` for the new ingest-path.
+    app_config
+        Optional full ``DurinConfig``. When provided, the dream's model
+        is resolved via :func:`durin.memory.model_resolve.resolve_memory_model`
+        (which honours ``aux_models.memory``). When ``None``, the legacy
+        ``dream_config.model_override`` is used directly.
     """
     if not entities:
         return
@@ -164,8 +169,13 @@ def maybe_dispatch_threshold_dream(
     import threading
 
     from durin.memory.dream_runner import DreamRunner
+    from durin.memory.model_resolve import resolve_memory_model
 
     auto_cfg = getattr(dream_config, "auto_absorb", None)
+    if app_config is not None:
+        resolved_model = resolve_memory_model(app_config)
+    else:
+        resolved_model = getattr(dream_config, "model_override", None)
     for ref in triggered_for:
         def _run(entity_ref: str = ref) -> None:
             try:
@@ -174,7 +184,10 @@ def maybe_dispatch_threshold_dream(
                     min_seconds_between_runs=int(
                         getattr(dream_config, "min_seconds_between_runs", 300),
                     ),
-                    model=getattr(dream_config, "model_override", None),
+                    max_seconds_per_run=int(
+                        getattr(dream_config, "max_seconds_per_run", 600),
+                    ),
+                    model=resolved_model,
                     vector_index=vector_index,
                     auto_absorb_enabled=bool(
                         getattr(auto_cfg, "enabled", False),

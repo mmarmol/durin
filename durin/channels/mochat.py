@@ -11,13 +11,13 @@ from datetime import datetime
 from typing import Any
 
 import httpx
+from pydantic import Field
 
 from durin.bus.events import OutboundMessage
 from durin.bus.queue import MessageBus
 from durin.channels.base import BaseChannel
 from durin.config.paths import get_runtime_subdir
 from durin.config.schema import Base
-from pydantic import Field
 
 try:
     import socketio

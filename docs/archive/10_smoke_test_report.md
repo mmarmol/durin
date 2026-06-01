@@ -76,7 +76,7 @@ msg 1 [user]: Read the file SOUL.md…
 msg 2 [assistant] tool_calls=3 usage_prompt_tokens=10295:
 msg 3 [tool]: 1| # Soul  2| …                       (read_file result)
 msg 4 [tool]: No matches found for pattern 'identity' in /Users/marcelo/…
-msg 5 [tool]: 01_roadmap.md\n02_bitacora.md\n…       (list_dir result)
+msg 5 [tool]: roadmap.md\nbitacora.md\n…       (list_dir result)
 msg 6 [assistant] usage_prompt_tokens=10833:        (final answer)
 ```
 

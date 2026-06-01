@@ -174,3 +174,126 @@ def test_load_entry_schema_violation_raises(tmp_path: Path) -> None:
     path.write_text("---\nid: mem-001\n---\n\nbody\n", encoding="utf-8")
     with pytest.raises(ValidationError):
         load_entry(path)
+
+
+# ---------------------------------------------------------------------------
+# P9 Cambio 3: wikilink (Obsidian-style) serialization of source_refs / related
+# ---------------------------------------------------------------------------
+
+
+def test_save_entry_serializes_refs_as_wikilinks(tmp_path: Path) -> None:
+    """source_refs and related must be written as Obsidian wikilinks
+    on disk so Obsidian's graph view + backlinks pane render."""
+    path = tmp_path / "entry.md"
+    entry = MemoryEntry(
+        id="abc123",
+        headline="h",
+        source_refs=["sessions/conv-1_s1.md", "memory/episodic/xyz789"],
+        related=["memory/entities/person/marcelo"],
+        body="body",
+    )
+    save_entry(entry, path)
+    text = path.read_text(encoding="utf-8")
+    assert "[[sessions/conv-1_s1.md]]" in text
+    assert "[[memory/episodic/xyz789]]" in text
+    assert "[[memory/entities/person/marcelo]]" in text
+
+
+def test_load_entry_strips_wikilinks_to_plain_refs(tmp_path: Path) -> None:
+    """In-memory representation stays as plain strings; the wikilink
+    wrap lives at the disk boundary only."""
+    path = tmp_path / "entry.md"
+    path.write_text(
+        "---\n"
+        "id: abc\n"
+        "headline: h\n"
+        "source_refs:\n"
+        "  - '[[sessions/conv-1_s1.md]]'\n"
+        "  - '[[memory/episodic/xyz]]'\n"
+        "related:\n"
+        "  - '[[memory/entities/person/marcelo]]'\n"
+        "---\n\nbody\n",
+        encoding="utf-8",
+    )
+    entry = load_entry(path)
+    assert entry.source_refs == [
+        "sessions/conv-1_s1.md", "memory/episodic/xyz",
+    ]
+    assert entry.related == ["memory/entities/person/marcelo"]
+
+
+def test_load_entry_tolerant_of_plain_refs_backward_compat(
+    tmp_path: Path,
+) -> None:
+    """Workspaces written before P9 Cambio 3 have plain refs. Loader
+    must accept both formats so we don't need a migration step."""
+    path = tmp_path / "entry.md"
+    path.write_text(
+        "---\n"
+        "id: abc\n"
+        "headline: h\n"
+        "source_refs:\n"
+        "  - sessions/conv-1_s1.md\n"
+        "  - memory/episodic/xyz\n"
+        "---\n\nbody\n",
+        encoding="utf-8",
+    )
+    entry = load_entry(path)
+    assert entry.source_refs == [
+        "sessions/conv-1_s1.md", "memory/episodic/xyz",
+    ]
+
+
+def test_load_entry_tolerant_of_mixed_format(tmp_path: Path) -> None:
+    """Hand-edited entry with one ref wrapped, one plain — both work."""
+    path = tmp_path / "entry.md"
+    path.write_text(
+        "---\n"
+        "id: abc\n"
+        "headline: h\n"
+        "source_refs:\n"
+        "  - '[[wrapped/ref]]'\n"
+        "  - plain/ref\n"
+        "---\n\nbody\n",
+        encoding="utf-8",
+    )
+    entry = load_entry(path)
+    assert entry.source_refs == ["wrapped/ref", "plain/ref"]
+
+
+def test_round_trip_preserves_refs_with_wikilink_serialization(
+    tmp_path: Path,
+) -> None:
+    """write → read returns identical in-memory entry (modulo
+    wikilink-strip on load)."""
+    path = tmp_path / "entry.md"
+    original = MemoryEntry(
+        id="abc",
+        headline="h",
+        source_refs=["sessions/conv-1_s1.md"],
+        related=["memory/episodic/xyz"],
+        body="body",
+    )
+    save_entry(original, path)
+    loaded = load_entry(path)
+    assert loaded.source_refs == original.source_refs
+    assert loaded.related == original.related
+
+
+def test_save_entry_idempotent_on_already_wikilinked_refs(
+    tmp_path: Path,
+) -> None:
+    """If in-memory entry already has wikilink-formatted refs (e.g.
+    user passed them that way), don't double-wrap."""
+    path = tmp_path / "entry.md"
+    entry = MemoryEntry(
+        id="abc",
+        headline="h",
+        source_refs=["[[already/wrapped]]"],
+        body="body",
+    )
+    save_entry(entry, path)
+    text = path.read_text(encoding="utf-8")
+    # Must NOT see [[[[already/wrapped]]]] (double wrap)
+    assert "[[[[" not in text
+    assert "[[already/wrapped]]" in text

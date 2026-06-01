@@ -32,6 +32,25 @@ def _make_loop():
     return loop, bus
 
 
+@pytest.fixture(autouse=True)
+def _stub_session_summary_store():
+    """Audit (third pass, 2026-05-28): `_format_pending_summary` is
+    invoked by `_process_message` on every turn and calls
+    `get_session_summary(self.workspace, session.key)`. With the
+    fully-mocked workspace + MagicMock session.key from `_make_loop`,
+    the lazy file-load path hangs (MagicMock-path `is_file()` returns
+    truthy, then `load_entry` chokes). Pre-A10 (2026-05-28) this path
+    didn't exist, so the tests passed even with the mocks. Auto-stub
+    `get_session_summary` to short-circuit it — these tests exercise
+    CLI command handling, not session-summary persistence.
+    """
+    with patch(
+        "durin.memory.session_summary_store.get_session_summary",
+        return_value=(None, None),
+    ):
+        yield
+
+
 async def _wait_until(predicate, *, timeout: float = 0.2, interval: float = 0.01) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:

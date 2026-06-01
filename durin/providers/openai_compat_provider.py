@@ -12,17 +12,17 @@ import string
 import time
 import uuid
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from ipaddress import ip_address
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 import httpx
 import json_repair
-from contextlib import suppress
+from loguru import logger
 
 from durin.telemetry.logger import current_telemetry
 from durin.utils.tool_argument_repair import parse_tool_call_arguments
-from loguru import logger
 
 if os.environ.get("LANGFUSE_SECRET_KEY") and importlib.util.find_spec("langfuse"):
     from langfuse.openai import AsyncOpenAI

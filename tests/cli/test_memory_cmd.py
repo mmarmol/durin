@@ -13,6 +13,8 @@ from typer.testing import CliRunner
 from durin.cli.memory_cmd import memory_app
 from durin.memory.dream import ConsolidationResult, DreamConsolidator, EntryRef
 
+# Default `agent_created` scope opened by `tests/conftest.py` (autouse).
+
 
 runner = CliRunner()
 
@@ -56,30 +58,33 @@ def populated_workspace(tmp_path: Path) -> Path:
 
 
 def _make_stub_llm(entity_ref: str, *, rev: int):
-    type_, slug = entity_ref.split(":", 1)
+    """v2 stub: returns ===PATCH=== / ===BODY_DELTA=== / ===COMMIT===."""
+    import json as _json
+    ops = [
+        {"op": "add", "path": "/aliases/-", "value": "Marcelo",
+         "provenance": f"episodic/e{rev}.md"},
+        {"op": "add", "path": "/attributes/notes",
+         "value": f"rev {rev} observations",
+         "provenance": f"episodic/e{rev}.md"},
+    ] if rev == 1 else [
+        {"op": "replace", "path": "/attributes/notes",
+         "value": f"rev {rev} observations",
+         "provenance": f"episodic/e{rev}.md"},
+    ]
     response = (
-        "===PAGE===\n"
-        "---\n"
-        f"type: {type_}\n"
-        "name: Marcelo Marmol\n"
-        "aliases: [Marcelo, marcelo]\n"
-        f"dream_processed_through: {rev * 10}\n"
-        "---\n"
-        "\n"
-        "# Marcelo Marmol\n"
-        "\n"
-        f"## Current State (rev {rev})\n"
-        f"Observation set {rev}.\n"
-        "===COMMIT===\n"
-        f"Consolidate {entity_ref} (rev {rev})\n"
-        "\n"
-        f"Consolidation pass {rev} merging recent observations.\n"
-        "\n"
-        f"Sources: e{rev}\n"
-        f"Entities-touched: {entity_ref}\n"
-        "Entities-referenced: project:durin\n"
-        f"Cursor-after: {rev * 10}\n"
-        "===END===\n"
+        "===PATCH===\n"
+        + _json.dumps(ops, indent=2) + "\n"
+        + "===BODY_DELTA===\n"
+        + f"Observation set {rev}.\n"
+        + "===COMMIT===\n"
+        + f"Consolidate {entity_ref} (rev {rev})\n"
+        + "\n"
+        + f"Consolidation pass {rev} merging recent observations.\n"
+        + "\n"
+        + f"Sources: episodic/e{rev}.md\n"
+        + f"Entities-touched: {entity_ref}\n"
+        + f"Cursor-after: 2026-04-{10 + rev * 5:02d}\n"
+        + "===END===\n"
     )
 
     def stub(prompt: str, *, model: str) -> str:
@@ -179,11 +184,13 @@ def test_expand_shows_page_metadata_and_history(populated_workspace: Path) -> No
     with _patch_workspace(populated_workspace):
         result = runner.invoke(memory_app, ["expand", "person:marcelo"])
     assert result.exit_code == 0, result.output
-    assert "Marcelo Marmol" in result.output
+    # v2 patch ops add alias "Marcelo" via /aliases/-, so the page
+    # name stays the placeholder slug-title ("Marcelo") and the alias
+    # surfaces in the aliases list.
+    assert "person:marcelo" in result.output
+    assert "Marcelo" in result.output
     assert "History" in result.output
     assert "Sources" in result.output
-    assert "Related entities" in result.output
-    assert "project:durin" in result.output  # from Entities-referenced trailer
 
 
 def test_expand_missing_page_fails(populated_workspace: Path) -> None:
@@ -437,9 +444,12 @@ def test_absorb_merges_pages_and_archives(tmp_path: Path) -> None:
     # Absorbed moved to archive.
     absorbed_orig = tmp_path / "memory" / "entities" / "person" / "marcelo_m.md"
     assert not absorbed_orig.exists()
+    # Phase 0 deliverable 5: archive lives top-level at
+    # memory/archive/entities/<type>/<slug>.md (no longer nested under
+    # the canonical's slug folder).
     archived = (
-        tmp_path / "memory" / "entities" / "person" / "marcelo"
-        / "archive" / "marcelo_m.md"
+        tmp_path / "memory" / "archive" / "entities" / "person"
+        / "marcelo_m.md"
     )
     assert archived.exists()
 

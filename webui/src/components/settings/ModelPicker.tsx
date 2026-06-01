@@ -6,17 +6,25 @@ import { listModels } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 /** Searchable model field: type freely, or pick from the provider's
- *  catalog. The curated per-provider shortlist floats to the top. */
+ *  catalog. The curated per-provider shortlist floats to the top.
+ *
+ *  ``capability``: optional ``"vision" | "audio" | "text"``. When set,
+ *  the backend filters the catalog so the picker only surfaces models
+ *  that support the requested modality — used by the vision/audio aux
+ *  pickers to stop suggesting text-only models.
+ */
 export function ModelPicker({
   token,
   provider,
   value,
   onChange,
+  capability = "",
 }: {
   token: string;
   provider: string;
   value: string;
   onChange: (model: string) => void;
+  capability?: string;
 }) {
   const { t } = useTranslation();
   const [suggested, setSuggested] = useState<string[]>([]);
@@ -26,7 +34,7 @@ export function ModelPicker({
 
   useEffect(() => {
     let cancelled = false;
-    listModels(token, provider)
+    listModels(token, provider, capability)
       .then((catalog) => {
         if (cancelled) return;
         setSuggested(catalog.suggested);
@@ -40,7 +48,7 @@ export function ModelPicker({
     return () => {
       cancelled = true;
     };
-  }, [token, provider]);
+  }, [token, provider, capability]);
 
   useEffect(() => {
     if (!open) return;

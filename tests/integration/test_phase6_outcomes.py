@@ -8,7 +8,7 @@ and fake embeddings (no real fastembed download).
 
 If any of these tests fail, the architecture has regressed on a
 load-bearing promise; the right move is to reopen doc 18 (or doc 19's
-asunción master list) with the new evidence.
+assumption master list) with the new evidence.
 """
 
 from __future__ import annotations
@@ -62,37 +62,36 @@ class _CharProvider(EmbeddingProvider):
         return out
 
 
-def _make_stub_llm(entity_ref: str, *, body: str, sources: list[str], cursor: int):
-    """Builds an LLM stub that returns a well-formed consolidation response."""
+def _make_stub_llm(entity_ref: str, *, body: str, sources: list[str], cursor):
+    """v2 LLM stub for consolidation."""
+    import json as _json
     type_, slug = entity_ref.split(":", 1)
     source_str = ", ".join(sources)
+    primary = sources[0] if sources else "episodic/unknown.md"
+    ops = [
+        {"op": "add", "path": "/aliases/-", "value": slug,
+         "provenance": primary},
+        {"op": "add", "path": "/aliases/-", "value": slug.title(),
+         "provenance": primary},
+    ]
     response = (
-        "===PAGE===\n"
-        "---\n"
-        f"type: {type_}\n"
-        f"name: {slug.replace('_', ' ').title()}\n"
-        f"aliases: [{slug}, {slug.title()}]\n"
-        f"dream_processed_through: {cursor}\n"
-        "---\n"
-        "\n"
-        f"# {slug.replace('_', ' ').title()}\n"
-        "\n"
-        f"{body}\n"
-        "===COMMIT===\n"
-        f"Consolidate {entity_ref} (rev 1)\n"
-        "\n"
-        "Consolidation pass merging episodic observations.\n"
-        "\n"
-        f"Sources: {source_str}\n"
-        f"Entities-touched: {entity_ref}\n"
-        f"Cursor-after: {cursor}\n"
-        "===END===\n"
+        "===PATCH===\n"
+        + _json.dumps(ops, indent=2) + "\n"
+        + "===BODY_DELTA===\n"
+        + f"{body}\n"
+        + "===COMMIT===\n"
+        + f"Consolidate {entity_ref} (rev 1)\n"
+        + "\nConsolidation pass merging episodic observations.\n"
+        + f"\nSources: {source_str}\n"
+        + f"Entities-touched: {entity_ref}\n"
+        + f"Cursor-after: {cursor}\n"
+        + "===END===\n"
     )
     return lambda prompt, *, model: response
 
 
 # ---------------------------------------------------------------------------
-# O1 — Coherencia cross-sesión sobre proyecto
+# O1 — Cross-session coherence about a project
 # ---------------------------------------------------------------------------
 
 
@@ -159,7 +158,7 @@ def test_o1_project_decisions_consolidated(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# O2 — Unificación automática por aliases / identifiers
+# O2 — Automatic unification by aliases / identifiers
 # ---------------------------------------------------------------------------
 
 
@@ -314,15 +313,17 @@ def test_o5_drill_down_expand(tmp_path: Path) -> None:
     absorber.absorb("person:marcelo", "person:marcelo_m",
                     reason="duplicate identity confirmed")
 
+    # Phase 0 deliverable 5: archive is top-level under memory/archive/.
     archive_path = (
-        tmp_path / "memory" / "entities" / "person" / "marcelo" / "archive"
+        tmp_path / "memory" / "archive" / "entities" / "person"
         / "marcelo_m.md"
     )
-    assert archive_path.exists(), "absorbed page must be in archive subfolder"
+    assert archive_path.exists(), "absorbed page must be in top-level archive"
     archived = EntityPage.from_file(archive_path)
     assert archived is not None
-    # Drill-down via the absorbed_into pointer works:
-    assert archived.extra["absorbed_into"] == "../../marcelo.md"
+    # Drill-down via the canonical URI works (spec uses `archived_into`
+    # carrying the URI, not a relative filesystem link).
+    assert archived.extra["archived_into"] == "person:marcelo"
 
     # The canonical's body now references the absorbed entity:
     canonical = EntityPage.from_file(
@@ -333,7 +334,7 @@ def test_o5_drill_down_expand(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Anti-fragilidad — el sistema funciona aún sin dream activo
+# Anti-fragility — the system works even without an active dream
 # ---------------------------------------------------------------------------
 
 

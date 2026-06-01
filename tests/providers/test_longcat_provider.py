@@ -1,13 +1,6 @@
 """Tests for the LongCat provider registration."""
 
-from durin.config.schema import ProvidersConfig
 from durin.providers.registry import PROVIDERS, find_by_name
-
-
-def test_longcat_config_field_exists():
-    """ProvidersConfig should have a longcat field."""
-    config = ProvidersConfig()
-    assert hasattr(config, "longcat")
 
 
 def test_longcat_provider_in_registry():

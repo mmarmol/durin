@@ -65,10 +65,6 @@ class Durin:
 
         loop = AgentLoop.from_config(
             config,
-            image_generation_provider_configs={
-                "openrouter": config.providers.openrouter,
-                "aihubmix": config.providers.aihubmix,
-            },
             session_key=session_key,
         )
         return cls(loop)

@@ -5,9 +5,9 @@ detects that two pages refer to the same identity (aliases overlap,
 identifier overlap, or LLM judgment), one is absorbed into the other:
 
 - Canonical: receives merged aliases + identifiers + body section.
-- Absorbed: moved to ``<canonical_slug>/archive/<absorbed_slug>.md``
-  with frontmatter ``absorbed_into: ../../<canonical_slug>.md`` for
-  traceability.
+- Absorbed: moved to ``memory/archive/entities/<type>/<absorbed_slug>.md``
+  with frontmatter ``archived_into: <type>:<canonical_slug>`` for
+  traceability (doc memory §3.2 — archive is top-level, not nested).
 - Alias index drops the absorbed entity_ref (and any aliases unique
   to it become aliases of the canonical via the merged frontmatter).
 - Vector index drops the absorbed entity row.
@@ -27,11 +27,10 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable
 
 from durin.memory.aliases_index import AliasIndex
 from durin.memory.entity_page import EntityPage
-from durin.utils.git_repo import GitRepo, GitRepoError, NothingToCommitError
+from durin.utils.git_repo import GitRepo, NothingToCommitError
 
 __all__ = [
     "AbsorptionError",
@@ -124,9 +123,9 @@ class EntityAbsorption:
         1. Load both pages from disk.
         2. Merge aliases + identifiers + body into canonical.
         3. Write updated canonical.
-        4. Move absorbed file to ``<canonical_slug>/archive/<absorbed_slug>.md``.
-        5. Stamp absorbed file's frontmatter with ``absorbed_into`` /
-           ``absorbed_at`` / ``absorbed_reason``.
+        4. Move absorbed file to ``memory/archive/entities/<type>/<absorbed_slug>.md``.
+        5. Stamp absorbed file's frontmatter with ``archived_into`` /
+           ``archived_at`` / ``archived_reason``.
         6. Commit both changes in one git operation.
         7. Refresh alias_index (canonical) and remove absorbed entity_ref.
         8. Remove absorbed from vector_index (if provided).
@@ -153,10 +152,12 @@ class EntityAbsorption:
         if not canonical_path.exists():
             raise AbsorptionError(f"canonical page missing: {canonical_path}")
         if not absorbed_path.exists():
-            # Maybe already archived?
+            # Maybe already archived? Top-level archive layout per
+            # `docs/architecture/memory/01_data_and_entities.md` §3.6:
+            #   memory/archive/entities/<type>/<slug>.md
             archive_target = (
-                self.entities_root / canonical_type / canonical_slug / "archive"
-                / f"{absorbed_slug}.md"
+                self.workspace / "memory" / "archive" / "entities"
+                / absorbed_type / f"{absorbed_slug}.md"
             )
             if archive_target.exists():
                 logger.info("absorb: %s already archived; no-op", absorbed)
@@ -176,28 +177,18 @@ class EntityAbsorption:
         merged = _merge_pages(canonical_page, absorbed_page, absorbed_ref=absorbed)
         canonical_path.write_text(merged.to_markdown(), encoding="utf-8")
 
-        # 4: move absorbed to archive subfolder of canonical
-        archive_dir = (
-            self.entities_root / canonical_type / canonical_slug / "archive"
+        # 4-5: move absorbed to top-level archive + stamp frontmatter via
+        # shared archive helper (Phase 0 deliverable 5). New path:
+        #   memory/archive/entities/<absorbed_type>/<absorbed_slug>.md
+        # Helper writes archived_at + archived_into + archived_reason.
+        from durin.memory.archive import archive_entity
+
+        archive_entity(
+            self.workspace,
+            absorbed_path,
+            into_uri=canonical,
+            reason=reason or None,
         )
-        archive_dir.mkdir(parents=True, exist_ok=True)
-        archived_path = archive_dir / f"{absorbed_slug}.md"
-
-        # 5: stamp absorbed file frontmatter, then move it
-        # Compute the relative link from archived → canonical for the
-        # ``absorbed_into`` field (humans can click it in obsidian etc).
-        # archived_path lives at: entities/<type>/<canonical_slug>/archive/<absorbed_slug>.md
-        # canonical_path:        entities/<type>/<canonical_slug>.md
-        # so the link is ../../<canonical_slug>.md
-        from datetime import datetime, timezone
-
-        absorbed_page.extra["absorbed_into"] = f"../../{canonical_slug}.md"
-        absorbed_page.extra["absorbed_at"] = datetime.now(timezone.utc).isoformat()
-        if reason:
-            absorbed_page.extra["absorbed_reason"] = reason
-        archived_path.write_text(absorbed_page.to_markdown(), encoding="utf-8")
-        # Remove the original location — the file's new home is in archive.
-        absorbed_path.unlink()
 
         # 6: git commit (covering all 3 file ops: canonical updated,
         # absorbed deleted from old path, archived created)
@@ -213,8 +204,7 @@ class EntityAbsorption:
             f"Merged {absorbed} into {canonical}. "
             f"Reason: {reason or '(unspecified)'}.\n"
             f"Absorbed page moved to "
-            f"entities/{canonical_type}/{canonical_slug}/archive/"
-            f"{absorbed_slug}.md."
+            f"archive/entities/{absorbed_type}/{absorbed_slug}.md."
         )
         if judge_reasoning:
             body_text += f"\n\nJudge reasoning:\n{judge_reasoning.strip()}"
@@ -265,6 +255,8 @@ class EntityAbsorption:
                     aliases=list(merged.aliases),
                     body=merged.body,
                     path=canonical_path,
+                    attributes=dict(merged.attributes),
+                    relations=list(merged.relations),
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
@@ -330,9 +322,15 @@ def _merge_pages(
 
     # Identifiers and other emergent fields: union when possible.
     merged_extra: dict = dict(canonical.extra)
+    _archive_markers = {
+        "archived_into", "archived_at", "archived_reason",
+        # Legacy names — still skipped on merge for back-compat with
+        # archives written before the field rename.
+        "absorbed_into", "absorbed_at", "absorbed_reason",
+    }
     for key, value in absorbed.extra.items():
-        if key in {"absorbed_into", "absorbed_at", "absorbed_reason"}:
-            # Don't propagate absorption markers from a previously-absorbed
+        if key in _archive_markers:
+            # Don't propagate archive markers from a previously-absorbed
             # ancestor into the canonical (would confuse the trail).
             continue
         existing = merged_extra.get(key)
@@ -366,6 +364,11 @@ def _merge_pages(
         dream_processed_through=canonical.dream_processed_through,
         created_at=canonical.created_at,
         updated_at=canonical.updated_at,
+        # E19: absorption product is fully agent-managed even if
+        # the canonical input was user-authored — the merge itself
+        # came from durin's auto-absorb pipeline. Subsequent runs
+        # may continue to manage the resulting page.
+        author="agent_created",
         extra=merged_extra,
     )
 

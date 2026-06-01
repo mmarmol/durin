@@ -228,6 +228,64 @@ export async function deleteSecret(
   await request<{ ok: boolean }>(`${base}/api/secrets/delete?${query}`, token);
 }
 
+// -- cron jobs (P11) ---------------------------------------------------
+
+export interface CronJobRow {
+  id: string;
+  name: string;
+  enabled: boolean;
+  is_system: boolean;
+  schedule: {
+    kind: string;
+    label: string;
+    expr: string | null;
+    every_ms: number | null;
+    at_ms: number | null;
+    tz: string | null;
+  };
+  message: string;
+  channel: string;
+  state: {
+    next_run_at_ms: number | null;
+    last_run_at_ms: number | null;
+    last_status: "ok" | "error" | "skipped" | null;
+    last_error: string | null;
+  };
+  created_at_ms: number;
+  updated_at_ms: number;
+}
+
+export async function listCronJobs(
+  token: string,
+  base: string = "",
+): Promise<CronJobRow[]> {
+  const res = await request<{ jobs: CronJobRow[] }>(`${base}/api/cron`, token);
+  return res.jobs;
+}
+
+export async function removeCronJob(
+  token: string,
+  id: string,
+  base: string = "",
+): Promise<void> {
+  const query = new URLSearchParams({ id });
+  await request<{ result: string }>(`${base}/api/cron/remove?${query}`, token);
+}
+
+export async function toggleCronJob(
+  token: string,
+  id: string,
+  enabled: boolean,
+  base: string = "",
+): Promise<CronJobRow> {
+  const query = new URLSearchParams({ id, enabled: String(enabled) });
+  const res = await request<{ job: CronJobRow }>(
+    `${base}/api/cron/toggle?${query}`,
+    token,
+  );
+  return res.job;
+}
+
 export async function getConfig(
   token: string,
   base: string = "",
@@ -270,6 +328,31 @@ export async function testModel(
   );
 }
 
+/** Result of a cross-encoder model probe (audit B12). */
+export interface CrossEncoderTestResult {
+  status: "ok" | "fail";
+  message: string;
+  model_id: string;
+  duration_ms: number;
+}
+
+/** Probe a cross-encoder model id by loading + running a trivial score
+ *  against it. Returns ok/fail with a human-readable message and the
+ *  load+score timing. Used by the Settings → Memory pane so an operator
+ *  can verify a model id (sentence-transformers handle, HuggingFace
+ *  reference, local path, etc.) before committing it to config. */
+export async function testCrossEncoderModel(
+  token: string,
+  model: string,
+  base: string = "",
+): Promise<CrossEncoderTestResult> {
+  const query = new URLSearchParams({ model });
+  return request<CrossEncoderTestResult>(
+    `${base}/api/memory/cross-encoder/test?${query.toString()}`,
+    token,
+  );
+}
+
 export interface ChannelInfo {
   name: string;
   display_name: string;
@@ -296,10 +379,17 @@ export interface ModelCatalog {
 export async function listModels(
   token: string,
   provider: string,
+  capability: string = "",
   base: string = "",
 ): Promise<ModelCatalog> {
-  const qs = provider ? `?provider=${encodeURIComponent(provider)}` : "";
-  return request<ModelCatalog>(`${base}/api/models${qs}`, token);
+  const params = new URLSearchParams();
+  if (provider) params.set("provider", provider);
+  if (capability) params.set("capability", capability);
+  const qs = params.toString();
+  return request<ModelCatalog>(
+    `${base}/api/models${qs ? `?${qs}` : ""}`,
+    token,
+  );
 }
 
 export interface ModelCapabilities {
@@ -386,9 +476,9 @@ export interface MemoryEntityDetail {
     slug: string;
     path: string;
     name: string;
-    absorbed_at: string | null;
-    absorbed_reason: string | null;
-    absorbed_into: string | null;
+    archived_at: string | null;
+    archived_reason: string | null;
+    archived_into: string | null;
   }>;
   entries: Array<{
     id: string;
@@ -475,6 +565,87 @@ export async function fetchMemoryEdge(
   const url =
     `${base}/api/memory/edge/${encodeURIComponent(source)}/${encodeURIComponent(target)}`;
   return request<MemoryEdgeDetail>(url, token);
+}
+
+// ---------------------------------------------------------------------------
+// Individual entry browse / forget / backlinks (P12)
+// ---------------------------------------------------------------------------
+
+export interface MemoryEntryDetail {
+  uri: string;          // memory/<class>/<id>
+  class_name: string;   // episodic | stable | corpus | session_summary
+  frontmatter: {
+    id: string;
+    headline: string;
+    summary: string;
+    valid_from: string | null;
+    author: string;
+    entities: string[];
+    source_refs: string[];
+    related: string[];
+  };
+  body: string;
+  exists: boolean;
+}
+
+export interface MemoryBacklink {
+  uri: string;
+  context: string;    // "source_refs" | "related" | "body" (or comma-joined)
+  headline: string;
+}
+
+export interface MemoryBacklinksPayload {
+  uri: string;
+  backlinks: MemoryBacklink[];
+  truncated: boolean;
+}
+
+/** GET /api/memory/entry?uri=… — full frontmatter + body for one entry. */
+export async function fetchMemoryEntry(
+  token: string,
+  uri: string,
+  base: string = "",
+): Promise<MemoryEntryDetail | null> {
+  const url = `${base}/api/memory/entry?uri=${encodeURIComponent(uri)}`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+    credentials: "same-origin",
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new ApiError(res.status, `HTTP ${res.status}`);
+  return (await res.json()) as MemoryEntryDetail;
+}
+
+/** GET /api/memory/forget?uri=… — archive an entry. Returns the
+ *  backend's ``{result}`` payload verbatim so the UI can branch on
+ *  ``"archived" | "not_found" | "protected" | "invalid"``. */
+export async function forgetMemoryEntry(
+  token: string,
+  uri: string,
+  base: string = "",
+): Promise<{ result: string; detail?: string }> {
+  const url = `${base}/api/memory/forget?uri=${encodeURIComponent(uri)}`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+    credentials: "same-origin",
+  });
+  // 200, 400, 403 all carry a JSON body with `result` — surface it
+  // verbatim so the caller picks the message. Only network / 5xx
+  // errors throw.
+  if (res.status >= 500) {
+    throw new ApiError(res.status, `HTTP ${res.status}`);
+  }
+  return (await res.json()) as { result: string; detail?: string };
+}
+
+/** GET /api/memory/backlinks?uri=… — entries that reference this one. */
+export async function fetchMemoryBacklinks(
+  token: string,
+  uri: string,
+  base: string = "",
+): Promise<MemoryBacklinksPayload> {
+  const url = `${base}/api/memory/backlinks?uri=${encodeURIComponent(uri)}`;
+  return request<MemoryBacklinksPayload>(url, token);
 }
 
 export interface MemorySessionDetail {

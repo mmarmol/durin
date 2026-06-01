@@ -48,12 +48,20 @@ logger = logging.getLogger(__name__)
 CATEGORIES = ("single_hop", "multi_hop", "temporal", "open_domain", "adversarial")
 
 # Mapeo de los códigos numéricos del dataset (1..5) a las categorías
-# nombradas. El orden refleja el §4.1 del paper.
+# nombradas. Canonical per mem0's published benchmark code
+# (``mem0/memory-benchmarks/benchmarks/locomo/prompts.py::
+# CATEGORY_NAMES``) — VERIFIED against the raw counts in
+# ``locomo10.json`` which yield 282 / 321 / 96 / 841 / 446
+# for codes 1..5. Audit H13 (2026-05-29) fixed a pre-existing
+# swap that re-labelled the four non-adversarial categories
+# (paper §4.1 narrative order ≠ dataset code-to-label order);
+# every prior bench-X labelling that called single_hop "our
+# weakest category" was really pointing at multi_hop.
 _CATEGORY_BY_CODE = {
-    1: "single_hop",
-    2: "multi_hop",
-    3: "temporal",
-    4: "open_domain",
+    1: "multi_hop",
+    2: "temporal",
+    3: "open_domain",
+    4: "single_hop",
     5: "adversarial",
 }
 
@@ -172,9 +180,24 @@ def load_dataset(path: str | Path) -> list[QA]:
                 continue
             question = q.get("question") or ""
             answer = q.get("answer")
-            if not question or answer is None:
+            if not question:
                 skipped += 1
                 continue
+            # Audit H14 (2026-05-29): LoCoMo adversarial questions
+            # (category code 5) come with ``answer=None`` by design —
+            # the agent is expected to REFUSE to answer because the
+            # fact isn't in the conversation. Pre-H14 the loader
+            # skipped them (444 / 446 of the adversarial set were
+            # invisible) so every prior bench reported adversarial
+            # over a sample of size 2 — mostly noise. The string
+            # sentinel ``"__REFUSE__"`` flags these for the judge to
+            # score with a refusal rubric instead of substring match.
+            if answer is None:
+                if category == "adversarial":
+                    answer = "__REFUSE__"
+                else:
+                    skipped += 1
+                    continue
             qas.append(QA(
                 qa_id=f"{conv.conv_id}-q{q_idx}",
                 conv_id=conv.conv_id,
@@ -289,4 +312,102 @@ def stratified_subset(
             + ". Use allow_undersupplied=True (CLI: --allow-undersupplied) "
               "to take min(per_category, available) instead."
         )
+    return out
+
+
+def proportional_subset(
+    qas: list[QA],
+    *,
+    total_n: int,
+    seed: int = 42,
+    categories: Iterable[str] = CATEGORIES,
+) -> list[QA]:
+    """Pick ~``total_n`` QAs proportional to each category's share of
+    the corpus (audit H19, 2026-05-29).
+
+    LoCoMo's category distribution is highly skewed (single_hop 42%,
+    adversarial 23%, multi_hop 14%, temporal 16%, open_domain 5%
+    in the locomo10.json). ``stratified_subset`` with ``N`` per
+    category over-represents rare categories and under-represents
+    single_hop — a 25/25/25/25/25 sample lifts adversarial from its
+    natural 23% share to 20% (close), but lifts open_domain from
+    5% to 20% (4× over). A score on such a subset isn't directly
+    comparable to systems that benchmark against the full corpus
+    (mem0, Letta, MemMachine all do).
+
+    Allocation rule:
+      target[c] = max(1, round(total_n * count[c] / total_qas))
+      adjusted to land exactly on total_n via a deterministic
+      largest-fractional-remainder pass.
+
+    ``max(1, ...)`` guarantees no category disappears at small N;
+    the final adjustment pass uses largest-remainder so the sum
+    always matches ``total_n`` exactly (no off-by-rounding).
+
+    Reproducibility contract:
+      - Same (qas, total_n, seed) → identical output across runs.
+      - Sort is `(category, qa_id)` so a re-run that picks the same
+        set returns it in the same order.
+      - Per-category allocation is purely arithmetic (no rng), so
+        only the WITHIN-category sampling is seed-driven.
+    """
+    if not qas or total_n <= 0:
+        return []
+    rng = random.Random(seed)
+    cat_list = [c for c in categories]
+    by_cat: dict[str, list[QA]] = {c: [] for c in cat_list}
+    for qa in qas:
+        if qa.category in by_cat:
+            by_cat[qa.category].append(qa)
+
+    # Filter to non-empty categories so a missing category doesn't
+    # consume a slot from the `max(1, ...)` floor.
+    present = [c for c in cat_list if by_cat[c]]
+    if not present:
+        return []
+    counts = {c: len(by_cat[c]) for c in present}
+    total = sum(counts.values())
+
+    # Compute raw fractional targets then round via largest-remainder
+    # so the sum lands exactly on total_n. Each present category
+    # gets at least 1.
+    raw = {c: total_n * counts[c] / total for c in present}
+    floors = {c: max(1, int(raw[c])) for c in present}
+    # Sum after floors; adjust against total_n
+    overflow = sum(floors.values()) - total_n
+    if overflow > 0:
+        # Trim from the categories with the smallest fractional part
+        # (largest-overshoot first) while respecting the ≥ 1 floor.
+        remainders = sorted(
+            present, key=lambda c: (raw[c] - int(raw[c])),
+        )
+        for c in remainders:
+            if overflow <= 0:
+                break
+            if floors[c] > 1:
+                floors[c] -= 1
+                overflow -= 1
+    elif overflow < 0:
+        # Add to the categories with the largest fractional part
+        remainders = sorted(
+            present, key=lambda c: -(raw[c] - int(raw[c])),
+        )
+        i = 0
+        while overflow < 0:
+            c = remainders[i % len(remainders)]
+            if floors[c] < counts[c]:
+                floors[c] += 1
+                overflow += 1
+            i += 1
+            if i > total_n * 4:  # paranoid runaway guard
+                break
+
+    out: list[QA] = []
+    for cat in present:
+        bucket = by_cat[cat]
+        take = min(floors[cat], len(bucket))
+        sampled = sorted(rng.sample(bucket, take), key=lambda q: q.qa_id)
+        out.extend(sampled)
+    # Final sort by (category, qa_id) for deterministic ordering
+    out.sort(key=lambda q: (q.category, q.qa_id))
     return out

@@ -81,9 +81,13 @@ def test_store_records_full_frontmatter(tmp_path: Path) -> None:
     assert loaded.body == "Body of the entry."
 
 
-def test_store_uses_current_author_by_default(tmp_path: Path) -> None:
-    """Without an author_scope, author defaults to user_authored."""
-    result = store_memory(tmp_path, content="hand-edited content")
+def test_store_inside_user_scope_marks_user_authored(tmp_path: Path) -> None:
+    """`/remember` and similar human-driven paths wrap in
+    ``author_scope('user_authored')``. There is no implicit default
+    (per `durin/memory/provenance.py`) — every caller declares.
+    """
+    with author_scope("user_authored"):
+        result = store_memory(tmp_path, content="hand-edited content")
     loaded = load_entry(Path(result["path"]))
     assert loaded.author == "user_authored"
 

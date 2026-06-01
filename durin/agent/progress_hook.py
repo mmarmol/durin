@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import inspect
 import json
+from contextlib import suppress
 from typing import Any, Awaitable, Callable
 
 from loguru import logger
-
-from contextlib import suppress
 
 from durin.agent.hook import AgentHook, AgentHookContext
 from durin.telemetry.logger import current_telemetry
@@ -129,6 +128,7 @@ class AgentProgressHook(AgentHook):
         for tc in context.tool_calls:
             args_str = json.dumps(tc.arguments, ensure_ascii=False)
             logger.info("Tool call: {}({})", tc.name, args_str[:200])
+        _emit_non_memory_fallback_events(context.tool_calls)
         if self._set_tool_context:
             self._set_tool_context(
                 self._channel,
@@ -204,3 +204,52 @@ class AgentProgressHook(AgentHook):
 
     def finalize_content(self, context: AgentHookContext, content: str | None) -> str | None:
         return self._strip_think(content)
+
+
+# Audit H17 (2026-05-29): per-tool-call telemetry for "non-memory
+# tools used in a memory-enabled session". The bench-100 v8 analysis
+# showed 27/102 traces (26%) fell back to grep / list_dir / read_file
+# after the memory tools exhausted their useful results. Without this
+# event there's no observable signal to track that pattern over
+# time — the runtime logs it but a downstream dashboard needs a
+# structured row to count.
+_MEMORY_TOOLS = frozenset({
+    "memory_search", "memory_drill",
+    "memory_store", "memory_ingest",
+})
+_BENCH_RELEVANT_FALLBACK_TOOLS = frozenset({
+    "grep", "list_dir", "read_file", "edit_file", "exec", "write_file",
+})
+
+
+def _emit_non_memory_fallback_events(tool_calls: list[Any]) -> None:
+    """Emit one ``memory.fallback_tool_used`` event per non-memory
+    tool call in this iteration.
+
+    A non-memory tool call doesn't ALWAYS imply a fallback — the
+    agent may legitimately need to read a config file or run a shell
+    command. The event payload carries ``tool_name`` so downstream
+    analysis can filter to the bench-relevant ones (grep/list_dir/
+    read_file) and correlate with QAs that exhausted memory_search.
+
+    Best-effort: failures degrade silently so the hook never breaks
+    a tool dispatch.
+    """
+    from durin.agent.tools._telemetry import emit_tool_event
+
+    for tc in tool_calls:
+        name = getattr(tc, "name", "") or ""
+        if not name or name in _MEMORY_TOOLS:
+            continue
+        try:
+            emit_tool_event(
+                "memory.fallback_tool_used",
+                {
+                    "tool_name": name,
+                    "is_bench_relevant": (
+                        name in _BENCH_RELEVANT_FALLBACK_TOOLS
+                    ),
+                },
+            )
+        except Exception:  # noqa: BLE001
+            continue

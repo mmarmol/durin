@@ -189,20 +189,16 @@ class TestUnifiedSessionConfig:
         """save_config() writes 'unifiedSession' into config.json (simulates durin onboard)."""
         from durin.config.loader import load_config, save_config
 
-        # `save_config` now uses `exclude_defaults=True`, so a fresh
-        # default Config writes an essentially-empty file. The original
-        # intent of this regression test — "the schema carries
-        # unified_session" — is captured by asserting the field exists
-        # on the loaded Config object, not by raw JSON inspection.
+        # Set a NON-default value so it actually exercises persistence:
+        # `save_config` uses `exclude_defaults=True`, so only a non-default
+        # `unified_session` is written — and must round-trip back as True.
         config = Config()
+        config.agents.defaults.unified_session = True
         config_path = tmp_path / "config.json"
         save_config(config, config_path)
 
         loaded = load_config(config_path)
-        assert hasattr(loaded.agents.defaults, "unified_session"), (
-            "Config schema must continue to expose unified_session"
-        )
-        assert loaded.agents.defaults.unified_session is False
+        assert loaded.agents.defaults.unified_session is True
 
 
 # ---------------------------------------------------------------------------

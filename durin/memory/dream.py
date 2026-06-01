@@ -23,14 +23,14 @@ to litellm + the provider config from ``durin.security.secrets`` +
 from __future__ import annotations
 
 import logging
-import os
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Iterable, Protocol
+from typing import Any, Protocol
 
 from durin.memory.aliases_index import AliasIndex
+from durin.memory.dream_git_history import format_recent_history
+from durin.memory.entity_inventory import existing_uris_by_recent_mtime
 from durin.memory.entity_page import EntityPage
 from durin.utils.git_repo import GitRepo, NothingToCommitError
 
@@ -39,6 +39,9 @@ __all__ = [
     "DreamConsolidator",
     "DreamError",
     "EntryRef",
+    "LLMInvoke",
+    "LLMResponse",
+    "default_llm_invoke",
 ]
 
 logger = logging.getLogger(__name__)
@@ -50,7 +53,19 @@ logger = logging.getLogger(__name__)
 
 
 class DreamError(Exception):
-    """Raised when consolidation fails (LLM bad output, IO, etc.)."""
+    """Raised when consolidation fails (LLM bad output, IO, etc.).
+
+    ``triggered_quarantine`` is set by ``DreamConsolidator.apply`` when
+    the failure was the third structural strike for this entity (i.e.
+    ``record_failure`` just set ``dream_quarantine`` on the page). The
+    runner reads this attribute to increment its
+    ``entities_quarantined`` counter for ``memory.dream.end``
+    telemetry (audit A5).
+    """
+
+    def __init__(self, *args, triggered_quarantine: bool = False) -> None:
+        super().__init__(*args)
+        self.triggered_quarantine = triggered_quarantine
 
 
 @dataclass
@@ -65,19 +80,58 @@ class EntryRef:
 
 @dataclass
 class ConsolidationResult:
-    """LLM output parsed into actionable pieces."""
+    """v2 LLM output parsed into actionable pieces.
 
-    page_text: str                                 # full markdown for the entity file
+    The LLM emits a JSON Patch + a body delta + a commit message; the
+    actual page text is only known *after* the patch is applied to
+    the on-disk entity page. ``page_text`` is populated by
+    :meth:`DreamConsolidator.apply` after the write succeeds, so it
+    reflects what actually landed on disk (post-cursor-override).
+
+    Token counters (audit A5) sum across every LLM call made during
+    ``consolidate_entity`` for this entity — that is, the initial
+    call plus any parse-retry calls. The DreamRunner aggregates these
+    across all entities in a pass for the ``memory.dream.end`` event.
+    """
+
+    parsed_output: Any  # ParsedDreamOutput; typed lazily to avoid cycle
     commit_subject: str
     commit_body: str
     commit_trailers: dict[str, list[str]] = field(default_factory=dict)
     raw_output: str = ""                           # original LLM response, for audit
+    # A5: token accounting per consolidation. `llm_call_count` includes
+    # successful parse + every parse-retry. Defaults make existing
+    # call sites (e.g. tests that build a ConsolidationResult by hand)
+    # compatible without churn.
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    llm_call_count: int = 0
     # G2 invariant: timestamp of the last entry sent to the LLM in this
     # batch. :meth:`DreamConsolidator.apply` forces the entity page's
     # ``dream_processed_through`` to this value (overriding whatever the
     # LLM put in ``Cursor-after``) so callers can safely batch large
     # entry sets without silent data loss.
     batch_last_ts: str | None = None
+    # Populated by ``apply()`` after a successful write. Empty string
+    # before apply runs (callers that need the post-apply rendering
+    # call apply() first).
+    page_text: str = ""
+
+    def raw_output_commit_message(self) -> str:
+        """Return the LLM-emitted commit message text (between
+        ``===COMMIT===`` and ``===END===``)."""
+        return getattr(self.parsed_output, "commit_message", "")
+
+
+def _trailer_value(
+    trailers: dict[str, list[str]], key: str,
+) -> str:
+    """Return the first value for *key* in *trailers*, or ``""``."""
+    values = trailers.get(key) or []
+    for v in values:
+        if v:
+            return v
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -85,18 +139,55 @@ class ConsolidationResult:
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class LLMResponse:
+    """Outcome of one LLM call: generated text + token accounting.
+
+    Token counts are best-effort — providers that don't report usage
+    leave them at 0. The Dream cost alarm (doc 08 §3 R3) computes
+    `dream_llm_cost_per_day_usd` from `llm_input_tokens_total` and
+    `llm_output_tokens_total` aggregated across one pass; missing
+    counts under-report cost (safe-failure direction).
+    """
+
+    text: str
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+
+
 class LLMInvoke(Protocol):
-    """Protocol for any callable that takes prompt + model → response."""
+    """Protocol for any callable that takes prompt + model → response.
 
-    def __call__(self, prompt: str, *, model: str) -> str: ...
+    Returns an :class:`LLMResponse` carrying both the generated text
+    and the token usage (for cost telemetry, audit A5). Implementations
+    that cannot report usage should leave token counts at 0.
+    """
+
+    def __call__(self, prompt: str, *, model: str) -> LLMResponse: ...
 
 
-def default_llm_invoke(prompt: str, *, model: str = "glm-5.1") -> str:
+def default_llm_invoke(
+    prompt: str,
+    *,
+    model: str = "glm-5.1",
+    temperature: float = 0.1,
+) -> LLMResponse:
     """Production-default LLM invocation via litellm + zhipu coding plan.
 
     Reads the API key from durin's secret store. Uses the OpenAI-
     compatible adapter (``openai/<model>``) with ``api_base`` override
     pointing at ``https://api.z.ai/api/coding/paas/v4``.
+
+    Returns the generated text plus prompt/completion tokens extracted
+    from ``response.usage``. Some upstream providers/proxies omit the
+    usage block; in that case tokens fall back to 0 so the dream cost
+    telemetry reports zero (under-report) rather than crashing.
+
+    ``temperature`` (default 0.1, kept identical to v1 behaviour) is
+    surfaced so callers like the LoCoMo judge can vary it across
+    retries — audit H2 (2026-05-29) introduced retry-time temperature
+    jitter to break upstream wedges where temp=0 returned the same
+    broken completion every attempt.
     """
     # Lazy imports so import-time isn't paid by callers that pass their own.
     from durin.security.secrets import get_secret_store
@@ -114,27 +205,114 @@ def default_llm_invoke(prompt: str, *, model: str = "glm-5.1") -> str:
         messages=[{"role": "user", "content": prompt}],
         api_key=api_key,
         api_base="https://api.z.ai/api/coding/paas/v4",
-        temperature=0.1,
+        temperature=temperature,
     )
-    return response.choices[0].message.content
+    usage = getattr(response, "usage", None)
+    prompt_tokens = 0
+    completion_tokens = 0
+    if usage is not None:
+        prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+        completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+    content = response.choices[0].message.content
+    if content is None:
+        # Providers return content=None on refusals / empty / tool-call
+        # turns. Without this guard, None propagates into LLMResponse.text
+        # (typed str) and surfaces downstream only as a generic
+        # DreamPatchParseError("not a string") in the retry loop, masking
+        # the real cause. Log it here and coerce to "" so the type holds.
+        logger.warning(
+            "dream LLM (%s) returned no content (refusal or empty "
+            "response); treating as empty", model,
+        )
+    return LLMResponse(
+        text=content or "",
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Commit-message extraction (split LLM commit string into subject/body/trailers)
+# ---------------------------------------------------------------------------
+
+
+_TRAILER_LINE_RE = re.compile(
+    r"^([A-Z][A-Za-z0-9-]+):\s*(.*)$",
+)
+
+
+def _extract_commit_parts(
+    commit_message: str,
+) -> tuple[str, str, dict[str, list[str]]]:
+    """Split an LLM-emitted commit message into subject, body, trailers.
+
+    The convention (doc 05 §11 + commit_format.md):
+
+        <subject — max 70 chars>
+
+        <optional multi-paragraph body>
+
+        Sources: foo.md, bar.md
+        Cursor-after: 2026-05-26T...
+        Entities-touched: person:marcelo
+
+    Lines that match ``<Capitalized-Word>: <value>`` at the END of the
+    message are trailers. Anything between the first line and the
+    trailer block is the body. The first line is the subject.
+
+    Returns ``(subject, body, trailers)`` where ``trailers`` is a
+    ``{key: [values]}`` map (multi-valued for keys that legitimately
+    repeat in git, though we don't expect any in practice).
+    """
+    text = commit_message.strip("\n")
+    if not text:
+        return "", "", {}
+    lines = text.splitlines()
+    subject = lines[0].strip()
+
+    # Walk back from the bottom collecting trailer lines until we hit
+    # a non-trailer line.
+    trailers: dict[str, list[str]] = {}
+    body_end = len(lines)
+    for i in range(len(lines) - 1, 0, -1):
+        line = lines[i].strip()
+        if not line:
+            # blank line — could be the separator before trailers or in
+            # the body. If we've already started collecting trailers,
+            # this blank line marks the body/trailer boundary; stop.
+            if trailers:
+                body_end = i
+                break
+            else:
+                # blank line within the body; keep looking for trailers
+                # but record this as the potential body end if we hit
+                # a trailer next.
+                continue
+        m = _TRAILER_LINE_RE.match(line)
+        if not m:
+            # Non-trailer non-empty line — body content. Stop collecting.
+            body_end = i + 1
+            break
+        key, value = m.group(1), m.group(2).strip()
+        trailers.setdefault(key, []).insert(0, value)
+    else:
+        # Walked all the way back to line 1 (the body has only trailer
+        # lines, no actual body).
+        body_end = 1
+
+    body_lines = lines[1:body_end]
+    # Strip blank lines around the body.
+    while body_lines and not body_lines[0].strip():
+        body_lines.pop(0)
+    while body_lines and not body_lines[-1].strip():
+        body_lines.pop()
+    body = "\n".join(body_lines)
+    return subject, body, trailers
 
 
 # ---------------------------------------------------------------------------
 # DreamConsolidator
 # ---------------------------------------------------------------------------
-
-
-# Same shape as scripts/dream_dryrun.py PROMPT_TEMPLATE but lives as a
-# tracked artifact in durin/templates/dream/consolidator.md (Phase 0.3).
-_PROMPT_TEMPLATE_PATH = (
-    Path(__file__).resolve().parent.parent / "templates" / "dream" / "consolidator.md"
-)
-
-
-_SECTION_PAGE = re.compile(
-    r"===PAGE===\s*\n(.+?)\n===COMMIT===\s*\n(.+?)(?:\n===END===|\Z)",
-    re.DOTALL,
-)
 
 
 class DreamConsolidator:
@@ -144,18 +322,29 @@ class DreamConsolidator:
     entity to consolidate and supplies the entries. This lets us
     unit-test the consolidation logic in isolation from "what entries
     to feed it" (which lives in higher layers / future work).
+
+    v2 (Phase 1.9): prompt + parse goes through the new pipeline
+    (``dream_prompt_builder`` + ``dream_patch_parser``) and apply
+    delegates to ``dream_apply.apply_dream_output`` +
+    ``dream_archive_consumed.archive_consumed_episodic`` +
+    ``dream_quarantine`` for failure bookkeeping + ``dream_commit_message``
+    for the canonical trailer block.
     """
 
     # G11: input budget per call. 50 entries × ~100 tokens = ~5000
     # input tokens; plus prompt (~2000) + current_page (~1500) ≈ 8500
-    # tokens total. Well within 32K+ context windows. Take *newest*
-    # entries when capping (assumes caller passes them in any order;
-    # we sort by timestamp before slicing).
+    # tokens total. Well within 32K+ context windows.
+    #
+    # Take *oldest* entries when capping (fix 2026-05-30): previously
+    # took newest, but combined with the cursor advancing to
+    # ``batch_last_ts`` that silently dropped the older N-50 entries
+    # forever — the cursor jumped to the newest timestamp and the next
+    # discovery filtered the rest as "pre-cursor". Oldest-first is
+    # FIFO + monotonic-cursor-safe: each pass drains 50, cursor moves
+    # to the newest of the batch (still older than the unprocessed
+    # remainder), DreamRunner's drain loop repeats until empty or
+    # `max_seconds_per_run` budget exhausted.
     MAX_ENTRIES_PER_CALL = 50
-
-    # G2 + G7: max page size and body-shrink ratio safety nets.
-    PAGE_MAX_BYTES = 25 * 1024
-    BODY_SHRINK_REJECT_RATIO = 0.5
 
     # G10/retries: 3 attempts on parse failure with feedback-in-prompt.
     MAX_RETRIES = 3
@@ -193,18 +382,22 @@ class DreamConsolidator:
         entity_ref: str,
         entries: list[EntryRef],
     ) -> ConsolidationResult:
-        """Build prompt, call LLM, parse output. Pure (no disk writes).
+        """Build prompt, call LLM, parse v2 output. Pure (no disk writes).
 
-        Per doc 23 §9:
-        - G11: caps entries at ``MAX_ENTRIES_PER_CALL`` (newest first
-          by timestamp).
+        Per doc 05 + doc 23 §9:
+        - G11: caps entries at ``MAX_ENTRIES_PER_CALL`` (oldest first
+          by timestamp — see constant docstring).
         - G2: tags the result with ``batch_last_ts`` so :meth:`apply`
           can force the cursor to the last entry of the batch,
-          overriding whatever the LLM put in ``Cursor-after`` (prevents
-          silent data loss when N > cap).
+          overriding whatever the LLM put in ``Cursor-after``.
         - G10/retry: retries up to ``MAX_RETRIES`` on parse failure,
           feeding the error back into the prompt.
         """
+        from durin.memory.dream_patch_parser import (
+            DreamPatchParseError,
+            parse_dream_output,
+        )
+
         if not entries:
             raise DreamError(f"no entries provided for {entity_ref}")
         if ":" not in entity_ref:
@@ -212,48 +405,75 @@ class DreamConsolidator:
                 f"entity_ref must be '<type>:<value>': {entity_ref!r}"
             )
 
-        # G11: cap entries — take the newest by timestamp.
+        # G11: cap entries — take the OLDEST by timestamp (FIFO).
+        # Pre-2026-05-30 took newest; combined with cursor=batch_last_ts
+        # that filtered older entries out of subsequent discoveries.
+        # Oldest-first + drain loop in DreamRunner = no data loss.
         if len(entries) > self.MAX_ENTRIES_PER_CALL:
             logger.info(
-                "dream: capping %s from %d to %d entries (newest first)",
+                "dream: capping %s from %d to %d entries (oldest first)",
                 entity_ref, len(entries), self.MAX_ENTRIES_PER_CALL,
             )
             entries = sorted(entries, key=lambda e: e.timestamp)[
-                -self.MAX_ENTRIES_PER_CALL:
+                : self.MAX_ENTRIES_PER_CALL
             ]
         # G2: remember the last ts of the actual batch we're sending.
         batch_last_ts = entries[-1].timestamp if entries else None
 
         current_page = self._read_existing_page(entity_ref)
-        current_page_parsed = (
-            EntityPage.from_text(current_page) if current_page else None
-        )
 
         last_error: str | None = None
+        # A5: accumulate tokens across retries — the prompt is sent
+        # again on each parse-retry, so cost compounds with retries.
+        total_prompt_tokens = 0
+        total_completion_tokens = 0
+        call_count = 0
         for attempt in range(self.MAX_RETRIES):
             prompt = self._build_prompt(entity_ref, entries, current_page)
             if last_error is not None:
                 prompt += (
                     f"\n\n[Previous attempt failed with error: {last_error}]\n"
                     "Please produce a strictly-formatted response with "
-                    "===PAGE===, ===COMMIT===, and ===END=== markers, "
-                    "valid YAML frontmatter (type, name, aliases at minimum)."
+                    "===PATCH===, ===BODY_DELTA===, ===COMMIT===, "
+                    "===END=== markers and a JSON array of patch ops "
+                    "(each carrying a `provenance` field)."
                 )
-            raw = self._llm_invoke(prompt, model=self.model)
+            response = self._llm_invoke(prompt, model=self.model)
+            call_count += 1
+            # Tolerate legacy llm_invoke implementations that return a
+            # bare str (pre-A5 protocol). The dataclass case is the
+            # normal one; the str fallback is a compat shim for
+            # third-party callers that haven't migrated.
+            if isinstance(response, LLMResponse):
+                raw = response.text
+                total_prompt_tokens += response.prompt_tokens
+                total_completion_tokens += response.completion_tokens
+            else:
+                raw = str(response)
             try:
-                result = self._parse_response(
-                    raw, current_page_parsed=current_page_parsed,
-                )
-            except DreamError as exc:
+                parsed = parse_dream_output(raw)
+            except DreamPatchParseError as exc:
                 last_error = str(exc)
                 logger.warning(
                     "dream consolidate attempt %d/%d failed: %s",
                     attempt + 1, self.MAX_RETRIES, exc,
                 )
                 continue
-            # G2: stamp the batch_last_ts so apply() can force the cursor.
-            result.batch_last_ts = batch_last_ts
-            return result
+
+            subject, body, trailers = _extract_commit_parts(
+                parsed.commit_message,
+            )
+            return ConsolidationResult(
+                parsed_output=parsed,
+                commit_subject=subject,
+                commit_body=body,
+                commit_trailers=trailers,
+                raw_output=raw,
+                batch_last_ts=batch_last_ts,
+                prompt_tokens=total_prompt_tokens,
+                completion_tokens=total_completion_tokens,
+                llm_call_count=call_count,
+            )
 
         raise DreamError(
             f"dream failed after {self.MAX_RETRIES} attempts: {last_error}"
@@ -263,58 +483,183 @@ class DreamConsolidator:
         self,
         entity_ref: str,
         result: ConsolidationResult,
+        *,
+        trigger: str = "manual",
     ) -> str | None:
-        """Persist: write entity page, git commit, refresh alias index.
+        """Persist: apply patch, archive consumed, commit, refresh indices.
 
-        Returns the commit SHA, or ``None`` if there were no changes
-        to commit (idempotent re-run on identical content).
+        v2 flow (doc 05 §6 + d4-d10):
 
-        G2 invariant: if ``result.batch_last_ts`` is set, forces the
-        page's ``dream_processed_through`` to that value, overriding
-        any ``Cursor-after`` the LLM put in the trailers. Without
-        this, batches that hit MAX_ENTRIES_PER_CALL could silently
-        lose the unprocessed tail.
+          1. Ensure a placeholder entity page exists on disk so the
+             applier has something to mutate.
+          2. ``apply_dream_output`` validates ops, copies to
+             ``.md.bak``, applies the JSON Patch, appends the body
+             delta, and re-renders the page atomically. On structural
+             failure the file is rolled back and a typed
+             ``DreamApplyResult`` flows back here.
+          3. On success: record provenance, archive consumed episodic
+             entries, clear the quarantine counter, and commit the
+             resulting page to ``memory/.git/`` with the canonical
+             trailer block.
+          4. On structural failure: increment the quarantine counter
+             via :func:`record_failure` (only structural kinds count
+             per doc 05 §12.5) and re-raise as :class:`DreamError`
+             so the caller knows this entity skipped.
+
+        G2 invariant (doc 05 §6.1): after the patch is applied, force
+        the on-disk page's ``dream_processed_through`` to
+        ``result.batch_last_ts`` — the timestamp of the latest entry
+        the LLM was *given*, not whatever ``Cursor-after`` the LLM
+        emitted. Defends against silent data loss when the LLM
+        processed only a subset of a multi-entry batch.
+
+        Returns the commit SHA, or ``None`` when nothing changed
+        (idempotent re-run on identical content).
         """
+        from durin.memory.dream_apply import (
+            DreamApplyFailureKind,
+            apply_dream_output,
+        )
+        from durin.memory.dream_archive_consumed import (
+            archive_consumed_episodic,
+        )
+        from durin.memory.dream_commit_message import (
+            CommitTrailers,
+            finalize_commit_message,
+        )
+        from durin.memory.dream_quarantine import (
+            clear_failures,
+            record_failure,
+        )
+
         type_, slug = entity_ref.split(":", 1)
         page_path = self.entities_root / type_ / f"{slug}.md"
 
-        # G2: force cursor to batch_last_ts before persistence.
-        page_text = result.page_text
-        if result.batch_last_ts is not None:
-            parsed = EntityPage.from_text(page_text)
-            if parsed is not None and parsed.dream_processed_through != result.batch_last_ts:
-                parsed.dream_processed_through = result.batch_last_ts
-                page_text = parsed.to_markdown()
-                # Keep result.page_text in sync so callers see what was written.
-                result.page_text = page_text
+        # 1) Ensure a target page exists for the applier to mutate.
+        # First Dream pass for a brand-new entity hits a placeholder
+        # we create here.
+        if not page_path.exists():
+            placeholder = EntityPage(
+                type=type_, name=slug.replace("_", " ").title() or slug,
+                aliases=[],
+                # E19: Dream is the author of any placeholder it
+                # writes; auto-absorb must be free to merge it.
+                author="agent_created",
+            )
+            placeholder.save(page_path)
 
-        # Idempotence: if existing page is identical, no-op early.
-        if page_path.exists():
-            existing_text = page_path.read_text(encoding="utf-8")
-            if existing_text == page_text:
-                logger.info("dream apply: no changes for %s", entity_ref)
-                return None
+        # 2) Apply the patch + body delta atomically.
+        cursor_for_telemetry = (
+            result.batch_last_ts or _trailer_value(
+                result.commit_trailers, "Cursor-after",
+            )
+            or ""
+        )
+        apply_result = apply_dream_output(
+            workspace=self.workspace,
+            entity_ref=entity_ref,
+            parsed=result.parsed_output,
+            trigger=trigger,
+            cursor_after=cursor_for_telemetry,
+        )
 
-        page_path.parent.mkdir(parents=True, exist_ok=True)
-        page_path.write_text(page_text, encoding="utf-8")
+        if apply_result.failure_kind is not None:
+            # Structural failures increment the quarantine counter. A5:
+            # propagate whether THIS failure crossed the 3-strike
+            # threshold so the runner can count quarantined entities.
+            triggered = False
+            try:
+                page = EntityPage.from_file(page_path)
+                if page is not None and apply_result.failure_kind in {
+                    DreamApplyFailureKind.VALIDATION,
+                    DreamApplyFailureKind.PATCH_RUNTIME,
+                    DreamApplyFailureKind.ROUND_TRIP,
+                }:
+                    triggered = record_failure(page, apply_result.failure_kind)
+                    page.save(page_path)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "dream apply: could not record quarantine for %s: %s",
+                    entity_ref, exc,
+                )
+            raise DreamError(
+                f"apply_dream_output failed ({apply_result.failure_kind.value}): "
+                f"{apply_result.error_message}",
+                triggered_quarantine=triggered,
+            )
 
+        # 3) G2 — force cursor to batch_last_ts AFTER the patch has
+        # applied. Bumps `dream_processed_through` + clears the
+        # quarantine counter (success resets per §12.5).
+        page = EntityPage.from_file(page_path)
+        if page is None:
+            # apply_dream_output's round-trip guard makes this very
+            # unlikely; defensive raise.
+            raise DreamError(
+                f"page unreadable after apply for {entity_ref}"
+            )
+        if (
+            result.batch_last_ts is not None
+            and page.dream_processed_through != result.batch_last_ts
+        ):
+            page.dream_processed_through = result.batch_last_ts
+        clear_failures(page)
+        page.save(page_path)
+        # Stash the post-apply page text back into the result so
+        # callers + tests can inspect what landed.
+        result.page_text = page_path.read_text(encoding="utf-8")
+
+        # 4) Commit to git with the canonical trailer block.
         repo = self._get_git_repo()
         repo.init(
             gitignore_patterns=[
-                "*.lance/",
-                "vectors/",
-                ".aliases.json",
-                ".usage.json",
-                ".usage/",
-                ".dream.lock",
-                ".locks/",
+                "*.lance/", "vectors/", ".aliases.json",
+                ".usage.json", ".usage/", ".dream.lock", ".locks/",
             ]
         )
+        # Build the final commit message via the hybrid module so
+        # Trigger+Run-id always land + missing LLM trailers are
+        # backfilled from runner state (doc 05 §11).
+        import uuid
+        sources_list = result.commit_trailers.get("Sources") or []
+        sources = [
+            s.strip() for s in ",".join(sources_list).split(",")
+            if s.strip()
+        ]
+        if not sources:
+            # Backfill from parsed patch provenance — guarantees the
+            # trailer is informative even when the LLM omitted it.
+            seen: set[str] = set()
+            for op in (result.parsed_output.patch_ops or []):
+                prov = op.get("provenance") if isinstance(op, dict) else None
+                if isinstance(prov, str) and prov not in seen:
+                    seen.add(prov)
+                    sources.append(prov)
+        trailers = CommitTrailers(
+            sources=sources,
+            cursor_after=(
+                result.batch_last_ts
+                or _trailer_value(result.commit_trailers, "Cursor-after")
+                or ""
+            ),
+            entities_touched=entity_ref,
+            trigger=trigger,
+            run_id=str(uuid.uuid4()),
+        )
+        final_commit = finalize_commit_message(
+            result.raw_output_commit_message(),
+            trailers=trailers,
+        )
+
+        # `repo.commit` expects subject/body/trailers split. Re-parse
+        # what we just rendered so the runner's trailers are
+        # authoritative.
+        subj, body_text, trailer_dict = _extract_commit_parts(final_commit)
         try:
             sha = repo.commit(
-                subject=result.commit_subject,
-                body=result.commit_body,
-                trailers={k: v for k, v in result.commit_trailers.items()},
+                subject=subj,
+                body=body_text,
+                trailers={k: v for k, v in trailer_dict.items()},
                 paths=[page_path],
                 author="durin-dream",
                 author_email="dream@durin.local",
@@ -322,18 +667,18 @@ class DreamConsolidator:
         except NothingToCommitError:
             sha = None
 
-        # Refresh alias index — even on no-commit (alias_index might be
-        # stale relative to file). Parse the just-written page.
-        # In-memory only (per doc 23 T1.4): no save() to disk; the next
-        # process boot rebuilds from disk.
+        # 5) Archive consumed episodic entries + drop their vector rows.
+        archive_consumed_episodic(
+            workspace=self.workspace,
+            entity_ref=entity_ref,
+            parsed=result.parsed_output,
+            vector_index=self._vector_index,
+        )
+
+        # 6) Refresh alias index + vector index for the entity page.
         idx = self._get_alias_index()
-        page = EntityPage.from_text(result.page_text)
         if page is not None:
             idx.refresh_for(page, slug=slug)
-            # Vector index: only upsert if a real index was provided. We
-            # don't auto-construct one because that pulls in fastembed
-            # (heavy dep) — the caller decides whether vector retrieval
-            # is enabled, same as memory.enabled in config.
             if self._vector_index is not None:
                 try:
                     self._vector_index.upsert_entity_page(
@@ -342,16 +687,27 @@ class DreamConsolidator:
                         aliases=list(page.aliases),
                         body=page.body,
                         path=page_path,
+                        attributes=dict(page.attributes),
+                        relations=list(page.relations),
                     )
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
                         "dream apply: vector index upsert failed for %s: %s",
                         entity_ref, exc,
                     )
-        else:
+
+        # 7) Re-index FTS5 for the entity page (doc 02 §6.2). E5:
+        # `trigger="dream_apply"` so capacity dashboards can split
+        # this burst from the steady watcher stream.
+        try:
+            from durin.memory.indexer import reindex_one_file
+            reindex_one_file(
+                self.workspace, page_path, trigger="dream_apply",
+            )
+        except Exception as exc:  # noqa: BLE001
             logger.warning(
-                "dream apply: wrote unparseable page for %s — alias_index not updated",
-                entity_ref,
+                "dream apply: FTS reindex failed for %s: %s",
+                entity_ref, exc,
             )
 
         return sha
@@ -368,45 +724,115 @@ class DreamConsolidator:
     ) -> str:
         """Compose the prompt from the tracked template + dynamic vars.
 
-        Template is read fresh each call so iteration on the template
-        is reflected without restarting any service.
-        """
-        template = self._read_prompt_template()
+        Delegates to :func:`durin.memory.dream_prompt_builder.build_dream_prompt`
+        which assembles the multi-file v2 prompt package (consolidator
+        template + rules + commit_format + json_patch_reference + 6
+        examples) and fills the input slots.
 
-        entries_text_lines: list[str] = []
+        The legacy ``_read_prompt_template`` + inline-fence extraction
+        is no longer used — the v2 template is the prompt as-is (no
+        wrapping fence) and the builder reads all auxiliary files
+        directly from ``durin/templates/dream/``.
+
+        Audit F7 (2026-05-28) wired three of the four placeholder
+        slots Phase 1 deliverable 9 promised:
+
+        - ``existing_attribute_keys`` and ``existing_relation_types``
+          are now parsed from the current entity page's frontmatter
+          so the LLM has a concrete schema to keep coherent.
+        - ``recent_history`` calls
+          :func:`durin.memory.dream_git_history.format_recent_history`
+          to inject the last 30 days of commits on this entity so the
+          LLM can avoid undoing its own recent decisions.
+
+        ``existing_uris`` remains empty (walk + sort by mtime + cap
+        is a separate change — flagged as F7-deferred in doc 11).
+        """
+        from durin.memory.dream_prompt_builder import (
+            DreamPromptContext,
+            build_dream_prompt,
+        )
+
+        entries_lines: list[str] = []
         for entry in entries:
             entities_str = ", ".join(entry.entities) if entry.entities else ""
             tag_suffix = f" [tags: {entities_str}]" if entities_str else ""
-            entries_text_lines.append(
-                f"- [{entry.timestamp} / {entry.id}]{tag_suffix} {entry.text}"
+            # Surface the entry id as the spec-format provenance path
+            # the LLM is asked to cite (`episodic/<id>.md`). Bug
+            # 2026-05-31: showing `[<timestamp> / <bare_id>]` induced
+            # the LLM to mirror that visual format as
+            # `<timestamp>/<bare_id>`, which then failed to match
+            # `archive_consumed_episodic`'s `startswith("episodic/")`
+            # filter — consumed entries silently accumulated on disk.
+            entries_lines.append(
+                f"[{entry.timestamp} | episodic/{entry.id}.md]"
+                f"{tag_suffix} {entry.text}"
             )
-        entries_text = "\n".join(entries_text_lines)
 
-        prompt_vars = {
-            "entity_id": entity_ref,
-            "n_entries": str(len(entries)),
-            "entries_text": entries_text,
-            "current_page": current_page or "(no existing page — this is the first consolidation)",
-        }
+        # F7: parse the existing page so we can populate the schema
+        # slots. Failures are swallowed — the LLM still gets a usable
+        # prompt; it just loses the schema-coherence hints.
+        existing_attribute_keys: tuple[str, ...] = ()
+        existing_relation_types: tuple[str, ...] = ()
+        current_relation_count: int = 0
+        if current_page:
+            try:
+                page = EntityPage.from_text(current_page)
+                existing_attribute_keys = tuple(
+                    sorted(page.attributes.keys())
+                )
+                rel_types = sorted({
+                    str(r.get("type", "")).strip()
+                    for r in (page.relations or [])
+                    if isinstance(r, dict) and r.get("type")
+                })
+                existing_relation_types = tuple(rel_types)
+                current_relation_count = len(page.relations or [])
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "dream: prompt slot parse failed for %s: %s",
+                    entity_ref, exc,
+                )
 
-        # Simple {placeholder} substitution since the template is YAML/markdown
-        # — Python's str.format would fight with literal braces in markdown.
-        out = template
-        for key, value in prompt_vars.items():
-            out = out.replace("{" + key + "}", value)
-        return out
-
-    def _read_prompt_template(self) -> str:
-        """Read the prompt template file. Falls back to an inline default."""
+        # F7: git history is best-effort context fuel; the producer
+        # already returns "(no recent history)" on any failure.
         try:
-            text = _PROMPT_TEMPLATE_PATH.read_text(encoding="utf-8")
-        except OSError:
-            return _INLINE_TEMPLATE_FALLBACK
-        # The template doc has explanatory prose + ``` code fence with the
-        # actual prompt. Extract the code block when present; otherwise
-        # use the whole file.
-        fence_match = re.search(r"```\s*\n(.*?)\n```", text, re.DOTALL)
-        return fence_match.group(1) if fence_match else text
+            recent_history_text = format_recent_history(
+                self.workspace, entity_ref,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "dream: recent_history failed for %s: %s",
+                entity_ref, exc,
+            )
+            recent_history_text = ""
+
+        # F17 (audit third pass, 2026-05-28): workspace entity
+        # inventory so the LLM avoids creating duplicate URIs (e.g.
+        # `person:marcelo_marmol` when `person:marcelo` already exists).
+        try:
+            existing_uris = existing_uris_by_recent_mtime(self.workspace)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "dream: existing_uris producer failed: %s", exc,
+            )
+            existing_uris = ()
+
+        ctx = DreamPromptContext(
+            entity_id=entity_ref,
+            existing_page_content=(
+                current_page
+                or "(no existing page — this is the first consolidation)"
+            ),
+            existing_attribute_keys=existing_attribute_keys,
+            existing_relation_types=existing_relation_types,
+            existing_uris=existing_uris,
+            recent_history=recent_history_text,
+            entries=tuple(entries_lines),
+            current_relation_count=current_relation_count,
+        )
+        return build_dream_prompt(ctx)
+
 
     def _read_existing_page(self, entity_ref: str) -> str | None:
         type_, slug = entity_ref.split(":", 1)
@@ -417,81 +843,6 @@ class DreamConsolidator:
             return path.read_text(encoding="utf-8")
         except OSError:
             return None
-
-    @classmethod
-    def _parse_response(
-        cls,
-        raw: str,
-        *,
-        current_page_parsed: "EntityPage | None" = None,
-    ) -> ConsolidationResult:
-        """Extract ===PAGE=== and ===COMMIT=== sections.
-
-        Validates per doc 23 §9:
-        - G7: rejects if body shrinks more than BODY_SHRINK_REJECT_RATIO
-          vs current_page (likely LLM hallucination / info loss).
-        - Page size capped at PAGE_MAX_BYTES.
-        - Parsed page must satisfy EntityPage.from_text() (required
-          frontmatter fields, valid YAML).
-        """
-        # Some LLMs wrap the whole thing in a ```fence. Strip it if so.
-        stripped = raw.strip()
-        if stripped.startswith("```"):
-            lines = stripped.split("\n")
-            if lines and lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].strip().startswith("```"):
-                lines = lines[:-1]
-            stripped = "\n".join(lines)
-
-        match = _SECTION_PAGE.search(stripped)
-        if not match:
-            raise DreamError(
-                "LLM response missing ===PAGE=== / ===COMMIT=== markers"
-            )
-        page_text = match.group(1).strip() + "\n"
-        commit_text = match.group(2).strip()
-
-        # G7-soft: cap page size.
-        if len(page_text.encode("utf-8")) > cls.PAGE_MAX_BYTES:
-            raise DreamError(
-                f"page_text exceeds {cls.PAGE_MAX_BYTES} bytes "
-                f"({len(page_text)} chars); refusing to commit"
-            )
-
-        # Validate page is parseable as EntityPage (catches missing
-        # frontmatter fields / malformed YAML before we write to disk).
-        parsed_page = EntityPage.from_text(page_text)
-        if parsed_page is None:
-            raise DreamError(
-                "LLM page_text does not parse as a valid EntityPage "
-                "(missing required frontmatter type/name or malformed YAML)"
-            )
-
-        # G7: reject if body shrunk >50% vs current page (likely
-        # hallucination / info loss). Only trigger when current was
-        # substantial enough that shrink matters.
-        if current_page_parsed is not None:
-            old_body = (current_page_parsed.body or "").strip()
-            new_body = (parsed_page.body or "").strip()
-            if len(old_body) > 200 and len(new_body) < len(old_body) * cls.BODY_SHRINK_REJECT_RATIO:
-                raise DreamError(
-                    f"consolidated body shrank from {len(old_body)} to "
-                    f"{len(new_body)} chars (>{int((1-cls.BODY_SHRINK_REJECT_RATIO)*100)}% loss). "
-                    "Refusing to commit (possible hallucination/info-loss)."
-                )
-
-        # Split commit into subject + body + trailers.
-        from durin.utils.git_repo import _split_message
-
-        subject, body, trailers = _split_message(commit_text)
-        return ConsolidationResult(
-            page_text=page_text,
-            commit_subject=subject,
-            commit_body=body,
-            commit_trailers=trailers,
-            raw_output=raw,
-        )
 
     def _get_git_repo(self) -> GitRepo:
         if self._git_repo is None:
@@ -516,21 +867,3 @@ class DreamConsolidator:
         return get_shared_alias_index(self.memory_root)
 
 
-# Fallback used when durin/templates/dream/consolidator.md is missing.
-# Kept minimal — the on-disk template is the source of truth.
-_INLINE_TEMPLATE_FALLBACK = """Eres durin, asistente con sistema de memoria entity-centric.
-
-Tu tarea: tomar N observaciones episódicas sobre la entidad `{entity_id}`
-y producir DOS outputs en formato:
-
-===PAGE===
-<markdown completo de la página entity, incluyendo frontmatter YAML>
-===COMMIT===
-<commit subject, body, trailers como Sources/Entities-touched/Cursor-after>
-===END===
-
-Entidad: {entity_id}
-Página actual: {current_page}
-Observaciones ({n_entries}):
-{entries_text}
-"""

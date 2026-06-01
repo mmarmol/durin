@@ -4,7 +4,7 @@ Estado: BORRADOR DE INVESTIGACIÓN. No commitment.
 Autor: investigation agent.
 Fecha: 2026-05-23.
 Referencias cruzadas: `docs/08_memory_phase2_proposal.md` §0c.9, `docs/03_memory_design.md`,
-`docs/07_external_agents_review.md`, `durin/memory/provenance.py`,
+`docs/archive/34_external_agents_review.md`, `durin/memory/provenance.py`,
 `durin/agent/loop.py`, `durin/agent/subagent.py`, `durin/agent/memory.py` (Consolidator/Dream).
 
 ---
@@ -930,7 +930,7 @@ contenido útil amerita una pasada de background_review.
 
 - Sin cambios en el código de turno: ~3-8k tokens input + 200-1500 tokens
   output (estimación basada en sesiones típicas registradas en
-  `02_bitacora.md`; el dato exacto puede medirse antes de habilitar).
+  `bitacora.md`; el dato exacto puede medirse antes de habilitar).
 - Background_review extra: payload del fork es solo el último turno
   (~500-3000 tokens input) + 50-200 tokens output (porque el prompt está
   diseñado para responses cortas).
@@ -1541,7 +1541,7 @@ Antes de implementar, vale la pena confirmar tres cosas empíricamente:
 ### 9.1 Medir el costo real de un turno típico
 
 Usar telemetría existente (`cache.usage`, `tool.*`) para sacar de
-`02_bitacora.md` o de la base de sesiones actual: cuál es el costo
+`bitacora.md` o de la base de sesiones actual: cuál es el costo
 promedio de un turno de Sonnet/Opus en durin, en USD. Esto da el
 denominator real para evaluar si el ~$0.001 del background_review con
 Haiku es 1% o 10% del turno.
@@ -1578,7 +1578,7 @@ background_review puede seguir el mismo patrón.
 ### 9.4 Validar prompt sobre 5-10 turnos reales históricos
 
 Antes de mergear, correr el prompt en frío sobre 5-10 turnos seleccionados
-manualmente de `02_bitacora.md` (con redacted real-name si aplica). Anotar:
+manualmente de `bitacora.md` (con redacted real-name si aplica). Anotar:
 qué guardó, qué dejó pasar, qué guardó que no debió, qué dejó pasar que
 debió guardar. Iterar el prompt hasta que el comportamiento esté
 calibrado. **No mergear sin esta validación**.

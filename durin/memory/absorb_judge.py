@@ -138,10 +138,17 @@ def judge_pair(
         absorbed_mtime=absorbed_mtime,
     )
 
+    # A5: tolerate both new LLMResponse-returning and legacy str-
+    # returning llm_invoke shapes. The judge consumes the text; token
+    # usage propagation for auto-absorb is intentionally NOT plumbed
+    # into `memory.dream.end` (the absorb judge runs AFTER the dream
+    # pass and emits its own `memory.absorb.judged` event).
+    from durin.memory.dream import LLMResponse as _LLMResponse
+
     last_error: Exception | None = None
     for attempt in range(max_retries + 1):
         try:
-            raw = llm_invoke(prompt, model=model)
+            response = llm_invoke(prompt, model=model)
         except Exception as exc:  # noqa: BLE001
             last_error = exc
             logger.warning(
@@ -149,6 +156,7 @@ def judge_pair(
                 attempt + 1, max_retries + 1, exc,
             )
             continue
+        raw = response.text if isinstance(response, _LLMResponse) else str(response)
         try:
             return _parse_response(raw)
         except JudgeError as exc:

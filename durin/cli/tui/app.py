@@ -85,6 +85,10 @@ class DurinApp(App[None]):
         self._tool_bubbles: dict[str, Any] = {}
         self._bus_task: asyncio.Task | None = None
         self._consume_task: asyncio.Task | None = None
+        # Fire-and-forget tasks (submit publishes, tool-bubble notes) parked
+        # here so the event loop keeps a strong reference and can't GC them
+        # mid-flight (RUF006).
+        self._background_tasks: set[asyncio.Task] = set()
         self._palette = "ithildin"
         self._mode = "dark"
         self._apply_durin_theme()
@@ -441,7 +445,9 @@ class DurinApp(App[None]):
             return
         # Spinner: shows "thinking…" between submit and first delta.
         self._show_working_indicator()
-        asyncio.create_task(self._publish_inbound(value, media))
+        task = asyncio.create_task(self._publish_inbound(value, media))
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
 
     def _show_working_indicator(self) -> None:
         """Mount a 'thinking…' spinner below the assistant bubble.

@@ -1,17 +1,18 @@
 """§2.H — fragment/canonical retrieval contract.
 
-The doc 18 §6 promise — "página consolidada y entries post-cursor
-coexisten en los resultados; el LLM reconcilia en read-time con
-timestamps y contexto" — was a design intent that did not survive
+The doc 18 §6 promise — "consolidated page and post-cursor entries
+coexist in the results; the LLM reconciles at read-time with
+timestamps and context" — was a design intent that did not survive
 into the LLM delivery contract until §2.H. These tests pin the
 contract on both delivery paths (lazy `memory_search` + eager
 `hot_layer`) so future changes don't silently regress it.
 
 Marker convention follows the compaction precedent
-(``=== ARCHIVED SUMMARY ===`` per bitácora 2026-05-19):
+(``=== ARCHIVED SUMMARY ===`` per logbook 2026-05-19) and was
+formalised in ``docs/architecture/memory/06_prompts_and_instructions.md`` §8.3 to:
 
-- ``=== CANONICAL: <ref> (canonical entity page) === ... === END CANONICAL ===``
-- ``=== FRAGMENT: <ref?>, ts=<valid_from> === ... === END FRAGMENT ===``
+- ``=== CANONICAL: <ref> (consolidated <ts>) === ... === END CANONICAL ===``
+- ``=== FRAGMENT: <path> (ts <ts>) === ... === END FRAGMENT ===``
 """
 
 from __future__ import annotations
@@ -104,47 +105,17 @@ class TestToDictContract:
 
 
 # ---------------------------------------------------------------------------
-# render_block — the LLM-facing marker format
+# render_block markers — migrated to sectioned_output (audit F4, 2026-05-28)
 # ---------------------------------------------------------------------------
-
-
-class TestRenderBlock:
-    def test_canonical_header_and_footer(self) -> None:
-        r = Result(
-            source="memory", uri="memory/entity_page/person:marcelo",
-            headline="Marcelo", snippet="m",
-            summary="Marcelo Marmol",
-            class_name="entity_page",
-            entities=("person:marcelo",),
-        )
-        out = r.render_block()
-        assert out.startswith("=== CANONICAL: memory/entity_page/person:marcelo (canonical entity page) ===")
-        assert out.endswith("=== END CANONICAL ===")
-        assert "Marcelo Marmol" in out
-
-    def test_fragment_includes_timestamp(self) -> None:
-        r = Result(
-            source="memory", uri="memory/episodic/e1",
-            headline="h", snippet="s",
-            summary="Just observed something",
-            class_name="episodic",
-            valid_from="2026-05-23T18:00",
-            entities=("person:marcelo",),
-        )
-        out = r.render_block()
-        assert "=== FRAGMENT: memory/episodic/e1 (ts: 2026-05-23T18:00) ===" in out
-        assert "Just observed something" in out
-        assert "Entities: person:marcelo" in out
-        assert out.endswith("=== END FRAGMENT ===")
-
-    def test_fragment_with_no_valid_from_still_renders(self) -> None:
-        r = Result(
-            source="memory", uri="memory/stable/x",
-            headline="h", snippet="s", class_name="stable",
-        )
-        out = r.render_block()
-        # No ts hint and no canonical marker since stable is fragment.
-        assert out.startswith("=== FRAGMENT: memory/stable/x ===")
+#
+# Pre-F4 `Result.render_block` produced per-row marker blocks consumed
+# by the agent. F4 completed the Phase 3 migration: the renderer is
+# now `durin.memory.sectioned_output.render_sectioned`, which groups
+# hits by section and emits intros + per-block markers + END closes.
+#
+# Tests for marker format moved to `tests/memory/test_sectioned_migration_f4.py`
+# (END markers, summary > body > snippet preference, entities tail,
+# canonical ts/no-ts variants).
 
 
 # ---------------------------------------------------------------------------
@@ -215,7 +186,11 @@ class TestSearchDreamedGrep:
 # ---------------------------------------------------------------------------
 
 
-def test_memory_search_tool_includes_rendered_blocks(tmp_path: Path) -> None:
+def test_memory_search_tool_emits_sectioned_rendered(tmp_path: Path) -> None:
+    """Audit F4 (2026-05-28): the tool returns a single
+    `sectioned_rendered` string with grouped sections + per-block
+    markers + END closes. Per-row `rendered` was dropped — WebUI
+    consumes raw fields, the LLM consumes the sectioned string."""
     from durin.agent.tools.memory_search import MemorySearchTool
 
     page = EntityPage(type="person", name="Marcelo", aliases=["marcelo"])
@@ -229,10 +204,13 @@ def test_memory_search_tool_includes_rendered_blocks(tmp_path: Path) -> None:
     tool = MemorySearchTool(workspace=tmp_path)
     out = asyncio.run(tool.execute(query="marcelo", scope="dreamed", level="warm"))
     assert out["total"] >= 2
+    # The sectioned string carries markers + section headers.
+    rendered = out["sectioned_rendered"]
+    assert "=== CANONICAL: " in rendered
+    assert "=== END CANONICAL ===" in rendered
+    # Per-row `rendered` no longer present in the response shape.
     for r in out["results"]:
-        assert "rendered" in r, "tool boundary must add the marker block"
-        assert r["rendered"].startswith("=== ")
-        assert r["rendered"].endswith(" ===")
+        assert "rendered" not in r
 
 
 # ---------------------------------------------------------------------------
@@ -285,7 +263,10 @@ class TestHotLayerFragmentsSection:
 
         rendered = read_hot_layer(tmp_path).render()
         assert "## Memory: Recent fragments (post-cursor)" in rendered
-        assert "=== FRAGMENT: person:marcelo" in rendered
+        # Marker format (doc 06 §8.3): `=== FRAGMENT: <path> (ts <ts>) ===`
+        # — path is workspace-relative, not the entity ref.
+        assert "=== FRAGMENT: memory/episodic/" in rendered
+        assert "(ts 2026-05-22" in rendered
         assert "post-cursor obs" in rendered
 
     def test_pre_cursor_fragment_filtered_out(self, tmp_path: Path) -> None:

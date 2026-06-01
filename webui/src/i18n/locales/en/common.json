@@ -25,7 +25,7 @@
       "section": "System",
       "restartHint": "Restart durin to apply runtime changes.",
       "restart": "Restart durin",
-      "restarting": "Restarting..."
+      "restarting": "Restarting…"
     },
     "restart": {
       "completed": "Restart completed in {{seconds}}s."
@@ -70,7 +70,9 @@
       "advanced": "All settings",
       "providers": "Model providers",
       "web-search": "Web search",
-      "channels": "Channels"
+      "channels": "Channels",
+      "memory": "Memory",
+      "cron": "Cron"
     },
     "sections": {
       "interface": "Interface",
@@ -100,7 +102,7 @@
       "notAvailable": "Not available"
     },
     "status": {
-      "loading": "Loading settings...",
+      "loading": "Loading settings…",
       "loadError": "Could not load settings",
       "unsaved": "Unsaved changes.",
       "savedRestart": "Saved. Restart durin to apply."
@@ -174,7 +176,17 @@
       "save": "Save secret",
       "saving": "Saving…",
       "delete": "Delete",
-      "confirmDelete": "Delete this secret?"
+      "confirmDelete": "Delete this secret?",
+      "edit": "Edit",
+      "editTitle": "Editing {{name}}",
+      "editingBadge": "EDITING",
+      "cancel": "Cancel",
+      "saveEdit": "Save changes",
+      "hintValueEdit": "Leave blank to keep the current value. Provide a new value only when rotating the secret.",
+      "valuePlaceholderEdit": "(leave blank to keep current)",
+      "valueRedacted": "(no hint available)",
+      "fieldOrigin": "Origin",
+      "fieldCreated": "Created"
     },
     "config": {
       "description": "Every durin setting, grouped by section. Editing a value writes it straight to the config — the same as durin config set. Lists and managed secrets are read-only here.",
@@ -184,7 +196,17 @@
       "on": "On",
       "off": "Off",
       "managed": "Managed secret",
-      "empty": "No settings in this section."
+      "empty": "No settings in this section.",
+      "secretRotate": "Rotate value",
+      "secretRotateHint": "Write a new value to the stored secret. All config refs pointing to this name will use it.",
+      "secretDisconnect": "Disconnect",
+      "secretDisconnectHint": "Replace this ref with a plaintext input. The secret stays in the store, only this field is severed.",
+      "secretRotateTitle": "Rotate {{name}}",
+      "secretRotateDescription": "Replace the value stored for {{name}}. Every config field that references ${secret:{{name}}} will pick this up immediately. The value never leaves the secret store and never enters the chat.",
+      "secretRotatePlaceholder": "New secret value",
+      "secretRotateCancel": "Cancel",
+      "secretRotateSave": "Save",
+      "secretRotateSaving": "Saving…"
     },
     "models": {
       "auxTitle": "Vision & audio models",
@@ -212,7 +234,22 @@
       "capsVision": "vision",
       "capsAudio": "audio",
       "capsContext": "{{tokens}} context",
-      "capsUnknown": "Pick a model to see what it supports."
+      "capsUnknown": "Pick a model to see what it supports.",
+      "pickProvider": "Pick a provider",
+      "testRow": "Test",
+      "testRowHint": "Real round-trip to the configured model — verifies the API key and model id work together.",
+      "saving": "Saving…",
+      "advanced": "Advanced",
+      "contextWindow": "Context window",
+      "contextWindowHint": "Max input tokens fed to the model per turn. Defaults to the model catalog value.",
+      "temperature": "Temperature",
+      "temperatureHint": "Sampling temperature in [0, 2]. Lower = more deterministic.",
+      "maxTokens": "Max output tokens",
+      "maxTokensHint": "Cap per assistant message. Bounded by the model.",
+      "reasoningEffort": "Reasoning effort",
+      "reasoningEffortHint": "For reasoning models: low | medium | high. Leave blank for default.",
+      "enabled": "Enabled",
+      "disabled": "Disabled"
     },
     "channels": {
       "description": "Bridge durin to chat platforms. Enable a channel and set its credential — the token goes to the secret store, not config.json.",
@@ -226,6 +263,54 @@
       "noCredential": "No credential needed.",
       "loadError": "Could not load channels.",
       "saveError": "Could not save the channel."
+    },
+    "memory": {
+      "description": "Tune the memory subsystem — search reranking and dream auto-consolidation.",
+      "loadError": "Could not load memory settings.",
+      "saveError": "Could not save {{path}}.",
+      "sections": {
+        "rerank": "Search reranking",
+        "dream": "Entity consolidation (Dream)",
+        "workingMemory": "Working memory"
+      },
+      "rows": {
+        "crossEncoderEnabled": "Cross-encoder reranker",
+        "crossEncoderModel": "Reranker model",
+        "thresholdEntries": "Consolidation threshold",
+        "dreamMinTokens": "Minimum tokens to run"
+      },
+      "help": {
+        "crossEncoderEnabled": "Opt-in second-pass reranker. Adds 300-1500 ms per query and ~1 GB RAM but improves quality on ambiguous queries. Off by default.",
+        "crossEncoderModel": "Model used when the reranker is enabled. The default works well for multilingual queries; alternatives trade size for latency.",
+        "thresholdEntries": "Run an entity-centric Dream pass once a single entity accumulates this many post-cursor entries. Set to 0 to disable the per-entity trigger (cron and session-close triggers still apply).",
+        "dreamMinTokens": "Skip the pre-LLM analysis when accumulated chat since last run is below this. Default 2000 filters trivial / social exchanges; 0 disables the gate (every non-empty tick runs)."
+      },
+      "crossEncoderModelPlaceholder": "model id (e.g. BAAI/bge-reranker-base)",
+      "crossEncoderTest": "Test",
+      "workingMemoryDescription": "Hourly consolidation of the chat history into MEMORY.md / SOUL.md / USER.md and on-the-fly skill creation. Runs every 2h and only triggers when there's enough new conversation to justify the LLM call."
+    },
+    "cron": {
+      "title": "Scheduled jobs",
+      "description": "Background tasks the cron service runs on a schedule. System jobs (dream, heartbeat, memory dream) cannot be removed but can be disabled. To add a new job, use the `cron` tool from the chat.",
+      "loading": "Loading jobs…",
+      "loadError": "Could not load cron jobs.",
+      "empty": "No scheduled jobs.",
+      "emptyHint": "The agent can create one via the `cron` tool from chat.",
+      "systemBadge": "system",
+      "fieldNext": "Next",
+      "fieldLast": "Last",
+      "remove": "Remove job",
+      "cantDeleteSystem": "System jobs cannot be removed.",
+      "systemJobs": {
+        "dream": {
+          "name": "Working memory consolidation",
+          "note": "Distills recent chat history into MEMORY.md / SOUL.md / USER.md and creates skills when patterns emerge. Skips trivial ticks (see \"Memoria viva → Minimum tokens\" in Memory settings)."
+        },
+        "memory_dream": {
+          "name": "Entity knowledge consolidation",
+          "note": "Nightly deep pass that turns episodic memory entries into canonical entity pages (knowledge graph)."
+        }
+      }
     }
   },
   "chat": {
@@ -239,7 +324,9 @@
       "today": "Today",
       "yesterday": "Yesterday",
       "earlier": "Earlier"
-    }
+    },
+    "rename": "Rename",
+    "renameAria": "Rename chat"
   },
   "deleteConfirm": {
     "title": "Delete this chat?",
@@ -320,7 +407,7 @@
     },
     "composer": {
       "placeholderThread": "Type your message…",
-      "placeholderHero": "Ask anything...",
+      "placeholderHero": "Ask anything…",
       "placeholderOpening": "Opening a new chat…",
       "placeholderStreaming": "Model is responding…",
       "inputAria": "Message input",
@@ -334,21 +421,6 @@
       "send": "Send message",
       "stop": "Stop response",
       "attachImage": "Attach image",
-      "imageMode": {
-        "label": "Image Generation",
-        "toggle": "Toggle image generation mode",
-        "placeholder": "Describe or edit an image…",
-        "aspectAria": "Image aspect ratio",
-        "aspectLabel": "Image aspect",
-        "aspect": {
-          "auto": "Auto",
-          "1_1": "Square 1:1",
-          "3_4": "Portrait 3:4",
-          "9_16": "Story 9:16",
-          "4_3": "Landscape 4:3",
-          "16_9": "Wide 16:9"
-        }
-      },
       "tools": {
         "search": "Search",
         "reason": "Reason",
@@ -473,5 +545,86 @@
       "title": "Message too large",
       "body": "The server rejected your last message because it exceeded the size limit. Remove some images or try smaller files, then send again."
     }
+  },
+  "memoryGraph": {
+    "title": "Memory graph",
+    "searchPlaceholder": "Search memory (vector + grep)…",
+    "clear": "Clear",
+    "refresh": "Refresh",
+    "empty": "No entity pages yet.",
+    "emptyHintCommand": "durin memory dream",
+    "closeSearch": "Close search panel",
+    "searching": "Searching…",
+    "closeEdge": "Close edge popup",
+    "loading": "Loading…",
+    "close": "Close",
+    "tabInfo": "Info",
+    "tabBody": "Body",
+    "loadingDetail": "Loading detail…",
+    "fieldType": "Type",
+    "fieldLastDreamed": "Last dreamed",
+    "fieldAliases": "Aliases",
+    "fieldIdentifiers": "Identifiers",
+    "noBody": "No body content.",
+    "noHistory": "No git history yet.",
+    "fieldSessionKey": "Session key",
+    "fieldChannel": "Channel",
+    "fieldModel": "Model",
+    "fieldMessages": "Messages",
+    "fieldCreated": "Created",
+    "fieldUpdated": "Updated",
+    "entitiesFromMeta": "Entities (from meta tags)",
+    "entitiesFromSources": "Entities (from entry source_refs)",
+    "noRecentMessages": "No recent messages.",
+    "noLifecycleEvents": "No lifecycle events recorded.",
+    "unfocus": "Unfocus",
+    "focusOneHop": "Focus 1-hop",
+    "loadingGraph": "Loading…",
+    "showAll": "Show all",
+    "noMatches": "No matches.",
+    "entriesReferencing": "Entries referencing",
+    "noAbsorptions": "No absorptions for this entity.",
+    "noSourceLinkedEntries": "No episodic entries linked back to this session via source_refs.",
+    "emptyHint": "Run <code>durin memory dream</code> once entries accumulate.",
+    "noConsolidatedHint": "Tagged in episodic entries but no consolidated page yet. Run <code>durin memory dream</code> to create one.",
+    "stats": "{{nodes}} nodes · {{edges}} edges",
+    "statsPhantom": "{{count}} phantom",
+    "statsTruncated": "truncated",
+    "tabEntries": "Entries",
+    "entries": {
+      "empty": "No entries reference this entity yet.",
+      "notFound": "Entry not found.",
+      "cantArchiveProtected": "Can't archive entity pages from here — use durin memory absorb / revert.",
+      "backToList": "Back to list",
+      "headline": "Headline",
+      "validFrom": "Valid from",
+      "author": "Author",
+      "entitiesField": "Entities",
+      "sourceRefs": "Source refs",
+      "related": "Related",
+      "body": "Body",
+      "backlinks": "Backlinks",
+      "truncated": "truncated",
+      "noBacklinks": "No backlinks.",
+      "archive": "Archive",
+      "archiving": "Archiving…",
+      "confirmArchive": "Archive this entry?",
+      "confirm": "Confirm",
+      "cancel": "Cancel"
+    }
+  },
+  "composer": {
+    "placeholder": "Type your message…",
+    "inputAria": "Message input",
+    "sendAria": "Send message",
+    "hint": "Enter to send · Shift+Enter for newline"
+  },
+  "empty": {
+    "noChatsTitle": "No chats yet",
+    "noChatsBody": "Start a conversation — your sessions are stored locally on the durin workspace and stay available across reloads.",
+    "newChat": "New chat"
+  },
+  "list": {
+    "scrollToBottom": "Scroll to bottom"
   }
 }

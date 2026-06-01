@@ -1,4 +1,4 @@
-"""Plan mode tools — Sprint B / L3 (docs/07_external_agents_review.md).
+"""Plan mode tools — Sprint B / L3 (docs/archive/34_external_agents_review.md).
 
 Two LLM-callable tools that work with the agent-mode system in
 ``durin/agent/agent_mode.py``:
@@ -22,7 +22,7 @@ Design notes (file-based plan storage):
 
 The original Sprint B used the ``plan`` argument as the message body of the
 tool result, with no disk persistence. That MVP traded daily-driver
-ergonomics for ~3h of implementation simplicity (see bitácora entry "Plan
+ergonomics for ~3h of implementation simplicity (see logbook entry "Plan
 storage redesign — May 2026" for the post-mortem). File-based gives:
 
 - Persistence across context compaction
@@ -339,10 +339,10 @@ class ExitPlanModeTool(Tool, _PlanModeToolBase):
         # tool result.
         with suppress(Exception):
             from durin.session.session_meta import (
+                append_event,
                 extract_markdown_title,
                 make_plan_event,
                 meta_path_for,
-                append_event,
             )
 
             sessions_dir = self._workspace / "sessions" if self._workspace else None

@@ -54,17 +54,15 @@ def stage_media_paths_for_session_replay(paths: list[str]) -> list[str]:
 
 def merge_turn_media_into_last_assistant(
     all_messages: list[dict[str, Any]],
-    generated_image_paths: list[str],
-    extra_attachment_paths: list[str],
+    attachment_paths: list[str],
 ) -> None:
-    """Attach staged paths to the last assistant row in *all_messages* (in-place)."""
+    """Attach staged paths to the last assistant row in *all_messages* (in-place).
+
+    *attachment_paths* are the media the ``message`` tool delivered this turn,
+    staged so they survive session replay.
+    """
     merged = list(
-        dict.fromkeys(
-            [
-                *stage_media_paths_for_session_replay(generated_image_paths),
-                *stage_media_paths_for_session_replay(extra_attachment_paths),
-            ]
-        )
+        dict.fromkeys(stage_media_paths_for_session_replay(attachment_paths))
     )
     last = all_messages[-1] if all_messages else None
     if not merged or not last or last.get("role") != "assistant":

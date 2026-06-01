@@ -89,7 +89,8 @@ pip install -e ".[memory,mcp,web]"
 
 | Extra | Pulls in | When you need it |
 |---|---|---|
-| `memory` | `fastembed`, `lancedb` | Vector recall over `memory/` (Phase 2). |
+| `memory` | `fastembed`, `lancedb` | Vector recall + lexical FTS over `memory/`. Default embedding is `intfloat/multilingual-e5-small` (~450 MB, 100+ langs, MIT). |
+| `cross-encoder` | `sentence-transformers` (+ `torch` ~1 GB) | Optional reranker for `memory_search`. Default model `BAAI/bge-reranker-base` (~100M params, MIT). Off by default — opt in via the wizard or `memory.search.cross_encoder.enabled = true`. |
 | `mcp` | `mcp` | Use durin as an MCP server. |
 | `web` | `ddgs`, `readability-lxml` | The web-search and reader tools. |
 | `slack` | `slack-sdk`, `slackify-markdown` | Slack channel. |
@@ -97,6 +98,13 @@ pip install -e ".[memory,mcp,web]"
 | `oauth` | `oauth-cli-kit` | OAuth login (`durin provider login …`). |
 | `local` | `llama-cpp-python`, `huggingface-hub` | Local GGUF model serving. |
 | `dev` | `pytest`, `ruff`, … | Run the test suite + lint. |
+
+Memory subsystem note: with `[memory]` installed, durin's workspace at
+`~/.durin/workspace/` becomes a navigable knowledge vault — a
+`VAULT_README.md` is auto-generated at the workspace root on first
+boot explaining the layout, and the on-disk format (markdown +
+frontmatter + wikilinks) opens natively in Obsidian or any markdown
+reader. See `docs/architecture/memory/` for the subsystem deep-dive.
 
 ### First-time configuration
 
