@@ -592,6 +592,76 @@ class MemoryDreamSkippedEvent(TypedDict):
     session_key: NotRequired[str | None]
 
 
+class MemoryDreamBudgetExhaustedEvent(TypedDict):
+    """Per-pass time budget hit mid-drain (FIFO drain loop).
+
+    Emitted by :class:`durin.memory.dream_runner.DreamRunner` when an
+    entity's accumulated wall-clock crosses ``max_seconds_per_run``
+    *after* a successful batch (so each entity always makes at least one
+    batch of forward progress). ``pending_remaining`` is how many entries
+    were deferred to the next pass.
+    """
+
+    trigger: str
+    entity_ref: str
+    pending_remaining: int
+    elapsed_s: float
+    budget_s: int
+
+
+class MemoryDreamLegacyStartEvent(TypedDict):
+    """Legacy (session-history) dream pass began.
+
+    Emitted by the legacy :class:`durin.agent.memory.Dream` consolidator
+    wired at ``AgentLoop`` startup — distinct from the entity-centric
+    ``memory.dream.*`` runner. Tracks the batch about to be fed to the
+    Phase-1 LLM.
+    """
+
+    entries_count: int
+    batch_size: int
+    tokens: int
+    model: str | None
+
+
+class MemoryDreamLegacyEndEvent(TypedDict):
+    """Legacy dream pass finished (success or per-phase failure).
+
+    ``status`` carries the outcome: ``"phase1_failed"``,
+    ``"phase2_exception"``, or ``"phase2_<stop_reason>"``. The cost +
+    cursor fields let dashboards split a productive pass
+    (``cursor_advanced`` true) from a no-op or failed one. The two
+    ``phase2_*`` / ``commit_sha`` fields are present only when Phase 2
+    ran.
+    """
+
+    status: str
+    duration_ms: int
+    cursor_advanced: bool
+    changelog_count: int
+    phase1_prompt_tokens: int
+    phase1_completion_tokens: int
+    model: str | None
+    phase2_tool_events: NotRequired[int]
+    commit_sha: NotRequired[str | None]
+
+
+class MemoryDreamLegacySkippedEvent(TypedDict):
+    """Legacy dream trigger fired but did no work.
+
+    ``reason`` is ``"no_entries"`` (nothing unprocessed) or
+    ``"below_token_threshold"`` (unprocessed tail under
+    ``min_tokens_to_run``). The token fields are present only for the
+    threshold case.
+    """
+
+    reason: str
+    model: str | None
+    tokens: NotRequired[int]
+    threshold: NotRequired[int]
+    entries_count: NotRequired[int]
+
+
 class MemoryAbsorbJudgedEvent(TypedDict):
     """LLM-judge ran on an alias-overlap candidate pair (doc 25 §2.D).
 
@@ -1067,6 +1137,10 @@ EVENTS: dict[str, type] = {
     "memory.dream.skipped": MemoryDreamSkippedEvent,
     "memory.dream.patch_applied": MemoryDreamPatchAppliedEvent,
     "memory.dream.entity_failed": MemoryDreamEntityFailedEvent,
+    "memory.dream.budget_exhausted": MemoryDreamBudgetExhaustedEvent,
+    "memory.dream.legacy.start": MemoryDreamLegacyStartEvent,
+    "memory.dream.legacy.end": MemoryDreamLegacyEndEvent,
+    "memory.dream.legacy.skipped": MemoryDreamLegacySkippedEvent,
     "memory.entity_relation_cap_warned": MemoryEntityRelationCapWarnedEvent,
     "memory.entity_relation_cap_rejected": MemoryEntityRelationCapRejectedEvent,
     "memory.absorb.judged": MemoryAbsorbJudgedEvent,
