@@ -140,6 +140,14 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+filterwarnings = [
+    # Third-party: the lark_oapi (Feishu) SDK still uses the deprecated
+    # pkg_resources namespace API on import. Not our code; nothing to fix
+    # until the SDK migrates. Scoped to the exact messages so our own
+    # deprecations still surface.
+    "ignore:Deprecated call to `pkg_resources.declare_namespace:DeprecationWarning",
+    "ignore:pkg_resources is deprecated as an API:DeprecationWarning",
+]
 markers = [
     "ollama: requires running Ollama instance with a local model",
     "local_llm: requires llama-cpp-python and a cached GGUF model",

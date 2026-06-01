@@ -41,6 +41,13 @@ __all__ = (
 API_SESSION_KEY = "api:default"
 API_CHAT_ID = "default"
 
+# Typed aiohttp application keys (web.AppKey) instead of bare strings — the
+# string form emits a NotAppKeyWarning per access and loses type info.
+_AGENT_LOOP_KEY: web.AppKey[Any] = web.AppKey("agent_loop")
+_MODEL_NAME_KEY: web.AppKey[str] = web.AppKey("model_name")
+_REQUEST_TIMEOUT_KEY: web.AppKey[float] = web.AppKey("request_timeout")
+_SESSION_LOCKS_KEY: web.AppKey[dict] = web.AppKey("session_locks")
+
 
 # ---------------------------------------------------------------------------
 # Response helpers
@@ -197,9 +204,9 @@ async def handle_chat_completions(request: web.Request) -> web.Response:
     if not isinstance(content_type, str):
         content_type = ""
 
-    agent_loop = request.app["agent_loop"]
-    timeout_s: float = request.app.get("request_timeout", 120.0)
-    model_name: str = request.app.get("model_name", "durin")
+    agent_loop = request.app[_AGENT_LOOP_KEY]
+    timeout_s: float = request.app.get(_REQUEST_TIMEOUT_KEY, 120.0)
+    model_name: str = request.app.get(_MODEL_NAME_KEY, "durin")
 
     stream = False
     try:
@@ -226,7 +233,7 @@ async def handle_chat_completions(request: web.Request) -> web.Response:
         return _error_json(400, f"Only configured model '{model_name}' is available")
 
     session_key = f"api:{session_id}" if session_id else API_SESSION_KEY
-    session_locks: dict[str, asyncio.Lock] = request.app["session_locks"]
+    session_locks: dict[str, asyncio.Lock] = request.app[_SESSION_LOCKS_KEY]
     session_lock = session_locks.setdefault(session_key, asyncio.Lock())
 
     logger.info(
@@ -351,7 +358,7 @@ async def handle_chat_completions(request: web.Request) -> web.Response:
 
 async def handle_models(request: web.Request) -> web.Response:
     """GET /v1/models"""
-    model_name = request.app.get("model_name", "durin")
+    model_name = request.app.get(_MODEL_NAME_KEY, "durin")
     return web.json_response(
         {
             "object": "list",
@@ -388,10 +395,10 @@ def create_app(
         request_timeout: Per-request timeout in seconds.
     """
     app = web.Application(client_max_size=20 * 1024 * 1024)  # 20MB for base64 images
-    app["agent_loop"] = agent_loop
-    app["model_name"] = model_name
-    app["request_timeout"] = request_timeout
-    app["session_locks"] = {}  # per-user locks, keyed by session_key
+    app[_AGENT_LOOP_KEY] = agent_loop
+    app[_MODEL_NAME_KEY] = model_name
+    app[_REQUEST_TIMEOUT_KEY] = request_timeout
+    app[_SESSION_LOCKS_KEY] = {}  # per-user locks, keyed by session_key
 
     app.router.add_post("/v1/chat/completions", handle_chat_completions)
     app.router.add_get("/v1/models", handle_models)
