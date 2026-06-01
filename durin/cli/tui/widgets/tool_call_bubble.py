@@ -256,7 +256,14 @@ class ToolCallBubble(Vertical):
             return
         import asyncio
 
-        asyncio.create_task(publish(note, []))
+        task = asyncio.create_task(publish(note, []))
+        # Retain a strong ref on the (longer-lived) app so the loop can't GC
+        # this fire-and-forget task before it runs (RUF006). The widget is
+        # transient; the app outlives it.
+        bg = getattr(self.app, "_background_tasks", None)
+        if bg is not None:
+            bg.add(task)
+            task.add_done_callback(bg.discard)
 
     # ---- lifecycle ----
 
