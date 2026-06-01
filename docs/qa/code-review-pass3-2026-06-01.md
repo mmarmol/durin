@@ -30,15 +30,6 @@
 - **Mitigant:** default bind `127.0.0.1` (schema.py:653), and binding `0.0.0.0` prints a warning. But exposed via reverse proxy / shared host / `0.0.0.0` it is fully open.
 - **Question:** add an optional bearer-token check mirroring the websocket gateway's `_check_api_token`?
 
-### A4 🐞 LOW — exec spill files written to disk before secret redaction
-- **Where:** `durin/agent/tools/shell.py:251` (`truncate_with_spill` writes full raw output to `<ws>/.durin/spills/`) vs `durin/agent/runner.py:1825` (`redact_secrets` applied only afterward, to the returned string).
-- **Verified:** the spill write happens inside the tool, before the runner's redaction step. So secret values appearing in exec stdout/stderr land un-redacted in the spill file.
-- **Scope:** workspace-local file; exec-scoped store secrets are injected as env the agent never prints. Still violates the "secret values never hit disk outside secrets.json" invariant. **Fix:** redact before spilling, or redact spill contents on write.
-
-### A5 🐞 LOW — secret redaction covers only store values, not ambient `allowed_env_keys`
-- **Where:** `durin/agent/tools/shell.py` env build + `security/secrets.py:408` (`build_redactor` from `secrets.json` entries only).
-- **Verified:** the `SecretRedactor` is built from store entries; credentials surfaced into exec via `exec.allowed_env_keys` (ambient `os.environ`) are not in the redactor, so if such a value echoes into tool output it reaches the model context un-redacted. Opt-in config, minor.
-
 ### A6 ⚖️ LOW — open websocket handshake when token is explicitly disabled
 - **Where:** `durin/channels/websocket.py:2115`.
 - **Verified:** with `websocket_requires_token=False`, the handshake returns `None` (authorized) regardless of the supplied token. This is an opt-in weakening; default is `requires_token=True`, host `127.0.0.1`. Noted for completeness.
