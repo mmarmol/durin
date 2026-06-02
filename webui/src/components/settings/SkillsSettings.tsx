@@ -99,7 +99,11 @@ export function SkillsSettings({ token }: { token: string }) {
         <SettingsRow
           key={row.name}
           title={`${row.name}  ·  ${row.mode}`}
-          description={`${row.source}${row.description ? ` — ${row.description}` : ""}`}
+          description={
+            `${row.source}` +
+            (row.description ? ` — ${row.description}` : "") +
+            (row.provenance?.source ? ` · from ${row.provenance.source}` : "")
+          }
         >
           <div className="flex gap-2">
             <Button variant="outline" size="sm" onClick={() => void open(row.name)}>

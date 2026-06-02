@@ -64,8 +64,8 @@ import { ChannelsSettings } from "@/components/settings/ChannelsSettings";
 import { ConfigSettings } from "@/components/settings/ConfigSettings";
 import { CronSettings } from "@/components/settings/CronSettings";
 import { MemorySettings } from "@/components/settings/MemorySettings";
-import { SkillsSettings } from "@/components/settings/SkillsSettings";
 import { ModelPicker } from "@/components/settings/ModelPicker";
+import { SkillsSettings } from "@/components/settings/SkillsSettings";
 import {
   SettingsGroup,
   SettingsRow,

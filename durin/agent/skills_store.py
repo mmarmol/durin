@@ -122,7 +122,7 @@ def fork_on_write(workspace: Path, name: str, loader: SkillsLoader | None = None
     def _stamp(data: dict) -> None:
         durin = ensure_durin(data)
         durin.setdefault("mode", "auto")
-        durin["provenance"] = {"source": f"builtin:{name}", "created_at": _today()}
+        durin.setdefault("provenance", {"source": f"builtin:{name}", "created_at": _today()})
 
     _update_md(dest / "SKILL.md", _stamp)
     return dest
