@@ -163,10 +163,11 @@ Se adopta el patrón que **memoria ya usa**, no uno nuevo:
 - **Parte A (sueño 2h):** se apoya en el **cursor global** del sueño de 2h
   (`.dream_cursor`, entero monótono) para "qué sesiones son nuevas".
 - **Parte B (sueño diario):** **cursor por-skill guardado en el frontmatter de la
-  skill** (`metadata.durin.provenance.dream_processed_through`), **idéntico** al
-  `dream_processed_through` que el sueño de entidades guarda en cada página
+  skill** (`metadata.durin.provenance.dream_processed_through` = **hash del body**
+  con que se revisó), análogo al cursor por-página del sueño de entidades
   ([dream_runner.py:700](../../../durin/memory/dream_runner.py#L700)). Cada skill
-  lleva su propio "procesado hasta" → la staleness por-skill (§6) es nativa.
+  lleva su "revisado-en-este-estado" → el **corte por cambio** (§6) es nativo:
+  body igual = ya revisada = se saltea.
 
 Se descarta el *date-filter* (una query recomputada, no estado durable → frágil y
 desalineado con memoria).
@@ -204,44 +205,52 @@ Rápido y local. Sobre las sesiones nuevas desde el cursor:
 > sidecar). Se hace como **Tarea 0 del plan de Parte B** (la señal se retoca ahí
 > igual). No es un soft-deferral: tiene fix y lugar.
 
-Holístico. **Revisa el catálogo ENTERO como un todo** — las skills usadas durante
-todo el día **más todas las demás que existan** — para evaluar si tienen sentido
-en conjunto. No mira una sesión: mira el catálogo. El uso del día es la *señal*;
-el objeto de revisión es *todas* las skills `auto`. La cadencia diaria es la
-baja-frecuencia anti-oscilación.
+Holístico en **alcance**, acotado en **trabajo**. El *alcance* es el catálogo
+entero (cualquier par de `auto` puede fusionarse, la coherencia es global). Pero
+el *trabajo* **nunca es "revisar todo"**: el límite es el **DELTA** — solo las
+skills **nuevas o cuyo cuerpo cambió** desde la última revisión. Una skill estable
+que nadie tocó **no se re-revisa** (no hay motivo). El uso del día es señal/contexto,
+no el alcance.
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│  FASE 0 — Señal del día (sin LLM)                         │
-│  agrega skill_calls del día → { skill → ops }              │
-│  (qué se usó; es input, no el alcance de la revisión)      │
+│  FASE 0 — Delta (sin LLM)  ← EL CORTE                     │
+│  auto skills nuevas o con body-hash ≠ dream_processed_through │
+│  estables → se saltean sin LLM   |   + señal del día (uso) │
 ├──────────────────────────────────────────────────────────┤
-│  FASE 1 — Revisar el catálogo como un todo                │
-│  TODAS las `auto` (usadas o no): ¿alguna debe evolucionar? │
-│  ¿dos cubren lo mismo? ¿el conjunto tiene sentido?         │
+│  FASE 1 — Revisar el delta (juicio por CONTENIDO)         │
+│  cada una del delta vs el catálogo/vecinas:                │
+│  ¿debe evolucionar? ¿se solapa con otra? → fusionar        │
 ├──────────────────────────────────────────────────────────┤
-│  FASE 2 — Aplicar: evolucionar / fusionar                 │
-│  evolucionar una `auto`; o fusionar A+B→C las solapadas    │
+│  FASE 2 — Aplicar: evolucionar / fusionar A+B→C            │
 └──────────────────────────────────────────────────────────┘
+        tope `budget`/día (bursts arrastran, se loguean)
         VERIFICACIÓN → skills_store (dedup, provenance, commit)
 ```
 
 > **Diferencia clave con Parte A:** A mira **solo sesiones recientes** y actúa
-> *local* (mejorar lo que se llamó, crear lo que falta). B mira **el catálogo
-> entero** y actúa *global* (evolución/unificación que requiere ver todo junto).
+> *local* (mejorar lo llamado, crear lo que falta). B tiene *alcance global*
+> (cualquier par puede fusionarse) pero **trabaja sobre el delta** (lo cambiado),
+> no sobre todo el catálogo cada día.
 
 - **Fusión A+B→C:** escribir C vía `skills_store`; quitar A y B (workspace) o
   fork-and-disable (builtin); **un** commit con rationale. Git guarda el
   histórico (`revert` recupera).
 - **Sin poda activa de muertas en Spec 1** (decisión 2026-06-02): una skill sin
   uso simplemente queda; el buscador (Spec 2) la vuelve inocua.
-- **Cadencia = staleness por-skill (decisión 2026-06-02).** El pase corre diario,
-  pero re-cura **cada skill según su propio** `dream_processed_through`: en cada
-  día las skills tienen distinta antigüedad sin reprocesar; se re-curan las que
-  cruzaron su umbral (p.ej. ≥7d) o que acumularon `skill_calls` nuevos. No es un
-  throttle global — es per-skill, igual que el sueño de entidades cura cada página
-  por su cuenta. Eso evita re-tocar la misma skill a diario (anti-oscilación) sin
-  frenar el pase.
+- **El corte = CAMBIO, no tiempo (decisión 2026-06-02, refinado).** El cursor
+  `dream_processed_through` guarda el **hash del body** con que se revisó la skill.
+  El delta = skills sin cursor (nuevas) o con body-hash distinto (cambiadas). Las
+  estables se saltean sin LLM → el pase **no escala con el catálogo**: catálogo
+  estable = no-op. Esto reemplaza la idea previa de "staleness por tiempo" (que
+  habría re-revisado todo cada día). El catálogo se recorre entero **una sola vez**
+  (primer pase, todas sin cursor); después, solo el delta.
+- **Tope de presupuesto:** si el delta es grande (burst, p.ej. import E3), se
+  revisan `budget`/día y el resto **arrastra** (siguen sin cursor → otro día), se
+  **loguea** lo diferido (sin truncado silencioso).
+- **Fusión a escala:** comparar una del delta contra *todo* es barato con pocas;
+  con miles, alimentar el prompt solo con las **vecinas** vía el índice de
+  búsqueda (**Spec 2**) — dependencia suave, no bloquea con catálogo chico.
 
 ---
 
@@ -343,8 +352,9 @@ inyección por RELEVANCIA  (reemplaza el catálogo-entero de cada turno)
 2. **Cursor de skills:** patrón de memoria — Parte A se apoya en el cursor global
    del 2h; Parte B usa cursor **por-skill en frontmatter**
    (`dream_processed_through`). Se descarta el date-filter (§4).
-3. **Cadencia de Parte B:** **staleness por-skill** (cada skill por su
-   `dream_processed_through`), no throttle global (§6).
+3. **Corte de Parte B:** **por CAMBIO**, no por tiempo — el delta = skills
+   nuevas o con body-hash ≠ `dream_processed_through`; estables se saltean.
+   Tope `budget`/día con arrastre. La daily nunca "revisa todo" (§6).
 4. **Retiro de la autoría cruda del 2h:** al enrutar por `skills_store`, **se
    elimina** el `WriteFileTool` crudo de Phase 2 — una sola vía sancionada de
    escritura de skills.
