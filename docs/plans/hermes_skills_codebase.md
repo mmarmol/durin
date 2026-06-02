@@ -1,5 +1,7 @@
 # Referencia de código — Skills en Hermes (`~/git_personal/hermes-agent`)
 
+> 📚 **REFERENCIA (no es plan ni decisión).** Análisis del código de Hermes; insumo histórico.
+
 > **Fuente de consulta**, no propuesta. Investigación línea-por-línea del código
 > real de Hermes sobre cómo usa, busca, crea y evoluciona skills, para
 > consultar al implementar el sistema de durin (ver `skills_evolutivas.md`).
