@@ -271,6 +271,54 @@ def dream_create_skill(workspace: Path, name: str, content: str,
     return {"ok": True, "name": name, "commit": sha}
 
 
+def dream_fuse_skills(workspace: Path, *, target: str, content: str,
+                      sources: list[str], rationale: str) -> dict:
+    """Fuse `sources` into a new `target` skill. Refuses any `manual` source.
+    Writes target (source=dream, mode=auto), removes workspace sources /
+    disables builtin sources, one commit."""
+    if not _safe_name(target) or not all(_safe_name(s) for s in sources):
+        return {"error": "invalid skill name"}
+    if not rationale.strip():
+        return {"error": "rationale is required"}
+    for s in sources:
+        text = read_skill_content(workspace, s)
+        # Refuse only an EXPLICIT manual choice (the user's); the origin-based
+        # default from read_mode would refuse every workspace skill.
+        if text is not None and _durin_blob(text).get("mode") == "manual":
+            return {"error": f"source is manual, refusing: {s}"}
+    if _skill_md(workspace, target).exists():
+        return {"error": f"target already exists: {target}"}
+    store = _store_init(workspace)
+    md = _skill_md(workspace, target)
+    md.parent.mkdir(parents=True, exist_ok=True)
+    md.write_text(content, encoding="utf-8")
+
+    def _stamp(data: dict) -> None:
+        durin = ensure_durin(data)
+        durin["mode"] = "auto"
+        durin["provenance"] = {"source": "dream", "created_at": _today(),
+                               "fused_from": list(sources)}
+
+    _update_md(md, _stamp)
+    for s in sources:
+        src_dir = _skills_dir(workspace) / s
+        if src_dir.exists():
+            shutil.rmtree(src_dir)
+        else:  # builtin: workspace tombstone that disables model invocation
+            tomb = _skills_dir(workspace) / s
+            tomb.mkdir(parents=True, exist_ok=True)
+            # disable_model_invocation lives at the TOP level of the
+            # frontmatter (SkillsLoader reads it from get_skill_metadata,
+            # not from metadata.durin); provenance stays under metadata.durin.
+            (tomb / "SKILL.md").write_text(
+                f"---\nname: {s}\ndisable_model_invocation: true\n"
+                f"metadata:\n  durin:\n    mode: auto\n"
+                f"    provenance:\n      source: dream\n      fused_into: {target}\n"
+                f"---\nFused into `{target}`.\n", encoding="utf-8")
+    sha = store.auto_commit(f"skill: fuse {sources} -> {target}: {rationale.strip()} [dream]")
+    return {"ok": True, "target": target, "removed": list(sources), "commit": sha}
+
+
 def web_list(workspace: Path) -> tuple[int, dict]:
     head = _store(workspace).log(max_entries=1)
     return 200, {
