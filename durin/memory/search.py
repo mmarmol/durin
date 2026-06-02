@@ -23,7 +23,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from durin.memory.paths import MEMORY_CLASSES, walk_class
+from durin.memory.paths import (
+    MEMORY_CLASSES,
+    skill_path_from_uri,
+    skill_uri,
+    walk_class,
+    walk_skills,
+)
 from durin.memory.schema import MemoryEntry
 from durin.memory.storage import FrontmatterError, load_entry
 
@@ -31,6 +37,7 @@ __all__ = [
     "Result",
     "search_dreamed",
     "search_memory",
+    "search_skills",
     "search_undreamed",
 ]
 
@@ -90,6 +97,8 @@ class Result:
             return "session"
         if self.source != "memory":
             return self.source
+        if self.class_name == "skill":
+            return "skill"
         return "canonical" if self.class_name == "entity_page" else "fragment"
 
     def to_dict(self) -> dict:
@@ -202,6 +211,10 @@ def search_dreamed(
     # memory" that fragments above amend. Skip the `archive/`
     # subfolders (absorbed pages stay reachable via expand only).
     results.extend(_search_entity_pages(memory_root, needle_low, level))
+    # Skills live outside `memory/` (under `skills/<slug>/SKILL.md`) but
+    # belong to the same lazy-retrieval contract: when the vector index
+    # is cold/absent the grep fallback must still surface a cold skill.
+    results.extend(search_skills(workspace, needle_low, level=level))
     return results
 
 
@@ -251,6 +264,59 @@ def _search_entity_pages(
                 # temporal claims, per doc 18 §6 protocol α.
                 valid_from="",
                 entities=(ref,),
+            )
+        )
+    return out
+
+
+def search_skills(
+    workspace: Path,
+    needle: str,
+    *,
+    level: Level = "warm",
+) -> list[Result]:
+    """Grep over ``skills/<slug>/SKILL.md`` (cold-skill fallback).
+
+    Mirrors :func:`_search_entity_pages` but rooted at ``skills/``: walks
+    via :func:`walk_skills`, parses each via :class:`SkillPage`, and
+    substring-matches the needle against name + description + body. Emits
+    ``Result(class_name="skill")`` so the §2.H contract surfaces the hit
+    as a SKILL when rendered. This is the grep fallback the dispatcher
+    uses when the vector index is cold/absent — a freshly authored skill
+    that hasn't been embedded yet is still reachable here.
+
+    Disabled skills (``disable_model_invocation``) and unreadable files
+    are skipped silently, matching the rebuild walkers.
+    """
+    from durin.memory.skill_page import SkillPage
+
+    needle_low = needle.lower()
+    out: list[Result] = []
+    for skill_md in walk_skills(workspace):
+        page = SkillPage.from_file(skill_md)
+        if page is None or page.disabled:
+            continue
+        haystack_parts = [page.name, page.description, page.body or ""]
+        haystack = " ".join(haystack_parts).lower()
+        if needle_low not in haystack:
+            continue
+        slug = skill_md.parent.name
+        snippet = (
+            _make_snippet(page.description, needle_low)
+            or _make_snippet(page.body, needle_low)
+            or page.description[:160]
+        )
+        out.append(
+            Result(
+                source="memory",
+                uri=skill_path_from_uri(skill_uri(slug)),
+                headline=page.name,
+                snippet=snippet,
+                summary=page.description if level == "warm" else "",
+                body=page.body if level == "cold" else "",
+                class_name="skill",
+                valid_from="",
+                entities=(skill_uri(slug),),
             )
         )
     return out
