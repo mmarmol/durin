@@ -65,7 +65,6 @@ import { ConfigSettings } from "@/components/settings/ConfigSettings";
 import { CronSettings } from "@/components/settings/CronSettings";
 import { MemorySettings } from "@/components/settings/MemorySettings";
 import { ModelPicker } from "@/components/settings/ModelPicker";
-import { SkillsSettings } from "@/components/settings/SkillsSettings";
 import {
   SettingsGroup,
   SettingsRow,
@@ -73,6 +72,7 @@ import {
 } from "@/components/settings/primitives";
 import { PALETTES, type Palette } from "@/hooks/useTheme";
 import { cn } from "@/lib/utils";
+import { ConnectionBadge } from "@/components/ConnectionBadge";
 import { useClient } from "@/providers/ClientProvider";
 import type { SecretEntry, SettingsPayload, WebSearchSettingsUpdate } from "@/lib/types";
 
@@ -83,7 +83,6 @@ type SettingsSectionKey =
   | "channels"
   | "memory"
   | "cron"
-  | "skills"
   | "secrets"
   | "advanced";
 type ByokPaneKey = "llm" | "web-search";
@@ -411,8 +410,6 @@ export function SettingsView({
                 <MemorySettings token={token} />
               ) : activeSection === "cron" ? (
                 <CronSettings token={token} />
-              ) : activeSection === "skills" ? (
-                <SkillsSettings token={token} />
               ) : activeSection === "secrets" ? (
                 <SecretsSettings token={token} />
               ) : activeSection === "advanced" ? (
@@ -472,7 +469,6 @@ const SETTINGS_NAV_ITEMS = [
   { key: "channels", icon: MessagesSquare },
   { key: "memory", icon: Brain },
   { key: "cron", icon: Clock },
-  { key: "skills", icon: Sparkles },
   { key: "secrets", icon: Lock },
   { key: "advanced", icon: Sliders },
 ] as const;
@@ -529,6 +525,9 @@ function SettingsSidebar({
       </nav>
 
       <div className="mt-auto pt-4">
+        <div className="px-2 pb-2">
+          <ConnectionBadge />
+        </div>
         {onLogout ? (
           <Button
             type="button"

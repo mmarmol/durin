@@ -53,8 +53,7 @@
       "advanced": "All settings",
       "channels": "Channels",
       "memory": "Memory",
-      "cron": "Cron",
-      "skills": "Skills"
+      "cron": "Cron"
     },
     "sections": {
       "interface": "Interface",
@@ -134,18 +133,19 @@
         "missingCredential": "Ajoutez l'identifiant requis avant d'enregistrer.",
         "saveHint": "Les changements s'appliquent aux nouvelles requêtes web search."
       }
-    },
-    "skills": {
-      "view": "Voir",
-      "makeManual": "Passer en manuel",
-      "makeAuto": "Passer en auto",
-      "back": "Retour",
-      "empty": "Aucune skill.",
-      "selectPrompt": "Sélectionnez une skill pour l'afficher.",
-      "discardPrompt": "Abandonner les modifications non enregistrées ?",
-      "editHint": "Passez en manuel pour modifier",
-      "autoReadonly": "Lecture seule : cette skill est en mode auto (gérée par l'agent). Passez-la en manuel pour la modifier."
     }
+  },
+  "skills": {
+    "view": "Voir",
+    "makeManual": "Passer en manuel",
+    "makeAuto": "Passer en auto",
+    "back": "Retour",
+    "empty": "Aucune skill.",
+    "selectPrompt": "Sélectionnez une skill pour l'afficher.",
+    "discardPrompt": "Abandonner les modifications non enregistrées ?",
+    "editHint": "Passez en manuel pour modifier",
+    "autoReadonly": "Lecture seule : cette skill est en mode auto (gérée par l'agent). Passez-la en manuel pour la modifier.",
+    "title": "Skills"
   },
   "chat": {
     "fallbackTitle": "Discussion {{id}}",

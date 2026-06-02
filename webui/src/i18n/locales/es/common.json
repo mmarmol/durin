@@ -72,8 +72,7 @@
       "advanced": "All settings",
       "channels": "Channels",
       "memory": "Memoria",
-      "cron": "Cron",
-      "skills": "Skills"
+      "cron": "Cron"
     },
     "sections": {
       "interface": "Interfaz",
@@ -312,18 +311,19 @@
           "note": "Pasada profunda nocturna que convierte las entradas episódicas de memoria en páginas canónicas de entidades (grafo de conocimiento)."
         }
       }
-    },
-    "skills": {
-      "view": "Ver",
-      "makeManual": "Pasar a manual",
-      "makeAuto": "Pasar a auto",
-      "back": "Volver",
-      "empty": "No hay skills.",
-      "selectPrompt": "Elegí una skill para verla.",
-      "discardPrompt": "¿Descartar los cambios sin guardar?",
-      "editHint": "Pasá a manual para editar",
-      "autoReadonly": "Solo lectura: esta skill está en modo auto (la gestiona el agente). Pasala a manual para editar."
     }
+  },
+  "skills": {
+    "view": "Ver",
+    "makeManual": "Pasar a manual",
+    "makeAuto": "Pasar a auto",
+    "back": "Volver",
+    "empty": "No hay skills.",
+    "selectPrompt": "Elegí una skill para verla.",
+    "discardPrompt": "¿Descartar los cambios sin guardar?",
+    "editHint": "Pasá a manual para editar",
+    "autoReadonly": "Solo lectura: esta skill está en modo auto (la gestiona el agente). Pasala a manual para editar.",
+    "title": "Skills"
   },
   "chat": {
     "fallbackTitle": "Chat {{id}}",

@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { DeleteConfirm } from "@/components/DeleteConfirm";
 import { Sidebar } from "@/components/Sidebar";
 import { MemoryGraphView } from "@/components/MemoryGraphView";
+import { SkillsView } from "@/components/SkillsView";
 import { SettingsView } from "@/components/settings/SettingsView";
 import { ThreadShell } from "@/components/thread/ThreadShell";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
@@ -42,7 +43,7 @@ type BootState =
 const SIDEBAR_STORAGE_KEY = "durin-webui.sidebar";
 const RESTART_STARTED_KEY = "durin-webui.restartStartedAt";
 const SIDEBAR_WIDTH = 272;
-type ShellView = "chat" | "settings" | "memory_graph";
+type ShellView = "chat" | "settings" | "memory_graph" | "skills";
 
 function AuthForm({
   failed,
@@ -348,6 +349,11 @@ function Shell({
     setMobileSidebarOpen(false);
   }, []);
 
+  const onOpenSkills = useCallback(() => {
+    setView("skills");
+    setMobileSidebarOpen(false);
+  }, []);
+
   const onBackToChat = useCallback(() => {
     setView("chat");
     setMobileSidebarOpen(false);
@@ -455,6 +461,8 @@ function Shell({
     onOpenSettings,
     onOpenMemoryGraph,
     memoryGraphActive: view === "memory_graph",
+    onOpenSkills,
+    skillsActive: view === "skills",
   };
   const showMainSidebar = view !== "settings";
 
@@ -539,6 +547,11 @@ function Shell({
               onToggleSidebar={toggleSidebar}
               hideSidebarToggleOnDesktop={desktopSidebarOpen}
             />
+          </div>
+        )}
+        {view === "skills" && (
+          <div className="absolute inset-0 flex flex-col">
+            <SkillsView />
           </div>
         )}
       </main>
