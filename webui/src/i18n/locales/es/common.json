@@ -560,7 +560,7 @@
     }
   },
   "memoryGraph": {
-    "title": "Grafo de memoria",
+    "title": "Memoria",
     "searchPlaceholder": "Buscar en memoria (vector + grep)…",
     "clear": "Limpiar",
     "refresh": "Actualizar",

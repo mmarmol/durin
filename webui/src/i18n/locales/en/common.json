@@ -559,7 +559,7 @@
     }
   },
   "memoryGraph": {
-    "title": "Memory graph",
+    "title": "Memory",
     "searchPlaceholder": "Search memory (vector + grep)…",
     "clear": "Clear",
     "refresh": "Refresh",
