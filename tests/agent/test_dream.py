@@ -120,17 +120,18 @@ class TestDreamRun:
         expected = str(BUILTIN_SKILLS_DIR / "skill-creator" / "SKILL.md")
         assert expected in system_prompt
 
-    async def test_skill_write_tool_accepts_workspace_relative_skill_path(self, dream, store):
-        """Dream skill creation should allow skills/<name>/SKILL.md relative to workspace root."""
-        write_tool = dream._tools.get("write_file")
-        assert write_tool is not None
+    async def test_skill_write_tool_authors_skill_under_workspace(self, dream, store):
+        """Dream skill creation routes through skill_write, writing skills/<name>/SKILL.md."""
+        skill_tool = dream._tools.get("skill_write")
+        assert skill_tool is not None
+        assert dream._tools.get("write_file") is None
 
-        result = await write_tool.execute(
-            path="skills/test-skill/SKILL.md",
+        await skill_tool.execute(
+            name="test-skill",
             content="---\nname: test-skill\ndescription: Test\n---\n",
+            rationale="recurring pattern not covered by existing skills",
         )
 
-        assert "Successfully wrote" in result
         assert (store.workspace / "skills" / "test-skill" / "SKILL.md").exists()
 
     async def test_skips_llm_when_tokens_below_threshold(
