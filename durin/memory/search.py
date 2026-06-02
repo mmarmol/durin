@@ -214,7 +214,13 @@ def search_dreamed(
     # Skills live outside `memory/` (under `skills/<slug>/SKILL.md`) but
     # belong to the same lazy-retrieval contract: when the vector index
     # is cold/absent the grep fallback must still surface a cold skill.
-    results.extend(search_skills(workspace, needle_low, level=level))
+    # Gated by `memory.index_skills`: this grep-fallback reads SKILL.md off
+    # disk, bypassing the index — so when off it must be skipped too, or
+    # skills leak in despite never being indexed.
+    from durin.memory.index_meta import skills_indexing_enabled
+
+    if skills_indexing_enabled():
+        results.extend(search_skills(workspace, needle_low, level=level))
     return results
 
 
