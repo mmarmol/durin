@@ -157,6 +157,7 @@ Usage:
   hit. Hard cap 50.
 
 Results come pre-sectioned with structural markers:
+- `=== SKILL: <name> ===` — a matching procedure; these are steps to FOLLOW, not facts to cite
 - `=== CANONICAL: <uri> ===` — consolidated entity pages (durable knowledge)
 - `=== FRAGMENT: <path> ===` — recent observations not yet consolidated
 - `=== SESSION: <id> ===` — conversation summaries

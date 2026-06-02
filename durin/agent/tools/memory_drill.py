@@ -28,7 +28,8 @@ MAX_BATCH_URIS: int = 10
 
 _URI_DESCRIPTION = (
     "Markdown URI such as 'sessions/<key>.md#turn-42', "
-    "'ingested/<id>/source.md#section-3', or 'memory/<class>/<id>'."
+    "'ingested/<id>/source.md#section-3', 'memory/<class>/<id>', or "
+    "'skills/<slug>/SKILL.md'."
 )
 
 _PARAMETERS = tool_parameters_schema(

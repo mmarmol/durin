@@ -24,6 +24,24 @@ from durin.memory.vector_index import VectorIndex, vector_index_available
 logger = logging.getLogger(__name__)
 
 
+def _skill_uri_to_path(uri: str) -> str:
+    """Normalise a skill uri to its drillable on-disk shape.
+
+    Skill hits surface under two uri forms depending on the source:
+    the FTS/vector internal id ``skill/<slug>`` and the on-disk path
+    ``skills/<slug>/SKILL.md`` (what the grep fallback emits). Both map
+    to the same file; return the ``skills/<slug>/SKILL.md`` form so the
+    agent always receives a drillable uri.
+    """
+    if uri.startswith("skills/") and uri.endswith("/SKILL.md"):
+        return uri
+    if uri.startswith("skill/"):
+        from durin.memory.paths import skill_path_from_uri
+
+        return skill_path_from_uri(uri)
+    return uri
+
+
 # E11 (2026-05-28): `_load_cursors_from_entities_dir` moved to
 # `durin.memory.entity_ranker` next to its consumer
 # `rank_with_entities`. The v2 pipeline now calls it directly.
@@ -64,6 +82,13 @@ _PARAMETERS = tool_parameters_schema(
         minimum=1,
         maximum=50,
     ),
+    kinds=StringSchema(
+        "Which kinds of results to return. 'all' (default) returns "
+        "everything. 'skill' returns only skill procedures. 'fact' "
+        "returns everything EXCEPT skills (facts, entity pages, "
+        "sessions, ingested docs).",
+        enum=["all", "skill", "fact"],
+    ),
     required=["query"],
     description=(
         # Canonical text per `docs/architecture/memory/06_prompts_and_instructions.md` §3.1.
@@ -91,6 +116,8 @@ _PARAMETERS = tool_parameters_schema(
         "answers, raise to 20-30 for audit / investigative queries that "
         "need to see every relevant hit. Hard cap 50.\n\n"
         "Results come pre-sectioned with structural markers:\n"
+        "- `=== SKILL: <name> ===` — a matching procedure; these are "
+        "steps to FOLLOW, not facts to cite\n"
         "- `=== CANONICAL: <uri> ===` — consolidated entity pages "
         "(durable knowledge)\n"
         "- `=== FRAGMENT: <path> ===` — recent observations not yet "
@@ -211,6 +238,20 @@ class MemorySearchTool(Tool):
 
         from durin.memory.storage import load_entry
 
+        # Skill hits address `skills/<name>/SKILL.md`, not the
+        # `memory/<class>/<id>` triplet the split below expects. Read the
+        # SKILL.md directly so cold-tier callers get a real body instead
+        # of an empty string (the split would mis-parse the skill uri).
+        if r.class_name == "skill":
+            skill_path = self._workspace / _skill_uri_to_path(r.uri)
+            if not skill_path.is_file():
+                return r
+            try:
+                text = skill_path.read_text(encoding="utf-8")
+            except OSError:
+                return r
+            return dataclasses.replace(r, body=text)
+
         try:
             _, class_name, entry_id = r.uri.split("/", 2)
         except ValueError:
@@ -286,6 +327,7 @@ class MemorySearchTool(Tool):
         query = str(kwargs.get("query") or "").strip()
         scope = str(kwargs.get("scope") or "all")
         level = str(kwargs.get("level") or "warm")
+        kinds = str(kwargs.get("kinds") or "all")
         keywords_raw = kwargs.get("keywords")
         keywords = (
             str(keywords_raw).strip()
@@ -310,6 +352,8 @@ class MemorySearchTool(Tool):
             return {"error": f"invalid scope {scope!r}"}
         if level not in ("warm", "cold"):
             return {"error": f"invalid level {level!r}"}
+        if kinds not in ("all", "skill", "fact"):
+            return {"error": f"invalid kinds {kinds!r}"}
 
         # F2 (audit third pass, 2026-05-28): archive is intentionally
         # not indexed (vector/lexical/grep over memory/ exclude
@@ -409,6 +453,14 @@ class MemorySearchTool(Tool):
                 if h.type in ("session_summary", "corpus")
             ]
 
+        # `kinds` post-filter: 'skill' keeps only skill procedures,
+        # 'fact' drops them (facts/entities/sessions/ingested), 'all'
+        # (default) is a no-op. Skill hits carry `type == "skill"`.
+        if kinds == "skill":
+            hits = [h for h in hits if h.type == "skill"]
+        elif kinds == "fact":
+            hits = [h for h in hits if h.type != "skill"]
+
         # Convert :class:`SectionedHit` rows into the legacy `Result`
         # shape expected by the agent (carries `to_dict`). F4 (third
         # pass, 2026-05-28): the LLM-facing block rendering moved to
@@ -427,6 +479,7 @@ class MemorySearchTool(Tool):
             render_sectioned,
         )
         _TYPE_FROM_CLASS = {
+            "skill": "skill",
             "entity_page": "entity",
             "episodic": "episodic", "stable": "stable",
             "corpus": "corpus", "session_summary": "session_summary",
@@ -695,7 +748,17 @@ class MemorySearchTool(Tool):
         """
         # Derive the legacy class_name + uri + source shape.
         hit_path = hit.path or ""
-        if hit.type == "entity":
+        if hit.type == "skill":
+            # Skills live under `skills/<name>/SKILL.md` (outside
+            # `memory/`). Prefer the on-disk path the index carries so
+            # the uri the agent sees is drillable; fall back to
+            # translating the internal `skill/<slug>` id. Do NOT fall
+            # through to the `memory/<class>/<id>` shaping below — that
+            # would emit an undrillable `memory/skill/...` uri.
+            class_name = "skill"
+            uri = hit_path or _skill_uri_to_path(hit.uri)
+            source = "memory"
+        elif hit.type == "entity":
             class_name = "entity_page"
             # `hit.uri` for entity pages is `<type>:<slug>`; the legacy
             # URI shape carries the class prefix.
