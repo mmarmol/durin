@@ -42,6 +42,7 @@ from durin.memory.paths import (
     skill_uri,
     skills_dir,
     walk_memory,
+    walk_skills,
 )
 from durin.memory.storage import load_entry
 
@@ -318,6 +319,15 @@ def detect_index_staleness(workspace: Path) -> list[dict]:
     for md in walk_memory(workspace, include_archive=False):
         uri = _uri_for(workspace, md) or md.stem
         fs_files[uri] = md.stat().st_mtime
+    # Skills live under skills/<name>/SKILL.md (outside memory/), so
+    # walk_memory never yields them. Without this pass every indexed
+    # skill row looks like a `row_for_missing_file` and drift repair
+    # SILENTLY DELETES it. Compute the uri exactly as _payload_for_skill
+    # does (slug = skill_md.parent.name) so the fs uri matches the
+    # indexed uri and the row is recognized as backed by a real file.
+    for skill_md in walk_skills(workspace):
+        uri = skill_uri(skill_md.parent.name)
+        fs_files[uri] = skill_md.stat().st_mtime
 
     with FTSIndex.open(workspace) as idx:
         seen_in_index: set[str] = set()

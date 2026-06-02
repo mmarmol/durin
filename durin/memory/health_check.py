@@ -365,6 +365,26 @@ class HealthChecker:
         # For missing_row / mtime_lag we need the file path. Derive
         # from URI for entries (memory/<class>/<id>) and for entity
         # refs (`<type>:<slug>`).
+        # Skills (`skill/<slug>`) live under skills/<slug>/SKILL.md and
+        # re-index via reindex_one_skill (not reindex_one_file). Handle
+        # them before the bare-id else, which only scans entry classes
+        # and would never reconstruct a skill path.
+        if uri.startswith("skill/"):
+            from durin.memory.indexer import reindex_one_skill
+            from durin.memory.paths import skill_path_from_uri
+
+            skill_md = self._workspace / skill_path_from_uri(uri)
+            if skill_md.is_file():
+                try:
+                    reindex_one_skill(
+                        self._workspace, skill_md, trigger="drift_repair",
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "health_check: drift repair %s failed: %s",
+                        skill_md, exc,
+                    )
+            return
         candidate_paths: list[Path] = []
         if uri.startswith("memory/"):
             candidate_paths.append(self._workspace / f"{uri}.md")
