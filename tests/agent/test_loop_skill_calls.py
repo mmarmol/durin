@@ -1,21 +1,37 @@
 from durin.agent.skill_usage import extract_skill_calls
 
 
-def _record_skill_calls(session_metadata: dict, messages: list[dict]) -> None:
-    calls = extract_skill_calls(messages)
+def _record(metadata, all_messages, save_skip):
+    # EXACT expression used in loop._state_save (keep in sync).
+    new = all_messages[save_skip:]
+    calls = extract_skill_calls(new)
     if calls:
-        session_metadata.setdefault("skill_calls", []).extend(calls)
+        metadata.setdefault("skill_calls", []).extend(calls)
 
 
-def test_recording_appends_to_existing_skill_calls():
-    md = {"skill_calls": [{"skill": "old", "op": "read"}]}
-    msgs = [{"role": "assistant", "tool_calls": [
-        {"function": {"name": "skill_edit", "arguments": {"name": "git-helper"}}}]}]
-    _record_skill_calls(md, msgs)
-    assert md["skill_calls"] == [{"skill": "old", "op": "read"}, {"skill": "git-helper", "op": "edit"}]
+def _assistant_read(skill):
+    return {"role": "assistant", "tool_calls": [
+        {"function": {"name": "read_file",
+                      "arguments": {"path": f"skills/{skill}/SKILL.md"}}}]}
 
 
-def test_recording_is_noop_when_no_skill_calls():
+def test_only_new_turn_messages_are_recorded_no_reaccumulation():
     md = {}
-    _record_skill_calls(md, [{"role": "user", "content": "hi"}])
+    # Turn 1: history empty. all_messages = [user, assistant(read X)]. save_skip=1
+    t1 = [{"role": "user", "content": "do X"}, _assistant_read("git-helper")]
+    _record(md, t1, save_skip=1)
+    # Turn 2: prior turn is now history; all_messages carries it again + new turn.
+    t2 = t1 + [{"role": "user", "content": "do Y"}, _assistant_read("deploy-flow")]
+    # save_skip excludes everything from turn 1 (its 2 msgs) + the 1 base offset = 3
+    _record(md, t2, save_skip=3)
+    assert md["skill_calls"] == [
+        {"skill": "git-helper", "op": "read"},
+        {"skill": "deploy-flow", "op": "read"},
+    ]
+    # git-helper recorded exactly once, NOT re-counted on turn 2.
+
+
+def test_no_skill_calls_is_noop():
+    md = {}
+    _record(md, [{"role": "user", "content": "hi"}], save_skip=1)
     assert "skill_calls" not in md
