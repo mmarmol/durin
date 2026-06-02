@@ -68,3 +68,26 @@ def test_curate_excludes_pristine_builtins(tmp_path):
     res = curate_catalog(ws, judge=lambda p: calls.append(p) or '{"actions": []}')
     assert res == {"reviewed": 0, "applied": 0, "deferred": 0}
     assert calls == []
+
+
+def test_curate_skips_fuse_with_out_of_scope_source(tmp_path):
+    ws = tmp_path / "ws"
+    _mk(ws, "git-a", "body a")  # the only reviewed skill
+    def judge(prompt):
+        # judge names a source ("ghost") that was never in the catalog
+        return ('{"actions": [{"type": "fuse", "target": "x", '
+                '"sources": ["git-a", "ghost"], "content": "merged", "rationale": "r"}]}')
+    res = curate_catalog(ws, judge=judge)
+    assert res["applied"] == 0
+    assert (ws / "skills" / "git-a").exists()   # not fused away
+    assert not (ws / "skills" / "x").exists()
+
+
+def test_curate_skips_evolve_of_out_of_scope_skill(tmp_path):
+    ws = tmp_path / "ws"
+    _mk(ws, "git-a", "body a")
+    def judge(prompt):
+        return ('{"actions": [{"type": "evolve", "name": "ghost", '
+                '"old": "x", "new": "y", "rationale": "r"}]}')
+    res = curate_catalog(ws, judge=judge)
+    assert res["applied"] == 0
