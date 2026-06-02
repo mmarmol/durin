@@ -52,7 +52,11 @@ __all__ = [
 # rendered_frontmatter (attributes/relations as prose between aliases
 # and body) so attribute queries hit the centroid. Pre-v4 centroids
 # omit this signal — a forced rebuild realigns the table.
-CURRENT_SCHEMA_VERSION: int = 4
+# v5 (skills-memory-class): skills are now indexed as `class="skill"`
+# rows (vector Pass 3 + FTS skill loop). Pre-v5 indexes carry no skill
+# rows — the bump forces an auto-rebuild so existing workspaces pick
+# them up.
+CURRENT_SCHEMA_VERSION: int = 5
 
 
 @dataclass(frozen=True)
