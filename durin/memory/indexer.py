@@ -37,7 +37,12 @@ from typing import Any, Optional
 
 from durin.memory.entity_page import EntityPage
 from durin.memory.fts_index import FTSIndex
-from durin.memory.paths import walk_memory
+from durin.memory.paths import (
+    skill_path_from_uri,
+    skill_uri,
+    skills_dir,
+    walk_memory,
+)
 from durin.memory.storage import load_entry
 
 __all__ = [
@@ -46,6 +51,7 @@ __all__ = [
     "ensure_index_fresh",
     "rebuild_fts_index",
     "reindex_one_file",
+    "reindex_one_skill",
 ]
 
 
@@ -89,7 +95,7 @@ def ensure_index_fresh(workspace: Path) -> dict:
     _FRESHNESS_CHECKED.add(key)
 
     workspace = Path(workspace)
-    if not (workspace / "memory").is_dir():
+    if not ((workspace / "memory").is_dir() or skills_dir(workspace).is_dir()):
         return {"rebuilt": False, "reason": "no_memory_dir"}
 
     meta = load_index_meta(workspace)
@@ -171,6 +177,29 @@ def rebuild_fts_index(workspace: Path) -> IndexStats:
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "indexer: upsert %s failed: %s", md_path, exc,
+                )
+                errors += 1
+                continue
+            indexed += 1
+        # Second pass: index skills/<name>/SKILL.md alongside memory files.
+        from durin.memory.paths import walk_skills
+
+        for skill_md in walk_skills(workspace):
+            try:
+                payload = _payload_for_skill(workspace, skill_md)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "indexer: skipping %s: %s", skill_md, exc,
+                )
+                errors += 1
+                continue
+            if payload is None:
+                continue
+            try:
+                idx.upsert(**payload)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "indexer: upsert %s failed: %s", skill_md, exc,
                 )
                 errors += 1
                 continue
@@ -394,6 +423,62 @@ def reindex_one_file(
             )
 
 
+def reindex_one_skill(
+    workspace: Path,
+    skill_md: Path,
+    *,
+    trigger: str = "skill_store",
+) -> None:
+    """Synchronous re-index for one ``skills/<name>/SKILL.md``.
+
+    Mirrors :func:`reindex_one_file` for the skills tree: called by the
+    skills_store after a skill is created/edited/deleted. If the file
+    disappeared (skill deleted) the row is evicted instead.
+
+    The default ``trigger`` is ``skill_store`` because every callsite is
+    the git-backed skills authoring path; it propagates into
+    ``memory.index.write`` so dashboards can split skill writes from
+    memory writes.
+    """
+    import time
+
+    workspace = Path(workspace)
+    skill_md = Path(skill_md)
+    with FTSIndex.open(workspace) as idx:
+        if not skill_md.is_file():
+            uri = skill_uri(skill_md.parent.name)
+            t0 = time.monotonic()
+            idx.delete_by_uri(uri)
+            duration_ms = (time.monotonic() - t0) * 1000.0
+            _emit_write(
+                uri=uri, op="delete",
+                trigger=trigger, duration_ms=duration_ms,
+            )
+            return
+        try:
+            payload = _payload_for_skill(workspace, skill_md)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "indexer: skip incremental skill %s: %s", skill_md, exc,
+            )
+            return
+        if payload is None:
+            return
+        try:
+            t0 = time.monotonic()
+            idx.upsert(**payload)
+            duration_ms = (time.monotonic() - t0) * 1000.0
+            _emit_write(
+                uri=payload["uri"], op="upsert",
+                trigger=trigger, duration_ms=duration_ms,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "indexer: incremental skill upsert %s failed: %s",
+                skill_md, exc,
+            )
+
+
 # ---------------------------------------------------------------------------
 # internals
 # ---------------------------------------------------------------------------
@@ -447,10 +532,50 @@ def _payload_for(workspace: Path, md_path: Path) -> Optional[dict]:
     }
 
 
+def _skill_text(sp) -> str:  # type: ignore[no-untyped-def]
+    """Compose the BM25 text for one skill page (name + description +
+    full body, mirroring the entity-page composition)."""
+    return f"{sp.name}\n{sp.description}\n{sp.body}"
+
+
+def _payload_for_skill(workspace: Path, skill_md: Path) -> Optional[dict]:
+    """Derive the upsert payload for one ``skills/<name>/SKILL.md``.
+
+    Returns ``None`` when the file is unreadable/malformed (SkillPage
+    returns ``None``). The ``uri`` is ``skill/<slug>`` where ``<slug>``
+    is the skill directory name — identical to :func:`_uri_for`'s skill
+    branch so the rebuild and incremental paths dedup cleanly.
+    """
+    from durin.memory.skill_page import SkillPage
+
+    sp = SkillPage.from_file(skill_md)
+    if sp is None:
+        return None
+    slug = skill_md.parent.name
+    uri = skill_uri(slug)
+    return {
+        "uri": uri,
+        "path": skill_path_from_uri(uri),
+        "type_": "skill",
+        "entity_type": None,
+        "text": _skill_text(sp),
+        "mtime": skill_md.stat().st_mtime,
+    }
+
+
 def _uri_for(workspace: Path, md_path: Path) -> Optional[str]:
     """Best-effort URI derivation for a deleted file (no file content
-    available). For entity pages the URI is ``<type>:<slug>``; for
-    entries it's the bare ``id`` which equals the filename stem."""
+    available). For skill pages the URI is ``skill/<slug>``; for entity
+    pages it's ``<type>:<slug>``; for entries it's the bare ``id`` which
+    equals the filename stem."""
+    # Skills live under <workspace>/skills/, outside memory/. Check this
+    # branch first — the memory/ relative_to below raises for skill paths.
+    try:
+        skill_parts = md_path.relative_to(skills_dir(workspace)).parts
+    except ValueError:
+        skill_parts = ()
+    if skill_parts:
+        return skill_uri(skill_parts[0])
     try:
         parts = md_path.relative_to(workspace / "memory").parts
     except ValueError:
