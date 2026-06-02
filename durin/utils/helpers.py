@@ -788,4 +788,12 @@ def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]
     except Exception:
         logger.exception("Failed to initialize git store for {}", workspace)
 
+    # Initialize git for skill version control (separate repo, whole-tree)
+    try:
+        from durin.utils.gitstore import GitStore
+
+        GitStore(workspace / "skills", subtree=True, label="skills").init()
+    except Exception:
+        logger.exception("Failed to initialize skills git store for {}", workspace)
+
     return added

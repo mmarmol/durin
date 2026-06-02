@@ -51,7 +51,9 @@
       "web-search": "Web search",
       "secrets": "Secrets",
       "advanced": "All settings",
-      "channels": "Channels"
+      "channels": "Channels",
+      "memory": "Memory",
+      "cron": "Cron"
     },
     "sections": {
       "interface": "Giao diện",
@@ -132,6 +134,18 @@
         "saveHint": "Thay đổi áp dụng cho các yêu cầu web search mới."
       }
     }
+  },
+  "skills": {
+    "view": "Xem",
+    "makeManual": "Chuyển thủ công",
+    "makeAuto": "Chuyển tự động",
+    "back": "Quay lại",
+    "empty": "Không có skill nào.",
+    "selectPrompt": "Chọn một skill để xem.",
+    "discardPrompt": "Bỏ các thay đổi chưa lưu?",
+    "editHint": "Chuyển sang thủ công để chỉnh sửa",
+    "autoReadonly": "Chỉ đọc: skill này ở chế độ tự động (do agent quản lý). Chuyển sang thủ công để chỉnh sửa.",
+    "title": "Skills"
   },
   "chat": {
     "fallbackTitle": "Trò chuyện {{id}}",
@@ -335,5 +349,8 @@
       "title": "Tin nhắn quá lớn",
       "body": "Máy chủ đã từ chối tin nhắn trước vì vượt quá giới hạn kích thước. Hãy bớt ảnh hoặc chọn tệp nhỏ hơn rồi thử lại."
     }
+  },
+  "memoryGraph": {
+    "title": "Memory"
   }
 }

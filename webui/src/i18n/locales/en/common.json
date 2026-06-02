@@ -313,6 +313,18 @@
       }
     }
   },
+  "skills": {
+    "view": "View",
+    "makeManual": "Make manual",
+    "makeAuto": "Make auto",
+    "back": "Back",
+    "empty": "No skills found.",
+    "selectPrompt": "Select a skill to view it.",
+    "discardPrompt": "Discard unsaved changes?",
+    "editHint": "Switch to manual to edit",
+    "autoReadonly": "Read-only: this skill is in auto mode (managed by the agent). Switch it to manual to edit.",
+    "title": "Skills"
+  },
   "chat": {
     "fallbackTitle": "Chat {{id}}",
     "loading": "Loading…",
@@ -547,7 +559,7 @@
     }
   },
   "memoryGraph": {
-    "title": "Memory graph",
+    "title": "Memory",
     "searchPlaceholder": "Search memory (vector + grep)…",
     "clear": "Clear",
     "refresh": "Refresh",

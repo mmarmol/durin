@@ -51,7 +51,9 @@
       "web-search": "Web search",
       "secrets": "Secrets",
       "advanced": "All settings",
-      "channels": "Channels"
+      "channels": "Channels",
+      "memory": "Memory",
+      "cron": "Cron"
     },
     "sections": {
       "interface": "介面",
@@ -132,6 +134,18 @@
         "saveHint": "變更會套用到新的 web search 請求。"
       }
     }
+  },
+  "skills": {
+    "view": "檢視",
+    "makeManual": "設為手動",
+    "makeAuto": "設為自動",
+    "back": "返回",
+    "empty": "沒有技能。",
+    "selectPrompt": "選擇一個技能以檢視。",
+    "discardPrompt": "放棄未儲存的變更？",
+    "editHint": "切換為手動以編輯",
+    "autoReadonly": "唯讀：此技能處於自動模式（由代理管理）。切換為手動即可編輯。",
+    "title": "Skills"
   },
   "chat": {
     "fallbackTitle": "對話 {{id}}",
@@ -335,5 +349,8 @@
       "title": "訊息過大",
       "body": "伺服器因超過大小限制拒收了上一則訊息。可移除部分圖片或改用較小的圖片後再試。"
     }
+  },
+  "memoryGraph": {
+    "title": "Memory"
   }
 }
