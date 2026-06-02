@@ -762,13 +762,17 @@ class MemorySearchTool(Tool):
         hit_path = hit.path or ""
         if hit.type == "skill":
             # Skills live under `skills/<name>/SKILL.md` (outside
-            # `memory/`). Prefer the on-disk path the index carries so
-            # the uri the agent sees is drillable; fall back to
-            # translating the internal `skill/<slug>` id. Do NOT fall
-            # through to the `memory/<class>/<id>` shaping below — that
-            # would emit an undrillable `memory/skill/...` uri.
+            # `memory/`). The agent uri must be the drillable display
+            # path regardless of which source surfaced the hit. B1
+            # (2026-06-03) unified the FUSION uri to `skill/<slug>`, so
+            # BOTH `hit.uri` and `hit.path` can now be `skill/<slug>`
+            # (the grep arm sets `path = r.uri = skill/<slug>`); always
+            # run `_skill_uri_to_path` over the chosen source so the
+            # result uri is `skills/<slug>/SKILL.md`. Do NOT fall through
+            # to the `memory/<class>/<id>` shaping below — that would
+            # emit an undrillable `memory/skill/...` uri.
             class_name = "skill"
-            uri = hit_path or _skill_uri_to_path(hit.uri)
+            uri = _skill_uri_to_path(hit_path or hit.uri)
             source = "memory"
         elif hit.type == "entity":
             class_name = "entity_page"
