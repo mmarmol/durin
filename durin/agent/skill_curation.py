@@ -56,10 +56,16 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
     for a in actions:
         t = a.get("type")
         if t == "fuse":
+            if not set(a.get("sources", [])) <= set(selected):
+                logger.warning("curation: skipping fuse with out-of-scope sources %s", a.get("sources"))
+                continue
             r = ss.dream_fuse_skills(workspace, target=a["target"], content=a["content"],
                                      sources=a["sources"], rationale=a.get("rationale", "fuse"))
             applied += 1 if r.get("ok") else 0
         elif t == "evolve":
+            if a.get("name") not in selected:
+                logger.warning("curation: skipping evolve of out-of-scope skill %s", a.get("name"))
+                continue
             r = ss.apply_skill_edit(workspace, a["name"], old=a["old"], new=a["new"],
                                     rationale=a.get("rationale", "evolve"))
             applied += 1 if r.get("ok") else 0
