@@ -288,10 +288,18 @@ class AutoAbsorbConfig(Base):
 class CrossEncoderConfig(Base):
     """Cross-encoder reranker config (doc 03 §9, doc 10 P4).
 
-    OFF by default per spec — the model adds 300-1500ms latency and
-    requires ~1GB additional RAM. Power users with quality-sensitive
-    workloads enable it; the default pipeline already produces useful
-    retrieval.
+    OFF by default — but this is a *library/CI-safe* default, NOT a
+    recommendation against it. Enabling it triggers a one-time
+    multi-hundred-MB model download on first search, which must not
+    happen implicitly in CI / test / headless environments that build a
+    default config. The onboarding wizard recommends turning it ON (it
+    asks the operator explicitly, with the download + latency cost
+    stated) because in the real personal-agent loop the rerank's
+    300-800ms is dwarfed by the multi-second LLM call that follows every
+    search, while the ranking gain is direct. Edge / RAM-constrained
+    operators decline at the prompt. The pipeline degrades gracefully to
+    RRF + entity-aware rerank when disabled or when the model fails to
+    load.
     """
 
     enabled: bool = False

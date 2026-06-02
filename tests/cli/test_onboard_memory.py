@@ -130,7 +130,12 @@ def test_cross_encoder_question_anchors() -> None:
     assert "300-800ms" in text
     assert "~600MB" in text
     assert "BAAI/bge-reranker-base" in text
-    assert "[y/N]" in text
+    # Recommended ON for the personal-agent shape: the copy must signal
+    # the recommendation and the prompt must default to Yes — Y (capital)
+    # signals the default. The config-level default stays OFF (CI-safe);
+    # the recommendation lives in onboarding.
+    assert "Recommended" in text
+    assert "[Y/n]" in text
 
 
 def test_cross_encoder_yes(monkeypatch: pytest.MonkeyPatch) -> None:
