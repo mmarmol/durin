@@ -54,6 +54,9 @@ memory_ingest, memory_drill). The memory system holds:
 - **Session summaries** — distilled records of past conversations.
 - **Ingested documents** — chunks of user-provided sources (PDFs,
   notes, articles).
+- **Skills** — procedural memory: step-by-step procedures you follow
+  for recurring tasks. A `skill` hit is an instruction set to
+  **execute**, not a fact to cite.
 
 When you might need a fact, call memory_search rather than answering
 from cold recall. State the source of any fact you cite by referencing
