@@ -3,9 +3,10 @@
 Phase 2.2 of the memory subsystem. The index lives at
 ``<workspace>/.durin/index/lance/`` (moved 2026-05-30 — P9 vault-
 friendly cleanup; was previously ``<workspace>/memory/.index.lance``
-where it polluted the markdown-vault folder layout). Holds one record
-per memory entry: ``(id, class_name, summary, headline, vector,
-valid_from, path)``. Vectors are produced by an
+where it polluted the markdown-vault folder layout). Holds three
+record types — memory entry, entity page, and skill — sharing the
+same row schema: ``(id, class_name, summary, headline, vector,
+valid_from, entities, path, body_length)``. Vectors are produced by an
 :class:`~durin.memory.embedding.EmbeddingProvider` (``FastembedProvider``
 in V1).
 
@@ -35,7 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from durin.memory.embedding import EmbeddingProvider
-from durin.memory.paths import MEMORY_CLASSES, walk_class
+from durin.memory.paths import MEMORY_CLASSES, skill_uri, walk_class
 from durin.memory.schema import MemoryEntry
 from durin.memory.storage import load_entry
 
@@ -233,6 +234,77 @@ class VectorIndex:
             self._atomic_upsert(table, record)
         else:
             db.create_table(_TABLE_NAME, data=[record])
+
+    def upsert_skill(
+        self,
+        *,
+        name: str,
+        description: str,
+        body: str,
+        path: Any,
+        mode: str = "",
+    ) -> None:
+        """Index a skill page (``skills/<slug>/SKILL.md``) into the vector store.
+
+        Mirrors :meth:`upsert_entity_page`: composes the embedding text,
+        embeds it via :meth:`EmbeddingProvider.embed_passages` (so
+        E5-family models get the ``passage: `` prefix), synthesises a
+        record sharing the table schema, then atomically replaces-or-
+        inserts by ``id`` (or creates the table on first write).
+
+        Stored as ``class_name="skill"`` and keyed by
+        :func:`~durin.memory.paths.skill_uri` (``skill/<slug>``) so search
+        consumers can distinguish skills from memory entries and entity
+        pages via the same field. ``mode`` is accepted for callsite
+        symmetry with ``SkillPage`` but does not enter the embedding.
+        """
+        text = f"{name}\n{description}\n{body}"
+        # Use embed_passages (not raw embed) so E5-family models get the
+        # required `passage: ` prefix. For non-E5 models this is a no-op.
+        [vec] = self._provider.embed_passages([text])
+        record: dict[str, Any] = {
+            "id": skill_uri(name),
+            "class_name": "skill",
+            "summary": description,
+            "headline": name,
+            "body_length": len(body or ""),
+            "vector": vec,
+            "valid_from": "",
+            "entities": [],
+            "path": str(path),
+        }
+        db = self._connect()
+        names = db.list_tables().tables
+        if _TABLE_NAME in names:
+            table = db.open_table(_TABLE_NAME)
+            self._guard_dim_match(table, len(vec))
+            self._atomic_upsert(table, record)
+        else:
+            db.create_table(_TABLE_NAME, data=[record])
+
+    def _skill_record(
+        self,
+        skill: Any,  # durin.memory.skill_page.SkillPage
+        md_file: Path,
+        vec: list[float],
+    ) -> dict[str, Any]:
+        """Build the LanceDB row for a skill page, sharing the table
+        schema with memory entries and entity pages (rebuild Pass 3)."""
+        try:
+            rel_path = md_file.relative_to(self._workspace)
+        except ValueError:
+            rel_path = md_file
+        return {
+            "id": skill_uri(skill.name),
+            "class_name": "skill",
+            "summary": skill.description,
+            "headline": skill.name,
+            "body_length": len(skill.body or ""),
+            "vector": vec,
+            "valid_from": "",
+            "entities": [],
+            "path": str(rel_path),
+        }
 
     _PAGE_EMBED_BUDGET_CHARS = 1500
 
@@ -448,9 +520,9 @@ class VectorIndex:
         return True
 
     def rebuild_from_workspace(self) -> int:
-        """Re-embed every ``memory/<class>/*.md`` entry AND every
-        ``memory/entities/<type>/<slug>.md`` page; returns total count
-        rebuilt.
+        """Re-embed every ``memory/<class>/*.md`` entry, every
+        ``memory/entities/<type>/<slug>.md`` page, AND every
+        ``skills/<slug>/SKILL.md`` skill; returns total count rebuilt.
 
         NOT atomic: the existing table is dropped, then the new one is
         created (`_drop_if_exists` then `create_table`), so there is a
@@ -466,13 +538,13 @@ class VectorIndex:
         — entity pages were re-upserted only by Dream apply or absorb,
         which meant that after a forced rebuild (e.g. schema version
         bump) entity pages were silently missing from the vector index
-        until the next consolidation pass. Now the rebuild is complete.
+        until the next consolidation pass. Skills (Pass 3) were added
+        later: they live under `skills/`, an independent root, so the
+        rebuild walks them even when `memory/` is absent.
         """
-        memory_root = self._workspace / "memory"
-        if not memory_root.is_dir():
-            return 0
-
-        # Pass 1: walk classified memory entries.
+        # Pass 1: walk classified memory entries. `walk_class` guards on
+        # the class dir's existence, so this is safe when `memory/` is
+        # absent (e.g. a skills-only workspace).
         entries: list[tuple[MemoryEntry, str, Path]] = []
         for class_name in MEMORY_CLASSES:
             for path in walk_class(self._workspace, class_name):
@@ -489,7 +561,7 @@ class VectorIndex:
         # invalid) — skip them silently like the rest of the walker.
         from durin.memory.entity_page import EntityPage
         entity_pages: list[tuple[EntityPage, Path]] = []
-        entities_root = memory_root / "entities"
+        entities_root = self._workspace / "memory" / "entities"
         if entities_root.is_dir():
             for md_file in sorted(entities_root.rglob("*.md")):
                 try:
@@ -504,11 +576,33 @@ class VectorIndex:
                     continue
                 entity_pages.append((page, md_file))
 
-        if not entries and not entity_pages:
+        # Pass 3: walk skills (`skills/<slug>/SKILL.md`). Disabled skills
+        # (`disable_model_invocation`) stay out of the searchable index.
+        # `walk_skills` guards on the `skills/` root's existence and
+        # skips `_`-prefixed dirs (symmetry with `walk_memory`).
+        # Gated by `memory.index_skills`: when off, skills are never
+        # embedded into the vector table (clean no-op even with SKILL.md
+        # files on disk).
+        from durin.memory.index_meta import skills_indexing_enabled
+        from durin.memory.paths import walk_skills
+        from durin.memory.skill_page import SkillPage
+        skills: list[tuple[SkillPage, Path]] = []
+        skill_walk = walk_skills(self._workspace) if skills_indexing_enabled() else ()
+        for md in skill_walk:
+            try:
+                sp = SkillPage.from_file(md)
+            except Exception:  # noqa: BLE001
+                logger.warning("vector_index: skipping malformed skill %s", md)
+                continue
+            if sp is None or sp.disabled:
+                continue
+            skills.append((sp, md))
+
+        if not entries and not entity_pages and not skills:
             self._drop_if_exists()
             return 0
 
-        # Embed batches: entries first, then entity pages.
+        # Embed batches: entries first, then entity pages, then skills.
         entry_texts = [self._embed_text(entry) for entry, _, _ in entries]
         page_texts = [
             self._compose_entity_page_text(
@@ -520,13 +614,16 @@ class VectorIndex:
             )
             for page, _ in entity_pages
         ]
-        # Batch write — both entries and entity pages are passages, so
-        # use embed_passages to apply E5 prefix uniformly.
-        all_vectors = self._provider.embed_passages(entry_texts + page_texts) if (
-            entry_texts or page_texts
-        ) else []
+        skill_texts = [
+            f"{sp.name}\n{sp.description}\n{sp.body}" for sp, _ in skills
+        ]
+        # Batch write — entries, entity pages, and skills are all
+        # passages, so use embed_passages to apply E5 prefix uniformly.
+        all_texts = entry_texts + page_texts + skill_texts
+        all_vectors = self._provider.embed_passages(all_texts) if all_texts else []
         entry_vectors = all_vectors[: len(entry_texts)]
-        page_vectors = all_vectors[len(entry_texts):]
+        page_vectors = all_vectors[len(entry_texts):len(entry_texts) + len(page_texts)]
+        skill_vectors = all_vectors[len(entry_texts) + len(page_texts):]
 
         records = [
             self._record_with_vector(entry, class_name, path, vec)
@@ -537,6 +634,11 @@ class VectorIndex:
             self._entity_page_record(page, md_file, vec)
             for (page, md_file), vec
             in zip(entity_pages, page_vectors)
+        )
+        records.extend(
+            self._skill_record(sp, md_file, vec)
+            for (sp, md_file), vec
+            in zip(skills, skill_vectors)
         )
 
         db = self._connect()

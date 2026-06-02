@@ -49,6 +49,24 @@ def _translate_entity_page_uri(path_part: str) -> str:
     return f"memory/entities/{type_}/{slug}.md"
 
 
+def _translate_skill_uri(path_part: str) -> str:
+    """Map a skill uri to its on-disk SKILL.md path.
+
+    Skills surface under two uri forms: the on-disk
+    ``skills/<slug>/SKILL.md`` (what `memory_search` emits and what
+    resolves literally) and the internal index id ``skill/<slug>``
+    (FTS/vector). Translate the latter to the former so an agent that
+    drills the internal id still resolves the file. Any other string
+    passes through unchanged."""
+    if path_part.startswith("skills/") and path_part.endswith("/SKILL.md"):
+        return path_part
+    if path_part.startswith("skill/"):
+        from durin.memory.paths import skill_path_from_uri
+
+        return skill_path_from_uri(path_part)
+    return path_part
+
+
 def drill(workspace: Path, uri: str) -> str:
     """Return the markdown section addressed by ``uri``.
 
@@ -65,6 +83,9 @@ def drill(workspace: Path, uri: str) -> str:
     - ``memory/archive/<class>/<id>.md`` — archived content surfaced by
       ``memory_search(scope='archive')``. The full relative path under
       ``memory/archive/`` is emitted by that path after G6.
+    - ``skills/<slug>/SKILL.md`` — a skill page as emitted by
+      `memory_search` for the SKILL section. The internal index id
+      ``skill/<slug>`` is also accepted and translated to this path.
     - Any absolute or workspace-relative path with optional ``#anchor``.
 
     Returns the section text (or full file content when no anchor is
@@ -79,8 +100,11 @@ def drill(workspace: Path, uri: str) -> str:
         path_part, anchor = uri, ""
 
     # G6: translate the canonical entity page URI shape before resolving.
+    # Skills (H28, 2026-06-03): translate the internal `skill/<slug>` id
+    # to its on-disk `skills/<slug>/SKILL.md` path.
     original_uri = uri
     path_part = _translate_entity_page_uri(path_part)
+    path_part = _translate_skill_uri(path_part)
 
     raw = Path(path_part).expanduser()
     full_path = raw if raw.is_absolute() else (workspace / raw)

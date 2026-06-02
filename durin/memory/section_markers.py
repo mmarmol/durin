@@ -35,7 +35,28 @@ __all__ = [
     "fragment_marker",
     "ingested_marker",
     "session_marker",
+    "skill_marker",
 ]
+
+
+def _skill_name(uri: str) -> str:
+    """Parse the skill's short name out of its uri.
+
+    ``skills/<name>/SKILL.md`` -> ``<name>`` (the skill dir name);
+    ``skill/<slug>`` -> ``<slug>``. Falls back to the trailing path
+    segment (or the whole uri) when neither layout matches, so the
+    marker always carries a non-empty, human-readable label.
+    """
+    cleaned = uri.strip().strip("/")
+    parts = [p for p in cleaned.split("/") if p]
+    if not parts:
+        return uri
+    head = parts[0].lower()
+    if head == "skills" and len(parts) >= 2:
+        return parts[1]
+    if head == "skill" and len(parts) >= 2:
+        return parts[1]
+    return parts[-1]
 
 
 def _compose_qualifiers(*parts: str) -> str:
@@ -117,6 +138,21 @@ def ingested_marker(
     """
     label = ingest_id or "unknown"
     return f"=== INGESTED: {label}/{uri}{_compose_qualifiers(completeness)} ==="
+
+
+def skill_marker(uri: str, *, completeness: str = "") -> str:
+    """Header for a skill (procedure) block.
+
+    Format: ``=== SKILL: <name> ===`` where ``<name>`` is the skill
+    dir name parsed from the uri (``skills/<name>/SKILL.md`` ->
+    ``<name>``, ``skill/<slug>`` -> ``<slug>``). Mirrors the
+    ``ref``/``uri`` + ``completeness`` shape of the other markers; the
+    body content and ``end_marker`` line are appended by the caller.
+
+    H5: ``completeness`` (optional) appends to the trailing parens.
+    """
+    name = _skill_name(uri)
+    return f"=== SKILL: {name}{_compose_qualifiers(completeness)} ==="
 
 
 def end_marker(kind: str) -> str:

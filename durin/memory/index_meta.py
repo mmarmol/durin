@@ -36,7 +36,30 @@ __all__ = [
     "load_index_meta",
     "meta_path",
     "save_index_meta",
+    "skills_indexing_enabled",
 ]
+
+
+def skills_indexing_enabled() -> bool:
+    """Whether skill-memory-class indexing/surfacing is configured on.
+
+    Single source of truth for the ``memory.index_skills`` toggle across
+    the memory layer (FTS rebuild, vector rebuild, drift detection, and the
+    search grep-fallback). Lives here — a stdlib-only leaf module — so the
+    indexer/vector_index/search modules can gate without importing from the
+    agent layer (memory must not depend on agent).
+
+    Best-effort: a missing/unloadable config (pure ``tmp_path`` unit tests)
+    is treated as enabled. Only an explicit ``False`` disables skills. The
+    ``load_config`` import is inside the function so tests can monkeypatch
+    ``durin.config.loader.load_config`` to flip the flag.
+    """
+    try:
+        from durin.config.loader import load_config
+
+        return bool(load_config().memory.index_skills)
+    except Exception:  # noqa: BLE001
+        return True
 
 
 # Bumped any time the on-disk schema (frontmatter fields, archive
@@ -52,7 +75,11 @@ __all__ = [
 # rendered_frontmatter (attributes/relations as prose between aliases
 # and body) so attribute queries hit the centroid. Pre-v4 centroids
 # omit this signal — a forced rebuild realigns the table.
-CURRENT_SCHEMA_VERSION: int = 4
+# v5 (skills-memory-class): skills are now indexed as `class="skill"`
+# rows (vector Pass 3 + FTS skill loop). Pre-v5 indexes carry no skill
+# rows — the bump forces an auto-rebuild so existing workspaces pick
+# them up.
+CURRENT_SCHEMA_VERSION: int = 5
 
 
 @dataclass(frozen=True)

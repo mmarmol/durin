@@ -67,9 +67,13 @@ Para tasks con codebase o knowledge base no-trivial, query-conditioned context r
 
 **Status actual**: convergencia parcial con Horizon 2 — el memory subsystem
 actual ya hace retrieval por query, vía `memory_search` (FTS + vector + RRF +
-rerank). Lo que falta para que esto sea Horizon 1b completo es la pieza
-"codebase-aware" (PageRank-style sobre el repo del usuario, no sobre la
-memoria). No priorizado hoy.
+rerank). El **skill-doc retrieval estilo Hermes ya está shipped** (Spec 2,
+2026-06-03): los skills (`skills/<slug>/SKILL.md`) son una pseudo-clase de
+memoria buscable — indexados en FTS + vector, devueltos por `memory_search`
+como `kind="skill"` (procedimientos a seguir, no hechos a citar), drillables,
+gated por `memory.index_skills`. Lo que falta para que esto sea Horizon 1b
+completo es la pieza "codebase-aware" (PageRank-style sobre el repo del
+usuario, no sobre la memoria). No priorizado hoy.
 
 ---
 
@@ -86,8 +90,10 @@ LLM-driven + auto-absorb opt-in. Ver `docs/architecture/memory/`.
 - Aider's PageRank repo map: validated por adopción + benchmark results
 - Reflexion (academic): episodic failure memory mejora recovery medible
 
+**Refinamientos shipped post-Phase 6**:
+- Skills como pseudo-clase de memoria buscable (Spec 2, 2026-06-03) — `memory_search` devuelve `kind="skill"`, indexado FTS + vector, keep-in-sync en cada mutación, gated por `memory.index_skills`. Cierra el "skill-doc retrieval estilo Hermes" de Horizon 1b. Pendiente fast-follow: hot working-set tier (Phase 5, diferido).
+
 **Refinamientos no perseguidos (por ahora)**:
-- Hermes-style agent-written skill documents (alongside agent-written milestones) — ya tenemos skills/ pero no son agent-authored
 - Aider PageRank-style relevance ranking para code-related milestones — no aplicable hoy (no usamos memoria sobre código)
 - Reflexion-style explicit failure-pattern tracking — no priorizado
 
@@ -122,4 +128,4 @@ para rationale completo.
 
 ---
 
-## Last updated: 2026-05-30 (cleanup — pruned shipped sections, refreshed current state, archived 12-item tools roadmap to git history)
+## Last updated: 2026-06-03 (skills retrieval / Spec 2 shipped — skills are now a searchable memory pseudo-class via `memory_search`)

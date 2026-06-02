@@ -408,6 +408,9 @@ class MemoryConfig(Base):
     """
 
     enabled: bool = True
+    # Skills are authored + injected already; this gates making them
+    # searchable as a `skill` memory class (skill-memory-class indexing).
+    index_skills: bool = True
     embedding: MemoryEmbeddingConfig = Field(default_factory=MemoryEmbeddingConfig)
     dream: MemoryDreamConfig = Field(default_factory=MemoryDreamConfig)
     search: MemorySearchConfig = Field(default_factory=MemorySearchConfig)
