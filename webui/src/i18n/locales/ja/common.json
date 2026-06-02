@@ -51,7 +51,10 @@
       "web-search": "Web search",
       "secrets": "Secrets",
       "advanced": "All settings",
-      "channels": "Channels"
+      "channels": "Channels",
+      "memory": "Memory",
+      "cron": "Cron",
+      "skills": "Skills"
     },
     "sections": {
       "interface": "インターフェース",
