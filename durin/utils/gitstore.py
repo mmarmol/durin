@@ -43,7 +43,7 @@ def _compute_line_ages(annotated) -> list[LineAge]:
 
 
 class GitStore:
-    """Git-backed version control for memory files."""
+    """Git-backed version control for a set of files or a whole file tree."""
 
     def __init__(
         self,
@@ -57,7 +57,8 @@ class GitStore:
         self._tracked_files = tracked_files or []
         self._subtree = subtree
         self._label = label
-        # Memory keeps its historical author; subtree stores get a per-label one.
+        # `label` sets the init commit message and, in subtree mode, the author;
+        # non-subtree keeps the historical author `durin <durin@dream>`.
         self._author = (
             f"durin <durin@{label}>".encode() if subtree else b"durin <durin@dream>"
         )
@@ -138,7 +139,7 @@ class GitStore:
     # -- daily operations ------------------------------------------------------
 
     def auto_commit(self, message: str) -> str | None:
-        """Stage tracked memory files and commit if there are changes.
+        """Stage changes (tracked files, or the whole tree in subtree mode) and commit if any.
 
         Returns the short commit SHA, or None if nothing to commit.
         """
@@ -218,6 +219,13 @@ class GitStore:
             rel = str(path.relative_to(self._workspace))
             if rel not in target:
                 path.unlink()
+        # Prune directories left empty by the deletions above (bottom-up), skipping .git
+        for path in sorted(self._workspace.rglob("*"), reverse=True):
+            if path.is_dir() and ".git" not in path.relative_to(self._workspace).parts:
+                try:
+                    path.rmdir()  # only removes if empty
+                except OSError:
+                    pass
 
     def _resolve_sha(self, short_sha: str) -> bytes | None:
         """Resolve a short SHA prefix to the full SHA bytes."""

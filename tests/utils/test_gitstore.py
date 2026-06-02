@@ -257,3 +257,4 @@ class TestSubtreeMode:
         s.revert(bad)
         assert (root / "a" / "SKILL.md").read_text(encoding="utf-8") == "original\n"
         assert not (root / "b" / "SKILL.md").exists()  # addition undone
+        assert not (root / "b").exists()  # empty dir pruned, not just the file
