@@ -20,6 +20,7 @@ from durin.agent.hook import AgentHook, CompositeHook
 from durin.agent.memory import Consolidator, Dream
 from durin.agent.progress_hook import AgentProgressHook
 from durin.agent.runner import _MAX_INJECTIONS_PER_TURN, AgentRunner, AgentRunSpec
+from durin.agent.skill_usage import extract_skill_calls
 from durin.agent.subagent import SubagentManager
 from durin.agent.tools.context import AuxProviderHandle
 from durin.agent.tools.file_state import FileStateStore, bind_file_states, reset_file_states
@@ -1800,6 +1801,14 @@ class AgentLoop:
         # into unrelated turns.
         from durin.agent.agent_mode import clear_executing_plan_if_todos_done
         clear_executing_plan_if_todos_done(ctx.session.metadata)
+
+        # E2 Part A: durable skill-usage signal. Scan only THIS turn's new
+        # messages (the same slice _save_turn persists) so calls aren't
+        # re-counted every turn as the conversation accumulates.
+        _new_messages = ctx.all_messages[ctx.save_skip:]
+        _skill_calls = extract_skill_calls(_new_messages)
+        if _skill_calls:
+            ctx.session.metadata.setdefault("skill_calls", []).extend(_skill_calls)
 
         ctx.turn_latency_ms = max(0, int((time.time() - ctx.turn_wall_started_at) * 1000))
         self._save_turn(

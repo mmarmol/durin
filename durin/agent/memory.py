@@ -1136,7 +1136,7 @@ class Dream:
         """Build a minimal tool registry for the Dream agent."""
         from durin.agent.skills import BUILTIN_SKILLS_DIR
         from durin.agent.tools.file_state import FileStates
-        from durin.agent.tools.filesystem import EditFileTool, ReadFileTool, WriteFileTool
+        from durin.agent.tools.filesystem import EditFileTool, ReadFileTool
 
         tools = ToolRegistry()
         workspace = self.store.workspace
@@ -1152,11 +1152,11 @@ class Dream:
             file_states=file_states,
         ))
         tools.register(EditFileTool(workspace=workspace, allowed_dir=workspace, file_states=file_states))
-        # write_file resolves relative paths from workspace root, but can only
-        # write under skills/ so the prompt can safely use skills/<name>/SKILL.md.
-        skills_dir = workspace / "skills"
-        skills_dir.mkdir(parents=True, exist_ok=True)
-        tools.register(WriteFileTool(workspace=workspace, allowed_dir=skills_dir, file_states=file_states))
+        # E2 Part A: author skills through the sanctioned store (provenance +
+        # commit + fork-on-write), not a raw file write.
+        from durin.agent.tools.skill_write import SkillWriteTool
+        (workspace / "skills").mkdir(parents=True, exist_ok=True)
+        tools.register(SkillWriteTool(workspace=workspace))
         return tools
 
     # -- skill listing --------------------------------------------------------
@@ -1326,9 +1326,24 @@ class Dream:
             f"## Current USER.md ({len(current_user)} chars)\n{current_user}"
         )
 
+        # Compact "recently-used skills" line so Phase 2 can choose to patch
+        # the `auto` skills that were actually exercised. Appended only when
+        # non-empty; one line, names + read/edit counts.
+        from durin.agent.skill_usage import collect_recent_skill_calls
+
+        _used = collect_recent_skill_calls(self.store.workspace)
+        used_skills_block = ""
+        if _used:
+            _used_line = "Recently-used skills: " + ", ".join(
+                f"{n} (read×{o.get('read', 0)}, edit×{o.get('edit', 0)})"
+                for n, o in sorted(_used.items())
+            )
+            used_skills_block = f"\n\n## Recently-Used Skills\n{_used_line}"
+
         # Phase 1: Analyze (no skills list — dedup is Phase 2's job)
         phase1_prompt = (
             f"## Conversation History\n{history_text}\n\n{file_context}"
+            f"{used_skills_block}"
         )
 
         phase1_prompt_tokens = 0
