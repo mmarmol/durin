@@ -134,6 +134,17 @@
         "missingCredential": "填寫必要憑證後才能儲存。",
         "saveHint": "變更會套用到新的 web search 請求。"
       }
+    },
+    "skills": {
+      "view": "檢視",
+      "makeManual": "設為手動",
+      "makeAuto": "設為自動",
+      "back": "返回",
+      "empty": "沒有技能。",
+      "selectPrompt": "選擇一個技能以檢視。",
+      "discardPrompt": "放棄未儲存的變更？",
+      "editHint": "切換為手動以編輯",
+      "autoReadonly": "唯讀：此技能處於自動模式（由代理管理）。切換為手動即可編輯。"
     }
   },
   "chat": {

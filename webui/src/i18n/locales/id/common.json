@@ -312,6 +312,17 @@
           "note": "Pass mendalam malam hari yang mengubah entri memori episodik menjadi halaman entitas kanonikal (grafik pengetahuan)."
         }
       }
+    },
+    "skills": {
+      "view": "Lihat",
+      "makeManual": "Jadikan manual",
+      "makeAuto": "Jadikan auto",
+      "back": "Kembali",
+      "empty": "Tidak ada skill.",
+      "selectPrompt": "Pilih skill untuk melihatnya.",
+      "discardPrompt": "Buang perubahan yang belum disimpan?",
+      "editHint": "Ubah ke manual untuk mengedit",
+      "autoReadonly": "Hanya-baca: skill ini dalam mode auto (dikelola oleh agen). Ubah ke manual untuk mengedit."
     }
   },
   "chat": {

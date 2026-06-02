@@ -134,6 +134,17 @@
         "missingCredential": "保存する前に必要な認証情報を入力してください。",
         "saveHint": "変更は新しい web search リクエストに適用されます。"
       }
+    },
+    "skills": {
+      "view": "表示",
+      "makeManual": "手動にする",
+      "makeAuto": "自動にする",
+      "back": "戻る",
+      "empty": "スキルがありません。",
+      "selectPrompt": "表示するスキルを選択してください。",
+      "discardPrompt": "保存していない変更を破棄しますか？",
+      "editHint": "編集するには手動に切り替えてください",
+      "autoReadonly": "読み取り専用：このスキルは自動モード（エージェント管理）です。編集するには手動に切り替えてください。"
     }
   },
   "chat": {

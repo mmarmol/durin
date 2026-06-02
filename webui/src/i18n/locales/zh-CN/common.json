@@ -141,6 +141,17 @@
         "missingCredential": "填写所需凭证后才能保存。",
         "saveHint": "改动会应用到新的 web search 请求。"
       }
+    },
+    "skills": {
+      "view": "查看",
+      "makeManual": "设为手动",
+      "makeAuto": "设为自动",
+      "back": "返回",
+      "empty": "没有技能。",
+      "selectPrompt": "选择一个技能以查看。",
+      "discardPrompt": "放弃未保存的更改？",
+      "editHint": "切换为手动以编辑",
+      "autoReadonly": "只读：此技能处于自动模式（由代理管理）。切换为手动即可编辑。"
     }
   },
   "chat": {
