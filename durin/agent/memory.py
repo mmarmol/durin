@@ -1326,9 +1326,24 @@ class Dream:
             f"## Current USER.md ({len(current_user)} chars)\n{current_user}"
         )
 
+        # Compact "recently-used skills" line so Phase 2 can choose to patch
+        # the `auto` skills that were actually exercised. Appended only when
+        # non-empty; one line, names + read/edit counts.
+        from durin.agent.skill_usage import collect_recent_skill_calls
+
+        _used = collect_recent_skill_calls(self.store.workspace)
+        used_skills_block = ""
+        if _used:
+            _used_line = "Recently-used skills: " + ", ".join(
+                f"{n} (read×{o.get('read', 0)}, edit×{o.get('edit', 0)})"
+                for n, o in sorted(_used.items())
+            )
+            used_skills_block = f"\n\n## Recently-Used Skills\n{_used_line}"
+
         # Phase 1: Analyze (no skills list — dedup is Phase 2's job)
         phase1_prompt = (
             f"## Conversation History\n{history_text}\n\n{file_context}"
+            f"{used_skills_block}"
         )
 
         phase1_prompt_tokens = 0
