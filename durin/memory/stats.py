@@ -47,6 +47,8 @@ class MemoryStats:
     recall_total: int = 0
     recall_vector_total: int = 0
     recall_grep_total: int = 0
+    recall_skill_total: int = 0
+    skill_miss_total: int = 0
     recall_vector_entity_aware: int = 0
     recall_vector_reordered: int = 0
     recall_vector_duration_ms_total: float = 0.0
@@ -114,6 +116,8 @@ class MemoryStats:
                 "total": self.recall_total,
                 "vector_total": self.recall_vector_total,
                 "grep_total": self.recall_grep_total,
+                "skill_total": self.recall_skill_total,
+                "skill_miss_total": self.skill_miss_total,
                 "vector_entity_aware": self.recall_vector_entity_aware,
                 "vector_reordered": self.recall_vector_reordered,
                 "vector_duration_ms_total": self.recall_vector_duration_ms_total,
@@ -296,10 +300,13 @@ def _apply_event(etype: str, data: dict[str, Any], stats: MemoryStats) -> None:
     (forward-compat: a new event won't break old aggregators)."""
     if etype == "memory.recall":
         stats.recall_total += 1
+        stats.recall_skill_total += int(data.get("skill_result_count", 0) or 0)
         # The recall event doesn't carry strategy directly; derive from
         # the vector event count after the loop. For now bucket "grep"
         # as "recalls that didn't fire a vector event". The vector path
         # ALWAYS emits both events, so vector_total ≤ recall_total.
+    elif etype == "memory.skill_miss":
+        stats.skill_miss_total += 1
     elif etype == "memory.recall.vector":
         stats.recall_vector_total += 1
         if data.get("ranking") == "entity_aware":
