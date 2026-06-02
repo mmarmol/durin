@@ -848,6 +848,8 @@ def cmd_stats(
     recall_table.add_row("Total recalls", str(stats.recall_total))
     recall_table.add_row("  vector path", str(stats.recall_vector_total))
     recall_table.add_row("  grep path", str(stats.recall_grep_total))
+    recall_table.add_row("  skill recalls", str(stats.recall_skill_total))
+    recall_table.add_row("Skill misses", str(stats.skill_miss_total))
     recall_table.add_row(
         "Vector entity-aware activations",
         f"{stats.recall_vector_entity_aware} "

@@ -120,3 +120,10 @@ def test_load_missing_fields_returns_none(tmp_path: Path) -> None:
 def test_current_schema_version_is_positive_int() -> None:
     assert isinstance(CURRENT_SCHEMA_VERSION, int)
     assert CURRENT_SCHEMA_VERSION >= 1
+
+
+def test_schema_version_is_5_for_skill_indexing() -> None:
+    """v5 forces a rebuild so existing workspaces pick up skill rows
+    (skills indexed as ``class="skill"`` via vector Pass 3 / FTS skill
+    loop)."""
+    assert CURRENT_SCHEMA_VERSION == 5

@@ -489,6 +489,19 @@ def _safe_vector_search(
                 # Entity-page rows: id is already the entity_ref
                 # (e.g. "person:deborah") per upsert_entity_page.
                 uri = raw_id
+            elif class_name == "skill":
+                # B1 (skills, 2026-06-03): the FTS indexer writes skills
+                # under the bare `skill/<slug>` uri (via
+                # `_payload_for_skill`), NOT `skills/<slug>/SKILL.md`. To
+                # let RRF fuse the vector + FTS hits for the SAME skill,
+                # the vector normaliser must use that bare `skill/<slug>`
+                # id (== `raw_id`) as the FUSION uri — the H28 principle
+                # "build the SAME uri shape as FTS". The drillable
+                # `skills/<slug>/SKILL.md` display path rides along in the
+                # row's `path` field and is resolved at the result layer
+                # (memory_search._sectioned_to_result via
+                # `_skill_uri_to_path`).
+                uri = raw_id
             elif class_name:
                 # Episodic / stable / corpus / session_summary etc.
                 # Match the FTS convention: memory/<class>/<id>.

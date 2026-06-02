@@ -24,13 +24,19 @@ from durin.utils.helpers import ensure_dir
 
 __all__ = [
     "MEMORY_CLASSES",
+    "SKILLS_DIRNAME",
     "dream_dir",
     "ingested_dir",
     "ingested_entry_dir",
     "memory_class_dir",
     "memory_dir",
+    "skill_dir",
+    "skill_path_from_uri",
+    "skill_uri",
+    "skills_dir",
     "walk_class",
     "walk_memory",
+    "walk_skills",
 ]
 
 MEMORY_CLASSES: tuple[str, ...] = (
@@ -75,6 +81,41 @@ def ingested_entry_dir(workspace: Path, entry_id: str) -> Path:
 def dream_dir(workspace: Path) -> Path:
     """Return the dream subsystem's working directory."""
     return ensure_dir(workspace / "dream")
+
+
+SKILLS_DIRNAME = "skills"
+
+
+def skills_dir(workspace: Path) -> Path:
+    """Return the skills root inside the given workspace."""
+    return Path(workspace) / SKILLS_DIRNAME
+
+
+def skill_dir(workspace: Path, name: str) -> Path:
+    """Return the directory dedicated to a single skill."""
+    return skills_dir(workspace) / name
+
+
+def walk_skills(workspace: Path) -> Iterator[Path]:
+    """Yield every skills/<name>/SKILL.md, skipping _-prefixed dirs (walk_memory symmetry)."""
+    root = skills_dir(workspace)
+    if not root.is_dir():
+        return
+    for md in sorted(root.rglob("SKILL.md")):
+        if any(part.startswith("_") for part in md.relative_to(root).parts):
+            continue
+        yield md
+
+
+def skill_uri(slug: str) -> str:
+    """Return the canonical URI for a skill: ``skill/<slug>``."""
+    return f"skill/{slug}"
+
+
+def skill_path_from_uri(uri: str) -> str:
+    """Return the workspace-relative SKILL.md path for a ``skill/<slug>`` URI."""
+    slug = uri.split("/", 1)[1] if uri.startswith("skill/") else uri
+    return f"{SKILLS_DIRNAME}/{slug}/SKILL.md"
 
 
 def walk_memory(

@@ -455,6 +455,7 @@ class MemoryRecallEvent(TypedDict):
     strategy: str
     duration_ms: float
     total_candidates: int
+    skill_result_count: NotRequired[int]
     keywords: NotRequired[str | None]
     recovered_from: NotRequired[list[str]]
     recovery_duration_ms: NotRequired[float]
@@ -982,6 +983,23 @@ class MemoryRecallFailureEvent(TypedDict):
     session_key: NotRequired[str | None]
 
 
+class MemorySkillMissEvent(TypedDict):
+    """A `kinds="skill"` memory_search returned zero results.
+
+    The skill-retrieval analogue of ``memory.search.failure``: emitted
+    once per skill-targeted query that surfaced nothing. ``had_skill_candidate``
+    is True when the workspace DOES contain skills on disk — i.e. a real
+    silent-miss worth investigating (skills exist but none were retrieved),
+    versus an expected empty (no skills authored yet).
+    """
+
+    query: str
+    result_count: int
+    had_skill_candidate: bool
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
 class MemoryHealthCheckEvent(TypedDict):
     """One health-check tick completed (doc 02 §5.1 + doc 07 §9.4).
 
@@ -1154,6 +1172,7 @@ EVENTS: dict[str, type] = {
     "memory.recall.rrf": MemoryRecallRRFEvent,
     "memory.recall.rerank": MemoryRecallRerankEvent,
     "memory.search.failure": MemoryRecallFailureEvent,
+    "memory.skill_miss": MemorySkillMissEvent,
     "memory.health_check": MemoryHealthCheckEvent,
     "memory.health.critical": MemoryHealthCriticalEvent,
     "memory.fallback_tool_used": MemoryFallbackToolUsedEvent,
@@ -1224,6 +1243,7 @@ __all__ = [
     "MemoryRecallRRFEvent",
     "MemoryRecallRerankEvent",
     "MemoryRecallFailureEvent",
+    "MemorySkillMissEvent",
     "MemoryIndexWriteEvent",
     "MemoryIndexRebuildEvent",
     "MemoryIndexStalenessDetectedEvent",

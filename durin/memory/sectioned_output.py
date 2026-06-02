@@ -52,8 +52,8 @@ class SectionedHit:
     """
 
     uri: str
-    type: str  # "entity" | "episodic" | "stable" | "corpus" |
-               # "session_summary"
+    type: str  # "skill" | "entity" | "episodic" | "stable" |
+               # "corpus" | "session_summary"
     path: str
     score: float
     ts: str = ""
@@ -79,6 +79,7 @@ class SectionedHit:
 # cursor); session summaries get their own section because their
 # provenance is different (a conversation, not a memory tool).
 _SECTION_FOR_TYPE: dict[str, str] = {
+    "skill": "skill",
     "entity": "canonical",
     "episodic": "fragment",
     "stable": "fragment",
@@ -86,7 +87,13 @@ _SECTION_FOR_TYPE: dict[str, str] = {
     "corpus": "ingested",
 }
 
+# Skills lead: a matching procedure is a "playbook" to execute, so it
+# belongs before the facts the agent reconciles. The three dicts above
+# and below are COUPLED — `by_section` is pre-seeded from this order
+# and `_SECTION_INTRO` is indexed unguarded, so every name here must
+# also have a `_SECTION_INTRO` entry or rendering KeyErrors.
 _SECTION_ORDER: tuple[str, ...] = (
+    "skill",
     "canonical",
     "fragment",
     "session",
@@ -94,6 +101,10 @@ _SECTION_ORDER: tuple[str, ...] = (
 )
 
 _SECTION_INTRO: dict[str, str] = {
+    "skill": (
+        "Procedures matching the query — follow these steps to "
+        "execute the task; they are instructions, not facts to cite."
+    ),
     "canonical": (
         "Consolidated entity pages — the main memory; fragments "
         "below amend them with newer information."
@@ -192,7 +203,7 @@ def _render_block(section: str, hit: SectionedHit) -> str:
     parts = [marker]
     if rendered_body:
         parts.append(rendered_body)
-    if section != "canonical" and hit.entities:
+    if section not in ("canonical", "skill") and hit.entities:
         parts.append(f"Entities: {', '.join(hit.entities)}")
     from durin.memory.section_markers import end_marker
     parts.append(end_marker(section))
@@ -228,7 +239,10 @@ def _marker_for(
         fragment_marker,
         ingested_marker,
         session_marker,
+        skill_marker,
     )
+    if section == "skill":
+        return skill_marker(hit.uri, completeness=completeness)
     if section == "canonical":
         return canonical_marker(
             hit.uri, ts=hit.ts, completeness=completeness,
