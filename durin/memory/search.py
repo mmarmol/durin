@@ -25,7 +25,6 @@ from typing import Literal
 
 from durin.memory.paths import (
     MEMORY_CLASSES,
-    skill_path_from_uri,
     skill_uri,
     walk_class,
     walk_skills,
@@ -315,7 +314,14 @@ def search_skills(
         out.append(
             Result(
                 source="memory",
-                uri=skill_path_from_uri(skill_uri(slug)),
+                # B1 (2026-06-03): emit the canonical `skill/<slug>`
+                # fusion uri so the grep arm fuses with vector + FTS for
+                # the same skill (instead of splitting under
+                # `skills/<slug>/SKILL.md`). The result layer
+                # (memory_search._sectioned_to_result) normalises this
+                # back to the drillable `skills/<slug>/SKILL.md` display
+                # path via `_skill_uri_to_path`.
+                uri=skill_uri(slug),
                 headline=page.name,
                 snippet=snippet,
                 summary=page.description if level == "warm" else "",
