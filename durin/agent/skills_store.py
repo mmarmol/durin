@@ -281,10 +281,7 @@ def dream_fuse_skills(workspace: Path, *, target: str, content: str,
     if not rationale.strip():
         return {"error": "rationale is required"}
     for s in sources:
-        text = read_skill_content(workspace, s)
-        # Refuse only an EXPLICIT manual choice (the user's); the origin-based
-        # default from read_mode would refuse every workspace skill.
-        if text is not None and _durin_blob(text).get("mode") == "manual":
+        if read_mode(workspace, s) == "manual":
             return {"error": f"source is manual, refusing: {s}"}
     if _skill_md(workspace, target).exists():
         return {"error": f"target already exists: {target}"}
