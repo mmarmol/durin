@@ -4,6 +4,7 @@ import {
   Network,
   Search,
   Settings,
+  Sparkles,
   SquarePen,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -26,6 +27,8 @@ interface SidebarProps {
   onOpenSettings: () => void;
   onOpenMemoryGraph?: () => void;
   memoryGraphActive?: boolean;
+  onOpenSkills?: () => void;
+  skillsActive?: boolean;
   onCollapse: () => void;
 }
 
@@ -150,6 +153,25 @@ export function Sidebar(props: SidebarProps) {
             </Button>
           </div>
         </>
+      ) : null}
+      {props.onOpenSkills ? (
+        <div className="px-2.5 pb-2">
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={props.onOpenSkills}
+            className={cn(
+              "h-8 w-full justify-start gap-2 rounded-full px-2.5 text-[12.5px] font-medium",
+              props.skillsActive
+                ? "bg-sidebar-accent/80 text-sidebar-foreground"
+                : "text-sidebar-foreground/85 hover:bg-sidebar-accent/75 hover:text-sidebar-foreground",
+            )}
+            aria-pressed={!!props.skillsActive}
+          >
+            <Sparkles className="h-3.5 w-3.5" aria-hidden />
+            {t("skills.title")}
+          </Button>
+        </div>
       ) : null}
       <Separator className="bg-sidebar-border/50" />
       <div className="space-y-1 px-2.5 py-2.5 text-xs">

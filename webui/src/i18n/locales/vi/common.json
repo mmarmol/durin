@@ -53,8 +53,7 @@
       "advanced": "All settings",
       "channels": "Channels",
       "memory": "Memory",
-      "cron": "Cron",
-      "skills": "Skills"
+      "cron": "Cron"
     },
     "sections": {
       "interface": "Giao diện",
@@ -134,18 +133,19 @@
         "missingCredential": "Thêm thông tin bắt buộc trước khi lưu.",
         "saveHint": "Thay đổi áp dụng cho các yêu cầu web search mới."
       }
-    },
-    "skills": {
-      "view": "Xem",
-      "makeManual": "Chuyển thủ công",
-      "makeAuto": "Chuyển tự động",
-      "back": "Quay lại",
-      "empty": "Không có skill nào.",
-      "selectPrompt": "Chọn một skill để xem.",
-      "discardPrompt": "Bỏ các thay đổi chưa lưu?",
-      "editHint": "Chuyển sang thủ công để chỉnh sửa",
-      "autoReadonly": "Chỉ đọc: skill này ở chế độ tự động (do agent quản lý). Chuyển sang thủ công để chỉnh sửa."
     }
+  },
+  "skills": {
+    "view": "Xem",
+    "makeManual": "Chuyển thủ công",
+    "makeAuto": "Chuyển tự động",
+    "back": "Quay lại",
+    "empty": "Không có skill nào.",
+    "selectPrompt": "Chọn một skill để xem.",
+    "discardPrompt": "Bỏ các thay đổi chưa lưu?",
+    "editHint": "Chuyển sang thủ công để chỉnh sửa",
+    "autoReadonly": "Chỉ đọc: skill này ở chế độ tự động (do agent quản lý). Chuyển sang thủ công để chỉnh sửa.",
+    "title": "Skills"
   },
   "chat": {
     "fallbackTitle": "Trò chuyện {{id}}",

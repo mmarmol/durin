@@ -53,8 +53,7 @@
       "advanced": "All settings",
       "channels": "Channels",
       "memory": "Memory",
-      "cron": "Cron",
-      "skills": "Skills"
+      "cron": "Cron"
     },
     "sections": {
       "interface": "인터페이스",
@@ -134,18 +133,19 @@
         "missingCredential": "저장하기 전에 필요한 자격 증명을 입력하세요.",
         "saveHint": "변경 사항은 새 web search 요청에 적용됩니다."
       }
-    },
-    "skills": {
-      "view": "보기",
-      "makeManual": "수동으로 전환",
-      "makeAuto": "자동으로 전환",
-      "back": "뒤로",
-      "empty": "스킬이 없습니다.",
-      "selectPrompt": "볼 스킬을 선택하세요.",
-      "discardPrompt": "저장하지 않은 변경 사항을 버리시겠습니까?",
-      "editHint": "편집하려면 수동으로 전환하세요",
-      "autoReadonly": "읽기 전용: 이 스킬은 자동 모드(에이전트 관리)입니다. 편집하려면 수동으로 전환하세요."
     }
+  },
+  "skills": {
+    "view": "보기",
+    "makeManual": "수동으로 전환",
+    "makeAuto": "자동으로 전환",
+    "back": "뒤로",
+    "empty": "스킬이 없습니다.",
+    "selectPrompt": "볼 스킬을 선택하세요.",
+    "discardPrompt": "저장하지 않은 변경 사항을 버리시겠습니까?",
+    "editHint": "편집하려면 수동으로 전환하세요",
+    "autoReadonly": "읽기 전용: 이 스킬은 자동 모드(에이전트 관리)입니다. 편집하려면 수동으로 전환하세요.",
+    "title": "Skills"
   },
   "chat": {
     "fallbackTitle": "채팅 {{id}}",
