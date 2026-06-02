@@ -339,3 +339,15 @@ def test_drift_repair_does_not_delete_indexed_skill(tmp_path):
 - **Spec coverage:** Phase 0-2 = the spec's "skill as memory class + lifecycle foundation + memory_search typed". Phase 4 = the LLM-facing kind. Phase 6 = config gate. Phase 7 = miss telemetry. Phase 5 (hot tier) = the spec's §2.2 — **deferred** per D7 (flag to user).
 - **No placeholders:** the load-bearing/novel code (SkillPage, upsert_skill, URI helpers, drift fix, section dicts, _sync_index) is shown in full; mechanical edits give the exact change + test. Implementers match by SYMBOL (lines drift).
 - **Type consistency:** the URI shape `skill/<slug>` ↔ `skills/<slug>/SKILL.md` is identical across all tasks (D2). `class_name`/`type_`/`kind`/section name all = `"skill"`.
+
+---
+
+## Execution outcome (2026-06-03)
+
+All phases executed via subagent-driven TDD in worktree `durin-smc` (branch `skills-memory-class`). Phases 0-4, 6, 7 shipped; Phase 5 (hot working-set) deferred per D7. Full suite green (5422 passed, 16 skipped). Verified live end-to-end against a real lance+FTS index (search returns/renders/drills a skill; `kinds` filter; cold-tier body enrichment; dream never sweeps skills).
+
+**Final review found and fixed two defects:**
+- **B1 (BLOCKER, fixed `0e47360`):** the three search arms emitted divergent fusion URIs for one skill (FTS `skill/<slug>` vs vector+grep `skills/<slug>/SKILL.md`), so RRF split the score and duplicated the hit. The H28 skill-branch comment falsely claimed FTS wrote the long form. Fix: fusion key is uniformly the canonical stored key `skill/<slug>` (vector `_safe_vector_search` uses `raw_id`; grep `search_skills` uses `skill_uri(slug)`); the drillable `skills/<slug>/SKILL.md` is resolved only at the result boundary via `_skill_uri_to_path(hit.path or hit.uri)`. Regression `test_skill_rrf_fusion.py` drives the real pipeline with both arms and asserts exactly one fused hit.
+- **M1 (fixed `2b21687`):** a skill indexed while `index_skills=True` still surfaced after the flag was set `False` (lexical/vector rows linger; drift repair no-ops on `row_for_missing_file`). Fix: `memory_search` drops skill-typed hits when `not skills_indexing_enabled()`, so disabling the flag is an immediate read-side no-op regardless of lingering rows.
+
+**M2 (accepted, not a skill regression):** `ensure_index_fresh` rebuilds only FTS on a schema-version bump, never the vector index — for *all* classes, not just skills (entity pages behave identically). Vector skill rows are created incrementally on each mutation (`_sync_index`) and on a manual `durin memory reindex`. No data loss; consistent with existing system behavior. Left as-is to avoid changing global rebuild semantics.
