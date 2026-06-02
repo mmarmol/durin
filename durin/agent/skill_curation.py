@@ -1,7 +1,9 @@
 """Daily content-driven skill curation (E2 Part B).
 
-Cut-off = CHANGE, not "review everything". Reviews only the **delta** — `auto`
-skills that are new or whose BODY changed since last curated (via
+Reviews the workspace `auto` set (the evolving catalog — dream-created and forked
+skills), never pristine builtins. Cut-off = CHANGE, not "review everything":
+only the **delta** — `auto` skills that are new or whose BODY changed since last
+curated (via
 `skills_store.needs_curation`). Stable skills are skipped with no LLM call, so
 the pass never scales with catalog size. `budget` caps the per-day delta; the
 rest carries over (un-cursored → a later day), logged.
@@ -26,7 +28,13 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
                    usage: dict | None = None, budget: int = DEFAULT_BUDGET) -> dict:
     """One delta-curation pass. Returns {'reviewed', 'applied', 'deferred'}."""
     workspace = Path(workspace)
-    auto = [s["name"] for s in ss.list_skills_info(workspace) if s["mode"] == "auto"]
+    # Only the evolving WORKSPACE set: dream-created + forked skills. Pristine
+    # builtins (source="builtin") are the stable seed — not re-curated/forked
+    # until they're forked into the workspace by some other path.
+    auto = [
+        s["name"] for s in ss.list_skills_info(workspace)
+        if s["mode"] == "auto" and s["source"] == "workspace"
+    ]
     delta = [n for n in auto if ss.needs_curation(workspace, n)]
     if not delta:
         return {"reviewed": 0, "applied": 0, "deferred": 0}
