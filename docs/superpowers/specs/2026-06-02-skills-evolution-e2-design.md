@@ -1,7 +1,14 @@
 # Spec — Skills Evolution E2 (Cristalización + Curación)
 
-> **Estado:** diseño en revisión, pre-implementación. Etapa 2 del sistema de
-> skills evolutivas. Construye sobre **E1 (shipped** — PR #19, `e595fd6`).
+> 🟢 **FUENTE DE VERDAD de E2.** Este doc manda sobre el diseño y estado de la
+> Etapa 2. Construye sobre **E1 (shipped** — PR #19, `e595fd6`).
+>
+> **Estado:**
+> - **Parte A** (sueño 2h: crear + parchear local) — ✅ **HECHO** (merged a main,
+>   release local `v0.1.0a9`). Plan: `superpowers/plans/2026-06-02-…e2-part-a.md`.
+> - **Parte B** (sueño diario: curación global del catálogo) — ⛔ **pendiente**
+>   (sin plan de implementación todavía).
+>
 > Decisiones + **auditoría de código** vía brainstorming el 2026-06-02.
 >
 > **Nota de proceso:** un primer borrador de este spec se apoyó en supuestos
@@ -189,27 +196,39 @@ Rápido y local. Sobre las sesiones nuevas desde el cursor:
 - **Reemplaza** el `WriteFileTool` crudo de hoy por `skills_store` (provenance,
   commit, fork-on-write).
 
----
+> ⚠️ **Cabo suelto conocido (de la implementación de A).** `collect_recent_skill_calls`
+> hoy lee **todos** los sidecars de sesión (`sessions/*.meta.json`), no solo los
+> recientes — contradice "solo sesiones recientes". *Impacto:* bajo (el juez
+> decide por contenido; a lo sumo surfacea como candidata una skill usada hace
+> mucho). *Resolución:* acotar el colector a lo reciente (ventana por mtime del
+> sidecar). Se hace como **Tarea 0 del plan de Parte B** (la señal se retoca ahí
+> igual). No es un soft-deferral: tiene fix y lugar.
 
-## §6 — Parte B: curación global (sueño diario)
-
-Exhaustivo. Ve el catálogo entero; la cadencia diaria es la baja-frecuencia
-anti-oscilación.
+Holístico. **Revisa el catálogo ENTERO como un todo** — las skills usadas durante
+todo el día **más todas las demás que existan** — para evaluar si tienen sentido
+en conjunto. No mira una sesión: mira el catálogo. El uso del día es la *señal*;
+el objeto de revisión es *todas* las skills `auto`. La cadencia diaria es la
+baja-frecuencia anti-oscilación.
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│  FASE 0 — Mapa global (sin LLM)                           │
-│  agrega skill_calls de las sesiones desde el cursor        │
-│  → { skill → [sesiones, ops] }                             │
+│  FASE 0 — Señal del día (sin LLM)                         │
+│  agrega skill_calls del día → { skill → ops }              │
+│  (qué se usó; es input, no el alcance de la revisión)      │
 ├──────────────────────────────────────────────────────────┤
-│  FASE 1 — Fusionar solapadas (juicio por CONTENIDO)       │
-│  dos `auto` cubren lo mismo → fusionar A+B→C               │
+│  FASE 1 — Revisar el catálogo como un todo                │
+│  TODAS las `auto` (usadas o no): ¿alguna debe evolucionar? │
+│  ¿dos cubren lo mismo? ¿el conjunto tiene sentido?         │
 ├──────────────────────────────────────────────────────────┤
-│  FASE 2 — Mejorar las `auto` muy usadas                   │
-│  revisión de catálogo, no per-sesión                       │
+│  FASE 2 — Aplicar: evolucionar / fusionar                 │
+│  evolucionar una `auto`; o fusionar A+B→C las solapadas    │
 └──────────────────────────────────────────────────────────┘
         VERIFICACIÓN → skills_store (dedup, provenance, commit)
 ```
+
+> **Diferencia clave con Parte A:** A mira **solo sesiones recientes** y actúa
+> *local* (mejorar lo que se llamó, crear lo que falta). B mira **el catálogo
+> entero** y actúa *global* (evolución/unificación que requiere ver todo junto).
 
 - **Fusión A+B→C:** escribir C vía `skills_store`; quitar A y B (workspace) o
   fork-and-disable (builtin); **un** commit con rationale. Git guarda el

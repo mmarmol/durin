@@ -1,5 +1,8 @@
 # Skills Evolution E2 — Part A Implementation Plan
 
+> ✅ **EJECUTADO** (merged a main, release local `v0.1.0a9`). Plan cerrado. El
+> diseño y estado vivos están en el spec de E2.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Capture skill-usage signal (`skill_calls`) in each session's durable `.meta.json`, and route the 2h dream's skill authoring through E1's `skills_store` (provenance + commit + fork-on-write), removing the raw `WriteFileTool` path.

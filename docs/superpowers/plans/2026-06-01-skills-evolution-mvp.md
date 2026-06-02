@@ -1,5 +1,7 @@
 # Skills Evolution MVP — Implementation Plan
 
+> ✅ **EJECUTADO — E1 SHIPPED** (PR #19, merge `e595fd6`). Plan histórico, cerrado.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make durin's skills first-class **versioned, mode-gated entities** — the agent evolves them in-loop via a `skill_edit` tool that commits each change (with rationale, reversible), an `auto|manual` flag per skill controls who may edit, and a `/skills` command + web panel let the user see/edit/toggle them.
