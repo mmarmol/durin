@@ -45,14 +45,19 @@ def extract_skill_calls(messages: list[dict]) -> list[dict]:
     return calls
 
 
-def collect_recent_skill_calls(workspace) -> dict[str, dict[str, int]]:
+def collect_recent_skill_calls(workspace, within_hours: float | None = None) -> dict[str, dict[str, int]]:
     """Aggregate skill_calls across session sidecars: {skill: {op: count}}.
 
     Reads the durable ``derived.skill_calls`` of every session's ``.meta.json``.
     Used by the 2h dream to know which `auto` skills were used (candidates to
     patch). A future per-skill cursor (Part B) bounds this by 'since last';
     Part A reads all present sidecars.
+
+    When ``within_hours`` is set, sidecars whose mtime is older than that window
+    are skipped, so the 2h dream can focus on recent activity. Default ``None``
+    is unbounded.
     """
+    import time as _time
     from pathlib import Path
 
     from durin.session.session_meta import read_derived
@@ -62,8 +67,11 @@ def collect_recent_skill_calls(workspace) -> dict[str, dict[str, int]]:
     agg: dict[str, dict[str, int]] = {}
     if not sessions_dir.is_dir():
         return agg
+    cutoff = (_time.time() - within_hours * 3600) if within_hours is not None else None
     for meta in sessions_dir.glob("*.meta.json"):
         try:
+            if cutoff is not None and meta.stat().st_mtime < cutoff:
+                continue
             derived = read_derived(meta)
         except Exception:
             continue
