@@ -1,3 +1,6 @@
+import os
+import time
+
 from durin.agent.skill_usage import collect_recent_skill_calls, extract_skill_calls
 from durin.session.manager import SessionManager
 
@@ -38,3 +41,18 @@ def test_collect_recent_skill_calls_aggregates_across_sessions(tmp_path):
         sm.save(s)
     agg = collect_recent_skill_calls(tmp_path)
     assert agg.get("git-helper", {}).get("read") == 2
+
+
+def test_collect_skill_calls_within_hours_filters_old_sidecars(tmp_path):
+    sm = SessionManager(tmp_path)
+    for key in ("websocket:recent", "websocket:old"):
+        s = sm.get_or_create(key)
+        s.add_message("user", "x")
+        s.metadata["skill_calls"] = [{"skill": "git-helper", "op": "read"}]
+        sm.save(s)
+    old_meta = next(p for p in (tmp_path / "sessions").glob("*old*.meta.json"))
+    old = time.time() - 100 * 3600
+    os.utime(old_meta, (old, old))
+
+    assert collect_recent_skill_calls(tmp_path)["git-helper"]["read"] == 2
+    assert collect_recent_skill_calls(tmp_path, within_hours=48)["git-helper"]["read"] == 1

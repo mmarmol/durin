@@ -1331,7 +1331,7 @@ class Dream:
         # non-empty; one line, names + read/edit counts.
         from durin.agent.skill_usage import collect_recent_skill_calls
 
-        _used = collect_recent_skill_calls(self.store.workspace)
+        _used = collect_recent_skill_calls(self.store.workspace, within_hours=48)
         used_skills_block = ""
         if _used:
             _used_line = "Recently-used skills: " + ", ".join(
