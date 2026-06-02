@@ -28,6 +28,13 @@ def _store(workspace: Path) -> GitStore:
     return GitStore(_skills_dir(workspace), subtree=True, label="skills")
 
 
+def _safe_name(name: str) -> bool:
+    """Reject skill names that could escape the skills dir (path traversal)."""
+    return bool(name) and name not in (".", "..") and not any(
+        c in name for c in ("/", "\\", "\x00")
+    )
+
+
 def _loader(workspace: Path) -> SkillsLoader:
     # Pass the (patchable) module global so tests can point at a fake builtin dir.
     return SkillsLoader(Path(workspace), builtin_skills_dir=BUILTIN_SKILLS_DIR)
@@ -53,6 +60,8 @@ def _durin_blob(text: str) -> dict:
 
 def read_mode(workspace: Path, name: str, loader: SkillsLoader | None = None) -> str:
     """Explicit metadata.durin.mode, else default by origin (builtin=auto, user=manual)."""
+    if not _safe_name(name):
+        return "manual"
     loader = loader or _loader(workspace)
     text = loader.load_skill(name)
     if text is None:
@@ -64,6 +73,8 @@ def read_mode(workspace: Path, name: str, loader: SkillsLoader | None = None) ->
 
 
 def read_skill_content(workspace: Path, name: str) -> str | None:
+    if not _safe_name(name):
+        return None
     return _loader(workspace).load_skill(name)
 
 
@@ -97,6 +108,8 @@ def _store_init(workspace: Path) -> GitStore:
 def fork_on_write(workspace: Path, name: str, loader: SkillsLoader | None = None) -> Path:
     """Ensure a writable workspace copy of `name`. Copies a builtin in, stamping
     provenance + an explicit mode=auto. Returns the workspace skill dir."""
+    if not _safe_name(name):
+        raise FileNotFoundError(f"invalid skill name: {name}")
     loader = loader or _loader(workspace)
     dest = _skills_dir(workspace) / name
     if (dest / "SKILL.md").exists():
@@ -118,6 +131,8 @@ def fork_on_write(workspace: Path, name: str, loader: SkillsLoader | None = None
 def set_mode(workspace: Path, name: str, mode: str) -> str | None:
     if mode not in ("auto", "manual"):
         raise ValueError("mode must be 'auto' or 'manual'")
+    if not _safe_name(name):
+        raise FileNotFoundError(f"invalid skill name: {name}")
     store = _store_init(workspace)  # ensure git repo exists before mutating files
     dest = fork_on_write(workspace, name)
     def _set(data: dict) -> None:
@@ -141,13 +156,17 @@ def apply_skill_edit(
     """The skill_edit operation: fork-on-write, mode gate, bounded replace, commit."""
     if not rationale or not rationale.strip():
         return {"error": "rationale is required"}
+    if not _safe_name(name):
+        return {"error": "invalid skill name"}
     loader = _loader(workspace)
     if loader.load_skill(name) is None:
         return {"error": f"skill not found: {name}"}
     mode = read_mode(workspace, name, loader)
     store = _store_init(workspace)  # ensure git repo exists before mutating files
     dest = fork_on_write(workspace, name, loader)
-    target = dest / file
+    target = (dest / file).resolve()
+    if not target.is_relative_to(dest.resolve()):
+        return {"error": "file escapes skill directory"}
     if not target.exists():
         if old == "":
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -179,6 +198,8 @@ def apply_skill_edit(
 def save_skill_content(workspace: Path, name: str, content: str,
                        rationale: str = "edit via web") -> dict:
     """Full-content overwrite of a MANUAL skill's SKILL.md (web edit surface)."""
+    if not _safe_name(name):
+        return {"error": "invalid skill name"}
     if read_mode(workspace, name) != "manual":
         return {"error": "skill is not manual; flip it to manual to edit"}
     store = _store_init(workspace)  # ensure git repo exists before mutating files
