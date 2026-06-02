@@ -580,10 +580,15 @@ class VectorIndex:
         # (`disable_model_invocation`) stay out of the searchable index.
         # `walk_skills` guards on the `skills/` root's existence and
         # skips `_`-prefixed dirs (symmetry with `walk_memory`).
+        # Gated by `memory.index_skills`: when off, skills are never
+        # embedded into the vector table (clean no-op even with SKILL.md
+        # files on disk).
+        from durin.memory.index_meta import skills_indexing_enabled
         from durin.memory.paths import walk_skills
         from durin.memory.skill_page import SkillPage
         skills: list[tuple[SkillPage, Path]] = []
-        for md in walk_skills(self._workspace):
+        skill_walk = walk_skills(self._workspace) if skills_indexing_enabled() else ()
+        for md in skill_walk:
             try:
                 sp = SkillPage.from_file(md)
             except Exception:  # noqa: BLE001

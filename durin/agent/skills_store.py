@@ -70,17 +70,16 @@ def _body_hash(text: str) -> str:
 def _index_skills_enabled() -> bool:
     """Whether skill-memory-class indexing is configured on.
 
-    Best-effort: a missing/unloadable config (pure tmp_path unit tests)
-    is treated as enabled so the FTS/vector guards downstream — which
-    no-op when lancedb/the index aren't present — still run. We only
-    bail early when the toggle is explicitly false.
+    Delegates to the memory-layer single source of truth
+    (:func:`durin.memory.index_meta.skills_indexing_enabled`) so the
+    write-side gate here and the read-side gates in the indexer / vector
+    index / search all consult the same best-effort logic. Best-effort: a
+    missing/unloadable config (pure tmp_path unit tests) is treated as
+    enabled; only an explicit false bails early.
     """
-    try:
-        from durin.config.loader import load_config
+    from durin.memory.index_meta import skills_indexing_enabled
 
-        return bool(load_config().memory.index_skills)
-    except Exception:  # noqa: BLE001
-        return True
+    return skills_indexing_enabled()
 
 
 def _vector_index_for(workspace: Path):

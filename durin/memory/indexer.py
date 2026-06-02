@@ -88,6 +88,7 @@ def ensure_index_fresh(workspace: Path) -> dict:
         IndexMeta,
         load_index_meta,
         save_index_meta,
+        skills_indexing_enabled,
     )
 
     key = str(Path(workspace).resolve())
@@ -96,7 +97,11 @@ def ensure_index_fresh(workspace: Path) -> dict:
     _FRESHNESS_CHECKED.add(key)
 
     workspace = Path(workspace)
-    if not ((workspace / "memory").is_dir() or skills_dir(workspace).is_dir()):
+    # The skills dir alone forces a rebuild only when skill indexing is on;
+    # with `memory.index_skills=False` a skills-only workspace shouldn't
+    # rebuild (the skill loop is a no-op anyway). The memory/ term stands.
+    skills_present = skills_indexing_enabled() and skills_dir(workspace).is_dir()
+    if not ((workspace / "memory").is_dir() or skills_present):
         return {"rebuilt": False, "reason": "no_memory_dir"}
 
     meta = load_index_meta(workspace)
@@ -183,9 +188,13 @@ def rebuild_fts_index(workspace: Path) -> IndexStats:
                 continue
             indexed += 1
         # Second pass: index skills/<name>/SKILL.md alongside memory files.
+        # Gated by `memory.index_skills`: when off, skills are never written
+        # to the index (clean no-op even though SKILL.md files exist on disk).
+        from durin.memory.index_meta import skills_indexing_enabled
         from durin.memory.paths import walk_skills
 
-        for skill_md in walk_skills(workspace):
+        skill_iter = walk_skills(workspace) if skills_indexing_enabled() else ()
+        for skill_md in skill_iter:
             try:
                 payload = _payload_for_skill(workspace, skill_md)
             except Exception as exc:  # noqa: BLE001
@@ -325,9 +334,17 @@ def detect_index_staleness(workspace: Path) -> list[dict]:
     # SILENTLY DELETES it. Compute the uri exactly as _payload_for_skill
     # does (slug = skill_md.parent.name) so the fs uri matches the
     # indexed uri and the row is recognized as backed by a real file.
-    for skill_md in walk_skills(workspace):
-        uri = skill_uri(skill_md.parent.name)
-        fs_files[uri] = skill_md.stat().st_mtime
+    #
+    # Gated by `memory.index_skills`: when off, we deliberately do NOT add
+    # on-disk skills to fs_files. Any leftover `skill/*` rows from a prior
+    # enabled run then look like `row_for_missing_file` and get GC'd on the
+    # next drift repair — this is the intended "purge on disable" behavior.
+    from durin.memory.index_meta import skills_indexing_enabled
+
+    if skills_indexing_enabled():
+        for skill_md in walk_skills(workspace):
+            uri = skill_uri(skill_md.parent.name)
+            fs_files[uri] = skill_md.stat().st_mtime
 
     with FTSIndex.open(workspace) as idx:
         seen_in_index: set[str] = set()
