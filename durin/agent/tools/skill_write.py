@@ -1,9 +1,10 @@
-"""skill_write tool — dream authors a NEW skill through skills_store.
+"""skill_write tool — the sanctioned skill-authoring tool.
 
-Replaces the raw WriteFileTool the 2h dream used to dump SKILL.md with — this
-goes through E1's service layer (:func:`dream_create_skill`) so every
-dream-authored skill is a first-class citizen: provenance source='dream',
-mode='auto', and committed to the skills subtree.
+Auto-discovered into the main agent's ``core`` toolset (like E1's
+``skill_edit``), so it is available in-loop as well as to the 2h dream. It
+routes through E1's service layer (:func:`dream_create_skill`) instead of a raw
+WriteFileTool, so every authored skill is a first-class citizen: provenance
+source='dream', mode='auto', and committed to the skills subtree.
 """
 from __future__ import annotations
 
@@ -35,7 +36,10 @@ _PARAMETERS = tool_parameters_schema(
 
 @tool_parameters(_PARAMETERS)
 class SkillWriteTool(Tool):
-    """skill_write tool."""
+    """skill_write tool — the sanctioned skill-authoring tool.
+
+    Used by the dream and available in-loop; routes through skills_store.
+    """
 
     def __init__(self, workspace: str | Path) -> None:
         self._workspace = Path(workspace).expanduser()

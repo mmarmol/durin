@@ -1802,10 +1802,11 @@ class AgentLoop:
         from durin.agent.agent_mode import clear_executing_plan_if_todos_done
         clear_executing_plan_if_todos_done(ctx.session.metadata)
 
-        # E2 Part A: durable skill-usage signal. Scan this turn's messages for
-        # skill activations/edits and append to the session's derived metadata
-        # (persists to <key>.meta.json — never capped, survives consolidation).
-        _skill_calls = extract_skill_calls(ctx.all_messages)
+        # E2 Part A: durable skill-usage signal. Scan only THIS turn's new
+        # messages (the same slice _save_turn persists) so calls aren't
+        # re-counted every turn as the conversation accumulates.
+        _new_messages = ctx.all_messages[ctx.save_skip:]
+        _skill_calls = extract_skill_calls(_new_messages)
         if _skill_calls:
             ctx.session.metadata.setdefault("skill_calls", []).extend(_skill_calls)
 
