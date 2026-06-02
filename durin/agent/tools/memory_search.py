@@ -534,6 +534,7 @@ class MemorySearchTool(Tool):
             "strategy": strategy,
             "duration_ms": duration_ms,
             "total_candidates": total_candidates,
+            "skill_result_count": sum(1 for r in results if r.kind == "skill"),
             "keywords": keywords,
         }
         if pipeline_result.recovered_from:
@@ -544,6 +545,17 @@ class MemorySearchTool(Tool):
                 pipeline_result.recovery_duration_ms
             )
         emit_tool_event("memory.recall", recall_payload)
+        if kinds == "skill" and not results:
+            from durin.memory.paths import walk_skills
+            had_candidate = any(True for _ in walk_skills(self._workspace))
+            emit_tool_event(
+                "memory.skill_miss",
+                {
+                    "query": query,
+                    "result_count": 0,
+                    "had_skill_candidate": had_candidate,
+                },
+            )
         response: dict[str, Any] = {
             "results": [r.to_dict() for r in results],
             "total": len(results),
