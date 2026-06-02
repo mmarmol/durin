@@ -3,6 +3,7 @@
 import subprocess
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -214,3 +215,45 @@ class TestNestedRepoProtection:
 
         assert result is False
         assert not (workspace / ".git").exists()
+
+
+def _write(root: Path, rel: str, text: str) -> None:
+    p = root / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text, encoding="utf-8")
+
+
+class TestSubtreeMode:
+    def _store(self, root: Path) -> GitStore:
+        s = GitStore(root, subtree=True, label="skills")
+        s.init()
+        return s
+
+    def test_init_creates_repo_and_permissive_gitignore(self, tmp_path):
+        root = tmp_path / "skills"
+        s = GitStore(root, subtree=True, label="skills")
+        assert s.init() is True
+        assert (root / ".git").is_dir()
+        assert "__pycache__/" in (root / ".gitignore").read_text(encoding="utf-8")
+        assert s.init() is False  # idempotent
+
+    def test_commit_tracks_arbitrary_files(self, tmp_path):
+        root = tmp_path / "skills"
+        s = self._store(root)
+        _write(root, "a/SKILL.md", "# a\n")
+        sha = s.auto_commit("skill(a): create")
+        assert sha and len(sha) == 8
+        assert s.auto_commit("noop") is None
+        assert s.log()[0].message == "skill(a): create"
+
+    def test_revert_undoes_modification_and_addition(self, tmp_path):
+        root = tmp_path / "skills"
+        s = self._store(root)
+        _write(root, "a/SKILL.md", "original\n")
+        s.auto_commit("skill(a): create")
+        _write(root, "a/SKILL.md", "changed\n")
+        _write(root, "b/SKILL.md", "b\n")
+        bad = s.auto_commit("skill: bad")
+        s.revert(bad)
+        assert (root / "a" / "SKILL.md").read_text(encoding="utf-8") == "original\n"
+        assert not (root / "b" / "SKILL.md").exists()  # addition undone
