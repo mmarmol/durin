@@ -1,16 +1,5 @@
-import pytest
-
 from durin.agent import skills_store as ss
 from durin.agent.skill_curation import curate_catalog
-
-
-@pytest.fixture(autouse=True)
-def _isolate_builtins(tmp_path, monkeypatch):
-    # Point builtins at an empty dir so the delta = the test workspace only,
-    # never the real shipped builtin catalog.
-    empty = tmp_path / "_no_builtins"
-    empty.mkdir()
-    monkeypatch.setattr(ss, "BUILTIN_SKILLS_DIR", empty)
 
 
 def _mk(ws, name, body="body"):
@@ -67,5 +56,15 @@ def test_curate_noop_on_empty_delta(tmp_path):
     calls = []
     res = curate_catalog(ws / ".", judge=lambda p: calls.append(p) or '{"actions": []}')
     # NOTE: ws has one stable skill → delta empty → judge never called
+    assert res == {"reviewed": 0, "applied": 0, "deferred": 0}
+    assert calls == []
+
+
+def test_curate_excludes_pristine_builtins(tmp_path):
+    # No workspace skills created → with real shipped builtins present,
+    # the delta must still be empty (builtins are source="builtin", excluded).
+    ws = tmp_path / "ws"; ws.mkdir()
+    calls = []
+    res = curate_catalog(ws, judge=lambda p: calls.append(p) or '{"actions": []}')
     assert res == {"reviewed": 0, "applied": 0, "deferred": 0}
     assert calls == []
