@@ -349,5 +349,8 @@
       "title": "Tin nhắn quá lớn",
       "body": "Máy chủ đã từ chối tin nhắn trước vì vượt quá giới hạn kích thước. Hãy bớt ảnh hoặc chọn tệp nhỏ hơn rồi thử lại."
     }
+  },
+  "memoryGraph": {
+    "title": "Memory"
   }
 }

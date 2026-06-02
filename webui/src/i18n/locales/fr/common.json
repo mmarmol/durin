@@ -349,5 +349,8 @@
       "title": "Message trop volumineux",
       "body": "Le serveur a rejeté votre dernier message car il dépasse la taille autorisée. Retirez des images ou choisissez des fichiers plus légers, puis renvoyez-le."
     }
+  },
+  "memoryGraph": {
+    "title": "Memory"
   }
 }

@@ -560,7 +560,7 @@
     }
   },
   "memoryGraph": {
-    "title": "Grafik memori",
+    "title": "Memori",
     "searchPlaceholder": "Cari memori (vector + grep)…",
     "clear": "Hapus",
     "refresh": "Segarkan",
