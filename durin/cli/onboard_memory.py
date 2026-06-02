@@ -107,30 +107,37 @@ def prompt_memory_aux_model(
 # Verbatim from `docs/architecture/memory/06_prompts_and_instructions.md` §6.2.
 CROSS_ENCODER_QUESTION_TEXT: str = dedent(
     """\
-    Advanced retrieval option: durin can use a cross-encoder reranker
-    to improve search quality. This adds 300-800ms latency per query
-    and requires ~600MB additional RAM. The default model is
-    `BAAI/bge-reranker-base` (MIT, multilingual, ~100M params).
+    Recommended: durin can use a cross-encoder reranker to improve
+    search quality. This adds 300-800ms latency per query and requires
+    ~600MB additional RAM. The default model is `BAAI/bge-reranker-base`
+    (MIT, multilingual, ~100M params).
 
-    Most users do NOT need this — the default search (without the
-    reranker) works well for typical workloads. Enable it later via
-    the web dashboard if you find queries returning poor results.
+    For a personal agent this is worth enabling: the rerank's latency is
+    dwarfed by the LLM call that follows every search, while the ranking
+    gain is direct. Decline if you run on edge / RAM-constrained
+    hardware. You can change this anytime via the web dashboard.
 
-    Enable advanced reranker now? [y/N]:
+    Enable advanced reranker now? [Y/n]:
     """
 )
 
 
-def prompt_enable_cross_encoder(current: bool = False) -> bool:
+def prompt_enable_cross_encoder(
+    current: bool = False, *, recommended: bool = True,
+) -> bool:
     """Render the Q6.2 question and return the user's choice.
 
-    Same pattern as :func:`prompt_enable_auto_absorb`: re-prompts
-    preserve the prior opt-in; Ctrl+C preserves *current*.
+    The pre-selected answer is *recommended* (ON for the personal-agent
+    shape — see the question copy), so a fresh install defaults to Yes
+    while the config-level default stays OFF for CI / library safety.
+    *current* is only the abort fallback: Ctrl+C / abort preserves the
+    operator's existing value rather than silently applying the
+    recommendation.
     """
     questionary = _get_questionary()
     answer: Any = questionary.confirm(
         CROSS_ENCODER_QUESTION_TEXT,
-        default=bool(current),
+        default=bool(recommended),
     ).ask()
     if answer is None:
         return bool(current)
