@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import difflib
+import hashlib
 import shutil
 from pathlib import Path
 
@@ -56,6 +57,41 @@ def _durin_blob(text: str) -> dict:
     meta = data.get("metadata")
     durin = meta.get("durin") if isinstance(meta, dict) else None
     return durin if isinstance(durin, dict) else {}
+
+
+def _body_hash(text: str) -> str:
+    _data, body = split_frontmatter(text)
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()[:16]
+
+
+def needs_curation(workspace: Path, name: str) -> bool:
+    """True when the skill is new or its BODY changed since last curated."""
+    text = read_skill_content(workspace, name)
+    if text is None:
+        return False
+    prov = _durin_blob(text).get("provenance")
+    stored = prov.get("dream_processed_through") if isinstance(prov, dict) else None
+    return stored != _body_hash(text)
+
+
+def mark_curated(workspace: Path, name: str) -> str | None:
+    """Stamp provenance.dream_processed_through = current body hash + commit."""
+    if not _safe_name(name):
+        return None
+    store = _store_init(workspace)
+    dest = fork_on_write(workspace, name)
+    h = _body_hash((dest / "SKILL.md").read_text(encoding="utf-8"))
+
+    def _set(data: dict) -> None:
+        durin = ensure_durin(data)
+        prov = durin.get("provenance")
+        if not isinstance(prov, dict):
+            prov = {"source": "unknown", "created_at": _today()}
+        prov["dream_processed_through"] = h
+        durin["provenance"] = prov
+
+    _update_md(dest / "SKILL.md", _set)
+    return store.auto_commit(f"skill({name}): curated @ {h}")
 
 
 def read_mode(workspace: Path, name: str, loader: SkillsLoader | None = None) -> str:
