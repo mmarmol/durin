@@ -1,8 +1,10 @@
 # Spec — Skills Evolution MVP (Etapa 1)
 
-> **Estado:** diseño aprobado, pre-implementación. Es la **Etapa 1** del sistema
-> de skills evolutivas. No reemplaza el plan-fuente; lo aterriza a un MVP
-> implementable. Decisiones tomadas vía brainstorming el 2026-06-01.
+> **Estado:** ✅ **SHIPPED** (PR #19, merge `e595fd6`, 2026-06-02). Es la
+> **Etapa 1** del sistema de skills evolutivas. No reemplaza el plan-fuente; lo
+> aterriza a un MVP implementable. Decisiones tomadas vía brainstorming el
+> 2026-06-01. La **Etapa 2** la diseña
+> [`2026-06-02-skills-evolution-e2-design.md`](2026-06-02-skills-evolution-e2-design.md).
 >
 > **Fuentes:** [`docs/plans/skills_evolutivas.md`](../../plans/skills_evolutivas.md)
 > (la visión §1–§9) · [`docs/plans/hermes_skills_codebase.md`](../../plans/hermes_skills_codebase.md)

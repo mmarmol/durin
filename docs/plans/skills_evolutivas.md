@@ -217,7 +217,8 @@ Nivel 1 local híbrido; nivel 2 remoto solo on-gap (→ C).
 
 | Pieza durin | Rol en este plan |
 |---|---|
-| **Dream** (`agent/memory.py`, Fase 1/2) | Auto-creación (cristalizar) + edición de docs; ya detecta workflows recurrentes y escribe skills |
+| **Sueño 2h** (`Dream`, `agent/memory.py`) | Aprende comportamiento (SOUL/USER/MEMORY); ya autorea skills (crudo). E2 → autoría/parche **local** vía `skills_store` |
+| **Sueño diario** (`DreamConsolidator`, `memory/dream.py`) | Consolidación exhaustiva de entidades. E2 → **curación global** de skills (fusionar/unificar) |
 | **SkillsLoader** (`agent/skills.py`) | Carga, frontmatter, flag `always` (= divisoria de retrieval) |
 | **ContextBuilder** (`agent/context.py`) | Punto de inyección; mover cola larga de stable→on-demand |
 | **git de memoria** | Versionado/rollback/rationale de skills (= mecanismo SkillOpt) |
@@ -230,10 +231,17 @@ Nivel 1 local híbrido; nivel 2 remoto solo on-gap (→ C).
 
 ## §8 — Puntos abiertos (resolver en sus fases)
 
-- **A. Trigger de cristalización.** ¿*Eager* estilo Hermes (online, por
-  complejidad, justo tras la tarea — reactivo, arriesga bloat), *lazy* estilo
-  Dream actual (batch, por frecuencia — limpio pero tardío), o *híbrido*
-  (online marca candidato "pending", batch confirma si recurre)?
+- ~~**A. Trigger de cristalización.**~~ **RESUELTO (E2, 2026-06-02, tras
+  auditoría de código).** No es eager-vs-lazy: es **híbrido por reparto entre los
+  dos sueños existentes**. El de **cada-2h** (aprende comportamiento, ya autorea
+  skills) hace autoría/parche **local rápido**; el **diario** (consolidación
+  exhaustiva) hace la **curación global** (fusionar/unificar). La señal de uso se
+  registra como `skill_calls` (read/edit/create + ancla de turno) en el bloque
+  `derived` del `.meta.json` de la sesión — **durable** (el meta no se capa),
+  porque lo que el sueño lee de `history.jsonl` son resúmenes LLM y la señal cruda
+  se perdería. Toda escritura pasa por el `skills_store` de E1. Ver
+  [`2026-06-02-skills-evolution-e2-design.md`](../superpowers/specs/2026-06-02-skills-evolution-e2-design.md)
+  (§2 reparto, §4 señal, Apéndice A evidencia).
 
 - **B. Estándar de interop.** ¿`agentskills.io` (donde está el Hub de Hermes,
   habilita buscar/comparar en varios marketplaces con una query) vs nativo
