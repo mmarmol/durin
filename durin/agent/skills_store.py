@@ -209,6 +209,32 @@ def save_skill_content(workspace: Path, name: str, content: str,
     return {"ok": True, "name": name, "commit": sha}
 
 
+def dream_create_skill(workspace: Path, name: str, content: str,
+                       rationale: str) -> dict:
+    """Create a NEW skill authored by the dream: stamp mode=auto +
+    provenance.source='dream', write SKILL.md, commit. Refuses to overwrite
+    an existing skill (that path is an edit, not a create)."""
+    if not _safe_name(name):
+        return {"error": "invalid skill name"}
+    if not rationale or not rationale.strip():
+        return {"error": "rationale is required"}
+    md = _skill_md(workspace, name)
+    if md.exists():
+        return {"error": f"skill already exists: {name}"}
+    store = _store_init(workspace)  # ensure git repo exists before mutating files
+    md.parent.mkdir(parents=True, exist_ok=True)
+    md.write_text(content, encoding="utf-8")
+
+    def _stamp(data: dict) -> None:
+        durin = ensure_durin(data)
+        durin["mode"] = "auto"
+        durin["provenance"] = {"source": "dream", "created_at": _today()}
+
+    _update_md(md, _stamp)
+    sha = store.auto_commit(f"skill({name}): {rationale.strip()} [dream]")
+    return {"ok": True, "name": name, "commit": sha}
+
+
 def web_list(workspace: Path) -> tuple[int, dict]:
     head = _store(workspace).log(max_entries=1)
     return 200, {
