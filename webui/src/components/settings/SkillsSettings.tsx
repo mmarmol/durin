@@ -47,7 +47,7 @@ export function SkillsSettings({ token }: { token: string }) {
         setSelected(detail);
         setDraft(detail.content);
       } catch (e) {
-        setError((e as Error).message);
+        setError(e instanceof ApiError ? `HTTP ${e.status}` : (e as Error).message);
       }
     },
     [token],
@@ -61,7 +61,7 @@ export function SkillsSettings({ token }: { token: string }) {
         await refresh();
         if (selected?.name === row.name) await open(row.name);
       } catch (e) {
-        setError((e as Error).message);
+        setError(e instanceof ApiError ? `HTTP ${e.status}` : (e as Error).message);
       } finally {
         setBusy(null);
       }
@@ -76,7 +76,7 @@ export function SkillsSettings({ token }: { token: string }) {
       await saveSkill(token, selected.name, draft);
       await refresh();
     } catch (e) {
-      setError((e as Error).message);
+      setError(e instanceof ApiError ? `HTTP ${e.status}` : (e as Error).message);
     } finally {
       setBusy(null);
     }
@@ -86,7 +86,7 @@ export function SkillsSettings({ token }: { token: string }) {
     return (
       <div className="flex h-40 items-center justify-center text-sm text-muted-foreground">
         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-        {t("settings.nav.skills")}
+        {t("settings.status.loading")}
       </div>
     );
   }
