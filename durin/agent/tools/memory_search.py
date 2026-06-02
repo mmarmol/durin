@@ -18,6 +18,7 @@ from durin.memory.aliases_index import AliasIndex
 from durin.memory.entity_ranker import (
     extract_query_entities,
 )
+from durin.memory.index_meta import skills_indexing_enabled
 from durin.memory.search import Result
 from durin.memory.vector_index import VectorIndex, vector_index_available
 
@@ -452,6 +453,18 @@ class MemorySearchTool(Tool):
                 h for h in hits
                 if h.type in ("session_summary", "corpus")
             ]
+
+        # M1 (2026-06-03): read-side gate for `memory.index_skills=False`.
+        # The write-side gates stop NEW skills from being indexed, but a
+        # skill indexed earlier (while the flag was True) leaves FTS/vector
+        # rows that the search arms still read — and drift repair does not
+        # evict them. Drop ALL skill-typed hits at the tool boundary (the
+        # only skill-surfacing consumer) so flipping the flag off yields
+        # zero skill hits immediately, regardless of lingering rows. This
+        # sits BEFORE both the `results` conversion and `render_sectioned`,
+        # so neither the payload nor the rendered text leaks a skill.
+        if not skills_indexing_enabled():
+            hits = [h for h in hits if h.type != "skill"]
 
         # `kinds` post-filter: 'skill' keeps only skill procedures,
         # 'fact' drops them (facts/entities/sessions/ingested), 'all'
