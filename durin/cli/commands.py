@@ -1353,6 +1353,23 @@ def _run_gateway(
                 )
             except Exception:
                 logger.exception("memory_dream cron failed")
+
+            try:
+                from durin.agent.skill_curation import curate_catalog
+                from durin.memory.dream import default_llm_invoke
+
+                curation_model = resolve_memory_model(config)
+
+                def _judge(prompt: str) -> str:
+                    # ONE completion via the already-resolved memory model,
+                    # using the same call shape DreamRunner's judge uses.
+                    return default_llm_invoke(prompt, model=curation_model).text
+
+                summary = curate_catalog(workspace, judge=_judge)
+                logger.info("skill curation: reviewed=%s applied=%s deferred=%s",
+                            summary["reviewed"], summary["applied"], summary["deferred"])
+            except Exception:
+                logger.exception("skill curation step (non-fatal) failed")
             return None
 
         from durin.utils.evaluator import evaluate_response
