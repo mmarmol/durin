@@ -307,6 +307,58 @@ export async function setConfigValue(
   return res.config;
 }
 
+// -- skills (skills-evolution-mvp) -------------------------------------------
+
+export interface SkillRow {
+  name: string;
+  source: string;
+  mode: "auto" | "manual";
+  description?: string;
+  provenance?: { source?: string; created_at?: string };
+}
+
+export interface SkillDetail {
+  name: string;
+  mode: "auto" | "manual";
+  content: string;
+}
+
+export async function listSkills(
+  token: string,
+  base: string = "",
+): Promise<SkillRow[]> {
+  const res = await request<{ skills: SkillRow[] }>(`${base}/api/skills`, token);
+  return res.skills;
+}
+
+export async function getSkill(
+  token: string,
+  name: string,
+  base: string = "",
+): Promise<SkillDetail> {
+  return request<SkillDetail>(`${base}/api/skills/${encodeURIComponent(name)}`, token);
+}
+
+export async function saveSkill(
+  token: string,
+  name: string,
+  content: string,
+  base: string = "",
+): Promise<void> {
+  const query = new URLSearchParams({ content });
+  await request<{ ok: boolean }>(`${base}/api/skills/${encodeURIComponent(name)}/save?${query}`, token);
+}
+
+export async function setSkillMode(
+  token: string,
+  name: string,
+  value: "auto" | "manual",
+  base: string = "",
+): Promise<void> {
+  const query = new URLSearchParams({ value });
+  await request<{ ok: boolean }>(`${base}/api/skills/${encodeURIComponent(name)}/mode?${query}`, token);
+}
+
 export interface ModelTestResult {
   status: "ok" | "warn" | "fail";
   message: string;
