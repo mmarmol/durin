@@ -45,9 +45,22 @@ def _compute_line_ages(annotated) -> list[LineAge]:
 class GitStore:
     """Git-backed version control for memory files."""
 
-    def __init__(self, workspace: Path, tracked_files: list[str]):
+    def __init__(
+        self,
+        workspace: Path,
+        tracked_files: list[str] | None = None,
+        *,
+        subtree: bool = False,
+        label: str = "memory",
+    ):
         self._workspace = workspace
-        self._tracked_files = tracked_files
+        self._tracked_files = tracked_files or []
+        self._subtree = subtree
+        self._label = label
+        # Memory keeps its historical author; subtree stores get a per-label one.
+        self._author = (
+            f"durin <durin@{label}>".encode() if subtree else b"durin <durin@dream>"
+        )
 
     def is_initialized(self) -> bool:
         """Check if the git repo has been initialized."""
@@ -94,21 +107,27 @@ class GitStore:
             else:
                 gitignore.write_text(dream_entries, encoding="utf-8")
 
-            # Ensure tracked files exist (touch them if missing) so the initial
-            # commit has something to track.
-            for rel in self._tracked_files:
-                p = self._workspace / rel
-                p.parent.mkdir(parents=True, exist_ok=True)
-                if not p.exists():
-                    p.write_text("", encoding="utf-8")
+            if self._subtree:
+                self._stage_all()
+            else:
+                # Ensure tracked files exist (touch them if missing) so the
+                # initial commit has something to track.
+                for rel in self._tracked_files:
+                    p = self._workspace / rel
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    if not p.exists():
+                        p.write_text("", encoding="utf-8")
+                porcelain.add(
+                    str(self._workspace),
+                    paths=[".gitignore"] + self._tracked_files,
+                )
 
             # Initial commit
-            porcelain.add(str(self._workspace), paths=[".gitignore"] + self._tracked_files)
             porcelain.commit(
                 str(self._workspace),
-                message=b"init: durin memory store",
-                author=b"durin <durin@dream>",
-                committer=b"durin <durin@dream>",
+                message=f"init: durin {self._label} store".encode("utf-8"),
+                author=self._author,
+                committer=self._author,
             )
             logger.info("Git store initialized at {}", self._workspace)
             return True
@@ -129,19 +148,23 @@ class GitStore:
         try:
             from dulwich import porcelain
 
-            # .gitignore excludes everything except tracked files,
-            # so any staged/unstaged change must be in our files.
-            st = porcelain.status(str(self._workspace))
-            if not st.unstaged and not any(st.staged.values()):
-                return None
+            if self._subtree:
+                if not self._stage_all():
+                    return None
+            else:
+                # .gitignore excludes everything except tracked files,
+                # so any staged/unstaged change must be in our files.
+                st = porcelain.status(str(self._workspace))
+                if not st.unstaged and not any(st.staged.values()):
+                    return None
+                porcelain.add(str(self._workspace), paths=self._tracked_files)
 
             msg_bytes = message.encode("utf-8") if isinstance(message, str) else message
-            porcelain.add(str(self._workspace), paths=self._tracked_files)
             sha_bytes = porcelain.commit(
                 str(self._workspace),
                 message=msg_bytes,
-                author=b"durin <durin@dream>",
-                committer=b"durin <durin@dream>",
+                author=self._author,
+                committer=self._author,
             )
             if sha_bytes is None:
                 return None
@@ -153,6 +176,48 @@ class GitStore:
             return None
 
     # -- internal helpers ------------------------------------------------------
+
+    def _stage_all(self) -> list[str]:
+        """Stage every change (new, modified, deleted). Returns changed relpaths."""
+        from dulwich import porcelain
+        from dulwich.repo import Repo
+
+        changed: set[str] = set()
+        with Repo(str(self._workspace)) as repo:
+            st = porcelain.status(repo, untracked_files="all")
+            for key in ("add", "modify", "delete"):
+                for p in st.staged.get(key, []):
+                    changed.add(p.decode() if isinstance(p, bytes) else p)
+            for p in list(st.unstaged) + list(st.untracked):
+                changed.add(p.decode() if isinstance(p, bytes) else p)
+            if changed:
+                porcelain.add(repo, paths=sorted(changed))
+        return sorted(changed)
+
+    @staticmethod
+    def _iter_tree(repo, tree, prefix: str = ""):
+        for entry in tree.items():
+            name = entry.path.decode() if isinstance(entry.path, bytes) else entry.path
+            rel = f"{prefix}{name}"
+            obj = repo[entry.sha]
+            if obj.type_name == b"tree":
+                yield from GitStore._iter_tree(repo, obj, prefix=rel + "/")
+            elif obj.type_name == b"blob":
+                yield rel, obj.data
+
+    def _sync_worktree(self, target: dict[str, bytes]) -> None:
+        for rel, data in target.items():
+            dest = self._workspace / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(data)
+        for path in self._workspace.rglob("*"):
+            if path.is_dir():
+                continue
+            if ".git" in path.relative_to(self._workspace).parts:
+                continue
+            rel = str(path.relative_to(self._workspace))
+            if rel not in target:
+                path.unlink()
 
     def _resolve_sha(self, short_sha: str) -> bytes | None:
         """Resolve a short SHA prefix to the full SHA bytes."""
@@ -194,6 +259,8 @@ class GitStore:
 
     def _build_gitignore(self) -> str:
         """Generate .gitignore content from tracked files."""
+        if self._subtree:
+            return "__pycache__/\n*.pyc\n.archive/\n.DS_Store\n"
         dirs: set[str] = set()
         for f in self._tracked_files:
             parent = str(Path(f).parent)
@@ -352,19 +419,25 @@ class GitStore:
                 parent_obj = repo[commit_obj.parents[0]]
                 tree = repo[parent_obj.tree]
 
-                restored: list[str] = []
-                for filepath in self._tracked_files:
-                    content = self._read_blob_from_tree(repo, tree, filepath)
-                    if content is not None:
-                        dest = self._workspace / filepath
-                        dest.write_text(content, encoding="utf-8")
-                        restored.append(filepath)
-
-            if not restored:
-                return None
+                if self._subtree:
+                    target = dict(self._iter_tree(repo, tree))
+                else:
+                    restored: list[str] = []
+                    for filepath in self._tracked_files:
+                        content = self._read_blob_from_tree(repo, tree, filepath)
+                        if content is not None:
+                            dest = self._workspace / filepath
+                            dest.write_text(content, encoding="utf-8")
+                            restored.append(filepath)
 
             # Commit the restored state
             msg = f"revert: undo {commit}"
+            if self._subtree:
+                self._sync_worktree(target)
+                return self.auto_commit(msg)
+
+            if not restored:
+                return None
             return self.auto_commit(msg)
         except Exception:
             logger.exception("Git revert failed for {}", commit)
