@@ -33,6 +33,7 @@ from typing import Any, Optional
 
 from durin.memory.fts_index import FTSIndex
 from durin.memory.lexical_search import lexical_search
+from durin.memory.paths import skill_path_from_uri
 from durin.memory.query_router import decide_lexical_route
 from durin.memory.rrf_fusion import fuse_rrf
 from durin.memory.sectioned_output import (
@@ -489,6 +490,14 @@ def _safe_vector_search(
                 # Entity-page rows: id is already the entity_ref
                 # (e.g. "person:deborah") per upsert_entity_page.
                 uri = raw_id
+            elif class_name == "skill":
+                # H28 (skills, 2026-06-03): the FTS indexer writes skills
+                # under `skills/<slug>/SKILL.md`, NOT `memory/skill/<id>`.
+                # The vector row carries that stored `path` directly; use
+                # it so RRF fuses the vector + FTS hits for the same skill
+                # instead of splitting their scores under two URIs. Fall
+                # back to reconstructing from the `skill/<slug>` id.
+                uri = r.get("path") or skill_path_from_uri(raw_id)
             elif class_name:
                 # Episodic / stable / corpus / session_summary etc.
                 # Match the FTS convention: memory/<class>/<id>.
