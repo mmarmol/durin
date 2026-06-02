@@ -186,3 +186,33 @@ def save_skill_content(workspace: Path, name: str, content: str,
     (dest / "SKILL.md").write_text(content, encoding="utf-8")
     sha = store.auto_commit(f"skill({name}): {rationale}")
     return {"ok": True, "name": name, "commit": sha}
+
+
+def web_list(workspace: Path) -> tuple[int, dict]:
+    head = _store(workspace).log(max_entries=1)
+    return 200, {
+        "skills": list_skills_info(workspace),
+        "store_head": ({"sha": head[0].sha, "at": head[0].timestamp} if head else None),
+    }
+
+
+def web_get(workspace: Path, name: str) -> tuple[int, dict]:
+    content = read_skill_content(workspace, name)
+    if content is None:
+        return 404, {"error": f"skill not found: {name}"}
+    return 200, {"name": name, "mode": read_mode(workspace, name), "content": content}
+
+
+def web_save(workspace: Path, name: str, content: str) -> tuple[int, dict]:
+    res = save_skill_content(workspace, name, content)
+    return (400, res) if "error" in res else (200, res)
+
+
+def web_mode(workspace: Path, name: str, value: str) -> tuple[int, dict]:
+    if value not in ("auto", "manual"):
+        return 400, {"error": "value must be 'auto' or 'manual'"}
+    try:
+        sha = set_mode(workspace, name, value)
+    except FileNotFoundError:
+        return 404, {"error": f"skill not found: {name}"}
+    return 200, {"ok": True, "name": name, "mode": value, "commit": sha}

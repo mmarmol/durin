@@ -674,6 +674,21 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/config/set":
             return self._handle_config_set(request)
 
+        if got == "/api/skills":
+            return self._handle_skills_list(request)
+
+        m = re.match(r"^/api/skills/([^/]+)/save$", got)
+        if m:
+            return self._handle_skill_save(request, m.group(1))
+
+        m = re.match(r"^/api/skills/([^/]+)/mode$", got)
+        if m:
+            return self._handle_skill_mode(request, m.group(1))
+
+        m = re.match(r"^/api/skills/([^/]+)$", got)
+        if m:
+            return self._handle_skill_get(request, m.group(1))
+
         if got == "/api/channels":
             return self._handle_channels_list(request)
 
@@ -1382,6 +1397,73 @@ class WebSocketChannel(BaseChannel):
             "created_at_ms": job.created_at_ms,
             "updated_at_ms": job.updated_at_ms,
         }
+
+    def _handle_skills_list(self, request: WsRequest) -> Response:
+        """`GET /api/skills` — list installed skills + the skills store HEAD."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from durin.agent import skills_store as ss
+        from durin.config.loader import load_config
+        try:
+            workspace = load_config().workspace_path
+            status, payload = ss.web_list(workspace)
+        except Exception as exc:  # noqa: BLE001
+            return _http_error(500, f"skills list failed: {exc}")
+        return _http_json_response(payload, status=status)
+
+    def _handle_skill_get(self, request: WsRequest, name: str) -> Response:
+        """`GET /api/skills/{name}` — fetch a skill's mode + SKILL.md content."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        decoded = _decode_api_key(name)
+        if decoded is None:
+            return _http_error(400, "invalid skill name")
+        from durin.agent import skills_store as ss
+        from durin.config.loader import load_config
+        try:
+            workspace = load_config().workspace_path
+            status, payload = ss.web_get(workspace, decoded)
+        except Exception as exc:  # noqa: BLE001
+            return _http_error(500, f"skill read failed: {exc}")
+        return _http_json_response(payload, status=status)
+
+    def _handle_skill_save(self, request: WsRequest, name: str) -> Response:
+        """`GET /api/skills/{name}/save?content=...` — overwrite a MANUAL skill."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        decoded = _decode_api_key(name)
+        if decoded is None:
+            return _http_error(400, "invalid skill name")
+        query = _parse_query(request.path)
+        content = _query_first(query, "content")
+        if content is None:
+            return _http_error(400, "content is required")
+        from durin.agent import skills_store as ss
+        from durin.config.loader import load_config
+        try:
+            workspace = load_config().workspace_path
+            status, payload = ss.web_save(workspace, decoded, content)
+        except Exception as exc:  # noqa: BLE001
+            return _http_error(500, f"skill save failed: {exc}")
+        return _http_json_response(payload, status=status)
+
+    def _handle_skill_mode(self, request: WsRequest, name: str) -> Response:
+        """`GET /api/skills/{name}/mode?value=auto|manual` — set a skill's mode."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        decoded = _decode_api_key(name)
+        if decoded is None:
+            return _http_error(400, "invalid skill name")
+        query = _parse_query(request.path)
+        value = (_query_first(query, "value") or "").strip()
+        from durin.agent import skills_store as ss
+        from durin.config.loader import load_config
+        try:
+            workspace = load_config().workspace_path
+            status, payload = ss.web_mode(workspace, decoded, value)
+        except Exception as exc:  # noqa: BLE001
+            return _http_error(500, f"skill mode failed: {exc}")
+        return _http_json_response(payload, status=status)
 
     def _handle_cron_list(self, request: WsRequest) -> Response:
         """`GET /api/cron` — list all scheduled jobs (including disabled
