@@ -78,7 +78,7 @@ class GitStore:
         if self.is_initialized():
             return False
 
-        if self._is_inside_git_repo():
+        if not self._subtree and self._is_inside_git_repo():
             logger.warning(
                 "Workspace {} is already inside a git repo; "
                 "skipping nested repo initialization",
