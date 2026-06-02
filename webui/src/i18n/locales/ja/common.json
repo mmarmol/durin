@@ -51,7 +51,9 @@
       "web-search": "Web search",
       "secrets": "Secrets",
       "advanced": "All settings",
-      "channels": "Channels"
+      "channels": "Channels",
+      "memory": "Memory",
+      "cron": "Cron"
     },
     "sections": {
       "interface": "インターフェース",
@@ -132,6 +134,18 @@
         "saveHint": "変更は新しい web search リクエストに適用されます。"
       }
     }
+  },
+  "skills": {
+    "view": "表示",
+    "makeManual": "手動にする",
+    "makeAuto": "自動にする",
+    "back": "戻る",
+    "empty": "スキルがありません。",
+    "selectPrompt": "表示するスキルを選択してください。",
+    "discardPrompt": "保存していない変更を破棄しますか？",
+    "editHint": "編集するには手動に切り替えてください",
+    "autoReadonly": "読み取り専用：このスキルは自動モード（エージェント管理）です。編集するには手動に切り替えてください。",
+    "title": "Skills"
   },
   "chat": {
     "fallbackTitle": "チャット {{id}}",
@@ -335,5 +349,8 @@
       "title": "メッセージが大きすぎます",
       "body": "サイズ上限を超えたため、直前のメッセージはサーバーに拒否されました。画像を減らすか、より小さいファイルに差し替えて再送してください。"
     }
+  },
+  "memoryGraph": {
+    "title": "Memory"
   }
 }

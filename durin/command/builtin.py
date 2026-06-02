@@ -196,6 +196,13 @@ BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
         "<list|show|search|drill> [args]",
     ),
     BuiltinCommandSpec(
+        "/skills",
+        "Skill operations",
+        "Subcommands: list, mode <name> <auto|manual>.",
+        "wrench",
+        "<list|mode> [args]",
+    ),
+    BuiltinCommandSpec(
         "/remember",
         "Remember a fact",
         "Store a fact in episodic memory tagged as user-authored (curator never touches).",
@@ -1575,6 +1582,49 @@ async def _memory_reindex(
     )
 
 
+async def cmd_skills(ctx: CommandContext) -> OutboundMessage:
+    """Skill operations dispatcher: list, mode."""
+    from durin.agent import skills_store as ss
+
+    workspace = _resolve_workspace(ctx.loop)
+    metadata_text = {**dict(ctx.msg.metadata or {}), "render_as": "text"}
+
+    parts = (ctx.args or "").strip().split(None, 1)
+    sub = parts[0].lower() if parts else ""
+    rest = parts[1] if len(parts) > 1 else ""
+
+    def _reply(content: str) -> OutboundMessage:
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content=content, metadata=metadata_text,
+        )
+
+    if not sub or sub == "list":
+        skills = ss.list_skills_info(workspace)
+        if not skills:
+            return _reply("No skills found.")
+        lines = ["## Skills", ""]
+        for s in skills:
+            lines.append(
+                f"- **{s['name']}** [{s['source']}] · mode=`{s['mode']}` — {s['description']}"
+            )
+        return _reply("\n".join(lines))
+
+    if sub == "mode":
+        mparts = rest.split()
+        if len(mparts) != 2 or mparts[1].lower() not in {"auto", "manual"}:
+            return _reply("Usage: `/skills mode <name> <auto|manual>`")
+        name, want = mparts[0], mparts[1].lower()
+        try:
+            sha = ss.set_mode(workspace, name, want)
+        except FileNotFoundError:
+            return _reply(f"Skill `{name}` not found.")
+        suffix = f" ({sha})" if sha else ""
+        return _reply(f"Skill `{name}` mode → **{want}**{suffix}.")
+
+    return _reply(f"Unknown `/skills` subcommand `{sub}`. Try `list` or `mode`.")
+
+
 async def cmd_remember(ctx: CommandContext) -> OutboundMessage:
     """Store a fact in episodic memory as ``user_authored``.
 
@@ -1923,6 +1973,8 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.exact("/hotkeys", cmd_hotkeys)
     router.exact("/memory", cmd_memory)
     router.prefix("/memory ", cmd_memory)
+    router.exact("/skills", cmd_skills)
+    router.prefix("/skills ", cmd_skills)
     router.exact("/remember", cmd_remember)
     router.prefix("/remember ", cmd_remember)
     router.exact("/forget", cmd_forget)

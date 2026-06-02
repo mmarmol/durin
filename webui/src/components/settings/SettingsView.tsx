@@ -72,6 +72,7 @@ import {
 } from "@/components/settings/primitives";
 import { PALETTES, type Palette } from "@/hooks/useTheme";
 import { cn } from "@/lib/utils";
+import { ConnectionBadge } from "@/components/ConnectionBadge";
 import { useClient } from "@/providers/ClientProvider";
 import type { SecretEntry, SettingsPayload, WebSearchSettingsUpdate } from "@/lib/types";
 
@@ -524,6 +525,9 @@ function SettingsSidebar({
       </nav>
 
       <div className="mt-auto pt-4">
+        <div className="px-2 pb-2">
+          <ConnectionBadge />
+        </div>
         {onLogout ? (
           <Button
             type="button"

@@ -51,7 +51,9 @@
       "web-search": "Recherche web",
       "secrets": "Secrets",
       "advanced": "All settings",
-      "channels": "Channels"
+      "channels": "Channels",
+      "memory": "Memory",
+      "cron": "Cron"
     },
     "sections": {
       "interface": "Interface",
@@ -132,6 +134,18 @@
         "saveHint": "Les changements s'appliquent aux nouvelles requêtes web search."
       }
     }
+  },
+  "skills": {
+    "view": "Voir",
+    "makeManual": "Passer en manuel",
+    "makeAuto": "Passer en auto",
+    "back": "Retour",
+    "empty": "Aucune skill.",
+    "selectPrompt": "Sélectionnez une skill pour l'afficher.",
+    "discardPrompt": "Abandonner les modifications non enregistrées ?",
+    "editHint": "Passez en manuel pour modifier",
+    "autoReadonly": "Lecture seule : cette skill est en mode auto (gérée par l'agent). Passez-la en manuel pour la modifier.",
+    "title": "Skills"
   },
   "chat": {
     "fallbackTitle": "Discussion {{id}}",
@@ -335,5 +349,8 @@
       "title": "Message trop volumineux",
       "body": "Le serveur a rejeté votre dernier message car il dépasse la taille autorisée. Retirez des images ou choisissez des fichiers plus légers, puis renvoyez-le."
     }
+  },
+  "memoryGraph": {
+    "title": "Memory"
   }
 }
