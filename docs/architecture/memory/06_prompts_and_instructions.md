@@ -622,19 +622,26 @@ than failing.
 ### 6.2 Cross-encoder reranker (opt-in)
 
 ```
-Advanced retrieval option: durin can use a cross-encoder reranker to
-improve search quality. This adds 300-1500ms latency per query (depending
-on the model) and requires additional RAM. The default model is
-`BAAI/bge-reranker-base` (~100M params, MIT license, multilingual).
+Recommended: durin can use a cross-encoder reranker to improve search
+quality. This adds 300-800ms latency per query and requires ~600MB
+additional RAM. The default model is `BAAI/bge-reranker-base` (MIT,
+multilingual, ~100M params).
 
-Most users do NOT need this — the default search (without the reranker)
-works well for typical workloads. Enable it later via the web dashboard
-if you find queries returning poor results.
+For a personal agent this is worth enabling: the rerank's latency is
+dwarfed by the LLM call that follows every search, while the ranking
+gain is direct. Decline if you run on edge / RAM-constrained hardware.
+You can change this anytime via the web dashboard.
 
-Enable advanced reranker now? [y/N]:
+Enable advanced reranker now? [Y/n]:
 ```
 
-Default: no. Wording matches the trade-off discussion in `03_search_pipeline.md` §9.5.
+Default presented at onboarding: **Yes (recommended)**. Note this is the
+*onboarding* recommendation, not the config-level default: `MemorySearchConfig.cross_encoder.enabled` stays `False` so CI / test / headless
+environments that build a default config never trigger the one-time
+model download implicitly. The recommendation-ON lives in the wizard
+prompt (`prompt_enable_cross_encoder(recommended=True)`), which writes
+`true` into the operator's own config. Wording matches the trade-off
+discussion in `03_search_pipeline.md` §9.5.
 
 ### 6.3 Auto-absorb (entity dedup post-Dream, opt-in)
 
