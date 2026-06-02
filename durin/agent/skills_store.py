@@ -9,12 +9,15 @@ from __future__ import annotations
 import datetime as _dt
 import difflib
 import hashlib
+import logging
 import shutil
 from pathlib import Path
 
 from durin.agent.skills import BUILTIN_SKILLS_DIR, SkillsLoader
 from durin.agent.skills_frontmatter import ensure_durin, join_frontmatter, split_frontmatter
 from durin.utils.gitstore import GitStore
+
+logger = logging.getLogger(__name__)
 
 
 def _skills_dir(workspace: Path) -> Path:
@@ -64,6 +67,98 @@ def _body_hash(text: str) -> str:
     return hashlib.sha256(body.encode("utf-8")).hexdigest()[:16]
 
 
+def _index_skills_enabled() -> bool:
+    """Whether skill-memory-class indexing is configured on.
+
+    Best-effort: a missing/unloadable config (pure tmp_path unit tests)
+    is treated as enabled so the FTS/vector guards downstream — which
+    no-op when lancedb/the index aren't present — still run. We only
+    bail early when the toggle is explicitly false.
+    """
+    try:
+        from durin.config.loader import load_config
+
+        return bool(load_config().memory.index_skills)
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def _vector_index_for(workspace: Path):
+    """Construct a :class:`VectorIndex` the way the rest of the codebase does
+    (``FastembedProvider(model=config.memory.embedding.model)``), or ``None``
+    when the optional lancedb extra is absent. Loading the embedding model is
+    heavy but only happens when lancedb is installed — guarded so pure
+    tmp_path unit tests stay fast (lancedb absent → no-op)."""
+    from durin.memory.vector_index import VectorIndex, vector_index_available
+
+    if not vector_index_available():
+        return None
+    from durin.config.loader import load_config
+    from durin.memory.embedding import FastembedProvider
+
+    cfg = load_config()
+    provider = FastembedProvider(model=cfg.memory.embedding.model)
+    return VectorIndex(workspace, provider)
+
+
+def _sync_index(workspace: Path, name: str) -> None:
+    """Upsert a skill into the memory index (FTS + vector) after a mutation.
+
+    No-op when indexing is disabled (``memory.index_skills=false``) or the
+    optional lancedb extra is unavailable — which keeps pure tmp_path unit
+    tests fast. Failures are logged, never raised: an index drift must not
+    break the (already-committed) skill write.
+    """
+    if not _index_skills_enabled():
+        return
+    try:
+        from durin.memory.indexer import reindex_one_skill
+        from durin.memory.paths import skill_dir, skill_path_from_uri, skill_uri
+        from durin.memory.skill_page import SkillPage
+
+        skill_md = skill_dir(workspace, name) / "SKILL.md"
+        # FTS (cheap, no embedding model).
+        reindex_one_skill(workspace, skill_md, trigger="skill_store")
+        # Vector (needs the embedding provider; guarded on lancedb).
+        vi = _vector_index_for(workspace)
+        if vi is not None:
+            sp = SkillPage.from_file(skill_md)
+            if sp is not None and not sp.disabled:
+                vi.upsert_skill(
+                    name=sp.name,
+                    description=sp.description,
+                    body=sp.body,
+                    path=skill_path_from_uri(skill_uri(name)),
+                    mode=sp.mode,
+                )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("skill index sync failed for %s: %s", name, exc)
+
+
+def _unsync_index(workspace: Path, name: str) -> None:
+    """Evict a removed skill from the memory index (FTS + vector).
+
+    Called when a mutation deletes/rmtrees a workspace skill (fuse sources).
+    ``reindex_one_skill`` deletes the FTS row by uri when the file is gone;
+    the vector row is dropped by ``delete_by_id(skill_uri(name))``. No-op /
+    logged-failure semantics mirror :func:`_sync_index`.
+    """
+    if not _index_skills_enabled():
+        return
+    try:
+        from durin.memory.indexer import reindex_one_skill
+        from durin.memory.paths import skill_dir, skill_uri
+
+        skill_md = skill_dir(workspace, name) / "SKILL.md"
+        # File is gone → reindex_one_skill takes the delete-by-uri branch.
+        reindex_one_skill(workspace, skill_md, trigger="skill_store")
+        vi = _vector_index_for(workspace)
+        if vi is not None:
+            vi.delete_by_id(skill_uri(name))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("skill index unsync failed for %s: %s", name, exc)
+
+
 def needs_curation(workspace: Path, name: str) -> bool:
     """True when the skill is new or its BODY changed since last curated."""
     text = read_skill_content(workspace, name)
@@ -91,7 +186,9 @@ def mark_curated(workspace: Path, name: str) -> str | None:
         durin["provenance"] = prov
 
     _update_md(dest / "SKILL.md", _set)
-    return store.auto_commit(f"skill({name}): curated @ {h}")
+    sha = store.auto_commit(f"skill({name}): curated @ {h}")
+    _sync_index(workspace, name)
+    return sha
 
 
 def read_mode(workspace: Path, name: str, loader: SkillsLoader | None = None) -> str:
@@ -175,7 +272,9 @@ def set_mode(workspace: Path, name: str, mode: str) -> str | None:
         ensure_durin(data)["mode"] = mode
 
     _update_md(dest / "SKILL.md", _set)
-    return store.auto_commit(f"skill({name}): set mode={mode}")
+    sha = store.auto_commit(f"skill({name}): set mode={mode}")
+    _sync_index(workspace, name)
+    return sha
 
 
 def _preview(before: str, after: str) -> str:
@@ -228,6 +327,7 @@ def apply_skill_edit(
         }
     target.write_text(updated, encoding="utf-8")
     sha = store.auto_commit(f"skill({name}): {rationale.strip()}")
+    _sync_index(workspace, name)
     return {"ok": True, "name": name, "file": file, "mode": mode, "commit": sha}
 
 
@@ -242,6 +342,7 @@ def save_skill_content(workspace: Path, name: str, content: str,
     dest = fork_on_write(workspace, name)
     (dest / "SKILL.md").write_text(content, encoding="utf-8")
     sha = store.auto_commit(f"skill({name}): {rationale}")
+    _sync_index(workspace, name)
     return {"ok": True, "name": name, "commit": sha}
 
 
@@ -268,6 +369,7 @@ def dream_create_skill(workspace: Path, name: str, content: str,
 
     _update_md(md, _stamp)
     sha = store.auto_commit(f"skill({name}): {rationale.strip()} [dream]")
+    _sync_index(workspace, name)
     return {"ok": True, "name": name, "commit": sha}
 
 
@@ -313,6 +415,12 @@ def dream_fuse_skills(workspace: Path, *, target: str, content: str,
                 f"    provenance:\n      source: dream\n      fused_into: {target}\n"
                 f"---\nFused into `{target}`.\n", encoding="utf-8")
     sha = store.auto_commit(f"skill: fuse {sources} -> {target}: {rationale.strip()} [dream]")
+    # Multi-op index fan-out: the new target enters the index; every source
+    # leaves it (workspace sources are rmtree'd; builtin sources become
+    # disabled tombstones, which must not stay searchable).
+    _sync_index(workspace, target)
+    for s in sources:
+        _unsync_index(workspace, s)
     return {"ok": True, "target": target, "removed": list(sources), "commit": sha}
 
 
