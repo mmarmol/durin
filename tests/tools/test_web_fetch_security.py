@@ -173,3 +173,19 @@ async def test_web_fetch_blocks_private_redirect_before_returning_image(monkeypa
     data = json.loads(result)
     assert "error" in data
     assert "redirect blocked" in data["error"].lower()
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_connect_time_guard_blocks_dns_rebind():
+    """A2: even if up-front validation passed (the DNS-rebinding TOCTOU), the
+    connect-time SSRF guard resolves+pins at connection and blocks a target
+    that resolves to an internal address — no request reaches it."""
+    tool = WebFetchTool(WebFetchConfig(use_jina_reader=False))
+    # Simulate the rebind: validation already passed, but the address the
+    # fetch actually resolves to is internal.
+    with patch("durin.agent.tools.web._validate_url_safe", return_value=(True, "")), \
+         patch("durin.security.network.socket.getaddrinfo", _fake_resolve_private):
+        result = await tool.execute(url="http://rebind.example/latest/meta-data/")
+    data = json.loads(result)
+    assert "error" in data
+    assert "private" in data["error"].lower() or "blocked" in data["error"].lower()

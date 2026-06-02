@@ -23,6 +23,7 @@ import base64
 import mimetypes
 import os
 import re
+import socket
 import time
 from collections import deque
 from contextlib import suppress
@@ -38,7 +39,11 @@ from durin.bus.events import OutboundMessage
 from durin.bus.queue import MessageBus
 from durin.channels.base import BaseChannel
 from durin.config.schema import Base
-from durin.security.network import validate_url_target
+from durin.security.network import (
+    SSRFError,
+    resolve_and_validate,
+    validate_url_target,
+)
 from durin.utils.logging_bridge import redirect_lib_logging
 
 try:
@@ -59,6 +64,40 @@ except ImportError:  # pragma: no cover
 if TYPE_CHECKING:
     from botpy.message import BaseMessage, C2CMessage, GroupMessage
     from botpy.types.message import Media
+
+
+class _SSRFGuardResolver(aiohttp.abc.AbstractResolver):
+    """aiohttp resolver that validates + pins each host to a public IP.
+
+    A fetched media URL can't DNS-rebind to an internal address between
+    validation and connection: aiohttp connects to the returned ``host``
+    (the validated IP) while keeping ``hostname`` for Host header + TLS SNI.
+    Mirrors the httpx ``SSRFGuardTransport`` for durin's aiohttp channels.
+    """
+
+    async def resolve(
+        self, host: str, port: int = 0, family: int = socket.AF_INET,
+    ) -> list[dict[str, Any]]:
+        try:
+            ip = resolve_and_validate(host)
+        except SSRFError as exc:
+            raise OSError(str(exc)) from exc
+        fam = socket.AF_INET6 if ":" in ip else socket.AF_INET
+        return [{
+            "hostname": host, "host": ip, "port": port,
+            "family": fam, "proto": 0, "flags": 0,
+        }]
+
+    async def close(self) -> None:
+        return None
+
+
+def _ssrf_guarded_session() -> aiohttp.ClientSession:
+    """An aiohttp session whose connections are SSRF-guarded (IP-pinned)."""
+    return aiohttp.ClientSession(
+        timeout=aiohttp.ClientTimeout(total=120),
+        connector=aiohttp.TCPConnector(resolver=_SSRFGuardResolver()),
+    )
 
 
 # QQ rich media file_type: 1=image, 4=file
@@ -203,7 +242,7 @@ class QQChannel(BaseChannel):
             return
 
         self._running = True
-        self._http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=120))
+        self._http = _ssrf_guarded_session()
 
         self._client = _make_bot_class(self)()
         self.logger.info("bot started (C2C & Group supported)")
@@ -407,7 +446,7 @@ class QQChannel(BaseChannel):
             return None, None
 
         if not self._http:
-            self._http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=120))
+            self._http = _ssrf_guarded_session()
         try:
             async with self._http.get(media_ref, allow_redirects=True) as resp:
                 if resp.status >= 400:
@@ -597,7 +636,7 @@ class QQChannel(BaseChannel):
             url = f"https:{url}"
 
         if not self._http:
-            self._http = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=120))
+            self._http = _ssrf_guarded_session()
 
         safe = _sanitize_filename(filename_hint)
         ts = int(time.time() * 1000)

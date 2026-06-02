@@ -16,13 +16,6 @@
 - **Risk:** an authorized sender gets RCE-as-durin-user by design (personal agent) — but a **prompt-injection** payload in fetched web content / a forwarded message / an ingested doc can instruct the agent to call `exec`. `web_fetch` only prepends a weak "treat as data" banner (`web.py`), which durin's own memory flags as unreliable. The deny-pattern list (`shell.py:105`) blocks ~a handful of patterns (`rm -rf`, fork bombs) and is trivially bypassed (`python -c`, `curl`-exfil, `find -delete`).
 - **Not a code bug** — a posture decision. **Question:** make `sandbox=bwrap|docker` + `restrict_to_workspace=True` the default for non-single-user deployments, or document the hardening + state the deny-list is not a security boundary?
 
-### A2 🐞 HIGH — DNS-rebinding SSRF in `web_fetch` (validate-then-refetch TOCTOU)
-- **Where:** `durin/agent/tools/web.py:503` (`_validate_url_safe` → `security/network.py:45 validate_url_target`) then the direct fetches at `web.py:356/380/403` (`httpx.AsyncClient(...).get(url)`).
-- **Verified:** `validate_url_target` resolves DNS via `socket.getaddrinfo` and checks the IP against blocked nets (network.py:65). The fetch then calls `client.get(url)` with the **hostname**, and httpx re-resolves independently — there is no custom transport/resolver pinning the validated IP on the direct paths (confirmed: those `async with httpx.AsyncClient(proxy=...)` blocks have no resolver override).
-- **Risk:** attacker-controlled DNS returns a public IP at validation time (passes) and `169.254.169.254` / `127.0.0.1` at fetch time → SSRF to cloud metadata / internal services. Reachable from any input that can drive `web_fetch` (authorized sender or prompt injection). The post-fetch `validate_resolved_url` doesn't close it (checks the unchanged hostname, re-resolves a third time).
-- **Mitigant:** the *primary* extractor is Jina Reader (external, not SSRF-reachable), but the readability fallback fetches directly.
-- **Fix:** resolve once, pin the connection to that IP (custom httpx transport / resolver, or connect-by-IP with a `Host` header).
-
 ### A3 ⚖️ MED — OpenAI-compatible API server has no authentication
 - **Where:** `durin/api/server.py:201` (`handle_chat_completions`) — registered by `durin api`.
 - **Verified:** read the handler — it pulls `agent_loop`/timeout/model from `request.app` and processes the turn (full agent incl. `exec`); **no token/auth check anywhere in the file** (the 7 "token" hits are LLM-output stream tokens). Unlike the websocket gateway, which enforces `_check_api_token` on every sensitive route, the API server has no auth layer.

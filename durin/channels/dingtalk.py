@@ -18,7 +18,11 @@ from durin.bus.events import OutboundMessage
 from durin.bus.queue import MessageBus
 from durin.channels.base import BaseChannel
 from durin.config.schema import Base
-from durin.security.network import validate_resolved_url, validate_url_target
+from durin.security.network import (
+    ssrf_safe_async_client,
+    validate_resolved_url,
+    validate_url_target,
+)
 
 DINGTALK_MAX_REMOTE_MEDIA_BYTES = 20 * 1024 * 1024
 DINGTALK_MAX_REMOTE_MEDIA_REDIRECTS = 3
@@ -213,7 +217,10 @@ class DingTalkChannel(BaseChannel):
                 return
 
             self._running = True
-            self._http = httpx.AsyncClient()
+            # SSRF guard: pins every connection (incl. media-download redirect
+            # hops) to a validated IP, closing the validate-then-refetch TOCTOU.
+            # Vendor API hosts are public, so the guard is transparent there.
+            self._http = ssrf_safe_async_client()
 
             self.logger.info(
                 "Initializing Stream Client with Client ID: {}...",

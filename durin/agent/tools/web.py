@@ -18,6 +18,7 @@ from durin.agent.tools._telemetry import emit_tool_event
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.schema import IntegerSchema, StringSchema, tool_parameters_schema
 from durin.config.schema import Base
+from durin.security.network import ssrf_safe_async_client
 from durin.utils.helpers import build_image_content_blocks
 
 # Shared constants
@@ -514,7 +515,7 @@ class WebFetchTool(Tool):
 
         # Detect and fetch images directly to avoid Jina's textual image captioning
         try:
-            async with httpx.AsyncClient(proxy=self.proxy, follow_redirects=True, max_redirects=MAX_REDIRECTS, timeout=15.0) as client:
+            async with ssrf_safe_async_client(proxy=self.proxy, follow_redirects=True, max_redirects=MAX_REDIRECTS, timeout=15.0) as client:
                 async with client.stream("GET", url, headers={"User-Agent": self.user_agent}) as r:
                     from durin.security.network import validate_resolved_url
 
@@ -604,11 +605,11 @@ class WebFetchTool(Tool):
         from readability import Document
 
         try:
-            async with httpx.AsyncClient(
+            async with ssrf_safe_async_client(
+                proxy=self.proxy,
                 follow_redirects=True,
                 max_redirects=MAX_REDIRECTS,
                 timeout=30.0,
-                proxy=self.proxy,
             ) as client:
                 r = await client.get(url, headers={"User-Agent": self.user_agent})
                 r.raise_for_status()

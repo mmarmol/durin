@@ -8,6 +8,8 @@ import socket
 from contextlib import suppress
 from urllib.parse import urlparse
 
+import httpx
+
 _BLOCKED_NETWORKS = [
     ipaddress.ip_network("0.0.0.0/8"),
     ipaddress.ip_network("10.0.0.0/8"),
@@ -107,6 +109,86 @@ def validate_resolved_url(url: str) -> tuple[bool, str]:
                 return False, f"Redirect target {hostname} resolves to private address {addr}"
 
     return True, ""
+
+
+class SSRFError(Exception):
+    """A fetch target resolved to a private/internal address, or was
+    unresolvable — raised by the connect-time SSRF guard."""
+
+
+def resolve_and_validate(host: str) -> str:
+    """Resolve *host* to a public IP, rejecting private/internal targets.
+
+    Returns the validated IP string to pin the connection to. Raises
+    :class:`SSRFError` when the host is unresolvable or resolves to (or is)
+    a private/internal address. Pinning the connection to this exact IP is
+    what closes the validate-then-refetch DNS-rebinding TOCTOU: validation
+    and the connection use the *same* resolution.
+    """
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        literal = None
+    if literal is not None:
+        if _is_private(literal):
+            raise SSRFError(f"blocked private/internal address: {host}")
+        return str(literal)
+
+    try:
+        infos = socket.getaddrinfo(host, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+    except socket.gaierror as e:
+        raise SSRFError(f"cannot resolve hostname: {host}") from e
+
+    addrs: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
+    for info in infos:
+        try:
+            addrs.append(ipaddress.ip_address(info[4][0]))
+        except ValueError:
+            continue
+    if not addrs:
+        raise SSRFError(f"no usable address for {host}")
+    # Match validate_url_target's posture: any private address fails the host.
+    for addr in addrs:
+        if _is_private(addr):
+            raise SSRFError(f"{host} resolves to private/internal address {addr}")
+    return str(addrs[0])
+
+
+class SSRFGuardTransport(httpx.AsyncHTTPTransport):
+    """httpx transport that resolves + validates the target host once and
+    pins the connection to that IP, preserving the ``Host`` header and TLS
+    SNI (so certificate verification still matches the hostname).
+
+    This closes the validate-then-refetch DNS-rebinding TOCTOU (A2): the
+    validation and the actual connection use the *same* resolution. Because
+    httpx routes every request — including each redirect hop — through the
+    transport, redirects are re-validated and re-pinned automatically, so
+    callers don't need a manual per-hop check.
+    """
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        host = request.url.host
+        if host:
+            ip = resolve_and_validate(host)  # raises SSRFError on private/unresolvable
+            if ip != host:
+                # Pin to the validated IP; keep Host (already set on the
+                # request) and pin TLS SNI to the original hostname.
+                request.url = request.url.copy_with(host=ip)
+                request.extensions["sni_hostname"] = host
+        return await super().handle_async_request(request)
+
+
+def ssrf_safe_async_client(*, proxy: str | None = None, **kwargs) -> httpx.AsyncClient:
+    """Build an ``httpx.AsyncClient`` that pins each connection to a
+    validated IP (SSRF guard) when no proxy is configured.
+
+    With a proxy, egress (and thus SSRF policy) is the proxy's job, so the
+    guard transport is skipped and the proxy is used as before.
+    """
+    if proxy:
+        return httpx.AsyncClient(proxy=proxy, **kwargs)
+    kwargs.setdefault("transport", SSRFGuardTransport())
+    return httpx.AsyncClient(**kwargs)
 
 
 def contains_internal_url(command: str) -> bool:
