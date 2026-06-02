@@ -1136,7 +1136,7 @@ class Dream:
         """Build a minimal tool registry for the Dream agent."""
         from durin.agent.skills import BUILTIN_SKILLS_DIR
         from durin.agent.tools.file_state import FileStates
-        from durin.agent.tools.filesystem import EditFileTool, ReadFileTool, WriteFileTool
+        from durin.agent.tools.filesystem import EditFileTool, ReadFileTool
 
         tools = ToolRegistry()
         workspace = self.store.workspace
@@ -1152,11 +1152,11 @@ class Dream:
             file_states=file_states,
         ))
         tools.register(EditFileTool(workspace=workspace, allowed_dir=workspace, file_states=file_states))
-        # write_file resolves relative paths from workspace root, but can only
-        # write under skills/ so the prompt can safely use skills/<name>/SKILL.md.
-        skills_dir = workspace / "skills"
-        skills_dir.mkdir(parents=True, exist_ok=True)
-        tools.register(WriteFileTool(workspace=workspace, allowed_dir=skills_dir, file_states=file_states))
+        # E2 Part A: author skills through the sanctioned store (provenance +
+        # commit + fork-on-write), not a raw file write.
+        from durin.agent.tools.skill_write import SkillWriteTool
+        (workspace / "skills").mkdir(parents=True, exist_ok=True)
+        tools.register(SkillWriteTool(workspace=workspace))
         return tools
 
     # -- skill listing --------------------------------------------------------
