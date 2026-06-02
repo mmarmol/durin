@@ -43,3 +43,35 @@ def extract_skill_calls(messages: list[dict]) -> list[dict]:
                 if skill:
                     calls.append({"skill": skill, "op": "edit"})
     return calls
+
+
+def collect_recent_skill_calls(workspace) -> dict[str, dict[str, int]]:
+    """Aggregate skill_calls across session sidecars: {skill: {op: count}}.
+
+    Reads the durable ``derived.skill_calls`` of every session's ``.meta.json``.
+    Used by the 2h dream to know which `auto` skills were used (candidates to
+    patch). A future per-skill cursor (Part B) bounds this by 'since last';
+    Part A reads all present sidecars.
+    """
+    from pathlib import Path
+
+    from durin.session.session_meta import read_derived
+
+    workspace = Path(workspace)
+    sessions_dir = workspace / "sessions"
+    agg: dict[str, dict[str, int]] = {}
+    if not sessions_dir.is_dir():
+        return agg
+    for meta in sessions_dir.glob("*.meta.json"):
+        try:
+            derived = read_derived(meta)
+        except Exception:
+            continue
+        for call in (derived.get("skill_calls") or []):
+            skill = call.get("skill")
+            op = call.get("op")
+            if not skill or not op:
+                continue
+            agg.setdefault(skill, {}).setdefault(op, 0)
+            agg[skill][op] += 1
+    return agg

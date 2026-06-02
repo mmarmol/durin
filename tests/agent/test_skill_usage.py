@@ -1,4 +1,5 @@
-from durin.agent.skill_usage import extract_skill_calls
+from durin.agent.skill_usage import collect_recent_skill_calls, extract_skill_calls
+from durin.session.manager import SessionManager
 
 
 def test_read_file_on_skill_md_is_a_read_call():
@@ -26,3 +27,14 @@ def test_non_skill_read_and_other_tools_are_ignored():
         {"role": "user", "content": "hi"},
     ]
     assert extract_skill_calls(messages) == []
+
+
+def test_collect_recent_skill_calls_aggregates_across_sessions(tmp_path):
+    sm = SessionManager(tmp_path)
+    for key, skill in (("websocket:a", "git-helper"), ("websocket:b", "git-helper")):
+        s = sm.get_or_create(key)
+        s.add_message("user", "x")
+        s.metadata["skill_calls"] = [{"skill": skill, "op": "read"}]
+        sm.save(s)
+    agg = collect_recent_skill_calls(tmp_path)
+    assert agg.get("git-helper", {}).get("read") == 2
