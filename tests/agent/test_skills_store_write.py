@@ -1,6 +1,8 @@
 # tests/agent/test_skills_store_write.py
 from pathlib import Path
 
+import pytest
+
 from durin.agent import skills_store as ss
 
 
@@ -80,3 +82,30 @@ def test_save_skill_content_requires_manual(tmp_path):
     ss.set_mode(ws, "mine", "auto")
     rej = ss.save_skill_content(ws, "mine", "whatever")
     assert "error" in rej
+
+
+def test_apply_edit_create_file_with_empty_old(tmp_path):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    _user_skill(ws, "mine", body="step one\n")
+    ss.set_mode(ws, "mine", "auto")
+    res = ss.apply_skill_edit(ws, "mine", old="", new="\nappended line\n", rationale="add note")
+    assert res["ok"] is True
+    assert "appended line" in (ws / "skills" / "mine" / "SKILL.md").read_text()
+
+
+def test_save_skill_content_returns_commit_sha(tmp_path):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    _user_skill(ws, "mine")
+    res = ss.save_skill_content(ws, "mine", "---\nname: mine\ndescription: d\n---\nNEW\n")
+    assert res["ok"] is True
+    assert res["commit"]  # truthy SHA
+
+
+def test_set_mode_raises_on_invalid_mode(tmp_path):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    _user_skill(ws, "mine")
+    with pytest.raises(ValueError):
+        ss.set_mode(ws, "mine", "bogus")

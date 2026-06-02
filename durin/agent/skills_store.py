@@ -120,7 +120,10 @@ def set_mode(workspace: Path, name: str, mode: str) -> str | None:
         raise ValueError("mode must be 'auto' or 'manual'")
     store = _store_init(workspace)  # ensure git repo exists before mutating files
     dest = fork_on_write(workspace, name)
-    _update_md(dest / "SKILL.md", lambda d: ensure_durin(d).__setitem__("mode", mode))
+    def _set(data: dict) -> None:
+        ensure_durin(data)["mode"] = mode
+
+    _update_md(dest / "SKILL.md", _set)
     return store.auto_commit(f"skill({name}): set mode={mode}")
 
 
