@@ -72,7 +72,8 @@
       "advanced": "All settings",
       "channels": "Channels",
       "memory": "Memoria",
-      "cron": "Cron"
+      "cron": "Cron",
+      "skills": "Skills"
     },
     "sections": {
       "interface": "Interfaz",

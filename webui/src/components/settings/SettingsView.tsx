@@ -64,6 +64,7 @@ import { ChannelsSettings } from "@/components/settings/ChannelsSettings";
 import { ConfigSettings } from "@/components/settings/ConfigSettings";
 import { CronSettings } from "@/components/settings/CronSettings";
 import { MemorySettings } from "@/components/settings/MemorySettings";
+import { SkillsSettings } from "@/components/settings/SkillsSettings";
 import { ModelPicker } from "@/components/settings/ModelPicker";
 import {
   SettingsGroup,
@@ -82,6 +83,7 @@ type SettingsSectionKey =
   | "channels"
   | "memory"
   | "cron"
+  | "skills"
   | "secrets"
   | "advanced";
 type ByokPaneKey = "llm" | "web-search";
@@ -409,6 +411,8 @@ export function SettingsView({
                 <MemorySettings token={token} />
               ) : activeSection === "cron" ? (
                 <CronSettings token={token} />
+              ) : activeSection === "skills" ? (
+                <SkillsSettings token={token} />
               ) : activeSection === "secrets" ? (
                 <SecretsSettings token={token} />
               ) : activeSection === "advanced" ? (
@@ -468,6 +472,7 @@ const SETTINGS_NAV_ITEMS = [
   { key: "channels", icon: MessagesSquare },
   { key: "memory", icon: Brain },
   { key: "cron", icon: Clock },
+  { key: "skills", icon: Sparkles },
   { key: "secrets", icon: Lock },
   { key: "advanced", icon: Sliders },
 ] as const;
