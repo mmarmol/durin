@@ -309,12 +309,38 @@ export async function setConfigValue(
 
 // -- skills (skills-evolution-mvp) -------------------------------------------
 
+/** A §8.C security verdict. "" = not yet scanned (quarantine without a report). */
+export type SkillVerdict = "safe" | "caution" | "dangerous" | "";
+
+export interface SkillFinding {
+  category: string;
+  severity: "info" | "caution" | "high" | "dangerous";
+  where: string;
+  detail: string;
+}
+
 export interface SkillRow {
   name: string;
   source: string;
   mode: "auto" | "manual";
   description?: string;
   provenance?: { source?: string; created_at?: string };
+  status?: "active" | "quarantined";
+  verdict?: SkillVerdict;
+  findings?: SkillFinding[];
+}
+
+/** A skill awaiting an import decision in `.durin/import-quarantine/` (§6.B fills these). */
+export interface QuarantineRow {
+  name: string;
+  status: "quarantined";
+  source: string;
+  verdict: SkillVerdict;
+  findings: SkillFinding[];
+  /** Suggested allowlist prefix for a one-click "trust this source" (§A1). */
+  trust_prefix?: string;
+  /** Declared dependency installs (info only — durin never auto-runs them, §B11). */
+  install_specs?: string[];
 }
 
 export interface SkillDetail {
@@ -329,6 +355,171 @@ export async function listSkills(
 ): Promise<SkillRow[]> {
   const res = await request<{ skills: SkillRow[] }>(`${base}/api/skills`, token);
   return res.skills;
+}
+
+export async function listQuarantine(
+  token: string,
+  base: string = "",
+): Promise<QuarantineRow[]> {
+  const res = await request<{ quarantined: QuarantineRow[] }>(
+    `${base}/api/skills/quarantine`,
+    token,
+  );
+  return res.quarantined;
+}
+
+// -- skill import (§6.B) -----------------------------------------------------
+
+export interface SkillCandidate {
+  name: string;
+  ref: string;
+  kind: "local" | "https" | "github";
+  detail: string;
+}
+
+/** Result of fetching a source into quarantine. Exactly one shape applies:
+ *  a single skill landed (`quarantined`), several were found (`candidates` —
+ *  pick one), or the source was fuzzy (`unresolved_reason`). */
+export interface ImportResult {
+  quarantined?: string;
+  source?: string;
+  verdict?: SkillVerdict;
+  needs?: "allow" | "confirm" | "block";
+  findings?: SkillFinding[];
+  candidates?: SkillCandidate[];
+  unresolved_reason?: string;
+}
+
+/** Outcome of an approve (install through the gate). `ok` on success;
+ *  `refused` (with the verdict) when the gate blocked/needs confirmation. */
+export interface ApproveResult {
+  ok?: boolean;
+  name?: string;
+  verdict?: SkillVerdict;
+  commit?: string;
+  refused?: "block" | "confirm" | "invalid" | "exists";
+  message?: string;
+  error?: string;
+}
+
+export async function importSource(
+  token: string,
+  source: string,
+  base: string = "",
+): Promise<ImportResult> {
+  const query = new URLSearchParams({ source });
+  return request<ImportResult>(`${base}/api/skills/import?${query}`, token);
+}
+
+/** A registry search hit. `ref` is the importable source (feed it to
+ *  `importSource`); `signals` is open — today only `installs` is read. */
+export interface SkillSearchHit {
+  name: string;
+  ref: string;
+  registry: string;
+  description: string;
+  signals: { installs?: number };
+}
+
+export async function searchSkills(
+  token: string,
+  query: string,
+  limit = 0,
+  base: string = "",
+): Promise<{ hits: SkillSearchHit[] }> {
+  const params = new URLSearchParams({ query, limit: String(limit) });
+  return request<{ hits: SkillSearchHit[] }>(
+    `${base}/api/skills/search?${params}`,
+    token,
+  );
+}
+
+export async function approveSkill(
+  token: string,
+  name: string,
+  opts: { confirm?: boolean; override?: boolean; replace?: boolean } = {},
+  base: string = "",
+): Promise<ApproveResult> {
+  const query = new URLSearchParams();
+  if (opts.confirm) query.set("confirm", "true");
+  if (opts.override) query.set("override", "true");
+  if (opts.replace) query.set("replace", "true");
+  const qs = query.toString();
+  const url = `${base}/api/skills/${encodeURIComponent(name)}/approve${qs ? `?${qs}` : ""}`;
+  // 200 (installed) and 409 (gate refused) both carry a useful body; only 5xx throws.
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+    credentials: "same-origin",
+  });
+  if (res.status >= 500) throw new ApiError(res.status, `HTTP ${res.status}`);
+  return (await res.json()) as ApproveResult;
+}
+
+export async function rejectSkill(
+  token: string,
+  name: string,
+  base: string = "",
+): Promise<{ ok?: boolean; error?: string }> {
+  return request<{ ok?: boolean; error?: string }>(
+    `${base}/api/skills/${encodeURIComponent(name)}/reject`,
+    token,
+  );
+}
+
+export interface JudgeResult {
+  name: string;
+  verdict?: SkillVerdict;
+  findings?: SkillFinding[];
+  judged?: boolean;
+  error?: string;
+}
+
+/** Run the LLM judge on-demand over a quarantined skill (independent of the
+ *  auto-run trigger). Updates the quarantine's stored scan. */
+export async function judgeSkill(
+  token: string,
+  name: string,
+  base: string = "",
+): Promise<JudgeResult> {
+  return request<JudgeResult>(
+    `${base}/api/skills/${encodeURIComponent(name)}/judge`,
+    token,
+  );
+}
+
+export interface GithubTokenTestResult {
+  ok: boolean;
+  remaining?: number | null;
+  limit?: number | null;
+  error?: string;
+}
+
+export async function testGithubToken(
+  token: string,
+  secret: string,
+  base: string = "",
+): Promise<GithubTokenTestResult> {
+  const query = new URLSearchParams({ secret });
+  return request<GithubTokenTestResult>(
+    `${base}/api/skills/github-token-test?${query}`,
+    token,
+  );
+}
+
+/** Add a trust-pattern prefix to the import allowlist (one-click "trust source").
+ *  Reads the current allowlist, appends, and writes it back via config. */
+export async function addTrustPattern(
+  token: string,
+  prefix: string,
+  base: string = "",
+): Promise<void> {
+  const snap = await getConfig(token, base);
+  const skills = (snap.config as { skills?: { security?: { allowlist?: unknown } } })?.skills;
+  const cur = Array.isArray(skills?.security?.allowlist)
+    ? (skills!.security!.allowlist as string[])
+    : [];
+  if (cur.includes(prefix)) return;
+  await setConfigValue(token, "skills.security.allowlist", [...cur, prefix], base);
 }
 
 export async function getSkill(

@@ -1384,7 +1384,10 @@ def _run_gateway(
                     # using the same call shape DreamRunner's judge uses.
                     return default_llm_invoke(prompt, model=curation_model).text
 
-                summary = curate_catalog(workspace, judge=_judge)
+                from durin.agent.skill_drift import check_upstream_drift
+                _allowlist = list(config.skills.security.allowlist)
+                summary = curate_catalog(workspace, judge=_judge,
+                                         drift_check=check_upstream_drift, allowlist=_allowlist)
                 logger.info("skill curation: reviewed=%s applied=%s deferred=%s",
                             summary["reviewed"], summary["applied"], summary["deferred"])
             except Exception:
@@ -2602,6 +2605,10 @@ app.add_typer(_secret_app, name="secret")
 from durin.cli.memory_cmd import memory_app as _memory_app  # noqa: E402
 
 app.add_typer(_memory_app, name="memory")
+
+from durin.cli.skill_cmd import skill_app as _skill_app  # noqa: E402
+
+app.add_typer(_skill_app, name="skill")
 
 
 def _refresh_help_epilog() -> None:

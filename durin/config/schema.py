@@ -383,6 +383,91 @@ class MemoryHealthCheckConfig(Base):
     interval_seconds: int = Field(default=900, ge=60, le=86_400)
 
 
+class SkillsHotTierConfig(Base):
+    """Hot working-set tier for skills (Spec 2 §2.2/§8).
+
+    The cache-stable prefix injects only the usage-ranked working set
+    instead of the whole catalog; the long tail is reachable via
+    ``memory_search`` (kind="skill"). ``enabled=False`` restores the
+    full-catalog injection (A/B / calibration fallback). Sizes favor
+    frequent-over-the-window (the durable working set); ``recent`` is a
+    smaller recency bonus. Calibrate with the shipped ``memory.skill_miss``
+    telemetry.
+    """
+
+    enabled: bool = True
+    recent: int = 15
+    frequent: int = 30
+    frequent_window_hours: float = 168.0  # 7 days
+    recent_window_hours: float = 24.0
+
+
+class SkillJudgeConfig(Base):
+    """LLM semantic-audit pass over an imported skill, after the deterministic
+    §8.C scan (spec 2026-06-03 §A3). ``trigger`` decides WHEN it auto-runs:
+    ``off`` (default) — never auto; invoke on-demand per skill ("Audit with LLM").
+    ``uncertain`` — only when the gate is already unsure (carries code / caution /
+    out-of-allowlist), to break the tie; clean allowlisted skills skip it (zero
+    tax). ``always`` — every import. An LLM call per import is overkill for the
+    common case (the human already reviews + approves), hence ``off`` default.
+    Degrades gracefully (skips, never errors/blocks) when no aux model resolves.
+    ``max_severity`` caps how high the judge may raise the verdict: ``caution``
+    (default) lets it force a confirm but never block on its own — only the
+    deterministic rules block. ``model`` names an aux model; empty → default."""
+
+    trigger: Literal["off", "uncertain", "always"] = "off"
+    max_severity: Literal["caution", "dangerous"] = "caution"
+    model: str = ""
+
+
+class SkillSecurityConfig(Base):
+    """Security floor + policy for skill import (§8.C/§6.B). ``allowlist`` =
+    trusted source-ref prefixes (e.g. ``github:anthropics/``, ``https://gitlab.com/acme/``).
+    A match skips only the *source* confirmation; the verdict/code gates have no
+    opt-out. Caps bound a fetched skill's size/file count. ``github_token_secret``
+    names a durin secret holding a GitHub API token (raises rate limits + private
+    repos); empty → anonymous. ``install_specs_policy`` governs a skill's declared
+    dependency installs: ``never`` (v1, info only), ``ask`` (run on explicit
+    approval — v1.1), ``auto``."""
+
+    allowlist: list[str] = Field(default_factory=list)
+    github_token_secret: str = ""
+    max_files: int = 100
+    max_total_bytes: int = 3 * 1024 * 1024
+    max_file_bytes: int = 1024 * 1024
+    install_specs_policy: Literal["never", "ask", "auto"] = "never"
+    llm_judge: SkillJudgeConfig = Field(default_factory=SkillJudgeConfig)
+
+
+class SkillRegistryConfig(Base):
+    """One search registry. ``kind`` selects the adapter; ``api_key_secret`` names
+    a durin secret (empty → anonymous). ``taps`` is github-only (repos to search)."""
+
+    name: str
+    kind: Literal["skills.sh", "clawhub", "github", "well-known"]
+    enabled: bool = True
+    api_key_secret: str = ""
+    taps: list[str] = Field(default_factory=list)
+
+
+class SkillsDiscoveryConfig(Base):
+    """Skill discovery: which registries to search + how many results."""
+
+    registries: list[SkillRegistryConfig] = Field(
+        default_factory=lambda: [SkillRegistryConfig(name="skills.sh", kind="skills.sh")])
+    search_limit: int = 10
+
+
+class SkillsConfig(Base):
+    """Global skill-subsystem governance (spec 2026-06-03 §9). Per-agent
+    skill-context tuning (``skills_hot_tier``, ``disabled_skills``) lives on
+    ``agents.defaults``; the memory-index toggle stays at ``memory.index_skills``.
+    ``discovery`` (registries + search) is added by the discovery feature."""
+
+    security: SkillSecurityConfig = Field(default_factory=SkillSecurityConfig)
+    discovery: SkillsDiscoveryConfig = Field(default_factory=SkillsDiscoveryConfig)
+
+
 class MemoryConfig(Base):
     """Memory subsystem configuration root.
 
@@ -538,6 +623,7 @@ class AgentDefaults(Base):
     bot_icon: str = "⚒️"  # Short icon (emoji or text) shown next to the bot name in CLI; "" to omit
     unified_session: bool = False  # Share one session across all channels (single-user multi-device)
     disabled_skills: list[str] = Field(default_factory=list)  # Skill names to exclude from loading (e.g. ["summarize", "skill-creator"])
+    skills_hot_tier: SkillsHotTierConfig = Field(default_factory=SkillsHotTierConfig)
     max_messages: int = Field(
         default=120,
         ge=0,
@@ -817,6 +903,7 @@ class Config(BaseSettings):
     appearance: AppearanceConfig = Field(default_factory=AppearanceConfig)
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    skills: SkillsConfig = Field(default_factory=SkillsConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)

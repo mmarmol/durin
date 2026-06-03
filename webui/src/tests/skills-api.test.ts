@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { listSkills, saveSkill, setSkillMode } from "@/lib/api";
+import { listQuarantine, listSkills, saveSkill, searchSkills, setSkillMode } from "@/lib/api";
 
 function mockFetchOnce(json: unknown) {
   return vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
@@ -31,5 +31,53 @@ describe("skills api", () => {
     const url = String(f.mock.calls[0][0]);
     expect(url).toContain("/api/skills/a/save");
     expect(url).toContain("content=BODY");
+  });
+
+  it("listSkills preserves the §8.C verdict and findings fields", async () => {
+    mockFetchOnce({
+      skills: [
+        {
+          name: "evil",
+          source: "workspace",
+          mode: "manual",
+          status: "active",
+          verdict: "dangerous",
+          findings: [
+            { category: "prompt_injection", severity: "dangerous", where: "SKILL.md", detail: "ignore-previous-instructions" },
+          ],
+        },
+      ],
+      store_head: null,
+    });
+    const rows = await listSkills("tok");
+    expect(rows[0].verdict).toBe("dangerous");
+    expect(rows[0].findings?.[0].category).toBe("prompt_injection");
+  });
+
+  it("searchSkills encodes the query and returns hits", async () => {
+    const f = mockFetchOnce({
+      hits: [
+        { name: "pdf", ref: "github:acme/pdf", registry: "acme", description: "d", signals: { installs: 3 } },
+      ],
+    });
+    const res = await searchSkills("tok", "p df");
+    expect(res.hits[0].ref).toBe("github:acme/pdf");
+    expect(res.hits[0].signals.installs).toBe(3);
+    const url = String(f.mock.calls[0][0]);
+    expect(url).toContain("/api/skills/search");
+    expect(url).toContain("query=p+df");
+    expect(url).toContain("limit=0");
+  });
+
+  it("listQuarantine hits /api/skills/quarantine and returns rows", async () => {
+    const f = mockFetchOnce({
+      quarantined: [
+        { name: "q", status: "quarantined", source: "github:owner/repo", verdict: "caution", findings: [] },
+      ],
+    });
+    const rows = await listQuarantine("tok");
+    expect(rows[0].name).toBe("q");
+    expect(rows[0].source).toBe("github:owner/repo");
+    expect(String(f.mock.calls[0][0])).toContain("/api/skills/quarantine");
   });
 });

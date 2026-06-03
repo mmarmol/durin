@@ -52,3 +52,14 @@ def test_list_skills_info_reports_source_and_mode(tmp_path, monkeypatch):
     assert by_name["greet"]["mode"] == "auto"
     assert by_name["mine"]["source"] == "workspace"
     assert by_name["mine"]["mode"] == "manual"
+
+
+def test_list_skills_info_surfaces_version_and_license(tmp_path):
+    from durin.agent.skills_store import list_skills_info
+    d = tmp_path / "skills" / "v"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text(
+        "---\nname: v\ndescription: d\nversion: 3.4.5\nlicense: Apache-2.0\n---\nbody\n")
+    info = {i["name"]: i for i in list_skills_info(tmp_path)}
+    assert info["v"]["version"] == "3.4.5"
+    assert info["v"]["license"] == "Apache-2.0"

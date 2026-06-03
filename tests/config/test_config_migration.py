@@ -247,3 +247,102 @@ def test_load_config_resets_ssrf_whitelist_when_next_config_is_empty(tmp_path) -
     with patch("durin.security.network.socket.getaddrinfo", _fake_resolve("ts.local", ["100.100.1.1"])):
         ok, _ = validate_url_target("http://ts.local/api")
         assert not ok
+
+
+def test_load_config_migrates_legacy_skill_import(tmp_path) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps({"memory": {"skillImport": {"allowlist": ["github:acme/"], "maxFiles": 50}}}),
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.skills.security.allowlist == ["github:acme/"]
+    assert config.skills.security.max_files == 50
+    assert not hasattr(config.memory, "skill_import")
+
+
+def test_load_config_migrates_legacy_skills_hot_tier(tmp_path) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps({"memory": {"skillsHotTier": {"frequent": 12}}}), encoding="utf-8"
+    )
+
+    config = load_config(config_path)
+
+    assert config.agents.defaults.skills_hot_tier.frequent == 12
+
+
+def test_save_config_rewrites_legacy_skill_keys(tmp_path) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {"memory": {"skillImport": {"allowlist": ["github:acme/"]},
+                        "skillsHotTier": {"frequent": 9}}}
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+    save_config(config, config_path)
+    from durin.config.loader import read_persisted_config
+
+    saved = read_persisted_config(config_path)
+
+    assert "skillImport" not in saved.get("memory", {})
+    assert "skillsHotTier" not in saved.get("memory", {})
+
+
+def test_skills_section_survives_split_layout_roundtrip(tmp_path) -> None:
+    """The new top-level `skills` section must persist through save (which
+    converts to the split layout) + reload — else migrated/user skill config is
+    silently lost when the split-file allowlist omits the section."""
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps({"skills": {"security": {"allowlist": ["github:acme/"]}}}),
+        encoding="utf-8",
+    )
+
+    cfg = load_config(config_path)
+    assert cfg.skills.security.allowlist == ["github:acme/"]
+
+    save_config(cfg, config_path)  # → split layout
+    reloaded = load_config(config_path)
+
+    assert reloaded.skills.security.allowlist == ["github:acme/"]
+
+
+def test_telemetry_section_survives_split_layout_roundtrip(tmp_path) -> None:
+    """Regression: telemetry was silently dropped on save/migrate because the
+    split layout used a hardcoded section list it was added to after the fact."""
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps({"telemetry": {"push": {"enabled": True}}}), encoding="utf-8"
+    )
+
+    cfg = load_config(config_path)  # migrates monolith → split
+    save_config(cfg, config_path)  # writes split
+
+    assert load_config(config_path).telemetry.push.enabled is True
+
+
+def test_write_split_layout_persists_every_section_including_unknown(tmp_path) -> None:
+    """The split writer must persist EVERY top-level section it is handed —
+    including one no hardcoded list ever knew about — so a future Config section
+    can never be silently dropped on save."""
+    from durin.config.loader import _read_split_layout, _write_split_layout
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({"_layout": "split"}) + "\n", encoding="utf-8")
+    data = {
+        "agents": {"defaults": {"botName": "x"}},
+        "telemetry": {"push": {"enabled": True}},
+        "appearance": {"foo": 1},
+        "skills": {"security": {"allowlist": ["github:acme/"]}},
+        "aFutureSectionNotYetInvented": {"k": 2},
+    }
+
+    _write_split_layout(data, config_path)
+
+    assert _read_split_layout(config_path) == data

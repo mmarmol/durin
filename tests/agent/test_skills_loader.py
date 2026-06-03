@@ -268,6 +268,50 @@ def test_disabled_skills_excluded_from_list(tmp_path: Path) -> None:
     assert entries[0]["path"] == str(beta_path)
 
 
+def test_build_skills_summary_include_restricts(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    ws_skills = workspace / "skills"
+    ws_skills.mkdir(parents=True)
+    _write_skill(ws_skills, "alpha", body="# Alpha")
+    _write_skill(ws_skills, "beta", body="# Beta")
+    _write_skill(ws_skills, "gamma", body="# Gamma")
+    builtin = tmp_path / "builtin"
+    builtin.mkdir()
+
+    loader = SkillsLoader(workspace, builtin_skills_dir=builtin)
+    out = loader.build_skills_summary(include={"alpha", "gamma"})
+    assert "alpha" in out and "gamma" in out
+    assert "beta" not in out
+
+
+def test_build_skills_summary_include_none_is_full_catalog(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    ws_skills = workspace / "skills"
+    ws_skills.mkdir(parents=True)
+    _write_skill(ws_skills, "alpha", body="# Alpha")
+    _write_skill(ws_skills, "beta", body="# Beta")
+    builtin = tmp_path / "builtin"
+    builtin.mkdir()
+
+    loader = SkillsLoader(workspace, builtin_skills_dir=builtin)
+    out = loader.build_skills_summary()  # include=None -> unchanged
+    assert "alpha" in out and "beta" in out
+
+
+def test_build_skills_summary_exclude_wins_over_include(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    ws_skills = workspace / "skills"
+    ws_skills.mkdir(parents=True)
+    _write_skill(ws_skills, "alpha", body="# Alpha")
+    _write_skill(ws_skills, "beta", body="# Beta")
+    builtin = tmp_path / "builtin"
+    builtin.mkdir()
+
+    loader = SkillsLoader(workspace, builtin_skills_dir=builtin)
+    out = loader.build_skills_summary(exclude={"alpha"}, include={"alpha", "beta"})
+    assert "alpha" not in out and "beta" in out
+
+
 def test_disabled_skills_empty_set_no_effect(tmp_path: Path) -> None:
     workspace = tmp_path / "ws"
     ws_skills = workspace / "skills"
@@ -493,3 +537,48 @@ def test_get_skill_metadata_handles_yaml_types(tmp_path: Path) -> None:
     assert meta.get("always") is True
     # metadata is a parsed dict, not a JSON string
     assert isinstance(meta.get("metadata"), dict)
+
+
+# -- agentskills.io root ``platforms`` OS gating -------------------------------
+
+
+def test_platforms_hides_skill_off_platform(tmp_path, monkeypatch):
+    import durin.agent.skills as skmod
+    d = tmp_path / "skills" / "linux-only"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text("---\nname: linux-only\ndescription: d\nplatforms: [linux]\n---\nx\n")
+    loader = skmod.SkillsLoader(tmp_path)
+    monkeypatch.setattr(skmod, "_current_platform", lambda: "macos")
+    assert "linux-only" not in [s["name"] for s in loader.list_skills(filter_unavailable=False)]
+    monkeypatch.setattr(skmod, "_current_platform", lambda: "linux")
+    assert "linux-only" in [s["name"] for s in loader.list_skills(filter_unavailable=False)]
+
+
+def test_platforms_accepts_openclaw_darwin_alias(tmp_path, monkeypatch):
+    import durin.agent.skills as skmod
+    d = tmp_path / "skills" / "mac-skill"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text("---\nname: mac-skill\ndescription: d\nplatforms: [darwin]\n---\nx\n")
+    loader = skmod.SkillsLoader(tmp_path)
+    monkeypatch.setattr(skmod, "_current_platform", lambda: "macos")
+    assert "mac-skill" in [s["name"] for s in loader.list_skills(filter_unavailable=False)]
+
+
+def test_no_platforms_means_all(tmp_path, monkeypatch):
+    import durin.agent.skills as skmod
+    d = tmp_path / "skills" / "anywhere"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text("---\nname: anywhere\ndescription: d\n---\nx\n")
+    loader = skmod.SkillsLoader(tmp_path)
+    monkeypatch.setattr(skmod, "_current_platform", lambda: "windows")
+    assert "anywhere" in [s["name"] for s in loader.list_skills(filter_unavailable=False)]
+
+
+def test_kebab_disable_model_invocation_respected(tmp_path):
+    from durin.agent.skills import SkillsLoader
+    d = tmp_path / "skills" / "hidden"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text(
+        "---\nname: hidden\ndescription: d\ndisable-model-invocation: true\n---\nx\n")
+    summary = SkillsLoader(tmp_path).build_skills_summary()
+    assert "hidden" not in summary   # kebab form honored like snake/camel

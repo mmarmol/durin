@@ -4,12 +4,30 @@ import json
 import os
 import re
 import shutil
+import sys
 from pathlib import Path
 
 import yaml
 
 # Default builtin skills directory (relative to this file)
 BUILTIN_SKILLS_DIR = Path(__file__).parent.parent / "skills"
+
+_PLATFORM_ALIASES = {
+    "darwin": "macos", "macos": "macos", "osx": "macos", "mac": "macos",
+    "linux": "linux",
+    "win32": "windows", "windows": "windows", "win": "windows",
+}
+
+
+def _current_platform() -> str:
+    p = sys.platform
+    if p.startswith("linux"):
+        return "linux"
+    if p == "darwin":
+        return "macos"
+    if p.startswith("win"):
+        return "windows"
+    return p
 
 # Opening ---, YAML body (group 1), closing --- on its own line; supports CRLF.
 _STRIP_SKILL_FRONTMATTER = re.compile(
@@ -68,6 +86,8 @@ class SkillsLoader:
         if self.disabled_skills:
             skills = [s for s in skills if s["name"] not in self.disabled_skills]
 
+        skills = [s for s in skills if self._platform_ok(s["name"])]
+
         if filter_unavailable:
             return [skill for skill in skills if self._check_requirements(self._get_skill_meta(skill["name"]))]
         return skills
@@ -108,7 +128,11 @@ class SkillsLoader:
         ]
         return "\n\n---\n\n".join(parts)
 
-    def build_skills_summary(self, exclude: set[str] | None = None) -> str:
+    def build_skills_summary(
+        self,
+        exclude: set[str] | None = None,
+        include: set[str] | None = None,
+    ) -> str:
         """
         Build a summary of all skills (name, description, path, availability).
 
@@ -125,6 +149,9 @@ class SkillsLoader:
 
         Args:
             exclude: Set of skill names to omit from the summary.
+            include: When provided, only these names appear — used by the
+                hot working-set tier. ``exclude`` still wins (a name in both
+                is skipped).
 
         Returns:
             Markdown-formatted skills summary.
@@ -137,6 +164,8 @@ class SkillsLoader:
         for entry in all_skills:
             skill_name = entry["name"]
             if exclude and skill_name in exclude:
+                continue
+            if include is not None and skill_name not in include:
                 continue
             # ``_get_skill_meta`` returns the nested durin-specific blob
             # (under ``metadata.durin``); the disable flag lives at the
@@ -172,6 +201,7 @@ class SkillsLoader:
         return bool(
             skill_meta.get("disable_model_invocation")
             or skill_meta.get("disableModelInvocation")
+            or skill_meta.get("disable-model-invocation")
         )
 
     def _get_missing_requirements(self, skill_meta: dict) -> str:
@@ -227,6 +257,22 @@ class SkillsLoader:
         return all(shutil.which(cmd) for cmd in required_bins) and all(
             os.environ.get(var) for var in required_env_vars
         )
+
+    def _platform_ok(self, name: str) -> bool:
+        """Honor the agentskills.io root ``platforms`` field. No field = all
+        platforms. Accepts standard (macos/linux/windows) + OpenClaw aliases
+        (darwin/win32)."""
+        meta = self.get_skill_metadata(name) or {}
+        plats = meta.get("platforms")
+        if not plats:
+            return True
+        if isinstance(plats, str):
+            plats = [plats]
+        normalized = {
+            _PLATFORM_ALIASES.get(str(p).lower().strip(), str(p).lower().strip())
+            for p in plats
+        }
+        return _current_platform() in normalized
 
     def _get_skill_meta(self, name: str) -> dict:
         """Get durin metadata for a skill (cached in frontmatter)."""

@@ -29,6 +29,7 @@ import {
   RotateCcw,
   ScrollText,
   Settings,
+  ShieldCheck,
   Sliders,
   Sparkles,
   Triangle,
@@ -66,6 +67,7 @@ import { ConfigSettings } from "@/components/settings/ConfigSettings";
 import { CronSettings } from "@/components/settings/CronSettings";
 import { LogsSettings } from "@/components/settings/LogsSettings";
 import { MemorySettings } from "@/components/settings/MemorySettings";
+import { SkillsSecuritySettings } from "@/components/settings/SkillsSecuritySettings";
 import { ModelPicker } from "@/components/settings/ModelPicker";
 import {
   SettingsGroup,
@@ -84,6 +86,7 @@ type SettingsSectionKey =
   | "web-search"
   | "channels"
   | "memory"
+  | "skills-security"
   | "cron"
   | "secrets"
   | "advanced"
@@ -411,6 +414,8 @@ export function SettingsView({
                 <ChannelsSettings token={token} />
               ) : activeSection === "memory" ? (
                 <MemorySettings token={token} />
+              ) : activeSection === "skills-security" ? (
+                <SkillsSecuritySettings token={token} />
               ) : activeSection === "cron" ? (
                 <CronSettings token={token} />
               ) : activeSection === "secrets" ? (
@@ -473,6 +478,7 @@ const SETTINGS_NAV_ITEMS = [
   { key: "web-search", icon: Globe },
   { key: "channels", icon: MessagesSquare },
   { key: "memory", icon: Brain },
+  { key: "skills-security", icon: ShieldCheck },
   { key: "cron", icon: Clock },
   { key: "secrets", icon: Lock },
   { key: "advanced", icon: Sliders },

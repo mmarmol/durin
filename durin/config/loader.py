@@ -48,21 +48,11 @@ from durin.config.schema import Config
 # Global variable to store current config path (for multi-instance support)
 _current_config_path: Path | None = None
 
-# Top-level Config field aliases (camelCase) used in the split layout.
-# Filenames mirror the Pydantic alias so editing by hand matches what
-# the user sees inside the file.
-_TOP_LEVEL_KEYS = (
-    "agents",
-    "channels",
-    "memory",
-    "providers",
-    "api",
-    "gateway",
-    "tools",
-    "modelPresets",
-    "modelCapabilities",
-    "install",
-)
+# The split layout writes one file per top-level config section. The section
+# set is NOT hardcoded — it is derived from the serialized config (every
+# non-default top-level key), so a newly added Config section can never be
+# silently dropped on save. (A hardcoded list previously lost telemetry /
+# appearance / skills, each added after the list was frozen.)
 
 
 def set_config_path(path: Path) -> None:
@@ -137,9 +127,8 @@ def _migrate_to_split_layout(monolith_path: Path) -> None:
         return
     split = _split_dir(monolith_path)
     split.mkdir(parents=True, exist_ok=True)
-    for key in _TOP_LEVEL_KEYS:
-        value = data.get(key)
-        if value is None:
+    for key, value in data.items():
+        if key.startswith("_") or value is None:
             continue
         target = split / f"{key}.json"
         target.write_text(
@@ -189,8 +178,8 @@ def _write_split_layout(data: dict[str, Any], config_path: Path) -> None:
     split = _split_dir(config_path)
     split.mkdir(parents=True, exist_ok=True)
     seen: set[Path] = set()
-    for key in _TOP_LEVEL_KEYS:
-        if key not in data:
+    for key in data:
+        if key.startswith("_"):
             continue
         target = split / f"{key}.json"
         seen.add(target)
@@ -496,5 +485,21 @@ def _migrate_config(data: dict) -> dict:
             my_cfg["allowSet"] = tools.pop("mySet")
         else:
             tools.pop("mySet", None)
+
+    # Move memory.skillImport → skills.security and memory.skillsHotTier →
+    # agents.defaults.skillsHotTier (spec 2026-06-03 §9 — skills config reorg).
+    # Handles both camelCase (as persisted) and snake_case keys.
+    memory = data.get("memory", {})
+    for legacy in ("skillImport", "skill_import"):
+        if legacy in memory:
+            security = data.setdefault("skills", {}).setdefault("security", {})
+            for key, value in memory.pop(legacy).items():
+                security.setdefault(key, value)
+            break
+    for legacy in ("skillsHotTier", "skills_hot_tier"):
+        if legacy in memory:
+            defaults = data.setdefault("agents", {}).setdefault("defaults", {})
+            defaults.setdefault("skillsHotTier", memory.pop(legacy))
+            break
 
     return data

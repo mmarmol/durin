@@ -72,6 +72,7 @@
       "web-search": "Web search",
       "channels": "Channels",
       "memory": "Memory",
+      "skills-security": "Skills security",
       "cron": "Cron",
       "logs": "Logs"
     },
@@ -290,6 +291,44 @@
       "crossEncoderTest": "Test",
       "workingMemoryDescription": "Hourly consolidation of the chat history into MEMORY.md / SOUL.md / USER.md and on-the-fly skill creation. Runs every 2h and only triggers when there's enough new conversation to justify the LLM call."
     },
+    "skillsSecurity": {
+      "description": "Security policy for importing skills (§8.C/§6.B): the LLM judge, trust patterns, the GitHub token, and size caps.",
+      "loadError": "Could not load the configuration.",
+      "saveError": "Could not save the setting.",
+      "sections": {
+        "judge": "LLM security judge",
+        "trust": "Trust patterns",
+        "token": "GitHub token",
+        "caps": "Size caps"
+      },
+      "rows": {
+        "judgeTrigger": "When to run the judge",
+        "judgeMaxSeverity": "Maximum severity",
+        "judgeModel": "Judge model",
+        "tokenSecret": "Token secret",
+        "maxFiles": "Max files",
+        "maxTotalMb": "Max total (MB)",
+        "maxFileMb": "Max per file (MB)"
+      },
+      "help": {
+        "judgeTrigger": "Off: only on-demand (the 'Audit with LLM' button per skill). Uncertain: auto-run only when the gate is already unsure (code / caution / out-of-allowlist). Always: every import. Degrades silently when no model is available.",
+        "judgeMaxSeverity": "How high the judge may raise a verdict. 'Caution' forces a confirm but never blocks on its own; 'Dangerous' lets it block (override required).",
+        "judgeModel": "Model name for the judge. Empty uses the default memory model."
+      },
+      "severity": { "caution": "Caution (confirm)", "dangerous": "Dangerous (block)" },
+      "trigger": { "off": "Off (on-demand only)", "uncertain": "When uncertain (tie-break)", "always": "Always" },
+      "trustDescription": "A safe skill from a trusted source installs without a confirm. Patterns match the source by prefix — e.g. github:acme/, https://gitlab.com/acme/.",
+      "noPatterns": "No trust patterns yet.",
+      "patternPlaceholder": "github:owner/ or https://host/path/",
+      "addPattern": "Add",
+      "removePattern": "Remove pattern",
+      "tokenDescription": "A GitHub token raises the API rate limit and reaches private repos. Pick a secret holding the token (create one in the Secrets section).",
+      "tokenNone": "None (anonymous)",
+      "testToken": "Test",
+      "tokenOk": "Token OK — {{remaining}} API requests remaining.",
+      "tokenTestError": "Token test failed.",
+      "modelPlaceholder": "default model"
+    },
     "cron": {
       "title": "Scheduled jobs",
       "description": "Background tasks the cron service runs on a schedule. System jobs (dream, heartbeat, memory dream) cannot be removed but can be disabled. To add a new job, use the `cron` tool from the chat.",
@@ -324,6 +363,37 @@
     "discardPrompt": "Discard unsaved changes?",
     "editHint": "Switch to manual to edit",
     "autoReadonly": "Read-only: this skill is in auto mode (managed by the agent). Switch it to manual to edit.",
+    "tab": { "active": "Active", "quarantine": "Quarantine" },
+    "quarantineEmpty": "No skills in quarantine.",
+    "security": "Security",
+    "noFindings": "No security findings.",
+    "verdict": { "safe": "Safe", "caution": "Caution", "dangerous": "Dangerous" },
+    "import": {
+      "placeholder": "Import a skill: path, https://…/SKILL.md, or github:owner/repo",
+      "button": "Import",
+      "pick": "Several skills found — pick one",
+      "approve": "Approve",
+      "reject": "Reject",
+      "confirmInstall": "This skill carries code or is flagged caution. Install it anyway?",
+      "forceDangerous": "This skill is DANGEROUS — the scan found a serious risk. Force install anyway?",
+      "confirm": "Confirm",
+      "force": "Force install",
+      "replace": "Replace",
+      "replaceExists": "A skill with this name is already installed. Replace it?",
+      "cancel": "Cancel",
+      "trust": "Trust source",
+      "trusted": "Trusted {{prefix}} — future safe imports from it skip the confirm.",
+      "declaredDeps": "Declared dependencies (not run): {{deps}}",
+      "judge": "Audit with LLM",
+      "unresolved": "Could not resolve a skill from that source. Ask the agent in chat to investigate the link."
+    },
+    "search": {
+      "placeholder": "Search the registry for skills",
+      "button": "Search",
+      "empty": "No skills matched that search.",
+      "installs_one": "{{count}} install",
+      "installs_other": "{{count}} installs"
+    },
     "title": "Skills"
   },
   "chat": {
