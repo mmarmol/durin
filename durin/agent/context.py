@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from durin.agent.memory import MemoryStore
+from durin.agent.skill_usage import compute_working_set
 from durin.agent.skills import SkillsLoader
 from durin.memory.hot_layer import read_hot_layer
 from durin.session.goal_state import goal_state_runtime_lines
@@ -123,6 +124,10 @@ class ContextBuilder:
         # event data). Exposed so AgentLoop / footer / /status can read
         # the current breakdown without touching the JSONL log.
         self.last_composition: dict[str, Any] | None = None
+        # Hot working-set tier: computed once per instance (= per session)
+        # so the stable prefix stays byte-identical across turns.
+        self._skill_working_set: set[str] | None = None
+        self._skill_working_set_done = False
 
     def build_system_prompt(
         self,
@@ -187,7 +192,10 @@ class ContextBuilder:
                 breakdown["skills_active"] = block
                 parts.append(block)
 
-        skills_summary = self.skills.build_skills_summary(exclude=set(always_skills))
+        include = self._hot_tier_include(always_skills)
+        skills_summary = self.skills.build_skills_summary(
+            exclude=set(always_skills), include=include,
+        )
         if skills_summary:
             block = render_template("agent/skills_section.md", skills_summary=skills_summary)
             breakdown["skills_catalog"] = block
@@ -204,6 +212,35 @@ class ContextBuilder:
 
         self._last_layer_breakdown["stable"] = breakdown
         return "\n\n---\n\n".join(parts)
+
+    def _hot_tier_include(self, always_skills: list[str]) -> set[str] | None:
+        """The working-set name filter for the skills_catalog block, or None
+        (full catalog) when the hot tier is disabled. Memoized per instance."""
+        if self._skill_working_set_done:
+            return self._skill_working_set
+        self._skill_working_set_done = True
+        try:
+            from durin.config.loader import load_config
+            ht = load_config().memory.skills_hot_tier
+        except Exception:  # noqa: BLE001 — unit/test workspaces without a config file
+            from durin.config.schema import SkillsHotTierConfig
+            ht = SkillsHotTierConfig()
+        if not ht.enabled:
+            self._skill_working_set = None
+            return None
+        always = set(always_skills)
+        candidates = [
+            e["name"] for e in self.skills.list_skills(filter_unavailable=False)
+            if e["name"] not in always
+        ]
+        names = compute_working_set(
+            self.workspace, candidates,
+            recent=ht.recent, frequent=ht.frequent,
+            frequent_window_hours=ht.frequent_window_hours,
+            recent_window_hours=ht.recent_window_hours,
+        )
+        self._skill_working_set = set(names)
+        return self._skill_working_set
 
     def _build_context_layer(self, *, agent_mode_name: str | None) -> str:
         """Session-stable blocks that may differ between sessions.
