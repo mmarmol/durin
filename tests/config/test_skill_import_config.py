@@ -27,7 +27,7 @@ def test_default_github_token_secret_empty():
 
 def test_llm_judge_defaults():
     j = Config().memory.skill_import.llm_judge
-    assert j.enabled is True          # ON by default (graceful degrade if no aux model)
+    assert j.enabled is False         # opt-in: deterministic scan + human gate are the floor
     assert j.max_severity == "caution"
     assert j.model == ""
 
