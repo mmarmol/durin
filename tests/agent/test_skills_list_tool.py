@@ -21,8 +21,10 @@ _EVIL = "evil-skill"
 def _mk_skill(ws: Path, name: str, body: str) -> None:
     d = ws / "skills" / name
     d.mkdir(parents=True)
+    prov = ("metadata:\n  durin:\n    provenance:\n"
+            '      source: "github:o/r/x"\n      content_hash: "abc"\n')
     (d / "SKILL.md").write_text(
-        f"---\nname: {name}\ndescription: a test skill\n---\n{body}\n",
+        f"---\nname: {name}\ndescription: a test skill\n{prov}---\n{body}\n",
         encoding="utf-8",
     )
 

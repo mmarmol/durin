@@ -6,7 +6,9 @@ from durin.agent.skills_surface import quarantined_skills, skills_inventory
 def _skill(ws, name, body="Do the task.\n", mode_auto=False):
     d = ws / "skills" / name
     d.mkdir(parents=True)
-    (d / "SKILL.md").write_text(f"---\nname: {name}\ndescription: d\n---\n{body}")
+    prov = ("metadata:\n  durin:\n    provenance:\n"
+            '      source: "github:o/r/x"\n      content_hash: "abc"\n')
+    (d / "SKILL.md").write_text(f"---\nname: {name}\ndescription: d\n{prov}---\n{body}")
 
 def test_inventory_lists_active_with_verdict(tmp_path):
     _skill(tmp_path, "clean")

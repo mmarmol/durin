@@ -12,10 +12,13 @@ def _force_hot(monkeypatch, *, enabled=True, recent=1, frequent=1):
 
 
 def _seed_skills(ws, names):
+    prov = ("metadata:\n  durin:\n    provenance:\n"
+            '      source: "github:o/r/x"\n      content_hash: "abc"\n')
     for n in names:
         d = ws / "skills" / n
         d.mkdir(parents=True, exist_ok=True)
-        (d / "SKILL.md").write_text(f"---\nname: {n}\ndescription: do {n}\n---\n# {n}\n")
+        (d / "SKILL.md").write_text(
+            f"---\nname: {n}\ndescription: do {n}\n{prov}---\n# {n}\n")
 
 
 def _seed_usage(ws, calls, *, name="s1"):
