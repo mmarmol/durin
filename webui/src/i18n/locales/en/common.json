@@ -72,6 +72,7 @@
       "web-search": "Web search",
       "channels": "Channels",
       "memory": "Memory",
+      "skills-security": "Skills security",
       "cron": "Cron"
     },
     "sections": {
@@ -289,6 +290,43 @@
       "crossEncoderTest": "Test",
       "workingMemoryDescription": "Hourly consolidation of the chat history into MEMORY.md / SOUL.md / USER.md and on-the-fly skill creation. Runs every 2h and only triggers when there's enough new conversation to justify the LLM call."
     },
+    "skillsSecurity": {
+      "description": "Security policy for importing skills (§8.C/§6.B): the LLM judge, trust patterns, the GitHub token, and size caps.",
+      "loadError": "Could not load the configuration.",
+      "saveError": "Could not save the setting.",
+      "sections": {
+        "judge": "LLM security judge",
+        "trust": "Trust patterns",
+        "token": "GitHub token",
+        "caps": "Size caps"
+      },
+      "rows": {
+        "judgeEnabled": "Run the LLM judge",
+        "judgeMaxSeverity": "Maximum severity",
+        "judgeModel": "Judge model",
+        "tokenSecret": "Token secret",
+        "maxFiles": "Max files",
+        "maxTotalMb": "Max total (MB)",
+        "maxFileMb": "Max per file (MB)"
+      },
+      "help": {
+        "judgeEnabled": "After the deterministic scan, an LLM reviews each imported skill for what regex can't see. Runs once per import; degrades silently when no model is available.",
+        "judgeMaxSeverity": "How high the judge may raise a verdict. 'Caution' forces a confirm but never blocks on its own; 'Dangerous' lets it block (override required).",
+        "judgeModel": "Model name for the judge. Empty uses the default memory model."
+      },
+      "severity": { "caution": "Caution (confirm)", "dangerous": "Dangerous (block)" },
+      "trustDescription": "A safe skill from a trusted source installs without a confirm. Patterns match the source by prefix — e.g. github:acme/, https://gitlab.com/acme/.",
+      "noPatterns": "No trust patterns yet.",
+      "patternPlaceholder": "github:owner/ or https://host/path/",
+      "addPattern": "Add",
+      "removePattern": "Remove pattern",
+      "tokenDescription": "A GitHub token raises the API rate limit and reaches private repos. Pick a secret holding the token (create one in the Secrets section).",
+      "tokenNone": "None (anonymous)",
+      "testToken": "Test",
+      "tokenOk": "Token OK — {{remaining}} API requests remaining.",
+      "tokenTestError": "Token test failed.",
+      "modelPlaceholder": "default model"
+    },
     "cron": {
       "title": "Scheduled jobs",
       "description": "Background tasks the cron service runs on a schedule. System jobs (dream, heartbeat, memory dream) cannot be removed but can be disabled. To add a new job, use the `cron` tool from the chat.",
@@ -341,6 +379,8 @@
       "replace": "Replace",
       "replaceExists": "A skill with this name is already installed. Replace it?",
       "cancel": "Cancel",
+      "trust": "Trust source",
+      "trusted": "Trusted {{prefix}} — future safe imports from it skip the confirm.",
       "unresolved": "Could not resolve a skill from that source. Ask the agent in chat to investigate the link."
     },
     "title": "Skills"
