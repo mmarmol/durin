@@ -173,12 +173,27 @@ def _fetch_github(cand: SkillCandidate, qdir: Path, budget: list[int],
         raise ValueError(f"no files under {cand.ref}")
 
 
+def _should_judge(skill_dir: Path, source: str, trigger: str, allowlist: list[str]) -> bool:
+    """Per the judge trigger: ``always`` → yes; ``uncertain`` → only when the gate
+    would already require a confirm (carries code / caution / out-of-allowlist),
+    i.e. there's a real tie to break; ``off`` → no auto-run."""
+    if trigger == "always":
+        return True
+    if trigger != "uncertain":
+        return False
+    vr = validate_skill(skill_dir)
+    det = scan_skill(skill_dir)
+    return decide_action(source, verdict=det.verdict,
+                         carries_code=vr.carries_code, allowlist=allowlist) == "confirm"
+
+
 def fetch_candidate(cand: SkillCandidate, *, quarantine_root: Path,
                     max_files: int = _DEFAULT_MAX_FILES,
                     max_total_bytes: int = _DEFAULT_MAX_TOTAL_BYTES,
                     max_file_bytes: int = _DEFAULT_MAX_FILE_BYTES,
-                    judge_enabled: bool = False, judge_model: str = "",
-                    judge_max_severity: str = "caution") -> Path:
+                    judge_trigger: str = "off", judge_model: str = "",
+                    judge_max_severity: str = "caution",
+                    allowlist: list[str] | None = None) -> Path:
     """Download one resolved candidate into `<quarantine_root>/<name>/`, run the
     §8.C audit (deterministic scan + optional LLM judge), and drop a `.scan.json`
     (source + merged verdict + findings) beside it. The downloaded tree is NOT
@@ -202,7 +217,8 @@ def fetch_candidate(cand: SkillCandidate, *, quarantine_root: Path,
         _fetch_github(cand, qdir, budget, caps)
     else:
         raise ValueError(f"unknown candidate kind: {cand.kind!r}")
-    rep = audit_skill(qdir, judge_enabled=judge_enabled, judge_model=judge_model,
+    run_judge = _should_judge(qdir, cand.ref, judge_trigger, allowlist or [])
+    rep = audit_skill(qdir, judge_enabled=run_judge, judge_model=judge_model,
                       judge_max_severity=judge_max_severity)
     (qdir / ".scan.json").write_text(json.dumps({
         "source": cand.ref,
