@@ -91,7 +91,8 @@ LLM-driven + auto-absorb opt-in. Ver `docs/architecture/memory/`.
 - Reflexion (academic): episodic failure memory mejora recovery medible
 
 **Refinamientos shipped post-Phase 6**:
-- Skills como pseudo-clase de memoria buscable (Spec 2, 2026-06-03) — `memory_search` devuelve `kind="skill"`, indexado FTS + vector, keep-in-sync en cada mutación, gated por `memory.index_skills`. Cierra el "skill-doc retrieval estilo Hermes" de Horizon 1b. Pendiente fast-follow: hot working-set tier (Phase 5, diferido).
+- Skills como pseudo-clase de memoria buscable (Spec 2, 2026-06-03) — `memory_search` devuelve `kind="skill"`, indexado FTS + vector, keep-in-sync en cada mutación, gated por `memory.index_skills`. Cierra el "skill-doc retrieval estilo Hermes" de Horizon 1b.
+- Hot working-set tier (Phase 5, 2026-06-03) — el bloque de skills del stable-anchor inyecta el working-set rankeado por uso (`skill_calls`: frecuentes-7d ∪ recientes, fill-to-budget), memoizado por sesión (prefix-cache-safe), gated por `memory.skills_hot_tier`. La cola larga queda en `memory_search`; un nudge en el prompt avisa de buscarla. Completa el retrieval híbrido caliente/frío de Spec 2 §2.2.
 
 **Refinamientos no perseguidos (por ahora)**:
 - Aider PageRank-style relevance ranking para code-related milestones — no aplicable hoy (no usamos memoria sobre código)
@@ -128,4 +129,4 @@ para rationale completo.
 
 ---
 
-## Last updated: 2026-06-03 (skills retrieval / Spec 2 shipped — skills are now a searchable memory pseudo-class via `memory_search`)
+## Last updated: 2026-06-03 (Spec 2 shipped: skills are a searchable memory pseudo-class + hot working-set tier — full hot/cold retrieval)
