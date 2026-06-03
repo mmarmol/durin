@@ -677,6 +677,11 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/skills":
             return self._handle_skills_list(request)
 
+        # Exact match BEFORE the `([^/]+)` patterns so "quarantine" is not
+        # captured as a skill name by `^/api/skills/([^/]+)$`.
+        if got == "/api/skills/quarantine":
+            return self._handle_skills_quarantine(request)
+
         m = re.match(r"^/api/skills/([^/]+)/save$", got)
         if m:
             return self._handle_skill_save(request, m.group(1))
@@ -1409,6 +1414,19 @@ class WebSocketChannel(BaseChannel):
             status, payload = ss.web_list(workspace)
         except Exception as exc:  # noqa: BLE001
             return _http_error(500, f"skills list failed: {exc}")
+        return _http_json_response(payload, status=status)
+
+    def _handle_skills_quarantine(self, request: WsRequest) -> Response:
+        """`GET /api/skills/quarantine` — list skills awaiting an import decision."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from durin.agent import skills_store as ss
+        from durin.config.loader import load_config
+        try:
+            workspace = load_config().workspace_path
+            status, payload = ss.web_quarantine(workspace)
+        except Exception as exc:  # noqa: BLE001
+            return _http_error(500, f"skills quarantine failed: {exc}")
         return _http_json_response(payload, status=status)
 
     def _handle_skill_get(self, request: WsRequest, name: str) -> Response:

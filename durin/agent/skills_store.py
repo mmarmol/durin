@@ -426,11 +426,22 @@ def dream_fuse_skills(workspace: Path, *, target: str, content: str,
 
 
 def web_list(workspace: Path) -> tuple[int, dict]:
+    # Scan-augmented inventory (verdict + status) so the management panel can
+    # surface security state. Imported locally to avoid a circular import
+    # (skills_surface imports from skills_store). Scanning on a panel load is fine.
+    from durin.agent.skills_surface import skills_inventory
+
     head = _store(workspace).log(max_entries=1)
     return 200, {
-        "skills": list_skills_info(workspace),
+        "skills": skills_inventory(workspace),
         "store_head": ({"sha": head[0].sha, "at": head[0].timestamp} if head else None),
     }
+
+
+def web_quarantine(workspace: Path) -> tuple[int, dict]:
+    from durin.agent.skills_surface import quarantined_skills
+
+    return 200, {"quarantined": quarantined_skills(workspace)}
 
 
 def web_get(workspace: Path, name: str) -> tuple[int, dict]:
