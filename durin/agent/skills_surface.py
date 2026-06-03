@@ -56,7 +56,8 @@ def quarantined_skills(workspace) -> list[dict]:
     for d in sorted(qroot.iterdir()):
         if not (d / "SKILL.md").is_file():
             continue
-        entry = {"name": d.name, "status": "quarantined", "source": "", "verdict": "", "findings": []}
+        entry = {"name": d.name, "status": "quarantined", "source": "",
+                 "verdict": "", "findings": [], "trust_prefix": ""}
         sj = d / ".scan.json"
         if sj.is_file():
             try:
@@ -66,5 +67,8 @@ def quarantined_skills(workspace) -> list[dict]:
                 entry["findings"] = meta.get("findings", [])
             except Exception:
                 pass
+        if entry["source"]:
+            from durin.agent.skills_import import trust_prefix_for
+            entry["trust_prefix"] = trust_prefix_for(entry["source"])
         out.append(entry)
     return out

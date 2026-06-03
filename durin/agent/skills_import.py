@@ -316,3 +316,21 @@ def reject_quarantined(workspace: Path, name: str) -> dict:
         return {"error": f"not in quarantine: {name}"}
     shutil.rmtree(qdir, ignore_errors=True)
     return {"ok": True, "name": name}
+
+
+def trust_prefix_for(ref: str) -> str:
+    """Suggest a starting allowlist prefix to pre-fill for 'trust this source'.
+    The user edits it (e.g. broaden a repo to the whole org). NOT a repo-vs-org
+    decision — just a sensible, specific starting point per source kind:
+    github → the repo (`github:owner/repo`); https → the SKILL.md's dir; local →
+    the path as-is."""
+    ref = (ref or "").strip()
+    if ref.startswith("github:"):
+        repo_part = ref[len("github:"):].split("@", 1)[0]
+        segs = [s for s in repo_part.split("/") if s][:2]
+        return "github:" + "/".join(segs) if len(segs) == 2 else ref
+    if ref.startswith(("https://", "http://")):
+        if ref.rstrip("/").endswith("SKILL.md"):
+            return ref.rsplit("/", 1)[0] + "/"
+        return ref
+    return ref
