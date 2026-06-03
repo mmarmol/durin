@@ -404,14 +404,17 @@ class SkillsHotTierConfig(Base):
 
 class SkillJudgeConfig(Base):
     """LLM semantic-audit pass over an imported skill, after the deterministic
-    §8.C scan (spec 2026-06-03 §A3). ``enabled`` ON by default — degrades
-    gracefully (skips, never errors/blocks) when no aux model resolves.
+    §8.C scan (spec 2026-06-03 §A3). ``enabled`` **OFF by default (opt-in)**: the
+    deterministic scan + human gate are the floor; an LLM call per import is
+    overkill for the common case (the human already reviews + approves). Enable it
+    to auto-run the judge on every import, or invoke it on-demand per skill.
+    Degrades gracefully (skips, never errors/blocks) when no aux model resolves.
     ``max_severity`` caps how high the judge may raise the verdict: ``caution``
     (default) means it can force a confirm but never block on its own — only the
-    deterministic rules block. ``model`` names an aux model (``aux_models.skill_audit``);
-    empty → the default judge model."""
+    deterministic rules block. ``model`` names an aux model; empty → the default
+    judge model."""
 
-    enabled: bool = True
+    enabled: bool = False
     max_severity: Literal["caution", "dangerous"] = "caution"
     model: str = ""
 
