@@ -103,3 +103,26 @@ def test_github_no_skills_is_unresolved(monkeypatch):
     ]))
     r = resolve_candidates("github:o/r")
     assert not r.candidates and r.unresolved_reason
+
+
+def test_github_subpath_name_match_fallback(monkeypatch):
+    """A registry slug that isn't the repo path (e.g. a skills.sh skillId)
+    resolves by matching the skill dir's last segment anywhere in the tree."""
+    monkeypatch.setattr(R, "_gh_get_json", _fake_gh([
+        {"path": "skills/.curated/pdf/SKILL.md", "type": "blob"},
+        {"path": "skills/other/SKILL.md", "type": "blob"},
+    ]))
+    r = resolve_candidates("github:o/r/pdf")
+    assert [c.ref for c in r.candidates] == ["github:o/r@main/skills/.curated/pdf"]
+    assert not r.unresolved_reason
+
+
+def test_github_exact_subpath_beats_name_match(monkeypatch):
+    """An exact subpath dir wins; the name-match fallback does NOT also pull
+    same-named dirs elsewhere."""
+    monkeypatch.setattr(R, "_gh_get_json", _fake_gh([
+        {"path": "pdf/SKILL.md", "type": "blob"},
+        {"path": "skills/.curated/pdf/SKILL.md", "type": "blob"},
+    ]))
+    r = resolve_candidates("github:o/r/pdf")
+    assert [c.ref for c in r.candidates] == ["github:o/r@main/pdf"]
