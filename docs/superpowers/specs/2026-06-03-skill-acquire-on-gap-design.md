@@ -1,6 +1,12 @@
 # §6.C — Acquire-on-gap: search-before-create for skills
 
-**Status:** DESIGN (2026-06-03) · grounded against code + Hermes/skill-creator prior art
+**Status:** BUILT (2026-06-04) · Path B (dream seed) verified LIVE — a real allowlisted
+registry fetch (`github:vercel-labs/json-render/react-pdf`) ran fetch+scan+gate
+end-to-end and returned a 3732-char seed; a non-allowlisted source instant-rejects with
+no download. Unit suite green (10 new tests; 790 passed across affected areas). Path A
+(in-session prompt) implemented; pending a live run against the real agent.
+Plan: `docs/superpowers/plans/2026-06-04-skill-acquire-on-gap.md`.
+**Design (2026-06-03):** grounded against code + Hermes/skill-creator prior art
 **Vision doc:** `docs/plans/skills_evolutivas.md` (§1.5, §6.C, §8.E)
 **Related:** discovery/registries spec `2026-06-03-skill-discovery-registries-design.md` (search substrate, BUILT)
 
