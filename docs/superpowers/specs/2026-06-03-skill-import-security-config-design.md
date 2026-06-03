@@ -58,8 +58,15 @@ skill the agent can run for a deeper, tool-using audit; out of scope here.
 **Settled (2026-06-03):**
 1. **Cap at `caution`.** The judge raises to at most caution (forces a confirm);
    it NEVER blocks on its own — only the deterministic rules block.
-2. **ON by default** (`enabled=true`), **degrading gracefully**: if no aux model
-   resolves, skip the judge silently (don't error, don't block the import).
+2. **Opt-in, off by default — REVISED 2026-06-03.** On-by-default taxed every
+   import with an LLM call for a threat-slice the human gate already covers. The
+   config is a 3-way `trigger`: `off` (default — on-demand only), `uncertain`
+   (auto ONLY when the gate is already unsure: carries code / caution /
+   out-of-allowlist; clean allowlisted skills skip it), `always`. Plus an
+   **on-demand** path — an "Audit with LLM" button per skill (web, async/off-loop)
+   + `skill_audit(deep=true)` (agent) — so the judge runs when *you* want a second
+   opinion on a specific import. Degrades gracefully (skips, never errors/blocks)
+   when no model resolves.
 3. **Escalate only with a concrete, explained finding.** Every judge finding MUST
    state *exactly* what and why — the specific code/snippet/behavior and the
    threat — surfaced verbatim in the gate. No vague "looks suspicious": a skill
@@ -156,7 +163,7 @@ class SkillImportConfig(Base):
     llm_judge: SkillJudgeConfig = Field(default_factory=SkillJudgeConfig)  # A3
 
 class SkillJudgeConfig(Base):
-    enabled: bool = True                                # A3 — on by default; graceful degrade if no aux model
+    trigger: Literal["off", "uncertain", "always"] = "off"  # A3 — opt-in; on-demand otherwise (revised)
     max_severity: Literal["caution", "dangerous"] = "caution"  # A3 — settled: caution
     model: str = ""                                     # aux_models.skill_audit; "" → default judge model
 ```
@@ -171,8 +178,12 @@ patterns).
 ## Decisions (settled 2026-06-03 with the user)
 1. **LLM-judge cap:** `caution` — never blocks alone; only deterministic rules
    block. Plus: every judge finding must give the **exact** what/why.
-2. **LLM-judge default:** **ON**, degrading gracefully when no aux model resolves.
-   Model: `aux_models.skill_audit`, falling back to the default judge model.
+2. **LLM-judge trigger (REVISED 2026-06-03):** 3-way `off` (default — opt-in) /
+   `uncertain` (auto only on the confirm path, a tie-break) / `always`, plus
+   on-demand per skill. On-by-default was overkill (an LLM call per import when
+   the human gate already reviews). **Verified live:** the real judge leaves a
+   clean builtin `safe` and catches a regex-clean exfil + social-engineering skill
+   (→ `caution`, with the exact what/why).
 3. **Caps:** 100 files / 3 MB total / 1 MB per file.
 4. **Install-specs:** v1 = **info-only** (`never`); the approval executor → v1.1.
 5. **Trust:** a **uniform advanced-config list of prefix patterns** over the
