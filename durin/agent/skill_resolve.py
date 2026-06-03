@@ -1,0 +1,169 @@
+"""Source resolution for skill import (§6.B). A source is rarely a direct
+`.../SKILL.md`: a GitHub repo may hold many skills under subdirs, a local path
+may be a directory of skills. `resolve_candidates` turns any source into a list
+of concrete `SkillCandidate`s. The *mechanical* discovery is deterministic; the
+*fuzzy* part ("which of many", "is this URL even a skill") is the agent's job —
+fuzzy/unrecognized sources return an `unresolved_reason`, not an exception, so
+the orchestrator skill can investigate and re-resolve.
+
+No install, no scan here — pure discovery. Network fetches are SSRF-safe."""
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from durin.agent.skills_frontmatter import split_frontmatter
+
+_GITHUB_API = "https://api.github.com"
+_GITHUB_PREFIXES = ("github:", "https://github.com/", "http://github.com/")
+
+
+@dataclass
+class SkillCandidate:
+    name: str           # skill name: frontmatter/dir name, or repo name at root
+    ref: str            # concrete fetchable ref understood by fetch_candidate:
+                        #   local:  absolute filesystem path to the skill dir
+                        #   https:  direct URL to a SKILL.md
+                        #   github: "github:owner/repo@branch/<dir>"
+    kind: str           # "local" | "https" | "github"
+    detail: str = ""    # description if known cheaply
+
+
+@dataclass
+class ResolveResult:
+    candidates: list[SkillCandidate] = field(default_factory=list)
+    unresolved_reason: str = ""   # non-empty => the agent must investigate
+
+
+# --- local -------------------------------------------------------------------
+
+def _name_of(skill_dir: Path) -> tuple[str, str]:
+    try:
+        data, _ = split_frontmatter((skill_dir / "SKILL.md").read_text(encoding="utf-8"))
+        return (str(data.get("name") or skill_dir.name), str(data.get("description") or ""))
+    except OSError:
+        return (skill_dir.name, "")
+
+
+def _resolve_local(p: Path) -> ResolveResult:
+    if p.is_file() and p.name == "SKILL.md":
+        p = p.parent
+    if (p / "SKILL.md").is_file():
+        name, detail = _name_of(p)
+        return ResolveResult([SkillCandidate(name, str(p.resolve()), "local", detail)])
+    if p.is_dir():
+        cands = []
+        for md in sorted(p.glob("*/SKILL.md")):
+            name, detail = _name_of(md.parent)
+            cands.append(SkillCandidate(name, str(md.parent.resolve()), "local", detail))
+        if cands:
+            return ResolveResult(cands)
+    return ResolveResult(unresolved_reason=f"no SKILL.md at or under {p}")
+
+
+# --- github ------------------------------------------------------------------
+
+def _gh_get_json(url: str) -> dict:
+    """GET a GitHub API URL as JSON over the SSRF-safe client. Runs the async
+    fetch in a fresh thread so it works whether or not a loop is already running."""
+    import asyncio
+    import threading
+
+    from durin.security.network import ssrf_safe_async_client
+
+    box: dict = {}
+
+    async def _go() -> dict:
+        async with ssrf_safe_async_client() as client:
+            resp = await client.get(url, headers={"Accept": "application/vnd.github+json"},
+                                    timeout=15.0)
+            resp.raise_for_status()
+            return resp.json()
+
+    def _run() -> None:
+        try:
+            box["value"] = asyncio.run(_go())
+        except Exception as exc:  # noqa: BLE001 — surfaced to the caller below
+            box["error"] = exc
+
+    t = threading.Thread(target=_run)
+    t.start()
+    t.join()
+    if "error" in box:
+        raise box["error"]
+    return box["value"]
+
+
+def _parse_github(source: str) -> tuple[str, str, str | None, str]:
+    """Return (owner, repo, branch_or_None, subpath). branch None => default."""
+    branch: str | None = None
+    if source.startswith("github:"):
+        rest = source[len("github:"):]
+        # optional @branch on the repo: owner/repo@branch/sub
+        rest, _, frag = rest.partition("@")
+        parts = [s for s in rest.split("/") if s]
+        owner, repo = parts[0], parts[1]
+        subpath = "/".join(parts[2:])
+        if frag:
+            fb = frag.split("/")
+            branch = fb[0]
+            if len(fb) > 1:
+                subpath = "/".join(fb[1:])
+        return owner, repo, branch, subpath
+    # https://github.com/owner/repo[/tree/branch/sub...]
+    tail = re.sub(r"^https?://github\.com/", "", source).strip("/")
+    parts = [s for s in tail.split("/") if s]
+    owner, repo = parts[0], parts[1]
+    repo = re.sub(r"\.git$", "", repo)
+    subpath = ""
+    if len(parts) > 2 and parts[2] in ("tree", "blob"):
+        branch = parts[3] if len(parts) > 3 else None
+        subpath = "/".join(parts[4:])
+    elif len(parts) > 2:
+        subpath = "/".join(parts[2:])
+    return owner, repo, branch, subpath
+
+
+def _resolve_github(source: str) -> ResolveResult:
+    owner, repo, branch, subpath = _parse_github(source)
+    if branch is None:
+        meta = _gh_get_json(f"{_GITHUB_API}/repos/{owner}/{repo}")
+        branch = meta.get("default_branch") or "main"
+    tree = _gh_get_json(f"{_GITHUB_API}/repos/{owner}/{repo}/git/trees/{branch}?recursive=1")
+    sub = subpath.strip("/")
+    cands: list[SkillCandidate] = []
+    for entry in tree.get("tree", []):
+        path = entry.get("path", "")
+        if entry.get("type") != "blob" or not (path == "SKILL.md" or path.endswith("/SKILL.md")):
+            continue
+        skill_dir = path[: -len("/SKILL.md")] if path.endswith("/SKILL.md") else ""
+        if sub and not (skill_dir == sub or skill_dir.startswith(sub + "/")):
+            continue
+        name = skill_dir.rsplit("/", 1)[-1] if skill_dir else repo
+        cands.append(SkillCandidate(name, f"github:{owner}/{repo}@{branch}/{skill_dir}", "github"))
+    if not cands:
+        return ResolveResult(unresolved_reason=f"no SKILL.md found in github:{owner}/{repo}"
+                             + (f"/{sub}" if sub else ""))
+    return ResolveResult(cands)
+
+
+# --- entry point -------------------------------------------------------------
+
+def resolve_candidates(source: str) -> ResolveResult:
+    """Turn any import source into concrete skill candidates (or an
+    unresolved_reason for the agent to investigate)."""
+    source = source.strip()
+    if not source:
+        return ResolveResult(unresolved_reason="empty source")
+    if source.startswith(_GITHUB_PREFIXES):
+        return _resolve_github(source)
+    if re.match(r"^https?://", source):
+        if source.rstrip("/").endswith("SKILL.md"):
+            segs = [s for s in source.split("/") if s]
+            name = segs[-2] if len(segs) >= 2 else "skill"
+            return ResolveResult([SkillCandidate(name, source, "https")])
+        return ResolveResult(unresolved_reason=(
+            "URL is not a direct SKILL.md and is not a GitHub repo; "
+            "ask the agent to investigate the link"))
+    return _resolve_local(Path(source).expanduser())
