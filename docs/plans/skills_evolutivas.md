@@ -23,15 +23,17 @@
 + piso §8.C + gate · interop agentskills.io · Skills-Surface · retrieval Nivel-1
 (índice + hot-tier) · **discovery/registries** (skills.sh + clawhub: search,
 resolución name-match, CLI, web — spec `2026-06-03-skill-discovery-registries-design.md`)
-· **drift→evolución §8.D** (`durin/agent/skill_drift.py` + `curate_catalog`).
+· **drift→evolución §8.D** (`durin/agent/skill_drift.py` + `curate_catalog`) ·
+**barrida origen-no-verificado → cuarentena** (`durin/agent/skill_lifecycle.py`:
+un skill de workspace sin provenance se reubica a cuarentena al cargar el contexto
++ surfaces → inerte para el agente, surfaceado para el humano).
 
 **Pendiente:** **§6.C adquirir-on-gap** (trigger de gap + flujo `AskUserQuestion`;
 el search ya es la semilla) · **§6.D Etapa-2 / §6.B Etapa-1** (adaptar lo importado
 a tools nativas + gate blando por uso) · **§5.2 capa `original/` inmutable** (hoy:
-`provenance.source` + `content_hash` + re-fetch, sin copia guardada) · **barrida de
-origen-no-verificado → cuarentena** · **P6** (ejecutor de install-specs / sandbox
-runtime — hoy info-only, policy `never`) · adapters extra (github-taps /
-well-known / lobehub) · §8.F GEPA/SkillOpt.
+`provenance.source` + `content_hash` + re-fetch, sin copia guardada) · **P6**
+(ejecutor de install-specs / sandbox runtime — hoy info-only, policy `never`) ·
+adapters extra (github-taps / well-known / lobehub) · §8.F GEPA/SkillOpt.
 
 ## §1 — La idea
 
