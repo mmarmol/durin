@@ -98,7 +98,9 @@ def _http_get_bytes(url: str) -> bytes:
 
     async def _go() -> bytes:
         async with ssrf_safe_async_client() as client:
-            resp = await client.get(url, timeout=30.0)
+            # _gh_headers attaches the GitHub token only for raw.githubusercontent
+            # / api.github.com — never for a direct (non-GitHub) https source.
+            resp = await client.get(url, headers=_resolve._gh_headers(url), timeout=30.0)
             resp.raise_for_status()
             return resp.content
 

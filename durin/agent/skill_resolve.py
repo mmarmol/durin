@@ -64,6 +64,41 @@ def _resolve_local(p: Path) -> ResolveResult:
 
 # --- github ------------------------------------------------------------------
 
+def _is_github_url(url: str) -> bool:
+    """True only for the real GitHub API / raw hosts (https). The token guard:
+    we attach the GitHub token ONLY to these, never to an arbitrary https source,
+    so a malicious/direct URL can't capture the credential."""
+    return url.startswith("https://api.github.com/") or url.startswith(
+        "https://raw.githubusercontent.com/")
+
+
+def _github_token() -> str:
+    """Resolve the configured GitHub token via durin secrets, or "" (anonymous).
+    `memory.skill_import.github_token_secret` holds a secret NAME; missing/empty
+    degrades to anonymous (never raises)."""
+    from durin.config.loader import load_config
+    from durin.security.secrets import resolve_secret
+    try:
+        name = (load_config().memory.skill_import.github_token_secret or "").strip()
+        if not name:
+            return ""
+        return str(resolve_secret(f"${{secret:{name}}}") or "")
+    except Exception:  # noqa: BLE001 — missing secret / store issue → anonymous
+        return ""
+
+
+def _gh_headers(url: str, accept: str | None = None) -> dict:
+    """Headers for a GitHub request — attaches the token ONLY for GitHub hosts."""
+    headers: dict = {}
+    if accept:
+        headers["Accept"] = accept
+    if _is_github_url(url):
+        tok = _github_token()
+        if tok:
+            headers["Authorization"] = f"Bearer {tok}"
+    return headers
+
+
 def _gh_get_json(url: str) -> dict:
     """GET a GitHub API URL as JSON over the SSRF-safe client. Runs the async
     fetch in a fresh thread so it works whether or not a loop is already running."""
@@ -76,7 +111,7 @@ def _gh_get_json(url: str) -> dict:
 
     async def _go() -> dict:
         async with ssrf_safe_async_client() as client:
-            resp = await client.get(url, headers={"Accept": "application/vnd.github+json"},
+            resp = await client.get(url, headers=_gh_headers(url, "application/vnd.github+json"),
                                     timeout=15.0)
             resp.raise_for_status()
             return resp.json()

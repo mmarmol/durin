@@ -540,6 +540,57 @@ def web_skill_reject(workspace: Path, name: str) -> tuple[int, dict]:
     return (400, res) if "error" in res else (200, res)
 
 
+def web_github_token_test(secret_name: str) -> tuple[int, dict]:
+    """`GET /api/skills/github-token-test?secret=` — verify a GitHub-token secret
+    against the GitHub API (rate_limit). Returns {ok, remaining, limit} or {ok:false, error}."""
+    import asyncio
+    import threading
+
+    from durin.security.network import ssrf_safe_async_client
+    from durin.security.secrets import resolve_secret
+
+    name = (secret_name or "").strip()
+    if not name:
+        return 400, {"error": "secret name required"}
+    try:
+        token = str(resolve_secret(f"${{secret:{name}}}") or "")
+    except Exception:  # noqa: BLE001
+        return 200, {"ok": False, "error": f"secret not found: {name}"}
+    if not token:
+        return 200, {"ok": False, "error": "secret resolved empty"}
+
+    box: dict = {}
+
+    async def _go() -> tuple[int, dict]:
+        async with ssrf_safe_async_client() as client:
+            r = await client.get(
+                "https://api.github.com/rate_limit",
+                headers={"Authorization": f"Bearer {token}",
+                         "Accept": "application/vnd.github+json"},
+                timeout=10.0)
+            ctype = r.headers.get("content-type", "")
+            return r.status_code, (r.json() if "json" in ctype else {})
+
+    def _run() -> None:
+        try:
+            box["v"] = asyncio.run(_go())
+        except Exception as exc:  # noqa: BLE001
+            box["e"] = exc
+
+    t = threading.Thread(target=_run)
+    t.start()
+    t.join()
+    if "e" in box:
+        return 200, {"ok": False, "error": str(box["e"])}
+    status, data = box["v"]
+    if status == 200:
+        core = data.get("resources", {}).get("core", {}) if isinstance(data, dict) else {}
+        return 200, {"ok": True, "remaining": core.get("remaining"), "limit": core.get("limit")}
+    if status == 401:
+        return 200, {"ok": False, "error": "GitHub rejected the token (401)"}
+    return 200, {"ok": False, "error": f"GitHub returned {status}"}
+
+
 def web_get(workspace: Path, name: str) -> tuple[int, dict]:
     content = read_skill_content(workspace, name)
     if content is None:
