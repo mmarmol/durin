@@ -37,6 +37,20 @@ Which skills were used recently. Context only — NOT a value signal:
 {{ usage_json }}
 ```
 
+## Upstream updates available (only for some skills)
+
+A few skills above were imported from an external source that has since published a
+NEWER version. The LOCAL copy (in "Skills to review") may have its OWN local
+improvements you MUST preserve. Below is the latest UPSTREAM body for each, keyed by
+skill name. If the upstream contains a concrete improvement worth bringing in, emit
+an `evolve` (exact old/new on the LOCAL body) that incorporates it WITHOUT discarding
+local changes. If nothing is worth bringing in, do nothing. When this object is
+empty, ignore this section.
+
+```json
+{{ upstream_json }}
+```
+
 ## Output
 
 Return a STRICT JSON object and nothing else — no prose, no markdown fences around

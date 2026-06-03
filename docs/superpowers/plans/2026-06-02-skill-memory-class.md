@@ -291,16 +291,17 @@ def test_drift_repair_does_not_delete_indexed_skill(tmp_path):
 
 ---
 
-## Phase 5 — Context hot-tier — DEFERRED (decided 2026-06-02, out of scope)
+## Phase 5 — Context hot-tier — SHIPPED 2026-06-03 (→ [`2026-06-03-skills-hot-tier.md`](2026-06-03-skills-hot-tier.md))
 
-> **Deferred to a fast-follow** — not built in this execution. Rationale (D7): durin
-> already injects `skills_active` (always-on) + `skills_catalog`, so a usage-ranked
-> hot working-set is additive/redundant unless ranked by recent usage, and risks the
-> prefix-cache anchor. The searchable memory-class (Phases 0-4, 6-7) is the load-bearing
-> win; the hot working-set is a separable enhancement. **When pursued later:** block at/
-> after `memory_hot` (end of stable, never before identity/bootstrap/skills_active),
-> reuse `skill_calls` for ranking, register a `stable_labels` breakdown key, watch
-> `_FRAGMENT_CLASSES` in `hot_layer.py`.
+> Built as a separate plan. The `skills_catalog` block now injects a usage-ranked
+> **working set** (top frequent-7d ∪ recent, filled to a config budget) instead of
+> the full catalog, memoized per session (prefix-cache safe), gated by
+> `memory.skills_hot_tier` (toggle off = full catalog). The long tail is reachable
+> via `memory_search`, and a §5.2 prompt nudge tells the agent to search when the
+> working set doesn't cover the task. Note vs the original deferral guess: we modify
+> the existing `skills_catalog` block (before `memory_hot`) per spec §7 — NOT a new
+> block "at/after memory_hot" — because the memoized working set is more
+> cache-stable than the per-turn `memory_hot`; `hot_layer.py` is untouched.
 
 ---
 

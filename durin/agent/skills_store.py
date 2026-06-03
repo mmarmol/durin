@@ -224,6 +224,8 @@ def list_skills_info(workspace: Path) -> list[dict]:
             "source": entry["source"],
             "mode": read_mode(workspace, name, loader),
             "description": data.get("description", ""),
+            "version": data.get("version", ""),
+            "license": data.get("license", ""),
             "provenance": prov if isinstance(prov, dict) else {},
         })
     return out
@@ -424,11 +426,245 @@ def dream_fuse_skills(workspace: Path, *, target: str, content: str,
 
 
 def web_list(workspace: Path) -> tuple[int, dict]:
+    # Scan-augmented inventory (verdict + status) so the management panel can
+    # surface security state. Imported locally to avoid a circular import
+    # (skills_surface imports from skills_store). Scanning on a panel load is fine.
+    from durin.agent.skills_surface import skills_inventory
+
     head = _store(workspace).log(max_entries=1)
     return 200, {
-        "skills": list_skills_info(workspace),
+        "skills": skills_inventory(workspace),
         "store_head": ({"sha": head[0].sha, "at": head[0].timestamp} if head else None),
     }
+
+
+def web_quarantine(workspace: Path) -> tuple[int, dict]:
+    from durin.agent.skills_surface import quarantined_skills
+
+    return 200, {"quarantined": quarantined_skills(workspace)}
+
+
+def _import_allowlist() -> list[str]:
+    from durin.config.loader import load_config
+    try:
+        return list(load_config().skills.security.allowlist)
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _import_caps() -> tuple[int, int, int]:
+    from durin.config.loader import load_config
+    try:
+        si = load_config().skills.security
+        return (si.max_files, si.max_total_bytes, si.max_file_bytes)
+    except Exception:  # noqa: BLE001
+        return (100, 3 * 1024 * 1024, 1024 * 1024)
+
+
+def _import_judge() -> tuple[str, str, str]:
+    from durin.config.loader import load_config
+    try:
+        j = load_config().skills.security.llm_judge
+        return (str(j.trigger or "off"), str(j.model or ""), str(j.max_severity or "caution"))
+    except Exception:  # noqa: BLE001
+        return ("off", "", "caution")
+
+
+def web_import_resolve(workspace: Path, source: str) -> tuple[int, dict]:
+    """`GET /api/skills/resolve?source=` — list the skill candidates a source
+    points at (a repo may hold many). No download, no scan."""
+    from durin.agent.skill_resolve import resolve_candidates
+
+    res = resolve_candidates(source)
+    return 200, {
+        "candidates": [{"name": c.name, "ref": c.ref, "kind": c.kind, "detail": c.detail}
+                       for c in res.candidates],
+        "unresolved_reason": res.unresolved_reason,
+    }
+
+
+def web_import_fetch(workspace: Path, source: str) -> tuple[int, dict]:
+    """`GET /api/skills/import?source=` — fetch ONE candidate into quarantine +
+    scan. If the source resolves to many, return the candidate list to pick from."""
+    from durin.agent.skill_resolve import resolve_candidates
+    from durin.agent.skills_import import decide_action, fetch_candidate, validate_skill
+    from durin.security.skill_scan import scan_skill
+
+    res = resolve_candidates(source)
+    if not res.candidates:
+        return 200, {"unresolved_reason": res.unresolved_reason or "no skill found at source"}
+    if len(res.candidates) > 1:
+        return 200, {
+            "candidates": [{"name": c.name, "ref": c.ref, "kind": c.kind, "detail": c.detail}
+                           for c in res.candidates],
+            "note": "multiple skills found; import one by passing its ref as source",
+        }
+    cand = res.candidates[0]
+    qroot = Path(workspace) / ".durin" / "import-quarantine"
+    mf, mt, mfb = _import_caps()
+    jt, jm, jms = _import_judge()
+    qdir = fetch_candidate(cand, quarantine_root=qroot,
+                           max_files=mf, max_total_bytes=mt, max_file_bytes=mfb,
+                           judge_trigger=jt, judge_model=jm, judge_max_severity=jms,
+                           allowlist=_import_allowlist())
+    rep = scan_skill(qdir)
+    vr = validate_skill(qdir)
+    needs = decide_action(cand.ref, verdict=rep.verdict,
+                          carries_code=vr.carries_code, allowlist=_import_allowlist())
+    return 200, {"quarantined": cand.name, "source": cand.ref,
+                 "verdict": rep.verdict, "needs": needs,
+                 "findings": [{"category": f.category, "severity": f.severity,
+                               "where": f.where, "detail": f.detail} for f in rep.findings]}
+
+
+def web_skill_search(workspace: Path, query: str, limit: int = 0) -> tuple[int, dict]:
+    """`GET /api/skills/search?query=&limit=` — search the configured registries.
+    Search-only: returns ranked hits, each with a `ref` to import via the gate."""
+    import asyncio
+
+    from durin.agent.skill_registry import build_adapters, search_registries
+    from durin.config.loader import load_config
+
+    q = (query or "").strip()
+    if not q:
+        return 400, {"error": "query is required"}
+    cfg = load_config()
+    disc = cfg.skills.discovery
+    hits = asyncio.run(search_registries(
+        q,
+        adapters=build_adapters(disc.registries),
+        allowlist=list(cfg.skills.security.allowlist),
+        limit=int(limit) or disc.search_limit,
+    ))
+    return 200, {"hits": [{"name": h.name, "ref": h.ref, "registry": h.registry,
+                           "description": h.description, "signals": h.signals} for h in hits]}
+
+
+def web_skill_approve(workspace: Path, name: str, *, confirm: bool,
+                      override: bool, replace: bool = False) -> tuple[int, dict]:
+    """`GET /api/skills/{name}/approve?confirm=&override=&replace=` — install a
+    quarantined skill through the §8.C gate. 409 with {refused} when refused."""
+    import json as _json
+
+    from durin.agent.skills_import import SkillImportRefused, install_imported_skill
+
+    qdir = Path(workspace) / ".durin" / "import-quarantine" / name
+    if not (qdir / "SKILL.md").is_file():
+        return 404, {"error": f"not in quarantine: {name}"}
+    source = name
+    sj = qdir / ".scan.json"
+    if sj.is_file():
+        try:
+            source = _json.loads(sj.read_text()).get("source", name)
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        res = install_imported_skill(workspace, qdir, source=source,
+                                     allowlist=_import_allowlist(),
+                                     confirmed=confirm, override=override, replace=replace)
+        return 200, res
+    except SkillImportRefused as exc:
+        return 409, {"refused": exc.action, "verdict": exc.verdict, "message": str(exc)}
+
+
+def web_skill_reject(workspace: Path, name: str) -> tuple[int, dict]:
+    """`GET /api/skills/{name}/reject` — discard a quarantined skill."""
+    from durin.agent.skills_import import reject_quarantined
+
+    res = reject_quarantined(workspace, name)
+    return (400, res) if "error" in res else (200, res)
+
+
+def web_skill_judge(workspace: Path, name: str) -> tuple[int, dict]:
+    """`GET /api/skills/{name}/judge` — run the LLM judge ON-DEMAND over a
+    quarantined skill (independent of the auto-run trigger), merge its findings
+    into the quarantine .scan.json, and return the updated verdict + findings.
+    Reports an explicit error when no judge model is available."""
+    import json as _json
+
+    from durin.security.skill_judge import JudgeError, judge_skill
+    from durin.security.skill_scan import ScanReport, scan_skill
+
+    qdir = Path(workspace) / ".durin" / "import-quarantine" / name
+    if not (qdir / "SKILL.md").is_file():
+        return 404, {"error": f"not in quarantine: {name}"}
+    _, model, max_sev = _import_judge()
+    det = scan_skill(qdir)
+    try:
+        from durin.memory.dream import default_llm_invoke
+        jf = judge_skill(qdir, llm_invoke=default_llm_invoke, model=model or "glm-5.1",
+                         max_severity=max_sev)
+    except JudgeError as exc:
+        return 200, {"name": name, "verdict": det.verdict, "judged": False,
+                     "error": f"judge unavailable: {exc}"}
+    except Exception as exc:  # noqa: BLE001
+        return 200, {"name": name, "verdict": det.verdict, "judged": False,
+                     "error": f"judge error: {exc}"}
+
+    merged = ScanReport(findings=det.findings + jf)
+    findings = [{"category": f.category, "severity": f.severity, "where": f.where,
+                 "detail": f.detail} for f in merged.findings]
+    source = name
+    sj = qdir / ".scan.json"
+    if sj.is_file():
+        try:
+            source = _json.loads(sj.read_text()).get("source", name)
+        except Exception:  # noqa: BLE001
+            pass
+    sj.write_text(_json.dumps({"source": source, "verdict": merged.verdict, "findings": findings}),
+                  encoding="utf-8")
+    return 200, {"name": name, "verdict": merged.verdict, "findings": findings, "judged": True}
+
+
+def web_github_token_test(secret_name: str) -> tuple[int, dict]:
+    """`GET /api/skills/github-token-test?secret=` — verify a GitHub-token secret
+    against the GitHub API (rate_limit). Returns {ok, remaining, limit} or {ok:false, error}."""
+    import asyncio
+    import threading
+
+    from durin.security.network import ssrf_safe_async_client
+    from durin.security.secrets import resolve_secret
+
+    name = (secret_name or "").strip()
+    if not name:
+        return 400, {"error": "secret name required"}
+    try:
+        token = str(resolve_secret(f"${{secret:{name}}}") or "")
+    except Exception:  # noqa: BLE001
+        return 200, {"ok": False, "error": f"secret not found: {name}"}
+    if not token:
+        return 200, {"ok": False, "error": "secret resolved empty"}
+
+    box: dict = {}
+
+    async def _go() -> tuple[int, dict]:
+        async with ssrf_safe_async_client() as client:
+            r = await client.get(
+                "https://api.github.com/rate_limit",
+                headers={"Authorization": f"Bearer {token}",
+                         "Accept": "application/vnd.github+json"},
+                timeout=10.0)
+            ctype = r.headers.get("content-type", "")
+            return r.status_code, (r.json() if "json" in ctype else {})
+
+    def _run() -> None:
+        try:
+            box["v"] = asyncio.run(_go())
+        except Exception as exc:  # noqa: BLE001
+            box["e"] = exc
+
+    t = threading.Thread(target=_run)
+    t.start()
+    t.join()
+    if "e" in box:
+        return 200, {"ok": False, "error": str(box["e"])}
+    status, data = box["v"]
+    if status == 200:
+        core = data.get("resources", {}).get("core", {}) if isinstance(data, dict) else {}
+        return 200, {"ok": True, "remaining": core.get("remaining"), "limit": core.get("limit")}
+    if status == 401:
+        return 200, {"ok": False, "error": "GitHub rejected the token (401)"}
+    return 200, {"ok": False, "error": f"GitHub returned {status}"}
 
 
 def web_get(workspace: Path, name: str) -> tuple[int, dict]:

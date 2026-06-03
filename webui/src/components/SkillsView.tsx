@@ -6,13 +6,25 @@ import { MarkdownText, preloadMarkdownText } from "@/components/MarkdownText";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  addTrustPattern,
   ApiError,
+  approveSkill,
   getSkill,
+  importSource,
+  judgeSkill,
+  listQuarantine,
   listSkills,
+  rejectSkill,
   saveSkill,
+  searchSkills,
   setSkillMode,
+  type QuarantineRow,
+  type SkillCandidate,
   type SkillDetail,
+  type SkillFinding,
   type SkillRow,
+  type SkillSearchHit,
+  type SkillVerdict,
 } from "@/lib/api";
 import { useClient } from "@/providers/ClientProvider";
 import { cn } from "@/lib/utils";
@@ -42,6 +54,61 @@ function ModeBadge({ mode }: { mode: "auto" | "manual" }) {
   );
 }
 
+/** The §8.C verdict, shown only when it warrants attention (caution|dangerous).
+ * Safe skills get no badge — absence of a warning IS the "safe" signal, and a
+ * green chip on every row would be noise. */
+function VerdictBadge({ verdict }: { verdict?: SkillVerdict }) {
+  const { t } = useTranslation();
+  if (verdict !== "caution" && verdict !== "dangerous") return null;
+  const label =
+    verdict === "dangerous"
+      ? t("skills.verdict.dangerous")
+      : t("skills.verdict.caution");
+  return (
+    <span
+      className={cn(
+        "shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium leading-none",
+        verdict === "dangerous"
+          ? "bg-destructive/10 text-destructive"
+          : "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+      )}
+    >
+      {label}
+    </span>
+  );
+}
+
+function severityClass(sev: SkillFinding["severity"]): string {
+  if (sev === "dangerous" || sev === "high") return "text-destructive";
+  if (sev === "caution") return "text-amber-600 dark:text-amber-400";
+  return "text-muted-foreground";
+}
+
+/** The reasons behind a verdict: one line per §8.C finding (category, location,
+ * detail), colored by severity. Used in the active-skill detail and inline on
+ * each quarantine row. */
+function FindingsList({ findings }: { findings: SkillFinding[] }) {
+  const { t } = useTranslation();
+  if (findings.length === 0) {
+    return (
+      <p className="text-[12px] text-muted-foreground">{t("skills.noFindings")}</p>
+    );
+  }
+  return (
+    <ul className="flex flex-col gap-1.5">
+      {findings.map((f, i) => (
+        <li key={`${f.category}-${f.where}-${i}`} className="text-[12px] leading-snug">
+          <span className={cn("font-medium", severityClass(f.severity))}>
+            {f.category}
+          </span>
+          <span className="text-muted-foreground"> · {f.where}</span>
+          <div className="text-muted-foreground">{f.detail}</div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 /**
  * Skills — a top-level surface (peer of Chat and the Memory graph), not a
  * settings section. Skills are procedural memory: a library the user reads,
@@ -56,6 +123,8 @@ export function SkillsView() {
   const { token } = useClient();
   const { t } = useTranslation();
   const [rows, setRows] = useState<SkillRow[] | null>(null);
+  const [quarantine, setQuarantine] = useState<QuarantineRow[] | null>(null);
+  const [pane, setPane] = useState<"active" | "quarantine">("active");
   const [selected, setSelected] = useState<string | null>(null);
   const [detail, setDetail] = useState<SkillDetail | null>(null);
   const [draft, setDraft] = useState("");
@@ -63,6 +132,22 @@ export function SkillsView() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [importSrc, setImportSrc] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [importMsg, setImportMsg] = useState<string | null>(null);
+  const [picker, setPicker] = useState<SkillCandidate[] | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searching, setSearching] = useState(false);
+  const [searchMsg, setSearchMsg] = useState<string | null>(null);
+  const [hits, setHits] = useState<SkillSearchHit[] | null>(null);
+  const [acting, setActing] = useState<string | null>(null);
+  const [gate, setGate] = useState<{
+    name: string;
+    confirm: boolean;
+    override: boolean;
+    replace: boolean;
+    ask: "confirm" | "block" | "exists";
+  } | null>(null);
 
   useEffect(() => {
     preloadMarkdownText();
@@ -71,7 +156,12 @@ export function SkillsView() {
   const refresh = useCallback(async () => {
     setError(null);
     try {
-      setRows(await listSkills(token));
+      const [skills, quar] = await Promise.all([
+        listSkills(token),
+        listQuarantine(token),
+      ]);
+      setRows(skills);
+      setQuarantine(quar);
     } catch (e) {
       setError(errMsg(e));
     } finally {
@@ -82,6 +172,168 @@ export function SkillsView() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  const doImport = useCallback(
+    async (source: string) => {
+      const src = source.trim();
+      if (!src) return;
+      setImporting(true);
+      setImportMsg(null);
+      setPicker(null);
+      try {
+        const res = await importSource(token, src);
+        if (res.candidates && res.candidates.length > 0) {
+          setPicker(res.candidates);
+        } else if (res.quarantined) {
+          setImportSrc("");
+          setPane("quarantine"); // show where it landed
+          await refresh();
+        } else {
+          setImportMsg(res.unresolved_reason || t("skills.import.unresolved"));
+        }
+      } catch (e) {
+        setImportMsg(errMsg(e));
+      } finally {
+        setImporting(false);
+      }
+    },
+    [token, refresh, t],
+  );
+
+  // Registry search is read-only: it never installs. Each hit's "Import"
+  // button feeds its `ref` into the same `doImport` flow the manual input
+  // uses (resolve → quarantine → gate), so there's one import path.
+  const doSearch = useCallback(
+    async (query: string) => {
+      const q = query.trim();
+      if (!q) return;
+      setSearching(true);
+      setSearchMsg(null);
+      try {
+        const res = await searchSkills(token, q);
+        setHits(res.hits);
+        if (res.hits.length === 0) setSearchMsg(t("skills.search.empty"));
+      } catch (e) {
+        setHits(null);
+        setSearchMsg(errMsg(e));
+      } finally {
+        setSearching(false);
+      }
+    },
+    [token, t],
+  );
+
+  // The gate is server-side: approve, and react to what it asks for. A safe,
+  // trusted skill installs straight away; otherwise the server says it needs
+  // confirmation (code/caution/out-of-allowlist) or a dangerous override, and
+  // we surface that as an INLINE prompt on the row (no native dialog).
+  const approve = useCallback(
+    async (name: string) => {
+      setActing(name);
+      setImportMsg(null);
+      try {
+        const res = await approveSkill(token, name);
+        if (res.ok) {
+          setGate(null);
+          await refresh();
+        } else if (res.refused === "confirm" || res.refused === "block" || res.refused === "exists") {
+          setGate({ name, confirm: false, override: false, replace: false, ask: res.refused });
+        } else if (res.message || res.error) {
+          setImportMsg(res.message || res.error || null);
+        }
+      } catch (e) {
+        setImportMsg(errMsg(e));
+      } finally {
+        setActing(null);
+      }
+    },
+    [token, refresh],
+  );
+
+  // Accept the gate's current ask, accumulate the matching flag, and retry —
+  // chaining if the server then asks for another (e.g. confirm -> exists).
+  const confirmGate = useCallback(async () => {
+    if (!gate) return;
+    const next = {
+      ...gate,
+      confirm: gate.confirm || gate.ask === "confirm",
+      override: gate.override || gate.ask === "block",
+      replace: gate.replace || gate.ask === "exists",
+    };
+    setActing(next.name);
+    try {
+      const res = await approveSkill(token, next.name, {
+        confirm: next.confirm,
+        override: next.override,
+        replace: next.replace,
+      });
+      if (res.ok) {
+        setGate(null);
+        await refresh();
+      } else if (res.refused === "confirm" || res.refused === "block" || res.refused === "exists") {
+        setGate({ ...next, ask: res.refused });
+      } else if (res.message || res.error) {
+        setImportMsg(res.message || res.error || null);
+      }
+    } catch (e) {
+      setImportMsg(errMsg(e));
+    } finally {
+      setActing(null);
+    }
+  }, [token, gate, refresh]);
+
+  const reject = useCallback(
+    async (name: string) => {
+      setActing(name);
+      try {
+        await rejectSkill(token, name);
+        await refresh();
+      } catch (e) {
+        setImportMsg(errMsg(e));
+      } finally {
+        setActing(null);
+      }
+    },
+    [token, refresh],
+  );
+
+  // On-demand "Audit with LLM": run the judge on this one quarantined skill,
+  // then refresh so its findings/verdict update. Runs regardless of the trigger.
+  const judgeOne = useCallback(
+    async (name: string) => {
+      setActing(name);
+      setImportMsg(null);
+      try {
+        const r = await judgeSkill(token, name);
+        if (r.error) setImportMsg(r.error);
+        await refresh();
+      } catch (e) {
+        setImportMsg(errMsg(e));
+      } finally {
+        setActing(null);
+      }
+    },
+    [token, refresh],
+  );
+
+  // One-click "trust this source": append the suggested prefix to the allowlist
+  // so future safe imports from it skip the confirm. Refine/remove in settings.
+  const trust = useCallback(
+    async (prefix: string) => {
+      if (!prefix) return;
+      setActing(prefix);
+      setImportMsg(null);
+      try {
+        await addTrustPattern(token, prefix);
+        setImportMsg(t("skills.import.trusted", { prefix }));
+      } catch (e) {
+        setImportMsg(errMsg(e));
+      } finally {
+        setActing(null);
+      }
+    },
+    [token, t],
+  );
 
   const dirty = detail != null && draft !== detail.content;
 
@@ -156,6 +408,7 @@ export function SkillsView() {
   }, [token, detail, refresh]);
 
   const list = rows ?? [];
+  const quarList = quarantine ?? [];
   const current = list.find((r) => r.name === selected) ?? null;
   const editable = detail?.mode === "manual";
 
@@ -186,32 +439,295 @@ export function SkillsView() {
               selected ? "hidden md:block" : "block",
             )}
           >
-            {list.length === 0 ? (
+            {/* Import — a surface action (bring a skill in); the result lands
+                in Quarantine. Source-agnostic: path, URL, or github:owner/repo. */}
+            <div className="border-b border-border/30 p-3">
+              <form
+                className="flex flex-col gap-2"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void doImport(importSrc);
+                }}
+              >
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={importSrc}
+                    onChange={(e) => setImportSrc(e.target.value)}
+                    placeholder={t("skills.import.placeholder")}
+                    className="min-w-0 flex-1 rounded-[8px] border border-border/60 bg-background px-2.5 py-1.5 text-[12px] outline-none focus:border-primary/60"
+                  />
+                  <Button type="submit" size="sm" disabled={importing || !importSrc.trim()}>
+                    {importing ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      t("skills.import.button")
+                    )}
+                  </Button>
+                </div>
+                {importMsg ? (
+                  <p className="text-[12px] text-muted-foreground">{importMsg}</p>
+                ) : null}
+              </form>
+
+              {/* Picker: when a source resolves to several skills, choose one. */}
+              {picker && picker.length > 0 ? (
+                <div className="mt-2 flex flex-col gap-1 rounded-[8px] border border-border/40 bg-muted/20 p-2">
+                  <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    {t("skills.import.pick")}
+                  </p>
+                  {picker.map((c) => (
+                    <button
+                      key={c.ref}
+                      type="button"
+                      onClick={() => void doImport(c.ref)}
+                      disabled={importing}
+                      className="flex flex-col items-start rounded-[6px] px-2 py-1.5 text-left hover:bg-muted/50 disabled:opacity-50"
+                    >
+                      <span className="text-[13px] font-medium text-foreground">{c.name}</span>
+                      <span className="truncate text-[11px] text-muted-foreground">{c.ref}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+
+              {/* Search the registry — read-only. A hit's Import button feeds
+                  its `ref` into the same import flow above (no install here). */}
+              <form
+                className="mt-2 flex gap-2"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void doSearch(searchQuery);
+                }}
+              >
+                <input
+                  type="search"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder={t("skills.search.placeholder")}
+                  className="min-w-0 flex-1 rounded-[8px] border border-border/60 bg-background px-2.5 py-1.5 text-[12px] outline-none focus:border-primary/60"
+                />
+                <Button type="submit" size="sm" variant="outline" disabled={searching || !searchQuery.trim()}>
+                  {searching ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    t("skills.search.button")
+                  )}
+                </Button>
+              </form>
+              {searchMsg ? (
+                <p className="mt-1.5 text-[12px] text-muted-foreground">{searchMsg}</p>
+              ) : null}
+
+              {hits && hits.length > 0 ? (
+                <div className="mt-2 flex flex-col gap-1 rounded-[8px] border border-border/40 bg-muted/20 p-2">
+                  {hits.map((h) => (
+                    <div
+                      key={h.ref}
+                      className="flex items-start gap-2 rounded-[6px] px-2 py-1.5"
+                    >
+                      <div className="flex min-w-0 flex-1 flex-col">
+                        <span className="flex items-center gap-1.5">
+                          <span className="truncate text-[13px] font-medium text-foreground">
+                            {h.name}
+                          </span>
+                          <span className="shrink-0 text-[11px] text-muted-foreground">
+                            {h.registry}
+                          </span>
+                          {typeof h.signals?.installs === "number" ? (
+                            <span className="shrink-0 text-[11px] text-muted-foreground">
+                              · {t("skills.search.installs", { count: h.signals.installs })}
+                            </span>
+                          ) : null}
+                        </span>
+                        {h.description ? (
+                          <span className="truncate text-[12px] text-muted-foreground">
+                            {h.description}
+                          </span>
+                        ) : null}
+                        <span className="truncate text-[11px] text-muted-foreground/70">
+                          {h.ref}
+                        </span>
+                      </div>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        disabled={importing}
+                        onClick={() => void doImport(h.ref)}
+                      >
+                        {t("skills.import.button")}
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+
+            {/* Tabs: the active inventory vs the §8.C import quarantine. */}
+            <div className="sticky top-0 z-10 flex gap-1 border-b border-border/30 bg-background/95 p-2 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+              <button
+                type="button"
+                onClick={() => setPane("active")}
+                className={cn(
+                  "flex flex-1 items-center justify-center gap-1.5 rounded-[6px] px-2 py-1 text-[12px] transition-colors",
+                  pane === "active"
+                    ? "bg-primary/10 text-primary"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {t("skills.tab.active")}
+                <span className="opacity-60">{list.length}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setPane("quarantine")}
+                className={cn(
+                  "flex flex-1 items-center justify-center gap-1.5 rounded-[6px] px-2 py-1 text-[12px] transition-colors",
+                  pane === "quarantine"
+                    ? "bg-primary/10 text-primary"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {t("skills.tab.quarantine")}
+                <span className={cn(quarList.length > 0 ? "text-destructive" : "opacity-60")}>
+                  {quarList.length}
+                </span>
+              </button>
+            </div>
+
+            {pane === "active" ? (
+              list.length === 0 ? (
+                <p className="p-4 text-[13px] text-muted-foreground">
+                  {t("skills.empty")}
+                </p>
+              ) : (
+                list.map((row) => (
+                  <button
+                    key={row.name}
+                    type="button"
+                    onClick={() => select(row.name)}
+                    className={cn(
+                      "flex w-full flex-col gap-1 border-b border-border/30 px-4 py-3 text-left transition-colors",
+                      row.name === selected ? "bg-primary/10" : "hover:bg-muted/40",
+                    )}
+                  >
+                    <span className="flex items-center justify-between gap-2">
+                      <span className="truncate text-[14px] font-medium text-foreground">
+                        {row.name}
+                      </span>
+                      <span className="flex shrink-0 items-center gap-1.5">
+                        <VerdictBadge verdict={row.verdict} />
+                        <ModeBadge mode={row.mode} />
+                      </span>
+                    </span>
+                    <span className="truncate text-[12px] text-muted-foreground">
+                      {row.source}
+                      {row.provenance?.source ? ` · ${row.provenance.source}` : ""}
+                    </span>
+                  </button>
+                ))
+              )
+            ) : quarList.length === 0 ? (
               <p className="p-4 text-[13px] text-muted-foreground">
-                {t("skills.empty")}
+                {t("skills.quarantineEmpty")}
               </p>
             ) : (
-              list.map((row) => (
-                <button
-                  key={row.name}
-                  type="button"
-                  onClick={() => select(row.name)}
-                  className={cn(
-                    "flex w-full flex-col gap-1 border-b border-border/30 px-4 py-3 text-left transition-colors",
-                    row.name === selected ? "bg-primary/10" : "hover:bg-muted/40",
-                  )}
+              quarList.map((q) => (
+                <div
+                  key={q.name}
+                  className="flex flex-col gap-1.5 border-b border-border/30 px-4 py-3"
                 >
                   <span className="flex items-center justify-between gap-2">
                     <span className="truncate text-[14px] font-medium text-foreground">
-                      {row.name}
+                      {q.name}
                     </span>
-                    <ModeBadge mode={row.mode} />
+                    <VerdictBadge verdict={q.verdict} />
                   </span>
-                  <span className="truncate text-[12px] text-muted-foreground">
-                    {row.source}
-                    {row.provenance?.source ? ` · ${row.provenance.source}` : ""}
-                  </span>
-                </button>
+                  {q.source ? (
+                    <span className="truncate text-[12px] text-muted-foreground">
+                      {q.source}
+                    </span>
+                  ) : null}
+                  {q.install_specs && q.install_specs.length > 0 ? (
+                    <p className="text-[11px] text-muted-foreground">
+                      {t("skills.import.declaredDeps", { deps: q.install_specs.join(", ") })}
+                    </p>
+                  ) : null}
+                  <FindingsList findings={q.findings} />
+                  {gate?.name === q.name ? (
+                    // Inline gate prompt — no native dialog. The button is
+                    // destructive when forcing a dangerous-verdict install.
+                    <div className="flex flex-col gap-2 rounded-[8px] border border-border/60 bg-muted/40 p-2">
+                      <p className="text-[12px] text-foreground">
+                        {gate.ask === "block"
+                          ? t("skills.import.forceDangerous")
+                          : gate.ask === "exists"
+                            ? t("skills.import.replaceExists")
+                            : t("skills.import.confirmInstall")}
+                      </p>
+                      <div className="flex gap-2">
+                        <Button
+                          size="sm"
+                          variant={gate.ask === "block" ? "destructive" : "default"}
+                          disabled={acting === q.name}
+                          onClick={() => void confirmGate()}
+                        >
+                          {gate.ask === "block"
+                            ? t("skills.import.force")
+                            : gate.ask === "exists"
+                              ? t("skills.import.replace")
+                              : t("skills.import.confirm")}
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={acting === q.name}
+                          onClick={() => setGate(null)}
+                        >
+                          {t("skills.import.cancel")}
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex gap-2 pt-1">
+                      <Button
+                        size="sm"
+                        disabled={acting === q.name}
+                        onClick={() => void approve(q.name)}
+                      >
+                        {t("skills.import.approve")}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={acting === q.name}
+                        onClick={() => void reject(q.name)}
+                      >
+                        {t("skills.import.reject")}
+                      </Button>
+                      {q.trust_prefix ? (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          disabled={acting === q.trust_prefix}
+                          onClick={() => void trust(q.trust_prefix!)}
+                          title={q.trust_prefix}
+                        >
+                          {t("skills.import.trust")}
+                        </Button>
+                      ) : null}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={acting === q.name}
+                        onClick={() => void judgeOne(q.name)}
+                      >
+                        {t("skills.import.judge")}
+                      </Button>
+                    </div>
+                  )}
+                </div>
               ))
             )}
           </aside>
@@ -241,6 +757,7 @@ export function SkillsView() {
                     {detail.name}
                   </span>
                   <ModeBadge mode={detail.mode} />
+                  <VerdictBadge verdict={current?.verdict} />
                   {current?.provenance?.source ? (
                     <span className="truncate text-[12px] text-muted-foreground">
                       from {current.provenance.source}
@@ -291,6 +808,15 @@ export function SkillsView() {
                     </Button>
                   </div>
                 </div>
+
+                {current && current.findings && current.findings.length > 0 ? (
+                  <div className="shrink-0 border-b border-border/30 bg-amber-500/5 px-4 py-3 sm:px-6">
+                    <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      {t("skills.security")}
+                    </p>
+                    <FindingsList findings={current.findings} />
+                  </div>
+                ) : null}
 
                 <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6">
                   {tab === "view" ? (
