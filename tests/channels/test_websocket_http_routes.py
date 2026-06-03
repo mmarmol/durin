@@ -439,6 +439,54 @@ async def test_static_rejects_path_traversal(
         await server_task
 
 
+def _seed_quarantine(workspace: Path, name: str = "pending") -> None:
+    q = workspace / ".durin" / "import-quarantine" / name
+    q.mkdir(parents=True)
+    (q / "SKILL.md").write_text(f"---\nname: {name}\ndescription: d\n---\nhi\n")
+    (q / ".scan.json").write_text(
+        json.dumps({"source": "github:x/y", "verdict": "caution", "findings": []})
+    )
+
+
+@pytest.mark.asyncio
+async def test_skills_quarantine_route_not_shadowed_by_skill_name(
+    bus: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`GET /api/skills/quarantine` must hit the quarantine handler, not the
+    `/api/skills/<name>` skill-get route with name='quarantine'."""
+    from types import SimpleNamespace
+
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    _seed_quarantine(ws)
+    monkeypatch.setattr(
+        "durin.config.loader.load_config",
+        lambda *a, **k: SimpleNamespace(workspace_path=ws),
+    )
+    channel = _ch(bus, port=29911)
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+    try:
+        boot = await _http_get("http://127.0.0.1:29911/webui/bootstrap")
+        auth = {"Authorization": f"Bearer {boot.json()['token']}"}
+
+        resp = await _http_get(
+            "http://127.0.0.1:29911/api/skills/quarantine", headers=auth
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        # Routed to the quarantine handler: payload has the quarantine list,
+        # NOT a skill-get shape (which would 404 "skill not found: quarantine"
+        # or return a {name, mode, content} body for a skill named quarantine).
+        assert "quarantined" in body
+        assert "content" not in body
+        names = {s["name"] for s in body["quarantined"]}
+        assert "pending" in names
+    finally:
+        await channel.stop()
+        await server_task
+
+
 @pytest.mark.asyncio
 async def test_unknown_route_returns_404(bus: MagicMock) -> None:
     channel = _ch(bus, port=29907)
