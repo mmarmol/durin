@@ -1,11 +1,8 @@
-"""§6.C — acquire_safe_seed: only a risk-free hit becomes a seed."""
+"""§6.C — acquire_safe_seed gates ONE ref; only a risk-free allowlisted ref seeds."""
 import asyncio
 from pathlib import Path
 
-import pytest
-
 from durin.agent import skill_acquire
-from durin.agent.skill_registry import SkillSearchHit
 
 
 class _Cand:
@@ -32,22 +29,20 @@ class _Valid:
         self.carries_code = carries_code
 
 
-def _wire(monkeypatch, *, hits, verdict, carries_code, tmp_path):
-    """Patch the network/fetch/scan deps so the test is offline + deterministic."""
-    async def _search(query, *, adapters, allowlist, limit):
-        return hits
-
+def _wire(monkeypatch, *, verdict, carries_code, fetch_spy=None):
+    """Patch resolve/fetch/scan so the test is offline + deterministic.
+    decide_action is REAL (pure) — the allowlist gating is exercised for real."""
     def _resolve(ref):
         return _Resolve([_Cand(ref.split("/")[-1], ref)])
 
-    def _fetch(cand, *, quarantine_root, allowlist=None):
+    def _fetch(cand, *, quarantine_root, allowlist=None, judge_trigger="off"):
+        if fetch_spy is not None:
+            fetch_spy.append(cand.ref)
         d = Path(quarantine_root) / cand.name
         d.mkdir(parents=True, exist_ok=True)
         (d / "SKILL.md").write_text("---\nname: x\n---\nbody", encoding="utf-8")
         return d
 
-    monkeypatch.setattr("durin.agent.skill_registry.search_registries", _search)
-    monkeypatch.setattr("durin.agent.skill_registry.build_adapters", lambda r: [])
     monkeypatch.setattr("durin.agent.skill_resolve.resolve_candidates", _resolve)
     monkeypatch.setattr("durin.agent.skills_import.fetch_candidate", _fetch)
     monkeypatch.setattr("durin.agent.skills_import.validate_skill",
@@ -56,34 +51,34 @@ def _wire(monkeypatch, *, hits, verdict, carries_code, tmp_path):
                         lambda d: _Scan(verdict))
 
 
-def test_safe_allowlisted_hit_returns_seed(monkeypatch, tmp_path):
-    hits = [SkillSearchHit(name="pdf", ref="github:acme/pdf", registry="skills.sh")]
-    _wire(monkeypatch, hits=hits, verdict="safe", carries_code=False, tmp_path=tmp_path)
+def test_allowlisted_clean_ref_returns_seed(monkeypatch, tmp_path):
+    _wire(monkeypatch, verdict="safe", carries_code=False)
     out = asyncio.run(skill_acquire.acquire_safe_seed(
-        tmp_path, "pdf", registries=[], allowlist=["github:acme"], limit=5))
+        tmp_path, "github:acme/pdf", allowlist=["github:acme"]))
     assert out is not None
     assert out["source"] == "github:acme/pdf"
     assert "body" in out["content"]
 
 
-def test_risky_hit_is_not_seeded(monkeypatch, tmp_path):
-    hits = [SkillSearchHit(name="pdf", ref="github:acme/pdf", registry="skills.sh")]
-    _wire(monkeypatch, hits=hits, verdict="safe", carries_code=True, tmp_path=tmp_path)
+def test_not_allowlisted_rejected_without_download(monkeypatch, tmp_path):
+    spy: list[str] = []
+    _wire(monkeypatch, verdict="safe", carries_code=False, fetch_spy=spy)
     out = asyncio.run(skill_acquire.acquire_safe_seed(
-        tmp_path, "pdf", registries=[], allowlist=["github:acme"], limit=5))
+        tmp_path, "github:acme/pdf", allowlist=[]))
+    assert out is None
+    assert spy == []  # fast reject — fetch_candidate must NOT be called
+
+
+def test_allowlisted_but_carries_code_refused(monkeypatch, tmp_path):
+    _wire(monkeypatch, verdict="safe", carries_code=True)
+    out = asyncio.run(skill_acquire.acquire_safe_seed(
+        tmp_path, "github:acme/pdf", allowlist=["github:acme"]))
     assert out is None
 
 
-def test_not_allowlisted_is_not_seeded(monkeypatch, tmp_path):
-    hits = [SkillSearchHit(name="pdf", ref="github:acme/pdf", registry="skills.sh")]
-    _wire(monkeypatch, hits=hits, verdict="safe", carries_code=False, tmp_path=tmp_path)
+def test_unresolvable_source_returns_none(monkeypatch, tmp_path):
+    monkeypatch.setattr("durin.agent.skill_resolve.resolve_candidates",
+                        lambda ref: _Resolve([]))
     out = asyncio.run(skill_acquire.acquire_safe_seed(
-        tmp_path, "pdf", registries=[], allowlist=[], limit=5))
-    assert out is None
-
-
-def test_no_hits_returns_none(monkeypatch, tmp_path):
-    _wire(monkeypatch, hits=[], verdict="safe", carries_code=False, tmp_path=tmp_path)
-    out = asyncio.run(skill_acquire.acquire_safe_seed(
-        tmp_path, "pdf", registries=[], allowlist=["github:acme"], limit=5))
+        tmp_path, "github:acme/pdf", allowlist=["github:acme"]))
     assert out is None
