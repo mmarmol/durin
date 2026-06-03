@@ -16,9 +16,8 @@ before install; nothing third-party lands in `skills/` unvetted.
 - "install `<github repo>` as a skill"
 - "add this skill from `<link>`"
 
-For the ClawHub registry specifically, the `clawhub` skill searches by name.
-Use **this** skill for arbitrary sources, and prefer it whenever you want the
-security scan and the human gate.
+Use this skill to import any agentskills.io skill from a path, URL, or GitHub
+repo — always through the security scan and the human gate.
 
 ## Flow
 
