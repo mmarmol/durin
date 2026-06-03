@@ -24,11 +24,11 @@ async def test_skill_search_requires_query():
     assert "error" in out
 
 
-def test_build_adapters_only_enabled_skillssh():
+def test_build_adapters_skips_disabled_and_unwired():
     regs = [
         SimpleNamespace(kind="skills.sh", enabled=True),
-        SimpleNamespace(kind="skills.sh", enabled=False),
-        SimpleNamespace(kind="clawhub", enabled=True),
+        SimpleNamespace(kind="skills.sh", enabled=False),    # disabled → skipped
+        SimpleNamespace(kind="well-known", enabled=True),    # kind not wired yet → skipped
     ]
     adapters = build_adapters(regs)
     assert len(adapters) == 1
