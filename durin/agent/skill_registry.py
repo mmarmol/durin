@@ -62,6 +62,41 @@ class SkillsShRegistry:
         return hits
 
 
+class ClawHubRegistry:
+    """ClawHub — GET /api/v1/skills?search=&limit= → hits with a clawhub:<slug>
+    ref (fetched via the zip endpoint, not github). Community-trust (the
+    ClawHavoc incident: 341 malicious skills, Feb 2026) → always gated. Degrades
+    to [] on any error."""
+
+    name = "clawhub"
+    BASE_URL = "https://clawhub.ai/api/v1"
+
+    async def search(self, query: str, *, limit: int) -> list[SkillSearchHit]:
+        try:
+            async with ssrf_safe_async_client() as client:
+                resp = await client.get(f"{self.BASE_URL}/skills",
+                                        params={"search": query, "limit": limit}, timeout=15.0)
+                resp.raise_for_status()
+                data = resp.json()
+        except Exception:  # noqa: BLE001
+            return []
+        items = data.get("items", data) if isinstance(data, dict) else data
+        if not isinstance(items, list):
+            return []
+        hits: list[SkillSearchHit] = []
+        for it in items[:limit]:
+            if not isinstance(it, dict):
+                continue
+            slug = it.get("slug")
+            if not isinstance(slug, str) or not slug:
+                continue
+            name = it.get("displayName") or it.get("name") or slug
+            desc = it.get("summary") or it.get("description") or ""
+            hits.append(SkillSearchHit(name=str(name), ref=f"clawhub:{slug}",
+                                       registry="clawhub", description=str(desc)))
+        return hits
+
+
 async def search_registries(query, *, adapters, allowlist, limit) -> list[SkillSearchHit]:
     """Query every adapter in parallel; dedupe by ref (first adapter wins),
     round-robin interleave, float allowlisted refs to the front, truncate.
@@ -99,4 +134,6 @@ def build_adapters(registries) -> list:
             continue
         if r.kind == "skills.sh":
             out.append(SkillsShRegistry())
+        elif r.kind == "clawhub":
+            out.append(ClawHubRegistry())
     return out
