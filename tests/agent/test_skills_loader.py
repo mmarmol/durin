@@ -268,6 +268,50 @@ def test_disabled_skills_excluded_from_list(tmp_path: Path) -> None:
     assert entries[0]["path"] == str(beta_path)
 
 
+def test_build_skills_summary_include_restricts(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    ws_skills = workspace / "skills"
+    ws_skills.mkdir(parents=True)
+    _write_skill(ws_skills, "alpha", body="# Alpha")
+    _write_skill(ws_skills, "beta", body="# Beta")
+    _write_skill(ws_skills, "gamma", body="# Gamma")
+    builtin = tmp_path / "builtin"
+    builtin.mkdir()
+
+    loader = SkillsLoader(workspace, builtin_skills_dir=builtin)
+    out = loader.build_skills_summary(include={"alpha", "gamma"})
+    assert "alpha" in out and "gamma" in out
+    assert "beta" not in out
+
+
+def test_build_skills_summary_include_none_is_full_catalog(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    ws_skills = workspace / "skills"
+    ws_skills.mkdir(parents=True)
+    _write_skill(ws_skills, "alpha", body="# Alpha")
+    _write_skill(ws_skills, "beta", body="# Beta")
+    builtin = tmp_path / "builtin"
+    builtin.mkdir()
+
+    loader = SkillsLoader(workspace, builtin_skills_dir=builtin)
+    out = loader.build_skills_summary()  # include=None -> unchanged
+    assert "alpha" in out and "beta" in out
+
+
+def test_build_skills_summary_exclude_wins_over_include(tmp_path: Path) -> None:
+    workspace = tmp_path / "ws"
+    ws_skills = workspace / "skills"
+    ws_skills.mkdir(parents=True)
+    _write_skill(ws_skills, "alpha", body="# Alpha")
+    _write_skill(ws_skills, "beta", body="# Beta")
+    builtin = tmp_path / "builtin"
+    builtin.mkdir()
+
+    loader = SkillsLoader(workspace, builtin_skills_dir=builtin)
+    out = loader.build_skills_summary(exclude={"alpha"}, include={"alpha", "beta"})
+    assert "alpha" not in out and "beta" in out
+
+
 def test_disabled_skills_empty_set_no_effect(tmp_path: Path) -> None:
     workspace = tmp_path / "ws"
     ws_skills = workspace / "skills"
