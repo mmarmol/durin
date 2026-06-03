@@ -2584,6 +2584,10 @@ from durin.cli.memory_cmd import memory_app as _memory_app  # noqa: E402
 
 app.add_typer(_memory_app, name="memory")
 
+from durin.cli.skill_cmd import skill_app as _skill_app  # noqa: E402
+
+app.add_typer(_skill_app, name="skill")
+
 
 def _refresh_help_epilog() -> None:
     """Regenerate `durin --help`'s group listing from the live registry.
