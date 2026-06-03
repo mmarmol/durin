@@ -509,12 +509,14 @@ Under `## Skill creation rules (for [SKILL] entries)`, immediately before the li
 that documents `skill_write(...)`, insert:
 
 ```markdown
-- **Before authoring, look for prior art**: call `skill_acquire_seed(query)` with a
-  short phrase describing the capability. If it returns a `seed`, ADAPT that body
-  (fix names/paths, drop irrelevant parts) and pass the result as `skill_write`'s
-  `content` — do not copy it verbatim. If `seed` is null, author from scratch as
-  before. `skill_acquire_seed` only ever returns risk-free prior art; you never need
-  to judge its safety.
+- **Before authoring, look for prior art (registries):** use `skill_search` with a
+  short phrase for the capability to get candidate hits. For a relevant hit, call
+  `skill_acquire_seed(source=<the hit's ref>)`. If it returns a `seed`, ADAPT that
+  body (fix names/paths, drop irrelevant parts) and pass the result as `skill_write`'s
+  `content` — do not copy it verbatim. If it returns `{seed: null}` (needs consent or
+  unfetchable), try another hit from the search results, or author from scratch. You
+  never need to judge a candidate's safety — `skill_acquire_seed` only ever hands back
+  risk-free prior art.
 ```
 
 - [ ] **Step 3: Verify the template still renders**
