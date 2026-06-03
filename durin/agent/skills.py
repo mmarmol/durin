@@ -201,6 +201,7 @@ class SkillsLoader:
         return bool(
             skill_meta.get("disable_model_invocation")
             or skill_meta.get("disableModelInvocation")
+            or skill_meta.get("disable-model-invocation")
         )
 
     def _get_missing_requirements(self, skill_meta: dict) -> str:
