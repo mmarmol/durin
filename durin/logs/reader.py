@@ -23,7 +23,10 @@ __all__ = [
     "session_from_filename",
     "segment_files",
     "read_page",
+    "compute_facets",
 ]
+
+_GATEWAY_LEVELS = ["TRACE", "DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR", "CRITICAL"]
 
 _SESSION_DATE_RE = re.compile(r"^(?P<session>.+)_\d{4}-\d{2}-\d{2}$")
 
@@ -204,3 +207,24 @@ def read_page(directory: Path, query: LogQuery) -> LogPage:
         scanned_through_ts=scanned_through_ts,
         has_more=has_more,
     )
+
+
+def compute_facets(directory: Path, source: str) -> dict[str, list[str]]:
+    """Filter options derived cheaply from filenames / static registries."""
+    if source == "gateway":
+        channels: set[str] = set()
+        segs = segment_files(directory, "gateway")
+        if segs:  # newest segment only — channels are a small, recent set
+            for text in open_text(segs[0]):
+                line = parse_line("gateway", text, session=None)
+                if line is not None:
+                    channels.add(str(line.fields.get("channel", "-")))
+        return {"levels": _GATEWAY_LEVELS, "channels": sorted(channels)}
+    # telemetry: sessions from filenames, types from the static registry
+    sessions = {session_from_filename(p.name) for p in segment_files(directory, "telemetry")}
+    try:
+        from durin.telemetry.schema import EVENTS
+        types = sorted(EVENTS.keys())
+    except Exception:  # noqa: BLE001
+        types = []
+    return {"sessions": sorted(sessions), "types": types}
