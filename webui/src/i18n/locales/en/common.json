@@ -73,7 +73,8 @@
       "channels": "Channels",
       "memory": "Memory",
       "skills-security": "Skills security",
-      "cron": "Cron"
+      "cron": "Cron",
+      "logs": "Logs"
     },
     "sections": {
       "interface": "Interface",

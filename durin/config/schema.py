@@ -875,6 +875,27 @@ class TelemetryConfig(Base):
     push: TelemetryPushConfig = Field(default_factory=TelemetryPushConfig)
 
 
+class LoggingConfig(Base):
+    """Gateway daemon log lifecycle (web-editable).
+
+    Governs ONLY the gateway's ``gateway.log`` file sink — rotation by
+    size, gz compression of rotated segments, deletion by age. The
+    telemetry subsystem has its own independent lifecycle
+    (``durin/telemetry/retention.py``) and is NOT affected by these keys.
+    """
+
+    max_file_mb: int = Field(
+        default=5, ge=1, le=1024,
+        validation_alias=AliasChoices("maxFileMb", "max_file_mb"),
+        serialization_alias="maxFileMb",
+    )  # Size at which gateway.log rotates to a new segment.
+    retention_days: int = Field(
+        default=7, ge=1, le=365,
+        validation_alias=AliasChoices("retentionDays", "retention_days"),
+        serialization_alias="retentionDays",
+    )  # Age at which rotated gateway segments are deleted.
+
+
 class Config(BaseSettings):
     """Root configuration for durin."""
 
@@ -885,6 +906,7 @@ class Config(BaseSettings):
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
+    logging: LoggingConfig = Field(default_factory=LoggingConfig)
     api: ApiConfig = Field(default_factory=ApiConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)

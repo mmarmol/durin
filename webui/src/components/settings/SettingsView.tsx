@@ -27,6 +27,7 @@ import {
   Moon,
   Orbit,
   RotateCcw,
+  ScrollText,
   Settings,
   ShieldCheck,
   Sliders,
@@ -64,6 +65,7 @@ import {
 import { ChannelsSettings } from "@/components/settings/ChannelsSettings";
 import { ConfigSettings } from "@/components/settings/ConfigSettings";
 import { CronSettings } from "@/components/settings/CronSettings";
+import { LogsSettings } from "@/components/settings/LogsSettings";
 import { MemorySettings } from "@/components/settings/MemorySettings";
 import { SkillsSecuritySettings } from "@/components/settings/SkillsSecuritySettings";
 import { ModelPicker } from "@/components/settings/ModelPicker";
@@ -87,7 +89,8 @@ type SettingsSectionKey =
   | "skills-security"
   | "cron"
   | "secrets"
-  | "advanced";
+  | "advanced"
+  | "logs";
 type ByokPaneKey = "llm" | "web-search";
 
 interface SettingsViewProps {
@@ -419,6 +422,8 @@ export function SettingsView({
                 <SecretsSettings token={token} />
               ) : activeSection === "advanced" ? (
                 <ConfigSettings token={token} />
+              ) : activeSection === "logs" ? (
+                <LogsSettings token={token} />
               ) : (
                 <ByokSettings
                   forcePane={activeSection === "web-search" ? "web-search" : "llm"}
@@ -477,6 +482,7 @@ const SETTINGS_NAV_ITEMS = [
   { key: "cron", icon: Clock },
   { key: "secrets", icon: Lock },
   { key: "advanced", icon: Sliders },
+  { key: "logs", icon: ScrollText },
 ] as const;
 
 function SettingsSidebar({

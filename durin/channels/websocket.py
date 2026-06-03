@@ -222,6 +222,37 @@ def _query_first(query: dict[str, list[str]], key: str) -> str | None:
     return values[0] if values else None
 
 
+def _logs_query_from_params(query: dict[str, list[str]]):
+    """Build a :class:`durin.logs.reader.LogQuery` from URL query params."""
+    from durin.logs.reader import LogQuery
+
+    def first(name: str) -> str | None:
+        vals = query.get(name)
+        return vals[0] if vals else None
+
+    source = (first("source") or "gateway").strip()
+    filters: dict[str, set[str]] = {}
+    for key in ("level", "channel", "session", "type"):
+        vals = query.get(key)
+        if vals:
+            collected: set[str] = set()
+            for v in vals:  # repeated params OR comma-joined both supported
+                collected.update(part for part in v.split(",") if part)
+            if collected:
+                filters[key] = collected
+    before_ts = first("before_ts")
+    window = first("window_hours")
+    limit = first("limit")
+    return LogQuery(
+        source="telemetry" if source == "telemetry" else "gateway",
+        q=(first("q") or None),
+        before_ts=float(before_ts) if before_ts else None,
+        window_hours=(None if window == "all" else float(window) if window else 24.0),
+        limit=max(1, min(int(limit), 1000)) if limit else 200,
+        filters=filters,
+    )
+
+
 def _mask_secret_hint(secret: str | None) -> str | None:
     if not secret:
         return None
@@ -673,6 +704,9 @@ class WebSocketChannel(BaseChannel):
 
         if got == "/api/config/set":
             return self._handle_config_set(request)
+
+        if got == "/api/logs":
+            return self._handle_logs_list(request)
 
         if got == "/api/skills":
             return self._handle_skills_list(request)
@@ -1756,6 +1790,42 @@ class WebSocketChannel(BaseChannel):
                 "config": mask_secrets(
                     config.model_dump(mode="json", by_alias=True)
                 ),
+            }
+        )
+
+    def _handle_logs_list(self, request: WsRequest) -> Response:
+        """`GET /api/logs?source=&...` — read-only log viewer (gateway/telemetry).
+
+        Reads JSONL log segments newest-first with transparent gz
+        decompression, grep-before-parse, before_ts cursor pagination, and
+        a bounded scan window. The telemetry backend is NOT touched — this
+        only reads the existing files.
+        """
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from pathlib import Path
+
+        from durin.cli.gateway_daemon import daemon_logs_path
+        from durin.logs.reader import compute_facets, read_page
+
+        query = _parse_query(request.path)
+        log_query = _logs_query_from_params(query)
+        if log_query.source == "telemetry":
+            directory = Path.home() / ".cache" / "durin" / "telemetry"
+        else:
+            directory = daemon_logs_path().parent
+        try:
+            page = read_page(directory, log_query)
+            facets = compute_facets(directory, log_query.source)
+        except Exception as exc:  # noqa: BLE001
+            return _http_error(500, f"log read failed: {exc}")
+        return _http_json_response(
+            {
+                "lines": page.lines,
+                "facets": facets,
+                "next_cursor": page.next_cursor,
+                "scanned_through_ts": page.scanned_through_ts,
+                "has_more": page.has_more,
             }
         )
 

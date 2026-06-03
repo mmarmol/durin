@@ -1984,3 +1984,49 @@ parallel systems, name the boundary and check whether it should
 survive — here, "identity + working memory" vs "knowledge graph
 about the world" is a boundary we want.
 
+---
+
+## Web log viewer — alternatives discarded (2026-06-03)
+
+When building the dashboard log viewer (Settings → Logs, two read-only
+tabs over the gateway JSONL log and the existing telemetry JSONL), several
+tempting designs were considered and rejected. The shipped design is
+documented in `superpowers/specs/2026-06-03-logs-viewer-lifecycle-design.md`
+and `superpowers/plans/2026-06-03-logs-viewer-lifecycle.md`; this records
+the *roads not taken*.
+
+- **Exposing telemetry retention as web config.** *Discarded.* Telemetry
+  has its own deliberate lifecycle (`durin/telemetry/retention.py`: compress
+  at 30d, delete at 90d) and the self-managing agents consume it to make
+  decisions. The viewer reads it but never mutates it; its knobs are not
+  surfaced. **Lesson:** a data store that feeds autonomous decisions is not
+  a user-tunable surface — read it, don't expose its dials.
+
+- **A single unified log+telemetry stream.** *Discarded.* The two sources
+  share only a timestamp; merging them into one chronological stream forces
+  a lowest-common-denominator (timestamp + text) that erases telemetry's
+  typed structure and breaks the category filter. Kept as two tabs over one
+  shared read primitive. **Lesson:** don't unify streams whose only common
+  axis is time; you pay structure to buy a correlation that isn't there.
+
+- **An FTS/SQLite index over logs for search.** *Discarded.* Logs are
+  append-only and time-ordered, so the filesystem layout *is* the time
+  index. Newest-first reads + a `before_ts` cursor + grep-before-parse +
+  a bounded scan window give interactive search whose cost scales with the
+  *page*, not the *corpus* — at zero index infrastructure. **Lesson:** for
+  recent-biased, time-ordered data, the filesystem is the index; an FTS
+  layer is write-time cost and staleness for value you don't need yet.
+
+- **Daily compression trigger (in addition to size).** *Discarded.* loguru
+  takes a single rotation trigger; size-based rotation (5 MB → gz) already
+  bounds segments. A separate daily pass is a second mechanism for the same
+  end and needs custom rotation code. **Lesson:** one trigger that already
+  bounds the thing doesn't get a second trigger "to be safe."
+
+The one factual correction worth recording: an early exploration claimed
+telemetry "accumulates forever, never cleaned." That was **wrong** —
+`retention.py` has compressed+deleted on the health-check tick since P7.2.
+The design decision above (don't touch telemetry) rests on the corrected
+fact. **Lesson:** verify a subsystem's actual lifecycle in code before
+designing a feature that assumes its absence.
+
