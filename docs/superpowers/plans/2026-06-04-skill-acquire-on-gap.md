@@ -218,72 +218,80 @@ git commit -m "feat(skills): §6.C acquire_safe_seed — gated registry seed (sa
 
 ---
 
-## Task 2: `skill_acquire_seed` tool wrapper
+## Task 2: `skill_acquire_seed` tool wrapper (per-ref)
 
 **Files:**
 - Create: `durin/agent/tools/skill_acquire_seed.py`
 - Test: `tests/agent/test_skill_acquire_seed_tool.py`
 
+**Pattern note:** mirror the EXACT `Tool` shape of `durin/agent/tools/skill_search.py`
+(read it first). It declares parameters with `tool_parameters_schema`, has a `name`
+property, a `create(cls, ctx)` classmethod that reads `ctx.app_config.skills` (falling
+back to `load_config().skills`), and an async `execute`. Match whatever mechanism
+`skill_search.py` uses to attach `_PARAMETERS` (e.g. a `@tool_parameters(...)`
+decorator vs a `parameters` property) — do not invent a different one.
+
+The tool takes a single `source` (a ref the dream picked from a `skill_search` hit)
+and pulls only the **allowlist** from config (no registries/limit — there is no search
+here; search is the separate raw `skill_search` tool).
+
 - [ ] **Step 1: Write the failing test**
 
 ```python
 # tests/agent/test_skill_acquire_seed_tool.py
-"""§6.C — the skill_acquire_seed tool wraps acquire_safe_seed + reads config."""
+"""§6.C — the skill_acquire_seed tool gates ONE ref via acquire_safe_seed."""
 import asyncio
-import types
 
 from durin.agent.tools.skill_acquire_seed import SkillAcquireSeedTool
 
 
-def _ctx(tmp_path):
-    return types.SimpleNamespace(workspace=tmp_path, app_config=None)
-
-
-def test_tool_name():
-    assert SkillAcquireSeedTool.name.fget(
-        SkillAcquireSeedTool(workspace="/tmp", registries=[], allowlist=[], limit=5)
-    ) == "skill_acquire_seed"
+def test_tool_name(tmp_path):
+    tool = SkillAcquireSeedTool(workspace=tmp_path, allowlist=[])
+    assert tool.name == "skill_acquire_seed"
 
 
 def test_execute_returns_seed(monkeypatch, tmp_path):
-    async def _fake(workspace, query, *, registries, allowlist, limit):
-        return {"name": "pdf", "source": "github:acme/pdf", "content": "body"}
+    async def _fake(workspace, source, *, allowlist):
+        return {"name": "pdf", "source": source, "content": "body"}
 
-    monkeypatch.setattr(
-        "durin.agent.skill_acquire.acquire_safe_seed", _fake)
-    tool = SkillAcquireSeedTool(
-        workspace=tmp_path, registries=[], allowlist=["github:acme"], limit=5)
-    out = asyncio.run(tool.execute(query="pdf"))
+    monkeypatch.setattr("durin.agent.skill_acquire.acquire_safe_seed", _fake)
+    tool = SkillAcquireSeedTool(workspace=tmp_path, allowlist=["github:acme"])
+    out = asyncio.run(tool.execute(source="github:acme/pdf"))
     assert out["seed"]["source"] == "github:acme/pdf"
 
 
 def test_execute_no_seed(monkeypatch, tmp_path):
-    async def _none(workspace, query, *, registries, allowlist, limit):
+    async def _none(workspace, source, *, allowlist):
         return None
 
-    monkeypatch.setattr(
-        "durin.agent.skill_acquire.acquire_safe_seed", _none)
-    tool = SkillAcquireSeedTool(
-        workspace=tmp_path, registries=[], allowlist=[], limit=5)
-    out = asyncio.run(tool.execute(query="pdf"))
+    monkeypatch.setattr("durin.agent.skill_acquire.acquire_safe_seed", _none)
+    tool = SkillAcquireSeedTool(workspace=tmp_path, allowlist=[])
+    out = asyncio.run(tool.execute(source="github:acme/pdf"))
     assert out["seed"] is None
     assert "note" in out
+
+
+def test_execute_missing_source(tmp_path):
+    tool = SkillAcquireSeedTool(workspace=tmp_path, allowlist=["github:acme"])
+    out = asyncio.run(tool.execute(source=""))
+    assert out["seed"] is None
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `.venv/bin/python -m pytest tests/agent/test_skill_acquire_seed_tool.py -q`
+Run: `/Users/marcelo/git_personal/durin/.venv/bin/python -m pytest tests/agent/test_skill_acquire_seed_tool.py -q`
 Expected: FAIL — `ModuleNotFoundError: No module named 'durin.agent.tools.skill_acquire_seed'`.
 
 - [ ] **Step 3: Write the minimal implementation**
 
 ```python
 # durin/agent/tools/skill_acquire_seed.py
-"""skill_acquire_seed tool — §6.C. Search registries for prior art and return a
-RISK-FREE seed (gate verdict 'allow') for the dream to author from. Encapsulates
-search + fetch + §8.C gate so a risky hit is never surfaced as an autonomous seed.
-Available to the dream phase-2 toolset; the in-session agent uses the raw
-skill_search/skill_import/ask_user_question tools instead (a human is present)."""
+"""skill_acquire_seed tool — §6.C. Given ONE registry ref the dream chose from a raw
+skill_search hit, return a RISK-FREE seed (gate verdict 'allow') to author from, or
+{seed: null} to tell the dream to pick another. The gate runs in code
+(acquire_safe_seed), so a risky/un-allowlisted ref is never handed back. Lives in the
+dream phase-2 toolset; the in-session agent uses raw skill_search/skill_import/
+ask_user_question instead (a human is present to approve risky candidates)."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -292,28 +300,30 @@ from typing import Any
 from durin.agent.tools.base import Tool
 from durin.agent.tools.schema import StringSchema, tool_parameters_schema
 
+# NOTE: if skill_search.py attaches parameters via a decorator (e.g.
+# `@tool_parameters(_PARAMETERS)`) instead of a `parameters` property, mirror that
+# exact mechanism here — keep the schema content below identical.
+_PARAMETERS = tool_parameters_schema(
+    source=StringSchema(
+        "A registry ref from a skill_search hit to evaluate as a seed "
+        "(e.g. 'github:owner/repo/skill' or 'clawhub:slug')."),
+    required=["source"],
+    description=(
+        "Given a ref from a skill_search result, return a RISK-FREE seed (SKILL.md "
+        "body) to author a new skill from — only if it clears the security gate. "
+        "Returns {seed: null} when it needs user consent or can't be fetched; then "
+        "pick another hit or author from scratch. Never installs; never returns "
+        "risky code."
+    ),
+)
+
 
 class SkillAcquireSeedTool(Tool):
-    """Return a safe registry seed for a capability the catalog lacks."""
+    """Return a safe registry seed for one chosen ref, or null (pick another)."""
 
-    _PARAMETERS = tool_parameters_schema(
-        query=StringSchema(
-            "What the missing skill should do — a short capability phrase "
-            "(e.g. 'extract tables from PDF')."),
-        required=["query"],
-        description=(
-            "Search skill registries for prior art for a capability no existing "
-            "skill covers, and return a RISK-FREE seed (SKILL.md body) to author "
-            "from. Returns {seed: null} when nothing clears the security gate — "
-            "then author from scratch. Never installs; never returns risky code."
-        ),
-    )
-
-    def __init__(self, workspace, registries, allowlist, limit):
+    def __init__(self, workspace, allowlist):
         self._workspace = Path(workspace)
-        self._registries = registries
         self._allowlist = allowlist
-        self._limit = limit
 
     @property
     def name(self) -> str:
@@ -321,17 +331,15 @@ class SkillAcquireSeedTool(Tool):
 
     @property
     def description(self) -> str:
-        return self._PARAMETERS["description"]
+        return _PARAMETERS["description"]
 
     @property
     def parameters(self) -> dict:
-        return self._PARAMETERS
+        return _PARAMETERS
 
     @classmethod
     def create(cls, ctx: Any) -> "SkillAcquireSeedTool":
-        registries: list = []
         allowlist: list[str] = []
-        limit = 10
         try:
             sk = ctx.app_config.skills
         except Exception:  # noqa: BLE001
@@ -341,44 +349,40 @@ class SkillAcquireSeedTool(Tool):
             except Exception:  # noqa: BLE001
                 sk = None
         if sk is not None:
-            registries = list(sk.discovery.registries)
-            limit = int(sk.discovery.search_limit)
             allowlist = list(sk.security.allowlist)
-        return cls(workspace=ctx.workspace, registries=registries,
-                   allowlist=allowlist, limit=limit)
+        return cls(workspace=ctx.workspace, allowlist=allowlist)
 
     async def execute(self, **kwargs: Any) -> Any:
         from durin.agent.skill_acquire import acquire_safe_seed
 
-        query = str(kwargs.get("query", "")).strip()
-        if not query:
-            return {"seed": None, "note": "query is required"}
+        source = str(kwargs.get("source", "")).strip()
+        if not source:
+            return {"seed": None, "note": "source is required"}
         seed = await acquire_safe_seed(
-            self._workspace, query, registries=self._registries,
-            allowlist=self._allowlist, limit=self._limit)
+            self._workspace, source, allowlist=self._allowlist)
         if seed is None:
             return {"seed": None,
-                    "note": "no risk-free prior art found — author from scratch"}
+                    "note": "needs user consent or unfetchable — pick another hit "
+                            "or author from scratch"}
         return {"seed": seed,
                 "note": "adapt this seed; it passed the security gate"}
 ```
 
 - [ ] **Step 4: Run the test to verify it passes**
 
-Run: `.venv/bin/python -m pytest tests/agent/test_skill_acquire_seed_tool.py -q`
-Expected: PASS (3 passed).
+Run: `/Users/marcelo/git_personal/durin/.venv/bin/python -m pytest tests/agent/test_skill_acquire_seed_tool.py -q`
+Expected: PASS (4 passed).
 
-> If `test_tool_name` fails because the `Tool` base defines `name`/`parameters`
-> differently than `SkillSearchTool`, open `durin/agent/tools/skill_search.py` and
-> `durin/agent/tools/base.py` and match that class's exact property/decorator shape
-> (e.g. `@tool_parameters(...)` instead of a `parameters` property). Keep the test's
-> intent: name is `skill_acquire_seed`, `execute` returns `{"seed": ...}`.
+> If construction/`name`/parameters shape differs from the real `Tool` base, open
+> `durin/agent/tools/skill_search.py` + `durin/agent/tools/base.py` and match that
+> class exactly. Keep the test intent: `SkillAcquireSeedTool(workspace=..., allowlist=...)`
+> constructs, `.name == "skill_acquire_seed"`, `execute(source=...)` returns `{"seed": ...}`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add durin/agent/tools/skill_acquire_seed.py tests/agent/test_skill_acquire_seed_tool.py
-git commit -m "feat(skills): §6.C skill_acquire_seed tool (config-driven, gated)"
+git commit -m "feat(skills): §6.C skill_acquire_seed tool (per-ref, gated)"
 ```
 
 ---
