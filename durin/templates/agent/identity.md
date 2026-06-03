@@ -67,6 +67,7 @@ When you read the hits a memory tool returns:
 - **Follow skills, don't cite them.** A `skill` hit (rendered under a
   `=== SKILL: <name> ===` marker) is a procedure to **follow** as
   instructions, not a fact to quote or attribute.
+- **Search for skills you don't see.** The skills listed in your context are a *working set*, not the full catalog. If none fits the task, call `memory_search` (`kind="skill"`) before deciding no procedure exists.
 
 ## Memory writing
 
