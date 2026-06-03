@@ -149,7 +149,39 @@ describe("SkillsView security surface", () => {
     await user.click(screen.getByRole("button", { name: "Force install" }));
 
     expect(api.approveSkill).toHaveBeenNthCalledWith(1, "tok", "evil");
-    expect(api.approveSkill).toHaveBeenNthCalledWith(2, "tok", "evil", { override: true });
+    expect(api.approveSkill).toHaveBeenNthCalledWith(2, "tok", "evil", {
+      confirm: false,
+      override: true,
+      replace: false,
+    });
+  });
+
+  it("offers an inline replace when a skill name already exists", async () => {
+    vi.mocked(api.listSkills).mockResolvedValue([
+      { name: "clean", source: "builtin", mode: "auto", status: "active", verdict: "safe", findings: [] },
+    ]);
+    vi.mocked(api.listQuarantine).mockResolvedValue([
+      { name: "dup", status: "quarantined", source: "github:o/r", verdict: "safe", findings: [] },
+    ]);
+    vi.mocked(api.approveSkill)
+      .mockResolvedValueOnce({ refused: "exists", verdict: "safe" })
+      .mockResolvedValueOnce({ ok: true, name: "dup" });
+
+    const user = userEvent.setup();
+    render(wrap(<SkillsView />));
+    await screen.findByText("clean");
+    await user.click(screen.getByRole("button", { name: /quarantine/i }));
+    await screen.findByText("dup");
+
+    await user.click(screen.getByRole("button", { name: "Approve" }));
+    expect(await screen.findByText(/already installed/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Replace" }));
+
+    expect(api.approveSkill).toHaveBeenNthCalledWith(2, "tok", "dup", {
+      confirm: false,
+      override: false,
+      replace: true,
+    });
   });
 
   it("rejects a quarantined skill", async () => {

@@ -1539,12 +1539,14 @@ class WebSocketChannel(BaseChannel):
         query = _parse_query(request.path)
         confirm = (_query_first(query, "confirm") or "").lower() in ("1", "true", "yes")
         override = (_query_first(query, "override") or "").lower() in ("1", "true", "yes")
+        replace = (_query_first(query, "replace") or "").lower() in ("1", "true", "yes")
         from durin.agent import skills_store as ss
         from durin.config.loader import load_config
         try:
             workspace = load_config().workspace_path
             status, payload = ss.web_skill_approve(workspace, decoded,
-                                                   confirm=confirm, override=override)
+                                                   confirm=confirm, override=override,
+                                                   replace=replace)
         except Exception as exc:  # noqa: BLE001
             return _http_error(500, f"approve failed: {exc}")
         return _http_json_response(payload, status=status)

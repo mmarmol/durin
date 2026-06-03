@@ -228,13 +228,14 @@ def _safe_qname(name: str) -> bool:
 
 def install_imported_skill(workspace: Path, quarantine_dir: Path, *, source: str,
                            allowlist: list[str], confirmed: bool = False,
-                           override: bool = False) -> dict:
+                           override: bool = False, replace: bool = False) -> dict:
     """Install a quarantined skill — but ONLY through the §8.C gate, enforced
     HERE in code (not in the tool/skill/UI): `block` (dangerous) needs
     `override`; `confirm` (code / caution / out-of-allowlist) needs `confirmed`
-    or `override`. On pass: copy out of quarantine, stamp
-    metadata.durin.provenance + mode=manual, commit, index, append the audit
-    log, and consume the quarantine dir. Raises SkillImportRefused otherwise."""
+    or `override`; a name that already exists needs `replace`. On pass: copy out
+    of quarantine, stamp metadata.durin.provenance + mode=manual, commit, index,
+    append the audit log, and consume the quarantine dir. Raises
+    SkillImportRefused otherwise."""
     from durin.agent.skills_store import (
         _skill_md,
         _store_init,
@@ -261,7 +262,9 @@ def install_imported_skill(workspace: Path, quarantine_dir: Path, *, source: str
     name = vr.name
     dest = _skill_md(workspace, name).parent
     if dest.exists():
-        raise SkillImportRefused("exists", rep.verdict, f"skill already exists: {name}")
+        if not replace:
+            raise SkillImportRefused("exists", rep.verdict, f"skill already exists: {name}")
+        shutil.rmtree(dest)
 
     store = _store_init(workspace)
     shutil.copytree(quarantine_dir, dest,
@@ -276,6 +279,7 @@ def install_imported_skill(workspace: Path, quarantine_dir: Path, *, source: str
             "verdict": rep.verdict,
             "confirmed": bool(confirmed),
             "overridden": bool(override),
+            "replaced": bool(replace),
             "content_hash": chash,
             "created_at": _today(),
         }
@@ -284,7 +288,7 @@ def install_imported_skill(workspace: Path, quarantine_dir: Path, *, source: str
     sha = store.auto_commit(f"skill({name}): import from {source} [{rep.verdict}]")
     _sync_index(workspace, name)
     _audit(workspace, name=name, source=source, verdict=rep.verdict, action=action,
-           confirmed=bool(confirmed), overridden=bool(override),
+           confirmed=bool(confirmed), overridden=bool(override), replaced=bool(replace),
            content_hash=chash, commit=sha)
     shutil.rmtree(quarantine_dir, ignore_errors=True)  # consumed
     return {"ok": True, "name": name, "verdict": rep.verdict, "commit": sha}

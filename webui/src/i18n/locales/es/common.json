@@ -338,6 +338,8 @@
       "forceDangerous": "Esta skill es PELIGROSA — el scan encontró un riesgo serio. ¿Forzar la instalación igual?",
       "confirm": "Confirmar",
       "force": "Forzar instalación",
+      "replace": "Reemplazar",
+      "replaceExists": "Ya hay una skill instalada con ese nombre. ¿Reemplazarla?",
       "cancel": "Cancelar",
       "unresolved": "No se pudo resolver una skill desde esa fuente. Pedíle al agente en el chat que investigue el link."
     },

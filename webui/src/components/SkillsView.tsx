@@ -133,7 +133,13 @@ export function SkillsView() {
   const [importMsg, setImportMsg] = useState<string | null>(null);
   const [picker, setPicker] = useState<SkillCandidate[] | null>(null);
   const [acting, setActing] = useState<string | null>(null);
-  const [gate, setGate] = useState<{ name: string; action: "confirm" | "block" } | null>(null);
+  const [gate, setGate] = useState<{
+    name: string;
+    confirm: boolean;
+    override: boolean;
+    replace: boolean;
+    ask: "confirm" | "block" | "exists";
+  } | null>(null);
 
   useEffect(() => {
     preloadMarkdownText();
@@ -199,8 +205,8 @@ export function SkillsView() {
         if (res.ok) {
           setGate(null);
           await refresh();
-        } else if (res.refused === "confirm" || res.refused === "block") {
-          setGate({ name, action: res.refused });
+        } else if (res.refused === "confirm" || res.refused === "block" || res.refused === "exists") {
+          setGate({ name, confirm: false, override: false, replace: false, ask: res.refused });
         } else if (res.message || res.error) {
           setImportMsg(res.message || res.error || null);
         }
@@ -213,16 +219,28 @@ export function SkillsView() {
     [token, refresh],
   );
 
+  // Accept the gate's current ask, accumulate the matching flag, and retry —
+  // chaining if the server then asks for another (e.g. confirm -> exists).
   const confirmGate = useCallback(async () => {
     if (!gate) return;
-    const { name, action } = gate;
-    setActing(name);
+    const next = {
+      ...gate,
+      confirm: gate.confirm || gate.ask === "confirm",
+      override: gate.override || gate.ask === "block",
+      replace: gate.replace || gate.ask === "exists",
+    };
+    setActing(next.name);
     try {
-      const res = await approveSkill(
-        token, name, action === "block" ? { override: true } : { confirm: true });
+      const res = await approveSkill(token, next.name, {
+        confirm: next.confirm,
+        override: next.override,
+        replace: next.replace,
+      });
       if (res.ok) {
         setGate(null);
         await refresh();
+      } else if (res.refused === "confirm" || res.refused === "block" || res.refused === "exists") {
+        setGate({ ...next, ask: res.refused });
       } else if (res.message || res.error) {
         setImportMsg(res.message || res.error || null);
       }
@@ -496,20 +514,24 @@ export function SkillsView() {
                     // destructive when forcing a dangerous-verdict install.
                     <div className="flex flex-col gap-2 rounded-[8px] border border-border/60 bg-muted/40 p-2">
                       <p className="text-[12px] text-foreground">
-                        {gate.action === "block"
+                        {gate.ask === "block"
                           ? t("skills.import.forceDangerous")
-                          : t("skills.import.confirmInstall")}
+                          : gate.ask === "exists"
+                            ? t("skills.import.replaceExists")
+                            : t("skills.import.confirmInstall")}
                       </p>
                       <div className="flex gap-2">
                         <Button
                           size="sm"
-                          variant={gate.action === "block" ? "destructive" : "default"}
+                          variant={gate.ask === "block" ? "destructive" : "default"}
                           disabled={acting === q.name}
                           onClick={() => void confirmGate()}
                         >
-                          {gate.action === "block"
+                          {gate.ask === "block"
                             ? t("skills.import.force")
-                            : t("skills.import.confirm")}
+                            : gate.ask === "exists"
+                              ? t("skills.import.replace")
+                              : t("skills.import.confirm")}
                         </Button>
                         <Button
                           size="sm"

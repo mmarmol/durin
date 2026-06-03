@@ -495,9 +495,9 @@ def web_import_fetch(workspace: Path, source: str) -> tuple[int, dict]:
 
 
 def web_skill_approve(workspace: Path, name: str, *, confirm: bool,
-                      override: bool) -> tuple[int, dict]:
-    """`GET /api/skills/{name}/approve?confirm=&override=` — install a quarantined
-    skill through the §8.C gate. 409 with {refused} when the gate refuses."""
+                      override: bool, replace: bool = False) -> tuple[int, dict]:
+    """`GET /api/skills/{name}/approve?confirm=&override=&replace=` — install a
+    quarantined skill through the §8.C gate. 409 with {refused} when refused."""
     import json as _json
 
     from durin.agent.skills_import import SkillImportRefused, install_imported_skill
@@ -515,7 +515,7 @@ def web_skill_approve(workspace: Path, name: str, *, confirm: bool,
     try:
         res = install_imported_skill(workspace, qdir, source=source,
                                      allowlist=_import_allowlist(),
-                                     confirmed=confirm, override=override)
+                                     confirmed=confirm, override=override, replace=replace)
         return 200, res
     except SkillImportRefused as exc:
         return 409, {"refused": exc.action, "verdict": exc.verdict, "message": str(exc)}
