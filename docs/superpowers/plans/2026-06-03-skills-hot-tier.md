@@ -8,11 +8,16 @@
 
 **Tech Stack:** Python, pydantic config (`durin/config/schema.py`), pytest. Reuses `collect_recent_skill_calls` (already aggregates `{skill:{op:count}}` from session `.meta.json` sidecars with a `within_hours` window) and `SkillsLoader.build_skills_summary`.
 
-**Spec (source of truth, design already decided 2026-06-02):** [`docs/superpowers/specs/2026-06-02-skills-retrieval-spec2-design.md`](../specs/2026-06-02-skills-retrieval-spec2-design.md) §2.2, §3, §7 (change map), §8 (decisions). This plan is the deferred "Phase 5 — Context hot-tier" of [`2026-06-02-skill-memory-class.md`](2026-06-02-skill-memory-class.md). The prompt nudge (§5) and miss telemetry (§4) already shipped in PR #22.
+**Spec (source of truth, design already decided 2026-06-02):** [`docs/superpowers/specs/2026-06-02-skills-retrieval-spec2-design.md`](../specs/2026-06-02-skills-retrieval-spec2-design.md) §2.2, §3, §7 (change map), §8 (decisions). This plan is the deferred "Phase 5 — Context hot-tier" of [`2026-06-02-skill-memory-class.md`](2026-06-02-skill-memory-class.md).
 
-**Test command (worktree-aware — bare `pytest` resolves `durin` to the WRONG checkout's editable install):**
+**What already shipped (PR #22) vs. what's in scope here — verified 2026-06-03 against the merged code:**
+- ✅ **Miss telemetry (§4):** `memory.skill_miss` emits when a `kinds="skill"` search yields zero (Task 7.1). In scope here: nothing.
+- ⚠️ **Prompt nudge (§5.2): NOT shipped as specified.** `skills_section.md` only says skills are *searchable*; it does **not** carry the load-bearing nudge *"if nothing in the hot tier covers the task, search (`memory_search` kind=skill) before proceeding or concluding no skill exists."* Worse, its current line **"This catalog is always available"** becomes **false** once the hot tier injects only the working set (not the full catalog). Phase 5 removes the long tail from context, so this nudge + reframe become load-bearing **here** → **Task 5**.
+- ✅ **skill_calls signal wiring:** produced in `loop.py:1809` → persisted to `derived.skill_calls` via `manager.py:_DERIVED_METADATA_KEYS` → read by `collect_recent_skill_calls`. The working set has real data (the 2h dream already consumes it). In scope here: only the new ranking helper.
+
+**Test command** (work happens in the main checkout `/Users/marcelo/git_personal/durin`, on branch `skills-hot-tier` — the editable install resolves to this tree):
 ```
-cd /Users/marcelo/git_personal/durin-hot-tier && /Users/marcelo/git_personal/durin/.venv/bin/python -m pytest <paths> -v
+cd /Users/marcelo/git_personal/durin && /Users/marcelo/git_personal/durin/.venv/bin/python -m pytest <paths> -v
 ```
 
 ---
@@ -25,12 +30,17 @@ cd /Users/marcelo/git_personal/durin-hot-tier && /Users/marcelo/git_personal/dur
 | `durin/agent/skill_usage.py` | New pure `compute_working_set(workspace, candidates, *, recent, frequent, …)` — usage-rank + fill-to-budget | 2 |
 | `durin/agent/skills.py` | `build_skills_summary` gains an `include` filter (restrict to a name set) | 3 |
 | `durin/agent/context.py` | `ContextBuilder` computes the working set once (memoized, config-driven, toggle) and restricts the `skills_catalog` block to it | 4 |
-| (verify) | Live end-to-end against a real workspace with `skill_calls` sidecars | 5 |
-| docs | Mark Phase 5 shipped in the skill-memory-class plan + roadmap | 6 |
+| `durin/templates/agent/skills_section.md` (+ `identity.md`) | reframe "always available catalog" → working-set + long-tail-via-search, and add the §5.2 search nudge (load-bearing once the long tail leaves context) | 5 |
+| (verify) | Live end-to-end against a real workspace with `skill_calls` sidecars | 6 |
+| docs | Mark Phase 5 shipped in the skill-memory-class plan + roadmap | 7 |
 
 **Decisions locked from spec §8:** sizes ~15 recent / ~30 frequent (favor frequent), config-driven, generous-because-cached, calibrate later with the already-shipped miss telemetry. Hot tier shows **name + short description** (the current `build_skills_summary` line format `- **name** — desc \`path\`` already is exactly this — the `path` is the `read_file` handle). We only **restrict which** skills appear; we do not change the line format or `skills_active` (always-on full bodies).
 
 **Prefix-cache invariant (critical):** the working set is computed **once per `ContextBuilder` instance** (one instance per session, `loop.py:325`) and memoized, so the stable layer stays byte-identical across turns of a session. A new session = new instance = freshly-ranked set. This mirrors how `memory_hot` rotates daily (stable within its window). Do NOT recompute per turn.
+
+**Placement — reconciliation with the deferred note (drift resolved 2026-06-03).** The skill-memory-class plan's deferred Phase 5 note said *"block at/after `memory_hot`"*. We deliberately do **not** follow that literally: spec §7 (source of truth) says modify the **existing** `skills_catalog` block, which sits at position 4 of the stable layer (`identity → bootstrap → skills_active → skills_catalog → memory_hot`), i.e. **before** `memory_hot`. The cache analysis confirms this is correct, not just compatible: the working set is **memoized** (byte-identical for the whole session) while `memory_hot` is **re-read every turn** (`read_hot_layer(...).render()` is not memoized and can rotate under dream mid-session). Cache invalidation propagates forward from the first changed byte, so the **more-stable** block must come **first** — keeping the memoized working set ahead of the per-turn `memory_hot` means a mid-session hot-layer rotation never invalidates the working set's cached position. The note's "at/after memory_hot" assumed a *new* block and is the less-informed guess; we keep the existing position. We still honor the note's hard constraint: **never before `identity`/`bootstrap`/`skills_active`**.
+
+**Breakdown key (minor, decided).** The note suggested registering a *new* `stable_labels` breakdown key. We reuse the existing `skills_catalog` key (it already tracks this exact block, which now holds the working set) — no telemetry-key churn, no test churn. The human-facing label stays "Skills catalog"; it is acceptably accurate (it is the injected skills block) and not worth a churn.
 
 ---
 
@@ -70,7 +80,7 @@ def test_camel_alias_roundtrip():
 
 - [ ] **Step 2: Run it — FAIL** (`AttributeError: ... has no attribute 'skills_hot_tier'`)
 
-Run: `cd /Users/marcelo/git_personal/durin-hot-tier && /Users/marcelo/git_personal/durin/.venv/bin/python -m pytest tests/config/test_skills_hot_tier_config.py -v`
+Run: `cd /Users/marcelo/git_personal/durin && /Users/marcelo/git_personal/durin/.venv/bin/python -m pytest tests/config/test_skills_hot_tier_config.py -v`
 
 - [ ] **Step 3: Implement.** Find the base model class used by the other configs (it is `Base` — same class `MemoryEmbeddingConfig(Base)` etc. use; it carries the global `alias_generator=to_camel` + `populate_by_name`). Add the nested config class immediately before `class MemoryConfig` (or with the other `Memory*` configs), then one field on `MemoryConfig`.
 
@@ -106,7 +116,7 @@ Add to `MemoryConfig` (next to `index_skills`):
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/marcelo/git_personal/durin-hot-tier
+cd /Users/marcelo/git_personal/durin
 git add durin/config/schema.py tests/config/test_skills_hot_tier_config.py
 git commit -m "feat(config): MemoryConfig.skills_hot_tier (working-set sizes + windows + toggle)"
 ```
@@ -234,7 +244,7 @@ def compute_working_set(
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/marcelo/git_personal/durin-hot-tier
+cd /Users/marcelo/git_personal/durin
 git add durin/agent/skill_usage.py tests/agent/test_skill_working_set.py
 git commit -m "feat(skills): compute_working_set — usage-ranked hot set + fill-to-budget"
 ```
@@ -301,7 +311,7 @@ and right after the existing `if exclude and skill_name in exclude: continue` li
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/marcelo/git_personal/durin-hot-tier
+cd /Users/marcelo/git_personal/durin
 git add durin/agent/skills.py tests/agent/test_skills_loader.py
 git commit -m "feat(skills): build_skills_summary include= filter (hot working-set)"
 ```
@@ -447,28 +457,81 @@ In `_build_stable_layer`, change the `skills_catalog` block to pass `include`:
 
 - [ ] **Step 4: Run it — PASS** (3 tests). Regression — the cache + composition tests must still pass:
 ```
-cd /Users/marcelo/git_personal/durin-hot-tier && /Users/marcelo/git_personal/durin/.venv/bin/python -m pytest tests/agent/test_context_hot_tier.py tests/agent/test_context_prompt_cache.py tests/agent/test_context_builder.py tests/agent/test_context_three_tier_prompt.py tests/agent/test_context_composition_event.py -q
+cd /Users/marcelo/git_personal/durin && /Users/marcelo/git_personal/durin/.venv/bin/python -m pytest tests/agent/test_context_hot_tier.py tests/agent/test_context_prompt_cache.py tests/agent/test_context_builder.py tests/agent/test_context_three_tier_prompt.py tests/agent/test_context_composition_event.py -q
 ```
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/marcelo/git_personal/durin-hot-tier
+cd /Users/marcelo/git_personal/durin
 git add durin/agent/context.py tests/agent/test_context_hot_tier.py
 git commit -m "feat(context): inject usage-ranked skills working set (hot tier), memoized per session"
 ```
 
 ---
 
-## Task 5: VERIFY LIVE (gate, no commit)
+## Task 5: Prompt — working-set reframe + §5.2 search nudge
+
+**Files:**
+- Modify: `durin/templates/agent/skills_section.md` (the line that today says "This catalog is always available …")
+- Modify: `durin/templates/agent/identity.md` (the "Working with search results" area — add one bullet)
+- Test: `tests/memory/test_identity_skill_kind.py` (extend; this is the existing sync test that pins skill prompt wording — keep its current asserts green)
+
+**Why (load-bearing under Phase 5):** once Task 4 lands, only the working set is injected — the long tail is no longer in context. The agent must be told to search when the shown skills don't cover the task, otherwise it will conclude "no skill exists" for a skill it simply can't see. The current `skills_section.md` line "This catalog is always available" is now false (only the working set is shown). This is the spec §5.2 nudge, finally load-bearing.
+
+- [ ] **Step 1: Write the failing test.** First read `tests/memory/test_identity_skill_kind.py` (its `_norm` helper + `_SKILLS_SECTION` path). Add:
+
+```python
+def test_skills_section_reframed_as_working_set_with_search_nudge():
+    t = _norm(_SKILLS_SECTION).lower()
+    # the stale "always available [full catalog]" claim is gone
+    assert "always available" not in t
+    # the §5.2 nudge: search when the shown skills don't cover the task
+    assert "memory_search" in t
+    assert ("if nothing" in t or "if none" in t or "don't cover" in t
+            or "doesn't cover" in t)
+    assert ("before" in t and ("proceed" in t or "conclud" in t or "say" in t))
+```
+Keep the file's existing `test_skills_section_names_both_surfaces` (it asserts `memory_search` + `read` are present — the reframe below preserves both).
+
+- [ ] **Step 2: Run it — FAIL** (`assert "always available" not in t`).
+
+- [ ] **Step 3: Implement.** Rewrite the body line of `durin/templates/agent/skills_section.md` (keep the `# Skills` heading, the read-file sentence, the unavailable-deps sentence, and the `{{ skills_summary }}` placeholder exactly). Replace the "This catalog is always available …" sentence with:
+
+```
+The skills above are your **most-used working set**, not the whole catalog. Skills are searchable memory: if nothing above covers the task, search (`memory_search` with `kind="skill"`) **before** proceeding or concluding that no skill exists. It returns matching procedures as `kind="skill"` hits (rendered under `=== SKILL: <name> ===`) — follow them as steps, don't cite them as facts.
+```
+
+In `durin/templates/agent/identity.md`, in the "## Working with search results" list (where the "Follow skills, don't cite them" bullet already lives, added in PR #22), add one bullet right after it:
+
+```
+- **Search for skills you don't see.** The skills listed in your context are a *working set*, not the full catalog. If none fits the task, call `memory_search` (`kind="skill"`) before deciding no procedure exists.
+```
+
+- [ ] **Step 4: Run it — PASS.** Regression (the sync test must stay green):
+```
+cd /Users/marcelo/git_personal/durin && /Users/marcelo/git_personal/durin/.venv/bin/python -m pytest tests/memory/test_identity_skill_kind.py tests/memory/test_identity_memory_section.py -q
+```
+
+- [ ] **Step 5: Commit**
+
+```bash
+cd /Users/marcelo/git_personal/durin
+git add durin/templates/agent/skills_section.md durin/templates/agent/identity.md tests/memory/test_identity_skill_kind.py
+git commit -m "feat(prompts): reframe skills block as working set + add search-the-long-tail nudge (§5.2)"
+```
+
+---
+
+## Task 6: VERIFY LIVE (gate, no commit)
 
 **Goal:** prove the hot tier works end-to-end against a real workspace with real `skill_calls` sidecars and the real `ContextBuilder` — not just monkeypatched units.
 
-- [ ] **Step 1:** Write `/tmp/verify_hot_tier.py` that: (a) creates a workspace with ~5 skills on disk; (b) writes session `.meta.json` sidecars whose `derived.skill_calls` make 2 skills frequent (use `durin/session/session_meta.py` writer — inspect it; or write the sidecar JSON directly with the `derived.skill_calls` shape `[{"skill": "<name>", "op": "read"}, …]` that `collect_recent_skill_calls` reads); (c) sets `memory.skills_hot_tier` small (recent=1, frequent=1) via a real config or monkeypatched `load_config`; (d) builds the system prompt via `ContextBuilder(ws).build_system_prompt()`; asserts the 2 hot skills appear in the `skills_catalog` breakdown and a never-used skill does NOT; (e) builds twice and asserts the stable layer is byte-identical; (f) flips `enabled=False` (new `ContextBuilder`) and asserts the full catalog returns.
+- [ ] **Step 1:** Write `/tmp/verify_hot_tier.py` that: (a) creates a workspace with ~5 skills on disk; (b) writes session `.meta.json` sidecars whose `derived.skill_calls` make 2 skills frequent (use `durin/session/session_meta.py` writer — inspect it; or write the sidecar JSON directly with the `derived.skill_calls` shape `[{"skill": "<name>", "op": "read"}, …]` that `collect_recent_skill_calls` reads); (c) sets `memory.skills_hot_tier` small (recent=1, frequent=1) via a real config or monkeypatched `load_config`; (d) builds the system prompt via `ContextBuilder(ws).build_system_prompt()`; asserts the 2 hot skills appear in the `skills_catalog` breakdown and a never-used skill does NOT; (e) builds twice and asserts the stable layer is byte-identical; (f) flips `enabled=False` (new `ContextBuilder`) and asserts the full catalog returns; (g) asserts the rendered prompt contains the §5.2 search nudge (Task 5) so the agent is told to search the long tail it can no longer see.
 
-Run with the worktree on `PYTHONPATH` so `durin` resolves to it:
+Run from the checkout (the branch is checked out here, so `durin` resolves to this tree):
 ```
-cd /Users/marcelo/git_personal/durin-hot-tier && PYTHONPATH=/Users/marcelo/git_personal/durin-hot-tier /Users/marcelo/git_personal/durin/.venv/bin/python /tmp/verify_hot_tier.py
+cd /Users/marcelo/git_personal/durin && /Users/marcelo/git_personal/durin/.venv/bin/python /tmp/verify_hot_tier.py
 ```
 Expected: `HOT TIER LIVE: ALL PASS`.
 
@@ -476,7 +539,7 @@ Expected: `HOT TIER LIVE: ALL PASS`.
 
 ---
 
-## Task 6: Docs — mark Phase 5 shipped
+## Task 7: Docs — mark Phase 5 shipped
 
 **Files:**
 - Modify: `docs/superpowers/plans/2026-06-02-skill-memory-class.md` (the "Phase 5 — DEFERRED" block → shipped, link here)
@@ -487,7 +550,7 @@ Expected: `HOT TIER LIVE: ALL PASS`.
 - [ ] **Step 3: Commit**
 
 ```bash
-cd /Users/marcelo/git_personal/durin-hot-tier
+cd /Users/marcelo/git_personal/durin
 git add docs/superpowers/plans/2026-06-02-skill-memory-class.md docs/roadmap.md
 git commit -m "docs: skills hot working-set tier shipped (Phase 5)"
 ```
@@ -496,7 +559,9 @@ git commit -m "docs: skills hot working-set tier shipped (Phase 5)"
 
 ## Self-Review
 
-**Spec coverage:** §2.2/§3 hot tier (always + N recent + X frequent, name+desc, body on-demand) → Tasks 2+4. §7 change map row `skill_usage.py` working-set helper → Task 2; row `context.py` catalog→hot-tier → Task 4. §8.1 sizes (~15/~30, favor frequent, config-driven) → Tasks 1+2. §8.3 granularity (hot=name+desc; corpus richer) → unchanged line format (Task 4 note). §8.4 "single system, small catalog covered" → fill-to-budget (Task 2). Prompt nudge (§5) + miss telemetry (§4) already shipped (PR #22) — out of scope, noted in header.
+**Spec coverage:** §2.2/§3 hot tier (always + N recent + X frequent, name+desc, body on-demand) → Tasks 2+4. §7 change map row `skill_usage.py` working-set helper → Task 2; row `context.py` catalog→hot-tier → Task 4. §8.1 sizes (~15/~30, favor frequent, config-driven) → Tasks 1+2. §8.3 granularity (hot=name+desc; corpus richer) → unchanged line format (Task 4 note). §8.4 "single system, small catalog covered" → fill-to-budget (Task 2). **§5.2 nudge → Task 5** (verified NOT shipped in PR #22; load-bearing here because Phase 5 removes the long tail from context). §4 miss telemetry already shipped (PR #22) — out of scope.
+
+**Drift cross-check (vs existing specs + plans, 2026-06-03):** (1) deferred-note "block at/after memory_hot" vs spec §7 "modify existing skills_catalog block" → reconciled in the prefix-cache section (we follow the spec; cache analysis favors it). (2) deferred-note "new breakdown key" → reuse `skills_catalog` (documented). (3) deferred-note "watch `_FRAGMENT_CLASSES` in `hot_layer.py`" → not applicable: the working set is the `skills_catalog` block, `hot_layer.py`/`memory_hot` is untouched. (4) sizes/§7 map/skill_calls wiring → verified consistent. (5) the only real gap (the §5.2 nudge) is now Task 5.
 
 **Placeholder scan:** none — every code step shows full code; the only "adapt to the real fixture" is Task 3 Step 1 (reuse the existing `test_skills_loader.py` helper) and Task 5 (inspect `session_meta.py` writer), both explicit about what to read.
 
