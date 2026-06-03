@@ -47,8 +47,15 @@ _BODY_RULES = [
     (r"(?i)ignore\s+(all\s+|the\s+)?(previous|prior|above)\s+instructions", "prompt_injection", "dangerous", "ignore-previous-instructions"),
     (r"(?i)\byou\s+are\s+now\b|\bdisregard\s+(your|the|all)\s+(system|safety|previous)|\bact\s+as\s+(a\s+)?(dan|jailbroken|unrestricted)", "prompt_injection", "dangerous", "role-override/jailbreak"),
     (r"(?i)do\s+not\s+(tell|inform|notify|mention\s+to)\s+the\s+user", "prompt_injection", "high", "covert-action directive"),
-    (r"(?is)<!--.*?\b(ai|assistant|claude|ignore|run|exec|system|do not)\b.*?-->", "hidden_instructions", "high", "instruction inside HTML comment"),
-    (r"~/\.ssh\b|~/\.aws/credentials|~/\.aws\b|~/\.gnupg\b|~/\.env\b|/etc/passwd|/etc/shadow", "sensitive_path", "high", "sensitive path reference"),
+    # Hidden instruction in an HTML comment — only when it ADDRESSES the model
+    # (ai/assistant/claude/llm near an imperative) or contains an injection
+    # phrase. A bare "ignore"/"run" in a comment (e.g. `ascii-guard-ignore`, a
+    # build note) is NOT flagged — that was a false-positive source on real skills.
+    (r"(?is)<!--.*?(?:\b(?:ai|assistant|claude|llm)\b.*?\b(?:ignore|run|exec|execute|delete|send|post|fetch|disregard)\b|\bignore\s+(?:all\s+|the\s+|prior\s+|previous\s+|above\s+)*instructions|\byou\s+are\s+now\b|\bdisregard\s+(?:all|previous|the)\b).*?-->", "hidden_instructions", "high", "AI-directed instruction inside HTML comment"),
+    # A *mention* of a sensitive path (e.g. SSH-key setup docs) is caution, not
+    # dangerous — legit setup skills reference ~/.ssh. Real theft is the path
+    # read INSIDE a script combined with exfil (caught by dangerous_code).
+    (r"~/\.ssh\b|~/\.aws/credentials|~/\.aws\b|~/\.gnupg\b|~/\.env\b|/etc/passwd|/etc/shadow", "sensitive_path", "caution", "sensitive path reference"),
     (r"AKIA[0-9A-Z]{16}|\bsk-[A-Za-z0-9]{20,}|\bghp_[A-Za-z0-9]{36}|-----BEGIN [A-Z ]*PRIVATE KEY-----", "secrets", "caution", "hardcoded secret"),
 ]
 
@@ -58,7 +65,7 @@ _CODE_RULES = [
     (r"\brm\s+-rf?\s+[~/]|\bmkfs\b|\bdd\s+if=", "dangerous_code", "dangerous", "destructive command"),
     (r"\beval\s*\(|\bexec\s*\(|\bos\.system\s*\(|subprocess\.[A-Za-z_]+\([^)]*shell\s*=\s*True", "dangerous_code", "dangerous", "dynamic/shell exec"),
     (r"/dev/tcp/|\bnc\s+-[a-z]*e|\bncat\s+-[a-z]*e", "dangerous_code", "dangerous", "reverse shell"),
-    (r"\bos\.environ\b|\bprocess\.env\b", "dangerous_code", "high", "environment access (exfil-adjacent)"),
+    (r"\bos\.environ\b|\bprocess\.env\b", "dangerous_code", "caution", "environment access (exfil-adjacent)"),
     (r"\batob\s*\(|\bbase64\.b64decode\s*\(|(?:\\x[0-9a-fA-F]{2}){8,}", "dangerous_code", "caution", "obfuscation (base64/hex)"),
 ]
 
@@ -97,10 +104,13 @@ def validate_install_specs(data: dict) -> list[Finding]:
                 out.append(Finding("install_spec", "dangerous", where, "install entry is not a mapping"))
                 continue
             kind = str(spec.get("kind", ""))
-            if kind == "brew":
-                val = str(spec.get("formula") or spec.get("cask") or "")
-                if _bad(val, "..", "\\") or (val and not _BREW_RE.match(val)):
-                    out.append(Finding("install_spec", "dangerous", where, f"unsafe brew formula/cask {val!r}"))
+            if kind in ("brew", "apt", "pip", "cargo"):
+                # package-manager installs: validate the package/formula name
+                # against a safe pattern (no traversal / flags). apt/pip/cargo
+                # are common, legit kinds (durin's own github skill uses apt).
+                val = str(spec.get("formula") or spec.get("cask") or spec.get("package") or "")
+                if _bad(val, "..", "\\", "://") or (val and not _BREW_RE.match(val)):
+                    out.append(Finding("install_spec", "dangerous", where, f"unsafe {kind} package {val!r}"))
             elif kind == "go":
                 val = str(spec.get("module") or "")
                 if _bad(val, "..", "\\", "://") or (val and not _GO_RE.match(val)):
@@ -118,8 +128,10 @@ def validate_install_specs(data: dict) -> list[Finding]:
                 url = str(spec.get("url") or "")
                 if not re.match(r"^https?://", url) or any(c.isspace() for c in url):
                     out.append(Finding("install_spec", "dangerous", where, f"unsafe download url {url!r}"))
-            else:
-                out.append(Finding("install_spec", "caution", where, f"unknown install kind {kind!r}"))
+            # Unknown kinds are NOT flagged: we can't validate what we don't
+            # model, and flagging every unmodeled installer false-positives on
+            # legit skills. A code-carrying skill is gated by the carries-code
+            # confirm regardless.
     return out
 
 
