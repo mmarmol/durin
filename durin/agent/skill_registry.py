@@ -64,9 +64,9 @@ class SkillsShRegistry:
 
 class ClawHubRegistry:
     """ClawHub — GET /api/v1/skills?search=&limit= → hits with a clawhub:<slug>
-    ref (fetched via the zip endpoint, not github). Community-trust (the
-    ClawHavoc incident: 341 malicious skills, Feb 2026) → always gated. Degrades
-    to [] on any error."""
+    ref (fetched via the zip endpoint, not github). A third-party registry whose
+    vetting durin does not control → treated as community-trust, so every install
+    still passes the §8.C gate. Degrades to [] on any error."""
 
     name = "clawhub"
     BASE_URL = "https://clawhub.ai/api/v1"
