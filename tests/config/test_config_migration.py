@@ -292,3 +292,22 @@ def test_save_config_rewrites_legacy_skill_keys(tmp_path) -> None:
 
     assert "skillImport" not in saved.get("memory", {})
     assert "skillsHotTier" not in saved.get("memory", {})
+
+
+def test_skills_section_survives_split_layout_roundtrip(tmp_path) -> None:
+    """The new top-level `skills` section must persist through save (which
+    converts to the split layout) + reload — else migrated/user skill config is
+    silently lost when the split-file allowlist omits the section."""
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps({"skills": {"security": {"allowlist": ["github:acme/"]}}}),
+        encoding="utf-8",
+    )
+
+    cfg = load_config(config_path)
+    assert cfg.skills.security.allowlist == ["github:acme/"]
+
+    save_config(cfg, config_path)  # → split layout
+    reloaded = load_config(config_path)
+
+    assert reloaded.skills.security.allowlist == ["github:acme/"]

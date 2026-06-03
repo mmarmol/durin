@@ -55,6 +55,7 @@ _TOP_LEVEL_KEYS = (
     "agents",
     "channels",
     "memory",
+    "skills",
     "providers",
     "api",
     "gateway",
