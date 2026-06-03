@@ -491,12 +491,12 @@ export async function addTrustPattern(
   base: string = "",
 ): Promise<void> {
   const snap = await getConfig(token, base);
-  const memory = (snap.config as { memory?: { skillImport?: { allowlist?: unknown } } })?.memory;
-  const cur = Array.isArray(memory?.skillImport?.allowlist)
-    ? (memory!.skillImport!.allowlist as string[])
+  const skills = (snap.config as { skills?: { security?: { allowlist?: unknown } } })?.skills;
+  const cur = Array.isArray(skills?.security?.allowlist)
+    ? (skills!.security!.allowlist as string[])
     : [];
   if (cur.includes(prefix)) return;
-  await setConfigValue(token, "memory.skill_import.allowlist", [...cur, prefix], base);
+  await setConfigValue(token, "skills.security.allowlist", [...cur, prefix], base);
 }
 
 export async function getSkill(

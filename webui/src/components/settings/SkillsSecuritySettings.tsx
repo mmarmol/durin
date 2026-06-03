@@ -30,8 +30,8 @@ interface SkillImportShape {
 }
 
 function readSI(config: Record<string, unknown> | null) {
-  const memory = config?.memory as { skillImport?: SkillImportShape } | undefined;
-  const si = memory?.skillImport ?? {};
+  const skills = config?.skills as { security?: SkillImportShape } | undefined;
+  const si = skills?.security ?? {};
   const j = si.llmJudge ?? {};
   return {
     allowlist: Array.isArray(si.allowlist) ? si.allowlist.filter((x) => typeof x === "string") : [],
@@ -98,12 +98,12 @@ export function SkillsSecuritySettings({ token }: { token: string }) {
   const addPattern = useCallback(() => {
     const p = newPattern.trim();
     if (!p || v.allowlist.includes(p)) return;
-    void onSave("memory.skill_import.allowlist", [...v.allowlist, p]);
+    void onSave("skills.security.allowlist", [...v.allowlist, p]);
     setNewPattern("");
   }, [newPattern, v.allowlist, onSave]);
 
   const removePattern = useCallback(
-    (p: string) => onSave("memory.skill_import.allowlist", v.allowlist.filter((x) => x !== p)),
+    (p: string) => onSave("skills.security.allowlist", v.allowlist.filter((x) => x !== p)),
     [v.allowlist, onSave],
   );
 
@@ -148,8 +148,8 @@ export function SkillsSecuritySettings({ token }: { token: string }) {
           >
             <select
               value={v.judgeTrigger}
-              disabled={savingPath === "memory.skill_import.llm_judge.trigger"}
-              onChange={(e) => void onSave("memory.skill_import.llm_judge.trigger", e.target.value)}
+              disabled={savingPath === "skills.security.llm_judge.trigger"}
+              onChange={(e) => void onSave("skills.security.llm_judge.trigger", e.target.value)}
               className="rounded-[8px] border border-border/60 bg-background px-2 py-1 text-[13px] disabled:opacity-50"
             >
               <option value="off">{t("settings.skillsSecurity.trigger.off")}</option>
@@ -163,8 +163,8 @@ export function SkillsSecuritySettings({ token }: { token: string }) {
           >
             <select
               value={v.judgeMaxSeverity}
-              disabled={savingPath === "memory.skill_import.llm_judge.max_severity"}
-              onChange={(e) => void onSave("memory.skill_import.llm_judge.max_severity", e.target.value)}
+              disabled={savingPath === "skills.security.llm_judge.max_severity"}
+              onChange={(e) => void onSave("skills.security.llm_judge.max_severity", e.target.value)}
               className="rounded-[8px] border border-border/60 bg-background px-2 py-1 text-[13px] disabled:opacity-50"
             >
               <option value="caution">{t("settings.skillsSecurity.severity.caution")}</option>
@@ -178,8 +178,8 @@ export function SkillsSecuritySettings({ token }: { token: string }) {
             <ModelField
               value={v.judgeModel}
               disabled={false}
-              saving={savingPath === "memory.skill_import.llm_judge.model"}
-              onSave={(m) => void onSave("memory.skill_import.llm_judge.model", m)}
+              saving={savingPath === "skills.security.llm_judge.model"}
+              onSave={(m) => void onSave("skills.security.llm_judge.model", m)}
             />
           </SettingsRow>
         </SettingsGroup>
@@ -202,7 +202,7 @@ export function SkillsSecuritySettings({ token }: { token: string }) {
                   <Button
                     size="sm"
                     variant="ghost"
-                    disabled={savingPath === "memory.skill_import.allowlist"}
+                    disabled={savingPath === "skills.security.allowlist"}
                     onClick={() => void removePattern(p)}
                     aria-label={t("settings.skillsSecurity.removePattern")}
                   >
@@ -226,7 +226,7 @@ export function SkillsSecuritySettings({ token }: { token: string }) {
               />
               <Button
                 size="sm"
-                disabled={!newPattern.trim() || savingPath === "memory.skill_import.allowlist"}
+                disabled={!newPattern.trim() || savingPath === "skills.security.allowlist"}
                 onClick={addPattern}
               >
                 {t("settings.skillsSecurity.addPattern")}
@@ -250,10 +250,10 @@ export function SkillsSecuritySettings({ token }: { token: string }) {
             <div className="flex items-center gap-2">
               <select
                 value={v.githubTokenSecret}
-                disabled={savingPath === "memory.skill_import.github_token_secret"}
+                disabled={savingPath === "skills.security.github_token_secret"}
                 onChange={(e) => {
                   setTokenTest(null);
-                  void onSave("memory.skill_import.github_token_secret", e.target.value);
+                  void onSave("skills.security.github_token_secret", e.target.value);
                 }}
                 className="rounded-[8px] border border-border/60 bg-background px-2 py-1 text-[13px] disabled:opacity-50"
               >
@@ -293,20 +293,20 @@ export function SkillsSecuritySettings({ token }: { token: string }) {
           <NumberRow
             title={t("settings.skillsSecurity.rows.maxFiles")}
             value={v.maxFiles}
-            saving={savingPath === "memory.skill_import.max_files"}
-            onSave={(n) => void onSave("memory.skill_import.max_files", n)}
+            saving={savingPath === "skills.security.max_files"}
+            onSave={(n) => void onSave("skills.security.max_files", n)}
           />
           <NumberRow
             title={t("settings.skillsSecurity.rows.maxTotalMb")}
             value={Math.round(v.maxTotalBytes / MB)}
-            saving={savingPath === "memory.skill_import.max_total_bytes"}
-            onSave={(n) => void onSave("memory.skill_import.max_total_bytes", n * MB)}
+            saving={savingPath === "skills.security.max_total_bytes"}
+            onSave={(n) => void onSave("skills.security.max_total_bytes", n * MB)}
           />
           <NumberRow
             title={t("settings.skillsSecurity.rows.maxFileMb")}
             value={Math.round(v.maxFileBytes / MB)}
-            saving={savingPath === "memory.skill_import.max_file_bytes"}
-            onSave={(n) => void onSave("memory.skill_import.max_file_bytes", n * MB)}
+            saving={savingPath === "skills.security.max_file_bytes"}
+            onSave={(n) => void onSave("skills.security.max_file_bytes", n * MB)}
           />
         </SettingsGroup>
       </section>
