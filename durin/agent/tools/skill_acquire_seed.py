@@ -31,6 +31,11 @@ _PARAMETERS = tool_parameters_schema(
 class SkillAcquireSeedTool(Tool):
     """Return a safe registry seed for one chosen ref, or null (pick another)."""
 
+    # Dream-only: Path A (in-session) uses the raw skill_search/skill_import/
+    # ask_user_question tools so the user approves risky candidates. This gated tool
+    # silently skips risky ones, which is correct ONLY for the autonomous dream.
+    _scopes = {"dream"}
+
     def __init__(self, workspace: str | Path, allowlist: list[str]) -> None:
         self._workspace = Path(workspace)
         self._allowlist = list(allowlist)
