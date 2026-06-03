@@ -487,6 +487,114 @@ async def test_skills_quarantine_route_not_shadowed_by_skill_name(
         await server_task
 
 
+# --- §6.B import routes (local source, no network) ---------------------------
+
+def _mk_source_skill(root: Path, name: str = "imported", body: str = "Step 1: do it.\n") -> Path:
+    d = root / "src" / name
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text(f"---\nname: {name}\ndescription: d\n---\n{body}")
+    return d
+
+
+def _real_cfg_at(ws: Path):
+    from durin.config.loader import load_config
+    cfg = load_config()
+    cfg.agents.defaults.workspace = str(ws)
+    return cfg
+
+
+@pytest.mark.asyncio
+async def test_skills_resolve_route_lists_local_candidates(
+    bus: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from urllib.parse import quote
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    src = _mk_source_skill(tmp_path)
+    cfg = _real_cfg_at(ws)
+    monkeypatch.setattr("durin.config.loader.load_config", lambda *a, **k: cfg)
+    channel = _ch(bus, port=29920)
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+    try:
+        boot = await _http_get("http://127.0.0.1:29920/webui/bootstrap")
+        auth = {"Authorization": f"Bearer {boot.json()['token']}"}
+        resp = await _http_get(
+            f"http://127.0.0.1:29920/api/skills/resolve?source={quote(str(src))}", headers=auth)
+        assert resp.status_code == 200
+        body = resp.json()
+        # routed to resolve (not skill-get with name='resolve')
+        assert "candidates" in body
+        assert "imported" in {c["name"] for c in body["candidates"]}
+    finally:
+        await channel.stop()
+        await server_task
+
+
+@pytest.mark.asyncio
+async def test_skills_import_then_approve_installs(
+    bus: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from urllib.parse import quote
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    src = _mk_source_skill(tmp_path)
+    cfg = _real_cfg_at(ws)
+    monkeypatch.setattr("durin.config.loader.load_config", lambda *a, **k: cfg)
+    channel = _ch(bus, port=29921)
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+    try:
+        boot = await _http_get("http://127.0.0.1:29921/webui/bootstrap")
+        auth = {"Authorization": f"Bearer {boot.json()['token']}"}
+        imp = await _http_get(
+            f"http://127.0.0.1:29921/api/skills/import?source={quote(str(src))}", headers=auth)
+        assert imp.status_code == 200
+        body = imp.json()
+        assert body["quarantined"] == "imported"
+        assert body["verdict"] == "safe"
+        # a safe but out-of-allowlist skill needs confirm: bare approve is refused.
+        refused = await _http_get(
+            "http://127.0.0.1:29921/api/skills/imported/approve", headers=auth)
+        assert refused.status_code == 409
+        assert refused.json()["refused"] == "confirm"
+        ok = await _http_get(
+            "http://127.0.0.1:29921/api/skills/imported/approve?confirm=true", headers=auth)
+        assert ok.status_code == 200 and ok.json()["ok"]
+        assert (ws / "skills" / "imported" / "SKILL.md").is_file()
+    finally:
+        await channel.stop()
+        await server_task
+
+
+@pytest.mark.asyncio
+async def test_skill_reject_route_removes_quarantine(
+    bus: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from urllib.parse import quote
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    src = _mk_source_skill(tmp_path)
+    cfg = _real_cfg_at(ws)
+    monkeypatch.setattr("durin.config.loader.load_config", lambda *a, **k: cfg)
+    channel = _ch(bus, port=29922)
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+    try:
+        boot = await _http_get("http://127.0.0.1:29922/webui/bootstrap")
+        auth = {"Authorization": f"Bearer {boot.json()['token']}"}
+        await _http_get(
+            f"http://127.0.0.1:29922/api/skills/import?source={quote(str(src))}", headers=auth)
+        assert (ws / ".durin" / "import-quarantine" / "imported").is_dir()
+        rej = await _http_get(
+            "http://127.0.0.1:29922/api/skills/imported/reject", headers=auth)
+        assert rej.status_code == 200 and rej.json()["ok"]
+        assert not (ws / ".durin" / "import-quarantine" / "imported").exists()
+    finally:
+        await channel.stop()
+        await server_task
+
+
 @pytest.mark.asyncio
 async def test_unknown_route_returns_404(bus: MagicMock) -> None:
     channel = _ch(bus, port=29907)
