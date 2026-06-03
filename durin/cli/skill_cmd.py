@@ -106,6 +106,43 @@ def cmd_audit(
         console.print("[yellow]Lint warnings:[/yellow] " + "; ".join(rep.warnings))
 
 
+@skill_app.command("search")
+def cmd_search(
+    query: str = typer.Argument(..., help="What to search for across the configured skill registries."),
+    limit: int = typer.Option(0, "--limit", "-n", help="Max results (0 = config default)."),
+) -> None:
+    """Search external skill registries (skills.sh, …) for a skill.
+
+    Prints ranked hits; import one through the agent's `skill_import` tool or the
+    web panel — `search` never installs.
+    """
+    import asyncio
+
+    from durin.agent.skill_registry import build_adapters, search_registries
+
+    cfg = load_config()
+    disc = cfg.skills.discovery
+    hits = asyncio.run(search_registries(
+        query,
+        adapters=build_adapters(disc.registries),
+        allowlist=list(cfg.skills.security.allowlist),
+        limit=limit or disc.search_limit,
+    ))
+    if not hits:
+        console.print(f"[dim]No skills found for[/dim] {query!r}.")
+        return
+    table = Table(title=f"Skill search: {query}", show_lines=False)
+    table.add_column("Name", style="bold", no_wrap=True)
+    table.add_column("Registry", style="cyan", no_wrap=True)
+    table.add_column("Installs", justify="right", no_wrap=True)
+    table.add_column("Ref", style="dim", overflow="fold")
+    for h in hits:
+        installs = h.signals.get("installs")
+        table.add_row(h.name, h.registry,
+                      f"{installs:,}" if isinstance(installs, int) else "-", h.ref)
+    console.print(table)
+
+
 def _verdict_cell(verdict: str) -> str:
     style = _VERDICT_STYLE.get(verdict, "white")
     return f"[{style}]{verdict or '-'}[/{style}]"
