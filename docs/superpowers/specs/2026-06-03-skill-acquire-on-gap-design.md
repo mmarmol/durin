@@ -86,6 +86,11 @@ is handled.
 
 ### Path B — Dream phase 2 (autonomous, backstop)
 
+This is the **2h `dream` job** (`agent.dream.run()`, phase 2) — the **create** path.
+It is NOT the daily `curate_catalog` (which only evolves/fuses existing skills + §8.D
+drift, never creates). §6.C touches only the create path; the daily evolve pass is
+untouched.
+
 - **Trigger:** the existing `[SKILL]` flag (workflow seen 2+ times in history) — no
   new trigger.
 - **Flow:** before authoring a flagged `[SKILL]` from scratch, search the registries
@@ -120,10 +125,12 @@ This reuses `decide_action` verbatim — there is **no new policy engine**. §8.
      flexible.
    Network note: `search_registries` uses `ssrf_safe_async_client` over public HTTP
    (not MCP), so it is reachable from the cron/headless dream.
-2. **In-session confirmation surface.** Plain conversation turn (agent proposes
-   candidates, user replies) vs. a structured ask widget if durin has one. To verify
-   against durin's actual in-loop user-prompt capability — do **not** assume a
-   Claude-Code-style `AskUserQuestion` exists in durin without checking.
+2. **In-session confirmation surface — RESOLVED.** durin has a native
+   `ask_user_question` tool (`durin/agent/tools/ask_user.py`,
+   `AskUserQuestionTool`): `question` + `options` (array), with a
+   `session.metadata['pending_question']` hook for structured UI rendering. Path A
+   surfaces risky candidates as `options` (recommended first; flag which need tool
+   installs) and waits for the user's pick. No new mechanism needed.
 3. **In-session "recurring workflow" signal.** In-session the agent sees only the
    current session, not the 2+-occurrence history signal phase-1 uses. The nudge must
    lean on *complexity / "you just reinvented this"* (Hermes's `SKILLS_GUIDANCE`
