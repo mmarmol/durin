@@ -64,3 +64,37 @@ def test_sensitive_path_reference(tmp_path):
 def test_hardcoded_secret(tmp_path):
     r = scan_skill(_mk(tmp_path, body="Use AKIAIOSFODNN7EXAMPLE for access.\n"))
     assert any(f.category == "secrets" for f in r.findings)
+
+
+def _mk_install(tmp, install_yaml, name="ins"):
+    d = tmp / name
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: d\nmetadata:\n  openclaw:\n    install:\n{install_yaml}---\n body\n")
+    return d
+
+
+def test_clean_install_spec_no_finding(tmp_path):
+    d = _mk_install(tmp_path, "      - {kind: brew, formula: gh}\n")
+    assert not any(f.category == "install_spec" for f in scan_skill(d).findings)
+
+
+def test_download_non_https_flagged(tmp_path):
+    d = _mk_install(tmp_path, "      - {kind: download, url: \"file:///tmp/x.tgz\"}\n")
+    fs = scan_skill(d).findings
+    assert any(f.category == "install_spec" for f in fs)
+
+
+def test_brew_formula_traversal_flagged(tmp_path):
+    d = _mk_install(tmp_path, "      - {kind: brew, formula: \"../evil\"}\n")
+    assert any(f.category == "install_spec" for f in scan_skill(d).findings)
+
+
+def test_go_module_url_flagged(tmp_path):
+    d = _mk_install(tmp_path, "      - {kind: go, module: \"https://evil.example/mod\"}\n")
+    assert any(f.category == "install_spec" for f in scan_skill(d).findings)
+
+
+def test_node_pkg_with_protocol_flagged(tmp_path):
+    d = _mk_install(tmp_path, "      - {kind: node, package: \"file:../malicious\"}\n")
+    assert any(f.category == "install_spec" for f in scan_skill(d).findings)
