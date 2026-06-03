@@ -98,37 +98,57 @@ def compute_working_set(
 
     Top ``frequent`` candidates by call-count over ``frequent_window_hours``
     (the durable working set), then top ``recent`` over ``recent_window_hours``,
-    deduped. Filled to ``frequent + recent`` from ``candidates`` (stable order)
-    so a small/cold catalog still injects something. Usage for names not in
+    deduped. Then fill to ``frequent + recent``: first with any remaining
+    *used* candidates (by combined count) so a used skill never loses a slot
+    to an unused one, then with the rest in stable ``candidates`` order so a
+    small/cold catalog still injects something. Usage for names not in
     ``candidates`` is ignored. Returns at most ``frequent + recent`` names.
     """
     cand_set = set(candidates)
 
-    def _ranked(window: float, top: int) -> list[str]:
+    def _totals(window: float, top: int) -> dict[str, int]:
         if top <= 0:
-            return []
+            return {}
         agg = collect_recent_skill_calls(workspace, within_hours=window)
-        totals = {
+        return {
             s: sum(ops.values())
             for s, ops in agg.items()
             if s in cand_set
         }
+
+    def _top(totals: dict[str, int], top: int) -> list[str]:
         ordered = sorted(totals.items(), key=lambda kv: (-kv[1], kv[0]))
-        return [s for s, _ in ordered[:top]]
+        return [s for s, _ in ordered[:max(0, top)]]
+
+    freq_totals = _totals(frequent_window_hours, frequent)
+    rec_totals = _totals(recent_window_hours, recent)
 
     out: list[str] = []
     seen: set[str] = set()
-    for name in (*_ranked(frequent_window_hours, frequent),
-                 *_ranked(recent_window_hours, recent)):
+    for name in (*_top(freq_totals, frequent), *_top(rec_totals, recent)):
         if name not in seen:
             seen.add(name)
             out.append(name)
 
     budget = max(0, recent) + max(0, frequent)
-    for name in candidates:
-        if len(out) >= budget:
-            break
-        if name not in seen:
-            seen.add(name)
-            out.append(name)
+    if len(out) < budget:
+        # Fill: prefer remaining *used* candidates (by combined count) over
+        # never-used ones — a used skill must not lose a slot to an unused one
+        # when the budget is below the used-set size. Then any remaining slots
+        # go to unused candidates in stable catalog order.
+        combined: dict[str, int] = {}
+        for s in cand_set:
+            c = freq_totals.get(s, 0) + rec_totals.get(s, 0)
+            if c > 0:
+                combined[s] = c
+        used_rest = [
+            s for s in sorted(combined, key=lambda s: (-combined[s], s))
+            if s not in seen
+        ]
+        for name in (*used_rest, *candidates):
+            if len(out) >= budget:
+                break
+            if name not in seen:
+                seen.add(name)
+                out.append(name)
     return out[:budget]

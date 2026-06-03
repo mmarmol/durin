@@ -42,3 +42,17 @@ def test_budget_caps_large_cold_catalog(monkeypatch, tmp_path):
     cands = [f"s{i}" for i in range(50)]
     ws = compute_working_set(tmp_path, cands, recent=5, frequent=10)
     assert ws == cands[:15]
+
+
+def test_fill_prefers_used_over_unused(monkeypatch, tmp_path):
+    # 4 used skills but each window's top-2 only selects {deploy, rebase};
+    # budget=4 must fill the 2 remaining slots with the OTHER used skills
+    # (lint, docs), never the unused tail (live-verify regression).
+    _patch_calls(monkeypatch, {
+        168.0: {"deploy": 10, "rebase": 8, "lint": 6, "docs": 4},
+        24.0: {"deploy": 10, "rebase": 8, "lint": 6, "docs": 4},
+    })
+    cands = ["deploy", "rebase", "lint", "docs", "obscure1", "obscure2"]
+    ws = compute_working_set(tmp_path, cands, recent=2, frequent=2)
+    assert set(ws) == {"deploy", "rebase", "lint", "docs"}
+    assert "obscure1" not in ws and "obscure2" not in ws
