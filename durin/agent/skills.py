@@ -108,7 +108,11 @@ class SkillsLoader:
         ]
         return "\n\n---\n\n".join(parts)
 
-    def build_skills_summary(self, exclude: set[str] | None = None) -> str:
+    def build_skills_summary(
+        self,
+        exclude: set[str] | None = None,
+        include: set[str] | None = None,
+    ) -> str:
         """
         Build a summary of all skills (name, description, path, availability).
 
@@ -125,6 +129,9 @@ class SkillsLoader:
 
         Args:
             exclude: Set of skill names to omit from the summary.
+            include: When provided, only these names appear — used by the
+                hot working-set tier. ``exclude`` still wins (a name in both
+                is skipped).
 
         Returns:
             Markdown-formatted skills summary.
@@ -137,6 +144,8 @@ class SkillsLoader:
         for entry in all_skills:
             skill_name = entry["name"]
             if exclude and skill_name in exclude:
+                continue
+            if include is not None and skill_name not in include:
                 continue
             # ``_get_skill_meta`` returns the nested durin-specific blob
             # (under ``metadata.durin``); the disable flag lives at the
