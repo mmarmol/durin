@@ -291,13 +291,14 @@ The config lives as **per-topic files** under `~/.durin/config.json.d/` rather t
 ```
 ~/.durin/
     config.json          # 1-line marker: {"_layout": "split"}
-    config.json.d/       # per-topic files
-        agents.json  providers.json  channels.json  memory.json
-        gateway.json tools.json      api.json        install.json
+    config.json.d/       # one file per non-default top-level section
+        agents.json  memory.json    skills.json   providers.json
+        channels.json  tools.json   telemetry.json  api.json  …
     config.json.legacy   # backup of the pre-split monolith
 ```
 
 - **Migration is automatic**: the first `load_config` on a legacy monolith splits it, backs the original up as `config.json.legacy`, and rewrites `config.json` as a marker. See `durin/config/loader.py`.
+- **The section set is derived, not hardcoded**: every non-default top-level `Config` section gets its own file, derived from the serialized config. A newly added section participates automatically — there is no list to keep in sync. (A hardcoded list previously dropped `telemetry` / `appearance` / `skills` on save, each added after the list was frozen.)
 - **`save_config` writes only non-defaults** (`exclude_defaults=True`) then prunes noise: empty provider sections and disabled channels that match their shipped default are dropped. *Enabled* channels keep their full attribute set so every editable field stays discoverable.
 - `read_persisted_config()` is the layout-agnostic reader used by tooling + tests.
 

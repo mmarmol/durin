@@ -311,3 +311,38 @@ def test_skills_section_survives_split_layout_roundtrip(tmp_path) -> None:
     reloaded = load_config(config_path)
 
     assert reloaded.skills.security.allowlist == ["github:acme/"]
+
+
+def test_telemetry_section_survives_split_layout_roundtrip(tmp_path) -> None:
+    """Regression: telemetry was silently dropped on save/migrate because the
+    split layout used a hardcoded section list it was added to after the fact."""
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps({"telemetry": {"push": {"enabled": True}}}), encoding="utf-8"
+    )
+
+    cfg = load_config(config_path)  # migrates monolith → split
+    save_config(cfg, config_path)  # writes split
+
+    assert load_config(config_path).telemetry.push.enabled is True
+
+
+def test_write_split_layout_persists_every_section_including_unknown(tmp_path) -> None:
+    """The split writer must persist EVERY top-level section it is handed —
+    including one no hardcoded list ever knew about — so a future Config section
+    can never be silently dropped on save."""
+    from durin.config.loader import _read_split_layout, _write_split_layout
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({"_layout": "split"}) + "\n", encoding="utf-8")
+    data = {
+        "agents": {"defaults": {"botName": "x"}},
+        "telemetry": {"push": {"enabled": True}},
+        "appearance": {"foo": 1},
+        "skills": {"security": {"allowlist": ["github:acme/"]}},
+        "aFutureSectionNotYetInvented": {"k": 2},
+    }
+
+    _write_split_layout(data, config_path)
+
+    assert _read_split_layout(config_path) == data
