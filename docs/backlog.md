@@ -184,6 +184,38 @@ tolerable en vaults chicos. Priorizar si/ cuando un vault grande muestre
 latencia per-write medible (medir antes de diseñar).
 
 
+### P6 — Skills importadas: sin sandbox ni consentimiento de ejecución runtime
+
+**Contexto**: §6.B importa skills a través del piso §8.C (fetch → cuarentena →
+scan → gate → install). El gate es **install-time**: controla que la skill ENTRE.
+
+**Problema**: una vez instalada (incluso una `dangerous` vía override), la skill
+corre sus instrucciones/scripts con los permisos normales del agente. No hay
+sandbox de ejecución ni consentimiento por-skill al correrla. El gate no confina
+la ejecución.
+
+**Qué hace el campo** (investigado 2026-06-03, hermes + openclaw):
+- Ninguno sandboxea la ejecución de skills. Ambos gatean sólo install-time y
+  ejecutan vía su capa genérica de aprobación de tools (`tools/approval.py` en
+  hermes; `exec-approvals.ts` `ExecSecurity/ExecAsk` en openclaw).
+- Hermes: los `install` specs de dependencias (brew/npm) **nunca se ejecutan** —
+  quedan para el agente vía su terminal aprobado. `skills.inline_shell` (off por
+  default) puede pre-ejecutar `` !`cmd` `` del body SIN aprobación.
+- Openclaw: **auto-ejecuta** los install specs (hardening: `--ignore-scripts`,
+  regex allowlist, bootstrap go/uv que puede correr brew/apt con sudo). Único
+  consentimiento: el wizard de onboarding.
+
+**Propuesta tentativa** (incremental, no el sandbox completo):
+1. Near-term: cuando una skill declara `install` specs, **ofrecer correrlos con
+   aprobación explícita** del user (punto medio entre hermes=nunca y
+   openclaw=auto).
+2. Apoyar la ejecución de scripts de skills en el gate de tools de durin.
+3. Sandbox real (límites FS/red por skill) = v2 grande; medir necesidad.
+
+**Estado**: pendiente, no bloquea. durin alineado con el campo (gate
+install-time). El item #1 es el más valioso y acotado.
+
+
 ---
 
-## Last updated: 2026-06-01 (S1 redacción A4+A5 implementado y removido; ver commit)
+## Last updated: 2026-06-03 (P6 skill runtime execution añadido)
