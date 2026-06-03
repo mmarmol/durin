@@ -248,11 +248,17 @@ Nivel 1 local híbrido; nivel 2 remoto solo on-gap (→ C).
   [`2026-06-02-skills-evolution-e2-design.md`](../superpowers/specs/2026-06-02-skills-evolution-e2-design.md)
   (§2 reparto, §4 señal, Apéndice A evidencia).
 
-- **B. Estándar de interop.** ¿`agentskills.io` (donde está el Hub de Hermes,
-  habilita buscar/comparar en varios marketplaces con una query) vs nativo
-  Claude-Code (donde el formato de durin ya está casi nativo)? **Load-bearing**:
-  sin esto no hay §6.C. ¿Adoptar estándar o escribir adaptadores por
-  marketplace?
+- ~~**B. Estándar de interop.**~~ **RESUELTO (2026-06-03).** Se adopta
+  **[agentskills.io](https://agentskills.io/specification)** — el estándar abierto
+  al que TODO el ecosistema convergió (Hermes, OpenClaw, Pi, Claude Code, Codex,
+  Cursor, 30+ tools, 490k+ skills; agentskills.io ES la forma abierta/gobernada
+  del formato de Anthropic, no su producto). durin = core estándar en root +
+  comportamiento bajo `metadata.durin.*` + **fidelidad de round-trip** (preserva
+  frontmatter ajeno) → import es casi un no-op. Diseño + porqué:
+  [`docs/superpowers/specs/2026-06-03-skill-interop-standard-design.md`](../superpowers/specs/2026-06-03-skill-interop-standard-design.md);
+  contrato canónico: [`docs/architecture/skills/01_format_and_interop.md`](../architecture/skills/01_format_and_interop.md).
+  Implementado (round-trip + `platforms` + spellings + version/license) y
+  verificado live con skills reales de Hermes. El import (§6.B) es el siguiente plan.
 
 - **C. Piso de seguridad invariante** (el meta-skill no puede bajarlo).
   Propuesta de arranque, a confirmar: *(1) instalar/ejecutar código de una
