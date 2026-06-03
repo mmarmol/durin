@@ -6,6 +6,7 @@ import { MarkdownText, preloadMarkdownText } from "@/components/MarkdownText";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  addTrustPattern,
   ApiError,
   approveSkill,
   getSkill,
@@ -264,6 +265,25 @@ export function SkillsView() {
       }
     },
     [token, refresh],
+  );
+
+  // One-click "trust this source": append the suggested prefix to the allowlist
+  // so future safe imports from it skip the confirm. Refine/remove in settings.
+  const trust = useCallback(
+    async (prefix: string) => {
+      if (!prefix) return;
+      setActing(prefix);
+      setImportMsg(null);
+      try {
+        await addTrustPattern(token, prefix);
+        setImportMsg(t("skills.import.trusted", { prefix }));
+      } catch (e) {
+        setImportMsg(errMsg(e));
+      } finally {
+        setActing(null);
+      }
+    },
+    [token, t],
   );
 
   const dirty = detail != null && draft !== detail.content;
@@ -560,6 +580,17 @@ export function SkillsView() {
                       >
                         {t("skills.import.reject")}
                       </Button>
+                      {q.trust_prefix ? (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          disabled={acting === q.trust_prefix}
+                          onClick={() => void trust(q.trust_prefix!)}
+                          title={q.trust_prefix}
+                        >
+                          {t("skills.import.trust")}
+                        </Button>
+                      ) : null}
                     </div>
                   )}
                 </div>

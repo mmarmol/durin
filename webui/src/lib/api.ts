@@ -337,6 +337,8 @@ export interface QuarantineRow {
   source: string;
   verdict: SkillVerdict;
   findings: SkillFinding[];
+  /** Suggested allowlist prefix for a one-click "trust this source" (§A1). */
+  trust_prefix?: string;
 }
 
 export interface SkillDetail {
@@ -437,6 +439,41 @@ export async function rejectSkill(
     `${base}/api/skills/${encodeURIComponent(name)}/reject`,
     token,
   );
+}
+
+export interface GithubTokenTestResult {
+  ok: boolean;
+  remaining?: number | null;
+  limit?: number | null;
+  error?: string;
+}
+
+export async function testGithubToken(
+  token: string,
+  secret: string,
+  base: string = "",
+): Promise<GithubTokenTestResult> {
+  const query = new URLSearchParams({ secret });
+  return request<GithubTokenTestResult>(
+    `${base}/api/skills/github-token-test?${query}`,
+    token,
+  );
+}
+
+/** Add a trust-pattern prefix to the import allowlist (one-click "trust source").
+ *  Reads the current allowlist, appends, and writes it back via config. */
+export async function addTrustPattern(
+  token: string,
+  prefix: string,
+  base: string = "",
+): Promise<void> {
+  const snap = await getConfig(token, base);
+  const memory = (snap.config as { memory?: { skillImport?: { allowlist?: unknown } } })?.memory;
+  const cur = Array.isArray(memory?.skillImport?.allowlist)
+    ? (memory!.skillImport!.allowlist as string[])
+    : [];
+  if (cur.includes(prefix)) return;
+  await setConfigValue(token, "memory.skill_import.allowlist", [...cur, prefix], base);
 }
 
 export async function getSkill(

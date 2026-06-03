@@ -72,6 +72,7 @@
       "advanced": "All settings",
       "channels": "Channels",
       "memory": "Memoria",
+      "skills-security": "Seguridad de skills",
       "cron": "Cron"
     },
     "sections": {
@@ -256,6 +257,43 @@
       },
       "workingMemoryDescription": "Consolidación cada 2 horas del historial de chat en MEMORY.md / SOUL.md / USER.md y creación de skills sobre la marcha. Solo dispara cuando hay material acumulado suficiente para justificar la llamada al LLM."
     },
+    "skillsSecurity": {
+      "description": "Política de seguridad para importar skills (§8.C/§6.B): el juez LLM, patrones de confianza, el token de GitHub y los límites de tamaño.",
+      "loadError": "No se pudo cargar la configuración.",
+      "saveError": "No se pudo guardar el ajuste.",
+      "sections": {
+        "judge": "Juez LLM de seguridad",
+        "trust": "Patrones de confianza",
+        "token": "Token de GitHub",
+        "caps": "Límites de tamaño"
+      },
+      "rows": {
+        "judgeEnabled": "Correr el juez LLM",
+        "judgeMaxSeverity": "Severidad máxima",
+        "judgeModel": "Modelo del juez",
+        "tokenSecret": "Secret del token",
+        "maxFiles": "Máx archivos",
+        "maxTotalMb": "Máx total (MB)",
+        "maxFileMb": "Máx por archivo (MB)"
+      },
+      "help": {
+        "judgeEnabled": "Tras el scan determinista, un LLM revisa cada skill importada por lo que el regex no ve. Corre una vez por import; degrada en silencio si no hay modelo disponible.",
+        "judgeMaxSeverity": "Hasta dónde puede subir el verdict. 'Precaución' fuerza un confirm pero nunca bloquea solo; 'Peligrosa' le permite bloquear (requiere override).",
+        "judgeModel": "Nombre del modelo del juez. Vacío usa el modelo de memoria por default."
+      },
+      "severity": { "caution": "Precaución (confirm)", "dangerous": "Peligrosa (bloquea)" },
+      "trustDescription": "Una skill sana de una fuente confiable se instala sin confirm. Los patrones matchean la fuente por prefijo — ej: github:acme/, https://gitlab.com/acme/.",
+      "noPatterns": "Todavía no hay patrones de confianza.",
+      "patternPlaceholder": "github:owner/ o https://host/path/",
+      "addPattern": "Agregar",
+      "removePattern": "Quitar patrón",
+      "tokenDescription": "Un token de GitHub sube el rate limit de la API y alcanza repos privados. Elegí un secret que tenga el token (creá uno en la sección Secrets).",
+      "tokenNone": "Ninguno (anónimo)",
+      "testToken": "Probar",
+      "tokenOk": "Token OK — quedan {{remaining}} requests de API.",
+      "tokenTestError": "Falló la prueba del token.",
+      "modelPlaceholder": "modelo por default"
+    },
     "secrets": {
       "addTitle": "Agregar un secret",
       "confirmDelete": "¿Eliminar este secret?",
@@ -341,6 +379,8 @@
       "replace": "Reemplazar",
       "replaceExists": "Ya hay una skill instalada con ese nombre. ¿Reemplazarla?",
       "cancel": "Cancelar",
+      "trust": "Confiar fuente",
+      "trusted": "Confiado {{prefix}} — futuros imports sanos de ahí se saltan el confirm.",
       "unresolved": "No se pudo resolver una skill desde esa fuente. Pedíle al agente en el chat que investigue el link."
     },
     "title": "Skills"
