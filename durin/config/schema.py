@@ -383,6 +383,25 @@ class MemoryHealthCheckConfig(Base):
     interval_seconds: int = Field(default=900, ge=60, le=86_400)
 
 
+class SkillsHotTierConfig(Base):
+    """Hot working-set tier for skills (Spec 2 §2.2/§8).
+
+    The cache-stable prefix injects only the usage-ranked working set
+    instead of the whole catalog; the long tail is reachable via
+    ``memory_search`` (kind="skill"). ``enabled=False`` restores the
+    full-catalog injection (A/B / calibration fallback). Sizes favor
+    frequent-over-the-window (the durable working set); ``recent`` is a
+    smaller recency bonus. Calibrate with the shipped ``memory.skill_miss``
+    telemetry.
+    """
+
+    enabled: bool = True
+    recent: int = 15
+    frequent: int = 30
+    frequent_window_hours: float = 168.0  # 7 days
+    recent_window_hours: float = 24.0
+
+
 class MemoryConfig(Base):
     """Memory subsystem configuration root.
 
@@ -411,6 +430,7 @@ class MemoryConfig(Base):
     # Skills are authored + injected already; this gates making them
     # searchable as a `skill` memory class (skill-memory-class indexing).
     index_skills: bool = True
+    skills_hot_tier: SkillsHotTierConfig = Field(default_factory=SkillsHotTierConfig)
     embedding: MemoryEmbeddingConfig = Field(default_factory=MemoryEmbeddingConfig)
     dream: MemoryDreamConfig = Field(default_factory=MemoryDreamConfig)
     search: MemorySearchConfig = Field(default_factory=MemorySearchConfig)
