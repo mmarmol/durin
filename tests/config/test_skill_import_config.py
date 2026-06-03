@@ -8,3 +8,41 @@ def test_default_allowlist_empty():
 def test_allowlist_camel_roundtrip():
     cfg = Config.model_validate({"memory": {"skillImport": {"allowlist": ["github:NousResearch/"]}}})
     assert cfg.memory.skill_import.allowlist == ["github:NousResearch/"]
+
+
+def test_default_caps():
+    si = Config().memory.skill_import
+    assert si.max_files == 100
+    assert si.max_total_bytes == 3 * 1024 * 1024
+    assert si.max_file_bytes == 1024 * 1024
+
+
+def test_default_install_specs_policy_is_never():
+    assert Config().memory.skill_import.install_specs_policy == "never"
+
+
+def test_default_github_token_secret_empty():
+    assert Config().memory.skill_import.github_token_secret == ""
+
+
+def test_llm_judge_defaults():
+    j = Config().memory.skill_import.llm_judge
+    assert j.enabled is True          # ON by default (graceful degrade if no aux model)
+    assert j.max_severity == "caution"
+    assert j.model == ""
+
+
+def test_new_fields_camel_roundtrip():
+    cfg = Config.model_validate({"memory": {"skillImport": {
+        "githubTokenSecret": "gh_tok",
+        "maxFiles": 50,
+        "installSpecsPolicy": "ask",
+        "llmJudge": {"enabled": False, "maxSeverity": "dangerous", "model": "fast"},
+    }}})
+    si = cfg.memory.skill_import
+    assert si.github_token_secret == "gh_tok"
+    assert si.max_files == 50
+    assert si.install_specs_policy == "ask"
+    assert si.llm_judge.enabled is False
+    assert si.llm_judge.max_severity == "dangerous"
+    assert si.llm_judge.model == "fast"
