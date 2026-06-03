@@ -439,6 +439,25 @@ class SkillSecurityConfig(Base):
     llm_judge: SkillJudgeConfig = Field(default_factory=SkillJudgeConfig)
 
 
+class SkillRegistryConfig(Base):
+    """One search registry. ``kind`` selects the adapter; ``api_key_secret`` names
+    a durin secret (empty → anonymous). ``taps`` is github-only (repos to search)."""
+
+    name: str
+    kind: Literal["skills.sh", "clawhub", "github", "well-known"]
+    enabled: bool = True
+    api_key_secret: str = ""
+    taps: list[str] = Field(default_factory=list)
+
+
+class SkillsDiscoveryConfig(Base):
+    """Skill discovery: which registries to search + how many results."""
+
+    registries: list[SkillRegistryConfig] = Field(
+        default_factory=lambda: [SkillRegistryConfig(name="skills.sh", kind="skills.sh")])
+    search_limit: int = 10
+
+
 class SkillsConfig(Base):
     """Global skill-subsystem governance (spec 2026-06-03 §9). Per-agent
     skill-context tuning (``skills_hot_tier``, ``disabled_skills``) lives on
@@ -446,6 +465,7 @@ class SkillsConfig(Base):
     ``discovery`` (registries + search) is added by the discovery feature."""
 
     security: SkillSecurityConfig = Field(default_factory=SkillSecurityConfig)
+    discovery: SkillsDiscoveryConfig = Field(default_factory=SkillsDiscoveryConfig)
 
 
 class MemoryConfig(Base):
