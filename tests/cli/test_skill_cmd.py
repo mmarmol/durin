@@ -33,8 +33,13 @@ def _plain(text: str) -> str:
 def _mk_skill(ws: Path, name: str, body: str) -> Path:
     d = ws / "skills" / name
     d.mkdir(parents=True)
+    # Provenance = a legitimately-gated skill (else the unverified-origin sweep
+    # relocates it to quarantine and it leaves the active inventory).
     (d / "SKILL.md").write_text(
-        f"---\nname: {name}\ndescription: a test skill\n---\n{body}\n",
+        f"---\nname: {name}\ndescription: a test skill\n"
+        "metadata:\n  durin:\n    provenance:\n"
+        '      source: "github:o/r/x"\n      content_hash: "abc"\n'
+        f"---\n{body}\n",
         encoding="utf-8",
     )
     return d
