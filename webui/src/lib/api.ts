@@ -411,6 +411,29 @@ export async function importSource(
   return request<ImportResult>(`${base}/api/skills/import?${query}`, token);
 }
 
+/** A registry search hit. `ref` is the importable source (feed it to
+ *  `importSource`); `signals` is open — today only `installs` is read. */
+export interface SkillSearchHit {
+  name: string;
+  ref: string;
+  registry: string;
+  description: string;
+  signals: { installs?: number };
+}
+
+export async function searchSkills(
+  token: string,
+  query: string,
+  limit = 0,
+  base: string = "",
+): Promise<{ hits: SkillSearchHit[] }> {
+  const params = new URLSearchParams({ query, limit: String(limit) });
+  return request<{ hits: SkillSearchHit[] }>(
+    `${base}/api/skills/search?${params}`,
+    token,
+  );
+}
+
 export async function approveSkill(
   token: string,
   name: string,

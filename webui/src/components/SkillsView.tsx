@@ -16,12 +16,14 @@ import {
   listSkills,
   rejectSkill,
   saveSkill,
+  searchSkills,
   setSkillMode,
   type QuarantineRow,
   type SkillCandidate,
   type SkillDetail,
   type SkillFinding,
   type SkillRow,
+  type SkillSearchHit,
   type SkillVerdict,
 } from "@/lib/api";
 import { useClient } from "@/providers/ClientProvider";
@@ -134,6 +136,10 @@ export function SkillsView() {
   const [importing, setImporting] = useState(false);
   const [importMsg, setImportMsg] = useState<string | null>(null);
   const [picker, setPicker] = useState<SkillCandidate[] | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searching, setSearching] = useState(false);
+  const [searchMsg, setSearchMsg] = useState<string | null>(null);
+  const [hits, setHits] = useState<SkillSearchHit[] | null>(null);
   const [acting, setActing] = useState<string | null>(null);
   const [gate, setGate] = useState<{
     name: string;
@@ -192,6 +198,29 @@ export function SkillsView() {
       }
     },
     [token, refresh, t],
+  );
+
+  // Registry search is read-only: it never installs. Each hit's "Import"
+  // button feeds its `ref` into the same `doImport` flow the manual input
+  // uses (resolve → quarantine → gate), so there's one import path.
+  const doSearch = useCallback(
+    async (query: string) => {
+      const q = query.trim();
+      if (!q) return;
+      setSearching(true);
+      setSearchMsg(null);
+      try {
+        const res = await searchSkills(token, q);
+        setHits(res.hits);
+        if (res.hits.length === 0) setSearchMsg(t("skills.search.empty"));
+      } catch (e) {
+        setHits(null);
+        setSearchMsg(errMsg(e));
+      } finally {
+        setSearching(false);
+      }
+    },
+    [token, t],
   );
 
   // The gate is server-side: approve, and react to what it asks for. A safe,
@@ -458,6 +487,78 @@ export function SkillsView() {
                       <span className="text-[13px] font-medium text-foreground">{c.name}</span>
                       <span className="truncate text-[11px] text-muted-foreground">{c.ref}</span>
                     </button>
+                  ))}
+                </div>
+              ) : null}
+
+              {/* Search the registry — read-only. A hit's Import button feeds
+                  its `ref` into the same import flow above (no install here). */}
+              <form
+                className="mt-2 flex gap-2"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void doSearch(searchQuery);
+                }}
+              >
+                <input
+                  type="search"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder={t("skills.search.placeholder")}
+                  className="min-w-0 flex-1 rounded-[8px] border border-border/60 bg-background px-2.5 py-1.5 text-[12px] outline-none focus:border-primary/60"
+                />
+                <Button type="submit" size="sm" variant="outline" disabled={searching || !searchQuery.trim()}>
+                  {searching ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    t("skills.search.button")
+                  )}
+                </Button>
+              </form>
+              {searchMsg ? (
+                <p className="mt-1.5 text-[12px] text-muted-foreground">{searchMsg}</p>
+              ) : null}
+
+              {hits && hits.length > 0 ? (
+                <div className="mt-2 flex flex-col gap-1 rounded-[8px] border border-border/40 bg-muted/20 p-2">
+                  {hits.map((h) => (
+                    <div
+                      key={h.ref}
+                      className="flex items-start gap-2 rounded-[6px] px-2 py-1.5"
+                    >
+                      <div className="flex min-w-0 flex-1 flex-col">
+                        <span className="flex items-center gap-1.5">
+                          <span className="truncate text-[13px] font-medium text-foreground">
+                            {h.name}
+                          </span>
+                          <span className="shrink-0 text-[11px] text-muted-foreground">
+                            {h.registry}
+                          </span>
+                          {typeof h.signals?.installs === "number" ? (
+                            <span className="shrink-0 text-[11px] text-muted-foreground">
+                              · {t("skills.search.installs", { count: h.signals.installs })}
+                            </span>
+                          ) : null}
+                        </span>
+                        {h.description ? (
+                          <span className="truncate text-[12px] text-muted-foreground">
+                            {h.description}
+                          </span>
+                        ) : null}
+                        <span className="truncate text-[11px] text-muted-foreground/70">
+                          {h.ref}
+                        </span>
+                      </div>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        disabled={importing}
+                        onClick={() => void doImport(h.ref)}
+                      >
+                        {t("skills.import.button")}
+                      </Button>
+                    </div>
                   ))}
                 </div>
               ) : null}
