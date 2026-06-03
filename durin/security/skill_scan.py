@@ -67,13 +67,70 @@ def _apply(text: str, where: str, rules) -> list[Finding]:
     return [Finding(c, s, where, d) for rx, c, s, d in rules if re.search(rx, text)]
 
 
+# Install-spec safe-pattern allowlists (OpenClaw src/agents/skills/frontmatter.ts:28-110).
+# An install spec is an import vector; reject anything outside the proven-safe shapes.
+_BREW_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9@+._/-]*$")
+_GO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._~+\-/]*(?:@[A-Za-z0-9][A-Za-z0-9._~+\-/]*)?$")
+_UV_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-\[\]=<>!~+,]*$")
+_NPM_SCOPED = re.compile(r"^@[a-z0-9][a-z0-9._~-]*/[a-z0-9][a-z0-9._~-]*$")
+_NPM_UNSCOPED = re.compile(r"^[a-z0-9][a-z0-9._~-]*$")
+
+
+def _bad(v, *frags):  # any forbidden substring present, or leading dash / blank
+    return any(f in v for f in frags) or v.startswith("-") or not v.strip()
+
+
+def validate_install_specs(data: dict) -> list[Finding]:
+    out: list[Finding] = []
+    meta = data.get("metadata")
+    if not isinstance(meta, dict):
+        return out
+    for vendor, blob in meta.items():
+        if not isinstance(blob, dict):
+            continue
+        specs = blob.get("install")
+        if not isinstance(specs, list):
+            continue
+        where = f"metadata.{vendor}.install"
+        for spec in specs:
+            if not isinstance(spec, dict):
+                out.append(Finding("install_spec", "dangerous", where, "install entry is not a mapping"))
+                continue
+            kind = str(spec.get("kind", ""))
+            if kind == "brew":
+                val = str(spec.get("formula") or spec.get("cask") or "")
+                if _bad(val, "..", "\\") or (val and not _BREW_RE.match(val)):
+                    out.append(Finding("install_spec", "dangerous", where, f"unsafe brew formula/cask {val!r}"))
+            elif kind == "go":
+                val = str(spec.get("module") or "")
+                if _bad(val, "..", "\\", "://") or (val and not _GO_RE.match(val)):
+                    out.append(Finding("install_spec", "dangerous", where, f"unsafe go module {val!r}"))
+            elif kind == "uv":
+                val = str(spec.get("package") or "")
+                if _bad(val, "..", "\\", "://") or (val and not _UV_RE.match(val)):
+                    out.append(Finding("install_spec", "dangerous", where, f"unsafe uv package {val!r}"))
+            elif kind == "node":
+                val = str(spec.get("package") or "")
+                if ("://" in val or "#" in val or ":" in val or val.startswith("-")
+                        or not (_NPM_SCOPED.match(val) or _NPM_UNSCOPED.match(val.split("@")[0] or val))):
+                    out.append(Finding("install_spec", "dangerous", where, f"unsafe npm spec {val!r}"))
+            elif kind == "download":
+                url = str(spec.get("url") or "")
+                if not re.match(r"^https?://", url) or any(c.isspace() for c in url):
+                    out.append(Finding("install_spec", "dangerous", where, f"unsafe download url {url!r}"))
+            else:
+                out.append(Finding("install_spec", "caution", where, f"unknown install kind {kind!r}"))
+    return out
+
+
 def scan_skill(skill_dir: Path) -> ScanReport:
     skill_dir = Path(skill_dir)
     rep = ScanReport()
     md = skill_dir / "SKILL.md"
     if md.is_file():
-        _, body = split_frontmatter(md.read_text(encoding="utf-8"))
+        data, body = split_frontmatter(md.read_text(encoding="utf-8"))
         rep.findings += _apply(body, "SKILL.md", _BODY_RULES)
+        rep.findings += validate_install_specs(data)
         if _UNICODE_RE.search(body):
             rep.findings.append(Finding("unicode_smuggling", "dangerous", "SKILL.md",
                                         "invisible/bidi/tags unicode in body"))
