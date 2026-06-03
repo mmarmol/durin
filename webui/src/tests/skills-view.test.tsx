@@ -9,7 +9,15 @@ import { ClientProvider } from "@/providers/ClientProvider";
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
-  return { ...actual, listSkills: vi.fn(), listQuarantine: vi.fn(), getSkill: vi.fn() };
+  return {
+    ...actual,
+    listSkills: vi.fn(),
+    listQuarantine: vi.fn(),
+    getSkill: vi.fn(),
+    importSource: vi.fn(),
+    approveSkill: vi.fn(),
+    rejectSkill: vi.fn(),
+  };
 });
 
 function wrap(children: ReactNode) {
@@ -91,5 +99,48 @@ describe("SkillsView security surface", () => {
     await user.click(screen.getByRole("button", { name: /quarantine/i }));
 
     expect(await screen.findByText("No skills in quarantine.")).toBeInTheDocument();
+  });
+
+  it("imports a source through the quarantine-tab input", async () => {
+    vi.mocked(api.listSkills).mockResolvedValue([
+      { name: "clean", source: "builtin", mode: "auto", status: "active", verdict: "safe", findings: [] },
+    ]);
+    vi.mocked(api.listQuarantine).mockResolvedValue([]);
+    vi.mocked(api.importSource).mockResolvedValue({
+      quarantined: "imported", verdict: "safe", needs: "confirm", findings: [],
+    });
+
+    const user = userEvent.setup();
+    render(wrap(<SkillsView />));
+    await screen.findByText("clean");
+    await user.click(screen.getByRole("button", { name: /quarantine/i }));
+
+    const input = await screen.findByPlaceholderText(/Import a skill/i);
+    await user.type(input, "github:owner/repo");
+    await user.click(screen.getByRole("button", { name: "Import" }));
+
+    expect(api.importSource).toHaveBeenCalledWith("tok", "github:owner/repo");
+  });
+
+  it("rejects a quarantined skill", async () => {
+    vi.mocked(api.listSkills).mockResolvedValue([
+      { name: "clean", source: "builtin", mode: "auto", status: "active", verdict: "safe", findings: [] },
+    ]);
+    vi.mocked(api.listQuarantine)
+      .mockResolvedValueOnce([
+        { name: "sketchy", status: "quarantined", source: "github:o/r", verdict: "dangerous", findings: [] },
+      ])
+      .mockResolvedValue([]);
+    vi.mocked(api.rejectSkill).mockResolvedValue({ ok: true });
+
+    const user = userEvent.setup();
+    render(wrap(<SkillsView />));
+    await screen.findByText("clean");
+    await user.click(screen.getByRole("button", { name: /quarantine/i }));
+    await screen.findByText("sketchy");
+
+    await user.click(screen.getByRole("button", { name: "Reject" }));
+
+    expect(api.rejectSkill).toHaveBeenCalledWith("tok", "sketchy");
   });
 });
