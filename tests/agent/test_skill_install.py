@@ -3,10 +3,28 @@ import pytest
 from durin.agent.skills_frontmatter import split_frontmatter
 from durin.agent.skills_import import (
     SkillImportRefused,
+    declared_install_specs,
     install_imported_skill,
     reject_quarantined,
     trust_prefix_for,
 )
+
+
+def test_declared_install_specs(tmp_path):
+    d = tmp_path / "s"
+    d.mkdir()
+    (d / "SKILL.md").write_text(
+        "---\nname: s\ndescription: d\nmetadata:\n  openclaw:\n    install:\n"
+        "      - {kind: brew, formula: gh}\n      - {kind: pip, package: requests}\n---\nbody\n")
+    specs = declared_install_specs(d)
+    assert "brew: gh" in specs and "pip: requests" in specs
+
+
+def test_declared_install_specs_none(tmp_path):
+    d = tmp_path / "s"
+    d.mkdir()
+    (d / "SKILL.md").write_text("---\nname: s\ndescription: d\n---\nbody\n")
+    assert declared_install_specs(d) == []
 
 
 def test_trust_prefix_github_strips_branch_and_dir():

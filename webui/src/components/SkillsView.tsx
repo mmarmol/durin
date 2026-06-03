@@ -528,6 +528,11 @@ export function SkillsView() {
                       {q.source}
                     </span>
                   ) : null}
+                  {q.install_specs && q.install_specs.length > 0 ? (
+                    <p className="text-[11px] text-muted-foreground">
+                      {t("skills.import.declaredDeps", { deps: q.install_specs.join(", ") })}
+                    </p>
+                  ) : null}
                   <FindingsList findings={q.findings} />
                   {gate?.name === q.name ? (
                     // Inline gate prompt — no native dialog. The button is
