@@ -224,6 +224,8 @@ def list_skills_info(workspace: Path) -> list[dict]:
             "source": entry["source"],
             "mode": read_mode(workspace, name, loader),
             "description": data.get("description", ""),
+            "version": data.get("version", ""),
+            "license": data.get("license", ""),
             "provenance": prov if isinstance(prov, dict) else {},
         })
     return out

@@ -572,3 +572,13 @@ def test_no_platforms_means_all(tmp_path, monkeypatch):
     loader = skmod.SkillsLoader(tmp_path)
     monkeypatch.setattr(skmod, "_current_platform", lambda: "windows")
     assert "anywhere" in [s["name"] for s in loader.list_skills(filter_unavailable=False)]
+
+
+def test_kebab_disable_model_invocation_respected(tmp_path):
+    from durin.agent.skills import SkillsLoader
+    d = tmp_path / "skills" / "hidden"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text(
+        "---\nname: hidden\ndescription: d\ndisable-model-invocation: true\n---\nx\n")
+    summary = SkillsLoader(tmp_path).build_skills_summary()
+    assert "hidden" not in summary   # kebab form honored like snake/camel
