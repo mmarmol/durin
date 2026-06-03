@@ -517,6 +517,29 @@ def web_import_fetch(workspace: Path, source: str) -> tuple[int, dict]:
                                "where": f.where, "detail": f.detail} for f in rep.findings]}
 
 
+def web_skill_search(workspace: Path, query: str, limit: int = 0) -> tuple[int, dict]:
+    """`GET /api/skills/search?query=&limit=` — search the configured registries.
+    Search-only: returns ranked hits, each with a `ref` to import via the gate."""
+    import asyncio
+
+    from durin.agent.skill_registry import build_adapters, search_registries
+    from durin.config.loader import load_config
+
+    q = (query or "").strip()
+    if not q:
+        return 400, {"error": "query is required"}
+    cfg = load_config()
+    disc = cfg.skills.discovery
+    hits = asyncio.run(search_registries(
+        q,
+        adapters=build_adapters(disc.registries),
+        allowlist=list(cfg.skills.security.allowlist),
+        limit=int(limit) or disc.search_limit,
+    ))
+    return 200, {"hits": [{"name": h.name, "ref": h.ref, "registry": h.registry,
+                           "description": h.description, "signals": h.signals} for h in hits]}
+
+
 def web_skill_approve(workspace: Path, name: str, *, confirm: bool,
                       override: bool, replace: bool = False) -> tuple[int, dict]:
     """`GET /api/skills/{name}/approve?confirm=&override=&replace=` — install a

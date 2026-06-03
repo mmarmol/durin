@@ -691,6 +691,9 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/skills/github-token-test":
             return self._handle_skills_github_token_test(request)
 
+        if got == "/api/skills/search":
+            return await self._handle_skill_search(request)
+
         m = re.match(r"^/api/skills/([^/]+)/save$", got)
         if m:
             return self._handle_skill_save(request, m.group(1))
@@ -1534,6 +1537,29 @@ class WebSocketChannel(BaseChannel):
             status, payload = ss.web_import_fetch(workspace, source)
         except Exception as exc:  # noqa: BLE001
             return _http_error(500, f"import failed: {exc}")
+        return _http_json_response(payload, status=status)
+
+    async def _handle_skill_search(self, request: WsRequest) -> Response:
+        """`GET /api/skills/search?query=&limit=` — search the configured registries.
+        Async + off-thread: `web_skill_search` drives the registries via
+        `asyncio.run`, so it MUST run in a worker thread, never the event loop."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        query = _parse_query(request.path)
+        q = (_query_first(query, "query") or "").strip()
+        if not q:
+            return _http_error(400, "query is required")
+        try:
+            limit = int(_query_first(query, "limit") or 0)
+        except ValueError:
+            limit = 0
+        from durin.agent import skills_store as ss
+        from durin.config.loader import load_config
+        try:
+            workspace = load_config().workspace_path
+            status, payload = await asyncio.to_thread(ss.web_skill_search, workspace, q, limit)
+        except Exception as exc:  # noqa: BLE001
+            return _http_error(500, f"search failed: {exc}")
         return _http_json_response(payload, status=status)
 
     def _handle_skills_github_token_test(self, request: WsRequest) -> Response:
