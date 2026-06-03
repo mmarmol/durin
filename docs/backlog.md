@@ -216,6 +216,27 @@ la ejecución.
 install-time). El item #1 es el más valioso y acotado.
 
 
+### P7 — API REST del channel es GET-con-query (sin body POST) → valores sensibles en query
+
+**Contexto**: la API REST co-ubicada en el channel websocket (skills, settings,
+secrets, cron, config) se sirve sobre el parser del handshake
+(`WsRequest = websockets.http11.Request`), que sólo lee request-line + headers.
+
+**Problema**: por eso **todas las mutaciones van por GET con query params** —
+incluyendo valores sensibles: el `source` (URL) de import de skills, los tokens
+en `/api/settings/update` y `/api/secrets`, el `content` de skills. Quedan en
+logs del server y en el historial del browser. Localhost + token lo mitiga, pero
+GET para mutaciones con efectos/red no es correcto.
+
+**Propuesta tentativa**: dar **soporte de body POST** a la capa HTTP del channel
+(leer `Content-Length` bytes de la conexión tras parsear headers en
+`_dispatch_http`) y migrar las rutas mutadoras/sensibles a POST con body. No es
+local a skills — beneficia secrets/settings/skills por igual.
+
+**Estado**: pendiente, no bloquea (localhost + token). Es cambio de plataforma,
+no de skills; agendar como su propia tarea.
+
+
 ---
 
-## Last updated: 2026-06-03 (P6 skill runtime execution añadido)
+## Last updated: 2026-06-03 (P6 runtime execution + P7 channel POST-body añadidos)
