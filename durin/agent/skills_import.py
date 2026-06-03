@@ -14,8 +14,9 @@ from durin.agent.skills_frontmatter import split_frontmatter
 from durin.security.skill_scan import scan_skill
 
 _GITHUB_RAW = "https://raw.githubusercontent.com"
-_MAX_FILES = 200
-_MAX_BYTES = 5 * 1024 * 1024
+_DEFAULT_MAX_FILES = 100
+_DEFAULT_MAX_TOTAL_BYTES = 3 * 1024 * 1024
+_DEFAULT_MAX_FILE_BYTES = 1024 * 1024
 
 _NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$")
 
@@ -130,19 +131,24 @@ def _safe_rel(rel: str) -> bool:
     return bool(rel) and ".." not in Path(rel).parts and not Path(rel).is_absolute()
 
 
-def _write(qdir: Path, rel: str, data: bytes, budget: list[int]) -> None:
+def _write(qdir: Path, rel: str, data: bytes, budget: list[int],
+           caps: tuple[int, int, int]) -> None:
+    max_files, max_total, max_file = caps
     if not _safe_rel(rel):
         raise ValueError(f"unsafe path in skill: {rel!r}")
+    if len(data) > max_file:
+        raise ValueError(f"file {rel!r} exceeds per-file cap ({len(data)} > {max_file} bytes)")
     budget[0] += 1
     budget[1] += len(data)
-    if budget[0] > _MAX_FILES or budget[1] > _MAX_BYTES:
+    if budget[0] > max_files or budget[1] > max_total:
         raise ValueError("skill exceeds import size/file caps")
     dest = qdir / rel
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_bytes(data)
 
 
-def _fetch_github(cand: SkillCandidate, qdir: Path, budget: list[int]) -> None:
+def _fetch_github(cand: SkillCandidate, qdir: Path, budget: list[int],
+                  caps: tuple[int, int, int]) -> None:
     owner, repo, branch, skill_dir = _parse_github_ref(cand.ref)
     tree = _resolve._gh_get_json(
         f"{_resolve._GITHUB_API}/repos/{owner}/{repo}/git/trees/{branch}?recursive=1")
@@ -156,17 +162,22 @@ def _fetch_github(cand: SkillCandidate, qdir: Path, budget: list[int]) -> None:
         if not rel:
             continue
         data = _http_get_bytes(f"{_GITHUB_RAW}/{owner}/{repo}/{branch}/{path}")
-        _write(qdir, rel, data, budget)
+        _write(qdir, rel, data, budget, caps)
         found = True
     if not found:
         raise ValueError(f"no files under {cand.ref}")
 
 
-def fetch_candidate(cand: SkillCandidate, *, quarantine_root: Path) -> Path:
+def fetch_candidate(cand: SkillCandidate, *, quarantine_root: Path,
+                    max_files: int = _DEFAULT_MAX_FILES,
+                    max_total_bytes: int = _DEFAULT_MAX_TOTAL_BYTES,
+                    max_file_bytes: int = _DEFAULT_MAX_FILE_BYTES) -> Path:
     """Download one resolved candidate into `<quarantine_root>/<name>/`, run the
     §8.C scan, and drop a `.scan.json` (source + verdict + findings) beside it.
-    The downloaded tree is NOT installed — it sits in quarantine for the gate."""
+    The downloaded tree is NOT installed — it sits in quarantine for the gate.
+    Caps (config-driven) bound the total/per-file size and file count."""
     quarantine_root = Path(quarantine_root)
+    caps = (max_files, max_total_bytes, max_file_bytes)
     qdir = quarantine_root / cand.name
     if qdir.exists():
         shutil.rmtree(qdir)
@@ -176,11 +187,11 @@ def fetch_candidate(cand: SkillCandidate, *, quarantine_root: Path) -> Path:
         src = Path(cand.ref)
         for p in sorted(src.rglob("*")):
             if p.is_file() and ".git" not in p.parts and p.name != ".scan.json":
-                _write(qdir, str(p.relative_to(src)), p.read_bytes(), budget)
+                _write(qdir, str(p.relative_to(src)), p.read_bytes(), budget, caps)
     elif cand.kind == "https":
-        _write(qdir, "SKILL.md", _http_get_bytes(cand.ref), budget)
+        _write(qdir, "SKILL.md", _http_get_bytes(cand.ref), budget, caps)
     elif cand.kind == "github":
-        _fetch_github(cand, qdir, budget)
+        _fetch_github(cand, qdir, budget, caps)
     else:
         raise ValueError(f"unknown candidate kind: {cand.kind!r}")
     rep = scan_skill(qdir)

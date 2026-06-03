@@ -402,12 +402,37 @@ class SkillsHotTierConfig(Base):
     recent_window_hours: float = 24.0
 
 
+class SkillJudgeConfig(Base):
+    """LLM semantic-audit pass over an imported skill, after the deterministic
+    §8.C scan (spec 2026-06-03 §A3). ``enabled`` ON by default — degrades
+    gracefully (skips, never errors/blocks) when no aux model resolves.
+    ``max_severity`` caps how high the judge may raise the verdict: ``caution``
+    (default) means it can force a confirm but never block on its own — only the
+    deterministic rules block. ``model`` names an aux model (``aux_models.skill_audit``);
+    empty → the default judge model."""
+
+    enabled: bool = True
+    max_severity: Literal["caution", "dangerous"] = "caution"
+    model: str = ""
+
+
 class SkillImportConfig(Base):
-    """Security floor for skill import (§8.C). ``allowlist`` = trusted source
-    prefixes (e.g. ``github:anthropics/``). A match skips only the *source*
-    confirmation; the verdict/code gates have no opt-out. Default empty."""
+    """Security floor + policy for skill import (§8.C/§6.B). ``allowlist`` =
+    trusted source-ref prefixes (e.g. ``github:anthropics/``, ``https://gitlab.com/acme/``).
+    A match skips only the *source* confirmation; the verdict/code gates have no
+    opt-out. Caps bound a fetched skill's size/file count. ``github_token_secret``
+    names a durin secret holding a GitHub API token (raises rate limits + private
+    repos); empty → anonymous. ``install_specs_policy`` governs a skill's declared
+    dependency installs: ``never`` (v1, info only), ``ask`` (run on explicit
+    approval — v1.1), ``auto``."""
 
     allowlist: list[str] = Field(default_factory=list)
+    github_token_secret: str = ""
+    max_files: int = 100
+    max_total_bytes: int = 3 * 1024 * 1024
+    max_file_bytes: int = 1024 * 1024
+    install_specs_policy: Literal["never", "ask", "auto"] = "never"
+    llm_judge: SkillJudgeConfig = Field(default_factory=SkillJudgeConfig)
 
 
 class MemoryConfig(Base):

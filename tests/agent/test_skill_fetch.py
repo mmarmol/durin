@@ -1,8 +1,31 @@
 import json
 
+import pytest
+
 import durin.agent.skill_resolve as R
 from durin.agent.skill_resolve import SkillCandidate
 from durin.agent.skills_import import fetch_candidate
+
+
+def test_fetch_rejects_oversized_file(tmp_path):
+    src = tmp_path / "big"
+    src.mkdir()
+    (src / "SKILL.md").write_text("---\nname: big\ndescription: d\n---\nok\n")
+    (src / "blob.bin").write_bytes(b"x" * (2 * 1024 * 1024))
+    with pytest.raises(ValueError):
+        fetch_candidate(SkillCandidate("big", str(src), "local"),
+                        quarantine_root=tmp_path / "q", max_file_bytes=1024 * 1024)
+
+
+def test_fetch_rejects_too_many_files(tmp_path):
+    src = tmp_path / "many"
+    (src / "scripts").mkdir(parents=True)
+    (src / "SKILL.md").write_text("---\nname: many\ndescription: d\n---\nok\n")
+    for i in range(5):
+        (src / "scripts" / f"f{i}.sh").write_text("echo hi\n")
+    with pytest.raises(ValueError):
+        fetch_candidate(SkillCandidate("many", str(src), "local"),
+                        quarantine_root=tmp_path / "q", max_files=2)
 
 
 def test_fetch_local_candidate_quarantines_and_scans(tmp_path):
