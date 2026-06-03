@@ -386,6 +386,13 @@
       "judge": "Revisar con IA",
       "unresolved": "No se pudo resolver una skill desde esa fuente. Pedíle al agente en el chat que investigue el link."
     },
+    "search": {
+      "placeholder": "Buscar skills en el registro",
+      "button": "Buscar",
+      "empty": "Ninguna skill coincidió con esa búsqueda.",
+      "installs_one": "{{count}} instalación",
+      "installs_other": "{{count}} instalaciones"
+    },
     "title": "Skills"
   },
   "chat": {

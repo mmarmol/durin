@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,6 +17,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
     importSource: vi.fn(),
     approveSkill: vi.fn(),
     rejectSkill: vi.fn(),
+    searchSkills: vi.fn(),
   };
 });
 
@@ -37,6 +38,7 @@ beforeEach(() => {
   vi.mocked(api.importSource).mockReset();
   vi.mocked(api.approveSkill).mockReset();
   vi.mocked(api.rejectSkill).mockReset();
+  vi.mocked(api.searchSkills).mockReset();
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -123,6 +125,51 @@ describe("SkillsView security surface", () => {
     await user.click(screen.getByRole("button", { name: "Import" }));
 
     expect(api.importSource).toHaveBeenCalledWith("tok", "github:owner/repo");
+  });
+
+  it("searches the registry and a hit's Import reuses the import-by-source flow", async () => {
+    vi.mocked(api.listSkills).mockResolvedValue([
+      { name: "clean", source: "builtin", mode: "auto", status: "active", verdict: "safe", findings: [] },
+    ]);
+    vi.mocked(api.listQuarantine).mockResolvedValue([]);
+    vi.mocked(api.searchSkills).mockResolvedValue({
+      hits: [
+        {
+          name: "pdf-tools",
+          ref: "github:acme/pdf-tools",
+          registry: "acme",
+          description: "Work with PDFs",
+          signals: { installs: 42 },
+        },
+      ],
+    });
+    vi.mocked(api.importSource).mockResolvedValue({
+      quarantined: "pdf-tools", verdict: "safe", needs: "confirm", findings: [],
+    });
+
+    const user = userEvent.setup();
+    render(wrap(<SkillsView />));
+    await screen.findByText("clean");
+
+    const box = await screen.findByPlaceholderText(/Search the registry/i);
+    await user.type(box, "pdf");
+    await user.click(screen.getByRole("button", { name: "Search" }));
+
+    expect(api.searchSkills).toHaveBeenCalledWith("tok", "pdf");
+    // the hit renders with its name, install count and ref
+    expect(await screen.findByText("pdf-tools")).toBeInTheDocument();
+    expect(screen.getByText(/42 installs/)).toBeInTheDocument();
+    expect(screen.getByText("github:acme/pdf-tools")).toBeInTheDocument();
+
+    // the hit's Import button drives importSource with the hit's ref — the same
+    // path the manual input uses (search itself never installs). Scope to the
+    // hit's row so we don't catch the manual import input's Import button.
+    const hitRow = screen
+      .getByText("github:acme/pdf-tools")
+      .closest("div.flex.items-start") as HTMLElement;
+    await user.click(within(hitRow).getByRole("button", { name: "Import" }));
+
+    expect(api.importSource).toHaveBeenCalledWith("tok", "github:acme/pdf-tools");
   });
 
   it("surfaces the install gate inline (no native dialog) and forces on confirm", async () => {

@@ -386,6 +386,13 @@
       "judge": "Audit with LLM",
       "unresolved": "Could not resolve a skill from that source. Ask the agent in chat to investigate the link."
     },
+    "search": {
+      "placeholder": "Search the registry for skills",
+      "button": "Search",
+      "empty": "No skills matched that search.",
+      "installs_one": "{{count}} install",
+      "installs_other": "{{count}} installs"
+    },
     "title": "Skills"
   },
   "chat": {
