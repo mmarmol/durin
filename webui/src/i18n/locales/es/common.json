@@ -323,6 +323,11 @@
     "discardPrompt": "¿Descartar los cambios sin guardar?",
     "editHint": "Pasá a manual para editar",
     "autoReadonly": "Solo lectura: esta skill está en modo auto (la gestiona el agente). Pasala a manual para editar.",
+    "tab": { "active": "Activas", "quarantine": "Cuarentena" },
+    "quarantineEmpty": "No hay skills en cuarentena.",
+    "security": "Seguridad",
+    "noFindings": "Sin hallazgos de seguridad.",
+    "verdict": { "safe": "Segura", "caution": "Precaución", "dangerous": "Peligrosa" },
     "title": "Skills"
   },
   "chat": {

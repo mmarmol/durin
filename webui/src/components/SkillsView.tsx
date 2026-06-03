@@ -8,11 +8,15 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   ApiError,
   getSkill,
+  listQuarantine,
   listSkills,
   saveSkill,
   setSkillMode,
+  type QuarantineRow,
   type SkillDetail,
+  type SkillFinding,
   type SkillRow,
+  type SkillVerdict,
 } from "@/lib/api";
 import { useClient } from "@/providers/ClientProvider";
 import { cn } from "@/lib/utils";
@@ -42,6 +46,61 @@ function ModeBadge({ mode }: { mode: "auto" | "manual" }) {
   );
 }
 
+/** The §8.C verdict, shown only when it warrants attention (caution|dangerous).
+ * Safe skills get no badge — absence of a warning IS the "safe" signal, and a
+ * green chip on every row would be noise. */
+function VerdictBadge({ verdict }: { verdict?: SkillVerdict }) {
+  const { t } = useTranslation();
+  if (verdict !== "caution" && verdict !== "dangerous") return null;
+  const label =
+    verdict === "dangerous"
+      ? t("skills.verdict.dangerous")
+      : t("skills.verdict.caution");
+  return (
+    <span
+      className={cn(
+        "shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium leading-none",
+        verdict === "dangerous"
+          ? "bg-destructive/10 text-destructive"
+          : "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+      )}
+    >
+      {label}
+    </span>
+  );
+}
+
+function severityClass(sev: SkillFinding["severity"]): string {
+  if (sev === "dangerous" || sev === "high") return "text-destructive";
+  if (sev === "caution") return "text-amber-600 dark:text-amber-400";
+  return "text-muted-foreground";
+}
+
+/** The reasons behind a verdict: one line per §8.C finding (category, location,
+ * detail), colored by severity. Used in the active-skill detail and inline on
+ * each quarantine row. */
+function FindingsList({ findings }: { findings: SkillFinding[] }) {
+  const { t } = useTranslation();
+  if (findings.length === 0) {
+    return (
+      <p className="text-[12px] text-muted-foreground">{t("skills.noFindings")}</p>
+    );
+  }
+  return (
+    <ul className="flex flex-col gap-1.5">
+      {findings.map((f, i) => (
+        <li key={`${f.category}-${f.where}-${i}`} className="text-[12px] leading-snug">
+          <span className={cn("font-medium", severityClass(f.severity))}>
+            {f.category}
+          </span>
+          <span className="text-muted-foreground"> · {f.where}</span>
+          <div className="text-muted-foreground">{f.detail}</div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 /**
  * Skills — a top-level surface (peer of Chat and the Memory graph), not a
  * settings section. Skills are procedural memory: a library the user reads,
@@ -56,6 +115,8 @@ export function SkillsView() {
   const { token } = useClient();
   const { t } = useTranslation();
   const [rows, setRows] = useState<SkillRow[] | null>(null);
+  const [quarantine, setQuarantine] = useState<QuarantineRow[] | null>(null);
+  const [pane, setPane] = useState<"active" | "quarantine">("active");
   const [selected, setSelected] = useState<string | null>(null);
   const [detail, setDetail] = useState<SkillDetail | null>(null);
   const [draft, setDraft] = useState("");
@@ -71,7 +132,12 @@ export function SkillsView() {
   const refresh = useCallback(async () => {
     setError(null);
     try {
-      setRows(await listSkills(token));
+      const [skills, quar] = await Promise.all([
+        listSkills(token),
+        listQuarantine(token),
+      ]);
+      setRows(skills);
+      setQuarantine(quar);
     } catch (e) {
       setError(errMsg(e));
     } finally {
@@ -156,6 +222,7 @@ export function SkillsView() {
   }, [token, detail, refresh]);
 
   const list = rows ?? [];
+  const quarList = quarantine ?? [];
   const current = list.find((r) => r.name === selected) ?? null;
   const editable = detail?.mode === "manual";
 
@@ -186,32 +253,93 @@ export function SkillsView() {
               selected ? "hidden md:block" : "block",
             )}
           >
-            {list.length === 0 ? (
+            {/* Tabs: the active inventory vs the §8.C import quarantine. */}
+            <div className="sticky top-0 z-10 flex gap-1 border-b border-border/30 bg-background/95 p-2 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+              <button
+                type="button"
+                onClick={() => setPane("active")}
+                className={cn(
+                  "flex flex-1 items-center justify-center gap-1.5 rounded-[6px] px-2 py-1 text-[12px] transition-colors",
+                  pane === "active"
+                    ? "bg-primary/10 text-primary"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {t("skills.tab.active")}
+                <span className="opacity-60">{list.length}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setPane("quarantine")}
+                className={cn(
+                  "flex flex-1 items-center justify-center gap-1.5 rounded-[6px] px-2 py-1 text-[12px] transition-colors",
+                  pane === "quarantine"
+                    ? "bg-primary/10 text-primary"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {t("skills.tab.quarantine")}
+                <span className={cn(quarList.length > 0 ? "text-destructive" : "opacity-60")}>
+                  {quarList.length}
+                </span>
+              </button>
+            </div>
+
+            {pane === "active" ? (
+              list.length === 0 ? (
+                <p className="p-4 text-[13px] text-muted-foreground">
+                  {t("skills.empty")}
+                </p>
+              ) : (
+                list.map((row) => (
+                  <button
+                    key={row.name}
+                    type="button"
+                    onClick={() => select(row.name)}
+                    className={cn(
+                      "flex w-full flex-col gap-1 border-b border-border/30 px-4 py-3 text-left transition-colors",
+                      row.name === selected ? "bg-primary/10" : "hover:bg-muted/40",
+                    )}
+                  >
+                    <span className="flex items-center justify-between gap-2">
+                      <span className="truncate text-[14px] font-medium text-foreground">
+                        {row.name}
+                      </span>
+                      <span className="flex shrink-0 items-center gap-1.5">
+                        <VerdictBadge verdict={row.verdict} />
+                        <ModeBadge mode={row.mode} />
+                      </span>
+                    </span>
+                    <span className="truncate text-[12px] text-muted-foreground">
+                      {row.source}
+                      {row.provenance?.source ? ` · ${row.provenance.source}` : ""}
+                    </span>
+                  </button>
+                ))
+              )
+            ) : quarList.length === 0 ? (
               <p className="p-4 text-[13px] text-muted-foreground">
-                {t("skills.empty")}
+                {t("skills.quarantineEmpty")}
               </p>
             ) : (
-              list.map((row) => (
-                <button
-                  key={row.name}
-                  type="button"
-                  onClick={() => select(row.name)}
-                  className={cn(
-                    "flex w-full flex-col gap-1 border-b border-border/30 px-4 py-3 text-left transition-colors",
-                    row.name === selected ? "bg-primary/10" : "hover:bg-muted/40",
-                  )}
+              quarList.map((q) => (
+                <div
+                  key={q.name}
+                  className="flex flex-col gap-1.5 border-b border-border/30 px-4 py-3"
                 >
                   <span className="flex items-center justify-between gap-2">
                     <span className="truncate text-[14px] font-medium text-foreground">
-                      {row.name}
+                      {q.name}
                     </span>
-                    <ModeBadge mode={row.mode} />
+                    <VerdictBadge verdict={q.verdict} />
                   </span>
-                  <span className="truncate text-[12px] text-muted-foreground">
-                    {row.source}
-                    {row.provenance?.source ? ` · ${row.provenance.source}` : ""}
-                  </span>
-                </button>
+                  {q.source ? (
+                    <span className="truncate text-[12px] text-muted-foreground">
+                      {q.source}
+                    </span>
+                  ) : null}
+                  <FindingsList findings={q.findings} />
+                </div>
               ))
             )}
           </aside>
@@ -241,6 +369,7 @@ export function SkillsView() {
                     {detail.name}
                   </span>
                   <ModeBadge mode={detail.mode} />
+                  <VerdictBadge verdict={current?.verdict} />
                   {current?.provenance?.source ? (
                     <span className="truncate text-[12px] text-muted-foreground">
                       from {current.provenance.source}
@@ -291,6 +420,15 @@ export function SkillsView() {
                     </Button>
                   </div>
                 </div>
+
+                {current && current.findings && current.findings.length > 0 ? (
+                  <div className="shrink-0 border-b border-border/30 bg-amber-500/5 px-4 py-3 sm:px-6">
+                    <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      {t("skills.security")}
+                    </p>
+                    <FindingsList findings={current.findings} />
+                  </div>
+                ) : null}
 
                 <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6">
                   {tab === "view" ? (
