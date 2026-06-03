@@ -32,3 +32,13 @@ def test_skills_section_names_both_surfaces():
     # always-on catalog (read_file) AND searchable via memory_search kind=skill
     assert "memory_search" in t
     assert "read" in t  # read_file catalog surface
+
+def test_skills_section_reframed_as_working_set_with_search_nudge():
+    t = _norm(_SKILLS_SECTION).lower()
+    # the stale "always available [full catalog]" claim is gone
+    assert "always available" not in t
+    # the §5.2 nudge: search when the shown skills don't cover the task
+    assert "memory_search" in t
+    assert ("if nothing" in t or "if none" in t or "don't cover" in t
+            or "doesn't cover" in t)
+    assert ("before" in t and ("proceed" in t or "conclud" in t or "say" in t))
