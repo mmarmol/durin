@@ -106,8 +106,8 @@ def validate_install_specs(data: dict) -> list[Finding]:
             kind = str(spec.get("kind", ""))
             if kind in ("brew", "apt", "pip", "cargo"):
                 # package-manager installs: validate the package/formula name
-                # against a safe pattern (no traversal / flags). apt/pip/cargo
-                # are common, legit kinds (durin's own github skill uses apt).
+                # against a safe pattern (no traversal / flags). brew/apt/pip/cargo
+                # are common, legit package managers a skill may declare.
                 val = str(spec.get("formula") or spec.get("cask") or spec.get("package") or "")
                 if _bad(val, "..", "\\", "://") or (val and not _BREW_RE.match(val)):
                     out.append(Finding("install_spec", "dangerous", where, f"unsafe {kind} package {val!r}"))
