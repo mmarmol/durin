@@ -239,21 +239,38 @@ checks possible:
 | `verdict` / `confirmed` / `overridden` / `replaced` | the gate decision at install |
 | `created_at` | when it entered |
 
-**Refinement this spec adds (registry-discovered skills):** record *how it was
-discovered* distinctly from *where to re-fetch it*, so a future check can consult
-the registry itself rather than only re-diffing files — two additive fields:
+**Decided AGAINST (2026-06-03): no `registry` / `registry_id` provenance fields.**
+An earlier draft proposed stamping *how it was discovered* (`registry` adapter id +
+the registry's own `registry_id`) so a later check could ask the registry for a
+newer version. Dropped after verifying the design against code + the live APIs:
 
-- `registry` — the adapter id (`"skills.sh"` / `"clawhub"`); absent for a direct
-  github/url/local import.
-- `registry_id` — the registry's own identifier (skills.sh `id`, clawhub slug).
+- **Update detection is content-addressed, not registry-addressed.** `source` (the
+  fetchable ref) + `content_hash` + re-fetch is registry-agnostic — it works for
+  github, https, clawhub, and any future registry without per-registry knowledge.
+  Stamping per-registry version fields would reintroduce exactly the per-registry
+  coupling the content hash eliminates (and `latestVersion` vs `commitSha` vs
+  registry-N's-own-field does not generalize).
+- **There is no background sync to optimize, by design.** Curation only re-fetches
+  the narrow `auto` + `source=="workspace"` set, and only the change-gated `delta`
+  (`needs_curation`) — see `curate_catalog` (`skill_curation.py`). Imports are
+  stamped `mode="manual"` and **never** enter that delta. So no skill is re-fetched
+  on a schedule; a "cheap registry version check" has no consumer. A daily
+  fetch-everything sync is explicitly NOT something durin does or wants.
+- **Two intrinsic archetypes, each with a native cheap primitive already in code**
+  — should an on-demand, per-skill `update` ever be built (re-resolve `source`,
+  re-fetch *that one* skill; pending, low priority):
 
-`source` stays the fetchable ref, so the update path is unchanged. With `registry`
-+ `registry_id`, a later check can ask the registry for a newer version, a changed
-security audit (skills.sh surfaces socket / snyk / agent-trust-hub pass-warn-fail),
-or install-trend — signal a raw github origin can't give. Additive: no migration,
-absent fields = "direct origin." A skill's declared `version` already lives in its
-frontmatter (`list_skills_info` reads it), so we do not duplicate it into
-provenance.
+  | archetype | natural "version" | cheap native check |
+  |---|---|---|
+  | index-over-git (skills.sh, direct github, https) | git commit / content | github commit SHA via the API — uniform across all github sources |
+  | package registry (clawhub) | semver | `_clawhub_latest_version(slug)` — already exists (`skills_import.py`) |
+
+A skills.sh skill's `provenance.source` is a **github** ref because skills.sh is an
+*index over git*, not a host — it points at the repo and disappears after discovery.
+clawhub's `source` is `clawhub:<slug>` because clawhub *hosts* the versioned zip.
+That asymmetry is intrinsic to what each is, not an inconsistency to paper over with
+extra provenance fields. A skill's declared `version` already lives in its
+frontmatter (`list_skills_info` reads it); we do not duplicate it into provenance.
 
 ### 3.1 Install (reuse — nothing new)
 
@@ -387,8 +404,9 @@ remembering to filter.
 
 **Modify**
 - ✅ `durin/agent/skills_import.py` — the `clawhub` branch in `fetch_candidate`.
-  (⏳ pending: thread `registry`/`registry_id` into the provenance stamp, §3.0 —
-  needed for the registry-version-check.)
+  (`registry`/`registry_id` provenance fields — decided AGAINST, §3.0: update
+  detection stays content-addressed via `source` + `content_hash`, no per-registry
+  version fields, no background sync to optimize.)
 - ✅ `durin/agent/skill_curation.py` + `durin/templates/agent/skill_curation.md` +
   `durin/cli/commands.py` — drift incorporation into the dream pass (§3.2/§8.D).
 - ✅ `durin/agent/skills_surface.py` — `sweep_unverified_skills` at the top of
