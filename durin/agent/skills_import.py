@@ -336,6 +336,34 @@ def reject_quarantined(workspace: Path, name: str) -> dict:
     return {"ok": True, "name": name}
 
 
+def declared_install_specs(skill_dir: Path) -> list[str]:
+    """Human-readable list of a skill's declared dependency installs (e.g.
+    ``brew: gh``). INFO ONLY — durin never auto-runs them (policy 'never' in v1,
+    spec B11). Surfaces what the user/agent would need to install themselves."""
+    md = Path(skill_dir) / "SKILL.md"
+    if not md.is_file():
+        return []
+    try:
+        data, _ = split_frontmatter(md.read_text(encoding="utf-8"))
+    except OSError:
+        return []
+    meta = data.get("metadata")
+    out: list[str] = []
+    if isinstance(meta, dict):
+        for blob in meta.values():
+            specs = blob.get("install") if isinstance(blob, dict) else None
+            if not isinstance(specs, list):
+                continue
+            for spec in specs:
+                if not isinstance(spec, dict):
+                    continue
+                kind = str(spec.get("kind", "?"))
+                val = str(spec.get("formula") or spec.get("package")
+                          or spec.get("module") or spec.get("cask") or spec.get("url") or "")
+                out.append(f"{kind}: {val}" if val else kind)
+    return out
+
+
 def trust_prefix_for(ref: str) -> str:
     """Suggest a starting allowlist prefix to pre-fill for 'trust this source'.
     The user edits it (e.g. broaden a repo to the whole org). NOT a repo-vs-org

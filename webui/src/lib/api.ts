@@ -339,6 +339,8 @@ export interface QuarantineRow {
   findings: SkillFinding[];
   /** Suggested allowlist prefix for a one-click "trust this source" (§A1). */
   trust_prefix?: string;
+  /** Declared dependency installs (info only — durin never auto-runs them, §B11). */
+  install_specs?: string[];
 }
 
 export interface SkillDetail {

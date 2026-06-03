@@ -381,6 +381,7 @@
       "cancel": "Cancelar",
       "trust": "Confiar fuente",
       "trusted": "Confiado {{prefix}} — futuros imports sanos de ahí se saltan el confirm.",
+      "declaredDeps": "Dependencias declaradas (no se ejecutan): {{deps}}",
       "unresolved": "No se pudo resolver una skill desde esa fuente. Pedíle al agente en el chat que investigue el link."
     },
     "title": "Skills"
