@@ -165,7 +165,8 @@ Respuesta:
 - `facets` puebla los dropdowns de filtro sin escanear todo en el cliente.
 - **Robusto a archivos grandes:** leer `gateway.log` desde el final / por bloques,
   nunca cargar el archivo entero en memoria. Para telemetría, escanear archivos por
-  fecha; limitar por defecto a los últimos N días para no barrer todo el histórico.
+  fecha; la ventana de escaneo por defecto es `retention_days` (no tiene sentido
+  barrer más allá de lo que igualmente se purga).
 
 ### 4.5 Cliente
 
