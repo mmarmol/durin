@@ -364,6 +364,80 @@ export async function listQuarantine(
   return res.quarantined;
 }
 
+// -- skill import (§6.B) -----------------------------------------------------
+
+export interface SkillCandidate {
+  name: string;
+  ref: string;
+  kind: "local" | "https" | "github";
+  detail: string;
+}
+
+/** Result of fetching a source into quarantine. Exactly one shape applies:
+ *  a single skill landed (`quarantined`), several were found (`candidates` —
+ *  pick one), or the source was fuzzy (`unresolved_reason`). */
+export interface ImportResult {
+  quarantined?: string;
+  source?: string;
+  verdict?: SkillVerdict;
+  needs?: "allow" | "confirm" | "block";
+  findings?: SkillFinding[];
+  candidates?: SkillCandidate[];
+  unresolved_reason?: string;
+}
+
+/** Outcome of an approve (install through the gate). `ok` on success;
+ *  `refused` (with the verdict) when the gate blocked/needs confirmation. */
+export interface ApproveResult {
+  ok?: boolean;
+  name?: string;
+  verdict?: SkillVerdict;
+  commit?: string;
+  refused?: "block" | "confirm" | "invalid" | "exists";
+  message?: string;
+  error?: string;
+}
+
+export async function importSource(
+  token: string,
+  source: string,
+  base: string = "",
+): Promise<ImportResult> {
+  const query = new URLSearchParams({ source });
+  return request<ImportResult>(`${base}/api/skills/import?${query}`, token);
+}
+
+export async function approveSkill(
+  token: string,
+  name: string,
+  opts: { confirm?: boolean; override?: boolean } = {},
+  base: string = "",
+): Promise<ApproveResult> {
+  const query = new URLSearchParams();
+  if (opts.confirm) query.set("confirm", "true");
+  if (opts.override) query.set("override", "true");
+  const qs = query.toString();
+  const url = `${base}/api/skills/${encodeURIComponent(name)}/approve${qs ? `?${qs}` : ""}`;
+  // 200 (installed) and 409 (gate refused) both carry a useful body; only 5xx throws.
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+    credentials: "same-origin",
+  });
+  if (res.status >= 500) throw new ApiError(res.status, `HTTP ${res.status}`);
+  return (await res.json()) as ApproveResult;
+}
+
+export async function rejectSkill(
+  token: string,
+  name: string,
+  base: string = "",
+): Promise<{ ok?: boolean; error?: string }> {
+  return request<{ ok?: boolean; error?: string }>(
+    `${base}/api/skills/${encodeURIComponent(name)}/reject`,
+    token,
+  );
+}
+
 export async function getSkill(
   token: string,
   name: string,

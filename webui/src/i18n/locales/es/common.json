@@ -328,6 +328,16 @@
     "security": "Seguridad",
     "noFindings": "Sin hallazgos de seguridad.",
     "verdict": { "safe": "Segura", "caution": "Precaución", "dangerous": "Peligrosa" },
+    "import": {
+      "placeholder": "Importar skill: ruta, https://…/SKILL.md o github:owner/repo",
+      "button": "Importar",
+      "pick": "Se encontraron varias skills — elegí una",
+      "approve": "Aprobar",
+      "reject": "Rechazar",
+      "confirmInstall": "Esta skill trae código o está marcada como precaución. ¿Instalar igual?",
+      "forceDangerous": "Esta skill es PELIGROSA — el scan encontró un riesgo serio. ¿Forzar la instalación igual?",
+      "unresolved": "No se pudo resolver una skill desde esa fuente. Pedíle al agente en el chat que investigue el link."
+    },
     "title": "Skills"
   },
   "chat": {

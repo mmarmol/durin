@@ -7,12 +7,16 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
   ApiError,
+  approveSkill,
   getSkill,
+  importSource,
   listQuarantine,
   listSkills,
+  rejectSkill,
   saveSkill,
   setSkillMode,
   type QuarantineRow,
+  type SkillCandidate,
   type SkillDetail,
   type SkillFinding,
   type SkillRow,
@@ -124,6 +128,11 @@ export function SkillsView() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [importSrc, setImportSrc] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [importMsg, setImportMsg] = useState<string | null>(null);
+  const [picker, setPicker] = useState<SkillCandidate[] | null>(null);
+  const [acting, setActing] = useState<string | null>(null);
 
   useEffect(() => {
     preloadMarkdownText();
@@ -148,6 +157,77 @@ export function SkillsView() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  const doImport = useCallback(
+    async (source: string) => {
+      const src = source.trim();
+      if (!src) return;
+      setImporting(true);
+      setImportMsg(null);
+      setPicker(null);
+      try {
+        const res = await importSource(token, src);
+        if (res.candidates && res.candidates.length > 0) {
+          setPicker(res.candidates);
+        } else if (res.quarantined) {
+          setImportSrc("");
+          await refresh();
+        } else {
+          setImportMsg(res.unresolved_reason || t("skills.import.unresolved"));
+        }
+      } catch (e) {
+        setImportMsg(errMsg(e));
+      } finally {
+        setImporting(false);
+      }
+    },
+    [token, refresh, t],
+  );
+
+  // The gate is server-side: approve, and react to what it asks for. A safe,
+  // trusted skill installs straight away; otherwise the server says it needs
+  // confirmation (code/caution/out-of-allowlist) or a dangerous-verdict override.
+  const approve = useCallback(
+    async (q: QuarantineRow) => {
+      setActing(q.name);
+      setImportMsg(null);
+      try {
+        let res = await approveSkill(token, q.name);
+        if (res.refused === "confirm") {
+          if (!window.confirm(t("skills.import.confirmInstall"))) return;
+          res = await approveSkill(token, q.name, { confirm: true });
+        } else if (res.refused === "block") {
+          if (!window.confirm(t("skills.import.forceDangerous"))) return;
+          res = await approveSkill(token, q.name, { override: true });
+        }
+        if (res.ok) {
+          await refresh();
+        } else if (res.message || res.error) {
+          setImportMsg(res.message || res.error || null);
+        }
+      } catch (e) {
+        setImportMsg(errMsg(e));
+      } finally {
+        setActing(null);
+      }
+    },
+    [token, refresh, t],
+  );
+
+  const reject = useCallback(
+    async (name: string) => {
+      setActing(name);
+      try {
+        await rejectSkill(token, name);
+        await refresh();
+      } catch (e) {
+        setImportMsg(errMsg(e));
+      } finally {
+        setActing(null);
+      }
+    },
+    [token, refresh],
+  );
 
   const dirty = detail != null && draft !== detail.content;
 
@@ -317,30 +397,101 @@ export function SkillsView() {
                   </button>
                 ))
               )
-            ) : quarList.length === 0 ? (
-              <p className="p-4 text-[13px] text-muted-foreground">
-                {t("skills.quarantineEmpty")}
-              </p>
             ) : (
-              quarList.map((q) => (
-                <div
-                  key={q.name}
-                  className="flex flex-col gap-1.5 border-b border-border/30 px-4 py-3"
+              <div className="flex flex-col">
+                {/* Import: one source-agnostic input — local path, URL, or github:owner/repo. */}
+                <form
+                  className="flex flex-col gap-2 border-b border-border/30 p-3"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void doImport(importSrc);
+                  }}
                 >
-                  <span className="flex items-center justify-between gap-2">
-                    <span className="truncate text-[14px] font-medium text-foreground">
-                      {q.name}
-                    </span>
-                    <VerdictBadge verdict={q.verdict} />
-                  </span>
-                  {q.source ? (
-                    <span className="truncate text-[12px] text-muted-foreground">
-                      {q.source}
-                    </span>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={importSrc}
+                      onChange={(e) => setImportSrc(e.target.value)}
+                      placeholder={t("skills.import.placeholder")}
+                      className="min-w-0 flex-1 rounded-[8px] border border-border/60 bg-background px-2.5 py-1.5 text-[12px] outline-none focus:border-primary/60"
+                    />
+                    <Button type="submit" size="sm" disabled={importing || !importSrc.trim()}>
+                      {importing ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        t("skills.import.button")
+                      )}
+                    </Button>
+                  </div>
+                  {importMsg ? (
+                    <p className="text-[12px] text-muted-foreground">{importMsg}</p>
                   ) : null}
-                  <FindingsList findings={q.findings} />
-                </div>
-              ))
+                </form>
+
+                {/* Picker: when a source resolves to several skills, choose one. */}
+                {picker && picker.length > 0 ? (
+                  <div className="flex flex-col gap-1 border-b border-border/30 bg-muted/20 p-3">
+                    <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      {t("skills.import.pick")}
+                    </p>
+                    {picker.map((c) => (
+                      <button
+                        key={c.ref}
+                        type="button"
+                        onClick={() => void doImport(c.ref)}
+                        disabled={importing}
+                        className="flex flex-col items-start rounded-[6px] px-2 py-1.5 text-left hover:bg-muted/50 disabled:opacity-50"
+                      >
+                        <span className="text-[13px] font-medium text-foreground">{c.name}</span>
+                        <span className="truncate text-[11px] text-muted-foreground">{c.ref}</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+
+                {quarList.length === 0 ? (
+                  <p className="p-4 text-[13px] text-muted-foreground">
+                    {t("skills.quarantineEmpty")}
+                  </p>
+                ) : (
+                  quarList.map((q) => (
+                    <div
+                      key={q.name}
+                      className="flex flex-col gap-1.5 border-b border-border/30 px-4 py-3"
+                    >
+                      <span className="flex items-center justify-between gap-2">
+                        <span className="truncate text-[14px] font-medium text-foreground">
+                          {q.name}
+                        </span>
+                        <VerdictBadge verdict={q.verdict} />
+                      </span>
+                      {q.source ? (
+                        <span className="truncate text-[12px] text-muted-foreground">
+                          {q.source}
+                        </span>
+                      ) : null}
+                      <FindingsList findings={q.findings} />
+                      <div className="flex gap-2 pt-1">
+                        <Button
+                          size="sm"
+                          disabled={acting === q.name}
+                          onClick={() => void approve(q)}
+                        >
+                          {t("skills.import.approve")}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={acting === q.name}
+                          onClick={() => void reject(q.name)}
+                        >
+                          {t("skills.import.reject")}
+                        </Button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
             )}
           </aside>
 
