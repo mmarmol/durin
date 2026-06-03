@@ -191,3 +191,111 @@ def fetch_candidate(cand: SkillCandidate, *, quarantine_root: Path) -> Path:
                       "where": f.where, "detail": f.detail} for f in rep.findings],
     }), encoding="utf-8")
     return qdir
+
+
+# --- install (the gate invariant) --------------------------------------------
+
+class SkillImportRefused(Exception):
+    """install_imported_skill refused the install. `.action` is the gate verdict
+    ('block' | 'confirm' | 'invalid' | 'exists'); `.verdict` is the §8.C verdict."""
+
+    def __init__(self, action: str, verdict: str, message: str):
+        super().__init__(message)
+        self.action = action
+        self.verdict = verdict
+
+
+def _content_hash(skill_dir: Path) -> str:
+    import hashlib
+    h = hashlib.sha256()
+    for p in sorted(skill_dir.rglob("*")):
+        if p.is_file() and p.name != ".scan.json":
+            h.update(p.relative_to(skill_dir).as_posix().encode())
+            h.update(p.read_bytes())
+    return h.hexdigest()[:16]
+
+
+def _audit(workspace: Path, **fields) -> None:
+    log = Path(workspace) / ".durin" / "import-audit.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    with log.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(fields) + "\n")
+
+
+def _safe_qname(name: str) -> bool:
+    return bool(name) and ".." not in name and re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]*$", name) is not None
+
+
+def install_imported_skill(workspace: Path, quarantine_dir: Path, *, source: str,
+                           allowlist: list[str], confirmed: bool = False,
+                           override: bool = False) -> dict:
+    """Install a quarantined skill — but ONLY through the §8.C gate, enforced
+    HERE in code (not in the tool/skill/UI): `block` (dangerous) needs
+    `override`; `confirm` (code / caution / out-of-allowlist) needs `confirmed`
+    or `override`. On pass: copy out of quarantine, stamp
+    metadata.durin.provenance + mode=manual, commit, index, append the audit
+    log, and consume the quarantine dir. Raises SkillImportRefused otherwise."""
+    from durin.agent.skills_store import (
+        _skill_md,
+        _store_init,
+        _sync_index,
+        _today,
+        _update_md,
+        ensure_durin,
+    )
+
+    workspace = Path(workspace)
+    quarantine_dir = Path(quarantine_dir)
+    vr = validate_skill(quarantine_dir)
+    if not vr.ok:
+        raise SkillImportRefused("invalid", "", f"invalid skill: {vr.errors}")
+    rep = scan_skill(quarantine_dir)  # re-scan; never trust the quarantined .scan.json
+    action = decide_action(source, verdict=rep.verdict,
+                           carries_code=vr.carries_code, allowlist=allowlist)
+    if action == "block" and not override:
+        raise SkillImportRefused("block", rep.verdict,
+                                 "dangerous verdict; explicit override required")
+    if action == "confirm" and not (confirmed or override):
+        raise SkillImportRefused("confirm", rep.verdict,
+                                 "confirmation required (carries code / caution / out-of-allowlist)")
+    name = vr.name
+    dest = _skill_md(workspace, name).parent
+    if dest.exists():
+        raise SkillImportRefused("exists", rep.verdict, f"skill already exists: {name}")
+
+    store = _store_init(workspace)
+    shutil.copytree(quarantine_dir, dest,
+                    ignore=shutil.ignore_patterns(".scan.json", ".git"))
+    chash = _content_hash(dest)
+
+    def _stamp(data: dict) -> None:
+        durin = ensure_durin(data)
+        durin["mode"] = "manual"
+        durin["provenance"] = {
+            "source": source,
+            "verdict": rep.verdict,
+            "confirmed": bool(confirmed),
+            "overridden": bool(override),
+            "content_hash": chash,
+            "created_at": _today(),
+        }
+
+    _update_md(dest / "SKILL.md", _stamp)
+    sha = store.auto_commit(f"skill({name}): import from {source} [{rep.verdict}]")
+    _sync_index(workspace, name)
+    _audit(workspace, name=name, source=source, verdict=rep.verdict, action=action,
+           confirmed=bool(confirmed), overridden=bool(override),
+           content_hash=chash, commit=sha)
+    shutil.rmtree(quarantine_dir, ignore_errors=True)  # consumed
+    return {"ok": True, "name": name, "verdict": rep.verdict, "commit": sha}
+
+
+def reject_quarantined(workspace: Path, name: str) -> dict:
+    """Discard a quarantined skill (delete its dir). The opposite of approve."""
+    if not _safe_qname(name):
+        return {"error": "invalid name"}
+    qdir = Path(workspace) / ".durin" / "import-quarantine" / name
+    if not qdir.is_dir():
+        return {"error": f"not in quarantine: {name}"}
+    shutil.rmtree(qdir, ignore_errors=True)
+    return {"ok": True, "name": name}
