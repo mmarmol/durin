@@ -113,18 +113,14 @@ This reuses `decide_action` verbatim — there is **no new policy engine**. §8.
 
 ## 5. Open design decisions (to settle before/within the plan)
 
-1. **Path B mechanism — agent-tool vs. orchestrator pre-fetch.** The dream phase-2
-   toolset is currently `read_file` / `edit_file` / `skill_write` only
-   (`memory.py:_build_tools`). Two options:
-   - **(a) Give phase-2 the `skill_search` tool** + a `dream_phase2.md` instruction
-     to search before authoring a `[SKILL]`. Uniform with Path A (same agent-driven
-     tools); the LLM decides relevance. **Recommended** — keeps both paths identical
-     except for the human-present gate.
-   - **(b) Deterministic pre-fetch** in the orchestrator (search by `[SKILL]` name +
-     description, attach a safe seed to the phase-2 prompt). More controllable, less
-     flexible.
-   Network note: `search_registries` uses `ssrf_safe_async_client` over public HTTP
-   (not MCP), so it is reachable from the cron/headless dream.
+1. **Path B mechanism — RESOLVED: (a) give phase-2 the `skill_search` tool.** The
+   dream phase-2 toolset (`read_file` / `edit_file` / `skill_write`,
+   `memory.py:_build_tools`) gains `skill_search` + a `dream_phase2.md` instruction to
+   search before authoring a `[SKILL]`. Uniform with Path A (same agent-driven tools;
+   the LLM decides relevance). Rejected (b) deterministic orchestrator pre-fetch — less
+   flexible, diverges from Path A. Network note: `search_registries` uses
+   `ssrf_safe_async_client` over public HTTP (not MCP), so it is reachable from the
+   cron/headless dream.
 2. **In-session confirmation surface — RESOLVED.** durin has a native
    `ask_user_question` tool (`durin/agent/tools/ask_user.py`,
    `AskUserQuestionTool`): `question` + `options` (array), with a
@@ -166,3 +162,10 @@ No new pipeline, no new trigger, no new policy engine.
 - §8.F GEPA/SkillOpt offline scoring.
 - Any change to update detection / provenance (settled in the discovery spec §3.0 —
   content-addressed, no per-registry version fields).
+- **A protected `system` skill tier** (never auto-evolves, always inserted when
+  available, refuses user/dream edits — like Hermes's bundled/pinned classes).
+  durin today has no true protection (builtins fork-on-write; nothing refuses edits).
+  This is a **mode-taxonomy / governance change** (parked, own future spec); §6.C
+  acquisitions land as `auto` and the existing model is unchanged. Open questions for
+  that spec: "available when" (unconditional vs context-gated) and what "can't change"
+  enforces given fork-on-write.
