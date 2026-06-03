@@ -20,6 +20,7 @@ Do NOT guess paths.
 - If nothing to update, stop without calling tools
 
 ## Skill creation rules (for [SKILL] entries)
+- **Before authoring, look for prior art (registries):** use `skill_search` with a short phrase for the capability to get candidate hits. For a relevant hit, call `skill_acquire_seed(source=<the hit's ref>)`. If it returns a `seed`, ADAPT that body (fix names/paths, drop irrelevant parts) and pass the result as `skill_write`'s `content` — do not copy it verbatim. If it returns `{seed: null}` (needs consent or unfetchable), try another hit from the search results, or author from scratch. You never need to judge a candidate's safety — `skill_acquire_seed` only ever hands back risk-free prior art.
 - Call skill_write(name, content, rationale) to create the skill — `content` is the full SKILL.md body, `rationale` records why it is worth creating (commit message). The store writes skills/<name>/SKILL.md with provenance and a commit.
 - Before authoring, read_file `{{ skill_creator_path }}` for format reference (frontmatter structure, naming conventions, quality standards)
 - **Dedup check**: read existing skills listed below to verify the new skill is not functionally redundant. Skip creation if an existing skill already covers the same workflow.
