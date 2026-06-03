@@ -36,7 +36,14 @@ __all__ = [
     "daemon_status",
     "daemon_pid_path",
     "daemon_logs_path",
+    "daemon_boot_logs_path",
+    "GATEWAY_LOG_FILE_ENV",
 ]
+
+
+# Env flag set by start_daemon and read by the gateway run to decide
+# whether to attach the JSONL rotating file sink to gateway.log.
+GATEWAY_LOG_FILE_ENV = "DURIN_GATEWAY_LOG_FILE"
 
 
 # ---------------------------------------------------------------------------
@@ -59,6 +66,18 @@ def daemon_logs_path() -> Path:
     logs = _state_root() / "logs"
     logs.mkdir(parents=True, exist_ok=True)
     return logs / "gateway.log"
+
+
+def daemon_boot_logs_path() -> Path:
+    """Raw stdout/stderr capture for the daemon child (truncated each start).
+
+    Catches catastrophic pre-loguru failures (import errors, early
+    tracebacks). The structured log lives in ``gateway.log`` (loguru-owned,
+    rotating); this file is only a boot-time safety net.
+    """
+    logs = _state_root() / "logs"
+    logs.mkdir(parents=True, exist_ok=True)
+    return logs / "gateway.boot.log"
 
 
 # ---------------------------------------------------------------------------
@@ -147,14 +166,19 @@ def start_daemon(
         except OSError:
             pass
 
-    log_path = daemon_logs_path()
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    log_fd = open(log_path, "ab", buffering=0)  # noqa: SIM115 — kept open for the child
+    # loguru OWNS gateway.log (rotation/compression). The parent must not
+    # also hold an fd to it, so the child's raw stdout/stderr go to a
+    # separate boot file (truncated each start) — a safety net for
+    # catastrophic pre-loguru output (import errors, early tracebacks).
+    boot_path = daemon_boot_logs_path()
+    boot_path.parent.mkdir(parents=True, exist_ok=True)
+    log_fd = open(boot_path, "wb", buffering=0)  # noqa: SIM115 — kept open for the child
     # try/finally so the fd is closed even if Popen raises (C5): the child
     # has already dup'd it, so the parent always drops its copy.
     try:
         binary = durin_executable or _resolve_durin_binary()
         cmd = [binary, "gateway", "--foreground", *(extra_args or [])]
+        env = {**os.environ, GATEWAY_LOG_FILE_ENV: str(daemon_logs_path())}
         proc = subprocess.Popen(  # noqa: S603 — durin invokes its own binary; no shell
             cmd,
             stdin=subprocess.DEVNULL,
@@ -162,6 +186,7 @@ def start_daemon(
             stderr=log_fd,
             start_new_session=True,
             close_fds=True,
+            env=env,
         )
     finally:
         log_fd.close()

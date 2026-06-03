@@ -658,6 +658,61 @@ export async function getModelCapabilities(
 }
 
 // ---------------------------------------------------------------------------
+// Logs viewer (read-only): gateway + telemetry
+// ---------------------------------------------------------------------------
+
+export interface LogLineRow {
+  ts: number;
+  fields: Record<string, unknown>;
+  raw: Record<string, unknown>;
+}
+
+export interface LogFacets {
+  levels?: string[];
+  channels?: string[];
+  sessions?: string[];
+  types?: string[];
+}
+
+export interface LogPage {
+  lines: LogLineRow[];
+  facets: LogFacets;
+  next_cursor: number | null;
+  scanned_through_ts: number | null;
+  has_more: boolean;
+}
+
+export interface LogQueryParams {
+  source: "gateway" | "telemetry";
+  q?: string;
+  level?: string[];
+  channel?: string[];
+  session?: string[];
+  type?: string[];
+  beforeTs?: number | null;
+  windowHours?: number | "all";
+  limit?: number;
+}
+
+export async function fetchLogs(
+  token: string,
+  params: LogQueryParams,
+  base: string = "",
+): Promise<LogPage> {
+  const sp = new URLSearchParams();
+  sp.set("source", params.source);
+  if (params.q) sp.set("q", params.q);
+  for (const key of ["level", "channel", "session", "type"] as const) {
+    const vals = params[key];
+    if (vals && vals.length) sp.set(key, vals.join(","));
+  }
+  if (params.beforeTs != null) sp.set("before_ts", String(params.beforeTs));
+  if (params.windowHours != null) sp.set("window_hours", String(params.windowHours));
+  if (params.limit != null) sp.set("limit", String(params.limit));
+  return request<LogPage>(`${base}/api/logs?${sp.toString()}`, token);
+}
+
+// ---------------------------------------------------------------------------
 // Memory graph (Obsidian-style view)
 // ---------------------------------------------------------------------------
 

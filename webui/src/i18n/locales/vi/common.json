@@ -53,7 +53,8 @@
       "advanced": "All settings",
       "channels": "Channels",
       "memory": "Memory",
-      "cron": "Cron"
+      "cron": "Cron",
+      "logs": "Nhật ký"
     },
     "sections": {
       "interface": "Giao diện",

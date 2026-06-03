@@ -53,7 +53,8 @@
       "advanced": "All settings",
       "channels": "Channels",
       "memory": "Memory",
-      "cron": "Cron"
+      "cron": "Cron",
+      "logs": "로그"
     },
     "sections": {
       "interface": "인터페이스",
