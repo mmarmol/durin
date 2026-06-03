@@ -677,10 +677,16 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/skills":
             return self._handle_skills_list(request)
 
-        # Exact match BEFORE the `([^/]+)` patterns so "quarantine" is not
-        # captured as a skill name by `^/api/skills/([^/]+)$`.
+        # Exact matches BEFORE the `([^/]+)` patterns so "quarantine"/"resolve"/
+        # "import" are not captured as skill names by `^/api/skills/([^/]+)$`.
         if got == "/api/skills/quarantine":
             return self._handle_skills_quarantine(request)
+
+        if got == "/api/skills/resolve":
+            return self._handle_skills_resolve(request)
+
+        if got == "/api/skills/import":
+            return self._handle_skills_import(request)
 
         m = re.match(r"^/api/skills/([^/]+)/save$", got)
         if m:
@@ -689,6 +695,14 @@ class WebSocketChannel(BaseChannel):
         m = re.match(r"^/api/skills/([^/]+)/mode$", got)
         if m:
             return self._handle_skill_mode(request, m.group(1))
+
+        m = re.match(r"^/api/skills/([^/]+)/approve$", got)
+        if m:
+            return self._handle_skill_approve(request, m.group(1))
+
+        m = re.match(r"^/api/skills/([^/]+)/reject$", got)
+        if m:
+            return self._handle_skill_reject(request, m.group(1))
 
         m = re.match(r"^/api/skills/([^/]+)$", got)
         if m:
@@ -1481,6 +1495,74 @@ class WebSocketChannel(BaseChannel):
             status, payload = ss.web_mode(workspace, decoded, value)
         except Exception as exc:  # noqa: BLE001
             return _http_error(500, f"skill mode failed: {exc}")
+        return _http_json_response(payload, status=status)
+
+    def _handle_skills_resolve(self, request: WsRequest) -> Response:
+        """`GET /api/skills/resolve?source=` — list the candidates a source points at."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        source = (_query_first(_parse_query(request.path), "source") or "").strip()
+        if not source:
+            return _http_error(400, "source is required")
+        from durin.agent import skills_store as ss
+        from durin.config.loader import load_config
+        try:
+            workspace = load_config().workspace_path
+            status, payload = ss.web_import_resolve(workspace, source)
+        except Exception as exc:  # noqa: BLE001
+            return _http_error(500, f"resolve failed: {exc}")
+        return _http_json_response(payload, status=status)
+
+    def _handle_skills_import(self, request: WsRequest) -> Response:
+        """`GET /api/skills/import?source=` — fetch one candidate to quarantine + scan."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        source = (_query_first(_parse_query(request.path), "source") or "").strip()
+        if not source:
+            return _http_error(400, "source is required")
+        from durin.agent import skills_store as ss
+        from durin.config.loader import load_config
+        try:
+            workspace = load_config().workspace_path
+            status, payload = ss.web_import_fetch(workspace, source)
+        except Exception as exc:  # noqa: BLE001
+            return _http_error(500, f"import failed: {exc}")
+        return _http_json_response(payload, status=status)
+
+    def _handle_skill_approve(self, request: WsRequest, name: str) -> Response:
+        """`GET /api/skills/{name}/approve?confirm=&override=` — install through the gate."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        decoded = _decode_api_key(name)
+        if decoded is None:
+            return _http_error(400, "invalid skill name")
+        query = _parse_query(request.path)
+        confirm = (_query_first(query, "confirm") or "").lower() in ("1", "true", "yes")
+        override = (_query_first(query, "override") or "").lower() in ("1", "true", "yes")
+        from durin.agent import skills_store as ss
+        from durin.config.loader import load_config
+        try:
+            workspace = load_config().workspace_path
+            status, payload = ss.web_skill_approve(workspace, decoded,
+                                                   confirm=confirm, override=override)
+        except Exception as exc:  # noqa: BLE001
+            return _http_error(500, f"approve failed: {exc}")
+        return _http_json_response(payload, status=status)
+
+    def _handle_skill_reject(self, request: WsRequest, name: str) -> Response:
+        """`GET /api/skills/{name}/reject` — discard a quarantined skill."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        decoded = _decode_api_key(name)
+        if decoded is None:
+            return _http_error(400, "invalid skill name")
+        from durin.agent import skills_store as ss
+        from durin.config.loader import load_config
+        try:
+            workspace = load_config().workspace_path
+            status, payload = ss.web_skill_reject(workspace, decoded)
+        except Exception as exc:  # noqa: BLE001
+            return _http_error(500, f"reject failed: {exc}")
         return _http_json_response(payload, status=status)
 
     def _handle_cron_list(self, request: WsRequest) -> Response:

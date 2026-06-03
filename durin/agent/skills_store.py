@@ -444,6 +444,91 @@ def web_quarantine(workspace: Path) -> tuple[int, dict]:
     return 200, {"quarantined": quarantined_skills(workspace)}
 
 
+def _import_allowlist() -> list[str]:
+    from durin.config.loader import load_config
+    try:
+        return list(load_config().memory.skill_import.allowlist)
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def web_import_resolve(workspace: Path, source: str) -> tuple[int, dict]:
+    """`GET /api/skills/resolve?source=` — list the skill candidates a source
+    points at (a repo may hold many). No download, no scan."""
+    from durin.agent.skill_resolve import resolve_candidates
+
+    res = resolve_candidates(source)
+    return 200, {
+        "candidates": [{"name": c.name, "ref": c.ref, "kind": c.kind, "detail": c.detail}
+                       for c in res.candidates],
+        "unresolved_reason": res.unresolved_reason,
+    }
+
+
+def web_import_fetch(workspace: Path, source: str) -> tuple[int, dict]:
+    """`GET /api/skills/import?source=` — fetch ONE candidate into quarantine +
+    scan. If the source resolves to many, return the candidate list to pick from."""
+    from durin.agent.skill_resolve import resolve_candidates
+    from durin.agent.skills_import import decide_action, fetch_candidate, validate_skill
+    from durin.security.skill_scan import scan_skill
+
+    res = resolve_candidates(source)
+    if not res.candidates:
+        return 200, {"unresolved_reason": res.unresolved_reason or "no skill found at source"}
+    if len(res.candidates) > 1:
+        return 200, {
+            "candidates": [{"name": c.name, "ref": c.ref, "kind": c.kind, "detail": c.detail}
+                           for c in res.candidates],
+            "note": "multiple skills found; import one by passing its ref as source",
+        }
+    cand = res.candidates[0]
+    qroot = Path(workspace) / ".durin" / "import-quarantine"
+    qdir = fetch_candidate(cand, quarantine_root=qroot)
+    rep = scan_skill(qdir)
+    vr = validate_skill(qdir)
+    needs = decide_action(cand.ref, verdict=rep.verdict,
+                          carries_code=vr.carries_code, allowlist=_import_allowlist())
+    return 200, {"quarantined": cand.name, "source": cand.ref,
+                 "verdict": rep.verdict, "needs": needs,
+                 "findings": [{"category": f.category, "severity": f.severity,
+                               "where": f.where, "detail": f.detail} for f in rep.findings]}
+
+
+def web_skill_approve(workspace: Path, name: str, *, confirm: bool,
+                      override: bool) -> tuple[int, dict]:
+    """`GET /api/skills/{name}/approve?confirm=&override=` — install a quarantined
+    skill through the §8.C gate. 409 with {refused} when the gate refuses."""
+    import json as _json
+
+    from durin.agent.skills_import import SkillImportRefused, install_imported_skill
+
+    qdir = Path(workspace) / ".durin" / "import-quarantine" / name
+    if not (qdir / "SKILL.md").is_file():
+        return 404, {"error": f"not in quarantine: {name}"}
+    source = name
+    sj = qdir / ".scan.json"
+    if sj.is_file():
+        try:
+            source = _json.loads(sj.read_text()).get("source", name)
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        res = install_imported_skill(workspace, qdir, source=source,
+                                     allowlist=_import_allowlist(),
+                                     confirmed=confirm, override=override)
+        return 200, res
+    except SkillImportRefused as exc:
+        return 409, {"refused": exc.action, "verdict": exc.verdict, "message": str(exc)}
+
+
+def web_skill_reject(workspace: Path, name: str) -> tuple[int, dict]:
+    """`GET /api/skills/{name}/reject` — discard a quarantined skill."""
+    from durin.agent.skills_import import reject_quarantined
+
+    res = reject_quarantined(workspace, name)
+    return (400, res) if "error" in res else (200, res)
+
+
 def web_get(workspace: Path, name: str) -> tuple[int, dict]:
     content = read_skill_content(workspace, name)
     if content is None:
