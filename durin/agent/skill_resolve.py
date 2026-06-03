@@ -167,20 +167,35 @@ def _resolve_github(source: str) -> ResolveResult:
         branch = meta.get("default_branch") or "main"
     tree = _gh_get_json(f"{_GITHUB_API}/repos/{owner}/{repo}/git/trees/{branch}?recursive=1")
     sub = subpath.strip("/")
-    cands: list[SkillCandidate] = []
+
+    skill_dirs: list[str] = []
     for entry in tree.get("tree", []):
         path = entry.get("path", "")
         if entry.get("type") != "blob" or not (path == "SKILL.md" or path.endswith("/SKILL.md")):
             continue
-        skill_dir = path[: -len("/SKILL.md")] if path.endswith("/SKILL.md") else ""
-        if sub and not (skill_dir == sub or skill_dir.startswith(sub + "/")):
-            continue
+        skill_dirs.append(path[: -len("/SKILL.md")] if path.endswith("/SKILL.md") else "")
+
+    def _mk(skill_dir: str) -> SkillCandidate:
         name = skill_dir.rsplit("/", 1)[-1] if skill_dir else repo
-        cands.append(SkillCandidate(name, f"github:{owner}/{repo}@{branch}/{skill_dir}", "github"))
-    if not cands:
-        return ResolveResult(unresolved_reason=f"no SKILL.md found in github:{owner}/{repo}"
-                             + (f"/{sub}" if sub else ""))
-    return ResolveResult(cands)
+        return SkillCandidate(name, f"github:{owner}/{repo}@{branch}/{skill_dir}", "github")
+
+    if sub:
+        # Exact: the subpath IS a skill dir, or skills live under it.
+        exact = [d for d in skill_dirs if d == sub or d.startswith(sub + "/")]
+        if exact:
+            return ResolveResult([_mk(d) for d in exact])
+        # Fallback: a registry slug (e.g. a skills.sh skillId) is the skill's NAME,
+        # not its repo path — match the last segment anywhere in the tree, since
+        # skills live under varied prefixes (skills/, skills/.curated/, …).
+        leaf = sub.rsplit("/", 1)[-1]
+        named = [d for d in skill_dirs if d.rsplit("/", 1)[-1] == leaf]
+        if named:
+            return ResolveResult([_mk(d) for d in named])
+        return ResolveResult(unresolved_reason=f"no SKILL.md found in github:{owner}/{repo}/{sub}")
+
+    if skill_dirs:
+        return ResolveResult([_mk(d) for d in skill_dirs])
+    return ResolveResult(unresolved_reason=f"no SKILL.md found in github:{owner}/{repo}")
 
 
 # --- entry point -------------------------------------------------------------
