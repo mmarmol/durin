@@ -6,6 +6,10 @@ Subcommands:
   existing skill: the format lint (:func:`validate_skill`) plus the
   deterministic security scan (:func:`scan_skill`), rendering a verdict
   (safe/caution/dangerous) and a table of findings.
+- ``durin skill list`` — table of active skills (name, source, mode, verdict)
+  from the Skills-Surface inventory.
+- ``durin skill quarantine`` — table of skills awaiting an import decision
+  (name, source, verdict) plus each entry's findings.
 """
 
 from __future__ import annotations
@@ -100,3 +104,73 @@ def cmd_audit(
         console.print("[red]Lint errors:[/red] " + "; ".join(rep.errors))
     if rep.warnings:
         console.print("[yellow]Lint warnings:[/yellow] " + "; ".join(rep.warnings))
+
+
+def _verdict_cell(verdict: str) -> str:
+    style = _VERDICT_STYLE.get(verdict, "white")
+    return f"[{style}]{verdict or '-'}[/{style}]"
+
+
+@skill_app.command("list")
+def list_skills() -> None:
+    """List active skills with their §8.C verdict.
+
+    Renders the Skills-Surface inventory (name, source, mode, verdict) for the
+    skills available in the current workspace.
+    """
+    from durin.agent.skills_surface import skills_inventory
+
+    inv = skills_inventory(_workspace_root())
+    if not inv:
+        console.print("[dim]No skills installed.[/dim]")
+        return
+
+    table = Table(title="Skills", show_lines=False)
+    table.add_column("Name", style="bold", no_wrap=True)
+    table.add_column("Source", style="cyan", no_wrap=True)
+    table.add_column("Mode", no_wrap=True)
+    table.add_column("Verdict", no_wrap=True)
+    for s in inv:
+        table.add_row(
+            s["name"],
+            s.get("source", ""),
+            s.get("mode", ""),
+            _verdict_cell(s.get("verdict", "")),
+        )
+    console.print(table)
+
+
+@skill_app.command("quarantine")
+def cmd_quarantine() -> None:
+    """List skills awaiting an import decision (.durin/import-quarantine).
+
+    Renders each pending entry (name, source, verdict) plus its findings; prints
+    a friendly message when quarantine is empty.
+    """
+    from durin.agent.skills_surface import quarantined_skills
+
+    pending = quarantined_skills(_workspace_root())
+    if not pending:
+        console.print("[green]No skills in quarantine.[/green]")
+        return
+
+    table = Table(title="Quarantined skills", show_lines=True)
+    table.add_column("Name", style="bold", no_wrap=True)
+    table.add_column("Source", style="cyan", no_wrap=True)
+    table.add_column("Verdict", no_wrap=True)
+    table.add_column("Findings")
+    for s in pending:
+        findings = s.get("findings", [])
+        if findings:
+            detail = "\n".join(
+                f"{f.get('category', '?')} ({f.get('where', '?')})" for f in findings
+            )
+        else:
+            detail = "[dim]none[/dim]"
+        table.add_row(
+            s["name"],
+            s.get("source", ""),
+            _verdict_cell(s.get("verdict", "")),
+            detail,
+        )
+    console.print(table)
