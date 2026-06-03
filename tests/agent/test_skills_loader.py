@@ -537,3 +537,38 @@ def test_get_skill_metadata_handles_yaml_types(tmp_path: Path) -> None:
     assert meta.get("always") is True
     # metadata is a parsed dict, not a JSON string
     assert isinstance(meta.get("metadata"), dict)
+
+
+# -- agentskills.io root ``platforms`` OS gating -------------------------------
+
+
+def test_platforms_hides_skill_off_platform(tmp_path, monkeypatch):
+    import durin.agent.skills as skmod
+    d = tmp_path / "skills" / "linux-only"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text("---\nname: linux-only\ndescription: d\nplatforms: [linux]\n---\nx\n")
+    loader = skmod.SkillsLoader(tmp_path)
+    monkeypatch.setattr(skmod, "_current_platform", lambda: "macos")
+    assert "linux-only" not in [s["name"] for s in loader.list_skills(filter_unavailable=False)]
+    monkeypatch.setattr(skmod, "_current_platform", lambda: "linux")
+    assert "linux-only" in [s["name"] for s in loader.list_skills(filter_unavailable=False)]
+
+
+def test_platforms_accepts_openclaw_darwin_alias(tmp_path, monkeypatch):
+    import durin.agent.skills as skmod
+    d = tmp_path / "skills" / "mac-skill"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text("---\nname: mac-skill\ndescription: d\nplatforms: [darwin]\n---\nx\n")
+    loader = skmod.SkillsLoader(tmp_path)
+    monkeypatch.setattr(skmod, "_current_platform", lambda: "macos")
+    assert "mac-skill" in [s["name"] for s in loader.list_skills(filter_unavailable=False)]
+
+
+def test_no_platforms_means_all(tmp_path, monkeypatch):
+    import durin.agent.skills as skmod
+    d = tmp_path / "skills" / "anywhere"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text("---\nname: anywhere\ndescription: d\n---\nx\n")
+    loader = skmod.SkillsLoader(tmp_path)
+    monkeypatch.setattr(skmod, "_current_platform", lambda: "windows")
+    assert "anywhere" in [s["name"] for s in loader.list_skills(filter_unavailable=False)]
