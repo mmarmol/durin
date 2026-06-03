@@ -4,7 +4,7 @@
 
 **Goal:** Connect durin's existing federated registry search to its existing skill-authoring path so durin acquires a skill on its own initiative — searching registries and using a safe hit as a seed — in-session (interactive) and in the 2h dream (autonomous, safe-only).
 
-**Architecture:** Two paths over the same substrate (search → §8.C gate → author). **Path A (in-session)** is a prompt-only change: the in-loop agent already has `skill_search`, `skill_import`, `skill_write`, `ask_user_question` in core. **Path B (dream phase-2)** gets a new `skill_acquire_seed` tool that searches + fetches + gates **internally** and only ever returns a risk-free seed (`decide_action == "allow"`), so the autonomous risk rule is enforced in code, not in the prompt. Risky hits in-session route to the user via `ask_user_question`; risky hits in the dream are simply never seeded.
+**Architecture:** Two paths over the same substrate (search → §8.C gate → author). **Path A (in-session)** is a prompt-only change: the in-loop agent already has `skill_search`, `skill_import`, `skill_write`, `ask_user_question` in core. **Path B (dream phase-2)** gets the raw `skill_search` tool (so the dream sees the full hit list — transparent discovery) plus a new per-ref `skill_acquire_seed(source)` tool: given ONE chosen ref it runs the §8.C gate and returns the SKILL.md body **only if `decide_action == "allow"`**, else refuses ("pick another"). The risk rule is thus enforced in code — the autonomous dream can never receive risky content. **Cost:** the gate's scan is a static regex pass; the LLM **judge is never used** here (`judge_trigger="off"`). A non-allowlisted ref can never be `allow`, so `skill_acquire_seed` **rejects it instantly without any download** — only allowlisted (user-trusted) refs are fetched. Risky hits in-session route to the user via `ask_user_question`.
 
 **Tech Stack:** Python 3, pytest, durin's `Tool` base + `tool_parameters_schema`, existing `skill_registry` / `skills_import` / `skill_resolve` / `skill_scan` modules.
 
@@ -49,14 +49,11 @@ source (e.g. a trusted github owner). This mirrors the drift design and is inten
 
 ```python
 # tests/agent/test_skill_acquire.py
-"""§6.C — acquire_safe_seed: only a risk-free hit becomes a seed."""
+"""§6.C — acquire_safe_seed gates ONE ref; only a risk-free allowlisted ref seeds."""
 import asyncio
 from pathlib import Path
 
-import pytest
-
 from durin.agent import skill_acquire
-from durin.agent.skill_registry import SkillSearchHit
 
 
 class _Cand:
@@ -83,22 +80,20 @@ class _Valid:
         self.carries_code = carries_code
 
 
-def _wire(monkeypatch, *, hits, verdict, carries_code, tmp_path):
-    """Patch the network/fetch/scan deps so the test is offline + deterministic."""
-    async def _search(query, *, adapters, allowlist, limit):
-        return hits
-
+def _wire(monkeypatch, *, verdict, carries_code, fetch_spy=None):
+    """Patch resolve/fetch/scan so the test is offline + deterministic.
+    decide_action is REAL (pure) — the allowlist gating is exercised for real."""
     def _resolve(ref):
         return _Resolve([_Cand(ref.split("/")[-1], ref)])
 
-    def _fetch(cand, *, quarantine_root, allowlist=None):
+    def _fetch(cand, *, quarantine_root, allowlist=None, judge_trigger="off"):
+        if fetch_spy is not None:
+            fetch_spy.append(cand.ref)
         d = Path(quarantine_root) / cand.name
         d.mkdir(parents=True, exist_ok=True)
         (d / "SKILL.md").write_text("---\nname: x\n---\nbody", encoding="utf-8")
         return d
 
-    monkeypatch.setattr("durin.agent.skill_registry.search_registries", _search)
-    monkeypatch.setattr("durin.agent.skill_registry.build_adapters", lambda r: [])
     monkeypatch.setattr("durin.agent.skill_resolve.resolve_candidates", _resolve)
     monkeypatch.setattr("durin.agent.skills_import.fetch_candidate", _fetch)
     monkeypatch.setattr("durin.agent.skills_import.validate_skill",
@@ -107,38 +102,36 @@ def _wire(monkeypatch, *, hits, verdict, carries_code, tmp_path):
                         lambda d: _Scan(verdict))
 
 
-def test_safe_allowlisted_hit_returns_seed(monkeypatch, tmp_path):
-    hits = [SkillSearchHit(name="pdf", ref="github:acme/pdf", registry="skills.sh")]
-    _wire(monkeypatch, hits=hits, verdict="safe", carries_code=False, tmp_path=tmp_path)
+def test_allowlisted_clean_ref_returns_seed(monkeypatch, tmp_path):
+    _wire(monkeypatch, verdict="safe", carries_code=False)
     out = asyncio.run(skill_acquire.acquire_safe_seed(
-        tmp_path, "pdf", registries=[], allowlist=["github:acme"], limit=5))
+        tmp_path, "github:acme/pdf", allowlist=["github:acme"]))
     assert out is not None
     assert out["source"] == "github:acme/pdf"
     assert "body" in out["content"]
 
 
-def test_risky_hit_is_not_seeded(monkeypatch, tmp_path):
-    # carries_code → decide_action returns 'confirm' → never seeded autonomously
-    hits = [SkillSearchHit(name="pdf", ref="github:acme/pdf", registry="skills.sh")]
-    _wire(monkeypatch, hits=hits, verdict="safe", carries_code=True, tmp_path=tmp_path)
+def test_not_allowlisted_rejected_without_download(monkeypatch, tmp_path):
+    spy: list[str] = []
+    _wire(monkeypatch, verdict="safe", carries_code=False, fetch_spy=spy)
     out = asyncio.run(skill_acquire.acquire_safe_seed(
-        tmp_path, "pdf", registries=[], allowlist=["github:acme"], limit=5))
+        tmp_path, "github:acme/pdf", allowlist=[]))
+    assert out is None
+    assert spy == []  # fast reject — fetch_candidate must NOT be called
+
+
+def test_allowlisted_but_carries_code_refused(monkeypatch, tmp_path):
+    _wire(monkeypatch, verdict="safe", carries_code=True)
+    out = asyncio.run(skill_acquire.acquire_safe_seed(
+        tmp_path, "github:acme/pdf", allowlist=["github:acme"]))
     assert out is None
 
 
-def test_not_allowlisted_is_not_seeded(monkeypatch, tmp_path):
-    # default empty allowlist → 'confirm' → no autonomous seed
-    hits = [SkillSearchHit(name="pdf", ref="github:acme/pdf", registry="skills.sh")]
-    _wire(monkeypatch, hits=hits, verdict="safe", carries_code=False, tmp_path=tmp_path)
+def test_unresolvable_source_returns_none(monkeypatch, tmp_path):
+    monkeypatch.setattr("durin.agent.skill_resolve.resolve_candidates",
+                        lambda ref: _Resolve([]))
     out = asyncio.run(skill_acquire.acquire_safe_seed(
-        tmp_path, "pdf", registries=[], allowlist=[], limit=5))
-    assert out is None
-
-
-def test_no_hits_returns_none(monkeypatch, tmp_path):
-    _wire(monkeypatch, hits=[], verdict="safe", carries_code=False, tmp_path=tmp_path)
-    out = asyncio.run(skill_acquire.acquire_safe_seed(
-        tmp_path, "pdf", registries=[], allowlist=["github:acme"], limit=5))
+        tmp_path, "github:acme/pdf", allowlist=["github:acme"]))
     assert out is None
 ```
 
@@ -151,14 +144,16 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'durin.agent.skill_acqu
 
 ```python
 # durin/agent/skill_acquire.py
-"""§6.C acquire-on-gap — gated seed acquisition.
+"""§6.C acquire-on-gap — gated per-ref seed retrieval.
 
-Search the configured registries for prior art, fetch the top candidate the §8.C
-gate rates ``allow``, and return its SKILL.md body as a seed. The autonomous risk
-rule is enforced HERE, in code: a ``confirm``/``block`` hit is never returned, so
-the dream (no human present) can only ever seed from a risk-free source. Path A
-(in-session, human present) does not use this — it drives the raw tools and routes
-risky candidates to the user via ``ask_user_question``.
+Given ONE registry ref the dream chose from a raw ``skill_search`` result, run the
+§8.C gate and return its SKILL.md body ONLY if ``decide_action == 'allow'`` — else
+None ("pick another"). The autonomous risk rule is enforced HERE, in code: the dream
+(no human present) can never receive risky content. Cost-aware: a non-allowlisted ref
+can never reach 'allow', so it is rejected INSTANTLY without a download; only
+allowlisted (user-trusted) refs are fetched, and the gate's STATIC scan runs with the
+LLM judge OFF. Path A (in-session, human present) does not use this — it drives the
+raw tools and routes risky candidates to the user via ``ask_user_question``.
 """
 from __future__ import annotations
 
@@ -167,54 +162,46 @@ import shutil
 from pathlib import Path
 
 
-async def acquire_safe_seed(
-    workspace,
-    query: str,
-    *,
-    registries,
-    allowlist,
-    limit: int = 10,
-) -> dict | None:
-    """Return ``{"name", "source", "content"}`` for the top risk-free registry hit
-    matching ``query``, or ``None`` when no hit clears the §8.C gate."""
-    from durin.agent.skill_registry import build_adapters, search_registries
+async def acquire_safe_seed(workspace, source: str, *, allowlist) -> dict | None:
+    """Gate ONE registry ref for use as a seed. Returns
+    ``{"name", "source", "content"}`` when the §8.C gate rates it ``allow``, else
+    ``None``. Rejects a non-allowlisted ref without downloading it."""
     from durin.agent.skill_resolve import resolve_candidates
     from durin.agent.skills_import import (
         decide_action, fetch_candidate, validate_skill,
     )
     from durin.security.skill_scan import scan_skill
 
-    allow = list(allowlist or [])
-    query = (query or "").strip()
-    if not query:
+    allow = [p for p in (allowlist or []) if p]
+    source = (source or "").strip()
+    if not source:
+        return None
+    # Fast reject (no network): a non-allowlisted source can never reach 'allow'.
+    if not any(source.startswith(p) for p in allow):
         return None
 
-    hits = await search_registries(
-        query, adapters=build_adapters(registries), allowlist=allow, limit=limit)
+    res = resolve_candidates(source)
+    if not res.candidates:
+        return None
+    cand = res.candidates[0]
     seed_root = Path(workspace) / ".durin" / "acquire-quarantine"
-
-    for hit in hits:
-        res = resolve_candidates(hit.ref)
-        if not res.candidates:
-            continue
-        cand = res.candidates[0]
-        try:
-            qdir = await asyncio.to_thread(
-                fetch_candidate, cand, quarantine_root=seed_root, allowlist=allow)
-        except Exception:  # noqa: BLE001 — a bad candidate must not sink the rest
-            continue
-        try:
-            vr = validate_skill(qdir)
-            rep = scan_skill(qdir)
-            action = decide_action(
-                hit.ref, verdict=rep.verdict,
-                carries_code=vr.carries_code, allowlist=allow)
-            if action == "allow":
-                body = (qdir / "SKILL.md").read_text(encoding="utf-8")
-                return {"name": hit.name, "source": hit.ref, "content": body}
-        finally:
-            shutil.rmtree(qdir, ignore_errors=True)
-    return None
+    try:
+        qdir = await asyncio.to_thread(
+            fetch_candidate, cand, quarantine_root=seed_root,
+            allowlist=allow, judge_trigger="off")  # static scan only — never the judge
+    except Exception:  # noqa: BLE001 — a bad candidate must not sink the caller
+        return None
+    try:
+        vr = validate_skill(qdir)
+        rep = scan_skill(qdir)
+        action = decide_action(
+            source, verdict=rep.verdict, carries_code=vr.carries_code, allowlist=allow)
+        if action == "allow":
+            body = (qdir / "SKILL.md").read_text(encoding="utf-8")
+            return {"name": cand.name, "source": source, "content": body}
+        return None
+    finally:
+        shutil.rmtree(qdir, ignore_errors=True)
 ```
 
 - [ ] **Step 4: Run the tests to verify they pass**
