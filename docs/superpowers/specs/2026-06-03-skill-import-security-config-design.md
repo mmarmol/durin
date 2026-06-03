@@ -6,8 +6,8 @@
 > caps, B11 install-specs consent. (A2 POST-body → backlog P7; C14 force-replace
 > + C13 fuzzy-via-chat already resolved.)
 >
-> **Status:** DESIGN — not approved, not implemented. Decisions below are my
-> recommendations; open questions are flagged for the user to settle.
+> **Status:** DESIGN — the 5 open decisions were SETTLED with the user
+> (2026-06-03); see "Decisions" at the bottom. Not yet implemented.
 
 ## Why now / what the field does (researched 2026-06-03, file:line verified)
 
@@ -22,6 +22,16 @@
 | Signing | unsigned | integrity-hash (plugins only) | `content_hash` only | defer to v2 |
 
 Takeaway: neither peer makes security **user-configurable** and neither has an **LLM judge** — durin can lead on both, while aligning caps/consent to the field.
+
+**Design principle (non-negotiable): clean skills pass frictionlessly.** None of
+this may punish healthy skills. A safe, no-code skill must sail through the
+deterministic scan + the LLM-judge with **zero false escalation**; the only
+friction on a clean skill is a single trust-establishing confirm when its source
+isn't yet allowlisted (and none once it is). **Acceptance criterion:** re-verify
+the whole pipeline against the clean corpus (durin's 11 builtins + the ~157 real
+hermes/openclaw skills) — not one clean skill may turn caution/dangerous. This is
+exactly why the judge may escalate ONLY with a concrete, explained finding
+(decision A3.3): no vague unease, so a skill it cannot fault stays `safe`.
 
 ---
 
@@ -45,30 +55,41 @@ action.
 The user-extensible form is the "auditor skill" pattern (§8.C v2 note) — a builtin
 skill the agent can run for a deeper, tool-using audit; out of scope here.
 
-**Open decisions:**
-1. Can the judge raise to **`dangerous` (block)**, or cap it at **`caution`
-   (confirm)** to avoid false-blocks from hallucination? *Recommend: cap at
-   caution in v1* (judge informs + can force a confirm, but only the deterministic
-   rules block). Revisit once we trust the judge on the corpus.
-2. **Default on or opt-in?** *Recommend opt-in* (`enabled=false`) — it needs an
-   aux model configured and adds latency/cost; turn on in settings.
-3. Prompt/criteria content — draft from the §8.C threat taxonomy.
+**Settled (2026-06-03):**
+1. **Cap at `caution`.** The judge raises to at most caution (forces a confirm);
+   it NEVER blocks on its own — only the deterministic rules block.
+2. **ON by default** (`enabled=true`), **degrading gracefully**: if no aux model
+   resolves, skip the judge silently (don't error, don't block the import).
+3. **Escalate only with a concrete, explained finding.** Every judge finding MUST
+   state *exactly* what and why — the specific code/snippet/behavior and the
+   threat — surfaced verbatim in the gate. No vague "looks suspicious": a skill
+   the judge cannot concretely fault stays `safe` (serves the clean-skills
+   principle). The prompt/criteria derive from the §8.C threat taxonomy and force
+   a structured `{verdict, findings:[{what, why, where}]}` output.
 
 ---
 
 ## A1 — Allowlist + defaults
 
 durin's philosophy ([[feedback_open_over_closed]], [[feedback_user_configurable_optional_features]])
-argues against hardcoding someone else's trusted repos. Instead:
-- Keep `memory.skill_import.allowlist: list[str] = []` (empty default).
-- Make it **editable in settings** (A4).
-- Add a **"trust this source" one-click** on the approve flow: after importing
-  from `github:owner/repo/...`, offer to add `github:owner/repo` (or the host) to
-  the allowlist, so the user builds their own allowlist organically. Allowlisted +
-  safe + no-code then installs without confirm (the existing `decide_action` path).
+argues against hardcoding someone else's trusted repos AND against per-source-kind
+"magic" — github isn't the only host (gitlab / bitbucket / internal exist). So
+trust is a **uniform, user-configured list of patterns** matched (by prefix)
+against the source `ref`, identical for every source kind:
+- Keep `memory.skill_import.allowlist: list[str] = []` (empty default) — already a
+  prefix list. Examples: `github:acme/`, `https://gitlab.com/acme/`,
+  `https://bitbucket.org/myorg/`.
+- Surface it as an **advanced "trust patterns" editor** in settings (A4).
+- Optional convenience: a **"trust this source"** button on approve that
+  **pre-fills the imported skill's exact `ref`** into the editor for the user to
+  trim to the prefix they want — it does NOT auto-decide repo-vs-org-vs-host.
+- `ref` shapes by kind: github → `github:owner/repo@branch/dir`; https →
+  `https://host/path/SKILL.md`; local → absolute path (own machine; rarely needs
+  trusting). Allowlisted + safe + no-code → installs with no confirm (existing
+  `decide_action`).
 
-*Open decision:* prefix granularity for "trust source" — repo (`github:owner/repo`)
-vs org (`github:owner/`) vs host. *Recommend offer both repo and org.*
+*Future option (not v1):* glob patterns (`https://*.acme.com/`) if prefix proves
+too rigid.
 
 ---
 
@@ -135,9 +156,9 @@ class SkillImportConfig(Base):
     llm_judge: SkillJudgeConfig = Field(default_factory=SkillJudgeConfig)  # A3
 
 class SkillJudgeConfig(Base):
-    enabled: bool = False                               # A3 opt-in
-    max_severity: Literal["caution", "dangerous"] = "caution"  # A3 open-decision #1
-    model: str = ""                                     # aux model name; "" → default judge
+    enabled: bool = True                                # A3 — on by default; graceful degrade if no aux model
+    max_severity: Literal["caution", "dangerous"] = "caution"  # A3 — settled: caution
+    model: str = ""                                     # aux_models.skill_audit; "" → default judge model
 ```
 
 **Settings panel:** allowlist editor (add/remove prefixes), the GitHub-token
@@ -147,12 +168,21 @@ patterns).
 
 ---
 
-## Open decisions to settle before building
-1. LLM-judge: cap at `caution` or allow `dangerous`-block? (rec: caution v1)
-2. LLM-judge: opt-in default? (rec: yes) + which aux model?
-3. Caps: the three numbers (rec: 100 / 3 MB / 1 MB)
-4. Install-specs: build the executor now (`ask`) or phase it (`never` + info v1)?
-5. "Trust source" granularity: repo, org, both? (rec: both)
+## Decisions (settled 2026-06-03 with the user)
+1. **LLM-judge cap:** `caution` — never blocks alone; only deterministic rules
+   block. Plus: every judge finding must give the **exact** what/why.
+2. **LLM-judge default:** **ON**, degrading gracefully when no aux model resolves.
+   Model: `aux_models.skill_audit`, falling back to the default judge model.
+3. **Caps:** 100 files / 3 MB total / 1 MB per file.
+4. **Install-specs:** v1 = **info-only** (`never`); the approval executor → v1.1.
+5. **Trust:** a **uniform advanced-config list of prefix patterns** over the
+   source ref (any host — github/gitlab/bitbucket/https alike); optional
+   pre-fill-the-ref convenience button; no per-source-kind magic. Glob = future.
+
+**Acceptance criterion (clean-skills principle, non-negotiable):** re-verify the
+whole pipeline (deterministic scan + LLM-judge + gate) against the clean corpus
+(durin builtins + ~157 real skills) — **not one clean skill may escalate** to
+caution/dangerous.
 
 ## Implementation order (when approved)
 1. Config schema (`SkillImportConfig` + `SkillJudgeConfig`) + wire caps into
