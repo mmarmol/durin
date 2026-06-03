@@ -113,14 +113,20 @@ This reuses `decide_action` verbatim — there is **no new policy engine**. §8.
 
 ## 5. Open design decisions (to settle before/within the plan)
 
-1. **Path B mechanism — RESOLVED: (a) give phase-2 the `skill_search` tool.** The
-   dream phase-2 toolset (`read_file` / `edit_file` / `skill_write`,
-   `memory.py:_build_tools`) gains `skill_search` + a `dream_phase2.md` instruction to
-   search before authoring a `[SKILL]`. Uniform with Path A (same agent-driven tools;
-   the LLM decides relevance). Rejected (b) deterministic orchestrator pre-fetch — less
-   flexible, diverges from Path A. Network note: `search_registries` uses
-   `ssrf_safe_async_client` over public HTTP (not MCP), so it is reachable from the
-   cron/headless dream.
+1. **Path B mechanism — RESOLVED (refined): transparent search + gated retrieval.**
+   The dream phase-2 toolset (`read_file` / `edit_file` / `skill_write`,
+   `memory.py:_build_tools`) gains **two** tools:
+   - **`skill_search`** (the existing raw search tool) — returns the **full hit list**
+     so the dream sees every candidate (transparent, agent-driven discovery).
+   - **`skill_acquire_seed(source=<ref>)`** — given ONE chosen ref, resolve + fetch +
+     run the §8.C gate; return the SKILL.md body **only if `decide_action == "allow"`**,
+     else refuse with a "needs consent — pick another from the search results" note.
+   The dream loops: search → pick a hit → `skill_acquire_seed(its ref)` → if a seed
+   comes back, author from it; if refused, pick another hit; if none clear, author from
+   scratch. This gives agent-driven selection **with code-enforced retrieval safety** —
+   the autonomous dream can never receive risky content even if the prompt fails.
+   Network note: `search_registries` / `fetch_candidate` use `ssrf_safe_async_client`
+   over public HTTP (not MCP), reachable from the cron/headless dream.
 2. **In-session confirmation surface — RESOLVED.** durin has a native
    `ask_user_question` tool (`durin/agent/tools/ask_user.py`,
    `AskUserQuestionTool`): `question` + `options` (array), with a
