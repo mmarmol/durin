@@ -12,6 +12,16 @@
 
 ---
 
+## Status — SHIPPED 2026-06-03
+
+All tasks complete on `skills-hot-tier`. Commits: resolution `44f91ea`, fetch `3555200`, gate `5f6068e`, tool `7fbf949`, orchestrator builtin `a983ac5`, web routes `46a3cb3`, web surface `b42b506`, UX fix `088b2aa`. Tests: 32 new Python (`test_skill_resolve` 10, `_fetch` 4, `_install` 8, `skill_import_tool` 7, `import_skill_builtin` 3) + 3 web route + 6 `skills-view`; backend suite 2047 green, webui 153 green. **Verified live** against the real channel + bundle: multi-skill source → picker → pick; safe out-of-allowlist → inline confirm → install; dangerous → block → inline force/override → install with `overridden:true`; provenance + `.durin/import-audit.log` stamped.
+
+**UX refinements (post-review):** the import input is a **surface action above the Active/Quarantine tabs** (not inside the quarantine tab); a successful import auto-switches to Quarantine. The approve gate is an **inline styled prompt on the row** (no `window.confirm` — native dialogs broke the design): a destructive "force" button for a dangerous verdict, a plain "confirm" otherwise, plus cancel.
+
+**Security note (not fixed — flagged for decision):** the existing `clawhub` builtin installs skills via `npx clawhub install --workdir ~/.durin/workspace`, dropping them straight into `skills/` — bypassing the §8.C floor (no scan, gate, quarantine, or provenance). Routing clawhub through `import-skill` / the gate would close that gap, but it changes existing behavior; left for the user to decide.
+
+---
+
 ## File Structure
 
 - **Create `durin/agent/skill_resolve.py`** — `SkillCandidate`, `ResolveResult`, `resolve_candidates(source)`. Source → candidates. Local path/dir, direct `https://…/SKILL.md`, `github:owner/repo[/subpath]` / `https://github.com/owner/repo[/tree/branch/sub]` (GitHub REST tree walk). SSRF-safe. No install, no scan — pure discovery.
