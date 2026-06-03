@@ -338,6 +338,8 @@
       "forceDangerous": "This skill is DANGEROUS — the scan found a serious risk. Force install anyway?",
       "confirm": "Confirm",
       "force": "Force install",
+      "replace": "Replace",
+      "replaceExists": "A skill with this name is already installed. Replace it?",
       "cancel": "Cancel",
       "unresolved": "Could not resolve a skill from that source. Ask the agent in chat to investigate the link."
     },

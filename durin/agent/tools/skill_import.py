@@ -53,6 +53,11 @@ _PARAMETERS = tool_parameters_schema(
                      "when the user has explicitly told you to force the install."),
         default=False,
     ),
+    replace=BooleanSchema(
+        description=("install: overwrite an existing skill of the same name. Without "
+                     "this, install refuses when the name already exists."),
+        default=False,
+    ),
     description=(
         "Import a skill from any source (local path, URL, github:owner/repo) "
         "through the §8.C security floor: resolve -> fetch (quarantine+scan) -> "
@@ -119,6 +124,7 @@ class SkillImportTool(Tool):
         name = str(kwargs.get("name", "")).strip()
         confirm = bool(kwargs.get("confirm", False))
         override = bool(kwargs.get("override", False))
+        replace = bool(kwargs.get("replace", False))
 
         if action == "resolve":
             if not source:
@@ -170,7 +176,7 @@ class SkillImportTool(Tool):
                 return await asyncio.to_thread(
                     install_imported_skill, self._workspace, qdir,
                     source=src, allowlist=self._allowlist,
-                    confirmed=confirm, override=override)
+                    confirmed=confirm, override=override, replace=replace)
             except SkillImportRefused as exc:
                 return {"refused": exc.action, "verdict": exc.verdict, "message": str(exc)}
 

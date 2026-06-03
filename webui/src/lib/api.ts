@@ -410,12 +410,13 @@ export async function importSource(
 export async function approveSkill(
   token: string,
   name: string,
-  opts: { confirm?: boolean; override?: boolean } = {},
+  opts: { confirm?: boolean; override?: boolean; replace?: boolean } = {},
   base: string = "",
 ): Promise<ApproveResult> {
   const query = new URLSearchParams();
   if (opts.confirm) query.set("confirm", "true");
   if (opts.override) query.set("override", "true");
+  if (opts.replace) query.set("replace", "true");
   const qs = query.toString();
   const url = `${base}/api/skills/${encodeURIComponent(name)}/approve${qs ? `?${qs}` : ""}`;
   // 200 (installed) and 409 (gate refused) both carry a useful body; only 5xx throws.

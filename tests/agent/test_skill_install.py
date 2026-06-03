@@ -78,8 +78,19 @@ def test_refuses_to_overwrite_existing(tmp_path):
     q = _quar(tmp_path, "ok")
     install_imported_skill(tmp_path, q, source="github:x/y", allowlist=["github:x/"])
     q2 = _quar(tmp_path, "ok")
-    with pytest.raises(SkillImportRefused):
+    with pytest.raises(SkillImportRefused) as e:
         install_imported_skill(tmp_path, q2, source="github:x/y", allowlist=["github:x/"])
+    assert e.value.action == "exists"
+
+
+def test_replace_overwrites_existing(tmp_path):
+    q = _quar(tmp_path, "ok")
+    install_imported_skill(tmp_path, q, source="github:x/y", allowlist=["github:x/"])
+    q2 = _quar(tmp_path, "ok", body="updated body here\n")
+    res = install_imported_skill(tmp_path, q2, source="github:x/y",
+                                 allowlist=["github:x/"], replace=True)
+    assert res["ok"]
+    assert "updated body here" in (tmp_path / "skills" / "ok" / "SKILL.md").read_text()
 
 
 def test_reject_deletes_quarantine(tmp_path):
