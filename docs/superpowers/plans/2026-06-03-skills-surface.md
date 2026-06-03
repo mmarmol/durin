@@ -15,3 +15,18 @@
 4. Verify-live: list + audit an existing skill via CLI, chat slash, and the web endpoint; the quarantine section renders empty (no imports yet) without error.
 
 **Boundary:** read/act only; the floor logic is §8.C, the import action is §6.B. The quarantine list + approve/reject are scaffolded here and **filled** by §6.B.
+
+---
+
+## Status — SHIPPED 2026-06-03
+
+**Backend** (commits `5eebb7c`, `6b6713a`, `498117e`): `skills_inventory`/`quarantined_skills` read model; CLI `durin skill list|quarantine|audit`; web `GET /api/skills` (now carries `status`/`verdict`/`findings`) + `GET /api/skills/quarantine`; chat tools `skill_audit` + `skills_list`.
+
+**Frontend** (commit `daca080`): `SkillsView.tsx` + `api.ts` (`SkillVerdict`/`SkillFinding`/`QuarantineRow`, `listQuarantine`) + en/es i18n. Verdict badge per skill (caution|dangerous only — safe shows none), an **Active/Quarantine** tab bar, the Quarantine list with inline findings, and a Security section in the active-skill detail (severity-colored). Tests: `skills-api` + `skills-view`; webui suite green; tsc+vite clean. **Verified live** against the real `WebSocketChannel` serving the real `durin/web/dist` bundle (flagged active skill → Peligrosa + findings; quarantined skill with curl|bash + injection reasons; 0 console errors).
+
+**Design decisions:**
+- Safe skills get **no** verdict badge (absence = safe); a green chip on every row is noise.
+- Findings render in two contexts via one `FindingsList`: the active-skill detail (audit view) and inline on each quarantine row.
+- i18n: en + es only; the other 7 locales fall back to en rather than ship English mislabeled as translated.
+
+**Deferred to §6.B (Module 3):** the quarantine **approve/reject** actions. They need backend POST handlers (`install_imported_skill` / delete-quarantine) that don't exist yet, and the quarantine is empty until import lands. The read surface (list + reasons + empty state) is complete; Module 3 wires the two buttons onto the existing quarantine rows.
