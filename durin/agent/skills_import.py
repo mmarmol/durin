@@ -173,6 +173,64 @@ def _fetch_github(cand: SkillCandidate, qdir: Path, budget: list[int],
         raise ValueError(f"no files under {cand.ref}")
 
 
+_CLAWHUB_API = "https://clawhub.ai/api/v1"
+
+
+def _clawhub_latest_version(slug: str) -> str | None:
+    import json as _json
+    try:
+        meta = _json.loads(_http_get_bytes(f"{_CLAWHUB_API}/skills/{slug}"))
+    except Exception:  # noqa: BLE001
+        meta = {}
+    if isinstance(meta, dict):
+        latest = meta.get("latestVersion")
+        if isinstance(latest, dict) and isinstance(latest.get("version"), str) and latest["version"]:
+            return latest["version"]
+        tags = meta.get("tags")
+        if isinstance(tags, dict) and isinstance(tags.get("latest"), str) and tags["latest"]:
+            return tags["latest"]
+    try:
+        versions = _json.loads(_http_get_bytes(f"{_CLAWHUB_API}/skills/{slug}/versions"))
+        if isinstance(versions, list) and versions and isinstance(versions[0], dict):
+            v = versions[0].get("version")
+            if isinstance(v, str) and v:
+                return v
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def _fetch_clawhub(cand: SkillCandidate, qdir: Path, budget: list[int],
+                   caps: tuple[int, int, int]) -> None:
+    import io
+    import zipfile
+    from urllib.parse import urlencode
+
+    slug = cand.ref[len("clawhub:"):] if cand.ref.startswith("clawhub:") else cand.ref
+    version = _clawhub_latest_version(slug)
+    if not version:
+        raise ValueError(f"clawhub: could not resolve a version for {slug!r}")
+    zip_bytes = _http_get_bytes(f"{_CLAWHUB_API}/download?{urlencode({'slug': slug, 'version': version})}")
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
+    except zipfile.BadZipFile as exc:
+        raise ValueError(f"clawhub: invalid zip for {slug!r}") from exc
+    found = False
+    with zf:
+        for info in zf.infolist():
+            if info.is_dir():
+                continue
+            try:
+                _write(qdir, info.filename, zf.read(info.filename), budget, caps)
+                found = True
+            except ValueError:
+                # skip unsafe (zip-slip) or over-cap entries; never abort the whole
+                # import on one bad member
+                continue
+    if not found or not (qdir / "SKILL.md").is_file():
+        raise ValueError(f"clawhub: no SKILL.md in download for {slug!r}")
+
+
 def _should_judge(skill_dir: Path, source: str, trigger: str, allowlist: list[str]) -> bool:
     """Per the judge trigger: ``always`` → yes; ``uncertain`` → only when the gate
     would already require a confirm (carries code / caution / out-of-allowlist),
@@ -215,6 +273,8 @@ def fetch_candidate(cand: SkillCandidate, *, quarantine_root: Path,
         _write(qdir, "SKILL.md", _http_get_bytes(cand.ref), budget, caps)
     elif cand.kind == "github":
         _fetch_github(cand, qdir, budget, caps)
+    elif cand.kind == "clawhub":
+        _fetch_clawhub(cand, qdir, budget, caps)
     else:
         raise ValueError(f"unknown candidate kind: {cand.kind!r}")
     run_judge = _should_judge(qdir, cand.ref, judge_trigger, allowlist or [])
