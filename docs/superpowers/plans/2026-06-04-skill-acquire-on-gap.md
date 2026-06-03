@@ -387,47 +387,75 @@ git commit -m "feat(skills): §6.C skill_acquire_seed tool (per-ref, gated)"
 
 ---
 
-## Task 3: Register the tool in the dream phase-2 toolset
+## Task 3: Restrict the seed tool to dream-only + register both tools in the dream
+
+**Why:** `SkillAcquireSeedTool` has no `_scopes`, so the main-loop auto-loader would
+put it in core — but Path A (in-session) must use the RAW `skill_search` /
+`skill_import` / `ask_user_question` (a human approves risky candidates), NOT the
+gated tool that silently skips them. So mark the seed tool `dream`-scoped (excluded
+from core auto-load) and register it — plus the raw `skill_search` — manually in the
+dream's own toolset.
 
 **Files:**
-- Modify: `durin/agent/memory.py` (`Dream._build_tools`, after the `SkillWriteTool` registration ~line 1159)
-- Test: `tests/agent/test_skill_acquire_seed_tool.py` (add a registration test)
+- Modify: `durin/agent/tools/skill_acquire_seed.py` (add `_scopes`)
+- Modify: `durin/agent/memory.py` (`Dream._build_tools`, after the `SkillWriteTool` registration)
+- Test: `tests/agent/test_skill_acquire_seed_tool.py` (append registration + scope tests)
 
-- [ ] **Step 1: Write the failing test (append to the tool test file)**
+- [ ] **Step 1: Write the failing tests (append to the tool test file)**
 
 ```python
-def test_dream_toolset_includes_acquire_seed(tmp_path):
+def test_acquire_seed_excluded_from_core_autoload():
+    # Path A uses raw tools; the gated seed tool must not auto-load into the main loop.
+    assert "core" not in getattr(SkillAcquireSeedTool, "_scopes", {"core"})
+
+
+def test_dream_toolset_has_search_and_seed_and_write(tmp_path):
     from durin.agent.memory import Dream, MemoryStore
 
-    class _Prov:  # minimal LLM provider stand-in; _build_tools never calls it
+    class _Prov:  # minimal provider stand-in; _build_tools never calls it
         pass
 
     store = MemoryStore(workspace=tmp_path)
     dream = Dream(store=store, provider=_Prov(), model="x")
     names = {t.name for t in dream._tools.all()}
-    assert "skill_acquire_seed" in names
-    assert "skill_write" in names  # regression: existing tool still present
+    assert "skill_search" in names        # raw search — dream sees the full hit list
+    assert "skill_acquire_seed" in names  # gated per-ref retrieval
+    assert "skill_write" in names         # regression: existing authoring tool
 ```
 
-> If `MemoryStore(workspace=...)` or `dream._tools.all()` does not match the real
-> constructor/registry API, read `durin/agent/memory.py` around `class Dream` and
-> `class MemoryStore` and adjust the construction + the registry enumeration call
-> (e.g. `dream._tools.names()` or iterating `._tools`). Keep the assertion intent.
+> If `MemoryStore(workspace=...)`, `Dream(...)`, or `dream._tools.all()` doesn't match
+> the real API, read `durin/agent/memory.py` around `class Dream` / `class MemoryStore`
+> and the `ToolRegistry` class, and adjust construction + enumeration (e.g.
+> `dream._tools.names()`), keeping the assertion intent.
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `.venv/bin/python -m pytest tests/agent/test_skill_acquire_seed_tool.py::test_dream_toolset_includes_acquire_seed -q`
-Expected: FAIL — `skill_acquire_seed` not in the dream toolset.
+Run: `/Users/marcelo/git_personal/durin/.venv/bin/python -m pytest tests/agent/test_skill_acquire_seed_tool.py -q`
+Expected: FAIL — no `_scopes` yet; `skill_search`/`skill_acquire_seed` not in the dream toolset.
 
-- [ ] **Step 3: Add the registration in `Dream._build_tools`**
+- [ ] **Step 3a: Add `_scopes` to the seed tool**
+
+In `durin/agent/tools/skill_acquire_seed.py`, add this class attribute at the top of
+the `SkillAcquireSeedTool` class body (just under the class docstring):
+
+```python
+    # Dream-only: Path A (in-session) uses the raw skill_search/skill_import/
+    # ask_user_question tools so the user approves risky candidates. This gated tool
+    # silently skips risky ones, which is correct ONLY for the autonomous dream.
+    _scopes = {"dream"}
+```
+
+- [ ] **Step 3b: Register both tools in `Dream._build_tools`**
 
 In `durin/agent/memory.py`, immediately after the existing
 `tools.register(SkillWriteTool(workspace=workspace))` line, add:
 
 ```python
-        # §6.C: gated registry seed so phase-2 can author from safe prior art
-        # instead of always from a blank page. Returns risk-free seeds only.
+        # §6.C: the dream sees the full hit list (raw skill_search) and asks a gated
+        # per-ref tool for a seed; the gate (in skill_acquire_seed) only ever returns
+        # risk-free prior art, so the autonomous dream can never use risky content.
         from durin.agent.tools.skill_acquire_seed import SkillAcquireSeedTool
+        from durin.agent.tools.skill_search import SkillSearchTool
         from durin.config.loader import load_config
         try:
             _sk = load_config().skills
@@ -436,25 +464,30 @@ In `durin/agent/memory.py`, immediately after the existing
             _lim = int(_sk.discovery.search_limit)
         except Exception:  # noqa: BLE001 — never block dream startup on config
             _regs, _allow, _lim = [], [], 10
-        tools.register(SkillAcquireSeedTool(
+        tools.register(SkillSearchTool(
             workspace=workspace, registries=_regs, allowlist=_allow, limit=_lim))
+        tools.register(SkillAcquireSeedTool(workspace=workspace, allowlist=_allow))
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+> Verify `SkillSearchTool.__init__` signature in `durin/agent/tools/skill_search.py`
+> (it is `(self, workspace, registries, allowlist, limit)`); match it. If different,
+> adjust the construction to match the real signature.
 
-Run: `.venv/bin/python -m pytest tests/agent/test_skill_acquire_seed_tool.py -q`
-Expected: PASS (4 passed).
+- [ ] **Step 4: Run the tests to verify they pass**
 
-- [ ] **Step 5: Run the dream test module to check for regressions**
+Run: `/Users/marcelo/git_personal/durin/.venv/bin/python -m pytest tests/agent/test_skill_acquire_seed_tool.py -q`
+Expected: PASS (6 passed).
 
-Run: `.venv/bin/python -m pytest tests/agent/ -k "dream or skill_acquire" -q`
-Expected: PASS (no regressions in dream tests).
+- [ ] **Step 5: Run the dream + skill test modules to check for regressions**
+
+Run: `/Users/marcelo/git_personal/durin/.venv/bin/python -m pytest tests/agent/ -k "dream or skill" -q`
+Expected: PASS (no regressions).
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add durin/agent/memory.py tests/agent/test_skill_acquire_seed_tool.py
-git commit -m "feat(skills): §6.C wire skill_acquire_seed into dream phase-2 toolset"
+git add durin/agent/tools/skill_acquire_seed.py durin/agent/memory.py tests/agent/test_skill_acquire_seed_tool.py
+git commit -m "feat(skills): §6.C dream phase-2 gets raw skill_search + gated skill_acquire_seed (dream-scoped)"
 ```
 
 ---
