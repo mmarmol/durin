@@ -323,6 +323,11 @@
     "discardPrompt": "Discard unsaved changes?",
     "editHint": "Switch to manual to edit",
     "autoReadonly": "Read-only: this skill is in auto mode (managed by the agent). Switch it to manual to edit.",
+    "tab": { "active": "Active", "quarantine": "Quarantine" },
+    "quarantineEmpty": "No skills in quarantine.",
+    "security": "Security",
+    "noFindings": "No security findings.",
+    "verdict": { "safe": "Safe", "caution": "Caution", "dangerous": "Dangerous" },
     "title": "Skills"
   },
   "chat": {

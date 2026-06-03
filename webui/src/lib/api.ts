@@ -309,12 +309,34 @@ export async function setConfigValue(
 
 // -- skills (skills-evolution-mvp) -------------------------------------------
 
+/** A §8.C security verdict. "" = not yet scanned (quarantine without a report). */
+export type SkillVerdict = "safe" | "caution" | "dangerous" | "";
+
+export interface SkillFinding {
+  category: string;
+  severity: "info" | "caution" | "high" | "dangerous";
+  where: string;
+  detail: string;
+}
+
 export interface SkillRow {
   name: string;
   source: string;
   mode: "auto" | "manual";
   description?: string;
   provenance?: { source?: string; created_at?: string };
+  status?: "active" | "quarantined";
+  verdict?: SkillVerdict;
+  findings?: SkillFinding[];
+}
+
+/** A skill awaiting an import decision in `.durin/import-quarantine/` (§6.B fills these). */
+export interface QuarantineRow {
+  name: string;
+  status: "quarantined";
+  source: string;
+  verdict: SkillVerdict;
+  findings: SkillFinding[];
 }
 
 export interface SkillDetail {
@@ -329,6 +351,17 @@ export async function listSkills(
 ): Promise<SkillRow[]> {
   const res = await request<{ skills: SkillRow[] }>(`${base}/api/skills`, token);
   return res.skills;
+}
+
+export async function listQuarantine(
+  token: string,
+  base: string = "",
+): Promise<QuarantineRow[]> {
+  const res = await request<{ quarantined: QuarantineRow[] }>(
+    `${base}/api/skills/quarantine`,
+    token,
+  );
+  return res.quarantined;
 }
 
 export async function getSkill(
