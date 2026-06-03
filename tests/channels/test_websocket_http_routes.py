@@ -569,6 +569,38 @@ async def test_skills_import_then_approve_installs(
 
 
 @pytest.mark.asyncio
+async def test_skill_judge_route_runs_on_demand(
+    bus: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    q = ws / ".durin" / "import-quarantine" / "cand"
+    q.mkdir(parents=True)
+    (q / "SKILL.md").write_text("---\nname: cand\ndescription: d\n---\nbe helpful\n")
+    (q / ".scan.json").write_text(json.dumps({"source": "github:o/r", "verdict": "safe", "findings": []}))
+    cfg = _real_cfg_at(ws)
+    monkeypatch.setattr("durin.config.loader.load_config", lambda *a, **k: cfg)
+    monkeypatch.setattr(
+        "durin.memory.dream.default_llm_invoke",
+        lambda prompt, *, model=None: "===FINDINGS===\ncaution | intent | SKILL.md | reads an API key quietly\n===END===\n")
+    channel = _ch(bus, port=29924)
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+    try:
+        boot = await _http_get("http://127.0.0.1:29924/webui/bootstrap")
+        auth = {"Authorization": f"Bearer {boot.json()['token']}"}
+        resp = await _http_get("http://127.0.0.1:29924/api/skills/cand/judge", headers=auth)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["judged"] is True
+        assert body["verdict"] == "caution"
+        assert any(f["category"].startswith("llm:") for f in body["findings"])
+    finally:
+        await channel.stop()
+        await server_task
+
+
+@pytest.mark.asyncio
 async def test_github_token_test_route_not_shadowed(
     bus: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

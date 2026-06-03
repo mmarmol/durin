@@ -268,7 +268,7 @@
         "caps": "Límites de tamaño"
       },
       "rows": {
-        "judgeEnabled": "Correr el juez LLM",
+        "judgeTrigger": "Cuándo correr el juez",
         "judgeMaxSeverity": "Severidad máxima",
         "judgeModel": "Modelo del juez",
         "tokenSecret": "Secret del token",
@@ -277,11 +277,12 @@
         "maxFileMb": "Máx por archivo (MB)"
       },
       "help": {
-        "judgeEnabled": "Tras el scan determinista, un LLM revisa cada skill importada por lo que el regex no ve. Corre una vez por import; degrada en silencio si no hay modelo disponible.",
+        "judgeTrigger": "Off: sólo on-demand (el botón 'Revisar con IA' por skill). Cuando hay duda: corre automático sólo si el gate ya está indeciso (código / caution / fuera de allowlist). Siempre: en cada import. Degrada en silencio si no hay modelo disponible.",
         "judgeMaxSeverity": "Hasta dónde puede subir el verdict. 'Precaución' fuerza un confirm pero nunca bloquea solo; 'Peligrosa' le permite bloquear (requiere override).",
         "judgeModel": "Nombre del modelo del juez. Vacío usa el modelo de memoria por default."
       },
       "severity": { "caution": "Precaución (confirm)", "dangerous": "Peligrosa (bloquea)" },
+      "trigger": { "off": "Off (sólo on-demand)", "uncertain": "Cuando hay duda (desempate)", "always": "Siempre" },
       "trustDescription": "Una skill sana de una fuente confiable se instala sin confirm. Los patrones matchean la fuente por prefijo — ej: github:acme/, https://gitlab.com/acme/.",
       "noPatterns": "Todavía no hay patrones de confianza.",
       "patternPlaceholder": "github:owner/ o https://host/path/",
@@ -382,6 +383,7 @@
       "trust": "Confiar fuente",
       "trusted": "Confiado {{prefix}} — futuros imports sanos de ahí se saltan el confirm.",
       "declaredDeps": "Dependencias declaradas (no se ejecutan): {{deps}}",
+      "judge": "Revisar con IA",
       "unresolved": "No se pudo resolver una skill desde esa fuente. Pedíle al agente en el chat que investigue el link."
     },
     "title": "Skills"

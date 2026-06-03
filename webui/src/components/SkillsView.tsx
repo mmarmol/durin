@@ -11,6 +11,7 @@ import {
   approveSkill,
   getSkill,
   importSource,
+  judgeSkill,
   listQuarantine,
   listSkills,
   rejectSkill,
@@ -257,6 +258,25 @@ export function SkillsView() {
       setActing(name);
       try {
         await rejectSkill(token, name);
+        await refresh();
+      } catch (e) {
+        setImportMsg(errMsg(e));
+      } finally {
+        setActing(null);
+      }
+    },
+    [token, refresh],
+  );
+
+  // On-demand "Audit with LLM": run the judge on this one quarantined skill,
+  // then refresh so its findings/verdict update. Runs regardless of the trigger.
+  const judgeOne = useCallback(
+    async (name: string) => {
+      setActing(name);
+      setImportMsg(null);
+      try {
+        const r = await judgeSkill(token, name);
+        if (r.error) setImportMsg(r.error);
         await refresh();
       } catch (e) {
         setImportMsg(errMsg(e));
@@ -596,6 +616,14 @@ export function SkillsView() {
                           {t("skills.import.trust")}
                         </Button>
                       ) : null}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={acting === q.name}
+                        onClick={() => void judgeOne(q.name)}
+                      >
+                        {t("skills.import.judge")}
+                      </Button>
                     </div>
                   )}
                 </div>

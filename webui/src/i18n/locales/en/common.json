@@ -301,7 +301,7 @@
         "caps": "Size caps"
       },
       "rows": {
-        "judgeEnabled": "Run the LLM judge",
+        "judgeTrigger": "When to run the judge",
         "judgeMaxSeverity": "Maximum severity",
         "judgeModel": "Judge model",
         "tokenSecret": "Token secret",
@@ -310,11 +310,12 @@
         "maxFileMb": "Max per file (MB)"
       },
       "help": {
-        "judgeEnabled": "After the deterministic scan, an LLM reviews each imported skill for what regex can't see. Runs once per import; degrades silently when no model is available.",
+        "judgeTrigger": "Off: only on-demand (the 'Audit with LLM' button per skill). Uncertain: auto-run only when the gate is already unsure (code / caution / out-of-allowlist). Always: every import. Degrades silently when no model is available.",
         "judgeMaxSeverity": "How high the judge may raise a verdict. 'Caution' forces a confirm but never blocks on its own; 'Dangerous' lets it block (override required).",
         "judgeModel": "Model name for the judge. Empty uses the default memory model."
       },
       "severity": { "caution": "Caution (confirm)", "dangerous": "Dangerous (block)" },
+      "trigger": { "off": "Off (on-demand only)", "uncertain": "When uncertain (tie-break)", "always": "Always" },
       "trustDescription": "A safe skill from a trusted source installs without a confirm. Patterns match the source by prefix — e.g. github:acme/, https://gitlab.com/acme/.",
       "noPatterns": "No trust patterns yet.",
       "patternPlaceholder": "github:owner/ or https://host/path/",
@@ -382,6 +383,7 @@
       "trust": "Trust source",
       "trusted": "Trusted {{prefix}} — future safe imports from it skip the confirm.",
       "declaredDeps": "Declared dependencies (not run): {{deps}}",
+      "judge": "Audit with LLM",
       "unresolved": "Could not resolve a skill from that source. Ask the agent in chat to investigate the link."
     },
     "title": "Skills"

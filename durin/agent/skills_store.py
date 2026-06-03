@@ -552,6 +552,47 @@ def web_skill_reject(workspace: Path, name: str) -> tuple[int, dict]:
     return (400, res) if "error" in res else (200, res)
 
 
+def web_skill_judge(workspace: Path, name: str) -> tuple[int, dict]:
+    """`GET /api/skills/{name}/judge` — run the LLM judge ON-DEMAND over a
+    quarantined skill (independent of the auto-run trigger), merge its findings
+    into the quarantine .scan.json, and return the updated verdict + findings.
+    Reports an explicit error when no judge model is available."""
+    import json as _json
+
+    from durin.security.skill_judge import JudgeError, judge_skill
+    from durin.security.skill_scan import ScanReport, scan_skill
+
+    qdir = Path(workspace) / ".durin" / "import-quarantine" / name
+    if not (qdir / "SKILL.md").is_file():
+        return 404, {"error": f"not in quarantine: {name}"}
+    _, model, max_sev = _import_judge()
+    det = scan_skill(qdir)
+    try:
+        from durin.memory.dream import default_llm_invoke
+        jf = judge_skill(qdir, llm_invoke=default_llm_invoke, model=model or "glm-5.1",
+                         max_severity=max_sev)
+    except JudgeError as exc:
+        return 200, {"name": name, "verdict": det.verdict, "judged": False,
+                     "error": f"judge unavailable: {exc}"}
+    except Exception as exc:  # noqa: BLE001
+        return 200, {"name": name, "verdict": det.verdict, "judged": False,
+                     "error": f"judge error: {exc}"}
+
+    merged = ScanReport(findings=det.findings + jf)
+    findings = [{"category": f.category, "severity": f.severity, "where": f.where,
+                 "detail": f.detail} for f in merged.findings]
+    source = name
+    sj = qdir / ".scan.json"
+    if sj.is_file():
+        try:
+            source = _json.loads(sj.read_text()).get("source", name)
+        except Exception:  # noqa: BLE001
+            pass
+    sj.write_text(_json.dumps({"source": source, "verdict": merged.verdict, "findings": findings}),
+                  encoding="utf-8")
+    return 200, {"name": name, "verdict": merged.verdict, "findings": findings, "judged": True}
+
+
 def web_github_token_test(secret_name: str) -> tuple[int, dict]:
     """`GET /api/skills/github-token-test?secret=` — verify a GitHub-token secret
     against the GitHub API (rate_limit). Returns {ok, remaining, limit} or {ok:false, error}."""
