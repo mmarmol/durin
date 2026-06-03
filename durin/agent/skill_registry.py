@@ -3,7 +3,9 @@ into hits carrying a `ref` the existing resolve/fetch/gate pipeline understands.
 NO install here. Network is SSRF-safe."""
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
+from itertools import zip_longest
 from typing import Protocol
 
 from durin.security.network import ssrf_safe_async_client
@@ -58,3 +60,43 @@ class SkillsShRegistry:
                 signals={"installs": installs} if isinstance(installs, int) else {},
             ))
         return hits
+
+
+async def search_registries(query, *, adapters, allowlist, limit) -> list[SkillSearchHit]:
+    """Query every adapter in parallel; dedupe by ref (first adapter wins),
+    round-robin interleave, float allowlisted refs to the front, truncate.
+    A slow/failing adapter contributes [] — never sinks the rest."""
+    async def _safe(a) -> list[SkillSearchHit]:
+        try:
+            return await asyncio.wait_for(a.search(query, limit=limit), timeout=15.0)
+        except Exception:  # noqa: BLE001
+            return []
+    per_adapter = await asyncio.gather(*[_safe(a) for a in adapters]) if adapters else []
+    seen: set[str] = set()
+    lists: list[list[SkillSearchHit]] = []
+    for hits in per_adapter:
+        deduped = []
+        for h in hits:
+            if h.ref in seen:
+                continue
+            seen.add(h.ref)
+            deduped.append(h)
+        lists.append(deduped)
+    merged = [h for group in zip_longest(*lists) for h in group if h is not None]
+    pref = [p for p in (allowlist or []) if p]
+    allow_refs = {h.ref for h in merged if any(h.ref.startswith(p) for p in pref)}
+    ordered = [h for h in merged if h.ref in allow_refs] + \
+              [h for h in merged if h.ref not in allow_refs]
+    return ordered[:limit]
+
+
+def build_adapters(registries) -> list:
+    """Instantiate enabled adapters from config (a list of SkillRegistryConfig).
+    Only skills.sh is wired in this increment; other kinds are skipped."""
+    out = []
+    for r in registries:
+        if not getattr(r, "enabled", True):
+            continue
+        if r.kind == "skills.sh":
+            out.append(SkillsShRegistry())
+    return out
