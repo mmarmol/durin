@@ -461,6 +461,15 @@ def _import_caps() -> tuple[int, int, int]:
         return (100, 3 * 1024 * 1024, 1024 * 1024)
 
 
+def _import_judge() -> tuple[bool, str, str]:
+    from durin.config.loader import load_config
+    try:
+        j = load_config().memory.skill_import.llm_judge
+        return (bool(j.enabled), str(j.model or ""), str(j.max_severity or "caution"))
+    except Exception:  # noqa: BLE001
+        return (False, "", "caution")
+
+
 def web_import_resolve(workspace: Path, source: str) -> tuple[int, dict]:
     """`GET /api/skills/resolve?source=` — list the skill candidates a source
     points at (a repo may hold many). No download, no scan."""
@@ -493,8 +502,10 @@ def web_import_fetch(workspace: Path, source: str) -> tuple[int, dict]:
     cand = res.candidates[0]
     qroot = Path(workspace) / ".durin" / "import-quarantine"
     mf, mt, mfb = _import_caps()
+    je, jm, jms = _import_judge()
     qdir = fetch_candidate(cand, quarantine_root=qroot,
-                           max_files=mf, max_total_bytes=mt, max_file_bytes=mfb)
+                           max_files=mf, max_total_bytes=mt, max_file_bytes=mfb,
+                           judge_enabled=je, judge_model=jm, judge_max_severity=jms)
     rep = scan_skill(qdir)
     vr = validate_skill(qdir)
     needs = decide_action(cand.ref, verdict=rep.verdict,

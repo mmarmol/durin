@@ -500,6 +500,7 @@ def _real_cfg_at(ws: Path):
     from durin.config.loader import load_config
     cfg = load_config()
     cfg.agents.defaults.workspace = str(ws)
+    cfg.memory.skill_import.llm_judge.enabled = False  # hermetic: no real LLM call in tests
     return cfg
 
 
