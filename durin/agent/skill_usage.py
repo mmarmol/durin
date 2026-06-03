@@ -83,3 +83,52 @@ def collect_recent_skill_calls(workspace, within_hours: float | None = None) -> 
             agg.setdefault(skill, {}).setdefault(op, 0)
             agg[skill][op] += 1
     return agg
+
+
+def compute_working_set(
+    workspace,
+    candidates: list[str],
+    *,
+    recent: int,
+    frequent: int,
+    frequent_window_hours: float = 168.0,
+    recent_window_hours: float = 24.0,
+) -> list[str]:
+    """Usage-ranked working set of skill names for the hot tier.
+
+    Top ``frequent`` candidates by call-count over ``frequent_window_hours``
+    (the durable working set), then top ``recent`` over ``recent_window_hours``,
+    deduped. Filled to ``frequent + recent`` from ``candidates`` (stable order)
+    so a small/cold catalog still injects something. Usage for names not in
+    ``candidates`` is ignored. Returns at most ``frequent + recent`` names.
+    """
+    cand_set = set(candidates)
+
+    def _ranked(window: float, top: int) -> list[str]:
+        if top <= 0:
+            return []
+        agg = collect_recent_skill_calls(workspace, within_hours=window)
+        totals = {
+            s: sum(ops.values())
+            for s, ops in agg.items()
+            if s in cand_set
+        }
+        ordered = sorted(totals.items(), key=lambda kv: (-kv[1], kv[0]))
+        return [s for s, _ in ordered[:top]]
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for name in (*_ranked(frequent_window_hours, frequent),
+                 *_ranked(recent_window_hours, recent)):
+        if name not in seen:
+            seen.add(name)
+            out.append(name)
+
+    budget = max(0, recent) + max(0, frequent)
+    for name in candidates:
+        if len(out) >= budget:
+            break
+        if name not in seen:
+            seen.add(name)
+            out.append(name)
+    return out[:budget]
