@@ -72,11 +72,11 @@ class SkillImportTool(Tool):
 
     def __init__(self, workspace: str | Path, allowlist: list[str] | None = None,
                  caps: tuple[int, int, int] | None = None,
-                 judge: tuple[bool, str, str] | None = None) -> None:
+                 judge: tuple[str, str, str] | None = None) -> None:
         self._workspace = Path(workspace).expanduser()
         self._allowlist = list(allowlist or [])
         self._caps = caps or (100, 3 * 1024 * 1024, 1024 * 1024)
-        self._judge = judge or (False, "", "caution")  # off unless config says otherwise
+        self._judge = judge or ("off", "", "caution")  # trigger off unless config says otherwise
 
     @property
     def name(self) -> str:
@@ -106,7 +106,7 @@ class SkillImportTool(Tool):
         judge = None
         if si is not None:
             j = si.llm_judge
-            judge = (bool(j.enabled), str(j.model or ""), str(j.max_severity or "caution"))
+            judge = (str(j.trigger or "off"), str(j.model or ""), str(j.max_severity or "caution"))
         return cls(workspace=ctx.workspace, allowlist=allowlist, caps=caps, judge=judge)
 
     @property
@@ -155,11 +155,12 @@ class SkillImportTool(Tool):
                         "note": "multiple skills found; fetch one by passing its 'ref' as source"}
             cand = res.candidates[0]
             mf, mt, mfb = self._caps
-            je, jm, jms = self._judge
+            jt, jm, jms = self._judge
             qdir = await asyncio.to_thread(
                 fetch_candidate, cand, quarantine_root=self._qroot,
                 max_files=mf, max_total_bytes=mt, max_file_bytes=mfb,
-                judge_enabled=je, judge_model=jm, judge_max_severity=jms)
+                judge_trigger=jt, judge_model=jm, judge_max_severity=jms,
+                allowlist=self._allowlist)
             rep = scan_skill(qdir)
             vr = validate_skill(qdir)
             needs = decide_action(cand.ref, verdict=rep.verdict,

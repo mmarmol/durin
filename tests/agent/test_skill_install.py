@@ -3,11 +3,45 @@ import pytest
 from durin.agent.skills_frontmatter import split_frontmatter
 from durin.agent.skills_import import (
     SkillImportRefused,
+    _should_judge,
     declared_install_specs,
     install_imported_skill,
     reject_quarantined,
     trust_prefix_for,
 )
+
+
+def _mk_skill(tmp, name="s", body="be helpful\n", scripts=None):
+    d = tmp / name
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text(f"---\nname: {name}\ndescription: d\n---\n{body}")
+    if scripts:
+        (d / "scripts").mkdir()
+        for fn, c in scripts.items():
+            (d / "scripts" / fn).write_text(c)
+    return d
+
+
+def test_should_judge_off_never_runs(tmp_path):
+    d = _mk_skill(tmp_path, scripts={"x.sh": "echo hi\n"})
+    assert _should_judge(d, "github:x/y", "off", []) is False
+
+
+def test_should_judge_always_runs(tmp_path):
+    d = _mk_skill(tmp_path)
+    assert _should_judge(d, "github:x/y", "always", ["github:x/"]) is True
+
+
+def test_should_judge_uncertain_runs_on_code(tmp_path):
+    # carries code + out-of-allowlist → gate would confirm → judge runs (tie to break)
+    d = _mk_skill(tmp_path, scripts={"x.sh": "echo hi\n"})
+    assert _should_judge(d, "github:x/y", "uncertain", []) is True
+
+
+def test_should_judge_uncertain_skips_clean_allowlisted(tmp_path):
+    # safe + no code + allowlisted → gate allows → no tie → judge skipped (zero tax)
+    d = _mk_skill(tmp_path)
+    assert _should_judge(d, "github:x/y", "uncertain", ["github:x/"]) is False
 
 
 def test_declared_install_specs(tmp_path):
