@@ -420,7 +420,7 @@ class SkillJudgeConfig(Base):
     model: str = ""
 
 
-class SkillImportConfig(Base):
+class SkillSecurityConfig(Base):
     """Security floor + policy for skill import (§8.C/§6.B). ``allowlist`` =
     trusted source-ref prefixes (e.g. ``github:anthropics/``, ``https://gitlab.com/acme/``).
     A match skips only the *source* confirmation; the verdict/code gates have no
@@ -437,6 +437,15 @@ class SkillImportConfig(Base):
     max_file_bytes: int = 1024 * 1024
     install_specs_policy: Literal["never", "ask", "auto"] = "never"
     llm_judge: SkillJudgeConfig = Field(default_factory=SkillJudgeConfig)
+
+
+class SkillsConfig(Base):
+    """Global skill-subsystem governance (spec 2026-06-03 §9). Per-agent
+    skill-context tuning (``skills_hot_tier``, ``disabled_skills``) lives on
+    ``agents.defaults``; the memory-index toggle stays at ``memory.index_skills``.
+    ``discovery`` (registries + search) is added by the discovery feature."""
+
+    security: SkillSecurityConfig = Field(default_factory=SkillSecurityConfig)
 
 
 class MemoryConfig(Base):
@@ -467,8 +476,6 @@ class MemoryConfig(Base):
     # Skills are authored + injected already; this gates making them
     # searchable as a `skill` memory class (skill-memory-class indexing).
     index_skills: bool = True
-    skills_hot_tier: SkillsHotTierConfig = Field(default_factory=SkillsHotTierConfig)
-    skill_import: SkillImportConfig = Field(default_factory=SkillImportConfig)
     embedding: MemoryEmbeddingConfig = Field(default_factory=MemoryEmbeddingConfig)
     dream: MemoryDreamConfig = Field(default_factory=MemoryDreamConfig)
     search: MemorySearchConfig = Field(default_factory=MemorySearchConfig)
@@ -596,6 +603,7 @@ class AgentDefaults(Base):
     bot_icon: str = "⚒️"  # Short icon (emoji or text) shown next to the bot name in CLI; "" to omit
     unified_session: bool = False  # Share one session across all channels (single-user multi-device)
     disabled_skills: list[str] = Field(default_factory=list)  # Skill names to exclude from loading (e.g. ["summarize", "skill-creator"])
+    skills_hot_tier: SkillsHotTierConfig = Field(default_factory=SkillsHotTierConfig)
     max_messages: int = Field(
         default=120,
         ge=0,
@@ -854,6 +862,7 @@ class Config(BaseSettings):
     appearance: AppearanceConfig = Field(default_factory=AppearanceConfig)
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    skills: SkillsConfig = Field(default_factory=SkillsConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     api: ApiConfig = Field(default_factory=ApiConfig)

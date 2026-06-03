@@ -74,12 +74,12 @@ def _is_github_url(url: str) -> bool:
 
 def _github_token() -> str:
     """Resolve the configured GitHub token via durin secrets, or "" (anonymous).
-    `memory.skill_import.github_token_secret` holds a secret NAME; missing/empty
+    `skills.security.github_token_secret` holds a secret NAME; missing/empty
     degrades to anonymous (never raises)."""
     from durin.config.loader import load_config
     from durin.security.secrets import resolve_secret
     try:
-        name = (load_config().memory.skill_import.github_token_secret or "").strip()
+        name = (load_config().skills.security.github_token_secret or "").strip()
         if not name:
             return ""
         return str(resolve_secret(f"${{secret:{name}}}") or "")

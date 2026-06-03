@@ -97,7 +97,7 @@ class SkillAuditTool(Tool):
             from durin.config.loader import load_config
             from durin.security.skill_judge import audit_skill
             try:
-                j = load_config().memory.skill_import.llm_judge
+                j = load_config().skills.security.llm_judge
                 model, max_sev = str(j.model or ""), str(j.max_severity or "caution")
             except Exception:  # noqa: BLE001
                 model, max_sev = "", "caution"

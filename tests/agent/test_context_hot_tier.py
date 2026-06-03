@@ -5,9 +5,9 @@ from durin.agent.context import ContextBuilder
 def _force_hot(monkeypatch, *, enabled=True, recent=1, frequent=1):
     from durin.config.schema import Config
     cfg = Config()
-    cfg.memory.skills_hot_tier.enabled = enabled
-    cfg.memory.skills_hot_tier.recent = recent
-    cfg.memory.skills_hot_tier.frequent = frequent
+    cfg.agents.defaults.skills_hot_tier.enabled = enabled
+    cfg.agents.defaults.skills_hot_tier.recent = recent
+    cfg.agents.defaults.skills_hot_tier.frequent = frequent
     monkeypatch.setattr("durin.config.loader.load_config", lambda *a, **k: cfg)
 
 

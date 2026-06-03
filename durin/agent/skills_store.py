@@ -447,7 +447,7 @@ def web_quarantine(workspace: Path) -> tuple[int, dict]:
 def _import_allowlist() -> list[str]:
     from durin.config.loader import load_config
     try:
-        return list(load_config().memory.skill_import.allowlist)
+        return list(load_config().skills.security.allowlist)
     except Exception:  # noqa: BLE001
         return []
 
@@ -455,7 +455,7 @@ def _import_allowlist() -> list[str]:
 def _import_caps() -> tuple[int, int, int]:
     from durin.config.loader import load_config
     try:
-        si = load_config().memory.skill_import
+        si = load_config().skills.security
         return (si.max_files, si.max_total_bytes, si.max_file_bytes)
     except Exception:  # noqa: BLE001
         return (100, 3 * 1024 * 1024, 1024 * 1024)
@@ -464,7 +464,7 @@ def _import_caps() -> tuple[int, int, int]:
 def _import_judge() -> tuple[str, str, str]:
     from durin.config.loader import load_config
     try:
-        j = load_config().memory.skill_import.llm_judge
+        j = load_config().skills.security.llm_judge
         return (str(j.trigger or "off"), str(j.model or ""), str(j.max_severity or "caution"))
     except Exception:  # noqa: BLE001
         return ("off", "", "caution")

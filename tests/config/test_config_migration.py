@@ -247,3 +247,48 @@ def test_load_config_resets_ssrf_whitelist_when_next_config_is_empty(tmp_path) -
     with patch("durin.security.network.socket.getaddrinfo", _fake_resolve("ts.local", ["100.100.1.1"])):
         ok, _ = validate_url_target("http://ts.local/api")
         assert not ok
+
+
+def test_load_config_migrates_legacy_skill_import(tmp_path) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps({"memory": {"skillImport": {"allowlist": ["github:acme/"], "maxFiles": 50}}}),
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.skills.security.allowlist == ["github:acme/"]
+    assert config.skills.security.max_files == 50
+    assert not hasattr(config.memory, "skill_import")
+
+
+def test_load_config_migrates_legacy_skills_hot_tier(tmp_path) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps({"memory": {"skillsHotTier": {"frequent": 12}}}), encoding="utf-8"
+    )
+
+    config = load_config(config_path)
+
+    assert config.agents.defaults.skills_hot_tier.frequent == 12
+
+
+def test_save_config_rewrites_legacy_skill_keys(tmp_path) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {"memory": {"skillImport": {"allowlist": ["github:acme/"]},
+                        "skillsHotTier": {"frequent": 9}}}
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+    save_config(config, config_path)
+    from durin.config.loader import read_persisted_config
+
+    saved = read_persisted_config(config_path)
+
+    assert "skillImport" not in saved.get("memory", {})
+    assert "skillsHotTier" not in saved.get("memory", {})

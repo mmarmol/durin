@@ -497,4 +497,20 @@ def _migrate_config(data: dict) -> dict:
         else:
             tools.pop("mySet", None)
 
+    # Move memory.skillImport → skills.security and memory.skillsHotTier →
+    # agents.defaults.skillsHotTier (spec 2026-06-03 §9 — skills config reorg).
+    # Handles both camelCase (as persisted) and snake_case keys.
+    memory = data.get("memory", {})
+    for legacy in ("skillImport", "skill_import"):
+        if legacy in memory:
+            security = data.setdefault("skills", {}).setdefault("security", {})
+            for key, value in memory.pop(legacy).items():
+                security.setdefault(key, value)
+            break
+    for legacy in ("skillsHotTier", "skills_hot_tier"):
+        if legacy in memory:
+            defaults = data.setdefault("agents", {}).setdefault("defaults", {})
+            defaults.setdefault("skillsHotTier", memory.pop(legacy))
+            break
+
     return data
