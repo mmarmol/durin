@@ -17,6 +17,22 @@
 
 ---
 
+## Estado de implementación (2026-06-03, verificado contra código)
+
+**Construido:** crear/cristalizar (§6.A — dream + `curate_catalog`) · importar (§6.B)
++ piso §8.C + gate · interop agentskills.io · Skills-Surface · retrieval Nivel-1
+(índice + hot-tier) · **discovery/registries** (skills.sh + clawhub: search,
+resolución name-match, CLI, web — spec `2026-06-03-skill-discovery-registries-design.md`)
+· **drift→evolución §8.D** (`durin/agent/skill_drift.py` + `curate_catalog`).
+
+**Pendiente:** **§6.C adquirir-on-gap** (trigger de gap + flujo `AskUserQuestion`;
+el search ya es la semilla) · **§6.D Etapa-2 / §6.B Etapa-1** (adaptar lo importado
+a tools nativas + gate blando por uso) · **§5.2 capa `original/` inmutable** (hoy:
+`provenance.source` + `content_hash` + re-fetch, sin copia guardada) · **barrida de
+origen-no-verificado → cuarentena** · **P6** (ejecutor de install-specs / sandbox
+runtime — hoy info-only, policy `never`) · adapters extra (github-taps /
+well-known / lobehub) · §8.F GEPA/SkillOpt.
+
 ## §1 — La idea
 
 durin debe dar al usuario las herramientas para que, **mientras usa durin**:
@@ -260,14 +276,23 @@ Nivel 1 local híbrido; nivel 2 remoto solo on-gap (→ C).
   Implementado (round-trip + `platforms` + spellings + version/license) y
   verificado live con skills reales de Hermes. El import (§6.B) es el siguiente plan.
 
-- **C. Piso de seguridad invariante** (el meta-skill no puede bajarlo).
-  Propuesta de arranque, a confirmar: *(1) instalar/ejecutar código de una
-  skill-plugin* y *(2) traer de una fuente fuera del allowlist* siempre piden
-  confirmación. ¿Se agrega/saca algo?
+- ~~**C. Piso de seguridad invariante**~~ **RESUELTO (§8.C, 2026-06-03).** Piso
+  determinista (`scan_skill`) + gate `decide_action` enforced en código
+  (`install_imported_skill`): `dangerous` → block (necesita override explícito);
+  trae código / `caution` / fuera-de-allowlist → confirm. Allowlist
+  user-configurable; juez LLM opt-in (cap=caution, nunca bloquea solo). El
+  meta-skill no puede bajarlo: el gate vive en el install (código), no en el prompt.
 
-- **D. Drift de upstream.** Cuando el marketplace publique v2 del original,
-  ¿re-adaptar desde v2 o seguir con el fork? La provenance lo habilita; la
-  política de merge queda pendiente.
+- ~~**D. Drift de upstream.**~~ **RESUELTO (§8.D, 2026-06-03).** El skill NUNCA se
+  pisa — se **evoluciona**, no se reemplaza. `check_upstream_drift`
+  (`durin/agent/skill_drift.py`) re-fetchea `provenance.source`, escanea (§8.C) y
+  compara `content_hash`; el gate `decide_action` decide: `allow` (safe + sin código
+  + fuente confiable) → el pase diario de dream (`curate_catalog`) mete el upstream
+  como contexto y el juez lo **incorpora vía `evolve`** (merge quirúrgico que
+  preserva lo local — validado live con el modelo real); `confirm`/`block` (código /
+  caution / fuera-de-allowlist / dangerous) → gate humano, nunca se auto-funde
+  código no-confiable. La "política de merge" = el juez del pase diario, gateado por
+  §8.D.
 
 - **E. Latencia de adquisición.** §6.C ocurre mid-tarea. Política:
   ¿bloquear / intentar one-shot y escalar / proponer? (Resuelto parcialmente:
