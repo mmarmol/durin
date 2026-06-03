@@ -60,7 +60,8 @@
       "advanced": "All settings",
       "channels": "Channels",
       "memory": "Memory",
-      "cron": "Cron"
+      "cron": "Cron",
+      "logs": "日志"
     },
     "sections": {
       "interface": "界面",

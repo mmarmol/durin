@@ -72,7 +72,8 @@
       "web-search": "Web search",
       "channels": "Channels",
       "memory": "Memory",
-      "cron": "Cron"
+      "cron": "Cron",
+      "logs": "Logs"
     },
     "sections": {
       "interface": "Interface",
