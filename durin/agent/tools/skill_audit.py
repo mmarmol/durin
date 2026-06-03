@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from durin.agent.tools.base import Tool, tool_parameters
-from durin.agent.tools.schema import StringSchema, tool_parameters_schema
+from durin.agent.tools.schema import BooleanSchema, StringSchema, tool_parameters_schema
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +26,11 @@ _PARAMETERS = tool_parameters_schema(
     path=StringSchema(
         "Path to a skill directory to audit (overrides 'name'). Use to audit a "
         "skill that is not yet in the workspace 'skills/' dir."
+    ),
+    deep=BooleanSchema(
+        description=("Also run the LLM judge (semantic review of what regex can't see) "
+                     "on top of the deterministic scan. Slower; needs a judge model."),
+        default=False,
     ),
     description=(
         "Audit a skill for security: runs the format lint + deterministic "
@@ -88,7 +93,18 @@ class SkillAuditTool(Tool):
         assert target is not None  # guarded above
 
         rep = validate_skill(target)
-        scan = scan_skill(target)
+        if bool(kwargs.get("deep", False)):
+            from durin.config.loader import load_config
+            from durin.security.skill_judge import audit_skill
+            try:
+                j = load_config().memory.skill_import.llm_judge
+                model, max_sev = str(j.model or ""), str(j.max_severity or "caution")
+            except Exception:  # noqa: BLE001
+                model, max_sev = "", "caution"
+            scan = audit_skill(target, judge_enabled=True, judge_model=model,
+                               judge_max_severity=max_sev)
+        else:
+            scan = scan_skill(target)
         return {
             "name": rep.name,
             "verdict": scan.verdict,

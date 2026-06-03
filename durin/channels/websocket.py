@@ -707,6 +707,10 @@ class WebSocketChannel(BaseChannel):
         if m:
             return self._handle_skill_reject(request, m.group(1))
 
+        m = re.match(r"^/api/skills/([^/]+)/judge$", got)
+        if m:
+            return await self._handle_skill_judge(request, m.group(1))
+
         m = re.match(r"^/api/skills/([^/]+)$", got)
         if m:
             return self._handle_skill_get(request, m.group(1))
@@ -1564,6 +1568,23 @@ class WebSocketChannel(BaseChannel):
                                                    replace=replace)
         except Exception as exc:  # noqa: BLE001
             return _http_error(500, f"approve failed: {exc}")
+        return _http_json_response(payload, status=status)
+
+    async def _handle_skill_judge(self, request: WsRequest, name: str) -> Response:
+        """`GET /api/skills/{name}/judge` — run the LLM judge on-demand. Async +
+        off-thread so the (multi-second) model call doesn't stall the event loop."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        decoded = _decode_api_key(name)
+        if decoded is None:
+            return _http_error(400, "invalid skill name")
+        from durin.agent import skills_store as ss
+        from durin.config.loader import load_config
+        try:
+            workspace = load_config().workspace_path
+            status, payload = await asyncio.to_thread(ss.web_skill_judge, workspace, decoded)
+        except Exception as exc:  # noqa: BLE001
+            return _http_error(500, f"judge failed: {exc}")
         return _http_json_response(payload, status=status)
 
     def _handle_skill_reject(self, request: WsRequest, name: str) -> Response:

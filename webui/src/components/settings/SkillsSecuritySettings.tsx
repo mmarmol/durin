@@ -16,7 +16,7 @@ import { SettingsGroup, SettingsRow, SettingsSectionTitle } from "./primitives";
 const MB = 1024 * 1024;
 
 interface JudgeShape {
-  enabled?: boolean;
+  trigger?: "off" | "uncertain" | "always";
   maxSeverity?: "caution" | "dangerous";
   model?: string;
 }
@@ -39,7 +39,9 @@ function readSI(config: Record<string, unknown> | null) {
     maxFiles: typeof si.maxFiles === "number" ? si.maxFiles : 100,
     maxTotalBytes: typeof si.maxTotalBytes === "number" ? si.maxTotalBytes : 3 * MB,
     maxFileBytes: typeof si.maxFileBytes === "number" ? si.maxFileBytes : MB,
-    judgeEnabled: typeof j.enabled === "boolean" ? j.enabled : true,
+    judgeTrigger: ["off", "uncertain", "always"].includes(String(j.trigger))
+      ? String(j.trigger)
+      : "off",
     judgeMaxSeverity: j.maxSeverity === "dangerous" ? "dangerous" : "caution",
     judgeModel: typeof j.model === "string" ? j.model : "",
   };
@@ -141,18 +143,19 @@ export function SkillsSecuritySettings({ token }: { token: string }) {
         <SettingsSectionTitle>{t("settings.skillsSecurity.sections.judge")}</SettingsSectionTitle>
         <SettingsGroup>
           <SettingsRow
-            title={t("settings.skillsSecurity.rows.judgeEnabled")}
-            description={t("settings.skillsSecurity.help.judgeEnabled")}
+            title={t("settings.skillsSecurity.rows.judgeTrigger")}
+            description={t("settings.skillsSecurity.help.judgeTrigger")}
           >
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={savingPath === "memory.skill_import.llm_judge.enabled"}
-              onClick={() => void onSave("memory.skill_import.llm_judge.enabled", !v.judgeEnabled)}
-              className="w-[68px] rounded-full"
+            <select
+              value={v.judgeTrigger}
+              disabled={savingPath === "memory.skill_import.llm_judge.trigger"}
+              onChange={(e) => void onSave("memory.skill_import.llm_judge.trigger", e.target.value)}
+              className="rounded-[8px] border border-border/60 bg-background px-2 py-1 text-[13px] disabled:opacity-50"
             >
-              {v.judgeEnabled ? t("settings.config.on") : t("settings.config.off")}
-            </Button>
+              <option value="off">{t("settings.skillsSecurity.trigger.off")}</option>
+              <option value="uncertain">{t("settings.skillsSecurity.trigger.uncertain")}</option>
+              <option value="always">{t("settings.skillsSecurity.trigger.always")}</option>
+            </select>
           </SettingsRow>
           <SettingsRow
             title={t("settings.skillsSecurity.rows.judgeMaxSeverity")}
@@ -160,7 +163,7 @@ export function SkillsSecuritySettings({ token }: { token: string }) {
           >
             <select
               value={v.judgeMaxSeverity}
-              disabled={!v.judgeEnabled || savingPath === "memory.skill_import.llm_judge.max_severity"}
+              disabled={savingPath === "memory.skill_import.llm_judge.max_severity"}
               onChange={(e) => void onSave("memory.skill_import.llm_judge.max_severity", e.target.value)}
               className="rounded-[8px] border border-border/60 bg-background px-2 py-1 text-[13px] disabled:opacity-50"
             >
@@ -174,7 +177,7 @@ export function SkillsSecuritySettings({ token }: { token: string }) {
           >
             <ModelField
               value={v.judgeModel}
-              disabled={!v.judgeEnabled}
+              disabled={false}
               saving={savingPath === "memory.skill_import.llm_judge.model"}
               onSave={(m) => void onSave("memory.skill_import.llm_judge.model", m)}
             />

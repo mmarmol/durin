@@ -443,6 +443,27 @@ export async function rejectSkill(
   );
 }
 
+export interface JudgeResult {
+  name: string;
+  verdict?: SkillVerdict;
+  findings?: SkillFinding[];
+  judged?: boolean;
+  error?: string;
+}
+
+/** Run the LLM judge on-demand over a quarantined skill (independent of the
+ *  auto-run trigger). Updates the quarantine's stored scan. */
+export async function judgeSkill(
+  token: string,
+  name: string,
+  base: string = "",
+): Promise<JudgeResult> {
+  return request<JudgeResult>(
+    `${base}/api/skills/${encodeURIComponent(name)}/judge`,
+    token,
+  );
+}
+
 export interface GithubTokenTestResult {
   ok: boolean;
   remaining?: number | null;
