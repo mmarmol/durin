@@ -206,6 +206,11 @@ def resolve_candidates(source: str) -> ResolveResult:
     source = source.strip()
     if not source:
         return ResolveResult(unresolved_reason="empty source")
+    if source.startswith("clawhub:"):
+        slug = source[len("clawhub:"):].strip().strip("/")
+        if not slug:
+            return ResolveResult(unresolved_reason="empty clawhub slug")
+        return ResolveResult([SkillCandidate(slug, f"clawhub:{slug}", "clawhub")])
     if source.startswith(_GITHUB_PREFIXES):
         return _resolve_github(source)
     if re.match(r"^https?://", source):
