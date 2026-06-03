@@ -5,7 +5,20 @@ from durin.agent.skills_import import (
     SkillImportRefused,
     install_imported_skill,
     reject_quarantined,
+    trust_prefix_for,
 )
+
+
+def test_trust_prefix_github_strips_branch_and_dir():
+    assert trust_prefix_for("github:acme/cool@main/skills/foo") == "github:acme/cool"
+
+
+def test_trust_prefix_https_to_dir():
+    assert trust_prefix_for("https://host.com/x/SKILL.md") == "https://host.com/x/"
+
+
+def test_trust_prefix_local_unchanged():
+    assert trust_prefix_for("/abs/path/skill") == "/abs/path/skill"
 
 
 def _quar(tmp, name, body="ok\n", scripts=None):
