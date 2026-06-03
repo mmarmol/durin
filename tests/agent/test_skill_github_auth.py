@@ -20,7 +20,7 @@ def test_github_token_empty_when_unconfigured():
 
 def _cfg(secret_name):
     return SimpleNamespace(
-        memory=SimpleNamespace(skill_import=SimpleNamespace(github_token_secret=secret_name)))
+        skills=SimpleNamespace(security=SimpleNamespace(github_token_secret=secret_name)))
 
 
 def test_github_token_resolves_named_secret(monkeypatch):

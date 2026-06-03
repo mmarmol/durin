@@ -94,11 +94,11 @@ class SkillImportTool(Tool):
     def create(cls, ctx: Any) -> "SkillImportTool":
         si = None
         try:
-            si = ctx.app_config.memory.skill_import
+            si = ctx.app_config.skills.security
         except Exception:  # noqa: BLE001 — config shape varies; fall back to loader
             try:
                 from durin.config.loader import load_config
-                si = load_config().memory.skill_import
+                si = load_config().skills.security
             except Exception:  # noqa: BLE001
                 si = None
         allowlist = list(si.allowlist) if si is not None else []

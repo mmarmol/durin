@@ -221,7 +221,7 @@ class ContextBuilder:
         self._skill_working_set_done = True
         try:
             from durin.config.loader import load_config
-            ht = load_config().memory.skills_hot_tier
+            ht = load_config().agents.defaults.skills_hot_tier
         except Exception:  # noqa: BLE001 — unit/test workspaces without a config file
             from durin.config.schema import SkillsHotTierConfig
             ht = SkillsHotTierConfig()
