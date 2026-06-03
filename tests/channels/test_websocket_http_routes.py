@@ -568,6 +568,33 @@ async def test_skills_import_then_approve_installs(
 
 
 @pytest.mark.asyncio
+async def test_github_token_test_route_not_shadowed(
+    bus: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # `/api/skills/github-token-test` must hit the token-test handler, not
+    # `/api/skills/<name>` with name='github-token-test'.
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    cfg = _real_cfg_at(ws)
+    monkeypatch.setattr("durin.config.loader.load_config", lambda *a, **k: cfg)
+    monkeypatch.setattr("durin.security.secrets.resolve_secret", lambda ref: "")
+    channel = _ch(bus, port=29923)
+    server_task = asyncio.create_task(channel.start())
+    await asyncio.sleep(0.3)
+    try:
+        boot = await _http_get("http://127.0.0.1:29923/webui/bootstrap")
+        auth = {"Authorization": f"Bearer {boot.json()['token']}"}
+        resp = await _http_get(
+            "http://127.0.0.1:29923/api/skills/github-token-test?secret=ghx", headers=auth)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is False and "content" not in body  # token-test shape, no network
+    finally:
+        await channel.stop()
+        await server_task
+
+
+@pytest.mark.asyncio
 async def test_skill_reject_route_removes_quarantine(
     bus: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

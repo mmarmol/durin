@@ -688,6 +688,9 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/skills/import":
             return self._handle_skills_import(request)
 
+        if got == "/api/skills/github-token-test":
+            return self._handle_skills_github_token_test(request)
+
         m = re.match(r"^/api/skills/([^/]+)/save$", got)
         if m:
             return self._handle_skill_save(request, m.group(1))
@@ -1527,6 +1530,18 @@ class WebSocketChannel(BaseChannel):
             status, payload = ss.web_import_fetch(workspace, source)
         except Exception as exc:  # noqa: BLE001
             return _http_error(500, f"import failed: {exc}")
+        return _http_json_response(payload, status=status)
+
+    def _handle_skills_github_token_test(self, request: WsRequest) -> Response:
+        """`GET /api/skills/github-token-test?secret=` — verify a GitHub-token secret."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        secret = (_query_first(_parse_query(request.path), "secret") or "").strip()
+        from durin.agent import skills_store as ss
+        try:
+            status, payload = ss.web_github_token_test(secret)
+        except Exception as exc:  # noqa: BLE001
+            return _http_error(500, f"token test failed: {exc}")
         return _http_json_response(payload, status=status)
 
     def _handle_skill_approve(self, request: WsRequest, name: str) -> Response:
