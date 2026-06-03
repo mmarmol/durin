@@ -71,10 +71,12 @@ class SkillImportTool(Tool):
     """skill_import tool — §6.B import over the §8.C floor."""
 
     def __init__(self, workspace: str | Path, allowlist: list[str] | None = None,
-                 caps: tuple[int, int, int] | None = None) -> None:
+                 caps: tuple[int, int, int] | None = None,
+                 judge: tuple[bool, str, str] | None = None) -> None:
         self._workspace = Path(workspace).expanduser()
         self._allowlist = list(allowlist or [])
         self._caps = caps or (100, 3 * 1024 * 1024, 1024 * 1024)
+        self._judge = judge or (False, "", "caution")  # off unless config says otherwise
 
     @property
     def name(self) -> str:
@@ -101,7 +103,11 @@ class SkillImportTool(Tool):
                 si = None
         allowlist = list(si.allowlist) if si is not None else []
         caps = (si.max_files, si.max_total_bytes, si.max_file_bytes) if si is not None else None
-        return cls(workspace=ctx.workspace, allowlist=allowlist, caps=caps)
+        judge = None
+        if si is not None:
+            j = si.llm_judge
+            judge = (bool(j.enabled), str(j.model or ""), str(j.max_severity or "caution"))
+        return cls(workspace=ctx.workspace, allowlist=allowlist, caps=caps, judge=judge)
 
     @property
     def _qroot(self) -> Path:
@@ -149,9 +155,11 @@ class SkillImportTool(Tool):
                         "note": "multiple skills found; fetch one by passing its 'ref' as source"}
             cand = res.candidates[0]
             mf, mt, mfb = self._caps
+            je, jm, jms = self._judge
             qdir = await asyncio.to_thread(
                 fetch_candidate, cand, quarantine_root=self._qroot,
-                max_files=mf, max_total_bytes=mt, max_file_bytes=mfb)
+                max_files=mf, max_total_bytes=mt, max_file_bytes=mfb,
+                judge_enabled=je, judge_model=jm, judge_max_severity=jms)
             rep = scan_skill(qdir)
             vr = validate_skill(qdir)
             needs = decide_action(cand.ref, verdict=rep.verdict,

@@ -11,7 +11,10 @@ from pathlib import Path
 import durin.agent.skill_resolve as _resolve
 from durin.agent.skill_resolve import SkillCandidate
 from durin.agent.skills_frontmatter import split_frontmatter
+from durin.security.skill_judge import audit_skill
 from durin.security.skill_scan import scan_skill
+
+_VERDICT_ORDER = {"safe": 0, "caution": 1, "dangerous": 2}
 
 _GITHUB_RAW = "https://raw.githubusercontent.com"
 _DEFAULT_MAX_FILES = 100
@@ -173,11 +176,14 @@ def _fetch_github(cand: SkillCandidate, qdir: Path, budget: list[int],
 def fetch_candidate(cand: SkillCandidate, *, quarantine_root: Path,
                     max_files: int = _DEFAULT_MAX_FILES,
                     max_total_bytes: int = _DEFAULT_MAX_TOTAL_BYTES,
-                    max_file_bytes: int = _DEFAULT_MAX_FILE_BYTES) -> Path:
+                    max_file_bytes: int = _DEFAULT_MAX_FILE_BYTES,
+                    judge_enabled: bool = False, judge_model: str = "",
+                    judge_max_severity: str = "caution") -> Path:
     """Download one resolved candidate into `<quarantine_root>/<name>/`, run the
-    §8.C scan, and drop a `.scan.json` (source + verdict + findings) beside it.
-    The downloaded tree is NOT installed — it sits in quarantine for the gate.
-    Caps (config-driven) bound the total/per-file size and file count."""
+    §8.C audit (deterministic scan + optional LLM judge), and drop a `.scan.json`
+    (source + merged verdict + findings) beside it. The downloaded tree is NOT
+    installed — it sits in quarantine for the gate. Caps (config-driven) bound the
+    total/per-file size and file count."""
     quarantine_root = Path(quarantine_root)
     caps = (max_files, max_total_bytes, max_file_bytes)
     qdir = quarantine_root / cand.name
@@ -196,7 +202,8 @@ def fetch_candidate(cand: SkillCandidate, *, quarantine_root: Path,
         _fetch_github(cand, qdir, budget, caps)
     else:
         raise ValueError(f"unknown candidate kind: {cand.kind!r}")
-    rep = scan_skill(qdir)
+    rep = audit_skill(qdir, judge_enabled=judge_enabled, judge_model=judge_model,
+                      judge_max_severity=judge_max_severity)
     (qdir / ".scan.json").write_text(json.dumps({
         "source": cand.ref,
         "verdict": rep.verdict,
@@ -263,20 +270,31 @@ def install_imported_skill(workspace: Path, quarantine_dir: Path, *, source: str
     vr = validate_skill(quarantine_dir)
     if not vr.ok:
         raise SkillImportRefused("invalid", "", f"invalid skill: {vr.errors}")
-    rep = scan_skill(quarantine_dir)  # re-scan; never trust the quarantined .scan.json
-    action = decide_action(source, verdict=rep.verdict,
+    rep = scan_skill(quarantine_dir)  # fresh deterministic — the block path never trusts cache
+    verdict = rep.verdict
+    # Fold in the cached judge verdict (caps at caution → can raise to a confirm,
+    # never enable a block; the fresh deterministic re-scan above owns blocking).
+    sj = quarantine_dir / ".scan.json"
+    if sj.is_file():
+        try:
+            stored = str(json.loads(sj.read_text()).get("verdict", ""))
+            if _VERDICT_ORDER.get(stored, 0) > _VERDICT_ORDER.get(verdict, 0):
+                verdict = stored
+        except Exception:  # noqa: BLE001
+            pass
+    action = decide_action(source, verdict=verdict,
                            carries_code=vr.carries_code, allowlist=allowlist)
     if action == "block" and not override:
-        raise SkillImportRefused("block", rep.verdict,
+        raise SkillImportRefused("block", verdict,
                                  "dangerous verdict; explicit override required")
     if action == "confirm" and not (confirmed or override):
-        raise SkillImportRefused("confirm", rep.verdict,
+        raise SkillImportRefused("confirm", verdict,
                                  "confirmation required (carries code / caution / out-of-allowlist)")
     name = vr.name
     dest = _skill_md(workspace, name).parent
     if dest.exists():
         if not replace:
-            raise SkillImportRefused("exists", rep.verdict, f"skill already exists: {name}")
+            raise SkillImportRefused("exists", verdict, f"skill already exists: {name}")
         shutil.rmtree(dest)
 
     store = _store_init(workspace)
@@ -289,7 +307,7 @@ def install_imported_skill(workspace: Path, quarantine_dir: Path, *, source: str
         durin["mode"] = "manual"
         durin["provenance"] = {
             "source": source,
-            "verdict": rep.verdict,
+            "verdict": verdict,
             "confirmed": bool(confirmed),
             "overridden": bool(override),
             "replaced": bool(replace),
@@ -298,13 +316,13 @@ def install_imported_skill(workspace: Path, quarantine_dir: Path, *, source: str
         }
 
     _update_md(dest / "SKILL.md", _stamp)
-    sha = store.auto_commit(f"skill({name}): import from {source} [{rep.verdict}]")
+    sha = store.auto_commit(f"skill({name}): import from {source} [{verdict}]")
     _sync_index(workspace, name)
-    _audit(workspace, name=name, source=source, verdict=rep.verdict, action=action,
+    _audit(workspace, name=name, source=source, verdict=verdict, action=action,
            confirmed=bool(confirmed), overridden=bool(override), replaced=bool(replace),
            content_hash=chash, commit=sha)
     shutil.rmtree(quarantine_dir, ignore_errors=True)  # consumed
-    return {"ok": True, "name": name, "verdict": rep.verdict, "commit": sha}
+    return {"ok": True, "name": name, "verdict": verdict, "commit": sha}
 
 
 def reject_quarantined(workspace: Path, name: str) -> dict:
