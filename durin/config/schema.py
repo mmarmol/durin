@@ -402,6 +402,14 @@ class SkillsHotTierConfig(Base):
     recent_window_hours: float = 24.0
 
 
+class SkillImportConfig(Base):
+    """Security floor for skill import (§8.C). ``allowlist`` = trusted source
+    prefixes (e.g. ``github:anthropics/``). A match skips only the *source*
+    confirmation; the verdict/code gates have no opt-out. Default empty."""
+
+    allowlist: list[str] = Field(default_factory=list)
+
+
 class MemoryConfig(Base):
     """Memory subsystem configuration root.
 
@@ -431,6 +439,7 @@ class MemoryConfig(Base):
     # searchable as a `skill` memory class (skill-memory-class indexing).
     index_skills: bool = True
     skills_hot_tier: SkillsHotTierConfig = Field(default_factory=SkillsHotTierConfig)
+    skill_import: SkillImportConfig = Field(default_factory=SkillImportConfig)
     embedding: MemoryEmbeddingConfig = Field(default_factory=MemoryEmbeddingConfig)
     dream: MemoryDreamConfig = Field(default_factory=MemoryDreamConfig)
     search: MemorySearchConfig = Field(default_factory=MemorySearchConfig)
