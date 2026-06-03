@@ -1,6 +1,7 @@
 """Context builder for assembling agent prompts."""
 
 import base64
+import logging
 import mimetypes
 import platform
 from contextlib import suppress
@@ -20,6 +21,8 @@ from durin.utils.helpers import (
     truncate_text,
 )
 from durin.utils.prompt_templates import render_template
+
+logger = logging.getLogger(__name__)
 
 
 def summarize_composition(payload: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -110,6 +113,11 @@ class ContextBuilder:
         self.workspace = workspace
         self.timezone = timezone
         self.memory = MemoryStore(workspace)
+        try:
+            from durin.agent.skill_lifecycle import sweep_unverified_skills
+            sweep_unverified_skills(workspace)
+        except Exception:  # noqa: BLE001 — sweep is best-effort; never break context init
+            logger.debug("unverified-skill sweep failed", exc_info=True)
         self.skills = SkillsLoader(workspace, disabled_skills=set(disabled_skills) if disabled_skills else None)
         # Per-call breakdown of the rendered system-prompt sections, in
         # raw text. Each system-prompt build clears and re-fills it.

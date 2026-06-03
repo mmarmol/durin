@@ -32,6 +32,8 @@ def _skill_dirs(workspace: Path) -> dict[str, Path]:
 def skills_inventory(workspace) -> list[dict]:
     """Active skills (E1 fields) + §8.C verdict/findings + status='active'."""
     workspace = Path(workspace)
+    from durin.agent.skill_lifecycle import sweep_unverified_skills
+    sweep_unverified_skills(workspace)
     dirs = _skill_dirs(workspace)
     out = []
     for info in list_skills_info(workspace):
@@ -49,6 +51,8 @@ def skills_inventory(workspace) -> list[dict]:
 def quarantined_skills(workspace) -> list[dict]:
     """Skills awaiting import decision in .durin/import-quarantine/ (filled by §6.B)."""
     workspace = Path(workspace)
+    from durin.agent.skill_lifecycle import sweep_unverified_skills
+    sweep_unverified_skills(workspace)
     qroot = workspace / ".durin" / "import-quarantine"
     out = []
     if not qroot.is_dir():

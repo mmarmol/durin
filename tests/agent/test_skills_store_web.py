@@ -7,8 +7,10 @@ from durin.agent import skills_store as ss
 def _user_skill(ws: Path, name: str) -> None:
     d = ws / "skills" / name
     d.mkdir(parents=True)
+    prov = ("metadata:\n  durin:\n    provenance:\n"
+            '      source: "github:o/r/x"\n      content_hash: "abc"\n')
     (d / "SKILL.md").write_text(
-        f"---\nname: {name}\ndescription: d\n---\nBody\n", encoding="utf-8"
+        f"---\nname: {name}\ndescription: d\n{prov}---\nBody\n", encoding="utf-8"
     )
 
 
