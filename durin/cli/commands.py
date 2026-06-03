@@ -1365,7 +1365,10 @@ def _run_gateway(
                     # using the same call shape DreamRunner's judge uses.
                     return default_llm_invoke(prompt, model=curation_model).text
 
-                summary = curate_catalog(workspace, judge=_judge)
+                from durin.agent.skill_drift import check_upstream_drift
+                _allowlist = list(config.skills.security.allowlist)
+                summary = curate_catalog(workspace, judge=_judge,
+                                         drift_check=check_upstream_drift, allowlist=_allowlist)
                 logger.info("skill curation: reviewed=%s applied=%s deferred=%s",
                             summary["reviewed"], summary["applied"], summary["deferred"])
             except Exception:

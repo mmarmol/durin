@@ -25,7 +25,9 @@ logger = logging.getLogger(__name__)
 
 
 def curate_catalog(workspace, *, judge: Callable[[str], str],
-                   usage: dict | None = None, budget: int = DEFAULT_BUDGET) -> dict:
+                   usage: dict | None = None, budget: int = DEFAULT_BUDGET,
+                   drift_check: Callable | None = None,
+                   allowlist=None) -> dict:
     """One delta-curation pass. Returns {'reviewed', 'applied', 'deferred'}."""
     workspace = Path(workspace)
     # Only the evolving WORKSPACE set: dream-created + forked skills. Pristine
@@ -46,7 +48,27 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
                     len(delta), budget, deferred)
 
     catalog = {n: ss.read_skill_content(workspace, n) or "" for n in selected}
-    prompt = _build_prompt(catalog, usage or {})
+
+    import shutil as _shutil
+    upstream: dict[str, str] = {}
+    if drift_check is not None:
+        for n in selected:
+            try:
+                rep = drift_check(workspace, n, allowlist=list(allowlist or []))
+            except Exception:  # noqa: BLE001 — drift is best-effort; never break curation
+                logger.exception("upstream drift check failed for %s", n)
+                continue
+            if rep is None:
+                continue
+            if rep.action == "allow":
+                upstream[n] = rep.upstream_md  # safe → judge may incorporate via evolve
+            else:
+                logger.info("skill %s: upstream drift is %s (carries code / untrusted) — "
+                            "not auto-incorporated, left for human review", n, rep.action)
+            # always consume the fetched upstream copy
+            _shutil.rmtree(rep.qdir, ignore_errors=True)
+
+    prompt = _build_prompt(catalog, usage or {}, upstream)
     try:
         actions = (json.loads(judge(prompt)) or {}).get("actions", [])
     except (ValueError, TypeError):
@@ -76,8 +98,9 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
     return {"reviewed": len(selected), "applied": applied, "deferred": deferred}
 
 
-def _build_prompt(catalog: dict, usage: dict) -> str:
+def _build_prompt(catalog: dict, usage: dict, upstream: dict | None = None) -> str:
     from durin.utils.prompt_templates import render_template
     return render_template("agent/skill_curation.md", strip=True,
                            catalog_json=json.dumps(catalog, ensure_ascii=False),
-                           usage_json=json.dumps(usage, ensure_ascii=False))
+                           usage_json=json.dumps(usage, ensure_ascii=False),
+                           upstream_json=json.dumps(upstream or {}, ensure_ascii=False))
