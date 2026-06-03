@@ -34,6 +34,9 @@ function wrap(children: ReactNode) {
 beforeEach(() => {
   vi.mocked(api.listSkills).mockReset();
   vi.mocked(api.listQuarantine).mockReset();
+  vi.mocked(api.importSource).mockReset();
+  vi.mocked(api.approveSkill).mockReset();
+  vi.mocked(api.rejectSkill).mockReset();
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -101,7 +104,7 @@ describe("SkillsView security surface", () => {
     expect(await screen.findByText("No skills in quarantine.")).toBeInTheDocument();
   });
 
-  it("imports a source through the quarantine-tab input", async () => {
+  it("imports a source through the always-visible import input", async () => {
     vi.mocked(api.listSkills).mockResolvedValue([
       { name: "clean", source: "builtin", mode: "auto", status: "active", verdict: "safe", findings: [] },
     ]);
@@ -113,13 +116,40 @@ describe("SkillsView security surface", () => {
     const user = userEvent.setup();
     render(wrap(<SkillsView />));
     await screen.findByText("clean");
-    await user.click(screen.getByRole("button", { name: /quarantine/i }));
 
+    // the import input is a surface action, not buried in the quarantine tab
     const input = await screen.findByPlaceholderText(/Import a skill/i);
     await user.type(input, "github:owner/repo");
     await user.click(screen.getByRole("button", { name: "Import" }));
 
     expect(api.importSource).toHaveBeenCalledWith("tok", "github:owner/repo");
+  });
+
+  it("surfaces the install gate inline (no native dialog) and forces on confirm", async () => {
+    vi.mocked(api.listSkills).mockResolvedValue([
+      { name: "clean", source: "builtin", mode: "auto", status: "active", verdict: "safe", findings: [] },
+    ]);
+    vi.mocked(api.listQuarantine).mockResolvedValue([
+      { name: "evil", status: "quarantined", source: "github:o/r", verdict: "dangerous", findings: [] },
+    ]);
+    vi.mocked(api.approveSkill)
+      .mockResolvedValueOnce({ refused: "block", verdict: "dangerous" })
+      .mockResolvedValueOnce({ ok: true, name: "evil" });
+
+    const user = userEvent.setup();
+    render(wrap(<SkillsView />));
+    await screen.findByText("clean");
+    await user.click(screen.getByRole("button", { name: /quarantine/i }));
+    await screen.findByText("evil");
+
+    await user.click(screen.getByRole("button", { name: "Approve" }));
+    // an inline prompt appears (not window.confirm) — assert on a phrase unique
+    // to the gate message, then force the install.
+    expect(await screen.findByText(/serious risk/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Force install" }));
+
+    expect(api.approveSkill).toHaveBeenNthCalledWith(1, "tok", "evil");
+    expect(api.approveSkill).toHaveBeenNthCalledWith(2, "tok", "evil", { override: true });
   });
 
   it("rejects a quarantined skill", async () => {
