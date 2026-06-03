@@ -52,7 +52,10 @@ def test_fill_prefers_used_over_unused(monkeypatch, tmp_path):
         168.0: {"deploy": 10, "rebase": 8, "lint": 6, "docs": 4},
         24.0: {"deploy": 10, "rebase": 8, "lint": 6, "docs": 4},
     })
-    cands = ["deploy", "rebase", "lint", "docs", "obscure1", "obscure2"]
+    # Unused skills come FIRST in candidate order, so a naive fill (pure
+    # candidate order) would pick obscure1/obscure2 over the still-used
+    # lint/docs. Only the used-over-unused preference yields the right set.
+    cands = ["deploy", "rebase", "obscure1", "obscure2", "lint", "docs"]
     ws = compute_working_set(tmp_path, cands, recent=2, frequent=2)
     assert set(ws) == {"deploy", "rebase", "lint", "docs"}
     assert "obscure1" not in ws and "obscure2" not in ws
