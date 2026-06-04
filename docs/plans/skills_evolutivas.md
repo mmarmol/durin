@@ -31,8 +31,10 @@ un skill de workspace sin provenance se reubica a cuarentena al cargar el contex
 (search→gate→semilla: in-session interactivo + dream phase-2 autónomo safe-only —
 spec `2026-06-03-skill-acquire-on-gap-design.md`, PR #25).
 
-**Pendiente:** **P6** (ejecutor de install-specs / sandbox runtime — hoy info-only,
-policy `never`) · adapters extra de discovery (github-taps / well-known / lobehub).
+**Pendiente:** **P6 #2/#3** (correr los *scripts* bundleados de skills por el tool gate ·
+sandbox FS/red per-skill — el ejecutor de install-specs **#1 ya está built**:
+`skill_install_deps` + `skills.install_policy`, ver `docs/architecture/skills/00_overview.md §8`) ·
+adapters extra de discovery (github-taps / well-known / lobehub).
 
 **Descartado / resuelto (2026-06-04):**
 - **§6.D completo (Etapa-1 traducción + Etapa-2 optimizer) ≡ §8.F GEPA/SkillOpt —
