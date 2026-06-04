@@ -4,7 +4,13 @@ The default `python -m build` (sdist→wheel) silently dropped durin/web/dist/ o
 producing a wheel that serves a 404 dashboard. `_wheel_has_spa` backs the finalize
 guard that fails the build in that case.
 """
-import hatch_build
+import pytest
+
+# hatch_build imports hatchling (a build-system dep, not installed in the test env /
+# CI). Skip this module there; it still runs locally where the build tooling exists.
+pytest.importorskip("hatchling")
+
+import hatch_build  # noqa: E402
 
 
 def test_wheel_with_spa_is_detected():
