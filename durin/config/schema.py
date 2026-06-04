@@ -466,6 +466,11 @@ class SkillsConfig(Base):
 
     security: SkillSecurityConfig = Field(default_factory=SkillSecurityConfig)
     discovery: SkillsDiscoveryConfig = Field(default_factory=SkillsDiscoveryConfig)
+    install_policy: Literal["never", "approve", "auto"] = "approve"
+    """P6 #1 — how `skill_install_deps` runs a skill's declared install specs.
+    'never' = report only (never run, even with confirm); 'approve' = dry-run then
+    run on confirm (default); 'auto' = run without a per-call confirm. All policies
+    still execute through ExecTool's gate."""
 
 
 class MemoryConfig(Base):
