@@ -212,8 +212,14 @@ la ejecución.
 2. Apoyar la ejecución de scripts de skills en el gate de tools de durin.
 3. Sandbox real (límites FS/red por skill) = v2 grande; medir necesidad.
 
-**Estado**: pendiente, no bloquea. durin alineado con el campo (gate
-install-time). El item #1 es el más valioso y acotado.
+**Estado**: **item #1 CONSTRUIDO (2026-06-04)** — `skill_install_deps` tool:
+dry-run→confirm, configurable vía `skills.install_policy` (`never`|`approve`|`auto`),
+corre los comandos por el **exec gate de durin (ExecTool)** estilo hermes (no
+subprocess paralelo), sólo specs que el scanner §8.C no flaggeó, `download`/sudo
+excluidos (privilegiados surfaceados como `needs_privileges`). Plan:
+`docs/superpowers/plans/2026-06-04-skill-install-deps-p6.md`. Pendientes: **#2**
+(correr scripts bundleados de skills por el tool gate) y **#3** (sandbox FS/red
+per-skill). durin sigue alineado con el campo (gate install-time + ahora exec gate).
 
 
 ### P7 — API REST del channel es GET-con-query (sin body POST) → valores sensibles en query
