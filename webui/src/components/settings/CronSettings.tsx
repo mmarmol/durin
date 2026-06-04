@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Clock, Loader2, Trash2 } from "lucide-react";
+import { Clock, Loader2, Play, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,7 @@ import {
   ApiError,
   listCronJobs,
   removeCronJob,
+  runCronJob,
   toggleCronJob,
   type CronJobRow,
 } from "@/lib/api";
@@ -72,6 +73,20 @@ export function CronSettings({ token }: { token: string }) {
     }
   };
 
+  const run = async (id: string) => {
+    setBusyId(id);
+    setError(null);
+    try {
+      const r = await runCronJob(token, id);
+      if (!r.started) setError(t("settings.cron.alreadyRunning"));
+      await refresh();
+    } catch (e) {
+      setError(e instanceof ApiError ? `HTTP ${e.status}` : (e as Error).message);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   return (
     <div className="space-y-8">
       <section>
@@ -104,6 +119,7 @@ export function CronSettings({ token }: { token: string }) {
                 busy={busyId === job.id}
                 onRemove={() => void remove(job.id)}
                 onToggle={(next) => void toggle(job.id, next)}
+                onRun={() => void run(job.id)}
                 locale={i18n.language}
               />
             ))
@@ -119,12 +135,14 @@ function CronRow({
   busy,
   onRemove,
   onToggle,
+  onRun,
   locale,
 }: {
   job: CronJobRow;
   busy: boolean;
   onRemove: () => void;
   onToggle: (enabled: boolean) => void;
+  onRun: () => void;
   locale: string;
 }) {
   const { t } = useTranslation();
@@ -192,6 +210,20 @@ function CronRow({
       }
     >
       <div className="flex items-center gap-2">
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={busy || !job.enabled || !!job.state.executing}
+          onClick={onRun}
+          className="rounded-full"
+          title={t("settings.cron.runNow")}
+        >
+          {job.state.executing ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+          ) : (
+            <Play className="h-3.5 w-3.5" aria-hidden />
+          )}
+        </Button>
         <Button
           size="sm"
           variant="ghost"

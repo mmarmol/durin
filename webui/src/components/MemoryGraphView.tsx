@@ -1089,7 +1089,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                     <dl className="space-y-2">
                       <div className="flex justify-between gap-2">
                         <dt className="text-muted-foreground">{t("memoryGraph.fieldType")}</dt>
-                        <dd className="font-mono">{detail.page.type}</dd>
+                        <dd className="font-mono">{detail.page?.type ?? selected.type}</dd>
                       </div>
                       <div className="flex justify-between gap-2">
                         <dt className="text-muted-foreground">
@@ -1097,7 +1097,15 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                         </dt>
                         <dd className="font-mono">{selected.weight}</dd>
                       </div>
-                      {detail.page.dream_processed_through ? (
+                      {!detail.page ? (
+                        <p className="text-[11px] text-muted-foreground">
+                          <Trans
+                            i18nKey="memoryGraph.noConsolidatedHint"
+                            components={{ code: <code className="rounded bg-muted px-1" /> }}
+                          />
+                        </p>
+                      ) : null}
+                      {detail.page && detail.page.dream_processed_through ? (
                         <div className="flex justify-between gap-2">
                           <dt className="text-muted-foreground">{t("memoryGraph.fieldLastDreamed")}</dt>
                           <dd className="font-mono text-[11px]">
@@ -1105,7 +1113,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                           </dd>
                         </div>
                       ) : null}
-                      {detail.page.aliases.length > 0 ? (
+                      {detail.page && detail.page.aliases.length > 0 ? (
                         <div>
                           <dt className="text-muted-foreground">{t("memoryGraph.fieldAliases")}</dt>
                           <dd className="mt-0.5 flex flex-wrap gap-1">
@@ -1120,7 +1128,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                           </dd>
                         </div>
                       ) : null}
-                      {detail.page.identifiers ? (
+                      {detail.page && detail.page.identifiers ? (
                         <div>
                           <dt className="text-muted-foreground">{t("memoryGraph.fieldIdentifiers")}</dt>
                           <dd className="mt-0.5 space-y-0.5">
@@ -1141,7 +1149,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                   ) : null}
 
                   {activeTab === "body" ? (
-                    detail.page.body ? (
+                    detail.page && detail.page.body ? (
                       <pre className="whitespace-pre-wrap font-mono text-[11px] leading-relaxed">
                         {detail.page.body}
                       </pre>
