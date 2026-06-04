@@ -51,8 +51,36 @@ def _store(ws: Path, content: str, entities: list[str], day: int = 1) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _store_stable(ws: Path, content: str, entities: list[str], day: int = 4) -> None:
+    store_memory(
+        ws, content=content, class_name="stable", entities=entities,
+        valid_from=datetime.date(2026, 6, day),
+    )
+
+
 def test_entity_detail_missing_returns_none(tmp_path: Path) -> None:
     assert get_entity_detail(tmp_path, "person:nobody") is None
+
+
+def test_phantom_entity_returns_referencing_entries(tmp_path: Path) -> None:
+    """An entity tagged in a stable entry but with no consolidated page must
+    return a detail (page=None) carrying its referencing entries, instead of
+    404ing into an empty side panel."""
+    _store_stable(tmp_path, "mxHERO company profile", ["company:mxhero"])
+    d = get_entity_detail(tmp_path, "company:mxhero")
+    assert d is not None
+    assert d["page"] is None
+    assert d["ref"] == "company:mxhero"
+    classes = {e["class"] for e in d["entries"]}
+    assert "stable" in classes
+    assert any("mxHERO" in (e.get("body") or "") for e in d["entries"])
+
+
+def test_unknown_entity_with_no_entries_returns_none(tmp_path: Path) -> None:
+    """A ref with neither a page nor any referencing entry/archive is a real
+    miss → None (404), not a fabricated empty detail."""
+    _store_stable(tmp_path, "mxHERO profile", ["company:mxhero"])
+    assert get_entity_detail(tmp_path, "company:ghost") is None
 
 
 def test_entity_detail_minimal_page(tmp_path: Path) -> None:
