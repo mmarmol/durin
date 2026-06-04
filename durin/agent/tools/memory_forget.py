@@ -13,9 +13,10 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from durin.agent.tools._telemetry import emit_tool_event
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.schema import StringSchema, tool_parameters_schema
-from durin.memory.forget import ForgetError, forget_entry
+from durin.memory.forget import ForgetError, forget_entry, parse_memory_uri
 
 logger = logging.getLogger(__name__)
 
@@ -80,4 +81,9 @@ class MemoryForgetTool(Tool):
             rel = str(dest.relative_to(self._workspace))
         except ValueError:
             rel = str(dest)
+        class_name, _ = parse_memory_uri(uri)
+        emit_tool_event(
+            "memory.forget",
+            {"uri": uri, "class_name": class_name, "reason": reason},
+        )
         return {"uri": uri, "archived_to": rel, "status": "forgotten"}
