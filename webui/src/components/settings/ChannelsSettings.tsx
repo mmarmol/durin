@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { Loader2, Mail, MessageCircle, Plug, Send, type LucideIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,24 @@ import { useClient } from "@/providers/ClientProvider";
 /** Build an env-var-safe secret name for a channel credential. */
 function secretName(channel: string, field: string): string {
   return `${channel}_${field}`.toUpperCase().replace(/[^A-Z0-9_]/g, "_");
+}
+
+/** Generic per-type glyphs so channel rows carry an icon like the Providers
+ *  tab does (lucide has no brand marks for these platforms — match by kind). */
+const CHANNEL_ICONS: Record<string, LucideIcon> = {
+  email: Mail,
+  websocket: Plug,
+  telegram: Send,
+};
+
+/** Icon container mirroring the Providers tab's ProviderIcon treatment. */
+function ChannelIcon({ name }: { name: string }) {
+  const Icon = CHANNEL_ICONS[name] ?? MessageCircle;
+  return (
+    <span className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-muted text-foreground/82 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.025)] dark:bg-muted/70">
+      <Icon className="h-5 w-5" strokeWidth={2} aria-hidden />
+    </span>
+  );
 }
 
 /** One channel: enable/disable + (when enabling) its credential. */
@@ -31,14 +49,17 @@ function ChannelRow({
   return (
     <div className="px-4 py-3 sm:px-5">
       <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <div className="text-[14px] font-medium text-foreground">
-            {channel.display_name}
-          </div>
-          <div className="text-[12px] text-muted-foreground">
-            {channel.enabled
-              ? t("settings.channels.enabled")
-              : t("settings.channels.disabled")}
+        <div className="flex min-w-0 items-center gap-3">
+          <ChannelIcon name={channel.name} />
+          <div className="min-w-0">
+            <div className="text-[14px] font-medium text-foreground">
+              {channel.display_name}
+            </div>
+            <div className="text-[12px] text-muted-foreground">
+              {channel.enabled
+                ? t("settings.channels.enabled")
+                : t("settings.channels.disabled")}
+            </div>
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">

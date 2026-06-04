@@ -1,4 +1,6 @@
 import { Loader2, AlertTriangle, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -16,12 +18,13 @@ interface ApiStatusBannerProps {
  * banner auto-clears on ``turn_end`` from useDurinStream.
  */
 export function ApiStatusBanner({ status, onDismiss }: ApiStatusBannerProps) {
+  const { t } = useTranslation();
   const isFinal = status.final;
   const Icon = isFinal ? AlertTriangle : Loader2;
   const tone = isFinal ? "destructive" : "muted";
 
-  const title = resolveTitle(status);
-  const body = resolveBody(status);
+  const title = resolveTitle(status, t);
+  const body = resolveBody(status, t);
 
   return (
     <div
@@ -50,7 +53,7 @@ export function ApiStatusBanner({ status, onDismiss }: ApiStatusBannerProps) {
         variant="ghost"
         size="icon"
         onClick={onDismiss}
-        aria-label="Dismiss"
+        aria-label={t("common.dismiss")}
         className={cn(
           "h-6 w-6 shrink-0",
           tone === "destructive"
@@ -64,28 +67,28 @@ export function ApiStatusBanner({ status, onDismiss }: ApiStatusBannerProps) {
   );
 }
 
-function resolveTitle(status: ApiRetryStatus): string {
+function resolveTitle(status: ApiRetryStatus, t: TFunction): string {
   if (status.kind === "giving_up") {
-    return `Model request failed after ${status.attempt} attempts`;
+    return t("apiStatus.givingUpTitle", { attempt: status.attempt });
   }
   if (status.kind === "exhausted_persistent") {
-    return "Persistent retry stopped";
+    return t("apiStatus.exhaustedTitle");
   }
   const attemptLabel = status.max_attempts
-    ? `attempt ${status.attempt} of ${status.max_attempts}`
-    : `attempt ${status.attempt}`;
+    ? t("apiStatus.attemptOf", { attempt: status.attempt, max: status.max_attempts })
+    : t("apiStatus.attempt", { attempt: status.attempt });
   if (status.delay_s > 0) {
-    return `Retrying in ${status.delay_s}s · ${attemptLabel}`;
+    return t("apiStatus.retryingIn", { delay: status.delay_s, attemptLabel });
   }
-  return `Retrying · ${attemptLabel}`;
+  return t("apiStatus.retrying", { attemptLabel });
 }
 
-function resolveBody(status: ApiRetryStatus): string | null {
+function resolveBody(status: ApiRetryStatus, t: TFunction): string | null {
   if (status.kind === "giving_up") {
-    return "The error response will appear in the chat below. You can resend the message to retry.";
+    return t("apiStatus.givingUpBody");
   }
   if (status.kind === "exhausted_persistent") {
-    return "Too many identical errors in a row — giving up to avoid an infinite loop.";
+    return t("apiStatus.exhaustedBody");
   }
-  return "Transient provider error; the request will be re-sent automatically.";
+  return t("apiStatus.transientBody");
 }
