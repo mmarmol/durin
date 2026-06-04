@@ -3,11 +3,13 @@
 > 🟢 **FUENTE DE VERDAD de E2.** Este doc manda sobre el diseño y estado de la
 > Etapa 2. Construye sobre **E1 (shipped** — PR #19, `e595fd6`).
 >
-> **Estado:**
+> **Estado: ✅ COMPLETO (ambas partes; actualizado 2026-06-04, verificado contra código).**
 > - **Parte A** (sueño 2h: crear + parchear local) — ✅ **HECHO** (merged a main,
 >   release local `v0.1.0a9`). Plan: `superpowers/plans/2026-06-02-…e2-part-a.md`.
-> - **Parte B** (sueño diario: curación global del catálogo) — ⛔ **pendiente**
->   (sin plan de implementación todavía).
+> - **Parte B** (sueño diario: curación global del catálogo) — ✅ **HECHO**:
+>   `durin/agent/skill_curation.py::curate_catalog` (delta `auto`+`workspace`,
+>   `evolve`/`fuse`, drift §8.D incorporado) está cableado en el job `memory_dream`
+>   (`cli/commands.py`). As-built: `docs/architecture/skills/00_overview.md §6`.
 >
 > Decisiones + **auditoría de código** vía brainstorming el 2026-06-02.
 >
