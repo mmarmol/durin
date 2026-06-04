@@ -340,6 +340,8 @@
       "systemBadge": "sistema",
       "fieldNext": "Próxima",
       "fieldLast": "Última",
+      "runNow": "Ejecutar ahora",
+      "alreadyRunning": "La tarea ya se está ejecutando.",
       "remove": "Eliminar tarea",
       "cantDeleteSystem": "Las tareas del sistema no se pueden eliminar.",
       "systemJobs": {
