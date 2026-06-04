@@ -1,5 +1,7 @@
 # §6.C Acquire-on-gap Implementation Plan
 
+> ✅ **EXECUTED — historical execution record.** The feature this plan built is shipped and verified. Current as-built state: [`docs/architecture/skills/00_overview.md`](../../architecture/skills/00_overview.md). The unchecked `- [ ]` boxes below are the original TDD task list, **not pending work**.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Connect durin's existing federated registry search to its existing skill-authoring path so durin acquires a skill on its own initiative — searching registries and using a safe hit as a seed — in-session (interactive) and in the 2h dream (autonomous, safe-only).

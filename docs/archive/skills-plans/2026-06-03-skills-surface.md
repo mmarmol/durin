@@ -1,5 +1,7 @@
 # Skills Surface — exposure in web + both chats (Module 2 of 3)
 
+> ✅ **EXECUTED — historical execution record.** The feature this plan built is shipped and verified. Current as-built state: [`docs/architecture/skills/00_overview.md`](../../architecture/skills/00_overview.md). The unchecked `- [ ]` boxes below are the original TDD task list, **not pending work**.
+
 > **OUTLINE** (detailed when built — after §8.C, before §6.B). The shared presentation/control layer over the skills system. Builds on E1 (`/skills`, `SkillsSettings` web panel, `list_skills_info`) + §8.C audit. Built in the middle so §8.C's audit gets a surface immediately on existing skills; §6.B then fills the quarantine section.
 
 **Goal:** One inventory + actions service, rendered in the **web panel** and **both chats** (TUI + webui chat). Nothing implemented three times.

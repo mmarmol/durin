@@ -1,9 +1,10 @@
 # Plan — Skills evolutivas (crear · importar · adaptar · evolucionar)
 
-> 🧭 **MAPA / VISIÓN (vigente).** Roadmap de etapas E1→E5 — el norte. El diseño
-> de *lo que se construye ahora* (E2) vive en su spec:
-> [`superpowers/specs/2026-06-02-skills-evolution-e2-design.md`](../superpowers/specs/2026-06-02-skills-evolution-e2-design.md).
-> Este doc es fuente de verdad de la **visión**; para el **estado y diseño actual**, ese spec manda.
+> 🧭 **MAPA / VISIÓN (vigente).** Roadmap de etapas E1→E5 — el norte. Este doc es
+> fuente de verdad de la **visión**. Para **cómo funciona hoy el sistema construido**
+> (incluido el comportamiento en los dreams), la referencia as-built es
+> [`docs/architecture/skills/00_overview.md`](../architecture/skills/00_overview.md).
+> El diseño por feature vive en `superpowers/specs/2026-06-*-skill-*-design.md`.
 
 > **Fuente de inicio**, no decisión final. Captura la discusión sobre darle a
 > durin un sistema de skills que el usuario crea bajo demanda, importa de
@@ -17,7 +18,7 @@
 
 ---
 
-## Estado de implementación (2026-06-03, verificado contra código)
+## Estado de implementación (2026-06-04, verificado contra código)
 
 **Construido:** crear/cristalizar (§6.A — dream + `curate_catalog`) · importar (§6.B)
 + piso §8.C + gate · interop agentskills.io · Skills-Surface · retrieval Nivel-1
@@ -26,14 +27,28 @@ resolución name-match, CLI, web — spec `2026-06-03-skill-discovery-registries
 · **drift→evolución §8.D** (`durin/agent/skill_drift.py` + `curate_catalog`) ·
 **barrida origen-no-verificado → cuarentena** (`durin/agent/skill_lifecycle.py`:
 un skill de workspace sin provenance se reubica a cuarentena al cargar el contexto
-+ surfaces → inerte para el agente, surfaceado para el humano).
++ surfaces → inerte para el agente, surfaceado para el humano) · **§6.C adquirir-on-gap**
+(search→gate→semilla: in-session interactivo + dream phase-2 autónomo safe-only —
+spec `2026-06-03-skill-acquire-on-gap-design.md`, PR #25).
 
-**Pendiente:** **§6.C adquirir-on-gap** (trigger de gap + flujo `AskUserQuestion`;
-el search ya es la semilla) · **§6.D Etapa-2 / §6.B Etapa-1** (adaptar lo importado
-a tools nativas + gate blando por uso) · **§5.2 capa `original/` inmutable** (hoy:
-`provenance.source` + `content_hash` + re-fetch, sin copia guardada) · **P6**
-(ejecutor de install-specs / sandbox runtime — hoy info-only, policy `never`) ·
-adapters extra (github-taps / well-known / lobehub) · §8.F GEPA/SkillOpt.
+**Pendiente:** **P6** (ejecutor de install-specs / sandbox runtime — hoy info-only,
+policy `never`) · adapters extra de discovery (github-taps / well-known / lobehub).
+
+**Descartado / resuelto (2026-06-04):**
+- **§6.D completo (Etapa-1 traducción + Etapa-2 optimizer) ≡ §8.F GEPA/SkillOpt —
+  DESCARTADO.** *Etapa-2 / optimizer:* la evolución por contenido ya la hace
+  `curate_catalog`; la señal de uso (replay/canary) es demasiado escasa en skills
+  personales para ser un reward (§4 ya lo difirió). GEPA-el-algoritmo y SkillOpt-el-harness
+  (benchmark/train-val) no aplican sin benchmark; su única parte útil (bounded edit +
+  rollback) ya es git. *Etapa-1 / traducción a tools nativas:* durin no tiene superficie
+  de tools suficiente para que un skill importado referencie comúnmente tools que durin
+  no tenga — no justifica una pasada de adaptación. Nada de §6.D aporta sobre lo que hay.
+- **§5.2 capa `original/` — RESUELTO por git.** El contenido tal-como-llegó ya vive en el
+  commit de import del GitStore (inmutable, diffeable, incluso para fuentes
+  no-refetcheables); HEAD = actual; `git diff import..HEAD` = el delta. **No hay capa/dir
+  que construir.** Con §6.D descartado tampoco queda flujo de re-adaptación que consuma un
+  `original/` explícito. El invariante (import = commit pristino; la curación no toca
+  imports porque son `mode=manual`) ya se cumple.
 
 ## §1 — La idea
 
@@ -159,6 +174,18 @@ y se recupera bajo demanda. **Solo las distingue la `provenance`**:
   `experience` si es auto-creada).
 - `adapted/` — la que durin **realmente usa**: traducida a sus tools, con
   scripts donde había repetición. La única que evoluciona.
+
+> **Corrección (2026-06-04):** `original/` **no es una capa/dir a construir** — el
+> contenido tal-como-llegó **ya está preservado** en el commit de import del GitStore
+> de skills (`skill(name): import from <source>`, `skills_import.py`), inmutable y
+> diffeable, **incluso para fuentes no-refetcheables** (se commitea el contenido, no
+> sólo el hash). Sobre git, las "capas" son: **commit de import = `original`**,
+> **HEAD = actual**, **`git diff import..HEAD` = el delta**. **Resuelto (2026-06-04):
+> no hay nada que construir** — git ya da inmutabilidad + diff + rollback + historial,
+> incluso para fuentes no-refetcheables. Y con **§6.D descartado** no queda flujo de
+> re-adaptación que necesite un `original/` explícito (es `curate_catalog` quien
+> evoluciona, sobre git). El único invariante —import = commit pristino; la curación no
+> toca imports porque son `mode=manual`— ya se cumple.
 
 ### 5.3 — Pipeline de dos etapas
 

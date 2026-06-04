@@ -3,7 +3,12 @@
 > 🟢 **FUENTE DE VERDAD** del lado-lectura de skills (el "Spec 2" comprometido en
 > [`2026-06-02-skills-evolution-e2-design.md`](2026-06-02-skills-evolution-e2-design.md) §11).
 > Diseño cerrado vía brainstorming 2026-06-02, **tras auditar Hermes en detalle**.
-> Estado: pre-implementación.
+> **Estado: ✅ CONSTRUIDO (actualizado 2026-06-04, verificado contra código).** Skills
+> indexadas como clase de memoria buscable (`memory.index_skills`,
+> `durin/memory/skill_page.py::SkillPage`, FTS + vector) + hot-tier working-set
+> (`durin/agent/skill_usage.py::compute_working_set`, config
+> `agents.defaults.skills_hot_tier`), inyectado vía `templates/agent/skills_section.md`.
+> As-built: `docs/architecture/skills/00_overview.md §7`.
 
 ---
 

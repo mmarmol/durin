@@ -6,8 +6,14 @@
 > caps, B11 install-specs consent. (A2 POST-body → backlog P7; C14 force-replace
 > + C13 fuzzy-via-chat already resolved.)
 >
-> **Status:** DESIGN — the 5 open decisions were SETTLED with the user
-> (2026-06-03); see "Decisions" at the bottom. Not yet implemented.
+> **Status: ✅ BUILT (updated 2026-06-04, verified against code).** All items shipped:
+> A1 allowlist + A8 caps + A6 github_token_secret + A3 llm_judge → `skills.security`
+> (`config/schema.py::SkillSecurityConfig`); A4 settings surface →
+> `webui/.../settings/SkillsSecuritySettings.tsx`; B11 install-specs consent →
+> `skills.install_policy` + `skill_install_deps` tool (P6 #1, plan
+> `2026-06-04-skill-install-deps-p6.md`). A2 POST-body = backlog P7. As-built:
+> `docs/architecture/skills/00_overview.md §5,§8,§10`. (Original decisions settled
+> with the user 2026-06-03; see "Decisions" at the bottom.)
 
 ## Why now / what the field does (researched 2026-06-03, file:line verified)
 
