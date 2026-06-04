@@ -243,6 +243,33 @@ local a skills — beneficia secrets/settings/skills por igual.
 no de skills; agendar como su propia tarea.
 
 
+### DX — Sin separación dev/daily: todo el estado vive en `~/.durin` (falta `DURIN_HOME`)
+
+**Contexto**: es común tener dos instalaciones del CLI a la vez — una de
+desarrollo (editable, en el `.venv` del repo) y una "daily driver" (pipx en
+`~/.local/bin`). Ambas resuelven su raíz de datos al **mismo** `~/.durin`.
+
+**Problema**: no hay forma limpia de aislarlas. `--config` solo reubica el
+`config.json` y `workspace` es configurable, pero el resto está hardcodeado a
+`Path.home() / ".durin"`: `config.json` ([config/loader.py:68](../durin/config/loader.py#L68)),
+`workspace` default, `history`, `bridge`, `sessions` ([config/paths.py](../durin/config/paths.py)),
+raíz del daemon ([cli/gateway_daemon.py:56](../durin/cli/gateway_daemon.py#L56)),
+media de canales (qq), `oauth/`, `secrets.json`, `tool-results`. Resultado: una
+corrida de dev lee/escribe el estado de producción (memoria, cron, sesiones,
+secrets) sin querer. Observado en vivo: levantar el gateway de dev usó el
+`~/.durin/workspace` real (cron jobs `dream`/`memory_dream` reales).
+
+**Propuesta tentativa**: introducir `DURIN_HOME` (env var, default `~/.durin`) y
+centralizar la resolución de la raíz en **un** helper del que deriven todas las
+rutas; reemplazar los `Path.home() / ".durin"` hardcodeados por ese helper. Así
+dev corre con `DURIN_HOME=~/.durin_dev durin gateway …` y queda 100% separado de
+`~/.durin` (daily). Cuidar: migración/compat (si `DURIN_HOME` no está seteado,
+comportamiento idéntico al actual) y que `--config` siga funcionando como
+override puntual del config.
+
+**Estado**: pendiente — cambio acotado pero toca varias rutas; requiere test que
+verifique que con `DURIN_HOME` seteado ningún path cae en `~/.durin`.
+
 ---
 
-## Last updated: 2026-06-03 (P6 runtime execution + P7 channel POST-body añadidos)
+## Last updated: 2026-06-04 (DURIN_HOME dev/daily separation añadido)
