@@ -250,6 +250,7 @@ export interface CronJobRow {
     last_run_at_ms: number | null;
     last_status: "ok" | "error" | "skipped" | null;
     last_error: string | null;
+    executing?: boolean;
   };
   created_at_ms: number;
   updated_at_ms: number;
@@ -284,6 +285,20 @@ export async function toggleCronJob(
     token,
   );
   return res.job;
+}
+
+/** POST-style GET /api/cron/run?id=… — trigger a job now (background).
+ * `started:false` means it was already running (overlap guard). */
+export async function runCronJob(
+  token: string,
+  id: string,
+  base: string = "",
+): Promise<{ started: boolean; reason?: string }> {
+  const query = new URLSearchParams({ id });
+  return await request<{ started: boolean; reason?: string }>(
+    `${base}/api/cron/run?${query}`,
+    token,
+  );
 }
 
 export async function getConfig(
@@ -753,6 +768,8 @@ export async function fetchMemoryGraph(
 
 export interface MemoryEntityDetail {
   ref: string;
+  // null for a "phantom" entity — tagged in entries but not yet
+  // consolidated into a page. The panel still renders entries + archive.
   page: {
     type: string;
     name: string;
@@ -761,7 +778,7 @@ export interface MemoryEntityDetail {
     extra: Record<string, unknown>;
     body: string;
     dream_processed_through: string | null;
-  };
+  } | null;
   history: Array<{
     sha: string;
     short_sha: string;

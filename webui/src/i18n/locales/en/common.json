@@ -340,6 +340,8 @@
       "systemBadge": "system",
       "fieldNext": "Next",
       "fieldLast": "Last",
+      "runNow": "Run now",
+      "alreadyRunning": "Job is already running.",
       "remove": "Remove job",
       "cantDeleteSystem": "System jobs cannot be removed.",
       "systemJobs": {
