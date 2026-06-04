@@ -1,5 +1,7 @@
 # §8.C — Skill Security Floor + Audit (Module 1 of 3)
 
+> ✅ **EXECUTED — historical execution record.** The feature this plan built is shipped and verified. Current as-built state: [`docs/architecture/skills/00_overview.md`](../../architecture/skills/00_overview.md). The unchecked `- [ ]` boxes below are the original TDD task list, **not pending work**.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: superpowers:subagent-driven-development. Checkbox steps.
 > **Module 1 of 3** (build order: **§8.C floor+audit** → Skills-Surface exposure → §6.B import). This module is the reusable security primitive — testable + useful on the skills that ALREADY exist, with no import. Specs: [`2026-06-03-skill-import-and-security-floor-design.md`](../specs/2026-06-03-skill-import-and-security-floor-design.md) §4 + §8.
 

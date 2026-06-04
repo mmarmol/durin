@@ -200,7 +200,7 @@ drive curation — that's deliberate).
 ## 8. Runtime dependency install (P6 #1)
 
 A skill can declare OS/package dependencies (`metadata.<vendor>.install: [{kind, …}]`).
-Historically info-only (policy `never`). P6 #1 (spec/plan `2026-06-04-skill-install-deps-p6.md`)
+Historically info-only (policy `never`). P6 #1 (plan `docs/archive/skills-plans/2026-06-04-skill-install-deps-p6.md`)
 adds an **approved executor**:
 - `skills_import.py::runnable_install_specs` turns *safe* specs into shell commands
   (brew/apt/pip/cargo/npm/go/uv), **dropping** any spec the §8.C scanner flagged
