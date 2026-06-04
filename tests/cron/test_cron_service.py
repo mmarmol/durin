@@ -643,3 +643,57 @@ async def test_list_jobs_during_on_job_does_not_cause_stale_reload(tmp_path) -> 
         next_run = j["state"]["nextRunAtMs"]
         assert next_run is not None
         assert next_run > now_ms, f"Job '{j['name']}' next_run should be in the future"
+
+
+async def test_execute_job_guard_prevents_overlap(tmp_path) -> None:
+    """A second execution of a job already running is skipped — no overlap."""
+    calls: list[str] = []
+    release = asyncio.Event()
+
+    async def on_job(job: CronJob) -> None:
+        calls.append(job.id)
+        await release.wait()
+
+    service = CronService(tmp_path / "cron" / "jobs.json", on_job=on_job)
+    service.add_job(
+        name="dream",
+        schedule=CronSchedule(kind="every", every_ms=3_600_000),
+        message="x",
+    )
+    service._load_store()
+    j = service._store.jobs[0]
+
+    t1 = asyncio.create_task(service._execute_job(j))
+    await _wait_until(lambda: service.is_executing(j.id))
+    # Overlapping execution returns immediately without re-running on_job.
+    await service._execute_job(j)
+    assert calls == [j.id]
+
+    release.set()
+    await t1
+    assert not service.is_executing(j.id)
+
+
+async def test_run_job_refuses_when_already_executing(tmp_path) -> None:
+    """Manual run-now is refused while the job is already mid-execution."""
+    release = asyncio.Event()
+    started = asyncio.Event()
+
+    async def on_job(job: CronJob) -> None:
+        started.set()
+        await release.wait()
+
+    service = CronService(tmp_path / "cron" / "jobs.json", on_job=on_job)
+    service.add_job(
+        name="dream",
+        schedule=CronSchedule(kind="every", every_ms=3_600_000),
+        message="x",
+    )
+    service._load_store()
+    j = service._store.jobs[0]
+
+    t1 = asyncio.create_task(service._execute_job(j))
+    await started.wait()
+    assert await service.run_job(j.id, force=True) is False
+    release.set()
+    await t1
