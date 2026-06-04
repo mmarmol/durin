@@ -61,6 +61,38 @@ def test_forget_tool_nonexistent_entry(tmp_path: Path) -> None:
     assert "error" in result
 
 
+def test_forget_tool_emits_telemetry(tmp_path: Path) -> None:
+    """A successful forget fires a memory.forget telemetry event."""
+    import json
+
+    from durin.telemetry.logger import (
+        bind_telemetry,
+        get_session_logger,
+        reset_telemetry,
+    )
+
+    entry_id = _store_stable(tmp_path)
+    uri = f"memory/stable/{entry_id}"
+    tool = MemoryForgetTool(workspace=tmp_path)
+
+    logger = get_session_logger("websocket:c1", base_dir=tmp_path)
+    token = bind_telemetry(logger)
+    try:
+        asyncio.run(tool.execute(uri=uri, reason="duplicate"))
+    finally:
+        reset_telemetry(token)
+
+    events = [
+        json.loads(line)
+        for line in logger.path.read_text(encoding="utf-8").splitlines()
+    ]
+    forget = [e for e in events if e["type"] == "memory.forget"]
+    assert len(forget) == 1
+    assert forget[0]["data"]["uri"] == uri
+    assert forget[0]["data"]["class_name"] == "stable"
+    assert forget[0]["data"]["reason"] == "duplicate"
+
+
 def test_forget_tool_registered_in_core_scope(tmp_path: Path) -> None:
     """Auto-discovered + registered for the foreground agent (core scope)."""
     loader = ToolLoader()
