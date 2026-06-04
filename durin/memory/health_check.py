@@ -145,8 +145,16 @@ class HealthChecker:
         try:
             issues = detect_index_staleness(self._workspace)
             drift_count = len(issues)
+            orphan_uris: list[str] = []
             for issue in issues:
+                if issue.get("reason") == "row_for_missing_file":
+                    # File is gone — collected for a single batched prune
+                    # below (cheaper than one repair call per orphan).
+                    orphan_uris.append(issue.get("uri") or "")
+                    continue
                 self._repair_drift(issue)
+            if orphan_uris:
+                self._prune_orphans(orphan_uris)
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "health_check: staleness detection failed: %s", exc,
@@ -352,15 +360,57 @@ class HealthChecker:
         )
         return True
 
+    def _prune_orphans(self, uris: list[str]) -> None:
+        """Drop FTS + vector rows whose backing file is gone (model-free).
+
+        Pruning needs only the uri — ``delete_by_uris`` / ``delete_ids``
+        match on it directly — so unlike reindex we reconcile a deleted
+        file from the uri alone, no path reconstruction. One batched pass
+        per index keeps a bulk out-of-band deletion (e.g. ``rm -rf
+        memory/<dir>``) cheap and never loads the embedding model.
+        """
+        cleaned = [u for u in uris if u]
+        if not cleaned:
+            return
+        try:
+            from durin.memory.fts_index import FTSIndex
+
+            with FTSIndex.open(self._workspace) as idx:
+                idx.delete_by_uris(cleaned)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("health_check: FTS orphan prune failed: %s", exc)
+        try:
+            from durin.memory.vector_index import delete_ids
+
+            delete_ids(self._workspace, [self._vector_id_for(u) for u in cleaned])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("health_check: vector orphan prune failed: %s", exc)
+
+    @staticmethod
+    def _vector_id_for(uri: str) -> str:
+        """Map an index uri to its vector-table ``id``.
+
+        Memory entries are stored under the bare entry id
+        (``memory/<class>/<id>`` → ``<id>``); entity refs (``type:slug``)
+        and skills (``skill/<slug>``) use the uri verbatim.
+        """
+        if uri.startswith("memory/"):
+            return uri.rsplit("/", 1)[-1]
+        return uri
+
     def _repair_drift(self, issue: dict[str, Any]) -> None:
-        """Best-effort drift repair: re-index the offending path."""
+        """Best-effort drift repair: re-index the offending path.
+
+        ``row_for_missing_file`` is handled separately (batched prune in
+        ``run_tick`` via :meth:`_prune_orphans`); this method covers
+        ``missing_row`` / ``mtime_lag``, which need the live file.
+        """
         uri = issue.get("uri") or ""
         reason = issue.get("reason") or ""
         if reason == "row_for_missing_file":
-            # File is gone; the next walk_class won't return it, so
-            # reindex_one_file with the original path will delete
-            # the orphan row. We can't reconstruct the path from uri
-            # alone without a heuristic — best effort.
+            # Defensive: run_tick routes these to _prune_orphans, so this
+            # path is normally unreached. Prune here too if called directly.
+            self._prune_orphans([uri])
             return
         # For missing_row / mtime_lag we need the file path. Derive
         # from URI for entries (memory/<class>/<id>) and for entity
