@@ -146,6 +146,26 @@ class ExecTool(Tool):
         "/dev/tty",
     })
 
+    # Mutations of the `memory/` vault must go through the memory_store /
+    # memory_forget tools — a raw rm/mv/redirect/sed leaves the FTS +
+    # vector index pointing at a missing file (orphan rows the auto-repair
+    # can't reconstruct). Reads (cat/ls/grep) stay allowed. `memory/` is
+    # matched as a path segment (absolute `/…/memory/` or relative
+    # `memory/`); the boundary char before it keeps `inmemory/` and the
+    # like from tripping. The gap excludes command separators so a read of
+    # memory/ piped to an unrelated write isn't flagged.
+    _MEMREF = r"[^|;&\n]*[\s'\"=/(]memory/"
+    _MEMORY_MUTATION_PATTERNS: tuple[str, ...] = (
+        rf"\brm\b{_MEMREF}",
+        rf"\bmv\b{_MEMREF}",
+        rf"\bcp\b{_MEMREF}",
+        rf"\btruncate\b{_MEMREF}",
+        rf"\btee\b{_MEMREF}",
+        rf"\bsed\b[^|;&\n]*-i{_MEMREF}",
+        r"\bdd\b[^|;&\n]*\bof=[^|;&\n]*memory/",
+        r">>?\s*(?:[^\s'\"|;&<>]*/)?memory/",
+    )
+
     @property
     def description(self) -> str:
         return (
@@ -389,6 +409,10 @@ class ExecTool(Tool):
                 if re.search(pattern, lower):
                     return "Error: Command blocked by deny pattern filter"
 
+            mem_block = self._guard_memory_mutation(lower)
+            if mem_block:
+                return mem_block
+
             if self.allow_patterns:
                 return "Error: Command blocked by allowlist filter (not in allowlist)"
 
@@ -433,6 +457,24 @@ class ExecTool(Tool):
                         + _WORKSPACE_BOUNDARY_NOTE
                     )
 
+        return None
+
+    @classmethod
+    def _guard_memory_mutation(cls, lowered_cmd: str) -> str | None:
+        """Block shell mutations of the ``memory/`` vault.
+
+        Returns an actionable error (pointing at the memory tools) when the
+        command would rm/mv/cp/truncate/tee/sed -i/dd/redirect into a path
+        under ``memory/``; ``None`` otherwise. Reads are never matched.
+        """
+        for pattern in cls._MEMORY_MUTATION_PATTERNS:
+            if re.search(pattern, lowered_cmd):
+                return (
+                    "Error: refusing to mutate the memory/ vault from the "
+                    "shell — use the memory_store / memory_forget tools. A "
+                    "raw rm/mv/redirect leaves the search index pointing at "
+                    "a missing file."
+                )
         return None
 
     @classmethod

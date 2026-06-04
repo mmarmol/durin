@@ -613,8 +613,15 @@ def _uri_for(workspace: Path, md_path: Path) -> Optional[str]:
         type_ = parts[1]
         slug = md_path.stem
         return f"{type_}:{slug}"
-    # For entries, the id == the filename stem by convention
-    # (see durin.memory.storage); the indexer trusts that contract.
+    # Entries: the canonical uri is `memory/<class>/<id>` — the SAME form
+    # `_payload_for` indexes under (line ~553) and `fts_meta` stores. The
+    # id == the filename stem by convention (see durin.memory.storage).
+    # Returning the bare stem here desynced the delete path and drift
+    # detection from the index, mis-flagging every present entry as
+    # `row_for_missing_file` + `missing_row` and leaving `forget` /
+    # drift-repair unable to remove an entry's FTS row.
+    if len(parts) >= 2:
+        return f"memory/{parts[0]}/{md_path.stem}"
     return md_path.stem
 
 

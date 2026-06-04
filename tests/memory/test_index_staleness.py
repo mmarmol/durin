@@ -52,6 +52,50 @@ def test_detects_row_for_missing_file(tmp_path: Path) -> None:
     assert {"uri": "person:ghost", "reason": "row_for_missing_file"} in issues
 
 
+def _stable_entry(workspace: Path, content: str = "x") -> tuple[Path, str]:
+    """Write + return (path, uri) for a stable memory entry."""
+    import datetime
+
+    from durin.memory.provenance import author_scope
+    from durin.memory.store import store_memory
+
+    with author_scope("agent_created"):
+        res = store_memory(
+            workspace, content=content, class_name="stable",
+            entities=["company:mxhero"],
+            valid_from=datetime.date(2026, 6, 4),
+        )
+    path = workspace / "memory" / "stable" / f"{res['id']}.md"
+    return path, f"memory/stable/{res['id']}"
+
+
+def test_no_drift_for_present_entry(tmp_path: Path) -> None:
+    """Regression: a present, correctly-indexed ENTRY must not be flagged.
+
+    `_uri_for` returned the bare stem for entries while the index stores
+    `memory/<class>/<id>`, so every present entry was double-flagged
+    (row_for_missing_file + missing_row) and needlessly re-indexed on
+    every health-check tick.
+    """
+    path, _uri = _stable_entry(tmp_path)
+    reindex_one_file(tmp_path, path, trigger="test")
+    assert detect_index_staleness(tmp_path) == []
+
+
+def test_reindex_deletes_entry_row_when_file_gone(tmp_path: Path) -> None:
+    """reindex_one_file on a removed entry must drop its FTS row — the
+    derived uri must match the indexed `memory/<class>/<id>` form, else
+    forget / drift-repair silently leave an orphan row."""
+    path, uri = _stable_entry(tmp_path)
+    reindex_one_file(tmp_path, path, trigger="test")
+    with FTSIndex.open(tmp_path) as idx:
+        assert uri in {u for u, _ in idx.known_uris()}
+    path.unlink()
+    reindex_one_file(tmp_path, path, trigger="test")
+    with FTSIndex.open(tmp_path) as idx:
+        assert uri not in {u for u, _ in idx.known_uris()}
+
+
 def test_detects_mtime_lag(tmp_path: Path) -> None:
     """File modified after the indexer wrote its row → mtime_lag."""
     p = _entity(tmp_path, "marcelo")

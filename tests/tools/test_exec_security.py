@@ -117,6 +117,55 @@ def test_exec_allows_reads_of_history_jsonl(command):
     assert result is None
 
 
+# --- memory/ vault is tool-only: shell mutations are blocked --------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "rm memory/stable/0922d2931b46.md",
+        'rm "/Users/me/.durin/workspace/memory/stable/x.md"',
+        "mv memory/stable/x.md /tmp/",
+        "cp /tmp/x memory/stable/y.md",
+        "echo data > memory/stable/x.md",
+        "echo data >> memory/episodic/x.md",
+        "sed -i 's/a/b/' memory/stable/x.md",
+        "truncate -s 0 memory/corpus/x.md",
+        "tee memory/stable/x.md",
+    ],
+)
+def test_exec_blocks_memory_vault_mutations(command):
+    """rm/mv/cp/redirect/sed -i/dd into memory/ must be refused with an
+    actionable message pointing at the memory tools."""
+    tool = ExecTool()
+    result = tool._guard_command(command, "/tmp")
+    assert result is not None
+    assert "memory/ vault" in result
+    assert "memory_forget" in result
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat memory/stable/x.md",
+        "ls memory/",
+        "grep -r mxhero memory/",
+        "head -5 memory/episodic/x.md",
+        "wc -l memory/stable/x.md",
+        # Reading memory and writing the result elsewhere is fine.
+        "grep foo memory/stable/x.md > /tmp/out.txt",
+        # Mutations outside the vault are unaffected.
+        "rm /tmp/scratch.txt",
+        # A dir merely containing the substring 'memory' is not the vault.
+        "rm /tmp/inmemory/cache.bin",
+    ],
+)
+def test_exec_allows_memory_reads_and_non_vault_mutations(command):
+    tool = ExecTool()
+    result = tool._guard_command(command, "/tmp")
+    assert result is None
+
+
 # --- #2826: working_dir must not escape the configured workspace ---------
 
 

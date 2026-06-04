@@ -189,6 +189,41 @@ class FTSIndex:
             self._conn.rollback()
             raise
 
+    def delete_by_uris(self, uris: list[str]) -> int:
+        """Remove many uris in a single transaction (chunked IN clauses).
+
+        Used by the health-check self-heal to prune orphan rows for files
+        deleted out-of-band in one pass — keeps reconciling a bulk
+        deletion cheap instead of one commit per row. Returns the count of
+        distinct uris requested.
+        """
+        unique = [u for u in dict.fromkeys(uris) if u]
+        if not unique:
+            return 0
+        cur = self._conn.cursor()
+        cur.execute("BEGIN")
+        try:
+            for start in range(0, len(unique), 500):
+                chunk = unique[start:start + 500]
+                placeholders = ",".join("?" * len(chunk))
+                cur.execute(
+                    f"DELETE FROM memory_fts WHERE uri IN ({placeholders})",
+                    chunk,
+                )
+                cur.execute(
+                    f"DELETE FROM memory_fts_trigram WHERE uri IN ({placeholders})",
+                    chunk,
+                )
+                cur.execute(
+                    f"DELETE FROM fts_meta WHERE uri IN ({placeholders})",
+                    chunk,
+                )
+            self._conn.commit()
+        except sqlite3.Error:
+            self._conn.rollback()
+            raise
+        return len(unique)
+
     def clear(self) -> None:
         """Drop all rows from both tables. Used by ``durin reindex``."""
         cur = self._conn.cursor()

@@ -124,6 +124,51 @@ def test_phantom_node_for_unconsolidated_ref(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# entries from non-episodic classes (stable, corpus) must contribute nodes
+# ---------------------------------------------------------------------------
+
+
+def test_stable_entries_produce_entity_nodes(tmp_path: Path) -> None:
+    """Regression: entity refs tagged on ``stable`` entries must surface
+    as graph nodes. The builder previously walked only ``episodic``, so a
+    workspace whose memory lives in ``stable/`` rendered a graph with no
+    entity nodes (only sessions), hiding all consolidated knowledge.
+    """
+    store_memory(
+        tmp_path, content="mxHERO company profile", class_name="stable",
+        entities=["company:mxhero", "person:alex-panagides"],
+        valid_from=datetime.date(2026, 6, 4),
+    )
+    store_memory(
+        tmp_path, content="mxHERO Box award", class_name="stable",
+        entities=["company:mxhero", "company:box"],
+        valid_from=datetime.date(2026, 6, 4),
+    )
+    g = build_memory_graph(tmp_path)
+    ids = {n["id"] for n in g["nodes"]}
+    assert "company:mxhero" in ids
+    assert "person:alex-panagides" in ids
+    assert "company:box" in ids
+    # mxhero appears in both entries → weight 2.
+    mxhero = next(n for n in g["nodes"] if n["id"] == "company:mxhero")
+    assert mxhero["weight"] == 2
+    # Two co-occurrence edges (one per entry's pair).
+    assert len(g["edges"]) == 2
+
+
+def test_corpus_entries_produce_entity_nodes(tmp_path: Path) -> None:
+    store_memory(
+        tmp_path, content="reference doc", class_name="corpus",
+        entities=["topic:aws", "product:secure-share"],
+        valid_from=datetime.date(2026, 6, 4),
+    )
+    g = build_memory_graph(tmp_path)
+    ids = {n["id"] for n in g["nodes"]}
+    assert "topic:aws" in ids
+    assert "product:secure-share" in ids
+
+
+# ---------------------------------------------------------------------------
 # archive subfolder pages must NOT appear (de-indexed by design)
 # ---------------------------------------------------------------------------
 

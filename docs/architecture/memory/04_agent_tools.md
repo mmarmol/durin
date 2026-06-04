@@ -1,5 +1,5 @@
 ---
-title: Agent tools — memory_search, memory_store, memory_ingest, memory_drill
+title: Agent tools — memory_search, memory_store, memory_ingest, memory_drill, memory_forget
 version: 0.1-draft
 status: current — describes the shipped system (P11 era, 2026-05-30)
 last_updated: 2026-05-27
@@ -16,7 +16,7 @@ This document specifies the tool API surface that the agent LLM sees. It defines
 
 ---
 
-## 1. The four tools
+## 1. The five tools
 
 | Tool | Purpose | Hot/cold path |
 |---|---|---|
@@ -24,8 +24,9 @@ This document specifies the tool API surface that the agent LLM sees. It defines
 | `memory_store` | Persist a short observation as episodic/stable | Cold (write) |
 | `memory_ingest` | Take a long external source (URL, file path, raw text) and add it to corpus | Cold (write, may chunk) |
 | `memory_drill` | Inspect a specific URI by reading its full body (entity page, episodic, etc.) | Hot (read-only file access) |
+| `memory_forget` | Archive an entry + drop its index rows — the index-safe way to delete | Cold (write) |
 
-All four are exposed as MCP/tool calls to the agent. None invokes an LLM internally on the hot path.
+All five are exposed as MCP/tool calls to the agent. None invokes an LLM internally on the hot path.
 
 ---
 
@@ -374,6 +375,31 @@ same string.
 
 ---
 
+## 5b. `memory_forget` — index-safe deletion
+
+`durin/agent/tools/memory_forget.py`. Foreground-only (the Dream agent
+mutates the vault through its own structured tools). Removes a memory
+entry the agent no longer wants surfaced.
+
+- **Parameters:** `uri` (required, `memory/<class>/<id>` — exactly what
+  `memory_search` returns) and optional `reason` (recorded in the archive
+  frontmatter).
+- **Behaviour:** delegates to the shared `durin.memory.forget.forget_entry`
+  helper (also behind the `durin memory forget` CLI). Archives the entry
+  to `memory/archive/<class>/<id>.md` (reversible) and drops its FTS +
+  vector index rows so it stops appearing in search. Refuses
+  `memory/entities/...` (entity pages have their own absorb/revert
+  lifecycle).
+- **Why it exists:** without an in-band deletion tool the agent's only
+  recourse was a raw shell `rm`, which orphaned the FTS + vector rows
+  (the auto-repair couldn't reconstruct them). The `exec` tool now also
+  refuses mutations under `memory/` (`shell.py::_guard_memory_mutation`),
+  so `memory_forget` is the sanctioned deletion path. Vector cleanup uses
+  the model-free `vector_index.delete_ids`, so forgetting never loads the
+  embedding model.
+
+---
+
 ## 6. Result rendering — structural markers
 
 Per `03_search_pipeline.md` §12, each hit is rendered with one of four markers. The exact format:
@@ -483,7 +509,7 @@ The web dashboard also consumes three read-only endpoints exposed by the memory 
 | **`get_entity_detail(uri)`** | `durin/memory/graph_api.py` | Returns an entity page's full content + recent history (default last 20 commits) for the dashboard sidebar |
 | **`get_edge_detail(from_uri, to_uri)`** | `durin/memory/graph_api.py` | Returns the co-mention evidence between two entities (which sessions/entries mention both) |
 | **`search_memory_api(query, ...)`** | `durin/memory/graph_api.py` | Webui equivalent of `memory_search`. Same pipeline; different return shape (paginated, with stable IDs for UI rendering) |
-| **Graph canvas data** | `durin/memory/graph.py::build_memory_graph` | Builds `{nodes: [...], edges: [...]}` for an Obsidian-style canvas view. Includes session nodes + entity nodes; edges from co-mention counts. Caps at 500 nodes / 2000 edges to keep the canvas usable. |
+| **Graph canvas data** | `durin/memory/graph.py::build_memory_graph` | Builds `{nodes: [...], edges: [...]}` for an Obsidian-style canvas view. Entity nodes come from consolidated pages under `entities/`; entity-tag harvesting and co-mention edges are walked across the entry classes that carry `entities` (`episodic`, `stable`, `corpus`) — `pending` and `session_summary` are excluded. Refs tagged on entries but lacking a page render as phantom nodes. Also includes session nodes. Caps at 500 nodes / 2000 edges to keep the canvas usable. |
 
 Read-only by design — no mutation through these surfaces. Mutations flow through the agent tools (§2-§5) or direct `.md` editing.
 
