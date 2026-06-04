@@ -18,6 +18,7 @@ from durin.config.schema import Config
 from durin.utils.restart import consume_restart_notice_from_env, format_restart_completed_message
 
 if TYPE_CHECKING:
+    from durin.cron.service import CronService
     from durin.session.manager import SessionManager
 
 
@@ -75,11 +76,16 @@ class ChannelManager:
         *,
         session_manager: "SessionManager | None" = None,
         webui_runtime_model_name: Callable[[], str | None] | None = None,
+        cron_service: "CronService | None" = None,
     ):
         self.config = config
         self.bus = bus
         self._session_manager = session_manager
         self._webui_runtime_model_name = webui_runtime_model_name
+        # Running CronService instance (same gateway process) — handed to the
+        # websocket channel so its run-now endpoint reaches the live scheduler
+        # (and its in-process overlap guard), not a fresh action-log copy.
+        self._cron_service = cron_service
         self.channels: dict[str, BaseChannel] = {}
         self._dispatch_task: asyncio.Task | None = None
         self._origin_reply_fingerprints: dict[tuple[str, str, str], str] = {}
@@ -123,6 +129,8 @@ class ChannelManager:
                             kwargs["static_dist_path"] = static_path
                     if self._webui_runtime_model_name is not None:
                         kwargs["runtime_model_name"] = self._webui_runtime_model_name
+                    if self._cron_service is not None:
+                        kwargs["cron_service"] = self._cron_service
                 channel = cls(_resolve_section_secrets(section), self.bus, **kwargs)
                 channel.transcription_provider = transcription_provider
                 channel.transcription_api_key = transcription_key

@@ -1468,6 +1468,7 @@ def _run_gateway(
         bus,
         session_manager=session_manager,
         webui_runtime_model_name=_webui_runtime_model_name,
+        cron_service=cron,
     )
 
     def _pick_heartbeat_target() -> tuple[str, str]:

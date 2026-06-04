@@ -48,6 +48,7 @@ from durin.utils.webui_transcript import append_transcript_object, build_webui_t
 from durin.utils.webui_turn_helpers import websocket_turn_wall_started_at
 
 if TYPE_CHECKING:
+    from durin.cron.service import CronService
     from durin.session.manager import SessionManager
 
 
@@ -503,6 +504,7 @@ class WebSocketChannel(BaseChannel):
         session_manager: "SessionManager | None" = None,
         static_dist_path: Path | None = None,
         runtime_model_name: Callable[[], str | None] | None = None,
+        cron_service: "CronService | None" = None,
     ):
         if isinstance(config, dict):
             config = WebSocketConfig.model_validate(config)
@@ -525,6 +527,12 @@ class WebSocketChannel(BaseChannel):
             static_dist_path.resolve() if static_dist_path is not None else None
         )
         self._runtime_model_name = runtime_model_name
+        # Running CronService (same process). Used only by the run-now
+        # endpoint so a manual trigger reaches the live scheduler + its
+        # in-process overlap guard. None outside the gateway (tests).
+        self._cron_service = cron_service
+        # Strong refs to fire-and-forget run-now tasks (else GC'd mid-run).
+        self._background_run_tasks: set[asyncio.Task] = set()
         # Process-local secret used to HMAC-sign media URLs. The signed URL is
         # the capability — anyone who holds a valid URL can fetch that one
         # file, nothing else. The secret regenerates on restart so links
@@ -710,6 +718,9 @@ class WebSocketChannel(BaseChannel):
 
         if got == "/api/cron/toggle":
             return self._handle_cron_toggle(request)
+
+        if got == "/api/cron/run":
+            return self._handle_cron_run(request)
 
         if got == "/api/config":
             return self._handle_config_get(request)
@@ -1467,6 +1478,12 @@ class WebSocketChannel(BaseChannel):
                 "last_run_at_ms": job.state.last_run_at_ms,
                 "last_status": job.state.last_status,
                 "last_error": job.state.last_error,
+                # True while a run (scheduled or manual) is in flight — lets
+                # the webui disable "Run now" and show a spinner.
+                "executing": bool(
+                    self._cron_service is not None
+                    and self._cron_service.is_executing(job.id)
+                ),
             },
             "created_at_ms": job.created_at_ms,
             "updated_at_ms": job.updated_at_ms,
@@ -1706,6 +1723,37 @@ class WebSocketChannel(BaseChannel):
         if result == "protected":
             return _http_error(403, "system job; cannot remove")
         return _http_json_response({"result": result})
+
+    def _handle_cron_run(self, request: WsRequest) -> Response:
+        """`GET /api/cron/run?id=...` — manually trigger a job now.
+
+        Dispatches the run on the LIVE scheduler in the background (the dream
+        job can take minutes; we don't block the request). The scheduler's
+        in-process guard refuses an overlapping run, so a job already in
+        flight returns ``started: false`` instead of double-executing.
+        """
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        if self._cron_service is None:
+            return _http_error(503, "scheduler not available")
+        job_id = (_query_first(_parse_query(request.path), "id") or "").strip()
+        if not job_id:
+            return _http_error(400, "id is required")
+        if self._cron_service.get_job(job_id) is None:
+            return _http_error(404, "no such job")
+        if self._cron_service.is_executing(job_id):
+            return _http_json_response({"started": False, "reason": "already_running"})
+
+        async def _run() -> None:
+            try:
+                await self._cron_service.run_job(job_id, force=True)
+            except Exception:  # noqa: BLE001
+                logger.exception("cron run-now failed for {}", job_id)
+
+        task = asyncio.create_task(_run())
+        self._background_run_tasks.add(task)
+        task.add_done_callback(self._background_run_tasks.discard)
+        return _http_json_response({"started": True})
 
     def _handle_cron_toggle(self, request: WsRequest) -> Response:
         """`GET /api/cron/toggle?id=...&enabled=true|false` — enable
