@@ -1157,6 +1157,22 @@ class Dream:
         from durin.agent.tools.skill_write import SkillWriteTool
         (workspace / "skills").mkdir(parents=True, exist_ok=True)
         tools.register(SkillWriteTool(workspace=workspace))
+        # §6.C: the dream sees the full hit list (raw skill_search) and asks a gated
+        # per-ref tool for a seed; the gate (in skill_acquire_seed) only ever returns
+        # risk-free prior art, so the autonomous dream can never use risky content.
+        from durin.agent.tools.skill_acquire_seed import SkillAcquireSeedTool
+        from durin.agent.tools.skill_search import SkillSearchTool
+        from durin.config.loader import load_config
+        try:
+            _sk = load_config().skills
+            _regs = list(_sk.discovery.registries)
+            _allow = list(_sk.security.allowlist)
+            _lim = int(_sk.discovery.search_limit)
+        except Exception:  # noqa: BLE001 — never block dream startup on config
+            _regs, _allow, _lim = [], [], 10
+        tools.register(SkillSearchTool(
+            workspace=workspace, registries=_regs, allowlist=_allow, limit=_lim))
+        tools.register(SkillAcquireSeedTool(workspace=workspace, allowlist=_allow))
         return tools
 
     # -- skill listing --------------------------------------------------------
