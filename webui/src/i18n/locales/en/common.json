@@ -117,6 +117,7 @@
     },
     "byok": {
       "description": "Bring your own provider keys. durin reads these values from the current config and only configured providers can be selected in General.",
+      "webSearchDescription": "Configure the web search provider and its credential. This only affects the web search tool.",
       "configured": "Configured",
       "notConfigured": "Not configured",
       "configuredSection": "Configured",
@@ -292,7 +293,7 @@
       "workingMemoryDescription": "Hourly consolidation of the chat history into MEMORY.md / SOUL.md / USER.md and on-the-fly skill creation. Runs every 2h and only triggers when there's enough new conversation to justify the LLM call."
     },
     "skillsSecurity": {
-      "description": "Security policy for importing skills (§8.C/§6.B): the LLM judge, trust patterns, the GitHub token, and size caps.",
+      "description": "Security policy for importing skills: the LLM judge, trust patterns, the GitHub token, and size caps.",
       "loadError": "Could not load the configuration.",
       "saveError": "Could not save the setting.",
       "sections": {
@@ -357,6 +358,8 @@
     "view": "View",
     "makeManual": "Make manual",
     "makeAuto": "Make auto",
+    "modeAutoHint": "Auto: the agent decides when to use this skill.",
+    "modeManualHint": "Manual: only used when you invoke it explicitly.",
     "back": "Back",
     "empty": "No skills found.",
     "selectPrompt": "Select a skill to view it.",
@@ -604,6 +607,7 @@
     "agentActivityLiveToolsOnly": "Working… · {{tools}} tool calls",
     "imageAttachment": "Image attachment",
     "copyReply": "Copy reply",
+    "errorTitle": "The provider returned an error",
     "copiedReply": "Copied reply",
     "turnLatencyTitle": "Response time (end-to-end)"
   },
@@ -629,9 +633,35 @@
       "body": "The server rejected your last message because it exceeded the size limit. Remove some images or try smaller files, then send again."
     }
   },
+  "apiStatus": {
+    "givingUpTitle": "Model request failed after {{attempt}} attempts",
+    "exhaustedTitle": "Persistent retry stopped",
+    "attemptOf": "attempt {{attempt}} of {{max}}",
+    "attempt": "attempt {{attempt}}",
+    "retryingIn": "Retrying in {{delay}}s · {{attemptLabel}}",
+    "retrying": "Retrying · {{attemptLabel}}",
+    "givingUpBody": "The error response will appear in the chat below. You can resend the message to retry.",
+    "exhaustedBody": "Too many identical errors in a row — giving up to avoid an infinite loop.",
+    "transientBody": "Transient provider error; the request will be re-sent automatically."
+  },
+  "logs": {
+    "title": "Logs",
+    "tabs": { "gateway": "Gateway", "telemetry": "Telemetry" },
+    "searchPlaceholder": "Search…",
+    "filters": { "level": "level", "channel": "channel", "type": "type", "session": "session" },
+    "rotation": "Rotation",
+    "maxMb": "max MB",
+    "retention": "Retention",
+    "days": "days",
+    "set": "set",
+    "saved": "saved",
+    "empty": "No log lines in this window.",
+    "loadOlder": "Load older",
+    "widen": "Searched last {{hours}}h — widen"
+  },
   "memoryGraph": {
     "title": "Memory",
-    "searchPlaceholder": "Search memory (vector + grep)…",
+    "searchPlaceholder": "Search memory…",
     "clear": "Clear",
     "refresh": "Refresh",
     "empty": "No entity pages yet.",
@@ -662,6 +692,7 @@
     "noLifecycleEvents": "No lifecycle events recorded.",
     "unfocus": "Unfocus",
     "focusOneHop": "Focus 1-hop",
+    "interactionHint": "Click another node, drag to pin, or use the focus icon to isolate 1-hop neighbours.",
     "loadingGraph": "Loading…",
     "showAll": "Show all",
     "noMatches": "No matches.",
@@ -670,7 +701,11 @@
     "noSourceLinkedEntries": "No episodic entries linked back to this session via source_refs.",
     "emptyHint": "Run <code>durin memory dream</code> once entries accumulate.",
     "noConsolidatedHint": "Tagged in episodic entries but no consolidated page yet. Run <code>durin memory dream</code> to create one.",
-    "stats": "{{nodes}} nodes · {{edges}} edges",
+    "stats": "{{nodesLabel}} · {{edgesLabel}}",
+    "nodesCount_one": "{{count}} node",
+    "nodesCount_other": "{{count}} nodes",
+    "edgesCount_one": "{{count}} edge",
+    "edgesCount_other": "{{count}} edges",
     "statsPhantom": "{{count}} phantom",
     "statsTruncated": "truncated",
     "tabEntries": "Entries",

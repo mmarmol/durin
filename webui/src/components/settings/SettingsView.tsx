@@ -642,11 +642,21 @@ function GeneralSettings({
                   type="button"
                   onClick={() => onSelectPalette(option)}
                   className={cn(
-                    "rounded-full px-3 py-1 capitalize transition-colors",
+                    "inline-flex items-center gap-1.5 rounded-full px-3 py-1 capitalize transition-colors",
                     palette === option &&
                       "bg-background text-foreground shadow-sm",
                   )}
                 >
+                  {/* Swatch previews each palette's own accent: a nested
+                      data-palette element resolves that palette's --primary
+                      token, so the dot stays in sync with the design system
+                      instead of hardcoding hex values. */}
+                  <span
+                    data-palette={option}
+                    aria-hidden
+                    className="h-2.5 w-2.5 rounded-full ring-1 ring-black/10"
+                    style={{ backgroundColor: "hsl(var(--primary))" }}
+                  />
                   {option}
                 </button>
               ))}
@@ -1755,7 +1765,7 @@ function ByokSettings({
   return (
     <div className="space-y-6">
       <p className="max-w-[42rem] text-[13px] leading-6 text-muted-foreground">
-        {t("settings.byok.description")}
+        {t(pane === "web-search" ? "settings.byok.webSearchDescription" : "settings.byok.description")}
       </p>
       <div
         role="tablist"

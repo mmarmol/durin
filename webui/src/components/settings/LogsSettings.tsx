@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Loader2, RefreshCw, ScrollText } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import {
   ApiError,
   fetchLogs,
@@ -14,17 +16,29 @@ import { SettingsSectionTitle } from "./primitives";
 
 type Tab = "gateway" | "telemetry";
 
+/** Maps a log level to a token-backed text colour so ERROR/WARNING stand
+ *  out from INFO when scanning. Uses design tokens (--destructive, --warn);
+ *  unknown/low levels stay muted. */
+function levelClass(level: string): string {
+  const l = level.toUpperCase();
+  if (l === "ERROR" || l === "CRITICAL") return "text-destructive font-medium";
+  if (l === "WARNING" || l === "WARN") return "text-warn font-medium";
+  if (l === "DEBUG" || l === "TRACE") return "text-muted-foreground/60";
+  return "text-muted-foreground";
+}
+
 /** Settings → Logs section. Read-only viewer over the gateway JSONL log
  *  and the existing telemetry JSONL files. Two tabs share one server read
  *  primitive; they differ only in filters and columns. The telemetry
  *  backend is never mutated here. */
 export function LogsSettings({ token }: { token: string }) {
+  const { t } = useTranslation();
   const [tab, setTab] = useState<Tab>("gateway");
   return (
     <div className="space-y-6">
       <SettingsSectionTitle>
         <span className="flex items-center gap-2">
-          <ScrollText className="h-4 w-4" aria-hidden /> Logs
+          <ScrollText className="h-4 w-4" aria-hidden /> {t("logs.title")}
         </span>
       </SettingsSectionTitle>
       <div className="flex gap-2">
@@ -33,10 +47,10 @@ export function LogsSettings({ token }: { token: string }) {
             key={k}
             size="sm"
             variant={tab === k ? "default" : "ghost"}
-            className="rounded-full capitalize"
+            className="rounded-full"
             onClick={() => setTab(k)}
           >
-            {k}
+            {t(`logs.tabs.${k}`)}
           </Button>
         ))}
       </div>
@@ -46,6 +60,7 @@ export function LogsSettings({ token }: { token: string }) {
 }
 
 function LogTable({ token, source }: { token: string; source: Tab }) {
+  const { t } = useTranslation();
   const [rows, setRows] = useState<LogLineRow[]>([]);
   const [facets, setFacets] = useState<LogFacets>({});
   const [cursor, setCursor] = useState<number | null>(null);
@@ -102,18 +117,18 @@ function LogTable({ token, source }: { token: string; source: Tab }) {
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Search…"
+          placeholder={t("logs.searchPlaceholder")}
           className="h-8 flex-1 min-w-[180px] rounded-md border bg-background px-2 text-[13px]"
         />
         {source === "gateway" ? (
-          <MultiSelect label="level" options={facets.levels ?? []} value={level} onChange={setLevel} />
+          <MultiSelect label={t("logs.filters.level")} options={facets.levels ?? []} value={level} onChange={setLevel} />
         ) : (
-          <MultiSelect label="type" options={facets.types ?? []} value={type} onChange={setType} />
+          <MultiSelect label={t("logs.filters.type")} options={facets.types ?? []} value={type} onChange={setType} />
         )}
         {source === "gateway" ? (
-          <MultiSelect label="channel" options={facets.channels ?? []} value={channel} onChange={setChannel} />
+          <MultiSelect label={t("logs.filters.channel")} options={facets.channels ?? []} value={channel} onChange={setChannel} />
         ) : (
-          <MultiSelect label="session" options={facets.sessions ?? []} value={session} onChange={setSession} />
+          <MultiSelect label={t("logs.filters.session")} options={facets.sessions ?? []} value={session} onChange={setSession} />
         )}
         <Button size="sm" variant="ghost" onClick={() => void load(false)} disabled={loading} className="rounded-full">
           {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
@@ -126,7 +141,7 @@ function LogTable({ token, source }: { token: string; source: Tab }) {
 
       <div className="max-h-[60vh] overflow-auto rounded-md border font-mono text-[12px]">
         {rows.map((r, i) => (
-          <div key={i} className="border-b last:border-0">
+          <div key={i} className={cn("border-b last:border-0", i % 2 === 1 && "bg-muted/20")}>
             <button
               className="flex w-full gap-3 px-2 py-1 text-left hover:bg-muted/50"
               onClick={() => setExpanded(expanded === i ? null : i)}
@@ -136,7 +151,7 @@ function LogTable({ token, source }: { token: string; source: Tab }) {
               </span>
               {source === "gateway" ? (
                 <>
-                  <span className="w-14 shrink-0">{String(r.fields.level ?? "")}</span>
+                  <span className={cn("w-14 shrink-0", levelClass(String(r.fields.level ?? "")))}>{String(r.fields.level ?? "")}</span>
                   <span className="w-24 shrink-0 text-muted-foreground">{String(r.fields.channel ?? "")}</span>
                   <span className="truncate">{String(r.fields.message ?? "")}</span>
                 </>
@@ -156,7 +171,7 @@ function LogTable({ token, source }: { token: string; source: Tab }) {
           </div>
         ))}
         {rows.length === 0 && !loading ? (
-          <p className="px-2 py-4 text-muted-foreground">No log lines in this window.</p>
+          <p className="px-2 py-4 text-muted-foreground">{t("logs.empty")}</p>
         ) : null}
       </div>
 
@@ -164,12 +179,12 @@ function LogTable({ token, source }: { token: string; source: Tab }) {
         <div className="flex items-center gap-3">
           <Button size="sm" variant="ghost" className="rounded-full" disabled={loading}
             onClick={() => void load(true)}>
-            Load older
+            {t("logs.loadOlder")}
           </Button>
           {windowHours !== "all" ? (
             <button className="text-[12px] text-muted-foreground underline"
               onClick={() => setWindowHours((w) => (w === "all" ? "all" : w === 24 ? 168 : "all"))}>
-              Searched last {windowHours}h — widen
+              {t("logs.widen", { hours: windowHours })}
             </button>
           ) : null}
         </div>
@@ -179,6 +194,7 @@ function LogTable({ token, source }: { token: string; source: Tab }) {
 }
 
 function GatewayConfigRow({ token }: { token: string }) {
+  const { t } = useTranslation();
   const [mb, setMb] = useState("");
   const [days, setDays] = useState("");
   const [saved, setSaved] = useState(false);
@@ -189,17 +205,17 @@ function GatewayConfigRow({ token }: { token: string }) {
   };
   return (
     <div className="flex flex-wrap items-center gap-3 rounded-md border bg-muted/30 px-2 py-1 text-[12px]">
-      <span className="text-muted-foreground">Rotation</span>
-      <input value={mb} onChange={(e) => setMb(e.target.value)} placeholder="max MB"
+      <span className="text-muted-foreground">{t("logs.rotation")}</span>
+      <input value={mb} onChange={(e) => setMb(e.target.value)} placeholder={t("logs.maxMb")}
         className="h-7 w-20 rounded border bg-background px-1" />
       <Button size="sm" variant="ghost" className="rounded-full"
-        disabled={!mb} onClick={() => void save("logging.max_file_mb", Number(mb))}>set</Button>
-      <span className="text-muted-foreground">Retention</span>
-      <input value={days} onChange={(e) => setDays(e.target.value)} placeholder="days"
+        disabled={!mb} onClick={() => void save("logging.max_file_mb", Number(mb))}>{t("logs.set")}</Button>
+      <span className="text-muted-foreground">{t("logs.retention")}</span>
+      <input value={days} onChange={(e) => setDays(e.target.value)} placeholder={t("logs.days")}
         className="h-7 w-20 rounded border bg-background px-1" />
       <Button size="sm" variant="ghost" className="rounded-full"
-        disabled={!days} onClick={() => void save("logging.retention_days", Number(days))}>set</Button>
-      {saved ? <span className="text-emerald-600">saved</span> : null}
+        disabled={!days} onClick={() => void save("logging.retention_days", Number(days))}>{t("logs.set")}</Button>
+      {saved ? <span className="text-emerald-600">{t("logs.saved")}</span> : null}
     </div>
   );
 }

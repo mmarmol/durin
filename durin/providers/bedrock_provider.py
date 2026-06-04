@@ -12,7 +12,12 @@ from typing import Any
 
 import json_repair
 
-from durin.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from durin.providers.base import (
+    LLMProvider,
+    LLMResponse,
+    ToolCallRequest,
+    format_provider_error_content,
+)
 from durin.utils.tool_argument_repair import parse_tool_call_arguments
 
 _IMAGE_DATA_URL = re.compile(r"^data:image/([a-zA-Z0-9.+-]+);base64,(.*)$", re.DOTALL)
@@ -664,7 +669,7 @@ class BedrockProvider(LLMProvider):
             should_retry = True
 
         return LLMResponse(
-            content=f"Error: {str(body).strip()[:500]}",
+            content=format_provider_error_content(body),
             finish_reason="error",
             retry_after=retry_after,
             error_status_code=int(status_code) if status_code is not None else None,

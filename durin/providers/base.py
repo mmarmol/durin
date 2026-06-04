@@ -16,6 +16,40 @@ from loguru import logger
 from durin.utils.helpers import image_placeholder_text
 
 
+def format_provider_error_content(body: Any, exc: Exception | None = None) -> str:
+    """Turn a provider error body into a human-readable assistant message.
+
+    Provider SDKs hand us the error body as a parsed ``dict`` (or a JSON
+    string), so the naive ``f"Error: {body}"`` leaks a Python ``repr`` like
+    ``Error: {'code': '1210', 'message': 'Invalid API parameter…'}`` to the
+    user. This pulls the human ``message`` (and ``code`` when present) out of
+    the common OpenAI-compatible shapes and falls back to the trimmed raw text
+    so no information is lost. The webui detects the ``Error:`` prefix to style
+    the turn as an error card.
+    """
+    data: Any = body
+    if isinstance(body, str):
+        text = body.strip()
+        if not text:
+            return f"Error calling LLM: {exc}" if exc is not None else "Error"
+        try:
+            data = json.loads(text)
+        except (ValueError, TypeError):
+            return f"Error: {text[:500]}"
+
+    if isinstance(data, dict):
+        err = data.get("error") if isinstance(data.get("error"), dict) else data
+        message = err.get("message") or err.get("msg") or data.get("message")
+        code = err.get("code") or err.get("type") or data.get("code")
+        if message:
+            message = str(message).strip()
+            return f"Error ({code}): {message}" if code else f"Error: {message}"
+
+    if body is None:
+        return f"Error calling LLM: {exc}" if exc is not None else "Error"
+    return f"Error: {str(body).strip()[:500]}"
+
+
 @dataclass
 class ToolCallRequest:
     """A tool call request from the LLM."""

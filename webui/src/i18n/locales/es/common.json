@@ -68,9 +68,9 @@
       "byok": "Claves API",
       "providers": "Proveedores",
       "web-search": "Búsqueda web",
-      "secrets": "Secrets",
-      "advanced": "All settings",
-      "channels": "Channels",
+      "secrets": "Secretos",
+      "advanced": "Todos los ajustes",
+      "channels": "Canales",
       "memory": "Memoria",
       "skills-security": "Seguridad de skills",
       "cron": "Cron",
@@ -117,6 +117,7 @@
     },
     "byok": {
       "description": "Usa tus propias claves de proveedor. durin lee estos valores desde la configuración actual, y solo los proveedores configurados se pueden elegir en General.",
+      "webSearchDescription": "Configura el proveedor de búsqueda web y su credencial. Solo afecta a la herramienta de búsqueda web.",
       "configured": "Configurado",
       "notConfigured": "Sin configurar",
       "configuredSection": "Configurados",
@@ -142,7 +143,7 @@
       },
       "webSearch": {
         "provider": "Proveedor de búsqueda",
-        "providerHelp": "Elige el backend que usará la herramienta web search.",
+        "providerHelp": "Elige el backend que usará la herramienta de búsqueda web.",
         "selectProvider": "Seleccionar proveedor",
         "credentials": "Credenciales",
         "noCredentialRequired": "No requiere key",
@@ -154,7 +155,7 @@
         "apiKeyRequired": "Este proveedor de búsqueda requiere una API key.",
         "baseUrlRequired": "SearXNG requiere una Base URL.",
         "missingCredential": "Añade la credencial requerida antes de guardar.",
-        "saveHint": "Los cambios se aplican a nuevas solicitudes de web search."
+        "saveHint": "Los cambios se aplican a nuevas solicitudes de búsqueda web."
       }
     },
     "models": {
@@ -259,7 +260,7 @@
       "workingMemoryDescription": "Consolidación cada 2 horas del historial de chat en MEMORY.md / SOUL.md / USER.md y creación de skills sobre la marcha. Solo dispara cuando hay material acumulado suficiente para justificar la llamada al LLM."
     },
     "skillsSecurity": {
-      "description": "Política de seguridad para importar skills (§8.C/§6.B): el juez LLM, patrones de confianza, el token de GitHub y los límites de tamaño.",
+      "description": "Política de seguridad para importar skills: el juez LLM, patrones de confianza, el token de GitHub y los límites de tamaño.",
       "loadError": "No se pudo cargar la configuración.",
       "saveError": "No se pudo guardar el ajuste.",
       "sections": {
@@ -278,12 +279,12 @@
         "maxFileMb": "Máx por archivo (MB)"
       },
       "help": {
-        "judgeTrigger": "Off: sólo on-demand (el botón 'Revisar con IA' por skill). Cuando hay duda: corre automático sólo si el gate ya está indeciso (código / caution / fuera de allowlist). Siempre: en cada import. Degrada en silencio si no hay modelo disponible.",
+        "judgeTrigger": "Desactivado: solo bajo demanda (el botón 'Revisar con IA' por skill). Cuando hay duda: corre automático solo si el gate ya está indeciso (código / precaución / fuera de la lista de confianza). Siempre: en cada importación. Degrada en silencio si no hay modelo disponible.",
         "judgeMaxSeverity": "Hasta dónde puede subir el verdict. 'Precaución' fuerza un confirm pero nunca bloquea solo; 'Peligrosa' le permite bloquear (requiere override).",
         "judgeModel": "Nombre del modelo del juez. Vacío usa el modelo de memoria por default."
       },
-      "severity": { "caution": "Precaución (confirm)", "dangerous": "Peligrosa (bloquea)" },
-      "trigger": { "off": "Off (sólo on-demand)", "uncertain": "Cuando hay duda (desempate)", "always": "Siempre" },
+      "severity": { "caution": "Precaución (confirma)", "dangerous": "Peligrosa (bloquea)" },
+      "trigger": { "off": "Desactivado (solo bajo demanda)", "uncertain": "Cuando hay duda (desempate)", "always": "Siempre" },
       "trustDescription": "Una skill sana de una fuente confiable se instala sin confirm. Los patrones matchean la fuente por prefijo — ej: github:acme/, https://gitlab.com/acme/.",
       "noPatterns": "Todavía no hay patrones de confianza.",
       "patternPlaceholder": "github:owner/ o https://host/path/",
@@ -297,8 +298,8 @@
       "modelPlaceholder": "modelo por default"
     },
     "secrets": {
-      "addTitle": "Agregar un secret",
-      "confirmDelete": "¿Eliminar este secret?",
+      "addTitle": "Agregar un secreto",
+      "confirmDelete": "¿Eliminar este secreto?",
       "delete": "Eliminar",
       "description": "API keys y tokens, almacenados en ~/.durin/secrets.json (modo 0600), fuera de config.json. Los valores nunca se muestran aquí.",
       "empty": "Aún no hay secrets guardados.",
@@ -316,8 +317,8 @@
       "optional": "opcional",
       "save": "Guardar secret",
       "saving": "Guardando…",
-      "stored": "Secrets guardados",
-      "title": "Secrets",
+      "stored": "Secretos guardados",
+      "title": "Secretos",
       "edit": "Editar",
       "editTitle": "Editando {{name}}",
       "editingBadge": "EDITANDO",
@@ -357,6 +358,8 @@
     "view": "Ver",
     "makeManual": "Pasar a manual",
     "makeAuto": "Pasar a auto",
+    "modeAutoHint": "Auto: el agente decide cuándo usar esta skill.",
+    "modeManualHint": "Manual: solo se usa cuando la invocas explícitamente.",
     "back": "Volver",
     "empty": "No hay skills.",
     "selectPrompt": "Elegí una skill para verla.",
@@ -599,6 +602,7 @@
     },
     "copiedReply": "Respuesta copiada",
     "copyReply": "Copiar respuesta",
+    "errorTitle": "El proveedor devolvió un error",
     "reqSecret": {
       "alreadyStored": "Ya está guardado — no hay nada que hacer",
       "hint": "Se guarda directamente en el almacén de secrets de durin; el valor nunca llega al modelo ni al chat.",
@@ -630,9 +634,35 @@
       "body": "El servidor rechazó tu último mensaje por superar el tamaño permitido. Quita algunas imágenes o usa archivos más pequeños y vuelve a enviarlo."
     }
   },
+  "apiStatus": {
+    "givingUpTitle": "La solicitud al modelo falló tras {{attempt}} intentos",
+    "exhaustedTitle": "Reintentos detenidos",
+    "attemptOf": "intento {{attempt}} de {{max}}",
+    "attempt": "intento {{attempt}}",
+    "retryingIn": "Reintentando en {{delay}}s · {{attemptLabel}}",
+    "retrying": "Reintentando · {{attemptLabel}}",
+    "givingUpBody": "La respuesta de error aparecerá en el chat de abajo. Puedes reenviar el mensaje para reintentar.",
+    "exhaustedBody": "Demasiados errores idénticos seguidos — se detiene para evitar un bucle infinito.",
+    "transientBody": "Error transitorio del proveedor; la solicitud se reenviará automáticamente."
+  },
+  "logs": {
+    "title": "Registros",
+    "tabs": { "gateway": "Gateway", "telemetry": "Telemetría" },
+    "searchPlaceholder": "Buscar…",
+    "filters": { "level": "nivel", "channel": "canal", "type": "tipo", "session": "sesión" },
+    "rotation": "Rotación",
+    "maxMb": "MB máx.",
+    "retention": "Retención",
+    "days": "días",
+    "set": "Aplicar",
+    "saved": "Guardado",
+    "empty": "Sin registros en esta ventana.",
+    "loadOlder": "Cargar anteriores",
+    "widen": "Se buscó en las últimas {{hours}} h — ampliar"
+  },
   "memoryGraph": {
     "title": "Memoria",
-    "searchPlaceholder": "Buscar en memoria (vector + grep)…",
+    "searchPlaceholder": "Buscar en memoria…",
     "clear": "Limpiar",
     "refresh": "Actualizar",
     "empty": "Aún no hay páginas de entidades.",
@@ -663,6 +693,7 @@
     "noLifecycleEvents": "Sin eventos de ciclo de vida registrados.",
     "unfocus": "Quitar foco",
     "focusOneHop": "Enfocar 1 salto",
+    "interactionHint": "Haz clic en otro nodo, arrastra para fijar, o usa el ícono de foco para aislar los vecinos a 1 salto.",
     "loadingGraph": "Cargando…",
     "showAll": "Mostrar todo",
     "noMatches": "Sin resultados.",
@@ -671,7 +702,11 @@
     "noSourceLinkedEntries": "Ninguna entrada episódica enlaza con esta sesión via source_refs.",
     "emptyHint": "Ejecuta <code>durin memory dream</code> cuando se acumulen entradas.",
     "noConsolidatedHint": "Etiquetada en entradas episódicas pero aún sin página consolidada. Ejecuta <code>durin memory dream</code> para crear una.",
-    "stats": "{{nodes}} nodos · {{edges}} enlaces",
+    "stats": "{{nodesLabel}} · {{edgesLabel}}",
+    "nodesCount_one": "{{count}} nodo",
+    "nodesCount_other": "{{count}} nodos",
+    "edgesCount_one": "{{count}} enlace",
+    "edgesCount_other": "{{count}} enlaces",
     "statsPhantom": "{{count}} fantasma",
     "statsTruncated": "truncado",
     "tabEntries": "Entradas",

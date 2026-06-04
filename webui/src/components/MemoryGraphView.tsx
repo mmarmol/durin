@@ -649,8 +649,8 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
         {data ? (
           <span className="text-xs text-muted-foreground">
             {t("memoryGraph.stats", {
-              nodes: data.stats.node_count,
-              edges: data.stats.edge_count,
+              nodesLabel: t("memoryGraph.nodesCount", { count: data.stats.node_count }),
+              edgesLabel: t("memoryGraph.edgesCount", { count: data.stats.edge_count }),
             })}
             {data.stats.phantom_count > 0
               ? ` · ${t("memoryGraph.statsPhantom", { count: data.stats.phantom_count })}`
@@ -1243,8 +1243,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
             </div>
             <Separator className="bg-border/30" />
             <footer className="px-3 py-1.5 text-[10.5px] text-muted-foreground">
-              Click another node, drag to pin, click the focus icon to isolate
-              1-hop neighbours.
+              {t("memoryGraph.interactionHint")}
             </footer>
           </aside>
         ) : null}
