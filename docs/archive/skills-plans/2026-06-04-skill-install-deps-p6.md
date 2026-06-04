@@ -1,5 +1,7 @@
 # P6 #1 — Approved install-spec executor (+ §5.2 git-original prompt) Implementation Plan
 
+> ✅ **EXECUTED — historical execution record.** The feature this plan built is shipped and verified. Current as-built state: [`docs/architecture/skills/00_overview.md`](../../architecture/skills/00_overview.md). The unchecked `- [ ]` boxes below are the original TDD task list, **not pending work**.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Let durin install a skill's declared dependencies on demand, but only after explicit user approval — closing the gap where a skill is "unavailable" (missing CLI) and the user has to install deps by hand. Plus make it explicit to the dream LLM that a skill's original lives in git (§5.2).

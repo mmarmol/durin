@@ -217,7 +217,7 @@ dry-run→confirm, configurable vía `skills.install_policy` (`never`|`approve`|
 corre los comandos por el **exec gate de durin (ExecTool)** estilo hermes (no
 subprocess paralelo), sólo specs que el scanner §8.C no flaggeó, `download`/sudo
 excluidos (privilegiados surfaceados como `needs_privileges`). Plan:
-`docs/superpowers/plans/2026-06-04-skill-install-deps-p6.md`. Pendientes: **#2**
+`docs/archive/skills-plans/2026-06-04-skill-install-deps-p6.md`. Pendientes: **#2**
 (correr scripts bundleados de skills por el tool gate) y **#3** (sandbox FS/red
 per-skill). durin sigue alineado con el campo (gate install-time + ahora exec gate).
 

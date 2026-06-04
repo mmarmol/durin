@@ -5,7 +5,7 @@
 >
 > **Estado: ✅ COMPLETO (ambas partes; actualizado 2026-06-04, verificado contra código).**
 > - **Parte A** (sueño 2h: crear + parchear local) — ✅ **HECHO** (merged a main,
->   release local `v0.1.0a9`). Plan: `superpowers/plans/2026-06-02-…e2-part-a.md`.
+>   release local `v0.1.0a9`). Plan: `docs/archive/skills-plans/2026-06-02-skills-evolution-e2-part-a.md`.
 > - **Parte B** (sueño diario: curación global del catálogo) — ✅ **HECHO**:
 >   `durin/agent/skill_curation.py::curate_catalog` (delta `auto`+`workspace`,
 >   `evolve`/`fuse`, drift §8.D incorporado) está cableado en el job `memory_dream`

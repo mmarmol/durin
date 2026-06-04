@@ -1,5 +1,7 @@
 # Skill Interop Standard (§8.B) Implementation Plan
 
+> ✅ **EXECUTED — historical execution record.** The feature this plan built is shipped and verified. Current as-built state: [`docs/architecture/skills/00_overview.md`](../../architecture/skills/00_overview.md). The unchecked `- [ ]` boxes below are the original TDD task list, **not pending work**.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax.
 
 **Goal:** Make durin a *faithful* [agentskills.io](https://agentskills.io/specification) citizen so importing any standard `SKILL.md` is a near-no-op: preserve foreign frontmatter across edits (round-trip fidelity), honor the standard `platforms` field, accept standard spellings, and document the contract.
