@@ -6,7 +6,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Check, ChevronRight, Copy, FileIcon, ImageIcon, PlaySquare, Sparkles, Wrench } from "lucide-react";
+import { AlertTriangle, Check, ChevronRight, Copy, FileIcon, ImageIcon, PlaySquare, Sparkles, Wrench } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { ImageLightbox } from "@/components/ImageLightbox";
@@ -33,6 +33,18 @@ interface MessageBubbleProps {
  * Trace rows (tool-call hints, progress breadcrumbs) render as a subdued
  * collapsible group so intermediate steps never masquerade as replies.
  */
+/**
+ * A finished assistant turn that failed surfaces as plain ``Error: …`` text
+ * from the provider/runner (see ``format_provider_error_content`` server-side).
+ * Detect that shape so it can render as a distinct error card instead of
+ * masquerading as a normal reply. Kept conservative — only the canonical
+ * error prefixes — so a legitimate reply that merely mentions "error" is not
+ * mis-styled.
+ */
+function looksLikeProviderError(content: string): boolean {
+  return /^\s*Error( \(|: | calling )/.test(content);
+}
+
 export function MessageBubble({
   message,
   showAssistantCopyAction = true,
@@ -108,6 +120,11 @@ export function MessageBubble({
   const reasoningStreaming = !!(message.role === "assistant" && message.reasoningStreaming);
   const hasReasoning = reasoning.length > 0 || reasoningStreaming;
 
+  const isError =
+    message.role === "assistant" &&
+    !message.isStreaming &&
+    !empty &&
+    looksLikeProviderError(message.content);
   const showAssistantActions = message.role === "assistant" && !message.isStreaming && !empty;
   const showCopyButton = showAssistantCopyAction && showAssistantActions;
   const latencyMs = message.latencyMs;
@@ -126,7 +143,9 @@ export function MessageBubble({
         <TypingDots />
       ) : empty && message.isStreaming ? null : (
         <>
-          {message.renderAs === "text" ? (
+          {isError ? (
+            <ErrorCard content={message.content} />
+          ) : message.renderAs === "text" ? (
             <pre
               className={cn(
                 "whitespace-pre-wrap break-words font-mono",
@@ -431,6 +450,35 @@ function Dot({ delay }: { delay: string }) {
         "animate-bounce",
       )}
     />
+  );
+}
+
+/**
+ * A failed assistant turn. Renders the provider/runner error as a distinct
+ * destructive card (icon + title + detail) so it never reads as a normal
+ * reply. The canonical ``Error: …`` prefix is stripped for legibility; the
+ * remainder is the provider's own reason (often the most useful part).
+ */
+function ErrorCard({ content }: { content: string }) {
+  const { t } = useTranslation();
+  const detail =
+    content.replace(/^\s*Error(\s*\([^)]*\))?:\s*/, "").trim() || content.trim();
+  return (
+    <div
+      role="alert"
+      className={cn(
+        "flex items-start gap-2.5 rounded-[14px] border border-destructive/30 bg-destructive/10 px-4 py-3",
+        "text-[14px] leading-relaxed text-destructive",
+      )}
+    >
+      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+      <div className="min-w-0">
+        <p className="font-medium">{t("message.errorTitle")}</p>
+        <p className="mt-0.5 whitespace-pre-wrap break-words text-destructive/90">
+          {detail}
+        </p>
+      </div>
+    </div>
   );
 }
 

@@ -797,11 +797,9 @@ export function ThreadComposer({
                 <span className="truncate">{modelLabel}</span>
               </span>
             ) : null}
-            {!isHero ? (
-              <span className="hidden select-none text-[10.5px] text-muted-foreground/60 sm:inline">
-                {t("thread.composer.sendHint")}
-              </span>
-            ) : null}
+            <span className="hidden select-none text-[10.5px] text-muted-foreground/60 sm:inline">
+              {t("thread.composer.sendHint")}
+            </span>
           </div>
           <span className={cn(isHero ? "hidden" : "sm:hidden")} aria-hidden />
           <Button

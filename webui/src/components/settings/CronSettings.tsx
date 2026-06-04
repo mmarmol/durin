@@ -203,20 +203,20 @@ function CronRow({
             ? t("settings.models.enabled")
             : t("settings.models.disabled")}
         </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={busy || job.is_system}
-          onClick={onRemove}
-          className="rounded-full text-muted-foreground hover:text-destructive"
-          title={
-            job.is_system
-              ? t("settings.cron.cantDeleteSystem")
-              : t("settings.cron.remove")
-          }
-        >
-          <Trash2 className="h-3.5 w-3.5" aria-hidden />
-        </Button>
+        {/* System jobs cannot be removed (only disabled), so don't show an
+            inert trash affordance — its presence implied a deletable job. */}
+        {job.is_system ? null : (
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={busy}
+            onClick={onRemove}
+            className="rounded-full text-muted-foreground hover:text-destructive"
+            title={t("settings.cron.remove")}
+          >
+            <Trash2 className="h-3.5 w-3.5" aria-hidden />
+          </Button>
+        )}
       </div>
     </SettingsRow>
   );

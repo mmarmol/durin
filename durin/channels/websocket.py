@@ -57,6 +57,18 @@ def _strip_trailing_slash(path: str) -> str:
     return path or "/"
 
 
+def _humanize_interval_ms(every_ms: int) -> str:
+    """Render an ``every`` interval with the largest whole unit instead of raw
+    seconds, so a cron row reads ``every 2h`` rather than ``every 7200s``."""
+    secs = every_ms // 1000
+    if secs <= 0:
+        return "0s"
+    for unit_secs, suffix in ((86400, "d"), (3600, "h"), (60, "m")):
+        if secs % unit_secs == 0:
+            return f"{secs // unit_secs}{suffix}"
+    return f"{secs}s"
+
+
 def _normalize_config_path(path: str) -> str:
     return _strip_trailing_slash(path)
 
@@ -1424,8 +1436,7 @@ class WebSocketChannel(BaseChannel):
         # Render a human label per schedule kind. The full structured
         # data also goes out so the frontend can format dates locally.
         if sched.kind == "every":
-            secs = (sched.every_ms or 0) // 1000
-            label = f"every {secs}s"
+            label = f"every {_humanize_interval_ms(sched.every_ms or 0)}"
         elif sched.kind == "cron":
             tz = f" ({sched.tz})" if sched.tz else ""
             label = f"{sched.expr}{tz}"

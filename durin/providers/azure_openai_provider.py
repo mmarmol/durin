@@ -13,7 +13,7 @@ from typing import Any
 
 from openai import AsyncOpenAI
 
-from durin.providers.base import LLMProvider, LLMResponse
+from durin.providers.base import LLMProvider, LLMResponse, format_provider_error_content
 from durin.providers.openai_responses import (
     consume_sdk_stream,
     convert_messages,
@@ -116,8 +116,7 @@ class AzureOpenAIProvider(LLMProvider):
     def _handle_error(e: Exception) -> LLMResponse:
         response = getattr(e, "response", None)
         body = getattr(e, "body", None) or getattr(response, "text", None)
-        body_text = str(body).strip() if body is not None else ""
-        msg = f"Error: {body_text[:500]}" if body_text else f"Error calling Azure OpenAI: {e}"
+        msg = format_provider_error_content(body, e)
         retry_after = LLMProvider._extract_retry_after_from_headers(getattr(response, "headers", None))
         if retry_after is None:
             retry_after = LLMProvider._extract_retry_after(msg)

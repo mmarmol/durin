@@ -153,7 +153,7 @@ export function ThreadViewport({
       >
         {hasMessages ? (
           <div ref={contentRef} className="mx-auto flex min-h-full w-full max-w-[64rem] flex-col">
-            <div className="flex-1 px-4 pb-20 pt-4">
+            <div className="flex-1 px-4 pb-20 pt-8">
               <div className="mx-auto w-full max-w-[49.5rem]">
                 <ThreadMessages messages={messages} isStreaming={isStreaming} />
               </div>
