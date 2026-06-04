@@ -484,6 +484,16 @@ class MemoryIngestEvent(TypedDict):
     session_key: NotRequired[str | None]
 
 
+class MemoryForgetEvent(TypedDict):
+    """memory_forget invocation that archived an entry + dropped its index rows."""
+
+    uri: str
+    class_name: str
+    reason: str
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
 class MemoryEmbeddingLoadEvent(TypedDict):
     """Embedding model loaded into memory. Logged once per process lifetime."""
 
@@ -1144,6 +1154,7 @@ EVENTS: dict[str, type] = {
     "memory.recall": MemoryRecallEvent,
     "memory.store": MemoryStoreEvent,
     "memory.ingest": MemoryIngestEvent,
+    "memory.forget": MemoryForgetEvent,
     # Memory subsystem (Phase 2 — embedding)
     "memory.embedding.load": MemoryEmbeddingLoadEvent,
     "memory.embedding.embed": MemoryEmbeddingEmbedEvent,

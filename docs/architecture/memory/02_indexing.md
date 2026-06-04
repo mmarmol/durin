@@ -518,6 +518,10 @@ The system tolerates brief windows where `.md` and indices are not in sync (e.g.
 - When a search returns a hit whose `path` no longer exists on disk: the row is removed lazily.
 - When the file watcher detects a change but the indexer write fails: the file is re-queued.
 
+**`row_for_missing_file` self-heal (2026-06-04).** `detect_index_staleness` reports an indexed uri whose backing `.md` is gone (a raw `rm`, an external sync, a crash mid-write — the file watcher can't observe deletions). The health-check now *prunes* these orphans in one batched, model-free pass (`HealthChecker._prune_orphans` → `FTSIndex.delete_by_uris` + `vector_index.delete_ids`) instead of leaving them until a manual reindex. Pruning needs only the uri, never the embedding model, so reconciling a bulk deletion stays cheap.
+
+> **`_uri_for` entry-uri fix (2026-06-04).** `_uri_for` derived the bare filename stem for memory entries while `_payload_for` indexes — and `fts_meta` stores — the full `memory/<class>/<id>` form. The mismatch double-flagged *every present entry* as `row_for_missing_file` + `missing_row` (re-indexing the whole vault each tick) and left `forget` / drift-repair unable to delete an entry's FTS row. `_uri_for` now returns the canonical `memory/<class>/<id>`.
+
 **Search-time policy:** if a hit's `.md` is unreadable or whose `mtime` exceeds the indexed `mtime` by more than 60 seconds (heuristic), the hit is filtered out of results and a re-index of that file is scheduled.
 
 ---
