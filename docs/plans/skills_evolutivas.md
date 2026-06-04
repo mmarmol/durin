@@ -1,9 +1,10 @@
 # Plan — Skills evolutivas (crear · importar · adaptar · evolucionar)
 
-> 🧭 **MAPA / VISIÓN (vigente).** Roadmap de etapas E1→E5 — el norte. El diseño
-> de *lo que se construye ahora* (E2) vive en su spec:
-> [`superpowers/specs/2026-06-02-skills-evolution-e2-design.md`](../superpowers/specs/2026-06-02-skills-evolution-e2-design.md).
-> Este doc es fuente de verdad de la **visión**; para el **estado y diseño actual**, ese spec manda.
+> 🧭 **MAPA / VISIÓN (vigente).** Roadmap de etapas E1→E5 — el norte. Este doc es
+> fuente de verdad de la **visión**. Para **cómo funciona hoy el sistema construido**
+> (incluido el comportamiento en los dreams), la referencia as-built es
+> [`docs/architecture/skills/00_overview.md`](../architecture/skills/00_overview.md).
+> El diseño por feature vive en `superpowers/specs/2026-06-*-skill-*-design.md`.
 
 > **Fuente de inicio**, no decisión final. Captura la discusión sobre darle a
 > durin un sistema de skills que el usuario crea bajo demanda, importa de
