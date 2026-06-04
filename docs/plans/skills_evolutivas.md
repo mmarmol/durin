@@ -17,7 +17,7 @@
 
 ---
 
-## Estado de implementación (2026-06-03, verificado contra código)
+## Estado de implementación (2026-06-04, verificado contra código)
 
 **Construido:** crear/cristalizar (§6.A — dream + `curate_catalog`) · importar (§6.B)
 + piso §8.C + gate · interop agentskills.io · Skills-Surface · retrieval Nivel-1
@@ -26,14 +26,27 @@ resolución name-match, CLI, web — spec `2026-06-03-skill-discovery-registries
 · **drift→evolución §8.D** (`durin/agent/skill_drift.py` + `curate_catalog`) ·
 **barrida origen-no-verificado → cuarentena** (`durin/agent/skill_lifecycle.py`:
 un skill de workspace sin provenance se reubica a cuarentena al cargar el contexto
-+ surfaces → inerte para el agente, surfaceado para el humano).
++ surfaces → inerte para el agente, surfaceado para el humano) · **§6.C adquirir-on-gap**
+(search→gate→semilla: in-session interactivo + dream phase-2 autónomo safe-only —
+spec `2026-06-03-skill-acquire-on-gap-design.md`, PR #25).
 
-**Pendiente:** **§6.C adquirir-on-gap** (trigger de gap + flujo `AskUserQuestion`;
-el search ya es la semilla) · **§6.D Etapa-2 / §6.B Etapa-1** (adaptar lo importado
-a tools nativas + gate blando por uso) · **§5.2 capa `original/` inmutable** (hoy:
-`provenance.source` + `content_hash` + re-fetch, sin copia guardada) · **P6**
-(ejecutor de install-specs / sandbox runtime — hoy info-only, policy `never`) ·
-adapters extra (github-taps / well-known / lobehub) · §8.F GEPA/SkillOpt.
+**Pendiente:** **P6** (ejecutor de install-specs / sandbox runtime — hoy info-only,
+policy `never`) · adapters extra de discovery (github-taps / well-known / lobehub) ·
+**§5.2 — explicitar "original" en el flujo de adaptación** (ver corrección abajo: el
+contenido tal-como-llegó YA vive en el commit de import del GitStore; falta el concepto
+explícito + diff/re-adapt desde ahí, **no** una copia nueva).
+
+**Descartado / diferido con gatillo (2026-06-04):**
+- **§6.D Etapa-2 ≡ §8.F (optimizer usage-gated / GEPA/SkillOpt) — DESCARTADO.** La
+  evolución por contenido ya la hace `curate_catalog`; la señal de uso (replay/canary)
+  es demasiado escasa en skills personales para ser un reward — es exactamente por lo
+  que §4 ya difirió la "Capa B con score". No aporta sobre lo que hay. GEPA-el-algoritmo
+  y SkillOpt-el-harness (benchmark/train-val) no aplican; su única parte útil (bounded
+  edit + rollback) ya es git.
+- **§6.D Etapa-1 (traducción a tools nativas + de-repetición) — DIFERIDO con gatillo:**
+  sólo cuando exista un skill importado que NO corra bien en durin (referencia tools que
+  durin no tiene, o repetición manual obvia). Es una **pasada de lint** sobre el
+  SKILL.md, no un optimizer. Sin ese skill concreto, no hay qué adaptar.
 
 ## §1 — La idea
 
@@ -159,6 +172,19 @@ y se recupera bajo demanda. **Solo las distingue la `provenance`**:
   `experience` si es auto-creada).
 - `adapted/` — la que durin **realmente usa**: traducida a sus tools, con
   scripts donde había repetición. La única que evoluciona.
+
+> **Corrección (2026-06-04):** `original/` **no es una capa/dir a construir** — el
+> contenido tal-como-llegó **ya está preservado** en el commit de import del GitStore
+> de skills (`skill(name): import from <source>`, `skills_import.py`), inmutable y
+> diffeable, **incluso para fuentes no-refetcheables** (se commitea el contenido, no
+> sólo el hash). Sobre git, las tres "capas" son: **commit de import = `original`**,
+> **HEAD = `adapted`**, **`git diff import..HEAD` = el delta de adaptación**. El gap
+> real **no es guardar una copia** (git ya la tiene) sino **hacer "original" explícito
+> en el flujo**: que el pipeline de adaptación (Etapa-1/2) y los prompts traten el
+> commit de import como el original canónico y sepan diffear / re-adaptar desde ahí.
+> Hoy no existe ese concepto explícito en código ni prompts (grep vacío). Invariante a
+> preservar: el import siempre debe ser un commit pristino *antes* de cualquier
+> adaptación (hoy se cumple — no hay paso de adaptación todavía).
 
 ### 5.3 — Pipeline de dos etapas
 
