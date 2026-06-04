@@ -148,6 +148,53 @@ def test_load_store_falls_back_to_in_memory_on_corruption_after_start(
     assert result.jobs[0].name == "Daily Loving Message"
 
 
+def test_recompute_preserves_future_next_run(tmp_path: Path) -> None:
+    """An interval cron's persisted, still-future next-run must SURVIVE a
+    restart. Pre-fix, ``_recompute_next_runs`` reset every enabled job to
+    ``now + interval``, so a 2h cron 10 minutes from firing was pushed back
+    to 2h from boot on every start (and every reinstall-triggered restart).
+    """
+    from durin.cron.service import _now_ms
+
+    store_path = tmp_path / "cron" / "jobs.json"
+    service = CronService(store_path)
+    service.add_job(
+        name="dream",
+        schedule=CronSchedule(kind="every", every_ms=2 * 60 * 60 * 1000),
+        message="x",
+    )
+    service._load_store()
+    job = service._store.jobs[0]
+    future = _now_ms() + 10 * 60 * 1000  # 10 min from now, as if persisted
+    job.state.next_run_at_ms = future
+
+    service._recompute_next_runs()
+
+    assert job.state.next_run_at_ms == future, "future next-run must be preserved"
+
+
+def test_recompute_recomputes_missed_or_unset_next_run(tmp_path: Path) -> None:
+    """A job whose next-run is in the past (missed during downtime) or unset
+    must be recomputed to a future time, so it isn't stuck."""
+    from durin.cron.service import _now_ms
+
+    store_path = tmp_path / "cron" / "jobs.json"
+    service = CronService(store_path)
+    service.add_job(
+        name="dream",
+        schedule=CronSchedule(kind="every", every_ms=60 * 60 * 1000),
+        message="x",
+    )
+    service._load_store()
+    job = service._store.jobs[0]
+    job.state.next_run_at_ms = _now_ms() - 1000  # missed
+
+    service._recompute_next_runs()
+
+    assert job.state.next_run_at_ms is not None
+    assert job.state.next_run_at_ms > _now_ms()
+
+
 def test_full_round_trip_survives_repeated_save_load(tmp_path: Path) -> None:
     """Sanity check: jobs survive add → save → reload across fresh
     ``CronService`` instances pointing at the same store."""

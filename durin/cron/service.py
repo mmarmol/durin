@@ -377,12 +377,24 @@ class CronService:
             self._timer_task = None
 
     def _recompute_next_runs(self) -> None:
-        """Recompute next run times for all enabled jobs."""
+        """Recompute next run times for enabled jobs, preserving still-future ones.
+
+        Called on ``start()``. A persisted ``next_run_at_ms`` that is still
+        in the future MUST be kept: otherwise an interval ("every Nh") cron
+        loses its elapsed progress on every restart (and every
+        reinstall-triggered restart), so a 2h job 10 minutes from firing is
+        pushed back to 2h from boot and effectively never fires under
+        frequent restarts. Only (re)compute when the time is missing or
+        already due — that recovers jobs missed during downtime.
+        """
         if not self._store:
             return
         now = _now_ms()
         for job in self._store.jobs:
-            if job.enabled:
+            if not job.enabled:
+                continue
+            existing = job.state.next_run_at_ms
+            if existing is None or existing <= now:
                 job.state.next_run_at_ms = _compute_next_run(job.schedule, now)
 
     def _get_next_wake_ms(self) -> int | None:
