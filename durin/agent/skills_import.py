@@ -440,6 +440,73 @@ def declared_install_specs(skill_dir: Path) -> list[str]:
     return out
 
 
+# kind → (command template, which spec fields hold the value)
+_INSTALL_CMDS = {
+    "brew":  ("brew install {v}",      ("formula", "cask", "package")),
+    "apt":   ("apt-get install -y {v}", ("package",)),
+    "pip":   ("pip install {v}",       ("package",)),
+    "cargo": ("cargo install {v}",     ("package",)),
+    "npm":   ("npm install -g {v}",    ("package",)),
+    "go":    ("go install {v}",        ("module", "package")),
+    "uv":    ("uv pip install {v}",    ("package",)),
+    # 'download' (url) intentionally excluded — install manually (v1).
+}
+# Kinds that plainly need root — surfaced as needs_privileges so the user sees it.
+# We never inject sudo.
+_NEEDS_PRIV = {"apt"}
+
+
+def runnable_install_specs(skill_dir) -> list[dict]:
+    """Safe, runnable install specs as ``[{kind, value, command, needs_privileges}]``.
+    A spec the §8.C scanner flags ``dangerous`` is dropped; the ``download`` kind is
+    excluded (install manually). No execution here — see the skill_install_deps tool."""
+    from pathlib import Path
+
+    from durin.security.skill_scan import validate_install_specs
+
+    md = Path(skill_dir) / "SKILL.md"
+    if not md.is_file():
+        return []
+    try:
+        data, _ = split_frontmatter(md.read_text(encoding="utf-8"))
+    except OSError:
+        return []
+
+    # Collect list-level locators the §8.C scanner flagged dangerous.
+    bad = {f.where for f in validate_install_specs(data) if f.severity == "dangerous"}
+
+    out: list[dict] = []
+    meta = data.get("metadata")
+    if not isinstance(meta, dict):
+        return out
+    for vendor, blob in meta.items():
+        specs = blob.get("install") if isinstance(blob, dict) else None
+        if not isinstance(specs, list):
+            continue
+        # The scanner emits where = "metadata.<vendor>.install" (list-level, no index).
+        where = f"metadata.{vendor}.install"
+        if where in bad:
+            continue
+        for spec in specs:
+            if not isinstance(spec, dict):
+                continue
+            kind = str(spec.get("kind", ""))
+            tmpl = _INSTALL_CMDS.get(kind)
+            if tmpl is None:  # download / unknown → not runnable
+                continue
+            template, fields = tmpl
+            value = next((str(spec[f]) for f in fields if spec.get(f)), "")
+            if not value:
+                continue
+            out.append({
+                "kind": kind,
+                "value": value,
+                "command": template.format(v=value),
+                "needs_privileges": kind in _NEEDS_PRIV,
+            })
+    return out
+
+
 def trust_prefix_for(ref: str) -> str:
     """Suggest a starting allowlist prefix to pre-fill for 'trust this source'.
     The user edits it (e.g. broaden a repo to the whole org). NOT a repo-vs-org
