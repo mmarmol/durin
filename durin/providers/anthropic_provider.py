@@ -12,7 +12,12 @@ from typing import Any
 
 import json_repair
 
-from durin.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from durin.providers.base import (
+    LLMProvider,
+    LLMResponse,
+    ToolCallRequest,
+    format_provider_error_content,
+)
 
 _ALNUM = string.ascii_letters + string.digits
 
@@ -68,8 +73,7 @@ class AnthropicProvider(LLMProvider):
                     payload = response_json()
                 except Exception:
                     payload = None
-        payload_text = payload if isinstance(payload, str) else str(payload) if payload is not None else ""
-        msg = f"Error: {payload_text.strip()[:500]}" if payload_text.strip() else f"Error calling LLM: {e}"
+        msg = format_provider_error_content(payload, e)
         retry_after = cls._extract_retry_after_from_headers(headers)
         if retry_after is None:
             retry_after = LLMProvider._extract_retry_after(msg)

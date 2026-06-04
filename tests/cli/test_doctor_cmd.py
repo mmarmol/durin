@@ -69,6 +69,33 @@ def valid_config(fake_home: Path) -> Path:
         yield cfg
 
 
+@pytest.fixture
+def hermetic_state_probes(monkeypatch: pytest.MonkeyPatch):
+    """Make the aggregate exit-code tests deterministic across machines.
+
+    Two probes depend on host state that is irrelevant to the exit-code
+    aggregation those tests assert, and make a "clean" run non-deterministic:
+
+    - ``check_embedding_model_loads`` does a real model load+embed. On a box
+      with the ``[memory]`` extra installed but the ~0.45 GB model not yet
+      downloaded it returns ``fail`` (CI runs *without* the extra, so it skips
+      there — the failure only surfaces on dev machines).
+    - ``check_durin_on_path`` warns when more than one ``durin`` executable is
+      on PATH (a dev box with e.g. a pipx + venv install).
+
+    Both probes have their own dedicated unit tests above; here we stub them to
+    their clean result so these tests exercise the aggregation, not the host.
+    """
+    monkeypatch.setattr(
+        "durin.cli.doctor.check_embedding_model_loads",
+        lambda: CheckResult("embedding model load", "ok", "stubbed in test"),
+    )
+    monkeypatch.setattr(
+        "durin.cli.doctor.check_durin_on_path",
+        lambda: CheckResult("durin on PATH", "ok", "stubbed in test"),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Individual checks
 # ---------------------------------------------------------------------------
@@ -357,7 +384,9 @@ def test_apply_safe_fixes_creates_workspace(valid_config: Path, fake_home: Path)
     assert any("workspace" in m for m in applied)
 
 
-def test_run_doctor_returns_zero_when_clean(valid_config: Path, fake_home: Path) -> None:
+def test_run_doctor_returns_zero_when_clean(
+    valid_config: Path, fake_home: Path, hermetic_state_probes
+) -> None:
     (fake_home / ".durin" / "workspace").mkdir(parents=True)
     rc = run_doctor()
     assert rc == 0
@@ -385,7 +414,9 @@ def test_run_doctor_json_output(valid_config: Path, capsys: pytest.CaptureFixtur
 # ---------------------------------------------------------------------------
 
 
-def test_cli_doctor_json_emits_parseable_payload(valid_config: Path, fake_home: Path) -> None:
+def test_cli_doctor_json_emits_parseable_payload(
+    valid_config: Path, fake_home: Path, hermetic_state_probes
+) -> None:
     (fake_home / ".durin" / "workspace").mkdir(parents=True)
     result = runner.invoke(app, ["doctor", "--json"])
     assert result.exit_code == 0, result.output
@@ -394,7 +425,9 @@ def test_cli_doctor_json_emits_parseable_payload(valid_config: Path, fake_home: 
     assert data["worst"] in ("ok", "warn")
 
 
-def test_cli_doctor_fix_creates_missing_workspace(valid_config: Path, fake_home: Path) -> None:
+def test_cli_doctor_fix_creates_missing_workspace(
+    valid_config: Path, fake_home: Path, hermetic_state_probes
+) -> None:
     ws = fake_home / ".durin" / "workspace"
     assert not ws.exists()
     result = runner.invoke(app, ["doctor", "--fix"])

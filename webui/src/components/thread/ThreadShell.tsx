@@ -14,6 +14,12 @@ import type { ChatSummary, SlashCommand, UIMessage } from "@/lib/types";
 import { normalizeLegacyLongTaskMessages } from "@/lib/thread-display-compat";
 import { scrubSubagentUiMessages } from "@/lib/subagent-channel-display";
 import { useClient } from "@/providers/ClientProvider";
+import { cn } from "@/lib/utils";
+
+/** Starter prompts shown on the empty (new-chat) screen. Titles/prompts are
+ *  fully localized under ``thread.empty.quickActions.*``; clicking one sends
+ *  its prompt as the first message. */
+const QUICK_ACTION_KEYS = ["plan", "analyze", "brainstorm", "code", "summarize", "more"] as const;
 
 function projectWebuiThreadMessages(messages: UIMessage[]): UIMessage[] {
   return scrubSubagentUiMessages(normalizeLegacyLongTaskMessages(messages));
@@ -316,6 +322,27 @@ export function ThreadShell({
       <h1 className="text-balance text-[40px] font-normal leading-tight tracking-[-0.045em] text-foreground sm:text-[48px]">
         {t("thread.empty.greeting")}
       </h1>
+      <div className="mt-6 flex max-w-[40rem] flex-wrap items-center justify-center gap-2">
+        {QUICK_ACTION_KEYS.map((key) => (
+          <button
+            key={key}
+            type="button"
+            disabled={booting}
+            onClick={() =>
+              handleWelcomeSend(t(`thread.empty.quickActions.${key}.prompt`))
+            }
+            className={cn(
+              "rounded-full border border-border/70 bg-card/60 px-3.5 py-1.5",
+              "text-[13px] text-muted-foreground transition-colors",
+              "hover:border-border hover:bg-muted hover:text-foreground",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              "disabled:opacity-50",
+            )}
+          >
+            {t(`thread.empty.quickActions.${key}.title`)}
+          </button>
+        ))}
+      </div>
     </div>
   );
 

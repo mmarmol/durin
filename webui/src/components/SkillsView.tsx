@@ -40,10 +40,12 @@ function stripFrontmatter(md: string): string {
 }
 
 function ModeBadge({ mode }: { mode: "auto" | "manual" }) {
+  const { t } = useTranslation();
   return (
     <span
+      title={t(mode === "auto" ? "skills.modeAutoHint" : "skills.modeManualHint")}
       className={cn(
-        "shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium leading-none",
+        "shrink-0 cursor-help rounded-full px-2 py-0.5 text-[11px] font-medium leading-none",
         mode === "auto"
           ? "bg-primary/10 text-primary"
           : "bg-muted text-muted-foreground",
