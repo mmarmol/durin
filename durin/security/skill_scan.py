@@ -119,7 +119,7 @@ def validate_install_specs(data: dict) -> list[Finding]:
                 val = str(spec.get("package") or "")
                 if _bad(val, "..", "\\", "://") or (val and not _UV_RE.match(val)):
                     out.append(Finding("install_spec", "dangerous", where, f"unsafe uv package {val!r}"))
-            elif kind == "node":
+            elif kind in ("node", "npm"):
                 val = str(spec.get("package") or "")
                 if ("://" in val or "#" in val or ":" in val or val.startswith("-")
                         or not (_NPM_SCOPED.match(val) or _NPM_UNSCOPED.match(val.split("@")[0] or val))):
