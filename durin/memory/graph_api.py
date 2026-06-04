@@ -108,16 +108,31 @@ def get_entity_detail(
         except Exception:  # noqa: BLE001
             page = None
     if page is None:
-        # No canonical page; bail early. The caller can still surface
-        # the entity via search if it was tagged in entries.
-        return None
+        # Phantom: no consolidated page yet, but the entity may be tagged in
+        # entries (or have archived predecessors). Return a partial detail
+        # (page=None) so the side panel still renders the referencing
+        # entries + archive instead of 404ing into empty tabs. Only a ref
+        # with no page AND no entries AND no archive is a genuine miss.
+        archive = _load_archive(memory_root, type_, slug)
+        entries = _load_referencing_entries(
+            memory_root, entity_ref, None, entries_limit,
+        )
+        if not entries and not archive:
+            return None
+        return {
+            "ref": entity_ref,
+            "page": None,
+            "history": [],
+            "archive": archive,
+            "entries": entries,
+        }
 
     return {
         "ref": entity_ref,
         "page": _serialize_page(page),
         "history": _load_history(memory_root, page_path, history_limit),
         "archive": _load_archive(memory_root, type_, slug),
-        "entries": _load_post_cursor_entries(
+        "entries": _load_referencing_entries(
             memory_root, entity_ref, page.dream_processed_through, entries_limit,
         ),
     }
@@ -211,48 +226,57 @@ def _load_archive(
     return out
 
 
-def _load_post_cursor_entries(
+def _load_referencing_entries(
     memory_root: Path,
     entity_ref: str,
     cursor: Any,
     limit: int,
 ) -> list[dict[str, Any]]:
-    """Episodic entries that tag this entity and are newer than its cursor.
+    """Entries that tag this entity — the raw evidence behind it.
 
-    These are the "fragments" the dream consolidator has not yet folded
-    into the page body. Showing them in the side panel surfaces the
-    raw evidence backing the consolidated content.
+    Walks every entry class that carries entity tags (``episodic``,
+    ``stable``, ``corpus``) rather than ``episodic`` alone — a vault whose
+    knowledge lives in ``stable`` entries (the common case before
+    consolidation) would otherwise show an empty side panel even though the
+    entity is well-referenced.
+
+    Episodic fragments are filtered to those newer than the entity's dream
+    cursor (the ones not yet folded into the page body). ``stable`` /
+    ``corpus`` are durable facts that are never folded into a page, so they
+    always show. For a phantom (no page) ``cursor`` is None, so every
+    referencing entry surfaces.
     """
     cursor_dt = _parse_cursor(cursor)
     rows: list[tuple[str, dict[str, Any]]] = []
-    for path in walk_class(memory_root.parent, "episodic"):
-        try:
-            entry = load_entry(path)
-        except Exception:  # noqa: BLE001
-            continue
-        if entity_ref not in (entry.entities or []):
-            continue
-        ts = entry.valid_from.isoformat() if entry.valid_from else ""
-        if cursor_dt is not None and ts:
+    for class_name in ("episodic", "stable", "corpus"):
+        for path in walk_class(memory_root.parent, class_name):
             try:
-                entry_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-            except (ValueError, TypeError):
-                entry_dt = None
-            # Normalise to UTC — episodic entries may carry naive
-            # timestamps while the cursor is always tz-aware.
-            if entry_dt is not None and entry_dt.tzinfo is None:
-                entry_dt = entry_dt.replace(tzinfo=timezone.utc)
-            if entry_dt is not None and entry_dt <= cursor_dt:
-                continue  # already consolidated
-        rows.append((ts, {
-            "id": entry.id,
-            "valid_from": ts,
-            "headline": entry.headline,
-            "summary": entry.summary,
-            "body": (entry.body or "")[:2000],  # cap; full body via memory_drill
-            "class": "episodic",
-            "entities": list(entry.entities or []),
-        }))
+                entry = load_entry(path)
+            except Exception:  # noqa: BLE001
+                continue
+            if entity_ref not in (entry.entities or []):
+                continue
+            ts = entry.valid_from.isoformat() if entry.valid_from else ""
+            if class_name == "episodic" and cursor_dt is not None and ts:
+                try:
+                    entry_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                except (ValueError, TypeError):
+                    entry_dt = None
+                # Normalise to UTC — episodic entries may carry naive
+                # timestamps while the cursor is always tz-aware.
+                if entry_dt is not None and entry_dt.tzinfo is None:
+                    entry_dt = entry_dt.replace(tzinfo=timezone.utc)
+                if entry_dt is not None and entry_dt <= cursor_dt:
+                    continue  # already consolidated into the page body
+            rows.append((ts, {
+                "id": entry.id,
+                "valid_from": ts,
+                "headline": entry.headline,
+                "summary": entry.summary,
+                "body": (entry.body or "")[:2000],  # cap; full body via memory_drill
+                "class": class_name,
+                "entities": list(entry.entities or []),
+            }))
     # Newest first for the panel.
     rows.sort(key=lambda kv: kv[0], reverse=True)
     return [r[1] for r in rows[:limit]]

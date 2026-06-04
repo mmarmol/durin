@@ -114,7 +114,16 @@ class CronService:
         self._timer_task: asyncio.Task | None = None
         self._running = False
         self._timer_active = False
+        # Job ids currently executing — guards against a manual run-now
+        # overlapping a scheduled run (or another manual run) of the same
+        # long job (e.g. dream). In-process is sufficient: a single gateway
+        # owns the scheduler.
+        self._executing: set[str] = set()
         self.max_sleep_ms = max_sleep_ms
+
+    def is_executing(self, job_id: str) -> bool:
+        """Whether a job is currently mid-execution (run-now overlap guard)."""
+        return job_id in self._executing
 
     def _load_jobs(self) -> tuple[list[CronJob], int] | None:
         """Load jobs from disk.
@@ -377,12 +386,24 @@ class CronService:
             self._timer_task = None
 
     def _recompute_next_runs(self) -> None:
-        """Recompute next run times for all enabled jobs."""
+        """Recompute next run times for enabled jobs, preserving still-future ones.
+
+        Called on ``start()``. A persisted ``next_run_at_ms`` that is still
+        in the future MUST be kept: otherwise an interval ("every Nh") cron
+        loses its elapsed progress on every restart (and every
+        reinstall-triggered restart), so a 2h job 10 minutes from firing is
+        pushed back to 2h from boot and effectively never fires under
+        frequent restarts. Only (re)compute when the time is missing or
+        already due — that recovers jobs missed during downtime.
+        """
         if not self._store:
             return
         now = _now_ms()
         for job in self._store.jobs:
-            if job.enabled:
+            if not job.enabled:
+                continue
+            existing = job.state.next_run_at_ms
+            if existing is None or existing <= now:
                 job.state.next_run_at_ms = _compute_next_run(job.schedule, now)
 
     def _get_next_wake_ms(self) -> int | None:
@@ -442,45 +463,60 @@ class CronService:
         self._arm_timer()
 
     async def _execute_job(self, job: CronJob) -> None:
-        """Execute a single job."""
-        start_ms = _now_ms()
-        logger.info("Cron: executing job '{}' ({})", job.name, job.id)
+        """Execute a single job.
 
+        Re-entrancy guard: if this job id is already mid-execution (a
+        scheduled run still in flight, or a concurrent manual run-now), the
+        call returns immediately instead of starting an overlapping run.
+        """
+        if job.id in self._executing:
+            logger.warning(
+                "Cron: job '{}' ({}) already running; skipping overlapping run",
+                job.name, job.id,
+            )
+            return
+        self._executing.add(job.id)
         try:
-            if self.on_job:
-                await self.on_job(job)
+            start_ms = _now_ms()
+            logger.info("Cron: executing job '{}' ({})", job.name, job.id)
 
-            job.state.last_status = "ok"
-            job.state.last_error = None
-            logger.info("Cron: job '{}' completed", job.name)
+            try:
+                if self.on_job:
+                    await self.on_job(job)
 
-        except Exception as e:
-            job.state.last_status = "error"
-            job.state.last_error = str(e)
-            logger.exception("Cron: job '{}' failed", job.name)
+                job.state.last_status = "ok"
+                job.state.last_error = None
+                logger.info("Cron: job '{}' completed", job.name)
 
-        end_ms = _now_ms()
-        job.state.last_run_at_ms = start_ms
-        job.updated_at_ms = end_ms
+            except Exception as e:
+                job.state.last_status = "error"
+                job.state.last_error = str(e)
+                logger.exception("Cron: job '{}' failed", job.name)
 
-        job.state.run_history.append(CronRunRecord(
-            run_at_ms=start_ms,
-            status=job.state.last_status,
-            duration_ms=end_ms - start_ms,
-            error=job.state.last_error,
-        ))
-        job.state.run_history = job.state.run_history[-self._MAX_RUN_HISTORY:]
+            end_ms = _now_ms()
+            job.state.last_run_at_ms = start_ms
+            job.updated_at_ms = end_ms
 
-        # Handle one-shot jobs
-        if job.schedule.kind == "at":
-            if job.delete_after_run:
-                self._store.jobs = [j for j in self._store.jobs if j.id != job.id]
+            job.state.run_history.append(CronRunRecord(
+                run_at_ms=start_ms,
+                status=job.state.last_status,
+                duration_ms=end_ms - start_ms,
+                error=job.state.last_error,
+            ))
+            job.state.run_history = job.state.run_history[-self._MAX_RUN_HISTORY:]
+
+            # Handle one-shot jobs
+            if job.schedule.kind == "at":
+                if job.delete_after_run:
+                    self._store.jobs = [j for j in self._store.jobs if j.id != job.id]
+                else:
+                    job.enabled = False
+                    job.state.next_run_at_ms = None
             else:
-                job.enabled = False
-                job.state.next_run_at_ms = None
-        else:
-            # Compute next run
-            job.state.next_run_at_ms = _compute_next_run(job.schedule, _now_ms())
+                # Compute next run
+                job.state.next_run_at_ms = _compute_next_run(job.schedule, _now_ms())
+        finally:
+            self._executing.discard(job.id)
 
     def _append_action(self, action: Literal["add", "del", "update"], params: dict):
         self.store_path.parent.mkdir(parents=True, exist_ok=True)
@@ -663,6 +699,9 @@ class CronService:
             for job in store.jobs:
                 if job.id == job_id:
                     if not force and not job.enabled:
+                        return False
+                    if job.id in self._executing:
+                        # Already running — refuse rather than overlap.
                         return False
                     await self._execute_job(job)
                     self._save_store()
