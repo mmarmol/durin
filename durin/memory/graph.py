@@ -18,8 +18,9 @@ state — no LLM call, no mutation.
 
 **Edges**:
 
-- *Entity ↔ entity*: episodic-entry co-occurrence — every entry that
-  tags ≥2 entities contributes +1 to each unordered pair.
+- *Entity ↔ entity*: entry co-occurrence across the ``episodic``,
+  ``stable`` and ``corpus`` classes — every entry that tags ≥2
+  entities contributes +1 to each unordered pair.
 - *Session → entity*: derived from session ``meta.json::derived._last_tags``
   AND from episodic-entry ``source_refs`` that link back to
   ``sessions/<key>.md``. Weight = count of evidence per (session, ref).
@@ -38,7 +39,7 @@ import json
 import logging
 import re
 from collections import defaultdict
-from itertools import combinations
+from itertools import chain, combinations
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +52,12 @@ logger = logging.getLogger(__name__)
 
 _SESSION_REF_RE = re.compile(r"sessions/([^/.#]+)\.md")
 
+# Memory classes whose entries carry `entities` tags and therefore feed
+# the graph's nodes/edges. `pending` (intake buffer) and `session_summary`
+# are excluded: the former is not user-visible, the latter is already
+# represented by the dedicated session nodes.
+_ENTRY_CLASSES: tuple[str, ...] = ("episodic", "stable", "corpus")
+
 
 def build_memory_graph(
     workspace: Path,
@@ -61,8 +68,9 @@ def build_memory_graph(
 ) -> dict[str, Any]:
     """Return ``{"nodes": [...], "edges": [...], "stats": {...}}``.
 
-    Walks the on-disk memory tree once for pages, once for episodic
-    entries; optionally walks ``sessions/`` and links each session to
+    Walks the on-disk memory tree once for entity pages, once for the
+    entry classes that carry entity tags (``episodic``, ``stable``,
+    ``corpus``); optionally walks ``sessions/`` and links each session to
     the entities it tagged. Caps node + edge counts so a runaway
     workspace doesn't ship a 50 MB JSON payload — callers can request
     finer-grained slices later if needed.
@@ -103,10 +111,11 @@ def build_memory_graph(
             "weight": 0,  # filled from episodic count below
         }
 
-    # 2. Walk episodic entries: accumulate per-ref entry count + pairwise
-    # co-occurrence counts. Skip refs not present as an entity page (the
-    # entry tagged a type:value that nobody has consolidated yet — show
-    # those as "phantom" nodes so the user sees coverage gaps).
+    # 2. Walk entry classes (episodic + stable + corpus): accumulate
+    # per-ref entry count + pairwise co-occurrence counts. Skip refs not
+    # present as an entity page (the entry tagged a type:value that nobody
+    # has consolidated yet — show those as "phantom" nodes so the user
+    # sees coverage gaps).
     # Also harvest session refs from each entry's source_refs so we can
     # later draw session→entity edges from "this entry was authored
     # during conversation X" evidence.
@@ -118,7 +127,10 @@ def build_memory_graph(
     session_entity_evidence: dict[str, dict[str, int]] = defaultdict(
         lambda: defaultdict(int),
     )
-    for entry_path in walk_class(workspace, "episodic"):
+    entry_paths = chain.from_iterable(
+        walk_class(workspace, class_name) for class_name in _ENTRY_CLASSES
+    )
+    for entry_path in entry_paths:
         try:
             entry = load_entry(entry_path)
         except Exception:  # noqa: BLE001
