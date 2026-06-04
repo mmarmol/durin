@@ -895,3 +895,39 @@ class VectorIndex:
 def _escape(value: str) -> str:
     """Escape single quotes for LanceDB SQL-style filter strings."""
     return value.replace("'", "''")
+
+
+_DELETE_CHUNK = 500
+
+
+def delete_ids(workspace: Path, ids: list[str]) -> int:
+    """Drop rows by ``id`` WITHOUT an embedding provider — no model load.
+
+    Shared by :func:`durin.memory.forget.forget_entry` and the health-check
+    self-heal so neither pays the embedding-model load just to remove index
+    rows. Batches into ``id IN (...)`` deletes (chunked) so reconciling a
+    bulk out-of-band deletion stays a handful of ops, not one-per-row.
+
+    No-op (returns 0) when lancedb is unavailable or the table is absent.
+    Returns the number of distinct ids requested (LanceDB delete does not
+    report affected rows).
+    """
+    unique = [i for i in dict.fromkeys(ids) if i]
+    if not unique:
+        return 0
+    try:
+        import lancedb  # type: ignore[import-not-found]
+    except ImportError:
+        return 0
+    uri = str(Path(workspace).joinpath(*_INDEX_PATH))
+    if not Path(uri).is_dir():
+        return 0
+    db = lancedb.connect(uri)
+    if _TABLE_NAME not in db.list_tables().tables:
+        return 0
+    table = db.open_table(_TABLE_NAME)
+    for start in range(0, len(unique), _DELETE_CHUNK):
+        chunk = unique[start:start + _DELETE_CHUNK]
+        quoted = ",".join(f"'{_escape(i)}'" for i in chunk)
+        table.delete(f"id IN ({quoted})")
+    return len(unique)

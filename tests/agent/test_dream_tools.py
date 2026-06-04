@@ -32,3 +32,6 @@ def test_dream_registers_skill_write_not_write_file(tmp_path):
     names = set(tools.tool_names)
     assert "skill_write" in names
     assert "write_file" not in names
+    # memory_forget is a foreground-only deletion tool; the Dream agent
+    # mutates the vault through its own structured tools, never forget.
+    assert "memory_forget" not in names
