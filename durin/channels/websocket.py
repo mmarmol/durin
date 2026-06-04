@@ -2794,6 +2794,11 @@ class WebSocketChannel(BaseChannel):
         if self._server_task:
             try:
                 await self._server_task
+            except asyncio.CancelledError:
+                # Expected: the server task is cancelled during shutdown. It is a
+                # BaseException (not Exception), so without this it escapes the
+                # handler below and surfaces as an "uncaught exception" on every stop.
+                pass
             except Exception as e:
                 self.logger.warning("server task error during shutdown: {}", e)
             self._server_task = None

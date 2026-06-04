@@ -129,6 +129,14 @@ packages = ["durin"]
 # that would otherwise be excluded by the .gitignore.
 artifacts = ["durin/web/dist/**/*"]
 
+# Build the webui SPA before the wheel is assembled (so durin/web/dist/ exists
+# for the force-include) and assert it landed in the wheel. Without this hook a
+# bare `python -m build` shipped a wheel with NO SPA → a 404 dashboard. The hook
+# no-ops for editable installs, when DURIN_SKIP_WEBUI_BUILD=1, or when a prebuilt
+# durin/web/dist/ already exists (e.g. CI builds it explicitly first).
+[tool.hatch.build.targets.wheel.hooks.custom]
+path = "hatch_build.py"
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
