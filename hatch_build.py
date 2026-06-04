@@ -27,9 +27,42 @@ from pathlib import Path
 
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 
+_SPA_ENTRYPOINT = "durin/web/dist/index.html"
+
+
+def _wheel_has_spa(names) -> bool:
+    """True if a wheel namelist bundles the webui SPA entrypoint."""
+    return any(n.endswith(_SPA_ENTRYPOINT) for n in names)
+
 
 class WebUIBuildHook(BuildHookInterface):
     PLUGIN_NAME = "webui-build"
+
+    def finalize(self, version: str, build_data: dict, artifact_path: str) -> None:
+        # Guard: a wheel without the bundled webui SPA serves a 404 dashboard, and
+        # the default `python -m build` (sdist→wheel) can silently drop
+        # durin/web/dist/. Fail loudly here instead of shipping a broken wheel.
+        if self.target_name != "wheel" or version == "editable":
+            return
+        if os.environ.get("DURIN_SKIP_WEBUI_BUILD") == "1":
+            self.app.display_info(
+                "[webui-build] SPA-in-wheel assert skipped via DURIN_SKIP_WEBUI_BUILD=1"
+            )
+            return
+        import zipfile
+
+        try:
+            with zipfile.ZipFile(artifact_path) as zf:
+                names = zf.namelist()
+        except Exception:  # noqa: BLE001 — never mask the real build error
+            return
+        if not _wheel_has_spa(names):
+            raise RuntimeError(
+                f"[webui-build] built wheel {artifact_path} is MISSING "
+                f"{_SPA_ENTRYPOINT} — it would serve a 404 dashboard. Build the wheel "
+                "directly (`python -m build --wheel`) so the SPA is force-included, or "
+                "set DURIN_SKIP_WEBUI_BUILD=1 to intentionally ship without it."
+            )
 
     def initialize(self, version: str, build_data: dict) -> None:  # noqa: D401
         root = Path(self.root)
