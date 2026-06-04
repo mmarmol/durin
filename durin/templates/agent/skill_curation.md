@@ -20,6 +20,9 @@ When unsure, do nothing. Prefer an empty action list over a speculative change.
   clarification, a missing step). Do not rewrite for style or preference.
 - NEVER touch user or `manual` skills. Only `auto` skills are given to you here, so
   act exclusively on the skills listed below.
+- **The original is safe in git.** Each skill's original content is its first commit;
+  your `evolve`/`fuse` edits are versioned on top. The original is always
+  recoverable/diffable — evolve toward a concrete improvement without fear of losing it.
 
 ## Skills to review
 
