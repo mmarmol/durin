@@ -483,7 +483,7 @@ The web dashboard also consumes three read-only endpoints exposed by the memory 
 | **`get_entity_detail(uri)`** | `durin/memory/graph_api.py` | Returns an entity page's full content + recent history (default last 20 commits) for the dashboard sidebar |
 | **`get_edge_detail(from_uri, to_uri)`** | `durin/memory/graph_api.py` | Returns the co-mention evidence between two entities (which sessions/entries mention both) |
 | **`search_memory_api(query, ...)`** | `durin/memory/graph_api.py` | Webui equivalent of `memory_search`. Same pipeline; different return shape (paginated, with stable IDs for UI rendering) |
-| **Graph canvas data** | `durin/memory/graph.py::build_memory_graph` | Builds `{nodes: [...], edges: [...]}` for an Obsidian-style canvas view. Includes session nodes + entity nodes; edges from co-mention counts. Caps at 500 nodes / 2000 edges to keep the canvas usable. |
+| **Graph canvas data** | `durin/memory/graph.py::build_memory_graph` | Builds `{nodes: [...], edges: [...]}` for an Obsidian-style canvas view. Entity nodes come from consolidated pages under `entities/`; entity-tag harvesting and co-mention edges are walked across the entry classes that carry `entities` (`episodic`, `stable`, `corpus`) — `pending` and `session_summary` are excluded. Refs tagged on entries but lacking a page render as phantom nodes. Also includes session nodes. Caps at 500 nodes / 2000 edges to keep the canvas usable. |
 
 Read-only by design — no mutation through these surfaces. Mutations flow through the agent tools (§2-§5) or direct `.md` editing.
 
