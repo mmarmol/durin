@@ -426,16 +426,14 @@ class SkillSecurityConfig(Base):
     A match skips only the *source* confirmation; the verdict/code gates have no
     opt-out. Caps bound a fetched skill's size/file count. ``github_token_secret``
     names a durin secret holding a GitHub API token (raises rate limits + private
-    repos); empty → anonymous. ``install_specs_policy`` governs a skill's declared
-    dependency installs: ``never`` (v1, info only), ``ask`` (run on explicit
-    approval — v1.1), ``auto``."""
+    repos); empty → anonymous. (Running a skill's declared dependency installs is
+    governed by ``skills.install_policy`` — see P6 #1.)"""
 
     allowlist: list[str] = Field(default_factory=list)
     github_token_secret: str = ""
     max_files: int = 100
     max_total_bytes: int = 3 * 1024 * 1024
     max_file_bytes: int = 1024 * 1024
-    install_specs_policy: Literal["never", "ask", "auto"] = "never"
     llm_judge: SkillJudgeConfig = Field(default_factory=SkillJudgeConfig)
 
 
@@ -466,6 +464,11 @@ class SkillsConfig(Base):
 
     security: SkillSecurityConfig = Field(default_factory=SkillSecurityConfig)
     discovery: SkillsDiscoveryConfig = Field(default_factory=SkillsDiscoveryConfig)
+    install_policy: Literal["never", "approve", "auto"] = "approve"
+    """P6 #1 — how `skill_install_deps` runs a skill's declared install specs.
+    'never' = report only (never run, even with confirm); 'approve' = dry-run then
+    run on confirm (default); 'auto' = run without a per-call confirm. All policies
+    still execute through ExecTool's gate."""
 
 
 class MemoryConfig(Base):

@@ -17,10 +17,6 @@ def test_default_caps():
     assert si.max_file_bytes == 1024 * 1024
 
 
-def test_default_install_specs_policy_is_never():
-    assert Config().skills.security.install_specs_policy == "never"
-
-
 def test_default_github_token_secret_empty():
     assert Config().skills.security.github_token_secret == ""
 
@@ -36,13 +32,11 @@ def test_new_fields_camel_roundtrip():
     cfg = Config.model_validate({"skills": {"security": {
         "githubTokenSecret": "gh_tok",
         "maxFiles": 50,
-        "installSpecsPolicy": "ask",
         "llmJudge": {"trigger": "always", "maxSeverity": "dangerous", "model": "fast"},
     }}})
     si = cfg.skills.security
     assert si.github_token_secret == "gh_tok"
     assert si.max_files == 50
-    assert si.install_specs_policy == "ask"
     assert si.llm_judge.trigger == "always"
     assert si.llm_judge.max_severity == "dangerous"
     assert si.llm_judge.model == "fast"

@@ -1,5 +1,7 @@
 # Skill Memory Class — Implementation Plan (Spec 2, full integration)
 
+> ✅ **EXECUTED — historical execution record.** The feature this plan built is shipped and verified. Current as-built state: [`docs/architecture/skills/00_overview.md`](../../architecture/skills/00_overview.md). The unchecked `- [ ]` boxes below are the original TDD task list, **not pending work**.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans. Steps use checkbox (`- [ ]`) syntax.
 >
 > **Line numbers drift** — every touchpoint here was located by an exhaustive code audit (2026-06-02), but **match by SYMBOL (function/dict name), not by line number**; the audit's own critic found line drift. Verify each anchor against the real file before editing.

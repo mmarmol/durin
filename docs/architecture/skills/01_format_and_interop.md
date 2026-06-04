@@ -1,5 +1,8 @@
 # durin SKILL.md — Format & Interop Contract
 
+> For the whole skills subsystem (lifecycle, dreams, security, retrieval, runtime),
+> see [`00_overview.md`](00_overview.md). This file is the SKILL.md **format** contract.
+>
 > Canonical reference for durin's skill document format. durin's `SKILL.md` **is the
 > [agentskills.io](https://agentskills.io/specification) open standard** (the same format
 > Hermes, OpenClaw, Pi, Claude Code, Codex, Cursor, and 30+ tools use) **plus durin's own

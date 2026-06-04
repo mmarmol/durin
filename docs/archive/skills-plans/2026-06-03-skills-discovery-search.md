@@ -1,5 +1,7 @@
 # Skills discovery — search backend (increment 1) — Implementation Plan
 
+> ✅ **EXECUTED — historical execution record.** The feature this plan built is shipped and verified. Current as-built state: [`docs/architecture/skills/00_overview.md`](../../architecture/skills/00_overview.md). The unchecked `- [ ]` boxes below are the original TDD task list, **not pending work**.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: superpowers:subagent-driven-development. Steps use checkbox (`- [ ]`) syntax.
 
 **Goal:** Give durin a unified skill search over pluggable registries (skills.sh first), exposed as a `skill_search` agent tool. Each hit carries a `ref` that flows into the existing `skill_import` gate — search NEVER installs.
