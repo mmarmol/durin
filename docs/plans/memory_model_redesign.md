@@ -251,6 +251,16 @@ Verificado: el corto (legacy) **ya creaba skills** (`skill_write` en
 (agente autora) → corto (~2h: attributes + skills + extract) → largo (diario:
 consolidación).
 
+**Disparo (decidido).** **CORTO** = reactivo (*session-close* + *post-compaction*,
+triggers que ya existen) + safety-net cron ~2h + **gate** barato (skip si no
+hay turnos nuevos desde el cursor por-sesión). **LARGO** = diario baseline +
+disparo por **refine-pressure** (muchas entidades nuevas o alias-overlap
+detectado → refine antes). Ambos comparten **lock + throttle** (se serializan;
+nunca corren a la vez sobre el mismo grafo).
+**JUSTIF.** El agente autora síncrono → el lag de extract solo afecta hechos
+auto-extraídos. Reactivo = timely; safety-net = no se pierde nada; gate = no
+quema LLM en vacío. El refine es caro → diario, pero adaptivo ante bursts.
+
 **NUANCE — skills-refine conservador.** Las skills son **ejecutables**: un
 merge malo no ensucia datos, **rompe una capacidad que funcionaba**. El
 refine-de-skills del largo debe ser más conservador que el de entidades:
@@ -385,8 +395,9 @@ CONCURRENCIA:               git sustrato + merge semántico (no textual)
    **presupuesto de pin de always-on** (§2.10): qué `stance`/`practice` se
    inyectan en la ventana pre-dream (recencia + relevancia + scope al
    usuario/proyecto activo) sin explotar el contexto.
-7. **Cadencia y disparo de los dreams** (§2.7): ¿el corto es cron ~2h,
-   reactivo a escrituras, o con debounce? ¿el largo diario alcanza?
+7. **Cadencia/disparo de los dreams** — **DECIDIDO** (§2.7): CORTO reactivo
+   (session-close + post-compaction) + safety-net ~2h + gate; LARGO diario +
+   refine-pressure; ambos comparten lock + throttle.
 8. **Reset manual de cursor** (§2.6): cómo se expone "re-procesar desde turno
    X".
 
