@@ -976,7 +976,7 @@ class WebSocketChannel(BaseChannel):
             workspace = load_config().workspace_path
             payload = get_entity_detail(workspace, ref)
         except Exception as exc:  # noqa: BLE001
-            logger.exception("memory entity detail failed for %s", ref)
+            logger.exception("memory entity detail failed for {}", ref)
             return _http_error(500, f"entity detail failed: {exc}")
         if payload is None:
             return _http_error(404, f"entity not found: {ref}")
@@ -1003,7 +1003,7 @@ class WebSocketChannel(BaseChannel):
             workspace = load_config().workspace_path
             payload = get_session_detail(workspace, stem)
         except Exception as exc:  # noqa: BLE001
-            logger.exception("memory session detail failed for %s", stem)
+            logger.exception("memory session detail failed for {}", stem)
             return _http_error(500, f"session detail failed: {exc}")
         if payload is None:
             return _http_error(404, f"session not found: {stem}")
@@ -1029,7 +1029,7 @@ class WebSocketChannel(BaseChannel):
             workspace = load_config().workspace_path
             payload = get_entry_detail(workspace, uri)
         except Exception as exc:  # noqa: BLE001
-            logger.exception("memory entry detail failed for %s", uri)
+            logger.exception("memory entry detail failed for {}", uri)
             return _http_error(500, f"entry detail failed: {exc}")
         if payload is None:
             return _http_error(404, f"entry not found: {uri}")
@@ -1056,7 +1056,7 @@ class WebSocketChannel(BaseChannel):
             workspace = load_config().workspace_path
             payload = forget_entry(workspace, uri)
         except Exception as exc:  # noqa: BLE001
-            logger.exception("memory forget failed for %s", uri)
+            logger.exception("memory forget failed for {}", uri)
             return _http_error(500, f"forget failed: {exc}")
         result = payload.get("result")
         if result == "protected":
@@ -1086,7 +1086,7 @@ class WebSocketChannel(BaseChannel):
             workspace = load_config().workspace_path
             payload = get_entry_backlinks(workspace, uri)
         except Exception as exc:  # noqa: BLE001
-            logger.exception("memory backlinks failed for %s", uri)
+            logger.exception("memory backlinks failed for {}", uri)
             return _http_error(500, f"backlinks failed: {exc}")
         return _http_json_response(payload)
 
@@ -1111,7 +1111,7 @@ class WebSocketChannel(BaseChannel):
             workspace = load_config().workspace_path
             payload = get_edge_detail(workspace, a, b)
         except Exception as exc:  # noqa: BLE001
-            logger.exception("memory edge detail failed for %s ↔ %s", a, b)
+            logger.exception("memory edge detail failed for {} ↔ {}", a, b)
             return _http_error(500, f"edge detail failed: {exc}")
         return _http_json_response(payload)
 
