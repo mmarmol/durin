@@ -143,7 +143,7 @@ def judge_pair(
     # usage propagation for auto-absorb is intentionally NOT plumbed
     # into `memory.dream.end` (the absorb judge runs AFTER the dream
     # pass and emits its own `memory.absorb.judged` event).
-    from durin.memory.dream import LLMResponse as _LLMResponse
+    from durin.memory.llm_invoke import LLMResponse as _LLMResponse
 
     last_error: Exception | None = None
     for attempt in range(max_retries + 1):

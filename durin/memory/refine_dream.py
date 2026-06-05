@@ -20,7 +20,7 @@ from typing import Any, Callable
 
 from durin.memory.absorb_judge import JudgeError, judge_pair
 from durin.memory.absorption import EntityAbsorption
-from durin.memory.dream import default_llm_invoke
+from durin.memory.llm_invoke import default_llm_invoke
 from durin.memory.entity_page import EntityPage
 
 __all__ = ["is_tombstoned", "add_tombstone", "run_refine"]
