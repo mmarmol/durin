@@ -297,6 +297,42 @@ implementación (prosa plana paralela al grafo) duplicaba contenido. La capa
 siempre-presente debe ser **vista/pin** sobre las capas reales, no un store
 aparte.
 
+### 2.10 Feedback aprendido = entidades `stance` / `practice` (no es clase nueva)
+
+**DECISIÓN.** El **feedback** (cómo trabajar con el usuario, correcciones,
+preferencias, principios de operación que el agente aprende) se modela como
+entidades del vocab existente:
+- **`stance`** (preference/opinion/belief/position) → "una pregunta a la vez",
+  "no Claude attribution", "responder en español".
+- **`practice`** (skill/routine/method/habit) → "verificá en vivo antes de
+  decir done", "deploy vía wheel local", "verificá desde /tmp".
+
+Autoradas por el **agente** (desde correcciones), refinadas por **dream**,
+relacionadas a su sujeto (`person:`, `project:`, `tool:`, o global). **NO es
+un miembro nuevo del carril SELF** (SELF queda SOUL+skills): el feedback es
+**CONOCIMIENTO** ("lo aprendido sobre cómo trabajar"), pinneado al always-on.
+
+**JUSTIFICACIÓN.** El vocab ya tiene `stance`/`practice` exactamente para
+esto; reusa grafo + dream-refine (dedup/generaliza feedback repetido) +
+provenance (de qué corrección salió) + relaciones — sin clase nueva. (El
+"siempre-inyectado" que me hizo dudar es política del `hot_layer`, no una
+necesidad de storage.)
+
+**Always-on (qué se inyecta siempre) — cae de la decisión (b):**
+- La condición "siempre-activa" es un **atributo estructurado** (`always_on`).
+  Por (b), **dream es su dueño**. El agente la crea con default **`true`** (la
+  corrección **aplica de inmediato**); **dream rectifica** al consolidar
+  (decide qué queda always-on). Unifica las dos variantes ("todas activas
+  hasta que dream decida" = agente default-true + dream-owns-attribute).
+- **"Demote" ≠ borrar**: salir de always-on = **on-demand** (sigue
+  searchable), no se pierde. El set always-on es un subconjunto curado.
+- **Criterio de dream para mantener active**: load-bearing/frecuente,
+  general > narrow, scoped al usuario/proyecto activo, no superseded.
+- **SAFETY (ventana pre-dream)**: aunque el default sea `true`, el `hot_layer`
+  aplica un **presupuesto de tokens** (recencia + relevancia + scope al
+  usuario/proyecto activo) — un burst de feedback nuevo no debe explotar el
+  contexto antes de que dream pode. "Default active" ≠ "inyectar sin límite".
+
 ---
 
 ## 3. Modelo consolidado (vista de un vistazo)
@@ -312,6 +348,8 @@ CONOCIMIENTO — entidades  entities/<type>/<slug>.md         agente autora (pro
                                                              + dream largo (dedup/unify/split)
 CONOCIMIENTO — referencias ingested/source (REFERENCE)      agente ingiere
                           corpus/ (índice→page)             (dream NO sintetiza)
+CONOCIMIENTO — feedback   entities stance:/practice:        agente autora (de correcciones)
+  (cómo trabajar)         (always_on attr, pin hot_layer)   + dream refina/decide always-on
 
 SÍ-MISMO                  SOUL.md (constitución)            SOLO usuario (manual)
   (cómo soy/qué sé hacer) skills/<name>/SKILL.md            dream corto (crea) + largo (refina)
@@ -340,9 +378,11 @@ CONCURRENCIA:               git sustrato + merge semántico (no textual)
 5. **Resolución user-de-sesión → entidad `person:`** (§2.9): el mapeo
    channel-user-id → entidad es el problema de identidad cross-channel (R4).
    Trivial para webui (dueño único); manual/LLM en multi-channel.
-6. **Curación de la capa siempre-presente** (§2.9): el `hot_layer` cura por
-   recencia + top-headlines. ¿Basta, o se necesita curación-LLM (lo que hacía
-   el dream legacy)?
+6. **Curación de la capa siempre-presente** (§2.9, §2.10): el `hot_layer` cura
+   por recencia + top-headlines. ¿Basta, o se necesita curación-LLM? Y el
+   **presupuesto de pin de always-on** (§2.10): qué `stance`/`practice` se
+   inyectan en la ventana pre-dream (recencia + relevancia + scope al
+   usuario/proyecto activo) sin explotar el contexto.
 7. **Cadencia y disparo de los dreams** (§2.7): ¿el corto es cron ~2h,
    reactivo a escrituras, o con debounce? ¿el largo diario alcanza?
 8. **Reset manual de cursor** (§2.6): cómo se expone "re-procesar desde turno
