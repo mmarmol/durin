@@ -610,6 +610,18 @@ al lado de FTS+vector. Se agrega **solo cuando** aparezca (a) una feature de
 **graph-reasoning del agente** (multi-hop, analytics, shortest-path) — hoy no
 existe; o (b) un **cuello de botella MEDIDO** a escala. Hasta entonces: YAGNI.
 
+**Candidato nombrado (evaluado 2026-06-05, NO adoptado ahora)**: `graphqlite`
+(colliery-io, MIT) — extensión SQLite con Cypher + 15 algoritmos (PageRank,
+Louvain, Dijkstra, node-similarity/KNN…), `pip install`, upsert incremental +
+rebuild barato → encaja como índice **derivado** re-derivable, in-process, sin
+romper file-first. Valor concreto al trigger: **PageRank → relevancia del
+hot_layer (4A-1)** y **KNN/similarity → candidate-gen de dedup** más allá del
+alias-overlap. Reservas: **v<1.0** (joven para core), WAL/multi-proceso a
+confirmar (pero el índice es single-writer/derivado → acotado), perf EAV a
+escala. **Decisión: seguir sin él** (no es core; las ops actuales no lo piden);
+re-evaluar con un **spike** cuando llegue el trigger. Fallback si no pasa el
+spike: edges-table liviano hand-rolled (sin PageRank).
+
 ---
 
 ## 3. Modelo consolidado (vista de un vistazo)
