@@ -50,3 +50,36 @@ The double-check was worth it: it converted two "deferred index wiring" notes
 into concrete, reproduced failures (G1, G2) with exact errors — now known inputs
 to the Phase 8 plan instead of mid-integration surprises. Recommend G1 + G2 be
 explicit first tasks of Phase 8 (reader compatibility) before wiring triggers.
+
+---
+
+## Second review pass (battery of edge-case + integration tests)
+
+Composed the modules + ran the readers on shared state again, plus edge cases.
+Codified as `tests/memory/test_integration_new_model.py`.
+
+**Confirmed working:** old-format entity (user_authored, provenance without
+author) reads + appears in the graph; concurrent same-field precedence (user
+beats agent regardless of commit order, under CAS); reference edge cases (empty
+doc → 0 chunks, one word → 1 chunk); extract handles malformed LLM output
+(non-JSON / list / nested) as a no-op.
+
+**Fixed (T4):** attribute VALUES + relation targets were not searchable — the
+warm grep (`_search_entity_pages`) only matched name/aliases/body. It now uses
+the same composed text the FTS path indexes (`_entity_text`), so a search for a
+dream-extracted attribute value ("Boston") or a relation target ("alex") hits.
+
+**Confirmed Phase-8 requirements (not substrate bugs):**
+- **T2 — uncommitted working-tree entities (human-edit phase).** `memory_writer`
+  reads HEAD, so an entity present on disk but NOT committed (a manual / Obsidian
+  edit) is invisible: `create=False` safely ERRORS (no silent clobber), but
+  `create=True` (the upsert tool) would overwrite the user's uncommitted edit.
+  **Phase 8 must commit working-tree edits before memory_writer reads** (or have
+  memory_writer read-merge a dirty entity) — the deferred "don't ff over dirty"
+  / human-edit work. Verified: create=False raises FileNotFoundError; create=True
+  clobbers.
+- **Legacy `dream_apply` still writes entities via the working tree** (used by
+  the legacy `DreamConsolidator`). The new pipeline is all plumbing+CAS, but if
+  the legacy dream runs concurrently it reintroduces the G3 race. **Phase 8 must
+  disable/replace the legacy `dream_apply` path** so only memory_writer writes
+  entities.
