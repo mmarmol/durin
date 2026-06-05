@@ -20,7 +20,7 @@ from typing import Any, Callable
 
 from json_repair import repair_json
 
-from durin.memory.dream import LLMResponse, default_llm_invoke
+from durin.memory.llm_invoke import LLMResponse, default_llm_invoke
 from durin.memory.entity_page import EntityPage
 from durin.memory.field_patch import FieldPatch
 from durin.memory.memory_writer import WriteResult, write_entity
