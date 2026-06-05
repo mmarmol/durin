@@ -245,11 +245,13 @@ ingiere-doc) + la sesión que se graba sola. Recall conversacional = search
 sobre `sessions/`+`summaries` (marcador SESSION).
 
 **DECISIÓN — el extract dream lee MATERIAL NUEVO CRUDO: sesiones (turnos) +
-referencias recién ingeridas (post-cursor), no los summaries.** (Gap #1:
-referencias→entidades — el extract dream extrae menciones de docs nuevos
-igual que de sesiones; batched en la pasada, NO per-ingest, por eso es viable
-donde el `post_ingest_threshold` per-write no lo era. El agente igual taggea
-lo obvio al ingerir.) Los
+referencias recién ingeridas (post-cursor) + el body de las entidades
+tocadas, no los summaries.** (Gap #1: referencias→entidades — el extract dream
+extrae menciones de docs nuevos igual que de sesiones; batched en la pasada,
+NO per-ingest, por eso es viable donde el `post_ingest_threshold` per-write no
+lo era. El agente igual taggea lo obvio al ingerir. Sim #3: también lee el
+**body de las entidades tocadas** — los attributes se extraen de la prosa que
+el agente escribió, decisión b.) Los
 summaries son del **hot-path** (inyección barata de recall), no input de
 dream.
 **JUSTIFICACIÓN (4 problemas de extraer del summary).** (1) El summary
@@ -282,7 +284,7 @@ tipo de contenido**: ambos (entidades Y skills) reciben extract + refine.
 
 | Material | **CORTO** (integrar lo reciente, ~2h, cursor por-sesión) | **LARGO** (consolidar/limpiar el todo, ~diario, graph-wide) |
 |---|---|---|
-| **Entidades** | extraer hechos + `attributes` de sesiones nuevas; aplicar prefs de usuario a `person:` (el embedding se compone index-time de attributes+body-head, §2.11 — no hay summary que mantener) | dedup/absorb, unificar claves sinónimas, splitear, resolver contradicciones cross-grafo |
+| **Entidades** | extraer hechos + `attributes` de sesiones nuevas; aplicar prefs de usuario a `person:` (el embedding se compone index-time de attributes+body-head, §2.11 — no hay summary que mantener) | dedup/absorb, unificar claves sinónimas, resolver contradicciones cross-grafo, setear `always_on` de feedback (Sim #2) |
 | **Skills** | crear/arreglar skills desde la ejecución reciente | unificar duplicadas, mejorar eficiencia, refactor |
 | **Índices** | — | self-heal / orphans |
 
@@ -315,6 +317,17 @@ refine-de-skills del largo debe ser más conservador que el de entidades:
 apoyarse en el git store de skills (revert seguro), merges proponer-no-auto /
 alta-confianza (como el absorb-judge), y **verificar validez** de la skill
 unificada antes de reemplazar.
+
+**NO hay split automático (Sim-hallazgo #4).** El dream-largo **no** splitea
+entidades. Razón: la conflación real ("una entidad que son dos") viene casi
+siempre de un **mal merge del absorb**, y eso se recupera con **`git revert`
+del commit de merge** (el absorb es un commit → restaura ambas, limpio),
+agarrado temprano por el review en UI + quarantine. Conflaciones genuinas (el
+agente autoró dos cosas bajo un ref) son raras con refs/slugs explícitos y se
+arreglan manual / re-autorando. Split automático no tiene señal limpia (dedup
+tiene alias-overlap; split no) y su blast-radius es fabricar una entidad de una
+adivinanza. → recovery = `git revert` (temprano) + manual (tarde), no una
+operación de split.
 
 ### 2.8 Capa de referencias = documentos coherentes (no sintetizados por Dream)
 
@@ -377,11 +390,14 @@ provenance (de qué corrección salió) + relaciones — sin clase nueva. (El
 necesidad de storage.)
 
 **Always-on (qué se inyecta siempre) — cae de la decisión (b):**
-- La condición "siempre-activa" es un **atributo estructurado** (`always_on`).
-  Por (b), **dream es su dueño**. El agente la crea con default **`true`** (la
-  corrección **aplica de inmediato**); **dream rectifica** al consolidar
-  (decide qué queda always-on). Unifica las dos variantes ("todas activas
-  hasta que dream decida" = agente default-true + dream-owns-attribute).
+- La condición "siempre-activa" es un **atributo estructurado** (`always_on`),
+  y por (b) **dream es su dueño** — el agente **NO lo setea** (la tool de upsert
+  no emite attributes). **El default lo da el hot_layer, no el agente**: una
+  `stance`/`practice` **recién autorada se trata como always_on por convención**
+  (feedback reciente = pinneado) → la corrección aplica de inmediato **sin que
+  el agente escriba el atributo**; **el dream-largo setea `always_on` explícito**
+  al consolidar (rectifica/demota). (Sim-hallazgo #2: la versión anterior pedía
+  que el agente setee `always_on=true`, lo que contradecía la decisión b.)
 - **"Demote" ≠ borrar**: salir de always-on = **on-demand** (sigue
   searchable), no se pierde. El set always-on es un subconjunto curado.
 - **Criterio de dream para mantener active**: load-bearing/frecuente,
@@ -452,6 +468,10 @@ principal (no se guarda como `user.md`).
 - **Rol interlocutor** → marcador (`attributes.is_user` / relación al agente).
 - **Cadena de resolución (siempre aterriza)**: channel-id identificado →
   **owner** de la instalación (config default) → **`person:anonymous`** (piso).
+- **Cold-start (Sim-hallazgo #1)**: en la primera sesión la entidad owner aún
+  no existe → **se auto-crea un placeholder** `person:<owner>` (`author=agent_created`
+  para que dream/agente la enriquezcan), no se cae a anonymous. El placeholder
+  se llena con el uso.
 - **Otro agente como interlocutor**: es otra entidad-actor; el **principal
   humano detrás** se hereda por la cadena de delegación (default owner) — se
   sirven las prefs del humano, no del agente intermediario.
