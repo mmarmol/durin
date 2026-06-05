@@ -126,7 +126,7 @@ eje equivocado y dream miraba sólo una.
 | `session` | experiencia: crudo = verdad = input de dream | REUSE |
 | `session_summary` | experiencia: vista de recall para hot-path | REUSE |
 | `history.jsonl` | — | **SE ELIMINA** (era el feed aplanado del dream legacy; el dream nuevo lee sessions directo; recall = search SESSION) |
-| `pending` | buffer de intake | REUSE |
+| `pending` | — | **SE ELIMINA** (clase declarada pero muerta: sin writer, excluida de watcher/hot_layer, vault vacío; ruteo-por-intención no necesita buffer) |
 | `archive` | terminal | REUSE |
 | `SOUL.md` | constitución del agente | REUSE — pasa a `user_authored`, fuera de dream (§2.9) |
 | `skills/` | procedimientos | REUSE — dream corto crea, dream largo refina (§2.7) |
@@ -233,7 +233,12 @@ ya queda en el transcript. Dos verbos de escritura (autora-entidad,
 ingiere-doc) + la sesión que se graba sola. Recall conversacional = search
 sobre `sessions/`+`summaries` (marcador SESSION).
 
-**DECISIÓN — Dream lee las SESIONES CRUDAS (turnos), no los summaries.** Los
+**DECISIÓN — el extract dream lee MATERIAL NUEVO CRUDO: sesiones (turnos) +
+referencias recién ingeridas (post-cursor), no los summaries.** (Gap #1:
+referencias→entidades — el extract dream extrae menciones de docs nuevos
+igual que de sesiones; batched en la pasada, NO per-ingest, por eso es viable
+donde el `post_ingest_threshold` per-write no lo era. El agente igual taggea
+lo obvio al ingerir.) Los
 summaries son del **hot-path** (inyección barata de recall), no input de
 dream.
 **JUSTIFICACIÓN (4 problemas de extraer del summary).** (1) El summary
