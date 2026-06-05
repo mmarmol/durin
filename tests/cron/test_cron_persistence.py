@@ -195,6 +195,46 @@ def test_recompute_recomputes_missed_or_unset_next_run(tmp_path: Path) -> None:
     assert job.state.next_run_at_ms > _now_ms()
 
 
+def test_register_system_job_preserves_state_on_restart(tmp_path: Path) -> None:
+    """The gateway re-registers its system jobs (dream/memory_dream) on every
+    start. That must NOT wipe the persisted run state — pre-fix it reset
+    state to a fresh CronJobState, so "last executed" and an interval cron's
+    elapsed progress were lost on every restart (and every reinstall)."""
+    from durin.cron.service import _now_ms
+    from durin.cron.types import CronJob, CronPayload, CronRunRecord
+
+    store_path = tmp_path / "cron" / "jobs.json"
+
+    def _sysjob() -> CronJob:
+        return CronJob(
+            id="dream", name="dream",
+            schedule=CronSchedule(kind="every", every_ms=2 * 60 * 60 * 1000),
+            payload=CronPayload(kind="system_event"),
+        )
+
+    s1 = CronService(store_path)
+    s1.register_system_job(_sysjob())
+    s1._load_store()
+    j = next(x for x in s1._store.jobs if x.id == "dream")
+    ran_at = _now_ms() - 1000
+    j.state.last_run_at_ms = ran_at
+    j.state.last_status = "ok"
+    j.state.run_history.append(CronRunRecord(run_at_ms=ran_at, status="ok", duration_ms=5))
+    future = _now_ms() + 60 * 60 * 1000
+    j.state.next_run_at_ms = future
+    s1._save_store()
+
+    # Restart: a fresh CronService re-registers the same system job.
+    s2 = CronService(store_path)
+    s2.register_system_job(_sysjob())
+    s2._load_store()
+    j2 = next(x for x in s2._store.jobs if x.id == "dream")
+    assert j2.state.last_run_at_ms == ran_at, "last_run wiped on re-register"
+    assert j2.state.last_status == "ok"
+    assert len(j2.state.run_history) == 1, "run_history wiped on re-register"
+    assert j2.state.next_run_at_ms == future, "future next_run reset on re-register"
+
+
 def test_full_round_trip_survives_repeated_save_load(tmp_path: Path) -> None:
     """Sanity check: jobs survive add → save → reload across fresh
     ``CronService`` instances pointing at the same store."""

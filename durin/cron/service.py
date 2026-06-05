@@ -580,11 +580,27 @@ class CronService:
         return job
 
     def register_system_job(self, job: CronJob) -> CronJob:
-        """Register an internal system job (idempotent on restart)."""
+        """Register an internal system job (idempotent on restart).
+
+        The gateway re-registers its system jobs (dream, memory_dream) on
+        every start. Preserve the persisted run state — ``last_run_at_ms``,
+        ``last_status``, ``run_history``, and a still-future
+        ``next_run_at_ms`` — so a restart (or a reinstall) does not wipe
+        "last executed" or reset an interval cron's elapsed progress. Only
+        the schedule/payload definition is refreshed (the code may have
+        changed it). A brand-new system job gets a fresh next-run.
+        """
         store = self._load_store()
         now = _now_ms()
-        job.state = CronJobState(next_run_at_ms=_compute_next_run(job.schedule, now))
-        job.created_at_ms = now
+        existing = next((j for j in store.jobs if j.id == job.id), None)
+        if existing is not None:
+            job.state = existing.state
+            if job.state.next_run_at_ms is None or job.state.next_run_at_ms <= now:
+                job.state.next_run_at_ms = _compute_next_run(job.schedule, now)
+            job.created_at_ms = existing.created_at_ms
+        else:
+            job.state = CronJobState(next_run_at_ms=_compute_next_run(job.schedule, now))
+            job.created_at_ms = now
         job.updated_at_ms = now
         store.jobs = [j for j in store.jobs if j.id != job.id]
         store.jobs.append(job)
