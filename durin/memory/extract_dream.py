@@ -123,4 +123,18 @@ def extract_entity(
                    source_ref=src, at=now)
         for k, v in attrs.items()
     ]
-    return write_entity(workspace, entity_ref, patches, create=True)
+    result = write_entity(workspace, entity_ref, patches, create=True)
+    # Dream telemetry: reuse the legacy event so existing dashboards keep
+    # counting consolidations. Best-effort.
+    try:
+        from durin.agent.tools._telemetry import emit_tool_event
+        emit_tool_event("memory.dream.patch_applied", {
+            "entity_ref": entity_ref,
+            "ops_applied": len(attrs),
+            "trigger": "extract",
+            "committed": result.committed,
+            "source_ref": src,
+        })
+    except Exception:  # pragma: no cover
+        pass
+    return result

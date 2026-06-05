@@ -1339,22 +1339,28 @@ def _run_gateway(
             from durin.memory.vector_index import VectorIndex, vector_index_available
 
             workspace = config.workspace_path
-            from durin.memory.dream_passes import run_extract_pass, run_refine_pass
+            from durin.memory.dream_passes import (
+                run_extract_pass,
+                run_refine_pass,
+                run_skill_extract_pass,
+            )
             from durin.memory.model_resolve import resolve_memory_model
 
-            # New model (§8c/8d): the daily cron runs the extract pass (sessions
-            # → entity attributes) then the refine pass (dedup). This replaces
-            # the legacy DreamRunner/DreamConsolidator (episodic-entry JSON-Patch
-            # consolidation via working-tree writes — the obsolete model + the
-            # G3 race). Both passes write through memory_writer (plumbing + CAS).
+            # New model (§8c/8d/8e): the daily cron runs the extract pass
+            # (sessions → entity attributes), the skill-extract pass (sessions →
+            # reusable procedures as skills), then the refine pass (dedup). This
+            # replaces the legacy DreamRunner/DreamConsolidator (episodic-entry
+            # JSON-Patch consolidation via working-tree writes — the obsolete
+            # model + the G3 race). Writes go through memory_writer / skill_write.
             model = resolve_memory_model(config)
             try:
                 ex = await _asyncio.to_thread(run_extract_pass, workspace, model=model)
+                sk = await _asyncio.to_thread(run_skill_extract_pass, workspace, model=model)
                 rf = await _asyncio.to_thread(run_refine_pass, workspace, model=model)
                 logger.info(
                     "memory_dream cron: extract(sessions={} entities={}) "
-                    "refine(merged={} kept={})",
-                    ex["sessions"], ex["entities"],
+                    "skills(touched={}) refine(merged={} kept={})",
+                    ex["sessions"], ex["entities"], sk.get("skills_touched", 0),
                     len(rf.get("merged", [])), len(rf.get("kept_separate", [])),
                 )
             except Exception:

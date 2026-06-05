@@ -29,6 +29,15 @@ LLMInvoke = Callable[..., Any]
 _TOMBSTONE_FILE = ".refine_tombstones.json"
 
 
+def _emit(event: str, **data: Any) -> None:
+    """Best-effort dream telemetry (reuses the legacy memory.absorb.* names)."""
+    try:
+        from durin.agent.tools._telemetry import emit_tool_event
+        emit_tool_event(event, data)
+    except Exception:  # pragma: no cover — telemetry must never break the dream
+        pass
+
+
 def _tombstone_path(workspace: Path) -> Path:
     return Path(workspace) / "memory" / _TOMBSTONE_FILE
 
@@ -88,9 +97,11 @@ def run_refine(
         ref_a, ref_b = cand.refs
         if ref_a.split(":", 1)[0] != ref_b.split(":", 1)[0]:
             skipped.append({"pair": [ref_a, ref_b], "reason": "cross_type"})
+            _emit("memory.absorb.skipped", canonical=ref_a, absorbed=ref_b, reason="cross_type")
             continue
         if is_tombstoned(workspace, ref_a, ref_b):
             skipped.append({"pair": [ref_a, ref_b], "reason": "tombstoned"})
+            _emit("memory.absorb.skipped", canonical=ref_a, absorbed=ref_b, reason="tombstoned")
             continue
         page_a = _load_page(workspace, ref_a)
         page_b = _load_page(workspace, ref_b)
@@ -99,6 +110,7 @@ def run_refine(
             continue
         if page_a.author == "user_authored" or page_b.author == "user_authored":
             skipped.append({"pair": [ref_a, ref_b], "reason": "user_managed"})
+            _emit("memory.absorb.skipped", canonical=ref_a, absorbed=ref_b, reason="user_managed")
             continue
         try:
             judged = judge_pair(
@@ -109,6 +121,8 @@ def run_refine(
         except JudgeError as exc:
             skipped.append({"pair": [ref_a, ref_b], "reason": f"judge_error:{exc}"})
             continue
+        _emit("memory.absorb.judged", canonical=ref_a, absorbed=ref_b,
+              verdict=judged.verdict, confidence=judged.confidence)
         if judged.verdict == "same" and judged.confidence >= confidence_threshold:
             absorber.absorb(
                 ref_a, ref_b, reason="refine",
@@ -117,6 +131,8 @@ def run_refine(
             )
             merged.append({"canonical": ref_a, "absorbed": ref_b,
                            "confidence": judged.confidence})
+            _emit("memory.absorb.auto_merged", canonical=ref_a, absorbed=ref_b,
+                  confidence=judged.confidence)
         else:
             kept.append({"pair": [ref_a, ref_b], "verdict": judged.verdict,
                          "confidence": judged.confidence})
