@@ -776,3 +776,25 @@ system-entity (absorb=flip-true; crons=reasignar). **`identity.md` y
 (sacar `memory_store`, agregar `memory_upsert_entity`, disolver SOUL/USER/MEMORY).
 El **extract dream es composición de dos motores**: `DreamConsolidator` (patch,
 entidades) + path agentic `SkillWrite` (skills) leyendo sesiones+refs.
+
+### 6.2 Superficies de prompt — evaluar + ajustar (transversal, no cleanup final)
+
+Los prompts NO son una fase tardía: cada fase que emite una superficie LLM
+**incluye evaluar+ajustar su prompt como entregable**. Superficies (verificadas):
+
+| Superficie | Qué es | Fase(s) |
+|---|---|---|
+| `templates/agent/identity.md` (## Memory / ## Memory writing) | modelo mental del agente, cada turno | 6 + 8 (rewrite) |
+| `skills/memory/SKILL.md` | hoy describe el legacy (SOUL/USER/MEMORY/history.jsonl) | 8 |
+| `templates/dream/consolidator.md` + `rules.md` + `examples/` | prompt del entity dream | 3 (extract) + 4 (refine) |
+| `templates/dream/absorb_judge.md` | juez de dedup | 4 |
+| `templates/agent/dream_phase1.md` + `dream_phase2.md` | prompts del legacy dream | 3 (phase2 skill-creation) + 8 (disolver MEMORY/USER) |
+| descripciones de `memory_*` tools | lo que el agente lee para elegir tool | 2 (upsert/store) + 5 (ingest/search) |
+| salida del `hot_layer` (markers + intros) | lo que el agente consume del retrieval | 5 (REFERENCE) + 6 (PRINCIPAL/SYSTEM) |
+
+**Cautelas (de "evaluar", no "rewrite a ciegas"):**
+1. **Preservar patrones bench-validados** (doc 06 §2.2): declarativo+específico (vs
+   imperativo+genérico que perdió 20pp); structural markers; "don't answer from
+   cold recall" (+3.9pp LoCoMo). Ajuste quirúrgico.
+2. **Re-bench tras cambios grandes** (LoCoMo / EverMemBench / [[reference_memory_validation_benchmarks]])
+   — gate de validación, no "ajustar y rezar".
