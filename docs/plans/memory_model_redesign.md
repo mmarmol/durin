@@ -98,20 +98,58 @@ Esto **es** la distinción cosa / experiencia / documento, y **elimina el
 eje `episodic/stable`**. Resuelve "B dormido" por construcción: el agente
 de research habría autorado `company:mxhero` directo.
 
-### 2.3 Agente autora entidades; Dream refina (no autor único)
+### 2.3 Agente autora entidades; Dream es la autoridad de coherencia
 
 - **Agente**: upserta entidades (campos/relaciones) directo, citando
-  fuente. Rápido, posiblemente sucio.
-- **Dream**: pasa de *autor* a **editor/curador** — dedup (absorb-judge
-  **activo**, no opt-in), normaliza claves, mergea, chequea coherencia,
-  y consolida observaciones sueltas que el agente no autoró como entidad.
-- **Coordinación (la regla que lo hace seguro)**: nadie reescribe en
-  bruto. Todos emiten **patches con provenance por campo**. Conflicto →
-  por provenance + recencia (campo nuevo con mejor fuente gana; el viejo
-  va a history vía `valid_from/valid_until`), nunca overwrite ciego. Lo
-  `user_authored` (editado a mano) sigue intocable. Es la maquinaria que
-  el dream **ya** tiene (JSON Patch + provenance + `.md.bak`), ahora
-  compartida por dos editores tipo wiki con historial y atribución.
+  fuente. Rápido, posiblemente sucio. La entidad **existe de inmediato**
+  (no más phantom-hasta-que-corra-dream).
+- **Dream**: **autoridad de coherencia**, no autor deferente. Mandato
+  **estrecho y único**: sanitizar / unificar / splitear / mergear — todo
+  lo relacionado a higiene de memoria, **sin objetivos de tarea**. Tiene
+  **visibilidad total** (puede leer toda la memoria + sesiones,
+  recuperando el contexto relevante por decisión — no todo en un prompt).
+- **Provenance por campo como árbitro**: cada campo lleva
+  `{source_ref, at, author: agent|dream|user}`. Es el libro de arbitraje.
+- **Precedencia (decidida): `user > dream > agent`.** Dream **gana** sobre
+  el agente — clave para coherencia entre **múltiples agentes y modelos**
+  escribiendo: ninguna escritura de un agente es canónica por sí sola;
+  dream, con visión global y mandato de higiene, arbitra. El humano
+  (`user_authored`) sigue arriba de todo. Dentro de un nivel → recencia.
+  Contradicción real → el valor viejo va a history (`valid_from/until`),
+  no overwrite ciego.
+- **Estructurado vs body**: frontmatter (attributes/relations) =
+  compartido con provenance; body (prosa) = curado por dream (el agente
+  puede append una sección atribuida).
+- Todo escribe por el **mismo pipeline** (`dream_apply`: JSON Patch +
+  validación + `.md.bak` + commit) — dos editores de un wiki, una pluma.
+
+**Implicación / riesgo** (vigilar): dream-gana sube la vara sobre dream —
+debe correr **fiable y seguido** (si tarda, los datos provisionales del
+agente quedan canónicos en el ínterin) y ser **correcto** (autoridad
+única → una mala decisión de dream pisa datos buenos). El salvavidas es
+`user > dream` (el humano corrige). Conecta con la fiabilidad de cron que
+ya arreglamos.
+
+### 2.6 Concurrencia de agentes — git como sustrato, merge semántico encima
+
+Requisito de primera: **puede haber múltiples agentes concurrentes** sobre
+la misma memoria. El diseño no asume un único escritor.
+
+- **Git = sustrato** (versionado, auditoría, sync distribuida, revert).
+  Cada escritura = un commit en `memory/.git`.
+- **Pero git NO resuelve el conflicto**: su merge **textual** mangla YAML/
+  markdown estructurado. La resolución debe ser **semántica**: parsear el
+  frontmatter como datos → merge de dict (claves disjuntas = unión
+  trivial) → mismo campo = precedencia (`user > dream > agent`) + recencia.
+- **Dos niveles de conflicto**:
+  1. *Write-time* (síncrono, por página): patch optimista con retry si la
+     base cambió. Como los patches son por-campo, lo común auto-mergea;
+     mismo campo → precedencia. (Lock o optimistic-retry.)
+  2. *Refine-time* (async, cross-entidad): dream resuelve incoherencia con
+     visión total (dedup, split, normalize, contradicción).
+- El que los patches sean por-campo (no reescrituras de página) es lo que
+  **hace tratable** la concurrencia: la mayoría de escrituras concurrentes
+  tocan campos distintos → mergean solas.
 
 ### 2.4 USER.md / MEMORY.md → inyección dinámica, no archivos del dream
 
@@ -145,10 +183,13 @@ de research habría autorado `company:mxhero` directo.
 
 ## 3. Preguntas abiertas (lo que falta resolver)
 
-1. **Regla de coordinación agente↔dream en detalle** (§2.3): formato del
-   upsert del agente; cómo el dream distingue "refinar" de "rehacer";
-   resolución de conflicto campo-a-campo; qué tool expone el agente
-   (`memory_upsert_entity`?).
+1. **Coordinación agente↔dream** — precedencia **DECIDIDA**:
+   `user > dream > agent` (dream = autoridad de coherencia, §2.3). Sigue
+   abierto: forma exacta del tool de upsert (`memory_upsert_entity`?);
+   mecanismo write-time de concurrencia (lock global vs optimistic-retry
+   con merge semántico, §2.6); y el requisito derivado de que **dream
+   corra fiable y seguido** (si dream gana, su latencia y correctitud son
+   críticas).
 2. **Capa de experiencia** (§2.1): ¿qué es exactamente? ¿`history.jsonl` +
    session summaries? ¿cómo referencia entidades del grafo? ¿cómo se
    "extrae hechos → grafo" sin volver al problema de episodic?
