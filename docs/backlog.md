@@ -51,6 +51,33 @@ Implementación posible:
 
 **Estado**: pendiente — requiere proposal más detallada antes de implementar.
 
+### Dream (Track A) destila mal — confunde USER.md y MEMORY.md
+
+**Contexto**: el Dream legacy (working-memory consolidator, cron `dream`)
+mantiene `SOUL.md` / `USER.md` / `MEMORY.md` vía un AgentRunner Fase 2 con
+`edit_file` ([durin/agent/memory.py::Dream](../durin/agent/memory.py)).
+
+**Problema** (observado en vivo, workspace real 2026-06-05): la
+destilación mezcla las fronteras de los archivos.
+- **Estado de proyecto/trabajo aparece en USER.md Y MEMORY.md**: USER.md
+  tiene "Work Context / Proyecto activo: Investigación profunda sobre
+  mxHERO…" y MEMORY.md tiene "Investigación mxHERO Inc. (completada)…".
+  Los hechos del proyecto deberían vivir en MEMORY.md (long-term facts),
+  no en el perfil del usuario.
+- **Duplicación intra-USER.md**: "Preferences" y "Special Instructions"
+  repiten lo mismo (responder en español, investigaciones exhaustivas,
+  batch, confirmar al guardar).
+
+**Propuesta tentativa**: afilar `dream_phase2.md` con fronteras
+explícitas — SOUL = identidad del agente; USER = quién es el usuario +
+cómo quiere ser servido (perfil/preferencias, **no** estado de
+proyectos); MEMORY = hechos de largo plazo del trabajo/mundo (proyectos,
+entorno técnico, research). Añadir una regla anti-duplicación (no repetir
+la misma instrucción en dos secciones/archivos).
+
+**Estado**: pendiente — identificado durante el análisis del sistema de
+memoria (Track A working-memory).
+
 ---
 
 ## §2 — Backlog (sin priorizar)
@@ -272,4 +299,4 @@ verifique que con `DURIN_HOME` seteado ningún path cae en `~/.durin`.
 
 ---
 
-## Last updated: 2026-06-04 (DURIN_HOME dev/daily separation añadido)
+## Last updated: 2026-06-05 (Dream Track A destila mal: confunde USER.md/MEMORY.md)
