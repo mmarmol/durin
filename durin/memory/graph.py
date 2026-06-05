@@ -89,6 +89,10 @@ def build_memory_graph(
     from durin.memory.paths import walk_class
 
     nodes_by_ref: dict[str, dict[str, Any]] = {}
+    # G1: explicit entity-page relations become typed edges (source, target,
+    # type). Previously the graph only drew co-occurrence edges from entry tags,
+    # so the new model's `relations` field rendered as 0 edges.
+    relation_edges: list[tuple[str, str, str]] = []
     for page_path in walk_class(workspace, "entities"):
         # `entities/<type>/<slug>.md` — derive `<type>` from the path.
         rel = page_path.relative_to(entities_root)
@@ -110,6 +114,12 @@ def build_memory_graph(
             "aliases": list(page.aliases or []),
             "weight": 0,  # filled from episodic count below
         }
+        for rel in (page.relations or []):
+            to_ref = str(rel.get("to") or "")
+            if ":" in to_ref:
+                relation_edges.append(
+                    (ref, to_ref, str(rel.get("type") or "related"))
+                )
 
     # 2. Walk entry classes (episodic + stable + corpus): accumulate
     # per-ref entry count + pairwise co-occurrence counts. Skip refs not
@@ -218,6 +228,20 @@ def build_memory_graph(
                     "phantom": True,
                 }
 
+    # 3.6 (G1): register relation targets with no page yet as phantom nodes so
+    # the explicit edge has both endpoints (dangling relations are allowed).
+    for _src, to_ref, _t in relation_edges:
+        if to_ref not in nodes_by_ref:
+            t_type, _, t_slug = to_ref.partition(":")
+            nodes_by_ref[to_ref] = {
+                "id": to_ref,
+                "type": t_type or "unknown",
+                "name": t_slug or to_ref,
+                "aliases": [],
+                "weight": 0,
+                "phantom": True,
+            }
+
     # 4. Build the edge list. Only keep edges where both endpoints are
     # in the node set (defensive; same-ref edges already collapsed
     # by the sorted() dedup above).
@@ -225,6 +249,18 @@ def build_memory_graph(
     for (a, b), weight in edge_counts.items():
         if a in nodes_by_ref and b in nodes_by_ref:
             edges.append({"source": a, "target": b, "weight": weight})
+
+    # G1: explicit entity-page relations as typed edges (carry the relation
+    # type so the webui can label "founded_by", "partner", …).
+    for src_ref, to_ref, rtype in relation_edges:
+        if src_ref in nodes_by_ref and to_ref in nodes_by_ref:
+            edges.append({
+                "source": src_ref,
+                "target": to_ref,
+                "type": rtype,
+                "kind": "relation",
+                "weight": 1,
+            })
 
     # Session→entity edges. We keep them DIRECTIONAL conceptually
     # (a session links to the entities it discussed) but the JSON
