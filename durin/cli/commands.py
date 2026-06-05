@@ -1335,9 +1335,6 @@ def _run_gateway(
         if job.name == "memory_dream":
             import asyncio as _asyncio
 
-            from durin.memory.dream_runner import DreamRunner
-            from durin.memory.vector_index import VectorIndex, vector_index_available
-
             workspace = config.workspace_path
             from durin.memory.dream_passes import (
                 run_extract_pass,
