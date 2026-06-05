@@ -1098,12 +1098,12 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                         <dd className="font-mono">{selected.weight}</dd>
                       </div>
                       {!detail.page ? (
-                        <p className="text-[11px] text-muted-foreground">
-                          <Trans
-                            i18nKey="memoryGraph.noConsolidatedHint"
-                            components={{ code: <code className="rounded bg-muted px-1" /> }}
-                          />
-                        </p>
+                        <PhantomInfo
+                          entries={detail.entries}
+                          selectedRef={selected.id}
+                          nodes={data?.nodes ?? []}
+                          onSelect={setSelected}
+                        />
                       ) : null}
                       {detail.page && detail.page.dream_processed_through ? (
                         <div className="flex justify-between gap-2">
@@ -1558,6 +1558,103 @@ function CommitItem({
         </div>
       ) : null}
     </li>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// PhantomInfo — Info-tab body for a phantom entity (tagged in entries but not
+// yet consolidated into a page). Answers "what is this?" from the referencing
+// entries: a provisional description (the most representative entry) + the
+// entities it co-occurs with (clickable to navigate). No page-derived fields.
+// ---------------------------------------------------------------------------
+
+function PhantomInfo({
+  entries,
+  selectedRef,
+  nodes,
+  onSelect,
+}: {
+  entries: MemoryEntityDetail["entries"];
+  selectedRef: string;
+  nodes: MemoryGraphNode[];
+  onSelect: (node: MemoryGraphNode) => void;
+}) {
+  const { t } = useTranslation();
+  // Provisional description: prefer a durable `stable` entry, else newest.
+  const best = entries.find((e) => e.class === "stable") ?? entries[0];
+  const byClass = new Map<string, number>();
+  const coCounts = new Map<string, number>();
+  for (const e of entries) {
+    byClass.set(e.class, (byClass.get(e.class) ?? 0) + 1);
+    for (const ref of e.entities ?? []) {
+      if (ref === selectedRef) continue;
+      coCounts.set(ref, (coCounts.get(ref) ?? 0) + 1);
+    }
+  }
+  const breakdown = [...byClass.entries()].map(([c, n]) => `${n} ${c}`).join(" · ");
+  const coMentions = [...coCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
+  const nodeByRef = new Map(nodes.map((n) => [n.id, n]));
+  const chipLabel = (ref: string) =>
+    ref.includes(":") ? ref.split(":").slice(1).join(":") : ref;
+
+  return (
+    <>
+      {breakdown ? (
+        <div className="text-[11px] text-muted-foreground">{breakdown}</div>
+      ) : null}
+      {best ? (
+        <div>
+          <dt className="text-muted-foreground">{t("memoryGraph.phantomWhatIs")}</dt>
+          <dd className="mt-0.5">
+            {best.headline ? <div className="font-medium">{best.headline}</div> : null}
+            {best.body ? (
+              <p className="mt-0.5 text-[11px] text-muted-foreground">
+                {best.body.slice(0, 200)}
+                {best.body.length > 200 ? "…" : ""}
+              </p>
+            ) : null}
+          </dd>
+        </div>
+      ) : null}
+      {coMentions.length > 0 ? (
+        <div>
+          <dt className="text-muted-foreground">{t("memoryGraph.coMentions")}</dt>
+          <dd className="mt-0.5 flex flex-wrap gap-1">
+            {coMentions.map(([ref, count]) => {
+              const node = nodeByRef.get(ref);
+              return node ? (
+                <button
+                  key={ref}
+                  type="button"
+                  title={ref}
+                  onClick={() => onSelect(node)}
+                  className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10.5px] transition-colors hover:bg-accent hover:text-accent-foreground"
+                >
+                  {chipLabel(ref)}{" "}
+                  <span className="text-muted-foreground">×{count}</span>
+                </button>
+              ) : (
+                <span
+                  key={ref}
+                  title={ref}
+                  className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10.5px] opacity-60"
+                >
+                  {chipLabel(ref)}{" "}
+                  <span className="text-muted-foreground">×{count}</span>
+                </span>
+              );
+            })}
+          </dd>
+        </div>
+      ) : null}
+      <p className="text-[11px] text-muted-foreground">
+        <Trans
+          i18nKey="memoryGraph.noConsolidatedHint"
+          components={{ code: <code className="rounded bg-muted px-1" /> }}
+        />
+      </p>
+    </>
   );
 }
 
