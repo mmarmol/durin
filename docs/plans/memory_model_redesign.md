@@ -147,7 +147,10 @@ e indexa (prosa searchable) — no más phantom-hasta-que-corra-dream.
 **DECISIÓN — división de estructuración (opción b).** El agente autora
 **name + aliases + relations + body (prosa)**. **Dream es el dueño único del
 esquema estructurado**: extrae/normaliza `attributes` desde la prosa + las
-sesiones.
+sesiones. **El body es del AGENTE — dream NO lo reescribe** (Sim 2B-1): extrae
+attributes *de* él y a lo sumo appendea una sección atribuida; nunca clobberea
+la prosa. (Body = agente; attributes = dream → ownership por-campo limpio, sin
+conflicto agent-vs-dream sobre el body.)
 **JUSTIFICACIÓN.** Si dream tiene la autoridad de coherencia, debe ser el
 único estructurador — N agentes/modelos emitiendo claves distintas =
 incoherencia. Costo (atributos finos demoran) lo cubre el dream **corto**
@@ -211,6 +214,13 @@ El CAS **lo da git**, no se inventa a mano:
   nada más escribe. El watcher intenta diffear el raw-edit → field-patch
   `user_authored`; si hubo write programático concurrente, best-effort
   (precedencia user, o warn). La danza editor-en-vivo sale del camino crítico.
+  **Requisito de track de base (Sim 2D-1)**: el watcher debe diffear contra la
+  **base last-synced del working tree** (el blob al que se ff por última vez),
+  **no contra HEAD** — si un write programático avanzó HEAD mientras el humano
+  editaba una versión vieja, diffear vs HEAD perdería el cambio del dream;
+  diffear vs la base + re-aplicar sobre HEAD los preserva ambos. Y **no ff sobre
+  un working tree sucio** (esperar a que el humano guarde). Nota para cuando se
+  construya (es best-effort).
 - **Implementación**: **dulwich** (ya es dep, ya envuelto en `GitRepo`/`GitStore`).
   `repo.refs.set_if_equals(ref, old, new)` = el CAS atómico; `object_store` +
   `Blob/Tree/Commit` = el commit por plumbing. Ops multi-entidad (merge/split) =
@@ -468,6 +478,13 @@ principal (no se guarda como `user.md`).
 - **Rol interlocutor** → marcador (`attributes.is_user` / relación al agente).
 - **Cadena de resolución (siempre aterriza)**: channel-id identificado →
   **owner** de la instalación (config default) → **`person:anonymous`** (piso).
+- **Principal POR-MENSAJE, no por-sesión (Sim 2C-1)**: una sesión puede ser
+  grupal/multi-usuario → **no hay un principal único por sesión**. El principal
+  se **re-resuelve en cada mensaje entrante** (cacheado): el scope PRINCIPAL
+  **swapea al hablante actual** ("a quién le respondo ahora"). Prefs en
+  conflicto (marcelo→español, susana→inglés) → aplican las **del hablante
+  actual**. La SESSION es compartida, pero cada turno se **atribuye a su
+  hablante** (la experiencia se rutea a la `person:` correcta).
 - **Cold-start (Sim-hallazgo #1)**: en la primera sesión la entidad owner aún
   no existe → **se auto-crea un placeholder** `person:<owner>` (`author=agent_created`
   para que dream/agente la enriquezcan), no se cae a anonymous. El placeholder
