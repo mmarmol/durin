@@ -281,42 +281,7 @@ class MemoryIngestTool(Tool):
             },
         )
 
-        # Post-ingest threshold trigger — reuses the same shared helper
-        # as ``memory_store``. Dormant by design: ingest can produce 800+
-        # corpus entries in a single bench burst, and per-write LLM
-        # dispatch (even gated by per-entity threshold) is unacceptable
-        # at that scale. Ingested material stays fully searchable via
-        # FTS + vector and gets consolidated by the daily ``memory_dream``
-        # cron. Re-enabling this path (e.g. by extracting entities at
-        # ingest time) MUST introduce an explicit throttle (token-floor,
-        # cron-batched, or per-session debounce) before the dispatch can
-        # actually fire. See ``project_ingest_dormant_rationale.md`` for
-        # the bench-derived rationale.
-        #
-        # The call below is left wired so the day a throttle exists, only
-        # one knob has to change. Today entities is always [] so the
-        # helper short-circuits.
-        try:
-            from durin.memory.storage import load_entry as _load_entry
-            from durin.memory.threshold_trigger import (
-                maybe_dispatch_threshold_dream,
-            )
-
-            entry = _load_entry(Path(stored["path"]))
-            entities = list(entry.entities or ())
-            if entities:
-                maybe_dispatch_threshold_dream(
-                    workspace=self._workspace,
-                    entities=entities,
-                    dream_config=self._dream_config,
-                    vector_index=vi,
-                    source_trigger="post_ingest_threshold",
-                    app_config=self._app_config,
-                )
-        except Exception:  # noqa: BLE001
-            logger.exception(
-                "post_ingest_threshold dispatch failed for %s",
-                stored.get("id"),
-            )
-
+        # §8e: the post-ingest threshold trigger (legacy DreamRunner dispatch)
+        # is removed. Ingested material is searchable via FTS + vector and gets
+        # processed by the daily extract/refine passes.
         return first_id
