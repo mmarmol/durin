@@ -703,6 +703,8 @@
     "noSourceLinkedEntries": "No episodic entries linked back to this session via source_refs.",
     "emptyHint": "Run <code>durin memory dream</code> once entries accumulate.",
     "noConsolidatedHint": "Tagged in episodic entries but no consolidated page yet. Run <code>durin memory dream</code> to create one.",
+    "phantomWhatIs": "What this is (provisional)",
+    "coMentions": "Co-mentions",
     "stats": "{{nodesLabel}} · {{edgesLabel}}",
     "nodesCount_one": "{{count}} node",
     "nodesCount_other": "{{count}} nodes",
