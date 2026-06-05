@@ -13,12 +13,21 @@ SCOPE            QUÉ                                           COMPARTICIÓN
 [ SELF ]         SOUL (comportamiento) + índice de skills      compartido, siempre
 [ GENERAL ]      conocimiento general: entidades top/known,    compartido, siempre
                  referencias clave, hechos del mundo
-[ USER ]         t0: usuario genérico + memoria genérica       por-usuario (cold→ident.)
-                 t1 (identificado): person:<u> + su slice
-                     de experiencia (mi historia con él/ella)
+[ SYSTEM ]       entidad system:local (entorno/instalación:    compartido, siempre
+                 paths, tools, capacidades, config)
+[ PRINCIPAL ]    a quién sirvo, vista COMPUESTA (no guardada): por-principal (cadena
+  (ex-"USER")    person: resuelto + sus stance/practice         id → owner → anonymous)
+                 + ancla user_authored. Resolución:
+                 channel-id → owner (default) → anonymous
 [ SESSION ]      memoria de la sesión actual (qué pasó acá)    por-sesión (compartida
                                                                 entre participantes)
 ```
+
+**Nota (§2.12)**: "USER" se generaliza a **PRINCIPAL** = la entidad a la que el
+agente sirve (humano, otro agente, o el sistema), resuelta por la cadena
+`channel-id → owner → person:anonymous`. La vista se **ensambla** (person +
+stance/practice + ancla user_authored), no se guarda como `user.md`. Y se suma
+el scope **SYSTEM** (entorno), que faltaba.
 
 **Modelo de compartición** (clave): el **grafo de conocimiento es mayormente
 compartido** (el mundo es el mundo; mxHERO es mxHERO para todos) — excepto
