@@ -69,3 +69,24 @@ def test_refine_skips_user_managed(tmp_path):
     assert any(s["reason"] == "user_managed" for s in out["skipped"])
     assert counter["n"] == 0                            # judge not reached
     assert not out["merged"]
+
+
+def test_refine_merge_preserves_relations_and_attributes(tmp_path):
+    # the canonical's relations + attributes must survive the absorb — the new
+    # model carries the entity graph + structured facts on the page, and
+    # _merge_pages used to drop them (data loss / G1).
+    write_entity(tmp_path, "company:mxhero",
+                 [FieldPatch(kind="alias", value="mxHERO", author="agent", source_ref="s", at=NOW),
+                  FieldPatch(kind="relation", value={"to": "person:alex", "type": "founded_by"},
+                             author="agent", source_ref="s", at=NOW),
+                  FieldPatch(kind="attribute", key="hq", value="US",
+                             author="dream", source_ref="s", at=NOW)],
+                 create=True, name="mxHERO Inc.")
+    write_entity(tmp_path, "company:mxhero_inc",
+                 [FieldPatch(kind="alias", value="mxHERO", author="agent", source_ref="s", at=NOW)],
+                 create=True, name="mxHERO Incorporated")
+    out = run_refine(tmp_path, llm_invoke=_judge_stub("same", 98))
+    assert out["merged"]
+    page = EntityPage.from_file(tmp_path / "memory/entities/company/mxhero.md")
+    assert {"to": "person:alex", "type": "founded_by"} in page.relations
+    assert page.attributes.get("hq") == "US"
