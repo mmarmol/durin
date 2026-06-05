@@ -63,6 +63,14 @@ def test_two_writers_different_fields_both_land(tmp_path):
     assert "mxHERO Inc." in page.aliases
 
 
+def test_write_entity_sets_display_name(tmp_path):
+    write_entity(tmp_path, "company:mxhero",
+                 [FieldPatch(kind="body_append", value="x", author="agent",
+                             source_ref="s", at=NOW)], create=True, name="mxHERO Inc.")
+    page = EntityPage.from_file(_page_path(tmp_path, "company:mxhero"))
+    assert page.name == "mxHERO Inc."
+
+
 def test_missing_without_create_raises(tmp_path):
     import pytest
     with pytest.raises(FileNotFoundError):
