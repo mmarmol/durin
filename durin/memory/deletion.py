@@ -15,6 +15,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+from durin.memory.entity_page import EntityPage
 from durin.memory.refine_dream import add_tombstone
 
 __all__ = [
@@ -85,7 +86,7 @@ def delete_entity(workspace: Path, ref: str, *, reason: str = "user_delete") -> 
     now = datetime.now(timezone.utc).isoformat()
     _archive_file(src, dest, {"deleted": "true", "deleted_at": now,
                               "deleted_reason": reason})
-    _invalidate_alias_cache(workspace)
+    _alias_remove(workspace, ref)                   # surgical: drop one ref
     return dest
 
 
@@ -125,17 +126,32 @@ def unmerge(workspace: Path, canonical: str, absorbed: str,
                         encoding="utf-8")
         arch.unlink()
         restored = True
-    _invalidate_alias_cache(workspace)              # the shared index dropped it on absorb
+    if restored:
+        _alias_refresh(workspace, absorbed)         # surgical: re-add the restored ref
     add_tombstone(workspace, canonical, absorbed)   # do_not_absorb
     return restored
 
 
-def _invalidate_alias_cache(workspace: Path) -> None:
-    """The alias index is a workspace-shared cache mutated in place during
-    absorb(); after a file move it must be rebuilt so candidates reflect disk."""
+# The alias index is a workspace-shared in-memory cache that absorb() mutates in
+# place (idx.remove). After a file move we keep it consistent SURGICALLY — one
+# ref removed / re-added — never a full rebuild (which re-walks every entity on
+# disk; invalidate_alias_index is reserved for out-of-band edits and tests).
+def _alias_remove(workspace: Path, ref: str) -> None:
     try:
-        from durin.memory.aliases_cache import invalidate_alias_index
-        invalidate_alias_index(Path(workspace) / "memory")
+        from durin.memory.aliases_cache import get_shared_alias_index
+        get_shared_alias_index(Path(workspace) / "memory").remove(ref)
+    except Exception:  # pragma: no cover - best effort
+        pass
+
+
+def _alias_refresh(workspace: Path, ref: str) -> None:
+    try:
+        from durin.memory.aliases_cache import get_shared_alias_index
+        type_, _, slug = ref.partition(":")
+        path = Path(workspace) / "memory" / "entities" / type_ / f"{slug}.md"
+        page = EntityPage.from_file(path)
+        if page is not None:
+            get_shared_alias_index(Path(workspace) / "memory").refresh_for(page, slug)
     except Exception:  # pragma: no cover - best effort
         pass
 
