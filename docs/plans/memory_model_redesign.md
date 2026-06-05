@@ -125,7 +125,7 @@ eje equivocado y dream miraba sólo una.
 | `stable` | — | **SE DISUELVE** (→ entidad o registro de sesión) |
 | `session` | experiencia: crudo = verdad = input de dream | REUSE |
 | `session_summary` | experiencia: vista de recall para hot-path | REUSE |
-| `history.jsonl` | — | **CANDIDATO A REMOCIÓN** (sessions+summaries lo cubren; ABIERTO §4) |
+| `history.jsonl` | — | **SE ELIMINA** (era el feed aplanado del dream legacy; el dream nuevo lee sessions directo; recall = search SESSION) |
 | `pending` | buffer de intake | REUSE |
 | `archive` | terminal | REUSE |
 | `SOUL.md` | constitución del agente | REUSE — pasa a `user_authored`, fuera de dream (§2.9) |
@@ -449,8 +449,10 @@ CONCURRENCIA:               git sustrato + merge semántico (no textual)
    [memory_seq_ingesta.md](memory_seq_ingesta.md) E3a): merge no-replace, body
    append atribuido, sin `attributes` (dream extrae), relation dangling
    permitido, dedup a dream, crea-si-no-existe.
-3. **`history.jsonl`**: ¿se elimina (sessions+summaries lo cubren) o queda?
-   (§2.3).
+3. **`history.jsonl`** — **DECIDIDO: se elimina** (§2.3). Era el feed plano
+   global que alimentaba al dream legacy (batches `[RAW] N messages` por
+   `cursor`); su único consumidor se disuelve y el dream nuevo lee `sessions/`
+   directo. `sessions/<id>/<id>.jsonl` (por-sesión) es la fuente canónica.
 4. **Referencias** — **DECIDIDO** (§2.8, §2.11, ingesta E3b): doc entero =
    reference page (marcador REFERENCE); FTS indexa entero; vector = chunks por
    sección (token-split, parent-pointer); agente+dream linkean entidades;
@@ -467,8 +469,11 @@ CONCURRENCIA:               git sustrato + merge semántico (no textual)
 7. **Cadencia/disparo de los dreams** — **DECIDIDO** (§2.7): CORTO reactivo
    (session-close + post-compaction) + safety-net ~2h + gate; LARGO diario +
    refine-pressure; ambos comparten lock + throttle.
-8. **Reset manual de cursor** (§2.6): cómo se expone "re-procesar desde turno
-   X".
+8. **Reset de cursor** — **DECIDIDO** (§2.6): acción CLI + dashboard
+   (`durin memory reprocess --session <id> [--from-turn N]`) que rebobina el
+   cursor de extracción por-sesión (default turno 0) → el próximo dream-corto
+   re-extrae. Seguro: re-aplicar field-patches es idempotente bajo
+   provenance+precedencia (+ dedup). Cursor storage: meta/sidecar por-sesión.
 
 ---
 
