@@ -287,7 +287,11 @@ def cmd_dream(
     # entity attributes) + the refine pass (dedup), replacing the legacy
     # episodic-entry consolidation (DreamRunner / DreamConsolidator). The
     # `entity` filter is not used by the new passes.
-    from durin.memory.dream_passes import run_extract_pass, run_refine_pass
+    from durin.memory.dream_passes import (
+        run_extract_pass,
+        run_refine_pass,
+        run_skill_extract_pass,
+    )
     from durin.memory.model_resolve import resolve_memory_model
 
     if dry_run:
@@ -301,12 +305,15 @@ def cmd_dream(
     model = resolve_memory_model(cfg)
     console.print("[dim]Extract pass (sessions → entity attributes)…[/dim]")
     ex = run_extract_pass(workspace, model=model)
+    console.print("[dim]Skill-extract pass (sessions → reusable procedures)…[/dim]")
+    sk = run_skill_extract_pass(workspace, model=model)
     console.print("[dim]Refine pass (dedup duplicate entities)…[/dim]")
     rf = run_refine_pass(workspace, model=model)
     merged = len(rf.get("merged", []))
     console.print(
         f"\n[green]✓[/green] extract: {ex['entities']} attribute update(s) across "
-        f"{ex['sessions']} session(s); refine: {merged} merge(s)"
+        f"{ex['sessions']} session(s); skills: {sk.get('skills_touched', 0)}; "
+        f"refine: {merged} merge(s)"
     )
     if ex.get("errors"):
         console.print(
