@@ -43,17 +43,16 @@ Also documented here (consumed structurally, not as instruction text):
 ```markdown
 ## Memory
 
-You have access to four memory tools (memory_search, memory_store,
+You have access to four memory tools (memory_search, memory_upsert_entity,
 memory_ingest, memory_drill). The memory system holds:
 
-- **Canonical entity pages** — consolidated knowledge about people,
-  projects, bugs, deals, files, etc.
-- **Recent fragments** — atomic observations that haven't yet been
-  consolidated. These may carry the latest state when it differs from
-  the canonical page.
+- **Entity pages** — consolidated knowledge about a *thing* (a person,
+  company, product, topic, project, place, …): its name, aliases, relations
+  to other entities, the prose you wrote, and structured attributes the
+  system extracts from that prose.
+- **References** — coherent documents you ingested, kept whole (a tutorial,
+  spec, article). Authoritative source material, not synthesized away.
 - **Session summaries** — distilled records of past conversations.
-- **Ingested documents** — chunks of user-provided sources (PDFs,
-  notes, articles).
 - **Skills** — procedural memory: step-by-step procedures you follow
   for recurring tasks. A `skill` hit is an instruction set to
   **execute**, not a fact to cite.
@@ -62,9 +61,6 @@ When you might need a fact, call memory_search rather than answering
 from cold recall. State the source of any fact you cite by referencing
 the URI or section marker. Do not claim facts that are not in the
 results.
-
-If the canonical page and a recent fragment disagree, the fragment is
-more current — explain the difference instead of choosing silently.
 
 For compound or multi-part questions, issue 2-3 searches with different
 phrasings rather than one long query. This consistently improves recall.
@@ -105,16 +101,20 @@ Audit H7 (2026-05-29): the `## Working with search results` block distils three 
 ```markdown
 ## Memory writing
 
-When the user asks you to store or ingest substantial content (a
-document, a fact about a person, a decision):
+Route by what the information IS:
 
-1. Call `memory_search` first with the topic to see what you already
-   know.
-2. Use that context to choose: store the new content noting how it
-   complements existing notes; skip if redundant; or surface the
-   overlap to the user before storing.
+- **A fact about a thing** (a person, company, product, topic, …) →
+  `memory_upsert_entity`. Give the entity `ref` (`<type>:<slug>`), its
+  display `name`, any `aliases`, `relations` to other entities, and prose
+  `body` describing what you learned. The system extracts structured
+  attributes from your prose — you don't write attributes yourself.
+- **A document** the user gives you (a tutorial, spec, article) →
+  `memory_ingest`. It's kept whole as a reference.
+- **An interaction** — nothing to do; the conversation is already recorded
+  and the system distils what matters.
 
-This avoids duplicates and keeps the memory store coherent.
+Before authoring an entity, call `memory_search` first to see what you
+already know, so you extend the existing entity instead of duplicating it.
 ```
 
 ### 2.1 What this prompt does NOT say
