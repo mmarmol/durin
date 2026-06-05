@@ -101,6 +101,14 @@ def write_entity(
                 type=type_, name=slug
             )
 
+        # §2.4: default is agent-managed. memory_writer IS the agent/dream
+        # write path, so every page it writes is agent_created. The user opts
+        # to manage a page (page-level user_authored) via a SEPARATE path
+        # (direct edit / dashboard), which the refine dream then leaves alone.
+        # (Guarding memory_writer from writing an already-user_authored page is
+        # the human-edit phase; here the writes are agent/dream by definition.)
+        page.author = "agent_created"
+
         changed = False
         if name is not None and page.name != name:
             page.name = name
