@@ -192,13 +192,22 @@ El CAS **lo da git**, no se inventa a mano:
   canónica → reintentar es seguro. Patches por-campo → conflictos raros (campos
   distintos = re-aplicar auto-mergea). Nunca merge **textual** de git (manglaría
   YAML); el merge es **semántico** (re-aplicar el patch sobre la base nueva).
-- **Working tree (superficie humana)**: los writes programáticos van por
-  plumbing (no tocan el working tree); la edición humana directa la **detecta el
-  watcher y la commitea** (`user_authored`) → entra a la misma cadena de CAS; el
-  working tree se mantiene en sync (ff a HEAD) para que el humano vea.
-- **JUSTIF**: único modelo uniforme (gateway+CLI+editor+multi-host) y file-first
-  (la edición humana es otro escritor que git absorbe; single-writer pelearía).
-  git **ya** tiene el primitivo atómico — no hay que construir CAS a mano.
+- **Escritores de primera clase** (agente, dream, **humano vía dashboard**):
+  todos pasan por `memory_writer` → field-patch → CAS por plumbing (**no tocan
+  el working tree** → sin race de working tree en el camino crítico).
+- **Edición raw en Obsidian = best-effort, NO garantía v1**: el working tree se
+  mantiene **ff a HEAD** → Obsidian es un gran **lector** + editor seguro cuando
+  nada más escribe. El watcher intenta diffear el raw-edit → field-patch
+  `user_authored`; si hubo write programático concurrente, best-effort
+  (precedencia user, o warn). La danza editor-en-vivo sale del camino crítico.
+- **Implementación**: **dulwich** (ya es dep, ya envuelto en `GitRepo`/`GitStore`).
+  `repo.refs.set_if_equals(ref, old, new)` = el CAS atómico; `object_store` +
+  `Blob/Tree/Commit` = el commit por plumbing. Ops multi-entidad (merge/split) =
+  **un commit multi-archivo** → atómico por construcción.
+- **JUSTIF**: único modelo uniforme (gateway+CLI+dashboard+multi-host) y
+  file-first (markdown sigue siendo la verdad legible/versionada; los writes
+  seguros van por `memory_writer`). git **ya** tiene el primitivo atómico — no
+  se construye CAS a mano.
 
 **Capa 2 — exclusión de pasada de dream: SE MANTIENE un lock (≠ write-lock).**
 Un lock por working-tree (`.dream.lock`-style, cross-process, stale-takeover)
