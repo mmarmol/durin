@@ -24,6 +24,7 @@ from dulwich.repo import Repo
 from durin.memory.entity_page import EntityPage
 from durin.memory.field_patch import FieldPatch, apply_field_patch
 from durin.memory.git_plumbing import (
+    build_commit_with_changes,
     build_commit_with_file,
     default_ref,
     head_sha,
@@ -31,7 +32,7 @@ from durin.memory.git_plumbing import (
 )
 from durin.memory.provenance import current_author
 
-__all__ = ["WriteResult", "write_entity"]
+__all__ = ["WriteResult", "write_entity", "write_files_cas"]
 
 _MAX_RETRIES = 30
 # Bridge: page-level author (2 values) → field-level author (3 values).
@@ -143,6 +144,58 @@ def write_entity(
 
     raise RuntimeError(
         f"write_entity({ref}) exceeded {_MAX_RETRIES} CAS retries (high contention)"
+    )
+
+
+def write_files_cas(
+    workspace: Path,
+    changes: dict[str, bytes | None],
+    *,
+    message: str,
+    author: bytes = b"durin-memory <memory@durin.local>",
+) -> str | None:
+    """Commit MULTIPLE file changes atomically via plumbing + CAS, then ff.
+
+    ``changes`` maps rel_path (under ``memory/``) → bytes (write) or None
+    (delete). This is the multi-file analogue of ``write_entity`` — the entity
+    merge uses it so the refine commits like memory_writer (no porcelain
+    working-tree staging, resilient to ref-lock contention). Returns the new
+    commit sha (hex) on commit; None if ``changes`` is empty.
+    """
+    if not changes:
+        return None
+    root = Path(workspace) / "memory"
+    _ensure_repo(root)
+    msg = message.encode("utf-8") if isinstance(message, str) else message
+    for attempt in range(_MAX_RETRIES):
+        base = head_sha(root)
+        new_commit = build_commit_with_changes(
+            root, base, changes, author=author, message=msg)
+        repo = Repo(str(root))
+        try:
+            ok = repo.refs.set_if_equals(default_ref(repo), base, new_commit)
+        except FileLocked:
+            ok = False
+        finally:
+            repo.close()
+        if ok:
+            _fast_forward_working_tree(root)
+            # dulwich `reset --hard` does not reliably remove working-tree files
+            # that are absent from the target tree; enforce deletions explicitly
+            # so the working tree matches the commit.
+            for rel_path, content in changes.items():
+                if content is None:
+                    fpath = root / rel_path
+                    try:
+                        fpath.unlink()
+                    except FileNotFoundError:
+                        pass
+                    except OSError:  # pragma: no cover
+                        pass
+            return new_commit.decode("ascii")
+        time.sleep(random.uniform(0.0, 0.005) * (attempt + 1))
+    raise RuntimeError(
+        f"write_files_cas exceeded {_MAX_RETRIES} CAS retries (high contention)"
     )
 
 

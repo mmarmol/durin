@@ -21,6 +21,7 @@ __all__ = [
     "head_sha",
     "read_blob_at_head",
     "build_commit_with_file",
+    "build_commit_with_changes",
 ]
 
 _FILE_MODE = 0o100644
@@ -110,6 +111,71 @@ def build_commit_with_file(
         return commit.id
     finally:
         repo.close()
+
+
+def build_commit_with_changes(
+    root: Path,
+    base_commit: bytes | None,
+    changes: dict[str, bytes | None],
+    *,
+    author: bytes,
+    message: bytes,
+) -> bytes:
+    """Build a commit applying MULTIPLE file changes atomically.
+
+    ``changes`` maps rel_path → bytes (create/update) or None (delete). Returns
+    the new commit sha. No ref move, no working-tree mutation. Used for the
+    entity merge (canonical updated + absorbed deleted + archive created in ONE
+    commit), so the refine never touches the working tree (design §2.5).
+    """
+    repo = Repo(str(root))
+    try:
+        store = repo.object_store
+        cur = store[store[base_commit].tree] if base_commit else Tree()
+        for rel_path, content in changes.items():
+            parts = rel_path.encode().split(b"/")
+            if content is None:
+                cur = _remove_path(store, cur, parts)
+            else:
+                blob = Blob.from_string(content)
+                store.add_object(blob)
+                cur = _set_path(store, cur, parts, blob.id)
+            store.add_object(cur)
+        commit = Commit()
+        commit.tree = cur.id
+        commit.parents = [base_commit] if base_commit else []
+        commit.author = commit.committer = author
+        commit.author_time = commit.commit_time = int(time.time())
+        commit.author_timezone = commit.commit_timezone = 0
+        commit.encoding = b"utf-8"
+        commit.message = message
+        store.add_object(commit)
+        return commit.id
+    finally:
+        repo.close()
+
+
+def _remove_path(store, tree: Tree, parts: list[bytes]) -> Tree:
+    """Return a NEW Tree with ``parts`` removed, rebuilding subtrees. Drops a
+    subdirectory that becomes empty (git does not track empty dirs)."""
+    names = {e.path for e in tree.items()}
+    if parts[0] not in names:
+        return tree                                  # nothing to remove
+    new = Tree()
+    if len(parts) == 1:
+        for e in tree.items():
+            if e.path != parts[0]:
+                new.add(e.path, e.mode, e.sha)
+    else:
+        head, rest = parts[0], parts[1:]
+        new_sub = _remove_path(store, store[tree[head][1]], rest)
+        for e in tree.items():
+            if e.path != head:
+                new.add(e.path, e.mode, e.sha)
+        if list(new_sub.items()):                    # keep only if non-empty
+            store.add_object(new_sub)
+            new.add(head, _DIR_MODE, new_sub.id)
+    return new
 
 
 def _set_path(store, tree: Tree, parts: list[bytes], blob_id: bytes) -> Tree:
