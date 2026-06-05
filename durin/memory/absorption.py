@@ -345,11 +345,40 @@ def _merge_pages(
     else:
         new_body = canonical_body + "\n"
 
+    # relations: union, dedup by (to, type). The new model carries the entity
+    # graph here, so dropping these silently disconnected merged entities (G1).
+    merged_relations = [dict(r) for r in canonical.relations]
+    seen_rel = {(r.get("to"), r.get("type")) for r in merged_relations}
+    for r in absorbed.relations:
+        key = (r.get("to"), r.get("type"))
+        if key not in seen_rel:
+            seen_rel.add(key)
+            merged_relations.append(dict(r))
+
+    # attributes: union; the canonical (survivor) wins on a key conflict.
+    # (User-managed pages are never merged — Phase 4 skips them — so this can't
+    # clobber a user attribute.)
+    merged_attributes = dict(absorbed.attributes)
+    merged_attributes.update(canonical.attributes)
+
+    # provenance: keep canonical's (its attribute/relation indices stay valid
+    # as canonical's relations come first); fold in absorbed's attribute
+    # provenance for keys canonical didn't already have.
+    merged_prov: dict = dict(canonical.provenance) if canonical.provenance else {}
+    attr_prov = dict(merged_prov.get("attributes") or {})
+    for k, entry in ((absorbed.provenance or {}).get("attributes") or {}).items():
+        attr_prov.setdefault(k, entry)
+    if attr_prov:
+        merged_prov["attributes"] = attr_prov
+
     return EntityPage(
         type=canonical.type,
         name=canonical.name,
         aliases=merged_aliases,
         body=new_body,
+        attributes=merged_attributes,
+        relations=merged_relations,
+        provenance=merged_prov,
         dream_processed_through=canonical.dream_processed_through,
         created_at=canonical.created_at,
         updated_at=canonical.updated_at,
