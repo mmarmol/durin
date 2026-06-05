@@ -192,6 +192,36 @@ la misma memoria. El diseño no asume un único escritor.
 
 ---
 
+## 2.7 Inventario de clases (no nuevas — se simplifica)
+
+**0 clases nuevas · 3 remociones · el resto reuse con cambio de lógica/rol.**
+
+| Clase hoy | En el modelo nuevo | Cambio |
+|---|---|---|
+| `entity` | entidades (grafo) | REUSE — lógica: agente autora, dream refina |
+| `ingested` | doc coherente = reference page | REUSE — index + marcar REFERENCE |
+| `corpus` | índice de recuperación → page | REUSE — cambia rol |
+| `episodic` | observación (experiencia) | REUSE — pierde el par durabilidad |
+| `stable` | — | **SE DISUELVE** (→ observación o entidad) |
+| `session` / `session_summary` | experiencia (record/recall) | REUSE |
+| `history.jsonl` | log de experiencia | REUSE (¿o lo reemplazan sessions? §3.2) |
+| `pending` | buffer de intake | REUSE |
+| `archive` | terminal | REUSE |
+| `SOUL.md` + `skills/` | sí-mismo del agente | REUSE |
+| `MEMORY.md` / `USER.md` | — | **SE DISUELVEN** (→ inyección hot_layer) |
+
+Micro-decisiones a nivel clase (ninguna es clase nueva):
+- **Reference**: marcador REFERENCE + indexar el `ingested/source.md` que ya
+  existe — **sin carpeta nueva** (decidido: minimal).
+- **Observación**: ¿una sola clase (`episodic`, sin `stable`) o se pliega en
+  `sessions`+`summaries`? → es el fork de la capa de experiencia (§3.2).
+
+El error nunca fue "faltan clases": el agente las usaba por el eje equivocado
+(durabilidad) y dream solo miraba una. Se arregla el ruteo + autoría + rol de
+dream, no el storage.
+
+---
+
 ## 3. Preguntas abiertas (lo que falta resolver)
 
 1. **Coordinación agente↔dream** — precedencia **DECIDIDA**:
