@@ -415,6 +415,44 @@ tokenizer del embedding** (≤~480 con margen), no por chars.
 **ABIERTO (tuneable, no urgente porque es re-derivable):** migrar a un embedder
 long-context (bge-m3 / nomic-embed, 8192 tok) para chunks/summaries más grandes.
 
+### 2.12 Identidad del principal + entidad de sistema (#5)
+
+**DECISIÓN — el "user" es el PRINCIPAL resuelto, no una entidad ni un archivo.**
+El agente sirve a un **principal** (la entidad a la que sirve esta sesión):
+humano, otro agente, o el sistema. La "vista de usuario" se **ensambla** del
+principal (no se guarda como `user.md`).
+- **Tipo único `person:`** (no `user:` aparte) — para que dream lo **unifique**
+  (el absorb es **same-type**; dos tipos = duplicado permanente, lo contrario
+  de lo que se busca).
+- **Channel-ids → `identifiers`** de la persona (`slack:U123`, `telegram:456`,
+  `email:…`, `hostname:…`). Extender el absorb-judge para que el overlap cuente
+  identifiers además de aliases.
+- **Rol interlocutor** → marcador (`attributes.is_user` / relación al agente).
+- **Cadena de resolución (siempre aterriza)**: channel-id identificado →
+  **owner** de la instalación (config default) → **`person:anonymous`** (piso).
+- **Otro agente como interlocutor**: es otra entidad-actor; el **principal
+  humano detrás** se hereda por la cadena de delegación (default owner) — se
+  sirven las prefs del humano, no del agente intermediario.
+- **Autónomo (dream/cron)**: sin principal vivo → vista = SELF + GENERAL (+
+  owner como default).
+- **Desempate**: dream-absorb (overlap de identifiers/aliases) + UI eventual
+  (confirmar/separar/mergear). **Límite R4 aceptado**: no hay solver universal.
+- **Ancla user_authored (control manual)**: el usuario ajusta su modelo
+  escribiendo una `stance`/`practice` **`user_authored` force-pinned** (dream no
+  la toca, como SOUL); el dashboard expone un editor "mi perfil". **NO** un
+  `user.md` plano gestionado por dream (era el bug original).
+
+**DECISIÓN — entidad `system:` / `environment:` (el entorno, hueco que faltaba).**
+La info de sistema (paths, tools instaladas, capacidades, config de
+instalación) — que vivía en MEMORY.md y se quedó sin casa — pasa a una
+**entidad de entorno** (`system:local`): **always-on pinned**, **autorada por el
+agente** (descubre paths/tools) **+ editable por el usuario**. Reusa entidad +
+pin budget + dream refine.
+
+**El `hot_layer` ensambla entonces**: SELF (SOUL) + PRINCIPAL (person + sus
+stance/practice + ancla user_authored) + **SYSTEM** (entorno) + GENERAL +
+SESSION.
+
 ---
 
 ## 3. Modelo consolidado (vista de un vistazo)
@@ -432,11 +470,16 @@ CONOCIMIENTO — referencias ingested/source (REFERENCE)      agente ingiere
                           corpus/ (índice→page)             (dream NO sintetiza)
 CONOCIMIENTO — feedback   entities stance:/practice:        agente autora (de correcciones)
   (cómo trabajar)         (always_on attr, pin hot_layer)   + dream refina/decide always-on
+CONOCIMIENTO — sistema    entity system:local (always-on)   agente autora (descubre) + usuario edita
+  (entorno/instalación)   paths/tools/capacidades/config
 
 SÍ-MISMO                  SOUL.md (constitución)            SOLO usuario (manual)
   (cómo soy/qué sé hacer) skills/<name>/SKILL.md            dream corto (crea) + largo (refina)
 
-SIEMPRE-PRESENTE          (no es clase — se ensambla)       hot_layer (pin/vista sobre lo de arriba)
+PRINCIPAL (interlocutor)  person: resuelto (id→owner→anon)  vista compuesta (no se guarda)
+  (a quién sirvo)         + sus stance/practice + ancla     ancla = stance user_authored force-pin
+
+SIEMPRE-PRESENTE          (no es clase — se ensambla)       hot_layer = SELF+PRINCIPAL+SYSTEM+GENERAL+SESSION
 
 PRECEDENCIA de escritura:   user > dream > agent          (provenance por campo arbitra)
 TRES VELOCIDADES:           síncrono (agente) → corto (~2h, extract) → largo (diario, refine)
@@ -466,9 +509,11 @@ CONCURRENCIA:               git sustrato + merge semántico (no textual)
    sección (token-split, parent-pointer); agente+dream linkean entidades;
    búsqueda surface la page una vez (dedup por parent). **ABIERTO/tuneable**:
    embedder long-context (8192) y split de blob multi-artículo en varias pages.
-5. **Resolución user-de-sesión → entidad `person:`** (§2.9): el mapeo
-   channel-user-id → entidad es el problema de identidad cross-channel (R4).
-   Trivial para webui (dueño único); manual/LLM en multi-channel.
+5. **Identidad del principal** — **DECIDIDO** (§2.12): `person:` único +
+   channel-ids en `identifiers` + rol interlocutor + vista compuesta del
+   principal + cadena de resolución (identificado → owner → anonymous) +
+   dream-absorb/UI para desempatar (límite R4 aceptado). Ancla `user_authored`
+   force-pinned para control manual. Entidad `system:` nueva para el entorno.
 6. **Presupuesto de pin de always-on** — **DECIDIDO** (§2.10): budget de tokens
    configurable + ranking (user-force-pin > global > scoped; desempate recencia
    + frecuencia) + tres tiers (must-inject / if-budget / on-demand) + dream-largo
