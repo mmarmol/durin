@@ -297,8 +297,11 @@ entidad sobre episodic. En el modelo nuevo: **un cursor de extracción
 por-sesión** (forward: "extraje hasta turno N de esta sesión").
 **JUSTIFICACIÓN — por-sesión, no global.** Concurrencia: un puntero global
 podría saltarse una sesión activa con turnos viejos cuando otra más reciente
-avanza el puntero. El **refinamiento** (§2.7 largo) NO usa cursor — opera
-sobre el grafo completo.
+avanza el puntero. El **refinamiento** (§2.7 largo) no usa cursor de sesión,
+pero **NO opera sobre el grafo completo cada vez** — es **incremental sobre un
+dirty-set** (entidades que el extract tocó + nuevos alias-overlaps), con un
+full-sweep raro de red de seguridad (Sim 4A-2, §2.15). "Grafo completo cada
+día" no escala.
 **ARISTA.** Cursor-forward = dream no re-extrae turnos viejos; si la
 extracción se perdió un hecho, el cursor solo no lo reintenta. Mitigan: el
 refine graph-wide, futuras re-menciones, la provenance, y un reset manual
@@ -575,6 +578,37 @@ referencias son lo que el agente autora). Se agrega:
     lo chequea → nunca re-propone ese par.
   - **Permanente, override-able por el usuario** (nueva evidencia NO lo levanta
     sola; el usuario sí). Solo el usuario tombstonea (es su autoridad).
+
+### 2.15 Escala y costo (Sim escenario 4)
+
+- **4A-2 — Refine incremental, NO graph-wide cada vez (refinamiento de diseño).**
+  "Refine sobre el grafo completo diario" no escala (5,000 entidades = re-judge
+  redundante de todos los pares). El dream-largo opera sobre un **dirty-set**:
+  entidades que el extract tocó + **nuevos alias-overlaps** desde el último
+  refine (vía alias index). **Full-sweep raro** (semanal/mensual) de red de
+  seguridad. Corrige §2.6.
+- **4B-1 — Budget per-pass + drain en el extract.** Una ingesta masiva (300
+  refs) = spike de costo. El extract reusa el patrón del dream viejo
+  (`max_seconds_per_run` + drain-loop): extrae N por pasada, **difiere el resto**
+  a la próxima. Acota el envelope (gap #8).
+- **4A-1 — known-entities = sample, no exhaustiva.** A escala, la inyección
+  GENERAL del hot_layer es un **sample top/relevante**; el prompt debe dejar
+  claro que **no es exhaustiva** → el agente **busca** las entidades
+  task-specific. Degradación graceful (ya implícito en "GENERAL bounded").
+- **Escalan bien (confirmado)**: el **cursor por-sesión** (el extract solo lee
+  post-cursor, no re-lee meses de sesiones) y el **pin budget de always-on**
+  (§2.10 converge/demota el set de feedback). El pin budget era load-bearing.
+
+**Capa de grafo — punto de evolución (no graph DB, no ahora).** El diseño tiene
+operaciones con forma de grafo (traversal, vecindario, dedup, dirty-set), hoy
+servidas por **frontmatter `relations` + alias index + build in-memory**
+(`graph.py`, `aliases_index.py`) — **suficiente para las operaciones actuales**
+(ninguna pide multi-hop ni analytics). Una **graph DB NO puede reemplazar el
+file-first** (markdown = canónico); a lo sumo sería un **índice de grafo
+DERIVADO** (lo más liviano: tabla SQLite `edges(from,to,type)`, re-derivable),
+al lado de FTS+vector. Se agrega **solo cuando** aparezca (a) una feature de
+**graph-reasoning del agente** (multi-hop, analytics, shortest-path) — hoy no
+existe; o (b) un **cuello de botella MEDIDO** a escala. Hasta entonces: YAGNI.
 
 ---
 
