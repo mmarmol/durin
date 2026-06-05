@@ -1338,37 +1338,24 @@ def _run_gateway(
             from durin.memory.dream_runner import DreamRunner
             from durin.memory.vector_index import VectorIndex, vector_index_available
 
-            mem_dream_cfg = config.memory.dream
             workspace = config.workspace_path
-            vi = None
-            if config.memory.enabled and vector_index_available():
-                try:
-                    from durin.memory.embedding import FastembedProvider
-
-                    provider = FastembedProvider(model=config.memory.embedding.model)
-                    vi = VectorIndex(workspace, provider)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning(
-                        "memory_dream cron: vector index unavailable ({}); "
-                        "pages will not be indexed", exc,
-                    )
+            from durin.memory.dream_passes import run_extract_pass, run_refine_pass
             from durin.memory.model_resolve import resolve_memory_model
-            runner = DreamRunner(
-                workspace=workspace,
-                min_seconds_between_runs=mem_dream_cfg.min_seconds_between_runs,
-                max_seconds_per_run=mem_dream_cfg.max_seconds_per_run,
-                model=resolve_memory_model(config),
-                vector_index=vi,
-                auto_absorb_enabled=mem_dream_cfg.auto_absorb.enabled,
-                auto_absorb_threshold=mem_dream_cfg.auto_absorb.confidence_threshold,
-                auto_absorb_min_age_hours=mem_dream_cfg.auto_absorb.min_age_hours,
-                auto_absorb_judge_model=mem_dream_cfg.auto_absorb.judge_model,
-            )
+
+            # New model (§8c/8d): the daily cron runs the extract pass (sessions
+            # → entity attributes) then the refine pass (dedup). This replaces
+            # the legacy DreamRunner/DreamConsolidator (episodic-entry JSON-Patch
+            # consolidation via working-tree writes — the obsolete model + the
+            # G3 race). Both passes write through memory_writer (plumbing + CAS).
+            model = resolve_memory_model(config)
             try:
-                result = await _asyncio.to_thread(runner.run, trigger="cron_daily")
+                ex = await _asyncio.to_thread(run_extract_pass, workspace, model=model)
+                rf = await _asyncio.to_thread(run_refine_pass, workspace, model=model)
                 logger.info(
-                    "memory_dream cron: {} (consolidated={} failed={})",
-                    result.reason, result.entities_consolidated, result.entities_failed,
+                    "memory_dream cron: extract(sessions={} entities={}) "
+                    "refine(merged={} kept={})",
+                    ex["sessions"], ex["entities"],
+                    len(rf.get("merged", [])), len(rf.get("kept_separate", [])),
                 )
             except Exception:
                 logger.exception("memory_dream cron failed")
@@ -1675,23 +1662,19 @@ def _run_gateway(
     ):
         import threading as _threading_dream
 
-        from durin.memory.dream_runner import DreamRunner as _DreamRunner_h
-
         def _spawn_dream(trigger: str, session_key: str) -> None:
             ws = config.workspace_path
 
             def _run() -> None:
                 try:
-                    runner = _DreamRunner_h(
-                        workspace=ws,
-                        min_seconds_between_runs=mem_dream_cfg.min_seconds_between_runs,
-                        model=mem_dream_cfg.model_override,
-                        auto_absorb_enabled=mem_dream_cfg.auto_absorb.enabled,
-                        auto_absorb_threshold=mem_dream_cfg.auto_absorb.confidence_threshold,
-                        auto_absorb_min_age_hours=mem_dream_cfg.auto_absorb.min_age_hours,
-                        auto_absorb_judge_model=mem_dream_cfg.auto_absorb.judge_model,
-                    )
-                    runner.run(trigger=trigger)
+                    # §8c: reactive EXTRACT — when a session closes or compacts,
+                    # extract its new turns into entity attributes immediately
+                    # (the frequent dream, event-driven; the per-session cursor
+                    # makes it idempotent). Refine stays on the daily cron. This
+                    # replaces the legacy DreamRunner.
+                    from durin.memory.dream_passes import run_extract_pass
+                    from durin.memory.model_resolve import resolve_memory_model
+                    run_extract_pass(ws, model=resolve_memory_model(config))
                 except Exception:
                     logger.exception("{} dream failed ({})", trigger, session_key)
 
