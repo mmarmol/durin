@@ -527,6 +527,29 @@ referencias son lo que el agente autora). Se agrega:
 - Reusa `archive.py` (ya archiva entidades en absorb) + extiende
   `memory_forget`. Todo reversible por git.
 
+### 2.14 Fallos y recuperación (Sim escenario 3)
+
+- **3A — Extract falla a mitad**: el cursor por-sesión avanza
+  **per-batch-aplicado** (no solo al final de la pasada); una falla a mitad
+  mantiene lo aplicado. **Re-extracción idempotente por construcción**:
+  attributes = set/replace (re-aplicar = mismo valor); relations = add con
+  dedup `(to,type)`. → una falla a mitad nunca duplica.
+- **3B-1 — Revert re-sincroniza el índice**: un `git revert` (de un mal merge u
+  otra op) **toca el working tree** → el watcher re-indexa. Asegurar que el
+  revert sea op que toca el working tree (o reindex explícito), si no el índice
+  queda en el estado viejo.
+- **3C — Quarantine per-entidad**: si extraer una entidad falla 3× estructural,
+  se quarantena **esa entidad** (skip 7d, reusa `dream_quarantine`); el resto de
+  la pasada y el **cursor de sesión avanzan igual** (una entidad rota no bloquea
+  la pasada).
+- **3E — Size-guard de referencias**: arriba de un umbral de tokens (tunable),
+  la referencia se **indexa como REFERENCE pero NO se LLM-extrae** (bastan los
+  tags del agente al ingerir); acota el envelope de costo (gap #8).
+- **Tombstones (3B-2 / 3D-1) — EN DISEÑO**: las **decisiones estructurales
+  negativas del usuario** (delete, un-merge, reject) necesitan persistir para que
+  el dream no las deshaga (`user > dream` cubre valores de campo, NO estas).
+  Fork abierto — ver §4.
+
 ---
 
 ## 3. Modelo consolidado (vista de un vistazo)
