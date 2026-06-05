@@ -562,3 +562,42 @@ Esto desafía partes de `docs/architecture/memory/`:
   corto/largo.
 
 Cuando se acuerde el modelo, esos docs se reescriben o archivan con nota.
+
+---
+
+## 6. Notas de auditoría (código verificado, gaps cerrados)
+
+Pasada doc↔código antes de implementar (sin migración: borrón y cuenta nueva).
+
+1. **Referencias→entidades** (§2.6): el extract dream lee **material nuevo =
+   sesiones + referencias nuevas** (batched, NO per-ingest); el agente taggea lo
+   obvio al ingerir. Resuelve la contradicción E3b↔§2.6 y el placeholder vacío
+   de `ingestion.py:69` (Phase-3-over-ingested nunca construida).
+2. **`pending`**: clase muerta (sin writer; excluida de watcher/hot_layer;
+   vault vacío) → **ELIMINADA** (§2.3).
+3. **Borrado** (§2.13): entidad/referencia borrables vía archive (usuario
+   autoritativo; agente solo lo-que-autoró-solo / propone). Hoy `forget.py:65`
+   rechaza entidades.
+4. **Convergencia de creación / dedup**: exact-slug → **upsert-merge**
+   (determinista, seguro, ya está); fuzzy → **absorb-judge ON conservador** en
+   el modelo nuevo (hoy `enabled=False` por blast-radius, `schema.py:254`; el
+   nuevo lo necesita activo porque dream es la autoridad + hay dos caminos de
+   creación; seguridad = confianza 95 + quarantine + git-revert + review UI).
+5. **El summarizer SOBREVIVE**: el `Consolidator` loop-driven (`loop.py:1481`)
+   que escribe `session_summary/` es **separado** del dream — no se toca. El
+   reframe "matar legacy" era solo el dream de MEMORY/SOUL/USER, no el summarizer.
+6. **Extract dream = dos mecanismos**: JSON-Patch para entidades (decisión b) +
+   agentic `SkillWrite` para skills. Reusa el motor del ex-"legacy".
+7. **Schema del vector** (`vector_index.py:8`): falta **parent-ref/section** para
+   chunks de referencia → extender el schema (impl, no cambia el diseño).
+8. **Costo del extract dream**: leer sesiones+referencias crudas + extraer es
+   LLM por pasada → **gate/envelope** (cadencia + min-tokens), acotado por la
+   pasada (no per-write).
+
+**Reframe de naming**: lo que llamé "dream legacy" **no se mata** — es el
+**extract dream** renombrado/repurposed (input: sesiones+refs en vez de
+`history.jsonl`; output: entidades+skills en vez de MEMORY/USER planos; SOUL →
+user_authored). Crons (`dream`/`memory_dream`) a renombrar en inglés.
+
+> **Pendiente de forma**: estos docs del plan están en español y deben pasar a
+> **inglés** (regla: code + docs en inglés). Conversión al cerrar el diseño.
