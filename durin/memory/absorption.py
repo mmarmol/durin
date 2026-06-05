@@ -173,60 +173,49 @@ class EntityAbsorption:
                 f"absorbed_parsed={absorbed_page is not None})"
             )
 
-        # 2-3: merged canonical
+        # 2-6 (G3 fix, design §2.5): compute the merge as in-memory content
+        # (canonical merged + absorbed archived) and commit all three file ops
+        # in ONE plumbing+CAS commit — NO porcelain working-tree staging. This
+        # makes the refine resilient to the ref-lock contention memory_writer's
+        # CAS creates, and removes the working-tree race (memory_writer's ff vs
+        # porcelain add) that was silently losing merges under concurrency.
+        from datetime import datetime, timezone
+
+        from durin.memory.archive import _annotate_frontmatter
+        from durin.memory.memory_writer import write_files_cas
+
         merged = _merge_pages(canonical_page, absorbed_page, absorbed_ref=absorbed)
-        canonical_path.write_text(merged.to_markdown(), encoding="utf-8")
-
-        # 4-5: move absorbed to top-level archive + stamp frontmatter via
-        # shared archive helper (Phase 0 deliverable 5). New path:
-        #   memory/archive/entities/<absorbed_type>/<absorbed_slug>.md
-        # Helper writes archived_at + archived_into + archived_reason.
-        from durin.memory.archive import archive_entity
-
-        archive_entity(
-            self.workspace,
-            absorbed_path,
-            into_uri=canonical,
+        archived_md = _annotate_frontmatter(
+            absorbed_path.read_text(encoding="utf-8"),
+            archived_at=datetime.now(timezone.utc).isoformat(),
+            archived_into=canonical,
             reason=reason or None,
         )
 
-        # 6: git commit (covering all 3 file ops: canonical updated,
-        # absorbed deleted from old path, archived created)
-        repo = self._get_git_repo()
-        repo.init(
-            gitignore_patterns=[
-                "*.lance/", "vectors/",
-                ".aliases.json", ".usage.json", ".usage/",
-                ".dream.lock", ".locks/",
-            ]
-        )
-        body_text = (
-            f"Merged {absorbed} into {canonical}. "
-            f"Reason: {reason or '(unspecified)'}.\n"
-            f"Absorbed page moved to "
-            f"archive/entities/{absorbed_type}/{absorbed_slug}.md."
-        )
+        # Preserve the subject / body / trailers shape so `durin memory history`
+        # still parses the absorb metadata out of the commit message.
+        msg = [f"Absorb {absorbed} into {canonical}", "",
+               f"Merged {absorbed} into {canonical}. Reason: {reason or '(unspecified)'}.",
+               f"Absorbed page moved to archive/entities/{absorbed_type}/{absorbed_slug}.md."]
         if judge_reasoning:
-            body_text += f"\n\nJudge reasoning:\n{judge_reasoning.strip()}"
-        trailers: dict[str, str] = {
-            "Absorbed": absorbed,
-            "Into": canonical,
-            "Reason": reason or "alias overlap",
-        }
+            msg += ["", "Judge reasoning:", judge_reasoning.strip()]
+        msg += ["", f"Absorbed: {absorbed}", f"Into: {canonical}",
+                f"Reason: {reason or 'alias overlap'}"]
         if judge_confidence is not None:
-            trailers["Judge-Confidence"] = str(int(judge_confidence))
-        try:
-            sha = repo.commit(
-                subject=f"Absorb {absorbed} into {canonical}",
-                body=body_text,
-                trailers=trailers,
-                paths=None,  # all three changes (canonical, deletion, archive)
-                author="durin-dream",
-                author_email="dream@durin.local",
-            )
-        except NothingToCommitError:
-            logger.info("absorb: nothing to commit")
-            sha = None
+            msg.append(f"Judge-Confidence: {int(judge_confidence)}")
+
+        sha = write_files_cas(
+            self.workspace,
+            {
+                f"entities/{canonical_type}/{canonical_slug}.md":
+                    merged.to_markdown().encode("utf-8"),
+                f"entities/{absorbed_type}/{absorbed_slug}.md": None,
+                f"archive/entities/{absorbed_type}/{absorbed_slug}.md":
+                    archived_md.encode("utf-8"),
+            },
+            message="\n".join(msg),
+            author=b"durin-dream <dream@durin.local>",
+        )
 
         # 7: alias_index — refresh canonical, drop absorbed entity_ref
         # In-memory only (per doc 23 T1.4): no save() to disk.
