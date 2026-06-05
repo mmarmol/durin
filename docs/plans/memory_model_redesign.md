@@ -172,22 +172,45 @@ un wiki, una pluma.
 **RIESGO a vigilar.** Dream-gana sube la vara: debe correr fiable/seguido y
 ser correcto (autoridad única). Salvavidas: `user > dream`.
 
-### 2.5 Concurrencia de agentes — git como sustrato, merge semántico encima
+### 2.5 Concurrencia — DOS capas ortogonales (DECIDIDO)
 
-**DECISIÓN.** Puede haber **múltiples agentes concurrentes**; el diseño no
-asume un único escritor.
-- **Git = sustrato** (versionado, auditoría, sync distribuida, revert). Cada
-  escritura = un commit en `memory/.git`.
-- **Git NO resuelve el conflicto**: su merge textual mangla YAML/estructura.
-  La resolución es **semántica**: parsear frontmatter como datos → merge de
-  dict (claves disjuntas = unión) → mismo campo = precedencia (§2.4).
-- **Dos niveles**: (1) *write-time* por página — patch optimista con retry si
-  la base cambió (lock global vs optimistic-retry: ABIERTO §4); (2)
-  *refine-time* cross-grafo — dream largo (§2.7).
+Escritores reales de la memoria: gateway (agente + cron-dream in-process +
+thread de threshold), **procesos CLI independientes**, y el **editor humano**
+(Obsidian). No hay lock in-process posible entre todos → coordinación
+cross-process (un host) y cross-host (futuro).
 
-**JUSTIFICACIÓN.** Patches por-campo hacen tratable la concurrencia (la
-mayoría de escrituras tocan campos distintos → auto-mergean). Confiar en el
-auto-merge textual de git sería otra "fruta en la carnicería".
+**Capa 1 — write-time: OPTIMISTIC (sin write-lock), implementado CON git.**
+El CAS **lo da git**, no se inventa a mano:
+- *Local (cross-process, mismo repo)*: `git update-ref refs/heads/main <new>
+  <old>` es un **compare-and-swap atómico** sobre la branch. El write construye
+  el commit por **plumbing** (`hash-object` + `commit-tree`, **sin tocar el
+  working tree**) → `update-ref` CAS → si falla (HEAD se movió), re-lee HEAD,
+  **re-aplica el patch por-campo** sobre la versión nueva, reintenta.
+- *Cross-host (clones)*: `git push --force-with-lease` es el **mismo CAS** sobre
+  la red.
+- Conflicto mismo-campo → precedencia (`user>dream>agent`) + recencia. Fuente
+  canónica → reintentar es seguro. Patches por-campo → conflictos raros (campos
+  distintos = re-aplicar auto-mergea). Nunca merge **textual** de git (manglaría
+  YAML); el merge es **semántico** (re-aplicar el patch sobre la base nueva).
+- **Working tree (superficie humana)**: los writes programáticos van por
+  plumbing (no tocan el working tree); la edición humana directa la **detecta el
+  watcher y la commitea** (`user_authored`) → entra a la misma cadena de CAS; el
+  working tree se mantiene en sync (ff a HEAD) para que el humano vea.
+- **JUSTIF**: único modelo uniforme (gateway+CLI+editor+multi-host) y file-first
+  (la edición humana es otro escritor que git absorbe; single-writer pelearía).
+  git **ya** tiene el primitivo atómico — no hay que construir CAS a mano.
+
+**Capa 2 — exclusión de pasada de dream: SE MANTIENE un lock (≠ write-lock).**
+Un lock por working-tree (`.dream.lock`-style, cross-process, stale-takeover)
+asegura **una sola pasada de dream a la vez** (CORTO y LARGO **mutuamente
+exclusivos** — LARGO es graph-wide, solaparía). NO coordina escrituras (eso es
+la capa 1); evita **dos dreams** haciendo trabajo redundante/thrashing y
+quemando LLM (failure mode real — los fixes de cron `is_executing`). Dream, aun
+con este lock, escribe cada entidad **optimistic** (el agente/humano pueden
+tocarla durante la pasada).
+
+**No confundir**: capa 1 = no corromper escrituras (optimistic/git-CAS); capa 2
+= no correr dos dreams (lock de pasada). Ortogonales.
 
 ### 2.6 Capa de experiencia: sessions + summaries; Dream lee crudo
 
@@ -407,9 +430,12 @@ CONCURRENCIA:               git sustrato + merge semántico (no textual)
 
 ## 4. Preguntas abiertas (lo que falta resolver)
 
-1. **Mecanismo write-time de concurrencia** (§2.5): lock global simple vs
-   optimistic-retry con merge semántico. ¿Concurrencia local (un workdir, el
-   lock alcanza) o distribuida (clones separados, git-merge semántico)?
+1. **Concurrencia** — **DECIDIDO** (§2.5): 2 capas ortogonales. Write-time =
+   **optimistic con git** (`update-ref` CAS local / `push --force-with-lease`
+   cross-host + re-aplicar patch por-campo + precedencia, vía plumbing sin tocar
+   el working tree). Exclusión de pasada de dream = lock por working-tree (se
+   mantiene). Pendiente fino: reconciliación del working tree con la edición
+   humana en vivo.
 2. **Tool `memory_upsert_entity`** — **DECIDIDO** (spec en
    [memory_seq_ingesta.md](memory_seq_ingesta.md) E3a): merge no-replace, body
    append atribuido, sin `attributes` (dream extrae), relation dangling
