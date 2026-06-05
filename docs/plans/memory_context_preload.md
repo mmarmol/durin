@@ -75,15 +75,16 @@ sequenceDiagram
   problema no resuelto de identidad cross-channel (R4). Trivial para webui
   (dueño único); manual/LLM en multi-channel.
 
-### E3 — SWAP a usuario específico
-- **Quién/qué**: resuelve `person:<u>` (entidad) + su **slice de experiencia**
-  (mi historia con <u>); reemplaza el USER genérico por el específico.
-- **Pendiente**: cómo se hace el SWAP a mitad de sesión **sin perder
-  coherencia** (lo ya dicho con el genérico); qué es exactamente "slice de
-  experiencia de <u>".
+### E3 — SWAP al principal del mensaje (Sim 2C-1)
+- **Quién/qué**: el principal se re-resuelve **por mensaje entrante** (no una
+  vez por sesión); el scope PRINCIPAL swapea a `person:<hablante actual>` + su
+  slice de experiencia + sus stance/practice. "A quién le respondo ahora".
+- **Resuelto (Sim 2C-1)**: sesión grupal/multi-usuario → no hay principal único;
+  prefs en conflicto → aplican las del hablante actual.
 
 ### E4 — Acumulación de SESSION
 - **Quién/qué**: durante la conversación se acumula la memoria de sesión
-  (experiencia del aquí-y-ahora), compartida entre participantes.
-- **Pendiente**: ¿SESSION compartida implica **multi-usuario en una misma
-  sesión** (grupo)? ¿cómo se atribuye cada turno a su autor?
+  (experiencia del aquí-y-ahora), compartida entre participantes. **Cada turno
+  se atribuye a su hablante** → la experiencia se rutea a la `person:` correcta.
+- **Pendiente**: qué es exactamente "slice de experiencia de <u>" (cómo se
+  particiona la experiencia por-principal).

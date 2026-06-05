@@ -60,7 +60,10 @@ memory_upsert_entity(
 
 Reglas (decididas):
 - **Merge, no replace.** name/aliases = set/union; relations = add (dedup `(to,type)`); `ref` inexistente → **crea**, existe → **merge**.
-- **body = append** sección atribuida (no clobber; dream cura la prosa después).
+- **body = append** sección atribuida. **El body es del AGENTE; el dream NO lo
+  reescribe** (Sim 2B-1): extrae `attributes` de la prosa (decisión b) y a lo
+  sumo appendea una sección atribuida, pero no clobberea la prosa del agente.
+  (Antes decía "dream cura la prosa", lo que contradecía la propiedad del body.)
 - **Sin `attributes`** — la prosa lleva los hechos; el Dream-corto los extrae (decisión b).
 - **Relation a entidad inexistente = dangling permitido** (sin placeholder huérfano; el agente upserta el target si importa; dream resuelve).
 - **Dedup → dream**, no en el write (la tool no consulta alias-index). Agente rápido, dream autoridad.
