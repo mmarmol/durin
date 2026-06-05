@@ -244,12 +244,13 @@ def _search_entity_pages(
         page = EntityPage.from_file(page_path)
         if page is None:
             continue
-        haystack_parts = [
-            page.name,
-            " ".join(page.aliases or []),
-            page.body or "",
-        ]
-        haystack = " ".join(haystack_parts).lower()
+        # Haystack = the same composed text the FTS path indexes (name +
+        # aliases + attributes + relations + body), so a search by an
+        # attribute VALUE (e.g. the dream-extracted "hq: Boston") or a relation
+        # target matches here too. Previously the warm grep only saw
+        # name+aliases+body, so structured facts were unsearchable.
+        from durin.memory.indexer import _entity_text
+        haystack = _entity_text(page).lower()
         if needle_low not in haystack:
             continue
         slug = page_path.stem
