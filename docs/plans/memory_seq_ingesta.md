@@ -66,9 +66,12 @@ Reglas (decididas):
 - **Dedup → dream**, no en el write (la tool no consulta alias-index). Agente rápido, dream autoridad.
 - **La entidad existe ya** e indexa (prosa searchable).
 
-### E3b — Ingesta de documento (referencia)
-- **Quién/qué**: `memory_ingest(doc)` → `ingested/<id>/source` (entero, **REFERENCE**, indexado) + chunks `corpus` (índice → apunta a la page). Dream NO sintetiza referencias.
-- **Pendiente**: structure-aware vs blind-chunk; cómo linkea la page a entidades; el agente ingiere mal hoy (blob KB).
+### E3b — Ingesta de documento (referencia) — DECIDIDO
+- **Quién/qué**: `memory_ingest(doc)` → `ingested/<id>/source` (entero = fuente canónica, marcador **REFERENCE**). **FTS indexa el doc entero**; **vector = chunks por sección** (token-split ≤~480 tok, structure-aware, parent-pointer a la page). Dream NO sintetiza referencias.
+- **Links a entidades**: el agente taggea al ingerir (lo que sabe) + dream-corto extrae el resto → aristas reference↔entidad.
+- **Búsqueda**: surface la **page una vez** (dedup por parent; mejor sección como snippet), no N chunks.
+- **Invariante**: chunks/summary son DERIVADOS re-derivables desde la fuente (§2.11) → embedder/chunk-size tuneables sin migración.
+- **Pendiente (tuneable)**: blob multi-artículo → split en varias pages (v1: una page por doc); embedder long-context.
 
 ### E4 — La interacción se graba sola
 - **Qué**: el turno queda en `sessions/<id>` (crudo = verdad, anchors de turno estables). NO hay tool de observación (`memory_store`/`episodic`/`stable` se disuelven). El `session_summary` lo produce el summarizer en compaction (vista de recall hot-path, NO input de dream).
