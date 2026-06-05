@@ -1349,7 +1349,7 @@ def _run_gateway(
                     vi = VectorIndex(workspace, provider)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
-                        "memory_dream cron: vector index unavailable (%s); "
+                        "memory_dream cron: vector index unavailable ({}); "
                         "pages will not be indexed", exc,
                     )
             from durin.memory.model_resolve import resolve_memory_model
@@ -1367,7 +1367,7 @@ def _run_gateway(
             try:
                 result = await _asyncio.to_thread(runner.run, trigger="cron_daily")
                 logger.info(
-                    "memory_dream cron: %s (consolidated=%d failed=%d)",
+                    "memory_dream cron: {} (consolidated={} failed={})",
                     result.reason, result.entities_consolidated, result.entities_failed,
                 )
             except Exception:
@@ -1388,7 +1388,7 @@ def _run_gateway(
                 _allowlist = list(config.skills.security.allowlist)
                 summary = curate_catalog(workspace, judge=_judge,
                                          drift_check=check_upstream_drift, allowlist=_allowlist)
-                logger.info("skill curation: reviewed=%s applied=%s deferred=%s",
+                logger.info("skill curation: reviewed={} applied={} deferred={}",
                             summary["reviewed"], summary["applied"], summary["deferred"])
             except Exception:
                 logger.exception("skill curation step (non-fatal) failed")
@@ -1693,7 +1693,7 @@ def _run_gateway(
                     )
                     runner.run(trigger=trigger)
                 except Exception:
-                    logger.exception("%s dream failed (%s)", trigger, session_key)
+                    logger.exception("{} dream failed ({})", trigger, session_key)
 
             _threading_dream.Thread(
                 target=_run, daemon=True, name=f"dream-{trigger}",
