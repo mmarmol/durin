@@ -121,7 +121,7 @@ def _build_aux_providers(config: Any) -> dict[str, AuxProviderHandle]:
             try:
                 preset = config.resolve_preset(entry.preset)
             except Exception:
-                logger.exception("Failed to resolve aux preset %r for %s bridge", entry.preset, kind)
+                logger.exception("Failed to resolve aux preset {!r} for {} bridge", entry.preset, kind)
                 continue
         elif entry.model:
             preset = ModelPresetConfig(
@@ -133,11 +133,11 @@ def _build_aux_providers(config: Any) -> dict[str, AuxProviderHandle]:
         try:
             provider = make_provider(config, preset=preset)
         except Exception:
-            logger.exception("Failed to build aux provider for %s bridge (model=%s, provider=%s)",
+            logger.exception("Failed to build aux provider for {} bridge (model={}, provider={})",
                              kind, preset.model, preset.provider)
             continue
         out[kind] = AuxProviderHandle(provider=provider, model=preset.model)
-        logger.info("Aux %s bridge enabled — model=%s provider=%s",
+        logger.info("Aux {} bridge enabled — model={} provider={}",
                     kind, preset.model, preset.provider)
     return out
 

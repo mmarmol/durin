@@ -703,7 +703,7 @@ class Consolidator:
                 # if this write fails. Log loudly so the failure
                 # surfaces in operator review.
                 logger.warning(
-                    "session_summary: write for %s failed: %s",
+                    "session_summary: write for {} failed: {}",
                     session.key, exc,
                 )
         # Drop the legacy field from metadata if it was carrying a
@@ -716,7 +716,7 @@ class Consolidator:
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "session_summary: failed to drop legacy "
-                    "metadata for %s: %s", session.key, exc,
+                    "metadata for {}: {}", session.key, exc,
                 )
 
     def estimate_session_prompt_tokens(
@@ -1023,7 +1023,7 @@ class Consolidator:
                         self.on_post_compaction(session.key)
                     except Exception:
                         logger.exception(
-                            "post-compaction hook raised for %s",
+                            "post-compaction hook raised for {}",
                             session.key,
                         )
         finally:
