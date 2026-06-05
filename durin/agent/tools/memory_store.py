@@ -21,6 +21,31 @@ from durin.memory.vector_index import VectorIndex, vector_index_available
 
 logger = logging.getLogger(__name__)
 
+
+def _session_turn_ref() -> str | None:
+    """Provenance ref for the current foreground turn, or None.
+
+    Reads the per-turn telemetry binding (the same one ``emit_tool_event``
+    uses) for the active ``session_key`` + ``iteration`` and renders a
+    wiki-link in the shape ``graph.py::_SESSION_REF_RE`` parses, so the
+    stored entry links back to the session that created it. Returns None
+    outside a bound turn (dream/compaction/internal writes), so those add
+    no session ref. Never raises.
+    """
+    try:
+        from durin.telemetry.logger import current_telemetry
+
+        tl = current_telemetry()
+        if tl is None or not tl.session_key:
+            return None
+        from durin.session.manager import SessionManager
+
+        stem = SessionManager.safe_key(tl.session_key)
+        return f"[[sessions/{stem}.md#turn-{tl.iteration}]]"
+    except Exception:  # noqa: BLE001 — provenance is best-effort
+        return None
+
+
 # Agent-facing class enum. `pending` is a `MEMORY_CLASSES` value but is
 # excluded here because the walker / indexer / file_watcher all skip
 # `memory/pending/**` (intake buffer for compaction, not user-visible
@@ -212,7 +237,15 @@ class MemoryStoreTool(Tool):
         class_name = str(kwargs.get("class_name") or "episodic")
         headline = kwargs.get("headline") or None
         summary = str(kwargs.get("summary") or "")
-        source_refs = kwargs.get("source_refs") or []
+        source_refs = list(kwargs.get("source_refs") or [])
+        # Provenance: when this runs inside a foreground turn, record the
+        # originating session+turn so the entry links back to where it was
+        # created (graph session→entity edge + the entry's backlinks).
+        # Internal callers (dream/compaction) store via `store_memory`
+        # directly with no bound telemetry context, so they add nothing.
+        turn_ref = _session_turn_ref()
+        if turn_ref and turn_ref not in source_refs:
+            source_refs.append(turn_ref)
         entities = kwargs.get("entities") or []
         force = bool(kwargs.get("force", False))
 
