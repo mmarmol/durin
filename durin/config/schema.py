@@ -499,6 +499,10 @@ class MemoryConfig(Base):
     # Skills are authored + injected already; this gates making them
     # searchable as a `skill` memory class (skill-memory-class indexing).
     index_skills: bool = True
+    # §8b/8e: the workspace owner entity ref (e.g. "person:marcelo"). Resolves
+    # the principal for the pinned context (channel → owner → person:anonymous).
+    # None defaults to anonymous until the user sets it.
+    owner: str | None = None
     embedding: MemoryEmbeddingConfig = Field(default_factory=MemoryEmbeddingConfig)
     dream: MemoryDreamConfig = Field(default_factory=MemoryDreamConfig)
     search: MemorySearchConfig = Field(default_factory=MemorySearchConfig)

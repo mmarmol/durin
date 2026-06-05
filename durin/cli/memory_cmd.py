@@ -276,112 +276,42 @@ def cmd_dream(
         help="Print what would be consolidated without writing.",
     ),
 ) -> None:
-    """Manually trigger memory consolidation (dream pass).
+    """Manually trigger the dream passes.
 
-    Walks memory/episodic for entries with entity tags newer than each
-    entity page's cursor, groups them by entity, and invokes the LLM
-    consolidator. Writes the resulting entity pages + git commits.
-
-    Use ``--dry-run`` to inspect what would be consolidated.
+    Runs the extract pass (reads each session's new turns and extracts entity
+    attributes) followed by the refine pass (dedups duplicate entities). Writes
+    entity pages via the memory writer (git-committed).
     """
     workspace = _workspace_root()
-    memory_root = workspace / "memory"
-
-    if not (memory_root / "episodic").exists():
-        console.print("[yellow]No episodic memory yet — nothing to dream.[/yellow]")
-        return
-
-    pending = _discover_pending_consolidations(memory_root, entity_filter=entity)
-    if not pending:
-        if entity:
-            console.print(f"[green]No pending consolidations for {entity}.[/green]")
-        else:
-            console.print("[green]No pending consolidations.[/green]")
-        return
+    # New model (§8e): the manual dream runs the extract pass (sessions →
+    # entity attributes) + the refine pass (dedup), replacing the legacy
+    # episodic-entry consolidation (DreamRunner / DreamConsolidator). The
+    # `entity` filter is not used by the new passes.
+    from durin.memory.dream_passes import run_extract_pass, run_refine_pass
+    from durin.memory.model_resolve import resolve_memory_model
 
     if dry_run:
-        console.print("[bold]Dry run — would consolidate:[/bold]\n")
-        for ent_ref, entries in pending.items():
-            console.print(f"  [cyan]{ent_ref}[/cyan]: {len(entries)} entries")
-            for er in entries[:3]:
-                preview = er.text[:80].replace("\n", " ")
-                console.print(f"    - {er.id}: {preview}")
-            if len(entries) > 3:
-                console.print(f"    ... +{len(entries) - 3} more")
+        console.print(
+            "[yellow]--dry-run is not supported by the new dream passes; "
+            "run without it to extract + refine.[/yellow]"
+        )
         return
 
-    # Real consolidation routes through DreamRunner (doc 25 §2.A.1 β.2)
-    # so manual runs share the same lock + telemetry surface as the
-    # auto-triggers — prevents a user `durin memory dream` from racing
-    # the cron tick that fires at 3am. Throttle is disabled for the
-    # manual path: the user explicitly asked, respect that.
-    from durin.memory.dream_runner import DreamRunner
-    from durin.memory.vector_index import VectorIndex, vector_index_available
-
     cfg = load_config()
-
-    # W3 (doc 24): pass a VectorIndex so dream.apply() upserts the
-    # consolidated entity_page into LanceDB. Best-effort: if
-    # memory.enabled=false or fastembed missing, fall through without
-    # indexing (markdown remains source of truth).
-    vi: VectorIndex | None = None
-    try:
-        if cfg.memory.enabled and vector_index_available():
-            from durin.memory.embedding import FastembedProvider
-
-            provider = FastembedProvider(model=cfg.memory.embedding.model)
-            vi = VectorIndex(workspace, provider)
-    except Exception as exc:  # noqa: BLE001
-        console.print(
-            f"[yellow]vector index unavailable ({exc}); "
-            "entity pages will not be indexed[/yellow]"
-        )
-
-    from durin.memory.model_resolve import resolve_memory_model
-    runner = DreamRunner(
-        workspace=workspace,
-        min_seconds_between_runs=0,
-        max_seconds_per_run=cfg.memory.dream.max_seconds_per_run,
-        model=resolve_memory_model(cfg),
-        vector_index=vi,
-        # §2.D: opt-in auto-absorb post-dream. Manual `durin memory dream`
-        # respects the same config as the auto-triggers — if the user
-        # has it enabled, manual runs also auto-merge alias-overlap
-        # candidates above threshold.
-        auto_absorb_enabled=cfg.memory.dream.auto_absorb.enabled,
-        auto_absorb_threshold=cfg.memory.dream.auto_absorb.confidence_threshold,
-        auto_absorb_min_age_hours=cfg.memory.dream.auto_absorb.min_age_hours,
-        auto_absorb_judge_model=cfg.memory.dream.auto_absorb.judge_model,
+    model = resolve_memory_model(cfg)
+    console.print("[dim]Extract pass (sessions → entity attributes)…[/dim]")
+    ex = run_extract_pass(workspace, model=model)
+    console.print("[dim]Refine pass (dedup duplicate entities)…[/dim]")
+    rf = run_refine_pass(workspace, model=model)
+    merged = len(rf.get("merged", []))
+    console.print(
+        f"\n[green]✓[/green] extract: {ex['entities']} attribute update(s) across "
+        f"{ex['sessions']} session(s); refine: {merged} merge(s)"
     )
-
-    def _on_progress(ent_ref: str, msg: str) -> None:
-        console.print(f"  [bold]{ent_ref}[/bold] {msg}")
-
-    result = runner.run(
-        trigger="manual",
-        entity_filter=entity,
-        on_progress=_on_progress,
-    )
-    if result.ran:
-        ok = result.entities_consolidated
-        bad = result.entities_failed
+    if ex.get("errors"):
         console.print(
-            f"\n[green]✓[/green] Consolidated {ok} entit{'y' if ok == 1 else 'ies'} "
-            f"in {result.duration_s:.1f}s"
+            f"[yellow]{len(ex['errors'])} session(s) errored (see logs)[/yellow]"
         )
-        if bad:
-            console.print(f"[red]✗[/red] {bad} failed (see logs)")
-    elif result.reason == "concurrent_lock":
-        console.print(
-            "[yellow]Another dream pass is already running "
-            f"({(workspace / 'memory' / '.dream.lock').name}); skipped.[/yellow]"
-        )
-    elif result.reason == "no_pending":
-        # Should not happen — we filtered above — but cover the race
-        # where another process consumed everything between checks.
-        console.print("[green]No pending consolidations (just absorbed).[/green]")
-    else:
-        console.print(f"[yellow]Skipped: {result.reason}[/yellow]")
 
 
 # ---------------------------------------------------------------------------
