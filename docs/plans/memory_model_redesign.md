@@ -183,6 +183,24 @@ page-level.)
 `dream_apply` (JSON Patch + validación + `.md.bak` + commit). Dos editores de
 un wiki, una pluma.
 
+**DECISIÓN — autoría/control: default agente-administrado, opt-in del usuario
+(corrige el `user_authored`-por-default del código viejo).** El agente autora →
+las entidades son **agente-administradas por default** (extract/refine/dedup las
+manejan). Lo que dream deja en paz es **siempre una decisión EXPLÍCITA del
+usuario**, en cuatro formas:
+
+| Nivel | Quién decide | Qué hace dream |
+|---|---|---|
+| **Entidad (default)** | agente autora | administra (extract/refine/dedup) |
+| **Campo editado por el usuario** | usuario edita un campo (Obsidian/dashboard) | respeta ese campo (`author=user`, precedencia) — **no reclama la página** |
+| **Entidad marcada "mía"** | usuario opt-in explícito (toggle dashboard / flag) | **hands-off de la página entera** (= el `user_authored` explícito, no default) |
+| **Tombstone** (borrar / rechazar-merge) | usuario, acción explícita | respeta el "no" (no re-crea / no re-mergea) — §2.14 |
+
+(`user_authored` deja de ser el default-seguro; pasa a ser un **opt-in
+explícito**. Editar un campo ≠ reclamar la página — el código viejo las
+confundía.) Las **referencias** son intocadas por dream por una regla
+**distinta** (§2.8: no se sintetiza un doc coherente), no por autoría.
+
 **RIESGO a vigilar.** Dream-gana sube la vara: debe correr fiable/seguido y
 ser correcto (autoridad única). Salvavidas: `user > dream`.
 
@@ -545,10 +563,18 @@ referencias son lo que el agente autora). Se agrega:
 - **3E — Size-guard de referencias**: arriba de un umbral de tokens (tunable),
   la referencia se **indexa como REFERENCE pero NO se LLM-extrae** (bastan los
   tags del agente al ingerir); acota el envelope de costo (gap #8).
-- **Tombstones (3B-2 / 3D-1) — EN DISEÑO**: las **decisiones estructurales
-  negativas del usuario** (delete, un-merge, reject) necesitan persistir para que
-  el dream no las deshaga (`user > dream` cubre valores de campo, NO estas).
-  Fork abierto — ver §4.
+- **Tombstones (3B-2 / 3D-1) — DECIDIDO**: las **decisiones estructurales
+  negativas del usuario** (delete, un-merge, reject) son **acciones EXPLÍCITAS
+  del usuario** (§2.4, nivel tombstone) que dream respeta — `user > dream` cubría
+  solo valores de campo, no estas. Mecanismo (reusa el modelo, sin store nuevo):
+  - **Borrado**: el contenido va a archive (recuperable) pero el **ref queda
+    ocupado por un marker tombstone** (`{tombstone: deleted}`). El extract ve el
+    tombstone → **no re-crea** (a lo sumo re-surfacea "lo borraste y se mencionó
+    de nuevo"). Des-borrar = el usuario saca el tombstone.
+  - **Rechazo de merge**: un marker **`do_not_absorb: [X,Y]`**; el absorb-judge
+    lo chequea → nunca re-propone ese par.
+  - **Permanente, override-able por el usuario** (nueva evidencia NO lo levanta
+    sola; el usuario sí). Solo el usuario tombstonea (es su autoridad).
 
 ---
 
