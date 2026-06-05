@@ -54,11 +54,15 @@ def test_system_prompt_reflects_current_dream_memory_contract(tmp_path) -> None:
 
     prompt = builder.build_system_prompt()
 
-    assert "memory/history.jsonl" in prompt
-    assert "automatically managed by Dream" in prompt
-    assert "do not edit directly" in prompt
-    assert "memory/HISTORY.md" not in prompt
-    assert "write important facts here" not in prompt
+    # New memory model (§8a): entity pages + references, authored via
+    # memory_upsert_entity; SOUL.md is the user's control point.
+    assert "memory_upsert_entity" in prompt
+    assert "references" in prompt.lower()
+    assert "SOUL.md" in prompt
+    # The dissolved legacy contract must be gone.
+    assert "history.jsonl" not in prompt
+    assert "automatically managed by Dream" not in prompt
+    assert "memory_store" not in prompt
 
 
 def test_runtime_context_is_separate_untrusted_user_message(tmp_path) -> None:
