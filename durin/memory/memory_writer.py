@@ -70,8 +70,12 @@ def write_entity(
     patches: list[FieldPatch],
     *,
     create: bool = False,
+    name: str | None = None,
 ) -> WriteResult:
-    """Optimistically write ``patches`` into entity ``ref``'s page."""
+    """Optimistically write ``patches`` into entity ``ref``'s page.
+
+    ``name`` sets the display name (authored, not precedence-arbitrated).
+    """
     root = Path(workspace) / "memory"
     _ensure_repo(root)
     rel = _rel_path(ref)
@@ -98,6 +102,9 @@ def write_entity(
             )
 
         changed = False
+        if name is not None and page.name != name:
+            page.name = name
+            changed = True
         for p in patches:
             changed = apply_field_patch(page, p) or changed
         if not changed and raw is not None:
