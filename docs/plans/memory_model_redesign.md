@@ -160,10 +160,21 @@ modelos** escribiendo: ninguna escritura individual es canónica; dream, con
 visión global y mandato de higiene, arbitra. El humano (`user_authored`) por
 encima de todo (es su punto de control).
 
-**DECISIÓN — provenance por campo como árbitro.** Cada campo lleva
-`{source_ref, at, author: agent|dream|user}`. Conflicto → precedencia +
-recencia dentro de un nivel. Contradicción real → el valor viejo va a history
-(`valid_from/until`), nunca overwrite ciego.
+**DECISIÓN — provenance por campo como árbitro (Gap A cerrado).** Cada campo
+lleva `{source_ref, extracted_at, author}`. **DOS nociones de `author`
+coexisten** (distinta granularidad/propósito, no se reemplazan):
+- **Page-level** (`provenance.py` hoy, `user_authored | agent_created`): flag
+  "esta **página entera** es del usuario, dream no la toca" (protege SOUL,
+  anclas user_authored). Se mantiene tal cual.
+- **Field-level (NET-NEW)**: `provenance.attributes.<k>.author` y
+  `provenance.relations[i].author` ∈ **`{user, agent, dream}`** (3 valores).
+  Arbitra la precedencia **por campo**.
+Conflicto por-campo → `user > dream > agent`; empate → recencia
+(`extracted_at`); contradicción real → temporal validity (`valid_from/until`),
+nunca overwrite ciego. Implementado en `memory_writer`/`dream_apply`.
+(Hoy `provenance.py` es page-level/2-valores → el field-level de 3 valores es
+net-new; el diseño ya lo pedía, solo faltaba decir que NO reemplaza al
+page-level.)
 
 **DECISIÓN — pipeline compartido.** Agente y dream escriben por el mismo
 `dream_apply` (JSON Patch + validación + `.md.bak` + commit). Dos editores de
@@ -271,7 +282,7 @@ tipo de contenido**: ambos (entidades Y skills) reciben extract + refine.
 
 | Material | **CORTO** (integrar lo reciente, ~2h, cursor por-sesión) | **LARGO** (consolidar/limpiar el todo, ~diario, graph-wide) |
 |---|---|---|
-| **Entidades** | extraer hechos + `attributes` + **summary de embedding** de sesiones nuevas; aplicar prefs de usuario a `person:` | dedup/absorb, unificar claves sinónimas, splitear, resolver contradicciones cross-grafo |
+| **Entidades** | extraer hechos + `attributes` de sesiones nuevas; aplicar prefs de usuario a `person:` (el embedding se compone index-time de attributes+body-head, §2.11 — no hay summary que mantener) | dedup/absorb, unificar claves sinónimas, splitear, resolver contradicciones cross-grafo |
 | **Skills** | crear/arreglar skills desde la ejecución reciente | unificar duplicadas, mejorar eficiencia, refactor |
 | **Índices** | — | self-heal / orphans |
 
@@ -398,10 +409,16 @@ completo. ⇒ **el chunking/summary es SOLO problema del vector.**
 **DECISIÓN — embedding por tipo:**
 - **FTS (keyword)**: texto **completo** para todo (entidad:
   name+aliases+attributes+relations+body; referencia: doc entero). No se trocea.
-- **Vector — entidad** → embeber un **summary** (≤512 tok) que **mantiene el
-  dream-corto**. NO se chunkea una entidad (es unidad coherente). Generaliza el
-  fallback `_effective_summary` actual (summary-o-body-cortado, hoy solo para
-  *entries*) → dream **escribe** un summary real para entidades largas.
+- **Vector — entidad (Gap B cerrado)** → **NO hay campo `summary` separado** en
+  `EntityPage`; el embedding se **compone en index-time**: name + aliases +
+  **attributes + relations** + body-head, acotado a **≤512 tokens** (mismo fix
+  char→token de las referencias). NO se chunkea una entidad (es unidad
+  coherente). Racional: en el modelo nuevo los **`attributes` (dream-owned) SON
+  la esencia** → se priorizan en la composición para que siempre entren; el
+  body-head llena lo que sobra. Sin field → sin staleness, sin write extra,
+  reusa `_compose_entity_page_text` (`vector_index.py:387`, hoy cap 1500 chars →
+  pasar a ≤512 tok). (`_effective_summary` sigue siendo para *entries*, no
+  entidades.)
 - **Vector — referencia** → **chunks por sección** (≤512 tok, parent-pointer a
   la page, structure-aware). Se recupera la sección relevante de un doc largo.
 
@@ -601,3 +618,29 @@ user_authored). Crons (`dream`/`memory_dream`) a renombrar en inglés.
 
 > **Pendiente de forma**: estos docs del plan están en español y deben pasar a
 > **inglés** (regla: code + docs en inglés). Conversión al cerrar el diseño.
+
+### 6.1 Segunda pasada (consistencia interna + schemas que el diseño asume)
+
+Sin contradicciones internas nuevas. Schemas abiertos suficientes (tipos
+arbitrarios `system:`/`stance:`/`practice:` parsean; `identifiers`/`always_on`
+round-tripean vía `extra` de `EntityPage`). Dos huecos cerrados:
+
+- **Gap A — provenance por-campo con `author` 3-valores**: el diseño ya lo pedía
+  (§2.4); faltaba reconciliar con el page-level. Cerrado en §2.4: field-level
+  `{user,agent,dream}` (net-new) coexiste con page-level `{user_authored,
+  agent_created}` (se mantiene). `provenance.py` hoy es 2-valores/página.
+- **Gap B — sin campo `summary` en `EntityPage`**: §2.11 lo asumía; no existe.
+  Cerrado: embedding **index-time** (name+aliases+attributes+relations+body-head
+  ≤512 tok); los attributes son la esencia. Sin field nuevo.
+
+**Inventario net-new (esqueleto del plan de impl., no huecos)**: ~32 módulos
+UNTOUCHED, ~18 MODIFY, 2 ORPHAN (`consolidator_tags`, `dream_archive_consumed` —
+mueren con history.jsonl/episodic), ~10 net-new (dos runners extract/refine,
+extracción sesión→entidad, provenance por-campo, ranking always-on + pin budget,
+resolución de principal, descubrimiento `system:`, cursor por-sesión,
+refine-pressure, forget de entidades). Config net-new: owner, pin-budget,
+system-entity (absorb=flip-true; crons=reasignar). **`identity.md` y
+`SKILL.md` son inconsistentes entre sí HOY** y ambos hay que reescribirlos
+(sacar `memory_store`, agregar `memory_upsert_entity`, disolver SOUL/USER/MEMORY).
+El **extract dream es composición de dos motores**: `DreamConsolidator` (patch,
+entidades) + path agentic `SkillWrite` (skills) leyendo sesiones+refs.
