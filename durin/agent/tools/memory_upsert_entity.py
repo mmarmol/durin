@@ -108,6 +108,10 @@ class MemoryUpsertEntityTool(Tool):
             patches.append(FieldPatch(
                 kind="body_append", value=str(body), author=None,
                 source_ref=src, at=now))
+        # §2.13: explicitly (re-)authoring an entity overrides a prior delete
+        # tombstone — the user asked for it back.
+        from durin.memory.deletion import clear_delete_tombstone
+        clear_delete_tombstone(self._workspace, ref)
         try:
             with author_scope("agent_created"):
                 result = write_entity(

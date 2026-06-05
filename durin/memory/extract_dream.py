@@ -95,6 +95,11 @@ def extract_entity(
 ) -> WriteResult:
     """Extract attributes for ``entity_ref`` from ``turns`` and apply as dream."""
     llm_invoke = llm_invoke or default_llm_invoke
+    # §2.13: the extract dream respects a delete tombstone — it never re-creates
+    # an entity the user deleted (the user overrides by explicitly re-authoring).
+    from durin.memory.deletion import is_deleted
+    if is_deleted(workspace, entity_ref):
+        return WriteResult(entity_ref, committed=False, retries=0)
     root = Path(workspace) / "memory"
     type_, _, slug = entity_ref.partition(":")
     page_path = root / "entities" / type_ / f"{slug}.md"
