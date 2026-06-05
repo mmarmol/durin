@@ -112,3 +112,114 @@ def test_uncommitted_on_disk_entity_errors_not_clobbers(tmp_path):
         write_entity(tmp_path, "company:oldco",
                      [FieldPatch(kind="relation", value={"to": "person:x", "type": "ceo"},
                                  author="agent", source_ref="s", at=NOW)])
+
+
+# --- comprehensive searchability across entity types + retrieval mechanisms ---
+
+def _reindex_all(ws):
+    from durin.memory.indexer import reindex_one_file
+    for p in (ws / "memory" / "entities").rglob("*.md"):
+        reindex_one_file(ws, p)
+
+
+def _A(k, v):
+    return FieldPatch(kind="attribute", key=k, value=v, author="dream", source_ref="s", at=NOW)
+
+
+def _grep(ws, q, want):
+    return any(want in r.uri for r in search_memory(ws, q))
+
+
+def _fts(ws, q, want_slug):
+    from durin.memory.fts_index import FTSIndex
+    with FTSIndex.open(ws) as idx:
+        return any(want_slug in str(getattr(h, "uri", h)) for h in idx.search(q, limit=20))
+
+
+def test_all_entity_types_searchable_grep_and_fts(tmp_path):
+    # open type vocabulary + diverse attribute kinds (string / int / list /
+    # relation / body), found by both the grep and FTS paths.
+    write_entity(tmp_path, "person:alex", [_A("role", "founder")], create=True, name="Alex Panagides")
+    write_entity(tmp_path, "company:mxhero",
+                 [FieldPatch(kind="alias", value="mxHERO", author="agent", source_ref="s", at=NOW),
+                  _A("hq_country", "Argentina"), _A("founding_year", 2012),
+                  _A("products", ["mail2cloud", "supervisor"]),
+                  FieldPatch(kind="relation", value={"to": "company:box", "type": "partner"},
+                             author="agent", source_ref="s", at=NOW)],
+                 create=True, name="mxHERO Inc")
+    write_entity(tmp_path, "topic:smtp", [_A("default_port", 587)], create=True, name="SMTP")
+    write_entity(tmp_path, "stance:rigor",
+                 [FieldPatch(kind="body_append", value="Prefer rigor over speed.",
+                             author="agent", source_ref="s", at=NOW)], create=True, name="Rigor")
+    _reindex_all(tmp_path)
+
+    cases = [("Panagides", "person:alex"), ("mxHERO", "company:mxhero"),
+             ("Argentina", "company:mxhero"), ("2012", "company:mxhero"),
+             ("supervisor", "company:mxhero"), ("box", "company:mxhero"),
+             ("587", "topic:smtp"), ("rigor over speed", "stance:rigor")]
+    for q, want in cases:
+        assert _grep(tmp_path, q, want), f"grep miss: {q} -> {want}"
+        assert _fts(tmp_path, q, want.split(":")[1]), f"fts miss: {q} -> {want}"
+
+
+def test_dream_transformed_entity_fully_searchable(tmp_path):
+    # After agent-author -> extract (attributes) -> refine (merge), every datum
+    # (agent body/relation, dream attributes, refine-merged alias) survives and
+    # is searchable by grep + FTS.
+    from durin.memory.extract_dream import extract_entity
+    from durin.memory.refine_dream import run_refine
+
+    write_entity(tmp_path, "company:globex",
+                 [FieldPatch(kind="alias", value="Globex Corp", author="agent", source_ref="s", at=NOW),
+                  FieldPatch(kind="relation", value={"to": "person:hank", "type": "founded_by"},
+                             author="agent", source_ref="s", at=NOW),
+                  FieldPatch(kind="body_append", value="An energy conglomerate.",
+                             author="agent", source_ref="s", at=NOW)],
+                 create=True, name="Globex")
+    extract_entity(tmp_path, "company:globex", "facts",
+                   llm_invoke=lambda p, **k: '{"founding_year":1989,"headquarters":"Cypress Creek"}')
+    write_entity(tmp_path, "company:globex_incorporated",
+                 [FieldPatch(kind="alias", value="Globex Corp", author="agent", source_ref="s", at=NOW)],
+                 create=True, name="Globex Incorporated")
+    assert run_refine(tmp_path,
+                      llm_invoke=lambda p, **k: "===VERDICT===\nsame\n===CONFIDENCE===\n98\n"
+                                                "===REASONING===\nx\n===END===")["merged"]
+    page = EntityPage.from_file(tmp_path / "memory/entities/company/globex.md")
+    assert "conglomerate" in page.body                       # agent body
+    assert page.attributes.get("founding_year") == 1989       # dream attribute
+    assert "Globex Incorporated" in page.aliases              # refine-merged alias
+    assert {"to": "person:hank", "type": "founded_by"} in page.relations
+
+    _reindex_all(tmp_path)
+    for q, want in [("Cypress Creek", "company:globex"), ("1989", "company:globex"),
+                    ("Globex Incorporated", "company:globex"), ("hank", "company:globex"),
+                    ("conglomerate", "company:globex")]:
+        assert _grep(tmp_path, q, want), f"grep miss: {q}"
+        assert _fts(tmp_path, q, "globex"), f"fts miss: {q}"
+
+
+def test_vector_search_finds_attributes_and_semantic(tmp_path):
+    # The embedding includes attributes/relations (audit E9), and the vector
+    # path adds SEMANTIC recall the token paths miss. Guarded: needs the model.
+    from durin.memory.vector_index import vector_index_available
+    if not vector_index_available():
+        pytest.skip("vector index unavailable in this environment")
+    from durin.memory.embedding import FastembedProvider
+    from durin.memory.vector_index import VectorIndex
+
+    write_entity(tmp_path, "company:mxhero",
+                 [_A("hq_country", "Argentina"),
+                  FieldPatch(kind="body_append", value="An email-to-cloud company.",
+                             author="agent", source_ref="s", at=NOW)],
+                 create=True, name="mxHERO")
+    page = EntityPage.from_file(tmp_path / "memory/entities/company/mxhero.md")
+    vi = VectorIndex(tmp_path, FastembedProvider(model="intfloat/multilingual-e5-small"))
+    vi.upsert_entity_page(entity_ref="company:mxhero", name=page.name, aliases=list(page.aliases),
+                          body=page.body, path=tmp_path / "memory/entities/company/mxhero.md",
+                          attributes=dict(page.attributes), relations=list(page.relations))
+
+    def vec(q):
+        return any("mxhero" in str(h.get("uri", "") + h.get("entity_ref", "") + str(h.get("id", "")))
+                   for h in vi.search(q, top_k=5))
+    assert vec("Argentina")                 # exact attribute value, embedded
+    assert vec("correo en la nube")          # semantic (ES) — token paths would miss this
