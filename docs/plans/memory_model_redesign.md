@@ -368,8 +368,10 @@ CONCURRENCIA:               git sustrato + merge semántico (no textual)
 1. **Mecanismo write-time de concurrencia** (§2.5): lock global simple vs
    optimistic-retry con merge semántico. ¿Concurrencia local (un workdir, el
    lock alcanza) o distribuida (clones separados, git-merge semántico)?
-2. **Forma exacta del tool `memory_upsert_entity`** (§2.4): params, semántica
-   merge, qué pasa si `ref` no existe (crea) vs existe.
+2. **Tool `memory_upsert_entity`** — **DECIDIDO** (spec en
+   [memory_seq_ingesta.md](memory_seq_ingesta.md) E3a): merge no-replace, body
+   append atribuido, sin `attributes` (dream extrae), relation dangling
+   permitido, dedup a dream, crea-si-no-existe.
 3. **`history.jsonl`**: ¿se elimina (sessions+summaries lo cubren) o queda?
    (§2.3).
 4. **Referencias** (§2.8): ingestión structure-aware vs blind-chunk; cómo

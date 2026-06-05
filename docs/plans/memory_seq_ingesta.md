@@ -45,9 +45,26 @@ sequenceDiagram
 - **Qué**: el agente clasifica en {hecho-de-entidad → upsert, documento → ingest}. La interacción en sí no necesita verbo: se graba sola en la sesión (§2.6).
 - **Pendiente**: cómo se le instruye el ruteo (prompt / tool descriptions); aportes mixtos.
 
-### E3a — Upsert entidad (agente autora, light)
-- **Quién/qué**: `memory_upsert_entity(ref, name, aliases, relations, body-prosa)`. Merge, no replace. `author=agent`, `prov=turno`. Pipeline `dream_apply`. **La entidad existe ya** (prosa searchable). El agente NO emite `attributes` (los pone el Dream-corto, decisión b).
-- **Pendiente**: forma exacta del tool; `ref` inexistente (crea) vs existe (merge); body append vs replace.
+### E3a — Upsert entidad (agente autora, light) — DECIDIDO
+
+```
+memory_upsert_entity(
+  ref:        "<type>:<slug>"   # clave (la tool normaliza el slug); requerido
+  name:       "..."             # display (requerido al crear)
+  aliases?:   [...]
+  relations?: [{to:"<ref>", type:"...", ...metadata}]
+  body?:      "markdown prosa"
+)
+→ author=agent · prov=turno (auto) · dream_apply (validación + .md.bak + git + index)
+```
+
+Reglas (decididas):
+- **Merge, no replace.** name/aliases = set/union; relations = add (dedup `(to,type)`); `ref` inexistente → **crea**, existe → **merge**.
+- **body = append** sección atribuida (no clobber; dream cura la prosa después).
+- **Sin `attributes`** — la prosa lleva los hechos; el Dream-corto los extrae (decisión b).
+- **Relation a entidad inexistente = dangling permitido** (sin placeholder huérfano; el agente upserta el target si importa; dream resuelve).
+- **Dedup → dream**, no en el write (la tool no consulta alias-index). Agente rápido, dream autoridad.
+- **La entidad existe ya** e indexa (prosa searchable).
 
 ### E3b — Ingesta de documento (referencia)
 - **Quién/qué**: `memory_ingest(doc)` → `ingested/<id>/source` (entero, **REFERENCE**, indexado) + chunks `corpus` (índice → apunta a la page). Dream NO sintetiza referencias.
