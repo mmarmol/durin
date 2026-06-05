@@ -458,6 +458,21 @@ pin budget + dream refine.
 stance/practice + ancla user_authored) + **SYSTEM** (entorno) + GENERAL +
 SESSION.
 
+### 2.13 Borrado de entidades y referencias (Gap #3)
+
+**DECISIÓN.** Hoy `memory_forget` borra **entries** (archive reversible) pero
+**rechaza entidades** (`forget.py:65`) y no toca el `ingested/source` de una
+referencia. En el modelo nuevo eso está del lado equivocado (las entidades/
+referencias son lo que el agente autora). Se agrega:
+- **Referencia** → agente/usuario la borra: archiva el `ingested/source` + sus
+  chunks/page derivados. Unidad-documento, limpio.
+- **Entidad** → el **usuario** borra (autoritativo, archive). El **agente** solo
+  borra una entidad que **autoró solo** (sin contribuciones de dream/user) o
+  **propone** el borrado (dream/user confirma) — dream-gana: una entidad que
+  dream cura no se borra unilateral.
+- Reusa `archive.py` (ya archiva entidades en absorb) + extiende
+  `memory_forget`. Todo reversible por git.
+
 ---
 
 ## 3. Modelo consolidado (vista de un vistazo)
