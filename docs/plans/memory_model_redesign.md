@@ -234,7 +234,7 @@ tipo de contenido**: ambos (entidades Y skills) reciben extract + refine.
 
 | Material | **CORTO** (integrar lo reciente, ~2h, cursor por-sesión) | **LARGO** (consolidar/limpiar el todo, ~diario, graph-wide) |
 |---|---|---|
-| **Entidades** | extraer hechos + `attributes` de sesiones nuevas; aplicar prefs de usuario a `person:` | dedup/absorb, unificar claves sinónimas, splitear, resolver contradicciones cross-grafo |
+| **Entidades** | extraer hechos + `attributes` + **summary de embedding** de sesiones nuevas; aplicar prefs de usuario a `person:` | dedup/absorb, unificar claves sinónimas, splitear, resolver contradicciones cross-grafo |
 | **Skills** | crear/arreglar skills desde la ejecución reciente | unificar duplicadas, mejorar eficiencia, refactor |
 | **Índices** | — | self-heal / orphans |
 
@@ -343,6 +343,38 @@ necesidad de storage.)
   usuario/proyecto activo) — un burst de feedback nuevo no debe explotar el
   contexto antes de que dream pode. "Default active" ≠ "inyectar sin límite".
 
+### 2.11 Indexación: FTS vs vector, embedding por tipo, re-derivabilidad
+
+**Restricción real (verificada).** El embedding `intfloat/multilingual-e5-small`
+tiene **máximo 512 tokens**; lo que pasa se trunca **silencioso** (no
+recuperable por vector). **FTS5/BM25 no tiene límite** → indexa el texto
+completo. ⇒ **el chunking/summary es SOLO problema del vector.**
+
+**DECISIÓN — embedding por tipo:**
+- **FTS (keyword)**: texto **completo** para todo (entidad:
+  name+aliases+attributes+relations+body; referencia: doc entero). No se trocea.
+- **Vector — entidad** → embeber un **summary** (≤512 tok) que **mantiene el
+  dream-corto**. NO se chunkea una entidad (es unidad coherente). Generaliza el
+  fallback `_effective_summary` actual (summary-o-body-cortado, hoy solo para
+  *entries*) → dream **escribe** un summary real para entidades largas.
+- **Vector — referencia** → **chunks por sección** (≤512 tok, parent-pointer a
+  la page, structure-aware). Se recupera la sección relevante de un doc largo.
+
+**INVARIANTE anti-migración (lo irreversible — lockear ahora).** La **fuente
+canónica** (body de la entidad / `ingested/source.md` de la referencia) es la
+verdad; **summary y chunks son DERIVADOS y re-derivables** con anclas estables
+(parent-ref + offset/sección). ⇒ cambiar embedder, tamaño de chunk o estrategia
+= **re-derivar desde la fuente**, nunca migración imposible. El "infierno" solo
+pasa si los chunks fueran la fuente o no se guardara el original — ninguno aplica.
+
+**BUG a corregir.** El splitter corta por **chars** (`DEFAULT_CHUNK_SIZE=1500`)
+pero el límite es **tokens** (512) y durin es multilingüe → en CJK/scripts
+densos 1500 chars puede pasar 512 tok y truncar. Cortar por **tokens del
+tokenizer del embedding** (≤~480 con margen), no por chars.
+
+**ABIERTO (tuneable, no urgente porque es re-derivable):** migrar a un embedder
+long-context (bge-m3 / nomic-embed, 8192 tok) para chunks/summaries más grandes.
+
 ---
 
 ## 3. Modelo consolidado (vista de un vistazo)
@@ -384,9 +416,11 @@ CONCURRENCIA:               git sustrato + merge semántico (no textual)
    permitido, dedup a dream, crea-si-no-existe.
 3. **`history.jsonl`**: ¿se elimina (sessions+summaries lo cubren) o queda?
    (§2.3).
-4. **Referencias** (§2.8): ingestión structure-aware vs blind-chunk; cómo
-   linkea la reference page a entidades (`[[company:mxhero]]`); confirmar el
-   marcador REFERENCE en el pipeline de búsqueda.
+4. **Referencias** — **DECIDIDO** (§2.8, §2.11, ingesta E3b): doc entero =
+   reference page (marcador REFERENCE); FTS indexa entero; vector = chunks por
+   sección (token-split, parent-pointer); agente+dream linkean entidades;
+   búsqueda surface la page una vez (dedup por parent). **ABIERTO/tuneable**:
+   embedder long-context (8192) y split de blob multi-artículo en varias pages.
 5. **Resolución user-de-sesión → entidad `person:`** (§2.9): el mapeo
    channel-user-id → entidad es el problema de identidad cross-channel (R4).
    Trivial para webui (dueño único); manual/LLM en multi-channel.
