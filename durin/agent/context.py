@@ -314,23 +314,11 @@ class ContextBuilder:
         breakdown: dict[str, str] = {}
         parts: list[str] = []
 
-        memory = self.memory.get_memory_context()
-        if memory and not self._is_template_content(self.memory.read_memory(), "memory/MEMORY.md"):
-            block = f"# Memory\n\n{memory}"
-            breakdown["memory_long_term"] = block
-            parts.append(block)
-
-        entries = self.memory.read_unprocessed_history(since_cursor=self.memory.get_last_dream_cursor())
-        if entries:
-            capped = entries[-self._MAX_RECENT_HISTORY:]
-            history_text = "\n".join(
-                f"- [{e['timestamp']}] {e['content']}" for e in capped
-            )
-            history_text = truncate_text(history_text, self._MAX_HISTORY_CHARS)
-            block = "# Recent History\n\n" + history_text
-            breakdown["recent_history"] = block
-            parts.append(block)
-
+        # §8e: the legacy MEMORY.md long-term block + the history.jsonl
+        # "recent history" block are removed. In the new model that knowledge
+        # lives in the pinned context + entities (stable tier) and the raw turns
+        # are the session replay — injecting MEMORY.md/history here double-fed
+        # the prompt. The compaction summary below survives.
         if session_summary:
             block = f"[Archived Context Summary]\n\n{session_summary}"
             breakdown["session_summary"] = block
