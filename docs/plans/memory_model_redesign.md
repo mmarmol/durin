@@ -370,10 +370,18 @@ necesidad de storage.)
   searchable), no se pierde. El set always-on es un subconjunto curado.
 - **Criterio de dream para mantener active**: load-bearing/frecuente,
   general > narrow, scoped al usuario/proyecto activo, no superseded.
-- **SAFETY (ventana pre-dream)**: aunque el default sea `true`, el `hot_layer`
-  aplica un **presupuesto de tokens** (recencia + relevancia + scope al
-  usuario/proyecto activo) — un burst de feedback nuevo no debe explotar el
-  contexto antes de que dream pode. "Default active" ≠ "inyectar sin límite".
+- **SAFETY / política de pin (DECIDIDO)**: aunque el default sea `true`, el
+  `hot_layer` aplica un **presupuesto de tokens configurable** (slice para
+  feedback, aparte de entidades/sesión). Ranking cuando los `always_on`
+  exceden: **(1) user-force-pin** (override, entra sí o sí) > **(2) global**
+  (reglas transversales) > **(3) scoped al contexto activo**
+  (person/project/topic/tool en uso); desempate **recencia +
+  frecuencia/load-bearing**. **Tres tiers**: *must-inject* (globales + prefs del
+  user activo, acotado) / *if-budget* (scoped) / *on-demand* (narrow/stale/
+  superseded → dream las demota; searchable, no inyectadas). Una **corrección
+  fresca** rankea alto por recencia → **sobrevive el budget aunque dream no haya
+  corrido**; **dream-largo converge** el set (demote/generaliza) a algo chico y
+  load-bearing. "Default active" ≠ "inyectar sin límite".
 
 ### 2.11 Indexación: FTS vs vector, embedding por tipo, re-derivabilidad
 
@@ -461,11 +469,11 @@ CONCURRENCIA:               git sustrato + merge semántico (no textual)
 5. **Resolución user-de-sesión → entidad `person:`** (§2.9): el mapeo
    channel-user-id → entidad es el problema de identidad cross-channel (R4).
    Trivial para webui (dueño único); manual/LLM en multi-channel.
-6. **Curación de la capa siempre-presente** (§2.9, §2.10): el `hot_layer` cura
-   por recencia + top-headlines. ¿Basta, o se necesita curación-LLM? Y el
-   **presupuesto de pin de always-on** (§2.10): qué `stance`/`practice` se
-   inyectan en la ventana pre-dream (recencia + relevancia + scope al
-   usuario/proyecto activo) sin explotar el contexto.
+6. **Presupuesto de pin de always-on** — **DECIDIDO** (§2.10): budget de tokens
+   configurable + ranking (user-force-pin > global > scoped; desempate recencia
+   + frecuencia) + tres tiers (must-inject / if-budget / on-demand) + dream-largo
+   converge el set. (Sub-abierta menor: ¿la curación general del hot_layer
+   —entidades/sesión— necesita LLM o basta heurística? Tuneable.)
 7. **Cadencia/disparo de los dreams** — **DECIDIDO** (§2.7): CORTO reactivo
    (session-close + post-compaction) + safety-net ~2h + gate; LARGO diario +
    refine-pressure; ambos comparten lock + throttle.
