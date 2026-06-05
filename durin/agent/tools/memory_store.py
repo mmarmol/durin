@@ -140,6 +140,15 @@ class MemoryStoreTool(Tool):
 
     config_key = "memory"
 
+    @classmethod
+    def enabled(cls, ctx: Any) -> bool:
+        # §8a: removed from the agent toolset in the new memory model. Facts
+        # about a thing go through `memory_upsert_entity`; documents through
+        # `memory_ingest`; interactions stay in the session for the dream to
+        # distil. The `store_memory` FUNCTION stays for internal callers
+        # (compaction summaries, ingest chunks).
+        return False
+
     def __init__(
         self,
         workspace: str | Path,

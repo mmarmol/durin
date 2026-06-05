@@ -46,27 +46,19 @@ _PARAMETERS = tool_parameters_schema(
     ),
     required=["path"],
     description=(
-        # Canonical text per `docs/architecture/memory/06_prompts_and_instructions.md` §3.3.
-        "Add a local document (markdown or plain text) to durin's memory "
-        "corpus. Use this when the user wants a file on disk remembered "
-        "as reference material — research notes, transcripts, technical "
-        "specs, exported pages, markdown books, etc.\n\n"
-        "`path` is the absolute or workspace-relative path to the file. "
-        "The file is copied to `ingested/<id>/` for preservation (so the "
-        "original is recoverable verbatim) and the content is chunked "
-        "into searchable `memory/corpus/*.md` entries. Re-ingesting the "
-        "same file is idempotent — the id is derived from a hash of "
-        "(filename + content), so renaming the file before re-ingesting "
-        "produces a different id.\n\n"
+        "Add a local document (markdown or plain text) to durin's memory as "
+        "a REFERENCE — coherent source material the user wants kept whole: "
+        "research notes, transcripts, technical specs, exported pages, "
+        "markdown books, etc.\n\n"
+        "`path` is the absolute or workspace-relative path to the file. The "
+        "original is preserved verbatim and the document is indexed for "
+        "retrieval. Re-ingesting the same file is idempotent — the id is a "
+        "hash of (filename + content).\n\n"
         "For web content, use `web_fetch(url=...)` first to get clean "
-        "markdown, then `memory_store(content=..., class_name=\"corpus\", "
-        "source_refs=[url])`. `web_fetch` already handles URL extraction "
-        "(Jina/readability), SSRF protection, redirects, and image "
-        "detection.\n\n"
-        "For short inline text (a paragraph or two), call `memory_store` "
-        "directly with `class_name=\"corpus\"` — `memory_ingest` is "
-        "specifically for files on disk where preserving the original "
-        "artifact matters."
+        "markdown, then `memory_ingest` on the saved file. For a fact about a "
+        "*thing* (a person, company, product, topic…), use "
+        "`memory_upsert_entity` instead — `memory_ingest` is for whole "
+        "documents, not individual facts."
     ),
 )
 
