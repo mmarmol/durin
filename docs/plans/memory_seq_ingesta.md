@@ -4,11 +4,11 @@
 > cada etapa describe qué hace, quién, qué escribe, con qué provenance.
 > Parte de [memory_model_redesign.md](memory_model_redesign.md).
 
-Actores: **Usuario** · **Agente** (loop) · tools (`memory_store` /
-`memory_upsert_entity` / `memory_ingest`) · **Conocimiento** (entities +
-references + corpus-index) · **Experiencia** (sessions + obs + history) ·
-**Dream-refiner** (autoridad de coherencia, ex-Track B) · **Dream-self**
-(SOUL + skills, ex-Track A).
+Actores: **Usuario** · **Agente** (loop) · tools (`memory_upsert_entity` /
+`memory_ingest`) · **Conocimiento** (entities + references + corpus-index) ·
+**Experiencia** (`sessions/` crudo + `session_summary/`) · **Dream-CORTO**
+(extract reciente, ~2h, cursor por-sesión) · **Dream-LARGO** (refine/consolidar,
+~diario, graph-wide).
 
 ## Diagrama
 
@@ -17,22 +17,22 @@ sequenceDiagram
   actor U as Usuario
   participant A as Agente (loop)
   participant K as Conocimiento<br/>(entities/refs/corpus-idx)
-  participant E as Experiencia<br/>(sessions/obs/history)
-  participant DR as Dream-refiner<br/>(autoridad coherencia)
-  participant DS as Dream-self<br/>(SOUL + skills)
+  participant E as Experiencia<br/>(sessions + summaries)
+  participant DC as Dream-CORTO<br/>(extract ~2h)
+  participant DL as Dream-LARGO<br/>(refine ~diario)
 
   U->>A: "investiga X / acá un doc / recordá Y"
-  Note over A: [E2] ruteo por intención
-  A->>K: [E3a] memory_upsert_entity(company:x, name, relations, body-prosa)<br/>author=agent, prov=turno → lock+git+index
+  Note over A: [E2] ruteo por intención (2 verbos)
+  A->>K: [E3a] memory_upsert_entity(company:x, name, relations, body-prosa)<br/>author=agent, prov=turno → dream_apply (lock+git+index)
   Note over K: la entidad EXISTE ya (prosa searchable)
-  A->>K: [E3b] memory_ingest(doc) → ingested/ (original entero) +<br/>REFERENCE page + corpus chunks (índice → page)
-  A->>E: [E3c] memory_store(obs, entities=[person:u]) → index
-  A-->>E: [E4] (fin turno) append history.jsonl
+  A->>K: [E3b] memory_ingest(doc) → ingested/source (entero, REFERENCE) +<br/>corpus chunks (índice → page)
+  A-->>E: [E4] la interacción se graba sola en sessions/ (crudo = verdad)
   rect rgb(238,238,238)
-    Note over DR,DS: ASÍNCRONO (background)
-    DR->>K: [E5] lee entidades+obs+sessions (visión total)<br/>EXTRAE attributes, dedup/normaliza/splitea<br/>author=dream (gana) → patch+prov → git+reindex
-    DS->>DS: [E6] mantiene SOUL + skills desde history
+    Note over DC,DL: ASÍNCRONO (background)
+    DC->>K: [E5-corto] lee SESIONES CRUDAS post-cursor (por-sesión)<br/>EXTRAE hechos+attributes → entidades; prefs→person:u<br/>crea/arregla skills recientes · author=dream → patch+prov
+    DL->>K: [E5-largo] sobre el GRAFO COMPLETO (sin cursor)<br/>dedup/unifica/splitea entidades; unifica/mejora skills<br/>resuelve contradicciones; self-heal índices
   end
+  Note over A,E: [E6] SOUL no la toca dream — user_authored (edición manual del usuario)
 ```
 
 ## Etapas (a refinar al fino)
@@ -41,30 +41,32 @@ sequenceDiagram
 - **Qué**: el usuario manda un hecho, un documento, o una instrucción de recordar.
 - **Pendiente**: —
 
-### E2 — Agente rutea por intención
-- **Qué**: el agente clasifica el aporte en {hecho-de-entidad, observación, documento}.
-- **Pendiente**: ¿cómo se le instruye el ruteo? (prompt / tool descriptions). ¿Qué pasa con aportes mixtos?
+### E2 — Agente rutea por intención (dos verbos)
+- **Qué**: el agente clasifica en {hecho-de-entidad → upsert, documento → ingest}. La interacción en sí no necesita verbo: se graba sola en la sesión (§2.6).
+- **Pendiente**: cómo se le instruye el ruteo (prompt / tool descriptions); aportes mixtos.
 
-### E3a — Upsert entidad (agente-light)
-- **Quién/qué**: `memory_upsert_entity(ref, name, aliases, relations, body)`. Merge, no replace. `author=agent`, `prov=turno`. Pipeline `dream_apply` (lock+git+index). Entidad existe ya.
-- **Pendiente**: forma exacta del tool; qué pasa si `ref` no existe (crea) vs existe (merge); body append vs replace.
+### E3a — Upsert entidad (agente autora, light)
+- **Quién/qué**: `memory_upsert_entity(ref, name, aliases, relations, body-prosa)`. Merge, no replace. `author=agent`, `prov=turno`. Pipeline `dream_apply`. **La entidad existe ya** (prosa searchable). El agente NO emite `attributes` (los pone el Dream-corto, decisión b).
+- **Pendiente**: forma exacta del tool; `ref` inexistente (crea) vs existe (merge); body append vs replace.
 
-### E3b — Ingesta de documento
-- **Quién/qué**: `memory_ingest(doc)` → `ingested/<id>/source` (original entero) + **REFERENCE page** (coherente, linkea entidades) + chunks `corpus` (índice → apunta a la page). Marcador REFERENCE.
-- **Pendiente**: structure-aware vs blind-chunk; cómo se linkea la page a entidades; el agente ingiere mal hoy (blob KB).
+### E3b — Ingesta de documento (referencia)
+- **Quién/qué**: `memory_ingest(doc)` → `ingested/<id>/source` (entero, **REFERENCE**, indexado) + chunks `corpus` (índice → apunta a la page). Dream NO sintetiza referencias.
+- **Pendiente**: structure-aware vs blind-chunk; cómo linkea la page a entidades; el agente ingiere mal hoy (blob KB).
 
-### E3c — Observación a experiencia
-- **Quién/qué**: `memory_store(obs, entities=[...])` → capa experiencia → index. La observación **referencia** entidades, no las crea.
-- **Pendiente**: definir la capa experiencia (doc aparte / §3.2); cómo no se pisa con E3a.
+### E4 — La interacción se graba sola
+- **Qué**: el turno queda en `sessions/<id>` (crudo = verdad, anchors de turno estables). NO hay tool de observación (`memory_store`/`episodic`/`stable` se disuelven). El `session_summary` lo produce el summarizer en compaction (vista de recall hot-path, NO input de dream).
+- **Pendiente**: ¿`history.jsonl` se elimina (sessions+summaries lo cubren)? (abierto §4).
 
-### E4 — Cierre de turno
-- **Qué**: el loop appendea el turno a `history.jsonl` (log de experiencia).
-- **Pendiente**: ¿`history.jsonl` sigue, o se reemplaza por sessions/summaries?
+### E5-corto — Dream CORTO (extract reciente, async)
+- **Quién/qué**: lee **sesiones crudas post-cursor** (cursor por-sesión, forward). Extrae hechos + **attributes** → entidades; rutea prefs de usuario a `person:u`; crea/arregla **skills** de la ejecución reciente. `author=dream` (gana). patch+prov por `dream_apply`.
+- **JUSTIF**: lee crudo (no summaries) por fidelidad + provenance a anchor de turno (§2.6).
+- **Pendiente**: disparo (cron ~2h / reactivo / debounce); presupuesto de visión (recupera por entidad, no todo en un prompt); reset manual de cursor.
 
-### E5 — Dream-refiner (async)
-- **Quién/qué**: con visión total, **extrae attributes** (dueño del esquema), dedup/normaliza/splitea/mergea, resuelve contradicciones → temporal validity. `author=dream` (gana). patch+prov por el pipeline.
-- **Pendiente**: **quién lo dispara** (reactivo a cada escritura / debounce / cron); presupuesto de visión (no todo en un prompt → recupera por decisión).
+### E5-largo — Dream LARGO (refine/consolidar, async)
+- **Quién/qué**: sobre el **grafo completo** (sin cursor). Entidades: dedup/absorb, unificar claves, splitear, contradicciones cross-grafo. Skills: unificar duplicadas, mejorar eficiencia, refactor. Self-heal de índices/orphans.
+- **NUANCE**: skills son ejecutables → refine conservador (git-revert, merges proponer-no-auto/alta-confianza, verificar validez antes de reemplazar).
+- **Pendiente**: ¿diario alcanza? coordinación corto↔largo (que no se pisen; provenance por-campo arbitra).
 
-### E6 — Dream-self (async)
-- **Quién/qué**: mantiene **SOUL** (comportamiento) + crea/edita **skills** desde history. (USER.md/MEMORY.md disueltos → ver [memory_context_preload.md](memory_context_preload.md).)
-- **Pendiente**: ¿qué queda del cron `dream` legacy una vez disuelto USER/MEMORY? ¿Se fusiona con E5 en un solo cron?
+### E6 — SOUL (fuera de dream)
+- **Quién/qué**: `SOUL.md` = constitución del agente, **`user_authored`**, edición manual del usuario. Dream **nunca** la toca. (USER.md/MEMORY.md disueltos → [memory_context_preload.md](memory_context_preload.md).)
+- **Pendiente**: —

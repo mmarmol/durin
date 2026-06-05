@@ -15,12 +15,12 @@ sequenceDiagram
   participant HL as hot_layer (pre-carga)
   participant A as Agente (loop)
   participant S as memory_search<br/>(FTS+vector)
-  participant DR as Dream-refiner (async)
+  participant DR as Dreams corto/largo (async)
 
   Note over HL,A: [E0] bootstrap: HL ensambla contexto → prompt del agente
   U->>A: [E1] pregunta
   A->>S: [E2] memory_search(query) [2-3 fraseos]
-  S-->>A: [E3] hits sectorizados<br/>CANONICAL(verdad) · REFERENCE(doc) · FRAGMENT(crudo) · SESSION(convo)
+  S-->>A: [E3] hits sectorizados<br/>CANONICAL(verdad/entidad) · REFERENCE(doc) · SESSION(experiencia)
   Note over A: [E4] sintetiza por marcador + cita fuentes
   A-->>U: [E5] respuesta
   Note over DR: [E6] dream NO es síncrono; aporta estado YA curado.<br/>(opcional: gap detectado → encola refine async, no bloquea)
@@ -43,18 +43,20 @@ sequenceDiagram
 ### E3 — Pipeline devuelve marcadores
 - **Quién/qué**: FTS+vector → hits sectorizados con marcadores:
   `CANONICAL` (verdad/entidad) · `REFERENCE` (documento curado) ·
-  `FRAGMENT` (observación cruda) · `SESSION` (resumen de conversación),
-  con qualifier de completitud.
+  `SESSION` (experiencia: sesión/resumen), con qualifier de completitud.
+  **Nota**: el marcador `FRAGMENT` (observación cruda episodic/stable)
+  **desaparece** — esas clases se disuelven (§2.6); la experiencia reciente
+  no-consolidada vive en `sessions/` → marcador SESSION.
 - **Pendiente**: agregar/confirmar el marcador **REFERENCE** (hoy las refs caen en INGESTED); cap por-fuente.
 
 ### E4 — Síntesis
-- **Quién/qué**: el agente sintetiza priorizando por marcador (CANONICAL manda; FRAGMENT enmienda con timestamps; REFERENCE se cita como fuente), cita URIs.
+- **Quién/qué**: el agente sintetiza priorizando por marcador (CANONICAL manda como verdad; SESSION aporta lo reciente aún no consolidado, con timestamps; REFERENCE se cita como fuente), cita URIs.
 - **Pendiente**: regla explícita de precedencia al leer (verdad vs reciente vs documento).
 
 ### E5 — Respuesta
 - **Qué**: responde citando fuentes; nombra lo que falta.
 - **Pendiente**: —
 
-### E6 — Dream reactivo (opcional)
-- **Qué**: dream **no** corre en el camino síncrono. Su aporte es el estado ya curado que el search lee. Opción: si el agente detecta incoherencia/gap en los hits, **encola** un refine async (no bloquea la respuesta).
-- **Pendiente**: ¿vale la pena el refine reactivo, o solo scheduled/por-escritura?
+### E6 — Dreams no-síncronos (opcional reactivo)
+- **Qué**: ni el corto ni el largo corren en el camino síncrono de consulta. Su aporte es el **estado ya curado** que el search lee. Opción: si el agente detecta incoherencia/gap en los hits, **encola** un refine async (no bloquea la respuesta).
+- **Pendiente**: ¿vale la pena el refine reactivo, o solo scheduled/por-escritura (§2.7)?
