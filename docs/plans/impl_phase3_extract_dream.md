@@ -31,11 +31,14 @@ the agent's prose (body, author=agent) + the dream's structured attributes
   coexisting with the agent's prose on one page, per-field provenance, 2 git
   commits. The core redesign idea proven end-to-end.
 
+**Built (orchestration, `extract_runner.py`):** per-session cursor in the
+`.meta.json` `derived.extract_cursor`; discovery of entities the agent authored via
+`memory_upsert_entity` tool calls in the new turns; `run_extract_for_session`
+processes post-cursor turns, extracts each entity, advances the cursor;
+idempotent re-run. LIVE: ran over a session, glm-5.1 extracted 7 attributes,
+cursor 0->2, re-run no-op.
+
 **Deferred (follow-on, NOT in this phase) — design §2.7/§6.1:**
-- **Discovery + per-session cursor + orchestration:** scan post-cursor sessions,
-  find the entities mentioned/authored, extract each, advance
-  `derived.extract_cursor` in the session `.meta.json`. (Core `extract_entity`
-  is cursor-agnostic by design — it takes `turns` directly.)
 - **References as input:** extract entities from newly-ingested reference docs
   (same `extract_entity`, fed the reference text) — Phase 5 wires references.
 - **Skills extraction:** create/fix skills from recent execution (reuse the
