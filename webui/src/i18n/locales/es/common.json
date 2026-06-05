@@ -704,6 +704,8 @@
     "noSourceLinkedEntries": "Ninguna entrada episódica enlaza con esta sesión via source_refs.",
     "emptyHint": "Ejecuta <code>durin memory dream</code> cuando se acumulen entradas.",
     "noConsolidatedHint": "Etiquetada en entradas episódicas pero aún sin página consolidada. Ejecuta <code>durin memory dream</code> para crear una.",
+    "phantomWhatIs": "Qué es esto (provisional)",
+    "coMentions": "Co-menciones",
     "stats": "{{nodesLabel}} · {{edgesLabel}}",
     "nodesCount_one": "{{count}} nodo",
     "nodesCount_other": "{{count}} nodos",
