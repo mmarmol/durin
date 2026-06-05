@@ -511,6 +511,23 @@ def reindex_one_skill(
 # ---------------------------------------------------------------------------
 
 
+def _reference_title_body(md_text: str) -> tuple[str, str]:
+    """Split a reference page into (title, body) for FTS. Tolerant of missing
+    frontmatter."""
+    import re
+
+    import yaml
+
+    m = re.match(r"^---\s*\n(.*?)\n---\s*\n(.*)$", md_text, re.DOTALL)
+    if not m:
+        return "", md_text.strip()
+    try:
+        fm = yaml.safe_load(m.group(1)) or {}
+    except Exception:
+        fm = {}
+    return str(fm.get("title") or ""), m.group(2).strip()
+
+
 def _payload_for(workspace: Path, md_path: Path) -> Optional[dict]:
     """Derive the upsert payload for one file. Returns ``None`` if the
     file isn't an indexable shape (e.g. malformed entity page)."""
@@ -533,6 +550,22 @@ def _payload_for(workspace: Path, md_path: Path) -> Optional[dict]:
             "type_": "entity",
             "entity_type": page.type,
             "text": text,
+            "mtime": mtime,
+        }
+
+    if parts[0] == "references":
+        # Coherent reference doc (design §2.8): FTS the WHOLE doc. The
+        # `.chunks.jsonl` sidecar feeds the vector index separately and isn't a
+        # `.md`, so it never reaches here. Previously these fell through to the
+        # MemoryEntry branch and were rejected (G2).
+        slug = md_path.stem
+        title, body = _reference_title_body(md_path.read_text(encoding="utf-8"))
+        return {
+            "uri": f"reference:{slug}",
+            "path": rel_path,
+            "type_": "reference",
+            "entity_type": None,
+            "text": f"{title}\n\n{body}".strip(),
             "mtime": mtime,
         }
 

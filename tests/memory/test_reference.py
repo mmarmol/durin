@@ -44,6 +44,20 @@ def test_chunks_have_parent_pointer(tmp_path):
     assert all(c["tokens"] <= 512 for c in chunks)
 
 
+def test_reference_indexed_and_searchable(tmp_path):
+    # G2: reference pages are indexable (not rejected) + found by search.
+    from durin.memory.indexer import _payload_for
+    from durin.memory.search import search_memory
+    ingest_reference(tmp_path, "SMTP Setup",
+                     "Set the relay host to smtp.example.com port 587 with STARTTLS.")
+    payload = _payload_for(tmp_path, tmp_path / "memory/references/smtp-setup.md")
+    assert payload is not None
+    assert payload["type_"] == "reference"
+    assert payload["uri"] == "reference:smtp-setup"
+    hits = [r for r in search_memory(tmp_path, "STARTTLS") if r.class_name == "reference"]
+    assert hits and hits[0].uri == "memory/reference/smtp-setup"
+
+
 def test_reference_marker():
     assert reference_marker("reference:mxhero", title="mxHERO Profile") == \
         "=== REFERENCE: reference:mxhero (mxHERO Profile) ==="
