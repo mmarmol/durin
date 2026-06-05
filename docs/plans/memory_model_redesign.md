@@ -7,6 +7,11 @@
 >
 > Reto explícito: critícame, no asumas que algo está bien por estar escrito.
 
+**Secuencias al fino (un doc por punto, con su diagrama):**
+- [Ingesta (escritura)](memory_seq_ingesta.md)
+- [Consulta (lectura)](memory_seq_consulta.md)
+- [Contexto pre-cargado en sesión](memory_context_preload.md)
+
 ---
 
 ## 0. El objetivo (la vara con la que se juzga todo)
@@ -117,9 +122,14 @@ de research habría autorado `company:mxhero` directo.
   (`user_authored`) sigue arriba de todo. Dentro de un nivel → recencia.
   Contradicción real → el valor viejo va a history (`valid_from/until`),
   no overwrite ciego.
-- **Estructurado vs body**: frontmatter (attributes/relations) =
-  compartido con provenance; body (prosa) = curado por dream (el agente
-  puede append una sección atribuida).
+- **División de estructuración (DECIDIDA: opción b)**: el agente autora
+  **name + aliases + relations + body (prosa)** — la entidad existe e
+  indexa ya (prosa searchable). **Dream es el dueño único del esquema
+  estructurado**: extrae/normaliza `attributes` desde la prosa + las
+  observaciones. Racional: si dream tiene la autoridad de coherencia, debe
+  ser el único estructurador (N modelos emitiendo claves distintas =
+  incoherencia). Costo aceptado: los atributos finos demoran hasta que
+  corra dream; la prosa cubre la inmediatez vía búsqueda.
 - Todo escribe por el **mismo pipeline** (`dream_apply`: JSON Patch +
   validación + `.md.bak` + commit) — dos editores de un wiki, una pluma.
 
@@ -163,6 +173,7 @@ la misma memoria. El diseño no asume un único escritor.
   (`durin/memory/hot_layer.py`: inyecta entity pages, fragments recientes,
   known-entities). La decisión = apoyarse en él y **tirar el archivo plano
   + el dream legacy que lo mantiene**.
+- Detalle al fino → [memory_context_preload.md](memory_context_preload.md).
 
 ### 2.5 Referencias = documentos coherentes (no sintetizados por Dream)
 
@@ -184,23 +195,23 @@ la misma memoria. El diseño no asume un único escritor.
 ## 3. Preguntas abiertas (lo que falta resolver)
 
 1. **Coordinación agente↔dream** — precedencia **DECIDIDA**:
-   `user > dream > agent` (dream = autoridad de coherencia, §2.3). Sigue
-   abierto: forma exacta del tool de upsert (`memory_upsert_entity`?);
-   mecanismo write-time de concurrencia (lock global vs optimistic-retry
-   con merge semántico, §2.6); y el requisito derivado de que **dream
-   corra fiable y seguido** (si dream gana, su latencia y correctitud son
-   críticas).
+   `user > dream > agent`; estructuración **DECIDIDA** (agente prosa+links,
+   dream dueño de attributes). Sigue abierto: forma exacta del tool de
+   upsert; mecanismo write-time de concurrencia (lock vs optimistic); y que
+   **dream corra fiable y seguido**. Se trabaja en
+   [memory_seq_ingesta.md](memory_seq_ingesta.md).
 2. **Capa de experiencia** (§2.1): ¿qué es exactamente? ¿`history.jsonl` +
    session summaries? ¿cómo referencia entidades del grafo? ¿cómo se
    "extrae hechos → grafo" sin volver al problema de episodic?
 3. **Referencias/documentos** (§2.5): cerrar el diseño de reference page +
-   marcador REFERENCE + cómo se relaciona la página con entidades
-   (`[[company:mxhero]]`); ingestión structure-aware vs blind-chunk; y la
-   evidencia de que el agente hoy ingiere mal (blob de KB).
+   marcador REFERENCE + relación con entidades (`[[company:mxhero]]`);
+   ingestión structure-aware vs blind-chunk; evidencia de que el agente hoy
+   ingiere mal (blob de KB).
 4. **Resolución user-de-sesión → entidad** (§2.4): el mapeo
    channel-user-id → `person:` es en parte el problema **no resuelto** de
    identidad cross-channel (R4, `01_data_and_entities.md` §1). Trivial para
-   webui (dueño único); manual/LLM en multi-channel.
+   webui (dueño único); manual/LLM en multi-channel. Se trabaja en
+   [memory_context_preload.md](memory_context_preload.md).
 5. **Curación de la capa siempre-presente** (§2.4): el dream legacy curaba
    con LLM "qué es importante". El `hot_layer` cura por recencia +
    top-headlines. ¿Basta la heurística, o perdemos algo al quitar la
