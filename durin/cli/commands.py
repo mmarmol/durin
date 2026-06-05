@@ -1368,7 +1368,7 @@ def _run_gateway(
 
             try:
                 from durin.agent.skill_curation import curate_catalog
-                from durin.memory.dream import default_llm_invoke
+                from durin.memory.llm_invoke import default_llm_invoke
 
                 curation_model = resolve_memory_model(config)
 
