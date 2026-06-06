@@ -144,16 +144,21 @@ def cmd_reindex(
                 console.print(
                     "[bold]Rebuilding LanceDB vector index…[/bold]"
                 )
-                # Vector rebuild uses whichever embedding provider is
-                # configured. Reuse the same construction path the
-                # search tool uses.
+                # Vector rebuild uses the CONFIGURED embedding model, and
+                # records it in meta.json (N5a) so ensure_index_fresh can detect
+                # a later model swap.
                 try:
+                    from durin.config.loader import load_config
                     from durin.memory.embedding import FastembedProvider
-                    provider = FastembedProvider()
+                    from durin.memory.index_meta import record_built_model
+                    model = load_config().memory.embedding.model
+                    provider = FastembedProvider(model=model)
                     vi = VectorIndex(workspace, provider)
                     count = vi.rebuild_from_workspace()
+                    record_built_model(workspace, model)
                     console.print(
-                        f"  Indexed: [green]{count}[/green] rows"
+                        f"  Indexed: [green]{count}[/green] rows "
+                        f"(model: {model})"
                     )
                 except Exception as exc:  # noqa: BLE001
                     console.print(

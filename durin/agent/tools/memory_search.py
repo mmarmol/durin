@@ -175,7 +175,7 @@ class MemorySearchTool(Tool):
         # rebuild if not. The helper is idempotent.
         try:
             from durin.memory.indexer import ensure_index_fresh
-            ensure_index_fresh(self._workspace)
+            ensure_index_fresh(self._workspace, embedding_model=self._embedding_model)
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "memory_search: ensure_index_fresh failed: %s", exc,
