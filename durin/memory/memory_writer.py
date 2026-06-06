@@ -65,6 +65,43 @@ def _ensure_repo(root: Path) -> None:
         porcelain.init(str(root))
 
 
+def _commit_dirty_as_user(root: Path) -> None:
+    """Human-edit guard (design §2.5, N1): before a system write touches git,
+    commit any uncommitted working-tree ``.md`` edits with author ``user`` — so
+    the hard-reset ff (``_fast_forward_working_tree``) that follows can't clobber
+    an in-progress hand edit (e.g. the user editing a page in Obsidian). No-op on
+    a clean tree. Best-effort — a failure here must never block the system write.
+    """
+    if not (root / ".git").exists():
+        return
+    try:
+        status = porcelain.status(str(root))
+    except Exception:  # noqa: BLE001 — never block a write on the guard
+        return
+    dirty: list[str] = []
+    for group in (status.unstaged, status.untracked):
+        for item in group:
+            rel = item.decode("utf-8") if isinstance(item, bytes) else item
+            if not rel.endswith(".md"):
+                continue
+            parts = Path(rel).parts
+            if parts and parts[0] in ("archive", "pending"):
+                continue
+            dirty.append(rel)
+    if not dirty:
+        return
+    try:
+        porcelain.add(str(root), [str(root / d) for d in dirty])
+        porcelain.commit(
+            str(root),
+            message=b"manual edit (human-edit guard)",
+            author=b"user <user@durin.local>",
+            committer=b"user <user@durin.local>",
+        )
+    except Exception:  # noqa: BLE001
+        return
+
+
 def _emit_relation_cap(ref: str, before: int, after: int) -> None:
     """A3 — per-entity relation cap (doc 01 §4.4), soft 50 / hard 200.
 
@@ -116,6 +153,7 @@ def write_entity(
     """
     root = Path(workspace) / "memory"
     _ensure_repo(root)
+    _commit_dirty_as_user(root)  # N1: preserve any in-progress hand edit first
     rel = _rel_path(ref)
     type_, _, slug = ref.partition(":")
 
@@ -206,6 +244,7 @@ def write_files_cas(
         return None
     root = Path(workspace) / "memory"
     _ensure_repo(root)
+    _commit_dirty_as_user(root)  # N1: preserve any in-progress hand edit first
     msg = message.encode("utf-8") if isinstance(message, str) else message
     for attempt in range(_MAX_RETRIES):
         base = head_sha(root)
