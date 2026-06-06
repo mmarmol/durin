@@ -65,7 +65,7 @@ describe("SkillsView security surface", () => {
     expect(screen.getByText("Dangerous")).toBeInTheDocument();
   });
 
-  it("lists quarantined skills with their reasons under the Quarantine tab", async () => {
+  it("lists pending imports with their reason, and shows findings on triage", async () => {
     vi.mocked(api.listSkills).mockResolvedValue([
       { name: "clean", source: "builtin", mode: "auto", status: "active", verdict: "safe", findings: [] },
     ]);
@@ -85,13 +85,18 @@ describe("SkillsView security surface", () => {
     render(wrap(<SkillsView />));
     await screen.findByText("clean");
 
-    await user.click(screen.getByRole("button", { name: /quarantine/i }));
+    await user.click(screen.getByRole("button", { name: /pending/i }));
 
+    // the queue shows the name and the workflow reason it's there
     expect(await screen.findByText("sketchy")).toBeInTheDocument();
-    expect(screen.getByText(/fetch-and-execute/)).toBeInTheDocument();
+    expect(screen.getByText(/awaiting your approval/i)).toBeInTheDocument();
+
+    // the security findings live in the triage detail pane, opened on click
+    await user.click(screen.getByRole("button", { name: /sketchy/i }));
+    expect(await screen.findByText(/fetch-and-execute/)).toBeInTheDocument();
   });
 
-  it("renders an empty state when nothing is quarantined", async () => {
+  it("renders an empty state when nothing is pending", async () => {
     vi.mocked(api.listSkills).mockResolvedValue([
       { name: "clean", source: "builtin", mode: "auto", status: "active", verdict: "safe", findings: [] },
     ]);
@@ -101,12 +106,12 @@ describe("SkillsView security surface", () => {
     render(wrap(<SkillsView />));
     await screen.findByText("clean");
 
-    await user.click(screen.getByRole("button", { name: /quarantine/i }));
+    await user.click(screen.getByRole("button", { name: /pending/i }));
 
-    expect(await screen.findByText("No skills in quarantine.")).toBeInTheDocument();
+    expect(await screen.findByText("Nothing pending approval.")).toBeInTheDocument();
   });
 
-  it("imports a source through the always-visible import input", async () => {
+  it("imports a source through the Add-skill acquire pane", async () => {
     vi.mocked(api.listSkills).mockResolvedValue([
       { name: "clean", source: "builtin", mode: "auto", status: "active", verdict: "safe", findings: [] },
     ]);
@@ -119,7 +124,8 @@ describe("SkillsView security surface", () => {
     render(wrap(<SkillsView />));
     await screen.findByText("clean");
 
-    // the import input is a surface action, not buried in the quarantine tab
+    // import lives behind the header "Add skill" action, not in the list
+    await user.click(screen.getByRole("button", { name: /add skill/i }));
     const input = await screen.findByPlaceholderText(/Import a skill/i);
     await user.type(input, "github:owner/repo");
     await user.click(screen.getByRole("button", { name: "Import" }));
@@ -151,6 +157,7 @@ describe("SkillsView security surface", () => {
     render(wrap(<SkillsView />));
     await screen.findByText("clean");
 
+    await user.click(screen.getByRole("button", { name: /add skill/i }));
     const box = await screen.findByPlaceholderText(/Search the registry/i);
     await user.type(box, "pdf");
     await user.click(screen.getByRole("button", { name: "Search" }));
@@ -186,10 +193,10 @@ describe("SkillsView security surface", () => {
     const user = userEvent.setup();
     render(wrap(<SkillsView />));
     await screen.findByText("clean");
-    await user.click(screen.getByRole("button", { name: /quarantine/i }));
-    await screen.findByText("evil");
+    await user.click(screen.getByRole("button", { name: /pending/i }));
+    await user.click(await screen.findByRole("button", { name: /evil/i }));
 
-    await user.click(screen.getByRole("button", { name: "Approve" }));
+    await user.click(await screen.findByRole("button", { name: "Approve" }));
     // an inline prompt appears (not window.confirm) — assert on a phrase unique
     // to the gate message, then force the install.
     expect(await screen.findByText(/serious risk/i)).toBeInTheDocument();
@@ -217,10 +224,10 @@ describe("SkillsView security surface", () => {
     const user = userEvent.setup();
     render(wrap(<SkillsView />));
     await screen.findByText("clean");
-    await user.click(screen.getByRole("button", { name: /quarantine/i }));
-    await screen.findByText("dup");
+    await user.click(screen.getByRole("button", { name: /pending/i }));
+    await user.click(await screen.findByRole("button", { name: /dup/i }));
 
-    await user.click(screen.getByRole("button", { name: "Approve" }));
+    await user.click(await screen.findByRole("button", { name: "Approve" }));
     expect(await screen.findByText(/already installed/i)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Replace" }));
 
@@ -245,10 +252,10 @@ describe("SkillsView security surface", () => {
     const user = userEvent.setup();
     render(wrap(<SkillsView />));
     await screen.findByText("clean");
-    await user.click(screen.getByRole("button", { name: /quarantine/i }));
-    await screen.findByText("sketchy");
+    await user.click(screen.getByRole("button", { name: /pending/i }));
+    await user.click(await screen.findByRole("button", { name: /sketchy/i }));
 
-    await user.click(screen.getByRole("button", { name: "Reject" }));
+    await user.click(await screen.findByRole("button", { name: "Reject" }));
 
     expect(api.rejectSkill).toHaveBeenCalledWith("tok", "sketchy");
   });
