@@ -235,7 +235,7 @@ refine, so this may be acceptable — quantify before acting.
 > B-items are the same code as an A-gap (the module is dead **because** we forgot
 > to wire the feature) — resolve those together with their A item.
 
-### B1 — Orphaned modules (0 production callers) — 🔨 PARTIAL (2026-06-06)
+### B1 — Orphaned modules (0 production callers) — ✅ DONE (2026-06-06)
 > `dream_commit_message.py` ✅ killed (the new commit path in `memory_writer` +
 > `absorption` builds its own messages inline — confirmed not forgot-to-wire).
 > `entity_inventory.py` ✅ killed (A5 — redundant in the new model).
@@ -248,14 +248,14 @@ refine, so this may be acceptable — quantify before acting.
   `memory_writer`/`absorption`). **Pre-flight:** confirm the new commit path
   doesn't need it.
 
-### B2 — Orphaned telemetry TypedDicts (defined, not in `EVENTS`) — 🔨 PARTIAL (2026-06-06)
+### B2 — Orphaned telemetry TypedDicts (defined, not in `EVENTS`) — ✅ DONE (2026-06-06)
 > ✅ Killed 6 dead defs (`MemoryDreamSkipped/BudgetExhausted/LegacyStart/
 > LegacyEnd/LegacySkipped/EntityFailed`Event) + their `__all__` entry. Also
 > fixed the stale FIELDS of the 3 events the new passes reuse
 > (`MemoryDreamStart/End/PatchApplied`Event described the deleted DreamRunner's
 > shape; now match the new emit — telemetry accuracy). The 2
-> `MemoryEntityRelationCap*Event` defs are held for A3 (re-added to EVENTS if we
-> wire the cap, deleted if we drop it).
+> `MemoryEntityRelationCap*Event` defs were RE-ADDED to `EVENTS` + emitted (A3
+> wired the cap, alert-only); their docstrings corrected to match (C3).
 `MemoryDreamBudgetExhaustedEvent`, `MemoryDreamLegacyStartEvent`,
 `MemoryDreamLegacyEndEvent`, `MemoryDreamLegacySkippedEvent`,
 `MemoryDreamSkippedEvent`, `MemoryEntityRelationCapWarned/RejectedEvent`
