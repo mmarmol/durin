@@ -39,37 +39,28 @@ interface CrossEncoderState {
 }
 
 interface MemoryConfigShape {
+  // /api/config returns the on-disk alias shape (camelCase). The
+  // setConfigValue *paths* keep using snake_case because the backend's
+  // `_normalize_dotted_path` camelCases each segment before writing.
   search?: {
-    // /api/config returns the on-disk alias shape (camelCase). Pre-fix
-    // 2026-05-31 this interface declared `cross_encoder` /
-    // `threshold_entries` (snake_case) and reads silently returned
-    // the defaults — the panel always rendered "Desactivado" no
-    // matter what was on disk. The setConfigValue *paths* keep
-    // working with snake_case because `_normalize_dotted_path` in
-    // the backend camelCases each segment before writing.
     crossEncoder?: Partial<CrossEncoderState>;
   };
+  // memory.dream — the extract/refine/skill passes' triggers (§8e).
   dream?: {
-    thresholdEntries?: number;
+    enabled?: boolean;
+    cron?: string;
+    postCompaction?: boolean;
+    onSessionClose?: boolean;
+    autoAbsorb?: { enabled?: boolean };
   };
 }
 
-// Legacy dream lives at agents.defaults.dream — separate subsystem from
-// memory.dream (entity-centric). The legacy job is what consolidates the
-// chat history into MEMORY.md/SOUL.md/USER.md and creates skills; see
-// docs/bitacora.md "MEMORY.md/SOUL.md/USER.md stay outside entity-centric".
-interface AgentsConfigShape {
-  defaults?: {
-    dream?: {
-      minTokensToRun?: number;
-    };
-  };
-}
-
-function readDreamMinTokens(config: Record<string, unknown> | null): number {
-  const agents = config?.agents as AgentsConfigShape | undefined;
-  const value = agents?.defaults?.dream?.minTokensToRun;
-  return typeof value === "number" && Number.isFinite(value) ? value : 2000;
+interface DreamState {
+  enabled: boolean;
+  cron: string;
+  postCompaction: boolean;
+  onSessionClose: boolean;
+  autoAbsorb: boolean;
 }
 
 function readCrossEncoder(config: Record<string, unknown> | null): CrossEncoderState {
@@ -81,10 +72,17 @@ function readCrossEncoder(config: Record<string, unknown> | null): CrossEncoderS
   };
 }
 
-function readThresholdEntries(config: Record<string, unknown> | null): number {
+function readDream(config: Record<string, unknown> | null): DreamState {
   const memory = config?.memory as MemoryConfigShape | undefined;
-  const value = memory?.dream?.thresholdEntries;
-  return typeof value === "number" && Number.isFinite(value) ? value : 5;
+  const d = memory?.dream ?? {};
+  return {
+    enabled: typeof d.enabled === "boolean" ? d.enabled : true,
+    cron: typeof d.cron === "string" && d.cron ? d.cron : "0 3 * * *",
+    postCompaction: typeof d.postCompaction === "boolean" ? d.postCompaction : true,
+    onSessionClose: typeof d.onSessionClose === "boolean" ? d.onSessionClose : true,
+    autoAbsorb:
+      typeof d.autoAbsorb?.enabled === "boolean" ? d.autoAbsorb.enabled : false,
+  };
 }
 
 /** Memory settings — cross-encoder rerank, dream auto-trigger threshold,
@@ -131,8 +129,7 @@ export function MemorySettings({ token }: { token: string }) {
   );
 
   const crossEncoder = useMemo(() => readCrossEncoder(config), [config]);
-  const thresholdEntries = useMemo(() => readThresholdEntries(config), [config]);
-  const dreamMinTokens = useMemo(() => readDreamMinTokens(config), [config]);
+  const dream = useMemo(() => readDream(config), [config]);
 
   if (loading) {
     return (
@@ -190,28 +187,50 @@ export function MemorySettings({ token }: { token: string }) {
       </section>
 
       <section>
-        <SettingsSectionTitle>{t("settings.memory.sections.workingMemory")}</SettingsSectionTitle>
+        <SettingsSectionTitle>{t("settings.memory.sections.dream")}</SettingsSectionTitle>
         <p className="px-1 pb-2 text-[12px] text-muted-foreground">
-          {t("settings.memory.workingMemoryDescription")}
+          {t("settings.memory.dreamDescription")}
         </p>
         <SettingsGroup>
-          <DreamMinTokensRow
-            value={dreamMinTokens}
-            saving={savingPath === "agents.defaults.dream.min_tokens_to_run"}
-            onSave={(n) =>
-              void onSave("agents.defaults.dream.min_tokens_to_run", n)
+          <ToggleRow
+            title={t("settings.memory.rows.dreamEnabled")}
+            description={t("settings.memory.help.dreamEnabled")}
+            value={dream.enabled}
+            saving={savingPath === "memory.dream.enabled"}
+            onToggle={() => void onSave("memory.dream.enabled", !dream.enabled)}
+          />
+          <DreamCronRow
+            value={dream.cron}
+            disabled={!dream.enabled}
+            saving={savingPath === "memory.dream.cron"}
+            onSave={(c) => void onSave("memory.dream.cron", c)}
+          />
+          <ToggleRow
+            title={t("settings.memory.rows.dreamPostCompaction")}
+            description={t("settings.memory.help.dreamPostCompaction")}
+            value={dream.postCompaction}
+            saving={savingPath === "memory.dream.post_compaction"}
+            onToggle={() =>
+              void onSave("memory.dream.post_compaction", !dream.postCompaction)
             }
           />
-        </SettingsGroup>
-      </section>
-
-      <section>
-        <SettingsSectionTitle>{t("settings.memory.sections.dream")}</SettingsSectionTitle>
-        <SettingsGroup>
-          <ThresholdEntriesRow
-            value={thresholdEntries}
-            saving={savingPath === "memory.dream.threshold_entries"}
-            onSave={(n) => void onSave("memory.dream.threshold_entries", n)}
+          <ToggleRow
+            title={t("settings.memory.rows.dreamOnSessionClose")}
+            description={t("settings.memory.help.dreamOnSessionClose")}
+            value={dream.onSessionClose}
+            saving={savingPath === "memory.dream.on_session_close"}
+            onToggle={() =>
+              void onSave("memory.dream.on_session_close", !dream.onSessionClose)
+            }
+          />
+          <ToggleRow
+            title={t("settings.memory.rows.dreamAutoAbsorb")}
+            description={t("settings.memory.help.dreamAutoAbsorb")}
+            value={dream.autoAbsorb}
+            saving={savingPath === "memory.dream.auto_absorb.enabled"}
+            onToggle={() =>
+              void onSave("memory.dream.auto_absorb.enabled", !dream.autoAbsorb)
+            }
           />
         </SettingsGroup>
       </section>
@@ -219,35 +238,63 @@ export function MemorySettings({ token }: { token: string }) {
   );
 }
 
-/** Numeric input for `agents.defaults.dream.min_tokens_to_run` — the
- *  pre-LLM gate on the legacy dream cron. Same UX shape as
- *  ThresholdEntriesRow (local draft, commit on Enter or Save click). */
-function DreamMinTokensRow({
+/** On/off toggle row — the dream trigger booleans (enabled, post_compaction,
+ *  on_session_close, auto_absorb). */
+function ToggleRow({
+  title,
+  description,
   value,
+  saving,
+  onToggle,
+}: {
+  title: string;
+  description: string;
+  value: boolean;
+  saving: boolean;
+  onToggle: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <SettingsRow title={title} description={description}>
+      <Button
+        size="sm"
+        variant="outline"
+        disabled={saving}
+        onClick={onToggle}
+        className="w-[68px] rounded-full"
+      >
+        {value ? t("settings.config.on") : t("settings.config.off")}
+      </Button>
+    </SettingsRow>
+  );
+}
+
+/** Cron expression input for `memory.dream.cron` (the daily pass schedule). */
+function DreamCronRow({
+  value,
+  disabled,
   saving,
   onSave,
 }: {
-  value: number;
+  value: string;
+  disabled: boolean;
   saving: boolean;
-  onSave: (n: number) => void;
+  onSave: (cron: string) => void;
 }) {
   const { t } = useTranslation();
-  const [draft, setDraft] = useState(String(value));
-  useEffect(() => setDraft(String(value)), [value]);
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
 
-  const parsed = Number(draft);
-  const valid = Number.isFinite(parsed) && parsed >= 0 && Number.isInteger(parsed);
-  const dirty = valid && parsed !== value;
-
+  const dirty = draft.trim() !== value && draft.trim().length > 0;
   const commit = () => {
     if (!dirty) return;
-    onSave(parsed);
+    onSave(draft.trim());
   };
 
   return (
     <SettingsRow
-      title={t("settings.memory.rows.dreamMinTokens")}
-      description={t("settings.memory.help.dreamMinTokens")}
+      title={t("settings.memory.rows.dreamCron")}
+      description={t("settings.memory.help.dreamCron")}
     >
       <div className="flex items-center gap-2">
         <Input
@@ -256,13 +303,14 @@ function DreamMinTokensRow({
           onKeyDown={(e) => {
             if (e.key === "Enter") commit();
           }}
-          inputMode="numeric"
-          className="h-8 w-[120px] rounded-full text-[13px]"
+          placeholder="0 3 * * *"
+          disabled={disabled}
+          className="h-8 w-[140px] rounded-full text-[13px]"
         />
         <Button
           size="sm"
           variant="outline"
-          disabled={!dirty || saving}
+          disabled={!dirty || disabled || saving}
           onClick={commit}
           className="rounded-full"
         >
@@ -388,54 +436,4 @@ function CrossEncoderModelEditor({
   );
 }
 
-function ThresholdEntriesRow({
-  value,
-  saving,
-  onSave,
-}: {
-  value: number;
-  saving: boolean;
-  onSave: (n: number) => void;
-}) {
-  const { t } = useTranslation();
-  const [draft, setDraft] = useState(String(value));
-  useEffect(() => setDraft(String(value)), [value]);
-
-  const parsed = Number(draft);
-  const valid = Number.isFinite(parsed) && parsed >= 0 && Number.isInteger(parsed);
-  const dirty = valid && parsed !== value;
-
-  const commit = () => {
-    if (!dirty) return;
-    onSave(parsed);
-  };
-
-  return (
-    <SettingsRow
-      title={t("settings.memory.rows.thresholdEntries")}
-      description={t("settings.memory.help.thresholdEntries")}
-    >
-      <div className="flex items-center gap-2">
-        <Input
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") commit();
-          }}
-          inputMode="numeric"
-          className="h-8 w-[100px] rounded-full text-[13px]"
-        />
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={!dirty || saving}
-          onClick={commit}
-          className="rounded-full"
-        >
-          {t("settings.config.save")}
-        </Button>
-      </div>
-    </SettingsRow>
-  );
-}
 

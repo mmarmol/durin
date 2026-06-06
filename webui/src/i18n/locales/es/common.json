@@ -241,23 +241,28 @@
       "help": {
         "crossEncoderEnabled": "Reranker opcional de segunda pasada. Agrega 300-1500 ms por consulta y ~1 GB de RAM, pero mejora la calidad en consultas ambiguas. Desactivado por defecto.",
         "crossEncoderModel": "Modelo usado cuando el reranker está habilitado. El predeterminado funciona bien para consultas multilingües; las alternativas intercambian tamaño por latencia.",
-        "thresholdEntries": "Ejecuta una pasada Dream centrada en entidad cuando una entidad acumula esta cantidad de entradas posteriores al cursor. Establece 0 para desactivar el disparador por entidad (los disparadores cron y de cierre de sesión siguen activos).",
-        "dreamMinTokens": "Salta el análisis LLM cuando el chat acumulado desde la última pasada está por debajo de este valor. 2000 por defecto filtra intercambios triviales / sociales; 0 desactiva el filtro (cada tick no vacío ejecuta)."
+        "dreamEnabled": "Interruptor maestro del dream automático. Apagado, desactiva el cron y los disparadores reactivos; el manual `durin memory dream` sigue funcionando.",
+        "dreamCron": "Expresión cron para la pasada diaria de extract / refine / skills. Por defecto 0 3 * * * (3am local).",
+        "dreamPostCompaction": "Ejecuta una pasada de dream después de compactar una sesión — el contexto ya está en memoria, así que el costo se amortiza.",
+        "dreamOnSessionClose": "Ejecuta una pasada de dream cuando termina una sesión (/quit o timeout por inactividad).",
+        "dreamAutoAbsorb": "Permite que la pasada de refine fusione automáticamente entidades que juzga duplicadas (solo alta confianza). Apagado mantiene las fusiones manuales."
       },
       "loadError": "No se pudieron cargar los ajustes de memoria.",
       "rows": {
         "crossEncoderEnabled": "Reranker cross-encoder",
         "crossEncoderModel": "Modelo del reranker",
-        "thresholdEntries": "Umbral de consolidación",
-        "dreamMinTokens": "Tokens mínimos para ejecutar"
+        "dreamEnabled": "Dream activado",
+        "dreamCron": "Horario diario (cron)",
+        "dreamPostCompaction": "Ejecutar tras compactación",
+        "dreamOnSessionClose": "Ejecutar al cerrar sesión",
+        "dreamAutoAbsorb": "Auto-absorber duplicados"
       },
       "saveError": "No se pudo guardar {{path}}.",
       "sections": {
-        "dream": "Consolidación de entidades (Dream)",
-        "rerank": "Reranking de búsqueda",
-        "workingMemory": "Memoria viva"
+        "dream": "Dream (consolidación de memoria)",
+        "rerank": "Reranking de búsqueda"
       },
-      "workingMemoryDescription": "Consolidación cada 2 horas del historial de chat en MEMORY.md / SOUL.md / USER.md y creación de skills sobre la marcha. Solo dispara cuando hay material acumulado suficiente para justificar la llamada al LLM."
+      "dreamDescription": "El dream consolida las sesiones en páginas de entidad + skills y deduplica entidades repetidas. Corre en un cron diario más disparadores reactivos opcionales."
     },
     "skillsSecurity": {
       "description": "Política de seguridad para importar skills: el juez LLM, patrones de confianza, el token de GitHub y los límites de tamaño.",
