@@ -97,8 +97,29 @@ class ChannelManager:
 
         self._init_channels()
 
+    def _ensure_channel_extras(self) -> None:
+        """Install the pip extra for any enabled channel whose dep is missing, so
+        the next gateway start can load it. A freshly-installed channel SDK needs a
+        restart — its module-level import (slack) or availability flag (discord) was
+        already evaluated — so ``ensure_or_note`` logs a restart note."""
+        from durin.extras import REGISTRY, _module_present, ensure_or_note
+
+        for name in ("slack", "discord"):
+            section = getattr(self.config.channels, name, None)
+            if section is None:
+                continue
+            enabled = (
+                section.get("enabled", False)
+                if isinstance(section, dict)
+                else getattr(section, "enabled", False)
+            )
+            fe = REGISTRY.get(name)
+            if enabled and fe is not None and not _module_present(fe.module):
+                ensure_or_note(name, config=self.config)
+
     def _init_channels(self) -> None:
         """Initialize channels discovered via pkgutil scan + entry_points plugins."""
+        self._ensure_channel_extras()
         from durin.channels.registry import discover_all
 
         transcription_provider = self.config.channels.transcription_provider
