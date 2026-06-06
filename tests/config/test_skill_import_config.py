@@ -1,8 +1,14 @@
-from durin.config.schema import Config
+from durin.config.schema import Config, DEFAULT_SKILL_ALLOWLIST
 
 
-def test_default_allowlist_empty():
-    assert Config().skills.security.allowlist == []
+def test_default_allowlist_ships_vetted_vendors():
+    al = Config().skills.security.allowlist
+    assert al == DEFAULT_SKILL_ALLOWLIST
+    assert len(al) == 12
+    assert "github:anthropics/" in al and "github:obra/" in al
+    # default_factory gives each Config its own list (no shared-mutable default)
+    Config().skills.security.allowlist.append("x")
+    assert "x" not in Config().skills.security.allowlist
 
 
 def test_allowlist_camel_roundtrip():

@@ -127,7 +127,7 @@ async def search_registries(query, *, adapters, allowlist, limit) -> list[SkillS
 
 def build_adapters(registries) -> list:
     """Instantiate enabled adapters from config (a list of SkillRegistryConfig).
-    Only skills.sh is wired in this increment; other kinds are skipped."""
+    Wires skills.sh + clawhub; unknown kinds are skipped."""
     out = []
     for r in registries:
         if not getattr(r, "enabled", True):

@@ -30,16 +30,14 @@ _REQUIRED_PHRASES = (
     # Tool list may wrap across lines in the file; normalise whitespace
     # before comparing.
     # (Checked separately below.)
-    "Canonical entity pages",
-    "Recent fragments",
+    # §8a new model: entity pages + references replace canonical/fragments/
+    # ingested-chunks. The bench-validated anchors below are PRESERVED.
+    "Entity pages",
+    "References",
     "Session summaries",
-    "Ingested documents",
     "call memory_search rather than answering",
     "from cold recall",
     "State the source of any fact you cite",
-    "If the canonical page and a recent fragment disagree, "
-    "the fragment is",
-    "more current",
     "For compound or multi-part questions, issue 2-3 searches",
     # H22 (2026-05-30) anti-hallucination bullets — these are
     # production defaults that ship with durin and are read by the
@@ -66,7 +64,7 @@ def test_each_required_phrase_present(identity_text: str) -> None:
     # The full tool name list must be present (in any whitespace
     # arrangement).
     assert (
-        "memory_search, memory_store, memory_ingest, memory_drill"
+        "memory_search, memory_upsert_entity, memory_ingest, memory_drill"
         in normalised
     )
 

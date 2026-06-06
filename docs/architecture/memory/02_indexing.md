@@ -168,7 +168,7 @@ Email: marcelo@mxhero.com. Phone: +34123. Current residence: Spain. Spouse: Susa
 | `attributes.<key>: { current: <v>, history: [...] }` (stateful) | Renders `<Key.title()>: <current>.` Historical values are not rendered to the embedding text (to avoid centroid drift toward defunct facts). |
 | `relations[i] = { to: <uri>, type: <t>, since: <date>, ... }` | `<type.title()>: <slug> (since <date>).` See "Why slug-only and not the target's resolved name" below — audit G5 (2026-05-28) tightened the F22 defer. |
 | `provenance` | **Not rendered.** Internal metadata, no retrieval value. |
-| `dream_processed_through`, `created_at`, `updated_at` | **Not rendered.** Internal timestamps. |
+| `created_at`, `updated_at` | **Not rendered.** Internal timestamps. |
 
 **Why slug-only and not the target's resolved name** (audit G5,
 2026-05-28, tightening the F22 defer): the v1 spec proposed
@@ -251,7 +251,7 @@ With three retrieval paths reaching the page and drill closing the body-recovery
 
 **Shipped (v1, audit E9 2026-05-28):** `headline + summary + entities_list + body`.
 
-The originally-planned v2 (`entities_with_aliases` — expanding entity URIs to include aliases inline in the embedding text) is **superseded by the entity-aware ranker (audit A1)**. The ranker extracts entities from the query at search time and boosts entries tagged with that URI, achieving alias-aware retrieval without inflating the embedding centroid. Implementing entities_with_aliases on top would duplicate the ranker's work without measurable benefit; see audit E9 in [`11_audit_reconciliation.md`](11_audit_reconciliation.md) for the analysis.
+The originally-planned v2 (`entities_with_aliases` — expanding entity URIs to include aliases inline in the embedding text) is **superseded by the entity-aware ranker (audit A1)**. The ranker extracts entities from the query at search time and boosts entries tagged with that URI, achieving alias-aware retrieval without inflating the embedding centroid. Implementing entities_with_aliases on top would duplicate the ranker's work without measurable benefit; see audit E9 in the 2026-05 audit reconciliation (historical) for the analysis.
 
 The change in v2: when listing entities, expand each URI to include the entity's known aliases. Concretely, an episodic entry tagged with `entities: ["person:marcelo"]` composes:
 
@@ -410,7 +410,7 @@ The watcher monitors `memory/` (excluding `archive/`) for `mtime` changes on `.m
 
 **Bursts:** if many files change in a short window (e.g., bulk import), the watcher coalesces events. Documents are re-indexed in batches.
 
-**Lifecycle (audit A11, 2026-05-28).** The watcher is started by `AgentLoop.__init__` when `cfg.memory.file_watcher.enabled` is true — **default ON**. Failure to start (e.g. watchdog import error, filesystem permissions) is isolated: a warning logs, the loop keeps running, the per-tool re-index-on-write hooks (`memory_store`, `memory_ingest`, `DreamConsolidator.apply`) still keep the indices in sync. `AgentLoop.stop()` drains it cleanly so the daemon thread + Observer terminate before the process exits.
+**Lifecycle (audit A11, 2026-05-28).** The watcher is started by `AgentLoop.__init__` when `cfg.memory.file_watcher.enabled` is true — **default ON**. Failure to start (e.g. watchdog import error, filesystem permissions) is isolated: a warning logs, the loop keeps running. `memory_ingest` still indexes references at ingest time, but entity-page writes (`memory_writer`) rely on the watcher for re-indexing (FTS + vector, N2) — so a failed watcher means new/edited entities aren't searchable until `durin memory reindex`. `AgentLoop.stop()` drains it cleanly so the daemon thread + Observer terminate before the process exits.
 
 Disable via `[memory.file_watcher] enabled = false` if the workspace lives on a filesystem that doesn't play well with `watchdog`, or if the user just wants one fewer daemon thread.
 

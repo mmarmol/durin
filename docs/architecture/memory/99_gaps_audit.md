@@ -9,6 +9,12 @@ purpose: One-stop list of gaps identified between docs/architecture/memory/ corp
 
 # Memory corpus — gaps audit (working doc)
 
+> **⚠️ Superseded (2026-06).** This pre-migration doc-vs-code gap list is kept for
+> history. Those gaps were closed by the entity-centric migration + the C doc-rewrite
+> pass + the post-migration audit; the **current** record is
+> [`docs/qa/post_migration_audit_2026-06.md`](../../qa/post_migration_audit_2026-06.md).
+> For how the system works **now**, read `00`-`08` (memory) + `docs/architecture/skills/`.
+
 Audit performed 2026-05-27 against `/Users/marcelo/git_personal/durin/durin/` (code) and `/Users/marcelo/git_personal/durin/docs/*.md` (prior docs, especially 18, 20, 25, 28). This doc lists every gap that warrants remediation, prioritized by severity. Each item is an actionable unit — discuss, decide, apply, mark done.
 
 **Usage:** when remediating, follow the order below. Each item ends in `Status: open | resolved | wontfix` and `Decision: <date> <note>`.

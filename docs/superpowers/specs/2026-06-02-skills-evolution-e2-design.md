@@ -18,7 +18,7 @@
 > resistieron la lectura del código**. Esta versión está reescrita sobre hechos
 > verificados — ver **Apéndice A** para la evidencia `file:line`.
 >
-> **Fuentes:** [`docs/plans/skills_evolutivas.md`](../../plans/skills_evolutivas.md)
+> **Fuentes:** [`docs/archive/skills_evolutivas.md`](../../archive/skills_evolutivas.md)
 > · [`2026-06-01-skills-evolution-mvp-design.md`](2026-06-01-skills-evolution-mvp-design.md) (E1).
 
 ---
@@ -367,7 +367,7 @@ inyección por RELEVANCIA  (reemplaza el catálogo-entero de cada turno)
 
 ## §13 — Referencias
 
-- Plan-fuente: [`docs/plans/skills_evolutivas.md`](../../plans/skills_evolutivas.md)
+- Plan-fuente: [`docs/archive/skills_evolutivas.md`](../../archive/skills_evolutivas.md)
   (§6.A crear, §6.D evolucionar, §8.A trigger — resuelto acá).
 - E1: [`2026-06-01-skills-evolution-mvp-design.md`](2026-06-01-skills-evolution-mvp-design.md).
 

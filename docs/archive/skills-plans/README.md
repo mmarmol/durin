@@ -6,7 +6,7 @@ original task lists, **not pending work**.
 
 - **Current as-built state** → [`docs/architecture/skills/00_overview.md`](../../architecture/skills/00_overview.md)
 - **Design rationale** → `docs/superpowers/specs/2026-06-*-skill-*-design.md`
-- **Vision & roadmap (what's still pending / discarded)** → [`docs/plans/skills_evolutivas.md`](../../plans/skills_evolutivas.md)
+- **Vision & roadmap (what's still pending / discarded)** → [`docs/archive/skills_evolutivas.md`](../skills_evolutivas.md)
 - **Active pending work** → [`docs/backlog.md`](../../backlog.md)
 
 | Plan | Built |

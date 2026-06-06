@@ -51,21 +51,53 @@ Implementación posible:
 
 **Estado**: pendiente — requiere proposal más detallada antes de implementar.
 
+### Auto-instalar el extra de pip cuando se activa una feature
+
+**Contexto**: las features opcionales viven en extras de pip (`durin-agent[web]`
+= ddgs/search, `[slack]`, `[discord]`, `[mcp]`, `[memory]` = fastembed, `[local]`
+= llama-cpp, `[oauth]`). Un `pipx install` base no los trae.
+
+**Problema** (observado 2026-06-06): tras un install limpio (base), activar el
+search provider `duckduckgo` falló en runtime con `No module named 'ddgs'`. Hoy
+durin solo **avisa** (`ImportError → "pip install durin-agent[X]"`). No tiene
+sentido que falle algo que el usuario **activó** (en config o en el onboarding).
+
+**Propuesta** (diseño acordado 2026-06-06): helper `ensure_extra(extra)` que mapea
+feature→extra+módulo (`duckduckgo→web/ddgs`, `slack→slack`, `discord→discord`,
+`mcp→mcp`, `memory→memory/fastembed`, `local→local`, `oauth→oauth`) y, si el
+módulo no importa + `install.auto_install_extras` (**default ON**), corre
+`sys.executable -m pip install "durin-agent[<extra>]"` + reintenta. **Seguro**:
+solo instala extras PROPIOS de durin (pinneados en pyproject), nunca arbitrarios;
+funciona en pipx/pip/editable. Enganches:
+1. **onboarding wizard** — al elegir provider/canal/feature.
+2. **config activation** — al escribir el setting que la activa (ej.
+   `web_search.provider`, habilitar un canal).
+3. **red de seguridad runtime** — en los ~7 sitios de import lazy (ej.
+   `web.py::_search_duckduckgo` `from ddgs import DDGS`): `ImportError` →
+   `ensure_extra` + retry → **nunca falla lo activo**.
+
+El (3) es el catch-all robusto (cubre "activo en config pero dep faltante"); (1)+(2)
+lo hacen proactivo (instala al activar, no al primer uso). Toggle OFF para
+offline/air-gapped → cae al aviso actual.
+
+**Estado**: pendiente — diseño acordado; no construido (se priorizó cerrar el
+rediseño de memoria + merge a main, 2026-06-06).
+
 ---
 
 ## §2 — Backlog (sin priorizar)
 
 ### P5 — Tracing de tool calls de memoria en la session viewer
 
-**Contexto**: cuando el agente usa `memory_store` / `memory_search` /
-`memory_dream` / `memory_expand` durante una sesión, hoy queda en el
-log pero sin presentación visual integrada al historial de la sesión.
+**Contexto**: cuando el agente usa `memory_upsert_entity` / `memory_ingest` /
+`memory_search` / `memory_drill` / `memory_forget` durante una sesión, hoy queda
+en el log pero sin presentación visual integrada al historial de la sesión.
 
 **Idea (Marcelo)**: en la session viewer (web especialmente, también
 TUI si se puede):
 
 - En cada turn que el agente invoque una memory tool, destacar
-  visualmente cuál se procesó (ej: badge `📝 memory_store` al lado del
+  visualmente cuál se procesó (ej: badge `📝 memory_upsert_entity` al lado del
   turno, o highlighted background).
 - Click en el badge → expande para mostrar la memoria exacta que
   escribió/leyó, los argumentos, y el resultado (entry id, results
@@ -121,68 +153,11 @@ state + history + sources).
 - Search global: query `mmarmol@mxhero.com` debería surface marcelo
   card.
 
-**Estado**: pendiente, post-Phase 5 (cuando la pipeline entity-centric
-esté implementada).
-
-### Perf — `count_pending_for_trigger` hace full-walk del corpus por cada write
-
-**Contexto**: `durin/memory/threshold_trigger.py`. `maybe_dispatch_threshold_dream`
-(disparado desde `memory_store`/`memory_ingest` tras cada write con
-entities) llama a `count_pending_for_trigger(workspace)` en
-[threshold_trigger.py:161](../durin/memory/threshold_trigger.py#L161),
-**antes** del check de threshold. Corre en **cada** write que pasa el
-gate (`dream.enabled=True` + `threshold_entries>0`, ambos default → es
-frecuente).
-
-**Problema**: la función computa counts de **todas** las entidades pero
-el call-site sólo usa `counts.get(ref)` para `ref in entities` (los 1-3
-recién escritos). El costo es O(todo el corpus + todo episodic + todas
-las entity pages) por write:
-- Parte 1 — `_discover_pending_consolidations` ([memory_cmd.py:103](../durin/cli/memory_cmd.py#L103)):
-  carga **todas** las entity pages (`pages_dir.rglob("*.md")` para los
-  cursors) + camina **todo** episodic (`episodic_dir.glob("*.md")`,
-  `load_entry` por archivo).
-- Parte 2 — corpus walk ([threshold_trigger.py](../durin/memory/threshold_trigger.py)):
-  `walk_class(workspace, "corpus")` + `load_entry` de **cada** archivo.
-
-En vault típico ("cientos de entidades") es sub-segundo pero no gratis;
-en vault grande es latencia per-write notable. Es la misma clase de
-overhead per-write que motivó dejar dormant el threshold de ingest (ver
-[[project_ingest_dormant_rationale]] / nota memoria).
-
-**⚠️ Lo que NO funciona (verificado 2026-06-01, no repetir)**: el QA
-report sugirió "pasar `entity_filter`" como fix one-liner. **Es
-ineficaz, incluso contraproducente.** El parámetro `entity_filter` de
-ambas funciones se aplica *después* de cargar cada archivo (el `if
-entity_filter and ref != entity_filter: continue` está dentro del loop,
-tras `load_entry`), así que **no evita leer ningún archivo** — sólo
-achica el dict devuelto. Y como `count_pending_for_trigger` toma un solo
-`entity_filter` (no un set), usarlo con N entities obligaría a llamarlo N
-veces → **N full-walks → estrictamente peor**.
-
-**Propuesta tentativa (cambio estructural, no one-liner)**:
-- Un índice incremental de pending-counts por entidad (mantenido en el
-  write path) en vez de full-walk por trigger. El write ya sabe qué
-  entities tocó; podría incrementar un contador persistente y el trigger
-  sólo leería ese contador para los `entities` del write actual.
-- Alternativa parcial y más acotada: hacer que `_discover_pending_consolidations`
-  cargue sólo las entity pages de `entities` (no todas) cuando recibe un
-  filtro — pero ojo: esa función la **comparte Dream** para sus cursores,
-  así que tocarla afecta su semántica; requiere tests de Dream además de
-  los del trigger.
-- Cualquier diseño debe preservar la semántica de cursor (parte 1 reusa
-  el helper de Dream a propósito, para que el trigger "vea" exactamente
-  lo que Dream consolidaría) y la señal de "hotness" del corpus (parte 2;
-  Dream NO consolida corpus, pero un user activo dropeando docs sobre una
-  entidad es señal de que está hot).
-
-**Referencias**: ítem P1 #10 del QA review en
-[docs/qa/code-review-2026-06-01.md](qa/code-review-2026-06-01.md).
-
-**Estado**: pendiente — perf pass estructural. No bloquea; el costo es
-tolerable en vaults chicos. Priorizar si/ cuando un vault grande muestre
-latencia per-write medible (medir antes de diseñar).
-
+**Estado**: pendiente — la pipeline entity-centric YA está implementada (Phase
+1-7 + audit 2026-06) y la webui ya tiene una **vista de grafo** de memoria (nodos
+por entidad + filtros por tipo + panel de detalle al click en `/api/memory/graph`
+→ `graph.py::build_memory_graph`). Las "entity cards" (contact-book) serían una
+presentación alternativa sobre esa misma data; ya no está bloqueado.
 
 ### P6 — Skills importadas: sin sandbox ni consentimiento de ejecución runtime
 
@@ -272,4 +247,4 @@ verifique que con `DURIN_HOME` seteado ningún path cae en `~/.durin`.
 
 ---
 
-## Last updated: 2026-06-04 (DURIN_HOME dev/daily separation añadido)
+## Last updated: 2026-06-06 (added auto-install-extras idea; post-migration audit cleanup of obsolete items + P4/P5 refresh)

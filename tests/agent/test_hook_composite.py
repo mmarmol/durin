@@ -299,8 +299,7 @@ def _make_loop(tmp_path, hooks=None):
     with patch("durin.agent.loop.ContextBuilder"), \
          patch("durin.agent.loop.SessionManager"), \
          patch("durin.agent.loop.SubagentManager") as mock_sub_mgr, \
-         patch("durin.agent.loop.Consolidator"), \
-         patch("durin.agent.loop.Dream"):
+         patch("durin.agent.loop.Consolidator"):
         mock_sub_mgr.return_value.cancel_by_session = AsyncMock(return_value=0)
         loop = AgentLoop(
             bus=bus, provider=provider, workspace=tmp_path, hooks=hooks,

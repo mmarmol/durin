@@ -7,7 +7,6 @@ by a free-form body. Per ``docs/archive/35_entity_centric_plan.md`` §3.2 the
     type: <type>             # lowercase [a-z][a-z0-9_]*
     name: <display name>
     aliases: [<list>]
-    dream_processed_through: <msg_idx|null>
     created_at: <iso>
     updated_at: <iso>
 
@@ -48,7 +47,6 @@ _KNOWN_FIELDS = frozenset(
         "type",
         "name",
         "aliases",
-        "dream_processed_through",
         "created_at",
         "updated_at",
         "attributes",
@@ -87,8 +85,7 @@ class EntityPage:
     aliases: list[str] = field(default_factory=list)
     body: str = ""
 
-    # Optional cursor + timestamps.
-    dream_processed_through: int | str | None = None
+    # Optional timestamps.
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -142,7 +139,6 @@ class EntityPage:
             aliases_raw = []
         aliases = [str(a) for a in aliases_raw if isinstance(a, (str, int, float))]
 
-        cursor = data.get("dream_processed_through")
         created_at = _coerce_dt(data.get("created_at"))
         updated_at = _coerce_dt(data.get("updated_at"))
 
@@ -174,7 +170,6 @@ class EntityPage:
             name=name,
             aliases=aliases,
             body=body,
-            dream_processed_through=cursor,
             created_at=created_at,
             updated_at=updated_at,
             attributes=attributes,
@@ -206,8 +201,6 @@ class EntityPage:
             "name": self.name,
             "aliases": list(self.aliases),
         }
-        if self.dream_processed_through is not None:
-            frontmatter["dream_processed_through"] = self.dream_processed_through
         if self.created_at is not None:
             frontmatter["created_at"] = self.created_at.isoformat()
         if self.updated_at is not None:

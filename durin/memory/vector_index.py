@@ -282,6 +282,47 @@ class VectorIndex:
         else:
             db.create_table(_TABLE_NAME, data=[record])
 
+    def upsert_reference_chunk(
+        self,
+        *,
+        ref: str,
+        idx: int,
+        text: str,
+        path: Any,
+    ) -> None:
+        """Index one token-aware chunk of a reference document (design §2.8).
+
+        The whole reference doc is the FTS unit (``indexer._payload_for``); the
+        chunks are the vector unit. The row ``id`` is ``<ref>#<idx>`` so a
+        vector hit on a fragment resolves to its parent reference (strip
+        ``#<idx>``); ``class_name`` is ``"reference"`` to match the FTS/grep
+        reader side.
+        """
+        [vec] = self._provider.embed_passages([text])
+        try:
+            rel_path = Path(path).relative_to(self._workspace)
+        except ValueError:
+            rel_path = Path(path)
+        record: dict[str, Any] = {
+            "id": f"{ref}#{idx}",
+            "class_name": "reference",
+            "summary": text[:200],
+            "headline": ref,
+            "body_length": len(text or ""),
+            "vector": vec,
+            "valid_from": "",
+            "entities": [],
+            "path": str(rel_path),
+        }
+        db = self._connect()
+        names = db.list_tables().tables
+        if _TABLE_NAME in names:
+            table = db.open_table(_TABLE_NAME)
+            self._guard_dim_match(table, len(vec))
+            self._atomic_upsert(table, record)
+        else:
+            db.create_table(_TABLE_NAME, data=[record])
+
     def _skill_record(
         self,
         skill: Any,  # durin.memory.skill_page.SkillPage
@@ -598,7 +639,20 @@ class VectorIndex:
                 continue
             skills.append((sp, md))
 
-        if not entries and not entity_pages and not skills:
+        # Pass 4: references — the token-aware chunks are the vector unit
+        # (A2 / design §2.8). A forced rebuild MUST restore them too, else a
+        # `durin memory reindex` (or the N5 model-change rebuild) silently drops
+        # reference semantic search — only ingest-time indexing would survive.
+        from durin.memory.reference import reference_chunks
+        ref_chunks: list[tuple[str, int, str, Path]] = []  # (ref, idx, text, md)
+        refs_root = self._workspace / "memory" / "references"
+        if refs_root.is_dir():
+            for md_file in sorted(refs_root.glob("*.md")):
+                ref = f"reference:{md_file.stem}"
+                for rec in reference_chunks(self._workspace, ref):
+                    ref_chunks.append((ref, rec["idx"], rec["text"], md_file))
+
+        if not entries and not entity_pages and not skills and not ref_chunks:
             self._drop_if_exists()
             return 0
 
@@ -619,11 +673,14 @@ class VectorIndex:
         ]
         # Batch write — entries, entity pages, and skills are all
         # passages, so use embed_passages to apply E5 prefix uniformly.
-        all_texts = entry_texts + page_texts + skill_texts
+        ref_texts = [text for (_ref, _idx, text, _md) in ref_chunks]
+        all_texts = entry_texts + page_texts + skill_texts + ref_texts
         all_vectors = self._provider.embed_passages(all_texts) if all_texts else []
-        entry_vectors = all_vectors[: len(entry_texts)]
-        page_vectors = all_vectors[len(entry_texts):len(entry_texts) + len(page_texts)]
-        skill_vectors = all_vectors[len(entry_texts) + len(page_texts):]
+        n_e, n_p, n_s = len(entry_texts), len(page_texts), len(skill_texts)
+        entry_vectors = all_vectors[:n_e]
+        page_vectors = all_vectors[n_e:n_e + n_p]
+        skill_vectors = all_vectors[n_e + n_p:n_e + n_p + n_s]
+        ref_vectors = all_vectors[n_e + n_p + n_s:]
 
         records = [
             self._record_with_vector(entry, class_name, path, vec)
@@ -640,6 +697,22 @@ class VectorIndex:
             for (sp, md_file), vec
             in zip(skills, skill_vectors)
         )
+        for (ref, idx, text, md_file), vec in zip(ref_chunks, ref_vectors):
+            try:
+                rel_p = md_file.relative_to(self._workspace)
+            except ValueError:
+                rel_p = md_file
+            records.append({
+                "id": f"{ref}#{idx}",
+                "class_name": "reference",
+                "summary": text[:200],
+                "headline": ref,
+                "body_length": len(text or ""),
+                "vector": vec,
+                "valid_from": "",
+                "entities": [],
+                "path": str(rel_p),
+            })
 
         db = self._connect()
         self._drop_if_exists(db)
@@ -754,7 +827,7 @@ class VectorIndex:
             "vector": vector,
             "valid_from": entry.valid_from.isoformat() if entry.valid_from else "",
             # B1 (doc 24 §7): persist entity tags so entity_ranker's
-            # post-cursor boost can match c.get("entities", []) against
+            # entity-match boost can match c.get("entities", []) against
             # query entities. Without this column, the ranker can never
             # boost tagged entries — W1 would be inoperative.
             "entities": list(entry.entities),

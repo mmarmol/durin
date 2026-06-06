@@ -581,7 +581,7 @@ async def test_skill_judge_route_runs_on_demand(
     cfg = _real_cfg_at(ws)
     monkeypatch.setattr("durin.config.loader.load_config", lambda *a, **k: cfg)
     monkeypatch.setattr(
-        "durin.memory.dream.default_llm_invoke",
+        "durin.memory.llm_invoke.default_llm_invoke",
         lambda prompt, *, model=None: "===FINDINGS===\ncaution | intent | SKILL.md | reads an API key quietly\n===END===\n")
     channel = _ch(bus, port=29924)
     server_task = asyncio.create_task(channel.start())

@@ -35,6 +35,7 @@ __all__ = [
     "IndexMeta",
     "load_index_meta",
     "meta_path",
+    "record_built_model",
     "save_index_meta",
     "skills_indexing_enabled",
 ]
@@ -169,3 +170,26 @@ def save_index_meta(workspace: Path, meta: IndexMeta) -> None:
         except FileNotFoundError:
             pass
         raise
+
+
+def record_built_model(workspace: Path, model: str) -> None:
+    """N5a: record which embedding model the index was last built with, so
+    :func:`durin.memory.indexer.ensure_index_fresh` can detect a later swap.
+
+    Preserves the current ``schema_version``; when the model actually changes,
+    appends the prior model to ``previous_models`` as an audit trail. Called by
+    ``durin memory reindex`` after a (re)build.
+    """
+    prev_meta = load_index_meta(workspace)
+    previous = list(prev_meta.previous_models) if prev_meta else []
+    schema = prev_meta.schema_version if prev_meta else CURRENT_SCHEMA_VERSION
+    if prev_meta and prev_meta.embedding_model_id and prev_meta.embedding_model_id != model:
+        previous.append(prev_meta.embedding_model_id)
+    save_index_meta(
+        workspace,
+        IndexMeta(
+            schema_version=schema,
+            embedding_model_id=model,
+            previous_models=tuple(previous),
+        ),
+    )

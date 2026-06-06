@@ -217,5 +217,5 @@ liviana por calidad alcanza; el costo/escala lo absorbe el hot/cold split.
 ## §9 — Referencias
 
 - E2 (escritura): [`2026-06-02-skills-evolution-e2-design.md`](2026-06-02-skills-evolution-e2-design.md).
-- Plan-fuente: [`docs/plans/skills_evolutivas.md`](../../plans/skills_evolutivas.md) (§6.C/E acquire-on-gap → E4).
-- Hermes (referencia auditada): [`docs/plans/hermes_skills_codebase.md`](../../plans/hermes_skills_codebase.md) — inyección sin search, archiving como control de escala.
+- Plan-fuente: [`docs/archive/skills_evolutivas.md`](../../archive/skills_evolutivas.md) (§6.C/E acquire-on-gap → E4).
+- Hermes (referencia auditada): [`docs/research/hermes_skills_codebase.md`](../../research/hermes_skills_codebase.md) — inyección sin search, archiving como control de escala.

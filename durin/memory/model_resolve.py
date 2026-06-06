@@ -9,7 +9,7 @@ read their model name through this helper. Precedence:
 2. ``config.memory.dream.model_override`` — legacy per-dream knob.
 3. ``None`` — caller falls back to its own default (the agent's active
    preset for the legacy ``Dream``; the bundled ``default_llm_invoke``
-   default for ``DreamRunner``).
+   default for the dream).
 
 Provider override is **not** supported by this helper. The dream
 invokers either hardcode the provider (entity-centric uses zhipu via

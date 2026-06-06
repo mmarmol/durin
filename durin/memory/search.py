@@ -52,7 +52,7 @@ class Result:
 
     Per doc 25 §2.H (fragment/canonical retrieval contract): each result
     carries enough metadata for the LLM to distinguish a canonical
-    entity page from a recent post-cursor fragment, and to know when
+    entity page from a recent tagged fragment, and to know when
     the data was valid. The model can drill into the canonical via the
     ``entities`` pointer.
 
@@ -210,6 +210,9 @@ def search_dreamed(
     # memory" that fragments above amend. Skip the `archive/`
     # subfolders (absorbed pages stay reachable via expand only).
     results.extend(_search_entity_pages(memory_root, needle_low, level))
+    # G2: coherent reference docs (memory/references/) are authoritative
+    # consolidated knowledge — surface them in the dreamed tier too.
+    results.extend(_search_reference_pages(memory_root, needle_low, level))
     # Skills live outside `memory/` (under `skills/<slug>/SKILL.md`) but
     # belong to the same lazy-retrieval contract: when the vector index
     # is cold/absent the grep fallback must still surface a cold skill.
@@ -241,12 +244,13 @@ def _search_entity_pages(
         page = EntityPage.from_file(page_path)
         if page is None:
             continue
-        haystack_parts = [
-            page.name,
-            " ".join(page.aliases or []),
-            page.body or "",
-        ]
-        haystack = " ".join(haystack_parts).lower()
+        # Haystack = the same composed text the FTS path indexes (name +
+        # aliases + attributes + relations + body), so a search by an
+        # attribute VALUE (e.g. the dream-extracted "hq: Boston") or a relation
+        # target matches here too. Previously the warm grep only saw
+        # name+aliases+body, so structured facts were unsearchable.
+        from durin.memory.indexer import _entity_text
+        haystack = _entity_text(page).lower()
         if needle_low not in haystack:
             continue
         slug = page_path.stem
@@ -267,6 +271,47 @@ def _search_entity_pages(
                 # Entity pages don't carry a single valid_from; the
                 # body uses prose ("since 2026-03-15...") for
                 # temporal claims, per doc 18 §6 protocol α.
+                valid_from="",
+                entities=(ref,),
+            )
+        )
+    return out
+
+
+def _search_reference_pages(
+    memory_root: Path,
+    needle_low: str,
+    level: Level,
+) -> list[Result]:
+    """Grep over ``memory/references/<slug>.md`` (coherent reference docs).
+
+    Returns results with ``class_name="reference"``. References are
+    authoritative consolidated knowledge (design §2.8), so they live in the
+    dreamed tier alongside canonical entity pages. (G2: previously references
+    were not surfaced by any searcher.)
+    """
+    from durin.memory.indexer import _reference_title_body
+
+    refs_dir = memory_root / "references"
+    out: list[Result] = []
+    if not refs_dir.is_dir():
+        return out
+    for page_path in sorted(refs_dir.glob("*.md")):
+        title, body = _reference_title_body(page_path.read_text(encoding="utf-8"))
+        title = title or page_path.stem
+        if needle_low not in f"{title} {body}".lower():
+            continue
+        slug = page_path.stem
+        ref = f"reference:{slug}"
+        out.append(
+            Result(
+                source="memory",
+                uri=f"memory/reference/{slug}",
+                headline=title,
+                snippet=body[:160],
+                summary=title if level == "warm" else "",
+                body=body if level == "cold" else "",
+                class_name="reference",
                 valid_from="",
                 entities=(ref,),
             )

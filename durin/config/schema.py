@@ -40,52 +40,6 @@ class ChannelsConfig(Base):
     transcription_language: str | None = Field(default=None, pattern=r"^[a-z]{2,3}$")  # Optional ISO-639-1 hint for audio transcription
 
 
-class DreamConfig(Base):
-    """Dream memory consolidation configuration."""
-
-    _HOUR_MS = 3_600_000
-
-    interval_h: int = Field(default=2, ge=1)  # Every 2 hours by default
-    cron: str | None = Field(default=None, exclude=True)  # Legacy compatibility override
-    model_override: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("modelOverride", "model", "model_override"),
-    )  # Optional Dream-specific model override
-    max_batch_size: int = Field(default=20, ge=1)  # Max history entries per run
-    # Bumped from 10 to 15 in #3212 (exp002: +30% dedup, no accuracy loss; >15 plateaus).
-    max_iterations: int = Field(default=15, ge=1)  # Max tool calls per Phase 2
-    # Per-line git-blame age annotation in Phase 1 prompt (see #3212). Default
-    # on — set to False to feed MEMORY.md raw if a specific LLM reacts poorly
-    # to the `← Nd` suffix or you want deterministic, git-independent prompts.
-    annotate_line_ages: bool = True
-    # Pre-LLM gate (2026-05-31): when the cron fires, tokenize the unprocessed
-    # history.jsonl tail and skip the Phase 1 LLM call entirely if total tokens
-    # are below this threshold. Cheap (a few ms with tiktoken) and bounds the
-    # cost of a cron that ticks during quiet periods — a few "ok" / social
-    # turns no longer trigger a multi-thousand-token analysis. Default 2000:
-    # filters trivial / social sessions, keeps anything substantive enough to
-    # produce a fact worth escalating to MEMORY.md / SOUL.md / skills.
-    # Set to 0 to disable the gate (every non-empty cron tick runs the LLM,
-    # the pre-2026-05-31 behaviour).
-    min_tokens_to_run: int = Field(
-        default=2000, ge=0,
-        validation_alias=AliasChoices("minTokensToRun", "min_tokens_to_run"),
-    )
-
-    def build_schedule(self, timezone: str) -> CronSchedule:
-        """Build the runtime schedule, preferring the legacy cron override if present."""
-        if self.cron:
-            return CronSchedule(kind="cron", expr=self.cron, tz=timezone)
-        return CronSchedule(kind="every", every_ms=self.interval_h * self._HOUR_MS)
-
-    def describe_schedule(self) -> str:
-        """Return a human-readable summary for logs and startup output."""
-        if self.cron:
-            return f"cron {self.cron} (legacy)"
-        hours = self.interval_h
-        return f"every {hours}h"
-
-
 class InlineFallbackConfig(Base):
     """One inline fallback model configuration."""
 
@@ -151,39 +105,26 @@ class MemoryEmbeddingConfig(Base):
 
 
 class MemoryDreamConfig(Base):
-    """Entity-centric dream auto-trigger config (doc 25 §2.A.1).
+    """Memory dream config: when the extract / refine / skill passes run (§8e).
 
-    Distinct from ``agents.defaults.dream`` which schedules the legacy
-    ``MEMORY.md`` / ``SOUL.md`` consolidator. This block governs when
-    the entity-centric :class:`DreamConsolidator` runs automatically
-    over pending post-cursor entries.
+    Governs the daily ``memory_dream`` cron plus two reactive triggers. The
+    manual ``durin memory dream`` always works regardless of ``enabled``.
 
-    Four triggers (any combination):
+    Three triggers (any combination):
 
-    - **cron**: daily schedule (predictable, OpenClaw-style).
-    - **post_compaction**: dream after the conversation consolidator
-      compacts a session — the context is already in memory so the
-      cost is amortised.
-    - **on_session_close**: dream when a session ends (``/quit`` or
-      idle timeout).
-    - **threshold_entries**: dream when an entity accumulates this
-      many post-cursor entries (per-entity granularity).
-
-    ``min_seconds_between_runs`` throttles the per-entity triggers so
-    fast-firing events (e.g. a flurry of memory_store calls) don't
-    cause thrashing.
+    - **cron**: daily schedule (predictable).
+    - **post_compaction**: dream after a session is compacted — the context
+      is already in memory so the cost is amortised.
+    - **on_session_close**: dream when a session ends (``/quit`` or idle
+      timeout).
     """
 
-    # Master switch — false disables all four triggers; manual
+    # Master switch — false disables the cron + reactive triggers; manual
     # ``durin memory dream`` still works.
     enabled: bool = True
 
-    # Cron expression for the daily pass. 3am local to avoid the
-    # legacy ``dream`` job's every-2h schedule.
+    # Cron expression for the daily extract / refine / skill pass.
     cron: str = "0 3 * * *"
-
-    # Per-entity threshold. 0 disables the threshold trigger.
-    threshold_entries: int = Field(default=5, ge=0)
 
     # Hook into the session compaction lifecycle.
     post_compaction: bool = True
@@ -198,29 +139,42 @@ class MemoryDreamConfig(Base):
         validation_alias=AliasChoices("modelOverride", "model_override"),
     )
 
-    # Cooldown between auto-runs per workspace to prevent thrashing
-    # when multiple triggers fire fast.
+    # Throttle for the reactive triggers (post_compaction + on_session_close).
+    # They fire on a daemon thread per event; a burst of session closes would
+    # otherwise spawn a burst of overlapping extract passes. The reactive
+    # gate skips a run when one happened within this window (the per-session
+    # cursor means the skipped turns are picked up by the next run / the cron).
+    # 0 disables the throttle. The daily cron is never throttled.
     min_seconds_between_runs: int = Field(
         default=300,
         ge=0,
         validation_alias=AliasChoices("minSecondsBetweenRuns", "min_seconds_between_runs"),
     )
 
-    # Hard wall-clock cap per dream pass. The runner drains an entity's
-    # backlog across multiple consolidate batches (FIFO oldest-first,
-    # cursor advances per batch); this caps how long that drain runs
-    # before yielding. Remainder fires `memory.dream.budget_exhausted`
-    # telemetry and is picked up by the next trigger. Default 600s
-    # (10 min) covers ~10 oldest-first batches per entity at glm-5.1
-    # speeds; bump up for bootstraps of large entities, down for
-    # tighter cron windows.
+    # Hard wall-clock cap per extract pass. The pass makes one LLM call per
+    # session with new turns; on a large workspace (or a bootstrap) that can
+    # run long. When the elapsed time crosses this cap the pass yields after
+    # the current session — the per-session cursor makes the remainder resume
+    # on the next trigger. 0 disables the cap (run to completion).
     max_seconds_per_run: int = Field(
         default=600,
         ge=0,
         validation_alias=AliasChoices("maxSecondsPerRun", "max_seconds_per_run"),
     )
 
-    # §2.D auto-absorb config nested under dream.
+    # Token budget for the always-on guidance pin (A4, design §2.11). The
+    # always_on distillation pass ranks feedback (stance/practice), drops
+    # contradictions, and keeps the highest-priority items that fit this many
+    # tokens — injected into EVERY prompt, so this is a per-turn cost. 0
+    # disables the pin (nothing kept always_on). Default 1500 ≈ 15-25 concise
+    # standing instructions.
+    always_on_token_budget: int = Field(
+        default=1500,
+        ge=0,
+        validation_alias=AliasChoices("alwaysOnTokenBudget", "always_on_token_budget"),
+    )
+
+    # Auto-absorb config nested under dream (the refine pass's dedup/merge).
     auto_absorb: "AutoAbsorbConfig" = Field(
         default_factory=lambda: AutoAbsorbConfig(),
         validation_alias=AliasChoices("autoAbsorb", "auto_absorb"),
@@ -273,15 +227,6 @@ class AutoAbsorbConfig(Base):
         default=24,
         ge=0,
         validation_alias=AliasChoices("minAgeHours", "min_age_hours"),
-    )
-
-    # Override the judge model (None → use the dream model, which is
-    # the runner's ``model`` field). Setting a different model
-    # mitigates the self-consistency bias where the same model
-    # judges its own output.
-    judge_model: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("judgeModel", "judge_model"),
     )
 
 
@@ -420,16 +365,40 @@ class SkillJudgeConfig(Base):
     model: str = ""
 
 
+# Skill-source prefixes trusted by default — verified first-party vendor orgs +
+# de-facto-standard frameworks on skills.sh (2026-06). A match only skips the
+# *source* confirmation; the verdict/code gates still apply (so this never
+# auto-installs code-carrying or non-safe skills). Editable in config + the webui
+# (Skills security → Trust patterns). `github`/`microsoft` are scoped to their
+# skills repo (both are giant general orgs); the rest are org-level.
+DEFAULT_SKILL_ALLOWLIST: list[str] = [
+    "github:anthropics/",                # Anthropic — official Agent Skills
+    "github:google-gemini/",             # Google — official Gemini skills
+    "github:openai/",                    # OpenAI — official skills catalog
+    "github:vercel-labs/",               # Vercel — official agent-skills
+    "github:nousresearch/",              # Nous Research — hermes-agent skills
+    "github:obra/",                      # superpowers — de-facto-standard framework
+    "github:flutter/",                   # Google — Flutter skills
+    "github:firebase/",                  # Google — Firebase agent-skills
+    "github:googleworkspace/",           # Google — Workspace CLI skills
+    "github:google-labs-code/",          # Google Labs — stitch-skills
+    "github:microsoft/azure-skills/",    # Microsoft — Azure skills (repo-scoped)
+    "github:github/awesome-copilot/",    # GitHub/Microsoft — Copilot hub (repo-scoped)
+]
+
+
 class SkillSecurityConfig(Base):
     """Security floor + policy for skill import (§8.C/§6.B). ``allowlist`` =
-    trusted source-ref prefixes (e.g. ``github:anthropics/``, ``https://gitlab.com/acme/``).
-    A match skips only the *source* confirmation; the verdict/code gates have no
-    opt-out. Caps bound a fetched skill's size/file count. ``github_token_secret``
-    names a durin secret holding a GitHub API token (raises rate limits + private
-    repos); empty → anonymous. (Running a skill's declared dependency installs is
-    governed by ``skills.install_policy`` — see P6 #1.)"""
+    trusted source-ref prefixes (e.g. ``github:anthropics/``). A match skips only
+    the *source* confirmation; the verdict/code gates have no opt-out. Ships with a
+    vetted default of first-party vendor + de-facto orgs (``DEFAULT_SKILL_ALLOWLIST``),
+    editable in config + the webui (Skills security → Trust patterns). Caps bound a
+    fetched skill's size/file count. ``github_token_secret`` names a durin secret
+    holding a GitHub API token (raises rate limits + private repos); empty →
+    anonymous. (Running a skill's declared dependency installs is governed by
+    ``skills.install_policy`` — see P6 #1.)"""
 
-    allowlist: list[str] = Field(default_factory=list)
+    allowlist: list[str] = Field(default_factory=lambda: list(DEFAULT_SKILL_ALLOWLIST))
     github_token_secret: str = ""
     max_files: int = 100
     max_total_bytes: int = 3 * 1024 * 1024
@@ -485,9 +454,9 @@ class MemoryConfig(Base):
     silent (resilient: the embedding model itself auto-downloads on first
     use via fastembed; only the Python extra can't self-install).
 
-    ``dream`` configures auto-trigger of the entity-centric
-    :class:`DreamConsolidator` (doc 25 §2.A.1). Independent of
-    ``enabled`` — manual ``durin memory dream`` works either way.
+    ``dream`` configures the entity-centric dream passes (extract / refine /
+    skill / always_on) and their cron + reactive triggers (doc 25 §2.A.1).
+    Manual ``durin memory dream`` works regardless of the triggers.
 
     ``search`` configures the search pipeline (cross-encoder etc.).
 
@@ -499,6 +468,10 @@ class MemoryConfig(Base):
     # Skills are authored + injected already; this gates making them
     # searchable as a `skill` memory class (skill-memory-class indexing).
     index_skills: bool = True
+    # §8b/8e: the workspace owner entity ref (e.g. "person:marcelo"). Resolves
+    # the principal for the pinned context (channel → owner → person:anonymous).
+    # None defaults to anonymous until the user sets it.
+    owner: str | None = None
     embedding: MemoryEmbeddingConfig = Field(default_factory=MemoryEmbeddingConfig)
     dream: MemoryDreamConfig = Field(default_factory=MemoryDreamConfig)
     search: MemorySearchConfig = Field(default_factory=MemorySearchConfig)
@@ -653,7 +626,6 @@ class AgentDefaults(Base):
     # Key is a substring of the model name (case-insensitive); value is True/False.
     # First match wins. Empty = preserve the provider default. Use to opt models
     # OUT when they misbehave with parallel tool calls (e.g. {"glm-5.1": false}).
-    dream: DreamConfig = Field(default_factory=DreamConfig)
 
 
 class AgentsConfig(Base):

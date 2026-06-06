@@ -1,16 +1,16 @@
 ---
 title: Prompts and instructions
-version: 0.1-draft
-status: current — describes the shipped system (P11 era, 2026-05-30)
-last_updated: 2026-05-27
+version: 0.2
+status: current — describes the shipped system (post-migration, 2026-06-06)
+last_updated: 2026-06-06
 audience: humans and LLMs implementing or modifying this system
 depends_on: 00_overview.md, 04_agent_tools.md, 05_dream_cold_path.md
-related: 07_telemetry_and_observability.md
+related: 07_telemetry_and_observability.md, ../../qa/post_migration_audit_2026-06.md
 ---
 
 # Prompts and instructions
 
-This document specifies all the LLM-facing text the memory system produces: the agent's identity.md memory section, the tool descriptions, the Dream consolidator skill package, the absorb-judge prompt, the onboarding wizard text, and the structural marker conventions. **This document is the canonical text** — anything that mentions an LLM-facing string elsewhere must match what's specified here.
+This document specifies all the LLM-facing text the memory system produces: the agent's identity.md memory section, the tool descriptions, the Dream pass prompts (extract, absorb-judge, always-on rank, skill-extract), the onboarding wizard text, and the structural marker conventions. **This document is the canonical text** — anything that mentions an LLM-facing string elsewhere must match what's specified here.
 
 **Principle (P6 from overview):** structure communicates better than instructions. Markers and timestamps signal trust and recency. Imperatives like "treat as authoritative" or "USE BEFORE answering" are weak signals (see `feedback_tool_description_weak_signal.md`). Descriptive metadata wins.
 
@@ -24,8 +24,8 @@ The system produces text consumed by LLMs in five places:
 |---|---|---|---|
 | 1 | `identity.md` Memory section | Agent LLM at every turn (in system prompt) | §2 |
 | 2 | Tool descriptions (`memory_search` / `_store` / `_ingest` / `_drill`) | Agent LLM at tool-selection time | §3 |
-| 3 | Dream prompt package (multi-file assembly, NOT a skill) | Dream consolidator LLM at every consolidation call | §4 |
-| 4 | Absorb-judge prompt | Dedup judge LLM | §5 |
+| 3 | Dream pass prompts (extract, always-on rank, skill-extract sub-agent) | Dream LLM in the cold path | §4 |
+| 4 | Absorb-judge prompt | Refine-pass dedup judge LLM | §5 |
 | 5 | Onboarding wizard text (CLI + web dashboard) | Human operator at install + configuration | §6 |
 
 Also documented here (consumed structurally, not as instruction text):
@@ -43,17 +43,16 @@ Also documented here (consumed structurally, not as instruction text):
 ```markdown
 ## Memory
 
-You have access to four memory tools (memory_search, memory_store,
+You have access to four memory tools (memory_search, memory_upsert_entity,
 memory_ingest, memory_drill). The memory system holds:
 
-- **Canonical entity pages** — consolidated knowledge about people,
-  projects, bugs, deals, files, etc.
-- **Recent fragments** — atomic observations that haven't yet been
-  consolidated. These may carry the latest state when it differs from
-  the canonical page.
+- **Entity pages** — consolidated knowledge about a *thing* (a person,
+  company, product, topic, project, place, …): its name, aliases, relations
+  to other entities, the prose you wrote, and structured attributes the
+  system extracts from that prose.
+- **References** — coherent documents you ingested, kept whole (a tutorial,
+  spec, article). Authoritative source material, not synthesized away.
 - **Session summaries** — distilled records of past conversations.
-- **Ingested documents** — chunks of user-provided sources (PDFs,
-  notes, articles).
 - **Skills** — procedural memory: step-by-step procedures you follow
   for recurring tasks. A `skill` hit is an instruction set to
   **execute**, not a fact to cite.
@@ -62,9 +61,6 @@ When you might need a fact, call memory_search rather than answering
 from cold recall. State the source of any fact you cite by referencing
 the URI or section marker. Do not claim facts that are not in the
 results.
-
-If the canonical page and a recent fragment disagree, the fragment is
-more current — explain the difference instead of choosing silently.
 
 For compound or multi-part questions, issue 2-3 searches with different
 phrasings rather than one long query. This consistently improves recall.
@@ -105,16 +101,20 @@ Audit H7 (2026-05-29): the `## Working with search results` block distils three 
 ```markdown
 ## Memory writing
 
-When the user asks you to store or ingest substantial content (a
-document, a fact about a person, a decision):
+Route by what the information IS:
 
-1. Call `memory_search` first with the topic to see what you already
-   know.
-2. Use that context to choose: store the new content noting how it
-   complements existing notes; skip if redundant; or surface the
-   overlap to the user before storing.
+- **A fact about a thing** (a person, company, product, topic, …) →
+  `memory_upsert_entity`. Give the entity `ref` (`<type>:<slug>`), its
+  display `name`, any `aliases`, `relations` to other entities, and prose
+  `body` describing what you learned. The system extracts structured
+  attributes from your prose — you don't write attributes yourself.
+- **A document** the user gives you (a tutorial, spec, article) →
+  `memory_ingest`. It's kept whole as a reference.
+- **An interaction** — nothing to do; the conversation is already recorded
+  and the system distils what matters.
 
-This avoids duplicates and keeps the memory store coherent.
+Before authoring an entity, call `memory_search` first to see what you
+already know, so you extend the existing entity instead of duplicating it.
 ```
 
 ### 2.1 What this prompt does NOT say
@@ -181,6 +181,11 @@ Do not claim facts that are not in the search results.
 
 ### 3.2 `memory_store`
 
+> **Disabled** (`MemoryStoreTool.enabled()` returns False) — not in the live
+> toolset. The entity-centric model writes facts via `memory_upsert_entity`
+> (§3.5) and documents via `memory_ingest` (§3.3). The description below is kept
+> in sync (the tool still exists) but the LLM never sees it.
+
 ```
 Persist an observation to memory. Use this when you learn a fact the user is
 likely to need again — preferences, decisions, facts about people/projects/
@@ -213,26 +218,20 @@ fact.
 ### 3.3 `memory_ingest`
 
 ```
-Add a local document (markdown or plain text) to durin's memory corpus.
-Use this when the user wants a file on disk remembered as reference
-material — research notes, transcripts, technical specs, exported pages,
-markdown books, etc.
+Add a local document (markdown or plain text) to durin's memory as a
+REFERENCE — coherent source material the user wants kept whole:
+research notes, transcripts, technical specs, exported pages, markdown
+books, etc.
 
-`path` is the absolute or workspace-relative path to the file. The file
-is copied to `ingested/<id>/` for preservation (so the original is
-recoverable verbatim) and the content is chunked into searchable
-`memory/corpus/*.md` entries. Re-ingesting the same file is idempotent
-— the id is derived from a hash of (filename + content), so renaming
-the file before re-ingesting produces a different id.
+`path` is the absolute or workspace-relative path to the file. The
+original is preserved verbatim and the document is indexed for
+retrieval. Re-ingesting the same file is idempotent — the id is a hash
+of (filename + content).
 
 For web content, use `web_fetch(url=...)` first to get clean markdown,
-then `memory_store(content=..., class_name="corpus", source_refs=[url])`.
-`web_fetch` already handles URL extraction (Jina/readability),
-SSRF protection, redirects, and image detection.
-
-For short inline text (a paragraph or two), call `memory_store` directly
-with `class_name="corpus"` — `memory_ingest` is specifically for files
-on disk where preserving the original artifact matters.
+then `memory_ingest` on the saved file. For a fact about a *thing* (a
+person, company, product, topic…), use `memory_upsert_entity` instead —
+`memory_ingest` is for whole documents, not individual facts.
 ```
 
 ### 3.4 `memory_drill`
@@ -264,7 +263,25 @@ memory_search to find new candidates.
 
 Audit H9 (2026-05-29) consolidated the previous ``memory_drill_batch`` tool into ``memory_drill`` so the LLM sees one drill surface instead of two. The list-of-uris payload is identical to the old batch tool; the single-``uri`` legacy shape is preserved unchanged.
 
-### 3.5 Synchronization requirement
+### 3.5 `memory_upsert_entity`
+
+```
+Author or update an entity (a person, company, product, topic, place, etc.) you have learned a fact about. Provide `ref` as `<type>:<slug>` (e.g. company:mxhero, person:marcelo), the display `name`, any `aliases`, `relations` to other entities ({to: '<type>:<slug>', type: 'partner'}), and prose `body` describing what you know. Merges into the existing entity if it exists, creates it otherwise. Do NOT pass structured attributes — the system extracts those from your prose. Use this for facts about a THING; use memory_ingest for documents.
+```
+
+This is the primary write tool in the entity-centric model: the agent authors a THING (person/company/product/topic) as prose; the dream extracts typed attributes from that prose later. Contrast `memory_store` (§3.2, disabled) which wrote raw entries.
+
+### 3.6 `memory_forget`
+
+```
+Remove a memory entry you no longer want surfaced. Archives it to memory/archive/<class>/<id>.md (reversible) and removes its search index rows so it stops appearing in memory_search.
+
+This is the ONLY correct way to delete a memory entry — never rm or move files under memory/ via shell, which leaves the search indices pointing at a missing file.
+
+Pass `uri` exactly as memory_search returned it. Refuses entity pages (memory/entities/...): those have their own absorb/revert lifecycle.
+```
+
+### 3.7 Synchronization requirement
 
 The text above MUST match the `.description` property on each tool class (`durin/agent/tools/memory_search.py::MemorySearchTool.description`, etc.). That property is the field `Tool.to_schema()` emits as `function.description` in the OpenAI function-calling spec — i.e. what the LLM actually reads when deciding to call the tool.
 
@@ -276,314 +293,144 @@ Divergence is a bug. Updates flow from this document outward; never the other wa
 
 ---
 
-## 4. Dream prompt package
+## 4. Dream pass prompts
 
-Living at `durin/templates/dream/`. This is **the multi-file prompt assembly that the runner concatenates into a single prompt at every Dream consolidator call** — NOT a skill in the invocable-on-demand sense (the agent does not choose to load this; the runner builds and passes it). The package is intentionally larger (~1-2k tokens overhead per call) than a minimal prompt, in exchange for precision. JSON Patch is unforgiving syntax; without good few-shot examples, small models err.
+> **Migration note (2026-06-06).** The old `templates/dream/` **multi-file
+> JSON-Patch consolidator package** — `consolidator.md` + `json_patch_reference.md`
+> + `rules.md` + `commit_format.md` + an `examples/` bundle, where the LLM emitted
+> JSON Patch (RFC 6902) ops over the entity page frontmatter — **was deleted**
+> with the `DreamConsolidator`/`DreamRunner` cluster. The settled cold path
+> (`05_dream_cold_path.md`, audit `../../qa/post_migration_audit_2026-06.md`) has **four passes**
+> and **no JSON-Patch envelope, no `===PATCH===`/`===BODY_DELTA===`/`===COMMIT===`
+> output, no `Cursor-after` trailer**. The only file left under `templates/dream/`
+> is `absorb_judge.md` (§5). The four pass prompts are described below.
 
-**Terminology note:** the word "skill" elsewhere in durin refers to invocable artifacts the agent chooses to load (`~/.claude/skills/` style). The Dream prompt package is NOT one of those — it's a prompt template assembled by code. Keeping the distinction clear avoids confusion when readers cross-reference with `skill-creator` and similar tooling.
+The Dream passes (`durin/memory/dream_passes.py` + `extract_dream.py` +
+`always_on_dream.py`) build their prompts **in code**, not as a multi-file
+template assembly — except the absorb-judge prompt (§5), which is the lone
+surviving `templates/dream/` file. None of these is a "skill" in the
+invocable-on-demand sense (the agent does not choose to load them; the cold path
+builds and passes them).
 
-### 4.1 Layout
+| Pass | Prompt | Where | Output the LLM produces |
+|---|---|---|---|
+| **extract** | `build_extract_prompt` | `extract_dream.py` | a JSON object of `attribute_key → scalar/list` |
+| **always_on** | `_RANK_PROMPT` | `always_on_dream.py` | feedback refs, one per line, best-first |
+| **skill-extract** | `_SKILL_EXTRACT_PROMPT` (sub-agent system prompt) | `dream_passes.py` | `skill_write` tool calls (agentic) |
+| **refine** | `absorb_judge.md` | template (§5) | `===VERDICT===`/`===CONFIDENCE===`/`===REASONING===` |
 
-```
-durin/templates/dream/
-├── consolidator.md           # Main prompt — the contract, the input slots
-├── json_patch_reference.md   # How to write JSON Patch ops correctly
-├── rules.md                  # Long-form rules with rationale
-├── commit_format.md          # Exact format for the COMMIT section
-└── examples/
-    ├── 01_new_entity.md      # Few-shot: creating a page from scratch
-    ├── 02_update_attribute.md # Few-shot: replacing a value
-    ├── 03_add_relation.md    # Few-shot: adding a relation
-    ├── 04_handle_conflict.md # Few-shot: contradictory observations
-    ├── 05_unify_keys.md      # Few-shot: detecting duplicate keys and merging
-    └── 06_no_changes.md      # Few-shot: when entries don't warrant updates
-```
+### 4.1 Extract prompt — sessions → entity attributes
 
-### 4.2 `consolidator.md` — the main prompt
-
-The structure (input slots in `{braces}`):
-
-```markdown
-You are durin's Dream consolidator. Process N new observations about
-entity_id and update its canonical page.
-
-ENTITY: {entity_id}
-
-EXISTING PAGE (current canonical state):
-{existing_page_content}
-
-EXISTING SCHEMA for this entity (for coherence; not a constraint):
-  attributes: {list_of_attribute_keys}
-  relation types: {list_of_relation_types}
-  current relation count: {current_relation_count} (hard cap: 200 — see Rule 9)
-
-  Audit F7 (2026-05-28): both schema slots are now populated from the
-  current entity page's frontmatter. Pre-F7 they rendered as
-  `(none)` regardless of page state, leaving the LLM blind to
-  the existing schema and inviting drift (e.g. emitting `email`
-  when the page already has `e-mail`).
-
-  Audit B-19 (2026-05-29): `current_relation_count` is the integer
-  `len(page.relations)`. It is rendered into the prompt so the LLM
-  can budget against the 200 hard cap (Rule 9) before emitting new
-  `/relations/-` ops. Producer: `dream.py` parses the page once for
-  schema slots and reuses the count. The cap itself is enforced at
-  apply time in `durin.memory.entity_relation_cap.check_relation_cap`
-  (telemetry events `memory.entity_relation_cap_warned` /
-  `_rejected`); this slot is the LLM-facing surface that makes the
-  cap legible **before** the patch is emitted.
-
-  Guidance:
-  - PREFER reusing an existing key when the new info has the same semantic meaning.
-  - If you notice two existing keys mean the same thing (e.g. 'email' and 'e-mail'),
-    unify them in your output: emit ops that consolidate to one canonical key.
-  - You MAY introduce new keys if the new information genuinely needs them.
-  - The goal is coherent evolution, not rigid preservation.
-
-EXISTING ENTITY URIs in workspace (consider for dedup; create new only if no match):
-  {existing_uris}
-
-  Audit F17 (2026-05-28): producer shipped at
-  `durin.memory.entity_inventory.existing_uris_by_recent_mtime`.
-  Walks `memory/entities/<type>/<slug>.md` excluding archive,
-  sorts by file mtime descending, caps at 100. The slot now
-  carries the freshest URIs in the workspace so the LLM avoids
-  creating duplicates (e.g. `person:marcelo_marmol` when
-  `person:marcelo` already exists). The 100-cap lives at
-  `entity_inventory.DEFAULT_EXISTING_URIS_CAP` and at
-  `dream_prompt_builder._EXISTING_URIS_CAP` (two caps in series);
-  audit G4 (2026-05-28) explicitly decided NOT to lift it to
-  config — no telemetry detects "duplicate created because cap was
-  too low" so an operator has no observable trigger to tune it.
-  See `08_scope_and_discarded.md` §2.13.
-
-SUGGESTED STARTER TYPES (for when you must create a new entity URI):
-  person, place, project, topic, event, artifact, stance, practice
-  (open vocabulary — you may use a different type if none of these fit;
-   see `01_data_and_entities.md` §4.1.1 for examples per type)
-
-RECENT GIT HISTORY for this entity (so you can avoid undoing recent updates):
-  {recent_commits_with_short_diffs}
-
-  Audit F7 (2026-05-28): slot populated via
-  `durin.memory.dream_git_history.format_recent_history`. Pre-F7 it
-  always rendered as `(no recent history)` regardless of git state.
-
-PENDING OBSERVATIONS ({n_entries}):
-{entries_text}
-
-Now follow the rules in `rules.md` and emit your output using the format
-in `commit_format.md`. The output format is strict — see `json_patch_reference.md`
-for syntax. Refer to `examples/` for sample outputs in different scenarios.
-
-Begin output:
-===PATCH===
-```
-
-### 4.3 `json_patch_reference.md`
-
-Compact reference for JSON Patch (RFC 6902) ops the LLM might use:
-
-```markdown
-# JSON Patch operations reference
-
-You emit JSON Patch ops over the entity page's frontmatter. Allowed ops:
-
-## `add`
-Adds a value at a path. Use for new attributes, new relations, new aliases.
-```json
-{"op": "add", "path": "/attributes/email", "value": "marcelo@mxhero.com",
- "provenance": "<source_entry_path>"}
-```
-
-For appending to a list, use `-` as the path index:
-```json
-{"op": "add", "path": "/relations/-", "value": {
-  "to": "person:susana", "type": "spouse", "since": 2010
-}, "provenance": "<source_entry_path>"}
-```
-
-## `replace`
-Replaces a value at an existing path. Use when an attribute changes.
-```json
-{"op": "replace", "path": "/attributes/current_residence", "value": "Spain",
- "provenance": "<source_entry_path>"}
-```
-
-## `remove`
-Removes a value. Use sparingly — only when an observation EXPLICITLY contradicts
-existing data. Prefer adding `valid_until` or unifying instead.
-```json
-{"op": "remove", "path": "/attributes/old_role",
- "provenance": "<source_entry_path>"}
-```
-
-## Common pitfalls
-- Always include `provenance` pointing to the source observation that justifies
-  the op. Without it, the op will be rejected.
-- Paths use `/` separators and JSON Pointer syntax. Spaces and special chars
-  in keys must be escaped (`~1` for `/`, `~0` for `~`).
-- You CANNOT touch paths outside `/attributes/*`, `/relations/*`, `/aliases/*`.
-  Internal fields (dream_processed_through, created_at, updated_at) are
-  managed by the runner and will be rejected if you target them.
-- Order matters within an output: ops are applied sequentially. Don't
-  reference a path created by a later op.
-```
-
-### 4.4 `rules.md`
-
-Long-form rules with rationale (so the LLM can reason about edge cases):
-
-```markdown
-# Dream consolidator rules
-
-## Rule 1 — Coherence over rigidity
-Prefer existing attribute keys and relation types when the new information
-has the same semantic meaning. Don't invent `e-mail` if `email` is already
-present. BUT: if you notice two existing keys mean the same thing, unify
-them in this pass. Coherent evolution, not preservation.
-
-## Rule 2 — Single entity per pass
-Your task is to update ONE entity (the `entity_id` in the prompt). If a
-pending observation mentions a different entity, do NOT include it in this
-pass's PATCH. It will be processed in its own pass.
-
-## Rule 3 — Provenance is non-negotiable
-Every PATCH op must include a `provenance` field pointing to the source
-entry (the `id` or path of an observation that justified this op). Without
-provenance, the op will be rejected by the apply pipeline.
-
-## Rule 4 — Preserve by default
-Do NOT remove attributes or relations unless an observation EXPLICITLY
-contradicts them. When in doubt:
-- Append history via `valid_from` / `valid_until` instead of overwriting.
-- Add the new fact alongside the existing one, with notes in the body.
-- Emit a `remove` op only if the observation says "this is no longer true".
-
-## Rule 5 — Respect recent decisions
-The RECENT GIT HISTORY section shows commits in the last 30 days. If a
-recent commit updated something, be cautious about reverting that update
-based on older observations. Newer evidence wins; older evidence enriches.
-
-## Rule 6 — Body delta is for prose, not data
-The `===BODY_DELTA===` section is appended to the entity's narrative body.
-Use it for prose context that doesn't fit attributes/relations (relationships
-between facts, anecdotes, context, etc.). Leave empty if no body change.
-
-## Rule 7 — Commit message is the audit trail
-The `===COMMIT===` section becomes a git commit message. Format per
-`commit_format.md`. Subject ≤ 70 chars; trailers required per the format.
-The body of the message should explain non-obvious decisions you made
-(why you used `replace` vs `add`, why you didn't merge two keys, etc.).
-
-## Rule 8 — When in doubt, no-op is valid
-If the pending observations don't add new facts beyond what's already
-in the canonical page, emit an empty patch (`[]`), an empty body delta,
-and a commit message that says so. This is a successful pass.
-
-## Rule 9 — Per-entity relation cap (audit B-19, 2026-05-29)
-Each entity tolerates at most 200 outgoing relations (hard cap). The
-prompt shows you the current count as `current relation count: N`.
-If `current + new > 200`, the apply pipeline REJECTS the entire patch
-— re-rank, dedupe, or `remove` low-signal relations before fanning
-out. At ≥ 50 a soft cap fires (warn only, patch proceeds) as a hint
-that further growth needs justification. Body delta and attribute
-ops do NOT count against the cap. Enforcement lives at
-`durin.memory.entity_relation_cap.check_relation_cap`; telemetry
-events `memory.entity_relation_cap_warned` /
-`memory.entity_relation_cap_rejected` expose breaches for operators.
-```
-
-### 4.5 `commit_format.md`
-
-```markdown
-# Commit message format
-
-Your COMMIT section becomes a git commit message. Format:
+`build_extract_prompt(page, turns)` (`durin/memory/extract_dream.py`) is the
+write-side prompt. It reads a session's conversation turns and a single target
+entity's current page, and asks the LLM to **extract structured attributes** —
+NOT to emit JSON Patch ops. The parsed attributes are applied as `FieldPatch`es
+(`author="dream"`) through `memory_writer.write_entity`; the JSON-Patch apply
+pipeline is gone (`05_dream_cold_path.md` §4). Verbatim:
 
 ```
-<subject, max 70 chars>
+You are durin's memory extractor. From the conversation turns below, extract STRUCTURED ATTRIBUTES about the entity {ref} ({name}).
 
-<optional body, explaining non-obvious decisions>
+Rules:
+- Only include facts explicitly stated in the turns. Do not invent or infer.
+- Reuse an existing attribute key when the meaning matches (see EXISTING).
+- Values are scalars or short lists of scalars — NO prose, NO nested objects.
+- Output ONLY a JSON object mapping attribute_key -> value. No markdown, no commentary.
 
-Sources: <comma-separated entry paths or IDs>
-Cursor-after: <ISO timestamp of latest entry processed>
-Entities-touched: <entity_id>
+EXISTING ATTRIBUTE KEYS: {existing}
+
+ENTITY BODY (prose the agent wrote — extract structure FROM it too):
+{body}
+
+CONVERSATION TURNS:
+{turns}
+
+JSON:
 ```
 
-Note: `Trigger:` and `Run-id:` trailers are added by the runner automatically.
-Don't include them in your output.
+Input slots, all filled by `build_extract_prompt`:
 
-If you omit one of the LLM-supplied trailers (Sources / Cursor-after /
-Entities-touched), the runner will fill them in from its state and log a
-warning. Prefer to include them.
+| Slot | Source | Notes |
+|---|---|---|
+| `{ref}` | `page.entity_ref` | e.g. `person:marcelo` |
+| `{name}` | `page.name` | display name |
+| `{existing}` | `", ".join(sorted(page.attributes.keys()))` or `(none)` | the **key-reuse** block — drives per-entity schema-drift control (`05_dream_cold_path.md` §10): the LLM reuses `email` instead of minting `e-mail`/`correo` |
+| `{body}` | `page.body` (truncated 4000 chars) or `(empty)` | the agent-authored prose, mined for structure too |
+| `{turns}` | rendered conversation turns (truncated 12000 chars) | the new turns for this session |
 
-## Examples
+The output is a bare JSON object. `parse_attributes` is tolerant: it strips code
+fences, runs `json_repair`, and keeps **only** scalar / list-of-scalar values
+(prose blobs and nested dicts are dropped). An empty / unparseable response is a
+no-op (`05_dream_cold_path.md` §12). There is no `===PATCH===` marker, no
+`provenance` field in the output, and no commit-message section — provenance is
+attached per `FieldPatch` (`source_ref` = the session-turn marker
+`[[sessions/<stem>.md#turn-<total>]]`) by the writer, and the commit message is
+assembled inline by `memory_writer`.
 
-Good:
+**What this prompt does NOT include (vs the deleted consolidator):**
+- No `existing_uris` / dedup block. Extract only enriches entities the agent
+  already upserted via `memory_upsert_entity`, so it cannot create a duplicate
+  (audit A5); cross-entity identity dedup is the refine pass's job (§5).
+- No relation-count / relation-cap slot. The extract prompt writes attributes,
+  not relations; the relation cap (soft 50 / hard 200) is enforced at write time
+  in `memory_writer` (alert-only — `05_dream_cold_path.md` §4.1), not surfaced in
+  this prompt.
+- No git-history slot, no "starter types" slot, no per-entity cursor.
+
+### 4.2 always_on rank prompt — curate the pinned guidance
+
+`always_on_dream.py` `_RANK_PROMPT` ranks the **feedback entities**
+(`stance` / `practice` / `feedback`) that compete for the always-on pin
+(`05_dream_cold_path.md` §2.5). The LLM returns the refs in priority order, one
+per line, dropping any item that contradicts a higher-priority one. Verbatim:
+
 ```
-Update Marcelo's email and add spouse relation
+You are curating durin's ALWAYS-ON guidance: standing behavioural instructions injected into EVERY prompt. Below are candidate items, each as a ref line followed by its text. Return the refs in PRIORITY order (most load-bearing first), ONE PER LINE, and DROP any item that CONTRADICTS a higher-priority item (keep the one that better reflects the user's standing intent). Output ONLY refs, one per line — no prose, no numbering.
 
-Two observations confirmed the email change from the May 23 conversation
-and introduced the spouse relation from a 2010 episodic.
-
-Sources: episodic/2026-05-23T10-12.md, episodic/2026-01-15T19-00.md
-Cursor-after: 2026-05-23T10:12:00Z
-Entities-touched: person:marcelo
-```
-
-Bad (missing trailers):
-```
-Updated email
-```
-```
-
-### 4.6 Few-shot examples (`examples/`)
-
-Each example file has the same shape:
-
-```markdown
-# Example: <scenario>
-
-## Input
-ENTITY: person:marcelo
-EXISTING PAGE: ...
-EXISTING SCHEMA: ...
-PENDING OBSERVATIONS: ...
-
-## Expected output
-===PATCH===
-[...]
-===BODY_DELTA===
-...
-===COMMIT===
-...
-===END===
-
-## Why this is the expected output
-<reasoning>
+{items}
 ```
 
-Examples cover the cases that are likely to confuse small models:
-- 01: First touch on a placeholder entity (build from scratch).
-- 02: Email change (replace, not add).
-- 03: Add a relation to an entity that already exists.
-- 04: Two pending observations contradict each other — resolve via temporal validity.
-- 05: Observed `email` and `e-mail` both as attributes; unify to `email`.
-- 06: Pending observations don't add new facts (already in canonical) — emit empty PATCH + COMMIT explaining why.
+`{items}` is the candidate set, each rendered as a `ref` line followed by the
+pinned-block render of its page (`_render_pinned_block`). The pass parses the
+output line-by-line, keeps only refs it recognises, fits the survivors into
+`memory.dream.always_on_token_budget`, and flips the `always_on` flag — it never
+deletes anything (`05_dream_cold_path.md` §2.5). When no LLM is configured (or
+there is a single candidate) it falls back to precedence (`user_authored` first)
+then recency, with no prompt.
+
+### 4.3 Skill-extract sub-agent
+
+The skill-extract pass (`run_skill_extract_pass` in `dream_passes.py`) is **not**
+a fixed consolidator prompt — it is an **agentic sub-agent**. It spins up an
+`AgentRunner` with `ReadFileTool` / `EditFileTool` / `SkillWriteTool` and the
+following **system prompt** (`_SKILL_EXTRACT_PROMPT`), then feeds it the recent
+sessions' text as the user turn; the sub-agent decides whether to call
+`skill_write` (`05_dream_cold_path.md` §2.3). Verbatim system prompt:
+
+```
+You are durin's skill extractor. Review the recent conversation(s) below. If the user established a REUSABLE PROCEDURE for a recurring task — a sequence of steps, a workflow, a how-to to follow again later — create or update a skill for it by calling the `skill_write` tool. A skill is a step-by-step procedure to FOLLOW, not a fact and not a one-off. Reuse/extend an existing skill instead of duplicating it. If the conversation contains no reusable procedure, do nothing — don't call any tool.
+
+EXISTING SKILLS: {existing}
+```
+
+`{existing}` is the comma-separated list of skills already present
+(`skills/<name>/SKILL.md`), or `(none)`. The behaviour — write a `SKILL.md` only
+on a genuinely reusable procedure, reuse/extend rather than duplicate, no-op on a
+one-off — is carried by the sub-agent's tool use, not by a strict output
+envelope.
 
 ---
 
 ## 5. Absorb-judge prompt
 
-Lives at `durin/templates/dream/absorb_judge.md`. Active in current code. Specifies how the judge decides whether two entity pages with alias overlap describe the same real entity.
+Lives at `durin/templates/dream/absorb_judge.md` — the **only surviving file** under `templates/dream/`, loaded by `durin/memory/absorb_judge.py` (`_load_template` extracts the largest fenced block). Used by the **refine pass** (`run_refine` → `judge_pair`, `05_dream_cold_path.md` §8) to decide whether two entity pages with alias overlap describe the same real entity.
 
 The prompt provides:
 - Both entity pages (canonical candidate + absorbed candidate).
 - Mtime of each (for staleness reasoning).
 - The peer-review framing (judge is critic, not confirmer).
 
-The LLM emits one of three verdicts (identity judgement, **not** action prescription — the runner maps verdict + confidence to the merge action per `05_dream_cold_path.md` §8.4-8.5):
+The LLM emits one of three verdicts (identity judgement, **not** action prescription — the refine pass maps verdict + confidence to the merge action per `05_dream_cold_path.md` §8.4):
 
 | Verdict | Meaning |
 |---|---|
@@ -591,7 +438,7 @@ The LLM emits one of three verdicts (identity judgement, **not** action prescrip
 | `different` | The two pages are distinct entities with overlapping aliases (homonymy, shared acronyms, generic placeholders) |
 | `unclear` | Evidence is ambiguous; defer the call to a later pass |
 
-Output envelope mirrors the consolidator's: `===VERDICT===` + `===CONFIDENCE===` + `===REASONING===` + `===END===`. The current implementation (`durin/memory/absorb_judge.py::judge`) is solid; this doc captures the contract.
+Output envelope: `===VERDICT===` + `===CONFIDENCE===` + `===REASONING===` + `===END===`, parsed by `_parse_response` (tolerant of surrounding prose and verdict case). The current implementation (`durin/memory/absorb_judge.py::judge_pair`) is solid; this doc captures the contract.
 
 ---
 
@@ -661,7 +508,7 @@ when you trust the judge model and want to reduce manual cleanup.
 Defaults when enabled:
   - Confidence threshold: 95/100 (high — favors precision)
   - Minimum age: 24h (prevents Dream from merging its own hallucinations)
-  - Judge model: uses your Dream consolidator model
+  - Judge model: uses your Dream model
 
 Enable auto-absorb now? [y/N]:
 ```
@@ -781,14 +628,11 @@ person:marcelo, person:susana, project:durin, ...
 
 The intro sentences ("These are the authoritative records...", "Reconcile with the canonical...") are part of the canonical hot-layer rendering — they cue the LLM to treat canonical as ground truth and fragments as recent amendments to reconcile by timestamp.
 
-### 8.4 Cursor logic for fragments
+### 8.4 Fragment selection (two-track model, N3 2026-06-06)
 
-A fragment qualifies for the hot layer if and only if it satisfies BOTH:
+A fragment qualifies for the hot layer if its class is `episodic` or `stable` (not `corpus`, not `pending`) and it tags at least one entity. Qualifying fragments surface newest-first, capped by the budget.
 
-1. The entry's `valid_from` (or file `mtime`, as fallback) is **strictly after** the `dream_processed_through` cursor of the entity it tags.
-2. The entry's class is `episodic` or `stable` (not `corpus`, not `pending`).
-
-This means: as soon as Dream consolidates an episodic into an entity page, that episodic stops appearing in the hot layer (its `valid_from <= cursor` post-archive). The fragment slot is freed for newer post-cursor entries.
+There is no per-entity cursor. The earlier design folded an entity's fragments into its page and used a `dream_processed_through` cursor to graduate consolidated fragments out of the hot layer. The redesign does **not** consolidate fragments into pages — they are a separate raw track (`/remember` facts, session summaries) that coexists with the page — so nothing graduates a fragment out; the recency cap bounds the section and the LLM reconciles a fragment against the canonical page at read time using the timestamps.
 
 ### 8.5 Refresh cadence
 
@@ -799,7 +643,7 @@ The hot layer is **re-read from disk on every prompt build** (call: `read_hot_la
 **The practical effect of "cheap re-read each build":** between Dream passes, the `.md` files don't change → the assembled hot layer is byte-identical across consecutive turns → the upstream prompt cache (Anthropic / OpenAI) stays warm. A Dream pass invalidates the cache for one turn; the cache rewarms on the next turn. So in practice, the hot layer changes at most once per Dream pass:
 
 - Between Dream passes, the underlying `.md` files don't change → hot layer rendering is identical → upstream prompt cache stays warm.
-- A Dream pass that consolidates entities → updates `dream_processed_through` cursors → fragment list shrinks → hot layer changes → cache miss for that one turn → cache warms again on the next turn.
+- A Dream pass that updates entity pages (or a newly-landed fragment) changes the hot layer → cache miss for that one turn → cache warms again on the next turn.
 
 This is why the budgets are set conservatively. Larger budgets would invalidate cache more often.
 
@@ -839,12 +683,12 @@ If `read_hot_layer(workspace)` fails (disk error, parser error, missing files), 
 
 | # | Decision | Resolution | Applied in |
 |---|---|---|---|
-| 1 | Source of truth for LLM-facing text | This document. The per-tool `.description` property (e.g. `MemorySearchTool.description` in `durin/agent/tools/memory_search.py`) + `templates/agent/identity.md` + `templates/dream/*` must match this doc verbatim. Divergence = bug. (Audit C9 + B1, 2026-05-28: the v1 text referenced `memory_*.py::DESCRIPTION` constants that never existed; the canonical text lives in `_PARAMETERS["description"]` and is emitted via `Tool.description` → `function.description` in the OpenAI spec — see §3.5.) | §3.5 |
+| 1 | Source of truth for LLM-facing text | This document. The per-tool `.description` property (e.g. `MemorySearchTool.description` in `durin/agent/tools/memory_search.py`) + `templates/agent/identity.md` + `templates/dream/absorb_judge.md` + the in-code dream prompts (`extract_dream._EXTRACT_PROMPT`, `always_on_dream._RANK_PROMPT`, `dream_passes._SKILL_EXTRACT_PROMPT`) must match this doc verbatim. Divergence = bug. (Audit C9 + B1, 2026-05-28: the v1 text referenced `memory_*.py::DESCRIPTION` constants that never existed; the canonical text lives in `_PARAMETERS["description"]` and is emitted via `Tool.description` → `function.description` in the OpenAI spec — see §3.7.) | §3.7 |
 | 2 | Declarative not imperative phrasing | Validated by LoCoMo v2 (+3.9pp). "Don't answer cold" + "state source" + "issue 2-3 searches" worked; "USE BEFORE answering" did not. | §2.2 |
-| 3 | Dream prompt package layout (NOT a skill) | Multi-file prompt assembly in `templates/dream/`: main prompt + reference + rules + commit format + 6 few-shot examples. Concatenated by the runner at call time. ~1-2k tokens overhead accepted. This is a prompt template package, not an invocable skill — the agent does not "choose" to load it; the runner builds it. | §4 |
-| 4 | Few-shot examples for JSON Patch | Six examples covering common scenarios. Small models need concrete demonstrations of unfamiliar syntax. | §4.6 |
-| 5 | `existing_schema` framing | For coherence, not constraint. LLM may add new keys or unify duplicates. Explicit guidance in the prompt. | §4.2 |
-| 6 | Commit message format | LLM emits subject + body + 3 trailers (Sources, Cursor-after, Entities-touched). Runner adds Trigger + Run-id. Code verifies and auto-fills missing LLM trailers (warning, no block). | §4.5 |
+| 3 | Dream prompts are built in code (NOT a multi-file package, NOT a skill) | The four passes build prompts in code (`extract_dream` / `always_on_dream` / `dream_passes`); only `absorb_judge.md` is a template file. The old JSON-Patch consolidator package (`consolidator.md` + `json_patch_reference.md` + `rules.md` + `commit_format.md` + `examples/`) was deleted with the `DreamConsolidator`/`DreamRunner` cluster (audit `../../qa/post_migration_audit_2026-06.md`). | §4 |
+| 4 | Extract output is a JSON attribute object, not JSON Patch | `build_extract_prompt` asks for `attribute_key → scalar/list`; applied as `FieldPatch`es via `memory_writer`. No JSON-Patch ops, no few-shot package — the RFC 6902 envelope and its examples are gone. | §4.1 |
+| 5 | Extract key-reuse framing | `EXISTING ATTRIBUTE KEYS` block drives per-entity schema-drift control (reuse a key when the meaning matches). Per-entity scope; cross-entity dedup is the refine pass. | §4.1 |
+| 6 | No commit-message section in any dream prompt | Commit messages are assembled inline by `memory_writer` / `absorption`; provenance is per-`FieldPatch` (`source_ref`). The old `===COMMIT===` / `Cursor-after` trailer contract is gone (audit B1). | §4.1 |
 | 7 | Onboarding default for cross-encoder | OFF (matches §9.5 of doc 03). Wording communicates trade-off. | §6.2 |
 | 8 | Structural markers carry only metadata | No valuative language. Class + URI + timestamp only. | §7.2 |
 
@@ -860,8 +704,8 @@ None at the module level.
 |---|---|---|---|
 | `identity.md` Memory section | **Shipped (v2, 2026-05-25, +3.9pp on LoCoMo).** Both `## Memory` (read-time) and `## Memory writing` (write-time, B11) blocks present in `durin/templates/agent/identity.md`. Audit E23 (2026-05-28) flipped this row from "Light revision per §2 pending" — no concrete pending polish was specified, and the verified bench gain landed on what's currently in the template. | — | — |
 | Tool descriptions | ✅ Sync'd. Each tool's `.description` property delegates to `_PARAMETERS["description"]` which carries the verbatim doc §3 text. `test_tool_description_sync.py` guards both string equality and the `to_schema()` invariant (audit B1, 2026-05-28). | — | — |
-| `templates/dream/consolidator.md` | v2 — skill package multi-file per §4. **Shipped in Phase 1.9 (commit `6aafc3f`).** | — | — |
-| `templates/dream/absorb_judge.md` | Active | Same | None |
+| Dream pass prompts | **Shipped (four-pass model).** `build_extract_prompt` (`extract_dream.py`), `_RANK_PROMPT` (`always_on_dream.py`), `_SKILL_EXTRACT_PROMPT` sub-agent (`dream_passes.py`) per §4. The old JSON-Patch `consolidator.md` package was deleted in the migration. | — | — |
+| `templates/dream/absorb_judge.md` | Active (refine pass; only surviving `templates/dream/` file) | Same | None |
 | Onboarding wizard text | **Shipped.** The default wizard `durin/cli/onboard_wizard.py` has a memory submenu (`_configure_memory`, P10 2026-05-30): vector-memory toggle (ON by default), embedding-model pick (with pre-download warmup), cross-encoder, Dream auto-absorb, and aux-model — wired from `onboard_memory.py`. (`onboard.py` is the legacy `--advanced` field-walker, not the default path.) | Done | — |
 | Structural markers | CANONICAL/FRAGMENT in code | + SESSION + INGESTED | Renderer extension |
 
@@ -870,7 +714,7 @@ None at the module level.
 ## 11. Cross-references
 
 - Tool specifications (params + return + behavior): `04_agent_tools.md`.
-- Dream pipeline that consumes the skill package: `05_dream_cold_path.md` §5.
+- Dream passes that build and consume these prompts (extract / always_on / skill / refine): `05_dream_cold_path.md` §2, §8.
 - Cross-encoder configuration that the wizard exposes: `03_search_pipeline.md` §9.5.
 - Telemetry events from these LLM calls: `07_telemetry_and_observability.md` (pending).
 - v2 identity.md result that validated the declarative style: `~/.claude/projects/.../memory/project_locomo_v2_prompts_result.md`.

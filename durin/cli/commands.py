@@ -1319,63 +1319,58 @@ def _run_gateway(
     # Set cron callback (needs agent)
     async def on_cron_job(job: CronJob) -> str | None:
         """Execute a cron job through the agent."""
-        # Dream is an internal job — run directly, not through the agent loop.
-        if job.name == "dream":
-            try:
-                await agent.dream.run()
-                logger.info("Dream cron job completed")
-            except Exception:
-                logger.exception("Dream cron job failed")
-            return None
-        # Entity-centric dream (doc 25 §2.A.1). Separate from the
-        # legacy ``dream`` job above: this one runs DreamConsolidator
-        # over post-cursor entries in memory/entities/. Sync runner
-        # offloaded to a thread so the cron loop stays responsive
-        # during the LLM calls.
+        # The memory dream runs the extract/refine/skill passes directly
+        # (not through the agent loop). Sync passes offloaded to a thread so
+        # the cron loop stays responsive during the LLM calls.
         if job.name == "memory_dream":
             import asyncio as _asyncio
 
-            from durin.memory.dream_runner import DreamRunner
-            from durin.memory.vector_index import VectorIndex, vector_index_available
-
-            mem_dream_cfg = config.memory.dream
             workspace = config.workspace_path
-            vi = None
-            if config.memory.enabled and vector_index_available():
-                try:
-                    from durin.memory.embedding import FastembedProvider
-
-                    provider = FastembedProvider(model=config.memory.embedding.model)
-                    vi = VectorIndex(workspace, provider)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning(
-                        "memory_dream cron: vector index unavailable ({}); "
-                        "pages will not be indexed", exc,
-                    )
-            from durin.memory.model_resolve import resolve_memory_model
-            runner = DreamRunner(
-                workspace=workspace,
-                min_seconds_between_runs=mem_dream_cfg.min_seconds_between_runs,
-                max_seconds_per_run=mem_dream_cfg.max_seconds_per_run,
-                model=resolve_memory_model(config),
-                vector_index=vi,
-                auto_absorb_enabled=mem_dream_cfg.auto_absorb.enabled,
-                auto_absorb_threshold=mem_dream_cfg.auto_absorb.confidence_threshold,
-                auto_absorb_min_age_hours=mem_dream_cfg.auto_absorb.min_age_hours,
-                auto_absorb_judge_model=mem_dream_cfg.auto_absorb.judge_model,
+            from durin.memory.always_on_dream import run_always_on_pass
+            from durin.memory.dream_passes import (
+                run_extract_pass,
+                run_refine_pass,
+                run_skill_extract_pass,
             )
+            from durin.memory.model_resolve import resolve_memory_model
+
+            # New model (§8c/8d/8e): the daily cron runs the extract pass
+            # (sessions → entity attributes), the skill-extract pass (sessions →
+            # reusable procedures as skills), then the refine pass (dedup). This
+            # replaces the legacy DreamRunner/DreamConsolidator (episodic-entry
+            # JSON-Patch consolidation via working-tree writes — the obsolete
+            # model + the G3 race). Writes go through memory_writer / skill_write.
+            model = resolve_memory_model(config)
+            _cron_max_s = config.memory.dream.max_seconds_per_run
+            _absorb = config.memory.dream.auto_absorb
             try:
-                result = await _asyncio.to_thread(runner.run, trigger="cron_daily")
+                ex = await _asyncio.to_thread(
+                    run_extract_pass, workspace, model=model, max_seconds=_cron_max_s)
+                sk = await _asyncio.to_thread(run_skill_extract_pass, workspace, model=model)
+                rf = await _asyncio.to_thread(
+                    run_refine_pass, workspace, model=model,
+                    enabled=_absorb.enabled,
+                    confidence_threshold=_absorb.confidence_threshold,
+                    min_age_hours=_absorb.min_age_hours)
+                ao = await _asyncio.to_thread(
+                    run_always_on_pass, workspace, model=model,
+                    token_budget=config.memory.dream.always_on_token_budget)
                 logger.info(
-                    "memory_dream cron: {} (consolidated={} failed={})",
-                    result.reason, result.entities_consolidated, result.entities_failed,
+                    "memory_dream cron: extract(sessions={} entities={} {}ms yielded={}) "
+                    "skills(touched={} {}ms) refine(merged={} kept={} {}ms) "
+                    "always_on(pinned={} {}tok {}ms)",
+                    ex["sessions"], ex["entities"], ex.get("duration_ms", 0),
+                    ex.get("yielded", False), sk.get("skills_touched", 0),
+                    sk.get("duration_ms", 0), len(rf.get("merged", [])),
+                    len(rf.get("kept_separate", [])), rf.get("duration_ms", 0),
+                    ao.get("selected", 0), ao.get("tokens", 0), ao.get("duration_ms", 0),
                 )
             except Exception:
                 logger.exception("memory_dream cron failed")
 
             try:
                 from durin.agent.skill_curation import curate_catalog
-                from durin.memory.dream import default_llm_invoke
+                from durin.memory.llm_invoke import default_llm_invoke
 
                 curation_model = resolve_memory_model(config)
 
@@ -1626,26 +1621,11 @@ def _run_gateway(
         console.print(f"[green]✓[/green] Health endpoint: http://{host}:{health_port}/health")
         async with server:
             await server.serve_forever()
-    # Register Dream system job (always-on, idempotent on restart)
-    dream_cfg = config.agents.defaults.dream
-    if dream_cfg.model_override:
-        agent.dream.model = dream_cfg.model_override
-    agent.dream.max_batch_size = dream_cfg.max_batch_size
-    agent.dream.max_iterations = dream_cfg.max_iterations
-    agent.dream.annotate_line_ages = dream_cfg.annotate_line_ages
-    agent.dream.min_tokens_to_run = max(0, int(dream_cfg.min_tokens_to_run))
     from durin.cron.types import CronJob, CronPayload, CronSchedule
-    cron.register_system_job(CronJob(
-        id="dream",
-        name="dream",
-        schedule=dream_cfg.build_schedule(config.agents.defaults.timezone),
-        payload=CronPayload(kind="system_event"),
-    ))
-    console.print(f"[green]✓[/green] Dream: {dream_cfg.describe_schedule()}")
 
-    # Register entity-centric dream system job (doc 25 §2.A.1). Separate
-    # from the legacy `dream` above — this one consolidates post-cursor
-    # episodic entries into memory/entities/<type>/<slug>.md pages.
+    # Register the memory dream system job (doc 25 §2.A.1): the daily
+    # extract/refine/skill passes that consolidate sessions into
+    # memory/entities/<type>/<slug>.md pages + skills.
     mem_dream_cfg = config.memory.dream
     if mem_dream_cfg.enabled:
         cron.register_system_job(CronJob(
@@ -1675,25 +1655,54 @@ def _run_gateway(
     ):
         import threading as _threading_dream
 
-        from durin.memory.dream_runner import DreamRunner as _DreamRunner_h
+        from durin.memory.dream_passes import ReactiveDreamGate
+        # Shared by both reactive triggers: a lock so two events don't run
+        # overlapping passes + a throttle so a burst of session closes is
+        # absorbed (replaces the legacy DreamRunner's .dream.lock + cooldown).
+        _dream_gate = ReactiveDreamGate()
+        _dream_min_s = mem_dream_cfg.min_seconds_between_runs
+        _dream_max_s = mem_dream_cfg.max_seconds_per_run
 
         def _spawn_dream(trigger: str, session_key: str) -> None:
             ws = config.workspace_path
 
             def _run() -> None:
+                import time as _time_dream
+
+                from durin.agent.tools._telemetry import emit_tool_event
+                # Skip when a pass is already running or one ran too recently —
+                # the per-session cursor makes a skipped run harmless.
+                skip = _dream_gate.try_begin(_dream_min_s)
+                if skip:
+                    with suppress(Exception):
+                        emit_tool_event(
+                            "memory.dream.throttled",
+                            {"trigger": trigger, "reason": skip},
+                        )
+                    logger.debug("reactive dream skipped ({}): {}", trigger, skip)
+                    return
+                t_run = _time_dream.perf_counter()
                 try:
-                    runner = _DreamRunner_h(
-                        workspace=ws,
-                        min_seconds_between_runs=mem_dream_cfg.min_seconds_between_runs,
-                        model=mem_dream_cfg.model_override,
-                        auto_absorb_enabled=mem_dream_cfg.auto_absorb.enabled,
-                        auto_absorb_threshold=mem_dream_cfg.auto_absorb.confidence_threshold,
-                        auto_absorb_min_age_hours=mem_dream_cfg.auto_absorb.min_age_hours,
-                        auto_absorb_judge_model=mem_dream_cfg.auto_absorb.judge_model,
+                    # §8c: reactive EXTRACT — when a session closes or compacts,
+                    # extract its new turns into entity attributes immediately
+                    # (the frequent dream, event-driven; the per-session cursor
+                    # makes it idempotent). Refine stays on the daily cron.
+                    from durin.memory.dream_passes import run_extract_pass
+                    from durin.memory.model_resolve import resolve_memory_model
+                    out = run_extract_pass(
+                        ws, model=resolve_memory_model(config),
+                        max_seconds=_dream_max_s,
                     )
-                    runner.run(trigger=trigger)
+                    logger.info(
+                        "reactive dream done ({}): {} session(s), {} attribute "
+                        "update(s), yielded={}, {}ms",
+                        trigger, out["sessions"], out["entities"], out["yielded"],
+                        int((_time_dream.perf_counter() - t_run) * 1000),
+                    )
                 except Exception:
                     logger.exception("{} dream failed ({})", trigger, session_key)
+                finally:
+                    _dream_gate.end()
 
             _threading_dream.Thread(
                 target=_run, daemon=True, name=f"dream-{trigger}",

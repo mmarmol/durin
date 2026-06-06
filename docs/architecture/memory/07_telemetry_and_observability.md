@@ -1,11 +1,11 @@
 ---
 title: Telemetry and observability
 version: 0.1-draft
-status: current — describes the shipped system (P11 era, 2026-05-30)
-last_updated: 2026-05-27
+status: current — describes the shipped system (post-migration, 2026-06-06)
+last_updated: 2026-06-06
 audience: humans and LLMs implementing or modifying this system
 depends_on: 00_overview.md, 03_search_pipeline.md, 05_dream_cold_path.md
-related: 04_agent_tools.md
+related: 04_agent_tools.md, ../../qa/post_migration_audit_2026-06.md
 ---
 
 # Telemetry and observability
@@ -16,7 +16,7 @@ This document specifies the telemetry events emitted by the memory subsystem, th
 
 ---
 
-> **Implementation status:** events marked **NEW** in this document are v2 targets that do not yet exist in `durin/telemetry/schema.py`. The existing events (per `_REGISTRY` in schema.py) are explicitly noted as "already exists". Adding the new events is tracked as a deliverable in `09_implementation_roadmap.md` Phase 7 (Telemetry v2).
+> **Implementation status:** events marked **NEW** in this document are v2 targets that do not yet exist in `durin/telemetry/schema.py`. The existing events (per the `EVENTS` catalog in schema.py) are explicitly noted as "already exists". Adding the new events is tracked as a deliverable in `09_implementation_roadmap.md` Phase 7 (Telemetry v2).
 
 ## 1. Scope
 
@@ -32,7 +32,7 @@ This document specifies the telemetry events emitted by the memory subsystem, th
 
 - The telemetry transport itself (file vs. SQLite vs. external) — that's `durin/telemetry/` infrastructure.
 - Tracing across distributed processes — durin is single-process; no need.
-- Cost accounting for LLM calls — that's its own subsystem (could derive from `memory.dream.end.cost_usd` if added, but the cost ledger is upstream).
+- Cost accounting for LLM calls — that's its own subsystem; the cost ledger is upstream.
 
 ---
 
@@ -52,7 +52,7 @@ Each event has:
 }
 ```
 
-The `event` name is the registry key. Payload schemas are validated against the `_REGISTRY` in `schema.py` — adding a new event type requires adding a TypedDict and registering it.
+The `event` name is the catalog key. Payload schemas are declared in the `EVENTS` catalog in `schema.py` — adding a new event type requires adding a TypedDict and registering it there.
 
 ---
 
@@ -63,7 +63,8 @@ The `event` name is the registry key. Payload schemas are validated against the 
 | Recall | `memory.recall*` | Every `memory_search` call (and sub-paths) | Hot-path retrieval observability |
 | Store | `memory.store*` | Every `memory_store` call | Write observability + dedup tracking |
 | Ingest | `memory.ingest*` | Every `memory_ingest` call | Ingest observability |
-| Dream | `memory.dream.*` | Every Dream pass (start, end, skipped, per-entity result) | Cold-path consolidation observability |
+| Dream | `memory.dream.*` | Every dream pass (start / end per pass, per-entity `patch_applied`, `skill_extract`, `max_seconds_reached`, reactive-trigger `throttled`, `always_on` distillation) | Cold-path consolidation observability |
+| Relation cap | `memory.entity_relation_cap_*` | Entity write crosses the soft (50) or hard (200) relation cap — **alert-only**, the write still proceeds (A3) | Mega-hub formation early-warning |
 | Absorb | `memory.absorb.*` | Every absorb-judge decision (auto-merge, skipped, reverted) | Dedup observability |
 | Search-fail | `memory.search.failure` | Whenever a search-path component fails (recoverable or not) | Recovery + degradation tracking |
 | Index | `memory.index.*` | Index re-derivation events (per write, per rebuild) | Indexer health |
@@ -73,7 +74,7 @@ The `event` name is the registry key. Payload schemas are validated against the 
 
 Audit B10 (2026-05-28) added the `Embedding`, `Hot layer`, and `Health` rows — these events are emitted by the code but the original §3 table omitted them. The TypedDicts live in `durin/telemetry/schema.py`.
 
-> **Source of truth.** The exhaustive, authoritative list of event types is `durin/telemetry/schema.py::EVENTS` — `tests/telemetry/test_schema_catalog.py` enforces, in both directions, that every event emitted in the source tree has a catalog entry and vice versa. **This document annotates the events whose fields or usage need explanation; it does not mirror the catalog event-for-event.** A new event shipping without a subsection here is expected, not drift — consult `schema.py` for the complete set. (For example `memory.dream.budget_exhausted` — §6.6 below — plus the `memory.dream.legacy.*` family and `memory.fallback_tool_used` all exist in the catalog.)
+> **Source of truth.** The exhaustive, authoritative list of event types is `durin/telemetry/schema.py::EVENTS` — `tests/telemetry/test_schema_catalog.py` enforces, in both directions, that every event emitted in the source tree has a catalog entry and vice versa. **This document annotates the events whose fields or usage need explanation; it does not mirror the catalog event-for-event.** A new event shipping without a subsection here is expected, not drift — consult `schema.py` for the complete set. (For example `memory.fallback_tool_used` and `memory.skill_miss` exist in the catalog without a dedicated subsection here.)
 
 ---
 
@@ -214,118 +215,124 @@ Already exists in schema.py:669. Emits when `memory_store` refused to write due 
 
 ## 6. Dream events (cold path)
 
+The dream is now **four passes** (doc 05; doc 11 C2): **extract** (sessions → entity attributes), **refine** (dedup duplicate entities), **skill** (procedural-skill extraction), and **always_on** (pinned-guidance distillation). The daily cron runs all four; reactive triggers (`post_compaction` / `session_close`) run **extract only**, gated by the in-process throttle; manual `durin memory dream` runs the cron set. Emitters live in `durin/memory/dream_passes.py`, `extract_dream.py`, `always_on_dream.py`, `refine_dream.py`, and the reactive trigger in `durin/cli/commands.py`.
+
+> **Migration note.** The pre-migration `DreamConsolidator` / `DreamRunner` cluster, the JSON-Patch apply pipeline (`dream_apply.py`), the per-entity `dream_processed_through` cursor, and the `memory.dream.{skipped,entity_failed,budget_exhausted,legacy.*}` events were **deleted** (doc 11 B2/C2, N3). The events below are the ones the new passes actually emit; each maps 1:1 to a TypedDict in `schema.py`.
+
 ### 6.1 `memory.dream.start`
 
-Already exists.
+`MemoryDreamStartEvent`. Emitted by both the extract and refine passes (`dream_passes.py`).
 
-| Field | Type | Description |
-|---|---|---|
-| `trigger` | string | `threshold | post_ingest_threshold | cron_daily | post_compaction | session_close | manual` (audit F18, 2026-05-28 added `post_ingest_threshold`; matches the `dream.end` enum in §6.2 and the `threshold_trigger.py` ingest path) |
-| `entity_filter` | string \| null | If filter was applied |
-| `entities_pending` | int | How many entities have post-cursor entries |
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `kind` | string | yes | `extract` or `refine` — which pass began |
+| `session_key` | string \| null | optional | Session key (auto-injected by `emit_tool_event` when emitted in a session context; the cron path emits `None`) |
 
 ### 6.2 `memory.dream.end`
 
-Shipped pre-A5 with `trigger` + `entity_filter` + `entities_consolidated` + `entities_failed` + `duration_s`. Audit A5 (commit landing this doc update) added the four cost-telemetry fields below, renamed `duration_s` → `duration_ms`, and removed the old `duration_s` field. Consumers that pinned to `duration_s` need to update.
+`MemoryDreamEndEvent`. Emitted by both passes; `kind` + `duration_ms` are always present, the remaining fields are pass-specific (extract sets the entity counts, refine sets the merge counts).
 
-| Field | Type | Description |
-|---|---|---|
-| `trigger` | string | One of `threshold | post_ingest_threshold | cron_daily | post_compaction | session_close | manual`. |
-| `entity_filter` | string | When set, restricted the pass to one entity (empty string when no filter). |
-| `entities_consolidated` | int | Entities whose `apply` succeeded. |
-| `entities_failed` | int | Entities whose `consolidate_entity` or `apply` raised. |
-| `entities_quarantined` | int | Entities whose failure was the third structural strike (`dream_quarantine` field set on the page). Subset of `entities_failed`. |
-| `llm_call_count` | int | LLM calls across the pass — sums initial + retries per entity. |
-| `llm_input_tokens_total` | int | Prompt tokens summed across every LLM call. Cost = `total_input_tokens * input_rate + total_output_tokens * output_rate`. |
-| `llm_output_tokens_total` | int | Completion tokens summed across every LLM call. |
-| `duration_ms` | float | Wall-clock of the full pass (lock → consolidate → release). Replaces the pre-A5 `duration_s`. |
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `kind` | string | yes | `extract` or `refine` |
+| `duration_ms` | int | yes | Wall-clock of the full pass |
+| `entities_consolidated` | int | extract only | Entities whose attributes were written (`out["entities"]`) |
+| `entities_failed` | int | extract only | Sessions that raised during extraction (length of the error list) |
+| `sessions` | int | extract only | Session files that yielded at least one extracted entity |
+| `yielded` | bool | extract only | `True` when the `max_seconds_per_run` cap was hit and the per-session cursor will resume the remainder next trigger |
+| `merged` | int | refine only | Duplicate pairs auto-merged |
+| `kept` | int | refine only | Pairs judged distinct (kept separate) |
+| `candidates` | int | refine only | Alias-overlap candidate pairs considered |
 
-> **Token totals are best-effort.** A provider that doesn't surface `usage` (legacy `LLMInvoke` mocks, custom transports) leaves the counts at 0. The Dream cost alarm (doc 08 §3 R3) under-reports when tokens are missing — the safe-failure direction (no false positives). See `LLMResponse` in `durin/memory/dream.py`.
+There are **no cost-telemetry fields** (`llm_call_count` / `llm_*_tokens_total`) and no `trigger` / `entity_filter` / `entities_quarantined` on this event — those belonged to the deleted `DreamRunner` and were removed with it.
 
-### 6.3 `memory.dream.skipped`
+### 6.3 `memory.dream.patch_applied`
 
-Already exists.
-
-| Field | Type | Description |
-|---|---|---|
-| `trigger` | string | The trigger that was skipped |
-| `reason` | enum | `throttle | concurrent_lock | no_pending | disabled` |
-| `entity_filter` | string \| null | If filter was applied |
-
-### 6.4 `memory.dream.entity_failed`
-
-Emitted by `durin.memory.dream_apply._emit_apply_telemetry` whenever
-one entity's apply step fails. Audit F6 (2026-05-28) aligned this
-section to the shipped `DreamApplyFailureKind` enum.
-
-| Field | Type | Description |
-|---|---|---|
-| `entity_ref` | string | The entity that failed to consolidate (e.g. `person:marcelo`) |
-| `trigger` | string | Same trigger label the dream pass started with (`threshold`, `cron_daily`, `manual`, …) — see §6.1 |
-| `kind` | enum | `validation | patch_runtime | round_trip | io` — values of `DreamApplyFailureKind` |
-| `error_message` | string | Truncated to 500 chars (caller-side) |
-| `failure_count_now` | int | Post-increment counter; `0` for ambient (`io`) and pre-quarantine increments are emitted before the page is persisted, so structural kinds may also emit `0` here when the increment is recorded on the page separately |
-| `quarantined_until` | string | optional — ISO timestamp set only when this failure crossed the 3-strike quarantine threshold |
-
-Failure kind taxonomy (cross-references doc 05 §12):
-
-- **Structural** (count toward quarantine): `validation`, `patch_runtime`, `round_trip`.
-- **Ambient** (do NOT count): `io` (disk write errors). Upstream LLM call failures bubble up before `dream_apply` runs and are tallied by the runner totals, not by this event.
-
-The pre-F6 spec referenced `llm_call_failed` / `parse_failed` as kinds emitted on this event; neither value is actually emitted by any production callsite (the upstream consolidator path does not emit `memory.dream.entity_failed` on raw LLM failures — it just bubbles the exception up to the runner so the entity is skipped and the next trigger retries).
-
-### 6.5 `memory.dream.patch_applied`
-
-NEW.
-
-Emitted by `durin.memory.dream_apply._emit_apply_telemetry` on
-every successful apply. Audit F8 (2026-05-28) aligned this section
-to the shipped TypedDict — the pre-F8 spec named fields that no
-production callsite ever emits (`entity_uri`, `op_count`,
-`commit_sha`, `cursor_advanced_to`).
+`MemoryDreamPatchAppliedEvent`. Emitted by `durin/memory/extract_dream.py` once **per entity** the extract pass writes. The event name and `ops_applied` field are reused from the legacy event so existing dashboards keep counting consolidations — but the semantics changed: `ops_applied` now counts **attributes written**, not JSON-Patch ops (there is no JSON-Patch pipeline anymore; writes go through `memory_writer.write_entity` via CAS).
 
 | Field | Type | Description |
 |---|---|---|
 | `entity_ref` | string | Target entity (e.g. `person:marcelo`) |
-| `trigger` | string | Pass trigger (same vocabulary as §6.1) |
-| `ops_applied` | int | Count of JSON Patch ops that landed |
-| `sources_count` | int | Distinct `provenance` values across the applied ops (how many source observations contributed) |
-| `body_delta_chars` | int | Length of the `===BODY_DELTA===` block in chars |
-| `cursor_after` | string | The ISO timestamp stamped on the page (`dream_processed_through`) after this apply |
-| `duration_ms` | float | Wall-clock of the apply step |
+| `ops_applied` | int | Count of attributes written to the entity page |
+| `trigger` | string | Always `"extract"` today (the only pass that authors attributes) |
+| `committed` | bool | Whether the CAS write produced a commit (`write_entity` result) |
+| `source_ref` | string | The session-turn marker the attributes were extracted from (falls back to `"extract_dream"`) |
 
-The commit SHA is deliberately not emitted. F8 (2026-05-28) framed this as "dashboards can join via `entity_ref + cursor_after`"; G8 (2026-05-28) corrected the rationale because that join is fragile (requires parsing commit-message trailers, ambiguous when two entity touches share a cursor in the same pass). The real reason the field stays out: the realistic consumers (operator forensics, audit) use `git log memory/entities/<type>/<slug>.md` directly — the file path is known from the event's `entity_ref`, and `git log` carries the trailers per doc 05 §6. A debug dashboard would benefit from the SHA in telemetry but no such consumer exists. If one ever does, the cheap path is a NEW event `memory.dream.commit_recorded` fired after `repo.commit(...)` returns in `dream.py::apply()`, joining to `memory.dream.patch_applied` on `(session_key, iteration, entity_ref)`. See doc 08 §2.16 for the full reasoning.
+### 6.4 `memory.dream.skill_extract`
 
-### 6.6 `memory.dream.budget_exhausted`
+`MemoryDreamSkillExtractEvent`. Emitted by the skill pass (`dream_passes.py`) after it writes/updates procedural skills (doc 05 §8e).
 
-Emitted by `DreamRunner` when an entity's accumulated wall-clock crosses `max_seconds_per_run` *after* a successful batch in the FIFO drain loop (so each entity always makes at least one batch of forward progress; doc 05 §4.4). The remaining pending entries are deferred to the next pass.
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `skills_touched` | int | yes | Number of skill files written or updated this pass |
+| `duration_ms` | int | optional | Wall-clock of the skill pass |
+
+### 6.5 `memory.dream.max_seconds_reached`
+
+`MemoryDreamMaxSecondsReachedEvent`. Emitted by the extract pass when elapsed wall-clock crosses `memory.dream.max_seconds_per_run` (0 = unbounded); the pass yields after the current session and the **per-session** cursor resumes the remainder on the next trigger (doc 05 §8e). The companion `dream.end` for that pass carries `yielded=True`.
 
 | Field | Type | Description |
 |---|---|---|
-| `trigger` | string | Pass trigger (same vocabulary as §6.1) |
-| `entity_ref` | string | Entity whose drain was cut short |
-| `pending_remaining` | int | Entries left unconsolidated, deferred to the next pass |
-| `elapsed_s` | float | Wall-clock spent on this entity when the budget tripped |
-| `budget_s` | int | The `max_seconds_per_run` ceiling |
+| `kind` | string | `"extract"` (the only pass with a wall-clock cap) |
+| `max_seconds` | int | The `max_seconds_per_run` ceiling that tripped |
+| `elapsed_ms` | int | Wall-clock spent when the cap tripped |
+| `sessions_done` | int | Sessions extracted before yielding |
 
-Use to detect entities whose backlog consistently outruns the per-pass budget (a signal to raise `max_seconds_per_run` or investigate why one entity accumulates so many entries).
+Use to detect a session backlog that consistently outruns the per-pass budget (a signal to raise `max_seconds_per_run`).
 
-*The legacy `Dream` consolidator (`durin/agent/memory.py`) emits its own `memory.dream.legacy.{start,end,skipped}` family — see `schema.py` for those shapes; they mirror the entity-centric events but for the session-history consolidation path.*
+### 6.6 `memory.dream.throttled`
+
+`MemoryDreamThrottledEvent`. Emitted by the reactive trigger (`durin/cli/commands.py::_spawn_dream`) when the in-process gate skips a `post_compaction` / `session_close` extract. A skipped reactive run is harmless — the per-session cursor makes the next run idempotent.
+
+| Field | Type | Description |
+|---|---|---|
+| `trigger` | string | The reactive trigger that was skipped (`post_compaction` \| `session_close`) |
+| `reason` | string | `"locked"` (a pass was already running) or `"throttled"` (one ran within `min_seconds_between_runs`) |
+
+### 6.7 `memory.dream.always_on`
+
+`MemoryDreamAlwaysOnEvent`. Emitted by the always_on distillation pass (`durin/memory/always_on_dream.py`, A4). The pass gathers feedback entities, an LLM judge ranks them and drops contradictions, the survivors are fitted into a token budget (`memory.dream.always_on_token_budget`), and the selected refs are marked `always_on`. No entity is deleted — only the flag flips.
+
+| Field | Type | Description |
+|---|---|---|
+| `selected` | int | Items kept `always_on` (fit the token budget) |
+| `pruned` | int | Items ranked but that didn't fit the budget |
+| `dropped` | int | Items removed by the contradiction judge |
+| `tokens` | int | Token budget consumed by the selected set |
+| `duration_ms` | int | Wall-clock of the pass |
+
+(The internal `changed` counter — how many flags flipped — is logged but not emitted on this event.)
 
 ---
 
 ## 7. Absorb-judge events
 
-Already exist (`memory.absorb.*`). Reproduced briefly for completeness:
+`memory.absorb.*`, emitted by `durin/memory/refine_dream.py` (the refine pass) and `durin/cli/memory_cmd.py` (revert). Schemas in `schema.py`; reproduced briefly:
 
-| Event | When |
-|---|---|
-| `memory.absorb.judged` | A pair was judged (same / different / unclear) |
-| `memory.absorb.auto_merged` | The pair was merged |
-| `memory.absorb.skipped` | Pair was skipped (quarantine, cross-type, etc.) |
-| `memory.absorb.reverted` | A merge was undone (manual operator action) |
+| Event | TypedDict | When |
+|---|---|---|
+| `memory.absorb.judged` | `MemoryAbsorbJudgedEvent` | A candidate pair reached the LLM judge — carries `canonical` / `absorbed` / `verdict` (`same` \| `different` \| `unclear`) / `confidence` |
+| `memory.absorb.auto_merged` | `MemoryAbsorbAutoMergedEvent` | The pair was auto-merged (`verdict == "same"` and `confidence >= confidence_threshold`) |
+| `memory.absorb.skipped` | `MemoryAbsorbSkippedEvent` | Pair skipped before/at the judge — `reason` ∈ `cross_type` \| `tombstoned` \| `user_managed` \| `quarantine` \| `below_threshold` \| `verdict_different` \| `verdict_unclear` \| `judge_failed` \| `page_load_failed` |
+| `memory.absorb.reverted` | `MemoryAbsorbRevertedEvent` | A prior auto-merge was undone via `durin memory revert` (the regret-rate signal) |
 
-Schemas in `schema.py`. Not redefining here.
+The auto-merge gate respects `memory.dream.auto_absorb.enabled` (A1): when disabled the refine pass does not judge or merge, so `absorb.*` events only appear when auto-absorb is on (or via the manual `durin memory absorb` path). `min_age_hours` quarantine surfaces as `absorb.skipped` with `reason="quarantine"` (B3).
+
+---
+
+## 7a. Relation-cap events (alert-only)
+
+`memory.entity_relation_cap_warned` / `memory.entity_relation_cap_rejected` (`MemoryEntityRelationCapWarnedEvent` / `MemoryEntityRelationCapRejectedEvent`), emitted by `durin/memory/memory_writer.py::_emit_relation_cap` (A3, doc 11). When an entity write would take its relation count across the **soft cap (50)** the `_warned` event fires; across the **hard cap (200)** the `_rejected` event fires.
+
+**These are ALERT-ONLY — not a rollback.** The write still proceeds and no relation is dropped (no data loss); the events are the operator signal that an entity is growing into a mega-hub before sub-paging (audit B-14) becomes necessary. Enforcing the hard cap is a one-line flip in `_emit_relation_cap` if mega-hubs prove real.
+
+| Field | Type | Description |
+|---|---|---|
+| `entity_ref` | string | The entity being written |
+| `current_count` | int | Relation count **before** this write |
+| `new_count` | int | Relation count **after** this write |
+| `iteration` | int | optional — auto-injected by `emit_tool_event` |
+| `session_key` | string \| null | optional — auto-injected by `emit_tool_event` |
 
 ---
 
@@ -377,8 +384,10 @@ The real triggers are:
 
 - `watcher` (default) — `MemoryFileWatcher` picked up a `.md` change.
   Steady-state load. Bulk of events.
-- `dream_apply` — `Consolidator.apply` re-indexed the entity page
-  after a successful consolidation. Bursty around cron triggers.
+- `dream_apply` — the reactive index path re-indexed an entity page
+  after a dream write (the trigger label is retained from the
+  pre-migration consolidator for dashboard continuity). Bursty around
+  cron / reactive triggers.
 - `drift_repair` — `HealthChecker.run_tick` repaired a stale row.
   Rare; persistently > 0 means the watcher is missing events.
 
@@ -491,12 +500,12 @@ These are aggregations the operator should track (via dashboards or periodic che
 
 | Metric | Source | Healthy range |
 |---|---|---|
-| `dream_passes_per_day` | count of `memory.dream.start` | 5-50 |
-| `dream_skipped_rate` | `memory.dream.skipped` / total triggers | < 30% |
-| `dream_entity_failure_rate` | `memory.dream.entity_failed` / total entities consolidated | < 2% |
-| `dream_quarantined_entities` | accumulated `entities_quarantined` | 0-2 (alerting threshold) |
-| `dream_llm_cost_per_day_usd` | sum of `llm_input_tokens × price + ...` | $0.25-$1.50/day (target soak range per doc 09 §11.1); two-tier alarm — warn at $1.50/day (audit F19, 2026-05-28), error at $5/day (§11 below + doc 08 §3 R3) |
+| `dream_passes_per_day` | count of `memory.dream.start` (split by `kind`) | 5-50 |
+| `dream_extract_failure_rate` | `memory.dream.end{kind=extract}.entities_failed` / `sessions` | < 2% |
+| `dream_throttled_rate` | `memory.dream.throttled` / total reactive triggers | < 30% |
+| `dream_yield_rate` | `memory.dream.max_seconds_reached` (or `dream.end.yielded=True`) / extract passes | low → near 0 (persistent yields ⇒ raise `max_seconds_per_run`) |
 | `dream_duration_p95_ms` | `memory.dream.end.duration_ms` | < 60s (per pass) |
+| `relation_cap_warnings_per_week` | count of `memory.entity_relation_cap_warned` | low (a rising count ⇒ a forming mega-hub) |
 
 ### 10.3 Index health
 
@@ -524,9 +533,8 @@ When telemetry collection lands in a dashboard, these conditions should alert:
 |---|---|---|
 | Recall p95 > 2× expected | continuous over 1 hour | warn |
 | Recall persistent recovery (>5% rate) | over 1 hour | warn |
-| Dream entities_quarantined > 2 | single event | error |
-| Dream LLM cost > $1.50/day | rolling 24h sum | warn (audit F19, 2026-05-28: warn tier — operator inspects) |
-| Dream LLM cost > $5/day | rolling 24h sum | error |
+| `memory.entity_relation_cap_rejected` (hard cap crossed) | single event | warn (mega-hub forming; alert-only, the write still landed) |
+| Dream extract failure rate > 5% | rolling 24h | warn (sessions repeatedly failing extraction) |
 | Recall returning 0 results > 10% of calls | 1 hour rolling | warn (could be a real "nothing in memory" or a search bug) |
 | `memory.search.failure` with `recovery_succeeded=false` | single event | error |
 | Index rebuild took > 5 minutes | single event | warn (workspace might have grown unexpectedly) |
@@ -611,7 +619,7 @@ These defaults protect against accidental data leak when telemetry is shared wit
 | 2 | Sub-events for recall pipeline | recall.vector, recall.lexical, recall.rerank, recall.rrf — separate per step for diagnosis. | §4 |
 | 3 | New event for failure handling | `memory.search.failure` per §14.5 doc 03; carries recovery + degradation info. | §8 |
 | 4 | New events for indexer | `memory.index.write`, `.rebuild`, `.staleness_detected` — observability for the indexer's health. | §9 |
-| 5 | Quarantine telemetry | `memory.dream.entity_failed` emits with `quarantined: true` when triggered. Operator alarms on this. | §6.4 |
+| 5 | Relation-cap telemetry | `memory.entity_relation_cap_warned/rejected` fire when an entity write crosses the soft/hard cap — **alert-only** (A3): the write proceeds, nothing is dropped. Operator watches for forming mega-hubs. | §7a |
 | 6 | No external telemetry sink in MVP | Local jsonl file. Optional HTTPS push later. | §12 |
 | 7 | Sampling = none in MVP | Volume is low; emit everything. | §12.1 |
 | 8 | Retention | 30 days uncompressed + 60 more days compressed (90 days total). The original v1 draft proposed "1 year compressed"; aligned to code in audit B5 (`COMPRESSION_AGE_DAYS=30`, `DELETION_AGE_DAYS=90` in `durin/telemetry/retention.py`). | §12.2 |
@@ -627,8 +635,8 @@ None at the module level.
 
 | Aspect | Current state | v2 target | Migration work |
 |---|---|---|---|
-| Memory event registry | 25+ events in `schema.py` (audit C6: corrected from "12 events". `memory.*` keys in `EVENTS` cover recall (incl. `.lexical` / `.rerank` / `.rrf` / `.failure`), index (`.write` / `.rebuild` / `.staleness_detected`), dream (`.start` / `.end` / `.skipped` / `.entity_failed` / `.patch_applied`), absorb, store, ingest, embedding, hot_layer, health). Counts grow as new events ship (A5 added cost fields to `dream.end`; A6 added `tick_id`/`duration_ms` to `health_check`; B9 added `search.failure`; 2026-05-30 removed `recall.decay` with temporal decay). | — |
-| Cost in dream.end | Shipped (audit A5, 2026-05-28). `memory.dream.end` carries `llm_input_tokens_total`, `llm_output_tokens_total`, `llm_call_count`. The `default_llm_invoke` extracts per-call usage from litellm `response.usage`; `_ConsolidateTotals` aggregates across the pass. See §6.2 and audit E6. | Optional `llm_cost_usd` would multiply by per-model price; left out because the cost ledger is upstream (see §1 "out of scope"). | None |
+| Memory event registry | The `memory.*` keys in `EVENTS` cover recall (incl. `.vector` / `.lexical` / `.rerank` / `.rrf` / `.failure`), index (`.write` / `.rebuild` / `.staleness_detected`), dream (`.start` / `.end` / `.patch_applied` / `.skill_extract` / `.max_seconds_reached` / `.throttled` / `.always_on`), absorb (`.judged` / `.auto_merged` / `.skipped` / `.reverted`), store, ingest, forget, upsert_entity, relation-cap (`entity_relation_cap_warned` / `_rejected`), embedding, hot_layer, health, skill_miss, fallback_tool_used. The post-migration sweep (doc 11 B2) removed the deleted `dream.{skipped,entity_failed,budget_exhausted,legacy.*}` events. `tests/telemetry/test_schema_catalog.py` enforces catalog↔emission by name. | — |
+| Cost in dream.end | Not emitted. The deleted `DreamRunner` carried `llm_*_tokens_total` / `llm_call_count` on `dream.end`; the four-pass dream does not aggregate per-call usage, so those fields are gone (doc 11 B2). | If dream cost telemetry is wanted again, add usage aggregation in the passes and new fields — the cost ledger itself stays upstream (see §1 "out of scope"). | None |
 | Privacy: query truncation | Enforced at emit time (audit C6: was incorrectly "Not enforced" in the v1 draft). `durin/agent/tools/_telemetry.py::_truncate_freetext` trims fields named `query`, `text`, `snippet`, `content`, `needle` to 200 chars before persistence. Applied by `emit_tool_event` so every event consumer gets a trimmed payload. | — | — |
 | Privacy: URI hashing opt-in | Not present | Optional via config | New config flag |
 | Alarms / dashboards | None | Internal threshold checks + optional Grafana export | Out of scope for memory subsystem; downstream |
@@ -639,6 +647,7 @@ None at the module level.
 
 - Tool calls that emit recall events: `04_agent_tools.md` §2-§5.
 - Search pipeline failure mode + recovery (which emit `memory.search.failure`): `03_search_pipeline.md` §14.
-- Dream entity failure + quarantine (which emit `memory.dream.entity_failed`): `05_dream_cold_path.md` §12.5.
+- The four-pass dream (extract / refine / skill / always_on) that emits the `memory.dream.*` events: `05_dream_cold_path.md`.
+- Relation-cap alert-only decision (A3), cursor removal (N3), and the deleted dream cluster: `../../qa/post_migration_audit_2026-06.md`.
 - Indexer write triggers (which emit `memory.index.write`): `02_indexing.md` §6.
-- Absorb-judge events already in production: `durin/telemetry/schema.py`.
+- Absorb-judge + relation-cap event schemas: `durin/telemetry/schema.py`.

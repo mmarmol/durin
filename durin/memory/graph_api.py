@@ -3,8 +3,8 @@
 Three endpoints sit on top of the existing memory primitives:
 
 - :func:`get_entity_detail` — full page (frontmatter + body + identifiers),
-  git history of the page, archived absorbed pages, post-cursor entries
-  that reference the entity. Drives the side panel's tabs.
+  git history of the page, archived absorbed pages, and the entries that
+  reference the entity. Drives the side panel's tabs.
 - :func:`search_memory_api` — same logic as ``memory_search`` tool
   (vector + entity-aware reranking + grep fallback). Used as a filter
   on the graph + results list.
@@ -20,7 +20,6 @@ expects.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -44,7 +43,7 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# entity detail — page + history + archive + post-cursor entries
+# entity detail — page + history + archive + referencing entries
 # ---------------------------------------------------------------------------
 
 
@@ -70,7 +69,6 @@ def get_entity_detail(
                 "identifiers": {"email": [...], ...},
                 "extra": {...},  # any frontmatter the parser didn't promote
                 "body": "## Current State\\n...",
-                "dream_processed_through": "2026-05-20T...",
             },
             "history": [
                 {"sha": "abc1234", "subject": "...", "when": "...",
@@ -84,7 +82,7 @@ def get_entity_detail(
                  "archived_at": "...", "archived_reason": "auto"},
                 ...
             ],
-            "entries": [  # post-cursor episodic entries that reference this ref
+            "entries": [  # entries that reference this ref
                 {"id": "e123", "valid_from": "2026-05-23T...", "headline": "...",
                  "summary": "...", "body": "..."},
                 ...
@@ -115,7 +113,7 @@ def get_entity_detail(
         # with no page AND no entries AND no archive is a genuine miss.
         archive = _load_archive(memory_root, type_, slug)
         entries = _load_referencing_entries(
-            memory_root, entity_ref, None, entries_limit,
+            memory_root, entity_ref, entries_limit,
         )
         if not entries and not archive:
             return None
@@ -133,7 +131,7 @@ def get_entity_detail(
         "history": _load_history(memory_root, page_path, history_limit),
         "archive": _load_archive(memory_root, type_, slug),
         "entries": _load_referencing_entries(
-            memory_root, entity_ref, page.dream_processed_through, entries_limit,
+            memory_root, entity_ref, entries_limit,
         ),
     }
 
@@ -148,7 +146,6 @@ def _serialize_page(page: EntityPage) -> dict[str, Any]:
         "identifiers": identifiers if isinstance(identifiers, dict) else None,
         "extra": extra,  # leftover frontmatter (created_at, updated_at, etc.)
         "body": page.body or "",
-        "dream_processed_through": page.dream_processed_through,
     }
 
 
@@ -229,7 +226,6 @@ def _load_archive(
 def _load_referencing_entries(
     memory_root: Path,
     entity_ref: str,
-    cursor: Any,
     limit: int,
 ) -> list[dict[str, Any]]:
     """Entries that tag this entity — the raw evidence behind it.
@@ -240,13 +236,9 @@ def _load_referencing_entries(
     consolidation) would otherwise show an empty side panel even though the
     entity is well-referenced.
 
-    Episodic fragments are filtered to those newer than the entity's dream
-    cursor (the ones not yet folded into the page body). ``stable`` /
-    ``corpus`` are durable facts that are never folded into a page, so they
-    always show. For a phantom (no page) ``cursor`` is None, so every
-    referencing entry surfaces.
+    Two-track model (N3): fragments are not consolidated into the page, so
+    every referencing entry surfaces (recency-ordered, capped by ``limit``).
     """
-    cursor_dt = _parse_cursor(cursor)
     rows: list[tuple[str, dict[str, Any]]] = []
     for class_name in ("episodic", "stable", "corpus"):
         for path in walk_class(memory_root.parent, class_name):
@@ -257,17 +249,6 @@ def _load_referencing_entries(
             if entity_ref not in (entry.entities or []):
                 continue
             ts = entry.valid_from.isoformat() if entry.valid_from else ""
-            if class_name == "episodic" and cursor_dt is not None and ts:
-                try:
-                    entry_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                except (ValueError, TypeError):
-                    entry_dt = None
-                # Normalise to UTC — episodic entries may carry naive
-                # timestamps while the cursor is always tz-aware.
-                if entry_dt is not None and entry_dt.tzinfo is None:
-                    entry_dt = entry_dt.replace(tzinfo=timezone.utc)
-                if entry_dt is not None and entry_dt <= cursor_dt:
-                    continue  # already consolidated into the page body
             rows.append((ts, {
                 "id": entry.id,
                 "valid_from": ts,
@@ -280,20 +261,6 @@ def _load_referencing_entries(
     # Newest first for the panel.
     rows.sort(key=lambda kv: kv[0], reverse=True)
     return [r[1] for r in rows[:limit]]
-
-
-def _parse_cursor(value: Any) -> datetime | None:
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        return None  # numeric cursors not comparable to ISO ts
-    try:
-        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except (ValueError, TypeError):
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt
 
 
 # ---------------------------------------------------------------------------

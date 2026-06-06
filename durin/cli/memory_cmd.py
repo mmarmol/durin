@@ -72,105 +72,6 @@ def _open_repo():
     return repo
 
 
-# ---------------------------------------------------------------------------
-# G3 helper: parse cursor + entry timestamps as datetime, never string compare
-# ---------------------------------------------------------------------------
-
-
-def _is_at_or_before(entry_ts: str, cursor: Any) -> bool:
-    """True iff entry_ts <= cursor in real time (datetime semantics).
-
-    Mirrors :func:`durin.memory.entity_ranker._is_pre_cursor` per G3.
-    Numeric cursors (msg_idx) return False — not comparable to ISO ts.
-    """
-    if not entry_ts or cursor is None:
-        return False
-    if isinstance(cursor, (int, float)):
-        return False
-    try:
-        et = datetime.fromisoformat(str(entry_ts).replace("Z", "+00:00"))
-        ct = datetime.fromisoformat(str(cursor).replace("Z", "+00:00"))
-    except (ValueError, TypeError):
-        return False
-    return et <= ct
-
-
-# ---------------------------------------------------------------------------
-# dream — manual consolidation trigger
-# ---------------------------------------------------------------------------
-
-
-def _discover_pending_consolidations(
-    memory_root: Path,
-    *,
-    entity_filter: str | None = None,
-) -> dict[str, list]:
-    """Walk memory/episodic, group entries by entity tag, filter by cursor.
-
-    Returns ``{entity_ref → [EntryRef, ...]}`` sorted by timestamp
-    ascending per entity. Pre-cursor entries (those with timestamp at
-    or before the entity page's ``dream_processed_through``) are
-    excluded — their info is already consolidated.
-
-    G3: cursor comparison uses datetime parsing, not string comparison.
-    """
-    from durin.memory.dream import EntryRef
-    from durin.memory.entity_page import EntityPage
-    from durin.memory.storage import load_entry
-
-    pending: dict[str, list] = {}
-    episodic_dir = memory_root / "episodic"
-    if not episodic_dir.exists():
-        return pending
-
-    # Load existing pages to know cursors per entity.
-    cursors: dict[str, Any] = {}
-    pages_dir = memory_root / "entities"
-    if pages_dir.exists():
-        for page_path in pages_dir.rglob("*.md"):
-            if "/archive/" in str(page_path):
-                continue
-            page = EntityPage.from_file(page_path)
-            if page is None:
-                continue
-            slug = EntityPage.slug_from_path(page_path)
-            ref = f"{page.type}:{slug}"
-            if page.dream_processed_through is not None:
-                cursors[ref] = page.dream_processed_through
-
-    # Walk episodic entries, group by entity, filter by cursor.
-    for entry_path in sorted(episodic_dir.glob("*.md")):
-        try:
-            entry = load_entry(entry_path)
-        except Exception:  # noqa: BLE001
-            continue
-        # Doc memory §4.6.1: user-authored entries are protected from
-        # Dream consumption — they carry deliberate human choice and
-        # must not get folded into a Dream-managed canonical page.
-        if entry.author == "user_authored":
-            continue
-        ts = entry.valid_from.isoformat() if entry.valid_from else ""
-        for ent_ref in entry.entities:
-            if entity_filter and ent_ref != entity_filter:
-                continue
-            if _is_at_or_before(ts, cursors.get(ent_ref)):
-                continue  # pre-cursor; already consolidated
-            pending.setdefault(ent_ref, []).append(
-                EntryRef(
-                    id=entry.id,
-                    timestamp=ts,
-                    text=entry.body,
-                    entities=list(entry.entities),
-                )
-            )
-
-    # Sort each entity's entries by timestamp ascending (oldest first;
-    # consolidator caps at MAX_ENTRIES_PER_CALL by taking newest).
-    for ref in pending:
-        pending[ref].sort(key=lambda e: e.timestamp)
-    return pending
-
-
 # Exposed for the health-check recovery-hint anti-drift test
 # (tests/memory/test_health_critical_a7_recovery_hint.py). If this
 # tuple changes, the `_RECOVERY_HINTS` dict in
@@ -243,16 +144,21 @@ def cmd_reindex(
                 console.print(
                     "[bold]Rebuilding LanceDB vector index…[/bold]"
                 )
-                # Vector rebuild uses whichever embedding provider is
-                # configured. Reuse the same construction path the
-                # search tool uses.
+                # Vector rebuild uses the CONFIGURED embedding model, and
+                # records it in meta.json (N5a) so ensure_index_fresh can detect
+                # a later model swap.
                 try:
+                    from durin.config.loader import load_config
                     from durin.memory.embedding import FastembedProvider
-                    provider = FastembedProvider()
+                    from durin.memory.index_meta import record_built_model
+                    model = load_config().memory.embedding.model
+                    provider = FastembedProvider(model=model)
                     vi = VectorIndex(workspace, provider)
                     count = vi.rebuild_from_workspace()
+                    record_built_model(workspace, model)
                     console.print(
-                        f"  Indexed: [green]{count}[/green] rows"
+                        f"  Indexed: [green]{count}[/green] rows "
+                        f"(model: {model})"
                     )
                 except Exception as exc:  # noqa: BLE001
                     console.print(
@@ -276,112 +182,63 @@ def cmd_dream(
         help="Print what would be consolidated without writing.",
     ),
 ) -> None:
-    """Manually trigger memory consolidation (dream pass).
+    """Manually trigger the dream passes.
 
-    Walks memory/episodic for entries with entity tags newer than each
-    entity page's cursor, groups them by entity, and invokes the LLM
-    consolidator. Writes the resulting entity pages + git commits.
-
-    Use ``--dry-run`` to inspect what would be consolidated.
+    Runs the extract pass (reads each session's new turns and extracts entity
+    attributes) followed by the refine pass (dedups duplicate entities). Writes
+    entity pages via the memory writer (git-committed).
     """
     workspace = _workspace_root()
-    memory_root = workspace / "memory"
-
-    if not (memory_root / "episodic").exists():
-        console.print("[yellow]No episodic memory yet — nothing to dream.[/yellow]")
-        return
-
-    pending = _discover_pending_consolidations(memory_root, entity_filter=entity)
-    if not pending:
-        if entity:
-            console.print(f"[green]No pending consolidations for {entity}.[/green]")
-        else:
-            console.print("[green]No pending consolidations.[/green]")
-        return
+    # New model (§8e): the manual dream runs the extract pass (sessions →
+    # entity attributes) + the refine pass (dedup), replacing the legacy
+    # episodic-entry consolidation (DreamRunner / DreamConsolidator). The
+    # `entity` filter is not used by the new passes.
+    from durin.memory.always_on_dream import run_always_on_pass
+    from durin.memory.dream_passes import (
+        run_extract_pass,
+        run_refine_pass,
+        run_skill_extract_pass,
+    )
+    from durin.memory.model_resolve import resolve_memory_model
 
     if dry_run:
-        console.print("[bold]Dry run — would consolidate:[/bold]\n")
-        for ent_ref, entries in pending.items():
-            console.print(f"  [cyan]{ent_ref}[/cyan]: {len(entries)} entries")
-            for er in entries[:3]:
-                preview = er.text[:80].replace("\n", " ")
-                console.print(f"    - {er.id}: {preview}")
-            if len(entries) > 3:
-                console.print(f"    ... +{len(entries) - 3} more")
+        console.print(
+            "[yellow]--dry-run is not supported by the new dream passes; "
+            "run without it to extract + refine.[/yellow]"
+        )
         return
 
-    # Real consolidation routes through DreamRunner (doc 25 §2.A.1 β.2)
-    # so manual runs share the same lock + telemetry surface as the
-    # auto-triggers — prevents a user `durin memory dream` from racing
-    # the cron tick that fires at 3am. Throttle is disabled for the
-    # manual path: the user explicitly asked, respect that.
-    from durin.memory.dream_runner import DreamRunner
-    from durin.memory.vector_index import VectorIndex, vector_index_available
-
     cfg = load_config()
-
-    # W3 (doc 24): pass a VectorIndex so dream.apply() upserts the
-    # consolidated entity_page into LanceDB. Best-effort: if
-    # memory.enabled=false or fastembed missing, fall through without
-    # indexing (markdown remains source of truth).
-    vi: VectorIndex | None = None
-    try:
-        if cfg.memory.enabled and vector_index_available():
-            from durin.memory.embedding import FastembedProvider
-
-            provider = FastembedProvider(model=cfg.memory.embedding.model)
-            vi = VectorIndex(workspace, provider)
-    except Exception as exc:  # noqa: BLE001
-        console.print(
-            f"[yellow]vector index unavailable ({exc}); "
-            "entity pages will not be indexed[/yellow]"
-        )
-
-    from durin.memory.model_resolve import resolve_memory_model
-    runner = DreamRunner(
-        workspace=workspace,
-        min_seconds_between_runs=0,
-        max_seconds_per_run=cfg.memory.dream.max_seconds_per_run,
-        model=resolve_memory_model(cfg),
-        vector_index=vi,
-        # §2.D: opt-in auto-absorb post-dream. Manual `durin memory dream`
-        # respects the same config as the auto-triggers — if the user
-        # has it enabled, manual runs also auto-merge alias-overlap
-        # candidates above threshold.
-        auto_absorb_enabled=cfg.memory.dream.auto_absorb.enabled,
-        auto_absorb_threshold=cfg.memory.dream.auto_absorb.confidence_threshold,
-        auto_absorb_min_age_hours=cfg.memory.dream.auto_absorb.min_age_hours,
-        auto_absorb_judge_model=cfg.memory.dream.auto_absorb.judge_model,
-    )
-
-    def _on_progress(ent_ref: str, msg: str) -> None:
-        console.print(f"  [bold]{ent_ref}[/bold] {msg}")
-
-    result = runner.run(
-        trigger="manual",
-        entity_filter=entity,
-        on_progress=_on_progress,
-    )
-    if result.ran:
-        ok = result.entities_consolidated
-        bad = result.entities_failed
-        console.print(
-            f"\n[green]✓[/green] Consolidated {ok} entit{'y' if ok == 1 else 'ies'} "
-            f"in {result.duration_s:.1f}s"
-        )
-        if bad:
-            console.print(f"[red]✗[/red] {bad} failed (see logs)")
-    elif result.reason == "concurrent_lock":
-        console.print(
-            "[yellow]Another dream pass is already running "
-            f"({(workspace / 'memory' / '.dream.lock').name}); skipped.[/yellow]"
-        )
-    elif result.reason == "no_pending":
-        # Should not happen — we filtered above — but cover the race
-        # where another process consumed everything between checks.
-        console.print("[green]No pending consolidations (just absorbed).[/green]")
+    model = resolve_memory_model(cfg)
+    console.print("[dim]Extract pass (sessions → entity attributes)…[/dim]")
+    ex = run_extract_pass(workspace, model=model)
+    console.print("[dim]Skill-extract pass (sessions → reusable procedures)…[/dim]")
+    sk = run_skill_extract_pass(workspace, model=model)
+    _absorb = cfg.memory.dream.auto_absorb
+    if _absorb.enabled:
+        console.print("[dim]Refine pass (dedup duplicate entities)…[/dim]")
     else:
-        console.print(f"[yellow]Skipped: {result.reason}[/yellow]")
+        console.print(
+            "[dim]Refine pass skipped — auto_absorb disabled "
+            "(use 'durin memory absorb-suggest' to review duplicates)[/dim]"
+        )
+    rf = run_refine_pass(workspace, model=model, enabled=_absorb.enabled,
+                         confidence_threshold=_absorb.confidence_threshold,
+                         min_age_hours=_absorb.min_age_hours)
+    console.print("[dim]Always-on pass (distil pinned guidance)…[/dim]")
+    ao = run_always_on_pass(workspace, model=model,
+                            token_budget=cfg.memory.dream.always_on_token_budget)
+    merged = len(rf.get("merged", []))
+    console.print(
+        f"\n[green]✓[/green] extract: {ex['entities']} attribute update(s) across "
+        f"{ex['sessions']} session(s); skills: {sk.get('skills_touched', 0)}; "
+        f"refine: {merged} merge(s); "
+        f"always_on: {ao.get('selected', 0)} pinned ({ao.get('tokens', 0)} tok)"
+    )
+    if ex.get("errors"):
+        console.print(
+            f"[yellow]{len(ex['errors'])} session(s) errored (see logs)[/yellow]"
+        )
 
 
 # ---------------------------------------------------------------------------

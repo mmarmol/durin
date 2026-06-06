@@ -31,7 +31,6 @@ def _write_page(ws: Path, type_: str, slug: str, **kwargs) -> Path:
         name=kwargs.pop("name", slug.title()),
         aliases=kwargs.pop("aliases", []),
         body=kwargs.pop("body", ""),
-        dream_processed_through=kwargs.pop("dream_processed_through", None),
         extra=kwargs.pop("extra", {}),
     )
     path = ws / "memory" / "entities" / type_ / f"{slug}.md"
@@ -108,17 +107,17 @@ def test_entity_detail_identifiers_promoted(tmp_path: Path) -> None:
     assert "identifiers" not in d["page"]["extra"]
 
 
-def test_entity_detail_post_cursor_entries_filter(tmp_path: Path) -> None:
-    """Entries newer than the cursor surface; pre-cursor ones don't."""
-    _write_page(tmp_path, "person", "m",
-                dream_processed_through="2026-05-02T00:00:00")
-    _store(tmp_path, "pre", ["person:m"], day=1)   # before cursor → hidden
-    _store(tmp_path, "post", ["person:m"], day=5)  # after cursor → shown
+def test_entity_detail_referencing_entries_surface(tmp_path: Path) -> None:
+    """All entries tagging the entity surface (two-track model, N3: fragments
+    are not consolidated, so there is no cursor filter)."""
+    _write_page(tmp_path, "person", "m")
+    _store(tmp_path, "older obs", ["person:m"], day=1)
+    _store(tmp_path, "newer obs", ["person:m"], day=5)
     d = get_entity_detail(tmp_path, "person:m")
     assert d is not None
-    ids = [e["body"][:5] for e in d["entries"]]
-    assert any("post" in s for s in ids)
-    assert not any("pre" == s.strip() for s in ids)
+    bodies = [e["body"] for e in d["entries"]]
+    assert any("older obs" in b for b in bodies)
+    assert any("newer obs" in b for b in bodies)
 
 
 def test_entity_detail_includes_archive(tmp_path: Path) -> None:
