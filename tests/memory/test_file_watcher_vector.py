@@ -4,11 +4,19 @@ the extract dream never did; reindex_one_file is FTS-only), so new/edited entiti
 were vector-stale until a merge or full reindex."""
 from datetime import datetime, timezone
 
+import pytest
+
 from durin.memory.embedding import FastembedProvider
 from durin.memory.field_patch import FieldPatch
 from durin.memory.file_watcher import MemoryFileWatcher
 from durin.memory.memory_writer import write_entity
-from durin.memory.vector_index import VectorIndex
+from durin.memory.vector_index import VectorIndex, vector_index_available
+
+# Real vector retrieval needs the `memory` extra (fastembed + lancedb); CI skips it.
+pytestmark = pytest.mark.skipif(
+    not vector_index_available(),
+    reason="vector deps (memory extra: fastembed/lancedb) absent",
+)
 
 NOW = datetime(2026, 6, 5, tzinfo=timezone.utc)
 MODEL = "intfloat/multilingual-e5-small"
