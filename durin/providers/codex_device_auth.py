@@ -180,3 +180,87 @@ def _exchange_and_store(authorization_code: str, code_verifier: str) -> Any:
     )
     _strict_storage().save(token)
     return token
+
+
+@dataclass
+class CodexSessionInfo:
+    email: str | None
+    plan: str | None
+    source: Literal["durin", "codex-cli"]
+
+
+def _session_from_access(access: str, source: str) -> CodexSessionInfo:
+    return CodexSessionInfo(
+        email=email_from_jwt(access),
+        plan=plan_from_jwt(access),
+        source=source,  # type: ignore[arg-type]
+    )
+
+
+def _read_codex_cli_session() -> CodexSessionInfo | None:
+    """Detect (do NOT adopt) an official Codex CLI session at ~/.codex/auth.json."""
+    path = Path.home() / ".codex" / "auth.json"
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return None
+    access = (data.get("tokens", {}) or {}).get("access_token") or data.get("access_token")
+    if not isinstance(access, str) or not access:
+        return None
+    return _session_from_access(access, "codex-cli")
+
+
+def existing_codex_session() -> CodexSessionInfo | None:
+    """Return durin's own session if present, else a detected Codex CLI session."""
+    try:
+        token = _strict_storage().load()
+    except Exception:  # noqa: BLE001
+        token = None
+    if token and getattr(token, "access", None):
+        return _session_from_access(token.access, "durin")
+    return _read_codex_cli_session()
+
+
+def disconnect() -> bool:
+    """Delete durin's codex.json (+ .lock). True if anything was removed."""
+    try:
+        token_path = _strict_storage().get_token_path()
+    except Exception:  # noqa: BLE001
+        return False
+    removed = False
+    for path in (token_path, token_path.with_suffix(".lock")):
+        try:
+            path.unlink()
+            removed = True
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            logger.warning("could not remove {}: {}", path, exc)
+    return removed
+
+
+def login_blocking(
+    print_fn: Callable[[str], None],
+    *,
+    sleep_fn: Callable[[float], None] | None = None,
+    now_fn: Callable[[], float] | None = None,
+    max_wait_s: int = 15 * 60,
+) -> Any:
+    """Run the full device-code flow to completion (CLI use)."""
+    sleep_fn = sleep_fn or time.sleep
+    now_fn = now_fn or time.monotonic
+    challenge = request_device_code()
+    print_fn(f"Abrí: {challenge.verification_uri}")
+    print_fn(f"Ingresá el código: {challenge.user_code}")
+    print_fn("Esperando la autorización... (Ctrl+C para cancelar)")
+    start = now_fn()
+    while now_fn() - start < max_wait_s:
+        sleep_fn(challenge.interval)
+        res = poll_once(challenge.device_auth_id, challenge.user_code)
+        if res.status == "ok":
+            return res.token
+        if res.status == "error":
+            raise RuntimeError(res.error or "device-code login failed")
+    raise RuntimeError("device-code login timed out")
