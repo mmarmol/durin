@@ -10,7 +10,7 @@
 
 **Tech Stack:** Python 3, pytest, durin's `Tool` base + `ExecTool` (exec gate), existing `skills_import` / `skill_scan` modules.
 
-**Roadmap:** `docs/plans/skills_evolutivas.md` (P6); backlog `docs/backlog.md` (P6 item #1).
+**Roadmap:** `docs/archive/skills_evolutivas.md` (P6); backlog `docs/backlog.md` (P6 item #1).
 
 ## Design decisions (review these first)
 

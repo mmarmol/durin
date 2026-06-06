@@ -621,7 +621,7 @@ local skills, (b) calls `skill_search`, (c) on a safe hit authors via `skill_wri
 
 - [ ] **Step 4: Record the result**
 
-Update the spec status block (or `docs/plans/skills_evolutivas.md`) to mark §6.C
+Update the spec status block (or `docs/archive/skills_evolutivas.md`) to mark §6.C
 BUILT with a one-line note of what was verified live. Commit.
 
 ```bash
