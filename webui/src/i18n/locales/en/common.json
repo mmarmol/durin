@@ -329,7 +329,8 @@
       "help": {
         "judgeTrigger": "Off: only on-demand (the 'Audit with LLM' button per skill). Uncertain: auto-run only when the gate is already unsure (code / caution / out-of-allowlist). Always: every import. Degrades silently when no model is available.",
         "judgeMaxSeverity": "How high the judge may raise a verdict. 'Caution' forces a confirm but never blocks on its own; 'Dangerous' lets it block (override required).",
-        "judgeModel": "Model name for the judge. Empty uses the default memory model."
+        "judgeModel": "Model name for the judge. Empty uses the default memory model.",
+        "tokenSecret": "The durin secret holding your GitHub token. 'None' = anonymous requests (lower rate limit, no private repos)."
       },
       "severity": { "caution": "Caution (confirm)", "dangerous": "Dangerous (block)" },
       "trigger": { "off": "Off (on-demand only)", "uncertain": "When uncertain (tie-break)", "always": "Always" },
