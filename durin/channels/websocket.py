@@ -38,9 +38,13 @@ from durin.config.paths import get_media_dir
 from durin.config.schema import Base
 from durin.providers.codex_device_auth import (
     disconnect as codex_disconnect,
+)
+from durin.providers.codex_device_auth import (
     existing_codex_session,
-    poll_once as codex_poll_once,
     request_device_code,
+)
+from durin.providers.codex_device_auth import (
+    poll_once as codex_poll_once,
 )
 from durin.providers.codex_models import list_codex_models
 from durin.session.goal_state import goal_state_ws_blob
