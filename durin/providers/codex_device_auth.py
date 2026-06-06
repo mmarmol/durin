@@ -86,3 +86,97 @@ def _strict_storage() -> Any:
         token_filename=OPENAI_CODEX_PROVIDER.token_filename,
         import_codex_cli=False,
     )
+
+
+@dataclass
+class DeviceCodeChallenge:
+    user_code: str
+    verification_uri: str
+    device_auth_id: str
+    interval: int
+    expires_in: int
+
+
+@dataclass
+class PollResult:
+    status: Literal["pending", "ok", "error"]
+    token: Any | None = None  # oauth_cli_kit.models.OAuthToken
+    error: str | None = None
+
+
+def request_device_code() -> DeviceCodeChallenge:
+    with _client() as client:
+        resp = client.post(
+            DEVICE_USERCODE_URL,
+            json={"client_id": CLIENT_ID},
+            headers={"Content-Type": "application/json", "originator": ORIGINATOR},
+        )
+    if resp.status_code != 200:
+        raise RuntimeError(f"device code request failed: HTTP {resp.status_code}")
+    data = resp.json()
+    user_code = data.get("user_code", "")
+    device_auth_id = data.get("device_auth_id", "")
+    if not user_code or not device_auth_id:
+        raise RuntimeError("device code response missing required fields")
+    return DeviceCodeChallenge(
+        user_code=user_code,
+        verification_uri=VERIFICATION_URI,
+        device_auth_id=device_auth_id,
+        interval=max(3, int(data.get("interval", 5))),
+        expires_in=int(data.get("expires_in", 900)),
+    )
+
+
+def poll_once(device_auth_id: str, user_code: str) -> PollResult:
+    """One poll tick. ``pending`` while the user has not approved yet."""
+    with _client() as client:
+        resp = client.post(
+            DEVICE_TOKEN_URL,
+            json={"device_auth_id": device_auth_id, "user_code": user_code},
+            headers={"Content-Type": "application/json", "originator": ORIGINATOR},
+        )
+    if resp.status_code in (403, 404):
+        return PollResult(status="pending")
+    if resp.status_code != 200:
+        return PollResult(status="error", error=f"poll HTTP {resp.status_code}")
+    code_resp = resp.json()
+    authorization_code = code_resp.get("authorization_code", "")
+    code_verifier = code_resp.get("code_verifier", "")
+    if not authorization_code or not code_verifier:
+        return PollResult(status="error", error="missing authorization_code/code_verifier")
+    try:
+        token = _exchange_and_store(authorization_code, code_verifier)
+    except Exception as exc:  # noqa: BLE001
+        return PollResult(status="error", error=str(exc))
+    return PollResult(status="ok", token=token)
+
+
+def _exchange_and_store(authorization_code: str, code_verifier: str) -> Any:
+    from oauth_cli_kit.models import OAuthToken
+
+    with _client() as client:
+        resp = client.post(
+            TOKEN_URL,
+            data={
+                "grant_type": "authorization_code",
+                "code": authorization_code,
+                "redirect_uri": DEVICE_REDIRECT_URI,
+                "client_id": CLIENT_ID,
+                "code_verifier": code_verifier,
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+    if resp.status_code != 200:
+        raise RuntimeError(f"token exchange failed: HTTP {resp.status_code}")
+    tokens = resp.json()
+    access = tokens.get("access_token", "")
+    if not access:
+        raise RuntimeError("token exchange returned no access_token")
+    token = OAuthToken(
+        access=access,
+        refresh=tokens.get("refresh_token", ""),
+        expires=expiry_ms_from_jwt(access),
+        account_id=account_id_from_jwt(access),
+    )
+    _strict_storage().save(token)
+    return token
