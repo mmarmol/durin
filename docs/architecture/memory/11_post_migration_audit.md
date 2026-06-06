@@ -328,7 +328,7 @@ new-model equivalent or a conscious drop (cross-ref A1 auto_absorb, A3 cap, A5
 existing_uris, and the throttle/cap we just restored). This is where a "forgot
 to implement" can hide inside "doc drift."
 
-### C3 — Stale implementation-status tables + scattered legacy refs — 🔨 IN PROGRESS (2026-06-06)
+### C3 — Stale implementation-status tables + scattered legacy refs — ✅ DONE (2026-06-06)
 > doc 01 §11 status table + legacy refs fixed (agent); doc 05 status/telemetry
 > fixed. Also fixed stale CODE docstrings: relation_cap events (A3 alert-only)
 > + sectioned_output fragment intro (N3). REMAINING: doc 00 (overview) still

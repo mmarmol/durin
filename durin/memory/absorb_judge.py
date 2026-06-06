@@ -18,7 +18,7 @@ Design notes:
   dream_model`` (glm peer review C2, 2026-05-24) — the judge can see
   that two pages observed years apart probably aren't the same
   entity even if alias coincides.
-- **Markdown markers**: same envelope format as ``consolidator.md``
+- **Markdown markers**: a ``===MARKER===`` envelope format
   (``===VERDICT===`` / ``===CONFIDENCE===`` / ``===REASONING===`` /
   ``===END===``). Keeps the parser surface consistent.
 - **Retry on parse failure**: up to ``max_retries`` (default 2)
@@ -203,8 +203,8 @@ def _load_template() -> str:
     """Extract the fenced template body from absorb_judge.md.
 
     The .md file is a doc that describes the template and embeds it
-    inside a ``` block — same pattern as ``consolidator.md``. We grab
-    the largest fenced block to avoid accidentally formatting docs prose.
+    inside a ``` block. We grab the largest fenced block to avoid
+    accidentally formatting docs prose.
     """
     text = _TEMPLATE_PATH.read_text(encoding="utf-8")
     matches = re.findall(r"```(?:[a-z]*)\n(.*?)\n```", text, re.DOTALL)
