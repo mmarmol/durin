@@ -140,6 +140,15 @@ class MemoryStoreTool(Tool):
 
     config_key = "memory"
 
+    @classmethod
+    def enabled(cls, ctx: Any) -> bool:
+        # §8a: removed from the agent toolset in the new memory model. Facts
+        # about a thing go through `memory_upsert_entity`; documents through
+        # `memory_ingest`; interactions stay in the session for the dream to
+        # distil. The `store_memory` FUNCTION stays for internal callers
+        # (compaction summaries, ingest chunks).
+        return False
+
     def __init__(
         self,
         workspace: str | Path,
@@ -152,15 +161,11 @@ class MemoryStoreTool(Tool):
         # Lazily constructed once on first use; None means "disabled".
         self._vector_index: Optional[VectorIndex] = None
         self._vector_index_attempted = False
-        # Doc 25 §2.A.1 β.2 — per-entity threshold trigger config. When
-        # set + enabled + threshold_entries > 0, a successful write
-        # checks the per-entity post-cursor count and may dispatch a
-        # background dream pass. None disables the trigger entirely
-        # (tests, environments without the config).
+        # Retained for constructor compatibility only. They fed the per-entity
+        # threshold dream trigger, which was removed (§8e — the daily extract/
+        # refine passes consolidate now); memory_store itself is disabled in the
+        # new model.
         self._dream_config = dream_config
-        # Full DurinConfig. Forwarded to the threshold trigger so the
-        # spawned DreamRunner can resolve its model via aux_models.memory
-        # (else falls back to dream.model_override).
         self._app_config = app_config
 
     @property
@@ -351,38 +356,6 @@ class MemoryStoreTool(Tool):
                 result["id"], exc,
             )
 
-        # Doc 25 §2.A.1 β.2: threshold trigger. After a successful write
-        # that tagged at least one entity, check whether any of those
-        # entities crossed the per-entity post-cursor threshold. If yes,
-        # dispatch a background dream pass (throttled by DreamRunner).
-        # Fire-and-forget — must NOT block the tool response. Failures
-        # are logged, never propagated.
-        if entities:
-            self._maybe_dispatch_threshold_dream(list(entities), vi)
-
+        # §8e: the per-entity threshold dream trigger (legacy DreamRunner) is
+        # removed — the daily extract/refine passes handle consolidation.
         return result
-
-    def _maybe_dispatch_threshold_dream(
-        self,
-        entities: list[str],
-        vector_index: Optional[VectorIndex],
-    ) -> None:
-        """Thin wrapper around the shared helper (P7, doc 20).
-
-        Kept as a method for backward-compat with existing tests that
-        call it directly. Delegates to
-        :func:`durin.memory.threshold_trigger.maybe_dispatch_threshold_dream`
-        with ``source_trigger="threshold"`` (preserved telemetry label).
-        """
-        from durin.memory.threshold_trigger import (
-            maybe_dispatch_threshold_dream,
-        )
-
-        maybe_dispatch_threshold_dream(
-            workspace=self._workspace,
-            entities=entities,
-            dream_config=self._dream_config,
-            vector_index=vector_index,
-            source_trigger="threshold",
-            app_config=self._app_config,
-        )

@@ -1,10 +1,10 @@
 """LLM-judge for entity absorption (doc 25 §2.D).
 
-When auto-absorb is enabled, the :class:`DreamRunner` calls
-:func:`judge_pair` on every alias-overlap candidate that survived the
-cross-type filter and the 24-hour quarantine. The judge returns a
+When auto-absorb is enabled, the refine pass (``refine_dream.run_refine``)
+calls :func:`judge_pair` on every alias-overlap candidate that survived the
+cross-type filter and the ``min_age_hours`` quarantine. The judge returns a
 verdict (``"same"`` / ``"different"`` / ``"unclear"``), a confidence
-score (0-100), and free-form reasoning. The dispatcher merges only when
+score (0-100), and free-form reasoning. Refine merges only when
 ``verdict == "same"`` AND ``confidence >= confidence_threshold``.
 
 Design notes:
@@ -18,7 +18,7 @@ Design notes:
   dream_model`` (glm peer review C2, 2026-05-24) — the judge can see
   that two pages observed years apart probably aren't the same
   entity even if alias coincides.
-- **Markdown markers**: same envelope format as ``consolidator.md``
+- **Markdown markers**: a ``===MARKER===`` envelope format
   (``===VERDICT===`` / ``===CONFIDENCE===`` / ``===REASONING===`` /
   ``===END===``). Keeps the parser surface consistent.
 - **Retry on parse failure**: up to ``max_retries`` (default 2)
@@ -143,7 +143,7 @@ def judge_pair(
     # usage propagation for auto-absorb is intentionally NOT plumbed
     # into `memory.dream.end` (the absorb judge runs AFTER the dream
     # pass and emits its own `memory.absorb.judged` event).
-    from durin.memory.dream import LLMResponse as _LLMResponse
+    from durin.memory.llm_invoke import LLMResponse as _LLMResponse
 
     last_error: Exception | None = None
     for attempt in range(max_retries + 1):
@@ -203,8 +203,8 @@ def _load_template() -> str:
     """Extract the fenced template body from absorb_judge.md.
 
     The .md file is a doc that describes the template and embeds it
-    inside a ``` block — same pattern as ``consolidator.md``. We grab
-    the largest fenced block to avoid accidentally formatting docs prose.
+    inside a ``` block. We grab the largest fenced block to avoid
+    accidentally formatting docs prose.
     """
     text = _TEMPLATE_PATH.read_text(encoding="utf-8")
     matches = re.findall(r"```(?:[a-z]*)\n(.*?)\n```", text, re.DOTALL)
@@ -228,9 +228,6 @@ def _render_page_block(page: EntityPage, *, mtime: datetime | None) -> str:
         else "(unknown)"
     )
     lines.append(f"- File last modified: {created}")
-    cursor = page.dream_processed_through
-    if cursor:
-        lines.append(f"- Last dreamed through: {cursor}")
     if page.aliases:
         lines.append(f"- Aliases: {', '.join(page.aliases)}")
     # Identifiers are richer than aliases for entity disambiguation

@@ -539,6 +539,19 @@ class WebSocketChannel(BaseChannel):
         # become self-expiring (callers just refresh the session list).
         self._media_secret: bytes = secrets.token_bytes(32)
 
+    def _endpoint_workspace(self) -> Path:
+        """The gateway's ACTUAL workspace for read-only memory endpoints.
+
+        The ``--workspace`` flag sets the workspace on the session manager;
+        ``load_config()`` would re-read the config file's ``workspace_path`` and
+        ignore that override, so the memory graph/search endpoints must resolve
+        the workspace from the session manager when present.
+        """
+        if self._session_manager is not None:
+            return self._session_manager.workspace
+        from durin.config.loader import load_config
+        return load_config().workspace_path
+
     # -- Subscription bookkeeping -------------------------------------------
 
     def _attach(self, connection: Any, chat_id: str) -> None:
@@ -950,7 +963,7 @@ class WebSocketChannel(BaseChannel):
         from durin.memory.graph import build_memory_graph
 
         try:
-            workspace = load_config().workspace_path
+            workspace = self._endpoint_workspace()
             payload = build_memory_graph(workspace)
         except Exception as exc:  # noqa: BLE001
             logger.exception("memory graph build failed")
@@ -973,7 +986,7 @@ class WebSocketChannel(BaseChannel):
 
         ref = unquote(ref_encoded)
         try:
-            workspace = load_config().workspace_path
+            workspace = self._endpoint_workspace()
             payload = get_entity_detail(workspace, ref)
         except Exception as exc:  # noqa: BLE001
             logger.exception("memory entity detail failed for {}", ref)
@@ -1000,7 +1013,7 @@ class WebSocketChannel(BaseChannel):
 
         stem = unquote(stem_encoded)
         try:
-            workspace = load_config().workspace_path
+            workspace = self._endpoint_workspace()
             payload = get_session_detail(workspace, stem)
         except Exception as exc:  # noqa: BLE001
             logger.exception("memory session detail failed for {}", stem)
@@ -1026,7 +1039,7 @@ class WebSocketChannel(BaseChannel):
 
         uri = (_query_first(query, "uri") or "").strip()
         try:
-            workspace = load_config().workspace_path
+            workspace = self._endpoint_workspace()
             payload = get_entry_detail(workspace, uri)
         except Exception as exc:  # noqa: BLE001
             logger.exception("memory entry detail failed for {}", uri)
@@ -1053,7 +1066,7 @@ class WebSocketChannel(BaseChannel):
 
         uri = (_query_first(query, "uri") or "").strip()
         try:
-            workspace = load_config().workspace_path
+            workspace = self._endpoint_workspace()
             payload = forget_entry(workspace, uri)
         except Exception as exc:  # noqa: BLE001
             logger.exception("memory forget failed for {}", uri)
@@ -1083,7 +1096,7 @@ class WebSocketChannel(BaseChannel):
 
         uri = (_query_first(query, "uri") or "").strip()
         try:
-            workspace = load_config().workspace_path
+            workspace = self._endpoint_workspace()
             payload = get_entry_backlinks(workspace, uri)
         except Exception as exc:  # noqa: BLE001
             logger.exception("memory backlinks failed for {}", uri)
@@ -1108,7 +1121,7 @@ class WebSocketChannel(BaseChannel):
         a = unquote(source_enc)
         b = unquote(target_enc)
         try:
-            workspace = load_config().workspace_path
+            workspace = self._endpoint_workspace()
             payload = get_edge_detail(workspace, a, b)
         except Exception as exc:  # noqa: BLE001
             logger.exception("memory edge detail failed for {} ↔ {}", a, b)
@@ -1496,7 +1509,7 @@ class WebSocketChannel(BaseChannel):
         from durin.agent import skills_store as ss
         from durin.config.loader import load_config
         try:
-            workspace = load_config().workspace_path
+            workspace = self._endpoint_workspace()
             status, payload = ss.web_list(workspace)
         except Exception as exc:  # noqa: BLE001
             return _http_error(500, f"skills list failed: {exc}")
@@ -1509,7 +1522,7 @@ class WebSocketChannel(BaseChannel):
         from durin.agent import skills_store as ss
         from durin.config.loader import load_config
         try:
-            workspace = load_config().workspace_path
+            workspace = self._endpoint_workspace()
             status, payload = ss.web_quarantine(workspace)
         except Exception as exc:  # noqa: BLE001
             return _http_error(500, f"skills quarantine failed: {exc}")
@@ -1525,7 +1538,7 @@ class WebSocketChannel(BaseChannel):
         from durin.agent import skills_store as ss
         from durin.config.loader import load_config
         try:
-            workspace = load_config().workspace_path
+            workspace = self._endpoint_workspace()
             status, payload = ss.web_get(workspace, decoded)
         except Exception as exc:  # noqa: BLE001
             return _http_error(500, f"skill read failed: {exc}")
@@ -1545,7 +1558,7 @@ class WebSocketChannel(BaseChannel):
         from durin.agent import skills_store as ss
         from durin.config.loader import load_config
         try:
-            workspace = load_config().workspace_path
+            workspace = self._endpoint_workspace()
             status, payload = ss.web_save(workspace, decoded, content)
         except Exception as exc:  # noqa: BLE001
             return _http_error(500, f"skill save failed: {exc}")
@@ -1563,7 +1576,7 @@ class WebSocketChannel(BaseChannel):
         from durin.agent import skills_store as ss
         from durin.config.loader import load_config
         try:
-            workspace = load_config().workspace_path
+            workspace = self._endpoint_workspace()
             status, payload = ss.web_mode(workspace, decoded, value)
         except Exception as exc:  # noqa: BLE001
             return _http_error(500, f"skill mode failed: {exc}")
@@ -1579,7 +1592,7 @@ class WebSocketChannel(BaseChannel):
         from durin.agent import skills_store as ss
         from durin.config.loader import load_config
         try:
-            workspace = load_config().workspace_path
+            workspace = self._endpoint_workspace()
             status, payload = ss.web_import_resolve(workspace, source)
         except Exception as exc:  # noqa: BLE001
             return _http_error(500, f"resolve failed: {exc}")
@@ -1595,7 +1608,7 @@ class WebSocketChannel(BaseChannel):
         from durin.agent import skills_store as ss
         from durin.config.loader import load_config
         try:
-            workspace = load_config().workspace_path
+            workspace = self._endpoint_workspace()
             status, payload = ss.web_import_fetch(workspace, source)
         except Exception as exc:  # noqa: BLE001
             return _http_error(500, f"import failed: {exc}")
@@ -1618,7 +1631,7 @@ class WebSocketChannel(BaseChannel):
         from durin.agent import skills_store as ss
         from durin.config.loader import load_config
         try:
-            workspace = load_config().workspace_path
+            workspace = self._endpoint_workspace()
             status, payload = await asyncio.to_thread(ss.web_skill_search, workspace, q, limit)
         except Exception as exc:  # noqa: BLE001
             return _http_error(500, f"search failed: {exc}")
@@ -1650,7 +1663,7 @@ class WebSocketChannel(BaseChannel):
         from durin.agent import skills_store as ss
         from durin.config.loader import load_config
         try:
-            workspace = load_config().workspace_path
+            workspace = self._endpoint_workspace()
             status, payload = ss.web_skill_approve(workspace, decoded,
                                                    confirm=confirm, override=override,
                                                    replace=replace)
@@ -1669,7 +1682,7 @@ class WebSocketChannel(BaseChannel):
         from durin.agent import skills_store as ss
         from durin.config.loader import load_config
         try:
-            workspace = load_config().workspace_path
+            workspace = self._endpoint_workspace()
             status, payload = await asyncio.to_thread(ss.web_skill_judge, workspace, decoded)
         except Exception as exc:  # noqa: BLE001
             return _http_error(500, f"judge failed: {exc}")
@@ -1685,7 +1698,7 @@ class WebSocketChannel(BaseChannel):
         from durin.agent import skills_store as ss
         from durin.config.loader import load_config
         try:
-            workspace = load_config().workspace_path
+            workspace = self._endpoint_workspace()
             status, payload = ss.web_skill_reject(workspace, decoded)
         except Exception as exc:  # noqa: BLE001
             return _http_error(500, f"reject failed: {exc}")

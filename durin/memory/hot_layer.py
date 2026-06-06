@@ -1,12 +1,12 @@
 """Hot layer — the always-loaded memory section of the stable prompt tier.
 
-Phase 1.9 of the memory subsystem (renderer + cursor logic), refreshed
-in Phase 1.5 (canonical spec: ``docs/architecture/memory/06_prompts_and_instructions.md``
+Phase 1.9 of the memory subsystem (renderer), refreshed in Phase 1.5
+(canonical spec: ``docs/architecture/memory/06_prompts_and_instructions.md``
 §8). The hot layer is what the agent carries in every prompt without
 any tool call: identity essentials, canonical entity pages (the "main
-memory"), recent post-cursor fragments (entries that have not yet been
-consolidated into a page), top headlines and a de-duplicated entity
-name list. By design it changes at most once per Dream pass; between
+memory"), recent tagged fragments (two-track model, N3: fragments are not
+consolidated into pages, so they surface by recency), top headlines and a
+de-duplicated entity name list. By design it changes at most once per Dream pass; between
 passes it is read-only so the upstream provider's prompt cache stays
 warm across many turns.
 
@@ -41,7 +41,7 @@ __all__ = ["HotLayer", "read_hot_layer"]
 # Total ~1900 tokens — still cache-friendly between dreams.
 _IDENTITY_BUDGET_CHARS = 800    # ~200 tokens
 _CANONICAL_BUDGET_CHARS = 2400  # ~600 tokens — N entity pages
-_FRAGMENTS_BUDGET_CHARS = 1200  # ~300 tokens — recent post-cursor entries
+_FRAGMENTS_BUDGET_CHARS = 1200  # ~300 tokens — recent tagged entries
 _HEADLINES_BUDGET_CHARS = 1200  # ~300 tokens — legacy class entries
 _ENTITIES_BUDGET_CHARS = 600    # ~150 tokens
 _MAX_CANONICAL = 12
@@ -71,7 +71,7 @@ class HotLayer(NamedTuple):
         """Render the hot layer as markdown for the stable prompt tier.
 
         Section order follows §8.3: identity → canonical (main memory) →
-        fragments (recent, post-cursor) → headlines (legacy entries) →
+        fragments (recent, by recency) → headlines (legacy entries) →
         entity list. The LLM sees the canonical first, marked as
         authoritative; fragments come next with their timestamp so the
         model can reconcile temporal contradictions.
@@ -90,9 +90,9 @@ class HotLayer(NamedTuple):
         if self.fragment_blocks:
             body = "\n\n".join(self.fragment_blocks)
             parts.append(
-                "## Memory: Recent fragments (post-cursor)\n\n"
-                "Episodic entries not yet consolidated into a canonical "
-                "page. Reconcile with the canonical above using the "
+                "## Memory: Recent fragments\n\n"
+                "Recent episodic entries — raw memories that may carry newer "
+                "info than the canonical above. Reconcile using the "
                 "timestamps.\n\n"
                 + body
             )
@@ -113,13 +113,13 @@ def read_hot_layer(workspace: Path) -> HotLayer:
     section to empty so the prompt still builds.
     """
     try:
-        canonicals, canonical_cursors = _read_canonical_blocks(workspace)
+        canonicals = _read_canonical_blocks(workspace)
     except Exception as exc:  # pragma: no cover - defensive
         _emit_failure("canonical_blocks", exc)
-        canonicals, canonical_cursors = [], {}
+        canonicals = []
 
     try:
-        fragments = _read_fragment_blocks(workspace, canonical_cursors)
+        fragments = _read_fragment_blocks(workspace)
     except Exception as exc:  # pragma: no cover - defensive
         _emit_failure("fragment_blocks", exc)
         fragments = []
@@ -167,21 +167,17 @@ def _emit_failure(component: str, exc: BaseException) -> None:
 
 def _read_canonical_blocks(
     workspace: Path,
-) -> tuple[list[str], dict[str, Any]]:
+) -> list[str]:
     """Render top N entity pages as ``=== CANONICAL ===`` blocks.
 
-    Returns ``(blocks, cursors)`` where ``cursors`` maps each entity
-    ref to its ``dream_processed_through`` value — used by
-    :func:`_read_fragment_blocks` to filter to post-cursor entries.
-    Pages under ``archive/`` are skipped (absorbed records, surfaced
-    only via ``durin memory expand``).
+    Pages under ``archive/`` are skipped (absorbed records, surfaced only via
+    ``durin memory expand``).
 
     Per-page parse failures degrade silently with a telemetry event;
     the rest of the walk continues so one bad page can't break the
     whole layer.
     """
     pages: list[tuple[str, str, EntityPage]] = []  # (sort_key, ref, page)
-    cursors: dict[str, Any] = {}
     for page_path in walk_class(workspace, "entities"):
         try:
             page = EntityPage.from_file(page_path)
@@ -196,8 +192,6 @@ def _read_canonical_blocks(
         # written pages surface even pre-frontmatter updated_at adoption.
         updated = _resolve_updated_at(page, page_path)
         pages.append((updated, ref, page))
-        if page.dream_processed_through is not None:
-            cursors[ref] = page.dream_processed_through
 
     pages.sort(key=lambda t: t[0], reverse=True)
     blocks: list[str] = []
@@ -208,7 +202,7 @@ def _read_canonical_blocks(
             break
         blocks.append(block)
         total_chars += len(block)
-    return blocks, cursors
+    return blocks
 
 
 def _resolve_updated_at(page: EntityPage, page_path: Path) -> str:
@@ -385,15 +379,14 @@ def _render_identifiers_line(identifiers: Any) -> str:
 
 def _read_fragment_blocks(
     workspace: Path,
-    cursors: dict[str, Any],
 ) -> list[str]:
-    """Render up to N post-cursor entries from episodic/stable as FRAGMENT blocks.
+    """Render up to N recent entries from episodic/stable as FRAGMENT blocks.
 
-    Per §8.4, a fragment qualifies when BOTH:
-
-    1. Its ``valid_from`` (or file mtime fallback) is strictly after the
-       ``dream_processed_through`` cursor of every entity it tags.
-    2. Its class is ``episodic`` or ``stable`` (corpus and pending out).
+    A fragment qualifies when its class is ``episodic`` or ``stable`` (corpus
+    and pending out) and it tags at least one entity. Two-track model
+    (2026-06-06, N3): fragments are NOT consolidated into entity pages, so there
+    is no cursor-based "graduation" — recent tagged fragments surface by recency,
+    capped by the budget.
 
     Untagged entries (``entry.entities == []``) are not "fragments
     amending a canonical" by definition — they surface via the
@@ -412,15 +405,6 @@ def _read_fragment_blocks(
             if not entry.entities:
                 continue
             ts = entry.valid_from.isoformat() if entry.valid_from else ""
-            if ts and any(ref in cursors for ref in entry.entities):
-                if all(
-                    _is_at_or_before(ts, cursors.get(ref))
-                    for ref in entry.entities
-                    if ref in cursors
-                ):
-                    # Every relevant cursor already covers this entry —
-                    # canonical already absorbed it, skip.
-                    continue
             try:
                 rel = path.relative_to(workspace).as_posix()
             except ValueError:

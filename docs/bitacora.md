@@ -2030,3 +2030,52 @@ The design decision above (don't touch telemetry) rests on the corrected
 fact. **Lesson:** verify a subsystem's actual lifecycle in code before
 designing a feature that assumes its absence.
 
+
+---
+
+## Post-migration audit: legacy dream cluster removed, two-track model settled (June 2026)
+
+The entity-centric migration deleted the old consolidation stack; a meticulous
+post-migration audit (A1-A5, B1-B4, N1-N9, C1-C3 — record in
+`docs/qa/post_migration_audit_2026-06.md`) then closed the gaps and locked the
+decisions below. **Read before re-proposing any of these.**
+
+### Discarded (removed, with rationale)
+- **The DreamConsolidator / DreamRunner cluster + the JSON-Patch apply pipeline +
+  `threshold_trigger.py`.** Replaced by four passes of the single `memory_dream`
+  cron (extract / refine / skill / always_on) writing through `memory_writer`'s
+  git-CAS field patches. *Why threshold died:* 800-doc bench bursts made per-write
+  LLM dispatch unviable (see `project_ingest_dormant_rationale`); any re-enable
+  needs an explicit throttle.
+- **The per-entity `dream_processed_through` cursor** (N3). The earlier model
+  folded an entity's fragments into its page and used the cursor to "graduate"
+  consolidated fragments out of the hot layer. *Why removed:* the redesign is a
+  **two-track model** — entity pages (consolidated, built from SESSIONS + agent
+  authoring) and raw fragments (`/remember` facts + session summaries) that are
+  NEVER folded into pages. Nothing consolidates fragments, so nothing advances a
+  per-entity cursor. Don't reintroduce it without first reintroducing fragment→page
+  consolidation.
+- **`existing_uris` anti-dup in the extract prompt** (A5). The extract dream
+  enriches entities BY the agent's explicit `memory_upsert_entity` ref (it never
+  creates from scratch), so it can't introduce the duplicate `existing_uris` would
+  prevent; dedup is the agent's search-first instruction + the refine merge.
+- **The legacy working-memory Dream (`MEMORY.md` / `USER.md` injection + the 2h
+  `memory.py::Dream` phase-1/phase-2 over `history.jsonl`).** The agent's identity
+  now lives in the static `SOUL.md` bootstrap + the pinned principal entity;
+  standing behavioural guidance is the `always_on` pin (A4), curated by the dream
+  within a token budget. There is now exactly ONE dream cron (`memory_dream`).
+
+### Kept / decided
+- **Relation cap is alert-only** (A3): crossing soft/hard emits telemetry + logs
+  but never blocks a write or drops a relation. Enforcing the hard reject is a
+  one-line flip if mega-hubs ever prove real.
+- **No fragment auto-archive** (N4): episodic is the user's raw track
+  (`/remember`); auto-archiving would destroy explicit user memory. Deletion is
+  manual (`memory_forget`, reversible to `memory/archive/`). A size/age cap — not
+  auto-archive — is the lever if volume ever matters.
+- **Lesson (N1/N2/N8):** the live end-to-end + headless-webui checks caught three
+  real gaps the unit suite + doc-rewrite missed (hard-reset clobbering hand edits;
+  nothing embedding entity pages reactively; `rebuild_from_workspace` skipping
+  references). Verify the *whole path live* before declaring a subsystem done.
+
+## Last updated: 2026-06-06 (post-migration audit close)

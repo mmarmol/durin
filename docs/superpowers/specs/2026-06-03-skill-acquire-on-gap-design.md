@@ -9,7 +9,7 @@ drove memory_search → skill_search → skill_import → skill_write and author
 skill (`pdf-invoice-to-csv` + bundled script). **Both paths verified.**
 Plan: `docs/archive/skills-plans/2026-06-04-skill-acquire-on-gap.md`.
 **Design (2026-06-03):** grounded against code + Hermes/skill-creator prior art
-**Vision doc:** `docs/plans/skills_evolutivas.md` (§1.5, §6.C, §8.E)
+**Vision doc:** `docs/archive/skills_evolutivas.md` (§1.5, §6.C, §8.E)
 **Related:** discovery/registries spec `2026-06-03-skill-discovery-registries-design.md` (search substrate, BUILT)
 
 ## 1. What this is

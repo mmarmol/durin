@@ -13,7 +13,7 @@ This document is the **entry point to the specification corpus**. It defines the
 
 **How to read this corpus:** start here. Then go to the doc covering the module you need to understand or modify. Each doc is the source of truth for its scope; no fact should be duplicated across docs (only referenced via `[[link]]`).
 
-> **Heads-up — two consolidation tracks.** This corpus describes the **entity-centric** memory subsystem (the knowledge graph the agent builds about its world). A second, older consolidator — the legacy `dream` cron registered in `cli/commands.py:1604` — runs in parallel to maintain `MEMORY.md` / `SOUL.md` / `USER.md` and create `skills/<name>/SKILL.md`. It's not duplication; it's a separate layer (the agent's *own* working memory and identity, not knowledge about the world). See `05_dream_cold_path.md::§0` for the side-by-side comparison and the rationale for keeping them separate.
+> **Heads-up — two memory tracks (within this one subsystem).** This corpus describes the **entity-centric** memory subsystem. It holds two coexisting tracks: **(1) entity pages** — consolidated knowledge the agent authors (`memory_upsert_entity`) and the extract dream enriches from sessions; and **(2) raw fragments** — episodic/stable entries (`/remember` facts, session summaries) surfaced by recency, never folded into pages. The single `memory_dream` cron runs four passes (extract / refine / skill / always_on). The legacy `dream` consolidator that maintained `MEMORY.md` / `USER.md` was **removed** (the agent's identity now lives in the static `SOUL.md` bootstrap file + the pinned principal entity). See `05_dream_cold_path.md::§0`.
 
 ---
 
@@ -67,7 +67,8 @@ All design decisions rest on these principles. Any decision violating one requir
                              │ tool calls
                              ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│   AGENT TOOLS  (memory_search, memory_store, memory_ingest, ...)  │
+│   AGENT TOOLS  (memory_search, memory_upsert_entity,             │
+│                 memory_ingest, memory_drill, memory_forget)      │
 │                                                                   │
 │   Adapter layer between LLM and engines. Sectioned results with   │
 │   structural markers.                                             │
@@ -79,13 +80,13 @@ All design decisions rest on these principles. Any decision violating one requir
 │  SEARCH PIPELINE       │   │  WRITE PIPELINE                     │
 │  (hot path, no LLM)    │   │  (cold path, Dream + LLM)           │
 │                        │   │                                     │
-│  intent router         │   │  triggers (threshold, manual, cron) │
+│  intent router         │   │  triggers (cron / reactive / manual)│
 │  ↓                     │   │  ↓                                  │
-│  vector + BM25         │   │  Dream consolidator (LLM)           │
+│  vector + BM25         │   │  Dream: 4 passes (LLM)              │
 │  ↓                     │   │  ↓                                  │
 │  weighted merge        │   │  entity dedup / absorb-judge        │
 │  ↓                     │   │  ↓                                  │
-│  entity-aware rerank   │   │  apply (write + archive + reindex)  │
+│  entity-aware rerank   │   │  apply (CAS write + reindex)        │
 │  ↓                     │   │                                     │
 │  cross-encoder rerank  │   │                                     │
 └──────────┬─────────────┘   └────────────────┬────────────────────┘
@@ -138,18 +139,20 @@ All design decisions rest on these principles. Any decision violating one requir
 ### 5.2 Write path (cold, async)
 
 ```
-1. Agent or user calls memory_store / memory_ingest
-2. Tool creates entry in memory/{episodic|stable|corpus}/<ts>.md
-3. Entry is vectorized immediately (re-embed-on-write) → LanceDB + FTS5
-4. Threshold trigger evaluates: if entity accumulated N entries, dispatch Dream
-5. Dream (daemon thread, locked, throttled):
-   a. Reads post-cursor entries for entity X
-   b. Receives in prompt: existing_schema + known URIs
-   c. LLM emits JSON Patch over the entity page + body delta + commit
-   d. apply(): validates YAML, updates .md, advances cursor
-   e. Entity dedup (absorb-judge if alias overlap)
-   f. Archive: consolidated episodic entries → memory/archive/episodic/
-   g. Index re-derivation (LanceDB + FTS5)
+Track 1 — entity pages (consolidated knowledge):
+1. Agent calls memory_upsert_entity (name/aliases/relations/body as prose)
+   → memory_writer.write_entity: git-CAS field patch to memory/entities/<type>/<slug>.md
+2. The file change re-derives the indices (file watcher → FTS5 + vector, N2)
+3. The extract dream (cron/reactive) reads new SESSION turns → extracts typed
+   attributes onto the entity page (precedence user > dream > agent)
+4. The refine dream (cron, opt-in auto_absorb) dedups alias-overlap entities
+   via the absorb-judge LLM
+
+Track 2 — raw fragments (NOT consolidated):
+1. /remember (or memory_ingest for whole documents) writes memory/{episodic|
+   stable}/<id>.md (references for ingested docs); indexed for search
+2. Surfaced by recency in the hot layer + search; never folded into a page,
+   never auto-archived (manual memory_forget only)
 ```
 
 ## 6. Glossary
@@ -191,7 +194,7 @@ the specific module where the work landed.
 | **Recency handling** | The LLM does it. Every hit carries `valid_from`; the agent reasons about which fact is current given the question's intent. Search does not pre-filter by age. | Implicit decay was removed 2026-05-30 after the LoCoMo conv-5-q20 chicken case showed it perjudicates factual atemporal queries. Rationale in doc 03 §10. |
 | **Versioning / audit** | Git history exists; webui surfaces it via memory dashboards (Phase 4 dashboards shipped) | Dream uses git log internally; operators access via any git CLI or webui. |
 | **Tools** | `query` + `keywords` + `scope` + `level` + `limit` + sectioned results | Shipped Phase 5 d1. `limit` exposed audit A3. |
-| **Dream** | Consolidates facts into entities via JSON Patch + BODY_DELTA + COMMIT (Phase 1.9). Archives consumed episodic. Absorb-judge for entity dedup (opt-in). 3-strike quarantine on structural failures. | All shipped Phase 1.9 (commit `6aafc3f`). Auto-absorb skips user-authored entity pages (audit E19). |
+| **Dream** | The `memory_dream` cron runs four passes: **extract** (session turns → entity attributes via `memory_writer` CAS), **refine** (alias-overlap dedup via the absorb-judge, opt-in `auto_absorb`), **skill** (sessions → reusable skills), **always_on** (curate the pinned guidance within a token budget). Reactive triggers (post_compaction / session_close) run extract only. | Shipped. Auto-absorb skips user-authored entity pages (audit E19); fragments are not consolidated (two-track model). |
 | **Sessions** | Session summaries are a first-class memory class (`session_summary`) indexed by FTS5 + LanceDB | Shipped audit A10 (2026-05-28). `Consolidator._persist_last_summary` writes `memory/session_summary/<key>.md`. |
 
 ## 8. Document index
@@ -202,14 +205,14 @@ The following documents live in `docs/architecture/memory/` and are the detailed
 |---|---|---|
 | 00 | `00_overview.md` (this) | Overview, principles, diagram, glossary, index |
 | 01 | `01_data_and_entities.md` | Data types, schemas, lifecycle, entity model (attributes + relations + provenance), naming, paths |
-| 02 | `02_indexing.md` (pending) | LanceDB vector index, FTS5 lexical, SQLite structural (if applicable), re-derivation, file watcher |
-| 03 | `03_search_pipeline.md` (pending) | Intent router, vector search, BM25, weighted merge, entity-aware ranker, cross-encoder |
-| 04 | `04_agent_tools.md` (pending) | memory_search, memory_store, memory_ingest, memory_drill, result sectioning, markers |
-| 05 | `05_dream_cold_path.md` (pending) | Triggers, consolidator, JSON Patch, schema preservation, archive, dedup, absorb-judge, cursor |
-| 06 | `06_prompts_and_instructions.md` (pending) | identity.md Memory section, tool descriptions, marker conventions, LLM-facing messages |
-| 07 | `07_telemetry_and_observability.md` (pending) | Events, metrics, dashboards, health alarms |
-| 08 | `08_scope_and_discarded.md` (pending) | Revised non-goals, lessons from discarded experiments (G3.b), unadopted mechanisms from other systems |
-| 09 | `09_implementation_roadmap.md` (pending) | Concrete phasing: current state to final state, step by step, with done criteria |
+| 02 | `02_indexing.md` | LanceDB vector index, FTS5 lexical, SQLite structural (if applicable), re-derivation, file watcher |
+| 03 | `03_search_pipeline.md` | Intent router, vector search, BM25, weighted merge, entity-aware ranker, cross-encoder |
+| 04 | `04_agent_tools.md` | memory_search, memory_upsert_entity, memory_ingest, memory_drill, memory_forget, result sectioning, markers |
+| 05 | `05_dream_cold_path.md` | Four passes (extract/refine/skill/always_on), triggers, two-track model, absorb-judge dedup, config |
+| 06 | `06_prompts_and_instructions.md` | identity.md Memory section, tool descriptions, marker conventions, LLM-facing messages |
+| 07 | `07_telemetry_and_observability.md` | Events, metrics, dashboards, health alarms |
+| 08 | `08_scope_and_discarded.md` | Revised non-goals, lessons from discarded experiments (G3.b), unadopted mechanisms from other systems |
+| 09 | `09_implementation_roadmap.md` | Concrete phasing: current state to final state, step by step, with done criteria |
 
 The number and naming may be adjusted as we write. What matters is that each doc has a closed scope and explicit cross-references to related ones.
 

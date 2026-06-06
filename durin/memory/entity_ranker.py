@@ -14,10 +14,9 @@ Two pure functions:
      similarity score (typically LanceDB ``_distance``, lower=better).
    - **Entity-match ranking**: entity-pages whose id matches a query
      entity (any order, see note below), then memory entries tagged
-     with any query entity AND post-cursor (newer than the entity's
-     ``dream_processed_through``), ordered by recency. Pre-cursor
-     tagged entries are EXCLUDED from this list (their info lives in
-     the page; surfacing the raw entry duplicates context).
+     with any query entity, ordered by recency. (Two-track model, N3:
+     fragments are not consolidated into pages, so there is no
+     pre/post-cursor partition.)
 
    For each candidate, final score = ``Σ 1 / (rank_in_list + RRF_K)``
    across lists in which it appears. Sorted descending.
@@ -45,58 +44,16 @@ ranking among multiple pages for query entities is performed.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 from durin.memory.aliases_index import AliasIndex
-from durin.memory.entity_page import EntityPage
 
 __all__ = [
     "RRF_K",
     "extract_query_entities",
     "rank_with_entities",
-    "load_cursors_from_entities_dir",
     "RankedCandidate",
 ]
-
-
-def load_cursors_from_entities_dir(
-    memory_root: Path,
-    entity_refs: list[str],
-) -> dict[str, Any]:
-    """Read ``dream_processed_through`` from each entity's page (E11).
-
-    Returns ``{entity_ref: cursor_value}`` for refs whose page exists
-    and has a cursor field. The cursor map feeds ``rank_with_entities``
-    so the pre/post-cursor partitioning in §8.4 of doc 03 actually
-    applies — pre-E11 the v2 pipeline never loaded cursors and treated
-    every tagged entry as post-cursor.
-
-    Best-effort — missing pages or parse errors skip silently.
-
-    History: pre-E11 this lived as ``_load_cursors_from_entities_dir``
-    in ``durin/agent/tools/memory_search.py`` (v1 path consumer). When
-    the v1 path was removed in commit c820447 (Phase 5 d1 migration),
-    the helper was orphaned. Audit E11 (2026-05-28) moved it here next
-    to ``rank_with_entities``, the only consumer that needs it.
-    """
-    cursors: dict[str, Any] = {}
-    memory_root = Path(memory_root)
-    for ref in entity_refs:
-        if ":" not in ref:
-            continue
-        type_, slug = ref.split(":", 1)
-        page_path = memory_root / "entities" / type_ / f"{slug}.md"
-        if not page_path.exists():
-            continue
-        try:
-            page = EntityPage.from_file(page_path)
-        except Exception:  # noqa: BLE001
-            continue
-        if page is not None and page.dream_processed_through is not None:
-            cursors[ref] = page.dream_processed_through
-    return cursors
 
 
 # Constant from Cormack, Clarke, Buettcher 2009 ("Reciprocal Rank Fusion
@@ -176,34 +133,6 @@ def _tokenize(query: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Cursor comparison (G3): parse ISO datetimes, never compare raw strings.
-# ---------------------------------------------------------------------------
-
-
-def _is_pre_cursor(entry_ts: str | None, cursor: Any) -> bool:
-    """True iff entry timestamp is at or before the entity's cursor.
-
-    Parses both as ISO datetimes (handles ``2026-04-01``, ``2026-04-01T...``,
-    trailing ``Z``). String comparison is intentionally avoided per glm
-    G3: ``"2024-01-15T10:30:00" <= "2024-01-15"`` is False
-    lexicographically but the entry IS post the date-only cursor in
-    real time. Numeric cursors (msg_idx) are not comparable to ISO ts
-    and return False (treat as "not pre-cursor", default to boost).
-    """
-    if not entry_ts or cursor is None:
-        return False
-    # Integer cursor (msg_idx) cannot be compared to ISO timestamp.
-    if isinstance(cursor, (int, float)):
-        return False
-    try:
-        et = datetime.fromisoformat(str(entry_ts).replace("Z", "+00:00"))
-        ct = datetime.fromisoformat(str(cursor).replace("Z", "+00:00"))
-    except (ValueError, TypeError):
-        return False  # malformed → fail open (don't filter out)
-    return et <= ct
-
-
-# ---------------------------------------------------------------------------
 # rank_with_entities (RRF)
 # ---------------------------------------------------------------------------
 
@@ -228,7 +157,6 @@ def rank_with_entities(
     candidates: list[dict[str, Any]],
     *,
     query_entities: list[str],
-    cursors: dict[str, Any] | None = None,
     score_field: str = "_distance",
     higher_is_better: bool = False,
 ) -> list[RankedCandidate]:
@@ -239,8 +167,9 @@ def rank_with_entities(
     - **Vector rank**: candidates sorted by ``score_field`` (default
       LanceDB ``_distance``, lower=better; flip with ``higher_is_better``).
     - **Entity-match rank**: entity-pages whose ``id`` ∈ query_entities,
-      then memory entries tagged with any query entity AND post-cursor,
-      ordered by recency. Pre-cursor entries are excluded.
+      then memory entries tagged with any query entity, ordered by recency.
+      (Two-track model, N3: fragments are not consolidated, so there is no
+      pre/post-cursor partition — all tagged entries rank by recency.)
 
     Final score for each candidate = sum of ``1/(rank + RRF_K)`` across
     lists in which the candidate's id appears. Sorted descending.
@@ -251,9 +180,6 @@ def rank_with_entities(
         query_entities: Entity refs identified in the query (output of
             :func:`extract_query_entities`). Empty list → ranking falls
             back to vector ranking only.
-        cursors: Optional ``entity_ref → cursor_value`` map.
-            ``cursor_value`` may be ISO datetime string or int msg_idx;
-            G3 handles both safely.
         score_field: Name of the base similarity field. Default
             ``"_distance"`` (LanceDB).
         higher_is_better: Set True if base score is similarity (higher=better).
@@ -265,7 +191,6 @@ def rank_with_entities(
     Raises:
         ValueError: when any candidate is missing the ``id`` field.
     """
-    cursors = cursors or {}
     query_entity_set = set(query_entities)
 
     # --- Vector ranking ---------------------------------------------------
@@ -276,12 +201,12 @@ def rank_with_entities(
     by_vector = sorted(candidates, key=base_sort_key)
 
     # --- Entity-match ranking ---------------------------------------------
-    # Pages for query entities, then post-cursor tagged entries by recency.
+    # Pages for query entities, then tagged entries by recency.
     # G13: order among pages for different query entities is the order
     # they appear in ``candidates`` (typically vector-sort order). No
     # additional sorting is performed across pages.
     pages_for_query: list[dict[str, Any]] = []
-    tagged_post_cursor: list[tuple[str, dict[str, Any]]] = []
+    tagged_entries: list[tuple[str, dict[str, Any]]] = []
 
     if query_entity_set:
         for c in candidates:
@@ -298,16 +223,13 @@ def rank_with_entities(
             if not overlap:
                 continue
             entry_ts = c.get("valid_from") or c.get("created_at") or ""
-            # G2/G3: cursor compare uses datetime, not string.
-            is_pre = any(_is_pre_cursor(entry_ts, cursors.get(e)) for e in overlap)
-            if not is_pre:
-                tagged_post_cursor.append((str(entry_ts), c))
+            tagged_entries.append((str(entry_ts), c))
 
-        # Newest first within tagged-post group.
-        tagged_post_cursor.sort(key=lambda t: t[0], reverse=True)
+        # Newest first within the tagged group.
+        tagged_entries.sort(key=lambda t: t[0], reverse=True)
 
     entity_rank_list: list[dict[str, Any]] = (
-        pages_for_query + [t[1] for t in tagged_post_cursor]
+        pages_for_query + [t[1] for t in tagged_entries]
     )
 
     # --- RRF fusion -------------------------------------------------------
@@ -326,7 +248,7 @@ def rank_with_entities(
         if c.get("class_name") == "entity_page":
             signals_by_id.setdefault(did, []).append(f"entity_page_rank:{rank}")
         else:
-            signals_by_id.setdefault(did, []).append(f"post_cursor_rank:{rank}")
+            signals_by_id.setdefault(did, []).append(f"tagged_rank:{rank}")
 
     # --- Build output -----------------------------------------------------
     ranked: list[RankedCandidate] = []

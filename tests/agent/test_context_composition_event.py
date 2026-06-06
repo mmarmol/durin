@@ -94,10 +94,6 @@ def test_composition_event_emits_on_build_messages(monkeypatch, tmp_path):
     assert "identity" in payload["stable_breakdown"]
     assert payload["stable_breakdown"]["identity"] > 0
 
-    # Volatile picked up the memory we set.
-    assert "memory_long_term" in payload["volatile_breakdown"]
-    assert payload["volatile_breakdown"]["memory_long_term"] > 0
-
     # History contributes; current message contributes.
     assert payload["history_msg_tokens"] > 0
     assert payload["current_msg_tokens"] > 0

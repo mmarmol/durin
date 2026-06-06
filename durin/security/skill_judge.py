@@ -153,7 +153,7 @@ def audit_skill(skill_dir: Path, *, judge_enabled: bool = False, judge_model: st
     invoke = llm_invoke
     if invoke is None:
         try:
-            from durin.memory.dream import default_llm_invoke
+            from durin.memory.llm_invoke import default_llm_invoke
             invoke = default_llm_invoke
         except Exception:  # noqa: BLE001
             return rep

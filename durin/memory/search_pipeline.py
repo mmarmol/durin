@@ -291,25 +291,12 @@ def _entity_aware_rerank(
 
     from durin.memory.entity_ranker import (
         extract_query_entities,
-        load_cursors_from_entities_dir,
         rank_with_entities,
     )
 
     query_entities = extract_query_entities(query, alias_index)
     if not query_entities:
         return fused
-
-    # E11 (2026-05-28): load the per-entity `dream_processed_through`
-    # cursors so `rank_with_entities` can apply the pre/post-cursor
-    # partitioning documented in doc 03 §8.4. Pre-E11 the v2 pipeline
-    # never passed cursors and treated every tagged entry as
-    # post-cursor — a regression introduced silently when the v1 path
-    # was removed in commit c820447. Best-effort: pages without a
-    # cursor (or unparseable pages) simply don't contribute, which
-    # falls back to the pre-E11 behaviour for those entities.
-    cursors = load_cursors_from_entities_dir(
-        workspace / "memory", list(query_entities),
-    )
 
     # Adapt FusedHit → dict shape rank_with_entities expects.
     candidates: list[dict] = []
@@ -337,7 +324,6 @@ def _entity_aware_rerank(
     ranked = rank_with_entities(
         candidates,
         query_entities=query_entities,
-        cursors=cursors,
         score_field="_score",
         higher_is_better=True,
     )

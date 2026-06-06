@@ -383,3 +383,25 @@ def test_source_refs_and_meta_evidence_compound_weight(tmp_path: Path) -> None:
                    or e["target"].startswith("session:")]
     assert len(sess_edges) == 1
     assert sess_edges[0]["weight"] == 2
+
+
+def test_entity_page_relations_become_typed_edges(tmp_path: Path) -> None:
+    # G1: explicit entity-page relations render as typed edges; a dangling
+    # target (no page) is promoted to a phantom node.
+    _clear_all()
+    page = EntityPage(
+        type="company", name="Globex",
+        relations=[{"to": "person:hank", "type": "founded_by"},
+                   {"to": "company:acme", "type": "partner"}],
+    )
+    page.save(tmp_path / "memory" / "entities" / "company" / "globex.md")
+    _write_page(tmp_path, "person", "hank")
+    g = build_memory_graph(tmp_path, include_sessions=False)
+    rels = {(e["source"], e["target"], e["type"])
+            for e in g["edges"] if e.get("kind") == "relation"}
+    assert rels == {
+        ("company:globex", "person:hank", "founded_by"),
+        ("company:globex", "company:acme", "partner"),
+    }
+    acme = next(n for n in g["nodes"] if n["id"] == "company:acme")
+    assert acme.get("phantom") is True

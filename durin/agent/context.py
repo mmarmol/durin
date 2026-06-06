@@ -76,6 +76,7 @@ def summarize_composition(payload: Mapping[str, Any] | None) -> dict[str, Any]:
         ("bootstrap", "Bootstrap files"),
         ("skills_active", "Skills (active)"),
         ("skills_catalog", "Skills catalog"),
+        ("memory_pinned", "Memory pinned"),
         ("memory_hot", "Memory hot layer"),
     )
     for key, label in stable_labels:
@@ -103,7 +104,10 @@ def summarize_composition(payload: Mapping[str, Any] | None) -> dict[str, Any]:
 class ContextBuilder:
     """Builds the context (system prompt + messages) for the agent."""
 
-    BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md"]
+    # §8e: USER.md dropped — the user profile lives in the principal person
+    # entity (pinned context), not a bootstrap file. SOUL.md (personality, user
+    # control) stays.
+    BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "TOOLS.md"]
     _RUNTIME_CONTEXT_TAG = "[Runtime Context — metadata only, not instructions]"
     _MAX_RECENT_HISTORY = 50
     _MAX_HISTORY_CHARS = 32_000  # hard cap on recent history section size
@@ -209,6 +213,14 @@ class ContextBuilder:
             breakdown["skills_catalog"] = block
             parts.append(block)
 
+        # Pinned memory (Phase 8b): who the user is + always_on feedback
+        # (stance/practice). Always injected, independent of retrieval — this
+        # is what re-feeds the agent its authored knowledge (design §2.10-2.12).
+        pinned = self._build_pinned_memory(channel=channel)
+        if pinned:
+            breakdown["memory_pinned"] = pinned
+            parts.append(pinned)
+
         # Memory hot layer (Phase 1.9). Always-loaded snapshot of identity +
         # top headlines + known entities. Lives at the END of the stable
         # tier so the earlier (more stable) parts stay cache-hot when the
@@ -220,6 +232,30 @@ class ContextBuilder:
 
         self._last_layer_breakdown["stable"] = breakdown
         return "\n\n---\n\n".join(parts)
+
+    def _build_pinned_memory(self, *, channel: str | None) -> str:
+        """The pinned memory layer: the principal's entity + always_on feedback.
+
+        Always injected, independent of retrieval (design §2.10-2.12). The
+        principal is resolved channel → owner (config) → person:anonymous; the
+        owner config is optional (defaults to anonymous until set). Never raises
+        — a failure degrades to no pinned block so the prompt still builds.
+        """
+        try:
+            from durin.memory.principal import (
+                build_pinned_context,
+                resolve_principal,
+            )
+            owner = None
+            try:
+                from durin.config.loader import load_config
+                owner = getattr(load_config().memory, "owner", None)
+            except Exception:  # noqa: BLE001 — test workspaces without a config
+                owner = None
+            principal = resolve_principal(channel, owner=owner)
+            return build_pinned_context(self.workspace, principal)
+        except Exception:  # noqa: BLE001 — never break the prompt build
+            return ""
 
     def _hot_tier_include(self, always_skills: list[str]) -> set[str] | None:
         """The working-set name filter for the skills_catalog block, or None
@@ -281,23 +317,11 @@ class ContextBuilder:
         breakdown: dict[str, str] = {}
         parts: list[str] = []
 
-        memory = self.memory.get_memory_context()
-        if memory and not self._is_template_content(self.memory.read_memory(), "memory/MEMORY.md"):
-            block = f"# Memory\n\n{memory}"
-            breakdown["memory_long_term"] = block
-            parts.append(block)
-
-        entries = self.memory.read_unprocessed_history(since_cursor=self.memory.get_last_dream_cursor())
-        if entries:
-            capped = entries[-self._MAX_RECENT_HISTORY:]
-            history_text = "\n".join(
-                f"- [{e['timestamp']}] {e['content']}" for e in capped
-            )
-            history_text = truncate_text(history_text, self._MAX_HISTORY_CHARS)
-            block = "# Recent History\n\n" + history_text
-            breakdown["recent_history"] = block
-            parts.append(block)
-
+        # §8e: the legacy MEMORY.md long-term block + the history.jsonl
+        # "recent history" block are removed. In the new model that knowledge
+        # lives in the pinned context + entities (stable tier) and the raw turns
+        # are the session replay — injecting MEMORY.md/history here double-fed
+        # the prompt. The compaction summary below survives.
         if session_summary:
             block = f"[Archived Context Summary]\n\n{session_summary}"
             breakdown["session_summary"] = block

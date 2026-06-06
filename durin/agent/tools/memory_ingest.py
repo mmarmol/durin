@@ -23,9 +23,6 @@ from durin.agent.tools._telemetry import emit_tool_event
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.schema import StringSchema, tool_parameters_schema
 from durin.memory.ingestion import IngestError, ingest_artifact
-from durin.memory.provenance import author_scope
-from durin.memory.storage import load_entry
-from durin.memory.store import StoreError, store_memory
 from durin.memory.vector_index import (
     VectorIndex,
     VectorIndexDimensionMismatchError,
@@ -46,27 +43,19 @@ _PARAMETERS = tool_parameters_schema(
     ),
     required=["path"],
     description=(
-        # Canonical text per `docs/architecture/memory/06_prompts_and_instructions.md` §3.3.
-        "Add a local document (markdown or plain text) to durin's memory "
-        "corpus. Use this when the user wants a file on disk remembered "
-        "as reference material — research notes, transcripts, technical "
-        "specs, exported pages, markdown books, etc.\n\n"
-        "`path` is the absolute or workspace-relative path to the file. "
-        "The file is copied to `ingested/<id>/` for preservation (so the "
-        "original is recoverable verbatim) and the content is chunked "
-        "into searchable `memory/corpus/*.md` entries. Re-ingesting the "
-        "same file is idempotent — the id is derived from a hash of "
-        "(filename + content), so renaming the file before re-ingesting "
-        "produces a different id.\n\n"
+        "Add a local document (markdown or plain text) to durin's memory as "
+        "a REFERENCE — coherent source material the user wants kept whole: "
+        "research notes, transcripts, technical specs, exported pages, "
+        "markdown books, etc.\n\n"
+        "`path` is the absolute or workspace-relative path to the file. The "
+        "original is preserved verbatim and the document is indexed for "
+        "retrieval. Re-ingesting the same file is idempotent — the id is a "
+        "hash of (filename + content).\n\n"
         "For web content, use `web_fetch(url=...)` first to get clean "
-        "markdown, then `memory_store(content=..., class_name=\"corpus\", "
-        "source_refs=[url])`. `web_fetch` already handles URL extraction "
-        "(Jina/readability), SSRF protection, redirects, and image "
-        "detection.\n\n"
-        "For short inline text (a paragraph or two), call `memory_store` "
-        "directly with `class_name=\"corpus\"` — `memory_ingest` is "
-        "specifically for files on disk where preserving the original "
-        "artifact matters."
+        "markdown, then `memory_ingest` on the saved file. For a fact about a "
+        "*thing* (a person, company, product, topic…), use "
+        "`memory_upsert_entity` instead — `memory_ingest` is for whole "
+        "documents, not individual facts."
     ),
 )
 
@@ -173,15 +162,11 @@ class MemoryIngestTool(Tool):
             },
         )
 
-        # Derive a corpus memory entry pointing back to the ingested
-        # source. This is what makes the document searchable via the
-        # vector path. Best-effort: a failure to create the corpus
-        # entry doesn't roll back the ingest.
-        corpus_id = self._maybe_create_corpus_entry(
-            source_path=source,
-            ingested_path=result["source"],
-            content=result["content"],
-        )
+        # §A2: store the ingested document WHOLE as a reference (design §2.3/§2.8)
+        # — FTS the whole doc + vector-index its token-aware chunks. Replaces the
+        # legacy chunked `corpus/` model. Best-effort: a failure here does not
+        # roll back the verbatim ingest above.
+        ref = self._create_reference(source_path=source, content=result["content"])
 
         out = {
             "id": result["id"],
@@ -190,141 +175,58 @@ class MemoryIngestTool(Tool):
             "size_bytes": result["size_bytes"],
             "content": result["content"],
         }
-        if corpus_id:
-            out["corpus_entry_id"] = corpus_id
+        if ref:
+            out["reference"] = ref
         return out
 
-    def _maybe_create_corpus_entry(
-        self,
-        *,
-        source_path: Path,
-        ingested_path: str,
-        content: str,
-    ) -> str | None:
-        """Create a corpus memory entry derived from an ingested artifact.
+    def _create_reference(self, *, source_path: Path, content: str) -> str | None:
+        """Store the ingested document as a reference (whole doc + token-aware
+        chunk index), FTS-index the whole doc, and vector-index each chunk.
 
-        Returns the new entry id, or None if the derivation failed.
-        Embeds + indexes the entry when the vector path is available.
+        Returns the ref (``reference:<slug>``) or None on failure. The whole doc
+        is the FTS unit; the chunks (each <=512 tok, parent-pointed) are the
+        vector unit (design A2 / reference.py).
         """
-        ingested_rel = Path(ingested_path)
+        from durin.memory.reference import ingest_reference, reference_chunks
         try:
-            ingested_rel = ingested_rel.relative_to(self._workspace)
-        except ValueError:
-            pass
-        source_ref = f"[ingested {source_path.name}]({ingested_rel})"
+            res = ingest_reference(
+                self._workspace, source_path.stem, content,
+                source=str(source_path),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "memory_ingest: reference write failed for %s: %s",
+                source_path.name, exc,
+            )
+            return None
+        ref = res.ref
+        slug = ref.split(":", 1)[1]
+        ref_md = self._workspace / "memory" / "references" / f"{slug}.md"
 
-        # P5.3: recursive character splitter — paragraph > line >
-        # sentence > word > char preference, ~1500 chars per chunk
-        # with ~200 chars overlap so a fact straddling a cut still
-        # surfaces in both chunks.
-        from durin.memory.text_splitter import split_text
-        chunks = split_text(content) or [content[:_CORPUS_BODY_BUDGET_CHARS]]
-        # Multi-chunk ingest: each chunk is its own corpus entry so
-        # the search pipeline can rank them independently + the per-
-        # source cap (doc 03 §12.4) limits top-K to 3 chunks per
-        # source. We return the FIRST chunk's id for backward-compat
-        # with callers that expect a single id.
-        first_id: str | None = None
-        for idx, chunk in enumerate(chunks):
-            try:
-                with author_scope("agent_created"):
-                    stored = store_memory(
-                        self._workspace,
-                        content=chunk,
-                        class_name="corpus",
-                        headline=(
-                            f"Ingested: {source_path.name}"
-                            + (f" (chunk {idx + 1}/{len(chunks)})"
-                               if len(chunks) > 1 else "")
-                        ),
-                        summary="",
-                        source_refs=[source_ref],
-                    )
-            except (StoreError, OSError) as exc:
-                logger.warning(
-                    "memory_ingest: chunk %d/%d failed for %s: %s",
-                    idx + 1, len(chunks), source_path.name, exc,
-                )
-                continue
-            if first_id is None:
-                first_id = stored["id"]
+        # FTS: the whole reference doc is the lexical unit (indexer._payload_for).
+        try:
+            from durin.memory.indexer import reindex_one_file
+            reindex_one_file(self._workspace, ref_md)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "memory_ingest: reference FTS reindex failed for %s: %s", ref, exc,
+            )
 
-            vi = self._get_vector_index()
-            if vi is not None:
+        # Vector: each token-aware chunk, keyed <ref>#<idx> so a fragment hit
+        # resolves to the parent reference.
+        vi = self._get_vector_index()
+        if vi is not None:
+            for rec in reference_chunks(self._workspace, ref):
                 try:
-                    entry_path = Path(stored["path"])
-                    entry = load_entry(entry_path)
-                    vi.upsert(entry, stored["class"], entry_path)
+                    vi.upsert_reference_chunk(
+                        ref=ref, idx=rec["idx"], text=rec["text"], path=ref_md,
+                    )
                 except VectorIndexDimensionMismatchError as exc:
-                    logger.warning("ingest vector upsert: %s", exc)
+                    logger.warning("ingest reference vector upsert: %s", exc)
+                    break
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
-                        "ingest vector upsert failed for %s: %s",
-                        stored["id"], exc,
+                        "ingest reference vector upsert failed for %s#%s: %s",
+                        ref, rec.get("idx"), exc,
                     )
-
-            try:
-                from durin.memory.indexer import reindex_one_file
-                reindex_one_file(
-                    self._workspace, Path(stored["path"]),
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "memory_ingest FTS reindex failed for %s: %s",
-                    stored["id"], exc,
-                )
-
-        if first_id is None:
-            # Every chunk failed; nothing to emit, return None to
-            # signal the failure.
-            return None
-
-        emit_tool_event(
-            "memory.store",
-            {
-                "entry_id": stored["id"],
-                "class_name": stored["class"],
-                "author": stored["author"],
-                "headline": stored["headline"],
-            },
-        )
-
-        # Post-ingest threshold trigger — reuses the same shared helper
-        # as ``memory_store``. Dormant by design: ingest can produce 800+
-        # corpus entries in a single bench burst, and per-write LLM
-        # dispatch (even gated by per-entity threshold) is unacceptable
-        # at that scale. Ingested material stays fully searchable via
-        # FTS + vector and gets consolidated by the daily ``memory_dream``
-        # cron. Re-enabling this path (e.g. by extracting entities at
-        # ingest time) MUST introduce an explicit throttle (token-floor,
-        # cron-batched, or per-session debounce) before the dispatch can
-        # actually fire. See ``project_ingest_dormant_rationale.md`` for
-        # the bench-derived rationale.
-        #
-        # The call below is left wired so the day a throttle exists, only
-        # one knob has to change. Today entities is always [] so the
-        # helper short-circuits.
-        try:
-            from durin.memory.storage import load_entry as _load_entry
-            from durin.memory.threshold_trigger import (
-                maybe_dispatch_threshold_dream,
-            )
-
-            entry = _load_entry(Path(stored["path"]))
-            entities = list(entry.entities or ())
-            if entities:
-                maybe_dispatch_threshold_dream(
-                    workspace=self._workspace,
-                    entities=entities,
-                    dream_config=self._dream_config,
-                    vector_index=vi,
-                    source_trigger="post_ingest_threshold",
-                    app_config=self._app_config,
-                )
-        except Exception:  # noqa: BLE001
-            logger.exception(
-                "post_ingest_threshold dispatch failed for %s",
-                stored.get("id"),
-            )
-
-        return first_id
+        return ref

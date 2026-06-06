@@ -354,16 +354,11 @@ The entity-match list is typically much shorter than the vector list (3-5 items 
 
 Documented in `entity_ranker.py` module docstring (note "G9").
 
-### 8.4 Pre/post-cursor logic
+### 8.4 Entity-match list (two-track model, N3 2026-06-06)
 
-For each query entity URI, the pipeline reads the entity page's `dream_processed_through` cursor. Episodic/stable hits associated with that entity are partitioned:
+The canonical entity page (`type=entity`) enters the entity-match list when its URI matches a query entity. Episodic/stable hits tagged with that entity enter next, ordered by recency.
 
-- **Post-cursor entries** (timestamp newer than the cursor): enter the entity-match list with recency-based ordering. These are recent observations the canonical entity page does not yet reflect.
-- **Pre-cursor entries** (already consolidated into the entity page): **excluded from the entity-match list entirely**. Their information already lives in the canonical page; surfacing the raw entry would duplicate context.
-
-The canonical entity page (`type=entity`) is always in the entity-match list when its URI matches a query entity — independent of cursor logic.
-
-This avoids the redundancy of returning `entity:marcelo` (canonical, with all the facts) alongside 5 episodic entries each repeating one of those facts.
+There is **no pre/post-cursor partition.** The earlier design folded an entity's fragments into its page and tracked a per-entity `dream_processed_through` cursor to exclude already-consolidated fragments. The redesign builds entities from **sessions** (extract) + agent authoring and does **not** consolidate fragments — they are a separate raw track (`/remember` facts, session summaries) that coexists with the page. So every tagged fragment surfaces, recency-ordered; the cursor was removed. The LLM reconciles a fragment against the canonical page at read time using the timestamps in the markers.
 
 ### 8.5 Ordering when query mentions multiple entities
 

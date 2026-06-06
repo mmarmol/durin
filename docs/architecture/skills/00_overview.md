@@ -3,7 +3,7 @@
 > **What this is.** The single as-built reference for durin's skills subsystem: what
 > it does *today*, how the pieces fit, and where each lives in code. Companion:
 > [`01_format_and_interop.md`](01_format_and_interop.md) (the SKILL.md format contract).
-> Vision & roadmap (north star + what's deferred/discarded): `docs/plans/skills_evolutivas.md`.
+> Vision & roadmap (north star + what's deferred/discarded): `docs/archive/skills_evolutivas.md`.
 > Design rationale per feature: `docs/superpowers/specs/2026-06-*-skill-*-design.md`.
 >
 > Citations are **file + symbol** (stable across edits); grep the symbol to land on it.
@@ -49,12 +49,13 @@ standard — see `01_format_and_interop.md`.
 ```
                  ┌──────────── create (own experience) ──────────┐
  user/agent ──►  │  in-loop: skill_write / skill_edit            │
-                 │  2h dream: phase-1 flags [SKILL] → phase-2     │──► skills/<name>/  ──► retrieval
- registries ──►  │  import (§6.B) → §8.C gate → install           │     (git subtree)      (hot-tier +
-                 │  acquire-on-gap (§6.C): search → safe seed     │         │               searchable)
+                 │  dream skill-extract pass: mine sessions →     │──► skills/<name>/  ──► retrieval
+ registries ──►  │    skill_write (recurring procedure)          │     (git subtree)      (hot-tier +
+                 │  import (§6.B) → §8.C gate → install           │         │               searchable)
+                 │  acquire-on-gap (§6.C): search → safe seed     │         │
                  └───────────────────────────────────────────────┘         │
                                                                             ▼
-                                          daily dream: curate_catalog (evolve/fuse) + drift (§8.D)
+                                  memory_dream cron, curate_catalog pass: curate (evolve/fuse) + drift (§8.D)
 ```
 
 Five capabilities (vision §1, `skills_evolutivas.md`): **create · import · discover ·
@@ -69,18 +70,19 @@ acquire · evolve**. All converge on the same versioned `adapted` skill in the g
 first). Both route through `skills_store.py` (provenance + commit). The in-session
 prompt (`templates/agent/skills_section.md`) also drives **acquire-on-gap** — see §5.
 
-**The 2h dream (autonomous).** `durin/agent/memory.py::Dream` is a two-phase processor
-over `history.jsonl`, gated by `min_tokens_to_run` (default 2000 — quiet periods skip the
-LLM entirely):
-- **Phase 1** (`templates/agent/dream_phase1.md`, plain LLM call) extracts facts and
-  flags `[SKILL] <name>: <desc>` when a **specific, repeatable workflow appeared 2+
-  times** in history, with clear steps, substantial enough to warrant a skill.
-- **Phase 2** (`templates/agent/dream_phase2.md`, an `AgentRunner` with
-  read/edit/`skill_write` + `skill_search` + `skill_acquire_seed`) authors each `[SKILL]`
-  via `skill_write` → `skills_store.py::dream_create_skill` (provenance `source=dream`,
-  `mode=auto`, committed), with a dedup check against existing skills.
+**The skill-extract pass (autonomous).** `durin/memory/dream_passes.py::run_skill_extract_pass`
+→ `_skill_extract_async` is the skills arm of the daily `memory_dream` cron (§6). It mines
+the most recent **sessions** (`max_sessions`, default 3 — `_recent_sessions_text`, capped at
+~12k chars) and runs a sub-agent (`durin/agent/runner.py::AgentRunner`, `max_iterations=8`)
+whose system prompt (`_SKILL_EXTRACT_PROMPT`) asks it to author a skill **only when a
+reusable, recurring multi-step procedure appears**, reusing/extending an existing skill
+rather than duplicating it. The sub-agent is given a minimal toolset — `ReadFileTool`,
+`EditFileTool`, and `SkillWriteTool` (NO registry/acquire tools). When it calls `skill_write`
+the write routes through `skills_store.py::dream_create_skill` (provenance `source=dream`,
+`mode=auto`, committed). On a quiet day with no sessions the pass returns early
+(`reason="no_sessions"`) and never calls the LLM.
 
-This is the **create** path. See §6 for the two dreams.
+This is the **create** path. See §6 for the single `memory_dream` cron and its passes.
 
 ---
 
@@ -95,22 +97,28 @@ wires only skills.sh + clawhub today (github-taps/well-known/lobehub are roadmap
 as the `skill_search` core tool, plus CLI (`durin skill search`) and web.
 
 **Acquire-on-gap (§6.C)** — durin's own initiative to acquire a skill when it lacks one.
-Search is the seed; the gate (§7) is enforced. Two paths (spec
-`2026-06-03-skill-acquire-on-gap-design.md`, BUILT + live-verified):
+Search is the seed; the gate (§7) is enforced. Both paths (spec
+`2026-06-03-skill-acquire-on-gap-design.md`) are BUILT + live-verified:
 - **Path A — in-session, interactive.** Prompt guidance in `skills_section.md`: when
   local skill search (`memory_search kind=skill`) misses on a recurring/non-trivial
   workflow, `skill_search` the registries; to reuse a hit, `skill_import(action=fetch)`
   (runs the §8.C gate); if clean → `skill_write`; if risky → present candidates to the
   user via `ask_user_question`. A human approves anything risky.
-- **Path B — the dream, autonomous, safe-only.** Dream phase-2 has raw `skill_search`
-  (sees all hits) + a **gated per-ref** tool `skill_acquire_seed(source)`
-  (`durin/agent/tools/skill_acquire_seed.py`, **dream-scoped** `_scopes={"dream"}`). It
-  calls `durin/agent/skill_acquire.py::acquire_safe_seed`: a non-allowlisted ref is
-  **rejected without a download** (fast); allowlisted refs are fetched, statically scanned
-  (**LLM judge never used here** — `judge_trigger="off"`), and returned as a seed **only
-  if `decide_action == "allow"`**. The risk rule is enforced in code, so the autonomous
-  dream can never receive risky content. Conservative default: empty allowlist → nothing
-  auto-seeds → author from scratch.
+- **Path B — autonomous, safe-only.** The daily `memory_dream` **skill-extract pass**
+  hosts it: `dream_passes.py::_build_skill_extract_tools` hand-registers `skill_search`
+  + `skill_acquire_seed` alongside the authoring tools, and `_SKILL_EXTRACT_PROMPT`
+  drives the flow — `skill_search` a candidate → `skill_acquire_seed` its ref → adapt +
+  `skill_write`, else author from scratch. The seed gate is in code:
+  `skill_acquire_seed.py::SkillAcquireSeedTool` (`_scopes={"dream"}`, so it never loads
+  into the in-loop core agent) → `skill_acquire.py::acquire_safe_seed`, which **rejects a
+  non-allowlisted ref without a download** (fast), fetches + statically scans allowlisted
+  refs (**LLM judge never used** — `judge_trigger="off"`), and returns a seed **only if
+  `decide_action == "allow"`** (risk enforced in code). With the default empty allowlist
+  nothing auto-seeds → the dream authors from scratch (conservative). **Live-verified
+  2026-06-06:** a real skill-extract run called `skill_search → skill_acquire_seed →
+  skill_write`. (History: Path B first shipped in the 2h Dream's phase-2; the
+  entity-centric migration deleted that host and orphaned `skill_acquire_seed` until it
+  was re-homed here.)
 
 ---
 
@@ -149,17 +157,25 @@ ungated skill can't be used before the agent even starts.
 
 ---
 
-## 6. The two dreams (how skills work in the background)
+## 6. The dream (how skills work in the background)
 
-durin has **two separate cron jobs** (`durin/cli/commands.py`, the `on_cron_job` handler).
-They do different things for skills — do not conflate them:
+durin has **one dream cron** — `memory_dream` (`durin/cli/commands.py`, the `on_cron_job`
+handler's `memory_dream` branch; registered as a system job with schedule `memory.dream.cron`,
+default `0 3 * * *`). It also fires on two reactive triggers (`post_compaction`,
+`on_session_close`) that run the extract pass only. The daily cron runs its passes **in
+order** — `run_extract_pass` (sessions → entity attributes) → `run_skill_extract_pass`
+(sessions → skills) → `run_refine_pass` (entity dedup) → `run_always_on_pass` (distill the
+always-on pin) → `curate_catalog` (skill evolution). Two of those passes touch skills:
 
-| Job | Schedule | What it does for skills | Code |
-|---|---|---|---|
-| **`dream`** | every 2h (`agents.defaults.dream.interval_h`) | **CREATES** skills: phase-1 flags `[SKILL]` (workflow 2+ times) → phase-2 authors via `skill_write` (can seed from registries via `skill_acquire_seed`). Gated by `min_tokens_to_run`. | `memory.py::Dream.run` |
-| **`memory_dream`** | daily (`memory.dream.cron`, default 3am) | Entity-centric memory consolidation **and**, appended, **EVOLVES** skills: `skill_curation.py::curate_catalog`. | `cli/commands.py` (memory_dream branch) → `curate_catalog` |
+| Pass | What it does for skills | Code |
+|---|---|---|
+| **skill-extract** | **CREATES** skills: mines the most recent sessions; a sub-agent calls `skill_write` when a recurring multi-step procedure appears (provenance `source=dream`, `mode=auto`, committed). See §3. | `dream_passes.py::run_skill_extract_pass` → `dream_create_skill` |
+| **curate_catalog** | **EVOLVES** skills: reviews the change-gated delta, applies `evolve`/`fuse`. Appended as the dream's last step. | `cli/commands.py` (memory_dream branch) → `skill_curation.py::curate_catalog` |
 
-**Evolution — `curate_catalog` (daily).** Reviews **only** the change-gated delta:
+(The `extract` / `refine` / `always_on` passes are entity-memory consolidation, documented
+in the memory architecture docs; they don't touch skills.)
+
+**Evolution — `curate_catalog`.** Reviews **only** the change-gated delta:
 `mode=="auto"` AND `source=="workspace"` skills (dream-created + forks; never pristine
 builtins) that `needs_curation` (body changed since last pass). An LLM judge proposes
 `evolve` (surgical old/new on the local body) or `fuse` (merge near-duplicates) actions;
@@ -219,18 +235,21 @@ adds an **approved executor**:
 
 | Tool | Scope | Purpose |
 |---|---|---|
-| `skill_write` | core + dream | Create a new skill (→ `dream_create_skill`). |
+| `skill_write` | core | Create a new skill (→ `dream_create_skill`). Also hand-registered into the dream's skill-extract sub-agent (§3). |
 | `skill_edit` | core | Bounded edit of an existing skill (mode-gated; forks builtins). |
-| `skill_search` | core + dream | Search registries; returns hits + refs (never installs). |
+| `skill_search` | core | Search registries; returns hits + refs (never installs). |
 | `skill_import` | core | Import from a source through the §8.C gate (fetch→scan→gate→install). |
 | `skill_audit` | core | Run the §8.C scan on a skill; verdict + findings. |
 | `skills_list` | core | List available + quarantined skills. |
 | `skill_install_deps` | core | Install a skill's declared deps (dry-run→confirm, policy, via ExecTool). |
-| `skill_acquire_seed` | **dream-only** | Gated per-ref seed retrieval for autonomous acquisition (returns risk-free seeds only). |
+| `skill_acquire_seed` | **`dream`** (skill-extract pass) | Gated per-ref seed retrieval for autonomous acquisition (returns risk-free seeds only). `_scopes={"dream"}` keeps it out of the in-loop core agent; hand-registered in the daily skill-extract pass (`_build_skill_extract_tools`) — see §4 Path B. |
 
 Tools default to `core` scope (auto-loaded into the in-loop agent) unless they declare
-`_scopes`; `skill_acquire_seed` is `{"dream"}` so the in-session agent uses the raw
-tools + `ask_user_question` (a human approves risky candidates) instead.
+`_scopes` (`durin/agent/tools/loader.py::ToolLoader.load`). `skill_acquire_seed` declares
+`{"dream"}`, but `ToolLoader.load` is only ever called with `scope="core"` (in-loop) or
+`scope="subagent"`, so that tool is currently unreachable — the in-session agent uses the
+raw `skill_search` / `skill_import` + `ask_user_question` (a human approves risky candidates)
+instead, and the dream's skill-extract sub-agent gets only Read/Edit/`skill_write` (§3).
 
 ---
 
@@ -241,24 +260,25 @@ tools + `ask_user_question` (a human approves risky candidates) instead.
 - `skills.discovery` — `registries` (skills.sh, clawhub), `search_limit`.
 - `skills.install_policy` — `never` | `approve` | `auto` (default `approve`) for P6 #1.
 - `agents.defaults.skills_hot_tier` — hot-tier sizing (recent/frequent windows).
-- `agents.defaults.dream` — the 2h dream (`interval_h`, `min_tokens_to_run`, …).
-- `memory.dream` — the daily `memory_dream` (`cron`, …) that carries `curate_catalog`.
+- `memory.dream` — the single `memory_dream` cron (`cron`, default `0 3 * * *`;
+  `post_compaction`/`on_session_close` reactive triggers; `max_seconds_per_run`) that runs
+  the skill-extract pass and carries `curate_catalog`.
 - `memory.index_skills` — whether skills are indexed as a searchable memory class (default on).
 
 ---
 
 ## 11. Status (built / deferred / discarded)
 
-**Built & live-verified:** versioning + modes (E1) · crystallization signal + 2h-dream
-authoring (E2 Part A) · daily catalog curation `curate_catalog` (E2 Part B) · interop
-standard (§8.B) · import + §8.C security floor (§6.B/§8.C) · discovery/registries (§6.A) ·
+**Built & live-verified:** versioning + modes (E1) · dream skill-extract authoring
+(E2 Part A; `run_skill_extract_pass`) · daily catalog curation `curate_catalog` (E2 Part B) ·
+interop standard (§8.B) · import + §8.C security floor (§6.B/§8.C) · discovery/registries (§6.A) ·
 upstream drift→evolution (§8.D) · unverified-origin sweep (Part C) · retrieval: searchable
-memory class + hot-tier (Spec-2) · acquire-on-gap (§6.C, both paths) · runtime install
+memory class + hot-tier (Spec-2) · acquire-on-gap **Paths A + B** (in-session + autonomous
+skill-extract, §6.C; Path B re-homed + live-verified 2026-06-06) · runtime install
 executor (P6 #1).
 
-**Pending (active):** P6 #2 (run bundled skill *scripts* through the tool gate) · P6 #3
-(per-skill FS/net sandbox) · extra discovery adapters (github-taps / well-known / lobehub).
-See `docs/backlog.md`.
+**Pending (active):** P6 #2 (run bundled skill *scripts* through the tool gate) · P6 #3 (per-skill FS/net sandbox) ·
+extra discovery adapters (github-taps / well-known / lobehub). See `docs/backlog.md`.
 
 **Discarded (decided against, with rationale in `skills_evolutivas.md`):** §6.D
 adapt-to-native-tools / §8.F GEPA-SkillOpt optimizer (no value over `curate_catalog` +

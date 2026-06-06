@@ -33,13 +33,12 @@ class TestFromText:
         assert page.aliases == ["Marcelo", "marcelo"]
         assert "Marcelo Marmol" in page.body
 
-    def test_full_frontmatter_with_cursor_and_timestamps(self) -> None:
+    def test_full_frontmatter_with_timestamps(self) -> None:
         text = (
             "---\n"
             "type: project\n"
             "name: durin\n"
             "aliases: []\n"
-            "dream_processed_through: 4892\n"
             "created_at: 2026-03-15T12:00:00\n"
             "updated_at: 2026-05-23T18:30:00\n"
             "---\n"
@@ -48,7 +47,6 @@ class TestFromText:
         )
         page = EntityPage.from_text(text)
         assert page is not None
-        assert page.dream_processed_through == 4892
         assert page.created_at == datetime(2026, 3, 15, 12, 0, 0)
         assert page.updated_at == datetime(2026, 5, 23, 18, 30, 0)
 
@@ -163,7 +161,6 @@ class TestToMarkdown:
             name="Marcelo Marmol",
             aliases=["Marcelo", "marcelo"],
             body="## Current state\n\nbody content here",
-            dream_processed_through=4892,
             created_at=datetime(2026, 3, 15, 12, 0, 0),
             updated_at=datetime(2026, 5, 23, 18, 30, 0),
             extra={
@@ -178,7 +175,6 @@ class TestToMarkdown:
         assert round_trip.name == original.name
         assert round_trip.aliases == original.aliases
         assert round_trip.body.strip() == original.body.strip()
-        assert round_trip.dream_processed_through == original.dream_processed_through
         assert round_trip.created_at == original.created_at
         assert round_trip.updated_at == original.updated_at
         assert round_trip.extra == original.extra

@@ -121,10 +121,10 @@ def test_fragment_intro_sentence_present(tmp_path: Path) -> None:
         entities=["person:marcelo"],
     )
     rendered = read_hot_layer(tmp_path).render()
-    assert "## Memory: Recent fragments (post-cursor)" in rendered
+    assert "## Memory: Recent fragments" in rendered
     assert (
-        "Episodic entries not yet consolidated into a canonical "
-        "page. Reconcile with the canonical above using the "
+        "Recent episodic entries — raw memories that may carry newer "
+        "info than the canonical above. Reconcile using the "
         "timestamps."
     ) in rendered
 

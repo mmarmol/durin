@@ -110,8 +110,8 @@ _SECTION_INTRO: dict[str, str] = {
         "below amend them with newer information."
     ),
     "fragment": (
-        "Episodic and stable entries beyond the canonical cursor. "
-        "Reconcile with the canonical above using the timestamps."
+        "Recent episodic and stable entries — raw memories that may carry "
+        "newer info than the canonical above. Reconcile using the timestamps."
     ),
     "session": (
         "Session summaries and turn-level matches from prior "

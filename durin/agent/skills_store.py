@@ -591,7 +591,7 @@ def web_skill_judge(workspace: Path, name: str) -> tuple[int, dict]:
     _, model, max_sev = _import_judge()
     det = scan_skill(qdir)
     try:
-        from durin.memory.dream import default_llm_invoke
+        from durin.memory.llm_invoke import default_llm_invoke
         jf = judge_skill(qdir, llm_invoke=default_llm_invoke, model=model or "glm-5.1",
                          max_severity=max_sev)
     except JudgeError as exc:

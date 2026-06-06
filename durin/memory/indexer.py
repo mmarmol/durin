@@ -66,9 +66,14 @@ def _RESET_FRESHNESS_CACHE_FOR_TESTS() -> None:  # noqa: N802
     _FRESHNESS_CHECKED.clear()
 
 
-def ensure_index_fresh(workspace: Path) -> dict:
-    """Auto-rebuild the FTS index when the on-disk schema_version
-    differs from :data:`durin.memory.index_meta.CURRENT_SCHEMA_VERSION`.
+def ensure_index_fresh(workspace: Path, embedding_model: str | None = None) -> dict:
+    """Auto-rebuild the index when the on-disk meta is stale.
+
+    Rebuilds the FTS index when the on-disk schema_version differs from
+    :data:`durin.memory.index_meta.CURRENT_SCHEMA_VERSION`. When
+    ``embedding_model`` is given (the configured model) and differs from the
+    model recorded in meta (N5b), the VECTOR index is rebuilt too — a
+    same-dimension model swap would otherwise silently return stale results.
 
     Idempotent within a single process — the second call for the same
     workspace short-circuits via a module-level cache. Different
@@ -105,25 +110,35 @@ def ensure_index_fresh(workspace: Path) -> dict:
         return {"rebuilt": False, "reason": "no_memory_dir"}
 
     meta = load_index_meta(workspace)
-    if meta is None:
-        reason = "missing_meta"
-    elif meta.schema_version != CURRENT_SCHEMA_VERSION:
-        reason = "schema_mismatch"
-    else:
+    schema_stale = meta is None or meta.schema_version != CURRENT_SCHEMA_VERSION
+    model_stale = bool(
+        meta and embedding_model and meta.embedding_model_id
+        and meta.embedding_model_id != embedding_model
+    )
+    if not schema_stale and not model_stale:
         return {"rebuilt": False, "reason": "current"}
+    reason = (
+        "schema+model" if schema_stale and model_stale
+        else "model_changed" if model_stale
+        else ("missing_meta" if meta is None else "schema_mismatch")
+    )
 
     # Rebuild + persist new meta. Best-effort: a rebuild failure logs
     # but doesn't propagate — the search pipeline's graceful
-    # degradation handles a stale/empty index from there.
+    # degradation handles a stale/empty index from there. FTS rebuilds on a
+    # schema change; the VECTOR rebuilds on a model change (N5b).
     try:
-        stats = rebuild_fts_index(workspace)
-        _emit_rebuild(
-            target="fts",
-            indexed=stats.indexed,
-            errors=stats.errors,
-            duration_ms=0.0,
-            reason=reason,
-        )
+        if schema_stale:
+            stats = rebuild_fts_index(workspace)
+            _emit_rebuild(
+                target="fts",
+                indexed=stats.indexed,
+                errors=stats.errors,
+                duration_ms=0.0,
+                reason=reason,
+            )
+        if model_stale:
+            _rebuild_vector_for_model_change(workspace, embedding_model, meta)
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "ensure_index_fresh: rebuild failed for %s: %s",
@@ -131,17 +146,45 @@ def ensure_index_fresh(workspace: Path) -> dict:
         )
         return {"rebuilt": False, "reason": f"error: {exc}"}
 
-    # Bump meta to the current version. Preserve any previous
-    # embedding_model_id if present, else write an empty marker.
-    existing_model = meta.embedding_model_id if meta else ""
+    # Persist new meta: current schema + the model that just built the index.
+    # On a model change, keep the prior model in previous_models (audit trail).
+    new_model = embedding_model or (meta.embedding_model_id if meta else "")
+    previous = list(meta.previous_models) if meta else []
+    if model_stale and meta and meta.embedding_model_id:
+        previous.append(meta.embedding_model_id)
     save_index_meta(
         workspace,
         IndexMeta(
             schema_version=CURRENT_SCHEMA_VERSION,
-            embedding_model_id=existing_model,
+            embedding_model_id=new_model,
+            previous_models=tuple(previous),
         ),
     )
     return {"rebuilt": True, "reason": reason}
+
+
+def _rebuild_vector_for_model_change(workspace: Path, model: str, meta) -> None:
+    """N5b: the embedding model changed → re-embed the whole vector index with
+    the new model (the FTS index is model-independent). One-time cost on a model
+    swap; best-effort — never aborts startup."""
+    old = meta.embedding_model_id if meta else "?"
+    logger.warning(
+        "ensure_index_fresh: embedding model changed %s -> %s; rebuilding vector index",
+        old, model,
+    )
+    try:
+        from durin.memory.embedding import FastembedProvider
+        from durin.memory.vector_index import VectorIndex, vector_index_available
+    except ImportError:
+        return
+    if not vector_index_available():
+        return
+    vi = VectorIndex(workspace, FastembedProvider(model=model))
+    count = vi.rebuild_from_workspace()
+    _emit_rebuild(
+        target="vector", indexed=count, errors=0, duration_ms=0.0,
+        reason="model_changed",
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -450,6 +493,47 @@ def reindex_one_file(
             )
 
 
+def reindex_one_file_vector(workspace: Path, md_path: Path, vi) -> bool:
+    """Re-embed ONE entity page into the vector index (N2, 2026-06-06).
+
+    The reactive index path (file watcher) calls this so agent/dream-authored AND
+    hand-edited entity pages become vector-searchable. Previously NOTHING embedded
+    entity pages reactively — ``memory_upsert_entity`` / the extract dream never
+    did, and ``reindex_one_file`` is FTS-only, so the only embedders were the
+    absorption merge + a full ``durin memory reindex``. References are embedded at
+    ingest time and entries are niche (``memory_store`` disabled), so this handles
+    entity pages only. ``vi`` is a caller-owned ``VectorIndex`` (reused across
+    events). Returns True if it embedded. Best-effort — never raises.
+    """
+    workspace = Path(workspace)
+    md_path = Path(md_path)
+    try:
+        rel = md_path.relative_to(workspace / "memory")
+    except ValueError:
+        return False
+    parts = rel.parts
+    # entities/<type>/<slug>.md only
+    if not (len(parts) >= 3 and parts[0] == "entities" and md_path.suffix == ".md"):
+        return False
+    if not md_path.is_file():
+        return False
+    from durin.memory.entity_page import EntityPage
+    page = EntityPage.from_file(md_path)
+    if page is None:
+        return False
+    entity_ref = f"{parts[1]}:{md_path.stem}"
+    try:
+        vi.upsert_entity_page(
+            entity_ref=entity_ref, name=page.name, aliases=page.aliases,
+            body=page.body or "", path=md_path,
+            attributes=page.attributes, relations=page.relations,
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("indexer: vector reindex %s failed: %s", md_path, exc)
+        return False
+
+
 def reindex_one_skill(
     workspace: Path,
     skill_md: Path,
@@ -511,6 +595,23 @@ def reindex_one_skill(
 # ---------------------------------------------------------------------------
 
 
+def _reference_title_body(md_text: str) -> tuple[str, str]:
+    """Split a reference page into (title, body) for FTS. Tolerant of missing
+    frontmatter."""
+    import re
+
+    import yaml
+
+    m = re.match(r"^---\s*\n(.*?)\n---\s*\n(.*)$", md_text, re.DOTALL)
+    if not m:
+        return "", md_text.strip()
+    try:
+        fm = yaml.safe_load(m.group(1)) or {}
+    except Exception:
+        fm = {}
+    return str(fm.get("title") or ""), m.group(2).strip()
+
+
 def _payload_for(workspace: Path, md_path: Path) -> Optional[dict]:
     """Derive the upsert payload for one file. Returns ``None`` if the
     file isn't an indexable shape (e.g. malformed entity page)."""
@@ -533,6 +634,22 @@ def _payload_for(workspace: Path, md_path: Path) -> Optional[dict]:
             "type_": "entity",
             "entity_type": page.type,
             "text": text,
+            "mtime": mtime,
+        }
+
+    if parts[0] == "references":
+        # Coherent reference doc (design §2.8): FTS the WHOLE doc. The
+        # `.chunks.jsonl` sidecar feeds the vector index separately and isn't a
+        # `.md`, so it never reaches here. Previously these fell through to the
+        # MemoryEntry branch and were rejected (G2).
+        slug = md_path.stem
+        title, body = _reference_title_body(md_path.read_text(encoding="utf-8"))
+        return {
+            "uri": f"reference:{slug}",
+            "path": rel_path,
+            "type_": "reference",
+            "entity_type": None,
+            "text": f"{title}\n\n{body}".strip(),
             "mtime": mtime,
         }
 

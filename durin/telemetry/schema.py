@@ -542,134 +542,32 @@ class MemoryRecallVectorEvent(TypedDict):
 
 
 class MemoryDreamStartEvent(TypedDict):
-    """Entity-centric dream pass began (doc 25 §2.A.1).
+    """A dream pass began. Emitted by the new extract / refine passes
+    (``dream_passes.py``). ``kind`` is ``"extract"`` or ``"refine"``."""
 
-    Emitted only when the runner actually acquired the lock and is
-    about to execute. Skipped passes get :class:`MemoryDreamSkippedEvent`
-    instead so dashboards can split "ran" from "didn't run".
-    """
-
-    trigger: str  # "cron_daily" | "post_compaction" | "session_close" | "threshold" | "manual"
-    entity_filter: str  # entity ref when narrowed, "" otherwise
-    entities_pending: int
-    iteration: NotRequired[int]
+    kind: str
     session_key: NotRequired[str | None]
 
 
 class MemoryDreamEndEvent(TypedDict):
-    """Entity-centric dream pass completed (doc 25 §2.A.1, audit A5).
+    """A dream pass completed. Emitted by the new extract / refine passes.
 
-    Mirrors :class:`MemoryDreamStartEvent` with the outcome counters
-    and wall-clock duration. ``entities_failed`` counts entities whose
-    consolidate_entity raised — the rest of the pass still runs, so a
-    non-zero failed value is a soft signal, not a stop condition.
-
-    Audit A5 (2026-05-28) added the four cost-telemetry fields below
-    so doc 08 §3 R3's alarm (`dream_llm_cost_per_day_usd > $5/day`)
-    can be computed. Pre-A5 emit payloads used `duration_s`; that
-    name is gone — consumers should read `duration_ms`.
+    ``kind`` is ``"extract"`` or ``"refine"``; ``duration_ms`` is always
+    present. The extract pass sets ``entities_consolidated`` /
+    ``entities_failed`` / ``sessions`` / ``yielded`` (``yielded=True`` when the
+    ``max_seconds_per_run`` cap was hit and the cursor will resume next time);
+    the refine pass sets ``merged`` / ``kept`` / ``candidates``.
     """
 
-    trigger: str
-    entity_filter: str
-    entities_consolidated: int
-    entities_failed: int
-    # A5: NEW fields per doc 07 §6.2.
-    entities_quarantined: int
-    llm_call_count: int
-    llm_input_tokens_total: int
-    llm_output_tokens_total: int
-    duration_ms: float
-    iteration: NotRequired[int]
-    session_key: NotRequired[str | None]
-
-
-class MemoryDreamSkippedEvent(TypedDict):
-    """Entity-centric dream trigger fired but no work was done.
-
-    Reasons:
-
-    - ``"throttle"``: ``min_seconds_between_runs`` not elapsed yet.
-    - ``"no_pending"``: no entities have post-cursor entries.
-    - ``"concurrent_lock"``: another process is dreaming right now.
-    - ``"disabled"``: ``memory.dream.enabled`` is False.
-    """
-
-    trigger: str
-    reason: str
-    entity_filter: str
-    iteration: NotRequired[int]
-    session_key: NotRequired[str | None]
-
-
-class MemoryDreamBudgetExhaustedEvent(TypedDict):
-    """Per-pass time budget hit mid-drain (FIFO drain loop).
-
-    Emitted by :class:`durin.memory.dream_runner.DreamRunner` when an
-    entity's accumulated wall-clock crosses ``max_seconds_per_run``
-    *after* a successful batch (so each entity always makes at least one
-    batch of forward progress). ``pending_remaining`` is how many entries
-    were deferred to the next pass.
-    """
-
-    trigger: str
-    entity_ref: str
-    pending_remaining: int
-    elapsed_s: float
-    budget_s: int
-
-
-class MemoryDreamLegacyStartEvent(TypedDict):
-    """Legacy (session-history) dream pass began.
-
-    Emitted by the legacy :class:`durin.agent.memory.Dream` consolidator
-    wired at ``AgentLoop`` startup — distinct from the entity-centric
-    ``memory.dream.*`` runner. Tracks the batch about to be fed to the
-    Phase-1 LLM.
-    """
-
-    entries_count: int
-    batch_size: int
-    tokens: int
-    model: str | None
-
-
-class MemoryDreamLegacyEndEvent(TypedDict):
-    """Legacy dream pass finished (success or per-phase failure).
-
-    ``status`` carries the outcome: ``"phase1_failed"``,
-    ``"phase2_exception"``, or ``"phase2_<stop_reason>"``. The cost +
-    cursor fields let dashboards split a productive pass
-    (``cursor_advanced`` true) from a no-op or failed one. The two
-    ``phase2_*`` / ``commit_sha`` fields are present only when Phase 2
-    ran.
-    """
-
-    status: str
+    kind: str
     duration_ms: int
-    cursor_advanced: bool
-    changelog_count: int
-    phase1_prompt_tokens: int
-    phase1_completion_tokens: int
-    model: str | None
-    phase2_tool_events: NotRequired[int]
-    commit_sha: NotRequired[str | None]
-
-
-class MemoryDreamLegacySkippedEvent(TypedDict):
-    """Legacy dream trigger fired but did no work.
-
-    ``reason`` is ``"no_entries"`` (nothing unprocessed) or
-    ``"below_token_threshold"`` (unprocessed tail under
-    ``min_tokens_to_run``). The token fields are present only for the
-    threshold case.
-    """
-
-    reason: str
-    model: str | None
-    tokens: NotRequired[int]
-    threshold: NotRequired[int]
-    entries_count: NotRequired[int]
+    entities_consolidated: NotRequired[int]
+    entities_failed: NotRequired[int]
+    sessions: NotRequired[int]
+    yielded: NotRequired[bool]
+    merged: NotRequired[int]
+    kept: NotRequired[int]
+    candidates: NotRequired[int]
 
 
 class MemoryAbsorbJudgedEvent(TypedDict):
@@ -766,81 +664,44 @@ class MemoryStoreBlockedNearDuplicateEvent(TypedDict):
 
 
 class MemoryDreamPatchAppliedEvent(TypedDict):
-    """A Dream apply for one entity completed successfully (doc 07 §6.5).
+    """The extract dream applied attributes to one entity (one emit per entity).
 
-    Counts the ops that landed plus the diagnostics dashboards need
-    to spot drift (cursor advanced, body delta length, sources count).
-    ``failure_kind`` is always empty here — the failure variant lands
-    in :class:`MemoryDreamEntityFailedEvent`.
+    Reuses the legacy event name so existing dashboards keep counting
+    consolidations. ``source_ref`` is the session-turn marker the attributes
+    were extracted from.
     """
 
     entity_ref: str
-    trigger: str
-    ops_applied: int
-    sources_count: int
-    body_delta_chars: int
-    cursor_after: str  # ISO timestamp the runner stamped on the page
-    duration_ms: float
-    iteration: NotRequired[int]
-    session_key: NotRequired[str | None]
-
-
-class MemoryDreamEntityFailedEvent(TypedDict):
-    """A Dream apply for one entity failed (doc 07 §6.4).
-
-    Emitted on every failed entity (no batching) by
-    ``durin.memory.dream_apply._emit_apply_telemetry``. ``kind``
-    carries one of the four
-    :class:`durin.memory.dream_apply.DreamApplyFailureKind` values
-    (``validation`` / ``patch_runtime`` / ``round_trip`` / ``io``).
-    Only the structural kinds (validation / patch_runtime /
-    round_trip) contribute to the 3-strike quarantine counter —
-    enforced in :mod:`durin.memory.dream_quarantine`, not here.
-
-    Upstream LLM call failures (rate limit, timeout, network) happen
-    BEFORE ``dream_apply`` runs and bubble up to the runner; they do
-    NOT emit this event. Audit F6 (2026-05-28) corrected this
-    docstring after the third-pass audit caught a pre-F6 claim that
-    ``llm_call_failed`` / ``parse_failed`` were valid ``kind``
-    values here — neither string is ever emitted in production.
-    """
-
-    entity_ref: str
-    trigger: str
-    kind: str
-    error_message: str  # bounded; caller truncates if huge
-    failure_count_now: int  # post-increment value, 0 for ambient
-    quarantined_until: NotRequired[str]  # ISO timestamp when 3-strike trip
-    iteration: NotRequired[int]
-    session_key: NotRequired[str | None]
+    ops_applied: int  # number of attributes applied
+    trigger: str  # "extract"
+    committed: bool
+    source_ref: str
 
 
 class MemoryEntityRelationCapWarnedEvent(TypedDict):
-    """A Dream apply took an entity's relation count across the soft
-    cap (50). The apply proceeded; this event lets dashboards spot
-    mega-hub formation before sub-paging (audit B-14) becomes
-    necessary. Audit B-19 (2026-05-29) shipped this event alongside
-    the cap enforcement in `dream_apply.py`.
+    """An entity write took its relation count across the soft cap (50). The
+    write proceeded (alert-only, A3 2026-06-06, `memory_writer._emit_relation_
+    cap`); this event lets dashboards spot mega-hub formation before sub-paging
+    (audit B-14) becomes necessary.
     """
 
     entity_ref: str
-    current_count: int  # before the apply
-    new_count: int  # after the apply
+    current_count: int  # relations before this write
+    new_count: int  # relations after this write
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
 
 
 class MemoryEntityRelationCapRejectedEvent(TypedDict):
-    """A Dream apply was rejected because it would have taken an
-    entity's relation count over the hard cap (200). The apply was
-    rolled back and the entity surfaced as a
-    `DreamApplyFailureKind.VALIDATION` failure. Audit B-19
-    (2026-05-29).
+    """An entity write crossed the hard relation cap (200). A3 (2026-06-06):
+    this is ALERT-ONLY — the write is NOT blocked and no relation is dropped
+    (`memory_writer._emit_relation_cap`); the event is the operator signal that
+    an entity has grown a pathological number of relations.
     """
 
     entity_ref: str
-    current_count: int  # before the rejected apply
-    new_count: int  # the count the apply would have reached
+    current_count: int  # relations before this write
+    new_count: int  # relations after this write
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
 
@@ -1100,6 +961,55 @@ class MemoryHotLayerFailureEvent(TypedDict):
     session_key: NotRequired[str | None]
 
 
+class MemoryDreamSkillExtractEvent(TypedDict):
+    """The extract dream's skill pass wrote/updated procedural skills (§8e)."""
+
+    skills_touched: int
+    duration_ms: NotRequired[int]
+
+
+class MemoryDreamMaxSecondsReachedEvent(TypedDict):
+    """An extract pass hit ``memory.dream.max_seconds_per_run`` and yielded;
+    the per-session cursor resumes the remainder on the next trigger (§8e)."""
+
+    kind: str  # "extract"
+    max_seconds: int
+    elapsed_ms: int
+    sessions_done: int
+
+
+class MemoryDreamThrottledEvent(TypedDict):
+    """A reactive dream trigger (post_compaction / session_close) was skipped
+    by the in-process gate — ``reason`` is ``"locked"`` (a pass was already
+    running) or ``"throttled"`` (one ran within min_seconds_between_runs)."""
+
+    trigger: str
+    reason: str
+
+
+class MemoryDreamAlwaysOnEvent(TypedDict):
+    """The always_on distillation pass curated the pinned guidance set (A4).
+
+    ``selected`` items are kept always_on (fit the token budget); ``pruned``
+    were ranked but didn't fit; ``dropped`` were removed by the contradiction
+    judge; ``tokens`` is the budget consumed by the selected set.
+    """
+
+    selected: int
+    pruned: int
+    dropped: int
+    tokens: int
+    duration_ms: int
+
+
+class MemoryUpsertEntityEvent(TypedDict):
+    """memory_upsert_entity tool write (entity page authored/extended)."""
+
+    ref: str
+    committed: bool
+    retries: int
+
+
 # ===========================================================================
 # Catalog — single source of truth
 # ===========================================================================
@@ -1155,6 +1065,9 @@ EVENTS: dict[str, type] = {
     "memory.store": MemoryStoreEvent,
     "memory.ingest": MemoryIngestEvent,
     "memory.forget": MemoryForgetEvent,
+    "memory.upsert_entity": MemoryUpsertEntityEvent,
+    "memory.entity_relation_cap_warned": MemoryEntityRelationCapWarnedEvent,
+    "memory.entity_relation_cap_rejected": MemoryEntityRelationCapRejectedEvent,
     # Memory subsystem (Phase 2 — embedding)
     "memory.embedding.load": MemoryEmbeddingLoadEvent,
     "memory.embedding.embed": MemoryEmbeddingEmbedEvent,
@@ -1162,15 +1075,11 @@ EVENTS: dict[str, type] = {
     "memory.store.blocked_near_duplicate": MemoryStoreBlockedNearDuplicateEvent,
     "memory.dream.start": MemoryDreamStartEvent,
     "memory.dream.end": MemoryDreamEndEvent,
-    "memory.dream.skipped": MemoryDreamSkippedEvent,
     "memory.dream.patch_applied": MemoryDreamPatchAppliedEvent,
-    "memory.dream.entity_failed": MemoryDreamEntityFailedEvent,
-    "memory.dream.budget_exhausted": MemoryDreamBudgetExhaustedEvent,
-    "memory.dream.legacy.start": MemoryDreamLegacyStartEvent,
-    "memory.dream.legacy.end": MemoryDreamLegacyEndEvent,
-    "memory.dream.legacy.skipped": MemoryDreamLegacySkippedEvent,
-    "memory.entity_relation_cap_warned": MemoryEntityRelationCapWarnedEvent,
-    "memory.entity_relation_cap_rejected": MemoryEntityRelationCapRejectedEvent,
+    "memory.dream.skill_extract": MemoryDreamSkillExtractEvent,
+    "memory.dream.max_seconds_reached": MemoryDreamMaxSecondsReachedEvent,
+    "memory.dream.throttled": MemoryDreamThrottledEvent,
+    "memory.dream.always_on": MemoryDreamAlwaysOnEvent,
     "memory.absorb.judged": MemoryAbsorbJudgedEvent,
     "memory.absorb.auto_merged": MemoryAbsorbAutoMergedEvent,
     "memory.absorb.skipped": MemoryAbsorbSkippedEvent,
@@ -1243,7 +1152,6 @@ __all__ = [
     "MemoryEmbeddingEmbedEvent",
     "MemoryRecallVectorEvent",
     "MemoryDreamPatchAppliedEvent",
-    "MemoryDreamEntityFailedEvent",
     "MemoryEntityRelationCapWarnedEvent",
     "MemoryEntityRelationCapRejectedEvent",
     "MemoryHealthCheckEvent",

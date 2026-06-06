@@ -46,7 +46,7 @@ AUTO_ABSORB_QUESTION_TEXT: str = dedent(
     Defaults when enabled:
       - Confidence threshold: 95/100 (high — favors precision)
       - Minimum age: 24h (prevents Dream from merging its own hallucinations)
-      - Judge model: uses your Dream consolidator model
+      - Judge model: uses your Dream model
 
     Enable auto-absorb now? [y/N]:
     """

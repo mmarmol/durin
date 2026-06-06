@@ -44,7 +44,7 @@ class MemoryFileWatcher:
     ``stop()`` to avoid leaking threads.
     """
 
-    def __init__(self, workspace: Path) -> None:
+    def __init__(self, workspace: Path, embedding_model: str | None = None) -> None:
         self._workspace = Path(workspace).resolve()
         self._memory_root = self._workspace / "memory"
         self._queue: "Queue[object]" = Queue()
@@ -53,6 +53,12 @@ class MemoryFileWatcher:
         self._worker: Optional[threading.Thread] = None
         self._observer = None
         self._running = False
+        # N2: re-embed entity pages reactively (FTS via reindex_one_file is not
+        # enough — nothing else embeds them at author/edit time). None disables
+        # the vector half (FTS still runs).
+        self._embedding_model = embedding_model
+        self._vector_index = None
+        self._vector_attempted = False
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -130,10 +136,35 @@ class MemoryFileWatcher:
     # internals
     # ------------------------------------------------------------------
 
+    def _get_vector_index(self):
+        """Lazily build the VectorIndex (N2). None when no model is configured or
+        the embedder can't load — the FTS half still runs."""
+        if self._vector_attempted:
+            return self._vector_index
+        self._vector_attempted = True
+        if not self._embedding_model:
+            return None
+        try:
+            from durin.memory.embedding import FastembedProvider
+            from durin.memory.vector_index import VectorIndex
+            self._vector_index = VectorIndex(
+                self._workspace, FastembedProvider(model=self._embedding_model))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("file_watcher: vector index init failed: %s", exc)
+            self._vector_index = None
+        return self._vector_index
+
+    def _reindex_path(self, path: Path) -> None:
+        """Re-index one changed file: FTS always, vector for entity pages when an
+        embedder is configured (N2 — nothing else embeds them reactively)."""
+        from durin.memory.indexer import reindex_one_file, reindex_one_file_vector
+        reindex_one_file(self._workspace, path)
+        vi = self._get_vector_index()
+        if vi is not None:
+            reindex_one_file_vector(self._workspace, path, vi)
+
     def _worker_loop(self) -> None:
         """Drains the event queue. One thread, FIFO, serial."""
-        from durin.memory.indexer import reindex_one_file
-
         while True:
             try:
                 item = self._queue.get(timeout=0.5)
@@ -158,7 +189,7 @@ class MemoryFileWatcher:
                 if parts and parts[0] in ("archive", "pending"):
                     continue
                 try:
-                    reindex_one_file(self._workspace, path)
+                    self._reindex_path(path)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
                         "file_watcher: reindex %s failed: %s",

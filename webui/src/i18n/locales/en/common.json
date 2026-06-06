@@ -273,24 +273,39 @@
       "saveError": "Could not save {{path}}.",
       "sections": {
         "rerank": "Search reranking",
-        "dream": "Entity consolidation (Dream)",
-        "workingMemory": "Working memory"
+        "dream": "Dream (memory consolidation)"
       },
       "rows": {
         "crossEncoderEnabled": "Cross-encoder reranker",
         "crossEncoderModel": "Reranker model",
-        "thresholdEntries": "Consolidation threshold",
-        "dreamMinTokens": "Minimum tokens to run"
+        "dreamEnabled": "Dream enabled",
+        "dreamCron": "Daily schedule (cron)",
+        "dreamPostCompaction": "Run after compaction",
+        "dreamOnSessionClose": "Run on session close",
+        "dreamAutoAbsorb": "Auto-absorb duplicates",
+        "dreamAbsorbConfidence": "Auto-absorb confidence",
+        "dreamAbsorbMinAge": "Merge quarantine (h)",
+        "dreamThrottle": "Reactive throttle (s)",
+        "dreamMaxSeconds": "Max seconds per run",
+        "dreamAlwaysOnBudget": "Always-on budget (tokens)"
       },
       "help": {
         "crossEncoderEnabled": "Opt-in second-pass reranker. Adds 300-1500 ms per query and ~1 GB RAM but improves quality on ambiguous queries. Off by default.",
         "crossEncoderModel": "Model used when the reranker is enabled. The default works well for multilingual queries; alternatives trade size for latency.",
-        "thresholdEntries": "Run an entity-centric Dream pass once a single entity accumulates this many post-cursor entries. Set to 0 to disable the per-entity trigger (cron and session-close triggers still apply).",
-        "dreamMinTokens": "Skip the pre-LLM analysis when accumulated chat since last run is below this. Default 2000 filters trivial / social exchanges; 0 disables the gate (every non-empty tick runs)."
+        "dreamEnabled": "Master switch for the automatic dream. When off, the cron and reactive triggers are disabled; the manual `durin memory dream` still works.",
+        "dreamCron": "Cron expression for the daily extract / refine / skill pass. Default 0 3 * * * (3am local).",
+        "dreamPostCompaction": "Run a dream pass after a session is compacted — the context is already in memory so the cost is amortised.",
+        "dreamOnSessionClose": "Run a dream pass when a session ends (/quit or idle timeout).",
+        "dreamAutoAbsorb": "Let the refine pass automatically merge entities it judges duplicates (high-confidence only). Off keeps merges manual.",
+        "dreamAbsorbConfidence": "Minimum confidence (0-100) the judge requires to merge two entities. 95 = high precision. Only applies when auto-absorb is on.",
+        "dreamAbsorbMinAge": "Quarantine: don't merge entities newer than this many hours, so two freshly-created entities aren't merged before they differentiate. Only when auto-absorb is on.",
+        "dreamThrottle": "Minimum seconds between reactive dream runs (post-compaction / session-close). Absorbs bursts so overlapping passes don't pile up; 0 disables. The daily cron is never throttled.",
+        "dreamMaxSeconds": "Hard wall-clock cap per extract pass. When reached, the pass yields after the current session and the per-session cursor resumes the remainder on the next trigger. 0 = unbounded.",
+        "dreamAlwaysOnBudget": "Token budget for the 'always-on' guidance pinned into every prompt. The dream ranks feedback (stance/practice), drops contradictions, and fits the highest-priority items into this budget. 0 disables the pin."
       },
       "crossEncoderModelPlaceholder": "model id (e.g. BAAI/bge-reranker-base)",
       "crossEncoderTest": "Test",
-      "workingMemoryDescription": "Hourly consolidation of the chat history into MEMORY.md / SOUL.md / USER.md and on-the-fly skill creation. Runs every 2h and only triggers when there's enough new conversation to justify the LLM call."
+      "dreamDescription": "The dream consolidates sessions into entity pages + skills and dedups duplicate entities. It runs on a daily cron plus optional reactive triggers."
     },
     "skillsSecurity": {
       "description": "Security policy for importing skills: the LLM judge, trust patterns, the GitHub token, and size caps.",
