@@ -468,6 +468,24 @@ def reindex_one_file(
                     uri=uri, op="delete",
                     trigger=trigger, duration_ms=duration_ms,
                 )
+                # Keep the vector index symmetric: when a file vanishes,
+                # drop its Lance row too. Previously this path deleted only
+                # the FTS row, stranding the vector row as a search-able
+                # orphan that 404s on click. `delete_ids` is model-free and
+                # no-ops when lancedb is absent, so the hot watcher path
+                # stays cheap.
+                try:
+                    from durin.memory.vector_index import (
+                        delete_ids,
+                        vector_id_for_uri,
+                    )
+
+                    delete_ids(workspace, [vector_id_for_uri(uri)])
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "indexer: vector delete on vanish skipped for "
+                        "%s: %s", uri, exc,
+                    )
             return
         try:
             payload = _payload_for(workspace, md_path)
