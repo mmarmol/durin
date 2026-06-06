@@ -418,7 +418,7 @@ existing data. Prefer adding `valid_until` or unifying instead.
 - Paths use `/` separators and JSON Pointer syntax. Spaces and special chars
   in keys must be escaped (`~1` for `/`, `~0` for `~`).
 - You CANNOT touch paths outside `/attributes/*`, `/relations/*`, `/aliases/*`.
-  Internal fields (dream_processed_through, created_at, updated_at) are
+  Internal fields (created_at, updated_at) are
   managed by the runner and will be rejected if you target them.
 - Order matters within an output: ops are applied sequentially. Don't
   reference a path created by a later op.
@@ -775,14 +775,11 @@ person:marcelo, person:susana, project:durin, ...
 
 The intro sentences ("These are the authoritative records...", "Reconcile with the canonical...") are part of the canonical hot-layer rendering — they cue the LLM to treat canonical as ground truth and fragments as recent amendments to reconcile by timestamp.
 
-### 8.4 Cursor logic for fragments
+### 8.4 Fragment selection (two-track model, N3 2026-06-06)
 
-A fragment qualifies for the hot layer if and only if it satisfies BOTH:
+A fragment qualifies for the hot layer if its class is `episodic` or `stable` (not `corpus`, not `pending`) and it tags at least one entity. Qualifying fragments surface newest-first, capped by the budget.
 
-1. The entry's `valid_from` (or file `mtime`, as fallback) is **strictly after** the `dream_processed_through` cursor of the entity it tags.
-2. The entry's class is `episodic` or `stable` (not `corpus`, not `pending`).
-
-This means: as soon as Dream consolidates an episodic into an entity page, that episodic stops appearing in the hot layer (its `valid_from <= cursor` post-archive). The fragment slot is freed for newer post-cursor entries.
+There is no per-entity cursor. The earlier design folded an entity's fragments into its page and used a `dream_processed_through` cursor to graduate consolidated fragments out of the hot layer. The redesign does **not** consolidate fragments into pages — they are a separate raw track (`/remember` facts, session summaries) that coexists with the page — so nothing graduates a fragment out; the recency cap bounds the section and the LLM reconciles a fragment against the canonical page at read time using the timestamps.
 
 ### 8.5 Refresh cadence
 
@@ -793,7 +790,7 @@ The hot layer is **re-read from disk on every prompt build** (call: `read_hot_la
 **The practical effect of "cheap re-read each build":** between Dream passes, the `.md` files don't change → the assembled hot layer is byte-identical across consecutive turns → the upstream prompt cache (Anthropic / OpenAI) stays warm. A Dream pass invalidates the cache for one turn; the cache rewarms on the next turn. So in practice, the hot layer changes at most once per Dream pass:
 
 - Between Dream passes, the underlying `.md` files don't change → hot layer rendering is identical → upstream prompt cache stays warm.
-- A Dream pass that consolidates entities → updates `dream_processed_through` cursors → fragment list shrinks → hot layer changes → cache miss for that one turn → cache warms again on the next turn.
+- A Dream pass that updates entity pages (or a newly-landed fragment) changes the hot layer → cache miss for that one turn → cache warms again on the next turn.
 
 This is why the budgets are set conservatively. Larger budgets would invalidate cache more often.
 

@@ -361,12 +361,35 @@ unimplemented feature. Every item verified by reading the code.
 > `durin memory reindex` — not just user edits. Fix: the reactive index path
 > re-embeds (FTS + vector).
 
-### N3 — Per-entity `dream_processed_through` cursor never advanced — 🔲
+### N3 — Per-entity `dream_processed_through` cursor never advanced — ✅ DONE (2026-06-06)
+> **Decision: remove it (two-track model, user-confirmed).** Investigation of
+> the fragments answered the question: the only LIVE fragment producers are
+> `/remember` (episodic, user-authored "curator never touches") and session
+> close (session_summary). They are a SEPARATE raw track, never meant to be
+> consolidated into entity pages — the new extract dream builds entities from
+> SESSIONS, not fragments. So the per-entity cursor (the deleted
+> DreamConsolidator's fragment→page graduation tracker) is genuinely dead:
+> nothing advances it, and nothing should. Removed the field + all readers
+> (hot_layer, entity_ranker pre/post partition → renamed signal `tagged_rank`,
+> absorb_judge, graph_api, search_pipeline) + `load_cursors_from_entities_dir`
+> / `_is_pre_cursor` / `_parse_cursor`. Behaviour-neutral (cursor was always
+> null). Docs 01/03/06 updated. Deleted/updated the cursor tests across 7
+> files. 992 memory tests green. **Follow-up (→ C):** the deleted-consolidator
+> flow diagrams in doc 01 §ascii (lines ~578-650) + doc 05 still describe
+> fragment→page consolidation — fold into the doc-rewrite pass.
 > Nothing writes it (absorption only copies on merge; extract advances a per-
 > SESSION cursor). Hot-layer "graduation" + entity_ranker pre/post-cursor logic
 > run against a null cursor. May be obsolete-by-redesign (decide wire vs doc).
 
-### N4 — No automatic episodic→archive consolidation — 🔲
+### N4 — No automatic episodic→archive consolidation — ✅ ACCEPT (2026-06-06)
+> **Decision: accept — by design (two-track model, same as N3).** Episodic is
+> the raw user track (`/remember` facts the curator must never touch + session
+> summaries). Auto-archiving it would destroy the user's explicit memory.
+> Fragments are NOT consolidated into pages, so there is no "consumed →
+> archive" lifecycle to run. `archive_episodic` stays a manual operation
+> (`memory_forget` / webui). Volume is low (memory_store disabled). If volume
+> ever matters, a size/age CAP is the lever — NOT auto-archive. Doc 01 §5.3 /
+> doc 05 §7 (the old consume-and-archive lifecycle) → fold into the C pass.
 > `archive_episodic` only called by forget/webui (manual). Episodic accumulates
 > (low volume: memory_store disabled). Doc 05 §7 / doc 01 §5.3.
 

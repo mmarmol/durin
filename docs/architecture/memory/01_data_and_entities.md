@@ -170,7 +170,6 @@ Minimum required frontmatter (`durin/memory/entity_page.py::EntityPage`):
 type: <lowercase, [a-z][a-z0-9_]*>
 name: <display name>
 aliases: [<list of strings>]
-dream_processed_through: <timestamp or null>     # cursor
 created_at: <ISO timestamp>
 updated_at: <ISO timestamp>
 ---
@@ -178,7 +177,7 @@ updated_at: <ISO timestamp>
 <markdown body — free form>
 ```
 
-Known top-level fields (parsed explicitly): `type`, `name`, `aliases`, `dream_processed_through`, `created_at`, `updated_at`, `attributes`, `relations`, `provenance`, `author`. Audit E26 (2026-05-28) brought this list in sync with `_KNOWN_FIELDS` in `entity_page.py`: v2 fields (`attributes`/`relations`/`provenance`) shipped in earlier work, and `author` shipped with audit E19 (2026-05-28) for user-authored protection.
+Known top-level fields (parsed explicitly): `type`, `name`, `aliases`, `created_at`, `updated_at`, `attributes`, `relations`, `provenance`, `author`. (N3, 2026-06-06: the `dream_processed_through` cursor was removed — the two-track model does not consolidate fragments into pages, so there is nothing to advance a per-entity cursor.)
 
 **Anything else is preserved verbatim** in `entry.extra` (round-trip safe). Today Dream uses this to add emergent fields like `identifiers`, `related`, `dream_failure_count`, `dream_quarantine`, etc. without parser changes.
 
@@ -193,7 +192,6 @@ v2 schema **extends** the current one (backward-compatible with v1; v1 pages par
 type: person
 name: Marcelo
 aliases: [Marcelo Marmol, 马塞洛]
-dream_processed_through: <timestamp or null>
 created_at: <ISO timestamp>
 updated_at: <ISO timestamp>
 
