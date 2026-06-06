@@ -115,3 +115,54 @@ def test_poll_once_ok_exchanges_and_persists(monkeypatch, tmp_path):
     assert res.token.refresh == "RT"
     assert res.token.expires == exp * 1000
     assert saved and saved[-1].account_id == "acct_9"
+
+
+def test_existing_codex_session_reads_durin_token(monkeypatch):
+    access = _make_jwt(
+        {
+            "https://api.openai.com/auth": {
+                "chatgpt_account_id": "acct_9",
+                "chatgpt_plan_type": "pro",
+            },
+            "https://api.openai.com/profile.email": "u@x.com",
+        }
+    )
+
+    class _Storage:
+        def load(self):
+            return OAuthToken(access=access, refresh="RT", expires=10**13, account_id="acct_9")
+
+    monkeypatch.setattr(cda, "_strict_storage", lambda: _Storage())
+    monkeypatch.setattr(cda, "_read_codex_cli_session", lambda: None)
+    info = cda.existing_codex_session()
+    assert info is not None
+    assert info.email == "u@x.com"
+    assert info.plan == "pro"
+    assert info.source == "durin"
+
+
+def test_existing_codex_session_none_when_absent(monkeypatch):
+    class _Storage:
+        def load(self):
+            return None
+
+    monkeypatch.setattr(cda, "_strict_storage", lambda: _Storage())
+    monkeypatch.setattr(cda, "_read_codex_cli_session", lambda: None)
+    assert cda.existing_codex_session() is None
+
+
+def test_disconnect_removes_token_and_lock(monkeypatch, tmp_path):
+    token_path = tmp_path / "codex.json"
+    token_path.write_text("{}")
+    lock_path = tmp_path / "codex.lock"  # kit uses get_token_path().with_suffix(".lock")
+    lock_path.write_text("")
+
+    class _Storage:
+        def get_token_path(self):
+            return token_path
+
+    monkeypatch.setattr(cda, "_strict_storage", lambda: _Storage())
+    assert cda.disconnect() is True
+    assert not token_path.exists()
+    assert not lock_path.exists()
+    assert cda.disconnect() is False  # nothing left to remove
