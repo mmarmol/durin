@@ -1,10 +1,10 @@
-from durin.config.schema import Config
+from durin.config.schema import Config, DEFAULT_SKILL_ALLOWLIST
 
 
 def test_skills_namespace_defaults():
     c = Config()
     # governance moved out of memory.skill_import → skills.security
-    assert c.skills.security.allowlist == []
+    assert c.skills.security.allowlist == DEFAULT_SKILL_ALLOWLIST
     assert c.skills.security.llm_judge.trigger == "off"
     assert c.skills.security.max_files == 100
     # per-agent skill-context tuning moved onto agent defaults
