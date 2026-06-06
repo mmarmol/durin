@@ -208,8 +208,16 @@ def cmd_dream(
     ex = run_extract_pass(workspace, model=model)
     console.print("[dim]Skill-extract pass (sessions → reusable procedures)…[/dim]")
     sk = run_skill_extract_pass(workspace, model=model)
-    console.print("[dim]Refine pass (dedup duplicate entities)…[/dim]")
-    rf = run_refine_pass(workspace, model=model)
+    _absorb = cfg.memory.dream.auto_absorb
+    if _absorb.enabled:
+        console.print("[dim]Refine pass (dedup duplicate entities)…[/dim]")
+    else:
+        console.print(
+            "[dim]Refine pass skipped — auto_absorb disabled "
+            "(use 'durin memory absorb-suggest' to review duplicates)[/dim]"
+        )
+    rf = run_refine_pass(workspace, model=model, enabled=_absorb.enabled,
+                         confidence_threshold=_absorb.confidence_threshold)
     merged = len(rf.get("merged", []))
     console.print(
         f"\n[green]✓[/green] extract: {ex['entities']} attribute update(s) across "

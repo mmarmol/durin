@@ -1341,11 +1341,15 @@ def _run_gateway(
             # model + the G3 race). Writes go through memory_writer / skill_write.
             model = resolve_memory_model(config)
             _cron_max_s = config.memory.dream.max_seconds_per_run
+            _absorb = config.memory.dream.auto_absorb
             try:
                 ex = await _asyncio.to_thread(
                     run_extract_pass, workspace, model=model, max_seconds=_cron_max_s)
                 sk = await _asyncio.to_thread(run_skill_extract_pass, workspace, model=model)
-                rf = await _asyncio.to_thread(run_refine_pass, workspace, model=model)
+                rf = await _asyncio.to_thread(
+                    run_refine_pass, workspace, model=model,
+                    enabled=_absorb.enabled,
+                    confidence_threshold=_absorb.confidence_threshold)
                 logger.info(
                     "memory_dream cron: extract(sessions={} entities={} {}ms yielded={}) "
                     "skills(touched={} {}ms) refine(merged={} kept={} {}ms)",
