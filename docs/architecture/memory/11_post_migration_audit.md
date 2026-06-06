@@ -169,7 +169,20 @@ mode. Tie the decision to whether mega-hubs are a real risk in practice.
 
 ---
 
-### A4 — `always_on` pinned-context half has no producer — 🔲
+### A4 — `always_on` pinned-context half has no producer — ✅ DONE (2026-06-06)
+> **Decision: build the full distillation pass (not just a producer).** New
+> `always_on_dream.run_always_on_pass`: gathers feedback entities
+> (stance/practice/feedback), an LLM judge ranks them and DROPS contradictions,
+> the survivors are fitted into a **token budget** (`memory.dream.
+> always_on_token_budget`, parameter, default 1500), and the selected refs are
+> marked `always_on` (the rest unmarked). No entity is ever deleted — only the
+> flag flips — so a pruned/contradicted item returns when the budget frees or
+> the conflict resolves. Wired into the daily cron + manual `durin memory dream`
+> (after refine). Telemetry `memory.dream.always_on` + log. Tests:
+> `tests/memory/test_always_on_dream.py` (budget-fit, contradiction-drop,
+> no-LLM fallback, unmark-over-budget — each asserting no data loss). The pin
+> producer is the agent authoring feedback entities; the dream owns the
+> always_on flag (matches design §2.11 "the dream marked always_on").
 **Severity:** Medium.
 
 **Finding.** `principal.mark_always_on()` has **zero producers**; no dream or
