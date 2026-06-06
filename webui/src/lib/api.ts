@@ -1049,3 +1049,61 @@ export async function fetchMemorySession(
   if (!res.ok) throw new ApiError(res.status, `HTTP ${res.status}`);
   return (await res.json()) as MemorySessionDetail;
 }
+
+export interface CodexStatus {
+  connected: boolean;
+  email?: string | null;
+  plan?: string | null;
+  source?: "durin" | "codex-cli";
+}
+
+export interface CodexDeviceChallenge {
+  user_code: string;
+  verification_uri: string;
+  device_auth_id: string;
+  interval: number;
+  expires_in: number;
+}
+
+export interface CodexPollResult extends CodexStatus {
+  status: "pending" | "ok" | "error";
+  error?: string;
+}
+
+export async function fetchCodexStatus(
+  token: string,
+  base: string = "",
+): Promise<CodexStatus> {
+  return request<CodexStatus>(`${base}/api/oauth/codex/status`, token);
+}
+
+export async function startCodexDeviceAuth(
+  token: string,
+  base: string = "",
+): Promise<CodexDeviceChallenge> {
+  return request<CodexDeviceChallenge>(`${base}/api/oauth/codex/start`, token);
+}
+
+export async function pollCodexDeviceAuth(
+  token: string,
+  deviceAuthId: string,
+  userCode: string,
+  base: string = "",
+): Promise<CodexPollResult> {
+  const q = new URLSearchParams();
+  q.set("device_auth_id", deviceAuthId);
+  q.set("user_code", userCode);
+  return request<CodexPollResult>(
+    `${base}/api/oauth/codex/poll?${q}`,
+    token,
+  );
+}
+
+export async function disconnectCodex(
+  token: string,
+  base: string = "",
+): Promise<CodexStatus> {
+  return request<CodexStatus>(`${base}/api/oauth/codex/disconnect`, token, {
+    method: "POST",
+  });
+}

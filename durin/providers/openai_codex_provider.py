@@ -19,7 +19,8 @@ from durin.providers.openai_responses import (
 )
 
 DEFAULT_CODEX_URL = "https://chatgpt.com/backend-api/codex/responses"
-DEFAULT_ORIGINATOR = "durin"
+DEFAULT_ORIGINATOR = "codex_cli_rs"
+DEFAULT_USER_AGENT = "codex_cli_rs/0.0.0 (durin)"
 
 
 class OpenAICodexProvider(LLMProvider):
@@ -27,7 +28,7 @@ class OpenAICodexProvider(LLMProvider):
 
     supports_progress_deltas = True
 
-    def __init__(self, default_model: str = "openai-codex/gpt-5.1-codex"):
+    def __init__(self, default_model: str = "openai-codex/gpt-5.5"):
         super().__init__(api_key=None, api_base=None)
         self.default_model = default_model
 
@@ -45,8 +46,13 @@ class OpenAICodexProvider(LLMProvider):
         system_prompt, input_items = convert_messages(messages)
 
         from oauth_cli_kit import get_token as get_codex_token
+        from oauth_cli_kit.providers import OPENAI_CODEX_PROVIDER
 
-        token = await asyncio.to_thread(get_codex_token)
+        from durin.providers.codex_device_auth import _strict_storage
+
+        token = await asyncio.to_thread(
+            get_codex_token, OPENAI_CODEX_PROVIDER, _strict_storage()
+        )
         headers = _build_headers(token.account_id, token.access)
 
         body: dict[str, Any] = {
@@ -115,13 +121,16 @@ def _strip_model_prefix(model: str) -> str:
     return model
 
 
-def _build_headers(account_id: str, token: str) -> dict[str, str]:
+def _build_headers(account_id: str | None, token: str) -> dict[str, str]:
+    from durin.providers.codex_device_auth import account_id_from_jwt
+
+    resolved = account_id or account_id_from_jwt(token) or ""
     return {
         "Authorization": f"Bearer {token}",
-        "chatgpt-account-id": account_id,
+        "chatgpt-account-id": resolved,
         "OpenAI-Beta": "responses=experimental",
         "originator": DEFAULT_ORIGINATOR,
-        "User-Agent": "durin (python)",
+        "User-Agent": DEFAULT_USER_AGENT,
         "accept": "text/event-stream",
         "content-type": "application/json",
     }
