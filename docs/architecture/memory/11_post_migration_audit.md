@@ -133,7 +133,18 @@ correct the tool description to say "chunked corpus" until references ship.
 
 ---
 
-### A3 — Per-entity relation cap is not enforced — 🔲
+### A3 — Per-entity relation cap is not enforced — ✅ DONE (2026-06-06)
+> **Decision: wire it, soft / alert-only "de momento" (option a).**
+> `memory_writer.write_entity` now counts relations before/after the patches and
+> calls `check_relation_cap`; crossing the soft cap (50) emits
+> `memory.entity_relation_cap_warned`, crossing the hard cap (200) emits
+> `memory.entity_relation_cap_rejected` — both with a log. **No write is blocked
+> and no relation is dropped** (no data loss); enforcing the hard cap is a
+> one-line flip in `_emit_relation_cap` when mega-hubs prove real. This
+> RESOLVES the held dead-code: `entity_relation_cap.py` is now used (B1) and the
+> 2 `MemoryEntityRelationCap*Event` schemas are back in `EVENTS` (B2). Tests:
+> `tests/memory/test_entity_relation_cap.py` (logic + warn + hard-alert, each
+> asserting no data loss); catalog test green.
 **Severity:** Medium (data-integrity invariant absent; mega-hub protection).
 
 **Finding.** `entity_relation_cap.py` (soft 50 / hard 200, doc 01 §4.4 + §10

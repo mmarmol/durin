@@ -65,6 +65,43 @@ def _ensure_repo(root: Path) -> None:
         porcelain.init(str(root))
 
 
+def _emit_relation_cap(ref: str, before: int, after: int) -> None:
+    """A3 — per-entity relation cap (doc 01 §4.4), soft 50 / hard 200.
+
+    Alert-only "de momento": emit telemetry + log when a write crosses the soft
+    or hard cap, but NEVER block the write or drop a relation (no data loss).
+    Best-effort — telemetry must never break a write.
+    """
+    if after <= before:
+        return
+    try:
+        from durin.memory.entity_relation_cap import (
+            HARD_RELATION_CAP,
+            SOFT_RELATION_CAP,
+            check_relation_cap,
+        )
+        decision = check_relation_cap(
+            entity_ref=ref, current_count=before, adding=after - before)
+        if decision.action == "ok":
+            return
+        payload = {"entity_ref": ref, "current_count": before, "new_count": after}
+        from durin.agent.tools._telemetry import emit_tool_event
+        # Literal event names (the catalog scanner reads the string at the call).
+        if decision.action == "warn":
+            emit_tool_event("memory.entity_relation_cap_warned", payload)
+        else:
+            emit_tool_event("memory.entity_relation_cap_rejected", payload)
+        from loguru import logger
+        logger.warning(
+            "relation cap {} for {}: {} -> {} relations (soft={} hard={}; "
+            "alert-only, not enforced)",
+            decision.action, ref, before, after,
+            SOFT_RELATION_CAP, HARD_RELATION_CAP,
+        )
+    except Exception:  # pragma: no cover — never break a write
+        pass
+
+
 def write_entity(
     workspace: Path,
     ref: str,
@@ -114,8 +151,10 @@ def write_entity(
         if name is not None and page.name != name:
             page.name = name
             changed = True
+        rel_before = len(page.relations)
         for p in patches:
             changed = apply_field_patch(page, p) or changed
+        rel_after = len(page.relations)
         if not changed and raw is not None:
             return WriteResult(ref, committed=False, retries=attempt)  # no-op
 
@@ -138,6 +177,7 @@ def write_entity(
             repo.close()
         if ok:
             _fast_forward_working_tree(root)
+            _emit_relation_cap(ref, rel_before, rel_after)
             return WriteResult(ref, committed=True, retries=attempt)
         # CAS failed (mismatch or lock): HEAD may have moved → backoff + retry.
         time.sleep(random.uniform(0.0, 0.005) * (attempt + 1))
