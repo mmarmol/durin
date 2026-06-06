@@ -55,7 +55,17 @@ Documented here for historical reference. Hooks in `memory_store.execute`, `memo
 - **Risk**: if the rebuild takes long (>10s for large workspaces), it blocks the first `memory_search` post-update. Mitigation: emit progress log + consider a lock so two processes don't rebuild concurrently.
 - **Test**: set `meta.json` with `schema_version=1`, call `memory_search`, assert rebuild ran + meta updated.
 
-### P2.3 — Watchdog file watcher ✅ DONE (module: `d9a4d8e`; wired in `AgentLoop` in `989d33e` / audit A11)
+### P2.3 — Watchdog file watcher 🔨 PARTIAL (was wrongly ✅; corrected 2026-06-06 by the completeness re-audit)
+
+> **Correction (N1/N2):** the DoD claimed full credit but two halves were never
+> implemented. (a) **`author: user` commit** — the watcher only ever called
+> `reindex_one_file`; it never committed. NOW provided by the **human-edit guard**
+> (`memory_writer._commit_dirty_as_user`, N1, 2026-06-06): the next system write
+> commits any dirty hand edit with `author:user` before its hard-reset ff, so the
+> edit isn't clobbered. (b) **vector re-index of a hand edit** — `reindex_one_file`
+> is FTS-only; the watcher never re-embeds. Tracked as **N2** (in
+> `11_post_migration_audit.md`). DoD's "within 5 s a `memory_search` surfaces the
+> edit" holds for FTS, NOT for vector recall, until N2 lands.
 
 - **TYPE**: 🟢 module (~120 LOC)
 - **DoD**: Edit `memory/entities/person/marcelo.md` with vim and, within 5 seconds, the next `memory_search` for "marcelo" surfaces the words from the edit. Additionally: the commit in `memory/.git/` is recorded with `author: user`.

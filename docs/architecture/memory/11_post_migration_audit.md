@@ -337,3 +337,47 @@ Doc 00/01/02 prose + the "Implementation status" tables in doc 01 §11 / doc 05
 
 Each row flips to ✅ only after: pre-flight done + decision recorded + (if code)
 tests green + (if behavior) live-verified.
+
+---
+
+## D. Completeness re-audit (2026-06-06) — specs not implemented, found by a whole-docs vs code pass
+
+A second comprehensive doc-vs-code pass (all of docs 00-07,10) after A1-A5/B1-B4,
+run because rewriting the docs (C) could silently erase the spec of an
+unimplemented feature. Every item verified by reading the code.
+
+### N1 — Human edits clobbered by the system's hard-reset ff — ✅ DONE (2026-06-06)
+> `_fast_forward_working_tree` does `porcelain.reset(root, "hard")` (its own TODO
+> admitted the gap). A user's uncommitted hand edit was clobbered by the next
+> system write. **Fix:** `memory_writer._commit_dirty_as_user` commits dirty
+> working-tree `.md` edits with `author:user` before any system write touches git.
+> Tests: `test_user_edit_guard.py` (survives, author:user, no-op on clean). Also
+> corrects the phantom ✅ on `10_remaining_work` P2.3.
+
+### N2 — Nothing re-indexes the vector reactively (entity pages vector-stale) — 🔨 IN PROGRESS
+> The watcher's `reindex_one_file` is FTS-only; `memory_upsert_entity` + the
+> extract dream never embed; `upsert_entity_page` has ONE caller (absorption
+> merge). So every new/edited entity is vector-stale until a merge or full
+> `durin memory reindex` — not just user edits. Fix: the reactive index path
+> re-embeds (FTS + vector).
+
+### N3 — Per-entity `dream_processed_through` cursor never advanced — 🔲
+> Nothing writes it (absorption only copies on merge; extract advances a per-
+> SESSION cursor). Hot-layer "graduation" + entity_ranker pre/post-cursor logic
+> run against a null cursor. May be obsolete-by-redesign (decide wire vs doc).
+
+### N4 — No automatic episodic→archive consolidation — 🔲
+> `archive_episodic` only called by forget/webui (manual). Episodic accumulates
+> (low volume: memory_store disabled). Doc 05 §7 / doc 01 §5.3.
+
+### N5 — `durin memory reindex` doesn't write meta.json; no embedding-model-change detection — 🔲
+> `cmd_reindex` never calls `save_index_meta`; `ensure_index_fresh` checks only
+> schema_version, not the model id. Same-dim model swap is silent. Doc 02 §7.
+
+### N6 — Tool-description sync test guards the DISABLED memory_store, not the live tools — 🔲
+> `test_tool_description_sync` omits `memory_upsert_entity` + `memory_forget` →
+> their descriptions can drift undetected. Doc 04 §8 / doc 06 §3.5.
+
+### N7 — absorb-judge mtimes not passed by refine; no search-time staleness filter — 🔲 (Low)
+> `refine_dream` doesn't pass canonical/absorbed mtimes to `judge_pair`; no
+> per-search 60s mtime-lag filter (the 15-min cron covers it on a slower cadence).
