@@ -274,6 +274,13 @@
       },
       "dreamDescription": "El dream consolida las sesiones en páginas de entidad + skills y deduplica entidades repetidas. Corre en un cron diario más disparadores reactivos opcionales."
     },
+    "extras": {
+      "willInstall": "Esto instalará {{extra}} (~{{size}} de descarga).",
+      "restartAfter": "Reiniciar el gateway después de instalar",
+      "install": "Instalar",
+      "installing": "Instalando…",
+      "cancel": "Cancelar"
+    },
     "skillsSecurity": {
       "description": "Política de seguridad para importar skills: el juez LLM, patrones de confianza, el token de GitHub y los límites de tamaño.",
       "loadError": "No se pudo cargar la configuración.",

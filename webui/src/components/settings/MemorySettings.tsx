@@ -6,10 +6,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   getConfig,
+  getExtraStatus,
   setConfigValue,
   testCrossEncoderModel,
   type CrossEncoderTestResult,
+  type ExtraStatus,
 } from "@/lib/api";
+import { ExtraInstallPrompt } from "./ExtraInstallPrompt";
 import {
   SettingsGroup,
   SettingsRow,
@@ -149,6 +152,25 @@ export function MemorySettings({ token }: { token: string }) {
   const crossEncoder = useMemo(() => readCrossEncoder(config), [config]);
   const dream = useMemo(() => readDream(config), [config]);
 
+  const [pendingExtra, setPendingExtra] = useState<
+    { feature: string; status: ExtraStatus; after: () => void } | null
+  >(null);
+  const ensureThen = useCallback(
+    async (feature: string, after: () => void) => {
+      try {
+        const st = await getExtraStatus(token, feature);
+        if (st.present) {
+          after();
+          return;
+        }
+        setPendingExtra({ feature, status: st, after });
+      } catch {
+        after(); // status check failed — let the action surface its own error
+      }
+    },
+    [token],
+  );
+
   if (loading) {
     return (
       <div className="flex h-40 items-center justify-center text-sm text-muted-foreground">
@@ -182,7 +204,11 @@ export function MemorySettings({ token }: { token: string }) {
               variant="outline"
               disabled={savingPath === "memory.search.cross_encoder.enabled"}
               onClick={() =>
-                void onSave("memory.search.cross_encoder.enabled", !crossEncoder.enabled)
+                crossEncoder.enabled
+                  ? void onSave("memory.search.cross_encoder.enabled", false)
+                  : void ensureThen("cross_encoder", () =>
+                      void onSave("memory.search.cross_encoder.enabled", true),
+                    )
               }
               className="w-[68px] rounded-full"
             >
@@ -199,8 +225,22 @@ export function MemorySettings({ token }: { token: string }) {
               value={crossEncoder.model}
               disabled={!crossEncoder.enabled || savingPath === "memory.search.cross_encoder.model"}
               onSave={(model) => void onSave("memory.search.cross_encoder.model", model)}
+              ensureThen={ensureThen}
             />
           </SettingsRow>
+          {pendingExtra ? (
+            <ExtraInstallPrompt
+              token={token}
+              feature={pendingExtra.feature}
+              status={pendingExtra.status}
+              onCancel={() => setPendingExtra(null)}
+              onDone={(restarting) => {
+                const after = pendingExtra.after;
+                setPendingExtra(null);
+                if (!restarting) after();
+              }}
+            />
+          ) : null}
         </SettingsGroup>
       </section>
 
@@ -450,11 +490,13 @@ function CrossEncoderModelEditor({
   value,
   disabled,
   onSave,
+  ensureThen,
 }: {
   token: string;
   value: string;
   disabled: boolean;
   onSave: (model: string) => void;
+  ensureThen: (feature: string, after: () => void) => void;
 }) {
   const { t } = useTranslation();
   const [draft, setDraft] = useState(value);
@@ -525,7 +567,7 @@ function CrossEncoderModelEditor({
           size="sm"
           variant="outline"
           disabled={disabled || testing || draft.trim().length === 0}
-          onClick={() => void runTest()}
+          onClick={() => ensureThen("cross_encoder", () => void runTest())}
           className="rounded-full"
         >
           {testing ? (
