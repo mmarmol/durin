@@ -203,7 +203,14 @@ prompt-cache stability. If wired, it needs a budget + a producer policy.
 
 ---
 
-### A5 — Extract prompt omits anti-duplication context (`existing_uris`) — 🔲
+### A5 — Extract prompt omits anti-duplication context (`existing_uris`) — ✅ DONE (2026-06-06)
+> **Decision: accept + kill (not a gap).** Verified the new extract enriches
+> entities BY the agent's explicit `memory_upsert_entity` ref (it never
+> creates from scratch), so it cannot introduce a duplicate that
+> `existing_uris` would prevent. Dedup is covered elsewhere: the agent is
+> told to `memory_search` first (author-time) and the refine pass merges
+> alias-overlap duplicates (A1). `existing_uris` was the OLD consolidator's
+> need — redundant now. Killed `entity_inventory.py` (dead, 0 callers).
 **Severity:** Low/Medium (refine compensates).
 
 **Finding.** Doc 05 §5.1/§10-7 specifies the write prompt include an
@@ -231,8 +238,8 @@ refine, so this may be acceptable — quantify before acting.
 ### B1 — Orphaned modules (0 production callers) — 🔨 PARTIAL (2026-06-06)
 > `dream_commit_message.py` ✅ killed (the new commit path in `memory_writer` +
 > `absorption` builds its own messages inline — confirmed not forgot-to-wire).
-> `entity_inventory.py` held for A5, `entity_relation_cap.py` held for A3
-> (wire-vs-kill depends on those decisions).
+> `entity_inventory.py` ✅ killed (A5 — redundant in the new model).
+> `entity_relation_cap.py` ✅ revived/wired (A3).
 - `durin/memory/entity_inventory.py` — fed the deleted DreamConsolidator's
   `existing_uris`. **Tied to A5** (wire vs kill).
 - `durin/memory/entity_relation_cap.py` — **Tied to A3** (wire vs kill).
