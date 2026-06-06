@@ -1,9 +1,7 @@
 """LLM invocation helper for the memory subsystem.
 
-Extracted from ``durin.memory.dream`` (§8e) so the new dreams (extract / refine)
-and the absorb judge don't depend on the legacy ``DreamConsolidator`` module.
-``dream.py`` re-exports these names for the remaining legacy importers until
-that module is removed.
+The dream passes (extract / refine) and the absorb judge call the LLM through
+this helper.
 """
 from __future__ import annotations
 

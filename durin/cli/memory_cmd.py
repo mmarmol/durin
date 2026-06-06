@@ -192,7 +192,7 @@ def cmd_dream(
     workspace = _workspace_root()
     # New model (§8e): the manual dream runs the extract pass (sessions →
     # entity attributes) + the refine pass (dedup), replacing the legacy
-    # episodic-entry consolidation (DreamRunner / DreamConsolidator). The
+    # episodic-entry consolidation. The
     # `entity` filter is not used by the new passes.
     from durin.memory.always_on_dream import run_always_on_pass
     from durin.memory.dream_passes import (

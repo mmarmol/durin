@@ -507,7 +507,7 @@ class Consolidator:
         # Doc 25 §2.A.1 β.2: optional callback fired once per
         # ``maybe_consolidate_by_tokens`` call that produced at least
         # one summary. Wiring layer (``cli/commands.py``) sets this to
-        # a thunk that dispatches a background DreamRunner pass so
+        # a thunk that dispatches a background reactive dream (extract) pass so
         # consolidated context turns into entity-page updates while the
         # signal is fresh. Sync callable — must not block; the
         # callback owns its own threading if needed.
