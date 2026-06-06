@@ -86,6 +86,7 @@ PROVIDER_CHOICES: tuple[tuple[str, str, str], ...] = (
     ("Z.AI Coding Plan (recommended)", "zhipu", "glm-5.1"),
     ("Anthropic (Claude)", "anthropic", "claude-opus-4-7"),
     ("OpenAI (GPT)", "openai", "gpt-5"),
+    ("OpenAI Codex (ChatGPT Plus/Pro, OAuth)", "openai_codex", "gpt-5.5"),
     ("Google (Gemini)", "gemini", "gemini-2.5-pro"),
     ("OpenRouter (any model, one key)", "openrouter", "anthropic/claude-opus-4.7"),
     ("Custom OpenAI-compatible endpoint", "custom", ""),
@@ -100,6 +101,7 @@ DEFAULT_MODELS: dict[str, tuple[str, ...]] = {
     "zai_coding_plan": ("glm-5.1", "glm-4.6", "glm-5-turbo"),
     "anthropic": ("claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"),
     "openai": ("gpt-5", "gpt-5-mini", "gpt-4.1", "gpt-4o", "gpt-4o-mini"),
+    "openai_codex": ("gpt-5.5", "gpt-5.4-mini", "gpt-5.4", "gpt-5.3-codex", "gpt-5.3-codex-spark"),
     "gemini": ("gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"),
     "openrouter": (
         "anthropic/claude-opus-4.7",
@@ -575,14 +577,24 @@ def _direct_setup(config: Config, q: Any, summary: list[str]) -> bool:
             return False
         provider_name, recommended = picked
 
-        api_key = q.password(
-            f"Paste your {provider_name} API key "
-            "(blank if not required, Esc to go back):"
-        ).ask()
-        if api_key is None:
-            continue  # Esc → back to the provider list
-        if api_key:
-            _set_provider_api_key(config, provider_name, api_key)
+        if provider_name == "openai_codex":
+            # OAuth provider: authorize via device-code/loopback instead of a key.
+            from durin.cli.commands import _codex_login_flow
+
+            try:
+                _codex_login_flow(force=None)
+            except Exception as exc:  # noqa: BLE001
+                summary.append(f"Codex login failed/cancelled: {exc}")
+                continue  # back to the provider list
+        else:
+            api_key = q.password(
+                f"Paste your {provider_name} API key "
+                "(blank if not required, Esc to go back):"
+            ).ask()
+            if api_key is None:
+                continue  # Esc → back to the provider list
+            if api_key:
+                _set_provider_api_key(config, provider_name, api_key)
 
         model = _pick_model(provider_name, recommended, q)
         if model is _BACK:
