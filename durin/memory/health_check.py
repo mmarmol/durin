@@ -160,6 +160,29 @@ class HealthChecker:
                 "health_check: staleness detection failed: %s", exc,
             )
 
+        # Lance↔disk reconcile. The FTS-driven staleness pass above only
+        # sees orphans that are ALSO in `fts_meta`; rows that exist only in
+        # the vector table (out-of-band `rm -rf memory/<dir>`, a reinstall,
+        # or an FTS-only rebuild) are invisible to it. This scan prunes
+        # vector rows whose backing file is gone, model-free. Best-effort —
+        # a failure logs but never breaks the tick.
+        lance_orphans_pruned = 0
+        try:
+            from durin.memory.vector_index import prune_orphan_rows
+
+            pruned = prune_orphan_rows(self._workspace)
+            lance_orphans_pruned = len(pruned)
+            if pruned:
+                logger.info(
+                    "health_check: pruned %d lance orphan(s) with no "
+                    "backing file",
+                    lance_orphans_pruned,
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "health_check: lance reconcile failed: %s", exc,
+            )
+
         status = (
             "critical" if "critical" in self._critical_emitted
             else (
@@ -177,6 +200,8 @@ class HealthChecker:
         }
         if errors:
             payload["errors"] = errors
+        if lance_orphans_pruned:
+            payload["lance_orphans_pruned"] = lance_orphans_pruned
 
         try:
             emit_tool_event("memory.health_check", payload)
@@ -390,13 +415,12 @@ class HealthChecker:
     def _vector_id_for(uri: str) -> str:
         """Map an index uri to its vector-table ``id``.
 
-        Memory entries are stored under the bare entry id
-        (``memory/<class>/<id>`` → ``<id>``); entity refs (``type:slug``)
-        and skills (``skill/<slug>``) use the uri verbatim.
+        Delegates to :func:`durin.memory.vector_index.vector_id_for_uri`
+        so the watcher delete path and this reconcile share one mapping.
         """
-        if uri.startswith("memory/"):
-            return uri.rsplit("/", 1)[-1]
-        return uri
+        from durin.memory.vector_index import vector_id_for_uri
+
+        return vector_id_for_uri(uri)
 
     def _repair_drift(self, issue: dict[str, Any]) -> None:
         """Best-effort drift repair: re-index the offending path.

@@ -45,6 +45,8 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "VectorIndex",
     "VectorIndexDimensionMismatchError",
+    "prune_orphan_rows",
+    "vector_id_for_uri",
     "vector_index_available",
 ]
 
@@ -1004,3 +1006,61 @@ def delete_ids(workspace: Path, ids: list[str]) -> int:
         quoted = ",".join(f"'{_escape(i)}'" for i in chunk)
         table.delete(f"id IN ({quoted})")
     return len(unique)
+
+
+def vector_id_for_uri(uri: str) -> str:
+    """Map an index ``uri`` to its vector-table ``id``.
+
+    Memory entries are stored under the bare entry id
+    (``memory/<class>/<id>`` → ``<id>``); entity refs (``type:slug``) and
+    skills (``skill/<slug>``) use the uri verbatim. Single source of truth
+    shared by the health-check reconcile (``HealthChecker._vector_id_for``)
+    and the watcher delete path (``indexer.reindex_one_file``) so the two
+    can't drift.
+    """
+    if uri.startswith("memory/"):
+        return uri.rsplit("/", 1)[-1]
+    return uri
+
+
+def prune_orphan_rows(workspace: Path) -> list[str]:
+    """Delete vector rows whose backing file (the ``path`` column) is gone.
+
+    Scans the table for ``path`` values that no longer resolve to a file
+    under ``workspace`` and drops those rows. Model-free — projects only
+    ``id`` + ``path`` (no vectors) and deletes by id, so it never loads the
+    embedding model.
+
+    This catches orphans the FTS-driven staleness check is blind to: rows
+    that exist ONLY in Lance and never in ``fts_meta`` (an out-of-band
+    ``rm -rf memory/<dir>``, a reinstall, or an FTS-only rebuild). Rows
+    with an empty ``path`` are left alone — they can't be verified, so
+    deleting them would be unsafe. Returns the deleted ids.
+
+    No-op (returns ``[]``) when lancedb is unavailable, the index dir is
+    absent, the table is missing, or the table is empty.
+    """
+    try:
+        import lancedb  # type: ignore[import-not-found]
+    except ImportError:
+        return []
+    uri = str(Path(workspace).joinpath(*_INDEX_PATH))
+    if not Path(uri).is_dir():
+        return []
+    db = lancedb.connect(uri)
+    if _TABLE_NAME not in db.list_tables().tables:
+        return []
+    table = db.open_table(_TABLE_NAME)
+    total = table.count_rows()
+    if total == 0:
+        return []
+    ws = Path(workspace)
+    rows = table.search().select(["id", "path"]).limit(total).to_list()
+    orphan_ids = [
+        r["id"]
+        for r in rows
+        if r.get("path") and not (ws / r["path"]).is_file()
+    ]
+    if orphan_ids:
+        delete_ids(workspace, orphan_ids)
+    return orphan_ids
