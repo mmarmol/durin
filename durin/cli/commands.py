@@ -1643,6 +1643,16 @@ def _run_gateway(
             f"cron {mem_dream_cfg.cron}"
         )
 
+    # Prune system crons left in the store by a previous build but no longer
+    # managed here (e.g. the legacy 2h `dream` retired in the entity-centric
+    # redesign) so they don't linger in the UI / fire with no handler. Keep this
+    # set in sync with the system jobs registered above.
+    pruned = cron.prune_orphaned_system_jobs({"memory_dream"})
+    if pruned:
+        console.print(
+            f"[green]✓[/green] Cron: pruned orphaned system job(s): {', '.join(pruned)}"
+        )
+
     # Doc 25 §2.A.1 β.2: wire the post-compaction + session-close
     # hooks so dream picks up consolidated context while the signal
     # is fresh. Background daemon threads keep the agent loop

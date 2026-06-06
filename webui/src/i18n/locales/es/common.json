@@ -360,13 +360,9 @@
       "remove": "Eliminar tarea",
       "cantDeleteSystem": "Las tareas del sistema no se pueden eliminar.",
       "systemJobs": {
-        "dream": {
-          "name": "Consolidación de memoria viva",
-          "note": "Destila el chat reciente en MEMORY.md / SOUL.md / USER.md y crea skills cuando aparecen patrones. Saltea ticks triviales (ver \"Memoria viva → Tokens mínimos\" en ajustes de Memoria)."
-        },
         "memory_dream": {
-          "name": "Consolidación del grafo de entidades",
-          "note": "Pasada profunda nocturna que convierte las entradas episódicas de memoria en páginas canónicas de entidades (grafo de conocimiento)."
+          "name": "Consolidación de memoria de entidades",
+          "note": "Pasada diaria (3am local) más disparadores reactivos (post-compactación / cierre de sesión) que procesa las sesiones recientes — extrae atributos de entidades, mina skills, deduplica entidades y destila el pin always-on."
         }
       }
     }
@@ -564,7 +560,7 @@
           },
           "dream": {
             "title": "Ejecutar Dream",
-            "description": "Activa manualmente la consolidación de memoria."
+            "description": "Ejecuta manualmente el dream de consolidación de entidades (extract / skill / refine / always_on)."
           },
           "dream_log": {
             "title": "Mostrar registro de Dream",
@@ -718,7 +714,7 @@
     "noAbsorptions": "Sin absorciones para esta entidad.",
     "noSourceLinkedEntries": "Ninguna entrada episódica enlaza con esta sesión via source_refs.",
     "emptyHint": "Ejecuta <code>durin memory dream</code> cuando se acumulen entradas.",
-    "noConsolidatedHint": "Etiquetada en entradas episódicas pero aún sin página consolidada. Ejecuta <code>durin memory dream</code> para crear una.",
+    "noConsolidatedHint": "Mencionada en entradas episódicas pero aún sin página canónica de entidad. Ejecuta <code>durin memory dream</code> para extraerla y crear una.",
     "phantomWhatIs": "Qué es esto (provisional)",
     "coMentions": "Co-menciones",
     "stats": "{{nodesLabel}} · {{edgesLabel}}",

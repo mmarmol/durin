@@ -360,13 +360,9 @@
       "remove": "Remove job",
       "cantDeleteSystem": "System jobs cannot be removed.",
       "systemJobs": {
-        "dream": {
-          "name": "Working memory consolidation",
-          "note": "Distills recent chat history into MEMORY.md / SOUL.md / USER.md and creates skills when patterns emerge. Skips trivial ticks (see \"Memoria viva → Minimum tokens\" in Memory settings)."
-        },
         "memory_dream": {
-          "name": "Entity knowledge consolidation",
-          "note": "Nightly deep pass that turns episodic memory entries into canonical entity pages (knowledge graph)."
+          "name": "Entity memory consolidation",
+          "note": "Daily pass (3am local) plus reactive triggers (post-compaction / session-close) that processes recent sessions — extracts entity attributes, mines skills, deduplicates entities, and distills the always-on pin."
         }
       }
     }
@@ -559,7 +555,7 @@
           },
           "dream": {
             "title": "Run Dream",
-            "description": "Manually trigger memory consolidation."
+            "description": "Manually run the entity consolidation dream (extract / skill / refine / always_on)."
           },
           "dream_log": {
             "title": "Show Dream log",
@@ -717,7 +713,7 @@
     "noAbsorptions": "No absorptions for this entity.",
     "noSourceLinkedEntries": "No episodic entries linked back to this session via source_refs.",
     "emptyHint": "Run <code>durin memory dream</code> once entries accumulate.",
-    "noConsolidatedHint": "Tagged in episodic entries but no consolidated page yet. Run <code>durin memory dream</code> to create one.",
+    "noConsolidatedHint": "Mentioned in episodic entries but no canonical entity page yet. Run <code>durin memory dream</code> to extract and create one.",
     "phantomWhatIs": "What this is (provisional)",
     "coMentions": "Co-mentions",
     "stats": "{{nodesLabel}} · {{edgesLabel}}",

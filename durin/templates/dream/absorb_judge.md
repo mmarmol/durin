@@ -1,8 +1,9 @@
 # Absorb judge prompt — v1
 
 > LLM-judge para decidir si dos entity pages representan la MISMA
-> identidad real. Usado por `DreamRunner._maybe_auto_absorb` (doc 25
-> §2.D) cuando `memory.dream.auto_absorb.enabled = true`.
+> identidad real. Usado por el refine pass
+> `durin/memory/refine_dream.py::run_refine` cuando
+> `memory.dream.auto_absorb.enabled = true`.
 >
 > Diseñado adversarial: comparten al menos un alias (alias overlap)
 > pero esto es NECESARIO y NO suficiente. El judge debe defaultear
