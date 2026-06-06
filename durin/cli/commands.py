@@ -2476,7 +2476,7 @@ def _resolve_oauth_provider(provider: str):
     return spec
 
 
-from durin.utils.oauth import should_use_device_code
+from durin.utils.oauth import should_use_device_code  # noqa: E402
 
 
 @oauth_app.command("login")
