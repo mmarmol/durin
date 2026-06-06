@@ -1,9 +1,10 @@
 """Audit: tool descriptions in code must match doc 06 §3 verbatim.
 
-Per `docs/architecture/memory/06_prompts_and_instructions.md` §3.5: the canonical
+Per `docs/architecture/memory/06_prompts_and_instructions.md` §3.7: the canonical
 text the LLM sees lives in the doc. Code drift silently changes
 agent behaviour. This test parses the doc + compares against the
-4 memory tools' descriptions.
+LIVE memory tools' descriptions (search, upsert_entity, ingest, drill, forget)
+plus the disabled memory_store (kept in sync while it still exists).
 
 **What we compare** (audit B1, 2026-05-28): the `Tool.description`
 property — the field that `Tool.to_schema()` emits as
@@ -28,9 +29,11 @@ from pathlib import Path
 import pytest
 
 from durin.agent.tools.memory_drill import MemoryDrillTool
+from durin.agent.tools.memory_forget import MemoryForgetTool
 from durin.agent.tools.memory_ingest import MemoryIngestTool
 from durin.agent.tools.memory_search import MemorySearchTool
 from durin.agent.tools.memory_store import MemoryStoreTool
+from durin.agent.tools.memory_upsert_entity import MemoryUpsertEntityTool
 
 
 _DOC_PATH = (
@@ -125,6 +128,24 @@ def test_memory_drill_description_matches_doc(doc_text: str) -> None:
     actual = _tool_description(MemoryDrillTool)
     assert _normalise(actual) == _normalise(expected), (
         "memory_drill `.description` property drifted from doc 06 §3.4."
+    )
+
+
+def test_memory_upsert_entity_description_matches_doc(doc_text: str) -> None:
+    # N6: the live write tool MUST be doc-governed (was uncovered).
+    expected = _extract_section_block(doc_text, "### 3.5 `memory_upsert_entity`")
+    actual = _tool_description(MemoryUpsertEntityTool)
+    assert _normalise(actual) == _normalise(expected), (
+        "memory_upsert_entity `.description` property drifted from doc 06 §3.5."
+    )
+
+
+def test_memory_forget_description_matches_doc(doc_text: str) -> None:
+    # N6: the live delete tool MUST be doc-governed (was uncovered).
+    expected = _extract_section_block(doc_text, "### 3.6 `memory_forget`")
+    actual = _tool_description(MemoryForgetTool)
+    assert _normalise(actual) == _normalise(expected), (
+        "memory_forget `.description` property drifted from doc 06 §3.6."
     )
 
 
