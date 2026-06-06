@@ -264,7 +264,14 @@ refine, so this may be acceptable — quantify before acting.
 class defs. (The schema-catalog test already enforces EVENTS↔emit; these are
 just leftover defs.)
 
-### B3 — Dead config fields — 🔲
+### B3 — Dead config fields — ✅ DONE (2026-06-06)
+> **Decision (b): wire `min_age_hours`, kill `judge_model`.** `min_age_hours`
+> is now honoured by `run_refine` — a candidate pair is quarantined (skipped,
+> `memory.absorb.skipped` reason=quarantine) when either entity is younger
+> than the window (created_at, falling back to updated_at). Wired from config
+> through the cron + manual. `judge_model` removed (marginal bias knob; only
+> docstrings referenced it → B4). Test: `test_refine_quarantines_fresh_
+> entities_min_age_hours` (quarantined under a large window, merged with 0).
 `AutoAbsorbConfig.min_age_hours` + `judge_model` (0 reads — only docstrings).
 **Resolve with A1:** if we wire `auto_absorb`, these may become live (the judge
 quarantine window + judge model); if we drop `auto_absorb`, they go too. Do NOT
