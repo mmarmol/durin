@@ -9,6 +9,13 @@ depends_on: 09_implementation_roadmap.md (spec); 99_phase_progress_review.md (de
 
 # Remaining work (post-Phase-1.9)
 
+> **⚠️ Superseded (2026-06).** This pre-migration tracker is kept for history. The
+> Phase-1.9 work shipped with the entity-centric migration; the **current** state,
+> remediation record, and remaining items live in
+> [`docs/qa/post_migration_audit_2026-06.md`](../../qa/post_migration_audit_2026-06.md)
+> and [`docs/backlog.md`](../../backlog.md). For how the system works **now**, read
+> `00`-`08` (memory) + `docs/architecture/skills/` (skills) — not this list.
+
 This document is the **granular list of what remains** after the current state (commit `c820447`). The original plan (`09_implementation_roadmap.md`) is still the **specs** reference, but uses a "deliverables" granularity that hid scope and latent bugs in the autonomous session. This doc applies the format discussed in D5+D6:
 
 | Field | Meaning |
@@ -23,7 +30,7 @@ This document is the **granular list of what remains** after the current state (
 
 **State at close of second-pass audit (2026-05-28)**: ~5096 tests collected; tests/memory/ 1000 passed + 1 skipped (pre-existing). The v2 system runs end-to-end. Phase 4 (cross-encoder) shipped (P4.1-P4.4); Phase 8 (validation with LoCoMo bench) is still pending. Audit E35/E36 (2026-05-28) updated this header — the "4888 tests" count and the phrase "Phase 4 + Phase 8 remain" lagged behind the day's audit commits.
 
-> **Audit refresh 2026-05-28** (audit B3): most of the P2-P7 items listed without ✅ DONE below **were closed during the day 2026-05-28** via the A1-A11 audit commits. The current per-item state with rationale is in [`11_audit_reconciliation.md`](11_audit_reconciliation.md) (section for each A*). Quick summary by phase:
+> **Audit refresh 2026-05-28** (audit B3): most of the P2-P7 items listed without ✅ DONE below **were closed during the day 2026-05-28** via the A1-A11 audit commits. The current per-item state with rationale is in the 2026-05 audit reconciliation (historical) (section for each A*). Quick summary by phase:
 >
 > - **Phase 2**: P2.2 ✅ (commit `c3eff1e`), P2.3 ✅ module + wiring in `989d33e` (A11), P2.4 ✅ module + wiring in `989d33e` (A11), **P2.5 reverted** in `7a835f8` (audit A4 — violates "filesystem is source of truth" principle).
 > - **Phase 3**: P3.3 ✅ commit `bc55686`.
@@ -64,7 +71,8 @@ Documented here for historical reference. Hooks in `memory_store.execute`, `memo
 > commits any dirty hand edit with `author:user` before its hard-reset ff, so the
 > edit isn't clobbered. (b) **vector re-index of a hand edit** — `reindex_one_file`
 > is FTS-only; the watcher never re-embeds. Tracked as **N2** (in
-> `11_post_migration_audit.md`). DoD's "within 5 s a `memory_search` surfaces the
+> [`docs/qa/post_migration_audit_2026-06.md`](../../qa/post_migration_audit_2026-06.md),
+> now ✅ resolved). DoD's "within 5 s a `memory_search` surfaces the
 > edit" holds for FTS, NOT for vector recall, until N2 lands.
 
 - **TYPE**: 🟢 module (~120 LOC)

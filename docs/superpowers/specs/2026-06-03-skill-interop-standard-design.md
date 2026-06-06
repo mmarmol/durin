@@ -3,7 +3,7 @@
 > **Status:** Decision record, written autonomously 2026-06-03 per the architect's mandate
 > ("fijar el estándar primero; el resto son imports; que lo más fácil sea el modelo
 > estándar y abierto; Hermes pesa más pero verificá que cumpla nuestro skill design").
-> Resolves open point **§8.B** of [`docs/plans/skills_evolutivas.md`](../../plans/skills_evolutivas.md).
+> Resolves open point **§8.B** of [`docs/archive/skills_evolutivas.md`](../../archive/skills_evolutivas.md).
 > The architect will review and adjust on return.
 
 ---

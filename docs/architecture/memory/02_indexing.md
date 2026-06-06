@@ -251,7 +251,7 @@ With three retrieval paths reaching the page and drill closing the body-recovery
 
 **Shipped (v1, audit E9 2026-05-28):** `headline + summary + entities_list + body`.
 
-The originally-planned v2 (`entities_with_aliases` — expanding entity URIs to include aliases inline in the embedding text) is **superseded by the entity-aware ranker (audit A1)**. The ranker extracts entities from the query at search time and boosts entries tagged with that URI, achieving alias-aware retrieval without inflating the embedding centroid. Implementing entities_with_aliases on top would duplicate the ranker's work without measurable benefit; see audit E9 in [`11_audit_reconciliation.md`](11_audit_reconciliation.md) for the analysis.
+The originally-planned v2 (`entities_with_aliases` — expanding entity URIs to include aliases inline in the embedding text) is **superseded by the entity-aware ranker (audit A1)**. The ranker extracts entities from the query at search time and boosts entries tagged with that URI, achieving alias-aware retrieval without inflating the embedding centroid. Implementing entities_with_aliases on top would duplicate the ranker's work without measurable benefit; see audit E9 in the 2026-05 audit reconciliation (historical) for the analysis.
 
 The change in v2: when listing entities, expand each URI to include the entity's known aliases. Concretely, an episodic entry tagged with `entities: ["person:marcelo"]` composes:
 

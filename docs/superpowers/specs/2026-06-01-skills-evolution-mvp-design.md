@@ -6,8 +6,8 @@
 > 2026-06-01. La **Etapa 2** la diseña
 > [`2026-06-02-skills-evolution-e2-design.md`](2026-06-02-skills-evolution-e2-design.md).
 >
-> **Fuentes:** [`docs/plans/skills_evolutivas.md`](../../plans/skills_evolutivas.md)
-> (la visión §1–§9) · [`docs/plans/hermes_skills_codebase.md`](../../plans/hermes_skills_codebase.md)
+> **Fuentes:** [`docs/archive/skills_evolutivas.md`](../../archive/skills_evolutivas.md)
+> (la visión §1–§9) · [`docs/research/hermes_skills_codebase.md`](../../research/hermes_skills_codebase.md)
 > (referencia de código Hermes, verificada línea-por-línea).
 
 ---
@@ -462,7 +462,7 @@ comparan strings; se verifican en aislamiento, no solo en la suite completa.
 
 ## §13 — Referencias
 
-- Plan-fuente: `docs/plans/skills_evolutivas.md` (§1 idea, §5 modelo, §8 abiertos)
-- Código Hermes: `docs/plans/hermes_skills_codebase.md` (§1 trigger, §2
+- Plan-fuente: `docs/archive/skills_evolutivas.md` (§1 idea, §5 modelo, §8 abiertos)
+- Código Hermes: `docs/research/hermes_skills_codebase.md` (§1 trigger, §2
   progressive-disclosure, §5 gate de seguridad)
 - SkillOpt (disciplina de edición acotada): arXiv:2605.23904
