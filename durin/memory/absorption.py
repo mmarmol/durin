@@ -30,7 +30,7 @@ from pathlib import Path
 
 from durin.memory.aliases_index import AliasIndex
 from durin.memory.entity_page import EntityPage
-from durin.utils.git_repo import GitRepo, NothingToCommitError
+from durin.utils.git_repo import GitRepo
 
 __all__ = [
     "AbsorptionError",
@@ -379,7 +379,6 @@ def _merge_pages(
         attributes=merged_attributes,
         relations=merged_relations,
         provenance=merged_prov,
-        dream_processed_through=canonical.dream_processed_through,
         created_at=canonical.created_at,
         updated_at=canonical.updated_at,
         # E19: absorption product is fully agent-managed even if

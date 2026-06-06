@@ -145,57 +145,17 @@ class TestRankWithEntities:
         ranked = rank_with_entities(
             candidates,
             query_entities=["person:marcelo"],
-            cursors={"person:marcelo": "2026-05-01"},  # entry is post-cursor
         )
         assert ranked[0].record["id"] == "fresh"
-        assert any("post_cursor_rank:" in s for s in ranked[0].signals)
-
-    def test_memory_entry_pre_cursor_excluded_from_entity_list(self) -> None:
-        """Pre-cursor entries get NO entity_rank contribution (only vector).
-
-        With RRF: 'old' has best _distance so it leads in vector rank, but
-        it's NOT added to entity_rank_list (excluded as pre-cursor). 'neutral'
-        ranks lower in vector but also only gets vector contribution.
-        Result: 'old' still leads because vector rank wins.
-
-        The key assertion is 'old' has NO post_cursor/entity signal.
-        """
-        candidates = [
-            {
-                "id": "old",
-                "_distance": 0.1,
-                "class_name": "episodic",
-                "entities": ["person:marcelo"],
-                "valid_from": "2026-04-01",
-            },
-            {
-                "id": "neutral",
-                "_distance": 0.2,
-                "class_name": "episodic",
-                "entities": [],
-                "valid_from": "2026-04-01",
-            },
-        ]
-        ranked = rank_with_entities(
-            candidates,
-            query_entities=["person:marcelo"],
-            cursors={"person:marcelo": "2026-05-01"},
-        )
-        old = next(r for r in ranked if r.record["id"] == "old")
-        # Pre-cursor entries should NOT have entity-list signals
-        assert not any("post_cursor_rank" in s for s in old.signals)
-        assert not any("entity_page_rank" in s for s in old.signals)
-        # Only vector signal
-        assert all("vector_rank" in s for s in old.signals)
+        assert any("tagged_rank:" in s for s in ranked[0].signals)
 
     def test_combined_realistic_mix(self) -> None:
-        """Page + post-cursor entry + pre-cursor entry + neutral entry.
+        """Page + tagged entries + neutral entry.
 
-        Per doc 18 §3.4 (read-time reconciliation), the page and fresh
-        entries COEXIST in results — the LLM reconciles. So we don't
-        require the page to always be #1; we require the canonical page
-        and the fresh entry to be in the top 2, and pre-cursor entries
-        to drop to the bottom.
+        Per doc 18 §3.4 (read-time reconciliation), the page and tagged
+        entries COEXIST in results — the LLM reconciles. We require the
+        canonical page and the freshest tagged entry in the top 2; the
+        untagged neutral entry (vector signal only) ranks last.
         """
         candidates = [
             {"id": "neutral", "_distance": 0.5, "class_name": "episodic",
@@ -209,15 +169,12 @@ class TestRankWithEntities:
         ranked = rank_with_entities(
             candidates,
             query_entities=["person:marcelo"],
-            cursors={"person:marcelo": "2026-05-01"},
         )
         ids = [r.record["id"] for r in ranked]
-        # The two entity-relevant fresh candidates (page + post-cursor entry)
-        # should occupy positions 0 and 1 (order between them not asserted —
-        # they coexist intentionally).
+        # Page + freshest tagged entry lead (order between them not asserted).
         assert set(ids[:2]) == {"person:marcelo", "fresh"}
-        # Pre-cursor entry is demoted to the bottom.
-        assert ids[-1] == "old"
+        # The untagged neutral entry (vector signal only) ranks last.
+        assert ids[-1] == "neutral"
 
     def test_higher_is_better_score_handled(self) -> None:
         """When base score is similarity (higher=better), ranking respects that."""
@@ -233,8 +190,8 @@ class TestRankWithEntities:
         )
         assert ranked[0].record["id"] == "high_sim"
 
-    def test_no_cursor_defaults_to_boost(self) -> None:
-        """When cursor is missing, treat as post-cursor (don't penalize)."""
+    def test_tagged_entry_boosted(self) -> None:
+        """A memory entry tagged with a query entity gets the entity-match boost."""
         candidates = [
             {
                 "id": "tagged",
@@ -247,10 +204,8 @@ class TestRankWithEntities:
         ranked = rank_with_entities(
             candidates,
             query_entities=["person:marcelo"],
-            cursors={},  # no cursor for marcelo
         )
-        # Should still get entity_match signal as post-cursor
-        assert any("post_cursor_rank:" in s for s in ranked[0].signals)
+        assert any("tagged_rank:" in s for s in ranked[0].signals)
 
 
 # ---------------------------------------------------------------------------
@@ -297,64 +252,3 @@ class TestRRFBehavior:
     def test_rrf_k_constant_exposed(self) -> None:
         """RRF_K is a module-level constant matching the standard k=60."""
         assert RRF_K == 60
-
-    def test_iso_datetime_cursor_compare_g3(self) -> None:
-        """G3: cursor compare uses datetime parse, not string compare.
-
-        The buggy string comparison would treat
-        "2024-01-15T10:30:00" <= "2024-01-15" as False (T > "")
-        and incorrectly treat a post-cursor entry as post-cursor.
-
-        Actually... wait. The bug was: a date-only cursor and a
-        datetime entry_ts. String compare gives FALSE (entry "after"
-        cursor lexicographically), so the entry IS treated as post-
-        cursor — which is the correct answer for this specific case!
-
-        The real bug is the OPPOSITE: an entry with date-only ts and
-        a datetime cursor: "2024-01-15" <= "2024-01-15T10:30:00" is
-        TRUE → entry treated as pre-cursor → excluded. But in real
-        time, that entry on 2024-01-15 IS before a cursor of
-        2024-01-15T10:30:00 → so pre-cursor IS correct here too.
-
-        So the actual bug surface is mixed format precision in either
-        direction; we just exercise both and verify datetime semantics.
-        """
-        # Entry on date "2024-01-15", cursor on datetime later same day.
-        # Real semantics: entry IS at-or-before cursor → pre-cursor → excluded.
-        candidates = [
-            {
-                "id": "entry_a",
-                "_distance": 0.2,
-                "class_name": "episodic",
-                "entities": ["person:x"],
-                "valid_from": "2024-01-15",
-            },
-        ]
-        ranked = rank_with_entities(
-            candidates,
-            query_entities=["person:x"],
-            cursors={"person:x": "2024-01-15T10:30:00"},
-        )
-        entry = ranked[0]
-        # Pre-cursor → excluded from entity list, only vector signal.
-        assert not any("post_cursor_rank" in s for s in entry.signals)
-
-    def test_integer_cursor_does_not_block_post_cursor(self) -> None:
-        """G3: numeric (msg_idx) cursors return False from _is_pre_cursor
-        (cannot be compared to ISO ts) → entry is post-cursor by default."""
-        candidates = [
-            {
-                "id": "entry",
-                "_distance": 0.2,
-                "class_name": "episodic",
-                "entities": ["person:x"],
-                "valid_from": "2024-01-15",
-            },
-        ]
-        ranked = rank_with_entities(
-            candidates,
-            query_entities=["person:x"],
-            cursors={"person:x": 4892},  # msg_idx integer
-        )
-        # Should be in entity list (post-cursor default).
-        assert any("post_cursor_rank" in s for s in ranked[0].signals)

@@ -249,48 +249,24 @@ class TestHotLayerCanonicalSection:
 
 
 class TestHotLayerFragmentsSection:
-    def test_post_cursor_fragment_appears(self, tmp_path: Path) -> None:
-        page = EntityPage(
-            type="person", name="Marcelo", aliases=["m"],
-            dream_processed_through="2026-05-20T00:00:00",
-        )
+    def test_tagged_fragment_appears(self, tmp_path: Path) -> None:
+        # Two-track model (N3): tagged fragments surface by recency — there is
+        # no cursor-based graduation.
+        page = EntityPage(type="person", name="Marcelo", aliases=["m"])
         page.save(tmp_path / "memory" / "entities" / "person" / "marcelo.md")
         store_memory(
-            tmp_path, content="post-cursor obs",
+            tmp_path, content="recent obs",
             entities=["person:marcelo"],
             valid_from=datetime.date(2026, 5, 22),
         )
 
         rendered = read_hot_layer(tmp_path).render()
-        assert "## Memory: Recent fragments (post-cursor)" in rendered
+        assert "## Memory: Recent fragments" in rendered
         # Marker format (doc 06 §8.3): `=== FRAGMENT: <path> (ts <ts>) ===`
         # — path is workspace-relative, not the entity ref.
         assert "=== FRAGMENT: memory/episodic/" in rendered
         assert "(ts 2026-05-22" in rendered
-        assert "post-cursor obs" in rendered
-
-    def test_pre_cursor_fragment_filtered_out(self, tmp_path: Path) -> None:
-        page = EntityPage(
-            type="person", name="Marcelo", aliases=["m"],
-            dream_processed_through="2026-05-20T00:00:00",
-        )
-        page.save(tmp_path / "memory" / "entities" / "person" / "marcelo.md")
-        # Pre-cursor entry → already in the canonical, must not appear
-        # in the fragments section.
-        store_memory(
-            tmp_path, content="ancient observation",
-            entities=["person:marcelo"],
-            valid_from=datetime.date(2026, 5, 10),
-        )
-
-        layer = read_hot_layer(tmp_path)
-        rendered = layer.render()
-        # The legacy "Key Points" section still surfaces all headlines —
-        # that's not the §2.H curated path. The fragments section is
-        # the §2.H path and MUST NOT include the pre-cursor entry.
-        if layer.fragment_blocks:
-            joined = "\n".join(layer.fragment_blocks)
-            assert "ancient observation" not in joined
+        assert "recent obs" in rendered
 
 
 def test_hot_layer_falls_back_gracefully_with_no_entities_dir(tmp_path: Path) -> None:

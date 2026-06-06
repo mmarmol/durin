@@ -122,7 +122,6 @@ async def test_e2e1_memory_search_invokes_entity_aware_ranker(
             name="Marcelo Marmol",
             aliases=["Marcelo", "marcelo"],
             body="## Current State\nPrefers pytest.\n",
-            dream_processed_through="2026-04-15",
         )
         page_path = tmp_path / "memory" / "entities" / "person" / "marcelo.md"
         page.save(page_path)

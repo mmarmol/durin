@@ -100,7 +100,7 @@ def canonical_marker(
 def fragment_marker(
     path: str, *, ts: str = "", completeness: str = "",
 ) -> str:
-    """Header for a fragment block (episodic / stable / post-cursor).
+    """Header for a fragment block (episodic / stable).
 
     With ``ts`` set: ``=== FRAGMENT: <path> (ts <ts>) ===``
     With ``ts`` empty: ``=== FRAGMENT: <path> ===``
