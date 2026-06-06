@@ -393,7 +393,15 @@ unimplemented feature. Every item verified by reading the code.
 > `archive_episodic` only called by forget/webui (manual). Episodic accumulates
 > (low volume: memory_store disabled). Doc 05 §7 / doc 01 §5.3.
 
-### N5 — `durin memory reindex` doesn't write meta.json; no embedding-model-change detection — 🔲
+### N5 — `durin memory reindex` doesn't write meta.json; no embedding-model-change detection — ✅ DONE (2026-06-06)
+> **Decision (a): wire both.** `record_built_model` (index_meta) records the
+> embedding model + keeps an audit trail; `durin memory reindex` now uses the
+> CONFIGURED model (was the default) and calls it after the vector rebuild
+> (N5a). `ensure_index_fresh(embedding_model=...)` detects a stored-vs-config
+> model mismatch and rebuilds the VECTOR index + records the new model (N5b) —
+> a same-dimension swap no longer returns silently stale results. Wired from
+> the search tool (`self._embedding_model`). TDD: test_index_meta_model_change
+> (record + detect-change-rebuilds + no-rebuild-when-matching).
 > `cmd_reindex` never calls `save_index_meta`; `ensure_index_fresh` checks only
 > schema_version, not the model id. Same-dim model swap is silent. Doc 02 §7.
 
