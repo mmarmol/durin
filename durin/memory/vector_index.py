@@ -639,7 +639,20 @@ class VectorIndex:
                 continue
             skills.append((sp, md))
 
-        if not entries and not entity_pages and not skills:
+        # Pass 4: references — the token-aware chunks are the vector unit
+        # (A2 / design §2.8). A forced rebuild MUST restore them too, else a
+        # `durin memory reindex` (or the N5 model-change rebuild) silently drops
+        # reference semantic search — only ingest-time indexing would survive.
+        from durin.memory.reference import reference_chunks
+        ref_chunks: list[tuple[str, int, str, Path]] = []  # (ref, idx, text, md)
+        refs_root = self._workspace / "memory" / "references"
+        if refs_root.is_dir():
+            for md_file in sorted(refs_root.glob("*.md")):
+                ref = f"reference:{md_file.stem}"
+                for rec in reference_chunks(self._workspace, ref):
+                    ref_chunks.append((ref, rec["idx"], rec["text"], md_file))
+
+        if not entries and not entity_pages and not skills and not ref_chunks:
             self._drop_if_exists()
             return 0
 
@@ -660,11 +673,14 @@ class VectorIndex:
         ]
         # Batch write — entries, entity pages, and skills are all
         # passages, so use embed_passages to apply E5 prefix uniformly.
-        all_texts = entry_texts + page_texts + skill_texts
+        ref_texts = [text for (_ref, _idx, text, _md) in ref_chunks]
+        all_texts = entry_texts + page_texts + skill_texts + ref_texts
         all_vectors = self._provider.embed_passages(all_texts) if all_texts else []
-        entry_vectors = all_vectors[: len(entry_texts)]
-        page_vectors = all_vectors[len(entry_texts):len(entry_texts) + len(page_texts)]
-        skill_vectors = all_vectors[len(entry_texts) + len(page_texts):]
+        n_e, n_p, n_s = len(entry_texts), len(page_texts), len(skill_texts)
+        entry_vectors = all_vectors[:n_e]
+        page_vectors = all_vectors[n_e:n_e + n_p]
+        skill_vectors = all_vectors[n_e + n_p:n_e + n_p + n_s]
+        ref_vectors = all_vectors[n_e + n_p + n_s:]
 
         records = [
             self._record_with_vector(entry, class_name, path, vec)
@@ -681,6 +697,22 @@ class VectorIndex:
             for (sp, md_file), vec
             in zip(skills, skill_vectors)
         )
+        for (ref, idx, text, md_file), vec in zip(ref_chunks, ref_vectors):
+            try:
+                rel_p = md_file.relative_to(self._workspace)
+            except ValueError:
+                rel_p = md_file
+            records.append({
+                "id": f"{ref}#{idx}",
+                "class_name": "reference",
+                "summary": text[:200],
+                "headline": ref,
+                "body_length": len(text or ""),
+                "vector": vec,
+                "valid_from": "",
+                "entities": [],
+                "path": str(rel_p),
+            })
 
         db = self._connect()
         self._drop_if_exists(db)
