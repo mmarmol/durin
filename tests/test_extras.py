@@ -124,3 +124,16 @@ def test_none_config_treated_as_gate_on(monkeypatch):
     monkeypatch.setattr(ex.subprocess, "run", fake_run)
     r = ex.ensure_extra("web_search", config=None)
     assert r.status == "installed"
+
+
+def test_ensure_or_note_logs_and_returns(monkeypatch, caplog):
+    monkeypatch.setattr(
+        ex, "ensure_extra",
+        lambda feature, *, config: ex.EnsureResult("installed", feature, True, ""),
+    )
+    import logging
+    with caplog.at_level(logging.INFO):
+        r = ex.ensure_or_note("slack", config=None)
+    assert r.status == "installed"
+    assert r.needs_restart is True
+    assert any("slack" in rec.message for rec in caplog.records)
