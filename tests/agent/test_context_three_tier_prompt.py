@@ -73,29 +73,20 @@ def test_stable_layer_isolated_from_volatile(tmp_path):
 
 
 def test_volatile_blocks_appear_after_stable(builder):
-    """All three volatile signals (memory, history, summary) must land
-    AFTER the stable prefix — never before."""
-    _set_memory(builder, "User is a senior engineer.")
-    _set_history(builder, [{"timestamp": "2026-05-20", "content": "shipped feature X"}])
-
+    """The volatile signal (the session summary) must land AFTER the stable
+    prefix — never before. §8e removed the legacy MEMORY.md + history.jsonl
+    volatile blocks; that knowledge now lives in the stable pinned/hot tier, so
+    the compaction summary is the remaining volatile signal."""
     prompt = builder.build_system_prompt(
         channel="cli", session_summary="Past discussion summarized."
     )
 
     # Identity (stable) — anchor on the "## Workspace" template heading.
     identity_pos = prompt.find("## Workspace")
-    # Use ``rfind`` for "# Memory" so we land on the volatile occurrence,
-    # not the substring inside the bundled "memory" skill content (which
-    # lives in the stable Active Skills block — fixture uses a mock for
-    # always_skills which is empty, but be defensive).
-    memory_pos = prompt.rfind("# Memory")
-    history_pos = prompt.find("# Recent History")
     summary_pos = prompt.find("[Archived Context Summary]")
 
     assert identity_pos >= 0, "stable identity block must be present"
-    assert memory_pos > identity_pos, "memory must come after identity"
-    assert history_pos > memory_pos, "history must come after memory"
-    assert summary_pos > history_pos, "summary must come after history"
+    assert summary_pos > identity_pos, "summary (volatile) must come after identity (stable)"
 
 
 def test_context_layer_between_stable_and_volatile(builder, monkeypatch):
@@ -119,12 +110,13 @@ def test_context_layer_between_stable_and_volatile(builder, monkeypatch):
     prompt = builder.build_system_prompt(
         channel="cli",
         agent_mode_name="PLAN",
+        session_summary="Past summary.",
     )
     mode_pos = prompt.find("[ACTIVE MODE: PLAN]")
-    memory_pos = prompt.find("\n# Memory\n")
+    memory_pos = prompt.find("[Archived Context Summary]")
 
     assert mode_pos > 0, "mode suffix must be present"
-    assert mode_pos < memory_pos, "mode suffix must sit ABOVE memory (above volatile)"
+    assert mode_pos < memory_pos, "mode suffix must sit ABOVE the volatile summary"
     # Stable should still come first.
     identity_pos = prompt.find("## Workspace")
     assert identity_pos < mode_pos, "stable identity comes before mode suffix"
@@ -162,15 +154,12 @@ def test_empty_volatile_omits_separator(builder):
 def test_empty_context_layer_omits_separator(builder, monkeypatch):
     """When no agent_mode_name → context layer is empty → no extra
     separator between stable and volatile (or stable and end)."""
-    _set_memory(builder, "X")
     # No agent_mode_name passed.
-    p = builder.build_system_prompt(channel="cli")
-    # The separator between layers is "\n\n---\n\n". With only stable +
-    # volatile (no context), there should be exactly ONE such separator
-    # at the layer boundary, plus whatever separators exist within each
-    # layer (between identity / memory / etc).
+    p = builder.build_system_prompt(
+        channel="cli", session_summary="A volatile summary."
+    )
     # Sanity: stable + volatile present.
-    assert "\n# Memory\n" in p
+    assert "[Archived Context Summary]" in p
     assert "## Workspace" in p
 
 
