@@ -5,7 +5,7 @@ status: current — describes the shipped system (post-migration, 2026-06-06)
 last_updated: 2026-06-06
 audience: humans and LLMs implementing or modifying this system
 depends_on: 00_overview.md, 01_data_and_entities.md, 02_indexing.md
-related: 03_search_pipeline.md, 04_agent_tools.md, 11_post_migration_audit.md
+related: 03_search_pipeline.md, 04_agent_tools.md, ../../qa/post_migration_audit_2026-06.md
 ---
 
 # Dream — cold-path consolidation
@@ -26,11 +26,11 @@ the state over time.
 > consolidated `memory/episodic/` *fragments* into pages via a JSON-Patch apply
 > pipeline, a per-entity `dream_processed_through` cursor, an
 > episodic→archive lifecycle, and a per-write threshold trigger. **All of that
-> is gone.** The settled model has four passes (extract / refine / skill /
-> always_on) that read from **sessions**, write through `memory_writer`'s CAS
+> is gone.** The settled model has four passes — in run order **extract / skill /
+> refine / always_on** — that read from **sessions**, write through `memory_writer`'s CAS
 > commit path, and treat fragments as a separate raw track. The authoritative
-> record of what changed and why is `11_post_migration_audit.md` (A1-A5,
-> B1-B4, N1-N7); this doc honours those decisions.
+> record of what changed and why is `../../qa/post_migration_audit_2026-06.md` (A1-A5,
+> B1-B4, N1-N9); this doc honours those decisions.
 
 ---
 
@@ -70,8 +70,8 @@ it does not gate recall of either track.
 
 ### In scope
 
-- The four dream passes: **extract**, **refine**, **skill-extract**,
-  **always_on**.
+- The four dream passes, in run order: **extract**, **skill-extract**,
+  **refine**, **always_on**.
 - Their triggers: the daily CRON + the two REACTIVE triggers
   (post-compaction / session-close), serialized by `ReactiveDreamGate`.
 - The config block (`memory.dream.*` + nested `auto_absorb`).
@@ -640,4 +640,4 @@ were actually processed. The next trigger or the daily cron retries.
 - Telemetry event catalog: `07_telemetry_and_observability.md` and
   `durin/telemetry/schema.py`.
 - The authoritative migration record (what changed, A1-A5 / B1-B4 / N1-N7):
-  `11_post_migration_audit.md`.
+  `../../qa/post_migration_audit_2026-06.md`.

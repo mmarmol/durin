@@ -561,7 +561,7 @@ LanceDB + FTS5 index each corpus entry
 
 Episodic is **track 2: raw memory**. It is surfaced by recency in search and is
 **never** consolidated into entity pages, and **never** auto-archived (N3/N4,
-`11_post_migration_audit.md`). It is a separate track from the consolidated
+`../../qa/post_migration_audit_2026-06.md`). It is a separate track from the consolidated
 entity pages — nothing folds a fragment into a page.
 
 ```
