@@ -307,6 +307,13 @@
       "crossEncoderTest": "Test",
       "dreamDescription": "The dream consolidates sessions into entity pages + skills and dedups duplicate entities. It runs on a daily cron plus optional reactive triggers."
     },
+    "extras": {
+      "willInstall": "This will install {{extra}} (~{{size}} download).",
+      "restartAfter": "Restart the gateway after installing",
+      "install": "Install",
+      "installing": "Installing…",
+      "cancel": "Cancel"
+    },
     "skillsSecurity": {
       "description": "Security policy for importing skills: the LLM judge, trust patterns, the GitHub token, and size caps.",
       "loadError": "Could not load the configuration.",

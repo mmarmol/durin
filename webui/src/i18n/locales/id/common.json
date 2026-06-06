@@ -272,6 +272,13 @@
       },
       "dreamDescription": "Dream mengonsolidasi sesi menjadi halaman entitas + skill dan mendeduplikasi entitas duplikat. Berjalan pada cron harian plus trigger reaktif opsional."
     },
+    "extras": {
+      "willInstall": "Ini akan menginstal {{extra}} (~{{size}} unduhan).",
+      "restartAfter": "Mulai ulang gateway setelah menginstal",
+      "install": "Instal",
+      "installing": "Menginstal…",
+      "cancel": "Batal"
+    },
     "skillsSecurity": {
       "description": "Kebijakan keamanan untuk mengimpor skill: juri LLM, pola tepercaya, token GitHub, dan batas ukuran.",
       "loadError": "Tidak dapat memuat konfigurasi.",
