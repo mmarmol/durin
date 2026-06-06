@@ -107,6 +107,149 @@ def test_entity_detail_identifiers_promoted(tmp_path: Path) -> None:
     assert "identifiers" not in d["page"]["extra"]
 
 
+# ---------------------------------------------------------------------------
+# provenance surfacing — who/when/from-which-session each fact came from
+# ---------------------------------------------------------------------------
+
+
+def _provenanced_page(tmp_path: Path) -> Path:
+    """An agent-created topic with a relation whose provenance points back to
+    a session turn — mirrors what `memory_upsert_entity` writes."""
+    import datetime as _dt
+
+    page = EntityPage(
+        type="topic",
+        name="Reacción Adversa",
+        relations=[{"to": "topic:veterinaria", "type": "related_to"}],
+        provenance={
+            "relations": [
+                {
+                    "index": 0,
+                    "source_ref": "[[sessions/websocket_abc123.md#turn-8]]",
+                    "extracted_at": "2026-06-06T18:41:40.401981+00:00",
+                    "author": "agent",
+                },
+            ],
+            "attributes": {
+                "severity": {
+                    "source_ref": "[[sessions/cli_direct.md#turn-3]]",
+                    "extracted_at": "2026-06-06T19:00:00+00:00",
+                    "author": "dream",
+                },
+            },
+        },
+        author="agent_created",
+        created_at=_dt.datetime(2026, 6, 6, 18, 41, 40, tzinfo=_dt.timezone.utc),
+    )
+    path = tmp_path / "memory" / "entities" / "topic" / "reaccion.md"
+    page.save(path)
+    return path
+
+
+def test_serialize_page_exposes_relations_and_author(tmp_path: Path) -> None:
+    _provenanced_page(tmp_path)
+    d = get_entity_detail(tmp_path, "topic:reaccion")
+    assert d is not None
+    page = d["page"]
+    assert page["author"] == "agent_created"
+    assert page["created_at"].startswith("2026-06-06T18:41:40")
+    assert {"to": "topic:veterinaria", "type": "related_to"} in page["relations"]
+
+
+def test_provenance_events_parse_session_and_turn(tmp_path: Path) -> None:
+    _provenanced_page(tmp_path)
+    d = get_entity_detail(tmp_path, "topic:reaccion")
+    assert d is not None
+    events = d["provenance"]
+    rel = next(e for e in events if e["kind"] == "relation")
+    assert rel["author"] == "agent"
+    assert rel["session_stem"] == "websocket_abc123"
+    assert rel["turn"] == 8
+    assert rel["detail"] == "related_to → topic:veterinaria"
+    assert rel["when"].startswith("2026-06-06T18:41:40")
+
+    attr = next(e for e in events if e["kind"] == "attribute")
+    assert attr["author"] == "dream"
+    assert attr["session_stem"] == "cli_direct"
+    assert attr["turn"] == 3
+    assert attr["detail"] == "severity"
+
+
+def test_provenance_non_session_ref_has_no_link(tmp_path: Path) -> None:
+    import datetime as _dt
+
+    page = EntityPage(
+        type="topic", name="X",
+        relations=[{"to": "topic:y", "type": "related_to"}],
+        provenance={
+            "relations": [
+                {
+                    "index": 0,
+                    "source_ref": "memory_upsert_entity",  # fallback, not a session
+                    "extracted_at": "2026-06-06T18:41:40+00:00",
+                    "author": "agent",
+                },
+            ],
+        },
+        created_at=_dt.datetime(2026, 6, 6, tzinfo=_dt.timezone.utc),
+    )
+    page.save(tmp_path / "memory" / "entities" / "topic" / "x.md")
+    d = get_entity_detail(tmp_path, "topic:x")
+    assert d is not None
+    rel = next(e for e in d["provenance"] if e["kind"] == "relation")
+    assert rel["session_stem"] is None
+    assert rel["turn"] is None
+    assert rel["source_ref"] == "memory_upsert_entity"
+
+
+def test_provenance_empty_when_no_provenance(tmp_path: Path) -> None:
+    _write_page(tmp_path, "person", "plain", name="Plain")
+    d = get_entity_detail(tmp_path, "person:plain")
+    assert d is not None
+    assert d["provenance"] == []
+
+
+# ---------------------------------------------------------------------------
+# session detail — full thread (so the panel can scroll to a provenance moment)
+# ---------------------------------------------------------------------------
+
+
+def _write_session_jsonl(tmp_path: Path, stem: str, n: int) -> None:
+    import json as _json
+
+    sdir = tmp_path / "sessions"
+    sdir.mkdir(parents=True, exist_ok=True)
+    lines: list[dict] = [{"channel": "websocket", "title": "T"}]
+    for i in range(n):
+        lines.append({
+            "role": "user" if i % 2 == 0 else "assistant",
+            "content": f"msg {i}",
+            "timestamp": f"2026-06-06T10:{i:02d}:00",
+        })
+    (sdir / f"{stem}.jsonl").write_text(
+        "\n".join(_json.dumps(line) for line in lines) + "\n",
+        encoding="utf-8",
+    )
+
+
+def test_session_detail_returns_full_thread_with_index(tmp_path: Path) -> None:
+    from durin.memory.graph_api import get_session_detail
+
+    _write_session_jsonl(tmp_path, "websocket_s", 15)
+    d = get_session_detail(tmp_path, "websocket_s")
+    assert d is not None
+    msgs = d["recent_messages"]
+    # Full thread (chronological, with index + ts), not just the last 10 —
+    # the panel needs the earlier messages to scroll to an old provenance
+    # moment.
+    assert len(msgs) == 15
+    assert msgs[0]["index"] == 0
+    assert msgs[0]["preview"] == "msg 0"
+    assert msgs[0]["ts"] == "2026-06-06T10:00:00"
+    assert msgs[-1]["index"] == 14
+    assert msgs[-1]["preview"] == "msg 14"
+
+
 def test_entity_detail_referencing_entries_surface(tmp_path: Path) -> None:
     """All entries tagging the entity surface (two-track model, N3: fragments
     are not consolidated, so there is no cursor filter)."""

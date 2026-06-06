@@ -778,7 +778,23 @@ export interface MemoryEntityDetail {
     extra: Record<string, unknown>;
     body: string;
     dream_processed_through: string | null;
+    author?: string;
+    created_at?: string | null;
+    updated_at?: string | null;
+    relations?: Array<{ to: string; type: string }>;
   } | null;
+  // Per-field provenance flattened into UI events: who/when/from-which
+  // session each relation or attribute came from. `session_stem` + `turn`
+  // are parsed from `source_ref` so the origin can be made clickable.
+  provenance: Array<{
+    kind: "relation" | "attribute";
+    detail: string | null;
+    author: string | null;
+    when: string | null;
+    source_ref: string | null;
+    session_stem: string | null;
+    turn: number | null;
+  }>;
   history: Array<{
     sha: string;
     short_sha: string;
@@ -987,6 +1003,7 @@ export interface MemorySessionDetail {
     msg_index: number | null;
   }>;
   recent_messages: Array<{
+    index?: number;
     role: string;
     ts: string | number | null;
     preview: string;
