@@ -5,7 +5,7 @@ status: current — describes the shipped system (post-migration, 2026-06-06)
 last_updated: 2026-06-06
 audience: humans and LLMs implementing or modifying this system
 depends_on: 00_overview.md, 03_search_pipeline.md, 05_dream_cold_path.md
-related: 04_agent_tools.md, 11_post_migration_audit.md
+related: 04_agent_tools.md, ../../qa/post_migration_audit_2026-06.md
 ---
 
 # Telemetry and observability
@@ -648,6 +648,6 @@ None at the module level.
 - Tool calls that emit recall events: `04_agent_tools.md` §2-§5.
 - Search pipeline failure mode + recovery (which emit `memory.search.failure`): `03_search_pipeline.md` §14.
 - The four-pass dream (extract / refine / skill / always_on) that emits the `memory.dream.*` events: `05_dream_cold_path.md`.
-- Relation-cap alert-only decision (A3), cursor removal (N3), and the deleted dream cluster: `11_post_migration_audit.md`.
+- Relation-cap alert-only decision (A3), cursor removal (N3), and the deleted dream cluster: `../../qa/post_migration_audit_2026-06.md`.
 - Indexer write triggers (which emit `memory.index.write`): `02_indexing.md` §6.
 - Absorb-judge + relation-cap event schemas: `durin/telemetry/schema.py`.
