@@ -795,6 +795,13 @@ class InstallConfig(Base):
     """
 
     extras: list[str] = Field(default_factory=list)
+    auto_install_extras: bool = Field(
+        default=True,
+        description=(
+            "Auto-install a feature's pip extra when it's activated (frictionless). "
+            "Off falls back to a 'pip install durin-agent[X]' message."
+        ),
+    )
 
 
 class AppearanceConfig(Base):
