@@ -1100,6 +1100,20 @@ class MemoryHotLayerFailureEvent(TypedDict):
     session_key: NotRequired[str | None]
 
 
+class MemoryDreamSkillExtractEvent(TypedDict):
+    """The extract dream's skill pass wrote/updated procedural skills (§8e)."""
+
+    skills_touched: int
+
+
+class MemoryUpsertEntityEvent(TypedDict):
+    """memory_upsert_entity tool write (entity page authored/extended)."""
+
+    ref: str
+    committed: bool
+    retries: int
+
+
 # ===========================================================================
 # Catalog — single source of truth
 # ===========================================================================
@@ -1155,6 +1169,7 @@ EVENTS: dict[str, type] = {
     "memory.store": MemoryStoreEvent,
     "memory.ingest": MemoryIngestEvent,
     "memory.forget": MemoryForgetEvent,
+    "memory.upsert_entity": MemoryUpsertEntityEvent,
     # Memory subsystem (Phase 2 — embedding)
     "memory.embedding.load": MemoryEmbeddingLoadEvent,
     "memory.embedding.embed": MemoryEmbeddingEmbedEvent,
@@ -1162,15 +1177,8 @@ EVENTS: dict[str, type] = {
     "memory.store.blocked_near_duplicate": MemoryStoreBlockedNearDuplicateEvent,
     "memory.dream.start": MemoryDreamStartEvent,
     "memory.dream.end": MemoryDreamEndEvent,
-    "memory.dream.skipped": MemoryDreamSkippedEvent,
     "memory.dream.patch_applied": MemoryDreamPatchAppliedEvent,
-    "memory.dream.entity_failed": MemoryDreamEntityFailedEvent,
-    "memory.dream.budget_exhausted": MemoryDreamBudgetExhaustedEvent,
-    "memory.dream.legacy.start": MemoryDreamLegacyStartEvent,
-    "memory.dream.legacy.end": MemoryDreamLegacyEndEvent,
-    "memory.dream.legacy.skipped": MemoryDreamLegacySkippedEvent,
-    "memory.entity_relation_cap_warned": MemoryEntityRelationCapWarnedEvent,
-    "memory.entity_relation_cap_rejected": MemoryEntityRelationCapRejectedEvent,
+    "memory.dream.skill_extract": MemoryDreamSkillExtractEvent,
     "memory.absorb.judged": MemoryAbsorbJudgedEvent,
     "memory.absorb.auto_merged": MemoryAbsorbAutoMergedEvent,
     "memory.absorb.skipped": MemoryAbsorbSkippedEvent,
