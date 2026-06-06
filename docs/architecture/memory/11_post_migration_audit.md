@@ -51,7 +51,7 @@ remove the only home for a behavior we still want. Record the cross-impact.
 
 ## A. Implementation gaps (designed, not functional)
 
-### A1 — `auto_absorb` config is not wired into the refine pass — 🔲
+### A1 — `auto_absorb` config is not wired into the refine pass — ✅ DONE (2026-06-06)
 **Severity:** High. **Tied to recent work:** the webui `auto_absorb` toggle (just
 added) is therefore inert.
 
@@ -78,6 +78,18 @@ it *always merge* at the threshold (⇒ `enabled` is vestigial → remove it + t
 webui toggle + the dead `min_age_hours`/`judge_model`)? This decides whether the
 daily cron mutates the vault silently. Pick one and make config + webui + code
 consistent.
+
+**Decision (2026-06-06): Option (a) — respect `enabled`.** Pre-flight trace
+confirmed the gap (cron → `run_refine_pass` → `run_refine`, no `enabled` gate,
+config only written by the wizard, never read; manual `absorb-suggest`/`absorb`
+path exists). **Fix:** `run_refine_pass` now takes `enabled` + `confidence_threshold`;
+when disabled it skips (no judge, no merge — logs the manual path) and the cron
+(`commands.py`) + manual `durin memory dream` (`memory_cmd.py`) pass both from
+`config.memory.dream.auto_absorb`. The webui `auto_absorb` toggle is now live.
+Test: `test_refine_pass_respects_auto_absorb_enabled`. **Follow-up (→ B3):**
+`min_age_hours` + `judge_model` were NOT part of this decision and remain inert —
+resolve in B3 (the new refine doesn't create entities, so the same-run-merge
+quarantine `min_age_hours` guards against is largely moot → lean remove).
 
 ---
 

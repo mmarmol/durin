@@ -103,3 +103,27 @@ def test_extract_pass_respects_max_seconds(tmp_path):
     out = run_extract_pass(tmp_path, llm_invoke=slow_stub, max_seconds=0.001)
     assert out["yielded"] is True
     assert out["sessions"] < 3             # yielded before processing all sessions
+
+
+def test_refine_pass_respects_auto_absorb_enabled(tmp_path):
+    # A1: the refine pass must honour auto_absorb.enabled. Disabled (the
+    # conservative default) → no judge call, no merge; enabled → auto-merge.
+    write_entity(tmp_path, "company:a", [FieldPatch(kind="alias", value="A",
+                 author="agent", source_ref="s", at=NOW)], create=True, name="A Inc")
+    write_entity(tmp_path, "company:a2", [FieldPatch(kind="alias", value="A",
+                 author="agent", source_ref="s", at=NOW)], create=True, name="A Incorporated")
+    calls = []
+
+    def judge_stub(*a, **k):
+        calls.append(1)
+        return "===VERDICT===\nsame\n===CONFIDENCE===\n99\n===REASONING===\nx\n===END==="
+
+    out = run_refine_pass(tmp_path, llm_invoke=judge_stub, enabled=False)
+    assert out.get("disabled") is True
+    assert out["merged"] == []
+    assert calls == []  # the judge LLM is never invoked when disabled
+
+    out2 = run_refine_pass(tmp_path, llm_invoke=judge_stub, enabled=True,
+                           confidence_threshold=95)
+    assert len(out2["merged"]) == 1
+    assert calls  # judge ran when enabled
