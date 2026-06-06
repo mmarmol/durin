@@ -1053,6 +1053,8 @@ EVENTS: dict[str, type] = {
     "memory.ingest": MemoryIngestEvent,
     "memory.forget": MemoryForgetEvent,
     "memory.upsert_entity": MemoryUpsertEntityEvent,
+    "memory.entity_relation_cap_warned": MemoryEntityRelationCapWarnedEvent,
+    "memory.entity_relation_cap_rejected": MemoryEntityRelationCapRejectedEvent,
     # Memory subsystem (Phase 2 — embedding)
     "memory.embedding.load": MemoryEmbeddingLoadEvent,
     "memory.embedding.embed": MemoryEmbeddingEmbedEvent,

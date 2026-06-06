@@ -11,15 +11,17 @@ signal. B-19 ships the brake pedal:
   proceeds. Operators / dashboards can spot mega-hub formation
   before sub-paging (B-14) becomes necessary.
 
-- **Hard cap** (200): if a Dream apply would take the relation
-  count over the hard cap (was ≤ 200, would become > 200), the
-  apply is rejected with `DreamApplyFailureKind.VALIDATION`. A
-  telemetry event fires (`memory.entity_relation_cap_rejected`)
-  with the entity_ref + the would-be count so operators can act.
+- **Hard cap** (200): if a write takes the relation count over the
+  hard cap a telemetry event fires (`memory.entity_relation_cap_rejected`)
+  with the entity_ref + the count so operators can act.
 
-The signal is intentionally lossy at the soft cap (warn only) and
-hard at the hard cap (reject). This matches the doc 01 §4.4 spec
-without adding architectural surface beyond what the cap requires.
+A3 (2026-06-06) wires this into ``memory_writer.write_entity`` as
+**alert-only "de momento"**: both thresholds emit telemetry + a log, but the
+write always proceeds and no relation is ever dropped (the old
+``DreamApplyFailureKind.VALIDATION`` rejection path died with the legacy dream).
+Enforcing the hard cap (actually rejecting) is deferred until mega-hubs prove
+real — flip ``memory_writer._emit_relation_cap`` to honour
+``decision.action == "reject"``.
 """
 
 from __future__ import annotations
