@@ -166,7 +166,7 @@ class MemorySearchTool(Tool):
         self._vector_index_attempted = False
         self._app_config = app_config
         # Per doc 25 §2.C: alias index is shared process-wide via
-        # durin.memory.aliases_cache, so DreamConsolidator and
+        # durin.memory.aliases_cache, so the refine pass and
         # EntityAbsorption see updates as soon as we (or they) call
         # refresh_for / remove on it. No per-instance state needed.
         # Schema-version freshness check (doc 10 P2.2): on first
@@ -307,7 +307,7 @@ class MemorySearchTool(Tool):
 
         Built lazily on first call across the whole process via
         :func:`durin.memory.aliases_cache.get_shared_alias_index`;
-        ``DreamConsolidator`` and ``EntityAbsorption`` consult the same
+        the refine pass and ``EntityAbsorption`` consult the same
         instance so a single workspace builds the index once even when
         multiple consumers hit it in the same ``durin agent`` run.
 

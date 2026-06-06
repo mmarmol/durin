@@ -1,10 +1,10 @@
 """LLM-judge for entity absorption (doc 25 §2.D).
 
-When auto-absorb is enabled, the :class:`DreamRunner` calls
-:func:`judge_pair` on every alias-overlap candidate that survived the
-cross-type filter and the 24-hour quarantine. The judge returns a
+When auto-absorb is enabled, the refine pass (``refine_dream.run_refine``)
+calls :func:`judge_pair` on every alias-overlap candidate that survived the
+cross-type filter and the ``min_age_hours`` quarantine. The judge returns a
 verdict (``"same"`` / ``"different"`` / ``"unclear"``), a confidence
-score (0-100), and free-form reasoning. The dispatcher merges only when
+score (0-100), and free-form reasoning. Refine merges only when
 ``verdict == "same"`` AND ``confidence >= confidence_threshold``.
 
 Design notes:

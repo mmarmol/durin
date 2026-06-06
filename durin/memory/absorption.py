@@ -263,7 +263,7 @@ class EntityAbsorption:
         # Injected index (tests) takes precedence; otherwise resolve the
         # workspace-shared instance from durin.memory.aliases_cache
         # (doc 25 §2.C). The shared map is mutated in place by refresh_for
-        # and remove during absorb(), so memory_search and DreamConsolidator
+        # and remove during absorb(), so memory_search and the refine pass
         # see those writes immediately.
         if self._alias_index is not None:
             return self._alias_index
@@ -295,7 +295,7 @@ def _merge_pages(
     """Union aliases + identifiers, append absorbed body to canonical.
 
     v1 deterministic. The dream LLM can do smarter content merges by
-    invoking DreamConsolidator with both pages as context — that's an
+    invoking the refine absorb-judge with both pages as context — that's an
     opt-in path the caller controls. This function always succeeds and
     preserves content.
     """

@@ -277,7 +277,13 @@ just leftover defs.)
 quarantine window + judge model); if we drop `auto_absorb`, they go too. Do NOT
 delete before A1 is decided.
 
-### B4 — Stale comments/docstrings referencing deleted modules — 🔲
+### B4 — Stale comments/docstrings referencing deleted modules — ✅ DONE (2026-06-06)
+> Fixed the docstrings/comments that described the CURRENT dream in present
+> tense via deleted classes (MemoryConfig.dream, absorb_judge module doc,
+> absorption, aliases_cache, memory_search, model_resolve → now name the
+> extract/refine passes). Remaining mentions are accurate HISTORICAL
+> migration notes ('this REPLACED the legacy DreamRunner…') — kept as
+> intentional context, not debris.
 ~20 live files mention `DreamConsolidator`/`DreamRunner`/`dream_apply`/
 `threshold_trigger`/`dream_quarantine` in comments/docstrings (e.g.
 `absorption.py:266,298`, `config/schema.py` MemoryConfig docstring,

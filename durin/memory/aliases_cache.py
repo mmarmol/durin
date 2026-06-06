@@ -1,7 +1,7 @@
 """Process-wide shared cache for :class:`AliasIndex`.
 
 Implements §2.C of ``docs/archive/36_post_t1_state_and_t2_horizon.md``: three
-runtime consumers (``memory_search``, ``DreamConsolidator``,
+runtime consumers (``memory_search``, the refine pass,
 ``EntityAbsorption``) previously each built their own AliasIndex on
 first use. Each rebuild parses every entity page in
 ``memory/entities/<type>/*.md``; harmless but wasteful when the same
