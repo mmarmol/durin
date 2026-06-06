@@ -53,13 +53,20 @@ JWT account-id claim path (all impls): `payload["https://api.openai.com/auth"]["
 
 ## Decisions (agreed)
 
-- **Login mechanism**: support both. Loopback PKCE for local CLI (reuse kit, nicer UX);
+- **Terminology**: this is OAuth **authorization** — durin obtains a Codex token to call the
+  API on the user's behalf. It is unrelated to authenticating into durin's webui. UI wording
+  is "Conectar con ChatGPT" / "Desconectar", not "login/logout".
+- **Auth mechanism**: support both. Loopback PKCE for local CLI (reuse kit, nicer UX);
   device-code for webui and remote/headless CLI. Decided by **auto-detection with a manual override**.
-- **WebUI login**: always device-code (structural — the gateway cannot capture a loopback
-  redirect that lands on the user's browser machine).
+- **WebUI**: always device-code (structural — the gateway cannot capture a loopback redirect
+  that lands on the user's browser machine). WebUI surface = **Connect + status + Disconnect**.
+- **Existing Codex CLI session**: do **not** silently adopt `~/.codex/auth.json`. Detect it and
+  **ask** the user whether to use it or connect another account (disable the kit's silent
+  `import_codex_cli`).
 - **`originator`**: send `codex_cli_rs` (mimic the official Codex CLI) to avoid Cloudflare 403
   on non-residential IPs. Fixed value, not a config knob.
-- **Models**: live discovery from `GET /backend-api/codex/models` with an updated static fallback.
+- **Models**: live discovery from `GET /backend-api/codex/models` is the source of truth; a
+  static fallback (hermes-style) is used only when there is no token. No model knobs.
 - **Default model**: `openai-codex/gpt-5.5` (replacing deprecated `gpt-5.1-codex`).
 
 ## Architecture
@@ -95,6 +102,11 @@ The provider, refresh, and file-lock paths are **untouched** by this module.
 - CLI override: `--device` / `--loopback` flag on `durin oauth login` and an onboard prompt
   fallback. Order: explicit override > auto-detect > loopback default.
 - WebUI: always device-code (does not call the selector).
+- **Existing-session detection**: `existing_codex_session() -> CodexSessionInfo | None`
+  inspects `~/.codex/auth.json` (official Codex CLI) and durin's own `codex.json`, returning
+  the account email/plan if found. Both onboard and webui call this **before** starting a new
+  flow and prompt the user to reuse it or connect another account. `FileTokenStorage` is
+  constructed with `import_codex_cli=False` so nothing is adopted silently.
 
 ### 3. Provider — `durin/providers/openai_codex_provider.py` (minimal edits)
 
@@ -123,19 +135,26 @@ The provider, refresh, and file-lock paths are **untouched** by this module.
 
 ### 6. WebUI — `durin/channels/websocket.py` + `webui/` (Objective 2)
 
-Backend (two new routes, device-code only):
+Backend (device-code only):
 
+- `GET  /api/oauth/codex/status` → `{ connected: bool, email?, plan?, source: "durin"|"codex-cli" }`.
+  Reflects current `codex.json` and any detected `~/.codex/auth.json` (for the reuse prompt).
 - `POST /api/oauth/codex/start` → `{ user_code, verification_uri, device_auth_id, interval, expires_in }`.
 - `GET  /api/oauth/codex/poll?device_auth_id=...` → `{ status: pending|ok|error, ... }`;
   on `ok` the token is already persisted to `codex.json`.
+- `POST /api/oauth/codex/disconnect` → deletes `codex.json` (+ `.lock`); returns updated status.
 - The existing OAuth rejection at line 1296 stays for `/settings/provider/update`
   (still no api_key to set); the new routes are the OAuth path.
 
 Frontend (`webui/`):
 
-- In the Providers section, an "OpenAI Codex" entry with a **"Login con ChatGPT"** button.
-- Inline (non-native) modal showing `user_code` + `verification_uri`, polling `/poll`
-  until `ok`, then showing "conectado" status. Model selector via `/api/models`.
+- In the Providers section, an "OpenAI Codex" entry showing connection **status**
+  (connected account email/plan, or "no conectado").
+- **"Conectar con ChatGPT"** → if an existing Codex session is detected, first ask to reuse it
+  or connect another account; otherwise open an inline (non-native) modal showing `user_code`
+  + `verification_uri`, polling `/poll` until `ok`. Model selector via `/api/models`.
+- **"Desconectar"** → inline styled confirmation (no native `window.confirm`), then
+  `POST /disconnect`.
 
 ### 7. Tests
 
@@ -145,6 +164,9 @@ Frontend (`webui/`):
 - Model fallback when discovery fails; discovery parsing of a sample response.
 - **Refresh preserves `account_id`** (see risk below).
 - `should_use_device_code()` for SSH/headless vs local env matrices.
+- `existing_codex_session()` detection (durin `codex.json` and `~/.codex/auth.json`), and that
+  no silent import happens (`import_codex_cli=False`).
+- Disconnect deletes `codex.json` and status flips to `connected: false`.
 
 ## Risks / verification items
 
