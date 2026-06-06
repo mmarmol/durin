@@ -40,6 +40,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from durin.agent.tools._telemetry import emit_tool_event
+from durin.extras import ensure_or_note
 
 __all__ = [
     "EmbeddingProvider",
@@ -157,11 +158,15 @@ def list_supported_models() -> dict[str, dict[str, Any]]:
         return _CATALOG_CACHE
     try:
         from fastembed import TextEmbedding  # type: ignore[import-not-found]
-    except ImportError as exc:
-        raise RuntimeError(
-            "fastembed is required for vector retrieval. "
-            "Install the memory extra: pip install durin-agent[memory]"
-        ) from exc
+    except ImportError:
+        res = ensure_or_note("memory_vector", config=None)
+        try:
+            from fastembed import TextEmbedding  # type: ignore[import-not-found]
+        except ImportError as exc:
+            raise RuntimeError(
+                "fastembed is required for vector retrieval. "
+                + (res.message or "Install the memory extra: pip install durin-agent[memory]")
+            ) from exc
     # Double-checked under the lock: a concurrent caller may have populated
     # the cache (and registered) while we were importing (B5).
     with _REGISTRATION_LOCK:
