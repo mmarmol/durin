@@ -136,3 +136,17 @@ def _post_install(feature: str) -> None:
             cross_encoder.reset_global()
         except Exception:  # pragma: no cover - best effort
             logger.debug("extras: cross_encoder reset_global failed", exc_info=True)
+
+
+def ensure_or_note(feature: str, *, config) -> EnsureResult:
+    """Runtime convenience around ``ensure_extra``: install if missing and log a
+    one-line outcome. Callers inspect ``.status`` (retry if "present"/"installed"
+    and not needs_restart) and ``.needs_restart`` (tell the user to restart)."""
+    res = ensure_extra(feature, config=config)
+    if res.status == "installed" and res.needs_restart:
+        logger.info(
+            "extras: installed %s — restart the gateway to activate it", feature
+        )
+    elif res.status == "failed":
+        logger.warning("extras: could not install %s: %s", feature, res.message)
+    return res
