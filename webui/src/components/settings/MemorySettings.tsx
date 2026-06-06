@@ -53,7 +53,8 @@ interface MemoryConfigShape {
     onSessionClose?: boolean;
     minSecondsBetweenRuns?: number;
     maxSecondsPerRun?: number;
-    autoAbsorb?: { enabled?: boolean };
+    alwaysOnTokenBudget?: number;
+    autoAbsorb?: { enabled?: boolean; confidenceThreshold?: number; minAgeHours?: number };
   };
 }
 
@@ -64,7 +65,10 @@ interface DreamState {
   onSessionClose: boolean;
   minSecondsBetweenRuns: number;
   maxSecondsPerRun: number;
+  alwaysOnTokenBudget: number;
   autoAbsorb: boolean;
+  autoAbsorbConfidence: number;
+  autoAbsorbMinAgeHours: number;
 }
 
 function readCrossEncoder(config: Record<string, unknown> | null): CrossEncoderState {
@@ -88,8 +92,14 @@ function readDream(config: Record<string, unknown> | null): DreamState {
       typeof d.minSecondsBetweenRuns === "number" ? d.minSecondsBetweenRuns : 300,
     maxSecondsPerRun:
       typeof d.maxSecondsPerRun === "number" ? d.maxSecondsPerRun : 600,
+    alwaysOnTokenBudget:
+      typeof d.alwaysOnTokenBudget === "number" ? d.alwaysOnTokenBudget : 1500,
     autoAbsorb:
       typeof d.autoAbsorb?.enabled === "boolean" ? d.autoAbsorb.enabled : false,
+    autoAbsorbConfidence:
+      typeof d.autoAbsorb?.confidenceThreshold === "number" ? d.autoAbsorb.confidenceThreshold : 95,
+    autoAbsorbMinAgeHours:
+      typeof d.autoAbsorb?.minAgeHours === "number" ? d.autoAbsorb.minAgeHours : 24,
   };
 }
 
@@ -241,6 +251,22 @@ export function MemorySettings({ token }: { token: string }) {
             }
           />
           <DreamNumberRow
+            title={t("settings.memory.rows.dreamAbsorbConfidence")}
+            description={t("settings.memory.help.dreamAbsorbConfidence")}
+            value={dream.autoAbsorbConfidence}
+            disabled={!dream.enabled || !dream.autoAbsorb}
+            saving={savingPath === "memory.dream.auto_absorb.confidence_threshold"}
+            onSave={(n) => void onSave("memory.dream.auto_absorb.confidence_threshold", n)}
+          />
+          <DreamNumberRow
+            title={t("settings.memory.rows.dreamAbsorbMinAge")}
+            description={t("settings.memory.help.dreamAbsorbMinAge")}
+            value={dream.autoAbsorbMinAgeHours}
+            disabled={!dream.enabled || !dream.autoAbsorb}
+            saving={savingPath === "memory.dream.auto_absorb.min_age_hours"}
+            onSave={(n) => void onSave("memory.dream.auto_absorb.min_age_hours", n)}
+          />
+          <DreamNumberRow
             title={t("settings.memory.rows.dreamThrottle")}
             description={t("settings.memory.help.dreamThrottle")}
             value={dream.minSecondsBetweenRuns}
@@ -255,6 +281,14 @@ export function MemorySettings({ token }: { token: string }) {
             disabled={!dream.enabled}
             saving={savingPath === "memory.dream.max_seconds_per_run"}
             onSave={(n) => void onSave("memory.dream.max_seconds_per_run", n)}
+          />
+          <DreamNumberRow
+            title={t("settings.memory.rows.dreamAlwaysOnBudget")}
+            description={t("settings.memory.help.dreamAlwaysOnBudget")}
+            value={dream.alwaysOnTokenBudget}
+            disabled={!dream.enabled}
+            saving={savingPath === "memory.dream.always_on_token_budget"}
+            onSave={(n) => void onSave("memory.dream.always_on_token_budget", n)}
           />
         </SettingsGroup>
       </section>
