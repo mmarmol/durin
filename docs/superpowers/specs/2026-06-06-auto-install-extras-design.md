@@ -15,15 +15,26 @@ not fail; it should install it — **frictionless**, with a notice.
 
 ## Decisions (approved)
 
-- **Install UX:** auto-install on activation with a **progress notice** (toast/bar
-  "Instalando sentence-transformers ~1GB…"). No clicks, no console. The progress IS
-  the notice. Same for small and heavy deps.
-- **Restart handling:** context-aware **ask-to-restart**, only for extras that need
-  it. Webui: an inline "¿Reiniciar para activar?" prompt after install. Agent/chat:
-  the `ask_user_question` tool if available, else a plain question in the reply; if
-  there is no execution permission to restart, just notify. Where in-process state
+- **Install UX — context-specific** (refined 2026-06-06):
+  - **Webui enable / "Probar":** a **confirmation dialog** before installing — shows
+    the extra + its **download size**, plus (when `needs_restart`) a **restart
+    checkbox** in the same dialog. On confirm → install with progress, then restart if
+    the box was checked. Not silent: deliberately enabling a (possibly ~1GB) feature
+    warrants the heads-up.
+  - **Onboarding wizard:** when a feature is selected, indicate "installs X (~Y MB
+    download)"; install the selected features' extras during setup.
+  - **Reinstall / fresh install:** auto — re-installing what the base already had.
+  - **Agent / chat (runtime):** `ensure_extra` fires on the `ImportError`, installs
+    with a log/progress notice; restart handled by the ask below.
+- **Restart handling:** context-aware, only for extras that need it. Webui: the
+  restart checkbox in the install dialog (or an inline "¿Reiniciar?" right after).
+  Agent: the `ask_user_question` tool if available, else a plain question in the
+  reply; if restart can't be executed (no permission), notify. Where in-process state
   can be reset (e.g. the cross-encoder's cached-OFF flag), do that and skip the
   restart entirely.
+- **Gate:** `install.auto_install_extras` default **ON** — the capability is enabled;
+  the confirm UX above is the user's control point. OFF → fall back to today's
+  "install durin-agent[X]" message (offline / air-gapped / locked-down).
 
 ## Architecture
 
@@ -45,6 +56,8 @@ it; two surfaces (webui, agent) render progress + the restart ask.
    | `local_models` | local | `llama_cpp` | yes (model loads at boot) |
    | `oauth` | oauth | `oauth_cli_kit` | no (on-demand) |
    (`needs_restart` is confirmed per-extra at wiring time by where the dep loads.)
+   Each entry also carries an **`approx_size`** (rough download estimate, e.g.
+   cross-encoder ~1 GB / torch, web ~few MB) shown in the confirm dialog + onboarding.
 
 2. **`ensure_extra(feature) -> EnsureResult`** — `durin/extras.py`:
    - Probe the module. Present → `{status: "present"}`.
@@ -59,11 +72,13 @@ it; two surfaces (webui, agent) render progress + the restart ask.
    - **Safety:** only extras in the registry are installable; package specs come from
      durin-agent's own metadata — never an arbitrary, caller-supplied package.
 
-3. **Webui surface** — a backend endpoint `POST /api/extras/ensure {feature}` that
-   runs `ensure_extra` and streams/returns progress + result. The toggle / "Probar" /
-   provider-select handlers call it when the probe is missing; the UI shows the
-   progress notice, then (if `needs_restart`) an inline "¿Reiniciar para activar?"
-   button wired to a gateway-restart endpoint. No console.
+3. **Webui surface** — endpoints: `GET /api/extras/status?feature=…` (returns
+   `{present, extra, approx_size, needs_restart}`) and `POST /api/extras/ensure
+   {feature, restart?}` (installs, returns progress/result, restarts if requested).
+   On a toggle / "Probar" / provider-select where the probe is missing, the UI opens a
+   **confirm dialog** — "Esto instalará `<extra>` (~Y MB)" + a **restart checkbox**
+   when `needs_restart` — then on confirm calls `ensure`, shows progress, and restarts
+   if the box was checked. No console.
 
 4. **Agent surface** — at the existing runtime `ImportError` sites (cross_encoder
    loader, web search, etc.): call `ensure_extra`; if installed and `needs_restart`,
