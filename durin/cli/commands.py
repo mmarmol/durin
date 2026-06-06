@@ -1319,19 +1319,9 @@ def _run_gateway(
     # Set cron callback (needs agent)
     async def on_cron_job(job: CronJob) -> str | None:
         """Execute a cron job through the agent."""
-        # Dream is an internal job — run directly, not through the agent loop.
-        if job.name == "dream":
-            try:
-                await agent.dream.run()
-                logger.info("Dream cron job completed")
-            except Exception:
-                logger.exception("Dream cron job failed")
-            return None
-        # Entity-centric dream (doc 25 §2.A.1). Separate from the
-        # legacy ``dream`` job above: this one runs DreamConsolidator
-        # over post-cursor entries in memory/entities/. Sync runner
-        # offloaded to a thread so the cron loop stays responsive
-        # during the LLM calls.
+        # The memory dream runs the extract/refine/skill passes directly
+        # (not through the agent loop). Sync passes offloaded to a thread so
+        # the cron loop stays responsive during the LLM calls.
         if job.name == "memory_dream":
             import asyncio as _asyncio
 
@@ -1616,26 +1606,11 @@ def _run_gateway(
         console.print(f"[green]✓[/green] Health endpoint: http://{host}:{health_port}/health")
         async with server:
             await server.serve_forever()
-    # Register Dream system job (always-on, idempotent on restart)
-    dream_cfg = config.agents.defaults.dream
-    if dream_cfg.model_override:
-        agent.dream.model = dream_cfg.model_override
-    agent.dream.max_batch_size = dream_cfg.max_batch_size
-    agent.dream.max_iterations = dream_cfg.max_iterations
-    agent.dream.annotate_line_ages = dream_cfg.annotate_line_ages
-    agent.dream.min_tokens_to_run = max(0, int(dream_cfg.min_tokens_to_run))
     from durin.cron.types import CronJob, CronPayload, CronSchedule
-    cron.register_system_job(CronJob(
-        id="dream",
-        name="dream",
-        schedule=dream_cfg.build_schedule(config.agents.defaults.timezone),
-        payload=CronPayload(kind="system_event"),
-    ))
-    console.print(f"[green]✓[/green] Dream: {dream_cfg.describe_schedule()}")
 
-    # Register entity-centric dream system job (doc 25 §2.A.1). Separate
-    # from the legacy `dream` above — this one consolidates post-cursor
-    # episodic entries into memory/entities/<type>/<slug>.md pages.
+    # Register the memory dream system job (doc 25 §2.A.1): the daily
+    # extract/refine/skill passes that consolidate sessions into
+    # memory/entities/<type>/<slug>.md pages + skills.
     mem_dream_cfg = config.memory.dream
     if mem_dream_cfg.enabled:
         cron.register_system_job(CronJob(
