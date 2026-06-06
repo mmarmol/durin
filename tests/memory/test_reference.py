@@ -112,3 +112,21 @@ async def test_memory_ingest_makes_reference_searchable_grep_fts_vector(tmp_path
     hits = vi.search("how do I configure the outbound mail relay port", top_k=10)
     assert any("reference" in str(h.get("class_name", "")) and slug in str(h.get("id", ""))
                for h in hits), f"vector miss on reference chunk; got {[h.get('id') for h in hits]}"
+
+
+def test_rebuild_from_workspace_indexes_reference_chunks(tmp_path):
+    """A full vector rebuild must restore reference chunks (e2e finding 2026-06-06):
+    rebuild_from_workspace previously walked entries + entities + skills but NOT
+    references, so `durin memory reindex` / the N5 model-change rebuild silently
+    dropped reference semantic search."""
+    from durin.memory.embedding import FastembedProvider
+    from durin.memory.vector_index import VectorIndex
+    ingest_reference(tmp_path, "relay-doc",
+                     "Set relay.port to configure the outbound mail relay. Default 587.",
+                     source="docs/relay.md")
+    vi = VectorIndex(tmp_path, FastembedProvider("intfloat/multilingual-e5-small"))
+    n = vi.rebuild_from_workspace()
+    assert n >= 1
+    hits = vi.search("how do I set the outbound mail relay port", top_k=10)
+    assert any("reference" in str(h.get("class_name", "")) and "relay-doc" in str(h.get("id", ""))
+               for h in hits), f"reference chunk missing from rebuild; got {[h.get('id') for h in hits]}"

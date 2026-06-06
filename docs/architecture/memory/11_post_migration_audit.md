@@ -441,3 +441,14 @@ unimplemented feature. Every item verified by reading the code.
 > not worth the latency.
 > `refine_dream` doesn't pass canonical/absorbed mtimes to `judge_pair`; no
 > per-search 60s mtime-lag filter (the 15-min cron covers it on a slower cadence).
+
+### N8 — `rebuild_from_workspace` skipped references (found by the live e2e) — ✅ DONE (2026-06-06)
+> The live end-to-end verification (forcing all entity types through a full
+> reindex) caught it: `VectorIndex.rebuild_from_workspace` walked entries +
+> entity pages + skills but NOT `memory/references/`, so a `durin memory reindex`
+> (or the N5 model-change rebuild) silently dropped reference SEMANTIC search —
+> only the ingest-time vector indexing survived, until the next reindex wiped it.
+> Fixed: added a references pass (re-embed each reference's token-aware chunks).
+> Test: `test_rebuild_from_workspace_indexes_reference_chunks`. Also fixed doc 01's
+> session storage layout (it showed nested `sessions/<id>/<id>.jsonl`; the code —
+> `SessionManager._get_session_path` + every reader — is FLAT `sessions/<key>.jsonl`).

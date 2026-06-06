@@ -26,11 +26,11 @@ All memory artifacts live inside a single per-installation workspace (default: `
 
 ```
 <workspace>/
-├── sessions/                           Raw conversation transcripts
-│   └── <session_id>/
-│       ├── <session_id>.jsonl          Event stream (turns, tool calls, results)
-│       ├── <session_id>.meta.json      Title, timestamps, derived._last_summary
-│       └── ...
+├── sessions/                           Raw conversation transcripts (FLAT —
+│   ├── <session_key>.jsonl             SessionManager writes sessions/<key>.jsonl
+│   ├── <session_key>.meta.json         Title, timestamps, derived (summary +
+│   │                                   extract_cursor); sibling, not nested.
+│   └── ...
 │
 ├── ingested/                           Raw external documents
 │   └── <ingest_id>/
