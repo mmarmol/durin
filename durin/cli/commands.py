@@ -1326,6 +1326,7 @@ def _run_gateway(
             import asyncio as _asyncio
 
             workspace = config.workspace_path
+            from durin.memory.always_on_dream import run_always_on_pass
             from durin.memory.dream_passes import (
                 run_extract_pass,
                 run_refine_pass,
@@ -1350,13 +1351,18 @@ def _run_gateway(
                     run_refine_pass, workspace, model=model,
                     enabled=_absorb.enabled,
                     confidence_threshold=_absorb.confidence_threshold)
+                ao = await _asyncio.to_thread(
+                    run_always_on_pass, workspace, model=model,
+                    token_budget=config.memory.dream.always_on_token_budget)
                 logger.info(
                     "memory_dream cron: extract(sessions={} entities={} {}ms yielded={}) "
-                    "skills(touched={} {}ms) refine(merged={} kept={} {}ms)",
+                    "skills(touched={} {}ms) refine(merged={} kept={} {}ms) "
+                    "always_on(pinned={} {}tok {}ms)",
                     ex["sessions"], ex["entities"], ex.get("duration_ms", 0),
                     ex.get("yielded", False), sk.get("skills_touched", 0),
                     sk.get("duration_ms", 0), len(rf.get("merged", [])),
                     len(rf.get("kept_separate", [])), rf.get("duration_ms", 0),
+                    ao.get("selected", 0), ao.get("tokens", 0), ao.get("duration_ms", 0),
                 )
             except Exception:
                 logger.exception("memory_dream cron failed")

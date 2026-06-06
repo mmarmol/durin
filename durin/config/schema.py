@@ -162,6 +162,18 @@ class MemoryDreamConfig(Base):
         validation_alias=AliasChoices("maxSecondsPerRun", "max_seconds_per_run"),
     )
 
+    # Token budget for the always-on guidance pin (A4, design §2.11). The
+    # always_on distillation pass ranks feedback (stance/practice), drops
+    # contradictions, and keeps the highest-priority items that fit this many
+    # tokens — injected into EVERY prompt, so this is a per-turn cost. 0
+    # disables the pin (nothing kept always_on). Default 1500 ≈ 15-25 concise
+    # standing instructions.
+    always_on_token_budget: int = Field(
+        default=1500,
+        ge=0,
+        validation_alias=AliasChoices("alwaysOnTokenBudget", "always_on_token_budget"),
+    )
+
     # Auto-absorb config nested under dream (the refine pass's dedup/merge).
     auto_absorb: "AutoAbsorbConfig" = Field(
         default_factory=lambda: AutoAbsorbConfig(),

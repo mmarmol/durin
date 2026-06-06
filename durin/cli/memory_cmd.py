@@ -188,6 +188,7 @@ def cmd_dream(
     # entity attributes) + the refine pass (dedup), replacing the legacy
     # episodic-entry consolidation (DreamRunner / DreamConsolidator). The
     # `entity` filter is not used by the new passes.
+    from durin.memory.always_on_dream import run_always_on_pass
     from durin.memory.dream_passes import (
         run_extract_pass,
         run_refine_pass,
@@ -218,11 +219,15 @@ def cmd_dream(
         )
     rf = run_refine_pass(workspace, model=model, enabled=_absorb.enabled,
                          confidence_threshold=_absorb.confidence_threshold)
+    console.print("[dim]Always-on pass (distil pinned guidance)…[/dim]")
+    ao = run_always_on_pass(workspace, model=model,
+                            token_budget=cfg.memory.dream.always_on_token_budget)
     merged = len(rf.get("merged", []))
     console.print(
         f"\n[green]✓[/green] extract: {ex['entities']} attribute update(s) across "
         f"{ex['sessions']} session(s); skills: {sk.get('skills_touched', 0)}; "
-        f"refine: {merged} merge(s)"
+        f"refine: {merged} merge(s); "
+        f"always_on: {ao.get('selected', 0)} pinned ({ao.get('tokens', 0)} tok)"
     )
     if ex.get("errors"):
         console.print(

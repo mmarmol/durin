@@ -989,6 +989,21 @@ class MemoryDreamThrottledEvent(TypedDict):
     reason: str
 
 
+class MemoryDreamAlwaysOnEvent(TypedDict):
+    """The always_on distillation pass curated the pinned guidance set (A4).
+
+    ``selected`` items are kept always_on (fit the token budget); ``pruned``
+    were ranked but didn't fit; ``dropped`` were removed by the contradiction
+    judge; ``tokens`` is the budget consumed by the selected set.
+    """
+
+    selected: int
+    pruned: int
+    dropped: int
+    tokens: int
+    duration_ms: int
+
+
 class MemoryUpsertEntityEvent(TypedDict):
     """memory_upsert_entity tool write (entity page authored/extended)."""
 
@@ -1066,6 +1081,7 @@ EVENTS: dict[str, type] = {
     "memory.dream.skill_extract": MemoryDreamSkillExtractEvent,
     "memory.dream.max_seconds_reached": MemoryDreamMaxSecondsReachedEvent,
     "memory.dream.throttled": MemoryDreamThrottledEvent,
+    "memory.dream.always_on": MemoryDreamAlwaysOnEvent,
     "memory.absorb.judged": MemoryAbsorbJudgedEvent,
     "memory.absorb.auto_merged": MemoryAbsorbAutoMergedEvent,
     "memory.absorb.skipped": MemoryAbsorbSkippedEvent,
