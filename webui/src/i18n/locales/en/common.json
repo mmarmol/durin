@@ -282,7 +282,9 @@
         "dreamCron": "Daily schedule (cron)",
         "dreamPostCompaction": "Run after compaction",
         "dreamOnSessionClose": "Run on session close",
-        "dreamAutoAbsorb": "Auto-absorb duplicates"
+        "dreamAutoAbsorb": "Auto-absorb duplicates",
+        "dreamThrottle": "Reactive throttle (s)",
+        "dreamMaxSeconds": "Max seconds per run"
       },
       "help": {
         "crossEncoderEnabled": "Opt-in second-pass reranker. Adds 300-1500 ms per query and ~1 GB RAM but improves quality on ambiguous queries. Off by default.",
@@ -291,7 +293,9 @@
         "dreamCron": "Cron expression for the daily extract / refine / skill pass. Default 0 3 * * * (3am local).",
         "dreamPostCompaction": "Run a dream pass after a session is compacted — the context is already in memory so the cost is amortised.",
         "dreamOnSessionClose": "Run a dream pass when a session ends (/quit or idle timeout).",
-        "dreamAutoAbsorb": "Let the refine pass automatically merge entities it judges duplicates (high-confidence only). Off keeps merges manual."
+        "dreamAutoAbsorb": "Let the refine pass automatically merge entities it judges duplicates (high-confidence only). Off keeps merges manual.",
+        "dreamThrottle": "Minimum seconds between reactive dream runs (post-compaction / session-close). Absorbs bursts so overlapping passes don't pile up; 0 disables. The daily cron is never throttled.",
+        "dreamMaxSeconds": "Hard wall-clock cap per extract pass. When reached, the pass yields after the current session and the per-session cursor resumes the remainder on the next trigger. 0 = unbounded."
       },
       "crossEncoderModelPlaceholder": "model id (e.g. BAAI/bge-reranker-base)",
       "crossEncoderTest": "Test",

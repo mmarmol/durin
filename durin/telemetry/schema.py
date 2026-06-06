@@ -1104,6 +1104,26 @@ class MemoryDreamSkillExtractEvent(TypedDict):
     """The extract dream's skill pass wrote/updated procedural skills (§8e)."""
 
     skills_touched: int
+    duration_ms: NotRequired[int]
+
+
+class MemoryDreamMaxSecondsReachedEvent(TypedDict):
+    """An extract pass hit ``memory.dream.max_seconds_per_run`` and yielded;
+    the per-session cursor resumes the remainder on the next trigger (§8e)."""
+
+    kind: str  # "extract"
+    max_seconds: int
+    elapsed_ms: int
+    sessions_done: int
+
+
+class MemoryDreamThrottledEvent(TypedDict):
+    """A reactive dream trigger (post_compaction / session_close) was skipped
+    by the in-process gate — ``reason`` is ``"locked"`` (a pass was already
+    running) or ``"throttled"`` (one ran within min_seconds_between_runs)."""
+
+    trigger: str
+    reason: str
 
 
 class MemoryUpsertEntityEvent(TypedDict):
@@ -1179,6 +1199,8 @@ EVENTS: dict[str, type] = {
     "memory.dream.end": MemoryDreamEndEvent,
     "memory.dream.patch_applied": MemoryDreamPatchAppliedEvent,
     "memory.dream.skill_extract": MemoryDreamSkillExtractEvent,
+    "memory.dream.max_seconds_reached": MemoryDreamMaxSecondsReachedEvent,
+    "memory.dream.throttled": MemoryDreamThrottledEvent,
     "memory.absorb.judged": MemoryAbsorbJudgedEvent,
     "memory.absorb.auto_merged": MemoryAbsorbAutoMergedEvent,
     "memory.absorb.skipped": MemoryAbsorbSkippedEvent,

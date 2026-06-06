@@ -245,7 +245,9 @@
         "dreamCron": "Expresión cron para la pasada diaria de extract / refine / skills. Por defecto 0 3 * * * (3am local).",
         "dreamPostCompaction": "Ejecuta una pasada de dream después de compactar una sesión — el contexto ya está en memoria, así que el costo se amortiza.",
         "dreamOnSessionClose": "Ejecuta una pasada de dream cuando termina una sesión (/quit o timeout por inactividad).",
-        "dreamAutoAbsorb": "Permite que la pasada de refine fusione automáticamente entidades que juzga duplicadas (solo alta confianza). Apagado mantiene las fusiones manuales."
+        "dreamAutoAbsorb": "Permite que la pasada de refine fusione automáticamente entidades que juzga duplicadas (solo alta confianza). Apagado mantiene las fusiones manuales.",
+        "dreamThrottle": "Segundos mínimos entre pasadas reactivas de dream (post-compactación / cierre de sesión). Absorbe ráfagas para que no se apilen pasadas solapadas; 0 desactiva. El cron diario nunca se limita.",
+        "dreamMaxSeconds": "Cota wall-clock por pasada de extract. Al alcanzarla, la pasada cede tras la sesión actual y el cursor por-sesión reanuda el resto en el siguiente disparador. 0 = sin límite."
       },
       "loadError": "No se pudieron cargar los ajustes de memoria.",
       "rows": {
@@ -255,7 +257,9 @@
         "dreamCron": "Horario diario (cron)",
         "dreamPostCompaction": "Ejecutar tras compactación",
         "dreamOnSessionClose": "Ejecutar al cerrar sesión",
-        "dreamAutoAbsorb": "Auto-absorber duplicados"
+        "dreamAutoAbsorb": "Auto-absorber duplicados",
+        "dreamThrottle": "Throttle reactivo (s)",
+        "dreamMaxSeconds": "Máx. segundos por pasada"
       },
       "saveError": "No se pudo guardar {{path}}.",
       "sections": {

@@ -139,6 +139,29 @@ class MemoryDreamConfig(Base):
         validation_alias=AliasChoices("modelOverride", "model_override"),
     )
 
+    # Throttle for the reactive triggers (post_compaction + on_session_close).
+    # They fire on a daemon thread per event; a burst of session closes would
+    # otherwise spawn a burst of overlapping extract passes. The reactive
+    # gate skips a run when one happened within this window (the per-session
+    # cursor means the skipped turns are picked up by the next run / the cron).
+    # 0 disables the throttle. The daily cron is never throttled.
+    min_seconds_between_runs: int = Field(
+        default=300,
+        ge=0,
+        validation_alias=AliasChoices("minSecondsBetweenRuns", "min_seconds_between_runs"),
+    )
+
+    # Hard wall-clock cap per extract pass. The pass makes one LLM call per
+    # session with new turns; on a large workspace (or a bootstrap) that can
+    # run long. When the elapsed time crosses this cap the pass yields after
+    # the current session — the per-session cursor makes the remainder resume
+    # on the next trigger. 0 disables the cap (run to completion).
+    max_seconds_per_run: int = Field(
+        default=600,
+        ge=0,
+        validation_alias=AliasChoices("maxSecondsPerRun", "max_seconds_per_run"),
+    )
+
     # Auto-absorb config nested under dream (the refine pass's dedup/merge).
     auto_absorb: "AutoAbsorbConfig" = Field(
         default_factory=lambda: AutoAbsorbConfig(),

@@ -1340,15 +1340,19 @@ def _run_gateway(
             # JSON-Patch consolidation via working-tree writes — the obsolete
             # model + the G3 race). Writes go through memory_writer / skill_write.
             model = resolve_memory_model(config)
+            _cron_max_s = config.memory.dream.max_seconds_per_run
             try:
-                ex = await _asyncio.to_thread(run_extract_pass, workspace, model=model)
+                ex = await _asyncio.to_thread(
+                    run_extract_pass, workspace, model=model, max_seconds=_cron_max_s)
                 sk = await _asyncio.to_thread(run_skill_extract_pass, workspace, model=model)
                 rf = await _asyncio.to_thread(run_refine_pass, workspace, model=model)
                 logger.info(
-                    "memory_dream cron: extract(sessions={} entities={}) "
-                    "skills(touched={}) refine(merged={} kept={})",
-                    ex["sessions"], ex["entities"], sk.get("skills_touched", 0),
-                    len(rf.get("merged", [])), len(rf.get("kept_separate", [])),
+                    "memory_dream cron: extract(sessions={} entities={} {}ms yielded={}) "
+                    "skills(touched={} {}ms) refine(merged={} kept={} {}ms)",
+                    ex["sessions"], ex["entities"], ex.get("duration_ms", 0),
+                    ex.get("yielded", False), sk.get("skills_touched", 0),
+                    sk.get("duration_ms", 0), len(rf.get("merged", [])),
+                    len(rf.get("kept_separate", [])), rf.get("duration_ms", 0),
                 )
             except Exception:
                 logger.exception("memory_dream cron failed")
@@ -1640,21 +1644,54 @@ def _run_gateway(
     ):
         import threading as _threading_dream
 
+        from durin.memory.dream_passes import ReactiveDreamGate
+        # Shared by both reactive triggers: a lock so two events don't run
+        # overlapping passes + a throttle so a burst of session closes is
+        # absorbed (replaces the legacy DreamRunner's .dream.lock + cooldown).
+        _dream_gate = ReactiveDreamGate()
+        _dream_min_s = mem_dream_cfg.min_seconds_between_runs
+        _dream_max_s = mem_dream_cfg.max_seconds_per_run
+
         def _spawn_dream(trigger: str, session_key: str) -> None:
             ws = config.workspace_path
 
             def _run() -> None:
+                import time as _time_dream
+
+                from durin.agent.tools._telemetry import emit_tool_event
+                # Skip when a pass is already running or one ran too recently —
+                # the per-session cursor makes a skipped run harmless.
+                skip = _dream_gate.try_begin(_dream_min_s)
+                if skip:
+                    with suppress(Exception):
+                        emit_tool_event(
+                            "memory.dream.throttled",
+                            {"trigger": trigger, "reason": skip},
+                        )
+                    logger.debug("reactive dream skipped ({}): {}", trigger, skip)
+                    return
+                t_run = _time_dream.perf_counter()
                 try:
                     # §8c: reactive EXTRACT — when a session closes or compacts,
                     # extract its new turns into entity attributes immediately
                     # (the frequent dream, event-driven; the per-session cursor
-                    # makes it idempotent). Refine stays on the daily cron. This
-                    # replaces the legacy DreamRunner.
+                    # makes it idempotent). Refine stays on the daily cron.
                     from durin.memory.dream_passes import run_extract_pass
                     from durin.memory.model_resolve import resolve_memory_model
-                    run_extract_pass(ws, model=resolve_memory_model(config))
+                    out = run_extract_pass(
+                        ws, model=resolve_memory_model(config),
+                        max_seconds=_dream_max_s,
+                    )
+                    logger.info(
+                        "reactive dream done ({}): {} session(s), {} attribute "
+                        "update(s), yielded={}, {}ms",
+                        trigger, out["sessions"], out["entities"], out["yielded"],
+                        int((_time_dream.perf_counter() - t_run) * 1000),
+                    )
                 except Exception:
                     logger.exception("{} dream failed ({})", trigger, session_key)
+                finally:
+                    _dream_gate.end()
 
             _threading_dream.Thread(
                 target=_run, daemon=True, name=f"dream-{trigger}",
