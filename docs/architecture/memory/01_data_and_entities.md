@@ -2,7 +2,7 @@
 title: Data types and entity model
 version: 0.1-draft
 status: current — describes the shipped system (P11 era, 2026-05-30)
-last_updated: 2026-05-27
+last_updated: 2026-06-06
 audience: humans and LLMs implementing or modifying this system
 depends_on: 00_overview.md
 related: 02_indexing.md, 05_dream_cold_path.md
@@ -66,28 +66,28 @@ The system has **nine** data classes. Audit E25 (2026-05-28) added
 summaries from JSON sidecars into a first-class memory class at
 `memory/session_summary/`.
 
-| Class | Path | Mutability | Created by | Indexed for search? | Consumed by Dream? |
+| Class | Path | Mutability | Created by | Indexed for search? | Track / dream role |
 |---|---|---|---|---|---|
-| **Session** | `sessions/<id>/` | Append-only during session, then read-only | AgentLoop (automatic, scoped per interlocutor unless `unified_session=true`) | Full text grep | No (referenced only as source_refs) |
-| **Session summary** | `memory/session_summary/<sanitized_key>.md` | Replaced when consolidator re-summarises | Consolidator (`_persist_last_summary`, audit A10) | Vector + lexical (class `session_summary`) | No — used as retrieval context, not consumed as raw input |
-| **Ingested** | `ingested/<id>/` | Immutable | User (UI) or agent (tool) | Not directly; chunks via `corpus/` | No (chunks → corpus is what gets read) |
-| **Corpus** | `memory/corpus/<id>.md` | Replaced on re-ingest | Ingestion pipeline, agent | Vector + lexical | **Counts as signal** (threshold trigger §2.2 doc 05) but NOT consumed into entity pages — ingested docs are already canonical-ish |
-| **Episodic** | `memory/episodic/<id>.md` | Append-only typically | Agent via `memory_store` | Vector + lexical | **Yes, primary input.** Post-cursor entries are consumed, applied as PATCH ops, then archived |
-| **Stable** | `memory/stable/<id>.md` | Semi-mutable (editable) | Agent, user | Vector + lexical | Referenced as context but **never consumed or archived** by Dream (user-marked durable) |
-| **Pending** | `memory/pending/<id>.md` | Short-lived | Intake pipeline | Not indexed | No (intermediate buffer) |
-| **Entity** | `memory/entities/<type>/<slug>.md` | Mutable (Dream + user) | Dream consolidator, user | Vector + lexical | **Yes, target.** Dream's PATCH ops write to this class. |
-| **Archive** | `memory/archive/<class>/<id>.md` | Frozen | Dream after consolidation | **Excluded from all search paths by default** (vector index, FTS5/BM25, raw grep, walk+parse). Reachable only via explicit recovery flag. | No (terminal state) |
+| **Session** | `sessions/<id>/` | Append-only during session, then read-only | AgentLoop (automatic, scoped per interlocutor unless `unified_session=true`) | Full text grep | **Evidence.** The extract dream reads new session turns to derive entity attributes; referenced as source_refs. |
+| **Session summary** | `memory/session_summary/<sanitized_key>.md` | Replaced when re-summarised | Compaction (`_persist_last_summary`, audit A10) | Vector + lexical (class `session_summary`) | **Track 2 (raw).** Surfaced by recency as retrieval context; never consolidated into pages. |
+| **Ingested** | `ingested/<id>/` | Immutable | User (UI) or agent (tool) | Not directly; via `corpus/` / references | **Evidence.** Surfaced via its searchable representation; never consolidated. |
+| **Corpus** | `memory/corpus/<id>.md` | Replaced on re-ingest | Ingestion pipeline, agent | Vector + lexical | **Track 2 (raw).** Searchable reference; never consolidated into entity pages — ingested docs are already canonical-ish. |
+| **Episodic** | `memory/episodic/<id>.md` | Append-only typically | `/remember` (user_authored) + internal `store_memory` callers | Vector + lexical | **Track 2 (raw).** Surfaced by recency; never consolidated into pages, never auto-archived (N3/N4). |
+| **Stable** | `memory/stable/<id>.md` | Semi-mutable (editable) | Agent, user | Vector + lexical | **Track 2 (raw).** Promoted episodic; never consolidated, never archived (user-marked durable). |
+| **Pending** | `memory/pending/<id>.md` | Short-lived | Intake pipeline | Not indexed | Intermediate buffer; outside both tracks. |
+| **Entity** | `memory/entities/<type>/<slug>.md` | Mutable (agent + dream + user) | Agent (`memory_upsert_entity`), extract dream, user | Vector + lexical | **Track 1 (consolidated).** Written via `memory_writer` field patches; agent owns name/aliases/relations/body, the extract dream owns attributes (precedence user > dream > agent). |
+| **Archive** | `memory/archive/<class>/<id>.md` | Frozen | Manual (`memory_forget` / webui); refine dream on entity merge | **Excluded from all search paths by default** (vector index, FTS5/BM25, raw grep, walk+parse). Reachable only via explicit recovery flag. | Terminal state. |
 
 ### 2.1 Why each class exists
 
 - **Session**: full conversation history. Source of truth for "what was said". The agent must never lose this — it's the audit trail.
 - **Ingested**: external documents brought in by the user. Source of truth for "what was given". Used as evidence when citing.
 - **Corpus**: searchable chunks derived from `ingested/`. The retrieval unit for long documents.
-- **Episodic**: atomic observations extracted by the agent. Raw material for Dream.
+- **Episodic**: atomic raw observations (`/remember` user facts, internal store callers). Surfaced by recency; not folded into pages.
 - **Stable**: facts the agent or user has explicitly marked as durable. Like episodic but "promoted" — has more weight.
 - **Pending**: transitional buffer. Items waiting to be classified or processed. Operationally important; not user-visible.
 - **Entity**: synthesized canonical knowledge. The graph of "what we know" about people, projects, bugs, deals, etc.
-- **Archive** [V2]: episodic (and possibly others) that Dream has consolidated into entities. Kept for recoverability; excluded from default search.
+- **Archive**: entries removed from the live set — manually retired fragments (`memory_forget` / webui) and the loser side of a refine-dream entity merge. Kept for recoverability; excluded from default search. Fragments are **not** auto-archived (N3/N4).
 
 ---
 
@@ -245,7 +245,7 @@ identifiers: ...                                 # other emergent fields preserv
 
 Path: `memory/archive/<class>/<id>.md`
 
-When Dream consolidates an episodic into an entity page, the episodic file is **moved** (not copied or deleted) to `memory/archive/episodic/<id>.md`. The frontmatter gains an `archived_at` timestamp and an `archived_into` reference:
+When a fragment is retired (manually via `memory_forget` / webui) or when the refine dream merges one entity into another, the source file is **moved** (not copied or deleted) under `memory/archive/<class>/<id>.md`. Fragments are never auto-archived as a side effect of consolidation — there is no consolidate-and-archive lifecycle (N4). The archived file's frontmatter gains an `archived_at` timestamp and an `archived_into` reference:
 
 ```yaml
 ---
@@ -253,21 +253,21 @@ id: <original id>
 headline: <original headline>
 # ... all original fields preserved ...
 archived_at: <ISO timestamp>
-archived_into: person:marcelo                    # the entity URI it was consolidated into
+archived_into: person:marcelo                    # the canonical entity URI it was merged into (entity merge)
 ---
 
 <original body preserved>
 ```
 
-**`memory/archive/` is invisible to all default retrieval paths.** This is non-negotiable for the system to behave correctly after Dream consolidates an entry; the whole point of archiving is to remove the entry from competing with the canonical synthesis in search results.
+**`memory/archive/` is invisible to all default retrieval paths.** This is non-negotiable: once an entry is retired (a merged-away entity, or a manually forgotten fragment), the whole point of archiving is to remove it from competing with the live set in search results.
 
 Concretely, archive must be excluded from:
 
 | Path | How it's excluded |
 |---|---|
-| Vector index (LanceDB) | Indexer skips `memory/archive/**`. When Dream archives an entry, the corresponding LanceDB row is deleted. |
+| Vector index (LanceDB) | Indexer skips `memory/archive/**`. When an entry is archived, the corresponding LanceDB row is deleted. |
 | Lexical index (FTS5/BM25) | Indexer skips `memory/archive/**` on rebuild. Row deleted on archive. |
-| Raw grep / walk+parse on disk | The shared `walk_memory(workspace)` helper used by `search_undreamed`, fallback grep, and any future scanner must exclude `archive/` from its file enumeration. There is exactly one such helper; it is the chokepoint. |
+| Raw grep / walk+parse on disk | The shared `walk_memory(workspace)` helper (called with `include_archive=False`) used by `search_undreamed`, fallback grep, and any future scanner excludes `archive/` from its file enumeration. There is exactly one such helper; it is the chokepoint. |
 | Read-side helpers (entity_ranker, alias bootstrap, etc.) | Same — they consume the workspace walker output; if it excludes archive, they do too. |
 
 Access to archived content requires an **explicit opt-in**:
@@ -374,11 +374,9 @@ An attribute is **stateful** if and only if its key name matches one of these pa
 | Exact match: `state` | `attributes.state` |
 | Prefix `current_` | `attributes.current_residence`, `attributes.current_employer`, `attributes.current_role` |
 
-All other attribute keys are **static** (overwriting on update, no history). When Dream sets a stateful attribute and detects a change, it appends to `history` and updates `current`. When it sets a static attribute and detects a change, it overwrites the previous value (the prior value remains accessible via git history of the entity page).
+All other attribute keys are **static** (overwriting on update, no history). The static case is what ships today: when a static attribute changes, the new value overwrites the old via a field patch, and the prior value remains accessible through git history of the entity page (per-field precedence still applies — a user-set value is not overwritten by the dream).
 
-The patterns are applied by Dream during consolidation per **demonstration** in the prompt's few-shot examples (`durin/templates/dream/examples/`, especially `01_new_entity.md`, `02_update_attribute.md`, `04_handle_conflict.md`, `06_no_changes.md`). Audit E27 (2026-05-28) corrected an earlier claim that the patterns were articulated in `rules.md` — grep against `rules.md` and `consolidator.md` returns no mention of "stateful" or the explicit selection rule; the LLM learns the convention by example.
-
-No `STATEFUL_ATTRIBUTE_PATTERNS` constant exists in code — earlier drafts of this section referenced one that was never extracted. Decision: keep the rule in the LLM-facing prompt corpus (where it lives today) rather than mirror it as a Python regex set. If the rule ever needs to gate non-LLM code paths, extract the constant then. (Audit C1, 2026-05-28.)
+**Status note (2026-06-06):** the stateful/history-preserving variant above is a schema affordance the page format supports, but the current extract dream does **not** emit it — its prompt (`extract_dream.py::_EXTRACT_PROMPT`) constrains values to scalars or short lists of scalars (no nested objects). The legacy consolidator templates that once demonstrated the pattern (`durin/templates/dream/examples/`, `rules.md`, `consolidator.md`) are orphaned — no live code loads them after the migration. There is no `STATEFUL_ATTRIBUTE_PATTERNS` constant in code. If history-preservation is wanted, it must be wired into the extract prompt (or a successor pass); reconcile with the C-pass doc rewrite before relying on it.
 
 ### 4.4 Relations — design rules
 
@@ -389,7 +387,7 @@ Relations are first-class graph edges from one entity to another. Rules:
 | **First-class only if information-bearing** | A relation must add information beyond mention. Mere "appeared in session X" is NOT a relation. |
 | **Targets must have URIs** | `to` field references another entity. If the target doesn't exist, Dream creates a placeholder (`auto_created: true` in extra). |
 | **Free-form metadata** | Each relation can carry `since`, `intensity`, `role`, etc. No enforced schema beyond `to` and `type`. |
-| **Per-entity cap** | **Soft cap 50 + hard cap 200, enforced at Dream apply time** (audit B-19, 2026-05-29; supersedes the deferred state from audit C2 2026-05-28). `durin.memory.entity_relation_cap.check_relation_cap` runs after `_apply_ops_to_page` succeeds: crossing the soft cap fires `memory.entity_relation_cap_warned` (apply proceeds); crossing the hard cap fires `memory.entity_relation_cap_rejected` and rolls back the patch with `DreamApplyFailureKind.VALIDATION`. The LLM sees the current count as `current relation count: N` in the consolidator prompt (§4.2 of doc 06) and Rule 9 of `rules.md` instructs it to budget against the cap before fanning out new `/relations/-` ops. |
+| **Per-entity cap** | **Soft cap 50 + hard cap 200, alert-only at write time** (audit A3, 2026-06-06). `memory_writer.write_entity` counts relations before/after applying field patches and calls `durin.memory.entity_relation_cap.check_relation_cap`: crossing the soft cap fires `memory.entity_relation_cap_warned`, crossing the hard cap fires `memory.entity_relation_cap_rejected`. **Neither blocks the write or drops a relation** — no data loss; enforcing the hard cap is a one-line flip in `_emit_relation_cap` if mega-hubs prove real. |
 
 **Pure mentions are NOT relations.** "Marcelo was mentioned in session abc" is covered by:
 1. The vector index (sessions are vectorized via `_last_summary` in v2; episodic via body).
@@ -413,18 +411,18 @@ Examples:
 - "AcmeCorp Q4 Renewal" → `acmecorp_q4_renewal`
 - "auth middleware leak (high sev)" → `auth_middleware_leak_high_sev`
 
-If two distinct entities produce the same slug, a numeric suffix is added (`marcelo_marmol_2`). Dream's entity dedup pass (`05_dream_cold_path.md`) handles cases where two pages should actually be merged.
+If two distinct entities produce the same slug, a numeric suffix is added (`marcelo_marmol_2`). The refine dream's entity dedup pass (`05_dream_cold_path.md`) handles cases where two pages should actually be merged.
 
 **Alias index bootstrap from episodic** (`G3.e`, 2026-05-25): `AliasIndex.build()` (`durin/memory/aliases_index.py`) walks `memory/entities/**/*.md` first to populate aliases from canonical entity pages — that's the primary source. After that, it also walks `memory/episodic/**/*.md` and derives minimal aliases from each episodic's `entities:` frontmatter field. Episodic-derived aliases have **lower precedence** than canonical-derived (a canonical wins on conflict).
 
-Why the episodic bootstrap exists: in a cold workspace (Dream hasn't yet created canonical entity pages but the agent is already storing observations via `memory_store`), the alias index would otherwise be empty and the entity-aware ranker (§8 doc 03) would be inoperative. Bootstrapping from episodic ensures the ranker activates early, before consolidation has happened.
+Why the episodic bootstrap exists: in a cold workspace (few or no canonical entity pages yet, but the agent is already recording raw facts via `/remember`), the alias index would otherwise be thin and the entity-aware ranker (§8 doc 03) would be inoperative. Bootstrapping from episodic ensures the ranker activates early, before the entity graph is populated.
 
 ### 4.6 Provenance
 
-Provenance tracks which `source_ref` produced each attribute or relation. This is critical for:
-- Auditability ("how do we know Marcelo lives in Spain?")
-- Recovery (if Dream consolidated wrong, the original episodic is in `archive/` referenced via provenance).
-- Updates (when re-evaluating an attribute, Dream knows the original source).
+Provenance tracks which `source_ref` produced each attribute or relation, recorded per field at write time (`durin/memory/field_provenance.py`). This is critical for:
+- Auditability ("how do we know Marcelo lives in Spain?") — an extracted attribute points back at the session turn it came from.
+- Recovery (the original evidence — a session turn, or an archived fragment — is reachable via the recorded `source_ref`).
+- Updates (when re-evaluating an attribute, the writer knows the original source).
 
 **Structure:**
 
@@ -446,7 +444,7 @@ provenance:
 - A session turn: `session:<session_id>/turn-42`
 - An ingested artifact: `ingested/<ingest_id>/source.pdf`
 
-Relation provenance uses `index` to refer to the position in the `relations` list rather than the relation content (which may change). When Dream reorders relations, indices are updated.
+Relation provenance uses `index` to refer to the position in the `relations` list rather than the relation content (which may change). If relations are ever reordered, indices are updated.
 
 #### 4.6.1 Authorship classification (separate from source_ref provenance)
 
@@ -456,8 +454,8 @@ Beyond tracking which entry produced a fact, the system tracks **who wrote each 
 
 | Value | Meaning |
 |---|---|
-| `agent_created` | The agent (via `memory_store` / `memory_ingest` / Dream / curator) wrote this entry. Dream and curator may auto-manage it: update, consolidate into an entity page, archive, etc. |
-| `user_authored` | A human wrote this entry directly (manual `.md` edit, or via a UI surface marked as user-driven). Dream and curator **never** modify it. |
+| `agent_created` | The agent (via `memory_upsert_entity` / `memory_ingest`) or a dream pass wrote this entry/page. The dreams may auto-manage it: extend attributes, merge duplicate entities, etc. |
+| `user_authored` | A human wrote this entry/page directly (manual `.md` edit, `/remember`, or a UI surface marked as user-driven). The dreams **never** modify it. |
 
 **Default: `user_authored`** if nothing sets the context — i.e., the system assumes user authorship unless agent-driven code explicitly marks otherwise. This is the safe default: doing nothing leaves user content protected.
 
@@ -475,16 +473,17 @@ with author_scope("agent_created"):
 
 When the memory entry is persisted, `MemoryEntry.author` is set from `current_author()` and saved in the frontmatter (visible in the `.md` file).
 
-**Protection rule (enforced by Dream and curator code paths):**
+**Protection rule (enforced by the dream code paths):**
 
-> Dream and the curator **never** modify, archive, or consume entries with `author: user_authored`. They may *read* them as context (e.g., the existing schema of an entity page the user edited) but they never overwrite or move them.
+> The dreams **never** modify, archive, or merge away entries/pages whose page-level `author` is `user_authored`. They may *read* them as context (e.g., the existing schema of an entity page the user edited) but they never overwrite or move them.
 
-The rationale: a user who edited a `.md` file explicitly stated this content matters. Auto-managing it would destroy the user's stated intent. If the user wants Dream to take over an entry they wrote, they can change the `author:` field manually to `agent_created`.
+The rationale: a user who edited a `.md` file explicitly stated this content matters. Auto-managing it would destroy the user's stated intent. If the user wants a dream to take over a page they wrote, they change the `author:` field manually to `agent_created`.
 
-**Where the rule lives in code** (audit E19, 2026-05-28):
+**Where the rule lives in code** (relocated by the migration — the pre-migration `DreamConsolidator` / `dream_runner` homes are gone):
 
-- **Memory entries** (episodic / stable / corpus): the filter is in `cli/memory_cmd.py::_discover_pending_consolidations` (line ~150) — entries with `author: user_authored` never enter the batch the Dream consolidator receives. Pre-E19 this doc claimed the filter was inside `dream.py::DreamConsolidator.apply()`; corrected to the actual location.
-- **Entity pages**: `dream_runner.py::_maybe_auto_absorb` checks `page_a.author` and `page_b.author` and emits `memory.absorb.skipped` with `reason="user_authored"` when either side is hand-written. Pre-E19 this protection didn't exist — `EntityPage` had no `author` field, so the §4.6.1 promise was arch-unsupported for entity pages even though it was documented. E19 added the field (defaults to `user_authored` for safety; Dream and absorption set `agent_created` when they write a page) and wired the runner check.
+- **Entity pages**: `refine_dream.py` (the dedup pass) skips any candidate pair where `page_a.author == "user_authored"` or `page_b.author == "user_authored"`, recording `reason="user_managed"` (it never merges a user-managed page). The `EntityPage.author` field defaults to `user_authored` for safety; the dreams set the field-level author to `dream` (via `memory_writer`) when they write, leaving user-set fields untouched.
+- **Fragments** (episodic / stable): there is no consolidation batch to filter — the two-track model never feeds fragments to a dream at all. `/remember` writes them as `user_authored`, so they are protected by construction and only ever retired manually.
+- **Field-level precedence** (orthogonal to the page-level flag): `field_patch`/`field_provenance` enforce **user > dream > agent** per field, so the extract dream's attribute writes never clobber a value a user set, even on an `agent_created` page.
 
 **Note on the discrepancy in the prior schema field** (corrected 2026-05-27): an earlier draft of doc 01 listed `"agent_authored"` and `"dream"` as values; the code only has `"user_authored"` and `"agent_created"`. The schema field declaration in §3.3 has been corrected to match.
 
@@ -500,7 +499,7 @@ durin follows the same path. Three patterns cover the cases that come up in prac
 | **Prose in the body** | No natural positive equivalent exists. The negation lives as a sentence in the entity body. Vector search finds it. | Body contains: "Marcelo dislikes cilantro and complains about it in restaurants." |
 | **Temporal validity on a positive attribute** | The attribute was true and stopped being true. | `dietary: { current: omnivore, history: [{value: vegetarian, valid_from: 2020-01, valid_until: 2024-06}] }` |
 
-Dream's prompt instructs the LLM to apply this preference order. The decision is taken at consolidation time, not at retrieval time.
+These patterns are applied at write time, not at retrieval time: the agent reframes negations into positive facts or body prose when it authors a page (`memory_upsert_entity`), and the extract dream prefers a positive attribute when it derives one. (The temporal-validity variant carries the same caveat as §4.3 — the page format supports it, but the current extract prompt emits only scalar/list values.)
 
 **Trade-off accepted:** the system cannot answer structural queries like "list all entities that do NOT have attribute X". Such queries fall back to vector search over body prose. This matches the trade-off accepted by every mainstream system surveyed.
 
@@ -558,45 +557,45 @@ LanceDB + FTS5 index each corpus entry
 [end] ingested/ frozen; corpus entries are the searchable representation
 ```
 
-### 5.3 Episodic lifecycle (v2)
+### 5.3 Episodic lifecycle (two-track model)
+
+Episodic is **track 2: raw memory**. It is surfaced by recency in search and is
+**never** consolidated into entity pages, and **never** auto-archived (N3/N4,
+`11_post_migration_audit.md`). It is a separate track from the consolidated
+entity pages — nothing folds a fragment into a page.
 
 ```
-[memory_store call OR agent extraction]
+[/remember <fact>  OR  session-close summary  OR  internal store_memory caller]
    │
    ▼
-memory/episodic/<ts>.md created
+memory/episodic/<ts>.md created (author: user_authored for /remember)
    │
    ▼
 re-embed-on-write: LanceDB + FTS5 indexed immediately
    │
    ▼
-Threshold trigger: if entity X accumulated N entries, dispatch Dream
+surfaced by recency at query time (vector + lexical) for the life of the entry
    │
    ▼
-Dream daemon (locked, throttled):
-  - reads post-cursor episodic for entity X
-  - consolidates into entity page (updates attributes/relations/body)
-  - emits JSON Patch
-  - advances cursor (dream_processed_through)
-   │
-   ▼
-Episodic moved to memory/archive/episodic/<id>.md
-   │
-   ▼
-LanceDB + FTS5 remove the original episodic entry
-   │
-   ▼
-Episodic is now invisible to ALL default search paths:
-   - vector index: row deleted
-   - lexical index: row deleted
-   - raw grep / walk+parse: archive/ is excluded from the workspace walker
-   - any other reader using the shared workspace walker
-Reachable only via explicit recovery (scope=archive flag, CLI command, or direct file access)
+[terminal] no auto-consolidation, no auto-archive. Removal is a manual
+   operation only (memory_forget / webui → archive_episodic).
 ```
+
+Live producers of episodic are the `/remember` command (`user_authored` — the
+curator/dream never touches it) and a few internal `store_memory` callers
+(e.g. compaction). The `memory_store` agent tool is **disabled**
+(`memory_store.py::enabled()` returns `False`) — facts about a thing now go
+through `memory_upsert_entity` (track 1), not episodic. Session summaries are a
+sibling raw track (`memory/session_summary/`), surfaced the same way.
+
+There is no threshold trigger, no Dream daemon consuming episodic, no
+JSON-Patch apply, and no `dream_processed_through` cursor — that whole pipeline
+was removed in the migration. The extract dream builds entity attributes from
+**session turns** (§5.6), not from episodic fragments.
 
 ### 5.4 Stable lifecycle
 
-Similar to episodic but **never auto-archived under any condition**. Stable entries are "promoted" — the user or agent has explicitly marked them as durable. Dream may reference them when consolidating entities, but does not consume, archive, or modify them. Auto-archiving stable would destroy the explicit-durability intent that distinguishes stable from episodic.
+Similar to episodic — also **track 2: raw memory** — but additionally **never auto-archived under any condition**. Stable entries are "promoted" episodic: the user or agent has explicitly marked them as durable. Like all fragments, they are surfaced by recency and are never consolidated into entity pages; the dream never consumes, archives, or modifies them. Auto-archiving stable would destroy the explicit-durability intent that distinguishes stable from episodic.
 
 The user can edit a stable `.md` directly; the file watcher detects the mtime change and re-derives the index. To remove or supersede a stable entry, the user does so manually (delete or edit the file).
 
@@ -612,7 +611,7 @@ memory/corpus/<id>.md created with body = chunk text
 LanceDB + FTS5 indexed immediately
    │
    ▼
-[corpus entries are searchable references, generally not consumed by Dream]
+[corpus entries are searchable references; never consolidated into entity pages]
    │
    ▼
 If source ingested is re-ingested → old corpus chunks DELETED (not archived),
@@ -622,6 +621,12 @@ If source ingested is re-ingested → old corpus chunks DELETED (not archived),
 **Note on re-ingest:** corpus chunks are deleted on re-ingest, not archived. Reasoning: `memory/.git/` already preserves every prior version of every chunk via git history. A parallel `archive/corpus/` folder would be redundant. If the user needs to inspect a prior version of a chunk, they use `git log -p -- memory/corpus/<id>.md` like any other markdown file in the workspace.
 
 ### 5.6 Entity lifecycle
+
+Entity pages are **track 1: consolidated knowledge**. They are written by the
+agent and enriched by the extract dream — both through the single git-CAS write
+path (`memory_writer.write_entity`), which applies structured `FieldPatch`es
+under per-field precedence (**user > dream > agent**) and commits via git
+plumbing (no JSON-Patch, no working-tree mutation).
 
 ```
 [first time an entity URI is referenced]
@@ -633,28 +638,37 @@ Auto-created placeholder: memory/entities/<type>/<slug>.md
   - body: empty
    │
    ▼
-LanceDB + FTS5 indexed
+FTS5 + LanceDB indexed
    │
    ▼
-[Dream processes episodic referencing this entity]
+[agent authors the page]  memory_upsert_entity → write_entity
+  - name / aliases / relations / body patches (field author: agent)
    │
    ▼
-Dream emits JSON Patch:
-  - adds attributes, relations
-  - extends body
-  - updates aliases if new names detected
-  - advances dream_processed_through
+[extract dream enriches from SESSIONS]  read each session's new turns
+  (after a per-SESSION cursor) → extract structured attributes →
+  attribute patches (field author: dream) via write_entity
+  - a user-set field is never overwritten (precedence); the dream does NOT
+    read or consume episodic fragments
    │
    ▼
-Re-embed: LanceDB + FTS5 re-index the entity page
+Re-embed: FTS5 + LanceDB re-index the entity page
    │
    ▼
-[Dream's entity dedup pass may merge two entities if alias overlap]
+[refine dream — periodic dedup]  may merge two entities on high-confidence
+  alias/name overlap (absorb-judge), respecting do_not_absorb tombstones and
+  user-managed pages
    │
    ▼
 If absorbed: the absorbed page is moved to archive/entities/<type>/<slug>.md
             with archived_into: <canonical_uri>
 ```
+
+Note the cursor here is **per-session** (in the session's `.meta.json`
+`derived` block, advanced by `extract_runner`), tracking which turns have been
+read. There is no per-**entity** `dream_processed_through` cursor — that field
+was removed (N3), because the two-track model never graduates fragments into
+pages, so there is nothing per-entity to track.
 
 ---
 
@@ -664,10 +678,10 @@ Whenever an entity page or memory entry is written, deleted, or moved, the indic
 
 | Trigger | Action |
 |---|---|
-| `memory_store` creates an entry | Re-embed entry; insert into LanceDB + FTS5 |
-| `memory_ingest` creates corpus | Same |
-| Dream apply writes entity page | Re-embed entity; update LanceDB + FTS5 row |
-| Dream archives episodic | Remove from LanceDB + FTS5; insert in archive index (separate, optional) |
+| `/remember` (or an internal `store_memory` caller) creates a fragment | Re-embed entry; insert into LanceDB + FTS5 |
+| `memory_ingest` creates a reference | Index the document for grep + FTS + vector |
+| `memory_upsert_entity` / extract dream writes an entity page | Re-embed entity; update LanceDB + FTS5 row (reactive path re-embeds FTS **and** vector, N2) |
+| Refine dream archives the loser of a merge | Remove from LanceDB + FTS5 |
 | User edits `.md` manually | File watcher detects mtime change; re-derive that row |
 | `durin memory reindex` command | Wipe `.durin/index/` and rebuild from all `.md` files |
 
@@ -705,7 +719,7 @@ When v2 schema rolls out, the system must:
 
 ## 9. Constraints on YAML safety
 
-YAML round-trip is critical because Dream and the user both edit entity pages. Constraints (covered by existing tests):
+YAML round-trip is critical because the dreams, the agent, and the user all edit entity pages. Constraints (covered by existing tests):
 
 | Concern | Constraint |
 |---|---|
@@ -716,13 +730,13 @@ YAML round-trip is critical because Dream and the user both edit entity pages. C
 | Trailing whitespace / blank lines | Preserved in body, not stripped |
 | Date values | Parsed as `date` objects but written as `YYYY-MM-DD` strings |
 
-When Dream emits a JSON Patch that modifies frontmatter, the apply pipeline:
-1. Reads current `.md` → parses frontmatter to dict.
-2. Applies JSON Patch operations.
-3. Validates the result against the schema.
-4. Writes back using a YAML serializer configured for safety (Block style, default_flow_style=False, allow_unicode=True).
+The single write path is `memory_writer.write_entity` (git-CAS, no JSON-Patch, no working-tree mutation):
+1. Reads the page blob at HEAD → parses frontmatter to an `EntityPage`.
+2. Applies the structured `FieldPatch`es in order, under per-field precedence.
+3. Serializes the page back with a YAML serializer configured for safety (Block style, default_flow_style=False, allow_unicode=True).
+4. Builds a commit via git plumbing and CAS-installs it with `refs.set_if_equals(default_ref, base, new_commit)`; on a concurrent-writer conflict it retries from the new HEAD (up to `_MAX_RETRIES = 30`).
 
-A backup copy (`.md.bak`) is written before each apply. If the post-write validation fails (re-parse + sanity check), the backup is restored.
+There is no `.md.bak`: `memory/.git/` is the safety net. The working tree is fast-forwarded to HEAD after a successful commit so Obsidian and other readers see the latest. Uncommitted human edits are committed as `author: user` before any system write touches git (the human-edit guard, N1), so a hand edit is never clobbered.
 
 ---
 
@@ -733,53 +747,41 @@ All decisions originally open at the module level have been resolved (2026-05-27
 | # | Decision | Resolution | Applied in |
 |---|---|---|---|
 | **1** | Static vs stateful attributes — who decides | **Pattern-based on attribute key name.** Attributes whose key matches `status`, `phase`, `state`, `current_*` are stateful (history-preserving); all others are static. Deterministic, no closed catalog, testable. Pattern set may grow as new patterns appear. | §4.3 |
-| **2** | Relations per-entity cap behavior | **Soft cap 50: warn only** (telemetry `memory.entity_relation_cap_warned`, apply proceeds). **Hard cap 200: reject** the patch wholesale (telemetry `memory.entity_relation_cap_rejected`, `DreamApplyFailureKind.VALIDATION`, rollback). LLM-facing surface is `current relation count` slot in the consolidator prompt + Rule 9 in `rules.md`. Shipped in audit B-19 (2026-05-29). | §4.4 |
+| **2** | Relations per-entity cap behavior | **Soft cap 50 / hard cap 200, alert-only at write time** (telemetry `memory.entity_relation_cap_warned` / `_rejected`). `memory_writer.write_entity` counts relations and calls `check_relation_cap`; neither cap blocks the write or drops a relation (no data loss). Enforcement is a one-line flip if mega-hubs prove real. Shipped in audit A3 (2026-06-06). | §4.4 |
 | **3** | Slug collision strategy | **Numeric suffix** (`marcelo_marmol_2`). Real dedup of distinct entities sharing a slug is handled downstream by Dream's absorb-judge, not at the slug level. | §4.5 |
 | **4** | Archive recovery surface | **Walk on demand** (no parallel archive index in MVP). Three surfaces: (a) `memory_search(..., scope='archive')` for agent-visible semantic recovery (audit F2, 2026-05-28); (b) `durin memory expand <entity>` for per-entity rendering of canonical + archived predecessors; (c) `cat memory/archive/<class>/<id>.md` + `find memory/archive -name '*.md'` for direct shell access. Audit G2 (2026-05-28) explicitly decided against adding a dedicated `durin archive show / list` command — see `08_scope_and_discarded.md` §2.12. If frequent archive queries emerge, revisit with a metadata table. | §3.6 |
 | **5** | Negative facts (e.g., "Marcelo no come carne") | **No explicit polarity mechanism.** Three patterns, ordered by preference: (1) **positive equivalent fact** when one exists naturally ("no eats meat" → `dietary: vegetarian`); (2) **prose in the body** when no positive equivalent fits; (3) **temporal validity** via `valid_from`/`valid_until` for attributes that ended. Aligns with mem0/Letta (text only) and Graphiti (no negation, just temporal validity). No mainstream system models negation as a first-class structure — durin doesn't either. | §4.7 (new) |
-| **6** | Archive lifecycle for stable and corpus | **Archive applies only to episodic** consolidated by Dream. **Stable is never archived** (its existence is an explicit user/agent statement of durability; auto-archiving would destroy intent). **Corpus is deleted (not archived) on re-ingest** — git history already preserves all prior versions of corpus chunks; a parallel archive folder for corpus would be redundant. | §5.4, §5.5 |
+| **6** | Archive lifecycle for fragments | **No automatic archiving.** Fragments (episodic / stable) are track-2 raw memory and are never consolidated, so there is no consume-and-archive lifecycle (N3/N4). Episodic is retired only manually (`memory_forget` / webui); **stable is never archived** (an explicit user/agent statement of durability). **Corpus is deleted (not archived) on re-ingest** — git history already preserves all prior versions; a parallel archive folder would be redundant. Entity pages reach `archive/entities/` only as the loser of a refine-dream merge. | §5.3, §5.4, §5.5, §5.6 |
 
 ---
 
 ## 10b. Versioning via git history (cross-corpus decision #4)
 
-`memory/.git/` is an active git repository. Every Dream commit (and every user manual edit, if committed) is a version of the workspace. This is the **only** versioning mechanism — no parallel system is introduced, and **no dedicated tool is exposed to the agent**.
+`memory/.git/` is an active git repository. Every write (agent, dream, or committed user edit) is a version of the workspace. This is the **only** versioning mechanism — no parallel system is introduced, and **no dedicated tool is exposed to the agent**.
 
 ### Who uses git history and how
 
 | Consumer | How they access it |
 |---|---|
-| **Dream pipeline** | Reads `git log --since=... -- <entity_path>` internally when preparing the consolidation prompt. Recent commits are inlined as a `recent_history` block in the LLM input. This is pipeline code, not an MCP tool. |
+| **Write path** | `memory_writer.write_entity` *produces* the history — it builds and CAS-installs one commit per write. It does not *read* history back into a prompt. |
 | **User (now)** | Any git CLI works: `git -C ~/.durin/workspace/memory log -p -- entities/person/marcelo.md`. No additional surface is needed — the repository is already there. |
 | **User (post-MVP)** | Web UI renders log + diff viewer. Lives outside this corpus (frontend/UI layer); the data is read directly from `memory/.git/`. |
-| **Agent** | **No direct access.** The agent does not query git history through a tool. Whatever historical signal it needs, Dream has already incorporated into the canonical entity body or its commit messages, which are then visible through normal `memory_search`. |
+| **Agent** | **No direct access.** The agent does not query git history through a tool. Whatever it knows is what the canonical page currently holds, visible through normal `memory_search`. |
 
-### What Dream gets (pipeline detail)
+### What the dreams do NOT read
 
-When Dream prepares to consolidate an entity, its prompt builder inlines a `recent_history` section with the last N commits for that entity's `.md`. Concretely:
-
-```
-recent_history (last N=5 commits for entities/person/marcelo.md):
-  - 2026-05-26 by dream: "consolidate 7 episodic: add lives_in attribute, update aliases"
-  - 2026-05-20 by user: "manual edit: corrected spouse name spelling"
-  - ...
-```
-
-This:
-- Prevents Dream from "forgetting" attributes recently added.
-- Lets the LLM see if a piece of info was added and then removed (signal of prior rejection).
-- Provides natural anti-drift: the LLM sees its own previous output before regenerating.
+The current extract and refine dreams **do not** inline a `recent_history` / git-log block into their prompts — the pre-migration consolidator did that via the now-deleted `dream_git_history.py`, and that whole prompt-builder path is gone. The extract dream's context is the entity's current attributes + body + the session turns it is reading; the refine dream's context is the candidate pages plus the absorb-judge. Anti-drift now comes from per-field precedence (a value already set is not silently regenerated), not from re-reading commits.
 
 ### Constraints
 
 - `memory/.git/` remains on local disk. Pushing to a remote is allowed but not required.
-- Each Dream apply creates exactly one commit (no batched commits across entities).
-- Commit messages follow a structured format (specified in `05_dream_cold_path.md`) so `git log` is grep-able for debugging.
-- User manual edits to `.md` files are picked up by the file watcher and committed by the indexer with `author: user` (responsibility of the indexer — see `02_indexing.md`).
+- Each `write_entity` produces exactly one commit (entity merges in the refine pass likewise commit per merge).
+- Commit messages are built inline by the writer / absorption path (no separate commit-message module).
+- Uncommitted user `.md` edits are committed as `author: user` before any system write touches git (the human-edit guard, N1).
 
 ### Out of scope
 
-- An MCP `memory_history` tool — not needed. Dream uses git directly; user uses CLI.
+- An MCP `memory_history` tool — not needed; the user uses the git CLI.
 - A separate "versions" table in any index — git is the version store.
 - Time-travel queries via the search pipeline — search always operates on HEAD.
 - Branching for "what if" exploration — single linear history per workspace.
@@ -799,12 +801,12 @@ since Phase 1.9 / Phase 3 work shipped.
 | Ingested structure | ✅ Active | `durin/memory/ingestion.py` |
 | Memory entries (episodic/stable/corpus) | ✅ `MemoryEntry` Pydantic | `durin/memory/schema.py` |
 | Entity page schema (v2: attributes/relations/provenance + `author`) | ✅ Shipped. Audit E19 added `author` field for user-authored protection. | `durin/memory/entity_page.py::EntityPage` |
-| Archive folder | ✅ Active. Dream apply moves files; walker skips archive by default. | `durin/memory/archive.py` + `durin/memory/dream_archive_consumed.py` |
+| Archive folder | ✅ Active. Manual retire (`memory_forget`) and refine-merge move files; walker skips archive by default. | `durin/memory/archive.py` |
 | URI naming | ✅ `<type>:<value>` validated | `durin/memory/entities.py::is_valid_entity_ref` |
 | Slug normalization | ✅ Centralised | `durin/memory/entities.py::normalize_slug` (and `EntityPage.slug_from_path`) |
-| Provenance tracking | ✅ Active per PATCH op (Phase 1.9). Collected during apply and persisted in the entity page. | `durin/memory/dream_apply.py` |
+| Provenance tracking | ✅ Active per field. Recorded when a `FieldPatch` is applied and persisted in the entity page. | `durin/memory/field_provenance.py` + `durin/memory/field_patch.py` |
 | Round-trip safety | ✅ Tested | `tests/memory/test_entity_page.py` |
-| Versioning + git history exposure | ✅ Dream prompt builder reads `git log` of the entity page over the last 30 days as context. User accesses via any git CLI or webui. | `durin/memory/dream_git_history.py` |
+| Versioning via git | ✅ Each `write_entity` commits via git plumbing + CAS. The dreams do NOT read git history back into a prompt (the old `dream_git_history.py` reader was deleted). User accesses history via any git CLI or webui. | `durin/memory/memory_writer.py` + `durin/memory/git_plumbing.py` |
 
 When this module is locked, the migration tasks above will move into `09_implementation_roadmap.md`.
 
@@ -815,5 +817,5 @@ When this module is locked, the migration tasks above will move into `09_impleme
 - Indexing of these data types: `02_indexing.md` (pending)
 - How the search pipeline uses these structures: `03_search_pipeline.md` (pending)
 - Tools that create/modify these: `04_agent_tools.md` (pending)
-- Dream consolidation logic: `05_dream_cold_path.md` (pending)
+- Dream passes (extract + refine): `05_dream_cold_path.md`
 - Prior exploratory discussion: `../archive/40_exploracion_datos_y_relaciones.md`

@@ -679,31 +679,29 @@ class MemoryDreamPatchAppliedEvent(TypedDict):
 
 
 class MemoryEntityRelationCapWarnedEvent(TypedDict):
-    """A Dream apply took an entity's relation count across the soft
-    cap (50). The apply proceeded; this event lets dashboards spot
-    mega-hub formation before sub-paging (audit B-14) becomes
-    necessary. Audit B-19 (2026-05-29) shipped this event alongside
-    the cap enforcement in `dream_apply.py`.
+    """An entity write took its relation count across the soft cap (50). The
+    write proceeded (alert-only, A3 2026-06-06, `memory_writer._emit_relation_
+    cap`); this event lets dashboards spot mega-hub formation before sub-paging
+    (audit B-14) becomes necessary.
     """
 
     entity_ref: str
-    current_count: int  # before the apply
-    new_count: int  # after the apply
+    current_count: int  # relations before this write
+    new_count: int  # relations after this write
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
 
 
 class MemoryEntityRelationCapRejectedEvent(TypedDict):
-    """A Dream apply was rejected because it would have taken an
-    entity's relation count over the hard cap (200). The apply was
-    rolled back and the entity surfaced as a
-    `DreamApplyFailureKind.VALIDATION` failure. Audit B-19
-    (2026-05-29).
+    """An entity write crossed the hard relation cap (200). A3 (2026-06-06):
+    this is ALERT-ONLY — the write is NOT blocked and no relation is dropped
+    (`memory_writer._emit_relation_cap`); the event is the operator signal that
+    an entity has grown a pathological number of relations.
     """
 
     entity_ref: str
-    current_count: int  # before the rejected apply
-    new_count: int  # the count the apply would have reached
+    current_count: int  # relations before this write
+    new_count: int  # relations after this write
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
 

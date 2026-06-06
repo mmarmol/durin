@@ -1,38 +1,68 @@
 ---
 title: Dream — cold-path consolidation
-version: 0.1-draft
-status: current — describes the shipped system (P11 era, 2026-05-30)
-last_updated: 2026-05-31
+version: 0.2
+status: current — describes the shipped system (post-migration, 2026-06-06)
+last_updated: 2026-06-06
 audience: humans and LLMs implementing or modifying this system
 depends_on: 00_overview.md, 01_data_and_entities.md, 02_indexing.md
-related: 03_search_pipeline.md, 04_agent_tools.md
+related: 03_search_pipeline.md, 04_agent_tools.md, 11_post_migration_audit.md
 ---
 
 # Dream — cold-path consolidation
 
-This document specifies **Dream**, the cold-path process that consolidates raw observations (`memory/episodic/`, `memory/stable/`) into canonical entity pages (`memory/entities/<type>/<slug>.md`). Every step is asynchronous and may take seconds to minutes per pass.
+This document specifies **Dream**, the cold-path process that turns raw
+experience into structured knowledge: it reads each **session's** conversation
+turns and extracts canonical entity pages (`memory/entities/<type>/<slug>.md`),
+dedups duplicate entities, mines reusable procedures into skills, and curates
+the always-on pinned guidance. Every pass is asynchronous and may take seconds
+to minutes.
 
-**Invariant:** nothing Dream does blocks the hot path. The agent's search and tool calls run against whatever state Dream has produced so far. Dream improves the state over time.
+**Invariant:** nothing Dream does blocks the hot path. The agent's search and
+tool calls run against whatever state Dream has produced so far. Dream improves
+the state over time.
+
+> **Migration note.** This doc was rewritten after the legacy
+> `DreamConsolidator` / `DreamRunner` cluster was deleted. The old model
+> consolidated `memory/episodic/` *fragments* into pages via a JSON-Patch apply
+> pipeline, a per-entity `dream_processed_through` cursor, an
+> episodic→archive lifecycle, and a per-write threshold trigger. **All of that
+> is gone.** The settled model has four passes (extract / refine / skill /
+> always_on) that read from **sessions**, write through `memory_writer`'s CAS
+> commit path, and treat fragments as a separate raw track. The authoritative
+> record of what changed and why is `11_post_migration_audit.md` (A1-A5,
+> B1-B4, N1-N7); this doc honours those decisions.
 
 ---
 
-## 0. Two-track consolidation — Dream is one of two
+## 0. The two-track model — entities vs fragments
 
-durin runs **two parallel consolidation jobs**. They are conceptually distinct, write to disjoint storage, never race, and both are load-bearing. The architecture decision to keep them separate (and not merge MEMORY.md / SOUL.md / USER.md into the entity model) is recorded in `docs/bitacora.md` under "Architecture decision — MEMORY.md / SOUL.md / USER.md stay outside entity-centric (2026-05-31)".
+durin keeps **two disjoint memory tracks**. Dream operates on one of them.
 
-| | This doc — entity-centric Dream | Working-memory consolidator (legacy `dream` cron) |
+| | Entity track (Dream's domain) | Fragment track (raw, NOT consolidated) |
 |---|---|---|
-| Cron id | `memory_dream` | `dream` |
-| Default schedule | `0 3 * * *` (daily 3am UTC) | every 2h |
-| Handler | `durin.memory.dream_runner.DreamRunner` + `DreamConsolidator` | `durin.agent.memory.Dream` |
-| Reads | `memory/episodic/*.md` post-cursor per entity | `memory/history.jsonl` post-cursor + `MEMORY.md` + `SOUL.md` + `USER.md` + `skills/` |
-| Writes | `memory/entities/<type>/<slug>.md` (JSON Patch + body delta) | `MEMORY.md` / `SOUL.md` / `USER.md` in-place + creates `skills/<name>/SKILL.md` |
-| Consumer | `memory_search`, Memory Graph view | The system prompt of every turn (`BOOTSTRAP_FILES`) + the SkillsLoader |
-| Cost gate | Empty-pending skip (built-in to discovery) | Token-floor pre-LLM gate (`min_tokens_to_run`, default 2000) |
+| Storage | `memory/entities/<type>/<slug>.md` | `memory/episodic/*.md` (+ references in `memory/references/`) |
+| Producer | The agent authors name/aliases/relations/body via `memory_upsert_entity`; **Dream extracts attributes** from sessions | `/remember` (user-authored facts) + session-close summaries |
+| Consolidated by Dream? | **Yes** — extract / refine / always_on / skill passes | **No.** Fragments are never folded into pages |
+| Lifecycle | Pages evolve via CAS writes; duplicates merged via absorb | Append-only; archived only by an explicit `memory_forget` / webui action |
 
-**Why both exist.** The entity-centric Dream maintains the knowledge graph the agent acquires about its world. The legacy `dream` maintains the agent's *own* working memory and identity — what to remember as facts, what to remember as user model, what soul/principles to apply, and what patterns to escalate as reusable skills. Those are different concerns and the architectural decision is to keep them separate.
+**Why fragments are not consolidated (N3 + N4).** The only live fragment
+producers are `/remember` (episodic facts the user explicitly wrote — "the
+curator must never touch") and session-close summaries. They are raw user
+material, not candidates for graduation into entity pages. The new extract
+dream builds entities from **sessions** (the conversation transcript), not from
+fragments. Consequently:
 
-The rest of this document describes **only the entity-centric path**. For the working-memory cron, see `agent/memory.py::Dream` and the `agents.defaults.dream.*` config block. The two cronjobs are registered side-by-side in `cli/commands.py:1607` (id="dream") and `cli/commands.py:1620` (id="memory_dream").
+- **There is no per-entity `dream_processed_through` cursor.** It was removed
+  (N3) — nothing advanced it and nothing should. The extract pass tracks
+  progress with a **per-session** cursor instead (§3.2).
+- **There is no episodic→archive consolidate-and-archive lifecycle** (N4).
+  `archive_episodic` is a manual operation only (`memory_forget` / webui). If
+  episodic volume ever matters, a size/age **cap** is the lever — not
+  auto-archive.
+
+Both tracks remain fully searchable from write time via FTS + vector + grep
+(`02_indexing.md`, `03_search_pipeline.md`). Dream improves the *entity* track;
+it does not gate recall of either track.
 
 ---
 
@@ -40,681 +70,574 @@ The rest of this document describes **only the entity-centric path**. For the wo
 
 ### In scope
 
-- Trigger types and dispatch.
-- Lock + throttle + cursor mechanics.
-- Consolidator prompt (extended for v2 schema with attributes + relations + provenance).
-- JSON Patch-based apply (diff over the existing entity page, not full rewrite).
-- Entity deduplication via the absorb-judge LLM step.
-- Archive workflow for consolidated episodic.
-- Schema upgrade (v1 entity pages → v2 lazy on touch).
-- Schema drift control (prompt includes existing schema).
-- Git commits (one per apply, structured message).
-- Failure modes and recovery.
+- The four dream passes: **extract**, **refine**, **skill-extract**,
+  **always_on**.
+- Their triggers: the daily CRON + the two REACTIVE triggers
+  (post-compaction / session-close), serialized by `ReactiveDreamGate`.
+- The config block (`memory.dream.*` + nested `auto_absorb`).
+- The per-session extract cursor (idempotency).
+- Entity deduplication via the absorb-judge LLM step (refine pass).
+- Telemetry emitted by the passes.
 
 ### Out of scope
 
-- The hot-path read of consolidated entity pages — see `03_search_pipeline.md` and `04_agent_tools.md`.
-- The indexer re-deriving LanceDB/FTS5 rows after Dream apply — see `02_indexing.md` §6.
-- The schema of entity pages themselves — see `01_data_and_entities.md` §3.5.
+- The hot-path read of entity pages — see `03_search_pipeline.md` and
+  `04_agent_tools.md`.
+- The indexer re-deriving LanceDB/FTS5 rows after a write — see
+  `02_indexing.md`.
+- The schema of entity pages, per-field author precedence, and the CAS write
+  path — see `01_data_and_entities.md` and `memory_writer` (`02_indexing.md`).
+- The fragment track (`/remember`, session summaries) — see §0 and
+  `04_agent_tools.md`.
 
 ---
 
-## 2. Triggers
+## 2. The four passes
 
-Dream runs in response to one of six trigger labels. Each is recorded in telemetry and in the resulting git commit:
+All entry points live in `durin/memory/dream_passes.py`:
+`run_extract_pass`, `run_refine_pass`, `run_skill_extract_pass`, and
+`run_always_on_pass` (the always_on pass is implemented in
+`durin/memory/always_on_dream.py` and re-exported through that module).
 
-| Trigger label | When | Source | Frequency (typical) |
-|---|---|---|---|
-| `threshold` | Per-entity pending count crossed `threshold_entries` after a `memory_store` write | `memory_store` tool | A few per day during active use |
-| `post_ingest_threshold` | Per-entity pending count crossed `threshold_entries` after a `memory_ingest` write. **Dormant by design** as of 2026-05-31 — `memory_ingest` doesn't tag entities, so the helper short-circuits. See §2.1.1. | `memory_ingest` tool | 0 today |
-| `cron_daily` | Daily scheduled run (default: 03:00 local). Picks up entities whose pending count is below threshold but non-zero, or which have been quiet for > X days. | Cron scheduler | Once per day |
-| `session_close` | At the end of a long session (> 50 turns), trigger a pass on all entities mentioned in the session. | AgentLoop teardown | Once per session close |
-| `post_compaction` | After conversation compaction emits a `_last_summary`, trigger a pass on entities mentioned in the new summary. | Compaction handler | A few per long session |
-| `manual` | Operator command: `durin memory dream` (optionally with `--entity <uri>` filter). | CLI | On demand |
+| Pass | Entry point | Reads | Writes | Cadence |
+|---|---|---|---|---|
+| **extract** | `run_extract_pass` | each session's new turns | entity attributes (author `dream`) via `memory_writer` | frequent (cron + reactive) |
+| **skill-extract** | `run_skill_extract_pass` | recent sessions | `skills/<name>/SKILL.md` via `skill_write` | daily cron |
+| **refine** | `run_refine_pass` | entity pages (alias overlap) | merges duplicate pages (absorb) | daily cron |
+| **always_on** | `run_always_on_pass` | feedback entities (stance/practice/feedback) | flips `always_on` flags | daily cron |
 
-The two threshold labels (`threshold` and `post_ingest_threshold`) exist as separate strings so telemetry can distinguish which write surface triggered the consolidation. Behavior of the consolidation itself is identical — the labels only differ for diagnostics.
+The **extract** pass is the only one wired to the reactive triggers; refine,
+skill-extract, and always_on run on the daily cron (and on manual
+`durin memory dream`). See §6 for trigger wiring.
 
-Triggers are not mutually exclusive — multiple can request a run concurrently. The lock (§4) serializes them.
+### 2.1 Extract pass — sessions → entity attributes
 
-### 2.1 Threshold trigger dispatches asynchronously
+`run_extract_pass(workspace, *, llm_invoke=None, model=None, max_seconds=0)`
+iterates every `memory/sessions/*.jsonl`. For each session it calls
+`run_extract_for_session` (`durin/memory/extract_runner.py`):
 
-A critical implementation detail: the `threshold` trigger fires from inside `memory_store` and `memory_ingest` tools (after the write completes). To avoid blocking the agent's tool response on a multi-second Dream pass, the dispatch runs on a **daemon thread**:
+```
+1. Load the session jsonl → (metadata, messages). messages[i] is turn i+1.
+2. Read the per-session extract_cursor (§3.2). If total turns <= cursor, skip
+   (no new turns).
+3. Take the new turns (messages[cursor:]) and render them as text.
+4. Discover the entities the agent AUTHORED in those turns:
+   entity_refs_in_messages() scans the tool_calls for memory_upsert_entity and
+   collects each call's `ref` argument.
+5. For each discovered ref, call extract_entity(...) (§2.2).
+6. Advance the extract_cursor to `total` (per-batch).
+```
+
+Discovery is **precise**: the extract pass only enriches entities the agent
+explicitly upserted via `memory_upsert_entity` in the new turns. It never
+creates an entity from scratch, so it cannot introduce a duplicate that an
+`existing_uris` block would have prevented — which is why the extract prompt
+omits one (audit A5; dedup is handled author-time by `memory_search` and
+write-time by the refine pass). Mention-based discovery for entities the agent
+did not upsert is a documented future refinement, not current behaviour.
+
+Per-session cursors make the pass **idempotent**: a session with no new turns
+is skipped; a re-run re-processes nothing already seen. One bad session never
+aborts the whole pass — exceptions are collected into `out["errors"]` and the
+loop continues.
+
+`max_seconds` (0 = unbounded) is a hard wall-clock cap. When elapsed time
+crosses it the pass yields **after the current session** (it emits
+`memory.dream.max_seconds_reached` and breaks); the per-session cursor resumes
+the remainder on the next trigger. The cron and reactive callers pass
+`memory.dream.max_seconds_per_run` here (default 600s).
+
+### 2.2 `extract_entity` — the core extractor
+
+`extract_entity(workspace, entity_ref, turns, *, llm_invoke, model, source_ref)`
+(`durin/memory/extract_dream.py`) is the per-entity unit:
+
+```
+1. Honour deletion: if is_deleted(workspace, entity_ref) (§2.13 tombstone),
+   return without re-creating the entity. The user overrides by explicitly
+   re-authoring.
+2. Load the existing page (or a fresh EntityPage if none).
+3. Build the extract prompt (build_extract_prompt): the entity ref + name, its
+   EXISTING attribute keys (for key reuse), its body, and the turns.
+4. Invoke the LLM. parse_attributes() tolerantly parses the JSON object
+   (strips code fences, runs json_repair) and keeps ONLY scalar / list-of-
+   scalar values — prose blobs and nested dicts are dropped.
+5. If no attributes parsed, return a no-op.
+6. Build one FieldPatch(kind="attribute", author="dream", source_ref=...) per
+   attribute and apply via memory_writer.write_entity(..., create=True).
+7. Emit memory.dream.patch_applied (one per entity).
+```
+
+The extract dream owns the **attribute schema** (author `dream`); the agent owns
+name / aliases / relations / body (design §2.6/§2.7, decision b). Per-field
+precedence (user > dream > agent) means a user-set attribute is never
+overwritten by extraction. The prompt's rules are conservative: only facts
+explicitly stated in the turns, reuse an existing key when the meaning matches,
+scalars only, JSON-only output.
+
+`source_ref` is the session-turn marker
+`[[sessions/<stem>.md#turn-<total>]]`, recorded in the field provenance so a
+later reader can trace an attribute back to its origin turn.
+
+### 2.3 Skill-extract pass — sessions → reusable procedures
+
+`run_skill_extract_pass(workspace, *, provider=None, model=None,
+max_sessions=3)` mines the newest sessions for a **reusable procedure** and
+writes it as a skill (design §2.7). Unlike the other passes it is **agentic**:
+it spins up an `AgentRunner` with `ReadFileTool`, `EditFileTool`, and
+`SkillWriteTool`, and a system prompt instructing it to call `skill_write` only
+when a recurring step-by-step procedure appears (reuse/extend an existing skill
+instead of duplicating; do nothing on a one-off). It is a sync wrapper over the
+async runner so the cron can call it in a thread. Telemetry:
+`memory.dream.skill_extract` with `skills_touched`.
+
+### 2.4 Refine pass — dedup duplicate entities
+
+`run_refine_pass(workspace, *, llm_invoke=None, model="glm-5.1", enabled=True,
+confidence_threshold=95, min_age_hours=0)` is the periodic graph-hygiene pass.
+It delegates to `run_refine` (`durin/memory/refine_dream.py`), which reuses the
+absorb machinery (`EntityAbsorption.find_candidates` + `absorb` +
+`absorb_judge.judge_pair`). Full details in §8.
+
+The critical gate is **`enabled`** (audit A1): it is wired from
+`memory.dream.auto_absorb.enabled`, which is **OFF by default**. When disabled,
+`run_refine_pass` short-circuits — **no judge, no merge** — and logs the manual
+path. Duplicates are then surfaced on demand via `durin memory absorb-suggest`
+and merged with `durin memory absorb`. When enabled, the pass judges
+alias-overlap pairs and auto-merges those that pass the threshold + quarantine.
+
+### 2.5 always_on pass — curate the pinned guidance
+
+`run_always_on_pass(workspace, *, token_budget=1500, types=FEEDBACK_TYPES,
+llm_invoke=None, model="glm-5.1")` (`durin/memory/always_on_dream.py`) curates
+which **feedback entities** (`stance` / `practice` / `feedback`) are injected
+into EVERY prompt — the pinned "Always-on guidance" block built by
+`principal.build_pinned_context`. The agent authors these feedback entities as
+the user gives standing guidance; this pass owns the `always_on` flag (design
+§2.11, audit A4).
+
+```
+1. Gather all stance/practice/feedback entity pages; render + token-count each.
+2. Rank them best-first via an LLM judge (_RANK_PROMPT) that DROPS items
+   contradicting a higher-priority item. Fallback when no LLM / a single item:
+   user_authored first, then most-recently-updated.
+3. Fit the ranked list into token_budget (a hard ceiling; a later smaller item
+   may still fit, so overflow SKIPS rather than breaks).
+4. Mark the survivors always_on=true via principal.mark_always_on; unmark the
+   rest. Only the flag changes — no entity is ever deleted.
+```
+
+Because only the flag flips, a pruned or contradicted item returns
+automatically when the budget frees up or the conflict resolves.
+`token_budget` is wired from `memory.dream.always_on_token_budget` (0 disables
+the pin). Telemetry: `memory.dream.always_on` (`selected` / `pruned` /
+`dropped` / `tokens`).
+
+---
+
+## 3. Concurrency, throttle, and the per-session cursor
+
+There is **no cross-process `.dream.lock` and no `min_seconds`/cursor file** —
+those belonged to the deleted `DreamRunner`. The settled model uses two much
+simpler mechanisms.
+
+### 3.1 `ReactiveDreamGate` — in-process lock + throttle
+
+`ReactiveDreamGate` (`dream_passes.py`) guards the reactive triggers. The
+post-compaction / session-close hooks each fire on a daemon thread in the
+gateway process; without a guard a burst of session closes would spawn
+overlapping extract passes. One `ReactiveDreamGate` instance is shared by both
+reactive triggers in a gateway.
 
 ```python
-# durin/memory/threshold_trigger.py (simplified)
-import threading
-
-def maybe_dispatch_threshold_dream(workspace, entities, dream_config, ...):
-    if accumulated_count(entities) < threshold:
-        return
-    thread = threading.Thread(
-        target=lambda: DreamRunner(workspace, **dream_config).run(trigger="threshold"),
-        daemon=True,
-    )
-    thread.start()
+gate = ReactiveDreamGate()
+skip = gate.try_begin(min_seconds)   # "" → run; "locked"/"throttled" → skip
+if not skip:
+    try:
+        run_extract_pass(...)
+    finally:
+        gate.end()
 ```
 
-Implication: when `memory_store` returns to the agent, the threshold-triggered Dream pass may still be running in the background. The agent does NOT wait for consolidation to complete. The `memory.dream.start` / `memory.dream.end` telemetry events (doc 07 §6) fire asynchronously to the original tool call.
+`try_begin` is **non-blocking**:
 
-If the process exits before the daemon thread completes, the partial pass is abandoned — but no data is lost because the cursor is only advanced after a full successful apply (§4.3). The next trigger picks up the same pending entries.
+- returns `"locked"` when a pass is already running (the lock is held), or
+- returns `"throttled"` when a pass ended within `min_seconds`
+  (`memory.dream.min_seconds_between_runs`, default 300s; 0 disables), or
+- returns `""` (run) otherwise.
 
-The `cron_daily`, `session_close`, `post_compaction`, and `manual` triggers do NOT use daemon threading — they run in the foreground of whatever process invoked them (the cron scheduler, the agent loop teardown, etc.).
+A skipped run is harmless: the per-session cursor means the skipped session's
+turns are picked up by the in-flight pass, the next reactive trigger, or the
+daily cron. The skip is recorded as `memory.dream.throttled` with the reason.
+**The daily cron is never throttled** — it does not go through the gate.
 
-### 2.1.1 Why `post_ingest_threshold` is dormant
+### 3.2 Per-session extract cursor
 
-The wiring exists in `memory_ingest` (calls `maybe_dispatch_threshold_dream` after each successful corpus write) but the helper short-circuits because `memory_ingest` does NOT extract or tag entities on the corpus entry — entities is always `[]` and the dispatch never fires.
+The extract pass tracks progress with a **per-session** cursor (not per-entity).
+It is an integer turn count stored in the session's sidecar
+`<stem>.meta.json` under the `derived.extract_cursor` key
+(`get_extract_cursor` / `set_extract_cursor` in `extract_runner.py`). The pass
+processes only turns after the cursor and advances it to the total turn count
+after each batch. Because the extractor's writes are idempotent under per-field
+precedence, re-running over the same turns is safe.
 
-This is deliberate. A single `memory_ingest` invocation during a bench-style ingest can produce 800+ corpus entries; per-write LLM dispatch, even gated by per-entity threshold, exploded the LLM budget in early experiments. Until a write-time entity tagger ships AND an explicit throttle is added (token-floor analogous to `dream.min_tokens_to_run`, cron-batched, or per-session debounce), this trigger stays at 0 frequency. Ingested material remains fully searchable via FTS + vector from write-time; the canonical entity page just waits for the daily `memory_dream` cron.
+This is the **only** cursor in the dream system. The per-entity
+`dream_processed_through` cursor was removed (N3).
 
-The wiring is kept in place so the day a throttle exists, only one knob needs to change. See `memory_ingest.py:289+` for the in-code rationale and `project_ingest_dormant_rationale.md` (assistant memory) for the bench-derived constraint.
+### 3.3 Write concurrency is handled downstream
 
-### 2.2 Threshold counting logic
-
-The threshold trigger checks **per-entity** activity, not workspace-wide. The function `count_pending_for_trigger(workspace, entity_filter=...)` (in `durin/memory/threshold_trigger.py`) returns `{entity_uri: count}` summing two contributions:
-
-| Contribution | What it counts | Why it counts |
-|---|---|---|
-| **Episodic post-cursor** | Episodic entries newer than the entity's `dream_processed_through` cursor that are tagged with the entity in their `entities:` field | These are the entries Dream WILL consolidate. Direct signal that consolidation is due. Uses the same discovery helper as Dream itself to keep cursor semantics identical (no double-counting). |
-| **Corpus tagged with the entity** | Corpus entries that mention the entity in their `entities:` field | Dream does NOT consolidate corpus — an ingested document is already canonical-ish on its own. But if the user has been actively dropping documents about an entity, that's a signal the entity is "hot" and worth consolidating its episodic backlog. |
-
-**Stable entries do NOT count.** Stable is user-marked durable; Dream does not consume it (§7).
-
-When any entity's count reaches `threshold_entries` (default 5), the trigger dispatches a Dream pass **filtered to that single entity** (`entity_filter=<uri>`), not a workspace-wide pass. This keeps each threshold-triggered run small and focused — the entity that just received the N+1 write is the one consolidated.
-
-If multiple entities cross the threshold from a single write (e.g., `memory_store` with `entities=[person:marcelo, project:durin]` and both were already at N-1), each one dispatches its own daemon thread. The Dream lock (§4.1) serializes them.
-
-**Configuration knobs** (under `memory.dream.*`):
-
-- `threshold_entries`: minimum count to trigger (default 5)
-- `min_seconds_between_runs`: throttle window (default 300s) — applies AFTER the per-entity check; multiple per-entity dispatches within the throttle window are skipped with `reason=throttle`
+The passes do not hold a lock for their writes. Every entity write goes through
+`memory_writer.write_entity`, which is an optimistic multi-writer path:
+read page@HEAD → apply `FieldPatch`es with precedence → build a commit via
+dulwich plumbing (no working-tree mutation) → `refs.set_if_equals` CAS → retry
+on contention. The refine merge uses `write_files_cas` to commit the canonical
+edit, the absorbed deletion, and the archive copy in one atomic CAS commit.
+This replaces the legacy working-tree apply pipeline and its G3 race (see
+`02_indexing.md` and `memory_writer`).
 
 ---
 
-## 3. The Dream pass — high-level flow
+## 4. Writes, provenance, and git history
 
-### 3.0 Components
+The extract pass does **not** run a bespoke JSON-Patch apply pipeline. It builds
+`FieldPatch` objects and hands them to `memory_writer.write_entity`. There is no
+`===PATCH===` / `===BODY_DELTA===` / `===COMMIT===` envelope, no
+`dream_patch_parser`, no `dream_apply`, no `.md.bak` rollback — those modules
+were deleted with the legacy consolidator.
 
-Dream is organized in two layers, separated by concern:
+**Provenance** is carried per field: each `FieldPatch` has a `source_ref`
+(the session-turn marker) and an author (`dream`), persisted in the entity
+page's provenance map by `memory_writer` / `field_patch` (`01_data_and_entities.md`).
 
-| Layer | File | Role |
-|---|---|---|
-| `DreamConsolidator` | `durin/memory/dream.py` | **Pure consolidation logic.** Takes one entity + a batch of post-cursor entries, returns a `ConsolidationResult` (page diff + commit message). Stateless. No lock, no throttle, no telemetry. Tests use this directly to validate logic without operational scaffolding. |
-| `DreamRunner` | `durin/memory/dream_runner.py` | **Production orchestrator.** Holds the lock, throttle, telemetry, batching, and the optional absorb-judge pass. Wraps `DreamConsolidator` — instantiates one per entity and delegates the actual LLM call + parse + apply. |
+**Git history.** Entity writes are committed by `memory_writer` with author
+`durin-memory <memory@durin.local>`; absorb merges are committed by the
+absorption path with author `durin-dream <dream@durin.local>` and structured
+trailers (`Absorbed:`, `Into:`, `Reason:`, `Judge-Confidence:`) that
+`durin memory history` / `durin memory revert` parse. The commit messages are
+assembled inline by `memory_writer` / `absorption` (the legacy
+`dream_commit_message.py` builder was deleted — audit B1).
 
-**In production, only `DreamRunner` is invoked.** Triggers from §2 dispatch to it; `memory_store` / `memory_ingest` call it via `threshold_trigger.py`; the CLI command `durin memory dream` calls it. Nothing else in production talks to `DreamConsolidator` directly.
+### 4.1 Per-entity relation cap (soft / alert-only)
 
-**`dream.py` also exports** helper types used elsewhere (without going through Runner): `EntryRef` (referenced by CLI display code), `default_llm_invoke` (the LLM helper used by both Dream paths), `DreamError`.
-
-The rest of §3-§6 describes what happens during a Runner pass; the LLM call, response parsing, and apply pipeline are implementation details delegated to `DreamConsolidator`.
-
-### 3.1 Pass sequence
-
-A single Dream pass:
-
-```
-1. Trigger fires (with optional entity_filter)
-2. Throttle check: if last run was < MIN_INTERVAL ago, skip with reason="throttle"
-3. Discover pending entities (those with > 0 post-cursor entries) →
-   apply entity_filter if provided
-4. Acquire lock at memory/.dream.lock
-   - if lock held by another process → skip with reason="concurrent_lock"
-   - if lock is stale (> STALE_LOCK_SECONDS old, default 10 minutes) → take over
-5. For each pending entity (sequential, not parallel):
-   a. Load existing entity page (or create placeholder if new)
-   b. Load pending entries (post-cursor episodic/stable/corpus)
-   c. Build the consolidator prompt (§5)
-   d. Invoke LLM (default: glm-5.1 via durin.security.secrets)
-   e. Parse response into ConsolidationResult (page diff + commit message)
-   f. Apply: validate, write, archive consumed episodic, advance cursor
-   g. Run absorb-judge pass if alias overlap detected
-   h. Trigger index re-derivation for the changed entity page
-6. Release lock
-7. Emit telemetry: entities_consolidated, entities_failed, duration_ms
-```
-
-Sequential per-entity is deliberate. Parallel apply across entities can race on shared aliases or on the alias index; serialized is simpler and the entire pass is cold-path anyway.
+`memory_writer.write_entity` counts an entity's relations before and after the
+patches and calls `check_relation_cap` (`durin/memory/entity_relation_cap.py`,
+soft 50 / hard 200; audit A3). Crossing the **soft** cap emits
+`memory.entity_relation_cap_warned`; crossing the **hard** cap emits
+`memory.entity_relation_cap_rejected`. Both also log. **No write is blocked and
+no relation is dropped** — this is alert-only "de momento". Enforcing the hard
+cap (actually rejecting) is a one-line flip in
+`memory_writer._emit_relation_cap` when mega-hubs prove real. (The telemetry
+docstrings still describe the deleted dream's VALIDATION-rollback behaviour;
+the live behaviour is the soft path described here.)
 
 ---
 
-## 4. Lock + throttle + cursor
-
-### 4.1 Lock
-
-File: `memory/.dream.lock` (process-local, mtime-based liveness).
-
-Contains:
-```json
-{
-  "pid": <int>,
-  "trigger": "threshold|cron|...",
-  "started_at": "ISO timestamp",
-  "host": "<hostname>"
-}
-```
-
-Acquisition:
-- `acquire_lock`: write file with `O_EXCL`. If exists, check mtime — if older than `STALE_LOCK_SECONDS` (default 600s = 10 min), assume crashed previous run and take over.
-- `release_lock`: delete the file. Always called from a `finally` block.
-
-This is the SAME lock that the indexer (`02_indexing.md` §6.3) coordinates with via mtime comparison. No new lock infrastructure.
-
-### 4.2 Throttle
-
-Throttle prevents bursty triggers (e.g., 10 `memory_store` calls in a row, each firing threshold-trigger) from running 10 Dream passes back-to-back.
-
-Mechanism:
-- File `memory/.dream.last_run` carries the timestamp of the most recent successful run.
-- `min_seconds_between_runs` (default **300s = 5 min**, configurable) is the throttle window.
-- If a trigger fires within the window, it is recorded in telemetry as `skipped, reason=throttle` and not executed.
-- `manual` trigger bypasses throttle.
-
-This is a soft optimization — missing one trigger doesn't lose data (the next non-throttled trigger picks up the same pending entries).
-
-### 4.3 Cursor
-
-Each entity page has `dream_processed_through` in its frontmatter (`01_data_and_entities.md` §3.4): an ISO timestamp or msg_idx. Episodic/stable/corpus entries with timestamps **strictly after** the cursor are "post-cursor" — they are candidates for the next Dream pass.
-
-After successful apply, the cursor is moved to the timestamp of the latest consumed entry **in the batch the consolidator actually saw** (`batch_last_ts`). Because the consolidator caps at `MAX_ENTRIES_PER_CALL = 50` taking the **oldest** by timestamp (§6.1), `batch_last_ts` is the timestamp of the 50th-oldest pending entry — which is older than any unprocessed entry. The next discovery pass re-walks `memory/episodic/` and the entries newer than `batch_last_ts` remain visible as still-pending. This guarantees:
-- No re-processing of already-consumed entries in subsequent passes.
-- **No silent loss when N > cap**: the runner's drain loop (§4.4) keeps re-invoking the consolidator until the entity has no pending entries OR the per-pass time budget is exhausted.
-- New entries that arrived during the LLM call (race-safe) will be picked up on the next pass.
-
-If apply fails (LLM error, parse error, validation error), the cursor is NOT advanced. The entries remain post-cursor and the next pass tries again.
-
-### 4.4 Drain loop + per-pass time budget
-
-`DreamRunner._drain_entity` paginates over an entity's pending queue:
-
-```
-remaining = pending_for_entity
-while remaining:
-    consolidate(remaining)       # G11 cap = 50 oldest
-    apply(...)                   # cursor advances to batch_last_ts
-    remaining = re_discover(entity_filter=ent_ref)
-    if not remaining: break      # drained
-    if elapsed >= budget:
-        emit memory.dream.budget_exhausted
-        break                    # next trigger picks up the rest
-```
-
-`memory.dream.max_seconds_per_run` (default 600s) is the **per-pass** wall-clock cap — not per entity. A single greedy entity can consume the whole budget; any remaining entities in this pass are deferred to the next trigger. Telemetry event `memory.dream.budget_exhausted` carries `entity_ref`, `pending_remaining`, `elapsed_s`, `budget_s` so operators see what got pushed forward.
-
-Rationale: a 10-min budget covers ~10 batches per entity at glm-5.1 speeds (~60s per batch), which drains 500 entries — enough for a bootstrap of any normal-sized entity. Large bulk-ingests of an entity with thousands of entries will take multiple passes; that's fine, the cron tick re-runs the next day.
-
----
-
-## 5. The consolidator prompt (v2)
-
-The prompt is the single most important LLM-facing surface in the system. It is the canonical text in `durin/templates/dream/consolidator.md`. This section specifies the prompt's structure and the contract it establishes with the LLM.
-
-> **Implementation status:** §5 and §6 describe the format that **shipped** in Phase 1.9 (commit `6aafc3f`, 2026-05-28). The Dream consolidator now emits `===PATCH===` + `===BODY_DELTA===` + `===COMMIT===` markers with a JSON Patch list, parsed by `durin/memory/dream_patch_parser.py` and applied by `durin/memory/dream_apply.py` with `.md.bak` rollback. The earlier draft of this section described v1 (full-page rewrites) as the current state; corrected in audit B7 (2026-05-28).
-
-### 5.1 Inputs to the prompt
-
-| Input | Source | Purpose |
-|---|---|---|
-| `entity_id` (e.g., `person:marcelo`) | Trigger | The entity to consolidate |
-| `existing_page` | Read from disk | Current entity page (frontmatter + body) |
-| `existing_schema` | Derived from `existing_page` via `EntityPage.from_text` (audit F7, 2026-05-28) | List of attribute keys and relation types already used on this entity, rendered as `attributes: k1, k2` + `relation types: t1, t2` (sorted; `(none)` when empty). |
-| `existing_uris` | Workspace state via `durin.memory.entity_inventory.existing_uris_by_recent_mtime` (audit F17, 2026-05-28) | URIs of entities already in `memory/entities/**`, sorted by file mtime descending, capped at 100. Used to discourage duplicate entity creation (e.g. `person:marcelo_marmol` when `person:marcelo` already exists). |
-| `pending_entries` | Walk post-cursor `memory/episodic/`, `memory/stable/` filtered by entity tag | The N new observations to consolidate |
-| `recent_history` | `git log --since='30 days ago' -- <entity_path>` via `format_recent_history` (audit F7, 2026-05-28) | Last few git commits of THIS entity page, so LLM sees recent changes Dream made. |
-
-### 5.2 Prompt structure
-
-```
-You are durin's Dream consolidator. Process N new observations about
-entity_id and update its canonical page.
-
-ENTITY: {entity_id}
-
-EXISTING PAGE (current canonical state):
-{existing_page_content}
-
-EXISTING SCHEMA for this entity (for coherence; not a constraint):
-  attributes: {list_of_attribute_keys}
-  relation types: {list_of_relation_types}
-
-  Guidance:
-  - PREFER reusing an existing key when the new info has the same semantic meaning.
-  - If you notice two existing keys mean the same thing (e.g. 'email' and 'e-mail'),
-    unify them in your output: emit ops that consolidate to one canonical key.
-  - You MAY introduce new keys if the new information genuinely needs them.
-  - The goal is coherent evolution, not rigid preservation.
-
-EXISTING ENTITY URIs in workspace (consider for dedup; create new only if no match):
-  {list_of_uris_truncated_to_100}
-
-RECENT GIT HISTORY for this entity (so you can avoid undoing recent updates):
-  {recent_commits_with_short_diffs}
-
-PENDING OBSERVATIONS ({n_entries}):
-{entries_text}
-
-Return your output in this exact format:
-
-===PATCH===
-[
-  {"op": "add", "path": "/attributes/email", "value": "marcelo@mxhero.com",
-   "provenance": "episodic/2026-05-23T10-12.md"},
-  {"op": "replace", "path": "/attributes/phone", "value": "+34123",
-   "provenance": "episodic/2026-05-25T09-14.md"},
-  {"op": "add", "path": "/relations/-", "value": {
-     "to": "person:susana", "type": "spouse", "since": 2010
-  }, "provenance": "episodic/2026-01-15T19-00.md"}
-]
-
-===BODY_DELTA===
-<markdown to append to the body, OR empty if no body change>
-
-===COMMIT===
-<subject line, max 70 chars>
-
-<optional commit body with reasoning, Sources lines, Cursor-after line>
-
-===END===
-
-RULES:
-1. Prefer reusing existing attribute keys when meaning matches (see EXISTING SCHEMA
-   above). You MAY add new keys if genuinely needed; you MAY unify keys you observe
-   are semantically duplicate.
-2. Same guidance for relation types.
-3. For each patch op, include 'provenance' pointing to the source observation.
-4. Do NOT remove existing attributes or relations unless an observation EXPLICITLY
-   contradicts them. When in doubt, append history via valid_from/valid_until
-   instead of overwriting.
-5. If an observation tells you about a different entity than entity_id, IGNORE it.
-   Each Dream pass is single-entity.
-6. The COMMIT message is for the git log: short subject + optional body, then
-   trailers in the format specified in the Dream skill (Sources, Cursor-after, etc.).
-```
-
-The exact prompt template lives in `durin/templates/dream/consolidator.md` and is the source of truth. This document specifies the contract; the template is the implementation.
-
-### 5.3 Why this prompt shape
-
-| Element | Reason |
-|---|---|
-| `existing_schema` | Prevents drift — LLM reuses known keys instead of inventing synonyms |
-| `existing_uris` | Prevents duplicate entity creation (e.g., `person:marcelo` and `person:marcelo_marmol` for the same person) |
-| `recent_history` | LLM sees its own recent decisions; avoids accidentally undoing what was just consolidated |
-| JSON Patch (not full page) | Surgical edits; LLM doesn't need to copy unchanged content; less risk of accidental deletion |
-| `provenance` field per op | Auditability — every attribute/relation can be traced to its source observation |
-| Rule 4 (don't remove unless contradicted) | Defends against LLM hallucinating "forget X" behavior; preserves data by default |
-| Rule 5 (single-entity per pass) | Keeps each pass focused; multi-entity passes would need much longer prompts and more error modes |
-
----
-
-## 6. Apply pipeline
-
-After the LLM returns a response, the apply pipeline:
-
-```
-1. Parse response: split ===PATCH===, ===BODY_DELTA===, ===COMMIT=== sections
-   - Use `json_repair` to parse the PATCH (LLM small-model JSON quirks)
-   - Strip code fences from each section
-2. Validate the patch against the schema:
-   - Each op has a valid 'op', 'path', 'value', 'provenance'
-   - Paths only touch /attributes/*, /relations/*, /body (the latter is BODY_DELTA's job)
-   - provenance source_refs must point to entries that exist
-3. Read the current .md file
-4. Copy the target to `.md.bak` BEFORE any mutation (audit F16, 2026-05-28:
-   the pre-F16 doc listed this AFTER the write step, which contradicts
-   `durin/memory/dream_apply.py` lines 165-168 where the backup happens
-   first so any failure has something to restore from)
-5. Apply the JSON Patch operations to the frontmatter (using `jsonpatch` lib)
-6. Append BODY_DELTA to the body if non-empty
-7. Update internal fields: dream_processed_through = batch_last_ts, updated_at = now
-8. Re-render the entire .md (frontmatter + body), validate round-trip
-9. Write to a temp file, fsync, atomically rename over the target
-10. Post-write: re-parse the written file; if it doesn't pass schema validation,
-    restore from `.md.bak` and report failure (`ROUND_TRIP` kind)
-11. On success: delete `.md.bak`; commit to `memory/.git/` with the COMMIT
-    message + structured trailers:
-    Sources: <list of consumed entries>
-    Entities-touched: <entity_id>
-    Cursor-after: <batch_last_ts>
-    Trigger: <trigger_name>
-12. Archive consumed episodic entries (§7)
-13. Trigger indexer re-derivation for this entity page (§02_indexing.md §6.1)
-```
-
-If any step 2-10 fails, the apply is rolled back (file restored from `.md.bak`, cursor not advanced) and the entity is marked as failed in telemetry. The next pass will try again.
-
-### 6.1 Cursor advance invariant (G2)
-
-Critical correctness invariant for batch consolidation:
-
-**The cursor is set to `batch_last_ts` — the actual timestamp of the latest entry the runner passed to the LLM in this batch — NOT to whatever the LLM emitted in its commit's `Cursor-after:` trailer.**
-
-Reasoning: small models (and sometimes large ones under prompt pressure) occasionally process only a subset of a multi-entry batch — for example, the runner passes 10 entries but the LLM's response only references 5 of them, emitting `Cursor-after:` for the 5th entry's timestamp. If the runner trusted the LLM's `Cursor-after:` and advanced the cursor only to entry 5, the entries 6-10 would become **forever post-cursor in a way that no future pass would see them** (because they're below the new cursor floor but the LLM never actually consumed them).
-
-By forcing `dream_processed_through = batch_last_ts` (the timestamp of entry 10, regardless of which entries the LLM emitted ops for), the next pass picks up either the entries the LLM skipped (if they're still post-cursor against batch_last_ts somehow — they shouldn't be by construction) OR the next batch of new entries arriving after batch_last_ts.
-
-The LLM's `Cursor-after:` trailer is still recorded in the git commit message for audit — it tells us what the LLM *thought* it processed. The runner's enforced cursor tells us what was *actually* taken out of the post-cursor queue. Divergence between the two is a useful diagnostic signal (logged at `INFO` level when detected).
-
-Trade-off: if the LLM truly processed only K of N entries (N ≤ 50 cap), those K are correctly captured (their PATCH ops are applied) but the other N-K are silently dropped from re-processing within this batch. Mitigation: rare with modern models at the 50-entry cap; when it happens, the missing ops manifest as gaps in the entity page that the next batch (drain loop §4.4 immediately re-discovers and processes more) or a manual `durin memory dream` will fill in. Data is not lost from disk — only from the current consolidation pass.
-
-This invariant is enforced in `dream.py::ConsolidationResult.batch_last_ts` and applied in `DreamConsolidator.apply()` before writing the entity page.
-
-> **Historical note (2026-05-30):** the consolidator previously took the **newest** 50 entries on cap, which combined with `batch_last_ts` = newest-of-batch made the cursor jump to the timestamp of the newest entry in the entire pending set. Older entries that didn't fit in the batch were silently filtered out on the next discovery (they were now "pre-cursor"). End-to-end this dropped ~89% of pending entries on bootstraps of entities with > 50 history. Fix flipped the cap to **oldest-first** and added the drain loop in §4.4; the cursor now only advances over actually-processed entries.
-
----
-
-## 7. Archive workflow
-
-Per `01_data_and_entities.md` §3.6 and §5.3, episodic entries that Dream has consumed are **moved to `memory/archive/episodic/`** rather than deleted. Mechanics:
-
-```
-For each consumed episodic entry (referenced in this pass's PATCH provenance):
-  - Add frontmatter fields: archived_at, archived_into
-  - Move the file: memory/episodic/<id>.md → memory/archive/episodic/<id>.md
-  - The indexer removes the LanceDB row + FTS5 rows for this uri
-  - Archive folder is NEVER scanned by the default search pipeline (§3.6 of doc 01)
-```
-
-Stable entries are **never** auto-archived (§5.4 of doc 01). Even if Dream consumes a stable entry's content, the entry stays in `memory/stable/` because the user/agent explicitly marked it as durable.
-
-Corpus entries are not archived by Dream — they are deleted only on re-ingest of the source (§5.5 of doc 01).
-
----
-
-## 8. Entity dedup — absorb-judge (opt-in, OFF by default)
-
-The absorb-judge is a separate LLM-driven step that detects when two entity pages should be merged. It is **disabled by default** and enabled per-workspace via config. Defaults are conservative — false-positive merges destroy data structure silently, and the recovery path (revert a git commit) is fine but the noise is high.
-
-### 8.1 Why opt-in
-
-The blast radius of a silent bad merge is high enough that explicit opt-in is the right ergonomics. From `durin/config/schema.py::AutoAbsorbConfig`:
-
-> "Master switch — keep OFF by default; the blast radius of a silent bad merge is high enough that opt-in is the right ergonomics."
-
-When operators have telemetry data (from real Dream runs) to inform tuning, they can lower the confidence threshold or shorten the quarantine. Until then, defaults err on the side of "do nothing rather than do the wrong thing".
-
-### 8.2 Configuration
-
-Settings live under `memory.dream.auto_absorb.*` in the workspace config.
+## 5. Configuration
+
+All knobs live under `memory.dream.*` in `durin/config/schema.py`
+(`MemoryDreamConfig`), with the dedup knobs nested under `auto_absorb`
+(`AutoAbsorbConfig`).
 
 | Setting | Default | Effect |
 |---|---|---|
-| `enabled` | `false` | Master switch. When false, the absorb-judge step never runs. |
-| `confidence_threshold` | `95` (0-100) | Minimum judge confidence for auto-merge. High threshold favors precision over recall — pairs warranting merge typically also warrant manual review at 95. Tune down with telemetry data from `memory.absorb.judged`. |
-| `min_age_hours` | `24` | Both pages in a candidate pair must be at least this old (by file mtime). Blocks the "premature consolidation" loop where Dream creates two near-identical pages in the same pass and immediately merges its own hallucinations. |
-| `judge_model` | `null` (uses dream model) | Override model for the judge. When `null`, falls back to the Dream consolidator's model. Setting a different model reduces self-consistency bias (§8.5). |
+| `memory.dream.enabled` | `true` | Master switch for the cron + both reactive triggers. Manual `durin memory dream` works regardless. |
+| `memory.dream.cron` | `0 3 * * *` | Cron expression for the daily extract / skill / refine / always_on pass. |
+| `memory.dream.post_compaction` | `true` | Arm the reactive extract trigger on session compaction. |
+| `memory.dream.on_session_close` | `true` | Arm the reactive extract trigger on session close. |
+| `memory.dream.model_override` | `null` | Override the dream model. Resolved via `resolve_memory_model` (precedence: `aux_models.memory` → this → caller default). |
+| `memory.dream.min_seconds_between_runs` | `300` | Throttle window for the reactive `ReactiveDreamGate`. 0 disables. The cron is never throttled. |
+| `memory.dream.max_seconds_per_run` | `600` | Hard wall-clock cap per extract pass; the pass yields after the current session and the per-session cursor resumes the rest. 0 = run to completion. |
+| `memory.dream.always_on_token_budget` | `1500` | Token ceiling for the always-on pin (per-turn cost). 0 disables the pin. |
+| `memory.dream.auto_absorb.enabled` | `false` | Master switch for the refine pass's auto-merge. OFF → judge+merge skipped; use `durin memory absorb-suggest` / `absorb`. |
+| `memory.dream.auto_absorb.confidence_threshold` | `95` | LLM-judge confidence floor (0-100) for an auto-merge. |
+| `memory.dream.auto_absorb.min_age_hours` | `24` | Quarantine: skip a candidate pair if either page is younger than this (created_at, falling back to updated_at). 0 disables. |
 
-### 8.3 Trigger (when enabled)
-
-After a successful Dream apply, the alias index is checked for **alias overlap** between the just-touched entity and any other entity in the workspace:
-
-- If `entity_a.aliases ∩ entity_b.aliases ≠ ∅` and the entities have the same `type`, AND
-- Both pages are older than `min_age_hours` (quarantine), AND
-- The pair hasn't been judged in the last 24 hours (re-judge throttle — avoids burning LLM budget on the same pair every Dream run)
-
-→ The pair is queued for the absorb-judge LLM call.
-
-### 8.4 Judge prompt
-
-The judge (defined in `durin/memory/absorb_judge.py` and `durin/templates/dream/absorb_judge.md`) receives:
-
-| Input | Purpose |
-|---|---|
-| Canonical entity page (`entity_a`) | The candidate to keep |
-| Absorbed entity page (`entity_b`) | The candidate to merge in |
-| Cross-type filter | Both must have the same type to be merge candidates |
-| Source refs of both | So judge can see when each was created |
-
-It returns one of (verdict vocabulary is **identity-judgement**, not action-prescription — the runner maps verdict + confidence to the merge action):
-
-| Verdict | Meaning | Action when `confidence ≥ confidence_threshold` |
-|---|---|---|
-| `same` | A and B describe the same real entity | Combine `entity_b` into `entity_a`, archive `entity_b` |
-| `different` | A and B are distinct entities with overlapping aliases (e.g., two people named "Marcelo") | Do nothing; log `memory.absorb.judged` |
-| `unclear` | The judge couldn't decide; defer for now | Re-judge in 24h; do nothing |
-
-### 8.5 Judge decision and merge action
-
-The judge returns a structured decision plus a confidence score (0-100). The merge proceeds only if `verdict == "same"` AND `confidence ≥ confidence_threshold`. Decisions below threshold are logged as `memory.absorb.judged` events without merging — the operator can inspect these later to decide whether to lower the threshold.
-
-### 8.6 Merge action (when confidence passes threshold)
-
-When `verdict == "same"` and confidence passes the threshold:
-
-```
-1. Load both pages
-2. Apply a structured merge:
-   - aliases: union
-   - attributes: union; on conflict, keep the value from entity_a (canonical wins),
-     log the conflict in the commit body
-   - relations: union (dedup by (to, type) pair)
-   - body: append entity_b.body to entity_a.body with a separator section
-   - provenance: union
-3. Write the merged entity_a back
-4. Move entity_b to memory/archive/entities/<type>/<slug>.md
-   with archived_into: <entity_a_uri> in frontmatter
-5. Update the alias index (entity_a inherits all of entity_b's aliases)
-6. Re-derive LanceDB + FTS5 for entity_a; delete rows for entity_b
-7. Commit with message: "merge entity_b into entity_a (judge: <reasoning>)"
-```
-
-**Recovery:** `cd memory && git revert <merge_commit_sha>`. The merge is a single commit; reverting restores both pages to their pre-merge state. Telemetry records the revert as `memory.absorb.reverted`.
-
-### 8.7 Self-consistency bias mitigation
-
-When `judge_model == dream_model` (e.g., both glm-5.1), the judge tends to confirm Dream's recent decisions. The judge prompt includes a directive to peer-review critically and to flag uncertainty as `unclear` rather than confirm. (Corrected from `unsure` in audit C5 — §8.4 and `absorb_judge.py:73` both use the canonical `unclear`.)
-
-Per `feedback_question_user_input.md`-style reasoning: an LLM is more reliable when it has a different role (review vs. produce) than when it is asked to confirm its own output. Using a different model for the judge (when budget allows) further reduces this bias.
+The model used by every pass is resolved by
+`durin.memory.model_resolve.resolve_memory_model(config)`:
+`agents.aux_models.memory` (preset or inline `model`) → `memory.dream.model_override`
+→ `None` (the pass's own default, which is `glm-5.1` via `default_llm_invoke`).
 
 ---
 
-## 9. Schema upgrade — v1 → v2 lazy
+## 6. Triggers
 
-Per `01_data_and_entities.md` §8, entity pages without `attributes`/`relations`/`provenance` (v1) continue to parse with those fields treated as empty.
+Dream runs in response to three trigger kinds:
 
-When Dream first touches a v1 entity page in v2 code:
+| Trigger | When | Source | Passes run |
+|---|---|---|---|
+| **cron** | Daily at `memory.dream.cron` (default 03:00) | Cron scheduler (`cli/commands.py`, system job `memory_dream`) | extract → skill-extract → refine → always_on |
+| **post_compaction** | After a session is compacted | `agent.consolidator.on_post_compaction` hook (`cli/commands.py`) | extract only |
+| **session_close** | When a session ends | `agent.on_session_close` hook (`cli/commands.py`) | extract only |
+| **manual** | `durin memory dream` | `cli/memory_cmd.py` | extract → skill-extract → refine → always_on |
 
-1. The consolidator prompt is invoked normally — `existing_schema` is empty (no attributes yet).
-2. The LLM emits PATCH ops creating the first attributes/relations.
-3. Apply pipeline adds the v2 fields to the frontmatter as a natural side effect.
-4. `provenance` map is initialized empty and populated as ops are applied.
+### 6.1 Daily cron
 
-The migration is non-destructive and on-demand. A workspace with thousands of v1 entity pages doesn't need a bulk migration — each page upgrades when next consolidated. Until then, search still works (the indexer reads v1 pages just fine).
+Registered in `cli/commands.py` as the system job `memory_dream` (id +
+schedule from `memory.dream.cron`, only when `memory.dream.enabled`). The
+`on_cron_job` handler intercepts `job.name == "memory_dream"` and runs the four
+passes directly (NOT through the agent loop), each offloaded to a thread with
+`asyncio.to_thread` so the cron loop stays responsive during the LLM calls:
+
+```
+ex = run_extract_pass(ws, model, max_seconds=memory.dream.max_seconds_per_run)
+sk = run_skill_extract_pass(ws, model)
+rf = run_refine_pass(ws, model, enabled, confidence_threshold, min_age_hours)
+ao = run_always_on_pass(ws, model, token_budget=always_on_token_budget)
+```
+
+It also runs the skill-curation step (`curate_catalog`) afterward (out of scope
+for this doc). The whole handler is wrapped so a failure logs and never crashes
+the cron loop.
+
+### 6.2 Reactive triggers (extract only)
+
+When `memory.dream.enabled` and (`post_compaction` or `on_session_close`),
+`cli/commands.py` constructs one shared `ReactiveDreamGate` and a `_spawn_dream`
+closure. Each trigger fires `_spawn_dream(trigger, session_key)`, which launches
+a daemon thread that:
+
+1. Calls `gate.try_begin(min_seconds_between_runs)`; on a non-empty skip reason
+   emits `memory.dream.throttled` and returns.
+2. Otherwise runs **only** `run_extract_pass(ws, model,
+   max_seconds=max_seconds_per_run)`.
+3. Calls `gate.end()` in a `finally`.
+
+The hooks are attached with `hasattr` guards
+(`agent.consolidator.on_post_compaction`, `agent.on_session_close`) so test
+scaffolds without those attributes still work. Refine / skill / always_on stay
+on the daily cron — the reactive path is intentionally extract-only, because the
+fresh signal is the new conversation turns and refine/always_on are
+workspace-wide passes that don't need per-session cadence.
+
+### 6.3 Manual
+
+`durin memory dream` (`cli/memory_cmd.py`, `cmd_dream`) runs the full sequence —
+extract, skill-extract, refine (gated by `auto_absorb.enabled`, with the
+disabled path printing the absorb-suggest hint), then always_on — and prints a
+one-line summary. The optional `entity` argument is accepted for back-compat but
+**not used** by the new passes (extract discovers entities from sessions);
+`--dry-run` is unsupported and prints a notice.
+
+---
+
+## 7. (removed) Archive workflow
+
+The legacy fragment→page consolidate-and-archive lifecycle **does not exist**
+(N4). Dream does not consume episodic entries, so there is nothing to archive on
+apply. `archive_episodic` is a manual operation only, reachable via
+`durin memory forget` (which refuses entity pages) and the webui. Entity pages
+have their own lifecycle: `durin memory absorb` (merge → the absorbed page moves
+to `memory/archive/entities/<type>/<slug>.md`) and `durin memory revert`
+(undo). See `01_data_and_entities.md` for archive folder semantics and
+`02_indexing.md` for how the indexer drops archived rows.
+
+---
+
+## 8. Entity dedup — the refine pass + absorb-judge
+
+The refine pass (`run_refine` in `durin/memory/refine_dream.py`) is durin's
+entity-dedup engine. It is gated by `memory.dream.auto_absorb.enabled`
+(§2.4 / §5) and, when enabled, judges alias-overlap candidate pairs with an LLM
+and merges the ones the judge calls the *same* identity.
+
+### 8.1 Candidate discovery
+
+`EntityAbsorption.find_candidates()` (`durin/memory/absorption.py`) returns
+pairs of entities that share at least one alias. The signal is the alias index:
+any alias key that resolves to more than one entity ref contributes a candidate
+per pair, sorted so pairs with more shared aliases come first (stronger signal).
+
+### 8.2 Filters before the judge
+
+`run_refine` walks the candidates and skips a pair (each with a
+`memory.absorb.skipped` event carrying the reason) when:
+
+| Reason | Condition |
+|---|---|
+| `cross_type` | the two refs have different entity types (e.g. `person:` vs `project:`) |
+| `tombstoned` | the pair was recorded in `.refine_tombstones.json` because the user previously rejected/un-merged it (`is_tombstoned`); refine never re-merges it |
+| `load_failed` | one of the two pages couldn't be loaded |
+| `user_managed` | either page is `author == "user_authored"` — user-managed pages are left alone (design §2.4) |
+| `quarantine` | `min_age_hours > 0` and either page is younger than the window (`_too_fresh`, using `created_at` → `updated_at`; no timestamp = treated as old, fail-open) |
+
+### 8.3 The judge
+
+For a surviving pair, `judge_pair` (`durin/memory/absorb_judge.py`) is called
+with both pages, their shared aliases, the canonical/absorbed refs, and each
+page's **file mtime** (`_page_mtime`, audit N7a — fed so the judge can reason
+about staleness like "observed years apart"). The judge:
+
+- loads its prompt template from `durin/templates/dream/absorb_judge.md` (the
+  largest fenced block in the doc),
+- renders each page as a block (file-mtime line, aliases, identifiers, body),
+- treats alias overlap as *evidence, not proof* — the prompt defaults to
+  `different` when content evidence is thin (mitigates the high blast radius of
+  a bad merge),
+- parses a markdown envelope (`===VERDICT===` / `===CONFIDENCE===` /
+  `===REASONING===` / `===END===`),
+- retries up to `max_retries` (default 2) on a parse failure,
+- returns a `JudgeResult(verdict, confidence, reasoning)` or raises
+  `JudgeError` (the caller treats that as "skip this candidate").
+
+The verdict vocabulary is **identity-judgement**, not action-prescription:
+
+| Verdict | Meaning |
+|---|---|
+| `same` | A and B describe the same real entity |
+| `different` | distinct entities that merely share an alias (e.g. two people named "Marcelo") |
+| `unclear` | the judge couldn't decide |
+
+Every judged pair emits `memory.absorb.judged` (`verdict` + `confidence`) for
+threshold tuning.
+
+### 8.4 The merge
+
+Refine merges only when `verdict == "same"` AND
+`confidence >= confidence_threshold`; otherwise the pair is kept separate. On a
+merge it calls `EntityAbsorption.absorb(canonical, absorbed, reason="refine",
+judge_reasoning=..., judge_confidence=...)` and emits
+`memory.absorb.auto_merged`. `absorb` (`absorption.py`) does a deterministic
+structural merge via `_merge_pages`:
+
+- **aliases**: union (plus the absorbed page's display name as an alias);
+- **attributes**: union, canonical wins on a key conflict;
+- **relations**: union, deduped by `(to, type)` — dropping these would silently
+  disconnect the merged entity (G1);
+- **body**: append the absorbed body under a `## Absorbed from <ref>` section;
+- **provenance / identifiers**: union;
+- archive marker fields are not propagated.
+
+The merge commits **three file ops in one CAS commit** via `write_files_cas`
+(canonical updated, absorbed deleted, archived copy written to
+`memory/archive/entities/<type>/<slug>.md` with `archived_into`), author
+`durin-dream`. It then refreshes the in-memory alias index (add canonical, drop
+absorbed) and updates the vector index (delete the absorbed row, **re-upsert the
+canonical** with the merged body so semantic search isn't stale — glm peer
+review C4). The operation is idempotent: if the absorbed page is already
+archived, `absorb` is a no-op and returns `None`.
+
+**Recovery:** `cd memory && git revert <merge_sha>`. `durin memory revert`
+wraps this; for an auto-absorb commit (trailer `Reason: auto`) it emits
+`memory.absorb.reverted` — the regret-rate signal for tuning the threshold.
+After a user reverts/un-merges, the deletion path records a `do_not_absorb`
+tombstone (`add_tombstone`) so the next refine doesn't undo the revert.
+
+### 8.5 Self-consistency bias
+
+When the judge model equals the extract model, the judge tends to confirm. The
+prompt instructs the model to peer-review critically and prefer `unclear` over a
+forced confirmation; using a different model for the judge reduces this further.
+(Note: `AutoAbsorbConfig` no longer carries a `judge_model` knob — it was a
+marginal-value field and was removed in audit B3; the refine pass uses the
+resolved memory model for both extraction and the judge.)
+
+---
+
+## 9. Schema notes
+
+Entity pages parse missing `attributes` / `relations` / `provenance` as empty
+(`EntityPage`), so older pages keep working; the extract pass adds those fields
+as a natural side effect of the first write. There is no bulk migration step —
+the legacy "v1 → v2 lazy on Dream touch" framing no longer applies because the
+write path is `memory_writer`, not a versioned apply pipeline. Search reads any
+page regardless. See `01_data_and_entities.md` for the page schema.
 
 ---
 
 ## 10. Schema drift control
 
-The mechanism that prevents `email` → `e-mail` → `correo` drift across consolidations is the `existing_schema` block in the prompt (§5.2). The LLM sees what keys this entity already uses and is instructed to reuse them.
-
-Per-entity scope (not workspace-wide):
-
-- Drift between entities is acceptable. `person:marcelo.attributes.email` and `person:susana.attributes.correo_electronico` is tolerated — different entities can have different schemas if the LLM consistently produced them so.
-- Drift WITHIN an entity is what the prompt prevents.
-
-Workspace-wide consolidation (e.g., normalizing `email` vs `correo_electronico` across all person pages) is a deferred concern (see `08_scope_and_discarded.md` cross-entity consistency checks).
+Within a single entity, the extract prompt's `EXISTING ATTRIBUTE KEYS` block
+(`build_extract_prompt`) instructs the LLM to reuse a key when the meaning
+matches, which prevents `email` → `e-mail` → `correo` drift within that entity.
+Scope is per-entity: drift *between* entities is tolerated; workspace-wide
+attribute-key normalization is a deferred concern (see
+`08_scope_and_discarded.md`). Cross-entity *identity* duplication is the refine
+pass's job (§8), not the prompt's.
 
 ---
 
-## 11. Git commits
+## 11. Telemetry
 
-Every Dream apply creates exactly one commit in `memory/.git/`:
+All events are best-effort (telemetry never breaks a pass) and defined in
+`durin/telemetry/schema.py`:
 
-```
-<commit subject from ===COMMIT===>
+| Event | Emitted by | Key fields |
+|---|---|---|
+| `memory.dream.start` | extract + refine | `kind` (`extract`/`refine`) |
+| `memory.dream.end` | extract + refine | `kind`, `duration_ms`; extract: `entities_consolidated` / `entities_failed` / `sessions` / `yielded`; refine: `merged` / `kept` / `candidates` |
+| `memory.dream.patch_applied` | `extract_entity` (one per entity) | `entity_ref`, `ops_applied`, `trigger="extract"`, `committed`, `source_ref` |
+| `memory.dream.skill_extract` | skill-extract pass | `skills_touched`, `duration_ms` |
+| `memory.dream.max_seconds_reached` | extract pass (cap hit) | `kind`, `max_seconds`, `elapsed_ms`, `sessions_done` |
+| `memory.dream.throttled` | reactive gate skip | `trigger`, `reason` (`locked`/`throttled`) |
+| `memory.dream.always_on` | always_on pass | `selected`, `pruned`, `dropped`, `tokens`, `duration_ms` |
+| `memory.absorb.judged` | refine (per judged pair) | `canonical`, `absorbed`, `verdict`, `confidence` |
+| `memory.absorb.auto_merged` | refine (per merge) | `canonical`, `absorbed`, `confidence` |
+| `memory.absorb.skipped` | refine (per skipped pair) | `canonical`, `absorbed`, `reason` |
+| `memory.absorb.reverted` | `durin memory revert` (auto-absorb only) | `canonical`, `absorbed`, `original_sha`, `confidence` |
+| `memory.entity_relation_cap_warned` | `memory_writer` (soft cap crossed) | `entity_ref`, `current_count`, `new_count` |
+| `memory.entity_relation_cap_rejected` | `memory_writer` (hard cap crossed; alert-only) | `entity_ref`, `current_count`, `new_count` |
 
-<optional commit body>
-
-Sources: episodic/2026-05-23T10-12.md, episodic/2026-05-25T09-14.md
-Entities-touched: person:marcelo
-Cursor-after: 2026-05-25T09:14:00Z
-Trigger: threshold
-Run-id: <uuid>
-```
-
-Properties:
-
-- **One commit per apply.** Bulk passes that consolidate 10 entities produce 10 commits.
-- **Author**: `durin-dream <dream@durin.local>`.
-- **Trailers are grep-able.** Format rules live in the Dream skill (see `06_prompts_and_instructions.md`). The LLM is instructed to include `Sources:`, `Cursor-after:`, `Entities-touched:`. The code post-processes the commit message and:
-  - **Auto-completes `Trigger:` and `Run-id:`** (these are always known by the runner, not the LLM).
-  - **Verifies presence** of `Sources:`, `Cursor-after:`, `Entities-touched:` — if missing, fills them in from runner state and logs a warning.
-  - Does NOT block the commit if a trailer is missing; auto-fills with safety net.
-- **Commit subject** comes from the LLM (≤ 70 chars).
-- **No `--amend`.** Each consolidation is a discrete event in history.
-
-This hybrid (skill instructs + code verifies) gives flexibility to the LLM while guaranteeing the trailers that downstream queries (e.g., git log greppable for `memory_history`) depend on.
-
-User manual edits to `.md` files are committed separately by the indexer (§6.4 of doc 02) with `author: user`.
+The event **names** are reused from the legacy dream so existing dashboards keep
+counting; the producers and field shapes are the new passes'.
 
 ---
 
 ## 12. Failure modes
 
-Audit F6 (2026-05-28) aligned this section to the shipped enum.
-The `DreamApplyFailureKind` enum in `durin/memory/dream_apply.py`
-emits four kinds: `validation | patch_runtime | round_trip | io`.
-LLM call failures (§12.1) happen UPSTREAM of `dream_apply` and are
-tracked by the consolidator path, not by this enum. The pre-F6
-spec used `_failed` suffixes that no caller ever emitted.
+The deleted consolidator's structured failure enum
+(`DreamApplyFailureKind` = `validation | patch_runtime | round_trip | io`) and
+its per-entity quarantine are **gone** — there is no JSON-Patch apply pipeline
+to fail in those ways. The settled model's failure handling is simpler and
+spread across the passes:
 
-### 12.1 LLM call failure (upstream)
-
-If `default_llm_invoke` raises (network error, API timeout, rate limit):
-- Caught in the consolidator BEFORE `dream_apply` runs.
-- Telemetry emitted with the runner-level counter (not `DreamApplyFailureKind` — the apply step never executed).
-- Skip this entity for this pass; DO NOT advance cursor.
-- Continue to next entity.
-- Pass exits with one failure; next trigger will retry.
-
-### 12.2 Patch runtime failure (`kind=patch_runtime`)
-
-If `===PATCH===` JSON is malformed (after `json_repair`) OR if applying a parsed op raises:
-- Log: `kind=patch_runtime`.
-- Skip this entity; cursor stays.
-
-The pre-F6 spec split this as "parse failure"; the shipped enum
-folds both JSON-decode errors and patch-op runtime errors into the
-same category because the operator response (skip + cursor stays)
-is identical.
-
-### 12.3 Validation failure (`kind=validation`)
-
-If the patch tries to overwrite `dream_processed_through` or touches paths outside allowed roots:
-- Reject the patch.
-- Log: `kind=validation` with details.
-- Skip; cursor stays.
-
-### 12.4 Round-trip failure (`kind=round_trip`)
-
-If after applying the patch, the resulting frontmatter doesn't re-parse:
-- Restore from `.md.bak`.
-- Log: `kind=round_trip`.
-- Skip; cursor stays.
-
-### 12.4a IO failure (`kind=io`)
-
-If the disk write itself fails (disk full, permission denied, etc.):
-- Log: `kind=io`.
-- Skip; cursor stays.
-
-`io` is treated as **ambient** alongside upstream LLM failures —
-the entity has no structural defect; the environment is at fault.
-
-### 12.5 Repeated structural failures on the same entity
-
-If the same entity fails **3 times in a row** with a **structural** failure type — `STRUCTURAL_FAILURE_KINDS = {validation, patch_runtime, round_trip}` per `dream_quarantine.py:44` — across consecutive passes:
-
-- Add `dream_failure_count: 3` and `dream_quarantine: <ISO_timestamp_now+7d>` to the entity's frontmatter.
-- Subsequent passes skip this entity until `dream_quarantine` expires (default 7 days).
-- Telemetry emits `kind=quarantined`.
-- Operator manually inspects, fixes, and removes the fields (or waits for quarantine to expire).
-
-**Crucial: only structural failures count.** Ambient failures (upstream LLM call failures from rate limits / network timeouts, and `kind=io` from disk-write errors) do NOT increment the counter. Reasoning: ambient failures don't indicate a problem with the entity itself; they indicate transient infrastructure issues. Counting them would quarantine perfectly healthy entities during a z.ai outage or a disk-full event.
-
-After a successful apply, the counter resets to 0.
-
-This prevents one persistently-broken entity (corrupt frontmatter, edge-case prompt-killer, etc.) from leaking LLM call budget across passes. Cost-of-implementation: ~30 LOC + 2 frontmatter fields.
-
-### 12.6 Lock takeover after crash
-
-If a previous Dream pass crashed before releasing the lock:
-- Next pass detects stale lock (mtime > 10 min old).
-- Takes over the lock with its own PID.
-- Continues normally. The crashed pass's partial work is fine — it didn't advance any cursor it shouldn't have (cursor advance is the LAST step of apply).
-
----
-
-## 13. Throughput and cost considerations
-
-Dream cost is dominated by LLM calls (one per entity per pass + occasional absorb-judge calls):
-
-| Metric | Typical value |
+| Failure | Behaviour |
 |---|---|
-| LLM calls per pass | 1 per pending entity (5-50 typical) |
-| Tokens per call | ~2-5k input, ~500-1500 output |
-| Calls per day (active workspace) | 50-200 |
-| Cost per call (glm-5.1) | ~$0.005 |
-| Total daily cost | $0.25 - $1.00 |
+| **Extract: bad session** | caught per session in `run_extract_pass`; recorded in `out["errors"]`; the loop continues to the next session. |
+| **Extract: empty / unparseable LLM output** | `parse_attributes` returns `{}`; `extract_entity` returns a no-op; the per-session cursor still advances (the turns held no extractable attributes). |
+| **Extract: write contention** | `memory_writer.write_entity` retries the read-apply-CAS loop; raises only after `_MAX_RETRIES` (high contention). |
+| **Extract: time budget** | the pass yields after the current session (`memory.dream.max_seconds_reached`); the per-session cursor resumes the rest next trigger. |
+| **Refine: judge error** | `JudgeError` → the pair is skipped (`reason=judge_error:...`); other pairs proceed. |
+| **Refine: disabled** | `run_refine_pass` returns immediately with `disabled=True`; nothing is judged or merged. |
+| **Reactive: overlap / burst** | `ReactiveDreamGate.try_begin` returns `locked`/`throttled`; the run is skipped (`memory.dream.throttled`); the cursor makes it harmless. |
+| **Relation cap** | soft/hard cap crossings emit telemetry + log; the write still proceeds (alert-only, §4.1). |
+| **Cron handler** | the whole `memory_dream` branch is wrapped; a failure logs (`memory_dream cron failed`) and never crashes the cron loop. |
 
-This is the entire reason for the threshold-trigger design: avoid running Dream on every `memory_store` (which would be costly + slow). Threshold + cron together produce ~10-50 passes/day, each consuming a batch.
-
-If Dream cost becomes a concern, two levers exist:
-- Raise threshold (consolidate larger batches).
-- Use a smaller/cheaper model for routine consolidations and reserve glm-5.1 for complex ones.
-
-These are config knobs, not architectural changes.
+A skipped or failed extract is never data loss: nothing was archived, the page
+on disk is untouched, and the per-session cursor only advances over turns that
+were actually processed. The next trigger or the daily cron retries.
 
 ---
 
-## 14. Module-level decisions
-
-All consistent with prior decisions in docs 00-04.
+## 13. Module-level decisions
 
 | # | Decision | Resolution | Applied in |
 |---|---|---|---|
-| 1 | Trigger types | Six: threshold (per-entity, post-write), post_ingest_threshold (post-ingest pathway, mirrors threshold), cron_daily (safety net), session_close, post_compaction, manual. Threshold is the primary trigger; cron is the safety net. Corrected from "Five" in audit C4 (2026-05-28) — §2 of this doc enumerates all six and code wires all six (commit `c3eff1e`). | §2 |
-| 2 | Lock granularity | Single workspace-level file lock at `memory/.dream.lock`. Already exists; not introducing a new lock. | §4.1 |
-| 3 | Sequential per-entity within a pass | Yes. Parallel apply across entities can race on aliases / alias index. Cold path; serialization is acceptable. | §3 |
-| 4 | Throttle behavior | **300s (5 min) minimum interval between runs** (configurable via `min_seconds_between_runs`). Already in code. Manual trigger bypasses throttle. | §4.2 |
-| 5 | Cursor advancement | Only on full successful apply. Failures leave cursor where it was, so entries get retried next pass. | §4.3, §12 |
-| 6 | Apply mechanism — JSON Patch + Dream skill package | JSON Patch (RFC 6902) over the frontmatter, plus BODY_DELTA for body append. Surgical edits, not full page rewrites. Reduces hallucination-induced data loss. **All prompt material lives as a Dream skill package** (`durin/templates/dream/`) including the main prompt, JSON Patch reference, few-shot examples, and rules — concatenated at call time. Overhead ~1-2k tokens per call, accepted for precision. | §5.2, §6, doc 06 |
-| 7 | Prompt context (existing_schema + existing_uris + recent_history) | Yes, three context blocks: (a) **existing_schema** — attribute keys + relation types on this entity, **for coherence, not as constraint** (LLM may add new keys or unify duplicates); (b) **existing_uris** — top-100 entity URIs by recent mtime, to discourage duplicate entity creation; (c) **recent_history** — `git log` of the entity page over last 30 days, so the LLM sees its own previous decisions and avoids undoing them. Total ~1k tokens/call extra. | §5.2, §5.3 |
-| 8 | Absorb-judge trigger | Alias overlap + same type + 24h quarantine. LLM-judged verdict: `same` / `different` / `unclear` (audit E22 corrected — pre-E22 this row said `merge / keep_separate / unsure`, which never matched the `absorb_judge.py` enum or the prompt template). The dispatcher auto-merges only on `verdict == "same"` AND `confidence ≥ threshold`. | §8 |
-| 9 | v1 → v2 schema migration | Lazy on Dream touch. No bulk migration. Search works on v1 pages too. | §9 |
-| 10 | Drift control scope | Per-entity (workspace-wide normalization is deferred). | §10 |
-| 11 | Git commit pattern — skill instructs + code verifies | One commit per apply. Author: `durin-dream`. **Skill instructs** the LLM to format the commit message with trailers `Sources:`, `Cursor-after:`, `Entities-touched:`. **Code post-processes** the message: auto-completes `Trigger:` and `Run-id:` (always known by runner); verifies the LLM-supplied trailers are present and auto-fills from runner state if missing (warning, not block). | §11 |
-| 12 | Quarantine after repeated STRUCTURAL failures | After 3 consecutive **structural** failures (`validation`, `patch_runtime`, `round_trip`) on the same entity, set `dream_failure_count` + `dream_quarantine: <now+7d>` in its frontmatter; skip until quarantine expires. **Ambient failures (upstream LLM call errors + `kind=io` disk errors) do NOT count** — those indicate infrastructure issues, not entity-level problems. Counter resets after a successful apply. Audit F6 (2026-05-28) aligned the enum names to the shipped code. | §12.5 |
-| 13 | Cost expectation | $0.25-$1.00/day for active workspace at typical pass rates. Adjustable via threshold + model. | §13 |
-
-### Open
-
-None at the module level.
+| 1 | Passes | Four: extract (frequent), skill-extract, refine, always_on. The legacy single consolidator was deleted. | §2 |
+| 2 | Triggers | cron (all four) + reactive post_compaction/session_close (extract only) + manual (all four). The per-write threshold trigger was removed. | §6 |
+| 3 | Concurrency | In-process `ReactiveDreamGate` (lock + throttle) for reactive triggers; the daily cron is never throttled. No cross-process lock file. | §3.1 |
+| 4 | Cursor | Per-**session** `extract_cursor` in `<stem>.meta.json`. The per-entity `dream_processed_through` cursor was removed (N3). | §3.2 |
+| 5 | Write path | `memory_writer.write_entity` (FieldPatch + per-field precedence + dulwich CAS). No JSON-Patch envelope, no `.md.bak` rollback. | §4 |
+| 6 | Fragments | Raw track (`/remember` + session summaries), NOT consolidated; no episodic→archive lifecycle (N3/N4). | §0, §7 |
+| 7 | Extract prompt | Entity ref/name + existing attribute keys + body + turns. No `existing_uris` block — extract enriches only agent-upserted entities, so it can't create duplicates (A5). | §2.2 |
+| 8 | Dedup (refine) | Alias-overlap candidates → cross-type/tombstone/user-managed/quarantine filters → LLM judge (`same`/`different`/`unclear`) → merge on `same` + `confidence ≥ threshold`. Gated OFF by default by `auto_absorb.enabled` (A1). | §8 |
+| 9 | always_on | Distil feedback (stance/practice/feedback): LLM rank + drop contradictions + fit token budget; flip `always_on` flag only (A4). | §2.5 |
+| 10 | Relation cap | Soft 50 / hard 200, alert-only in `memory_writer`; no write blocked, no data dropped (A3). | §4.1 |
+| 11 | Recovery | `git revert` of the absorb commit (`durin memory revert`); `do_not_absorb` tombstone stops re-merge. | §8.4 |
+| 12 | Model | `resolve_memory_model`: `aux_models.memory` → `dream.model_override` → default (`glm-5.1`). | §5 |
 
 ---
 
-## 15. Implementation status (current vs target)
+## 14. Cross-references
 
-| Aspect | Current state | v2 target | Migration work |
-|---|---|---|---|
-| Trigger types | threshold + cron_daily + post_compaction + session_close + manual labels exist in code | Same (labels already defined); just ensure threshold is dispatched from `memory_store`/`memory_ingest` and not only as runner label | Minor wiring; document label semantics |
-| Lock + throttle + cursor | Active (works well) | Same | None |
-| Consolidator prompt | v2 — PATCH + BODY_DELTA + COMMIT, with existing_schema + uris + recent_history. **Shipped in Phase 1.9 (commit `6aafc3f`).** Multi-file Dream skill package at `durin/templates/dream/` (main prompt + json_patch_reference + examples/ + rules), assembled by `dream_prompt_builder.build_dream_prompt`. | — | — |
-| Apply mechanism | v2 — JSON Patch over frontmatter + body delta with `.md.bak` rollback. **Shipped in Phase 1.9.** See `durin/memory/dream_apply.py`. | — | — |
-| Provenance tracking | **Shipped (Phase 1.9).** Every PATCH op carries a `provenance` pointer; collected during apply and persisted in the entity page's `provenance` field. See `dream_patch_parser.py` + `dream_apply.py`. Audit E21 (2026-05-28) flipped this row from "Not explicit". | — | — |
-| Archive of consumed episodic | **Shipped (Phase 1.9).** `dream_archive_consumed.archive_consumed_episodic` moves provenance-cited episodic entries to `memory/archive/episodic/` after a successful apply. Wired by the Dream consolidator post-apply. Audit E21 flipped from "Not implemented". | — | — |
-| Absorb-judge | Active for alias overlap | Same; add merge action that uses structured merge + archive | Extend `judge_pair` decision handling |
-| v1 → v2 migration | n/a (v2 doesn't exist yet) | Lazy on Dream touch | Entity page parser already preserves unknown frontmatter; just add v2 fields |
-| Git commits | **Shipped (Phase 1.9).** Hybrid model active: skill instructs the LLM to include `Sources:`, `Cursor-after:`, `Entities-touched:` trailers; code auto-completes `Trigger:` + `Run-id:` always and fills LLM-missing trailers. See `dream_commit_message.py` + `dream_git_history.py`. Audit E21 flipped from "Active (LLM-emitted subject + body)" — the row still claimed migration work that already landed. | — | — |
-| Failure quarantine | **Shipped (Phase 1.9).** `dream_quarantine` + `dream_failure_count` fields on the entity page; `record_failure` increments and stamps a 7-day quarantine on the 3rd structural strike (parse / validation / round-trip — ambient failures excluded). The runner skips quarantined entities. See `dream_quarantine.py`. Audit E21 flipped from "Not implemented". | — | — |
-
----
-
-## 16. Cross-references
-
-- Entity schema (frontmatter v2 with attributes/relations/provenance): `01_data_and_entities.md` §3.5.
-- Archive folder behavior (exclusion from all search paths): `01_data_and_entities.md` §3.6.
-- Indexer re-derivation triggered after Dream apply: `02_indexing.md` §6.1.
-- Alias index updated on entity merge: `02_indexing.md` §6 (chokepoint walker).
-- Hot-path read of consolidated entity pages: `03_search_pipeline.md` §4.3.
-- `memory_store` and `memory_ingest` create the entries Dream consumes: `04_agent_tools.md` §3, §4.
-- Onboarding wizard exposes Dream cost expectations: `06_prompts_and_instructions.md` (pending).
-- Telemetry events emitted by Dream: `07_telemetry_and_observability.md` (pending).
+- Entity page schema, per-field author precedence, provenance:
+  `01_data_and_entities.md`.
+- The CAS write path (`memory_writer`, `field_patch`, `write_files_cas`) and the
+  indexer re-deriving FTS/vector after a write: `02_indexing.md`.
+- Archive folder semantics (exclusion from search): `01_data_and_entities.md`.
+- Hot-path read of entity pages: `03_search_pipeline.md`.
+- The agent's write tools (`memory_upsert_entity`, `memory_ingest`,
+  `memory_forget`) and the `/remember` fragment producer: `04_agent_tools.md`.
+- Telemetry event catalog: `07_telemetry_and_observability.md` and
+  `durin/telemetry/schema.py`.
+- The authoritative migration record (what changed, A1-A5 / B1-B4 / N1-N7):
+  `11_post_migration_audit.md`.
