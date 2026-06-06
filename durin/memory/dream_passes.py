@@ -1,16 +1,17 @@
-"""Cron entry points for the new dreams (Phase 8c/8d).
+"""Cron entry points for the memory dream passes.
 
-The new model has two dreams, split by CADENCE:
+There is ONE dream cron — ``memory_dream`` (daily, ``memory.dream.cron``) — plus
+the reactive triggers (post-compaction / session-close, ``ReactiveDreamGate``),
+which run the extract pass only. The daily cron runs, in order: extract →
+skill-extract → refine → always_on → curate_catalog. This module hosts
+``run_extract_pass``, ``run_skill_extract_pass`` and ``run_refine_pass``;
+``run_always_on_pass`` lives in ``always_on_dream`` and ``curate_catalog`` in
+``agent.skill_curation``.
 
-- **extract** (frequent, the ~2h `dream` cron): read each session's new turns
-  and extract structured entity attributes (``run_extract_pass``).
-- **refine** (periodic, the daily `memory_dream` cron): dedup/merge duplicate
-  entities (``run_refine_pass``).
-
-These REPLACE the legacy ``DreamRunner`` / ``DreamConsolidator`` at the cron
-callsites — the legacy consolidated episodic entries into pages via JSON-Patch
-+ working-tree writes (the obsolete model + the G3 race). Both new passes write
-through ``memory_writer`` (plumbing + CAS).
+These REPLACE the legacy ``DreamRunner`` / ``DreamConsolidator`` (which
+consolidated episodic entries into pages via JSON-Patch + working-tree writes —
+the obsolete model + the G3 race). All passes write through ``memory_writer``
+(plumbing + CAS).
 """
 from __future__ import annotations
 
@@ -24,7 +25,7 @@ from loguru import logger
 from durin.memory.extract_runner import run_extract_for_session
 from durin.memory.refine_dream import run_refine
 
-__all__ = ["run_extract_pass", "run_refine_pass", "ReactiveDreamGate"]
+__all__ = ["run_extract_pass", "run_skill_extract_pass", "run_refine_pass", "ReactiveDreamGate"]
 
 LLMInvoke = Callable[..., Any]
 
@@ -167,10 +168,21 @@ def _emit(event: str, **data: Any) -> None:
 _SKILL_EXTRACT_PROMPT = """You are durin's skill extractor. Review the recent \
 conversation(s) below. If the user established a REUSABLE PROCEDURE for a \
 recurring task — a sequence of steps, a workflow, a how-to to follow again \
-later — create or update a skill for it by calling the `skill_write` tool. A \
-skill is a step-by-step procedure to FOLLOW, not a fact and not a one-off. \
-Reuse/extend an existing skill instead of duplicating it. If the conversation \
-contains no reusable procedure, do nothing — don't call any tool.
+later — capture it as a skill. A skill is a step-by-step procedure to FOLLOW, \
+not a fact and not a one-off.
+
+For each reusable procedure you find, prefer acquiring an existing published \
+skill over writing one from scratch:
+1. Call `skill_search` with a short query to see if a registry already has it.
+2. If a strong hit exists, call `skill_acquire_seed` with that hit's ref. The \
+security gate runs automatically, so you only ever receive SAFE, allowlisted \
+content; a risky or un-allowlisted ref returns {{"seed": null}}. If you get a \
+seed, adapt it to the conversation and save it with `skill_write`.
+3. If search finds nothing usable, or `skill_acquire_seed` returns null, AUTHOR \
+the skill yourself from the conversation via `skill_write`.
+
+Reuse/extend an existing LOCAL skill instead of duplicating it. If the \
+conversation contains no reusable procedure, do nothing — don't call any tool.
 
 EXISTING SKILLS: {existing}
 """
@@ -203,6 +215,45 @@ def _list_skills(workspace: Path) -> list[str]:
                   if p.is_dir() and (p / "SKILL.md").is_file())
 
 
+def _build_skill_extract_tools(workspace: Path, fs: Any) -> Any:
+    """Toolset for the skill-extract sub-agent.
+
+    Two ways to land a skill: AUTHOR from the conversation (Read/Edit/SkillWrite)
+    or ACQUIRE a published one autonomously — Path B of acquire-on-gap (§6.C):
+    ``skill_search`` finds a candidate, ``skill_acquire_seed`` pulls a SAFE seed.
+    The seed gate runs in code (allowlist + scan), so a risky / un-allowlisted ref
+    is never handed back; the default empty allowlist means nothing auto-seeds and
+    the dream just authors from scratch. Path B previously lived in the deleted 2h
+    ``Dream`` phase-2; the daily ``memory_dream`` skill-extract pass is its new home.
+    """
+    from durin.agent.tools.filesystem import EditFileTool, ReadFileTool
+    from durin.agent.tools.registry import ToolRegistry
+    from durin.agent.tools.skill_acquire_seed import SkillAcquireSeedTool
+    from durin.agent.tools.skill_search import SkillSearchTool
+    from durin.agent.tools.skill_write import SkillWriteTool
+
+    registries: list = []
+    allowlist: list[str] = []
+    limit = 10
+    try:
+        from durin.config.loader import load_config
+        sk = load_config().skills
+        registries = list(sk.discovery.registries)
+        limit = int(sk.discovery.search_limit)
+        allowlist = list(sk.security.allowlist)
+    except Exception:  # noqa: BLE001
+        pass  # default config (empty allowlist) → acquire is a no-op, author-only
+
+    tools = ToolRegistry()
+    tools.register(ReadFileTool(workspace=workspace, allowed_dir=workspace, file_states=fs))
+    tools.register(EditFileTool(workspace=workspace, allowed_dir=workspace, file_states=fs))
+    tools.register(SkillWriteTool(workspace=workspace))
+    tools.register(SkillSearchTool(workspace=workspace, registries=registries,
+                                   allowlist=allowlist, limit=limit))
+    tools.register(SkillAcquireSeedTool(workspace=workspace, allowlist=allowlist))
+    return tools
+
+
 def run_skill_extract_pass(
     workspace: Path,
     *,
@@ -230,15 +281,9 @@ async def _skill_extract_async(
 
     from durin.agent.runner import AgentRunner, AgentRunSpec
     from durin.agent.tools.file_state import FileStates
-    from durin.agent.tools.filesystem import EditFileTool, ReadFileTool
-    from durin.agent.tools.registry import ToolRegistry
-    from durin.agent.tools.skill_write import SkillWriteTool
 
     fs = FileStates()
-    tools = ToolRegistry()
-    tools.register(ReadFileTool(workspace=workspace, allowed_dir=workspace, file_states=fs))
-    tools.register(EditFileTool(workspace=workspace, allowed_dir=workspace, file_states=fs))
-    tools.register(SkillWriteTool(workspace=workspace))
+    tools = _build_skill_extract_tools(workspace, fs)
 
     if provider is None:
         from durin.config.loader import load_config
