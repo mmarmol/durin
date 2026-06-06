@@ -282,6 +282,47 @@ class VectorIndex:
         else:
             db.create_table(_TABLE_NAME, data=[record])
 
+    def upsert_reference_chunk(
+        self,
+        *,
+        ref: str,
+        idx: int,
+        text: str,
+        path: Any,
+    ) -> None:
+        """Index one token-aware chunk of a reference document (design §2.8).
+
+        The whole reference doc is the FTS unit (``indexer._payload_for``); the
+        chunks are the vector unit. The row ``id`` is ``<ref>#<idx>`` so a
+        vector hit on a fragment resolves to its parent reference (strip
+        ``#<idx>``); ``class_name`` is ``"reference"`` to match the FTS/grep
+        reader side.
+        """
+        [vec] = self._provider.embed_passages([text])
+        try:
+            rel_path = Path(path).relative_to(self._workspace)
+        except ValueError:
+            rel_path = Path(path)
+        record: dict[str, Any] = {
+            "id": f"{ref}#{idx}",
+            "class_name": "reference",
+            "summary": text[:200],
+            "headline": ref,
+            "body_length": len(text or ""),
+            "vector": vec,
+            "valid_from": "",
+            "entities": [],
+            "path": str(rel_path),
+        }
+        db = self._connect()
+        names = db.list_tables().tables
+        if _TABLE_NAME in names:
+            table = db.open_table(_TABLE_NAME)
+            self._guard_dim_match(table, len(vec))
+            self._atomic_upsert(table, record)
+        else:
+            db.create_table(_TABLE_NAME, data=[record])
+
     def _skill_record(
         self,
         skill: Any,  # durin.memory.skill_page.SkillPage

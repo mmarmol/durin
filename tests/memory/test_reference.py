@@ -61,3 +61,54 @@ def test_reference_indexed_and_searchable(tmp_path):
 def test_reference_marker():
     assert reference_marker("reference:mxhero", title="mxHERO Profile") == \
         "=== REFERENCE: reference:mxhero (mxHERO Profile) ==="
+
+
+import pytest
+
+
+@pytest.mark.asyncio
+async def test_memory_ingest_makes_reference_searchable_grep_fts_vector(tmp_path):
+    """A2 end-to-end: memory_ingest stores the doc as a REFERENCE (whole) and
+    indexes it so it is findable via ALL THREE retrieval mechanisms — grep
+    (warm), FTS (whole doc), and vector/embeddings (the token chunks) — not the
+    old chunked `corpus/` model. This is the test that was missing when
+    references shipped unwired."""
+    from durin.agent.tools.memory_ingest import MemoryIngestTool
+    from durin.memory.fts_index import FTSIndex
+    from durin.memory.search import search_memory
+    from durin.memory.vector_index import VectorIndex
+    from durin.memory.embedding import FastembedProvider
+
+    body = ("Set the SMTP relay host to smtp.example.com on port 587 with "
+            "STARTTLS. The AI Supervisor approval flow routes attachments "
+            "into Box and SharePoint.\n\n")
+    doc = tmp_path / "spec.md"
+    doc.write_text("# SMTP Relay Setup\n\n" + body * 8, encoding="utf-8")
+
+    tool = MemoryIngestTool(workspace=str(tmp_path),
+                            embedding_model="intfloat/multilingual-e5-small")
+    await tool.execute(path=str(doc))
+
+    # (1) stored as a REFERENCE (whole doc) + chunk sidecar, NOT a corpus entry
+    refs = list((tmp_path / "memory" / "references").glob("*.md"))
+    assert refs, "memory_ingest did not create a reference page"
+    whole = refs[0].read_text(encoding="utf-8")
+    assert "type: reference" in whole and "STARTTLS" in whole
+    slug = refs[0].stem
+    assert (tmp_path / "memory" / "references" / f"{slug}.chunks.jsonl").exists()
+    corpus = tmp_path / "memory" / "corpus"
+    assert not (corpus.exists() and list(corpus.glob("*.md"))), "old corpus path still used"
+
+    # (2) GREP (warm) finds the whole reference
+    assert any(r.class_name == "reference" for r in search_memory(tmp_path, "STARTTLS")), "grep miss"
+
+    # (3) FTS finds the whole reference doc
+    with FTSIndex.open(tmp_path) as idx:
+        assert any(slug in str(getattr(h, "uri", h)) for h in idx.search("STARTTLS", limit=20)), "FTS miss"
+
+    # (4) VECTOR (embeddings): the chunks are embedded + a semantic query pulls a
+    #     chunk that resolves to the parent reference
+    vi = VectorIndex(tmp_path, FastembedProvider("intfloat/multilingual-e5-small"))
+    hits = vi.search("how do I configure the outbound mail relay port", top_k=10)
+    assert any("reference" in str(h.get("class_name", "")) and slug in str(h.get("id", ""))
+               for h in hits), f"vector miss on reference chunk; got {[h.get('id') for h in hits]}"

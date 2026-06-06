@@ -93,7 +93,19 @@ quarantine `min_age_hours` guards against is largely moot → lean remove).
 
 ---
 
-### A2 — References are not wired; `memory_ingest` still writes chunked `corpus/` — 🔲
+### A2 — References are not wired; `memory_ingest` still writes chunked `corpus/` — ✅ DONE (2026-06-06)
+> **Decision: wire references (option a).** `memory_ingest` now stores the doc
+> WHOLE as a reference (`_create_reference`) and indexes it for ALL THREE
+> retrieval mechanisms: grep (warm), FTS (whole doc = lexical unit), and
+> vector/embeddings (each token-aware ≤512 chunk, keyed `<ref>#<idx>` so a
+> fragment hit resolves to the parent reference). Added
+> `VectorIndex.upsert_reference_chunk`. The legacy chunked `corpus/` path was
+> removed from ingest. **Why it shipped untested before:** the storage module
+> had unit tests but there was NO integration test exercising
+> `ingest → reference → index → search`. **Fixed:** `test_memory_ingest_makes_
+> reference_searchable_grep_fts_vector` drives the real tool + real embedder +
+> real FTS/grep/vector and asserts all three find the reference (it FAILS on the
+> pre-fix code). 7/7 reference tests green.
 **Severity:** High (the tool's LLM-facing description is false). Note: references
 wiring was always a Phase-5 follow-on (`reference.py:11`), so this is
 *known-incomplete*, not a migration regression — but the ingest tool now claims
