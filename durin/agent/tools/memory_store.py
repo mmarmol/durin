@@ -161,15 +161,11 @@ class MemoryStoreTool(Tool):
         # Lazily constructed once on first use; None means "disabled".
         self._vector_index: Optional[VectorIndex] = None
         self._vector_index_attempted = False
-        # Doc 25 §2.A.1 β.2 — per-entity threshold trigger config. When
-        # set + enabled + threshold_entries > 0, a successful write
-        # checks the per-entity post-cursor count and may dispatch a
-        # background dream pass. None disables the trigger entirely
-        # (tests, environments without the config).
+        # Retained for constructor compatibility only. They fed the per-entity
+        # threshold dream trigger, which was removed (§8e — the daily extract/
+        # refine passes consolidate now); memory_store itself is disabled in the
+        # new model.
         self._dream_config = dream_config
-        # Full DurinConfig. Forwarded to the threshold trigger so the
-        # spawned DreamRunner can resolve its model via aux_models.memory
-        # (else falls back to dream.model_override).
         self._app_config = app_config
 
     @property

@@ -40,52 +40,6 @@ class ChannelsConfig(Base):
     transcription_language: str | None = Field(default=None, pattern=r"^[a-z]{2,3}$")  # Optional ISO-639-1 hint for audio transcription
 
 
-class DreamConfig(Base):
-    """Dream memory consolidation configuration."""
-
-    _HOUR_MS = 3_600_000
-
-    interval_h: int = Field(default=2, ge=1)  # Every 2 hours by default
-    cron: str | None = Field(default=None, exclude=True)  # Legacy compatibility override
-    model_override: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("modelOverride", "model", "model_override"),
-    )  # Optional Dream-specific model override
-    max_batch_size: int = Field(default=20, ge=1)  # Max history entries per run
-    # Bumped from 10 to 15 in #3212 (exp002: +30% dedup, no accuracy loss; >15 plateaus).
-    max_iterations: int = Field(default=15, ge=1)  # Max tool calls per Phase 2
-    # Per-line git-blame age annotation in Phase 1 prompt (see #3212). Default
-    # on — set to False to feed MEMORY.md raw if a specific LLM reacts poorly
-    # to the `← Nd` suffix or you want deterministic, git-independent prompts.
-    annotate_line_ages: bool = True
-    # Pre-LLM gate (2026-05-31): when the cron fires, tokenize the unprocessed
-    # history.jsonl tail and skip the Phase 1 LLM call entirely if total tokens
-    # are below this threshold. Cheap (a few ms with tiktoken) and bounds the
-    # cost of a cron that ticks during quiet periods — a few "ok" / social
-    # turns no longer trigger a multi-thousand-token analysis. Default 2000:
-    # filters trivial / social sessions, keeps anything substantive enough to
-    # produce a fact worth escalating to MEMORY.md / SOUL.md / skills.
-    # Set to 0 to disable the gate (every non-empty cron tick runs the LLM,
-    # the pre-2026-05-31 behaviour).
-    min_tokens_to_run: int = Field(
-        default=2000, ge=0,
-        validation_alias=AliasChoices("minTokensToRun", "min_tokens_to_run"),
-    )
-
-    def build_schedule(self, timezone: str) -> CronSchedule:
-        """Build the runtime schedule, preferring the legacy cron override if present."""
-        if self.cron:
-            return CronSchedule(kind="cron", expr=self.cron, tz=timezone)
-        return CronSchedule(kind="every", every_ms=self.interval_h * self._HOUR_MS)
-
-    def describe_schedule(self) -> str:
-        """Return a human-readable summary for logs and startup output."""
-        if self.cron:
-            return f"cron {self.cron} (legacy)"
-        hours = self.interval_h
-        return f"every {hours}h"
-
-
 class InlineFallbackConfig(Base):
     """One inline fallback model configuration."""
 
@@ -151,39 +105,26 @@ class MemoryEmbeddingConfig(Base):
 
 
 class MemoryDreamConfig(Base):
-    """Entity-centric dream auto-trigger config (doc 25 §2.A.1).
+    """Memory dream config: when the extract / refine / skill passes run (§8e).
 
-    Distinct from ``agents.defaults.dream`` which schedules the legacy
-    ``MEMORY.md`` / ``SOUL.md`` consolidator. This block governs when
-    the entity-centric :class:`DreamConsolidator` runs automatically
-    over pending post-cursor entries.
+    Governs the daily ``memory_dream`` cron plus two reactive triggers. The
+    manual ``durin memory dream`` always works regardless of ``enabled``.
 
-    Four triggers (any combination):
+    Three triggers (any combination):
 
-    - **cron**: daily schedule (predictable, OpenClaw-style).
-    - **post_compaction**: dream after the conversation consolidator
-      compacts a session — the context is already in memory so the
-      cost is amortised.
-    - **on_session_close**: dream when a session ends (``/quit`` or
-      idle timeout).
-    - **threshold_entries**: dream when an entity accumulates this
-      many post-cursor entries (per-entity granularity).
-
-    ``min_seconds_between_runs`` throttles the per-entity triggers so
-    fast-firing events (e.g. a flurry of memory_store calls) don't
-    cause thrashing.
+    - **cron**: daily schedule (predictable).
+    - **post_compaction**: dream after a session is compacted — the context
+      is already in memory so the cost is amortised.
+    - **on_session_close**: dream when a session ends (``/quit`` or idle
+      timeout).
     """
 
-    # Master switch — false disables all four triggers; manual
+    # Master switch — false disables the cron + reactive triggers; manual
     # ``durin memory dream`` still works.
     enabled: bool = True
 
-    # Cron expression for the daily pass. 3am local to avoid the
-    # legacy ``dream`` job's every-2h schedule.
+    # Cron expression for the daily extract / refine / skill pass.
     cron: str = "0 3 * * *"
-
-    # Per-entity threshold. 0 disables the threshold trigger.
-    threshold_entries: int = Field(default=5, ge=0)
 
     # Hook into the session compaction lifecycle.
     post_compaction: bool = True
@@ -198,29 +139,7 @@ class MemoryDreamConfig(Base):
         validation_alias=AliasChoices("modelOverride", "model_override"),
     )
 
-    # Cooldown between auto-runs per workspace to prevent thrashing
-    # when multiple triggers fire fast.
-    min_seconds_between_runs: int = Field(
-        default=300,
-        ge=0,
-        validation_alias=AliasChoices("minSecondsBetweenRuns", "min_seconds_between_runs"),
-    )
-
-    # Hard wall-clock cap per dream pass. The runner drains an entity's
-    # backlog across multiple consolidate batches (FIFO oldest-first,
-    # cursor advances per batch); this caps how long that drain runs
-    # before yielding. Remainder fires `memory.dream.budget_exhausted`
-    # telemetry and is picked up by the next trigger. Default 600s
-    # (10 min) covers ~10 oldest-first batches per entity at glm-5.1
-    # speeds; bump up for bootstraps of large entities, down for
-    # tighter cron windows.
-    max_seconds_per_run: int = Field(
-        default=600,
-        ge=0,
-        validation_alias=AliasChoices("maxSecondsPerRun", "max_seconds_per_run"),
-    )
-
-    # §2.D auto-absorb config nested under dream.
+    # Auto-absorb config nested under dream (the refine pass's dedup/merge).
     auto_absorb: "AutoAbsorbConfig" = Field(
         default_factory=lambda: AutoAbsorbConfig(),
         validation_alias=AliasChoices("autoAbsorb", "auto_absorb"),
@@ -657,7 +576,6 @@ class AgentDefaults(Base):
     # Key is a substring of the model name (case-insensitive); value is True/False.
     # First match wins. Empty = preserve the provider default. Use to opt models
     # OUT when they misbehave with parallel tool calls (e.g. {"glm-5.1": false}).
-    dream: DreamConfig = Field(default_factory=DreamConfig)
 
 
 class AgentsConfig(Base):
