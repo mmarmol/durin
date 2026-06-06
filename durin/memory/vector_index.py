@@ -795,7 +795,7 @@ class VectorIndex:
             "vector": vector,
             "valid_from": entry.valid_from.isoformat() if entry.valid_from else "",
             # B1 (doc 24 §7): persist entity tags so entity_ranker's
-            # post-cursor boost can match c.get("entities", []) against
+            # entity-match boost can match c.get("entities", []) against
             # query entities. Without this column, the ranker can never
             # boost tagged entries — W1 would be inoperative.
             "entities": list(entry.entities),

@@ -126,7 +126,6 @@ def test_retrieval_l1_light_end_to_end(
         type="person",
         name="Marcelo Marmol",
         aliases=["Marcelo", "marcelo"],
-        dream_processed_through=10,  # cursor: pre is before this
         body="## Current State\nPrefers pytest over unittest.\n",
         extra={"identifiers": ["mmarmol@mxhero.com"]},
     )
@@ -179,12 +178,11 @@ def test_retrieval_l1_light_end_to_end(
                 rec["entities"] = []
         enriched.append(rec)
 
-    # Cursor between pre (2026-04-01) and post (2026-05-23): pre is
-    # already consolidated (demote); post is fresh (boost).
+    # Two-track model (N3): both pre + post are tagged; recency orders them
+    # (post 2026-05-23 ranks above pre 2026-04-01 within the tagged group).
     ranked = rank_with_entities(
         enriched,
         query_entities=query_entities,
-        cursors={"person:marcelo": "2026-05-01"},
         score_field="_distance",
         higher_is_better=False,
     )
@@ -199,28 +197,25 @@ def test_retrieval_l1_light_end_to_end(
         f"entity page should surface in top 3; got order {ids}"
     )
 
-    # ASSERT 2: the pre-cursor entry is demoted relative to post-cursor.
-    # Both share the same entity tag; the cursor distinguishes them.
+    # ASSERT 2: the older entry is demoted relative to the newer one by
+    # recency (both tagged; the tagged group sorts newest-first).
     pre_pos = ids.index(pre["id"])
     post_pos = ids.index(post["id"])
     assert post_pos < pre_pos, (
-        f"post-cursor entry ({post_pos}) should rank above pre-cursor ({pre_pos}); "
+        f"newer entry ({post_pos}) should rank above older ({pre_pos}); "
         f"order: {ids}"
     )
 
-    # ASSERT 3: ranking annotated which signals fired.
-    # Under RRF (doc 23 T1.3): page gets vector_rank + entity_page_rank;
-    # pre-cursor entries are EXCLUDED from the entity-match list so they
-    # carry ONLY vector_rank (no post_cursor / pre_cursor annotation —
-    # the absence of an entity signal IS the demotion).
+    # ASSERT 3: ranking annotated which signals fired. Under RRF (doc 23 T1.3)
+    # the page gets vector_rank + entity_page_rank; tagged entries get
+    # vector_rank + tagged_rank (two-track model: no cursor exclusion).
     page_result = next(r for r in ranked if r.record["id"] == "person:marcelo")
     assert any("entity_page_rank" in s for s in page_result.signals)
 
     pre_result = next(r for r in ranked if r.record["id"] == pre["id"])
-    assert not any(
-        "post_cursor_rank" in s or "entity_page_rank" in s
-        for s in pre_result.signals
-    ), "pre-cursor entries must be excluded from entity-match list"
+    assert any("tagged_rank" in s for s in pre_result.signals), (
+        "tagged entries get the entity-match boost (recency-ordered)"
+    )
 
 
 def test_alias_via_identifier_finds_page(

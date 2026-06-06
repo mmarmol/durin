@@ -228,9 +228,6 @@ def _render_page_block(page: EntityPage, *, mtime: datetime | None) -> str:
         else "(unknown)"
     )
     lines.append(f"- File last modified: {created}")
-    cursor = page.dream_processed_through
-    if cursor:
-        lines.append(f"- Last dreamed through: {cursor}")
     if page.aliases:
         lines.append(f"- Aliases: {', '.join(page.aliases)}")
     # Identifiers are richer than aliases for entity disambiguation

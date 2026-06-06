@@ -52,7 +52,7 @@ class Result:
 
     Per doc 25 §2.H (fragment/canonical retrieval contract): each result
     carries enough metadata for the LLM to distinguish a canonical
-    entity page from a recent post-cursor fragment, and to know when
+    entity page from a recent tagged fragment, and to know when
     the data was valid. The model can drill into the canonical via the
     ``entities`` pointer.
 
