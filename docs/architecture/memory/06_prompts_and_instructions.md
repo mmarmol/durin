@@ -181,6 +181,11 @@ Do not claim facts that are not in the search results.
 
 ### 3.2 `memory_store`
 
+> **Disabled** (`MemoryStoreTool.enabled()` returns False) — not in the live
+> toolset. The entity-centric model writes facts via `memory_upsert_entity`
+> (§3.5) and documents via `memory_ingest` (§3.3). The description below is kept
+> in sync (the tool still exists) but the LLM never sees it.
+
 ```
 Persist an observation to memory. Use this when you learn a fact the user is
 likely to need again — preferences, decisions, facts about people/projects/
@@ -258,7 +263,25 @@ memory_search to find new candidates.
 
 Audit H9 (2026-05-29) consolidated the previous ``memory_drill_batch`` tool into ``memory_drill`` so the LLM sees one drill surface instead of two. The list-of-uris payload is identical to the old batch tool; the single-``uri`` legacy shape is preserved unchanged.
 
-### 3.5 Synchronization requirement
+### 3.5 `memory_upsert_entity`
+
+```
+Author or update an entity (a person, company, product, topic, place, etc.) you have learned a fact about. Provide `ref` as `<type>:<slug>` (e.g. company:mxhero, person:marcelo), the display `name`, any `aliases`, `relations` to other entities ({to: '<type>:<slug>', type: 'partner'}), and prose `body` describing what you know. Merges into the existing entity if it exists, creates it otherwise. Do NOT pass structured attributes — the system extracts those from your prose. Use this for facts about a THING; use memory_ingest for documents.
+```
+
+This is the primary write tool in the entity-centric model: the agent authors a THING (person/company/product/topic) as prose; the dream extracts typed attributes from that prose later. Contrast `memory_store` (§3.2, disabled) which wrote raw entries.
+
+### 3.6 `memory_forget`
+
+```
+Remove a memory entry you no longer want surfaced. Archives it to memory/archive/<class>/<id>.md (reversible) and removes its search index rows so it stops appearing in memory_search.
+
+This is the ONLY correct way to delete a memory entry — never rm or move files under memory/ via shell, which leaves the search indices pointing at a missing file.
+
+Pass `uri` exactly as memory_search returned it. Refuses entity pages (memory/entities/...): those have their own absorb/revert lifecycle.
+```
+
+### 3.7 Synchronization requirement
 
 The text above MUST match the `.description` property on each tool class (`durin/agent/tools/memory_search.py::MemorySearchTool.description`, etc.). That property is the field `Tool.to_schema()` emits as `function.description` in the OpenAI function-calling spec — i.e. what the LLM actually reads when deciding to call the tool.
 
@@ -830,7 +853,7 @@ If `read_hot_layer(workspace)` fails (disk error, parser error, missing files), 
 
 | # | Decision | Resolution | Applied in |
 |---|---|---|---|
-| 1 | Source of truth for LLM-facing text | This document. The per-tool `.description` property (e.g. `MemorySearchTool.description` in `durin/agent/tools/memory_search.py`) + `templates/agent/identity.md` + `templates/dream/*` must match this doc verbatim. Divergence = bug. (Audit C9 + B1, 2026-05-28: the v1 text referenced `memory_*.py::DESCRIPTION` constants that never existed; the canonical text lives in `_PARAMETERS["description"]` and is emitted via `Tool.description` → `function.description` in the OpenAI spec — see §3.5.) | §3.5 |
+| 1 | Source of truth for LLM-facing text | This document. The per-tool `.description` property (e.g. `MemorySearchTool.description` in `durin/agent/tools/memory_search.py`) + `templates/agent/identity.md` + `templates/dream/*` must match this doc verbatim. Divergence = bug. (Audit C9 + B1, 2026-05-28: the v1 text referenced `memory_*.py::DESCRIPTION` constants that never existed; the canonical text lives in `_PARAMETERS["description"]` and is emitted via `Tool.description` → `function.description` in the OpenAI spec — see §3.7.) | §3.7 |
 | 2 | Declarative not imperative phrasing | Validated by LoCoMo v2 (+3.9pp). "Don't answer cold" + "state source" + "issue 2-3 searches" worked; "USE BEFORE answering" did not. | §2.2 |
 | 3 | Dream prompt package layout (NOT a skill) | Multi-file prompt assembly in `templates/dream/`: main prompt + reference + rules + commit format + 6 few-shot examples. Concatenated by the runner at call time. ~1-2k tokens overhead accepted. This is a prompt template package, not an invocable skill — the agent does not "choose" to load it; the runner builds it. | §4 |
 | 4 | Few-shot examples for JSON Patch | Six examples covering common scenarios. Small models need concrete demonstrations of unfamiliar syntax. | §4.6 |

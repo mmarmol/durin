@@ -405,7 +405,15 @@ unimplemented feature. Every item verified by reading the code.
 > `cmd_reindex` never calls `save_index_meta`; `ensure_index_fresh` checks only
 > schema_version, not the model id. Same-dim model swap is silent. Doc 02 §7.
 
-### N6 — Tool-description sync test guards the DISABLED memory_store, not the live tools — 🔲
+### N6 — Tool-description sync test guards the DISABLED memory_store, not the live tools — ✅ DONE (2026-06-06)
+> **Decision (a): full fix.** Root cause was deeper than the test — doc 06 §3
+> itself documented the OLD toolset (search/store/ingest/drill) with NO
+> section for the live `memory_upsert_entity` / `memory_forget`, so there was
+> no canonical text to sync against. Added doc 06 §3.5 (`memory_upsert_entity`)
+> + §3.6 (`memory_forget`) with their exact `.description` text, marked §3.2
+> `memory_store` DISABLED, renumbered the sync requirement → §3.7. Added the
+> two sync tests; the live tools' descriptions are now doc-governed + drift-
+> guarded. 7/7 sync tests green.
 > `test_tool_description_sync` omits `memory_upsert_entity` + `memory_forget` →
 > their descriptions can drift undetected. Doc 04 §8 / doc 06 §3.5.
 
