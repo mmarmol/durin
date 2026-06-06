@@ -502,12 +502,11 @@ class AuxModelsConfig(Base):
 
     vision: AuxModelConfig | None = None
     audio: AuxModelConfig | None = None
-    # Model used by memory subsystem operations — both dreams
-    # (working-memory `dream` and entity-centric `memory_dream`).
-    # When unset, dreams fall back to their own `model_override` (if
-    # any) and then to the agent's active preset. Lets the user pick
-    # a cheaper/faster model for the long offline consolidation runs
-    # without changing the chat model.
+    # Model used by memory subsystem operations — the entity-centric
+    # `memory_dream` passes. When unset, the dream falls back to its
+    # own `model_override` (if any) and then to the bundled default.
+    # Lets the user pick a cheaper/faster model for the long offline
+    # consolidation runs without changing the chat model.
     memory: AuxModelConfig | None = None
 
 

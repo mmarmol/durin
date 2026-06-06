@@ -173,8 +173,9 @@ def cmd_reindex(
 def cmd_dream(
     entity: str = typer.Argument(
         None,
-        help="Specific entity (e.g. person:marcelo) to consolidate. "
-             "If omitted, consolidates all entities with pending entries.",
+        help="Specific entity (e.g. person:marcelo). Note: the current dream "
+             "passes process all recent sessions; per-entity filtering is not "
+             "yet applied.",
     ),
     dry_run: bool = typer.Option(
         False,
