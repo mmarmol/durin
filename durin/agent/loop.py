@@ -451,7 +451,15 @@ class AgentLoop:
             try:
                 from durin.memory.file_watcher import MemoryFileWatcher
 
-                watcher = MemoryFileWatcher(self.workspace)
+                # N2: pass the embedding model so the watcher re-embeds entity
+                # pages reactively (FTS alone leaves them vector-stale).
+                _emb_model = None
+                try:
+                    if mem_cfg.enabled:
+                        _emb_model = mem_cfg.embedding.model
+                except (AttributeError, TypeError):
+                    _emb_model = None
+                watcher = MemoryFileWatcher(self.workspace, embedding_model=_emb_model)
                 watcher.start()
                 self._memory_file_watcher = watcher
                 logger.info(

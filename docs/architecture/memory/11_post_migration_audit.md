@@ -354,7 +354,7 @@ unimplemented feature. Every item verified by reading the code.
 > Tests: `test_user_edit_guard.py` (survives, author:user, no-op on clean). Also
 > corrects the phantom ✅ on `10_remaining_work` P2.3.
 
-### N2 — Nothing re-indexes the vector reactively (entity pages vector-stale) — 🔨 IN PROGRESS
+### N2 — Nothing re-indexes the vector reactively (entity pages vector-stale) — ✅ DONE (2026-06-06)
 > The watcher's `reindex_one_file` is FTS-only; `memory_upsert_entity` + the
 > extract dream never embed; `upsert_entity_page` has ONE caller (absorption
 > merge). So every new/edited entity is vector-stale until a merge or full

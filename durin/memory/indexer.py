@@ -450,6 +450,47 @@ def reindex_one_file(
             )
 
 
+def reindex_one_file_vector(workspace: Path, md_path: Path, vi) -> bool:
+    """Re-embed ONE entity page into the vector index (N2, 2026-06-06).
+
+    The reactive index path (file watcher) calls this so agent/dream-authored AND
+    hand-edited entity pages become vector-searchable. Previously NOTHING embedded
+    entity pages reactively — ``memory_upsert_entity`` / the extract dream never
+    did, and ``reindex_one_file`` is FTS-only, so the only embedders were the
+    absorption merge + a full ``durin memory reindex``. References are embedded at
+    ingest time and entries are niche (``memory_store`` disabled), so this handles
+    entity pages only. ``vi`` is a caller-owned ``VectorIndex`` (reused across
+    events). Returns True if it embedded. Best-effort — never raises.
+    """
+    workspace = Path(workspace)
+    md_path = Path(md_path)
+    try:
+        rel = md_path.relative_to(workspace / "memory")
+    except ValueError:
+        return False
+    parts = rel.parts
+    # entities/<type>/<slug>.md only
+    if not (len(parts) >= 3 and parts[0] == "entities" and md_path.suffix == ".md"):
+        return False
+    if not md_path.is_file():
+        return False
+    from durin.memory.entity_page import EntityPage
+    page = EntityPage.from_file(md_path)
+    if page is None:
+        return False
+    entity_ref = f"{parts[1]}:{md_path.stem}"
+    try:
+        vi.upsert_entity_page(
+            entity_ref=entity_ref, name=page.name, aliases=page.aliases,
+            body=page.body or "", path=md_path,
+            attributes=page.attributes, relations=page.relations,
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("indexer: vector reindex %s failed: %s", md_path, exc)
+        return False
+
+
 def reindex_one_skill(
     workspace: Path,
     skill_md: Path,
