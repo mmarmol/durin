@@ -3,7 +3,7 @@
 > **Status:** Decision record, written autonomously 2026-06-03 per the architect's mandate
 > (plan the import; v1 **includes code-bearing skills**, so build §8.C; "no depende de la
 > fuente sino de reglas claras"; "es un skill" → the orchestrator is a builtin skill).
-> Resolves **§6.B** and **§8.C** of [`docs/plans/skills_evolutivas.md`](../../plans/skills_evolutivas.md).
+> Resolves **§6.B** and **§8.C** of [`docs/archive/skills_evolutivas.md`](../../archive/skills_evolutivas.md).
 > Builds on the adopted standard ([`2026-06-03-skill-interop-standard-design.md`](2026-06-03-skill-interop-standard-design.md)).
 > **The architect will review the security policy (§4) and adjust on return.**
 
