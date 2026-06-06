@@ -51,6 +51,38 @@ Implementación posible:
 
 **Estado**: pendiente — requiere proposal más detallada antes de implementar.
 
+### Auto-instalar el extra de pip cuando se activa una feature
+
+**Contexto**: las features opcionales viven en extras de pip (`durin-agent[web]`
+= ddgs/search, `[slack]`, `[discord]`, `[mcp]`, `[memory]` = fastembed, `[local]`
+= llama-cpp, `[oauth]`). Un `pipx install` base no los trae.
+
+**Problema** (observado 2026-06-06): tras un install limpio (base), activar el
+search provider `duckduckgo` falló en runtime con `No module named 'ddgs'`. Hoy
+durin solo **avisa** (`ImportError → "pip install durin-agent[X]"`). No tiene
+sentido que falle algo que el usuario **activó** (en config o en el onboarding).
+
+**Propuesta** (diseño acordado 2026-06-06): helper `ensure_extra(extra)` que mapea
+feature→extra+módulo (`duckduckgo→web/ddgs`, `slack→slack`, `discord→discord`,
+`mcp→mcp`, `memory→memory/fastembed`, `local→local`, `oauth→oauth`) y, si el
+módulo no importa + `install.auto_install_extras` (**default ON**), corre
+`sys.executable -m pip install "durin-agent[<extra>]"` + reintenta. **Seguro**:
+solo instala extras PROPIOS de durin (pinneados en pyproject), nunca arbitrarios;
+funciona en pipx/pip/editable. Enganches:
+1. **onboarding wizard** — al elegir provider/canal/feature.
+2. **config activation** — al escribir el setting que la activa (ej.
+   `web_search.provider`, habilitar un canal).
+3. **red de seguridad runtime** — en los ~7 sitios de import lazy (ej.
+   `web.py::_search_duckduckgo` `from ddgs import DDGS`): `ImportError` →
+   `ensure_extra` + retry → **nunca falla lo activo**.
+
+El (3) es el catch-all robusto (cubre "activo en config pero dep faltante"); (1)+(2)
+lo hacen proactivo (instala al activar, no al primer uso). Toggle OFF para
+offline/air-gapped → cae al aviso actual.
+
+**Estado**: pendiente — diseño acordado; no construido (se priorizó cerrar el
+rediseño de memoria + merge a main, 2026-06-06).
+
 ---
 
 ## §2 — Backlog (sin priorizar)
@@ -215,4 +247,4 @@ verifique que con `DURIN_HOME` seteado ningún path cae en `~/.durin`.
 
 ---
 
-## Last updated: 2026-06-06 (post-migration audit: removed obsolete items — legacy Dream Track A + threshold_trigger perf; refreshed P4/P5 to the entity-centric tools)
+## Last updated: 2026-06-06 (added auto-install-extras idea; post-migration audit cleanup of obsolete items + P4/P5 refresh)
