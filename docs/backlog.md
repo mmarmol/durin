@@ -51,48 +51,21 @@ Implementación posible:
 
 **Estado**: pendiente — requiere proposal más detallada antes de implementar.
 
-### Dream (Track A) destila mal — confunde USER.md y MEMORY.md
-
-**Contexto**: el Dream legacy (working-memory consolidator, cron `dream`)
-mantiene `SOUL.md` / `USER.md` / `MEMORY.md` vía un AgentRunner Fase 2 con
-`edit_file` ([durin/agent/memory.py::Dream](../durin/agent/memory.py)).
-
-**Problema** (observado en vivo, workspace real 2026-06-05): la
-destilación mezcla las fronteras de los archivos.
-- **Estado de proyecto/trabajo aparece en USER.md Y MEMORY.md**: USER.md
-  tiene "Work Context / Proyecto activo: Investigación profunda sobre
-  mxHERO…" y MEMORY.md tiene "Investigación mxHERO Inc. (completada)…".
-  Los hechos del proyecto deberían vivir en MEMORY.md (long-term facts),
-  no en el perfil del usuario.
-- **Duplicación intra-USER.md**: "Preferences" y "Special Instructions"
-  repiten lo mismo (responder en español, investigaciones exhaustivas,
-  batch, confirmar al guardar).
-
-**Propuesta tentativa**: afilar `dream_phase2.md` con fronteras
-explícitas — SOUL = identidad del agente; USER = quién es el usuario +
-cómo quiere ser servido (perfil/preferencias, **no** estado de
-proyectos); MEMORY = hechos de largo plazo del trabajo/mundo (proyectos,
-entorno técnico, research). Añadir una regla anti-duplicación (no repetir
-la misma instrucción en dos secciones/archivos).
-
-**Estado**: pendiente — identificado durante el análisis del sistema de
-memoria (Track A working-memory).
-
 ---
 
 ## §2 — Backlog (sin priorizar)
 
 ### P5 — Tracing de tool calls de memoria en la session viewer
 
-**Contexto**: cuando el agente usa `memory_store` / `memory_search` /
-`memory_dream` / `memory_expand` durante una sesión, hoy queda en el
-log pero sin presentación visual integrada al historial de la sesión.
+**Contexto**: cuando el agente usa `memory_upsert_entity` / `memory_ingest` /
+`memory_search` / `memory_drill` / `memory_forget` durante una sesión, hoy queda
+en el log pero sin presentación visual integrada al historial de la sesión.
 
 **Idea (Marcelo)**: en la session viewer (web especialmente, también
 TUI si se puede):
 
 - En cada turn que el agente invoque una memory tool, destacar
-  visualmente cuál se procesó (ej: badge `📝 memory_store` al lado del
+  visualmente cuál se procesó (ej: badge `📝 memory_upsert_entity` al lado del
   turno, o highlighted background).
 - Click en el badge → expande para mostrar la memoria exacta que
   escribió/leyó, los argumentos, y el resultado (entry id, results
@@ -148,68 +121,11 @@ state + history + sources).
 - Search global: query `mmarmol@mxhero.com` debería surface marcelo
   card.
 
-**Estado**: pendiente, post-Phase 5 (cuando la pipeline entity-centric
-esté implementada).
-
-### Perf — `count_pending_for_trigger` hace full-walk del corpus por cada write
-
-**Contexto**: `durin/memory/threshold_trigger.py`. `maybe_dispatch_threshold_dream`
-(disparado desde `memory_store`/`memory_ingest` tras cada write con
-entities) llama a `count_pending_for_trigger(workspace)` en
-[threshold_trigger.py:161](../durin/memory/threshold_trigger.py#L161),
-**antes** del check de threshold. Corre en **cada** write que pasa el
-gate (`dream.enabled=True` + `threshold_entries>0`, ambos default → es
-frecuente).
-
-**Problema**: la función computa counts de **todas** las entidades pero
-el call-site sólo usa `counts.get(ref)` para `ref in entities` (los 1-3
-recién escritos). El costo es O(todo el corpus + todo episodic + todas
-las entity pages) por write:
-- Parte 1 — `_discover_pending_consolidations` ([memory_cmd.py:103](../durin/cli/memory_cmd.py#L103)):
-  carga **todas** las entity pages (`pages_dir.rglob("*.md")` para los
-  cursors) + camina **todo** episodic (`episodic_dir.glob("*.md")`,
-  `load_entry` por archivo).
-- Parte 2 — corpus walk ([threshold_trigger.py](../durin/memory/threshold_trigger.py)):
-  `walk_class(workspace, "corpus")` + `load_entry` de **cada** archivo.
-
-En vault típico ("cientos de entidades") es sub-segundo pero no gratis;
-en vault grande es latencia per-write notable. Es la misma clase de
-overhead per-write que motivó dejar dormant el threshold de ingest (ver
-[[project_ingest_dormant_rationale]] / nota memoria).
-
-**⚠️ Lo que NO funciona (verificado 2026-06-01, no repetir)**: el QA
-report sugirió "pasar `entity_filter`" como fix one-liner. **Es
-ineficaz, incluso contraproducente.** El parámetro `entity_filter` de
-ambas funciones se aplica *después* de cargar cada archivo (el `if
-entity_filter and ref != entity_filter: continue` está dentro del loop,
-tras `load_entry`), así que **no evita leer ningún archivo** — sólo
-achica el dict devuelto. Y como `count_pending_for_trigger` toma un solo
-`entity_filter` (no un set), usarlo con N entities obligaría a llamarlo N
-veces → **N full-walks → estrictamente peor**.
-
-**Propuesta tentativa (cambio estructural, no one-liner)**:
-- Un índice incremental de pending-counts por entidad (mantenido en el
-  write path) en vez de full-walk por trigger. El write ya sabe qué
-  entities tocó; podría incrementar un contador persistente y el trigger
-  sólo leería ese contador para los `entities` del write actual.
-- Alternativa parcial y más acotada: hacer que `_discover_pending_consolidations`
-  cargue sólo las entity pages de `entities` (no todas) cuando recibe un
-  filtro — pero ojo: esa función la **comparte Dream** para sus cursores,
-  así que tocarla afecta su semántica; requiere tests de Dream además de
-  los del trigger.
-- Cualquier diseño debe preservar la semántica de cursor (parte 1 reusa
-  el helper de Dream a propósito, para que el trigger "vea" exactamente
-  lo que Dream consolidaría) y la señal de "hotness" del corpus (parte 2;
-  Dream NO consolida corpus, pero un user activo dropeando docs sobre una
-  entidad es señal de que está hot).
-
-**Referencias**: ítem P1 #10 del QA review en
-[docs/qa/code-review-2026-06-01.md](qa/code-review-2026-06-01.md).
-
-**Estado**: pendiente — perf pass estructural. No bloquea; el costo es
-tolerable en vaults chicos. Priorizar si/ cuando un vault grande muestre
-latencia per-write medible (medir antes de diseñar).
-
+**Estado**: pendiente — la pipeline entity-centric YA está implementada (Phase
+1-7 + audit 2026-06) y la webui ya tiene una **vista de grafo** de memoria (nodos
+por entidad + filtros por tipo + panel de detalle al click en `/api/memory/graph`
+→ `graph.py::build_memory_graph`). Las "entity cards" (contact-book) serían una
+presentación alternativa sobre esa misma data; ya no está bloqueado.
 
 ### P6 — Skills importadas: sin sandbox ni consentimiento de ejecución runtime
 
@@ -299,4 +215,4 @@ verifique que con `DURIN_HOME` seteado ningún path cae en `~/.durin`.
 
 ---
 
-## Last updated: 2026-06-05 (Dream Track A destila mal: confunde USER.md/MEMORY.md)
+## Last updated: 2026-06-06 (post-migration audit: removed obsolete items — legacy Dream Track A + threshold_trigger perf; refreshed P4/P5 to the entity-centric tools)
