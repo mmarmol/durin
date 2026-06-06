@@ -582,7 +582,7 @@ class CronService:
     def register_system_job(self, job: CronJob) -> CronJob:
         """Register an internal system job (idempotent on restart).
 
-        The gateway re-registers its system jobs (dream, memory_dream) on
+        The gateway re-registers its system jobs (memory_dream) on
         every start. Preserve the persisted run state — ``last_run_at_ms``,
         ``last_status``, ``run_history``, and a still-future
         ``next_run_at_ms`` — so a restart (or a reinstall) does not wipe
@@ -608,6 +608,34 @@ class CronService:
         self._arm_timer()
         logger.info("Cron: registered system job '{}' ({})", job.name, job.id)
         return job
+
+    def prune_orphaned_system_jobs(self, known_system_ids: set[str]) -> list[str]:
+        """Remove persisted system jobs the code no longer manages.
+
+        System jobs (``payload.kind == "system_event"``) are protected from
+        ``remove_job`` and re-registered on every start. When a system cron is
+        removed or renamed in code (e.g. the legacy 2h ``dream`` retired in the
+        entity-centric redesign), its persisted job would otherwise linger
+        forever — shown in the UI, fired on schedule, with no handler. Drop any
+        system-event job whose id is not in ``known_system_ids`` (the system
+        crons this build manages, regardless of enabled state). User jobs and
+        current system jobs are untouched. Call once at startup, after
+        registering the system jobs.
+        """
+        store = self._load_store()
+        orphans = [
+            j.id for j in store.jobs
+            if j.payload.kind == "system_event" and j.id not in known_system_ids
+        ]
+        if orphans:
+            store.jobs = [j for j in store.jobs if j.id not in orphans]
+            self._save_store()
+            self._arm_timer()
+            for jid in orphans:
+                logger.info(
+                    "Cron: pruned orphaned system job '{}' (no longer registered)", jid
+                )
+        return orphans
 
     def remove_job(self, job_id: str) -> Literal["removed", "protected", "not_found"]:
         """Remove a job by ID, unless it is a protected system job."""

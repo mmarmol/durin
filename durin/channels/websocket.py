@@ -853,6 +853,13 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/memory/cross-encoder/test":
             return await self._handle_cross_encoder_test(request, query)
 
+        if got == "/api/extras/status":
+            return self._handle_extras_status(request, query)
+        if got == "/api/extras/ensure":
+            return await self._handle_extras_ensure(request, query)
+        if got == "/api/extras/restart":
+            return self._handle_extras_restart(request)
+
         m = re.match(r"^/api/sessions/([^/]+)/messages$", got)
         if m:
             return self._handle_session_messages(request, m.group(1))
@@ -2249,6 +2256,72 @@ class WebSocketChannel(BaseChannel):
                 },
             )
         return _http_json_response(result)
+
+    def _handle_extras_status(self, request: WsRequest, query: dict) -> Response:
+        """`GET /api/extras/status?feature=<f>` — is the feature's pip extra
+        importable, and what would installing it cost / require?"""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from durin.extras import REGISTRY, _module_present
+
+        feature = (_query_first(query, "feature") or "").strip()
+        fe = REGISTRY.get(feature)
+        if fe is None:
+            return _http_error(400, f"unknown feature '{feature}'")
+        return _http_json_response(
+            {
+                "present": _module_present(fe.module),
+                "extra": fe.extra,
+                "approx_size": fe.approx_size,
+                "needs_restart": fe.needs_restart,
+                "label": fe.label,
+            }
+        )
+
+    async def _handle_extras_ensure(self, request: WsRequest, query: dict) -> Response:
+        """`POST /api/extras/ensure?feature=<f>&restart=<bool>` — install the
+        feature's extra (off-loop; may take minutes for heavy deps) and, if it
+        installed something that needs a restart and the caller opted in, kick a
+        gateway restart."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        import asyncio
+
+        from durin.config.loader import load_config
+        from durin.extras import REGISTRY, ensure_extra
+
+        feature = (_query_first(query, "feature") or "").strip()
+        if feature not in REGISTRY:
+            return _http_error(400, f"unknown feature '{feature}'")
+        restart = (_query_first(query, "restart") or "").lower() in ("1", "true", "yes")
+        res = await asyncio.to_thread(ensure_extra, feature, config=load_config())
+        out = {
+            "status": res.status,
+            "needs_restart": res.needs_restart,
+            "message": res.message,
+        }
+        if res.status == "installed" and restart and res.needs_restart:
+            self._spawn_gateway_restart()
+            out["restarting"] = True
+        return _http_json_response(out)
+
+    def _handle_extras_restart(self, request: WsRequest) -> Response:
+        """`POST /api/extras/restart` — restart the gateway daemon."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        self._spawn_gateway_restart()
+        return _http_json_response({"restarting": True})
+
+    @staticmethod
+    def _spawn_gateway_restart() -> None:
+        import subprocess
+        import sys
+
+        # Detached so it survives this process being killed by the restart.
+        subprocess.Popen(
+            [sys.executable, "-m", "durin", "gateway", "restart"],
+            start_new_session=True,
+        )
 
     @staticmethod
     def _is_websocket_channel_session_key(key: str) -> bool:

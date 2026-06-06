@@ -1337,7 +1337,7 @@ def _run_gateway(
             # New model (§8c/8d/8e): the daily cron runs the extract pass
             # (sessions → entity attributes), the skill-extract pass (sessions →
             # reusable procedures as skills), then the refine pass (dedup). This
-            # replaces the legacy DreamRunner/DreamConsolidator (episodic-entry
+            # replaces the legacy episodic-entry
             # JSON-Patch consolidation via working-tree writes — the obsolete
             # model + the G3 race). Writes go through memory_writer / skill_write.
             model = resolve_memory_model(config)
@@ -1376,7 +1376,7 @@ def _run_gateway(
 
                 def _judge(prompt: str) -> str:
                     # ONE completion via the already-resolved memory model,
-                    # using the same call shape DreamRunner's judge uses.
+                    # using the same call shape the refine pass's absorb judge uses.
                     return default_llm_invoke(prompt, model=curation_model).text
 
                 from durin.agent.skill_drift import check_upstream_drift
@@ -1643,10 +1643,20 @@ def _run_gateway(
             f"cron {mem_dream_cfg.cron}"
         )
 
+    # Prune system crons left in the store by a previous build but no longer
+    # managed here (e.g. the legacy 2h `dream` retired in the entity-centric
+    # redesign) so they don't linger in the UI / fire with no handler. Keep this
+    # set in sync with the system jobs registered above.
+    pruned = cron.prune_orphaned_system_jobs({"memory_dream"})
+    if pruned:
+        console.print(
+            f"[green]✓[/green] Cron: pruned orphaned system job(s): {', '.join(pruned)}"
+        )
+
     # Doc 25 §2.A.1 β.2: wire the post-compaction + session-close
     # hooks so dream picks up consolidated context while the signal
     # is fresh. Background daemon threads keep the agent loop
-    # responsive. DreamRunner's own lock + throttle absorbs collisions
+    # responsive. The reactive dream gate's lock + throttle absorbs collisions
     # with the daily cron. `hasattr` checks keep test scaffolds
     # (_FakeAgentLoop without consolidator / on_session_close) working
     # — production AgentLoop always has both attributes.
@@ -1658,7 +1668,7 @@ def _run_gateway(
         from durin.memory.dream_passes import ReactiveDreamGate
         # Shared by both reactive triggers: a lock so two events don't run
         # overlapping passes + a throttle so a burst of session closes is
-        # absorbed (replaces the legacy DreamRunner's .dream.lock + cooldown).
+        # absorbed (replaces the legacy cross-process .dream.lock + cooldown).
         _dream_gate = ReactiveDreamGate()
         _dream_min_s = mem_dream_cfg.min_seconds_between_runs
         _dream_max_s = mem_dream_cfg.max_seconds_per_run

@@ -163,6 +163,13 @@ class CrossEncoderReranker:
 _RERANK_FALLBACK_LOGGED = False
 
 
+def reset_global() -> None:
+    """Clear the process-wide 'reranker is off' latch so the next score retries
+    the (possibly just-installed) model. Mirrors health_check's reset."""
+    global _RERANK_FALLBACK_LOGGED
+    _RERANK_FALLBACK_LOGGED = False
+
+
 def rerank_hits(
     reranker: CrossEncoderReranker,
     *,

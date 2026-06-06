@@ -8,7 +8,7 @@ skill-extract → refine → always_on → curate_catalog. This module hosts
 ``run_always_on_pass`` lives in ``always_on_dream`` and ``curate_catalog`` in
 ``agent.skill_curation``.
 
-These REPLACE the legacy ``DreamRunner`` / ``DreamConsolidator`` (which
+These replace the removed legacy consolidator (which
 consolidated episodic entries into pages via JSON-Patch + working-tree writes —
 the obsolete model + the G3 race). All passes write through ``memory_writer``
 (plumbing + CAS).
@@ -37,7 +37,7 @@ class ReactiveDreamGate:
     event (same gateway process). Without a guard, a burst of session closes
     would spawn a burst of overlapping extract passes — duplicated LLM cost and
     thread pile-up. This replaces the cross-process ``.dream.lock`` + throttle
-    the legacy ``DreamRunner`` owned (removed §8e). One instance is shared by
+    the legacy consolidator owned (removed §8e). One instance is shared by
     all reactive triggers in a gateway.
 
     ``try_begin`` is non-blocking: it returns False (skip this run) when a pass
