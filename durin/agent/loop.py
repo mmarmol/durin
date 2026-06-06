@@ -16,6 +16,7 @@ from loguru import logger
 
 from durin.agent import model_presets as preset_helpers
 from durin.agent.context import ContextBuilder
+from durin.extras import ensure_or_note
 from durin.agent.hook import AgentHook, CompositeHook
 from durin.agent.memory import Consolidator
 from durin.agent.progress_hook import AgentProgressHook
@@ -721,6 +722,19 @@ class AgentLoop:
         except asyncio.CancelledError:
             logger.warning("MCP connection cancelled (will retry next message)")
             self._mcp_stacks.clear()
+        except ImportError:
+            res = ensure_or_note("mcp", config=getattr(self, "app_config", None))
+            if res.status in ("present", "installed"):
+                try:
+                    self._mcp_stacks = await connect_mcp_servers(
+                        self._mcp_servers, self.tools
+                    )
+                    if self._mcp_stacks:
+                        self._mcp_connected = True
+                except BaseException as e:  # noqa: BLE001
+                    logger.warning("Failed to connect MCP after install: {}", e)
+            else:
+                logger.warning("MCP unavailable: {}", res.message)
         except BaseException as e:
             logger.warning("Failed to connect MCP servers (will retry next message): {}", e)
             self._mcp_stacks.clear()

@@ -18,6 +18,7 @@ from durin.agent.tools._telemetry import emit_tool_event
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.schema import IntegerSchema, StringSchema, tool_parameters_schema
 from durin.config.schema import Base
+from durin.extras import ensure_extra
 from durin.security.network import ssrf_safe_async_client
 from durin.utils.helpers import build_image_content_blocks
 
@@ -137,6 +138,7 @@ class WebSearchTool(Tool):
             proxy=ctx.config.web.proxy,
             user_agent=ctx.config.web.user_agent,
             config_loader=config_loader,
+            app_config=getattr(ctx, "app_config", None),
         )
 
     def __init__(
@@ -145,11 +147,13 @@ class WebSearchTool(Tool):
         proxy: str | None = None,
         user_agent: str | None = None,
         config_loader: Callable[[], WebSearchConfig] | None = None,
+        app_config: Any | None = None,
     ):
         self.config = config if config is not None else WebSearchConfig()
         self.proxy = proxy
         self.user_agent = user_agent if user_agent is not None else _DEFAULT_USER_AGENT
         self._config_loader = config_loader
+        self._app_config = app_config
 
     def _refresh_config(self) -> None:
         if self._config_loader is None:
@@ -418,26 +422,43 @@ class WebSearchTool(Tool):
             return f"Error: {e}"
 
     async def _search_duckduckgo(self, query: str, n: int) -> str:
-        try:
-            # Note: duckduckgo_search is synchronous and does its own requests
-            # We run it in a thread to avoid blocking the loop
-            from ddgs import DDGS
-
-            ddgs = DDGS(timeout=10)
-            raw = await asyncio.wait_for(
-                asyncio.to_thread(ddgs.text, query, max_results=n),
+        async def _run():
+            # ddgs is synchronous; run it off the loop.
+            return await asyncio.wait_for(
+                asyncio.to_thread(_ddgs_text, query, n),
                 timeout=self.config.timeout,
             )
-            if not raw:
-                return f"No results for: {query}"
-            items = [
-                {"title": r.get("title", ""), "url": r.get("href", ""), "content": r.get("body", "")}
-                for r in raw
-            ]
-            return _format_results(query, items, n)
-        except Exception as e:
+
+        try:
+            raw = await _run()
+        except ImportError:
+            # `web` extra missing — auto-install then retry once.
+            res = ensure_extra("web_search", config=self._app_config)
+            if res.status not in ("present", "installed"):
+                return f"Error: web search unavailable — {res.message}"
+            try:
+                raw = await _run()
+            except Exception as e:  # noqa: BLE001
+                return f"Error: DuckDuckGo search failed ({e})"
+        except Exception as e:  # noqa: BLE001
             logger.warning("DuckDuckGo search failed: {}", e)
             return f"Error: DuckDuckGo search failed ({e})"
+        if not raw:
+            return f"No results for: {query}"
+        items = [
+            {"title": r.get("title", ""), "url": r.get("href", ""), "content": r.get("body", "")}
+            for r in raw
+        ]
+        return _format_results(query, items, n)
+
+
+def _ddgs_text(query: str, n: int):
+    """Run the synchronous ddgs search. The import lives here so a missing
+    `web` extra surfaces as ImportError at call time — `_search_duckduckgo`
+    catches it and auto-installs via `ensure_extra`."""
+    from ddgs import DDGS
+
+    return DDGS(timeout=10).text(query, max_results=n)
 
 
 @tool_parameters(

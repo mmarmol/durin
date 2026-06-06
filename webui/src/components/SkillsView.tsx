@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
-import { Loader2, Sparkles } from "lucide-react";
+import {
+  Loader2,
+  Plus,
+  Shield,
+  ShieldAlert,
+  ShieldCheck,
+  ShieldX,
+  Sparkles,
+} from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { MarkdownText, preloadMarkdownText } from "@/components/MarkdownText";
@@ -39,6 +47,15 @@ function stripFrontmatter(md: string): string {
   return m ? md.slice(m[0].length) : md;
 }
 
+/** Which pane fills the right side. The left column is navigation only; every
+ * piece of work — reading/editing a skill, triaging a pending import, or
+ * acquiring a new one — happens here with room to breathe. */
+type RightPane =
+  | { kind: "empty" }
+  | { kind: "acquire" }
+  | { kind: "skill"; name: string }
+  | { kind: "triage"; name: string };
+
 function ModeBadge({ mode }: { mode: "auto" | "manual" }) {
   const { t } = useTranslation();
   return (
@@ -56,9 +73,10 @@ function ModeBadge({ mode }: { mode: "auto" | "manual" }) {
   );
 }
 
-/** The §8.C verdict, shown only when it warrants attention (caution|dangerous).
- * Safe skills get no badge — absence of a warning IS the "safe" signal, and a
- * green chip on every row would be noise. */
+/** The §8.C verdict for an ACTIVE skill, shown only when it warrants attention
+ * (caution|dangerous). Safe skills get no badge — absence of a warning IS the
+ * "safe" signal, and a chip on every active row would be noise. Pending imports
+ * use {@link SecurityChip} instead, where the safety answer is the decision. */
 function VerdictBadge({ verdict }: { verdict?: SkillVerdict }) {
   const { t } = useTranslation();
   if (verdict !== "caution" && verdict !== "dangerous") return null;
@@ -80,6 +98,34 @@ function VerdictBadge({ verdict }: { verdict?: SkillVerdict }) {
   );
 }
 
+/** The full four-state safety answer for a PENDING import: during triage the
+ * user needs to see "is this safe?" explicitly, including the positive "safe"
+ * case (an affirmation, not the absence of a badge) and the rare "not analyzed"
+ * case (no `.scan.json`). Staying within durin's one-accent palette, the states
+ * are distinguished by icon + label, with colour only for the two that warn. */
+function SecurityChip({ verdict }: { verdict?: SkillVerdict }) {
+  const { t } = useTranslation();
+  const v = verdict || "unscanned";
+  const map = {
+    safe: { Icon: ShieldCheck, label: t("skills.verdict.safe"), cls: "bg-primary/10 text-primary" },
+    caution: { Icon: ShieldAlert, label: t("skills.verdict.caution"), cls: "bg-amber-500/10 text-amber-600 dark:text-amber-400" },
+    dangerous: { Icon: ShieldX, label: t("skills.verdict.dangerous"), cls: "bg-destructive/10 text-destructive" },
+    unscanned: { Icon: Shield, label: t("skills.verdict.unscanned"), cls: "bg-muted text-muted-foreground" },
+  } as const;
+  const { Icon, label, cls } = map[v as keyof typeof map] ?? map.unscanned;
+  return (
+    <span
+      className={cn(
+        "inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium leading-none",
+        cls,
+      )}
+    >
+      <Icon className="h-3 w-3" aria-hidden />
+      {label}
+    </span>
+  );
+}
+
 function severityClass(sev: SkillFinding["severity"]): string {
   if (sev === "dangerous" || sev === "high") return "text-destructive";
   if (sev === "caution") return "text-amber-600 dark:text-amber-400";
@@ -87,15 +133,8 @@ function severityClass(sev: SkillFinding["severity"]): string {
 }
 
 /** The reasons behind a verdict: one line per §8.C finding (category, location,
- * detail), colored by severity. Used in the active-skill detail and inline on
- * each quarantine row. */
+ * detail), colored by severity. */
 function FindingsList({ findings }: { findings: SkillFinding[] }) {
-  const { t } = useTranslation();
-  if (findings.length === 0) {
-    return (
-      <p className="text-[12px] text-muted-foreground">{t("skills.noFindings")}</p>
-    );
-  }
   return (
     <ul className="flex flex-col gap-1.5">
       {findings.map((f, i) => (
@@ -111,23 +150,45 @@ function FindingsList({ findings }: { findings: SkillFinding[] }) {
   );
 }
 
+/** The security report for a pending import, picking the right shape for the
+ * verdict: concrete findings, a clean-scan affirmation, or a not-analyzed hint. */
+function SecurityReport({ row }: { row: QuarantineRow }) {
+  const { t } = useTranslation();
+  if (row.findings.length > 0) return <FindingsList findings={row.findings} />;
+  if (row.verdict === "safe") {
+    return (
+      <p className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
+        <ShieldCheck className="h-3.5 w-3.5 text-primary" aria-hidden />
+        {t("skills.scanClean")}
+      </p>
+    );
+  }
+  if (!row.verdict) {
+    return <p className="text-[12px] text-muted-foreground">{t("skills.unscannedHint")}</p>;
+  }
+  return <p className="text-[12px] text-muted-foreground">{t("skills.noFindings")}</p>;
+}
+
 /**
  * Skills — a top-level surface (peer of Chat and the Memory graph), not a
  * settings section. Skills are procedural memory: a library the user reads,
- * edits, and the agent evolves. Master-detail: the list stays on the left, the
- * selected skill's detail fills the right pane (View renders markdown via the
- * chat's MarkdownText; Edit is the raw source, manual skills only). On narrow
- * screens it drills in. A skill is conceptually a directory; today the surface
- * edits its SKILL.md — a per-skill file tree (plugins with scripts) is a later
- * phase that this workspace layout leaves room for.
+ * edits, and the agent evolves.
+ *
+ * Master-detail with one spatial model: the LEFT column is navigation only —
+ * the Active library and the Pending import queue, switched by a segment. The
+ * RIGHT pane is where work happens, in one of four modes: read/edit a skill,
+ * triage a pending import (security report + actions, with room), acquire a new
+ * skill (import + registry search), or the empty prompt. On narrow screens it
+ * drills in. A skill is conceptually a directory; today the surface edits its
+ * SKILL.md — a per-skill file tree is a later phase this layout leaves room for.
  */
 export function SkillsView() {
   const { token } = useClient();
   const { t } = useTranslation();
   const [rows, setRows] = useState<SkillRow[] | null>(null);
   const [quarantine, setQuarantine] = useState<QuarantineRow[] | null>(null);
-  const [pane, setPane] = useState<"active" | "quarantine">("active");
-  const [selected, setSelected] = useState<string | null>(null);
+  const [listTab, setListTab] = useState<"active" | "pending">("active");
+  const [pane, setPane] = useState<RightPane>({ kind: "empty" });
   const [detail, setDetail] = useState<SkillDetail | null>(null);
   const [draft, setDraft] = useState("");
   const [tab, setTab] = useState<"view" | "edit">("view");
@@ -188,7 +249,7 @@ export function SkillsView() {
           setPicker(res.candidates);
         } else if (res.quarantined) {
           setImportSrc("");
-          setPane("quarantine"); // show where it landed
+          setListTab("pending"); // show where it landed
           await refresh();
         } else {
           setImportMsg(res.unresolved_reason || t("skills.import.unresolved"));
@@ -228,7 +289,7 @@ export function SkillsView() {
   // The gate is server-side: approve, and react to what it asks for. A safe,
   // trusted skill installs straight away; otherwise the server says it needs
   // confirmation (code/caution/out-of-allowlist) or a dangerous override, and
-  // we surface that as an INLINE prompt on the row (no native dialog).
+  // we surface that as an INLINE prompt in the triage pane (no native dialog).
   const approve = useCallback(
     async (name: string) => {
       setActing(name);
@@ -237,6 +298,7 @@ export function SkillsView() {
         const res = await approveSkill(token, name);
         if (res.ok) {
           setGate(null);
+          setPane({ kind: "empty" });
           await refresh();
         } else if (res.refused === "confirm" || res.refused === "block" || res.refused === "exists") {
           setGate({ name, confirm: false, override: false, replace: false, ask: res.refused });
@@ -271,6 +333,7 @@ export function SkillsView() {
       });
       if (res.ok) {
         setGate(null);
+        setPane({ kind: "empty" });
         await refresh();
       } else if (res.refused === "confirm" || res.refused === "block" || res.refused === "exists") {
         setGate({ ...next, ask: res.refused });
@@ -289,6 +352,8 @@ export function SkillsView() {
       setActing(name);
       try {
         await rejectSkill(token, name);
+        setGate(null);
+        setPane({ kind: "empty" });
         await refresh();
       } catch (e) {
         setImportMsg(errMsg(e));
@@ -339,40 +404,52 @@ export function SkillsView() {
 
   const dirty = detail != null && draft !== detail.content;
 
-  const open = useCallback(
-    async (name: string) => {
-      setError(null);
-      try {
-        const d = await getSkill(token, name);
-        setSelected(name);
-        setDetail(d);
-        setDraft(d.content);
-        setTab("view");
-      } catch (e) {
-        setError(errMsg(e));
-      }
-    },
-    [token],
-  );
-
   const guardDirty = useCallback(
     () => !dirty || window.confirm(t("skills.discardPrompt")),
     [dirty, t],
   );
 
-  const select = useCallback(
-    (name: string) => {
-      if (name === selected) return;
+  const openSkill = useCallback(
+    async (name: string) => {
+      if (pane.kind === "skill" && pane.name === name) return;
       if (!guardDirty()) return;
-      void open(name);
+      setError(null);
+      try {
+        const d = await getSkill(token, name);
+        setDetail(d);
+        setDraft(d.content);
+        setTab("view");
+        setPane({ kind: "skill", name });
+      } catch (e) {
+        setError(errMsg(e));
+      }
     },
-    [selected, guardDirty, open],
+    [token, pane, guardDirty],
   );
+
+  const openTriage = useCallback(
+    (name: string) => {
+      if (!guardDirty()) return;
+      setGate(null);
+      setImportMsg(null);
+      setDetail(null);
+      setPane({ kind: "triage", name });
+    },
+    [guardDirty],
+  );
+
+  const openAcquire = useCallback(() => {
+    if (!guardDirty()) return;
+    setDetail(null);
+    setImportMsg(null);
+    setPane({ kind: "acquire" });
+  }, [guardDirty]);
 
   const back = useCallback(() => {
     if (!guardDirty()) return;
-    setSelected(null);
     setDetail(null);
+    setGate(null);
+    setPane({ kind: "empty" });
   }, [guardDirty]);
 
   const save = useCallback(async () => {
@@ -411,7 +488,10 @@ export function SkillsView() {
 
   const list = rows ?? [];
   const quarList = quarantine ?? [];
-  const current = list.find((r) => r.name === selected) ?? null;
+  const skillRow =
+    pane.kind === "skill" ? (list.find((r) => r.name === pane.name) ?? null) : null;
+  const triageRow =
+    pane.kind === "triage" ? (quarList.find((q) => q.name === pane.name) ?? null) : null;
   const editable = detail?.mode === "manual";
 
   return (
@@ -423,8 +503,17 @@ export function SkillsView() {
           <span className="text-xs text-muted-foreground">{list.length}</span>
         ) : null}
         {error ? (
-          <span className="ml-auto truncate text-xs text-destructive">{error}</span>
+          <span className="truncate text-xs text-destructive">{error}</span>
         ) : null}
+        <Button
+          size="sm"
+          variant={pane.kind === "acquire" ? "default" : "outline"}
+          className="ml-auto"
+          onClick={openAcquire}
+        >
+          <Plus className="mr-1 h-4 w-4" aria-hidden />
+          {t("skills.add")}
+        </Button>
       </header>
 
       {loading ? (
@@ -434,146 +523,20 @@ export function SkillsView() {
         </div>
       ) : (
         <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[minmax(0,20rem)_1fr]">
-          {/* Master — skill list */}
+          {/* Master — navigation only: the Active library and Pending queue. */}
           <aside
             className={cn(
               "min-h-0 overflow-y-auto md:border-r md:border-border/40",
-              selected ? "hidden md:block" : "block",
+              pane.kind === "empty" ? "block" : "hidden md:block",
             )}
           >
-            {/* Import — a surface action (bring a skill in); the result lands
-                in Quarantine. Source-agnostic: path, URL, or github:owner/repo. */}
-            <div className="border-b border-border/30 p-3">
-              <form
-                className="flex flex-col gap-2"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void doImport(importSrc);
-                }}
-              >
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={importSrc}
-                    onChange={(e) => setImportSrc(e.target.value)}
-                    placeholder={t("skills.import.placeholder")}
-                    className="min-w-0 flex-1 rounded-[8px] border border-border/60 bg-background px-2.5 py-1.5 text-[12px] outline-none focus:border-primary/60"
-                  />
-                  <Button type="submit" size="sm" disabled={importing || !importSrc.trim()}>
-                    {importing ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      t("skills.import.button")
-                    )}
-                  </Button>
-                </div>
-                {importMsg ? (
-                  <p className="text-[12px] text-muted-foreground">{importMsg}</p>
-                ) : null}
-              </form>
-
-              {/* Picker: when a source resolves to several skills, choose one. */}
-              {picker && picker.length > 0 ? (
-                <div className="mt-2 flex flex-col gap-1 rounded-[8px] border border-border/40 bg-muted/20 p-2">
-                  <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                    {t("skills.import.pick")}
-                  </p>
-                  {picker.map((c) => (
-                    <button
-                      key={c.ref}
-                      type="button"
-                      onClick={() => void doImport(c.ref)}
-                      disabled={importing}
-                      className="flex flex-col items-start rounded-[6px] px-2 py-1.5 text-left hover:bg-muted/50 disabled:opacity-50"
-                    >
-                      <span className="text-[13px] font-medium text-foreground">{c.name}</span>
-                      <span className="truncate text-[11px] text-muted-foreground">{c.ref}</span>
-                    </button>
-                  ))}
-                </div>
-              ) : null}
-
-              {/* Search the registry — read-only. A hit's Import button feeds
-                  its `ref` into the same import flow above (no install here). */}
-              <form
-                className="mt-2 flex gap-2"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void doSearch(searchQuery);
-                }}
-              >
-                <input
-                  type="search"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder={t("skills.search.placeholder")}
-                  className="min-w-0 flex-1 rounded-[8px] border border-border/60 bg-background px-2.5 py-1.5 text-[12px] outline-none focus:border-primary/60"
-                />
-                <Button type="submit" size="sm" variant="outline" disabled={searching || !searchQuery.trim()}>
-                  {searching ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    t("skills.search.button")
-                  )}
-                </Button>
-              </form>
-              {searchMsg ? (
-                <p className="mt-1.5 text-[12px] text-muted-foreground">{searchMsg}</p>
-              ) : null}
-
-              {hits && hits.length > 0 ? (
-                <div className="mt-2 flex flex-col gap-1 rounded-[8px] border border-border/40 bg-muted/20 p-2">
-                  {hits.map((h) => (
-                    <div
-                      key={h.ref}
-                      className="flex items-start gap-2 rounded-[6px] px-2 py-1.5"
-                    >
-                      <div className="flex min-w-0 flex-1 flex-col">
-                        <span className="flex items-center gap-1.5">
-                          <span className="truncate text-[13px] font-medium text-foreground">
-                            {h.name}
-                          </span>
-                          <span className="shrink-0 text-[11px] text-muted-foreground">
-                            {h.registry}
-                          </span>
-                          {typeof h.signals?.installs === "number" ? (
-                            <span className="shrink-0 text-[11px] text-muted-foreground">
-                              · {t("skills.search.installs", { count: h.signals.installs })}
-                            </span>
-                          ) : null}
-                        </span>
-                        {h.description ? (
-                          <span className="truncate text-[12px] text-muted-foreground">
-                            {h.description}
-                          </span>
-                        ) : null}
-                        <span className="truncate text-[11px] text-muted-foreground/70">
-                          {h.ref}
-                        </span>
-                      </div>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        disabled={importing}
-                        onClick={() => void doImport(h.ref)}
-                      >
-                        {t("skills.import.button")}
-                      </Button>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-
-            {/* Tabs: the active inventory vs the §8.C import quarantine. */}
             <div className="sticky top-0 z-10 flex gap-1 border-b border-border/30 bg-background/95 p-2 backdrop-blur supports-[backdrop-filter]:bg-background/80">
               <button
                 type="button"
-                onClick={() => setPane("active")}
+                onClick={() => setListTab("active")}
                 className={cn(
                   "flex flex-1 items-center justify-center gap-1.5 rounded-[6px] px-2 py-1 text-[12px] transition-colors",
-                  pane === "active"
+                  listTab === "active"
                     ? "bg-primary/10 text-primary"
                     : "text-muted-foreground hover:text-foreground",
                 )}
@@ -583,35 +546,35 @@ export function SkillsView() {
               </button>
               <button
                 type="button"
-                onClick={() => setPane("quarantine")}
+                onClick={() => setListTab("pending")}
                 className={cn(
                   "flex flex-1 items-center justify-center gap-1.5 rounded-[6px] px-2 py-1 text-[12px] transition-colors",
-                  pane === "quarantine"
+                  listTab === "pending"
                     ? "bg-primary/10 text-primary"
                     : "text-muted-foreground hover:text-foreground",
                 )}
               >
-                {t("skills.tab.quarantine")}
-                <span className={cn(quarList.length > 0 ? "text-destructive" : "opacity-60")}>
+                {t("skills.tab.pending")}
+                <span className={cn(quarList.length > 0 ? "text-amber-600 dark:text-amber-400" : "opacity-60")}>
                   {quarList.length}
                 </span>
               </button>
             </div>
 
-            {pane === "active" ? (
+            {listTab === "active" ? (
               list.length === 0 ? (
-                <p className="p-4 text-[13px] text-muted-foreground">
-                  {t("skills.empty")}
-                </p>
+                <p className="p-4 text-[13px] text-muted-foreground">{t("skills.empty")}</p>
               ) : (
                 list.map((row) => (
                   <button
                     key={row.name}
                     type="button"
-                    onClick={() => select(row.name)}
+                    onClick={() => void openSkill(row.name)}
                     className={cn(
                       "flex w-full flex-col gap-1 border-b border-border/30 px-4 py-3 text-left transition-colors",
-                      row.name === selected ? "bg-primary/10" : "hover:bg-muted/40",
+                      pane.kind === "skill" && pane.name === row.name
+                        ? "bg-primary/10"
+                        : "hover:bg-muted/40",
                     )}
                   >
                     <span className="flex items-center justify-between gap-2">
@@ -631,36 +594,234 @@ export function SkillsView() {
                 ))
               )
             ) : quarList.length === 0 ? (
-              <p className="p-4 text-[13px] text-muted-foreground">
-                {t("skills.quarantineEmpty")}
-              </p>
+              <p className="p-4 text-[13px] text-muted-foreground">{t("skills.pendingEmpty")}</p>
             ) : (
               quarList.map((q) => (
-                <div
+                <button
                   key={q.name}
-                  className="flex flex-col gap-1.5 border-b border-border/30 px-4 py-3"
+                  type="button"
+                  onClick={() => openTriage(q.name)}
+                  className={cn(
+                    "flex w-full flex-col gap-1 border-b border-border/30 px-4 py-3 text-left transition-colors",
+                    pane.kind === "triage" && pane.name === q.name
+                      ? "bg-primary/10"
+                      : "hover:bg-muted/40",
+                  )}
                 >
                   <span className="flex items-center justify-between gap-2">
                     <span className="truncate text-[14px] font-medium text-foreground">
                       {q.name}
                     </span>
-                    <VerdictBadge verdict={q.verdict} />
+                    <SecurityChip verdict={q.verdict} />
                   </span>
-                  {q.source ? (
-                    <span className="truncate text-[12px] text-muted-foreground">
-                      {q.source}
-                    </span>
+                  <span className="truncate text-[12px] text-muted-foreground">
+                    {q.source
+                      ? t("skills.pendingReason", { source: q.source })
+                      : t("skills.pendingReasonBare")}
+                  </span>
+                </button>
+              ))
+            )}
+          </aside>
+
+          {/* Detail — the work pane. */}
+          <section
+            className={cn(
+              "min-h-0 min-w-0 flex-col",
+              pane.kind === "empty" ? "hidden md:flex" : "flex",
+            )}
+          >
+            {pane.kind === "empty" ? (
+              <div className="flex flex-1 items-center justify-center text-[13px] text-muted-foreground">
+                {t("skills.selectPrompt")}
+              </div>
+            ) : pane.kind === "acquire" ? (
+              <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6">
+                <button
+                  type="button"
+                  onClick={back}
+                  className="mb-3 text-[13px] text-muted-foreground hover:text-foreground md:hidden"
+                >
+                  &larr; {t("skills.back")}
+                </button>
+                <h2 className="text-[15px] font-semibold text-foreground">
+                  {t("skills.acquireTitle")}
+                </h2>
+                <p className="mt-1 max-w-[60ch] text-[12px] text-muted-foreground">
+                  {t("skills.acquireHint")}
+                </p>
+
+                {/* Import — source-agnostic: path, URL, or github:owner/repo. */}
+                <form
+                  className="mt-4 flex flex-col gap-2"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void doImport(importSrc);
+                  }}
+                >
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={importSrc}
+                      onChange={(e) => setImportSrc(e.target.value)}
+                      placeholder={t("skills.import.placeholder")}
+                      className="min-w-0 flex-1 rounded-[8px] border border-border/60 bg-background px-2.5 py-1.5 text-[12px] outline-none focus:border-primary/60"
+                    />
+                    <Button type="submit" size="sm" disabled={importing || !importSrc.trim()}>
+                      {importing ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        t("skills.import.button")
+                      )}
+                    </Button>
+                  </div>
+                  {importMsg ? (
+                    <p className="text-[12px] text-muted-foreground">{importMsg}</p>
                   ) : null}
-                  {q.install_specs && q.install_specs.length > 0 ? (
-                    <p className="text-[11px] text-muted-foreground">
-                      {t("skills.import.declaredDeps", { deps: q.install_specs.join(", ") })}
+                </form>
+
+                {/* Picker: when a source resolves to several skills, choose one. */}
+                {picker && picker.length > 0 ? (
+                  <div className="mt-2 flex flex-col gap-1 rounded-[8px] border border-border/40 bg-muted/20 p-2">
+                    <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      {t("skills.import.pick")}
+                    </p>
+                    {picker.map((c) => (
+                      <button
+                        key={c.ref}
+                        type="button"
+                        onClick={() => void doImport(c.ref)}
+                        disabled={importing}
+                        className="flex flex-col items-start rounded-[6px] px-2 py-1.5 text-left hover:bg-muted/50 disabled:opacity-50"
+                      >
+                        <span className="text-[13px] font-medium text-foreground">{c.name}</span>
+                        <span className="truncate text-[11px] text-muted-foreground">{c.ref}</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+
+                {/* Search the registry — read-only. A hit's Import button feeds
+                    its `ref` into the same import flow above (no install here). */}
+                <form
+                  className="mt-4 flex gap-2"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void doSearch(searchQuery);
+                  }}
+                >
+                  <input
+                    type="search"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder={t("skills.search.placeholder")}
+                    className="min-w-0 flex-1 rounded-[8px] border border-border/60 bg-background px-2.5 py-1.5 text-[12px] outline-none focus:border-primary/60"
+                  />
+                  <Button type="submit" size="sm" variant="outline" disabled={searching || !searchQuery.trim()}>
+                    {searching ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      t("skills.search.button")
+                    )}
+                  </Button>
+                </form>
+                {searchMsg ? (
+                  <p className="mt-1.5 text-[12px] text-muted-foreground">{searchMsg}</p>
+                ) : null}
+
+                {hits && hits.length > 0 ? (
+                  <div className="mt-2 flex flex-col gap-1 rounded-[8px] border border-border/40 bg-muted/20 p-2">
+                    {hits.map((h) => (
+                      <div
+                        key={h.ref}
+                        className="flex items-start gap-2 rounded-[6px] px-2 py-1.5"
+                      >
+                        <div className="flex min-w-0 flex-1 flex-col">
+                          <span className="flex items-center gap-1.5">
+                            <span className="truncate text-[13px] font-medium text-foreground">
+                              {h.name}
+                            </span>
+                            <span className="shrink-0 text-[11px] text-muted-foreground">
+                              {h.registry}
+                            </span>
+                            {typeof h.signals?.installs === "number" ? (
+                              <span className="shrink-0 text-[11px] text-muted-foreground">
+                                · {t("skills.search.installs", { count: h.signals.installs })}
+                              </span>
+                            ) : null}
+                          </span>
+                          {h.description ? (
+                            <span className="truncate text-[12px] text-muted-foreground">
+                              {h.description}
+                            </span>
+                          ) : null}
+                          <span className="truncate text-[11px] text-muted-foreground/70">
+                            {h.ref}
+                          </span>
+                        </div>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          disabled={importing}
+                          onClick={() => void doImport(h.ref)}
+                        >
+                          {t("skills.import.button")}
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : pane.kind === "triage" ? (
+              !triageRow ? (
+                <div className="flex flex-1 items-center justify-center text-[13px] text-muted-foreground">
+                  {t("skills.selectPrompt")}
+                </div>
+              ) : (
+                <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6">
+                  <button
+                    type="button"
+                    onClick={back}
+                    className="mb-3 text-[13px] text-muted-foreground hover:text-foreground md:hidden"
+                  >
+                    &larr; {t("skills.back")}
+                  </button>
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                    <span className="text-[15px] font-semibold text-foreground">
+                      {triageRow.name}
+                    </span>
+                    <SecurityChip verdict={triageRow.verdict} />
+                  </div>
+                  <p className="mt-1 text-[12px] text-muted-foreground">
+                    {triageRow.source
+                      ? t("skills.pendingReason", { source: triageRow.source })
+                      : t("skills.pendingReasonBare")}
+                  </p>
+
+                  <div className="mt-4">
+                    <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      {t("skills.security")}
+                    </p>
+                    <SecurityReport row={triageRow} />
+                  </div>
+
+                  {triageRow.install_specs && triageRow.install_specs.length > 0 ? (
+                    <p className="mt-3 text-[11px] text-muted-foreground">
+                      {t("skills.import.declaredDeps", {
+                        deps: triageRow.install_specs.join(", "),
+                      })}
                     </p>
                   ) : null}
-                  <FindingsList findings={q.findings} />
-                  {gate?.name === q.name ? (
+
+                  {importMsg ? (
+                    <p className="mt-3 text-[12px] text-muted-foreground">{importMsg}</p>
+                  ) : null}
+
+                  {gate?.name === triageRow.name ? (
                     // Inline gate prompt — no native dialog. The button is
                     // destructive when forcing a dangerous-verdict install.
-                    <div className="flex flex-col gap-2 rounded-[8px] border border-border/60 bg-muted/40 p-2">
+                    <div className="mt-4 flex flex-col gap-2 rounded-[8px] border border-border/60 bg-muted/40 p-3">
                       <p className="text-[12px] text-foreground">
                         {gate.ask === "block"
                           ? t("skills.import.forceDangerous")
@@ -672,7 +833,7 @@ export function SkillsView() {
                         <Button
                           size="sm"
                           variant={gate.ask === "block" ? "destructive" : "default"}
-                          disabled={acting === q.name}
+                          disabled={acting === triageRow.name}
                           onClick={() => void confirmGate()}
                         >
                           {gate.ask === "block"
@@ -684,7 +845,7 @@ export function SkillsView() {
                         <Button
                           size="sm"
                           variant="outline"
-                          disabled={acting === q.name}
+                          disabled={acting === triageRow.name}
                           onClick={() => setGate(null)}
                         >
                           {t("skills.import.cancel")}
@@ -692,29 +853,29 @@ export function SkillsView() {
                       </div>
                     </div>
                   ) : (
-                    <div className="flex gap-2 pt-1">
+                    <div className="mt-4 flex flex-wrap gap-2">
                       <Button
                         size="sm"
-                        disabled={acting === q.name}
-                        onClick={() => void approve(q.name)}
+                        disabled={acting === triageRow.name}
+                        onClick={() => void approve(triageRow.name)}
                       >
                         {t("skills.import.approve")}
                       </Button>
                       <Button
                         variant="outline"
                         size="sm"
-                        disabled={acting === q.name}
-                        onClick={() => void reject(q.name)}
+                        disabled={acting === triageRow.name}
+                        onClick={() => void reject(triageRow.name)}
                       >
                         {t("skills.import.reject")}
                       </Button>
-                      {q.trust_prefix ? (
+                      {triageRow.trust_prefix ? (
                         <Button
                           variant="ghost"
                           size="sm"
-                          disabled={acting === q.trust_prefix}
-                          onClick={() => void trust(q.trust_prefix!)}
-                          title={q.trust_prefix}
+                          disabled={acting === triageRow.trust_prefix}
+                          onClick={() => void trust(triageRow.trust_prefix!)}
+                          title={triageRow.trust_prefix}
                         >
                           {t("skills.import.trust")}
                         </Button>
@@ -722,26 +883,16 @@ export function SkillsView() {
                       <Button
                         variant="ghost"
                         size="sm"
-                        disabled={acting === q.name}
-                        onClick={() => void judgeOne(q.name)}
+                        disabled={acting === triageRow.name}
+                        onClick={() => void judgeOne(triageRow.name)}
                       >
                         {t("skills.import.judge")}
                       </Button>
                     </div>
                   )}
                 </div>
-              ))
-            )}
-          </aside>
-
-          {/* Detail — selected skill */}
-          <section
-            className={cn(
-              "min-h-0 min-w-0 flex-col",
-              selected ? "flex" : "hidden md:flex",
-            )}
-          >
-            {!detail ? (
+              )
+            ) : !detail ? (
               <div className="flex flex-1 items-center justify-center text-[13px] text-muted-foreground">
                 {t("skills.selectPrompt")}
               </div>
@@ -759,12 +910,12 @@ export function SkillsView() {
                     {detail.name}
                   </span>
                   <ModeBadge mode={detail.mode} />
-                  <VerdictBadge verdict={current?.verdict} />
-                  {current?.provenance?.source ? (
+                  <VerdictBadge verdict={skillRow?.verdict} />
+                  {skillRow?.provenance?.source ? (
                     <span className="truncate text-[12px] text-muted-foreground">
-                      from {current.provenance.source}
-                      {current.provenance.created_at
-                        ? ` · ${current.provenance.created_at}`
+                      from {skillRow.provenance.source}
+                      {skillRow.provenance.created_at
+                        ? ` · ${skillRow.provenance.created_at}`
                         : ""}
                     </span>
                   ) : null}
@@ -811,12 +962,12 @@ export function SkillsView() {
                   </div>
                 </div>
 
-                {current && current.findings && current.findings.length > 0 ? (
+                {skillRow && skillRow.findings && skillRow.findings.length > 0 ? (
                   <div className="shrink-0 border-b border-border/30 bg-amber-500/5 px-4 py-3 sm:px-6">
                     <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                       {t("skills.security")}
                     </p>
-                    <FindingsList findings={current.findings} />
+                    <FindingsList findings={skillRow.findings} />
                   </div>
                 ) : null}
 

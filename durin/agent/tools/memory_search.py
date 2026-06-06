@@ -803,8 +803,8 @@ class MemorySearchTool(Tool):
             uri = hit_path or hit.uri
             source = "sessions"
         elif "ingested/" in hit_path:
-            class_name = hit.type or "corpus"
-            uri = hit_path or f"memory/corpus/{hit.uri}"
+            class_name = hit.type or "ingested"
+            uri = hit_path or hit.uri
             source = "ingested"
         else:
             class_name = hit.type or ""

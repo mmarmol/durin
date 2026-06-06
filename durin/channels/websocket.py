@@ -36,6 +36,17 @@ from durin.channels.base import BaseChannel
 from durin.command.builtin import builtin_command_palette
 from durin.config.paths import get_media_dir
 from durin.config.schema import Base
+from durin.providers.codex_device_auth import (
+    disconnect as codex_disconnect,
+)
+from durin.providers.codex_device_auth import (
+    existing_codex_session,
+    request_device_code,
+)
+from durin.providers.codex_device_auth import (
+    poll_once as codex_poll_once,
+)
+from durin.providers.codex_models import list_codex_models
 from durin.session.goal_state import goal_state_ws_blob
 from durin.utils.helpers import safe_filename
 from durin.utils.media_decode import (
@@ -717,6 +728,18 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/settings/web-search/update":
             return self._handle_settings_web_search_update(request)
 
+        if got == "/api/oauth/codex/status":
+            return self._handle_codex_oauth_status(request)
+
+        if got == "/api/oauth/codex/start":
+            return self._handle_codex_oauth_start(request)
+
+        if got == "/api/oauth/codex/poll":
+            return self._handle_codex_oauth_poll(request)
+
+        if got == "/api/oauth/codex/disconnect":
+            return self._handle_codex_oauth_disconnect(request)
+
         if got == "/api/secrets":
             return self._handle_secrets_list(request)
 
@@ -829,6 +852,13 @@ class WebSocketChannel(BaseChannel):
 
         if got == "/api/memory/cross-encoder/test":
             return await self._handle_cross_encoder_test(request, query)
+
+        if got == "/api/extras/status":
+            return self._handle_extras_status(request, query)
+        if got == "/api/extras/ensure":
+            return await self._handle_extras_ensure(request, query)
+        if got == "/api/extras/restart":
+            return self._handle_extras_restart(request)
 
         m = re.match(r"^/api/sessions/([^/]+)/messages$", got)
         if m:
@@ -1236,6 +1266,61 @@ class WebSocketChannel(BaseChannel):
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         return _http_json_response(self._settings_payload())
+
+    def _codex_status_payload(self) -> dict[str, Any]:
+        info = existing_codex_session()
+        if info is None:
+            return {"connected": False}
+        return {
+            "connected": True,
+            "email": info.email,
+            "plan": info.plan,
+            "source": info.source,
+        }
+
+    def _handle_codex_oauth_status(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        return _http_json_response(self._codex_status_payload())
+
+    def _handle_codex_oauth_start(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        try:
+            ch = request_device_code()
+        except Exception as exc:  # noqa: BLE001
+            return _http_error(502, f"device code request failed: {exc}")
+        return _http_json_response(
+            {
+                "user_code": ch.user_code,
+                "verification_uri": ch.verification_uri,
+                "device_auth_id": ch.device_auth_id,
+                "interval": ch.interval,
+                "expires_in": ch.expires_in,
+            }
+        )
+
+    def _handle_codex_oauth_poll(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        query = _parse_query(request.path)
+        device_auth_id = (_query_first(query, "device_auth_id") or "").strip()
+        user_code = (_query_first(query, "user_code") or "").strip()
+        if not device_auth_id or not user_code:
+            return _http_error(400, "device_auth_id and user_code are required")
+        res = codex_poll_once(device_auth_id, user_code)
+        payload: dict[str, Any] = {"status": res.status}
+        if res.status == "ok":
+            payload.update(self._codex_status_payload())
+        if res.status == "error":
+            payload["error"] = res.error
+        return _http_json_response(payload)
+
+    def _handle_codex_oauth_disconnect(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        codex_disconnect()
+        return _http_json_response(self._codex_status_payload())
 
     def _handle_commands(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
@@ -1930,6 +2015,22 @@ class WebSocketChannel(BaseChannel):
         query = _parse_query(request.path)
         provider = (_query_first(query, "provider") or "").strip()
         capability = (_query_first(query, "capability") or "").strip().lower()
+
+        if provider in ("openai-codex", "openai_codex"):
+            access = None
+            try:
+                from oauth_cli_kit import get_token
+                from oauth_cli_kit.providers import OPENAI_CODEX_PROVIDER
+
+                from durin.providers.codex_device_auth import _strict_storage
+
+                tok = get_token(OPENAI_CODEX_PROVIDER, _strict_storage())
+                access = tok.access if tok else None
+            except Exception:  # noqa: BLE001
+                access = None
+            models = list_codex_models(access)
+            return _http_json_response({"suggested": models, "models": models})
+
         suggested = list(DEFAULT_MODELS.get(provider, ()))
 
         # Resolve provider keywords once. Empty tuple means "don't filter"
@@ -2155,6 +2256,72 @@ class WebSocketChannel(BaseChannel):
                 },
             )
         return _http_json_response(result)
+
+    def _handle_extras_status(self, request: WsRequest, query: dict) -> Response:
+        """`GET /api/extras/status?feature=<f>` — is the feature's pip extra
+        importable, and what would installing it cost / require?"""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        from durin.extras import REGISTRY, _module_present
+
+        feature = (_query_first(query, "feature") or "").strip()
+        fe = REGISTRY.get(feature)
+        if fe is None:
+            return _http_error(400, f"unknown feature '{feature}'")
+        return _http_json_response(
+            {
+                "present": _module_present(fe.module),
+                "extra": fe.extra,
+                "approx_size": fe.approx_size,
+                "needs_restart": fe.needs_restart,
+                "label": fe.label,
+            }
+        )
+
+    async def _handle_extras_ensure(self, request: WsRequest, query: dict) -> Response:
+        """`POST /api/extras/ensure?feature=<f>&restart=<bool>` — install the
+        feature's extra (off-loop; may take minutes for heavy deps) and, if it
+        installed something that needs a restart and the caller opted in, kick a
+        gateway restart."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        import asyncio
+
+        from durin.config.loader import load_config
+        from durin.extras import REGISTRY, ensure_extra
+
+        feature = (_query_first(query, "feature") or "").strip()
+        if feature not in REGISTRY:
+            return _http_error(400, f"unknown feature '{feature}'")
+        restart = (_query_first(query, "restart") or "").lower() in ("1", "true", "yes")
+        res = await asyncio.to_thread(ensure_extra, feature, config=load_config())
+        out = {
+            "status": res.status,
+            "needs_restart": res.needs_restart,
+            "message": res.message,
+        }
+        if res.status == "installed" and restart and res.needs_restart:
+            self._spawn_gateway_restart()
+            out["restarting"] = True
+        return _http_json_response(out)
+
+    def _handle_extras_restart(self, request: WsRequest) -> Response:
+        """`POST /api/extras/restart` — restart the gateway daemon."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        self._spawn_gateway_restart()
+        return _http_json_response({"restarting": True})
+
+    @staticmethod
+    def _spawn_gateway_restart() -> None:
+        import subprocess
+        import sys
+
+        # Detached so it survives this process being killed by the restart.
+        subprocess.Popen(
+            [sys.executable, "-m", "durin", "gateway", "restart"],
+            start_new_session=True,
+        )
 
     @staticmethod
     def _is_websocket_channel_session_key(key: str) -> bool:

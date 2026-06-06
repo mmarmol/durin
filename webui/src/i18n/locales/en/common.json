@@ -307,6 +307,13 @@
       "crossEncoderTest": "Test",
       "dreamDescription": "The dream consolidates sessions into entity pages + skills and dedups duplicate entities. It runs on a daily cron plus optional reactive triggers."
     },
+    "extras": {
+      "willInstall": "This will install {{extra}} (~{{size}} download).",
+      "restartAfter": "Restart the gateway after installing",
+      "install": "Install",
+      "installing": "Installing…",
+      "cancel": "Cancel"
+    },
     "skillsSecurity": {
       "description": "Security policy for importing skills: the LLM judge, trust patterns, the GitHub token, and size caps.",
       "loadError": "Could not load the configuration.",
@@ -329,7 +336,8 @@
       "help": {
         "judgeTrigger": "Off: only on-demand (the 'Audit with LLM' button per skill). Uncertain: auto-run only when the gate is already unsure (code / caution / out-of-allowlist). Always: every import. Degrades silently when no model is available.",
         "judgeMaxSeverity": "How high the judge may raise a verdict. 'Caution' forces a confirm but never blocks on its own; 'Dangerous' lets it block (override required).",
-        "judgeModel": "Model name for the judge. Empty uses the default memory model."
+        "judgeModel": "Model name for the judge. Empty uses the default memory model.",
+        "tokenSecret": "The durin secret holding your GitHub token. 'None' = anonymous requests (lower rate limit, no private repos)."
       },
       "severity": { "caution": "Caution (confirm)", "dangerous": "Dangerous (block)" },
       "trigger": { "off": "Off (on-demand only)", "uncertain": "When uncertain (tie-break)", "always": "Always" },
@@ -360,13 +368,9 @@
       "remove": "Remove job",
       "cantDeleteSystem": "System jobs cannot be removed.",
       "systemJobs": {
-        "dream": {
-          "name": "Working memory consolidation",
-          "note": "Distills recent chat history into MEMORY.md / SOUL.md / USER.md and creates skills when patterns emerge. Skips trivial ticks (see \"Memoria viva → Minimum tokens\" in Memory settings)."
-        },
         "memory_dream": {
-          "name": "Entity knowledge consolidation",
-          "note": "Nightly deep pass that turns episodic memory entries into canonical entity pages (knowledge graph)."
+          "name": "Entity memory consolidation",
+          "note": "Daily pass (3am local) plus reactive triggers (post-compaction / session-close) that processes recent sessions — extracts entity attributes, mines skills, deduplicates entities, and distills the always-on pin."
         }
       }
     }
@@ -378,16 +382,23 @@
     "modeAutoHint": "Auto: the agent decides when to use this skill.",
     "modeManualHint": "Manual: only used when you invoke it explicitly.",
     "back": "Back",
-    "empty": "No skills found.",
-    "selectPrompt": "Select a skill to view it.",
+    "empty": "No skills yet. Add one to get started.",
+    "selectPrompt": "Select a skill to view it, or add a new one.",
     "discardPrompt": "Discard unsaved changes?",
     "editHint": "Switch to manual to edit",
     "autoReadonly": "Read-only: this skill is in auto mode (managed by the agent). Switch it to manual to edit.",
-    "tab": { "active": "Active", "quarantine": "Quarantine" },
-    "quarantineEmpty": "No skills in quarantine.",
+    "add": "Add skill",
+    "acquireTitle": "Add a skill",
+    "acquireHint": "Import from a path, URL, or repo, or search the registry. Every skill you bring in waits in Pending until you approve it.",
+    "tab": { "active": "Active", "pending": "Pending" },
+    "pendingEmpty": "Nothing pending approval.",
+    "pendingReason": "Imported from {{source}} · awaiting your approval",
+    "pendingReasonBare": "Imported · awaiting your approval",
     "security": "Security",
     "noFindings": "No security findings.",
-    "verdict": { "safe": "Safe", "caution": "Caution", "dangerous": "Dangerous" },
+    "scanClean": "Scan found no risks.",
+    "unscannedHint": "Not analyzed yet. Run “Audit with LLM” to review it.",
+    "verdict": { "safe": "Safe", "caution": "Caution", "dangerous": "Dangerous", "unscanned": "Not analyzed" },
     "import": {
       "placeholder": "Import a skill: path, https://…/SKILL.md, or github:owner/repo",
       "button": "Import",
@@ -559,7 +570,7 @@
           },
           "dream": {
             "title": "Run Dream",
-            "description": "Manually trigger memory consolidation."
+            "description": "Manually run the entity consolidation dream (extract / skill / refine / always_on)."
           },
           "dream_log": {
             "title": "Show Dream log",
@@ -717,7 +728,7 @@
     "noAbsorptions": "No absorptions for this entity.",
     "noSourceLinkedEntries": "No episodic entries linked back to this session via source_refs.",
     "emptyHint": "Run <code>durin memory dream</code> once entries accumulate.",
-    "noConsolidatedHint": "Tagged in episodic entries but no consolidated page yet. Run <code>durin memory dream</code> to create one.",
+    "noConsolidatedHint": "Mentioned in episodic entries but no canonical entity page yet. Run <code>durin memory dream</code> to extract and create one.",
     "phantomWhatIs": "What this is (provisional)",
     "coMentions": "Co-mentions",
     "provenance": "Provenance",

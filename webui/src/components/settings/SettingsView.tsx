@@ -41,6 +41,7 @@ import { useTranslation } from "react-i18next";
 
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { Button } from "@/components/ui/button";
+import { CodexOAuthCard } from "@/components/settings/CodexOAuthCard";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -1613,6 +1614,7 @@ function ByokSettings({
   onSaveWebSearch: () => void;
 }) {
   const { t } = useTranslation();
+  const { token: codexToken } = useClient();
   const [activePane, setActivePane] = useState<ByokPaneKey>(forcePane ?? "llm");
   // When the parent pins a pane (the section *is* the pane), follow the
   // prop — the internal tab state is only for the un-pinned, tabbed case.
@@ -1807,6 +1809,7 @@ function ByokSettings({
       </div>
       {pane === "llm" ? (
         <div className="space-y-8">
+          <CodexOAuthCard token={codexToken} />
           <section className="space-y-3">
             <ByokSectionHeader
               title={t("settings.byok.configuredSection")}
