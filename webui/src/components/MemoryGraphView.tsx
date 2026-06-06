@@ -184,6 +184,9 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
   const [detailError, setDetailError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabName>("info");
   const [sessionTab, setSessionTab] = useState<SessionTabName>("info");
+  // When navigating to a session from a provenance event, the timestamp of
+  // that event — the messages tab scrolls to the nearest message (best-effort).
+  const [sessionScrollTs, setSessionScrollTs] = useState<string | null>(null);
   const [focusRef, setFocusRef] = useState<string | null>(null);
   const isSessionSelected = selected?.type === "session";
   // Wide-mode toggle for the right-hand detail panel. Sessions can
@@ -212,6 +215,39 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
       return next;
     });
   }, []);
+
+  // Navigate to the session a fact came from (provenance source_ref →
+  // `session:<stem>` node). Selecting the node opens the session detail
+  // panel via the existing `selected` effect. No-op when the session node
+  // isn't in the graph payload (e.g. its .jsonl was removed).
+  const selectSessionByStem = useCallback(
+    (stem: string, targetTs?: string | null) => {
+      const id = `session:${stem}`;
+      const node =
+        simNodesRef.current.find((n) => n.id === id) ??
+        data?.nodes.find((n) => n.id === id);
+      if (!node) return;
+      setSelected(node as MemoryGraphNode);
+      if (targetTs) {
+        // Came from a provenance event: open the thread and scroll to the
+        // moment that fact was recorded.
+        setSessionTab("messages");
+        setSessionScrollTs(targetTs);
+      } else {
+        setSessionTab("info");
+      }
+    },
+    [data],
+  );
+
+  // Local-graph follows selection (Obsidian's local graph model): focusing
+  // the active node dims the global hairball to its 1-hop neighbourhood, so
+  // the graph recedes to a contextual map while the content takes the stage.
+  // The panel's focus button still lets you unfocus to see the whole graph.
+  useEffect(() => {
+    setFocusRef(selected ? selected.id : null);
+  }, [selected?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Set of node types the user has toggled OFF in the legend. Default
   // empty = show all. Clicking a legend chip flips inclusion. Phantom
   // is treated as its own pseudo-type for the toggle.
@@ -490,7 +526,9 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
         hit.vy = 0;
         draggingRef.current = hit;
         setSelected(hit);
-        setActiveTab("info");
+        // Content-first landing: real pages open on the rendered body;
+        // phantoms (no page) open on Info where their provisional summary lives.
+        setActiveTab(hit.phantom ? "info" : "body");
         setEdgePopup(null);
         alphaRef.current = 0.4;
         evt.currentTarget.setPointerCapture(evt.pointerId);
@@ -853,7 +891,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                         const node = simNodesRef.current.find((n) => n.id === id);
                         if (node) {
                           setSelected(node);
-                          setActiveTab("info");
+                          setActiveTab(node.phantom ? "info" : "body");
                         }
                       }
                     }}
@@ -944,16 +982,16 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
           </div>
         ) : null}
 
-        {/* Right-side detail panel for the selected node. Width
-            toggles via the maximize button: 26rem (default, leaves
-            most of the graph visible) → up to ~80vw (long tool
-            outputs become readable). */}
+        {/* Right-side detail panel for the selected node. Obsidian-style
+            content primacy: on select the content takes most of the surface
+            (~58vw) and the graph recedes to a focused local view behind it;
+            the maximize button widens further (~80vw) for long bodies. */}
         {selected ? (
           <aside
             className={cn(
               "absolute right-3 top-3 z-10 flex max-w-[calc(100vw-1.5rem)] flex-col rounded-lg border border-border/50 bg-card/95 text-sm shadow-lg backdrop-blur",
               "transition-[width] duration-200 ease-out",
-              panelExpanded ? "w-[min(80vw,72rem)]" : "w-[26rem]",
+              panelExpanded ? "w-[min(80vw,72rem)]" : "w-[min(58vw,44rem)]",
             )}
             style={{ maxHeight: "calc(100% - 1.5rem)" }}
           >
@@ -1045,7 +1083,14 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                       { id: "sources", label: `Sources${detail?.entries.length ? ` (${detail.entries.length})` : ""}` },
                       { id: "archive", label: `Archive${detail?.archive.length ? ` (${detail.archive.length})` : ""}` },
                     ] as const
-                  ).map((tab) => (
+                  )
+                    // policy (a): phantom nodes have no consolidated page, so
+                    // "Body" and "History" are structurally always empty —
+                    // hide them instead of showing dead tabs.
+                    .filter((tab) =>
+                      !selected.phantom || (tab.id !== "body" && tab.id !== "history"),
+                    )
+                    .map((tab) => (
                     <button
                       key={tab.id}
                       type="button"
@@ -1081,6 +1126,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                 <SessionTabs
                   detail={sessionDetail}
                   tab={sessionTab}
+                  scrollTs={sessionScrollTs}
                 />
               ) : null}
               {detail ? (
@@ -1150,24 +1196,110 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
 
                   {activeTab === "body" ? (
                     detail.page && detail.page.body ? (
-                      <pre className="whitespace-pre-wrap font-mono text-[11px] leading-relaxed">
+                      <MarkdownTextRenderer className="text-[12.5px] leading-relaxed">
                         {detail.page.body}
-                      </pre>
+                      </MarkdownTextRenderer>
                     ) : (
                       <p className="text-muted-foreground">{t("memoryGraph.noBody")}</p>
                     )
                   ) : null}
 
                   {activeTab === "history" ? (
-                    detail.history.length === 0 ? (
-                      <p className="text-muted-foreground">{t("memoryGraph.noHistory")}</p>
-                    ) : (
-                      <ul className="space-y-2">
-                        {detail.history.map((c) => (
-                          <CommitItem key={c.sha} commit={c} />
-                        ))}
-                      </ul>
-                    )
+                    <div className="space-y-3">
+                      {/* Provenance: who/when/from-which-session each fact
+                          came from — the data durin always recorded but the
+                          panel never showed. The session origin is clickable
+                          (navigates to that session's detail). */}
+                      {detail.provenance.length > 0 ? (
+                        <div>
+                          <div className="mb-1 text-[10.5px] font-medium uppercase tracking-wide text-muted-foreground">
+                            {t("memoryGraph.provenance")}
+                          </div>
+                          {detail.page?.created_at ? (
+                            <p className="mb-2 text-[11px] text-muted-foreground">
+                              {t("memoryGraph.provCreated")}{" "}
+                              {detail.page.created_at.slice(0, 10)}
+                              {detail.page.author
+                                ? ` · ${detail.page.author}`
+                                : ""}
+                            </p>
+                          ) : null}
+                          <ul className="space-y-1.5">
+                            {detail.provenance.map((ev, i) => {
+                              const sessionInGraph =
+                                ev.session_stem != null &&
+                                (data?.nodes.some(
+                                  (n) => n.id === `session:${ev.session_stem}`,
+                                ) ?? false);
+                              return (
+                                <li
+                                  key={i}
+                                  className="rounded border border-border/40 bg-background/60 p-2"
+                                >
+                                  <div className="flex items-center justify-between text-[10.5px] text-muted-foreground">
+                                    <span>
+                                      {ev.kind === "relation"
+                                        ? t("memoryGraph.provRelation")
+                                        : t("memoryGraph.provAttribute")}
+                                      {ev.author ? ` · ${ev.author}` : ""}
+                                    </span>
+                                    <span>{ev.when ? ev.when.slice(0, 10) : ""}</span>
+                                  </div>
+                                  {ev.detail ? (
+                                    <div className="mt-0.5 font-mono text-[11px] break-all">
+                                      {ev.detail}
+                                    </div>
+                                  ) : null}
+                                  {sessionInGraph ? (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        selectSessionByStem(
+                                          ev.session_stem!,
+                                          ev.when,
+                                        )
+                                      }
+                                      className="mt-1 text-[10.5px] text-primary hover:underline"
+                                    >
+                                      {t("memoryGraph.provFromSession")}
+                                      {ev.turn != null
+                                        ? ` · ${t("memoryGraph.provTurn", { turn: ev.turn })}`
+                                        : ""}{" "}
+                                      →
+                                    </button>
+                                  ) : ev.source_ref ? (
+                                    <div className="mt-1 text-[10.5px] text-muted-foreground break-all">
+                                      {ev.source_ref}
+                                    </div>
+                                  ) : null}
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        </div>
+                      ) : null}
+
+                      {/* Git history of the page file (absorption/edit trail). */}
+                      {detail.history.length > 0 ? (
+                        <div>
+                          <div className="mb-1 text-[10.5px] font-medium uppercase tracking-wide text-muted-foreground">
+                            Git
+                          </div>
+                          <ul className="space-y-2">
+                            {detail.history.map((c) => (
+                              <CommitItem key={c.sha} commit={c} />
+                            ))}
+                          </ul>
+                        </div>
+                      ) : null}
+
+                      {detail.provenance.length === 0 &&
+                      detail.history.length === 0 ? (
+                        <p className="text-muted-foreground">
+                          {t("memoryGraph.noHistory")}
+                        </p>
+                      ) : null}
+                    </div>
                   ) : null}
 
                   {activeTab === "sources" ? (
@@ -1268,11 +1400,56 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
 function SessionTabs({
   detail,
   tab,
+  scrollTs,
 }: {
   detail: MemorySessionDetail;
   tab: SessionTabName;
+  scrollTs?: string | null;
 }) {
   const { t } = useTranslation();
+  const listRef = useRef<HTMLUListElement | null>(null);
+  const lastScrolledRef = useRef<string | null>(null);
+  const [highlightIdx, setHighlightIdx] = useState<number | null>(null);
+
+  // Best-effort: index of the message nearest `scrollTs` (a provenance
+  // event's UTC timestamp). Message ts are naive/local; the diff aligns when
+  // the session was written in the viewer's timezone — hence "best-effort".
+  const targetIdx = useMemo(() => {
+    if (!scrollTs) return null;
+    const target = new Date(scrollTs).getTime();
+    if (Number.isNaN(target)) return null;
+    let best = -1;
+    let bestDiff = Infinity;
+    detail.recent_messages.forEach((m, i) => {
+      if (m.ts == null) return;
+      const ms =
+        typeof m.ts === "number"
+          ? m.ts * 1000
+          : new Date(String(m.ts)).getTime();
+      if (Number.isNaN(ms)) return;
+      const diff = Math.abs(ms - target);
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        best = i;
+      }
+    });
+    return best >= 0 ? best : null;
+  }, [scrollTs, detail.recent_messages]);
+
+  useEffect(() => {
+    if (tab !== "messages" || !scrollTs || targetIdx == null) return;
+    if (lastScrolledRef.current === scrollTs) return;
+    const el = listRef.current?.querySelector(
+      `[data-msg-idx="${targetIdx}"]`,
+    ) as HTMLElement | null;
+    if (!el) return;
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    lastScrolledRef.current = scrollTs;
+    setHighlightIdx(targetIdx);
+    const tmr = setTimeout(() => setHighlightIdx(null), 2500);
+    return () => clearTimeout(tmr);
+  }, [tab, scrollTs, targetIdx]);
+
   if (tab === "info") {
     const info = detail.info;
     const metaEnts = detail.entities_tagged.from_meta;
@@ -1350,11 +1527,17 @@ function SessionTabs({
       return <p className="text-muted-foreground">{t("memoryGraph.noRecentMessages")}</p>;
     }
     return (
-      <ul className="space-y-2">
+      <ul className="space-y-2" ref={listRef}>
         {detail.recent_messages.map((m, i) => (
           <li
             key={i}
-            className="rounded border border-border/40 bg-background/60 p-2"
+            data-msg-idx={i}
+            className={cn(
+              "rounded border p-2 transition-colors",
+              highlightIdx === i
+                ? "border-primary/60 bg-primary/10"
+                : "border-border/40 bg-background/60",
+            )}
           >
             <div className="flex items-center justify-between text-[10.5px] text-muted-foreground">
               <span className="font-mono uppercase">{m.role}</span>

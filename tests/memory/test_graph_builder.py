@@ -386,8 +386,11 @@ def test_source_refs_and_meta_evidence_compound_weight(tmp_path: Path) -> None:
 
 
 def test_entity_page_relations_become_typed_edges(tmp_path: Path) -> None:
-    # G1: explicit entity-page relations render as typed edges; a dangling
-    # target (no page) is promoted to a phantom node.
+    # G1: explicit entity-page relations render as typed edges when the
+    # target has a page. policy (a): a degree-1 dangling target (``acme``,
+    # only Globex points at it) is NOT promoted to a phantom node, so its
+    # ``partner`` edge is dropped — the relation stays on disk in Globex's
+    # frontmatter, just isn't drawn.
     _clear_all()
     page = EntityPage(
         type="company", name="Globex",
@@ -399,9 +402,37 @@ def test_entity_page_relations_become_typed_edges(tmp_path: Path) -> None:
     g = build_memory_graph(tmp_path, include_sessions=False)
     rels = {(e["source"], e["target"], e["type"])
             for e in g["edges"] if e.get("kind") == "relation"}
-    assert rels == {
-        ("company:globex", "person:hank", "founded_by"),
-        ("company:globex", "company:acme", "partner"),
-    }
-    acme = next(n for n in g["nodes"] if n["id"] == "company:acme")
-    assert acme.get("phantom") is True
+    assert rels == {("company:globex", "person:hank", "founded_by")}
+    ids = {n["id"] for n in g["nodes"]}
+    assert "company:acme" not in ids
+
+
+def test_dangling_relation_degree1_suppressed(tmp_path: Path) -> None:
+    # policy (a): a page-less relation target that only ONE source points at
+    # is a degree-1 leaf — not promoted to a node, and its edge is dropped.
+    _clear_all()
+    EntityPage(
+        type="company", name="Globex",
+        relations=[{"to": "topic:latent-thing", "type": "related_to"}],
+    ).save(tmp_path / "memory" / "entities" / "company" / "globex.md")
+    g = build_memory_graph(tmp_path, include_sessions=False)
+    ids = {n["id"] for n in g["nodes"]}
+    assert "topic:latent-thing" not in ids
+    assert g["stats"]["phantom_count"] == 0
+    assert g["edges"] == []
+
+
+def test_dangling_relation_degree2_promoted(tmp_path: Path) -> None:
+    # policy (a): once >=2 distinct sources relate to the same page-less
+    # target, it is a real hub — promoted to a phantom node with both edges.
+    _clear_all()
+    for slug in ("globex", "initech"):
+        EntityPage(
+            type="company", name=slug.title(),
+            relations=[{"to": "topic:shared-hub", "type": "related_to"}],
+        ).save(tmp_path / "memory" / "entities" / "company" / f"{slug}.md")
+    g = build_memory_graph(tmp_path, include_sessions=False)
+    hub = next(n for n in g["nodes"] if n["id"] == "topic:shared-hub")
+    assert hub["phantom"] is True
+    rel_edges = [e for e in g["edges"] if e.get("kind") == "relation"]
+    assert {e["source"] for e in rel_edges} == {"company:globex", "company:initech"}

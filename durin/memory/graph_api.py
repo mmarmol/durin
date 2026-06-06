@@ -20,6 +20,7 @@ expects.
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -120,6 +121,7 @@ def get_entity_detail(
         return {
             "ref": entity_ref,
             "page": None,
+            "provenance": [],
             "history": [],
             "archive": archive,
             "entries": entries,
@@ -128,6 +130,7 @@ def get_entity_detail(
     return {
         "ref": entity_ref,
         "page": _serialize_page(page),
+        "provenance": _provenance_events(page),
         "history": _load_history(memory_root, page_path, history_limit),
         "archive": _load_archive(memory_root, type_, slug),
         "entries": _load_referencing_entries(
@@ -144,9 +147,94 @@ def _serialize_page(page: EntityPage) -> dict[str, Any]:
         "name": page.name,
         "aliases": list(page.aliases or []),
         "identifiers": identifiers if isinstance(identifiers, dict) else None,
-        "extra": extra,  # leftover frontmatter (created_at, updated_at, etc.)
+        # E19: page-level authorship (user_authored | agent_created) +
+        # timestamps, so the panel can show "created by <author> on <date>"
+        # instead of inferring it from a terse git commit.
+        "author": page.author,
+        "created_at": page.created_at.isoformat() if page.created_at else None,
+        "updated_at": page.updated_at.isoformat() if page.updated_at else None,
+        # Relations were previously only visible as graph edges; surface
+        # them in the panel too so provenance events can name them.
+        "relations": [dict(r) for r in (page.relations or [])],
+        "extra": extra,  # leftover frontmatter the parser didn't promote
         "body": page.body or "",
     }
+
+
+# Parse a provenance `source_ref` wikilink back to its session stem + turn.
+# Mirrors `graph.py::_SESSION_REF_RE` but also captures the `#turn-N`
+# fragment so the panel can show (and link to) the originating turn.
+_SOURCE_REF_RE = re.compile(r"sessions/([^/.#]+)\.md(?:#turn-(\d+))?")
+
+
+def _parse_source_ref(source_ref: Any) -> tuple[str | None, int | None]:
+    """``[[sessions/<stem>.md#turn-N]]`` → ``(stem, N)``.
+
+    Returns ``(None, None)`` for non-session refs (e.g. the
+    ``memory_upsert_entity`` fallback string, or an entry/tag ref) so the
+    frontend renders them as plain text with no session link.
+    """
+    if not source_ref:
+        return (None, None)
+    m = _SOURCE_REF_RE.search(str(source_ref))
+    if m is None:
+        return (None, None)
+    turn = int(m.group(2)) if m.group(2) else None
+    return (m.group(1), turn)
+
+
+def _provenance_events(page: EntityPage) -> list[dict[str, Any]]:
+    """Flatten an entity page's per-field provenance into UI-ready events.
+
+    durin records, for every relation and stateful attribute, *who*
+    (``author``: agent | dream | user), *when* (``extracted_at``), and
+    *from where* (``source_ref`` → a session turn). The detail panel never
+    surfaced it. This returns one event per provenanced field, with the
+    ``source_ref`` already split into ``session_stem`` + ``turn`` so the
+    frontend can make the origin clickable. Labels stay neutral (``kind`` +
+    ``detail``); i18n is the frontend's job. Sorted oldest-first.
+    """
+    prov = page.provenance or {}
+    events: list[dict[str, Any]] = []
+
+    relations = page.relations or []
+    for entry in prov.get("relations", []) or []:
+        if not isinstance(entry, dict):
+            continue
+        idx = entry.get("index")
+        detail: str | None = None
+        if isinstance(idx, int) and 0 <= idx < len(relations):
+            rel = relations[idx]
+            detail = f"{rel.get('type', 'related')} → {rel.get('to', '')}"
+        stem, turn = _parse_source_ref(entry.get("source_ref"))
+        events.append({
+            "kind": "relation",
+            "detail": detail,
+            "author": entry.get("author"),
+            "when": entry.get("extracted_at"),
+            "source_ref": entry.get("source_ref"),
+            "session_stem": stem,
+            "turn": turn,
+        })
+
+    attributes = prov.get("attributes")
+    if isinstance(attributes, dict):
+        for key, entry in attributes.items():
+            if not isinstance(entry, dict):
+                continue
+            stem, turn = _parse_source_ref(entry.get("source_ref"))
+            events.append({
+                "kind": "attribute",
+                "detail": str(key),
+                "author": entry.get("author"),
+                "when": entry.get("extracted_at"),
+                "source_ref": entry.get("source_ref"),
+                "session_stem": stem,
+                "turn": turn,
+            })
+
+    events.sort(key=lambda e: e.get("when") or "")
+    return events
 
 
 def _load_history(
@@ -305,7 +393,7 @@ def get_session_detail(
     workspace: Path,
     session_stem: str,
     *,
-    recent_messages: int = 10,
+    recent_messages: int = 2000,
     entries_limit: int = 50,
     tool_call_limit: int = 40,
 ) -> dict[str, Any] | None:
@@ -392,17 +480,25 @@ def get_session_detail(
 def _read_session_info_and_tail(
     jsonl_path: Path, n: int,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Parse line 0 (identity) and return up to ``n`` last messages."""
+    """Parse line 0 (identity) + the message thread (chronological).
+
+    Returns the full thread (each message carrying its ``index``, ``role``,
+    ``ts`` and a 280-char ``preview``), capped at ``n`` most-recent messages
+    so a huge session can't blow out the payload. The panel needs the
+    *whole* thread — not just the tail — to scroll to the message nearest a
+    provenance event's timestamp, which may be far from the end.
+    """
     import json
 
     info: dict[str, Any] = {"title": None, "message_count": 0, "channel": None,
                              "model": None, "created_at": None, "updated_at": None}
-    tail: list[dict[str, Any]] = []
+    messages: list[dict[str, Any]] = []
     try:
         with jsonl_path.open("r", encoding="utf-8") as fh:
             lines = fh.readlines()
     except OSError:
-        return info, tail
+        return info, messages
+    msg_index = 0
     for i, raw in enumerate(lines):
         raw = raw.strip()
         if not raw:
@@ -421,18 +517,9 @@ def _read_session_info_and_tail(
                 "updated_at": obj.get("updated_at"),
             })
             continue
-        info["message_count"] += 1
-    # Tail: parse from end, keep last n message-shaped objects
-    for raw in reversed(lines):
-        raw = raw.strip()
-        if not raw:
-            continue
-        try:
-            obj = json.loads(raw)
-        except json.JSONDecodeError:
-            continue
         if not isinstance(obj, dict) or "role" not in obj:
             continue
+        info["message_count"] += 1
         # Reduce to a compact preview to keep payload small.
         content = obj.get("content")
         if isinstance(content, list):
@@ -444,15 +531,19 @@ def _read_session_info_and_tail(
             )
         else:
             text = str(content or "")
-        tail.append({
+        messages.append({
+            "index": msg_index,
             "role": obj.get("role"),
             "ts": obj.get("ts") or obj.get("timestamp"),
             "preview": text[:280],
         })
-        if len(tail) >= n:
-            break
-    tail.reverse()
-    return info, tail
+        msg_index += 1
+    # Cap to the most-recent `n` (chronological order preserved). Best-effort
+    # for very long sessions: an older provenance moment beyond the cap falls
+    # back to the top of the returned window.
+    if n and len(messages) > n:
+        messages = messages[-n:]
+    return info, messages
 
 
 def _read_session_meta(meta_path: Path) -> dict[str, Any] | None:

@@ -228,19 +228,29 @@ def build_memory_graph(
                     "phantom": True,
                 }
 
-    # 3.6 (G1): register relation targets with no page yet as phantom nodes so
-    # the explicit edge has both endpoints (dangling relations are allowed).
-    for _src, to_ref, _t in relation_edges:
-        if to_ref not in nodes_by_ref:
-            t_type, _, t_slug = to_ref.partition(":")
-            nodes_by_ref[to_ref] = {
-                "id": to_ref,
-                "type": t_type or "unknown",
-                "name": t_slug or to_ref,
-                "aliases": [],
-                "weight": 0,
-                "phantom": True,
-            }
+    # 3.6 (G1 / policy-a): register a page-less relation target as a phantom
+    # node only when >=2 distinct sources point at it. A dangling relation to
+    # a target nobody else references is a degree-1 leaf that adds no graph
+    # structure — the relation still lives on disk in the source page's
+    # frontmatter (searchable), but we don't draw an empty node for it. The
+    # target is promoted to a real hub once a second entity relates to it (or
+    # once it gets its own consolidated page). Its edge is dropped downstream
+    # by the both-endpoints-present guard when the node is absent.
+    rel_target_sources: dict[str, set[str]] = defaultdict(set)
+    for src, to_ref, _t in relation_edges:
+        rel_target_sources[to_ref].add(src)
+    for to_ref, sources in rel_target_sources.items():
+        if to_ref in nodes_by_ref or len(sources) < 2:
+            continue
+        t_type, _, t_slug = to_ref.partition(":")
+        nodes_by_ref[to_ref] = {
+            "id": to_ref,
+            "type": t_type or "unknown",
+            "name": t_slug or to_ref,
+            "aliases": [],
+            "weight": 0,
+            "phantom": True,
+        }
 
     # 4. Build the edge list. Only keep edges where both endpoints are
     # in the node set (defensive; same-ref edges already collapsed
