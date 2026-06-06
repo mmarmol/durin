@@ -42,7 +42,7 @@ All memory artifacts live inside a single per-installation workspace (default: `
     ├── episodic/<id>.md                Short atomic observations
     ├── stable/<id>.md                  Stable, durable notes
     ├── pending/<id>.md                 Intake buffer (pre-classification)
-    ├── archive/                        [V2] Consolidated artifacts kept for recovery.
+    ├── archive/                        [CURRENT] Consolidated artifacts kept for recovery.
     │   └── episodic/<id>.md             Excluded from ALL default search paths
     │                                    (vector, lexical, grep, walk+parse).
     │                                    Reachable only via explicit opt-in.
@@ -527,7 +527,7 @@ compaction triggers (turn count threshold, context size, etc.)
 meta.json::derived._last_summary updated
    │
    ▼
-[V2] LanceDB re-embeds session:<id> with the new _last_summary
+[CURRENT] LanceDB re-embeds session:<id> with the new _last_summary
    │
    ▼
 [end of session]
