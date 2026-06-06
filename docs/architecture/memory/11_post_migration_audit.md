@@ -417,6 +417,12 @@ unimplemented feature. Every item verified by reading the code.
 > `test_tool_description_sync` omits `memory_upsert_entity` + `memory_forget` →
 > their descriptions can drift undetected. Doc 04 §8 / doc 06 §3.5.
 
-### N7 — absorb-judge mtimes not passed by refine; no search-time staleness filter — 🔲 (Low)
+### N7 — absorb-judge mtimes not passed by refine; no search-time staleness filter — ✅ DONE (2026-06-06)
+> **N7a wired, N7b accepted.** `refine_dream._page_mtime` now passes each
+> page's file mtime to `judge_pair` (was always rendering "(unknown)") so the
+> judge's staleness reasoning works. Test: test_refine_judge_mtime. **N7b
+> accept:** the 15-min health-check cron already reconciles staleness; a
+> per-search 60s mtime-lag filter adds a stat() per hit for marginal gain —
+> not worth the latency.
 > `refine_dream` doesn't pass canonical/absorbed mtimes to `judge_pair`; no
 > per-search 60s mtime-lag filter (the 15-min cron covers it on a slower cadence).

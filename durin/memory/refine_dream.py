@@ -88,6 +88,19 @@ def _load_page(workspace: Path, ref: str) -> EntityPage | None:
     return EntityPage.from_file(path) if path.exists() else None
 
 
+def _page_mtime(workspace: Path, ref: str):
+    """File mtime of an entity page as a UTC datetime (N7a) — fed to the absorb
+    judge so it can reason about staleness ("observed years apart"). None when
+    the file is unreadable."""
+    from datetime import datetime, timezone
+    type_, _, slug = ref.partition(":")
+    path = Path(workspace) / "memory" / "entities" / type_ / f"{slug}.md"
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+    except OSError:
+        return None
+
+
 def run_refine(
     workspace: Path,
     *,
@@ -142,6 +155,8 @@ def run_refine(
                 page_a, page_b, cand.shared_aliases,
                 llm_invoke=llm_invoke, model=model,
                 canonical_ref=ref_a, absorbed_ref=ref_b,
+                canonical_mtime=_page_mtime(workspace, ref_a),
+                absorbed_mtime=_page_mtime(workspace, ref_b),
             )
         except JudgeError as exc:
             skipped.append({"pair": [ref_a, ref_b], "reason": f"judge_error:{exc}"})
