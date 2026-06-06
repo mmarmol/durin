@@ -2476,19 +2476,32 @@ def _resolve_oauth_provider(provider: str):
     return spec
 
 
+from durin.utils.oauth import should_use_device_code  # noqa: E402
+
+
 @oauth_app.command("login")
 def provider_login(
     provider: str = typer.Argument(..., help="OAuth provider (e.g. 'openai-codex', 'github-copilot')"),
+    device: bool = typer.Option(False, "--device", help="Force device-code flow"),
+    loopback: bool = typer.Option(False, "--loopback", help="Force loopback PKCE flow"),
 ):
     """Authenticate with an OAuth provider."""
     spec = _resolve_oauth_provider(provider)
+
+    console.print(f"{__logo__} OAuth Login - {spec.label}\n")
+    if spec.name == "openai_codex" and (device or loopback):
+        force = "device" if device else "loopback"
+        try:
+            _codex_login_flow(force=force)
+        except ImportError:
+            console.print("[red]oauth_cli_kit not installed. Run: pip install oauth-cli-kit[/red]")
+            raise typer.Exit(1) from None
+        return
 
     handler = _LOGIN_HANDLERS.get(spec.name)
     if not handler:
         console.print(f"[red]Login not implemented for {spec.label}[/red]")
         raise typer.Exit(1)
-
-    console.print(f"{__logo__} OAuth Login - {spec.label}\n")
     handler()
 
 
@@ -2508,24 +2521,46 @@ def provider_logout(
     handler()
 
 
+def _codex_login_flow(force: str | None) -> None:
+    """force: 'device' | 'loopback' | None (auto-detect)."""
+    from durin.providers import codex_device_auth as cda
+
+    existing = cda.existing_codex_session()
+    if existing is not None:
+        who = existing.email or existing.plan or "cuenta existente"
+        src = "Codex CLI" if existing.source == "codex-cli" else "durin"
+        reuse = typer.confirm(
+            f"Encontré una sesión de Codex ({who}, vía {src}). ¿Usarla?",
+            default=True,
+        )
+        if reuse and existing.source == "durin":
+            console.print(f"[green]✓ Usando la sesión existente[/green] [dim]{who}[/dim]")
+            return
+        # codex-cli source or decline: fall through to a fresh connect.
+
+    use_device = force == "device" or (force != "loopback" and should_use_device_code())
+    if use_device:
+        token = cda.login_blocking(print_fn=lambda s: console.print(s))
+    else:
+        from oauth_cli_kit import login_oauth_interactive
+
+        token = login_oauth_interactive(
+            print_fn=lambda s: console.print(s),
+            prompt_fn=lambda s: typer.prompt(s),
+            originator="codex_cli_rs",
+        )
+    if not (token and token.access):
+        console.print("[red]✗ Authentication failed[/red]")
+        raise typer.Exit(1)
+    console.print(
+        f"[green]✓ Authenticated with OpenAI Codex[/green]  [dim]{token.account_id}[/dim]"
+    )
+
+
 @_register_login("openai_codex")
 def _login_openai_codex() -> None:
     try:
-        from oauth_cli_kit import get_token, login_oauth_interactive
-
-        token = None
-        with suppress(Exception):
-            token = get_token()
-        if not (token and token.access):
-            console.print("[cyan]Starting interactive OAuth login...[/cyan]\n")
-            token = login_oauth_interactive(
-                print_fn=lambda s: console.print(s),
-                prompt_fn=lambda s: typer.prompt(s),
-            )
-        if not (token and token.access):
-            console.print("[red]✗ Authentication failed[/red]")
-            raise typer.Exit(1)
-        console.print(f"[green]✓ Authenticated with OpenAI Codex[/green]  [dim]{token.account_id}[/dim]")
+        _codex_login_flow(force=None)
     except ImportError:
         console.print("[red]oauth_cli_kit not installed. Run: pip install oauth-cli-kit[/red]")
         raise typer.Exit(1) from None
