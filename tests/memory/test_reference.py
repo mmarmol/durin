@@ -65,7 +65,17 @@ def test_reference_marker():
 
 import pytest
 
+from durin.memory.vector_index import vector_index_available
 
+# These two tests exercise the REAL vector index (fastembed + lancedb); the CI
+# image skips the `memory` extra, so they self-skip there (grep/FTS tests stay).
+_needs_vector = pytest.mark.skipif(
+    not vector_index_available(),
+    reason="vector deps (memory extra: fastembed/lancedb) absent",
+)
+
+
+@_needs_vector
 @pytest.mark.asyncio
 async def test_memory_ingest_makes_reference_searchable_grep_fts_vector(tmp_path):
     """A2 end-to-end: memory_ingest stores the doc as a REFERENCE (whole) and
@@ -114,6 +124,7 @@ async def test_memory_ingest_makes_reference_searchable_grep_fts_vector(tmp_path
                for h in hits), f"vector miss on reference chunk; got {[h.get('id') for h in hits]}"
 
 
+@_needs_vector
 def test_rebuild_from_workspace_indexes_reference_chunks(tmp_path):
     """A full vector rebuild must restore reference chunks (e2e finding 2026-06-06):
     rebuild_from_workspace previously walked entries + entities + skills but NOT
