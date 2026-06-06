@@ -108,3 +108,19 @@ def test_post_install_cross_encoder_clears_fallback_flag():
 
 def test_post_install_unknown_is_noop():
     ex._post_install("web_search")  # must not raise
+
+
+def test_none_config_treated_as_gate_on(monkeypatch):
+    """The agent often has app_config=None; treat that as gate-on (default)."""
+    seen = {"present": False}
+    monkeypatch.setattr(ex, "_module_present", lambda m: seen["present"])
+    monkeypatch.setattr(ex, "_extra_specs", lambda extra: ["ddgs"])
+    monkeypatch.setattr(ex, "_installer_cmd", lambda specs: ["echo", *specs])
+
+    def fake_run(cmd, **kw):
+        seen["present"] = True
+        return types.SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr(ex.subprocess, "run", fake_run)
+    r = ex.ensure_extra("web_search", config=None)
+    assert r.status == "installed"

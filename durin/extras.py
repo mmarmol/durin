@@ -96,7 +96,8 @@ def ensure_extra(feature: str, *, config) -> EnsureResult:
     fe = REGISTRY[feature]
     if _module_present(fe.module):
         return EnsureResult("present", feature, fe.needs_restart)
-    if not getattr(config.install, "auto_install_extras", True):
+    install_cfg = getattr(config, "install", None)
+    if install_cfg is not None and not getattr(install_cfg, "auto_install_extras", True):
         return EnsureResult(
             "disabled", feature, fe.needs_restart,
             f"Run: pip install durin-agent[{fe.extra}]",
