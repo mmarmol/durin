@@ -42,6 +42,7 @@ from durin.providers.codex_device_auth import (
     poll_once as codex_poll_once,
     request_device_code,
 )
+from durin.providers.codex_models import list_codex_models
 from durin.session.goal_state import goal_state_ws_blob
 from durin.utils.helpers import safe_filename
 from durin.utils.media_decode import (
@@ -2003,6 +2004,22 @@ class WebSocketChannel(BaseChannel):
         query = _parse_query(request.path)
         provider = (_query_first(query, "provider") or "").strip()
         capability = (_query_first(query, "capability") or "").strip().lower()
+
+        if provider in ("openai-codex", "openai_codex"):
+            access = None
+            try:
+                from oauth_cli_kit import get_token
+                from oauth_cli_kit.providers import OPENAI_CODEX_PROVIDER
+
+                from durin.providers.codex_device_auth import _strict_storage
+
+                tok = get_token(OPENAI_CODEX_PROVIDER, _strict_storage())
+                access = tok.access if tok else None
+            except Exception:  # noqa: BLE001
+                access = None
+            models = list_codex_models(access)
+            return _http_json_response({"suggested": models, "models": models})
+
         suggested = list(DEFAULT_MODELS.get(provider, ()))
 
         # Resolve provider keywords once. Empty tuple means "don't filter"
