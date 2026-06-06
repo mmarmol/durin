@@ -23,9 +23,6 @@ from durin.agent.tools._telemetry import emit_tool_event
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.schema import StringSchema, tool_parameters_schema
 from durin.memory.ingestion import IngestError, ingest_artifact
-from durin.memory.provenance import author_scope
-from durin.memory.storage import load_entry
-from durin.memory.store import StoreError, store_memory
 from durin.memory.vector_index import (
     VectorIndex,
     VectorIndexDimensionMismatchError,
@@ -165,15 +162,11 @@ class MemoryIngestTool(Tool):
             },
         )
 
-        # Derive a corpus memory entry pointing back to the ingested
-        # source. This is what makes the document searchable via the
-        # vector path. Best-effort: a failure to create the corpus
-        # entry doesn't roll back the ingest.
-        corpus_id = self._maybe_create_corpus_entry(
-            source_path=source,
-            ingested_path=result["source"],
-            content=result["content"],
-        )
+        # §A2: store the ingested document WHOLE as a reference (design §2.3/§2.8)
+        # — FTS the whole doc + vector-index its token-aware chunks. Replaces the
+        # legacy chunked `corpus/` model. Best-effort: a failure here does not
+        # roll back the verbatim ingest above.
+        ref = self._create_reference(source_path=source, content=result["content"])
 
         out = {
             "id": result["id"],
@@ -182,106 +175,58 @@ class MemoryIngestTool(Tool):
             "size_bytes": result["size_bytes"],
             "content": result["content"],
         }
-        if corpus_id:
-            out["corpus_entry_id"] = corpus_id
+        if ref:
+            out["reference"] = ref
         return out
 
-    def _maybe_create_corpus_entry(
-        self,
-        *,
-        source_path: Path,
-        ingested_path: str,
-        content: str,
-    ) -> str | None:
-        """Create a corpus memory entry derived from an ingested artifact.
+    def _create_reference(self, *, source_path: Path, content: str) -> str | None:
+        """Store the ingested document as a reference (whole doc + token-aware
+        chunk index), FTS-index the whole doc, and vector-index each chunk.
 
-        Returns the new entry id, or None if the derivation failed.
-        Embeds + indexes the entry when the vector path is available.
+        Returns the ref (``reference:<slug>``) or None on failure. The whole doc
+        is the FTS unit; the chunks (each <=512 tok, parent-pointed) are the
+        vector unit (design A2 / reference.py).
         """
-        ingested_rel = Path(ingested_path)
+        from durin.memory.reference import ingest_reference, reference_chunks
         try:
-            ingested_rel = ingested_rel.relative_to(self._workspace)
-        except ValueError:
-            pass
-        source_ref = f"[ingested {source_path.name}]({ingested_rel})"
+            res = ingest_reference(
+                self._workspace, source_path.stem, content,
+                source=str(source_path),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "memory_ingest: reference write failed for %s: %s",
+                source_path.name, exc,
+            )
+            return None
+        ref = res.ref
+        slug = ref.split(":", 1)[1]
+        ref_md = self._workspace / "memory" / "references" / f"{slug}.md"
 
-        # P5.3: recursive character splitter — paragraph > line >
-        # sentence > word > char preference, ~1500 chars per chunk
-        # with ~200 chars overlap so a fact straddling a cut still
-        # surfaces in both chunks.
-        from durin.memory.text_splitter import split_text
-        chunks = split_text(content) or [content[:_CORPUS_BODY_BUDGET_CHARS]]
-        # Multi-chunk ingest: each chunk is its own corpus entry so
-        # the search pipeline can rank them independently + the per-
-        # source cap (doc 03 §12.4) limits top-K to 3 chunks per
-        # source. We return the FIRST chunk's id for backward-compat
-        # with callers that expect a single id.
-        first_id: str | None = None
-        for idx, chunk in enumerate(chunks):
-            try:
-                with author_scope("agent_created"):
-                    stored = store_memory(
-                        self._workspace,
-                        content=chunk,
-                        class_name="corpus",
-                        headline=(
-                            f"Ingested: {source_path.name}"
-                            + (f" (chunk {idx + 1}/{len(chunks)})"
-                               if len(chunks) > 1 else "")
-                        ),
-                        summary="",
-                        source_refs=[source_ref],
-                    )
-            except (StoreError, OSError) as exc:
-                logger.warning(
-                    "memory_ingest: chunk %d/%d failed for %s: %s",
-                    idx + 1, len(chunks), source_path.name, exc,
-                )
-                continue
-            if first_id is None:
-                first_id = stored["id"]
+        # FTS: the whole reference doc is the lexical unit (indexer._payload_for).
+        try:
+            from durin.memory.indexer import reindex_one_file
+            reindex_one_file(self._workspace, ref_md)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "memory_ingest: reference FTS reindex failed for %s: %s", ref, exc,
+            )
 
-            vi = self._get_vector_index()
-            if vi is not None:
+        # Vector: each token-aware chunk, keyed <ref>#<idx> so a fragment hit
+        # resolves to the parent reference.
+        vi = self._get_vector_index()
+        if vi is not None:
+            for rec in reference_chunks(self._workspace, ref):
                 try:
-                    entry_path = Path(stored["path"])
-                    entry = load_entry(entry_path)
-                    vi.upsert(entry, stored["class"], entry_path)
+                    vi.upsert_reference_chunk(
+                        ref=ref, idx=rec["idx"], text=rec["text"], path=ref_md,
+                    )
                 except VectorIndexDimensionMismatchError as exc:
-                    logger.warning("ingest vector upsert: %s", exc)
+                    logger.warning("ingest reference vector upsert: %s", exc)
+                    break
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
-                        "ingest vector upsert failed for %s: %s",
-                        stored["id"], exc,
+                        "ingest reference vector upsert failed for %s#%s: %s",
+                        ref, rec.get("idx"), exc,
                     )
-
-            try:
-                from durin.memory.indexer import reindex_one_file
-                reindex_one_file(
-                    self._workspace, Path(stored["path"]),
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "memory_ingest FTS reindex failed for %s: %s",
-                    stored["id"], exc,
-                )
-
-        if first_id is None:
-            # Every chunk failed; nothing to emit, return None to
-            # signal the failure.
-            return None
-
-        emit_tool_event(
-            "memory.store",
-            {
-                "entry_id": stored["id"],
-                "class_name": stored["class"],
-                "author": stored["author"],
-                "headline": stored["headline"],
-            },
-        )
-
-        # §8e: the post-ingest threshold trigger (legacy DreamRunner dispatch)
-        # is removed. Ingested material is searchable via FTS + vector and gets
-        # processed by the daily extract/refine passes.
-        return first_id
+        return ref
