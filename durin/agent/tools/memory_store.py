@@ -356,6 +356,6 @@ class MemoryStoreTool(Tool):
                 result["id"], exc,
             )
 
-        # §8e: the per-entity threshold dream trigger (legacy DreamRunner) is
+        # §8e: the per-entity threshold dream trigger is
         # removed — the daily extract/refine passes handle consolidation.
         return result

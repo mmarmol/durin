@@ -277,6 +277,13 @@ def _reconcile_extras_from_config(config: Config, extras: set[str]) -> None:
         extras.add("memory")
     if getattr(config.memory.search.cross_encoder, "enabled", False):
         extras.add("cross-encoder")
+    channels = getattr(config, "channels", None)
+    if getattr(getattr(channels, "slack", None), "enabled", False):
+        extras.add("slack")
+    if getattr(getattr(channels, "discord", None), "enabled", False):
+        extras.add("discord")
+    if config.agents.defaults.provider in ("openai_codex", "github_copilot"):
+        extras.add("oauth")
 
 
 def run_wizard(initial_config: Config, *, q: Any | None = None) -> WizardResult:

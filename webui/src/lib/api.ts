@@ -611,6 +611,40 @@ export async function testCrossEncoderModel(
   );
 }
 
+export interface ExtraStatus {
+  present: boolean;
+  extra: string;
+  approx_size: string;
+  needs_restart: boolean;
+  label: string;
+}
+
+export async function getExtraStatus(
+  token: string,
+  feature: string,
+  base: string = "",
+): Promise<ExtraStatus> {
+  const q = new URLSearchParams({ feature });
+  return request<ExtraStatus>(`${base}/api/extras/status?${q.toString()}`, token);
+}
+
+export interface EnsureExtraResult {
+  status: "present" | "installed" | "failed" | "disabled";
+  needs_restart: boolean;
+  message: string;
+  restarting?: boolean;
+}
+
+export async function ensureExtra(
+  token: string,
+  feature: string,
+  restart: boolean,
+  base: string = "",
+): Promise<EnsureExtraResult> {
+  const q = new URLSearchParams({ feature, restart: String(restart) });
+  return request<EnsureExtraResult>(`${base}/api/extras/ensure?${q.toString()}`, token);
+}
+
 export interface ChannelInfo {
   name: string;
   display_name: string;

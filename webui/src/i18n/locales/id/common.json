@@ -239,23 +239,84 @@
       "help": {
         "crossEncoderEnabled": "Reranker second-pass opt-in. Menambahkan 300-1500 ms per query dan ~1 GB RAM tetapi meningkatkan kualitas pada query ambigu. Mati secara default.",
         "crossEncoderModel": "Model yang digunakan saat reranker aktif. Default bekerja baik untuk query multibahasa; alternatif menukar ukuran dengan latensi.",
-        "thresholdEntries": "Jalankan pass Dream entity-centric saat satu entitas mengumpulkan jumlah entri post-cursor ini. Set ke 0 untuk menonaktifkan trigger per-entity (trigger cron dan session-close tetap berlaku).",
-        "dreamMinTokens": "Lewati analisis LLM saat chat terakumulasi sejak pass terakhir di bawah nilai ini. Default 2000 menyaring pertukaran sepele / sosial; 0 menonaktifkan filter (setiap tick non-kosong berjalan)."
+        "dreamEnabled": "Sakelar utama untuk dream otomatis. Saat mati, cron dan trigger reaktif dinonaktifkan; `durin memory dream` manual tetap berfungsi.",
+        "dreamCron": "Ekspresi cron untuk pass harian extract / refine / skill. Default 0 3 * * * (3 pagi waktu lokal).",
+        "dreamPostCompaction": "Jalankan pass dream setelah sesi dipadatkan — konteks sudah ada di memori sehingga biayanya teramortisasi.",
+        "dreamOnSessionClose": "Jalankan pass dream saat sesi berakhir (/quit atau timeout idle).",
+        "dreamAutoAbsorb": "Biarkan pass refine secara otomatis menggabungkan entitas yang dinilai duplikat (hanya keyakinan tinggi). Mati menjaga penggabungan tetap manual.",
+        "dreamAbsorbConfidence": "Keyakinan minimum (0-100) yang dibutuhkan juri untuk menggabungkan dua entitas. 95 = presisi tinggi. Hanya berlaku saat auto-absorb aktif.",
+        "dreamAbsorbMinAge": "Karantina: jangan gabungkan entitas yang lebih baru dari jumlah jam ini, agar dua entitas yang baru dibuat tidak digabungkan sebelum saling membedakan. Hanya saat auto-absorb aktif.",
+        "dreamThrottle": "Detik minimum antara pass dream reaktif (post-compaction / penutupan sesi). Menyerap lonjakan agar pass yang tumpang tindih tidak menumpuk; 0 menonaktifkan. Cron harian tidak pernah dibatasi.",
+        "dreamMaxSeconds": "Batas wall-clock keras per pass extract. Saat tercapai, pass mengalah setelah sesi saat ini dan kursor per-sesi melanjutkan sisanya pada trigger berikutnya. 0 = tanpa batas.",
+        "dreamAlwaysOnBudget": "Anggaran token untuk panduan 'always-on' yang dipasang di setiap prompt. Dream me-rangking feedback (stance/practice), membuang kontradiksi, dan memasukkan item prioritas tertinggi ke dalam anggaran ini. 0 menonaktifkan pin."
       },
       "loadError": "Tidak dapat memuat pengaturan memori.",
       "rows": {
         "crossEncoderEnabled": "Reranker cross-encoder",
         "crossEncoderModel": "Model reranker",
-        "thresholdEntries": "Ambang konsolidasi",
-        "dreamMinTokens": "Token minimum untuk berjalan"
+        "dreamEnabled": "Dream aktif",
+        "dreamCron": "Jadwal harian (cron)",
+        "dreamPostCompaction": "Jalankan setelah compaction",
+        "dreamOnSessionClose": "Jalankan saat sesi ditutup",
+        "dreamAutoAbsorb": "Auto-absorb duplikat",
+        "dreamAbsorbConfidence": "Keyakinan auto-absorb",
+        "dreamAbsorbMinAge": "Karantina penggabungan (j)",
+        "dreamThrottle": "Throttle reaktif (d)",
+        "dreamMaxSeconds": "Maks. detik per pass",
+        "dreamAlwaysOnBudget": "Anggaran always-on (token)"
       },
       "saveError": "Tidak dapat menyimpan {{path}}.",
       "sections": {
-        "dream": "Konsolidasi entitas (Dream)",
-        "rerank": "Reranking pencarian",
-        "workingMemory": "Memori aktif"
+        "dream": "Dream (konsolidasi memori)",
+        "rerank": "Reranking pencarian"
       },
-      "workingMemoryDescription": "Konsolidasi tiap 2 jam riwayat chat ke MEMORY.md / SOUL.md / USER.md dan pembuatan skill on-the-fly. Hanya berjalan saat ada cukup percakapan baru untuk membenarkan pemanggilan LLM."
+      "dreamDescription": "Dream mengonsolidasi sesi menjadi halaman entitas + skill dan mendeduplikasi entitas duplikat. Berjalan pada cron harian plus trigger reaktif opsional."
+    },
+    "extras": {
+      "willInstall": "Ini akan menginstal {{extra}} (~{{size}} unduhan).",
+      "restartAfter": "Mulai ulang gateway setelah menginstal",
+      "install": "Instal",
+      "installing": "Menginstal…",
+      "cancel": "Batal"
+    },
+    "skillsSecurity": {
+      "description": "Kebijakan keamanan untuk mengimpor skill: juri LLM, pola tepercaya, token GitHub, dan batas ukuran.",
+      "loadError": "Tidak dapat memuat konfigurasi.",
+      "saveError": "Tidak dapat menyimpan pengaturan.",
+      "sections": {
+        "judge": "Juri keamanan LLM",
+        "trust": "Pola tepercaya",
+        "token": "Token GitHub",
+        "caps": "Batas ukuran"
+      },
+      "rows": {
+        "judgeTrigger": "Kapan menjalankan juri",
+        "judgeMaxSeverity": "Tingkat keparahan maksimum",
+        "judgeModel": "Model juri",
+        "tokenSecret": "Secret token",
+        "maxFiles": "Maks. file",
+        "maxTotalMb": "Maks. total (MB)",
+        "maxFileMb": "Maks. per file (MB)"
+      },
+      "help": {
+        "judgeTrigger": "Mati: hanya sesuai permintaan (tombol 'Audit dengan LLM' per skill). Tidak pasti: jalankan otomatis hanya saat gate sudah ragu (code / hati-hati / di luar allowlist). Selalu: setiap impor. Berkurang diam-diam saat tidak ada model tersedia.",
+        "judgeMaxSeverity": "Seberapa tinggi juri boleh menaikkan vonis. 'Hati-hati' memaksa konfirmasi tetapi tidak pernah memblokir sendiri; 'Berbahaya' memungkinkannya memblokir (perlu override).",
+        "judgeModel": "Nama model untuk juri. Kosong menggunakan model memori default.",
+        "tokenSecret": "Secret durin yang menyimpan token GitHub Anda. 'Tidak ada' = permintaan anonim (batas rate lebih rendah, tanpa repo privat)."
+      },
+      "severity": { "caution": "Hati-hati (konfirmasi)", "dangerous": "Berbahaya (blokir)" },
+      "trigger": { "off": "Mati (hanya sesuai permintaan)", "uncertain": "Saat tidak pasti (penentu seri)", "always": "Selalu" },
+      "trustDescription": "Skill aman dari sumber tepercaya terpasang tanpa konfirmasi. Pola mencocokkan sumber berdasarkan awalan — mis. github:acme/, https://gitlab.com/acme/.",
+      "noPatterns": "Belum ada pola tepercaya.",
+      "patternPlaceholder": "github:owner/ atau https://host/path/",
+      "addPattern": "Tambah",
+      "removePattern": "Hapus pola",
+      "tokenDescription": "Token GitHub menaikkan batas rate API dan menjangkau repo privat. Pilih secret yang menyimpan token (buat satu di bagian Secret).",
+      "tokenNone": "Tidak ada (anonim)",
+      "testToken": "Tes",
+      "tokenOk": "Token OK — {{remaining}} permintaan API tersisa.",
+      "tokenTestError": "Tes token gagal.",
+      "modelPlaceholder": "model default"
     },
     "secrets": {
       "addTitle": "Tambah secret",
@@ -303,13 +364,9 @@
       "remove": "Hapus tugas",
       "cantDeleteSystem": "Tugas sistem tidak dapat dihapus.",
       "systemJobs": {
-        "dream": {
-          "name": "Konsolidasi memori aktif",
-          "note": "Mendistilasi riwayat chat terkini ke MEMORY.md / SOUL.md / USER.md dan membuat skill saat pola muncul. Melewati tick sepele (lihat \"Memori aktif → Token minimum\" di pengaturan Memori)."
-        },
         "memory_dream": {
-          "name": "Konsolidasi pengetahuan entitas",
-          "note": "Pass mendalam malam hari yang mengubah entri memori episodik menjadi halaman entitas kanonikal (grafik pengetahuan)."
+          "name": "Konsolidasi memori entitas",
+          "note": "Pass harian (3 pagi waktu lokal) plus trigger reaktif (post-compaction / penutupan sesi) yang memproses sesi terkini — mengekstrak atribut entitas, menambang skill, mendeduplikasi entitas, dan mendistilasi pin always-on."
         }
       }
     }
@@ -474,7 +531,7 @@
           },
           "dream": {
             "title": "Jalankan Dream",
-            "description": "Picu konsolidasi memori secara manual."
+            "description": "Jalankan secara manual dream konsolidasi entitas (extract / skill / refine / always_on)."
           },
           "dream_log": {
             "title": "Tampilkan log Dream",
@@ -600,7 +657,7 @@
     "noAbsorptions": "Tidak ada absorpsi untuk entitas ini.",
     "noSourceLinkedEntries": "Tidak ada entri episodik yang terhubung ke sesi ini via source_refs.",
     "emptyHint": "Jalankan <code>durin memory dream</code> setelah entri terkumpul.",
-    "noConsolidatedHint": "Ditandai di entri episodik tetapi belum ada halaman terkonsolidasi. Jalankan <code>durin memory dream</code> untuk membuatnya.",
+    "noConsolidatedHint": "Disebut di entri episodik tetapi belum ada halaman entitas kanonikal. Jalankan <code>durin memory dream</code> untuk mengekstrak dan membuatnya.",
     "stats": "{{nodes}} node · {{edges}} edge",
     "statsPhantom": "{{count}} fantom",
     "statsTruncated": "dipotong",
