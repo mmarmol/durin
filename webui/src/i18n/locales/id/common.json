@@ -272,6 +272,45 @@
       },
       "dreamDescription": "Dream mengonsolidasi sesi menjadi halaman entitas + skill dan mendeduplikasi entitas duplikat. Berjalan pada cron harian plus trigger reaktif opsional."
     },
+    "skillsSecurity": {
+      "description": "Kebijakan keamanan untuk mengimpor skill: juri LLM, pola tepercaya, token GitHub, dan batas ukuran.",
+      "loadError": "Tidak dapat memuat konfigurasi.",
+      "saveError": "Tidak dapat menyimpan pengaturan.",
+      "sections": {
+        "judge": "Juri keamanan LLM",
+        "trust": "Pola tepercaya",
+        "token": "Token GitHub",
+        "caps": "Batas ukuran"
+      },
+      "rows": {
+        "judgeTrigger": "Kapan menjalankan juri",
+        "judgeMaxSeverity": "Tingkat keparahan maksimum",
+        "judgeModel": "Model juri",
+        "tokenSecret": "Secret token",
+        "maxFiles": "Maks. file",
+        "maxTotalMb": "Maks. total (MB)",
+        "maxFileMb": "Maks. per file (MB)"
+      },
+      "help": {
+        "judgeTrigger": "Mati: hanya sesuai permintaan (tombol 'Audit dengan LLM' per skill). Tidak pasti: jalankan otomatis hanya saat gate sudah ragu (code / hati-hati / di luar allowlist). Selalu: setiap impor. Berkurang diam-diam saat tidak ada model tersedia.",
+        "judgeMaxSeverity": "Seberapa tinggi juri boleh menaikkan vonis. 'Hati-hati' memaksa konfirmasi tetapi tidak pernah memblokir sendiri; 'Berbahaya' memungkinkannya memblokir (perlu override).",
+        "judgeModel": "Nama model untuk juri. Kosong menggunakan model memori default.",
+        "tokenSecret": "Secret durin yang menyimpan token GitHub Anda. 'Tidak ada' = permintaan anonim (batas rate lebih rendah, tanpa repo privat)."
+      },
+      "severity": { "caution": "Hati-hati (konfirmasi)", "dangerous": "Berbahaya (blokir)" },
+      "trigger": { "off": "Mati (hanya sesuai permintaan)", "uncertain": "Saat tidak pasti (penentu seri)", "always": "Selalu" },
+      "trustDescription": "Skill aman dari sumber tepercaya terpasang tanpa konfirmasi. Pola mencocokkan sumber berdasarkan awalan — mis. github:acme/, https://gitlab.com/acme/.",
+      "noPatterns": "Belum ada pola tepercaya.",
+      "patternPlaceholder": "github:owner/ atau https://host/path/",
+      "addPattern": "Tambah",
+      "removePattern": "Hapus pola",
+      "tokenDescription": "Token GitHub menaikkan batas rate API dan menjangkau repo privat. Pilih secret yang menyimpan token (buat satu di bagian Secret).",
+      "tokenNone": "Tidak ada (anonim)",
+      "testToken": "Tes",
+      "tokenOk": "Token OK — {{remaining}} permintaan API tersisa.",
+      "tokenTestError": "Tes token gagal.",
+      "modelPlaceholder": "model default"
+    },
     "secrets": {
       "addTitle": "Tambah secret",
       "confirmDelete": "Hapus secret ini?",

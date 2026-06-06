@@ -296,7 +296,8 @@
       "help": {
         "judgeTrigger": "Desactivado: solo bajo demanda (el botón 'Revisar con IA' por skill). Cuando hay duda: corre automático solo si el gate ya está indeciso (código / precaución / fuera de la lista de confianza). Siempre: en cada importación. Degrada en silencio si no hay modelo disponible.",
         "judgeMaxSeverity": "Hasta dónde puede subir el verdict. 'Precaución' fuerza un confirm pero nunca bloquea solo; 'Peligrosa' le permite bloquear (requiere override).",
-        "judgeModel": "Nombre del modelo del juez. Vacío usa el modelo de memoria por default."
+        "judgeModel": "Nombre del modelo del juez. Vacío usa el modelo de memoria por default.",
+        "tokenSecret": "El secret de durin que contiene tu token de GitHub. 'Ninguno' = peticiones anónimas (rate limit más bajo, sin repos privados)."
       },
       "severity": { "caution": "Precaución (confirma)", "dangerous": "Peligrosa (bloquea)" },
       "trigger": { "off": "Desactivado (solo bajo demanda)", "uncertain": "Cuando hay duda (desempate)", "always": "Siempre" },
