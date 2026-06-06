@@ -283,8 +283,11 @@
         "dreamPostCompaction": "Run after compaction",
         "dreamOnSessionClose": "Run on session close",
         "dreamAutoAbsorb": "Auto-absorb duplicates",
+        "dreamAbsorbConfidence": "Auto-absorb confidence",
+        "dreamAbsorbMinAge": "Merge quarantine (h)",
         "dreamThrottle": "Reactive throttle (s)",
-        "dreamMaxSeconds": "Max seconds per run"
+        "dreamMaxSeconds": "Max seconds per run",
+        "dreamAlwaysOnBudget": "Always-on budget (tokens)"
       },
       "help": {
         "crossEncoderEnabled": "Opt-in second-pass reranker. Adds 300-1500 ms per query and ~1 GB RAM but improves quality on ambiguous queries. Off by default.",
@@ -294,8 +297,11 @@
         "dreamPostCompaction": "Run a dream pass after a session is compacted — the context is already in memory so the cost is amortised.",
         "dreamOnSessionClose": "Run a dream pass when a session ends (/quit or idle timeout).",
         "dreamAutoAbsorb": "Let the refine pass automatically merge entities it judges duplicates (high-confidence only). Off keeps merges manual.",
+        "dreamAbsorbConfidence": "Minimum confidence (0-100) the judge requires to merge two entities. 95 = high precision. Only applies when auto-absorb is on.",
+        "dreamAbsorbMinAge": "Quarantine: don't merge entities newer than this many hours, so two freshly-created entities aren't merged before they differentiate. Only when auto-absorb is on.",
         "dreamThrottle": "Minimum seconds between reactive dream runs (post-compaction / session-close). Absorbs bursts so overlapping passes don't pile up; 0 disables. The daily cron is never throttled.",
-        "dreamMaxSeconds": "Hard wall-clock cap per extract pass. When reached, the pass yields after the current session and the per-session cursor resumes the remainder on the next trigger. 0 = unbounded."
+        "dreamMaxSeconds": "Hard wall-clock cap per extract pass. When reached, the pass yields after the current session and the per-session cursor resumes the remainder on the next trigger. 0 = unbounded.",
+        "dreamAlwaysOnBudget": "Token budget for the 'always-on' guidance pinned into every prompt. The dream ranks feedback (stance/practice), drops contradictions, and fits the highest-priority items into this budget. 0 disables the pin."
       },
       "crossEncoderModelPlaceholder": "model id (e.g. BAAI/bge-reranker-base)",
       "crossEncoderTest": "Test",

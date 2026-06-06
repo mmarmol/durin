@@ -452,3 +452,15 @@ unimplemented feature. Every item verified by reading the code.
 > Test: `test_rebuild_from_workspace_indexes_reference_chunks`. Also fixed doc 01's
 > session storage layout (it showed nested `sessions/<id>/<id>.jsonl`; the code —
 > `SessionManager._get_session_path` + every reader — is FLAT `sessions/<key>.jsonl`).
+
+### N9 — Webui Memory config missing the newest params (found by the live webui check) — ✅ DONE (2026-06-06)
+> Headless-browser verification of the dashboard caught it: the curated Memory >
+> Dream settings exposed the core lifecycle params (enabled, cron, post_compaction,
+> on_session_close, auto_absorb toggle, throttle, max_seconds) but NOT the params
+> added later in this audit — `always_on_token_budget` (A4) and the `auto_absorb`
+> sub-knobs `confidence_threshold` + `min_age_hours` (A1/B3). They were settable
+> only via "Todos los ajustes" (raw). Added all three as curated controls in
+> `MemorySettings.tsx` (+ es/en i18n). Re-verified live: the Dream section now
+> renders 10 controls with correct titles/descriptions/values (95 / 24 / 1500).
+> Also confirmed the graph view renders correctly (7 nodes · 6 edges · 1 phantom,
+> matching the entity-integrity check) with per-type filters.
