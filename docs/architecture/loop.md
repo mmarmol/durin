@@ -206,6 +206,27 @@ Two top-level blocks:
 
 `durin/providers/` ships adapters for Anthropic, OpenAI-compat (Z.ai, OpenRouter, Azure, Ollama, LM Studio, Gemini, and 25+ others), Bedrock, GitHub Copilot, local llama-cpp, OpenAI Codex, and a fallback wrapper. `factory.make_provider(config)` resolves the active provider/model from config + presets.
 
+### OAuth providers (Codex / Copilot)
+
+`is_oauth` providers carry no API key. The token lives in `oauth-cli-kit`'s
+`FileTokenStorage` (`codex.json`) and is read at request time via `get_token()`
+(which refreshes on its own). For **OpenAI Codex** the user authorizes their
+ChatGPT plan instead of paying per token:
+
+- **Authorize** — `durin/providers/codex_device_auth.py` ports the device-code
+  flow (request → poll → exchange → persist). `should_use_device_code()` picks
+  loopback PKCE (local, via the kit) vs device-code (remote/headless/webui);
+  the CLI takes `--device/--loopback`, the webui is always device-code
+  (`/api/oauth/codex/{status,start,poll,disconnect}`). An existing `~/.codex`
+  session is detected and confirmed, never adopted silently
+  (`import_codex_cli=False`).
+- **Requests** — `openai_codex_provider.py` hits `chatgpt.com/backend-api/codex/responses`
+  with `originator: codex_cli_rs` (avoids Cloudflare 403 on non-residential IPs)
+  and `chatgpt-account-id` (re-derived from the access-token JWT so refresh can't
+  drop it).
+- **Models** — `codex_models.py` lists models live from the Codex backend with a
+  static fallback; default `gpt-5.5`.
+
 ### Capability metadata
 
 `get_model_capabilities(model, provider, overrides)` resolves a `ModelCapabilities` dataclass via a four-layer fallback:

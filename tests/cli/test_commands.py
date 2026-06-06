@@ -1706,6 +1706,9 @@ def test_gateway_health_endpoint_binds_and_serves_expected_responses(
         def register_system_job(self, _job) -> None:
             return None
 
+        def prune_orphaned_system_jobs(self, _known_system_ids) -> list:
+            return []
+
     class _FakeHeartbeatService:
         def __init__(self, **_kwargs) -> None:
             return None

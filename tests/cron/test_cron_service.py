@@ -697,3 +697,36 @@ async def test_run_job_refuses_when_already_executing(tmp_path) -> None:
     assert await service.run_job(j.id, force=True) is False
     release.set()
     await t1
+
+
+def test_prune_orphaned_system_jobs(tmp_path) -> None:
+    """A system job persisted from a previous build but no longer registered by
+    the code (e.g. the legacy 2h `dream` after the entity-centric redesign) must
+    be pruned. `remove_job` protects system jobs, so without this it lingers
+    forever — shown in the UI, fired on schedule, with no handler. Current system
+    jobs and user jobs are untouched."""
+    service = CronService(tmp_path / "cron" / "jobs.json")
+    service.register_system_job(CronJob(
+        id="dream", name="dream",
+        schedule=CronSchedule(kind="every", every_ms=7_200_000),
+        payload=CronPayload(kind="system_event"),
+    ))
+    service.register_system_job(CronJob(
+        id="memory_dream", name="memory_dream",
+        schedule=CronSchedule(kind="cron", expr="0 3 * * *"),
+        payload=CronPayload(kind="system_event"),
+    ))
+    service.add_job(
+        name="user job",
+        schedule=CronSchedule(kind="cron", expr="0 9 * * *"),
+        message="hi",
+    )
+
+    removed = service.prune_orphaned_system_jobs({"memory_dream"})
+
+    assert removed == ["dream"]
+    ids = {j.id for j in service.list_jobs(include_disabled=True)}
+    assert "memory_dream" in ids
+    assert "dream" not in ids
+    assert any(j.payload.kind == "agent_turn"
+               for j in service.list_jobs(include_disabled=True))

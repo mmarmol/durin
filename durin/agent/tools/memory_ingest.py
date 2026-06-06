@@ -1,12 +1,11 @@
 """memory_ingest tool — persist external artifacts as memory sources.
 
-Phase 1.5 of the memory subsystem. The tool copies the source file to
-``ingested/<id>/`` and, when memory is enabled, also creates a
-corresponding ``memory/corpus/<id>.md`` entry plus a vector index
-upsert so the document is searchable from the moment it's ingested —
-not only after dream (Phase 3) runs over it. The body of the corpus
-entry is a head excerpt of the ingested content (1500 chars, matching
-the embed budget); full content stays in ``ingested/<id>/source.*``.
+The tool copies the source file to ``ingested/<id>/`` and, when memory is
+enabled, stores the document WHOLE as a reference (§A2:
+``memory/references/<slug>.md`` + a token-aware ``.chunks.jsonl`` sidecar) and
+indexes it (FTS + vector) so it's searchable the moment it's ingested — not
+only after a dream pass. This replaced the legacy chunked ``corpus/`` model;
+full content stays in ``ingested/<id>/source.*``.
 
 When memory is disabled, the tool falls back to just the file copy +
 meta.json placeholder — the ``ingested/`` artifact is still grep-able
@@ -30,11 +29,6 @@ from durin.memory.vector_index import (
 )
 
 logger = logging.getLogger(__name__)
-
-# How much of the ingested content we put in the body of the derived
-# corpus entry. Matches the embed budget — anything bigger doesn't
-# influence the embedding anyway and just wastes disk on duplication.
-_CORPUS_BODY_BUDGET_CHARS = 1500
 
 _PARAMETERS = tool_parameters_schema(
     path=StringSchema(
@@ -70,20 +64,11 @@ class MemoryIngestTool(Tool):
         self,
         workspace: str | Path,
         embedding_model: str | None = None,
-        dream_config: Any | None = None,
-        app_config: Any | None = None,
     ) -> None:
         self._workspace = Path(workspace).expanduser()
         self._embedding_model = embedding_model
         self._vector_index: Optional[VectorIndex] = None
         self._vector_index_attempted = False
-        # Doc 25 §2.A.1 β.2 + P7 (doc 20): per-entity threshold trigger
-        # config for post-ingest dream dispatch. None disables. See
-        # ``durin.memory.threshold_trigger``.
-        self._dream_config = dream_config
-        # Full DurinConfig. Forwarded to the threshold trigger so the
-        # spawned DreamRunner can resolve its model via aux_models.memory.
-        self._app_config = app_config
 
     @property
     def name(self) -> str:
@@ -102,7 +87,6 @@ class MemoryIngestTool(Tool):
         # Read memory.* from the full DurinConfig on ctx.app_config —
         # ctx.config (= cfg.tools) does not carry a memory section.
         model = None
-        dream_cfg = None
         app = getattr(ctx, "app_config", None)
         if app is not None:
             try:
@@ -110,15 +94,9 @@ class MemoryIngestTool(Tool):
                     model = app.memory.embedding.model
             except (AttributeError, TypeError):
                 model = None
-            try:
-                dream_cfg = app.memory.dream
-            except (AttributeError, TypeError):
-                dream_cfg = None
         return cls(
             workspace=ctx.workspace,
             embedding_model=model,
-            dream_config=dream_cfg,
-            app_config=app,
         )
 
     def _get_vector_index(self) -> Optional[VectorIndex]:

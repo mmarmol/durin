@@ -1337,7 +1337,7 @@ def _run_gateway(
             # New model (§8c/8d/8e): the daily cron runs the extract pass
             # (sessions → entity attributes), the skill-extract pass (sessions →
             # reusable procedures as skills), then the refine pass (dedup). This
-            # replaces the legacy DreamRunner/DreamConsolidator (episodic-entry
+            # replaces the legacy episodic-entry
             # JSON-Patch consolidation via working-tree writes — the obsolete
             # model + the G3 race). Writes go through memory_writer / skill_write.
             model = resolve_memory_model(config)
@@ -1376,7 +1376,7 @@ def _run_gateway(
 
                 def _judge(prompt: str) -> str:
                     # ONE completion via the already-resolved memory model,
-                    # using the same call shape DreamRunner's judge uses.
+                    # using the same call shape the refine pass's absorb judge uses.
                     return default_llm_invoke(prompt, model=curation_model).text
 
                 from durin.agent.skill_drift import check_upstream_drift
@@ -1643,10 +1643,20 @@ def _run_gateway(
             f"cron {mem_dream_cfg.cron}"
         )
 
+    # Prune system crons left in the store by a previous build but no longer
+    # managed here (e.g. the legacy 2h `dream` retired in the entity-centric
+    # redesign) so they don't linger in the UI / fire with no handler. Keep this
+    # set in sync with the system jobs registered above.
+    pruned = cron.prune_orphaned_system_jobs({"memory_dream"})
+    if pruned:
+        console.print(
+            f"[green]✓[/green] Cron: pruned orphaned system job(s): {', '.join(pruned)}"
+        )
+
     # Doc 25 §2.A.1 β.2: wire the post-compaction + session-close
     # hooks so dream picks up consolidated context while the signal
     # is fresh. Background daemon threads keep the agent loop
-    # responsive. DreamRunner's own lock + throttle absorbs collisions
+    # responsive. The reactive dream gate's lock + throttle absorbs collisions
     # with the daily cron. `hasattr` checks keep test scaffolds
     # (_FakeAgentLoop without consolidator / on_session_close) working
     # — production AgentLoop always has both attributes.
@@ -1658,7 +1668,7 @@ def _run_gateway(
         from durin.memory.dream_passes import ReactiveDreamGate
         # Shared by both reactive triggers: a lock so two events don't run
         # overlapping passes + a throttle so a burst of session closes is
-        # absorbed (replaces the legacy DreamRunner's .dream.lock + cooldown).
+        # absorbed (replaces the legacy cross-process .dream.lock + cooldown).
         _dream_gate = ReactiveDreamGate()
         _dream_min_s = mem_dream_cfg.min_seconds_between_runs
         _dream_max_s = mem_dream_cfg.max_seconds_per_run
@@ -2476,19 +2486,32 @@ def _resolve_oauth_provider(provider: str):
     return spec
 
 
+from durin.utils.oauth import should_use_device_code  # noqa: E402
+
+
 @oauth_app.command("login")
 def provider_login(
     provider: str = typer.Argument(..., help="OAuth provider (e.g. 'openai-codex', 'github-copilot')"),
+    device: bool = typer.Option(False, "--device", help="Force device-code flow"),
+    loopback: bool = typer.Option(False, "--loopback", help="Force loopback PKCE flow"),
 ):
     """Authenticate with an OAuth provider."""
     spec = _resolve_oauth_provider(provider)
+
+    console.print(f"{__logo__} OAuth Login - {spec.label}\n")
+    if spec.name == "openai_codex" and (device or loopback):
+        force = "device" if device else "loopback"
+        try:
+            _codex_login_flow(force=force)
+        except ImportError:
+            console.print("[red]oauth_cli_kit not installed. Run: pip install oauth-cli-kit[/red]")
+            raise typer.Exit(1) from None
+        return
 
     handler = _LOGIN_HANDLERS.get(spec.name)
     if not handler:
         console.print(f"[red]Login not implemented for {spec.label}[/red]")
         raise typer.Exit(1)
-
-    console.print(f"{__logo__} OAuth Login - {spec.label}\n")
     handler()
 
 
@@ -2508,24 +2531,46 @@ def provider_logout(
     handler()
 
 
+def _codex_login_flow(force: str | None) -> None:
+    """force: 'device' | 'loopback' | None (auto-detect)."""
+    from durin.providers import codex_device_auth as cda
+
+    existing = cda.existing_codex_session()
+    if existing is not None:
+        who = existing.email or existing.plan or "cuenta existente"
+        src = "Codex CLI" if existing.source == "codex-cli" else "durin"
+        reuse = typer.confirm(
+            f"Encontré una sesión de Codex ({who}, vía {src}). ¿Usarla?",
+            default=True,
+        )
+        if reuse and existing.source == "durin":
+            console.print(f"[green]✓ Usando la sesión existente[/green] [dim]{who}[/dim]")
+            return
+        # codex-cli source or decline: fall through to a fresh connect.
+
+    use_device = force == "device" or (force != "loopback" and should_use_device_code())
+    if use_device:
+        token = cda.login_blocking(print_fn=lambda s: console.print(s))
+    else:
+        from oauth_cli_kit import login_oauth_interactive
+
+        token = login_oauth_interactive(
+            print_fn=lambda s: console.print(s),
+            prompt_fn=lambda s: typer.prompt(s),
+            originator="codex_cli_rs",
+        )
+    if not (token and token.access):
+        console.print("[red]✗ Authentication failed[/red]")
+        raise typer.Exit(1)
+    console.print(
+        f"[green]✓ Authenticated with OpenAI Codex[/green]  [dim]{token.account_id}[/dim]"
+    )
+
+
 @_register_login("openai_codex")
 def _login_openai_codex() -> None:
     try:
-        from oauth_cli_kit import get_token, login_oauth_interactive
-
-        token = None
-        with suppress(Exception):
-            token = get_token()
-        if not (token and token.access):
-            console.print("[cyan]Starting interactive OAuth login...[/cyan]\n")
-            token = login_oauth_interactive(
-                print_fn=lambda s: console.print(s),
-                prompt_fn=lambda s: typer.prompt(s),
-            )
-        if not (token and token.access):
-            console.print("[red]✗ Authentication failed[/red]")
-            raise typer.Exit(1)
-        console.print(f"[green]✓ Authenticated with OpenAI Codex[/green]  [dim]{token.account_id}[/dim]")
+        _codex_login_flow(force=None)
     except ImportError:
         console.print("[red]oauth_cli_kit not installed. Run: pip install oauth-cli-kit[/red]")
         raise typer.Exit(1) from None

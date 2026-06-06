@@ -1,23 +1,21 @@
 """Resolve which LLM model to use for memory subsystem operations.
 
-Both dreams (working-memory ``dream`` and entity-centric ``memory_dream``)
-read their model name through this helper. Precedence:
+The ``memory_dream`` passes read their model name through this helper.
+Precedence:
 
 1. ``config.agents.aux_models.memory`` — when set, the user has opted
    into a memory-specific model. If it points at a preset, the preset's
    ``model`` field wins; otherwise the inline ``model`` field is used.
-2. ``config.memory.dream.model_override`` — legacy per-dream knob.
-3. ``None`` — caller falls back to its own default (the agent's active
-   preset for the legacy ``Dream``; the bundled ``default_llm_invoke``
-   default for the dream).
+2. ``config.memory.dream.model_override`` — per-dream knob.
+3. ``None`` — caller falls back to its own default (the bundled
+   ``default_llm_invoke`` default).
 
 Provider override is **not** supported by this helper. The dream
-invokers either hardcode the provider (entity-centric uses zhipu via
-``default_llm_invoke``) or inherit it from the agent loop (legacy
-``Dream``). If the resolved model name is not served by the active
-provider the call will fail at LLM time — keep the model name
-compatible with the dream's provider until the broader aux-provider
-wiring lands.
+invokers hardcode the provider (entity-centric uses zhipu via
+``default_llm_invoke``). If the resolved model name is not served by
+the active provider the call will fail at LLM time — keep the model
+name compatible with the dream's provider until the broader
+aux-provider wiring lands.
 """
 
 from __future__ import annotations

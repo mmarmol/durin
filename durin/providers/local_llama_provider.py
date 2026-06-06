@@ -13,6 +13,7 @@ from typing import Any
 
 from loguru import logger
 
+from durin.extras import ensure_or_note
 from durin.providers.base import LLMProvider, LLMResponse
 
 _DEFAULT_CACHE_DIR = Path.home() / ".cache" / "durin" / "models"
@@ -174,10 +175,14 @@ class LocalLlamaProvider(LLMProvider):
         try:
             from llama_cpp import Llama
         except ImportError:
-            raise ImportError(
-                "llama-cpp-python is required for local models. "
-                "Install with: pip install 'durin[local]'"
-            ) from None
+            res = ensure_or_note("local_models", config=getattr(self, "_app_config", None))
+            try:
+                from llama_cpp import Llama
+            except ImportError as exc:
+                raise ImportError(
+                    "llama-cpp-python is required for local models. "
+                    + (res.message or "Install with: pip install durin-agent[local]")
+                ) from exc
 
         logger.info("Loading model '{}': {} (n_gpu_layers={})", name, model_path, self._n_gpu_layers)
         return Llama(
