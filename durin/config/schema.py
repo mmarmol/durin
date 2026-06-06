@@ -430,9 +430,9 @@ class MemoryConfig(Base):
     silent (resilient: the embedding model itself auto-downloads on first
     use via fastembed; only the Python extra can't self-install).
 
-    ``dream`` configures auto-trigger of the entity-centric
-    :class:`DreamConsolidator` (doc 25 §2.A.1). Independent of
-    ``enabled`` — manual ``durin memory dream`` works either way.
+    ``dream`` configures the entity-centric dream passes (extract / refine /
+    skill / always_on) and their cron + reactive triggers (doc 25 §2.A.1).
+    Manual ``durin memory dream`` works regardless of the triggers.
 
     ``search`` configures the search pipeline (cross-encoder etc.).
 
