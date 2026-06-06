@@ -365,16 +365,40 @@ class SkillJudgeConfig(Base):
     model: str = ""
 
 
+# Skill-source prefixes trusted by default — verified first-party vendor orgs +
+# de-facto-standard frameworks on skills.sh (2026-06). A match only skips the
+# *source* confirmation; the verdict/code gates still apply (so this never
+# auto-installs code-carrying or non-safe skills). Editable in config + the webui
+# (Skills security → Trust patterns). `github`/`microsoft` are scoped to their
+# skills repo (both are giant general orgs); the rest are org-level.
+DEFAULT_SKILL_ALLOWLIST: list[str] = [
+    "github:anthropics/",                # Anthropic — official Agent Skills
+    "github:google-gemini/",             # Google — official Gemini skills
+    "github:openai/",                    # OpenAI — official skills catalog
+    "github:vercel-labs/",               # Vercel — official agent-skills
+    "github:nousresearch/",              # Nous Research — hermes-agent skills
+    "github:obra/",                      # superpowers — de-facto-standard framework
+    "github:flutter/",                   # Google — Flutter skills
+    "github:firebase/",                  # Google — Firebase agent-skills
+    "github:googleworkspace/",           # Google — Workspace CLI skills
+    "github:google-labs-code/",          # Google Labs — stitch-skills
+    "github:microsoft/azure-skills/",    # Microsoft — Azure skills (repo-scoped)
+    "github:github/awesome-copilot/",    # GitHub/Microsoft — Copilot hub (repo-scoped)
+]
+
+
 class SkillSecurityConfig(Base):
     """Security floor + policy for skill import (§8.C/§6.B). ``allowlist`` =
-    trusted source-ref prefixes (e.g. ``github:anthropics/``, ``https://gitlab.com/acme/``).
-    A match skips only the *source* confirmation; the verdict/code gates have no
-    opt-out. Caps bound a fetched skill's size/file count. ``github_token_secret``
-    names a durin secret holding a GitHub API token (raises rate limits + private
-    repos); empty → anonymous. (Running a skill's declared dependency installs is
-    governed by ``skills.install_policy`` — see P6 #1.)"""
+    trusted source-ref prefixes (e.g. ``github:anthropics/``). A match skips only
+    the *source* confirmation; the verdict/code gates have no opt-out. Ships with a
+    vetted default of first-party vendor + de-facto orgs (``DEFAULT_SKILL_ALLOWLIST``),
+    editable in config + the webui (Skills security → Trust patterns). Caps bound a
+    fetched skill's size/file count. ``github_token_secret`` names a durin secret
+    holding a GitHub API token (raises rate limits + private repos); empty →
+    anonymous. (Running a skill's declared dependency installs is governed by
+    ``skills.install_policy`` — see P6 #1.)"""
 
-    allowlist: list[str] = Field(default_factory=list)
+    allowlist: list[str] = Field(default_factory=lambda: list(DEFAULT_SKILL_ALLOWLIST))
     github_token_secret: str = ""
     max_files: int = 100
     max_total_bytes: int = 3 * 1024 * 1024
