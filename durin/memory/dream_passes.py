@@ -14,15 +14,55 @@ through ``memory_writer`` (plumbing + CAS).
 """
 from __future__ import annotations
 
+import threading
+import time
 from pathlib import Path
 from typing import Any, Callable
+
+from loguru import logger
 
 from durin.memory.extract_runner import run_extract_for_session
 from durin.memory.refine_dream import run_refine
 
-__all__ = ["run_extract_pass", "run_refine_pass"]
+__all__ = ["run_extract_pass", "run_refine_pass", "ReactiveDreamGate"]
 
 LLMInvoke = Callable[..., Any]
+
+
+class ReactiveDreamGate:
+    """In-process concurrency lock + throttle for the reactive dream triggers.
+
+    The post_compaction / on_session_close triggers fire on a daemon thread per
+    event (same gateway process). Without a guard, a burst of session closes
+    would spawn a burst of overlapping extract passes — duplicated LLM cost and
+    thread pile-up. This replaces the cross-process ``.dream.lock`` + throttle
+    the legacy ``DreamRunner`` owned (removed §8e). One instance is shared by
+    all reactive triggers in a gateway.
+
+    ``try_begin`` is non-blocking: it returns False (skip this run) when a pass
+    is already in progress, or when one completed within ``min_seconds``. The
+    per-session cursor makes a skipped run harmless — its turns are picked up by
+    the in-flight pass, the next trigger, or the daily cron.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._last_end = 0.0  # monotonic; 0 → first run always allowed
+
+    def try_begin(self, min_seconds: float) -> str:
+        """Return "" when the caller may run, else a skip reason for telemetry:
+        ``"locked"`` (a pass is already running) or ``"throttled"`` (one ran
+        within ``min_seconds``)."""
+        if not self._lock.acquire(blocking=False):
+            return "locked"
+        if min_seconds and self._last_end and (time.monotonic() - self._last_end) < min_seconds:
+            self._lock.release()
+            return "throttled"
+        return ""
+
+    def end(self) -> None:
+        self._last_end = time.monotonic()
+        self._lock.release()
 
 
 def run_extract_pass(
@@ -30,19 +70,35 @@ def run_extract_pass(
     *,
     llm_invoke: LLMInvoke | None = None,
     model: str | None = None,
+    max_seconds: int = 0,
 ) -> dict:
     """Run the extract dream over every session that has new turns.
 
     Per-session cursors make this idempotent — a session with no new turns is
     skipped. Best-effort per session: one bad session doesn't abort the pass.
+
+    ``max_seconds`` (0 = unbounded) is a hard wall-clock cap: when the elapsed
+    time crosses it the pass yields after the current session, and the cursor
+    resumes the remainder on the next trigger (``memory.dream.max_seconds_per_run``).
     """
     import time
     t0 = time.perf_counter()
     _emit("memory.dream.start", kind="extract")
     sessions_dir = Path(workspace) / "sessions"
-    out: dict[str, Any] = {"sessions": 0, "entities": 0, "errors": []}
+    out: dict[str, Any] = {"sessions": 0, "entities": 0, "errors": [], "yielded": False}
     if sessions_dir.is_dir():
         for jsonl_path in sorted(sessions_dir.glob("*.jsonl")):
+            if max_seconds and (time.perf_counter() - t0) >= max_seconds:
+                out["yielded"] = True
+                elapsed_ms = int((time.perf_counter() - t0) * 1000)
+                _emit("memory.dream.max_seconds_reached", kind="extract",
+                      max_seconds=max_seconds, elapsed_ms=elapsed_ms,
+                      sessions_done=out["sessions"])
+                logger.warning(
+                    "extract dream hit max_seconds_per_run ({}s) after {} session(s) "
+                    "in {}ms; the per-session cursor resumes the remainder on the "
+                    "next trigger", max_seconds, out["sessions"], elapsed_ms)
+                break
             try:
                 r = run_extract_for_session(
                     workspace, jsonl_path, llm_invoke=llm_invoke, model=model)
@@ -52,10 +108,11 @@ def run_extract_pass(
                     out["entities"] += len(extracted)
             except Exception as exc:  # noqa: BLE001 — never abort the whole pass
                 out["errors"].append({"session": jsonl_path.stem, "error": str(exc)})
+    out["duration_ms"] = int((time.perf_counter() - t0) * 1000)
     _emit("memory.dream.end", kind="extract",
           entities_consolidated=out["entities"], entities_failed=len(out["errors"]),
-          sessions=out["sessions"],
-          duration_ms=int((time.perf_counter() - t0) * 1000))
+          sessions=out["sessions"], yielded=out["yielded"],
+          duration_ms=out["duration_ms"])
     return out
 
 
@@ -70,10 +127,11 @@ def run_refine_pass(
     t0 = time.perf_counter()
     _emit("memory.dream.start", kind="refine")
     out = run_refine(workspace, llm_invoke=llm_invoke, model=model)
+    out["duration_ms"] = int((time.perf_counter() - t0) * 1000)
     _emit("memory.dream.end", kind="refine",
           merged=len(out.get("merged", [])), kept=len(out.get("kept_separate", [])),
           candidates=out.get("candidates", 0),
-          duration_ms=int((time.perf_counter() - t0) * 1000))
+          duration_ms=out["duration_ms"])
     return out
 
 
@@ -145,6 +203,7 @@ def run_skill_extract_pass(
 async def _skill_extract_async(
     workspace: Path, *, provider: Any | None, model: str | None, max_sessions: int,
 ) -> dict:
+    t0 = time.perf_counter()
     sessions_text = _recent_sessions_text(workspace, max_sessions)
     if not sessions_text.strip():
         return {"skills_touched": 0, "reason": "no_sessions"}
@@ -183,5 +242,7 @@ async def _skill_extract_async(
 
     touched = sum(1 for ev in (result.tool_events or [])
                   if ev.get("name") == "skill_write")
-    _emit("memory.dream.skill_extract", skills_touched=touched)
-    return {"skills_touched": touched}
+    duration_ms = int((time.perf_counter() - t0) * 1000)
+    _emit("memory.dream.skill_extract", skills_touched=touched, duration_ms=duration_ms)
+    logger.info("skill-extract dream: {} skill(s) touched in {}ms", touched, duration_ms)
+    return {"skills_touched": touched, "duration_ms": duration_ms}

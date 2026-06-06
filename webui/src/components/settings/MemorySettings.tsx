@@ -51,6 +51,8 @@ interface MemoryConfigShape {
     cron?: string;
     postCompaction?: boolean;
     onSessionClose?: boolean;
+    minSecondsBetweenRuns?: number;
+    maxSecondsPerRun?: number;
     autoAbsorb?: { enabled?: boolean };
   };
 }
@@ -60,6 +62,8 @@ interface DreamState {
   cron: string;
   postCompaction: boolean;
   onSessionClose: boolean;
+  minSecondsBetweenRuns: number;
+  maxSecondsPerRun: number;
   autoAbsorb: boolean;
 }
 
@@ -80,6 +84,10 @@ function readDream(config: Record<string, unknown> | null): DreamState {
     cron: typeof d.cron === "string" && d.cron ? d.cron : "0 3 * * *",
     postCompaction: typeof d.postCompaction === "boolean" ? d.postCompaction : true,
     onSessionClose: typeof d.onSessionClose === "boolean" ? d.onSessionClose : true,
+    minSecondsBetweenRuns:
+      typeof d.minSecondsBetweenRuns === "number" ? d.minSecondsBetweenRuns : 300,
+    maxSecondsPerRun:
+      typeof d.maxSecondsPerRun === "number" ? d.maxSecondsPerRun : 600,
     autoAbsorb:
       typeof d.autoAbsorb?.enabled === "boolean" ? d.autoAbsorb.enabled : false,
   };
@@ -232,6 +240,22 @@ export function MemorySettings({ token }: { token: string }) {
               void onSave("memory.dream.auto_absorb.enabled", !dream.autoAbsorb)
             }
           />
+          <DreamNumberRow
+            title={t("settings.memory.rows.dreamThrottle")}
+            description={t("settings.memory.help.dreamThrottle")}
+            value={dream.minSecondsBetweenRuns}
+            disabled={!dream.enabled}
+            saving={savingPath === "memory.dream.min_seconds_between_runs"}
+            onSave={(n) => void onSave("memory.dream.min_seconds_between_runs", n)}
+          />
+          <DreamNumberRow
+            title={t("settings.memory.rows.dreamMaxSeconds")}
+            description={t("settings.memory.help.dreamMaxSeconds")}
+            value={dream.maxSecondsPerRun}
+            disabled={!dream.enabled}
+            saving={savingPath === "memory.dream.max_seconds_per_run"}
+            onSave={(n) => void onSave("memory.dream.max_seconds_per_run", n)}
+          />
         </SettingsGroup>
       </section>
     </div>
@@ -306,6 +330,62 @@ function DreamCronRow({
           placeholder="0 3 * * *"
           disabled={disabled}
           className="h-8 w-[140px] rounded-full text-[13px]"
+        />
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!dirty || disabled || saving}
+          onClick={commit}
+          className="rounded-full"
+        >
+          {t("settings.config.save")}
+        </Button>
+      </div>
+    </SettingsRow>
+  );
+}
+
+/** Numeric input row for the dream tuning knobs (reactive throttle seconds,
+ *  wall-clock cap seconds). Commit on Enter or Save. */
+function DreamNumberRow({
+  title,
+  description,
+  value,
+  disabled,
+  saving,
+  onSave,
+}: {
+  title: string;
+  description: string;
+  value: number;
+  disabled: boolean;
+  saving: boolean;
+  onSave: (n: number) => void;
+}) {
+  const { t } = useTranslation();
+  const [draft, setDraft] = useState(String(value));
+  useEffect(() => setDraft(String(value)), [value]);
+
+  const parsed = Number(draft);
+  const valid = Number.isFinite(parsed) && parsed >= 0 && Number.isInteger(parsed);
+  const dirty = valid && parsed !== value;
+  const commit = () => {
+    if (!dirty) return;
+    onSave(parsed);
+  };
+
+  return (
+    <SettingsRow title={title} description={description}>
+      <div className="flex items-center gap-2">
+        <Input
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commit();
+          }}
+          inputMode="numeric"
+          disabled={disabled}
+          className="h-8 w-[110px] rounded-full text-[13px]"
         />
         <Button
           size="sm"

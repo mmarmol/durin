@@ -75,3 +75,31 @@ def test_skill_extract_no_sessions_is_noop(tmp_path):
     from durin.memory.dream_passes import run_skill_extract_pass
     out = run_skill_extract_pass(tmp_path)
     assert out["skills_touched"] == 0
+
+
+def test_reactive_gate_serializes_and_throttles():
+    # The reactive gate replaces the legacy DreamRunner lock + cooldown:
+    # one pass at a time, and a burst within min_seconds is absorbed.
+    from durin.memory.dream_passes import ReactiveDreamGate
+    g = ReactiveDreamGate()
+    assert g.try_begin(300) == ""           # first run allowed
+    assert g.try_begin(300) == "locked"     # a pass is already in progress
+    g.end()
+    assert g.try_begin(300) == "throttled"  # one just ended (within the window)
+    assert g.try_begin(0) == ""             # throttle disabled → allowed
+    g.end()
+
+
+def test_extract_pass_respects_max_seconds(tmp_path):
+    import time as _t
+    for i in range(3):
+        _session(tmp_path, f"s{i}", [{"role": "user", "content": f"X{i}"},
+                                     _upsert(f"company:c{i}")])
+
+    def slow_stub(*a, **k):
+        _t.sleep(0.05)
+        return '{"founded_year": 2001}'
+
+    out = run_extract_pass(tmp_path, llm_invoke=slow_stub, max_seconds=0.001)
+    assert out["yielded"] is True
+    assert out["sessions"] < 3             # yielded before processing all sessions
