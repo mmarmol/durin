@@ -218,7 +218,8 @@ def cmd_dream(
             "(use 'durin memory absorb-suggest' to review duplicates)[/dim]"
         )
     rf = run_refine_pass(workspace, model=model, enabled=_absorb.enabled,
-                         confidence_threshold=_absorb.confidence_threshold)
+                         confidence_threshold=_absorb.confidence_threshold,
+                         min_age_hours=_absorb.min_age_hours)
     console.print("[dim]Always-on pass (distil pinned guidance)…[/dim]")
     ao = run_always_on_pass(workspace, model=model,
                             token_budget=cfg.memory.dream.always_on_token_budget)

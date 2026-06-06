@@ -38,6 +38,17 @@ def _emit(event: str, **data: Any) -> None:
         pass
 
 
+def _too_fresh(page: "EntityPage", min_age_hours: int, now: Any) -> bool:
+    """True when the entity is younger than the quarantine window (B3). Uses
+    created_at, falling back to updated_at; with no timestamp the entity is
+    treated as old (never quarantined — fail open, don't block a merge)."""
+    from datetime import timedelta
+    ts = page.created_at or page.updated_at
+    if ts is None:
+        return False
+    return (now - ts) < timedelta(hours=min_age_hours)
+
+
 def _tombstone_path(workspace: Path) -> Path:
     return Path(workspace) / "memory" / _TOMBSTONE_FILE
 
@@ -83,9 +94,18 @@ def run_refine(
     llm_invoke: LLMInvoke | None = None,
     model: str = "glm-5.1",
     confidence_threshold: int = 95,
+    min_age_hours: int = 0,
 ) -> dict:
-    """Dedup pass: judge alias-overlap candidate pairs and merge the same ones."""
+    """Dedup pass: judge alias-overlap candidate pairs and merge the same ones.
+
+    ``min_age_hours`` (B3) quarantines freshly-created/edited entities: a
+    candidate pair is skipped when either entity is younger than the window, so
+    the dream doesn't merge two entities before they have differentiated. 0
+    disables the quarantine.
+    """
+    from datetime import datetime, timezone
     llm_invoke = llm_invoke or default_llm_invoke
+    now = datetime.now(timezone.utc)
     absorber = EntityAbsorption(workspace=workspace)
     candidates = absorber.find_candidates()
 
@@ -111,6 +131,11 @@ def run_refine(
         if page_a.author == "user_authored" or page_b.author == "user_authored":
             skipped.append({"pair": [ref_a, ref_b], "reason": "user_managed"})
             _emit("memory.absorb.skipped", canonical=ref_a, absorbed=ref_b, reason="user_managed")
+            continue
+        if min_age_hours and (_too_fresh(page_a, min_age_hours, now)
+                              or _too_fresh(page_b, min_age_hours, now)):
+            skipped.append({"pair": [ref_a, ref_b], "reason": "quarantine"})
+            _emit("memory.absorb.skipped", canonical=ref_a, absorbed=ref_b, reason="quarantine")
             continue
         try:
             judged = judge_pair(

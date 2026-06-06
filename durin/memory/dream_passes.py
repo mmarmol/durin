@@ -123,6 +123,7 @@ def run_refine_pass(
     model: str = "glm-5.1",
     enabled: bool = True,
     confidence_threshold: int = 95,
+    min_age_hours: int = 0,
 ) -> dict:
     """Run the refine dream (dedup duplicate entities). The daily cron entry.
 
@@ -130,7 +131,8 @@ def run_refine_pass(
     ``memory.dream.auto_absorb.enabled``) the pass does NOT merge — duplicates
     are surfaced on demand by ``durin memory absorb-suggest`` and merged with
     ``durin memory absorb``. ``confidence_threshold`` is the LLM-judge floor for
-    an auto-merge. Both are wired from config by the cron / manual callers.
+    an auto-merge; ``min_age_hours`` quarantines freshly-created entities. All
+    three are wired from config by the cron / manual callers.
     """
     import time
     t0 = time.perf_counter()
@@ -143,7 +145,8 @@ def run_refine_pass(
                 "candidates": 0, "disabled": True, "duration_ms": 0}
     _emit("memory.dream.start", kind="refine")
     out = run_refine(workspace, llm_invoke=llm_invoke, model=model,
-                     confidence_threshold=confidence_threshold)
+                     confidence_threshold=confidence_threshold,
+                     min_age_hours=min_age_hours)
     out["duration_ms"] = int((time.perf_counter() - t0) * 1000)
     _emit("memory.dream.end", kind="refine",
           merged=len(out.get("merged", [])), kept=len(out.get("kept_separate", [])),

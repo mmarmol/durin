@@ -229,15 +229,6 @@ class AutoAbsorbConfig(Base):
         validation_alias=AliasChoices("minAgeHours", "min_age_hours"),
     )
 
-    # Override the judge model (None → use the dream model, which is
-    # the runner's ``model`` field). Setting a different model
-    # mitigates the self-consistency bias where the same model
-    # judges its own output.
-    judge_model: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("judgeModel", "judge_model"),
-    )
-
 
 class CrossEncoderConfig(Base):
     """Cross-encoder reranker config (doc 03 §9, doc 10 P4).

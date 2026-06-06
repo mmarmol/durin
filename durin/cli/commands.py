@@ -1350,7 +1350,8 @@ def _run_gateway(
                 rf = await _asyncio.to_thread(
                     run_refine_pass, workspace, model=model,
                     enabled=_absorb.enabled,
-                    confidence_threshold=_absorb.confidence_threshold)
+                    confidence_threshold=_absorb.confidence_threshold,
+                    min_age_hours=_absorb.min_age_hours)
                 ao = await _asyncio.to_thread(
                     run_always_on_pass, workspace, model=model,
                     token_budget=config.memory.dream.always_on_token_budget)
