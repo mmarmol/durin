@@ -301,14 +301,24 @@ last, after the A/B decisions settle the surrounding code.
 > the migration" — but confirm each, because some overlap with A (a doc still
 > describing a feature we *meant* to keep but didn't wire).
 
-### C1 — Doc 04 (agent tools) describes the wrong write surface — 🔲
+### C1 — Doc 04 (agent tools) describes the wrong write surface — ✅ DONE (2026-06-06)
+> Rewrote doc 04 to the live toolset: documented `memory_upsert_entity` (the
+> write tool), marked `memory_store` DISABLED, fixed ingest→references (A2)
+> and the FRAGMENT/INGESTED markers (N3). Aligned with doc 06 §3. Sync test
+> 7/7. (Verified against the code.)
 Doc 04 documents `memory_store` (now `enabled()=False`, hidden from the agent)
 and never mentions `memory_upsert_entity` (the real entity-write tool). Live
 surface = `memory_search, memory_upsert_entity, memory_ingest, memory_drill,
 memory_forget`. **Likely "intentionally changed"** → rewrite doc 04 + doc 06 §3
 to the real tools. Cross-check with A2 (ingest description) before finalizing.
 
-### C2 — Doc 05 (dream cold path) describes the deleted system — 🔲
+### C2 — Doc 05 (dream cold path) describes the deleted system — ✅ DONE (2026-06-06)
+> Rewrote doc 05 (720→~470 lines) to the four-pass model (extract / refine /
+> skill / always_on), triggers (cron = all four; reactive = extract only,
+> verified in commands.py; manual), config, and the two-track model. Removed
+> the threshold trigger, consolidator prompt, JSON-Patch apply pipeline, and
+> per-entity cursor. Kept §8 absorb-judge (verified). Each old guarantee was
+> cross-checked against a new-model equivalent (A1/A3/N3/N4).
 The entire doc describes the DreamConsolidator/DreamRunner/threshold pipeline
 (episodic → JSON-Patch → archive, lock/throttle/cursor, quarantine) that was
 deleted and replaced by `extract_dream`/`refine_dream`/`dream_passes` (sessions
@@ -318,7 +328,12 @@ new-model equivalent or a conscious drop (cross-ref A1 auto_absorb, A3 cap, A5
 existing_uris, and the throttle/cap we just restored). This is where a "forgot
 to implement" can hide inside "doc drift."
 
-### C3 — Stale implementation-status tables + scattered legacy refs — 🔲
+### C3 — Stale implementation-status tables + scattered legacy refs — 🔨 IN PROGRESS (2026-06-06)
+> doc 01 §11 status table + legacy refs fixed (agent); doc 05 status/telemetry
+> fixed. Also fixed stale CODE docstrings: relation_cap events (A3 alert-only)
+> + sectioned_output fragment intro (N3). REMAINING: doc 00 (overview) still
+> describes the legacy dream / memory_store / JSON-Patch (lines 16, 70, 141-
+> 148, 194, 207-208) + 3 cosmetic [V2] labels in doc 01.
 Doc 00/01/02 prose + the "Implementation status" tables in doc 01 §11 / doc 05
 §15 cite deleted files (`dream_apply.py`, `dream_git_history.py`,
 `dream_prompt_builder.py`, etc.) and the two-track `dream` cron / MEMORY.md story
