@@ -97,27 +97,28 @@ wires only skills.sh + clawhub today (github-taps/well-known/lobehub are roadmap
 as the `skill_search` core tool, plus CLI (`durin skill search`) and web.
 
 **Acquire-on-gap (§6.C)** — durin's own initiative to acquire a skill when it lacks one.
-Search is the seed; the gate (§7) is enforced. Two paths (spec
-`2026-06-03-skill-acquire-on-gap-design.md`). Path A (in-session) is BUILT + live-verified;
-Path B's safe-seed primitives exist but are **not wired into the current dream** (see below):
+Search is the seed; the gate (§7) is enforced. Both paths (spec
+`2026-06-03-skill-acquire-on-gap-design.md`) are BUILT + live-verified:
 - **Path A — in-session, interactive.** Prompt guidance in `skills_section.md`: when
   local skill search (`memory_search kind=skill`) misses on a recurring/non-trivial
   workflow, `skill_search` the registries; to reuse a hit, `skill_import(action=fetch)`
   (runs the §8.C gate); if clean → `skill_write`; if risky → present candidates to the
   user via `ask_user_question`. A human approves anything risky.
-- **Path B — autonomous, safe-only (not currently wired).** The safe-seed primitives
-  exist in the tree: `durin/agent/tools/skill_acquire_seed.py::SkillAcquireSeedTool`
-  (gated per-ref, **dream-scoped** `_scopes={"dream"}`) → `durin/agent/skill_acquire.py::acquire_safe_seed`,
-  which **rejects a non-allowlisted ref without a download** (fast), fetches + statically
-  scans allowlisted refs (**LLM judge never used here** — `judge_trigger="off"`), and
-  returns a seed **only if `decide_action == "allow"`** (risk enforced in code, so an
-  autonomous caller can never receive risky content). But the **only** consumer of the
-  `dream` tool scope was the old two-phase dream's phase-2 toolset, deleted in the
-  entity-centric migration. The current skill-extract pass (`_skill_extract_async`)
-  hand-registers only `ReadFileTool` / `EditFileTool` / `SkillWriteTool` and `ToolLoader.load`
-  is never called with `scope="dream"`, so today the dream **authors from scratch** — it
-  does not auto-seed from registries. Re-wiring this into the skill-extract sub-agent is
-  the path that would revive Path B (spec `2026-06-03-skill-acquire-on-gap-design.md`).
+- **Path B — autonomous, safe-only.** The daily `memory_dream` **skill-extract pass**
+  hosts it: `dream_passes.py::_build_skill_extract_tools` hand-registers `skill_search`
+  + `skill_acquire_seed` alongside the authoring tools, and `_SKILL_EXTRACT_PROMPT`
+  drives the flow — `skill_search` a candidate → `skill_acquire_seed` its ref → adapt +
+  `skill_write`, else author from scratch. The seed gate is in code:
+  `skill_acquire_seed.py::SkillAcquireSeedTool` (`_scopes={"dream"}`, so it never loads
+  into the in-loop core agent) → `skill_acquire.py::acquire_safe_seed`, which **rejects a
+  non-allowlisted ref without a download** (fast), fetches + statically scans allowlisted
+  refs (**LLM judge never used** — `judge_trigger="off"`), and returns a seed **only if
+  `decide_action == "allow"`** (risk enforced in code). With the default empty allowlist
+  nothing auto-seeds → the dream authors from scratch (conservative). **Live-verified
+  2026-06-06:** a real skill-extract run called `skill_search → skill_acquire_seed →
+  skill_write`. (History: Path B first shipped in the 2h Dream's phase-2; the
+  entity-centric migration deleted that host and orphaned `skill_acquire_seed` until it
+  was re-homed here.)
 
 ---
 
@@ -241,7 +242,7 @@ adds an **approved executor**:
 | `skill_audit` | core | Run the §8.C scan on a skill; verdict + findings. |
 | `skills_list` | core | List available + quarantined skills. |
 | `skill_install_deps` | core | Install a skill's declared deps (dry-run→confirm, policy, via ExecTool). |
-| `skill_acquire_seed` | **`dream`** (not loaded) | Gated per-ref seed retrieval for autonomous acquisition (returns risk-free seeds only). `_scopes={"dream"}`, but no agent loads the `dream` scope today — see §4 Path B. |
+| `skill_acquire_seed` | **`dream`** (skill-extract pass) | Gated per-ref seed retrieval for autonomous acquisition (returns risk-free seeds only). `_scopes={"dream"}` keeps it out of the in-loop core agent; hand-registered in the daily skill-extract pass (`_build_skill_extract_tools`) — see §4 Path B. |
 
 Tools default to `core` scope (auto-loaded into the in-loop agent) unless they declare
 `_scopes` (`durin/agent/tools/loader.py::ToolLoader.load`). `skill_acquire_seed` declares
@@ -272,13 +273,11 @@ instead, and the dream's skill-extract sub-agent gets only Read/Edit/`skill_writ
 (E2 Part A; `run_skill_extract_pass`) · daily catalog curation `curate_catalog` (E2 Part B) ·
 interop standard (§8.B) · import + §8.C security floor (§6.B/§8.C) · discovery/registries (§6.A) ·
 upstream drift→evolution (§8.D) · unverified-origin sweep (Part C) · retrieval: searchable
-memory class + hot-tier (Spec-2) · acquire-on-gap Path A (in-session, §6.C) · runtime install
+memory class + hot-tier (Spec-2) · acquire-on-gap **Paths A + B** (in-session + autonomous
+skill-extract, §6.C; Path B re-homed + live-verified 2026-06-06) · runtime install
 executor (P6 #1).
 
-**Pending (active):** acquire-on-gap Path B (autonomous dream seed) — safe-seed primitives
-(`skill_acquire_seed` / `acquire_safe_seed`) exist but the `dream` tool scope is no longer
-loaded by any agent, so re-wiring into the skill-extract sub-agent is needed (§4 Path B) ·
-P6 #2 (run bundled skill *scripts* through the tool gate) · P6 #3 (per-skill FS/net sandbox) ·
+**Pending (active):** P6 #2 (run bundled skill *scripts* through the tool gate) · P6 #3 (per-skill FS/net sandbox) ·
 extra discovery adapters (github-taps / well-known / lobehub). See `docs/backlog.md`.
 
 **Discarded (decided against, with rationale in `skills_evolutivas.md`):** §6.D

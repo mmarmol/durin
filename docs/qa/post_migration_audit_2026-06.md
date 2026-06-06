@@ -464,3 +464,18 @@ unimplemented feature. Every item verified by reading the code.
 > renders 10 controls with correct titles/descriptions/values (95 / 24 / 1500).
 > Also confirmed the graph view renders correctly (7 nodes · 6 edges · 1 phantom,
 > matching the entity-integrity check) with per-type filters.
+
+### N10 — acquire-on-gap Path B orphaned by the migration, re-homed (found while doc-auditing skills) — ✅ DONE (2026-06-06)
+> The skills doc-accuracy pass surfaced it. `skill_acquire_seed` (`_scopes={"dream"}`)
+> + `acquire_safe_seed` — the autonomous skill-acquisition primitives (acquire-on-gap
+> **Path B**, spec `2026-06-03-skill-acquire-on-gap-design.md`, originally BUILT +
+> live-verified in the **2h Dream's phase-2**) — were ORPHANED when the entity-centric
+> migration deleted that phase-2. No agent loads `scope="dream"`, and the replacement
+> skill-extract pass registered only Read/Edit/SkillWrite, so the dream could only author
+> from scratch — a **silent feature regression**, not dead code (the user caught the
+> mischaracterization). Re-homed: `dream_passes._build_skill_extract_tools` now
+> hand-registers `skill_search` + `skill_acquire_seed` (config allowlist) and
+> `_SKILL_EXTRACT_PROMPT` drives search → acquire-safe-seed → author-fallback. Tests:
+> `tests/memory/test_skill_extract_acquire.py` (5 tool names wired + allowlist carried).
+> **Live-verified:** a real skill-extract run called `skill_search → skill_acquire_seed
+> ×3 → skill_write` (empty allowlist → seeds safe-rejected → authored from scratch).
