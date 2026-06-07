@@ -473,3 +473,75 @@ def test_entity_subgraph_missing_ref_synthesized(tmp_path: Path) -> None:
     g = build_entity_subgraph(tmp_path, "topic:ghost", hops=1)
     assert {n["id"] for n in g["nodes"]} == {"topic:ghost"}
     assert g["edges"] == []
+
+
+# ---------------------------------------------------------------------------
+# P5: references as first-class nodes + derived_from edges
+# ---------------------------------------------------------------------------
+
+
+def _ingest_ref(ws: Path, title: str, content: str = "body") -> str:
+    from durin.memory.reference import ingest_reference
+
+    return ingest_reference(ws, title, content).ref
+
+
+def test_reference_walked_as_node_when_orphan(tmp_path: Path) -> None:
+    # A reference with no inbound derived_from is STILL a node (Q2): it has
+    # real content, so it's always shown, weight 1, labelled by its title.
+    _clear_all()
+    _ingest_ref(tmp_path, "Rabies Investigation", "notes")
+    g = build_memory_graph(tmp_path, include_sessions=False)
+    ref = next(n for n in g["nodes"] if n["id"] == "reference:rabies-investigation")
+    assert ref["type"] == "reference"
+    assert ref["name"] == "Rabies Investigation"
+    assert ref["weight"] == 1
+    assert g["edges"] == []
+    assert "reference" in g["stats"]["types"]
+
+
+def test_derived_from_renders_edge_and_inbound_weight(tmp_path: Path) -> None:
+    _clear_all()
+    ref = _ingest_ref(tmp_path, "Rabies Investigation", "notes")
+    EntityPage(
+        type="topic", name="Rabies", derived_from=[ref],
+    ).save(tmp_path / "memory" / "entities" / "topic" / "rabies.md")
+    g = build_memory_graph(tmp_path, include_sessions=False)
+    df = [e for e in g["edges"] if e.get("kind") == "derived_from"]
+    assert df == [{
+        "source": "topic:rabies",
+        "target": "reference:rabies-investigation",
+        "type": "derived_from",
+        "kind": "derived_from",
+        "weight": 1,
+    }]
+    # inbound link bumps the reference weight to 1 + 1.
+    ref_node = next(n for n in g["nodes"] if n["id"] == ref)
+    assert ref_node["weight"] == 2
+
+
+def test_quiet_entity_not_dropped_beneath_reference(tmp_path: Path) -> None:
+    # Q2/M3: a weight-0 entity floors to 1 in the cap sort, tying with a
+    # weight-1 orphan reference — both survive a tight node cap.
+    _clear_all()
+    _write_page(tmp_path, "topic", "aaa-quiet")  # weight 0, no edges
+    _ingest_ref(tmp_path, "zzz ref", "body")     # weight 1, orphan
+    g = build_memory_graph(tmp_path, include_sessions=False, max_nodes=2)
+    ids = {n["id"] for n in g["nodes"]}
+    assert "topic:aaa-quiet" in ids
+    assert "reference:zzz-ref" in ids
+    # stored weight unchanged (displayed as entries-referencing count).
+    quiet = next(n for n in g["nodes"] if n["id"] == "topic:aaa-quiet")
+    assert quiet["weight"] == 0
+
+
+def test_linked_reference_appears_in_focus(tmp_path: Path) -> None:
+    from durin.memory.graph import build_entity_subgraph
+
+    _clear_all()
+    ref = _ingest_ref(tmp_path, "Rabies Investigation", "notes")
+    EntityPage(
+        type="topic", name="Rabies", derived_from=[ref],
+    ).save(tmp_path / "memory" / "entities" / "topic" / "rabies.md")
+    g = build_entity_subgraph(tmp_path, "topic:rabies", hops=1)
+    assert ref in {n["id"] for n in g["nodes"]}
