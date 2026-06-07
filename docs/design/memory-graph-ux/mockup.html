@@ -38,6 +38,9 @@
   .node.lit .label { color:var(--ink); font-weight:600; }
   .node.lit .dot { box-shadow:0 0 0 4px rgba(91,86,224,.18); }
   .node.dim { opacity:.22; }
+  /* while searching, the graph recedes behind the results */
+  .graphpane.searching .node { opacity:.16; pointer-events:none; }
+  .graphpane.searching svg .edge { opacity:.06; }
   .node.active .dot { transform:scale(1.25); box-shadow:0 0 0 5px rgba(91,86,224,.28); }
   svg .edge { stroke:#cfcec9; stroke-width:1.2; transition:stroke .18s, opacity .18s; }
   svg .edge.lit { stroke:var(--accent); opacity:.85; } svg .edge.dim { opacity:.12; }
@@ -183,7 +186,7 @@ function emphasize(id){ const lit=neighbors(id);
 }
 function clearEmphasis(){ graphpane.querySelectorAll(".node").forEach(el=>el.classList.remove("lit","dim","active")); edgesSvg.querySelectorAll(".edge").forEach(e=>e.classList.remove("lit","dim")); }
 
-function onHover(n){ if(openId)return; emphasize(n.id); const el=nodeEl(n.id);
+function onHover(n){ if(openId||graphpane.classList.contains("searching"))return; emphasize(n.id); const el=nodeEl(n.id);
   preview.style.left=Math.min(el.offsetLeft+16, graphpane.clientWidth-250)+"px"; preview.style.top=Math.min(el.offsetTop+16, graphpane.clientHeight-150)+"px";
   preview.querySelector(".d").style.background=colorByType[n.type]; document.getElementById("pv-title").textContent=n.name;
   document.getElementById("pv-body").innerHTML=n.body.replace(/<[^>]+>/g," ").slice(0,160)+"…"; preview.style.display="block"; }
@@ -201,7 +204,7 @@ function applyResponsive(){
 }
 
 function openItem(id){
-  preview.style.display="none"; results.classList.remove("open"); // search is transient: closes on pick
+  preview.style.display="none"; results.classList.remove("open"); graphpane.classList.remove("searching"); // search is transient: closes on pick, graph returns
   const isRef=id.startsWith("reference:"); const item=isRef?REFERENCES.find(r=>r.id===id):NODES.find(n=>n.id===id); if(!item)return;
   openId=id;
   document.getElementById("pn-dot").style.background=colorByType[isRef?"reference":item.type];
@@ -223,13 +226,14 @@ graphpane.addEventListener("click",e=>{ if(e.target===graphpane||e.target===edge
 
 const ALL=[{kind:"canonical",id:"topic:reaccion-adversa",title:"Reacción Adversa Vacuna Rabia en Caninos",snip:"entidad consolidada"},{kind:"reference",id:"reference:reaccion-adversa-investigacion",title:"reaccion-adversa-…-investigacion",snip:"documento de referencia"}];
 const search=document.getElementById("search");
-search.addEventListener("input",()=>{ const q=search.value.trim().toLowerCase(); if(!q){results.classList.remove("open");return;}
+search.addEventListener("input",()=>{ const q=search.value.trim().toLowerCase(); if(!q){results.classList.remove("open"); graphpane.classList.remove("searching"); return;}
+  graphpane.classList.add("searching");
   const hits=ALL.filter(r=>r.title.toLowerCase().includes(q)||true);
   document.getElementById("rh-count").textContent=`Search · ${hits.length} resultados`;
   document.getElementById("results-list").innerHTML=hits.map((r,i)=>`<div class="item" data-i="${i}"><span class="kind ${r.kind}">${r.kind}</span><span class="t">${r.title}</span><div class="s">${r.snip}</div></div>`).join("");
   [...document.querySelectorAll("#results-list .item")].forEach((el,i)=>el.addEventListener("click",()=>openItem(hits[i].id)));
   results.classList.add("open"); });
-document.getElementById("results-x").addEventListener("click",()=>{results.classList.remove("open"); search.value="";});
+document.getElementById("results-x").addEventListener("click",()=>{results.classList.remove("open"); graphpane.classList.remove("searching"); search.value="";});
 
 layout(); window.addEventListener("resize",()=>{ applyResponsive(); layout(); });
 </script>
