@@ -440,7 +440,17 @@
       "button": "Search",
       "empty": "No skills matched that search.",
       "installs_one": "{{count}} install",
-      "installs_other": "{{count}} installs"
+      "installs_other": "{{count}} installs",
+      "resultsCount_one": "{{count}} result",
+      "resultsCount_other": "{{count}} results",
+      "sortLabel": "Sort",
+      "sortInstalls": "Installs",
+      "sortName": "Name A–Z",
+      "sortRelevance": "Relevance",
+      "showMore": "Show more",
+      "noDescription": "No description available.",
+      "acquireExplainer": "Public-registry skills. Importing drops a skill into Pending for your approval.",
+      "importByRef": "Import by reference"
     },
     "title": "Skills"
   },
