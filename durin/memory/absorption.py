@@ -30,6 +30,7 @@ from pathlib import Path
 
 from durin.memory.aliases_index import AliasIndex
 from durin.memory.entity_page import EntityPage
+from durin.memory.field_provenance import coerce_relation_prov
 from durin.utils.git_repo import GitRepo
 
 __all__ = [
@@ -361,15 +362,47 @@ def _merge_pages(
     merged_attributes = dict(absorbed.attributes)
     merged_attributes.update(canonical.attributes)
 
-    # provenance: keep canonical's (its attribute/relation indices stay valid
-    # as canonical's relations come first); fold in absorbed's attribute
-    # provenance for keys canonical didn't already have.
+    # derived_from (P2): union+dedup, canonical order first. The field is NOT
+    # carried via `extra` (it's a known kwarg), so it must be passed explicitly
+    # to the constructor below or it would be silently dropped.
+    merged_derived_from = list(canonical.derived_from or [])
+    seen_df = set(merged_derived_from)
+    for d in (absorbed.derived_from or []):
+        if d not in seen_df:
+            seen_df.add(d)
+            merged_derived_from.append(d)
+
+    # provenance: keep canonical's; fold in absorbed's entries for keys
+    # canonical didn't already have. All three field provenances are now
+    # key-addressed (attributes by key, relations by (to,type) — Q1,
+    # derived_from by ref) so the fold is a uniform setdefault, no re-indexing.
     merged_prov: dict = dict(canonical.provenance) if canonical.provenance else {}
     attr_prov = dict(merged_prov.get("attributes") or {})
     for k, entry in ((absorbed.provenance or {}).get("attributes") or {}).items():
         attr_prov.setdefault(k, entry)
     if attr_prov:
         merged_prov["attributes"] = attr_prov
+
+    # relations provenance (bug fix, item B): previously dropped entirely on
+    # merge. Coerce both sides to the (to,type)-keyed dict form (lenient on any
+    # legacy index-list) and fold; canonical wins on a key conflict.
+    rel_prov = coerce_relation_prov(
+        (canonical.provenance or {}).get("relations"), canonical.relations,
+    )
+    absorbed_rel_prov = coerce_relation_prov(
+        (absorbed.provenance or {}).get("relations"), absorbed.relations,
+    )
+    for k, entry in absorbed_rel_prov.items():
+        rel_prov.setdefault(k, entry)
+    if rel_prov:
+        merged_prov["relations"] = rel_prov
+
+    # derived_from provenance: ref-keyed; canonical wins.
+    df_prov = dict(merged_prov.get("derived_from") or {})
+    for ref, entry in ((absorbed.provenance or {}).get("derived_from") or {}).items():
+        df_prov.setdefault(ref, entry)
+    if df_prov:
+        merged_prov["derived_from"] = df_prov
 
     return EntityPage(
         type=canonical.type,
@@ -378,6 +411,7 @@ def _merge_pages(
         body=new_body,
         attributes=merged_attributes,
         relations=merged_relations,
+        derived_from=merged_derived_from,
         provenance=merged_prov,
         created_at=canonical.created_at,
         updated_at=canonical.updated_at,
