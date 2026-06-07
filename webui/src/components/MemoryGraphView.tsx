@@ -837,7 +837,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
       <header className="flex shrink-0 items-center gap-2 border-b border-border/40 px-3 py-2">
         <Network className="h-4 w-4 text-muted-foreground" aria-hidden />
         <h1 className="text-sm font-semibold">{t("memoryGraph.title")}</h1>
-        {data ? (
+        {data && !compact ? (
           <span className="text-xs text-muted-foreground">
             {t("memoryGraph.stats", {
               nodesLabel: t("memoryGraph.nodesCount", { count: data.stats.node_count }),
@@ -860,8 +860,8 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
             ← {t("memoryGraph.backToFull")}
           </button>
         ) : null}
-        <div className="ml-auto flex items-center gap-2">
-          <div className="relative">
+        <div className="ml-auto flex min-w-0 items-center gap-2">
+          <div className={cn("relative", compact && "min-w-0 flex-1")}>
             <SearchIcon
               className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
               aria-hidden
@@ -875,7 +875,8 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
               onFocus={() => setSearchOpen(true)}
               placeholder={t("memoryGraph.searchPlaceholder")}
               className={cn(
-                "h-7 w-72 rounded-md border border-input bg-background pl-7 pr-2 text-[12.5px]",
+                "h-7 rounded-md border border-input bg-background pl-7 pr-2 text-[12.5px]",
+                compact ? "w-full" : "w-72",
                 "outline-none focus:ring-1 focus:ring-ring",
               )}
             />
