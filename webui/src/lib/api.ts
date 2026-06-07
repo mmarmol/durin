@@ -356,6 +356,10 @@ export interface QuarantineRow {
   trust_prefix?: string;
   /** Declared dependency installs (info only — durin never auto-runs them, §B11). */
   install_specs?: string[];
+  /** Gate outcome: allow installs straight away; confirm/block need a prompt. */
+  needs?: "allow" | "confirm" | "block";
+  /** Why approval is required, in structured form (rendered as plain language). */
+  reasons?: { code: string; detail?: string }[];
 }
 
 export interface SkillDetail {
@@ -487,6 +491,8 @@ export interface JudgeResult {
   findings?: SkillFinding[];
   judged?: boolean;
   error?: string;
+  summary?: string;
+  error_code?: "unreachable" | "parse" | "no_model";
 }
 
 /** Run the LLM judge on-demand over a quarantined skill (independent of the
