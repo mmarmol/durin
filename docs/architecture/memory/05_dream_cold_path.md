@@ -26,8 +26,8 @@ the state over time.
 > consolidated `memory/episodic/` *fragments* into pages via a JSON-Patch apply
 > pipeline, a per-entity `dream_processed_through` cursor, an
 > episodic→archive lifecycle, and a per-write threshold trigger. **All of that
-> is gone.** The settled model has four passes — in run order **extract / skill /
-> refine / always_on** — that read from **sessions**, write through `memory_writer`'s CAS
+> is gone.** The settled model has five passes — in run order **extract /
+> derived_from / skill / refine / always_on** — that read from **sessions**, write through `memory_writer`'s CAS
 > commit path, and treat fragments as a separate raw track. The authoritative
 > record of what changed and why is `../../qa/post_migration_audit_2026-06.md` (A1-A5,
 > B1-B4, N1-N9); this doc honours those decisions.
@@ -70,8 +70,8 @@ it does not gate recall of either track.
 
 ### In scope
 
-- The four dream passes, in run order: **extract**, **skill-extract**,
-  **refine**, **always_on**.
+- The five dream passes, in run order: **extract**, **derived_from**,
+  **skill-extract**, **refine**, **always_on**.
 - Their triggers: the daily CRON + the two REACTIVE triggers
   (post-compaction / session-close), serialized by `ReactiveDreamGate`.
 - The config block (`memory.dream.*` + nested `auto_absorb`).
@@ -92,23 +92,33 @@ it does not gate recall of either track.
 
 ---
 
-## 2. The four passes
+## 2. The five passes
 
 All entry points live in `durin/memory/dream_passes.py`:
-`run_extract_pass`, `run_refine_pass`, `run_skill_extract_pass`, and
-`run_always_on_pass` (the always_on pass is implemented in
-`durin/memory/always_on_dream.py` and re-exported through that module).
+`run_extract_pass`, `run_derived_from_pass`, `run_refine_pass`,
+`run_skill_extract_pass`, and `run_always_on_pass` (the always_on pass is
+implemented in `durin/memory/always_on_dream.py` and re-exported through that
+module).
 
 | Pass | Entry point | Reads | Writes | Cadence |
 |---|---|---|---|---|
 | **extract** | `run_extract_pass` | each session's new turns | entity attributes (author `dream`) via `memory_writer` | frequent (cron + reactive) |
+| **derived_from** | `run_derived_from_pass` | each session (entities authored + references ingested) | `derived_from` links (author `dream`) via `memory_writer` | daily cron |
 | **skill-extract** | `run_skill_extract_pass` | recent sessions | `skills/<name>/SKILL.md` via `skill_write` | daily cron |
 | **refine** | `run_refine_pass` | entity pages (alias overlap) | merges duplicate pages (absorb) | daily cron |
 | **always_on** | `run_always_on_pass` | feedback entities (stance/practice/feedback) | flips `always_on` flags | daily cron |
 
-The **extract** pass is the only one wired to the reactive triggers; refine,
-skill-extract, and always_on run on the daily cron (and on manual
-`durin memory dream`). See §6 for trigger wiring.
+The **extract** pass is the only one wired to the reactive triggers;
+derived_from, refine, skill-extract, and always_on run on the daily cron (and on
+manual `durin memory dream`). See §6 for trigger wiring.
+
+The **derived_from** pass is the catch/repair for entity→source-document links:
+`memory_upsert_entity(derived_from=...)` is the primary write-time path
+(`04_agent_tools.md` §3); this pass links entities the agent authored without a
+source by reasoning over the session (which ingested document each entity was
+distilled from). It is idempotent and cheap — a session whose authored entities
+are already linked, or that ingested no references, is skipped with no LLM call
+(`durin/memory/derived_from_dream.py`).
 
 ### 2.1 Extract pass — sessions → entity attributes
 

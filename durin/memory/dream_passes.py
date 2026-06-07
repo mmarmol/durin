@@ -22,10 +22,14 @@ from typing import Any, Callable
 
 from loguru import logger
 
+from durin.memory.derived_from_dream import link_derived_from_for_session
 from durin.memory.extract_runner import run_extract_for_session
 from durin.memory.refine_dream import run_refine
 
-__all__ = ["run_extract_pass", "run_skill_extract_pass", "run_refine_pass", "ReactiveDreamGate"]
+__all__ = [
+    "run_extract_pass", "run_skill_extract_pass", "run_refine_pass",
+    "run_derived_from_pass", "ReactiveDreamGate",
+]
 
 LLMInvoke = Callable[..., Any]
 
@@ -113,6 +117,48 @@ def run_extract_pass(
     _emit("memory.dream.end", kind="extract",
           entities_consolidated=out["entities"], entities_failed=len(out["errors"]),
           sessions=out["sessions"], yielded=out["yielded"],
+          duration_ms=out["duration_ms"])
+    return out
+
+
+def run_derived_from_pass(
+    workspace: Path,
+    *,
+    llm_invoke: LLMInvoke | None = None,
+    model: str | None = None,
+    max_seconds: int = 0,
+) -> dict:
+    """Catch/repair pass: link entities to the source document(s) they were
+    distilled from, for sessions where the agent's write-time link is missing.
+
+    Idempotent and cheap: a session whose authored entities are already linked
+    (or that ingested no references) is skipped without an LLM call. Best-effort
+    per session; ``max_seconds`` (0 = unbounded) caps wall-clock and yields the
+    remainder to the next trigger.
+    """
+    import time
+    t0 = time.perf_counter()
+    _emit("memory.dream.start", kind="derived_from")
+    sessions_dir = Path(workspace) / "sessions"
+    out: dict[str, Any] = {"sessions": 0, "links": 0, "errors": [], "yielded": False}
+    if sessions_dir.is_dir():
+        for jsonl_path in sorted(sessions_dir.glob("*.jsonl")):
+            if max_seconds and (time.perf_counter() - t0) >= max_seconds:
+                out["yielded"] = True
+                break
+            try:
+                r = link_derived_from_for_session(
+                    workspace, jsonl_path, llm_invoke=llm_invoke, model=model)
+                linked = r.get("linked") or []
+                if linked:
+                    out["sessions"] += 1
+                    out["links"] += len(linked)
+            except Exception as exc:  # noqa: BLE001 — never abort the whole pass
+                out["errors"].append({"session": jsonl_path.stem, "error": str(exc)})
+    out["duration_ms"] = int((time.perf_counter() - t0) * 1000)
+    _emit("memory.dream.end", kind="derived_from",
+          links=out["links"], sessions=out["sessions"],
+          errors=len(out["errors"]), yielded=out["yielded"],
           duration_ms=out["duration_ms"])
     return out
 
