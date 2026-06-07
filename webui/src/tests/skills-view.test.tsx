@@ -240,7 +240,7 @@ describe("SkillsView security surface", () => {
     });
   });
 
-  it("shows why-it's-here reasons and audit summary in the triage pane", async () => {
+  it("shows why-it's-here reasons in the triage pane", async () => {
     vi.mocked(api.listSkills).mockResolvedValue([
       { name: "clean", source: "builtin", mode: "auto", status: "active", verdict: "safe", findings: [] },
     ]);
@@ -251,10 +251,6 @@ describe("SkillsView security surface", () => {
         reasons: [{ code: "untrusted_source", detail: "github:o/r" }],
       },
     ]);
-    vi.mocked(api.judgeSkill).mockResolvedValue({
-      name: "firecrawl", verdict: "safe", findings: [], judged: true,
-      summary: "Reviewed instructions and rules; no injection or exfiltration.",
-    });
 
     const user = userEvent.setup();
     render(wrap(<SkillsView />));
@@ -264,10 +260,43 @@ describe("SkillsView security surface", () => {
 
     // why-it's-here renders the reason in plain language
     expect(await screen.findByText(/isn't in your trusted allowlist/i)).toBeInTheDocument();
+  });
 
-    // running the audit shows the AI summary afterward
+  it("streams audit reasoning then shows the final summary", async () => {
+    vi.mocked(api.listSkills).mockResolvedValue([
+      { name: "clean", source: "builtin", mode: "auto", status: "active", verdict: "safe", findings: [] },
+    ]);
+    vi.mocked(api.listQuarantine).mockResolvedValue([
+      { name: "firecrawl", status: "quarantined", source: "github:o/r", verdict: "safe", findings: [],
+        needs: "confirm", reasons: [{ code: "untrusted_source", detail: "github:o/r" }] },
+    ]);
+
+    const handlers: Record<string, (ev: unknown) => void> = {};
+    const client = {
+      onChat: (id: string, h: (ev: unknown) => void) => {
+        handlers[id] = h;
+        return () => { delete handlers[id]; };
+      },
+      judgeStream: (name: string) => {
+        const id = `audit:${name}`;
+        handlers[id]?.({ event: "reasoning_delta", chat_id: id, text: "inspecting scripts" });
+        handlers[id]?.({ event: "skill_audit_done", chat_id: id, name, judged: true,
+          summary: "Reviewed; no injection.", findings: [], verdict: "safe" });
+      },
+    };
+
+    const user = userEvent.setup();
+    render(
+      <ClientProvider client={client as unknown as import("@/lib/durin-client").DurinClient} token="tok">
+        <SkillsView />
+      </ClientProvider>,
+    );
+    await screen.findByText("clean");
+    await user.click(screen.getByRole("button", { name: /pending/i }));
+    await user.click(await screen.findByRole("button", { name: /firecrawl/i }));
     await user.click(screen.getByRole("button", { name: /audit with llm/i }));
-    expect(await screen.findByText(/no injection or exfiltration/i)).toBeInTheDocument();
+
+    expect(await screen.findByText(/Reviewed; no injection/i)).toBeInTheDocument();
   });
 
   it("rejects a quarantined skill", async () => {
