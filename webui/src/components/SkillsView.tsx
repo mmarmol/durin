@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  ChevronDown,
+  ChevronRight,
   Loader2,
   Plus,
   Shield,
@@ -17,6 +19,7 @@ import {
   addTrustPattern,
   ApiError,
   approveSkill,
+  describeSkill,
   getSkill,
   importSource,
   listQuarantine,
@@ -204,6 +207,11 @@ export function SkillsView() {
   const [searching, setSearching] = useState(false);
   const [searchMsg, setSearchMsg] = useState<string | null>(null);
   const [hits, setHits] = useState<SkillSearchHit[] | null>(null);
+  const [sortBy, setSortBy] = useState<"installs" | "name" | "relevance">("installs");
+  const [searchLimit, setSearchLimit] = useState(10);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [descCache, setDescCache] = useState<Record<string, string | null>>({}); // null = loading
+  const [importByRefOpen, setImportByRefOpen] = useState(false);
   const [acting, setActing] = useState<string | null>(null);
   const [gate, setGate] = useState<{
     name: string;
@@ -268,14 +276,15 @@ export function SkillsView() {
   // button feeds its `ref` into the same `doImport` flow the manual input
   // uses (resolve → quarantine → gate), so there's one import path.
   const doSearch = useCallback(
-    async (query: string) => {
+    async (query: string, limit = 10) => {
       const q = query.trim();
       if (!q) return;
       setSearching(true);
       setSearchMsg(null);
       try {
-        const res = await searchSkills(token, q);
+        const res = await searchSkills(token, q, limit);
         setHits(res.hits);
+        setSearchLimit(limit);
         if (res.hits.length === 0) setSearchMsg(t("skills.search.empty"));
       } catch (e) {
         setHits(null);
@@ -285,6 +294,24 @@ export function SkillsView() {
       }
     },
     [token, t],
+  );
+
+  // Lazy SKILL.md description peek on expand: clawhub hits already carry one;
+  // github hits fetch it once and cache it per ref (null while loading).
+  const toggleExpand = useCallback(
+    async (hit: SkillSearchHit) => {
+      if (expanded === hit.ref) {
+        setExpanded(null);
+        return;
+      }
+      setExpanded(hit.ref);
+      if (hit.registry === "clawhub" || !hit.ref.startsWith("github:")) return;
+      if (descCache[hit.ref] !== undefined) return;
+      setDescCache((c) => ({ ...c, [hit.ref]: null }));
+      const r = await describeSkill(token, hit.ref);
+      setDescCache((c) => ({ ...c, [hit.ref]: r.description }));
+    },
+    [token, expanded, descCache],
   );
 
   // The gate is server-side: approve, and react to what it asks for. A safe,
@@ -515,6 +542,13 @@ export function SkillsView() {
     pane.kind === "triage" ? (quarList.find((q) => q.name === pane.name) ?? null) : null;
   const editable = detail?.mode === "manual";
 
+  // Client-side sort over the loaded hits. Missing installs sort last.
+  const sortedHits = (hits ?? []).slice().sort((a, b) => {
+    if (sortBy === "installs") return (b.signals?.installs ?? -1) - (a.signals?.installs ?? -1);
+    if (sortBy === "name") return a.name.localeCompare(b.name);
+    return 0; // relevance = registry order
+  });
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
       <header className="flex shrink-0 items-center gap-2 border-b border-border/40 px-3 py-2">
@@ -669,61 +703,10 @@ export function SkillsView() {
                   {t("skills.acquireTitle")}
                 </h2>
                 <p className="mt-1 max-w-[60ch] text-[12px] text-muted-foreground">
-                  {t("skills.acquireHint")}
+                  {t("skills.search.acquireExplainer")}
                 </p>
 
-                {/* Import — source-agnostic: path, URL, or github:owner/repo. */}
-                <form
-                  className="mt-4 flex flex-col gap-2"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    void doImport(importSrc);
-                  }}
-                >
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={importSrc}
-                      onChange={(e) => setImportSrc(e.target.value)}
-                      placeholder={t("skills.import.placeholder")}
-                      className="min-w-0 flex-1 rounded-[8px] border border-border/60 bg-background px-2.5 py-1.5 text-[12px] outline-none focus:border-primary/60"
-                    />
-                    <Button type="submit" size="sm" disabled={importing || !importSrc.trim()}>
-                      {importing ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        t("skills.import.button")
-                      )}
-                    </Button>
-                  </div>
-                  {importMsg ? (
-                    <p className="text-[12px] text-muted-foreground">{importMsg}</p>
-                  ) : null}
-                </form>
-
-                {/* Picker: when a source resolves to several skills, choose one. */}
-                {picker && picker.length > 0 ? (
-                  <div className="mt-2 flex flex-col gap-1 rounded-[8px] border border-border/40 bg-muted/20 p-2">
-                    <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                      {t("skills.import.pick")}
-                    </p>
-                    {picker.map((c) => (
-                      <button
-                        key={c.ref}
-                        type="button"
-                        onClick={() => void doImport(c.ref)}
-                        disabled={importing}
-                        className="flex flex-col items-start rounded-[6px] px-2 py-1.5 text-left hover:bg-muted/50 disabled:opacity-50"
-                      >
-                        <span className="text-[13px] font-medium text-foreground">{c.name}</span>
-                        <span className="truncate text-[11px] text-muted-foreground">{c.ref}</span>
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-
-                {/* Search the registry — read-only. A hit's Import button feeds
-                    its `ref` into the same import flow above (no install here). */}
+                {/* Primary: search the registry. */}
                 <form
                   className="mt-4 flex gap-2"
                   onSubmit={(e) => {
@@ -738,7 +721,7 @@ export function SkillsView() {
                     placeholder={t("skills.search.placeholder")}
                     className="min-w-0 flex-1 rounded-[8px] border border-border/60 bg-background px-2.5 py-1.5 text-[12px] outline-none focus:border-primary/60"
                   />
-                  <Button type="submit" size="sm" variant="outline" disabled={searching || !searchQuery.trim()}>
+                  <Button type="submit" size="sm" disabled={searching || !searchQuery.trim()}>
                     {searching ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
                     ) : (
@@ -750,49 +733,177 @@ export function SkillsView() {
                   <p className="mt-1.5 text-[12px] text-muted-foreground">{searchMsg}</p>
                 ) : null}
 
-                {hits && hits.length > 0 ? (
-                  <div className="mt-2 flex flex-col gap-1 rounded-[8px] border border-border/40 bg-muted/20 p-2">
-                    {hits.map((h) => (
-                      <div
-                        key={h.ref}
-                        className="flex items-start gap-2 rounded-[6px] px-2 py-1.5"
-                      >
-                        <div className="flex min-w-0 flex-1 flex-col">
-                          <span className="flex items-center gap-1.5">
-                            <span className="truncate text-[13px] font-medium text-foreground">
-                              {h.name}
-                            </span>
-                            <span className="shrink-0 text-[11px] text-muted-foreground">
-                              {h.registry}
-                            </span>
-                            {typeof h.signals?.installs === "number" ? (
-                              <span className="shrink-0 text-[11px] text-muted-foreground">
-                                · {t("skills.search.installs", { count: h.signals.installs })}
-                              </span>
-                            ) : null}
-                          </span>
-                          {h.description ? (
-                            <span className="truncate text-[12px] text-muted-foreground">
-                              {h.description}
-                            </span>
-                          ) : null}
-                          <span className="truncate text-[11px] text-muted-foreground/70">
-                            {h.ref}
-                          </span>
-                        </div>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="ghost"
-                          disabled={importing}
-                          onClick={() => void doImport(h.ref)}
+                {hits ? (
+                  <div className="mt-3">
+                    <div className="mb-2 flex items-center justify-between">
+                      <span className="text-[12px] text-muted-foreground">
+                        {t("skills.search.resultsCount", { count: hits.length })}
+                      </span>
+                      <label className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
+                        {t("skills.search.sortLabel")}
+                        <select
+                          value={sortBy}
+                          onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
+                          className="rounded-[6px] border border-border/60 bg-background px-1.5 py-0.5 text-[12px]"
                         >
-                          {t("skills.import.button")}
-                        </Button>
-                      </div>
-                    ))}
+                          <option value="installs">{t("skills.search.sortInstalls")}</option>
+                          <option value="name">{t("skills.search.sortName")}</option>
+                          <option value="relevance">{t("skills.search.sortRelevance")}</option>
+                        </select>
+                      </label>
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      {sortedHits.map((h) => {
+                        const desc =
+                          h.registry === "clawhub" || !h.ref.startsWith("github:")
+                            ? h.description
+                            : descCache[h.ref];
+                        const open = expanded === h.ref;
+                        return (
+                          <div
+                            key={h.ref}
+                            className="rounded-[8px] border border-border/40 bg-muted/20 p-2"
+                          >
+                            <div className="flex items-start gap-2">
+                              <button
+                                type="button"
+                                aria-label={`expand ${h.name}`}
+                                onClick={() => void toggleExpand(h)}
+                                className="mt-0.5 text-muted-foreground hover:text-foreground"
+                              >
+                                {open ? (
+                                  <ChevronDown className="h-3.5 w-3.5" />
+                                ) : (
+                                  <ChevronRight className="h-3.5 w-3.5" />
+                                )}
+                              </button>
+                              <div className="flex min-w-0 flex-1 flex-col">
+                                <span className="flex items-center gap-1.5">
+                                  <span
+                                    data-testid="hit-name"
+                                    className="truncate text-[13px] font-medium text-foreground"
+                                  >
+                                    {h.name}
+                                  </span>
+                                  <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                                    {h.registry}
+                                  </span>
+                                  {typeof h.signals?.installs === "number" ? (
+                                    <span className="shrink-0 text-[11px] text-muted-foreground">
+                                      {t("skills.search.installs", { count: h.signals.installs })}
+                                    </span>
+                                  ) : null}
+                                </span>
+                                {open ? (
+                                  <span className="mt-1 text-[12px] text-muted-foreground">
+                                    {desc === null ? (
+                                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                    ) : desc ? (
+                                      desc
+                                    ) : (
+                                      t("skills.search.noDescription")
+                                    )}
+                                  </span>
+                                ) : null}
+                                <span className="truncate text-[11px] text-muted-foreground/70">
+                                  {h.ref}
+                                </span>
+                              </div>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                disabled={importing}
+                                onClick={() => void doImport(h.ref)}
+                              >
+                                {t("skills.import.button")}
+                              </Button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {hits.length >= searchLimit ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="mt-2"
+                        disabled={searching}
+                        onClick={() => void doSearch(searchQuery, searchLimit + 10)}
+                      >
+                        {t("skills.search.showMore")}
+                      </Button>
+                    ) : null}
                   </div>
                 ) : null}
+
+                {/* Secondary: import by an explicit reference (path/URL/repo). */}
+                <div className="mt-4 border-t border-border/30 pt-3">
+                  <button
+                    type="button"
+                    onClick={() => setImportByRefOpen((v) => !v)}
+                    className="flex items-center gap-1.5 text-[12px] text-muted-foreground hover:text-foreground"
+                  >
+                    {importByRefOpen ? (
+                      <ChevronDown className="h-3.5 w-3.5" />
+                    ) : (
+                      <ChevronRight className="h-3.5 w-3.5" />
+                    )}
+                    {t("skills.search.importByRef")}
+                  </button>
+                  {importByRefOpen ? (
+                    <>
+                      <form
+                        className="mt-2 flex flex-col gap-2"
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          void doImport(importSrc);
+                        }}
+                      >
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            value={importSrc}
+                            onChange={(e) => setImportSrc(e.target.value)}
+                            placeholder={t("skills.import.placeholder")}
+                            className="min-w-0 flex-1 rounded-[8px] border border-border/60 bg-background px-2.5 py-1.5 text-[12px] outline-none focus:border-primary/60"
+                          />
+                          <Button type="submit" size="sm" disabled={importing || !importSrc.trim()}>
+                            {importing ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              t("skills.import.button")
+                            )}
+                          </Button>
+                        </div>
+                        {importMsg ? (
+                          <p className="text-[12px] text-muted-foreground">{importMsg}</p>
+                        ) : null}
+                      </form>
+
+                      {picker && picker.length > 0 ? (
+                        <div className="mt-2 flex flex-col gap-1 rounded-[8px] border border-border/40 bg-muted/20 p-2">
+                          <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                            {t("skills.import.pick")}
+                          </p>
+                          {picker.map((c) => (
+                            <button
+                              key={c.ref}
+                              type="button"
+                              onClick={() => void doImport(c.ref)}
+                              disabled={importing}
+                              className="flex flex-col items-start rounded-[6px] px-2 py-1.5 text-left hover:bg-muted/50 disabled:opacity-50"
+                            >
+                              <span className="text-[13px] font-medium text-foreground">{c.name}</span>
+                              <span className="truncate text-[11px] text-muted-foreground">{c.ref}</span>
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
+                    </>
+                  ) : null}
+                </div>
               </div>
             ) : pane.kind === "triage" ? (
               !triageRow ? (
