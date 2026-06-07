@@ -7,6 +7,7 @@ import {
   fetchCodexStatus,
   pollCodexDeviceAuth,
   startCodexDeviceAuth,
+  startCodexLoopbackAuth,
   type CodexStatus,
 } from "@/lib/api";
 
@@ -25,6 +26,7 @@ export function CodexOAuthCard({ token, base = "", embedded = false, onChanged }
     user_code: string;
     verification_uri: string;
   } | null>(null);
+  const [loopbackUrl, setLoopbackUrl] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
@@ -37,31 +39,61 @@ export function CodexOAuthCard({ token, base = "", embedded = false, onChanged }
     };
   }, [token, base]);
 
-  const connect = async () => {
-    setError(null);
-    setBusy(true);
+  const onConnected = (s: CodexStatus) => {
+    setChallenge(null);
+    setLoopbackUrl(null);
+    setBusy(false);
+    setStatus(s);
+    onChanged?.();
+  };
+
+  // Loopback (local install): the gateway captures the callback on localhost:1455.
+  const pollStatusUntilConnected = () => {
+    const tick = async () => {
+      try {
+        const s = await fetchCodexStatus(token, base);
+        if (s.connected) {
+          onConnected(s);
+          return;
+        }
+        pollTimer.current = window.setTimeout(tick, 2000);
+      } catch (e) {
+        setError((e as Error).message);
+        setBusy(false);
+      }
+    };
+    pollTimer.current = window.setTimeout(tick, 2000);
+  };
+
+  const connectLoopback = async () => {
+    try {
+      const { authorize_url } = await startCodexLoopbackAuth(token, base);
+      setLoopbackUrl(authorize_url);
+      window.open(authorize_url, "_blank", "noopener");
+      pollStatusUntilConnected();
+    } catch (e) {
+      setError((e as Error).message);
+      setBusy(false);
+    }
+  };
+
+  // Device-code (remote install): user types a code; requires the device-auth
+  // toggle in ChatGPT security settings.
+  const connectDeviceCode = async () => {
     try {
       const ch = await startCodexDeviceAuth(token, base);
       setChallenge({ user_code: ch.user_code, verification_uri: ch.verification_uri });
       const intervalMs = Math.max(3, ch.interval) * 1000;
       const tick = async () => {
         try {
-          const res = await pollCodexDeviceAuth(
-            token,
-            ch.device_auth_id,
-            ch.user_code,
-            base,
-          );
+          const res = await pollCodexDeviceAuth(token, ch.device_auth_id, ch.user_code, base);
           if (res.status === "ok") {
-            setChallenge(null);
-            setBusy(false);
-            setStatus({
+            onConnected({
               connected: true,
               email: res.email,
               plan: res.plan,
               source: res.source,
             });
-            onChanged?.();
             return;
           }
           if (res.status === "error") {
@@ -80,6 +112,16 @@ export function CodexOAuthCard({ token, base = "", embedded = false, onChanged }
     } catch (e) {
       setError((e as Error).message);
       setBusy(false);
+    }
+  };
+
+  const connect = async () => {
+    setError(null);
+    setBusy(true);
+    if (status?.can_loopback) {
+      await connectLoopback();
+    } else {
+      await connectDeviceCode();
     }
   };
 
@@ -128,6 +170,19 @@ export function CodexOAuthCard({ token, base = "", embedded = false, onChanged }
         </p>
       ) : null}
 
+      {loopbackUrl ? (
+        <div className="space-y-2 rounded-[8px] border border-border/60 bg-muted/40 p-3 text-[13px]">
+          <p>Se abrió una ventana del navegador para aprobar con ChatGPT.</p>
+          <p className="text-muted-foreground">
+            ¿No se abrió?{" "}
+            <a className="underline" href={loopbackUrl} target="_blank" rel="noreferrer">
+              Abrir manualmente
+            </a>
+          </p>
+          <p className="text-muted-foreground">Esperando la autorización…</p>
+        </div>
+      ) : null}
+
       {challenge ? (
         <div className="space-y-2 rounded-[8px] border border-border/60 bg-muted/40 p-3 text-[13px]">
           <p>
@@ -146,6 +201,10 @@ export function CodexOAuthCard({ token, base = "", embedded = false, onChanged }
             <span className="font-mono font-semibold">{challenge.user_code}</span>
           </p>
           <p className="text-muted-foreground">Esperando la autorización…</p>
+          <p className="text-[12px] text-muted-foreground">
+            Si ves un error de “autorización con código de dispositivo”, habilitala en los
+            ajustes de seguridad de ChatGPT y volvé a intentar.
+          </p>
         </div>
       ) : null}
 
@@ -183,7 +242,7 @@ export function CodexOAuthCard({ token, base = "", embedded = false, onChanged }
             </Button>
           </div>
         ) : null}
-        {!status?.connected && !challenge ? (
+        {!status?.connected && !challenge && !loopbackUrl ? (
           <Button size="sm" disabled={busy} onClick={() => void connect()}>
             Conectar con ChatGPT
           </Button>
