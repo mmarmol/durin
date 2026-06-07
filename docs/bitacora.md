@@ -2078,4 +2078,12 @@ decisions below. **Read before re-proposing any of these.**
   nothing embedding entity pages reactively; `rebuild_from_workspace` skipping
   references). Verify the *whole path live* before declaring a subsystem done.
 
-## Last updated: 2026-06-06 (post-migration audit close)
+## Memory-graph clustering / communities (Fase 3) — discarded as superseded (2026-06-07)
+
+- **What it was**: the planned Fase 3 of the memory-graph webui redesign (backlog P8): GraphRAG-style community detection (Leiden) over the global graph + LLM map-reduce community summaries + collapsible super-nodes, to keep the force-directed view navigable as the graph grows past a few hundred nodes (the "hairball").
+- **Why it was tried (planned)**: when scoped, the only ways to read the graph were the global overview (a hairball at scale) + type filters. Clustering looked necessary to tame density.
+- **What was learned**: the same redesign shipped an **ego-graph focus mode** (`build_entity_subgraph`, uncapped, centred on the clicked node — Obsidian's local graph) plus **search→click brings any node (even capped) into focus**, **type-filter chips**, and the **500-node weight cap**. Together these cover the actual need — "explore the graph without drowning in the hairball" — by making the global view a launch point you immediately focus *out of*, not a surface you must comprehend whole.
+- **Why it was discarded**: the navigability value clustering would add is already delivered by the ego-graph; the remaining delta (community boundaries + LLM summaries) is disproportionate — a community-detection algorithm + recurring LLM summarisation cost + cluster-rendering UI — for marginal benefit, and untestable/irrelevant at durin's current scale. Per the backlog convention, an item whose use case is covered by existing surfaces is **discarded with rationale**, not deferred.
+- **Lesson**: when a later-shipped feature (ego-graph focus) absorbs the premise of a planned one, re-evaluate instead of building on inertia. The hairball is a *landing-view* problem; "focus on demand" beats "summarise everything up front." Re-open only on a concrete failure — e.g., the landing overview itself becomes unusable at scale *with* focus available.
+
+## Last updated: 2026-06-07 (memory-graph P8: Fase 3 clustering discarded as superseded by ego-graph focus)
