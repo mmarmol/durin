@@ -288,12 +288,13 @@ Ya hecho en esta ronda: single-click = peek compacto (no tapa los nodos) / **dou
 
 Round 2 (2026-06-07): **ego-graph focus mode** (click → `build_entity_subgraph` uncapped, centrado, "← Grafo completo"); `kinds="fact"` cableado end-to-end (skills fuera server-side; el "scope=fact" era pasar el valor al parámetro equivocado — `kinds`, no `scope`); **Procedencia** es su propia pestaña (History = solo commits); click en FRAGMENT enfoca la entidad etiquetada.
 
-Pendiente:
-- **Header "N results"** muestra el total del backend, no los visibles tras dedup (cosmético).
-- **Click en FRAGMENT de tipo `reference`** (sin `entities`) no tiene destino — necesita un panel de contenido de referencia (las references no son nodos del grafo).
-- Fase 2.c hover-preview, Fase 3 clustering/comunidades (sin cambios).
+Round 3 (2026-06-07): header "N results" refleja las filas mostradas (dedup), no el total del backend; **panel de contenido de reference** — click en un hit `class_name=reference` abre el doc renderizado (`get_entry_detail` resuelve `reference:<slug>` vía `load_reference`).
 
-**Estado**: Fase 1 + Fase 2 (incl. ego-graph) + fixes de live-review implementados y desplegados en home.
+Pendiente:
+- **Fase 2.c hover-preview** (popover al pasar sobre un nodo).
+- **Fase 3 clustering/comunidades** (para el hairball global cuando crezca).
+
+**Estado**: Fase 1 + Fase 2 (incl. ego-graph) + 3 rondas de live-review implementadas y desplegadas en home. Quedan 2.c y Fase 3.
 
 ---
 
