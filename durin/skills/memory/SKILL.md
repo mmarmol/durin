@@ -12,7 +12,10 @@ durin's memory is Obsidian-compatible markdown under `memory/`:
   product, topic, project, place, …): its name, aliases, relations to other
   entities, the prose you wrote, and structured attributes the system
   extracts from that prose.
-- **`references/<slug>.md`** — documents you ingested, kept whole.
+- **`references/<slug>.md`** — documents you ingested, kept whole. When an
+  entity is distilled from one, link it with
+  `memory_upsert_entity(derived_from=["reference:<slug>"])` so the source is
+  reachable from the entity.
 - **`sessions/`** — the conversation record. The system distils what matters
   into entities and summaries; you don't write here.
 - **Skills** — procedures under `skills/<name>/SKILL.md`.

@@ -226,7 +226,10 @@ books, etc.
 `path` is the absolute or workspace-relative path to the file. The
 original is preserved verbatim and the document is indexed for
 retrieval. Re-ingesting the same file is idempotent — the id is a hash
-of (filename + content).
+of (filename + content). The result includes a `reference:<slug>`; when
+you then author an entity distilled from this document, pass that ref in
+`memory_upsert_entity(derived_from=[...])` so the entity links back to
+its source.
 
 For web content, use `web_fetch(url=...)` first to get clean markdown,
 then `memory_ingest` on the saved file. For a fact about a *thing* (a
@@ -266,7 +269,7 @@ Audit H9 (2026-05-29) consolidated the previous ``memory_drill_batch`` tool into
 ### 3.5 `memory_upsert_entity`
 
 ```
-Author or update an entity (a person, company, product, topic, place, etc.) you have learned a fact about. Provide `ref` as `<type>:<slug>` (e.g. company:mxhero, person:marcelo), the display `name`, any `aliases`, `relations` to other entities ({to: '<type>:<slug>', type: 'partner'}), and prose `body` describing what you know. Merges into the existing entity if it exists, creates it otherwise. Do NOT pass structured attributes — the system extracts those from your prose. Use this for facts about a THING; use memory_ingest for documents.
+Author or update an entity (a person, company, product, topic, place, etc.) you have learned a fact about. Provide `ref` as `<type>:<slug>` (e.g. company:mxhero, person:marcelo), the display `name`, any `aliases`, `relations` to other entities ({to: '<type>:<slug>', type: 'partner'}), and prose `body` describing what you know. Merges into the existing entity if it exists, creates it otherwise. Do NOT pass structured attributes — the system extracts those from your prose. When this entity was distilled from a document you ingested, pass `derived_from` with the `reference:<slug>` ref(s) memory_ingest returned, so the entity links back to its sources. Use this for facts about a THING; use memory_ingest for documents.
 ```
 
 This is the primary write tool in the entity-centric model: the agent authors a THING (person/company/product/topic) as prose; the dream extracts typed attributes from that prose later. Contrast `memory_store` (§3.2, disabled) which wrote raw entries.

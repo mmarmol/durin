@@ -44,7 +44,10 @@ _PARAMETERS = tool_parameters_schema(
         "`path` is the absolute or workspace-relative path to the file. The "
         "original is preserved verbatim and the document is indexed for "
         "retrieval. Re-ingesting the same file is idempotent — the id is a "
-        "hash of (filename + content).\n\n"
+        "hash of (filename + content). The result includes a "
+        "`reference:<slug>`; when you then author an entity distilled from this "
+        "document, pass that ref in `memory_upsert_entity(derived_from=[...])` "
+        "so the entity links back to its source.\n\n"
         "For web content, use `web_fetch(url=...)` first to get clean "
         "markdown, then `memory_ingest` on the saved file. For a fact about a "
         "*thing* (a person, company, product, topic…), use "
@@ -146,15 +149,17 @@ class MemoryIngestTool(Tool):
         # roll back the verbatim ingest above.
         ref = self._create_reference(source_path=source, content=result["content"])
 
-        out = {
-            "id": result["id"],
-            "saved_to": result["source"],
-            "meta_path": result["meta_path"],
-            "size_bytes": result["size_bytes"],
-            "content": result["content"],
-        }
+        # C1: emit `id` + `reference` FIRST so they survive the 16 KB head
+        # truncation on large docs — the agent (and the dream) read the
+        # `reference:<slug>` to link the entity back to its source. `content`
+        # (the whole doc) goes last for the same reason.
+        out: dict[str, Any] = {"id": result["id"]}
         if ref:
             out["reference"] = ref
+        out["saved_to"] = result["source"]
+        out["meta_path"] = result["meta_path"]
+        out["size_bytes"] = result["size_bytes"]
+        out["content"] = result["content"]
         return out
 
     def _create_reference(self, *, source_path: Path, content: str) -> str | None:

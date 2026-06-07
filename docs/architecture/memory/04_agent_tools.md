@@ -199,6 +199,7 @@ refine pass.
 | `name` | — | Display name. Required *in practice* when creating a new entity (passed through to `write_entity(name=...)`). |
 | `aliases` | — | Alternate names / identifiers for this entity. Each becomes an `alias` field-patch. |
 | `relations` | — | Relations to other entities. Each item is an object with required `to` (`<type>:<slug>`) and `type` (relation kind, e.g. `partner`, `makes`, `works_at`); extra keys are allowed (`additional_properties=True`, e.g. `since`). Items missing `to`/`type` are skipped. |
+| `derived_from` | — | Source documents this entity was distilled from — the `reference:<slug>` ref(s) returned by `memory_ingest`. Each becomes a `derived_from` field-patch (append + dedup, ref-keyed provenance). Items not starting with `reference:` are skipped. |
 | `body` | — | Prose describing what you know about this entity. Appended via a `body_append` field-patch. |
 
 **Do NOT pass structured attributes.** The schema has no `attributes` param by
@@ -242,8 +243,10 @@ The exact wording is the tool's `.description` (which delegates to
 sync-guarded by `tests/memory/test_tool_description_sync.py`. For reference, it
 covers: authoring/updating an entity from `ref`/`name`/`aliases`/`relations`/
 `body`; the merge-or-create semantics; the explicit "do NOT pass structured
-attributes — the system extracts those from your prose" rule; and the routing
-hint ("use this for facts about a THING; use memory_ingest for documents").
+attributes — the system extracts those from your prose" rule; the
+`derived_from` linking hint (pass the `reference:<slug>` ref(s) from
+`memory_ingest` for entities distilled from a document); and the routing hint
+("use this for facts about a THING; use memory_ingest for documents").
 
 ---
 
@@ -331,17 +334,18 @@ the document grep-able.
 ```json
 {
   "id": "<12-char sha256[:12] of (filename + content)>",
+  "reference": "reference:<slug>",
   "saved_to": "/abs/path/.../ingested/<id>/source.<ext>",
   "meta_path": "/abs/path/.../ingested/<id>/meta.json",
   "size_bytes": 12345,
-  "content": "<full text of the ingested file>",
-  "reference": "reference:<slug>"
+  "content": "<full text of the ingested file>"
 }
 ```
 
 Notes:
 - `saved_to` and `meta_path` are paths returned from [`ingestion.py`](../../durin/memory/ingestion.py) (`result["source"]` / `result["meta_path"]`).
 - `reference` is the `reference:<slug>` id of the stored reference. It is present **only when the reference write succeeded** — the reference write is best-effort and does not roll back the verbatim ingest if it fails (the key is omitted on failure or when memory is disabled).
+- **Key order (C1):** `id` + `reference` are emitted **first**, before `content` (the whole doc). The agent result is head-truncated at 16 KB; placing the ref before the body keeps `reference:<slug>` readable on large documents so the entity-linking flow (`memory_upsert_entity(derived_from=[...])`) survives truncation.
 - `id` is `sha256(filename + "\0" + content)[:12]` — re-ingesting the same file is idempotent, but renaming the file before re-ingest produces a different id (and therefore a duplicate entry under `ingested/`). If the user wants to "update" a previously-ingested file, the workflow is: re-ingest, then archive the old `ingested/<old-id>/` directory manually (or accept the duplicate; both versions live in git history).
 - `content` is returned so the agent can read the file in the same turn (without a follow-up `memory_drill`).
 
@@ -358,7 +362,10 @@ books, etc.
 `path` is the absolute or workspace-relative path to the file. The
 original is preserved verbatim and the document is indexed for
 retrieval. Re-ingesting the same file is idempotent — the id is a hash
-of (filename + content).
+of (filename + content). The result includes a `reference:<slug>`; when
+you then author an entity distilled from this document, pass that ref in
+`memory_upsert_entity(derived_from=[...])` so the entity links back to
+its source.
 
 For web content, use `web_fetch(url=...)` first to get clean markdown,
 then `memory_ingest` on the saved file. For a fact about a *thing* (a
