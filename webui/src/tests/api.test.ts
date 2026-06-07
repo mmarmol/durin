@@ -2,11 +2,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   deleteSession,
+  disconnectCodex,
   fetchSettings,
   fetchWebuiThread,
   listSessions,
   listSlashCommands,
   setApiReauthHandler,
+  startCodexLoopbackAuth,
   updateProviderSettings,
   updateSettings,
   updateWebSearchSettings,
@@ -156,6 +158,15 @@ describe("webui API helpers", () => {
         headers: { Authorization: "Bearer tok" },
       }),
     );
+  });
+
+  it("uses GET for codex OAuth — the websockets transport rejects non-GET (POST → ERR_EMPTY_RESPONSE)", async () => {
+    await startCodexLoopbackAuth("tok");
+    await disconnectCodex("tok");
+    const methods = vi
+      .mocked(fetch)
+      .mock.calls.map((c) => (c[1] as RequestInit | undefined)?.method);
+    expect(methods.every((m) => m === undefined || m === "GET")).toBe(true);
   });
 
   it("re-bootstraps and retries once when a request gets 401", async () => {
