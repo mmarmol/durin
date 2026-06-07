@@ -50,16 +50,14 @@ Verificado en el mock: split que re-encaja (wide) + full-screen (narrow) + searc
 
 ### Caso 2 — Search
 
-Intención: mientras buscás importan **los resultados**; el grafo recede. Al elegir, el grafo vuelve a importar (enfocado en lo elegido). Nunca los dos "vivos" a la vez.
+Buscar es un **modo lista + panel de lectura** (como mail/Finder). Mientras buscás importan los resultados; el grafo **recede** detrás. La lista **persiste** mientras navegás resultados — no se pierde al elegir.
 
-- Mientras hay query: lista de resultados (izquierda) y el **grafo se atenúa/recede detrás** (no interactivo). Skills excluidos (`kinds=fact`), deduplicados, contador = filas mostradas.
-- **Click en cualquier resultado** (canonical / fragment / reference): **se cierra el search**, el item abre en **EL MISMO panel** derecho, y el **grafo reaparece enfocado** en el nodo elegido — misma posición/comportamiento que click de nodo. Nada de "uno arriba, otro al costado".
-  - canonical (entity) → foco del nodo + contenido.
-  - reference → contenido del doc (no es nodo → grafo vuelve sin foco, panel igual).
-  - fragment/entry → foco de la entidad que etiqueta + contenido.
-- **Cerrar search sin elegir** (✕) → grafo vuelve completo.
-- **Off-cap**: si el resultado es un nodo que el grafo global dejó afuera (cap 500), al abrirlo se trae su **ego-grafo temporal** (excepción del eje C) y **close restaura el grafo global**.
-- **Trade-off decidido**: el click **cierra** el search (la query queda; reabrís tocando el buscador). Alternativa descartada: mantener la lista abierta junto al contenido → vuelve al 3-en-pantalla que queremos evitar.
+- Al tipear: lista de resultados (izquierda) + **grafo atenuado/recedido detrás** (no interactivo). Skills excluidos (`kinds=fact`), deduplicados, contador = filas mostradas.
+- **Click en un resultado** (canonical / fragment / reference): abre su contenido en **EL panel** (derecha). **La lista NO se cierra** → podés clickear otro y el panel cambia. El grafo sigue recedido. Mismo panel para todos los tipos (nada de "uno arriba, otro al costado").
+- **Cerrar el search** (✕ de la lista): la lista se cierra, el **grafo reaparece enfocado** en el último item que abriste (buscar → ubicar → explorar; el valor de durin). Sin item abierto → grafo completo.
+- **Off-cap**: si el item es un nodo que el grafo global dejó afuera (cap 500), al volver del search se trae su **ego-grafo temporal** y un siguiente close restaura el global.
+
+> Corrección (descartado lo anterior): "click cierra el search" hacía **perder la lista** y dejaba solo grafo+contenido. El modo lista+lectura lo arregla sin volver al 3-paneles-activos, porque el grafo está recedido durante el search.
 
 ### Caso 3 — "Grafo completo" / volver
 
