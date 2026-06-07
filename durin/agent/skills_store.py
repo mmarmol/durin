@@ -577,11 +577,12 @@ def web_skill_reject(workspace: Path, name: str) -> tuple[int, dict]:
 
 def web_skill_judge(workspace: Path, name: str) -> tuple[int, dict]:
     """`GET /api/skills/{name}/judge` — run the LLM judge ON-DEMAND over a
-    quarantined skill (independent of the auto-run trigger), merge its findings
-    into the quarantine .scan.json, and return the updated verdict + findings.
-    Reports an explicit error when no judge model is available."""
+    quarantined skill, merge its findings into the quarantine .scan.json, and
+    return the updated verdict + findings + summary. Errors carry a machine
+    ``error_code`` (unreachable | parse | no_model) for a readable UI message."""
     import json as _json
 
+    from durin.providers.base import LLMProvider
     from durin.security.skill_judge import JudgeError, judge_skill
     from durin.security.skill_scan import ScanReport, scan_skill
 
@@ -592,16 +593,18 @@ def web_skill_judge(workspace: Path, name: str) -> tuple[int, dict]:
     det = scan_skill(qdir)
     try:
         from durin.memory.llm_invoke import default_llm_invoke
-        jf = judge_skill(qdir, llm_invoke=default_llm_invoke, model=model or "glm-5.1",
-                         max_severity=max_sev)
+        outcome = judge_skill(qdir, llm_invoke=default_llm_invoke, model=model or "glm-5.1",
+                              max_severity=max_sev)
     except JudgeError as exc:
+        code = "parse" if "parse" in str(exc).lower() else "unreachable"
         return 200, {"name": name, "verdict": det.verdict, "judged": False,
-                     "error": f"judge unavailable: {exc}"}
+                     "error": str(exc), "error_code": code}
     except Exception as exc:  # noqa: BLE001
+        code = "unreachable" if LLMProvider._is_transient_error(str(exc)) else "no_model"
         return 200, {"name": name, "verdict": det.verdict, "judged": False,
-                     "error": f"judge error: {exc}"}
+                     "error": str(exc), "error_code": code}
 
-    merged = ScanReport(findings=det.findings + jf)
+    merged = ScanReport(findings=det.findings + outcome.findings)
     findings = [{"category": f.category, "severity": f.severity, "where": f.where,
                  "detail": f.detail} for f in merged.findings]
     source = name
@@ -611,9 +614,11 @@ def web_skill_judge(workspace: Path, name: str) -> tuple[int, dict]:
             source = _json.loads(sj.read_text()).get("source", name)
         except Exception:  # noqa: BLE001
             pass
-    sj.write_text(_json.dumps({"source": source, "verdict": merged.verdict, "findings": findings}),
+    sj.write_text(_json.dumps({"source": source, "verdict": merged.verdict,
+                               "findings": findings, "summary": outcome.summary}),
                   encoding="utf-8")
-    return 200, {"name": name, "verdict": merged.verdict, "findings": findings, "judged": True}
+    return 200, {"name": name, "verdict": merged.verdict, "findings": findings,
+                 "summary": outcome.summary, "judged": True}
 
 
 def web_github_token_test(secret_name: str) -> tuple[int, dict]:
