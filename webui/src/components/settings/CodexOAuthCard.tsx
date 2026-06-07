@@ -39,6 +39,13 @@ export function CodexOAuthCard({ token, base = "", embedded = false, onChanged }
     };
   }, [token, base]);
 
+  const cancelPoll = () => {
+    if (pollTimer.current) {
+      window.clearTimeout(pollTimer.current);
+      pollTimer.current = null;
+    }
+  };
+
   const onConnected = (s: CodexStatus) => {
     setChallenge(null);
     setLoopbackUrl(null);
@@ -125,6 +132,17 @@ export function CodexOAuthCard({ token, base = "", embedded = false, onChanged }
     }
   };
 
+  // Escape hatch: loopback detection can be fooled (e.g. an SSH port-forward
+  // makes a remote gateway look local), leaving the loopback callback
+  // unreachable. Device-code works everywhere, so always offer it as a fallback.
+  const switchToDeviceCode = async () => {
+    cancelPoll();
+    setLoopbackUrl(null);
+    setError(null);
+    setBusy(true);
+    await connectDeviceCode();
+  };
+
   const doDisconnect = async () => {
     setConfirmDisconnect(false);
     setBusy(true);
@@ -180,6 +198,16 @@ export function CodexOAuthCard({ token, base = "", embedded = false, onChanged }
             </a>
           </p>
           <p className="text-muted-foreground">Esperando la autorización…</p>
+          <p className="text-[12px] text-muted-foreground">
+            ¿No funciona?{" "}
+            <button
+              type="button"
+              className="underline hover:text-foreground"
+              onClick={() => void switchToDeviceCode()}
+            >
+              Usar código de dispositivo
+            </button>
+          </p>
         </div>
       ) : null}
 
@@ -243,9 +271,21 @@ export function CodexOAuthCard({ token, base = "", embedded = false, onChanged }
           </div>
         ) : null}
         {!status?.connected && !challenge && !loopbackUrl ? (
-          <Button size="sm" disabled={busy} onClick={() => void connect()}>
-            Conectar con ChatGPT
-          </Button>
+          <div className="flex flex-col items-end gap-1.5">
+            <Button size="sm" disabled={busy} onClick={() => void connect()}>
+              Conectar con ChatGPT
+            </Button>
+            {status?.can_loopback ? (
+              <button
+                type="button"
+                className="text-[12px] text-muted-foreground underline hover:text-foreground"
+                disabled={busy}
+                onClick={() => void switchToDeviceCode()}
+              >
+                ¿No funciona? Usar código de dispositivo
+              </button>
+            ) : null}
+          </div>
         ) : null}
       </div>
     </div>
