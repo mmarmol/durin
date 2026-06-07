@@ -121,6 +121,7 @@ def _provenanced_page(tmp_path: Path) -> Path:
         type="topic",
         name="Reacción Adversa",
         relations=[{"to": "topic:veterinaria", "type": "related_to"}],
+        derived_from=["reference:rabies-investigation"],
         provenance={
             "relations": [
                 {
@@ -135,6 +136,13 @@ def _provenanced_page(tmp_path: Path) -> Path:
                     "source_ref": "[[sessions/cli_direct.md#turn-3]]",
                     "extracted_at": "2026-06-06T19:00:00+00:00",
                     "author": "dream",
+                },
+            },
+            "derived_from": {
+                "reference:rabies-investigation": {
+                    "source_ref": "[[sessions/websocket_abc123.md#turn-8]]",
+                    "extracted_at": "2026-06-06T18:42:00+00:00",
+                    "author": "agent",
                 },
             },
         },
@@ -154,6 +162,7 @@ def test_serialize_page_exposes_relations_and_author(tmp_path: Path) -> None:
     assert page["author"] == "agent_created"
     assert page["created_at"].startswith("2026-06-06T18:41:40")
     assert {"to": "topic:veterinaria", "type": "related_to"} in page["relations"]
+    assert page["derived_from"] == ["reference:rabies-investigation"]
 
 
 def test_provenance_events_parse_session_and_turn(tmp_path: Path) -> None:
@@ -173,6 +182,12 @@ def test_provenance_events_parse_session_and_turn(tmp_path: Path) -> None:
     assert attr["session_stem"] == "cli_direct"
     assert attr["turn"] == 3
     assert attr["detail"] == "severity"
+
+    df = next(e for e in events if e["kind"] == "derived_from")
+    assert df["author"] == "agent"
+    assert df["detail"] == "reference:rabies-investigation"
+    assert df["session_stem"] == "websocket_abc123"
+    assert df["turn"] == 8
 
 
 def test_provenance_non_session_ref_has_no_link(tmp_path: Path) -> None:

@@ -1451,6 +1451,33 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                           </dd>
                         </div>
                       ) : null}
+                      {detail.page && (detail.page.derived_from?.length ?? 0) > 0 ? (
+                        <div>
+                          <dt className="text-muted-foreground">{t("memoryGraph.fieldSources")}</dt>
+                          <dd className="mt-0.5 space-y-0.5">
+                            {detail.page.derived_from!.map((ref) => (
+                              <button
+                                key={ref}
+                                type="button"
+                                onClick={() => {
+                                  // The reference is not a graph node — open its
+                                  // content in the side panel (same path as a
+                                  // reference search hit).
+                                  setSelected(null);
+                                  if (tokenRef.current) {
+                                    void fetchMemoryEntry(tokenRef.current, ref)
+                                      .then((d) => setReferenceDetail(d))
+                                      .catch(() => setReferenceDetail(null));
+                                  }
+                                }}
+                                className="block w-full truncate rounded bg-muted px-1.5 py-0.5 text-left font-mono text-[10.5px] text-primary hover:bg-muted/70 hover:underline"
+                              >
+                                {ref.replace(/^reference:/, "")}
+                              </button>
+                            ))}
+                          </dd>
+                        </div>
+                      ) : null}
                     </dl>
                   ) : null}
 
@@ -1497,7 +1524,9 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                                   <span>
                                     {ev.kind === "relation"
                                       ? t("memoryGraph.provRelation")
-                                      : t("memoryGraph.provAttribute")}
+                                      : ev.kind === "derived_from"
+                                        ? t("memoryGraph.provDerivedFrom")
+                                        : t("memoryGraph.provAttribute")}
                                     {ev.author ? ` · ${ev.author}` : ""}
                                   </span>
                                   <span>{ev.when ? ev.when.slice(0, 10) : ""}</span>

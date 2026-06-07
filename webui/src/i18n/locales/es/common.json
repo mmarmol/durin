@@ -765,6 +765,8 @@
     "provCreated": "Creada",
     "provRelation": "relación",
     "provAttribute": "atributo",
+    "provDerivedFrom": "fuente",
+    "fieldSources": "Documentos fuente",
     "backToFull": "Grafo completo",
     "provFromSession": "de la sesión",
     "provTurn": "turno {{turn}}",

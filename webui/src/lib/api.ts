@@ -857,12 +857,14 @@ export interface MemoryEntityDetail {
     created_at?: string | null;
     updated_at?: string | null;
     relations?: Array<{ to: string; type: string }>;
+    // Source documents this entity was distilled from (reference:<slug>).
+    derived_from?: string[];
   } | null;
   // Per-field provenance flattened into UI events: who/when/from-which
   // session each relation or attribute came from. `session_stem` + `turn`
   // are parsed from `source_ref` so the origin can be made clickable.
   provenance: Array<{
-    kind: "relation" | "attribute";
+    kind: "relation" | "attribute" | "derived_from";
     detail: string | null;
     author: string | null;
     when: string | null;
