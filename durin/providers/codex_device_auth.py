@@ -90,15 +90,100 @@ def expiry_ms_from_jwt(access_token: str) -> int:
     return int((time.time() + _DEFAULT_TTL_S) * 1000)
 
 
-def _strict_storage() -> Any:
-    """``FileTokenStorage`` for codex.json with silent CLI import disabled."""
-    from oauth_cli_kit.providers import OPENAI_CODEX_PROVIDER
+_CODEX_SECRET_NAME = "OPENAI_CODEX_OAUTH"
+
+
+def _kit_file_storage() -> Any:
+    """The kit's previous on-disk store — kept only for one-time migration."""
     from oauth_cli_kit.storage import FileTokenStorage
 
-    return FileTokenStorage(
-        token_filename=OPENAI_CODEX_PROVIDER.token_filename,
-        import_codex_cli=False,
-    )
+    return FileTokenStorage(token_filename="codex.json", import_codex_cli=False)
+
+
+def _codex_lock_dir() -> Path:
+    from durin.config.paths import get_config_path
+
+    d = get_config_path().parent / "oauth"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+class _CodexSecretsStorage:
+    """``oauth-cli-kit`` ``TokenStorage`` backed by durin's secret store.
+
+    The token blob lives in ``~/.durin/secrets.json`` (mode 0600), like every
+    other credential, instead of the kit's own app-data dir. The kit's
+    ``get_token()`` still drives refresh + locking — we only swap where the
+    bytes land. On first ``load()`` a token left in the kit's file store is
+    migrated into secrets.
+    """
+
+    def load(self) -> Any:
+        from oauth_cli_kit.models import OAuthToken
+
+        from durin.security.secrets import SecretNotFoundError, resolve_secret
+
+        raw: Any = None
+        try:
+            raw = resolve_secret(f"${{secret:{_CODEX_SECRET_NAME}}}")
+        except SecretNotFoundError:
+            raw = None
+        except Exception:  # noqa: BLE001
+            raw = None
+        if isinstance(raw, str) and raw.strip():
+            try:
+                d = json.loads(raw)
+                return OAuthToken(
+                    access=d.get("access", ""),
+                    refresh=d.get("refresh", ""),
+                    expires=int(d.get("expires", 0)),
+                    account_id=d.get("account_id"),
+                )
+            except Exception:  # noqa: BLE001
+                return None
+        # One-time migration from the kit's previous file store.
+        legacy = _kit_file_storage().load()
+        if legacy is not None and getattr(legacy, "access", None):
+            self.save(legacy)
+            return legacy
+        return None
+
+    def save(self, token: Any) -> None:
+        from durin.security.secrets import store_secret
+
+        blob = json.dumps(
+            {
+                "access": token.access,
+                "refresh": getattr(token, "refresh", ""),
+                "expires": getattr(token, "expires", 0),
+                "account_id": getattr(token, "account_id", None),
+            }
+        )
+        store_secret(
+            _CODEX_SECRET_NAME,
+            blob,
+            service="provider:openai_codex",
+            scope=["provider:openai_codex"],
+            description="OpenAI Codex OAuth token",
+            origin="oauth",
+        )
+
+    def get_token_path(self) -> Path:
+        # Data lives in secrets.json; this path is only used for the kit's
+        # cross-process refresh lock (``<path>.lock``).
+        return _codex_lock_dir() / "codex.json"
+
+
+def _strict_storage() -> Any:
+    return _CodexSecretsStorage()
+
+
+def codex_token_present() -> bool:
+    """True when durin holds a usable Codex token (in the secret store)."""
+    try:
+        return _strict_storage().load() is not None
+    except Exception:  # noqa: BLE001
+        return False
 
 
 @dataclass
@@ -241,20 +326,31 @@ def existing_codex_session() -> CodexSessionInfo | None:
 
 
 def disconnect() -> bool:
-    """Delete durin's codex.json (+ .lock). True if anything was removed."""
-    try:
-        token_path = _strict_storage().get_token_path()
-    except Exception:  # noqa: BLE001
-        return False
+    """Forget the Codex token: delete the secret and any legacy kit file."""
     removed = False
-    for path in (token_path, token_path.with_suffix(".lock")):
-        try:
-            path.unlink()
+    try:
+        from durin.security.secrets import SecretStore, get_secret_store
+
+        store = SecretStore().load()
+        if store.remove(_CODEX_SECRET_NAME):
+            store.save()
+            get_secret_store(reload=True)
             removed = True
-        except FileNotFoundError:
-            continue
-        except OSError as exc:
-            logger.warning("could not remove {}: {}", path, exc)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("could not remove codex secret: {}", exc)
+    # Clean up the kit's previous file store (+ lock), if still around.
+    try:
+        legacy = _kit_file_storage().get_token_path()
+        for path in (legacy, legacy.with_suffix(".lock")):
+            try:
+                path.unlink()
+                removed = True
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                logger.warning("could not remove {}: {}", path, exc)
+    except Exception:  # noqa: BLE001
+        pass
     return removed
 
 
