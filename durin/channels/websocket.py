@@ -1409,10 +1409,18 @@ class WebSocketChannel(BaseChannel):
             provider = provider.strip()
             if not provider:
                 return _http_error(400, "provider is required")
-            if find_by_name(provider) is None:
+            spec = find_by_name(provider)
+            if spec is None:
                 return _http_error(400, "unknown provider")
             provider_config = getattr(config.providers, provider, None)
-            if provider_config is None or not provider_config.api_key:
+            # OAuth providers (Codex) carry a stored token, not an api_key.
+            if getattr(spec, "is_oauth", False):
+                from durin.utils.oauth import any_token_present
+
+                configured = any_token_present(spec.name)
+            else:
+                configured = bool(provider_config and provider_config.api_key)
+            if not configured:
                 return _http_error(400, "provider is not configured")
             if defaults.provider != provider:
                 defaults.provider = provider
