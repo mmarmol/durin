@@ -398,6 +398,23 @@
     "noFindings": "No security findings.",
     "scanClean": "Scan found no risks.",
     "unscannedHint": "Not analyzed yet. Run “Audit with LLM” to review it.",
+    "whyHere": "Why it's here",
+    "reason": {
+      "untrusted_source": "The source {{detail}} isn't in your trusted allowlist, so it needs your explicit approval.",
+      "carries_code": "It carries executable code ({{detail}}) — review before approving.",
+      "declared_deps": "It declares dependencies (not run automatically): {{detail}}.",
+      "verdict_caution": "The security scan flagged it as caution.",
+      "verdict_dangerous": "The security scan flagged it as dangerous."
+    },
+    "audit": {
+      "running": "Auditing with AI…",
+      "summaryLabel": "AI audit",
+      "clean": "The AI reviewed it and found no problems.",
+      "unreachable": "Couldn't reach the audit model. Check your connection and retry.",
+      "no_model": "No audit model is configured.",
+      "parse": "The audit response was unreadable. Retry.",
+      "retry": "Retry audit"
+    },
     "verdict": { "safe": "Safe", "caution": "Caution", "dangerous": "Dangerous", "unscanned": "Not analyzed" },
     "import": {
       "placeholder": "Import a skill: path, https://…/SKILL.md, or github:owner/repo",
