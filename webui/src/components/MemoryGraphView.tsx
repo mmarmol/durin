@@ -333,6 +333,24 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
     alphaRef.current = 1;
   }, [simNodes, simEdges]);
 
+  // Deduped, capped search results actually shown (skills already excluded
+  // server-side via kinds="fact"). Shared by the header count and the list so
+  // "N results" matches what's rendered.
+  const searchDisplayed = useMemo(() => {
+    const list = Array.isArray(searchResults?.results)
+      ? searchResults!.results
+      : [];
+    const seen = new Set<string>();
+    return list
+      .filter((r) => {
+        const base = r.uri.split("#")[0];
+        if (seen.has(base)) return false;
+        seen.add(base);
+        return true;
+      })
+      .slice(0, 40);
+  }, [searchResults]);
+
   // Compute neighbour set for the active focus ref (1-hop)
   const focusNeighbours = useMemo(() => {
     if (!focusRef || !data) return null;
@@ -903,7 +921,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
           <aside className="absolute bottom-12 left-3 top-3 z-10 w-80 max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-lg border border-border/50 bg-card/95 shadow-lg backdrop-blur">
             <header className="flex items-center justify-between border-b border-border/40 px-3 py-2 text-xs">
               <span className="font-semibold">
-                Search · {searchResults ? `${searchResults.total} results` : "…"}
+                Search · {searchResults ? `${searchDisplayed.length} results` : "…"}
               </span>
               <div className="flex items-center gap-1 text-muted-foreground">
                 {searchResults ? (
@@ -932,18 +950,8 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                   {t("memoryGraph.noMatches")}
                 </div>
               ) : null}
-              {(searchResults?.results ?? [])
-                // Skills already excluded server-side via kinds="fact".
-                // Collapse the N chunks of one source (same base uri before
-                // the `#idx`) into a single row — otherwise a reference doc
-                // floods the list with identical-looking fragments.
-                .filter(
-                  (r, i, a) =>
-                    a.findIndex(
-                      (x) => x.uri.split("#")[0] === r.uri.split("#")[0],
-                    ) === i,
-                )
-                .slice(0, 40)
+              {/* Deduped + skills-excluded list (see searchDisplayed memo). */}
+              {searchDisplayed
                 .map((r, idx) => {
                 const isCanon = r.kind === "canonical";
                 const id = isCanon ? r.uri.split("/").pop() ?? "" : r.uri;
