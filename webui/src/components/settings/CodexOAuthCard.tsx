@@ -10,9 +10,16 @@ import {
   type CodexStatus,
 } from "@/lib/api";
 
-type Props = { token: string; base?: string };
+type Props = {
+  token: string;
+  base?: string;
+  /** When true, omit the outer card chrome + header (the provider row supplies them). */
+  embedded?: boolean;
+  /** Called after a successful connect/disconnect so the parent can refresh settings. */
+  onChanged?: () => void;
+};
 
-export function CodexOAuthCard({ token, base = "" }: Props) {
+export function CodexOAuthCard({ token, base = "", embedded = false, onChanged }: Props) {
   const [status, setStatus] = useState<CodexStatus | null>(null);
   const [challenge, setChallenge] = useState<{
     user_code: string;
@@ -54,6 +61,7 @@ export function CodexOAuthCard({ token, base = "" }: Props) {
               plan: res.plan,
               source: res.source,
             });
+            onChanged?.();
             return;
           }
           if (res.status === "error") {
@@ -80,6 +88,7 @@ export function CodexOAuthCard({ token, base = "" }: Props) {
     setBusy(true);
     try {
       setStatus(await disconnectCodex(token, base));
+      onChanged?.();
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -88,22 +97,36 @@ export function CodexOAuthCard({ token, base = "" }: Props) {
   };
 
   return (
-    <div className="space-y-3 rounded-[10px] border border-border/45 p-4">
-      <div className="flex items-center justify-between">
-        <span className="text-[15px] font-semibold">OpenAI Codex (ChatGPT)</span>
-        <span
-          className={cn(
-            "rounded-full px-2.5 py-1 text-[12px] font-medium",
-            status?.connected
-              ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
-              : "bg-muted text-muted-foreground",
-          )}
-        >
-          {status?.connected
-            ? `Conectado${status.email ? ` · ${status.email}` : ""}`
-            : "No conectado"}
-        </span>
-      </div>
+    <div
+      className={cn(
+        "space-y-3",
+        embedded ? "" : "rounded-[10px] border border-border/45 p-4",
+      )}
+    >
+      {embedded ? null : (
+        <div className="flex items-center justify-between">
+          <span className="text-[15px] font-semibold">OpenAI Codex (ChatGPT)</span>
+          <span
+            className={cn(
+              "rounded-full px-2.5 py-1 text-[12px] font-medium",
+              status?.connected
+                ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                : "bg-muted text-muted-foreground",
+            )}
+          >
+            {status?.connected
+              ? `Conectado${status.email ? ` · ${status.email}` : ""}`
+              : "No conectado"}
+          </span>
+        </div>
+      )}
+
+      {embedded && status?.connected ? (
+        <p className="text-[13px] text-muted-foreground">
+          Conectado{status.email ? ` · ${status.email}` : ""}
+          {status.plan ? ` (${status.plan})` : ""}
+        </p>
+      ) : null}
 
       {challenge ? (
         <div className="space-y-2 rounded-[8px] border border-border/60 bg-muted/40 p-3 text-[13px]">

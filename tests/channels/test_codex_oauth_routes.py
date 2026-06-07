@@ -21,6 +21,21 @@ def _req(path):
     return types.SimpleNamespace(path=path, headers={})
 
 
+def test_settings_payload_lists_codex_as_oauth(monkeypatch):
+    from durin.utils import oauth as oauth_utils
+
+    inst = _handler_instance()
+    # _settings_payload imports any_token_present from this module at call time.
+    monkeypatch.setattr(oauth_utils, "any_token_present", lambda name: False)
+    payload = inst._settings_payload()
+    codex = [p for p in payload["providers"] if p["name"] == "openai_codex"]
+    assert len(codex) == 1
+    assert codex[0]["oauth"] is True
+    assert codex[0]["configured"] is False
+    # OAuth rows carry no api_key fields.
+    assert "api_key_hint" not in codex[0]
+
+
 def test_status_reports_connected(monkeypatch):
     inst = _handler_instance()
     _ok_token(monkeypatch, inst)
