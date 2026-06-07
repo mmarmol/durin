@@ -750,6 +750,7 @@
     "focusOneHop": "Enfocar 1 salto",
     "interactionHint": "Haz clic en otro nodo, arrastra para fijar, o usa el ícono de foco para aislar los vecinos a 1 salto.",
     "loadingGraph": "Cargando…",
+    "retry": "Reintentar",
     "showAll": "Mostrar todo",
     "noMatches": "Sin resultados.",
     "entriesReferencing": "Entradas que referencian",
