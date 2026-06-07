@@ -29,6 +29,18 @@ contenido en **paneles distintos según el tipo**:
 
 ## Casos (uno por uno)
 
+### Caso 0 — Layout & responsive  ⟵ *fundacional (arregla el bug de reflow)*
+
+**Bug actual**: los paneles flotan (absolute) sobre el canvas; el canvas ocupa todo y nunca sabe que le quedó menos espacio → los nodos no se reacomodan, y search+selección+grafo se enciman.
+
+**Modelo**: el stage es **columnas que se reparten el espacio**, no overlays.
+- `[ columna grafo (flex:1) | panel de contenido (0 cerrado / ~42% abierto / 72% ancho) ]`.
+- Al abrir/cerrar el panel **o al hacer resize**, el canvas **re-encaja** sus nodos al tamaño real de su columna (re-centra/escala). Los nodos siempre reacomodan.
+- **Search = overlay transitorio** sobre la columna grafo; **se cierra al elegir un resultado**. Nunca hay search + contenido + grafo persistentes a la vez.
+- **Responsive**: cuando la columna grafo quedaría < ~280px (ventana chica o panel "ancho"), el contenido pasa a **pantalla completa** y el grafo se oculta, con "← volver al grafo". Una superficie por vez.
+
+Verificado en el mock: split que re-encaja (wide) + full-screen (narrow) + search que cierra al elegir.
+
 ### Caso 1 — Nodo: hover / click / close  ⟵ *validar primero*
 
 - **Hover** sobre nodo → resalta nodo + vecinos directos (atenúa el resto, en el lugar) + popover de preview (título + snippet). Salir el mouse → todo vuelve. No abre nada, no cambia alcance.
