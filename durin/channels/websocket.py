@@ -42,6 +42,7 @@ from durin.providers.codex_device_auth import (
 from durin.providers.codex_device_auth import (
     existing_codex_session,
     request_device_code,
+    start_loopback_login,
 )
 from durin.providers.codex_device_auth import (
     poll_once as codex_poll_once,
@@ -244,6 +245,25 @@ def _query_first(query: dict[str, list[str]], key: str) -> str | None:
     """Return the first value for *key*, or None."""
     values = query.get(key)
     return values[0] if values else None
+
+
+def _request_host_is_local(request: WsRequest) -> bool:
+    """True when the browser reached the webui via localhost.
+
+    Used to decide whether the loopback OAuth flow (callback on localhost:1455,
+    served by this gateway) can reach the user's browser — only when both run on
+    the same machine, i.e. the dashboard was opened at localhost/127.0.0.1/::1.
+    """
+    try:
+        host = request.headers.get("Host") or request.headers.get("host") or ""
+    except Exception:  # noqa: BLE001
+        host = ""
+    host = host.strip()
+    if host.startswith("["):  # bracketed IPv6, e.g. [::1]:8765
+        host = host[1:].split("]", 1)[0]
+    else:
+        host = host.rsplit(":", 1)[0] if host.count(":") == 1 else host
+    return host in ("localhost", "127.0.0.1", "::1")
 
 
 def _logs_query_from_params(query: dict[str, list[str]]):
@@ -733,6 +753,9 @@ class WebSocketChannel(BaseChannel):
 
         if got == "/api/oauth/codex/start":
             return self._handle_codex_oauth_start(request)
+
+        if got == "/api/oauth/codex/start-loopback":
+            return self._handle_codex_oauth_start_loopback(request)
 
         if got == "/api/oauth/codex/poll":
             return self._handle_codex_oauth_poll(request)
@@ -1297,7 +1320,22 @@ class WebSocketChannel(BaseChannel):
     def _handle_codex_oauth_status(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
-        return _http_json_response(self._codex_status_payload())
+        payload = self._codex_status_payload()
+        # Loopback (no device-auth toggle) only works when the browser is on
+        # the gateway machine — i.e. the webui was reached via localhost.
+        payload["can_loopback"] = _request_host_is_local(request)
+        return _http_json_response(payload)
+
+    def _handle_codex_oauth_start_loopback(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        if not _request_host_is_local(request):
+            return _http_error(400, "loopback unavailable on a remote gateway; use device code")
+        try:
+            url = start_loopback_login()
+        except Exception as exc:  # noqa: BLE001
+            return _http_error(502, f"loopback login failed to start: {exc}")
+        return _http_json_response({"authorize_url": url})
 
     def _handle_codex_oauth_start(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
