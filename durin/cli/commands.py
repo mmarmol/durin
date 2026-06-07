@@ -2552,13 +2552,7 @@ def _codex_login_flow(force: str | None) -> None:
     if use_device:
         token = cda.login_blocking(print_fn=lambda s: console.print(s))
     else:
-        from oauth_cli_kit import login_oauth_interactive
-
-        token = login_oauth_interactive(
-            print_fn=lambda s: console.print(s),
-            prompt_fn=lambda s: typer.prompt(s),
-            originator="codex_cli_rs",
-        )
+        token = cda.login_loopback_blocking(print_fn=lambda s: console.print(s))
     if not (token and token.access):
         console.print("[red]✗ Authentication failed[/red]")
         raise typer.Exit(1)

@@ -166,3 +166,61 @@ def test_disconnect_removes_token_and_lock(monkeypatch, tmp_path):
     assert not token_path.exists()
     assert not lock_path.exists()
     assert cda.disconnect() is False  # nothing left to remove
+
+
+import socket as _socket
+
+
+def _free_1455():
+    # Skip if something already holds :1455 (e.g. a real gateway loopback attempt).
+    for fam, host in ((_socket.AF_INET, "127.0.0.1"), (_socket.AF_INET6, "::1")):
+        s = _socket.socket(fam)
+        try:
+            if s.connect_ex((host, 1455)) == 0:
+                return False
+        finally:
+            s.close()
+    return True
+
+
+def test_build_authorize_url_params():
+    url = cda._build_authorize_url("CHAL", "STATE")
+    assert url.startswith("https://auth.openai.com/oauth/authorize?")
+    assert "originator=codex_cli_rs" in url
+    assert "code_challenge_method=S256" in url
+    assert "redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback" in url
+    assert "state=STATE" in url
+
+
+def test_callback_server_binds_ipv4():
+    if not _free_1455():
+        pytest.skip(":1455 already in use")
+    result = cda._CallbackResult()
+    servers = cda._start_callback_servers("st", result)
+    try:
+        assert servers, "no callback server bound"
+        s = _socket.socket(_socket.AF_INET)
+        s.settimeout(1.0)
+        # The whole point of the fix: the browser hits localhost -> 127.0.0.1.
+        assert s.connect_ex(("127.0.0.1", 1455)) == 0
+        s.close()
+    finally:
+        for srv in servers:
+            srv.shutdown()
+
+
+def test_start_loopback_returns_url_and_listens(monkeypatch):
+    if not _free_1455():
+        pytest.skip(":1455 already in use")
+    cda._loopback_state["thread"] = None
+    cda._loopback_state["url"] = None
+    url = cda.start_loopback_login(max_wait_s=0.2)
+    try:
+        assert "code_challenge=" in url and "originator=codex_cli_rs" in url
+        s = _socket.socket(_socket.AF_INET)
+        s.settimeout(1.0)
+        assert s.connect_ex(("127.0.0.1", 1455)) == 0  # listening before we returned
+        s.close()
+    finally:
+        # let the background thread time out (0.2s) and shut the servers down
+        time.sleep(0.4)
