@@ -30,8 +30,11 @@ _DESCRIPTION = (
     "`relations` to other entities ({to: '<type>:<slug>', type: 'partner'}), "
     "and prose `body` describing what you know. Merges into the existing entity "
     "if it exists, creates it otherwise. Do NOT pass structured attributes — "
-    "the system extracts those from your prose. Use this for facts about a "
-    "THING; use memory_ingest for documents."
+    "the system extracts those from your prose. When this entity was distilled "
+    "from a document you ingested, pass `derived_from` with the "
+    "`reference:<slug>` ref(s) memory_ingest returned, so the entity links back "
+    "to its sources. Use this for facts about a THING; use memory_ingest for "
+    "documents."
 )
 
 _PARAMETERS = tool_parameters_schema(
@@ -55,6 +58,14 @@ _PARAMETERS = tool_parameters_schema(
             additional_properties=True,
         ),
         description="Relations to other entities.",
+        nullable=True,
+    ),
+    derived_from=ArraySchema(
+        StringSchema("source document ref 'reference:<slug>'"),
+        description=(
+            "Source documents this entity was distilled from — the "
+            "`reference:<slug>` ref(s) returned by memory_ingest."
+        ),
         nullable=True,
     ),
     body=StringSchema(
@@ -102,6 +113,12 @@ class MemoryUpsertEntityTool(Tool):
             if isinstance(r, dict) and r.get("to") and r.get("type"):
                 patches.append(FieldPatch(
                     kind="relation", value=dict(r), author=None,
+                    source_ref=src, at=now))
+        for d in (kwargs.get("derived_from") or []):
+            d = str(d).strip()
+            if d.startswith("reference:"):
+                patches.append(FieldPatch(
+                    kind="derived_from", value=d, author=None,
                     source_ref=src, at=now))
         body = kwargs.get("body")
         if body:

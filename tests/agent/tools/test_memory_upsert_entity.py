@@ -36,6 +36,19 @@ def test_tool_merges_existing(tmp_path):
     assert any(r["to"] == "topic:t" for r in page.relations)
 
 
+def test_tool_records_derived_from(tmp_path):
+    tool = MemoryUpsertEntityTool(workspace=str(tmp_path))
+    asyncio.run(tool.execute(
+        ref="topic:rabies", name="Rabies",
+        derived_from=["reference:rabies-investigation", "not-a-ref"],
+        body="Notes distilled from the investigation."))
+    page = _page(tmp_path, "topic:rabies")
+    # the valid reference ref is linked; the non-reference value is skipped
+    assert page.derived_from == ["reference:rabies-investigation"]
+    prov = page.provenance["derived_from"]["reference:rabies-investigation"]
+    assert prov["author"] == "agent"
+
+
 def test_tool_rejects_bad_ref(tmp_path):
     tool = MemoryUpsertEntityTool(workspace=str(tmp_path))
     out = asyncio.run(tool.execute(ref="not-a-ref", name="X"))

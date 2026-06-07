@@ -74,7 +74,10 @@ Route by what the information IS:
   `body` describing what you learned. The system extracts structured
   attributes from your prose — you don't write attributes yourself.
 - **A document** the user gives you (a tutorial, spec, article) →
-  `memory_ingest`. It's kept whole as a reference.
+  `memory_ingest`. It's kept whole as a reference and returns a
+  `reference:<slug>`. If you then author an entity distilled from that
+  document, pass the ref in `memory_upsert_entity(derived_from=[...])` so the
+  entity links back to its source.
 - **An interaction** — nothing to do; the conversation is already recorded
   and the system distils what matters.
 
