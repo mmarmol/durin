@@ -52,6 +52,20 @@ def test_relation_add_dedup_by_to_type():
     assert len([r for r in p.relations if r["to"] == "company:carahsoft"]) == 1
 
 
+def test_derived_from_add_dedup_and_ref_keyed_provenance():
+    p = _page()
+    ref = "reference:rabies-investigation"
+    assert apply_field_patch(p, FieldPatch(kind="derived_from", value=ref,
+                                           author="agent", source_ref="sessions/x.md#turn-8", at=NOW)) is True
+    # dedup: same ref by same-rank author with no newer time → no change
+    assert apply_field_patch(p, FieldPatch(kind="derived_from", value=ref,
+                                           author="agent", source_ref="sessions/x.md#turn-8", at=NOW)) is False
+    assert p.derived_from == [ref]
+    # provenance keyed by the ref string (merge-safe)
+    assert p.provenance["derived_from"][ref]["source_ref"] == "sessions/x.md#turn-8"
+    assert p.provenance["derived_from"][ref]["author"] == "agent"
+
+
 def test_alias_dedup_and_body_append():
     p = _page()
     assert apply_field_patch(p, FieldPatch(kind="alias", value="mxHERO Inc.",
