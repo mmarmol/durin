@@ -114,9 +114,15 @@ def reference_refs_in_session(
 
 def entities_missing_derived_from(
     workspace: Path, refs: list[str],
-) -> list[EntityPage]:
-    """Pages for ``refs`` that exist on disk and have no ``derived_from`` yet."""
-    out: list[EntityPage] = []
+) -> list[tuple[str, EntityPage]]:
+    """``(ref, page)`` for ``refs`` that exist on disk and lack ``derived_from``.
+
+    The ``ref`` is the authoritative on-disk reference (the agent's upsert ref =
+    the filename slug). We deliberately do NOT use ``EntityPage.entity_ref``,
+    which re-derives the slug from the *name* and can diverge from the filename
+    (e.g. a renamed page) — writing back to that ref would miss the real file.
+    """
+    out: list[tuple[str, EntityPage]] = []
     root = Path(workspace) / "memory"
     for ref in refs:
         type_, _, slug = ref.partition(":")
@@ -128,18 +134,21 @@ def entities_missing_derived_from(
         except Exception:  # noqa: BLE001
             continue
         if page is not None and not page.derived_from:
-            out.append(page)
+            out.append((ref, page))
     return out
 
 
 def build_link_prompt(
-    workspace: Path, pages: list[EntityPage], references: list[str], turns: str,
+    workspace: Path,
+    pages: list[tuple[str, EntityPage]],
+    references: list[str],
+    turns: str,
 ) -> str:
     documents = "\n".join(
         f"- {ref} — {_ref_title(workspace, ref)}" for ref in references
     )
     entities = "\n".join(
-        f"- {p.entity_ref} — {(p.body or '').strip()[:300]}" for p in pages
+        f"- {ref} — {(page.body or '').strip()[:300]}" for ref, page in pages
     )
     return _LINK_PROMPT.format(
         documents=documents, entities=entities, turns=turns[:12000],
@@ -209,7 +218,7 @@ def link_derived_from_for_session(
     links = parse_links(
         raw,
         valid_refs=set(references),
-        valid_entities={p.entity_ref for p in pages},
+        valid_entities={ref for ref, _page in pages},
     )
     if not links:
         return {"session": jsonl_path.stem, "linked": []}

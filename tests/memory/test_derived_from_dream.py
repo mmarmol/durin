@@ -50,7 +50,20 @@ def test_entities_missing_derived_from_filters_linked(tmp_path: Path) -> None:
         tmp_path / "memory" / "entities" / "topic" / "unlinked.md")
     pages = entities_missing_derived_from(
         tmp_path, ["topic:linked", "topic:unlinked", "topic:ghost"])
-    assert [p.entity_ref for p in pages] == ["topic:unlinked"]
+    assert [ref for ref, _page in pages] == ["topic:unlinked"]
+
+
+def test_uses_on_disk_ref_not_name_derived_slug(tmp_path: Path) -> None:
+    # Regression: a page whose name slugifies differently from its filename
+    # (e.g. a renamed page) must be addressed by its on-disk ref, not
+    # EntityPage.entity_ref (name-derived) — else the write misses the file.
+    EntityPage(type="topic", name="Reacción Adversa Vacuna Rabia en Caninos").save(
+        tmp_path / "memory" / "entities" / "topic" / "reaccion-adversa-canino.md")
+    pages = entities_missing_derived_from(tmp_path, ["topic:reaccion-adversa-canino"])
+    assert len(pages) == 1
+    ref, page = pages[0]
+    assert ref == "topic:reaccion-adversa-canino"          # the filename slug
+    assert page.entity_ref != ref                          # name-derived diverges
 
 
 def test_parse_links_drops_unknown_refs_and_entities() -> None:
