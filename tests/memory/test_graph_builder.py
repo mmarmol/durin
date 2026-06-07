@@ -436,3 +436,40 @@ def test_dangling_relation_degree2_promoted(tmp_path: Path) -> None:
     assert hub["phantom"] is True
     rel_edges = [e for e in g["edges"] if e.get("kind") == "relation"]
     assert {e["source"] for e in rel_edges} == {"company:globex", "company:initech"}
+
+
+# ---------------------------------------------------------------------------
+# ego-graph (focus mode) — node + N-hop neighbourhood, uncapped
+# ---------------------------------------------------------------------------
+
+
+def test_entity_subgraph_one_hop(tmp_path: Path) -> None:
+    from durin.memory.graph import build_entity_subgraph
+
+    for s in ("a", "b", "c", "d"):
+        _write_page(tmp_path, "topic", s)
+    _store(tmp_path, "ab", ["topic:a", "topic:b"])
+    _store(tmp_path, "bc", ["topic:b", "topic:c"], day=2)
+    _store(tmp_path, "cd", ["topic:c", "topic:d"], day=3)
+    g = build_entity_subgraph(tmp_path, "topic:a", hops=1)
+    assert {n["id"] for n in g["nodes"]} == {"topic:a", "topic:b"}
+    assert g["focus"] == "topic:a"
+    # 2-hop neighbours excluded at hops=1
+    assert "topic:c" not in {n["id"] for n in g["nodes"]}
+
+
+def test_entity_subgraph_isolated_node(tmp_path: Path) -> None:
+    from durin.memory.graph import build_entity_subgraph
+
+    _write_page(tmp_path, "topic", "lonely")
+    g = build_entity_subgraph(tmp_path, "topic:lonely", hops=1)
+    assert {n["id"] for n in g["nodes"]} == {"topic:lonely"}
+    assert g["edges"] == []
+
+
+def test_entity_subgraph_missing_ref_synthesized(tmp_path: Path) -> None:
+    from durin.memory.graph import build_entity_subgraph
+
+    g = build_entity_subgraph(tmp_path, "topic:ghost", hops=1)
+    assert {n["id"] for n in g["nodes"]} == {"topic:ghost"}
+    assert g["edges"] == []

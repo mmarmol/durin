@@ -800,6 +800,23 @@ export async function fetchMemoryGraph(
   return request<MemoryGraphPayload>(`${base}/api/memory/graph`, token);
 }
 
+/** Ego-graph (focus mode): a node + its N-hop neighbourhood, uncapped, so
+ *  any node — including one dropped by the global cap or reached via search —
+ *  can be centred with just its relations around it. */
+export async function fetchMemorySubgraph(
+  token: string,
+  ref: string,
+  opts: { hops?: number; base?: string } = {},
+): Promise<MemoryGraphPayload> {
+  const base = opts.base ?? "";
+  const params = new URLSearchParams({ ref });
+  if (opts.hops) params.set("hops", String(opts.hops));
+  return request<MemoryGraphPayload>(
+    `${base}/api/memory/subgraph?${params}`,
+    token,
+  );
+}
+
 export interface MemoryEntityDetail {
   ref: string;
   // null for a "phantom" entity — tagged in entries but not yet
