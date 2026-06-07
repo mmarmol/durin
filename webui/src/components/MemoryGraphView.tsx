@@ -88,6 +88,16 @@ function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
 }
 
+// Width (px) the open content panel reserves on the right — the canvas shrinks
+// by this so the graph re-fits beside the panel instead of being covered.
+// Returns 0 when no content panel is open (the `.mg-cpanel` aside is only
+// mounted while open).
+function reservedRightWidth(): number {
+  if (typeof document === "undefined") return 0;
+  const p = document.querySelector(".mg-cpanel");
+  return p ? Math.round((p as HTMLElement).getBoundingClientRect().width) : 0;
+}
+
 function radiusForWeight(weight: number): number {
   return 5 + Math.sqrt(Math.max(0, weight)) * 2.2;
 }
@@ -182,6 +192,15 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
   const rafRef = useRef<number | null>(null);
   const draggingRef = useRef<SimNode | null>(null);
   const hoverRef = useRef<SimNode | null>(null);
+  // Caso 0: lets non-effect handlers (open/close panel) re-fit the canvas to
+  // the space left by the content panel, and reheat the sim to re-centre.
+  const resizeRef = useRef<() => void>(() => {});
+  function refitGraph() {
+    resizeRef.current();
+    alphaRef.current = Math.max(alphaRef.current, 0.6);
+    // re-fit again after the panel's width transition settles
+    setTimeout(() => { resizeRef.current(); alphaRef.current = Math.max(alphaRef.current, 0.5); }, 230);
+  }
   // Hover preview (Obsidian page-preview): debounced popover with the
   // hovered node's rendered body. Refs drive the hot pointer path; only
   // `hoverPreview` is React state. Bodies cached per node id.
@@ -267,6 +286,12 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
     setFocusRef(selected ? selected.id : null);
   }, [selected?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Caso 0: re-fit the graph whenever the content panel opens/closes/resizes —
+  // the canvas shrinks to the leftover width and the sim reheats to re-centre.
+  useEffect(() => {
+    refitGraph();
+  }, [selected?.id, !!referenceDetail, panelExpanded]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Switch the canvas to a node's ego-graph (uncapped neighbourhood). Used by
   // both graph clicks and search hits — so a searched node that the global
   // cap dropped is still brought in, centred, with just its relations.
@@ -312,7 +337,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
   // Build simulation arrays from data
   const { simNodes, simEdges } = useMemo(() => {
     if (!data) return { simNodes: [] as SimNode[], simEdges: [] as SimEdge[] };
-    const w = wrapRef.current?.clientWidth ?? 800;
+    const w = Math.max(80, (wrapRef.current?.clientWidth ?? 800) - reservedRightWidth());
     const h = wrapRef.current?.clientHeight ?? 600;
     const cx = w / 2;
     const cy = h / 2;
@@ -409,7 +434,12 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
     function resize() {
       if (!canvas || !wrap) return;
       const dpr = window.devicePixelRatio || 1;
-      const w = wrap.clientWidth;
+      // Caso 0: the graph claims the space the content panel doesn't.
+      // The open content panel (absolute, right) reserves width; the canvas
+      // (a left-aligned flow child) shrinks to the remainder, so the graph
+      // re-fits into its column instead of being covered by the overlay.
+      const reserved = reservedRightWidth();
+      const w = Math.max(80, wrap.clientWidth - reserved);
       const h = wrap.clientHeight;
       canvas.width = Math.floor(w * dpr);
       canvas.height = Math.floor(h * dpr);
@@ -417,6 +447,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
       canvas.style.height = `${h}px`;
       ctx?.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
+    resizeRef.current = resize;
     resize();
     const ro = new ResizeObserver(resize);
     ro.observe(wrap);
@@ -447,7 +478,9 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
         rafRef.current = requestAnimationFrame(frame);
         return;
       }
-      const w = wrap.clientWidth;
+      // usable width = full minus the open content panel (Caso 0): centring
+      // and bounds use the graph's actual column so it re-fits beside the panel.
+      const w = Math.max(80, wrap.clientWidth - reservedRightWidth());
       const h = wrap.clientHeight;
 
       const alpha = alphaRef.current;
@@ -1152,7 +1185,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
         {selected ? (
           <aside
             className={cn(
-              "absolute right-3 top-3 z-10 flex max-w-[calc(100vw-1.5rem)] flex-col rounded-lg border border-border/50 bg-card/95 text-sm shadow-lg backdrop-blur",
+              "mg-cpanel absolute right-3 top-3 z-10 flex max-w-[calc(100vw-1.5rem)] flex-col rounded-lg border border-border/50 bg-card/95 text-sm shadow-lg backdrop-blur",
               "transition-[width] duration-200 ease-out",
               panelExpanded ? "w-[calc(100%-1.5rem)]" : "w-[22rem]",
             )}
@@ -1548,7 +1581,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
             reference search hit opens its rendered doc here. */}
         {referenceDetail && !selected ? (
           <aside
-            className="absolute right-3 top-3 z-10 flex w-[min(58vw,44rem)] max-w-[calc(100vw-1.5rem)] flex-col rounded-lg border border-border/50 bg-card/95 text-sm shadow-lg backdrop-blur"
+            className="mg-cpanel absolute right-3 top-3 z-10 flex w-[min(58vw,44rem)] max-w-[calc(100vw-1.5rem)] flex-col rounded-lg border border-border/50 bg-card/95 text-sm shadow-lg backdrop-blur"
             style={{ maxHeight: "calc(100% - 1.5rem)" }}
           >
             <header className="flex items-start gap-2 border-b border-border/40 px-3 py-2">
