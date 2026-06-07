@@ -623,12 +623,12 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
         hit.vy = 0;
         draggingRef.current = hit;
         setSelected(hit);
-        // Single click opens (Obsidian-style) at compact width and re-centres
-        // the canvas on this node's ego-graph; double click expands the panel
-        // to the full reading view.
+        // Caso 1: click opens the node and focuses it IN PLACE (the global
+        // graph dims to its 1-hop neighbourhood via focusRef). No ego-replace
+        // and no camera move — the node you clicked is already on screen. The
+        // ego-graph is reserved for off-cap nodes reached via search.
         setPanelExpanded(false);
         setActiveTab(hit.phantom ? "info" : "body");
-        focusOnNode(hit.id);
         setReferenceDetail(null);
         setEdgePopup(null);
         alphaRef.current = 0.4;
@@ -667,20 +667,6 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
       setEdgePopup(null);
     },
     [hitTestNode, hitTestEdge, focusOnNode],
-  );
-
-  // Double click = "commit": open the full reading view (content takes the
-  // whole space, graph receded). Single click only peeks (see onPointerDown).
-  const onDoubleClick = useCallback(
-    (evt: React.MouseEvent<HTMLCanvasElement>) => {
-      const rect = evt.currentTarget.getBoundingClientRect();
-      const hit = hitTestNode(evt.clientX - rect.left, evt.clientY - rect.top);
-      if (!hit) return;
-      setSelected(hit);
-      setPanelExpanded(true);
-      setActiveTab(hit.phantom ? "info" : "body");
-    },
-    [hitTestNode],
   );
 
   const onPointerMove = useCallback(
@@ -943,7 +929,6 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
         <canvas
           ref={canvasRef}
           onPointerDown={onPointerDown}
-          onDoubleClick={onDoubleClick}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
           onPointerLeave={() => {
@@ -1083,7 +1068,11 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                       const target = isCanon ? id : (r.entities ?? [])[0];
                       if (!target) return;
                       setReferenceDetail(null);
-                      focusOnNode(target);
+                      // Caso 1: ego-replace only for off-cap nodes (not in the
+                      // current graph). In-graph hits just focus in place.
+                      if (!simNodesRef.current.some((n) => n.id === target)) {
+                        focusOnNode(target);
+                      }
                       const node =
                         simNodesRef.current.find((n) => n.id === target) ?? {
                           id: target,
