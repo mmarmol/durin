@@ -7,17 +7,26 @@ import {
   fetchCodexStatus,
   pollCodexDeviceAuth,
   startCodexDeviceAuth,
+  startCodexLoopbackAuth,
   type CodexStatus,
 } from "@/lib/api";
 
-type Props = { token: string; base?: string };
+type Props = {
+  token: string;
+  base?: string;
+  /** When true, omit the outer card chrome + header (the provider row supplies them). */
+  embedded?: boolean;
+  /** Called after a successful connect/disconnect so the parent can refresh settings. */
+  onChanged?: () => void;
+};
 
-export function CodexOAuthCard({ token, base = "" }: Props) {
+export function CodexOAuthCard({ token, base = "", embedded = false, onChanged }: Props) {
   const [status, setStatus] = useState<CodexStatus | null>(null);
   const [challenge, setChallenge] = useState<{
     user_code: string;
     verification_uri: string;
   } | null>(null);
+  const [loopbackUrl, setLoopbackUrl] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
@@ -30,25 +39,63 @@ export function CodexOAuthCard({ token, base = "" }: Props) {
     };
   }, [token, base]);
 
-  const connect = async () => {
-    setError(null);
-    setBusy(true);
+  const cancelPoll = () => {
+    if (pollTimer.current) {
+      window.clearTimeout(pollTimer.current);
+      pollTimer.current = null;
+    }
+  };
+
+  const onConnected = (s: CodexStatus) => {
+    setChallenge(null);
+    setLoopbackUrl(null);
+    setBusy(false);
+    setStatus(s);
+    onChanged?.();
+  };
+
+  // Loopback (local install): the gateway captures the callback on localhost:1455.
+  const pollStatusUntilConnected = () => {
+    const tick = async () => {
+      try {
+        const s = await fetchCodexStatus(token, base);
+        if (s.connected) {
+          onConnected(s);
+          return;
+        }
+        pollTimer.current = window.setTimeout(tick, 2000);
+      } catch (e) {
+        setError((e as Error).message);
+        setBusy(false);
+      }
+    };
+    pollTimer.current = window.setTimeout(tick, 2000);
+  };
+
+  const connectLoopback = async () => {
+    try {
+      const { authorize_url } = await startCodexLoopbackAuth(token, base);
+      setLoopbackUrl(authorize_url);
+      window.open(authorize_url, "_blank", "noopener");
+      pollStatusUntilConnected();
+    } catch (e) {
+      setError((e as Error).message);
+      setBusy(false);
+    }
+  };
+
+  // Device-code (remote install): user types a code; requires the device-auth
+  // toggle in ChatGPT security settings.
+  const connectDeviceCode = async () => {
     try {
       const ch = await startCodexDeviceAuth(token, base);
       setChallenge({ user_code: ch.user_code, verification_uri: ch.verification_uri });
       const intervalMs = Math.max(3, ch.interval) * 1000;
       const tick = async () => {
         try {
-          const res = await pollCodexDeviceAuth(
-            token,
-            ch.device_auth_id,
-            ch.user_code,
-            base,
-          );
+          const res = await pollCodexDeviceAuth(token, ch.device_auth_id, ch.user_code, base);
           if (res.status === "ok") {
-            setChallenge(null);
-            setBusy(false);
-            setStatus({
+            onConnected({
               connected: true,
               email: res.email,
               plan: res.plan,
@@ -75,11 +122,33 @@ export function CodexOAuthCard({ token, base = "" }: Props) {
     }
   };
 
+  const connect = async () => {
+    setError(null);
+    setBusy(true);
+    if (status?.can_loopback) {
+      await connectLoopback();
+    } else {
+      await connectDeviceCode();
+    }
+  };
+
+  // Escape hatch: loopback detection can be fooled (e.g. an SSH port-forward
+  // makes a remote gateway look local), leaving the loopback callback
+  // unreachable. Device-code works everywhere, so always offer it as a fallback.
+  const switchToDeviceCode = async () => {
+    cancelPoll();
+    setLoopbackUrl(null);
+    setError(null);
+    setBusy(true);
+    await connectDeviceCode();
+  };
+
   const doDisconnect = async () => {
     setConfirmDisconnect(false);
     setBusy(true);
     try {
       setStatus(await disconnectCodex(token, base));
+      onChanged?.();
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -88,22 +157,59 @@ export function CodexOAuthCard({ token, base = "" }: Props) {
   };
 
   return (
-    <div className="space-y-3 rounded-[10px] border border-border/45 p-4">
-      <div className="flex items-center justify-between">
-        <span className="text-[15px] font-semibold">OpenAI Codex (ChatGPT)</span>
-        <span
-          className={cn(
-            "rounded-full px-2.5 py-1 text-[12px] font-medium",
-            status?.connected
-              ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
-              : "bg-muted text-muted-foreground",
-          )}
-        >
-          {status?.connected
-            ? `Conectado${status.email ? ` · ${status.email}` : ""}`
-            : "No conectado"}
-        </span>
-      </div>
+    <div
+      className={cn(
+        "space-y-3",
+        embedded ? "" : "rounded-[10px] border border-border/45 p-4",
+      )}
+    >
+      {embedded ? null : (
+        <div className="flex items-center justify-between">
+          <span className="text-[15px] font-semibold">OpenAI Codex (ChatGPT)</span>
+          <span
+            className={cn(
+              "rounded-full px-2.5 py-1 text-[12px] font-medium",
+              status?.connected
+                ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                : "bg-muted text-muted-foreground",
+            )}
+          >
+            {status?.connected
+              ? `Conectado${status.email ? ` · ${status.email}` : ""}`
+              : "No conectado"}
+          </span>
+        </div>
+      )}
+
+      {embedded && status?.connected ? (
+        <p className="text-[13px] text-muted-foreground">
+          Conectado{status.email ? ` · ${status.email}` : ""}
+          {status.plan ? ` (${status.plan})` : ""}
+        </p>
+      ) : null}
+
+      {loopbackUrl ? (
+        <div className="space-y-2 rounded-[8px] border border-border/60 bg-muted/40 p-3 text-[13px]">
+          <p>Se abrió una ventana del navegador para aprobar con ChatGPT.</p>
+          <p className="text-muted-foreground">
+            ¿No se abrió?{" "}
+            <a className="underline" href={loopbackUrl} target="_blank" rel="noreferrer">
+              Abrir manualmente
+            </a>
+          </p>
+          <p className="text-muted-foreground">Esperando la autorización…</p>
+          <p className="text-[12px] text-muted-foreground">
+            ¿No funciona?{" "}
+            <button
+              type="button"
+              className="underline hover:text-foreground"
+              onClick={() => void switchToDeviceCode()}
+            >
+              Usar código de dispositivo
+            </button>
+          </p>
+        </div>
+      ) : null}
 
       {challenge ? (
         <div className="space-y-2 rounded-[8px] border border-border/60 bg-muted/40 p-3 text-[13px]">
@@ -123,6 +229,10 @@ export function CodexOAuthCard({ token, base = "" }: Props) {
             <span className="font-mono font-semibold">{challenge.user_code}</span>
           </p>
           <p className="text-muted-foreground">Esperando la autorización…</p>
+          <p className="text-[12px] text-muted-foreground">
+            Si ves un error de “autorización con código de dispositivo”, habilitala en los
+            ajustes de seguridad de ChatGPT y volvé a intentar.
+          </p>
         </div>
       ) : null}
 
@@ -160,10 +270,22 @@ export function CodexOAuthCard({ token, base = "" }: Props) {
             </Button>
           </div>
         ) : null}
-        {!status?.connected && !challenge ? (
-          <Button size="sm" disabled={busy} onClick={() => void connect()}>
-            Conectar con ChatGPT
-          </Button>
+        {!status?.connected && !challenge && !loopbackUrl ? (
+          <div className="flex flex-col items-end gap-1.5">
+            <Button size="sm" disabled={busy} onClick={() => void connect()}>
+              Conectar con ChatGPT
+            </Button>
+            {status?.can_loopback ? (
+              <button
+                type="button"
+                className="text-[12px] text-muted-foreground underline hover:text-foreground"
+                disabled={busy}
+                onClick={() => void switchToDeviceCode()}
+              >
+                ¿No funciona? Usar código de dispositivo
+              </button>
+            ) : null}
+          </div>
         ) : null}
       </div>
     </div>

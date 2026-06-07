@@ -150,6 +150,7 @@ export interface SettingsPayload {
     name: string;
     label: string;
     configured: boolean;
+    oauth?: boolean;
     api_key_hint?: string | null;
     api_base?: string | null;
     default_api_base?: string | null;
@@ -375,4 +376,12 @@ export type Outbound =
       /** When set, the agent on this chat is told (metadata only, no
        * value) that the secret is now available. */
       chat_id?: string;
+    }
+  | {
+      /** Start a streaming on-demand audit of a quarantined skill. Reasoning
+       * arrives as ``reasoning_delta`` on ``audit:<name>``; the terminal
+       * ``skill_audit_done`` carries the structured result. */
+      type: "skill_judge";
+      chat_id: string;
+      name: string;
     };

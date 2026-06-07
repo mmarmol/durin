@@ -42,6 +42,7 @@ from durin.providers.codex_device_auth import (
 from durin.providers.codex_device_auth import (
     existing_codex_session,
     request_device_code,
+    start_loopback_login,
 )
 from durin.providers.codex_device_auth import (
     poll_once as codex_poll_once,
@@ -244,6 +245,25 @@ def _query_first(query: dict[str, list[str]], key: str) -> str | None:
     """Return the first value for *key*, or None."""
     values = query.get(key)
     return values[0] if values else None
+
+
+def _request_host_is_local(request: WsRequest) -> bool:
+    """True when the browser reached the webui via localhost.
+
+    Used to decide whether the loopback OAuth flow (callback on localhost:1455,
+    served by this gateway) can reach the user's browser — only when both run on
+    the same machine, i.e. the dashboard was opened at localhost/127.0.0.1/::1.
+    """
+    try:
+        host = request.headers.get("Host") or request.headers.get("host") or ""
+    except Exception:  # noqa: BLE001
+        host = ""
+    host = host.strip()
+    if host.startswith("["):  # bracketed IPv6, e.g. [::1]:8765
+        host = host[1:].split("]", 1)[0]
+    else:
+        host = host.rsplit(":", 1)[0] if host.count(":") == 1 else host
+    return host in ("localhost", "127.0.0.1", "::1")
 
 
 def _logs_query_from_params(query: dict[str, list[str]]):
@@ -734,6 +754,9 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/oauth/codex/start":
             return self._handle_codex_oauth_start(request)
 
+        if got == "/api/oauth/codex/start-loopback":
+            return self._handle_codex_oauth_start_loopback(request)
+
         if got == "/api/oauth/codex/poll":
             return self._handle_codex_oauth_poll(request)
 
@@ -786,6 +809,9 @@ class WebSocketChannel(BaseChannel):
 
         if got == "/api/skills/search":
             return await self._handle_skill_search(request)
+
+        if got == "/api/skills/describe":
+            return await self._handle_skill_describe(request)
 
         m = re.match(r"^/api/skills/([^/]+)/save$", got)
         if m:
@@ -1254,8 +1280,24 @@ class WebSocketChannel(BaseChannel):
         if defaults.provider != "auto":
             spec = find_by_name(defaults.provider)
             selected_provider = spec.name if spec else provider_name
+        from durin.utils.oauth import any_token_present
+
         providers = []
         for spec in PROVIDERS:
+            # OAuth providers with a webui connect flow (Codex) surface as
+            # normal rows whose "configured" reflects a stored token, not an
+            # API key. They're authorized via /api/oauth/codex/*, not the
+            # key/base form (which still rejects is_oauth providers).
+            if spec.name == "openai_codex":
+                providers.append(
+                    {
+                        "name": spec.name,
+                        "label": spec.label,
+                        "configured": any_token_present(spec.name),
+                        "oauth": True,
+                    }
+                )
+                continue
             provider_config = getattr(config.providers, spec.name, None)
             if provider_config is None or spec.is_oauth or spec.is_local:
                 continue
@@ -1314,7 +1356,22 @@ class WebSocketChannel(BaseChannel):
     def _handle_codex_oauth_status(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
-        return _http_json_response(self._codex_status_payload())
+        payload = self._codex_status_payload()
+        # Loopback (no device-auth toggle) only works when the browser is on
+        # the gateway machine — i.e. the webui was reached via localhost.
+        payload["can_loopback"] = _request_host_is_local(request)
+        return _http_json_response(payload)
+
+    def _handle_codex_oauth_start_loopback(self, request: WsRequest) -> Response:
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        if not _request_host_is_local(request):
+            return _http_error(400, "loopback unavailable on a remote gateway; use device code")
+        try:
+            url = start_loopback_login()
+        except Exception as exc:  # noqa: BLE001
+            return _http_error(502, f"loopback login failed to start: {exc}")
+        return _http_json_response({"authorize_url": url})
 
     def _handle_codex_oauth_start(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
@@ -1755,6 +1812,21 @@ class WebSocketChannel(BaseChannel):
             return _http_error(500, f"search failed: {exc}")
         return _http_json_response(payload, status=status)
 
+    async def _handle_skill_describe(self, request: WsRequest) -> Response:
+        """`GET /api/skills/describe?ref=` — lazy SKILL.md description peek. Async +
+        off-thread (it makes an outbound HTTP fetch)."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        ref = (_query_first(_parse_query(request.path), "ref") or "").strip()
+        if not ref:
+            return _http_error(400, "ref is required")
+        from durin.agent import skills_store as ss
+        try:
+            status, payload = await asyncio.to_thread(ss.web_skill_describe, ref)
+        except Exception as exc:  # noqa: BLE001
+            return _http_error(500, f"describe failed: {exc}")
+        return _http_json_response(payload, status=status)
+
     def _handle_skills_github_token_test(self, request: WsRequest) -> Response:
         """`GET /api/skills/github-token-test?secret=` — verify a GitHub-token secret."""
         if not self._check_api_token(request):
@@ -1788,6 +1860,65 @@ class WebSocketChannel(BaseChannel):
         except Exception as exc:  # noqa: BLE001
             return _http_error(500, f"approve failed: {exc}")
         return _http_json_response(payload, status=status)
+
+    async def _run_skill_audit(self, connection: Any, name: str) -> None:
+        """Stream an on-demand LLM audit of a quarantined skill: reasoning deltas
+        on ``audit:<name>`` (reusing the chat reasoning stream), then a terminal
+        ``skill_audit_done`` with the structured outcome. Persists .scan.json."""
+        import json as _json
+
+        from durin.agent import skills_store as ss
+        from durin.memory.llm_invoke import default_llm_invoke_astream
+        from durin.providers.base import LLMProvider
+        from durin.security.skill_judge import JudgeError, judge_skill_astream
+        from durin.security.skill_scan import ScanReport, scan_skill
+
+        chat_id = f"audit:{name}"
+        workspace = self._endpoint_workspace()
+        qdir = Path(workspace) / ".durin" / "import-quarantine" / name
+        if not (qdir / "SKILL.md").is_file():
+            await self._send_event(connection, "skill_audit_done", chat_id=chat_id,
+                                   name=name, judged=False, error_code="not_found")
+            return
+        _, model, max_sev = ss._import_judge()
+        det = scan_skill(qdir)
+
+        async def on_reasoning(text: str) -> None:
+            await self.send_reasoning_delta(chat_id, text)
+
+        try:
+            outcome = await judge_skill_astream(
+                qdir, ainvoke_stream=default_llm_invoke_astream,
+                model=model or "glm-5.1", max_severity=max_sev, on_reasoning=on_reasoning,
+            )
+        except JudgeError as exc:
+            await self.send_reasoning_end(chat_id)
+            code = "parse" if "parse" in str(exc).lower() else "unreachable"
+            await self._send_event(connection, "skill_audit_done", chat_id=chat_id,
+                                   name=name, judged=False, error_code=code)
+            return
+        except Exception as exc:  # noqa: BLE001
+            await self.send_reasoning_end(chat_id)
+            code = "unreachable" if LLMProvider._is_transient_error(str(exc)) else "no_model"
+            await self._send_event(connection, "skill_audit_done", chat_id=chat_id,
+                                   name=name, judged=False, error_code=code)
+            return
+
+        await self.send_reasoning_end(chat_id)
+        merged = ScanReport(findings=det.findings + outcome.findings)
+        findings = [{"category": f.category, "severity": f.severity, "where": f.where,
+                     "detail": f.detail} for f in merged.findings]
+        source = name
+        sj = qdir / ".scan.json"
+        if sj.is_file():
+            try:
+                source = _json.loads(sj.read_text()).get("source", name)
+            except Exception:  # noqa: BLE001
+                pass
+        ss._persist_judge_result(qdir, source, merged.verdict, findings, outcome.summary)
+        await self._send_event(connection, "skill_audit_done", chat_id=chat_id, name=name,
+                               judged=True, verdict=merged.verdict, findings=findings,
+                               summary=outcome.summary)
 
     async def _handle_skill_judge(self, request: WsRequest, name: str) -> Response:
         """`GET /api/skills/{name}/judge` — run the LLM judge on-demand. Async +
@@ -2961,6 +3092,14 @@ class WebSocketChannel(BaseChannel):
             return
         if t == "secret_store":
             await self._handle_secret_store_envelope(connection, client_id, envelope)
+            return
+        if t == "skill_judge":
+            name = envelope.get("name")
+            if not isinstance(name, str) or not name:
+                await self._send_event(connection, "error", detail="missing skill name")
+                return
+            self._attach(connection, f"audit:{name}")
+            await self._run_skill_audit(connection, name)
             return
         await self._send_event(connection, "error", detail=f"unknown type: {t!r}")
 

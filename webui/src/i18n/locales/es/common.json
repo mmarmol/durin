@@ -398,6 +398,23 @@
     "noFindings": "Sin hallazgos de seguridad.",
     "scanClean": "Scan sin riesgos detectados.",
     "unscannedHint": "Sin analizar todavía. Corré «Revisar con IA» para auditarla.",
+    "whyHere": "Por qué está acá",
+    "reason": {
+      "untrusted_source": "La fuente {{detail}} no está en tu lista de confianza, por eso requiere tu aprobación explícita.",
+      "carries_code": "Trae código ejecutable ({{detail}}) — revisá antes de aprobar.",
+      "declared_deps": "Declara dependencias (no se ejecutan solas): {{detail}}.",
+      "verdict_caution": "El escaneo de seguridad la marcó como precaución.",
+      "verdict_dangerous": "El escaneo de seguridad la marcó como peligrosa."
+    },
+    "audit": {
+      "running": "Auditando con IA…",
+      "summaryLabel": "Auditoría IA",
+      "clean": "La IA la revisó y no encontró problemas.",
+      "unreachable": "No se pudo contactar el modelo de auditoría. Revisá tu conexión y reintentá.",
+      "no_model": "No hay modelo de auditoría configurado.",
+      "parse": "La respuesta de la auditoría no se pudo leer. Reintentá.",
+      "retry": "Reintentar auditoría"
+    },
     "verdict": { "safe": "Segura", "caution": "Precaución", "dangerous": "Peligrosa", "unscanned": "Sin analizar" },
     "import": {
       "placeholder": "Importar skill: ruta, https://…/SKILL.md o github:owner/repo",
@@ -423,7 +440,17 @@
       "button": "Buscar",
       "empty": "Ninguna skill coincidió con esa búsqueda.",
       "installs_one": "{{count}} instalación",
-      "installs_other": "{{count}} instalaciones"
+      "installs_other": "{{count}} instalaciones",
+      "resultsCount_one": "{{count}} resultado",
+      "resultsCount_other": "{{count}} resultados",
+      "sortLabel": "Orden",
+      "sortInstalls": "Installs",
+      "sortName": "Nombre A–Z",
+      "sortRelevance": "Relevancia",
+      "showMore": "Mostrar más",
+      "noDescription": "Sin descripción disponible.",
+      "acquireExplainer": "Skills del registro público. Al importar, la skill queda en Pendientes para tu aprobación.",
+      "importByRef": "Importar por referencia"
     },
     "title": "Skills"
   },

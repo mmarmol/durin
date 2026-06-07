@@ -356,6 +356,10 @@ export interface QuarantineRow {
   trust_prefix?: string;
   /** Declared dependency installs (info only — durin never auto-runs them, §B11). */
   install_specs?: string[];
+  /** Gate outcome: allow installs straight away; confirm/block need a prompt. */
+  needs?: "allow" | "confirm" | "block";
+  /** Why approval is required, in structured form (rendered as plain language). */
+  reasons?: { code: string; detail?: string }[];
 }
 
 export interface SkillDetail {
@@ -449,6 +453,24 @@ export async function searchSkills(
   );
 }
 
+/** Lazy SKILL.md description peek for a registry hit (search UI, on expand).
+ *  Returns an empty description when none is available — never throws on 404. */
+export async function describeSkill(
+  token: string,
+  ref: string,
+  base: string = "",
+): Promise<{ ref: string; description: string }> {
+  const params = new URLSearchParams({ ref });
+  try {
+    return await request<{ ref: string; description: string }>(
+      `${base}/api/skills/describe?${params}`,
+      token,
+    );
+  } catch {
+    return { ref, description: "" };
+  }
+}
+
 export async function approveSkill(
   token: string,
   name: string,
@@ -487,6 +509,8 @@ export interface JudgeResult {
   findings?: SkillFinding[];
   judged?: boolean;
   error?: string;
+  summary?: string;
+  error_code?: "unreachable" | "parse" | "no_model";
 }
 
 /** Run the LLM judge on-demand over a quarantined skill (independent of the
@@ -1090,6 +1114,8 @@ export interface CodexStatus {
   email?: string | null;
   plan?: string | null;
   source?: "durin" | "codex-cli";
+  /** True when the webui was reached via localhost — loopback OAuth (no device-auth toggle) works. */
+  can_loopback?: boolean;
 }
 
 export interface CodexDeviceChallenge {
@@ -1117,6 +1143,17 @@ export async function startCodexDeviceAuth(
   base: string = "",
 ): Promise<CodexDeviceChallenge> {
   return request<CodexDeviceChallenge>(`${base}/api/oauth/codex/start`, token);
+}
+
+export async function startCodexLoopbackAuth(
+  token: string,
+  base: string = "",
+): Promise<{ authorize_url: string }> {
+  return request<{ authorize_url: string }>(
+    `${base}/api/oauth/codex/start-loopback`,
+    token,
+    { method: "POST" },
+  );
 }
 
 export async function pollCodexDeviceAuth(

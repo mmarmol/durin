@@ -540,6 +540,43 @@ def web_skill_search(workspace: Path, query: str, limit: int = 0) -> tuple[int, 
                            "description": h.description, "signals": h.signals} for h in hits]}
 
 
+def web_skill_describe(ref: str) -> tuple[int, dict]:
+    """`GET /api/skills/describe?ref=` — read-only peek at a registry skill's
+    SKILL.md frontmatter ``description`` (lazy-loaded by the search UI on expand).
+
+    Resolves the ref the same way import does (``resolve_candidates`` — which uses
+    the GitHub tree API to locate the actual SKILL.md, since a registry skillId is
+    a NAME, not a path), then fetches just that SKILL.md and reads its frontmatter.
+    Never executes or writes anything. Any failure degrades to an empty string."""
+    ref = (ref or "").strip()
+    if not ref:
+        return 200, {"ref": ref, "description": ""}
+    try:
+        from durin.agent import skills_import as si
+        from durin.agent.skill_resolve import resolve_candidates
+        from durin.agent.skills_frontmatter import split_frontmatter
+
+        cands = resolve_candidates(ref).candidates
+        if not cands:
+            return 200, {"ref": ref, "description": ""}
+        cand = cands[0]
+        if cand.kind == "https":
+            url = cand.ref
+        elif cand.kind == "github":
+            owner, repo, branch, skill_dir = si._parse_github_ref(cand.ref)
+            path = f"{skill_dir}/SKILL.md" if skill_dir else "SKILL.md"
+            url = f"{si._GITHUB_RAW}/{owner}/{repo}/{branch}/{path}"
+        else:
+            # clawhub / local: the search hit already carries a description.
+            return 200, {"ref": ref, "description": ""}
+        raw = si._http_get_bytes(url)[:65_536]
+        data, _ = split_frontmatter(raw.decode("utf-8", errors="replace"))
+        desc = str(data.get("description") or "").strip()
+        return 200, {"ref": ref, "description": desc[:280]}
+    except Exception:  # noqa: BLE001 — describe is best-effort, never fatal
+        return 200, {"ref": ref, "description": ""}
+
+
 def web_skill_approve(workspace: Path, name: str, *, confirm: bool,
                       override: bool, replace: bool = False) -> tuple[int, dict]:
     """`GET /api/skills/{name}/approve?confirm=&override=&replace=` — install a
@@ -575,13 +612,25 @@ def web_skill_reject(workspace: Path, name: str) -> tuple[int, dict]:
     return (400, res) if "error" in res else (200, res)
 
 
-def web_skill_judge(workspace: Path, name: str) -> tuple[int, dict]:
-    """`GET /api/skills/{name}/judge` — run the LLM judge ON-DEMAND over a
-    quarantined skill (independent of the auto-run trigger), merge its findings
-    into the quarantine .scan.json, and return the updated verdict + findings.
-    Reports an explicit error when no judge model is available."""
+def _persist_judge_result(qdir, source: str, verdict: str, findings: list, summary: str) -> None:
+    """Write the merged judge result to the quarantine ``.scan.json`` (shared by
+    the HTTP and websocket audit paths)."""
     import json as _json
 
+    (qdir / ".scan.json").write_text(
+        _json.dumps({"source": source, "verdict": verdict, "findings": findings, "summary": summary}),
+        encoding="utf-8",
+    )
+
+
+def web_skill_judge(workspace: Path, name: str) -> tuple[int, dict]:
+    """`GET /api/skills/{name}/judge` — run the LLM judge ON-DEMAND over a
+    quarantined skill, merge its findings into the quarantine .scan.json, and
+    return the updated verdict + findings + summary. Errors carry a machine
+    ``error_code`` (unreachable | parse | no_model) for a readable UI message."""
+    import json as _json
+
+    from durin.providers.base import LLMProvider
     from durin.security.skill_judge import JudgeError, judge_skill
     from durin.security.skill_scan import ScanReport, scan_skill
 
@@ -592,16 +641,18 @@ def web_skill_judge(workspace: Path, name: str) -> tuple[int, dict]:
     det = scan_skill(qdir)
     try:
         from durin.memory.llm_invoke import default_llm_invoke
-        jf = judge_skill(qdir, llm_invoke=default_llm_invoke, model=model or "glm-5.1",
-                         max_severity=max_sev)
+        outcome = judge_skill(qdir, llm_invoke=default_llm_invoke, model=model or "glm-5.1",
+                              max_severity=max_sev)
     except JudgeError as exc:
+        code = "parse" if "parse" in str(exc).lower() else "unreachable"
         return 200, {"name": name, "verdict": det.verdict, "judged": False,
-                     "error": f"judge unavailable: {exc}"}
+                     "error": str(exc), "error_code": code}
     except Exception as exc:  # noqa: BLE001
+        code = "unreachable" if LLMProvider._is_transient_error(str(exc)) else "no_model"
         return 200, {"name": name, "verdict": det.verdict, "judged": False,
-                     "error": f"judge error: {exc}"}
+                     "error": str(exc), "error_code": code}
 
-    merged = ScanReport(findings=det.findings + jf)
+    merged = ScanReport(findings=det.findings + outcome.findings)
     findings = [{"category": f.category, "severity": f.severity, "where": f.where,
                  "detail": f.detail} for f in merged.findings]
     source = name
@@ -611,9 +662,9 @@ def web_skill_judge(workspace: Path, name: str) -> tuple[int, dict]:
             source = _json.loads(sj.read_text()).get("source", name)
         except Exception:  # noqa: BLE001
             pass
-    sj.write_text(_json.dumps({"source": source, "verdict": merged.verdict, "findings": findings}),
-                  encoding="utf-8")
-    return 200, {"name": name, "verdict": merged.verdict, "findings": findings, "judged": True}
+    _persist_judge_result(qdir, source, merged.verdict, findings, outcome.summary)
+    return 200, {"name": name, "verdict": merged.verdict, "findings": findings,
+                 "summary": outcome.summary, "judged": True}
 
 
 def web_github_token_test(secret_name: str) -> tuple[int, dict]:
