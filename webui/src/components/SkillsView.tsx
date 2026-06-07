@@ -198,6 +198,7 @@ export function SkillsView() {
   const [importSrc, setImportSrc] = useState("");
   const [importing, setImporting] = useState(false);
   const [importMsg, setImportMsg] = useState<string | null>(null);
+  const [auditMsg, setAuditMsg] = useState<{ kind: "summary" | "error"; text: string } | null>(null);
   const [picker, setPicker] = useState<SkillCandidate[] | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [searching, setSearching] = useState(false);
@@ -369,18 +370,28 @@ export function SkillsView() {
   const judgeOne = useCallback(
     async (name: string) => {
       setActing(name);
-      setImportMsg(null);
+      setAuditMsg(null);
       try {
         const r = await judgeSkill(token, name);
-        if (r.error) setImportMsg(r.error);
+        if (r.judged) {
+          setAuditMsg({
+            kind: "summary",
+            text: r.summary?.trim() || t("skills.audit.clean"),
+          });
+        } else {
+          setAuditMsg({
+            kind: "error",
+            text: t(`skills.audit.${r.error_code ?? "unreachable"}`),
+          });
+        }
         await refresh();
-      } catch (e) {
-        setImportMsg(errMsg(e));
+      } catch {
+        setAuditMsg({ kind: "error", text: t("skills.audit.unreachable") });
       } finally {
         setActing(null);
       }
     },
-    [token, refresh],
+    [token, refresh, t],
   );
 
   // One-click "trust this source": append the suggested prefix to the allowlist
@@ -432,6 +443,7 @@ export function SkillsView() {
       if (!guardDirty()) return;
       setGate(null);
       setImportMsg(null);
+      setAuditMsg(null);
       setDetail(null);
       setPane({ kind: "triage", name });
     },
@@ -799,12 +811,55 @@ export function SkillsView() {
                       : t("skills.pendingReasonBare")}
                   </p>
 
+                  {triageRow.reasons && triageRow.reasons.length > 0 ? (
+                    <div className="mt-4">
+                      <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        {t("skills.whyHere")}
+                      </p>
+                      <ul className="flex flex-col gap-1">
+                        {triageRow.reasons.map((r) => (
+                          <li key={r.code} className="text-[12px] text-muted-foreground">
+                            {t(`skills.reason.${r.code}`, { detail: r.detail ?? "" })}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+
                   <div className="mt-4">
                     <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                       {t("skills.security")}
                     </p>
                     <SecurityReport row={triageRow} />
                   </div>
+
+                  {acting === triageRow.name ? (
+                    <p className="mt-3 flex items-center gap-1.5 text-[12px] text-muted-foreground">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+                      {t("skills.audit.running")}
+                    </p>
+                  ) : auditMsg ? (
+                    auditMsg.kind === "summary" ? (
+                      <div className="mt-3">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                          {t("skills.audit.summaryLabel")}
+                        </p>
+                        <p className="text-[12px] text-muted-foreground">{auditMsg.text}</p>
+                      </div>
+                    ) : (
+                      <div className="mt-3 flex flex-wrap items-center gap-2">
+                        <span className="text-[12px] text-destructive">{auditMsg.text}</span>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={acting === triageRow.name}
+                          onClick={() => void judgeOne(triageRow.name)}
+                        >
+                          {t("skills.audit.retry")}
+                        </Button>
+                      </div>
+                    )
+                  ) : null}
 
                   {triageRow.install_specs && triageRow.install_specs.length > 0 ? (
                     <p className="mt-3 text-[11px] text-muted-foreground">
