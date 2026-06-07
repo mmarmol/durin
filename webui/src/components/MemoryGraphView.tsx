@@ -195,6 +195,9 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
   // Caso 0: lets non-effect handlers (open/close panel) re-fit the canvas to
   // the space left by the content panel, and reheat the sim to re-centre.
   const resizeRef = useRef<() => void>(() => {});
+  // Caso 2: while searching, the graph recedes behind the results (the result
+  // list is the focus). Read by the draw loop each frame (no re-subscribe).
+  const recedeRef = useRef(false);
   function refitGraph() {
     resizeRef.current();
     alphaRef.current = Math.max(alphaRef.current, 0.6);
@@ -328,6 +331,9 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
+  // Caso 2: the graph recedes when the search panel is up with a live query.
+  const searching = searchOpen && (search.trim().length > 0 || searchResults != null);
+  recedeRef.current = searching;
 
   // Edge popup state
   const [edgePopup, setEdgePopup] = useState<{
@@ -491,6 +497,9 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
 
       ctx.clearRect(0, 0, w, h);
 
+      // Caso 2: recede the whole graph behind the search results.
+      ctx.globalAlpha = recedeRef.current ? 0.18 : 1;
+
       ctx.lineCap = "round";
       for (const e of edges) {
         // Hidden endpoints → don't draw the edge at all.
@@ -550,6 +559,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
         ctx.fillText(shortLabel(n.name), n.x, n.y + r + 2);
       }
 
+      ctx.globalAlpha = 1;
       rafRef.current = requestAnimationFrame(frame);
     }
     rafRef.current = requestAnimationFrame(frame);
