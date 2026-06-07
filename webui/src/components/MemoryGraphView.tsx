@@ -324,7 +324,9 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
 
   // Compute matching ref set for search dimming
   const searchMatchSet = useMemo(() => {
-    if (!searchResults) return null;
+    // Defensive: a malformed payload (e.g. backend returned `{error}` with
+    // no `results`) must NOT crash the whole view into a blank screen.
+    if (!searchResults || !Array.isArray(searchResults.results)) return null;
     const refs = new Set<string>();
     for (const r of searchResults.results) {
       // Result URI: memory/<class_name>/<id>; for entity_page rows the
@@ -526,9 +528,11 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
         hit.vy = 0;
         draggingRef.current = hit;
         setSelected(hit);
-        // Content-first landing: real pages open on the rendered body;
-        // phantoms (no page) open on Info where their provisional summary lives.
-        setActiveTab(hit.phantom ? "info" : "body");
+        // Single click = light "peek": compact panel + local-graph focus,
+        // the graph stays visible (doesn't get covered). Double click opens
+        // the full reading view — Obsidian's survey-vs-commit. See onDoubleClick.
+        setPanelExpanded(false);
+        setActiveTab("info");
         setEdgePopup(null);
         alphaRef.current = 0.4;
         evt.currentTarget.setPointerCapture(evt.pointerId);
@@ -566,6 +570,20 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
       setEdgePopup(null);
     },
     [hitTestNode, hitTestEdge],
+  );
+
+  // Double click = "commit": open the full reading view (content takes the
+  // whole space, graph receded). Single click only peeks (see onPointerDown).
+  const onDoubleClick = useCallback(
+    (evt: React.MouseEvent<HTMLCanvasElement>) => {
+      const rect = evt.currentTarget.getBoundingClientRect();
+      const hit = hitTestNode(evt.clientX - rect.left, evt.clientY - rect.top);
+      if (!hit) return;
+      setSelected(hit);
+      setPanelExpanded(true);
+      setActiveTab(hit.phantom ? "info" : "body");
+    },
+    [hitTestNode],
   );
 
   const onPointerMove = useCallback(
@@ -652,6 +670,10 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
       (async () => {
         if (!tokenRef.current) return;
         try {
+          // Skills are filtered client-side below (the backend's "fact"
+          // scope is declared in the schema but rejected by execute() —
+          // "invalid scope 'fact'" — so we use the default and drop skills
+          // ourselves; they have their own Skills view).
           const r = await searchMemoryApi(tokenRef.current, q);
           if (!cancelled) {
             setSearchResults(r);
@@ -779,6 +801,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
         <canvas
           ref={canvasRef}
           onPointerDown={onPointerDown}
+          onDoubleClick={onDoubleClick}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
           onPointerLeave={() => {
@@ -878,7 +901,25 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                   {t("memoryGraph.noMatches")}
                 </div>
               ) : null}
-              {searchResults?.results.slice(0, 40).map((r, idx) => {
+              {(searchResults?.results ?? [])
+                // Drop skills — they belong to the Skills view, not memory
+                // search (backend "fact" scope that would do this is broken).
+                .filter(
+                  (r) =>
+                    String(r.class_name).toLowerCase() !== "skill" &&
+                    String(r.kind).toLowerCase() !== "skill",
+                )
+                // Collapse the N chunks of one source (same base uri before
+                // the `#idx`) into a single row — otherwise a reference doc
+                // floods the list with identical-looking fragments.
+                .filter(
+                  (r, i, a) =>
+                    a.findIndex(
+                      (x) => x.uri.split("#")[0] === r.uri.split("#")[0],
+                    ) === i,
+                )
+                .slice(0, 40)
+                .map((r, idx) => {
                 const isCanon = r.kind === "canonical";
                 const id = isCanon ? r.uri.split("/").pop() ?? "" : r.uri;
                 return (
@@ -895,7 +936,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                         }
                       }
                     }}
-                    className="block w-full border-t border-border/30 px-3 py-2 text-left text-xs hover:bg-muted/60"
+                    className="block w-full border-t border-border/30 px-3 py-2.5 text-left text-[13px] hover:bg-muted/60"
                   >
                     <div className="flex items-center gap-2">
                       <span
@@ -908,10 +949,12 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                       >
                         {r.kind}
                       </span>
-                      <span className="truncate font-medium">{r.headline || r.uri}</span>
+                      <span className="truncate font-medium">
+                        {(r.headline || r.uri).replace(/^[a-z_]+:/, "")}
+                      </span>
                     </div>
                     {r.snippet ? (
-                      <p className="mt-1 line-clamp-2 text-[11px] text-muted-foreground">
+                      <p className="mt-1 line-clamp-2 text-[12px] text-muted-foreground">
                         {r.snippet}
                       </p>
                     ) : null}
@@ -991,7 +1034,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
             className={cn(
               "absolute right-3 top-3 z-10 flex max-w-[calc(100vw-1.5rem)] flex-col rounded-lg border border-border/50 bg-card/95 text-sm shadow-lg backdrop-blur",
               "transition-[width] duration-200 ease-out",
-              panelExpanded ? "w-[min(80vw,72rem)]" : "w-[min(58vw,44rem)]",
+              panelExpanded ? "w-[calc(100%-1.5rem)]" : "w-[22rem]",
             )}
             style={{ maxHeight: "calc(100% - 1.5rem)" }}
           >
@@ -1197,7 +1240,10 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                   {activeTab === "body" ? (
                     detail.page && detail.page.body ? (
                       <MarkdownTextRenderer className="text-[12.5px] leading-relaxed">
-                        {detail.page.body}
+                        {/* Strip the inline `<!-- author [[sessions/…]] -->`
+                            provenance markers — they're machine metadata, not
+                            content, and render as raw noise. */}
+                        {detail.page.body.replace(/<!--[\s\S]*?-->/g, "").trim()}
                       </MarkdownTextRenderer>
                     ) : (
                       <p className="text-muted-foreground">{t("memoryGraph.noBody")}</p>
