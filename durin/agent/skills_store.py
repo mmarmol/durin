@@ -540,6 +540,29 @@ def web_skill_search(workspace: Path, query: str, limit: int = 0) -> tuple[int, 
                            "description": h.description, "signals": h.signals} for h in hits]}
 
 
+def web_skill_describe(ref: str) -> tuple[int, dict]:
+    """`GET /api/skills/describe?ref=` — read-only peek at a registry skill's
+    SKILL.md frontmatter ``description`` (lazy-loaded by the search UI on expand).
+    Never executes or writes anything. Any failure degrades to an empty string."""
+    from durin.agent import skills_import as si
+    from durin.agent.skills_frontmatter import split_frontmatter
+
+    ref = (ref or "").strip()
+    if not ref.startswith("github:"):
+        # clawhub hits already carry a description; other refs aren't peekable.
+        return 200, {"ref": ref, "description": ""}
+    try:
+        owner, repo, branch, skill_dir = si._parse_github_ref(ref)
+        path = f"{skill_dir}/SKILL.md" if skill_dir else "SKILL.md"
+        url = f"{si._GITHUB_RAW}/{owner}/{repo}/{branch}/{path}"
+        raw = si._http_get_bytes(url)[:65_536]
+        data, _ = split_frontmatter(raw.decode("utf-8", errors="replace"))
+        desc = str(data.get("description") or "").strip()
+        return 200, {"ref": ref, "description": desc[:280]}
+    except Exception:  # noqa: BLE001 — describe is best-effort, never fatal
+        return 200, {"ref": ref, "description": ""}
+
+
 def web_skill_approve(workspace: Path, name: str, *, confirm: bool,
                       override: bool, replace: bool = False) -> tuple[int, dict]:
     """`GET /api/skills/{name}/approve?confirm=&override=&replace=` — install a
