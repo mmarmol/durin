@@ -209,13 +209,21 @@ en `/api/settings/update` y `/api/secrets`, el `content` de skills. Quedan en
 logs del server y en el historial del browser. Localhost + token lo mitiga, pero
 GET para mutaciones con efectos/red no es correcto.
 
-**Propuesta tentativa**: dar **soporte de body POST** a la capa HTTP del channel
-(leer `Content-Length` bytes de la conexión tras parsear headers en
-`_dispatch_http`) y migrar las rutas mutadoras/sensibles a POST con body. No es
-local a skills — beneficia secrets/settings/skills por igual.
+**Propuesta tentativa**: ~~leer `Content-Length` bytes en `_dispatch_http`~~ —
+**no alcanza**. Verificado (2026-06-07, `websockets` 14.2): `Request.parse`
+rechaza el método no-GET *antes* de `process_request`/`_dispatch_http`
+(`ValueError: unsupported HTTP method; expected GET; got POST`), así que una POST
+nunca llega a la capa donde se leería el body. Resolverlo de verdad requiere un
+**server HTTP real** para la API REST (aiohttp / starlette / server asyncio
+propio) al lado del de websockets — o demultiplexar el socket crudo antes del
+handshake. Luego migrar las rutas mutadoras/sensibles (secrets, settings, skills)
+a POST con body.
 
-**Estado**: pendiente, no bloquea (localhost + token). Es cambio de plataforma,
-no de skills; agendar como su propia tarea.
+**Estado**: pendiente, no bloquea para lo actual (todo el webui usa GET). Es
+cambio de plataforma; agendar como su propia tarea. Mordió al feature Codex
+(2026-06-07): los endpoints `start-loopback`/`disconnect` se intentaron por POST
+→ `ERR_EMPTY_RESPONSE`; se workaroundearon a GET (no llevan datos sensibles en
+query, así que GET es correcto para ellos).
 
 
 ### DX — Sin separación dev/daily: todo el estado vive en `~/.durin` (falta `DURIN_HOME`)
@@ -247,4 +255,4 @@ verifique que con `DURIN_HOME` seteado ningún path cae en `~/.durin`.
 
 ---
 
-## Last updated: 2026-06-07 (P8 memory-graph Obsidian redesign CLOSED — shipped/deployed; Fase 3 clustering discarded → bitacora)
+## Last updated: 2026-06-07 (merged origin/main: Codex OAuth/loopback fixes + P7 HTTP-server scope; P8 memory-graph Obsidian redesign CLOSED, Fase 3 clustering discarded → bitacora)

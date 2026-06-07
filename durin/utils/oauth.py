@@ -38,23 +38,35 @@ def _kit_paths(provider_name: str) -> Iterable[Path]:
     interesting in those paths anyway.
     """
     try:
-        from oauth_cli_kit.providers import (
-            GITHUB_COPILOT_PROVIDER,
-            OPENAI_CODEX_PROVIDER,
-        )
         from oauth_cli_kit.storage import FileTokenStorage
     except ImportError:
         return ()
 
-    spec_map = {
-        "openai_codex": OPENAI_CODEX_PROVIDER,
-        "github_copilot": GITHUB_COPILOT_PROVIDER,
-    }
-    spec = spec_map.get(provider_name)
-    if spec is None:
+    # Resolve each provider's token filename independently. Older/newer kit
+    # versions may not export every provider constant (e.g. 0.1.x ships
+    # OPENAI_CODEX_PROVIDER but not GITHUB_COPILOT_PROVIDER) — importing them
+    # together would raise ImportError and drop the codex path entirely, so
+    # any_token_present() would miss a real codex.json and report "not
+    # configured" despite a valid login.
+    token_filename: str | None = None
+    if provider_name == "openai_codex":
+        try:
+            from oauth_cli_kit.providers import OPENAI_CODEX_PROVIDER
+
+            token_filename = OPENAI_CODEX_PROVIDER.token_filename
+        except ImportError:
+            token_filename = "codex.json"
+    elif provider_name == "github_copilot":
+        try:
+            from oauth_cli_kit.providers import GITHUB_COPILOT_PROVIDER
+
+            token_filename = GITHUB_COPILOT_PROVIDER.token_filename
+        except ImportError:
+            token_filename = "github_copilot.json"
+    if token_filename is None:
         return ()
     try:
-        storage = FileTokenStorage(token_filename=spec.token_filename)
+        storage = FileTokenStorage(token_filename=token_filename)
         return (storage.get_token_path(),)
     except Exception:  # noqa: BLE001
         return ()

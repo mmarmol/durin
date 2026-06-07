@@ -1,3 +1,4 @@
+import types
 import base64
 import json
 import time
@@ -151,18 +152,157 @@ def test_existing_codex_session_none_when_absent(monkeypatch):
     assert cda.existing_codex_session() is None
 
 
-def test_disconnect_removes_token_and_lock(monkeypatch, tmp_path):
-    token_path = tmp_path / "codex.json"
-    token_path.write_text("{}")
-    lock_path = tmp_path / "codex.lock"  # kit uses get_token_path().with_suffix(".lock")
+def test_disconnect_removes_secret_and_legacy_file(monkeypatch, tmp_path):
+    import durin.security.secrets as secmod
+
+    legacy = tmp_path / "codex.json"
+    legacy.write_text("{}")
+    lock_path = tmp_path / "codex.lock"  # legacy.with_suffix(".lock")
     lock_path.write_text("")
+    monkeypatch.setattr(
+        cda,
+        "_kit_file_storage",
+        lambda: types.SimpleNamespace(get_token_path=lambda: legacy),
+    )
 
-    class _Storage:
-        def get_token_path(self):
-            return token_path
+    removed_names: list[str] = []
 
-    monkeypatch.setattr(cda, "_strict_storage", lambda: _Storage())
+    class _FakeStore:
+        def load(self):
+            return self
+
+        def remove(self, name):
+            removed_names.append(name)
+            return True
+
+        def save(self):
+            return None
+
+    monkeypatch.setattr(secmod, "SecretStore", _FakeStore)
+    monkeypatch.setattr(secmod, "get_secret_store", lambda **k: None)
+
     assert cda.disconnect() is True
-    assert not token_path.exists()
+    assert "OPENAI_CODEX_OAUTH" in removed_names
+    assert not legacy.exists()
     assert not lock_path.exists()
-    assert cda.disconnect() is False  # nothing left to remove
+
+
+import socket as _socket
+
+
+def _free_1455():
+    # Skip if something already holds :1455 (e.g. a real gateway loopback attempt).
+    for fam, host in ((_socket.AF_INET, "127.0.0.1"), (_socket.AF_INET6, "::1")):
+        s = _socket.socket(fam)
+        try:
+            if s.connect_ex((host, 1455)) == 0:
+                return False
+        finally:
+            s.close()
+    return True
+
+
+def test_build_authorize_url_params():
+    url = cda._build_authorize_url("CHAL", "STATE")
+    assert url.startswith("https://auth.openai.com/oauth/authorize?")
+    assert "originator=codex_cli_rs" in url
+    assert "code_challenge_method=S256" in url
+    assert "redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback" in url
+    assert "state=STATE" in url
+
+
+def test_callback_server_binds_ipv4():
+    if not _free_1455():
+        pytest.skip(":1455 already in use")
+    result = cda._CallbackResult()
+    servers = cda._start_callback_servers("st", result)
+    try:
+        assert servers, "no callback server bound"
+        s = _socket.socket(_socket.AF_INET)
+        s.settimeout(1.0)
+        # The whole point of the fix: the browser hits localhost -> 127.0.0.1.
+        assert s.connect_ex(("127.0.0.1", 1455)) == 0
+        s.close()
+    finally:
+        for srv in servers:
+            srv.shutdown()
+
+
+def test_start_loopback_returns_url_and_listens(monkeypatch):
+    if not _free_1455():
+        pytest.skip(":1455 already in use")
+    cda._loopback_state["thread"] = None
+    cda._loopback_state["url"] = None
+    url = cda.start_loopback_login(max_wait_s=0.2)
+    try:
+        assert "code_challenge=" in url and "originator=codex_cli_rs" in url
+        s = _socket.socket(_socket.AF_INET)
+        s.settimeout(1.0)
+        assert s.connect_ex(("127.0.0.1", 1455)) == 0  # listening before we returned
+        s.close()
+    finally:
+        # let the background thread time out (0.2s) and shut the servers down
+        time.sleep(0.4)
+
+
+def test_codex_secrets_storage_roundtrip(monkeypatch):
+    import durin.security.secrets as secmod
+    from oauth_cli_kit.models import OAuthToken
+
+    store: dict[str, str] = {}
+
+    def fake_store(name, value, **kw):
+        ref = f"${{secret:{name}}}"
+        store[ref] = value
+        return ref
+
+    def fake_resolve(ref):
+        if isinstance(ref, str) and ref in store:
+            return store[ref]
+        raise secmod.SecretNotFoundError(str(ref))
+
+    monkeypatch.setattr(secmod, "store_secret", fake_store)
+    monkeypatch.setattr(secmod, "resolve_secret", fake_resolve)
+    monkeypatch.setattr(cda, "_kit_file_storage", lambda: types.SimpleNamespace(load=lambda: None))
+
+    s = cda._CodexSecretsStorage()
+    assert s.load() is None
+    s.save(OAuthToken(access="A", refresh="R", expires=123, account_id="acct"))
+    loaded = s.load()
+    assert loaded.access == "A"
+    assert loaded.refresh == "R"
+    assert loaded.expires == 123
+    assert loaded.account_id == "acct"
+    assert cda.codex_token_present() is True
+
+
+def test_codex_secrets_storage_migrates_from_kit_file(monkeypatch):
+    import durin.security.secrets as secmod
+    from oauth_cli_kit.models import OAuthToken
+
+    store: dict[str, str] = {}
+    saved: list[str] = []
+
+    def fake_store(name, value, **kw):
+        ref = f"${{secret:{name}}}"
+        store[ref] = value
+        saved.append(value)
+        return ref
+
+    def fake_resolve(ref):
+        if isinstance(ref, str) and ref in store:
+            return store[ref]
+        raise secmod.SecretNotFoundError(str(ref))
+
+    monkeypatch.setattr(secmod, "store_secret", fake_store)
+    monkeypatch.setattr(secmod, "resolve_secret", fake_resolve)
+    legacy = OAuthToken(access="LEG", refresh="LR", expires=99, account_id="la")
+    monkeypatch.setattr(cda, "_kit_file_storage", lambda: types.SimpleNamespace(load=lambda: legacy))
+
+    s = cda._CodexSecretsStorage()
+    loaded = s.load()  # secret absent -> migrate from kit file
+    assert loaded.access == "LEG"
+    assert saved  # migration persisted into the secret store
+    # legacy source no longer consulted now that the secret exists
+    monkeypatch.setattr(cda, "_kit_file_storage", lambda: types.SimpleNamespace(load=lambda: None))
+    assert s.load().access == "LEG"
