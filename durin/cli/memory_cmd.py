@@ -196,6 +196,7 @@ def cmd_dream(
     # `entity` filter is not used by the new passes.
     from durin.memory.always_on_dream import run_always_on_pass
     from durin.memory.dream_passes import (
+        run_derived_from_pass,
         run_extract_pass,
         run_refine_pass,
         run_skill_extract_pass,
@@ -213,6 +214,8 @@ def cmd_dream(
     model = resolve_memory_model(cfg)
     console.print("[dim]Extract pass (sessions → entity attributes)…[/dim]")
     ex = run_extract_pass(workspace, model=model)
+    console.print("[dim]Derived-from pass (link entities → source documents)…[/dim]")
+    df = run_derived_from_pass(workspace, model=model)
     console.print("[dim]Skill-extract pass (sessions → reusable procedures)…[/dim]")
     sk = run_skill_extract_pass(workspace, model=model)
     _absorb = cfg.memory.dream.auto_absorb
@@ -232,7 +235,9 @@ def cmd_dream(
     merged = len(rf.get("merged", []))
     console.print(
         f"\n[green]✓[/green] extract: {ex['entities']} attribute update(s) across "
-        f"{ex['sessions']} session(s); skills: {sk.get('skills_touched', 0)}; "
+        f"{ex['sessions']} session(s); "
+        f"derived_from: {df.get('links', 0)} link(s); "
+        f"skills: {sk.get('skills_touched', 0)}; "
         f"refine: {merged} merge(s); "
         f"always_on: {ao.get('selected', 0)} pinned ({ao.get('tokens', 0)} tok)"
     )

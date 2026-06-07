@@ -1328,6 +1328,7 @@ def _run_gateway(
             workspace = config.workspace_path
             from durin.memory.always_on_dream import run_always_on_pass
             from durin.memory.dream_passes import (
+                run_derived_from_pass,
                 run_extract_pass,
                 run_refine_pass,
                 run_skill_extract_pass,
@@ -1346,6 +1347,8 @@ def _run_gateway(
             try:
                 ex = await _asyncio.to_thread(
                     run_extract_pass, workspace, model=model, max_seconds=_cron_max_s)
+                df = await _asyncio.to_thread(
+                    run_derived_from_pass, workspace, model=model, max_seconds=_cron_max_s)
                 sk = await _asyncio.to_thread(run_skill_extract_pass, workspace, model=model)
                 rf = await _asyncio.to_thread(
                     run_refine_pass, workspace, model=model,
@@ -1357,10 +1360,13 @@ def _run_gateway(
                     token_budget=config.memory.dream.always_on_token_budget)
                 logger.info(
                     "memory_dream cron: extract(sessions={} entities={} {}ms yielded={}) "
+                    "derived_from(links={} sessions={} {}ms) "
                     "skills(touched={} {}ms) refine(merged={} kept={} {}ms) "
                     "always_on(pinned={} {}tok {}ms)",
                     ex["sessions"], ex["entities"], ex.get("duration_ms", 0),
-                    ex.get("yielded", False), sk.get("skills_touched", 0),
+                    ex.get("yielded", False),
+                    df.get("links", 0), df.get("sessions", 0), df.get("duration_ms", 0),
+                    sk.get("skills_touched", 0),
                     sk.get("duration_ms", 0), len(rf.get("merged", [])),
                     len(rf.get("kept_separate", [])), rf.get("duration_ms", 0),
                     ao.get("selected", 0), ao.get("tokens", 0), ao.get("duration_ms", 0),
