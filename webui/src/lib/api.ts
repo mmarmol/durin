@@ -1151,10 +1151,11 @@ export async function startCodexLoopbackAuth(
   token: string,
   base: string = "",
 ): Promise<{ authorize_url: string }> {
+  // GET, not POST: the channel's HTTP layer is served over the websockets
+  // handshake parser, which rejects non-GET methods (see backlog P7).
   return request<{ authorize_url: string }>(
     `${base}/api/oauth/codex/start-loopback`,
     token,
-    { method: "POST" },
   );
 }
 
@@ -1177,7 +1178,7 @@ export async function disconnectCodex(
   token: string,
   base: string = "",
 ): Promise<CodexStatus> {
-  return request<CodexStatus>(`${base}/api/oauth/codex/disconnect`, token, {
-    method: "POST",
-  });
+  // GET: the channel's HTTP layer (websockets handshake parser) rejects
+  // non-GET methods (see backlog P7). Carries no sensitive query params.
+  return request<CodexStatus>(`${base}/api/oauth/codex/disconnect`, token);
 }
