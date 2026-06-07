@@ -912,11 +912,12 @@ export interface MemorySearchPayload {
 export async function searchMemoryApi(
   token: string,
   query: string,
-  opts: { scope?: string; level?: string; base?: string } = {},
+  opts: { scope?: string; level?: string; kinds?: string; base?: string } = {},
 ): Promise<MemorySearchPayload> {
   const params = new URLSearchParams({ q: query });
   if (opts.scope) params.set("scope", opts.scope);
   if (opts.level) params.set("level", opts.level);
+  if (opts.kinds) params.set("kinds", opts.kinds);
   const base = opts.base ?? "";
   return request<MemorySearchPayload>(
     `${base}/api/memory/search?${params}`,

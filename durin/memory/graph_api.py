@@ -362,6 +362,7 @@ async def search_memory_api(
     *,
     scope: str = "all",
     level: str = "warm",
+    kinds: str = "all",
     embedding_model: str | None = None,
 ) -> dict[str, Any]:
     """Run the same search the LLM tool uses; return its JSON output.
@@ -380,7 +381,9 @@ async def search_memory_api(
     from durin.agent.tools.memory_search import MemorySearchTool
 
     tool = MemorySearchTool(workspace=workspace, embedding_model=embedding_model)
-    payload = await tool.execute(query=query, scope=scope, level=level)
+    payload = await tool.execute(
+        query=query, scope=scope, level=level, kinds=kinds,
+    )
     return payload
 
 
