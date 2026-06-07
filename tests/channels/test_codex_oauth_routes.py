@@ -105,7 +105,7 @@ def test_start_loopback_rejected_when_remote(monkeypatch):
 
 def test_settings_update_accepts_oauth_provider_with_token(monkeypatch):
     from durin.config import loader as cfgloader
-    from durin.utils import oauth as oauth_utils
+    from durin.providers import codex_device_auth as cda
 
     inst = _handler_instance()
     _ok_token(monkeypatch, inst)
@@ -121,7 +121,7 @@ def test_settings_update_accepts_oauth_provider_with_token(monkeypatch):
     monkeypatch.setattr(cfgloader, "load_config", lambda: cfg)
     saved = []
     monkeypatch.setattr(cfgloader, "save_config", lambda c: saved.append(c))
-    monkeypatch.setattr(oauth_utils, "any_token_present", lambda name: True)
+    monkeypatch.setattr(cda, "codex_token_present", lambda: True)
     req = types.SimpleNamespace(
         path="/api/settings/update?model=gpt-5.5&provider=openai_codex&token=t", headers={}
     )

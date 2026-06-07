@@ -1247,7 +1247,7 @@ class WebSocketChannel(BaseChannel):
         if defaults.provider != "auto":
             spec = find_by_name(defaults.provider)
             selected_provider = spec.name if spec else provider_name
-        from durin.utils.oauth import any_token_present
+        from durin.providers.codex_device_auth import codex_token_present
 
         providers = []
         for spec in PROVIDERS:
@@ -1260,7 +1260,7 @@ class WebSocketChannel(BaseChannel):
                     {
                         "name": spec.name,
                         "label": spec.label,
-                        "configured": any_token_present(spec.name),
+                        "configured": codex_token_present(),
                         "oauth": True,
                     }
                 )
@@ -1413,8 +1413,12 @@ class WebSocketChannel(BaseChannel):
             if spec is None:
                 return _http_error(400, "unknown provider")
             provider_config = getattr(config.providers, provider, None)
-            # OAuth providers (Codex) carry a stored token, not an api_key.
-            if getattr(spec, "is_oauth", False):
+            # OAuth providers carry a stored token, not an api_key.
+            if spec.name == "openai_codex":
+                from durin.providers.codex_device_auth import codex_token_present
+
+                configured = codex_token_present()
+            elif getattr(spec, "is_oauth", False):
                 from durin.utils.oauth import any_token_present
 
                 configured = any_token_present(spec.name)
