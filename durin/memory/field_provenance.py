@@ -52,34 +52,14 @@ def relation_prov_key(to: str, rtype: str) -> str:
     return f"{to}{_REL_KEY_SEP}{rtype}"
 
 
-def coerce_relation_prov(
-    raw: Any, relations: list[dict[str, Any]],
-) -> dict[str, dict[str, Any]]:
-    """Return relation provenance as a ``{composite_key: entry}`` dict.
+def coerce_relation_prov(raw: Any) -> dict[str, dict[str, Any]]:
+    """Return relation provenance as a ``{(to,type)-key: entry}`` dict (copy).
 
-    Lenient migration: accepts the legacy index-keyed LIST form
-    (``[{"index": i, ...}]``) and converts each entry by resolving ``index``
-    against ``relations`` to recover ``(to, type)``; a dict is returned as a
-    shallow copy. Each emitted entry carries ``to``/``type`` so readers never
-    need the positional index again.
+    Non-dict input (absent provenance) yields ``{}``. Relation provenance is
+    always key-addressed now; the legacy positional ``{index}`` list form is no
+    longer read.
     """
-    if isinstance(raw, dict):
-        return dict(raw)
-    out: dict[str, dict[str, Any]] = {}
-    if isinstance(raw, list):
-        for e in raw:
-            if not isinstance(e, dict):
-                continue
-            idx = e.get("index")
-            if isinstance(idx, int) and 0 <= idx < len(relations):
-                rel = relations[idx]
-                to, rtype = rel.get("to"), rel.get("type")
-                if to and rtype:
-                    entry = {k: v for k, v in e.items() if k != "index"}
-                    out[relation_prov_key(str(to), str(rtype))] = {
-                        "to": to, "type": rtype, **entry,
-                    }
-    return out
+    return dict(raw) if isinstance(raw, dict) else {}
 
 
 def incoming_wins(*, existing: dict[str, Any] | None,
