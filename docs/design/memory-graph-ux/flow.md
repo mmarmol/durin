@@ -1,13 +1,17 @@
 ---
 title: Memoria webui — interaction model (flow spec)
-status: draft for validation
+status: implemented (verified live)
 companion: ./mockup.html
 ---
 
 # Memoria — modelo de interacción
 
-> Doc de trabajo. Lo validamos sobre el `mockup.html` (autónomo, abrible en el
-> navegador). NO se implementa hasta confirmar. Vamos **de a un caso por vez**.
+> Validado sobre `mockup.html` e **implementado** en `MemoryGraphView.tsx`,
+> verificado en vivo contra el binario real. Estado por caso:
+> **Caso 0** (layout re-encaja) ✓ · **Caso 1** (click foco-en-lugar, ego solo
+> off-cap, sin doble-click) ✓ · **Caso 2** (search recede + lista+lectura) ✓ ·
+> **Caso 4** (mobile sin grafo → lista de entidades) ✓ · **Estados**
+> (vacío/loading/error+reintentar/sin-resultados) ✓.
 
 ## Diagnóstico del caos actual (qué romper)
 
