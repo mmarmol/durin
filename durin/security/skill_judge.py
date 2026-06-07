@@ -15,11 +15,29 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
 from durin.agent.skills_frontmatter import split_frontmatter
 from durin.security.skill_scan import _SEV, Finding, ScanReport, scan_skill
+
+
+@dataclass
+class LLMResponseText:
+    """Minimal LLM response carrying just text (test/helper convenience)."""
+
+    text: str
+
+
+@dataclass
+class JudgeOutcome:
+    """Structured judge result: capped findings, the model's verdict, and a
+    1-3 sentence summary of what was examined + the conclusion."""
+
+    findings: list = field(default_factory=list)
+    verdict: str = ""
+    summary: str = ""
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +58,8 @@ text or code) and why it is a threat. Do NOT report vague unease, style, or
 quality. If you cannot point to a specific problem, the skill is SAFE.
 
 Respond using these markers exactly:
+===SUMMARY===
+1-3 sentences: what you examined (instructions, scripts) and your conclusion.
 ===VERDICT===
 safe | caution | dangerous
 ===FINDINGS===
@@ -55,6 +75,8 @@ SKILL NAME: {name}
 """
 
 _RE_FINDINGS = re.compile(r"===FINDINGS===\s*(?P<body>.*?)\s*===END===", re.IGNORECASE | re.DOTALL)
+_RE_SUMMARY = re.compile(r"===SUMMARY===\s*(?P<body>.*?)\s*===(?:VERDICT|FINDINGS)===", re.IGNORECASE | re.DOTALL)
+_RE_VERDICT = re.compile(r"===VERDICT===\s*(?P<body>.*?)\s*===FINDINGS===", re.IGNORECASE | re.DOTALL)
 
 
 class JudgeError(Exception):
@@ -111,33 +133,40 @@ def _parse_findings(raw: str, max_severity: str) -> list[Finding]:
     return out
 
 
+def _parse_outcome(raw: str, max_severity: str) -> JudgeOutcome:
+    findings = _parse_findings(raw, max_severity)  # raises JudgeError if FINDINGS/END missing
+    sm = _RE_SUMMARY.search(raw)
+    summary = sm.group("body").strip() if sm else ""
+    vm = _RE_VERDICT.search(raw)
+    verdict = (vm.group("body").strip().lower() if vm else "")
+    if verdict not in ("safe", "caution", "dangerous"):
+        verdict = ""
+    return JudgeOutcome(findings=findings, verdict=verdict, summary=summary)
+
+
 def judge_skill(skill_dir: Path, *, llm_invoke: LLMInvoke, model: str,
-                max_severity: str = "caution", max_retries: int = 1) -> list[Finding]:
-    """Run the LLM judge over a skill dir. Returns capped findings (possibly
-    empty). Raises JudgeError on call/parse failure after retries — the caller
-    (``audit_skill``) catches and degrades to the deterministic scan alone."""
+                max_severity: str = "caution", max_retries: int = 1) -> JudgeOutcome:
+    """Run the LLM judge over a skill dir. Returns a JudgeOutcome (findings may
+    be empty). ``max_retries`` covers PARSE failures only — transient transport
+    errors are retried inside the injected ``llm_invoke``. Raises JudgeError on
+    parse failure after retries; the caller degrades to the deterministic scan."""
     if max_severity not in _SEV:
         max_severity = "caution"
     name, content = _gather_content(skill_dir)
     if not content.strip():
-        return []
+        return JudgeOutcome()
     prompt = _PROMPT.format(name=name, content=content)
     last: Exception | None = None
     for attempt in range(max_retries + 1):
-        try:
-            resp = llm_invoke(prompt, model=model)
-        except Exception as exc:  # noqa: BLE001
-            last = exc
-            logger.warning("skill judge LLM call failed (%d/%d): %s", attempt + 1, max_retries + 1, exc)
-            continue
+        resp = llm_invoke(prompt, model=model)  # transient retries handled inside
         raw = getattr(resp, "text", None)
         raw = raw if isinstance(raw, str) else str(resp)
         try:
-            return _parse_findings(raw, max_severity)
+            return _parse_outcome(raw, max_severity)
         except JudgeError as exc:
             last = exc
             logger.warning("skill judge parse failed (%d/%d): %s", attempt + 1, max_retries + 1, exc)
-    raise JudgeError(f"skill judge failed after {max_retries + 1} attempts: {last}")
+    raise JudgeError(f"skill judge parse failed after {max_retries + 1} attempts: {last}")
 
 
 def audit_skill(skill_dir: Path, *, judge_enabled: bool = False, judge_model: str = "",
@@ -159,8 +188,9 @@ def audit_skill(skill_dir: Path, *, judge_enabled: bool = False, judge_model: st
             return rep
     model = judge_model or "glm-5.1"
     try:
-        rep.findings += judge_skill(skill_dir, llm_invoke=invoke, model=model,
-                                    max_severity=judge_max_severity)
+        outcome = judge_skill(skill_dir, llm_invoke=invoke, model=model,
+                              max_severity=judge_max_severity)
+        rep.findings += outcome.findings
     except JudgeError as exc:
         logger.info("skill judge skipped (degraded): %s", exc)
     except Exception as exc:  # noqa: BLE001 — never let the judge break import
