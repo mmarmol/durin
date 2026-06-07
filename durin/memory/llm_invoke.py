@@ -6,12 +6,48 @@ this helper.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from typing import Protocol
 
 logger = logging.getLogger(__name__)
 
 __all__ = ["DreamError", "LLMResponse", "LLMInvoke", "default_llm_invoke"]
+
+
+def _retry_llm_call(call, *, mode: str = "standard"):
+    """Run ``call()`` with the same retry policy as chat (single source: the
+    constants + transient classifier on ``LLMProvider``). ``standard`` walks the
+    6-delay schedule (7 attempts); ``persistent`` caps each delay and keeps
+    retrying until the same error repeats ``_PERSISTENT_IDENTICAL_ERROR_LIMIT``
+    times. Non-transient errors are re-raised immediately."""
+    from durin.providers.base import LLMProvider
+
+    delays = LLMProvider._CHAT_RETRY_DELAYS
+    attempt = 0
+    identical = 0
+    last_text: str | None = None
+    while True:
+        try:
+            return call()
+        except Exception as exc:  # noqa: BLE001 — re-raised below if not transient
+            text = str(exc)
+            if not LLMProvider._is_transient_error(text):
+                raise
+            if mode == "persistent":
+                identical = identical + 1 if text == last_text else 1
+                last_text = text
+                if identical >= LLMProvider._PERSISTENT_IDENTICAL_ERROR_LIMIT:
+                    raise
+                delay = min(delays[min(attempt, len(delays) - 1)],
+                            LLMProvider._PERSISTENT_MAX_DELAY)
+            else:  # standard
+                if attempt >= len(delays):
+                    raise
+                delay = delays[attempt]
+            logger.info("memory LLM transient error, retrying in %ss: %s", delay, text)
+            time.sleep(delay)
+            attempt += 1
 
 
 class DreamError(Exception):
@@ -55,12 +91,21 @@ def default_llm_invoke(
 
     import litellm
 
-    response = litellm.completion(
-        model=f"openai/{model}",
-        messages=[{"role": "user", "content": prompt}],
-        api_key=api_key,
-        api_base="https://api.z.ai/api/coding/paas/v4",
-        temperature=temperature,
+    try:
+        from durin.config.loader import load_config
+        mode = load_config().defaults.provider_retry_mode
+    except Exception:  # noqa: BLE001 — config optional; default to standard
+        mode = "standard"
+
+    response = _retry_llm_call(
+        lambda: litellm.completion(
+            model=f"openai/{model}",
+            messages=[{"role": "user", "content": prompt}],
+            api_key=api_key,
+            api_base="https://api.z.ai/api/coding/paas/v4",
+            temperature=temperature,
+        ),
+        mode=mode,
     )
     usage = getattr(response, "usage", None)
     prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0) if usage else 0
@@ -76,3 +121,97 @@ def default_llm_invoke(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
     )
+
+
+async def _aretry_llm_call(acall, *, mode: str = "standard"):
+    """Async mirror of :func:`_retry_llm_call` — same LLMProvider policy."""
+    import asyncio
+
+    from durin.providers.base import LLMProvider
+
+    delays = LLMProvider._CHAT_RETRY_DELAYS
+    attempt = 0
+    identical = 0
+    last_text: str | None = None
+    while True:
+        try:
+            return await acall()
+        except Exception as exc:  # noqa: BLE001
+            text = str(exc)
+            if not LLMProvider._is_transient_error(text):
+                raise
+            if mode == "persistent":
+                identical = identical + 1 if text == last_text else 1
+                last_text = text
+                if identical >= LLMProvider._PERSISTENT_IDENTICAL_ERROR_LIMIT:
+                    raise
+                delay = min(delays[min(attempt, len(delays) - 1)], LLMProvider._PERSISTENT_MAX_DELAY)
+            else:
+                if attempt >= len(delays):
+                    raise
+                delay = delays[attempt]
+            logger.info("memory LLM (stream) transient error, retrying in %ss: %s", delay, text)
+            await asyncio.sleep(delay)
+            attempt += 1
+
+
+async def _acompletion(**kwargs):
+    """Indirection seam so tests can stub the litellm async call."""
+    import litellm
+
+    return await litellm.acompletion(**kwargs)
+
+
+async def default_llm_invoke_astream(
+    prompt: str,
+    *,
+    model: str = "glm-5.1",
+    temperature: float = 0.1,
+    on_reasoning=None,
+    on_content=None,
+) -> str:
+    """Stream a completion: forward ``reasoning_content`` chunks to ``on_reasoning``
+    and ``content`` chunks to ``on_content`` (each may be sync or async), returning
+    the assembled answer text. The stream OPEN is retried per the chat policy."""
+    from durin.security.secrets import get_secret_store
+
+    entry = get_secret_store().get("ZHIPU_API_KEY")
+    if entry is None:
+        raise DreamError("ZHIPU_API_KEY missing from secret store")
+    api_key = entry.value
+
+    try:
+        from durin.config.loader import load_config
+        mode = load_config().defaults.provider_retry_mode
+    except Exception:  # noqa: BLE001
+        mode = "standard"
+
+    async def _emit(cb, text):
+        if cb is None or not text:
+            return
+        r = cb(text)
+        if hasattr(r, "__await__"):
+            await r
+
+    async def _open():
+        return await _acompletion(
+            model=f"openai/{model}",
+            messages=[{"role": "user", "content": prompt}],
+            api_key=api_key,
+            api_base="https://api.z.ai/api/coding/paas/v4",
+            temperature=temperature,
+            stream=True,
+        )
+
+    stream = await _aretry_llm_call(_open, mode=mode)
+    parts: list[str] = []
+    async for chunk in stream:
+        delta = chunk.choices[0].delta
+        rc = getattr(delta, "reasoning_content", None)
+        if rc:
+            await _emit(on_reasoning, rc)
+        c = getattr(delta, "content", None)
+        if c:
+            parts.append(c)
+            await _emit(on_content, c)
+    return "".join(parts)

@@ -319,6 +319,15 @@ export class DurinClient {
     this.queueSend(frame);
   }
 
+  /** Kick off a streaming skill audit. Reasoning arrives as ``reasoning_delta``
+   *  on ``audit:<name>``; the terminal ``skill_audit_done`` carries the result.
+   *  Subscribe with ``onChat("audit:" + name, handler)`` before calling. */
+  judgeStream(name: string): void {
+    const chatId = `audit:${name}`;
+    this.attach(chatId);
+    this.queueSend({ type: "skill_judge", chat_id: chatId, name });
+  }
+
   /**
    * Write a credential into durin's secret store. The value rides the
    * authenticated socket as a JSON field — it never appears in a URL

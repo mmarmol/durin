@@ -1810,6 +1810,65 @@ class WebSocketChannel(BaseChannel):
             return _http_error(500, f"approve failed: {exc}")
         return _http_json_response(payload, status=status)
 
+    async def _run_skill_audit(self, connection: Any, name: str) -> None:
+        """Stream an on-demand LLM audit of a quarantined skill: reasoning deltas
+        on ``audit:<name>`` (reusing the chat reasoning stream), then a terminal
+        ``skill_audit_done`` with the structured outcome. Persists .scan.json."""
+        import json as _json
+
+        from durin.agent import skills_store as ss
+        from durin.memory.llm_invoke import default_llm_invoke_astream
+        from durin.providers.base import LLMProvider
+        from durin.security.skill_judge import JudgeError, judge_skill_astream
+        from durin.security.skill_scan import ScanReport, scan_skill
+
+        chat_id = f"audit:{name}"
+        workspace = self._endpoint_workspace()
+        qdir = Path(workspace) / ".durin" / "import-quarantine" / name
+        if not (qdir / "SKILL.md").is_file():
+            await self._send_event(connection, "skill_audit_done", chat_id=chat_id,
+                                   name=name, judged=False, error_code="not_found")
+            return
+        _, model, max_sev = ss._import_judge()
+        det = scan_skill(qdir)
+
+        async def on_reasoning(text: str) -> None:
+            await self.send_reasoning_delta(chat_id, text)
+
+        try:
+            outcome = await judge_skill_astream(
+                qdir, ainvoke_stream=default_llm_invoke_astream,
+                model=model or "glm-5.1", max_severity=max_sev, on_reasoning=on_reasoning,
+            )
+        except JudgeError as exc:
+            await self.send_reasoning_end(chat_id)
+            code = "parse" if "parse" in str(exc).lower() else "unreachable"
+            await self._send_event(connection, "skill_audit_done", chat_id=chat_id,
+                                   name=name, judged=False, error_code=code)
+            return
+        except Exception as exc:  # noqa: BLE001
+            await self.send_reasoning_end(chat_id)
+            code = "unreachable" if LLMProvider._is_transient_error(str(exc)) else "no_model"
+            await self._send_event(connection, "skill_audit_done", chat_id=chat_id,
+                                   name=name, judged=False, error_code=code)
+            return
+
+        await self.send_reasoning_end(chat_id)
+        merged = ScanReport(findings=det.findings + outcome.findings)
+        findings = [{"category": f.category, "severity": f.severity, "where": f.where,
+                     "detail": f.detail} for f in merged.findings]
+        source = name
+        sj = qdir / ".scan.json"
+        if sj.is_file():
+            try:
+                source = _json.loads(sj.read_text()).get("source", name)
+            except Exception:  # noqa: BLE001
+                pass
+        ss._persist_judge_result(qdir, source, merged.verdict, findings, outcome.summary)
+        await self._send_event(connection, "skill_audit_done", chat_id=chat_id, name=name,
+                               judged=True, verdict=merged.verdict, findings=findings,
+                               summary=outcome.summary)
+
     async def _handle_skill_judge(self, request: WsRequest, name: str) -> Response:
         """`GET /api/skills/{name}/judge` — run the LLM judge on-demand. Async +
         off-thread so the (multi-second) model call doesn't stall the event loop."""
@@ -2982,6 +3041,14 @@ class WebSocketChannel(BaseChannel):
             return
         if t == "secret_store":
             await self._handle_secret_store_envelope(connection, client_id, envelope)
+            return
+        if t == "skill_judge":
+            name = envelope.get("name")
+            if not isinstance(name, str) or not name:
+                await self._send_event(connection, "error", detail="missing skill name")
+                return
+            self._attach(connection, f"audit:{name}")
+            await self._run_skill_audit(connection, name)
             return
         await self._send_event(connection, "error", detail=f"unknown type: {t!r}")
 
