@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import json
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -264,3 +265,52 @@ def login_blocking(
         if res.status == "error":
             raise RuntimeError(res.error or "device-code login failed")
     raise RuntimeError("device-code login timed out")
+
+
+_loopback_lock = threading.Lock()
+_loopback_state: dict[str, Any] = {"thread": None, "url": None}
+
+
+def start_loopback_login(*, wait_url_s: float = 6.0) -> str:
+    """Start the loopback PKCE login in a background thread; return the authorize URL.
+
+    For LOCAL webui installs only: ``oauth-cli-kit`` serves the OAuth callback on
+    ``localhost:1455`` — reachable only when the browser runs on the gateway
+    machine — and writes the token to ``codex.json`` on success. Unlike
+    device-code, the loopback flow does not require enabling device authorization
+    in ChatGPT's security settings. The kit also opens the gateway's default
+    browser; the returned URL is surfaced as a manual fallback.
+    """
+    from oauth_cli_kit import login_oauth_interactive
+
+    with _loopback_lock:
+        existing = _loopback_state.get("thread")
+        if existing is not None and existing.is_alive() and _loopback_state.get("url"):
+            return _loopback_state["url"]  # an attempt is already in flight
+        _loopback_state["url"] = None
+        captured: list[str] = []
+
+        def _run() -> None:
+            try:
+                login_oauth_interactive(
+                    print_fn=lambda s: captured.append(str(s)),
+                    prompt_fn=lambda s: "",
+                    originator=ORIGINATOR,
+                    storage=_strict_storage(),
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("codex loopback login ended: {}", exc)
+
+        thread = threading.Thread(target=_run, daemon=True)
+        thread.start()
+        _loopback_state["thread"] = thread
+
+    deadline = time.monotonic() + wait_url_s
+    prefix = f"{ISSUER}/oauth/authorize"
+    while time.monotonic() < deadline:
+        url = next((c for c in captured if c.startswith(prefix)), None)
+        if url:
+            _loopback_state["url"] = url
+            return url
+        time.sleep(0.1)
+    raise RuntimeError("could not obtain the authorization URL")

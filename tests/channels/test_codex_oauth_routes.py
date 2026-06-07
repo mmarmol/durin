@@ -70,3 +70,34 @@ def test_disconnect(monkeypatch):
     resp = inst._handle_codex_oauth_disconnect(_req("/api/oauth/codex/disconnect?token=t"))
     body = json.loads(resp.body.decode("utf-8"))
     assert body["connected"] is False
+
+
+def _req_host(host):
+    return types.SimpleNamespace(path="/api/oauth/codex/x?token=t", headers={"Host": host})
+
+
+def test_status_reports_can_loopback_for_localhost(monkeypatch):
+    inst = _handler_instance()
+    _ok_token(monkeypatch, inst)
+    monkeypatch.setattr(ws, "existing_codex_session", lambda: None)
+    local = json.loads(inst._handle_codex_oauth_status(_req_host("localhost:8765")).body)
+    remote = json.loads(inst._handle_codex_oauth_status(_req_host("example.com")).body)
+    assert local["can_loopback"] is True
+    assert remote["can_loopback"] is False
+
+
+def test_start_loopback_returns_url_for_local(monkeypatch):
+    inst = _handler_instance()
+    _ok_token(monkeypatch, inst)
+    monkeypatch.setattr(
+        ws, "start_loopback_login", lambda: "https://auth.openai.com/oauth/authorize?x=1"
+    )
+    body = json.loads(inst._handle_codex_oauth_start_loopback(_req_host("127.0.0.1:8765")).body)
+    assert body["authorize_url"].startswith("https://auth.openai.com/oauth/authorize")
+
+
+def test_start_loopback_rejected_when_remote(monkeypatch):
+    inst = _handler_instance()
+    _ok_token(monkeypatch, inst)
+    resp = inst._handle_codex_oauth_start_loopback(_req_host("example.com"))
+    assert resp.status_code == 400
