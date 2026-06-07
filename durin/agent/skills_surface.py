@@ -61,7 +61,8 @@ def quarantined_skills(workspace) -> list[dict]:
         if not (d / "SKILL.md").is_file():
             continue
         entry = {"name": d.name, "status": "quarantined", "source": "",
-                 "verdict": "", "findings": [], "trust_prefix": "", "install_specs": []}
+                 "verdict": "", "findings": [], "trust_prefix": "", "install_specs": [],
+                 "needs": "confirm", "reasons": []}
         sj = d / ".scan.json"
         if sj.is_file():
             try:
@@ -75,5 +76,31 @@ def quarantined_skills(workspace) -> list[dict]:
         entry["install_specs"] = declared_install_specs(d)
         if entry["source"]:
             entry["trust_prefix"] = trust_prefix_for(entry["source"])
+
+        # The gate decision (decide_action) plus its plain-language drivers, so
+        # the UI can explain *why* approval is required — even when the skill is
+        # not insecure (e.g. the source simply isn't in the trust allowlist).
+        from durin.agent.skills_import import decide_action, validate_skill
+        from durin.agent.skills_store import _import_allowlist
+
+        allowlist = _import_allowlist()
+        vr = validate_skill(d)
+        verdict = entry["verdict"]
+        entry["needs"] = decide_action(entry["source"], verdict=verdict,
+                                       carries_code=vr.carries_code, allowlist=allowlist)
+        reasons: list[dict] = []
+        if verdict == "dangerous":
+            reasons.append({"code": "verdict_dangerous", "detail": ""})
+        elif verdict == "caution":
+            reasons.append({"code": "verdict_caution", "detail": ""})
+        if vr.carries_code:
+            reasons.append({"code": "carries_code",
+                            "detail": ", ".join(vr.code_artifacts[:8])})
+        if entry["source"] and not any(entry["source"].startswith(p) for p in allowlist if p):
+            reasons.append({"code": "untrusted_source", "detail": entry["source"]})
+        if entry["install_specs"]:
+            reasons.append({"code": "declared_deps",
+                            "detail": ", ".join(entry["install_specs"])})
+        entry["reasons"] = reasons
         out.append(entry)
     return out
