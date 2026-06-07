@@ -169,6 +169,22 @@ def judge_skill(skill_dir: Path, *, llm_invoke: LLMInvoke, model: str,
     raise JudgeError(f"skill judge parse failed after {max_retries + 1} attempts: {last}")
 
 
+async def judge_skill_astream(skill_dir: Path, *, ainvoke_stream, model: str,
+                              max_severity: str = "caution", on_reasoning=None) -> JudgeOutcome:
+    """Streaming variant of :func:`judge_skill`: forwards the model's reasoning to
+    ``on_reasoning`` as it arrives, then parses the assembled text into a
+    JudgeOutcome. Raises JudgeError if the markers are missing."""
+    if max_severity not in _SEV:
+        max_severity = "caution"
+    name, content = _gather_content(skill_dir)
+    if not content.strip():
+        return JudgeOutcome()
+    prompt = _PROMPT.format(name=name, content=content)
+    raw = await ainvoke_stream(prompt, model=model, on_reasoning=on_reasoning, on_content=None)
+    raw = raw if isinstance(raw, str) else str(raw)
+    return _parse_outcome(raw, max_severity)
+
+
 def audit_skill(skill_dir: Path, *, judge_enabled: bool = False, judge_model: str = "",
                 judge_max_severity: str = "caution",
                 llm_invoke: LLMInvoke | None = None) -> ScanReport:
