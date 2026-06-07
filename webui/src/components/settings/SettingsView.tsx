@@ -452,6 +452,9 @@ export function SettingsView({
                     }))
                   }
                   onSaveProvider={saveProvider}
+                  onRefreshSettings={() => {
+                    fetchSettings(token).then(applyPayload).catch(() => {});
+                  }}
                   onChangeWebSearchForm={setWebSearchForm}
                   onChangeWebSearchProvider={handleWebSearchProviderChange}
                   onToggleWebSearchKey={() => setWebSearchKeyVisible((visible) => !visible)}
@@ -1580,6 +1583,7 @@ function ByokSettings({
   onToggleProviderKeyEditing,
   onChangeProviderForm,
   onSaveProvider,
+  onRefreshSettings,
   onChangeWebSearchForm,
   onChangeWebSearchProvider,
   onToggleWebSearchKey,
@@ -1605,6 +1609,7 @@ function ByokSettings({
   onToggleProviderKeyEditing: (provider: string) => void;
   onChangeProviderForm: (provider: string, value: Partial<{ apiKey: string; apiBase: string }>) => void;
   onSaveProvider: (provider: string) => void;
+  onRefreshSettings: () => void;
   onChangeWebSearchForm: Dispatch<SetStateAction<WebSearchSettingsUpdate>>;
   onChangeWebSearchProvider: (provider: string) => void;
   onToggleWebSearchKey: () => void;
@@ -1671,7 +1676,13 @@ function ByokSettings({
           </span>
         </button>
 
-        {expanded ? (
+        {expanded && provider.oauth ? (
+          <div className="bg-muted/18 px-4 py-4 sm:px-5">
+            <CodexOAuthCard token={codexToken} embedded onChanged={onRefreshSettings} />
+          </div>
+        ) : null}
+
+        {expanded && !provider.oauth ? (
           <div className="space-y-3 bg-muted/18 px-4 py-4 sm:px-5">
             <label className="block space-y-1.5">
               <span className="text-[12px] font-medium text-muted-foreground">
@@ -1809,7 +1820,6 @@ function ByokSettings({
       </div>
       {pane === "llm" ? (
         <div className="space-y-8">
-          <CodexOAuthCard token={codexToken} />
           <section className="space-y-3">
             <ByokSectionHeader
               title={t("settings.byok.configuredSection")}

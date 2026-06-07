@@ -21,6 +21,21 @@ def _req(path):
     return types.SimpleNamespace(path=path, headers={})
 
 
+def test_settings_payload_lists_codex_as_oauth(monkeypatch):
+    from durin.utils import oauth as oauth_utils
+
+    inst = _handler_instance()
+    # _settings_payload imports any_token_present from this module at call time.
+    monkeypatch.setattr(oauth_utils, "any_token_present", lambda name: False)
+    payload = inst._settings_payload()
+    codex = [p for p in payload["providers"] if p["name"] == "openai_codex"]
+    assert len(codex) == 1
+    assert codex[0]["oauth"] is True
+    assert codex[0]["configured"] is False
+    # OAuth rows carry no api_key fields.
+    assert "api_key_hint" not in codex[0]
+
+
 def test_status_reports_connected(monkeypatch):
     inst = _handler_instance()
     _ok_token(monkeypatch, inst)
@@ -55,3 +70,34 @@ def test_disconnect(monkeypatch):
     resp = inst._handle_codex_oauth_disconnect(_req("/api/oauth/codex/disconnect?token=t"))
     body = json.loads(resp.body.decode("utf-8"))
     assert body["connected"] is False
+
+
+def _req_host(host):
+    return types.SimpleNamespace(path="/api/oauth/codex/x?token=t", headers={"Host": host})
+
+
+def test_status_reports_can_loopback_for_localhost(monkeypatch):
+    inst = _handler_instance()
+    _ok_token(monkeypatch, inst)
+    monkeypatch.setattr(ws, "existing_codex_session", lambda: None)
+    local = json.loads(inst._handle_codex_oauth_status(_req_host("localhost:8765")).body)
+    remote = json.loads(inst._handle_codex_oauth_status(_req_host("example.com")).body)
+    assert local["can_loopback"] is True
+    assert remote["can_loopback"] is False
+
+
+def test_start_loopback_returns_url_for_local(monkeypatch):
+    inst = _handler_instance()
+    _ok_token(monkeypatch, inst)
+    monkeypatch.setattr(
+        ws, "start_loopback_login", lambda: "https://auth.openai.com/oauth/authorize?x=1"
+    )
+    body = json.loads(inst._handle_codex_oauth_start_loopback(_req_host("127.0.0.1:8765")).body)
+    assert body["authorize_url"].startswith("https://auth.openai.com/oauth/authorize")
+
+
+def test_start_loopback_rejected_when_remote(monkeypatch):
+    inst = _handler_instance()
+    _ok_token(monkeypatch, inst)
+    resp = inst._handle_codex_oauth_start_loopback(_req_host("example.com"))
+    assert resp.status_code == 400

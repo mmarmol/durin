@@ -18,6 +18,8 @@ vi.mock("@/lib/api", async (importOriginal) => {
     approveSkill: vi.fn(),
     rejectSkill: vi.fn(),
     searchSkills: vi.fn(),
+    judgeSkill: vi.fn(),
+    describeSkill: vi.fn(),
   };
 });
 
@@ -39,6 +41,8 @@ beforeEach(() => {
   vi.mocked(api.approveSkill).mockReset();
   vi.mocked(api.rejectSkill).mockReset();
   vi.mocked(api.searchSkills).mockReset();
+  vi.mocked(api.judgeSkill).mockReset();
+  vi.mocked(api.describeSkill).mockReset();
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -124,8 +128,9 @@ describe("SkillsView security surface", () => {
     render(wrap(<SkillsView />));
     await screen.findByText("clean");
 
-    // import lives behind the header "Add skill" action, not in the list
+    // import-by-reference is a secondary, collapsed affordance under "Add skill"
     await user.click(screen.getByRole("button", { name: /add skill/i }));
+    await user.click(await screen.findByRole("button", { name: /import by reference/i }));
     const input = await screen.findByPlaceholderText(/Import a skill/i);
     await user.type(input, "github:owner/repo");
     await user.click(screen.getByRole("button", { name: "Import" }));
@@ -162,7 +167,7 @@ describe("SkillsView security surface", () => {
     await user.type(box, "pdf");
     await user.click(screen.getByRole("button", { name: "Search" }));
 
-    expect(api.searchSkills).toHaveBeenCalledWith("tok", "pdf");
+    expect(api.searchSkills).toHaveBeenCalledWith("tok", "pdf", 10);
     // the hit renders with its name, install count and ref
     expect(await screen.findByText("pdf-tools")).toBeInTheDocument();
     expect(screen.getByText(/42 installs/)).toBeInTheDocument();
@@ -177,6 +182,39 @@ describe("SkillsView security surface", () => {
     await user.click(within(hitRow).getByRole("button", { name: "Import" }));
 
     expect(api.importSource).toHaveBeenCalledWith("tok", "github:acme/pdf-tools");
+  });
+
+  it("search shows count, sorts, and lazy-describes on expand", async () => {
+    vi.mocked(api.listSkills).mockResolvedValue([
+      { name: "clean", source: "builtin", mode: "auto", status: "active", verdict: "safe", findings: [] },
+    ]);
+    vi.mocked(api.listQuarantine).mockResolvedValue([]);
+    vi.mocked(api.searchSkills).mockResolvedValue({
+      hits: [
+        { name: "alpha", ref: "github:o/alpha", registry: "skills.sh", description: "skills.sh: o · 5 installs", signals: { installs: 5 } },
+        { name: "zeta", ref: "github:o/zeta", registry: "skills.sh", description: "skills.sh: o · 90 installs", signals: { installs: 90 } },
+      ],
+    });
+    vi.mocked(api.describeSkill).mockResolvedValue({ ref: "github:o/alpha", description: "Alpha does X." });
+
+    const user = userEvent.setup();
+    render(wrap(<SkillsView />));
+    await screen.findByText("clean");
+    await user.click(screen.getByRole("button", { name: /add skill/i }));
+    await user.type(await screen.findByPlaceholderText(/Search the registry/i), "x");
+    await user.click(screen.getByRole("button", { name: "Search" }));
+
+    // result count appears
+    expect(await screen.findByText(/2 results/i)).toBeInTheDocument();
+
+    // default sort = installs desc → zeta (90) before alpha (5)
+    const names = screen.getAllByTestId("hit-name").map((n) => n.textContent);
+    expect(names).toEqual(["zeta", "alpha"]);
+
+    // expanding alpha lazy-fetches its description
+    await user.click(screen.getByRole("button", { name: /expand alpha/i }));
+    expect(await screen.findByText("Alpha does X.")).toBeInTheDocument();
+    expect(api.describeSkill).toHaveBeenCalledWith("tok", "github:o/alpha");
   });
 
   it("surfaces the install gate inline (no native dialog) and forces on confirm", async () => {
@@ -236,6 +274,65 @@ describe("SkillsView security surface", () => {
       override: false,
       replace: true,
     });
+  });
+
+  it("shows why-it's-here reasons in the triage pane", async () => {
+    vi.mocked(api.listSkills).mockResolvedValue([
+      { name: "clean", source: "builtin", mode: "auto", status: "active", verdict: "safe", findings: [] },
+    ]);
+    vi.mocked(api.listQuarantine).mockResolvedValue([
+      {
+        name: "firecrawl", status: "quarantined", source: "github:o/r", verdict: "safe", findings: [],
+        needs: "confirm",
+        reasons: [{ code: "untrusted_source", detail: "github:o/r" }],
+      },
+    ]);
+
+    const user = userEvent.setup();
+    render(wrap(<SkillsView />));
+    await screen.findByText("clean");
+    await user.click(screen.getByRole("button", { name: /pending/i }));
+    await user.click(await screen.findByRole("button", { name: /firecrawl/i }));
+
+    // why-it's-here renders the reason in plain language
+    expect(await screen.findByText(/isn't in your trusted allowlist/i)).toBeInTheDocument();
+  });
+
+  it("streams audit reasoning then shows the final summary", async () => {
+    vi.mocked(api.listSkills).mockResolvedValue([
+      { name: "clean", source: "builtin", mode: "auto", status: "active", verdict: "safe", findings: [] },
+    ]);
+    vi.mocked(api.listQuarantine).mockResolvedValue([
+      { name: "firecrawl", status: "quarantined", source: "github:o/r", verdict: "safe", findings: [],
+        needs: "confirm", reasons: [{ code: "untrusted_source", detail: "github:o/r" }] },
+    ]);
+
+    const handlers: Record<string, (ev: unknown) => void> = {};
+    const client = {
+      onChat: (id: string, h: (ev: unknown) => void) => {
+        handlers[id] = h;
+        return () => { delete handlers[id]; };
+      },
+      judgeStream: (name: string) => {
+        const id = `audit:${name}`;
+        handlers[id]?.({ event: "reasoning_delta", chat_id: id, text: "inspecting scripts" });
+        handlers[id]?.({ event: "skill_audit_done", chat_id: id, name, judged: true,
+          summary: "Reviewed; no injection.", findings: [], verdict: "safe" });
+      },
+    };
+
+    const user = userEvent.setup();
+    render(
+      <ClientProvider client={client as unknown as import("@/lib/durin-client").DurinClient} token="tok">
+        <SkillsView />
+      </ClientProvider>,
+    );
+    await screen.findByText("clean");
+    await user.click(screen.getByRole("button", { name: /pending/i }));
+    await user.click(await screen.findByRole("button", { name: /firecrawl/i }));
+    await user.click(screen.getByRole("button", { name: /audit with llm/i }));
+
+    expect(await screen.findByText(/Reviewed; no injection/i)).toBeInTheDocument();
   });
 
   it("rejects a quarantined skill", async () => {
