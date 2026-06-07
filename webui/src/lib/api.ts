@@ -1055,6 +1055,8 @@ export interface CodexStatus {
   email?: string | null;
   plan?: string | null;
   source?: "durin" | "codex-cli";
+  /** True when the webui was reached via localhost — loopback OAuth (no device-auth toggle) works. */
+  can_loopback?: boolean;
 }
 
 export interface CodexDeviceChallenge {
@@ -1082,6 +1084,17 @@ export async function startCodexDeviceAuth(
   base: string = "",
 ): Promise<CodexDeviceChallenge> {
   return request<CodexDeviceChallenge>(`${base}/api/oauth/codex/start`, token);
+}
+
+export async function startCodexLoopbackAuth(
+  token: string,
+  base: string = "",
+): Promise<{ authorize_url: string }> {
+  return request<{ authorize_url: string }>(
+    `${base}/api/oauth/codex/start-loopback`,
+    token,
+    { method: "POST" },
+  );
 }
 
 export async function pollCodexDeviceAuth(
