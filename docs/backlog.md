@@ -282,7 +282,18 @@ resúmenes (map-reduce), colapsar comunidades por defecto y expandir on-demand. 
 DESPUÉS de Fase 2.b/2.c, con lo aprendido de cómo se usa el local-graph (quizás el
 local-graph reduce la necesidad del global, cambiando el diseño de clustering).
 
-**Estado**: Fase 1 + core de Fase 2 implementados (sin commitear); 2.b/2.c/3 planeadas.
+**Live review (2026-06-07, deployed to home + dogfooded vía Playwright):**
+
+Ya hecho en esta ronda: single-click = peek compacto (no tapa los nodos) / **double-click = vista completa** (todo el espacio); MD del cuerpo renderizado + se limpian los marcadores `<!-- author [[...]] -->`; search filtra skills client-side + **dedup de fragments** (8 chunks idénticos → 1) + texto legible; guarda defensiva en `searchMatchSet` (un payload `{error}` ya no deja la app en blanco).
+
+Pendiente (de la review en vivo):
+- **History mezcla procedencia** → mover procedencia a su propia pestaña; History = solo commits git.
+- **Search: click en FRAGMENT no hace nada** (solo `canonical` selecciona nodo) → definir destino (abrir la referencia/entry).
+- **Header "N results"** muestra el total del backend, no los visibles tras filtro/dedup.
+- **Bug backend**: `search_memory_api(scope="fact")` → `{"error":"invalid scope 'fact'"}` pese a que el schema declara el enum `["all","skill","fact"]`. Mismatch schema↔validación en `MemorySearchTool`; arreglar la validación o quitar `fact` del enum.
+- Fase 2.b reading-first completo (tabs→secciones), 2.c hover-preview, Fase 3 clustering (sin cambios).
+
+**Estado**: Fase 1 + core de Fase 2 + fixes de live-review implementados y desplegados en home; resto planeado arriba.
 
 ---
 
