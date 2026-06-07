@@ -453,6 +453,24 @@ export async function searchSkills(
   );
 }
 
+/** Lazy SKILL.md description peek for a registry hit (search UI, on expand).
+ *  Returns an empty description when none is available — never throws on 404. */
+export async function describeSkill(
+  token: string,
+  ref: string,
+  base: string = "",
+): Promise<{ ref: string; description: string }> {
+  const params = new URLSearchParams({ ref });
+  try {
+    return await request<{ ref: string; description: string }>(
+      `${base}/api/skills/describe?${params}`,
+      token,
+    );
+  } catch {
+    return { ref, description: "" };
+  }
+}
+
 export async function approveSkill(
   token: string,
   name: string,
