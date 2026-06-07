@@ -286,14 +286,14 @@ local-graph reduce la necesidad del global, cambiando el diseño de clustering).
 
 Ya hecho en esta ronda: single-click = peek compacto (no tapa los nodos) / **double-click = vista completa** (todo el espacio); MD del cuerpo renderizado + se limpian los marcadores `<!-- author [[...]] -->`; search filtra skills client-side + **dedup de fragments** (8 chunks idénticos → 1) + texto legible; guarda defensiva en `searchMatchSet` (un payload `{error}` ya no deja la app en blanco).
 
-Pendiente (de la review en vivo):
-- **History mezcla procedencia** → mover procedencia a su propia pestaña; History = solo commits git.
-- **Search: click en FRAGMENT no hace nada** (solo `canonical` selecciona nodo) → definir destino (abrir la referencia/entry).
-- **Header "N results"** muestra el total del backend, no los visibles tras filtro/dedup.
-- **Bug backend**: `search_memory_api(scope="fact")` → `{"error":"invalid scope 'fact'"}` pese a que el schema declara el enum `["all","skill","fact"]`. Mismatch schema↔validación en `MemorySearchTool`; arreglar la validación o quitar `fact` del enum.
-- Fase 2.b reading-first completo (tabs→secciones), 2.c hover-preview, Fase 3 clustering (sin cambios).
+Round 2 (2026-06-07): **ego-graph focus mode** (click → `build_entity_subgraph` uncapped, centrado, "← Grafo completo"); `kinds="fact"` cableado end-to-end (skills fuera server-side; el "scope=fact" era pasar el valor al parámetro equivocado — `kinds`, no `scope`); **Procedencia** es su propia pestaña (History = solo commits); click en FRAGMENT enfoca la entidad etiquetada.
 
-**Estado**: Fase 1 + core de Fase 2 + fixes de live-review implementados y desplegados en home; resto planeado arriba.
+Pendiente:
+- **Header "N results"** muestra el total del backend, no los visibles tras dedup (cosmético).
+- **Click en FRAGMENT de tipo `reference`** (sin `entities`) no tiene destino — necesita un panel de contenido de referencia (las references no son nodos del grafo).
+- Fase 2.c hover-preview, Fase 3 clustering/comunidades (sin cambios).
+
+**Estado**: Fase 1 + Fase 2 (incl. ego-graph) + fixes de live-review implementados y desplegados en home.
 
 ---
 
