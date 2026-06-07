@@ -52,6 +52,43 @@ def test_relation_add_dedup_by_to_type():
     assert len([r for r in p.relations if r["to"] == "company:carahsoft"]) == 1
 
 
+def test_relation_provenance_keyed_by_to_type():
+    # Q1: relation provenance is a {(to,type)-key: entry} dict carrying to/type.
+    p = _page()
+    apply_field_patch(p, FieldPatch(kind="relation",
+                                    value=dict(to="company:carahsoft", type="partner"),
+                                    author="agent", source_ref="s#t1", at=NOW))
+    rel_prov = p.provenance["relations"]
+    assert isinstance(rel_prov, dict)
+    (entry,) = rel_prov.values()
+    assert entry["to"] == "company:carahsoft"
+    assert entry["type"] == "partner"
+    assert entry["author"] == "agent"
+    assert "index" not in entry
+
+
+def test_relation_provenance_lenient_migrates_legacy_index_list():
+    # A page persisted with the legacy index-keyed list is migrated to the
+    # (to,type)-keyed dict on the next relation write, preserving the old entry.
+    p = _page()
+    p.relations = [dict(to="topic:a", type="about")]
+    p.provenance = {"relations": [
+        {"index": 0, "source_ref": "old", "extracted_at": "2026-01-01T00:00:00+00:00",
+         "author": "agent"},
+    ]}
+    apply_field_patch(p, FieldPatch(kind="relation",
+                                    value=dict(to="topic:b", type="about"),
+                                    author="agent", source_ref="s#t2", at=NOW))
+    rel_prov = p.provenance["relations"]
+    assert isinstance(rel_prov, dict)
+    # both the migrated legacy entry and the new one are present, keyed by ref+type
+    tos = {e["to"] for e in rel_prov.values()}
+    assert tos == {"topic:a", "topic:b"}
+    migrated = next(e for e in rel_prov.values() if e["to"] == "topic:a")
+    assert migrated["source_ref"] == "old"
+    assert "index" not in migrated
+
+
 def test_derived_from_add_dedup_and_ref_keyed_provenance():
     p = _page()
     ref = "reference:rabies-investigation"

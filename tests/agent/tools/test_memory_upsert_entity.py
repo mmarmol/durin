@@ -22,8 +22,14 @@ def test_tool_authors_entity(tmp_path):
     assert "mxHERO" in page.aliases
     assert any(r["to"] == "company:carahsoft" for r in page.relations)
     assert "Box 2025" in page.body
-    # the field author is recorded as "agent" (resolved from author_scope)
-    assert page.provenance["relations"][0]["author"] == "agent"
+    # the field author is recorded as "agent" (resolved from author_scope).
+    # Q1: relation provenance is keyed by (to, type), carrying to/type.
+    rel_prov = page.provenance["relations"]
+    assert isinstance(rel_prov, dict)
+    entry = next(iter(rel_prov.values()))
+    assert entry["author"] == "agent"
+    assert entry["to"] == "company:carahsoft"
+    assert entry["type"] == "partner"
 
 
 def test_tool_merges_existing(tmp_path):

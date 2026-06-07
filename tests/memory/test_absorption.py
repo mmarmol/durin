@@ -286,3 +286,64 @@ def test_absorb_removes_from_vector_index(tmp_path: Path) -> None:
     ids_after = {h["id"] for h in hits_after}
     assert "person:marcelo" in ids_after
     assert "person:marcelo_m" not in ids_after
+
+
+# ---------------------------------------------------------------------------
+# P2 / Q1: _merge_pages folds derived_from + relation provenance (item B bug)
+# ---------------------------------------------------------------------------
+
+
+def test_merge_unions_derived_from_and_folds_provenance() -> None:
+    from durin.memory.absorption import _merge_pages
+    from durin.memory.field_provenance import relation_prov_key
+
+    canonical = EntityPage(
+        type="topic", name="Rabies",
+        relations=[{"to": "topic:virology", "type": "related_to"}],
+        derived_from=["reference:doc-a"],
+        provenance={
+            "relations": {
+                relation_prov_key("topic:virology", "related_to"): {
+                    "to": "topic:virology", "type": "related_to",
+                    "source_ref": "c", "extracted_at": "2026-06-01T00:00:00+00:00",
+                    "author": "agent",
+                },
+            },
+            "derived_from": {
+                "reference:doc-a": {
+                    "source_ref": "c", "extracted_at": "2026-06-01T00:00:00+00:00",
+                    "author": "agent",
+                },
+            },
+        },
+    )
+    absorbed = EntityPage(
+        type="topic", name="Rabies (dup)",
+        relations=[{"to": "topic:zoonosis", "type": "related_to"}],
+        derived_from=["reference:doc-a", "reference:doc-b"],
+        provenance={
+            "relations": {
+                relation_prov_key("topic:zoonosis", "related_to"): {
+                    "to": "topic:zoonosis", "type": "related_to",
+                    "source_ref": "a", "extracted_at": "2026-06-02T00:00:00+00:00",
+                    "author": "agent",
+                },
+            },
+            "derived_from": {
+                "reference:doc-b": {
+                    "source_ref": "a", "extracted_at": "2026-06-02T00:00:00+00:00",
+                    "author": "agent",
+                },
+            },
+        },
+    )
+    merged = _merge_pages(canonical, absorbed, absorbed_ref="topic:rabies_dup")
+
+    # derived_from: union, dedup, canonical order first.
+    assert merged.derived_from == ["reference:doc-a", "reference:doc-b"]
+    # derived_from provenance: both refs folded.
+    assert set(merged.provenance["derived_from"]) == {"reference:doc-a", "reference:doc-b"}
+    # relation provenance: BOTH sides retained (item B — was dropped before).
+    rel_prov = merged.provenance["relations"]
+    tos = {e["to"] for e in rel_prov.values()}
+    assert tos == {"topic:virology", "topic:zoonosis"}
