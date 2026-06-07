@@ -1236,9 +1236,15 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
         {selected ? (
           <aside
             className={cn(
-              "mg-cpanel absolute right-3 top-3 z-10 flex max-w-[calc(100vw-1.5rem)] flex-col rounded-lg border border-border/50 bg-card/95 text-sm shadow-lg backdrop-blur",
+              "absolute right-3 top-3 z-10 flex max-w-[calc(100vw-1.5rem)] flex-col rounded-lg border border-border/50 bg-card/95 text-sm shadow-lg backdrop-blur",
               "transition-[width] duration-200 ease-out",
-              compact || panelExpanded ? "w-[calc(100%-1.5rem)]" : "w-[22rem]",
+              // Reserve space (split, graph re-fits) only in the desktop compact
+              // panel. Expanded / mobile overlay the graph (no push) and fill the
+              // full height.
+              !compact && !panelExpanded && "mg-cpanel",
+              compact || panelExpanded
+                ? "bottom-3 w-[calc(100%-1.5rem)]"
+                : "w-[22rem]",
             )}
             style={{ maxHeight: "calc(100% - 1.5rem)" }}
           >
