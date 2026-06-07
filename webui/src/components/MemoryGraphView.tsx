@@ -918,8 +918,11 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
 
       <div ref={wrapRef} className="relative min-h-0 flex-1">
         {error ? (
-          <div className="absolute inset-0 flex items-center justify-center text-sm text-destructive">
-            {error}
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm text-destructive">
+            <span>{error}</span>
+            <Button variant="outline" size="sm" onClick={() => void refresh()}>
+              {t("memoryGraph.retry")}
+            </Button>
           </div>
         ) : null}
         {loading && !data ? (
@@ -1617,10 +1620,14 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                 </>
               ) : null}
             </div>
-            <Separator className="bg-border/30" />
-            <footer className="px-3 py-1.5 text-[10.5px] text-muted-foreground">
-              {t("memoryGraph.interactionHint")}
-            </footer>
+            {!compact ? (
+              <>
+                <Separator className="bg-border/30" />
+                <footer className="px-3 py-1.5 text-[10.5px] text-muted-foreground">
+                  {t("memoryGraph.interactionHint")}
+                </footer>
+              </>
+            ) : null}
           </aside>
         ) : null}
 
