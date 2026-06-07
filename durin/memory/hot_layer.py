@@ -355,8 +355,7 @@ def _render_relations_line(relations: list[dict[str, Any]]) -> str:
 def _render_identifiers_line(identifiers: Any) -> str:
     """Legacy v1 emergent ``identifiers`` field → one prose line.
 
-    Compatible with both shapes the dream LLM emits (per
-    ``docs/research/phase0_results.md``): flat list or typed dict.
+    Compatible with both shapes the dream LLM emits in practice: flat list or typed dict.
     Returns ``""`` when there's nothing meaningful to render.
     """
     if not identifiers:

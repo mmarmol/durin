@@ -344,7 +344,7 @@ the document grep-able.
 ```
 
 Notes:
-- `saved_to` and `meta_path` are paths returned from [`ingestion.py`](../../durin/memory/ingestion.py) (`result["source"]` / `result["meta_path"]`).
+- `saved_to` and `meta_path` are paths returned from [`ingestion.py`](../../../durin/memory/ingestion.py) (`result["source"]` / `result["meta_path"]`).
 - `reference` is the `reference:<slug>` id of the stored reference. It is present **only when the reference write succeeded** — the reference write is best-effort and does not roll back the verbatim ingest if it fails (the key is omitted on failure or when memory is disabled).
 - **Key order (C1):** `id` + `reference` are emitted **first**, before `content` (the whole doc). The agent result is head-truncated at 16 KB; placing the ref before the body keeps `reference:<slug>` readable on large documents so the entity-linking flow (`memory_upsert_entity(derived_from=[...])`) survives truncation.
 - `id` is `sha256(filename + "\0" + content)[:12]` — re-ingesting the same file is idempotent, but renaming the file before re-ingest produces a different id (and therefore a duplicate entry under `ingested/`). If the user wants to "update" a previously-ingested file, the workflow is: re-ingest, then archive the old `ingested/<old-id>/` directory manually (or accept the duplicate; both versions live in git history).

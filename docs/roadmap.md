@@ -2,8 +2,7 @@
 
 > Forward plan después de la refutación empírica de la dirección "smart layer".
 > Ver `bitacora.md` para qué se descartó y por qué.
-> Para detalles históricos de items shipped, ver `git log` + `bitacora.md` +
-> `archive/`.
+> Para detalles históricos de items shipped, ver `git log` + `bitacora.md`.
 
 ---
 
@@ -14,7 +13,7 @@ daily-driver lifecycle + capability bridges (vision/audio) + secrets +
 web config parity + workspace vault-friendly.
 
 **Memoria** (subsystem hardened post-H25→H30 + P9→P11):
-- 4 memory tools (`memory_search`, `memory_store`, `memory_ingest`, `memory_drill`) con FTS5 + LanceDB + grep + RRF + entity-aware ranker + cross-encoder rerank
+- 5 memory tools (`memory_search`, `memory_upsert_entity`, `memory_ingest`, `memory_drill`, `memory_forget`) con FTS5 + LanceDB + grep + RRF + entity-aware ranker + cross-encoder rerank (`memory_store` quedó deshabilitado en el modelo entity-centric — facts van por `memory_upsert_entity`)
 - Default embedding `intfloat/multilingual-e5-small` (~450 MB, 100+ langs, MIT)
 - Default cross-encoder `BAAI/bge-reranker-base` (opt-in via wizard)
 - Workspace Obsidian-compatible (`VAULT_README.md` + per-class `_INDEX.md`, wikilinks en `source_refs`/`related`, `.durin/index/` aislado)
@@ -36,7 +35,7 @@ Pendientes activos: `docs/backlog.md`.
 
 ### Horizon 1a — Role-based SOUL.md routing — REFUTED (2026-05-19)
 
-**Status**: closed. V9e ran 107 exercises × 3 conditions (none / specific / generic_agent), `max_tokens=131072`, glm-5.1. Pass rates: 69.2% / 71.0% / 73.8% — gap of 4.6pp within the noise floor (±4.4pp for N=107). The 23 divergent exercises distribute uniformly across the 6 possible patterns (chi² = 1.78, df=5, p≫0.05), and sign-test per-condition gives p=0.41–0.68 — **statistically indistinguishable from random model variance**. Error types are nearly identical across conditions (28/30/25 AssertionError, 1/1/2 setup errors). Jaccard similarity of fail-sets is 0.57–0.61 — most failures are shared difficulty, not differentiation. See `bitacora.md` y `archive/` para análisis V9e completo.
+**Status**: closed. V9e ran 107 exercises × 3 conditions (none / specific / generic_agent), `max_tokens=131072`, glm-5.1. Pass rates: 69.2% / 71.0% / 73.8% — gap of 4.6pp within the noise floor (±4.4pp for N=107). The 23 divergent exercises distribute uniformly across the 6 possible patterns (chi² = 1.78, df=5, p≫0.05), and sign-test per-condition gives p=0.41–0.68 — **statistically indistinguishable from random model variance**. Error types are nearly identical across conditions (28/30/25 AssertionError, 1/1/2 setup errors). Jaccard similarity of fail-sets is 0.57–0.61 — most failures are shared difficulty, not differentiation. See `bitacora.md` y `git log` para análisis V9e completo.
 
 **Lo que sobrevive como efecto real**:
 - **Token efficiency**: SOUL ≠ ∅ reduces median output tokens 3–5× y reasoning chars 2.84× vs no SOUL, a corrección idéntica. Robusto en V9d y V9e.
@@ -80,7 +79,7 @@ usuario, no sobre la memoria). No priorizado hoy.
 ### Horizon 2 — Memory system — SHIPPED (entity-centric, Phases 0-6 + post-T1 cycle)
 
 **Status**: implementado. La forma final difiere del diseño original
-(`archive/03_memory_design.md`): no son "5 node types con milestone
+(el diseño original): no son "5 node types con milestone
 promotion", sino entity-centric pages + classes (`stable` / `episodic` /
 `corpus` / `pending` / `session_summary` / `entities`) + Dream consolidator
 LLM-driven + auto-absorb opt-in. Ver `docs/architecture/memory/`.

@@ -12,8 +12,7 @@ depends_on: 09_implementation_roadmap.md (spec); 99_phase_progress_review.md (de
 > **⚠️ Superseded (2026-06).** This pre-migration tracker is kept for history. The
 > Phase-1.9 work shipped with the entity-centric migration; the **current** state,
 > remediation record, and remaining items live in
-> [`docs/qa/post_migration_audit_2026-06.md`](../../qa/post_migration_audit_2026-06.md)
-> and [`docs/backlog.md`](../../backlog.md). For how the system works **now**, read
+> [`docs/backlog.md`](../../backlog.md). For how the system works **now**, read
 > `00`-`08` (memory) + `docs/architecture/skills/` (skills) — not this list.
 
 This document is the **granular list of what remains** after the current state (commit `c820447`). The original plan (`09_implementation_roadmap.md`) is still the **specs** reference, but uses a "deliverables" granularity that hid scope and latent bugs in the autonomous session. This doc applies the format discussed in D5+D6:
@@ -70,9 +69,8 @@ Documented here for historical reference. Hooks in `memory_store.execute`, `memo
 > (`memory_writer._commit_dirty_as_user`, N1, 2026-06-06): the next system write
 > commits any dirty hand edit with `author:user` before its hard-reset ff, so the
 > edit isn't clobbered. (b) **vector re-index of a hand edit** — `reindex_one_file`
-> is FTS-only; the watcher never re-embeds. Tracked as **N2** (in
-> [`docs/qa/post_migration_audit_2026-06.md`](../../qa/post_migration_audit_2026-06.md),
-> now ✅ resolved). DoD's "within 5 s a `memory_search` surfaces the
+> is FTS-only; the watcher never re-embeds. Tracked as **N2**
+> (now ✅ resolved). DoD's "within 5 s a `memory_search` surfaces the
 > edit" holds for FTS, NOT for vector recall, until N2 lands.
 
 - **TYPE**: 🟢 module (~120 LOC)
@@ -317,7 +315,7 @@ Documented here for historical reference. Hooks in `memory_store.execute`, `memo
 ### P8.1 — LoCoMo bench run with v2 pipeline
 
 - **TYPE**: 🔴 integration + 📄 report
-- **DoD**: Run `scripts/benchmark/locomo_run.py` (exists) with per_category=25 → result documented in `docs/archive/39_locomo_results_and_sota_gap.md`. Bar: ≥ 64.7% (previous v2 baseline) without cross-encoder; ≥ 70% with cross-encoder.
+- **DoD**: Run `scripts/benchmark/locomo_run.py` (exists) with per_category=25 → result documented. Bar: ≥ 64.7% (previous v2 baseline) without cross-encoder; ≥ 70% with cross-encoder.
 - **Refs**:
   - Script: `scripts/benchmark/locomo_run.py`.
   - Results: appended in doc 28.

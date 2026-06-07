@@ -176,7 +176,7 @@ class VectorIndex:
     ) -> None:
         """Index a consolidated entity page (``memory/entities/<type>/<slug>.md``).
 
-        Per ``docs/archive/35_entity_centric_plan.md`` §7 + Phase 0.1 finding,
+        Per ``docs/architecture/memory/02_indexing.md`` §4.2 (Phase 0.1 finding),
         the embedded text omits the ``<type>:`` prefix (which Phase 0.1
         measured at cosine 0.517 against ``durin``, vs 0.755 for
         ``durin``/``durin-agent`` — the prefix introduces token noise).
