@@ -6,134 +6,123 @@
 <title>durin · Memoria — interaction mockup</title>
 <style>
   :root {
-    --bg: #fbfbfa;
-    --panel: #ffffff;
-    --ink: #1c1c1a;
-    --muted: #6b6b66;
-    --line: #e6e5e1;
-    --topic: #2faf6a;
-    --session: #6b7280;
-    --reference: #d9952b;
-    --accent: #5b56e0;
-    --lit: #1c1c1a;
-    --dim: #d7d6d2;
+    --bg:#fbfbfa; --panel:#fff; --ink:#1c1c1a; --muted:#6b6b66; --line:#e6e5e1;
+    --topic:#2faf6a; --session:#6b7280; --reference:#d9952b; --accent:#5b56e0;
   }
   * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; font: 14px/1.5 -apple-system, system-ui, sans-serif; color: var(--ink); background: var(--bg); }
-  .app { display: flex; height: 100vh; }
+  html, body { margin:0; height:100%; font:14px/1.5 -apple-system, system-ui, sans-serif; color:var(--ink); background:var(--bg); }
+  .app { display:flex; height:100vh; }
 
-  /* left rail (context only) */
-  .rail { width: 180px; border-right: 1px solid var(--line); padding: 12px; flex-shrink: 0; background: var(--panel); }
-  .rail .brand { font-weight: 700; margin-bottom: 16px; }
-  .rail .nav { font-size: 13px; color: var(--muted); }
-  .rail .nav .on { color: var(--ink); font-weight: 600; background: #f1f0ec; border-radius: 6px; padding: 4px 8px; display: inline-block; }
+  .rail { width:170px; border-right:1px solid var(--line); padding:12px; flex-shrink:0; background:var(--panel); }
+  .rail .brand { font-weight:700; margin-bottom:16px; }
+  .rail .nav .on { font-weight:600; background:#f1f0ec; border-radius:6px; padding:4px 8px; display:inline-block; }
+  .rail .nav .off { color:var(--muted); padding:4px 8px; display:inline-block; }
 
-  /* main */
-  .main { flex: 1; position: relative; min-width: 0; }
-  .topbar { height: 46px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 10px; padding: 0 14px; background: var(--panel); position: relative; z-index: 5; }
-  .topbar .title { font-weight: 600; }
-  .topbar .stats { color: var(--muted); font-size: 12px; }
-  .topbar .search { margin-left: auto; width: 300px; }
-  .topbar .search input { width: 100%; height: 30px; border: 1px solid var(--line); border-radius: 8px; padding: 0 10px; font: inherit; outline: none; }
-  .topbar .search input:focus { border-color: var(--accent); }
-  .backbtn { display: none; border: 1px solid var(--line); background: var(--panel); border-radius: 6px; padding: 3px 8px; font-size: 12px; color: var(--accent); cursor: pointer; }
+  .main { flex:1; display:flex; flex-direction:column; min-width:0; }
+  .topbar { height:46px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:10px; padding:0 14px; background:var(--panel); flex-shrink:0; }
+  .topbar .title { font-weight:600; }
+  .topbar .stats { color:var(--muted); font-size:12px; }
+  .topbar .search { margin-left:auto; width:280px; max-width:40vw; }
+  .topbar .search input { width:100%; height:30px; border:1px solid var(--line); border-radius:8px; padding:0 10px; font:inherit; outline:none; }
+  .topbar .search input:focus { border-color:var(--accent); }
 
-  .stage { position: absolute; inset: 46px 0 0 0; overflow: hidden; }
+  /* THE split: graph column + content column. Panels take space, not overlay. */
+  .stage { flex:1; display:flex; min-height:0; }
+  .graphpane { flex:1 1 0; position:relative; overflow:hidden; min-width:0; }
 
-  /* graph */
-  svg.edges { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-  .node { position: absolute; transform: translate(-50%, -50%); cursor: pointer; text-align: center; transition: opacity .18s ease; }
-  .node .dot { width: 18px; height: 18px; border-radius: 50%; margin: 0 auto 4px; box-shadow: 0 0 0 0 rgba(91,86,224,0); transition: box-shadow .18s ease, transform .12s ease; }
-  .node.t-topic .dot { background: var(--topic); }
-  .node.t-session .dot { background: var(--session); }
-  .node .label { font-size: 12px; color: var(--muted); white-space: nowrap; }
-  .node.lit .label { color: var(--ink); font-weight: 600; }
-  .node.lit .dot { box-shadow: 0 0 0 4px rgba(91,86,224,.18); }
-  .node.dim { opacity: .22; }
-  .node.active .dot { transform: scale(1.25); box-shadow: 0 0 0 5px rgba(91,86,224,.28); }
-  svg .edge { stroke: #cfcec9; stroke-width: 1.2; transition: stroke .18s, opacity .18s; }
-  svg .edge.lit { stroke: var(--accent); opacity: .8; }
-  svg .edge.dim { opacity: .12; }
+  svg.edges { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
+  .node { position:absolute; transform:translate(-50%,-50%); cursor:pointer; text-align:center; transition:left .22s cubic-bezier(.2,.8,.2,1), top .22s cubic-bezier(.2,.8,.2,1), opacity .18s; }
+  .node .dot { width:18px; height:18px; border-radius:50%; margin:0 auto 4px; transition:box-shadow .18s, transform .12s; }
+  .node.t-topic .dot{ background:var(--topic);} .node.t-session .dot{ background:var(--session);}
+  .node .label { font-size:12px; color:var(--muted); white-space:nowrap; }
+  .node.lit .label { color:var(--ink); font-weight:600; }
+  .node.lit .dot { box-shadow:0 0 0 4px rgba(91,86,224,.18); }
+  .node.dim { opacity:.22; }
+  .node.active .dot { transform:scale(1.25); box-shadow:0 0 0 5px rgba(91,86,224,.28); }
+  svg .edge { stroke:#cfcec9; stroke-width:1.2; transition:stroke .18s, opacity .18s; }
+  svg .edge.lit { stroke:var(--accent); opacity:.85; } svg .edge.dim { opacity:.12; }
 
-  /* hover preview popover */
-  .preview { position: absolute; z-index: 30; width: 250px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.10); padding: 10px; font-size: 12px; pointer-events: none; display: none; }
-  .preview .h { display: flex; gap: 6px; align-items: center; font-weight: 600; margin-bottom: 4px; }
-  .preview .h .d { width: 8px; height: 8px; border-radius: 50%; }
-  .preview .body { color: var(--muted); display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden; }
+  .preview { position:absolute; z-index:30; width:240px; background:var(--panel); border:1px solid var(--line); border-radius:10px; box-shadow:0 8px 24px rgba(0,0,0,.10); padding:10px; font-size:12px; pointer-events:none; display:none; }
+  .preview .h { display:flex; gap:6px; align-items:center; font-weight:600; margin-bottom:4px; }
+  .preview .h .d { width:8px; height:8px; border-radius:50%; }
+  .preview .body { color:var(--muted); display:-webkit-box; -webkit-line-clamp:5; -webkit-box-orient:vertical; overflow:hidden; }
 
-  /* THE single content panel (entity / reference / entry all use it) */
-  .panel { position: absolute; top: 12px; right: 12px; bottom: 12px; width: 380px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.12); display: none; flex-direction: column; z-index: 20; transition: width .18s ease; }
-  .panel.open { display: flex; }
-  .panel.wide { width: calc(100% - 24px); }
-  .panel header { display: flex; gap: 8px; align-items: flex-start; padding: 10px 12px; border-bottom: 1px solid var(--line); }
-  .panel header .d { width: 10px; height: 10px; border-radius: 50%; margin-top: 5px; flex-shrink: 0; }
-  .panel header .ttl { font-weight: 600; }
-  .panel header .sub { font-size: 12px; color: var(--muted); }
-  .panel header .sp { margin-left: auto; display: flex; gap: 4px; }
-  .panel header button { border: none; background: none; cursor: pointer; color: var(--muted); border-radius: 6px; padding: 3px 6px; font-size: 13px; }
-  .panel header button:hover { background: #f1f0ec; }
-  .panel .tabs { display: flex; gap: 4px; flex-wrap: wrap; padding: 6px 10px; border-bottom: 1px solid var(--line); font-size: 12px; }
-  .panel .tabs button { border: none; background: none; cursor: pointer; color: var(--muted); padding: 3px 8px; border-radius: 6px; }
-  .panel .tabs button.on { background: rgba(91,86,224,.12); color: var(--accent); }
-  .panel .content { padding: 12px; overflow: auto; font-size: 13px; }
-  .panel .content h1 { font-size: 18px; margin: 0 0 8px; }
-  .panel .content h2 { font-size: 15px; margin: 14px 0 6px; }
-  .panel .content p { margin: 0 0 8px; }
-  .panel .content ul { margin: 0 0 8px 18px; padding: 0; }
+  /* search = TRANSIENT overlay over the graph pane; closes on pick */
+  .results { position:absolute; top:12px; left:12px; bottom:12px; width:290px; max-width:calc(100% - 24px); background:var(--panel); border:1px solid var(--line); border-radius:12px; box-shadow:0 10px 30px rgba(0,0,0,.10); display:none; flex-direction:column; z-index:15; }
+  .results.open { display:flex; }
+  .results .rh { padding:9px 12px; border-bottom:1px solid var(--line); font-size:12px; font-weight:600; display:flex; justify-content:space-between; }
+  .results .rh .x { cursor:pointer; color:var(--muted); }
+  .results .list { overflow:auto; }
+  .results .item { padding:10px 12px; border-top:1px solid var(--line); cursor:pointer; }
+  .results .item:first-child { border-top:none; } .results .item:hover { background:#f6f5f2; }
+  .results .kind { font-size:10px; text-transform:uppercase; border-radius:4px; padding:1px 5px; }
+  .results .kind.canonical { background:rgba(47,175,106,.16); color:#1f7a4a; }
+  .results .kind.reference { background:rgba(217,149,43,.16); color:#9a6712; }
+  .results .item .t { font-weight:600; margin-left:6px; } .results .item .s { font-size:11px; color:var(--muted); margin-top:4px; }
 
-  /* search results */
-  .results { position: absolute; top: 12px; left: 12px; bottom: 12px; width: 300px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.10); display: none; flex-direction: column; z-index: 15; }
-  .results.open { display: flex; }
-  .results .rh { padding: 9px 12px; border-bottom: 1px solid var(--line); font-size: 12px; font-weight: 600; display: flex; justify-content: space-between; }
-  .results .rh .x { cursor: pointer; color: var(--muted); }
-  .results .list { overflow: auto; }
-  .results .item { padding: 10px 12px; border-top: 1px solid var(--line); cursor: pointer; }
-  .results .item:hover { background: #f6f5f2; }
-  .results .item:first-child { border-top: none; }
-  .results .kind { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; border-radius: 4px; padding: 1px 5px; }
-  .results .kind.canonical { background: rgba(47,175,106,.16); color: #1f7a4a; }
-  .results .kind.reference { background: rgba(217,149,43,.16); color: #9a6712; }
-  .results .item .t { font-weight: 600; margin-left: 6px; }
-  .results .item .s { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  /* content panel = a COLUMN sibling (takes space). width 0 closed. */
+  .panel { flex:0 0 0; width:0; overflow:hidden; border-left:1px solid var(--line); background:var(--panel); display:flex; flex-direction:column; transition:flex-basis .22s cubic-bezier(.2,.8,.2,1); }
+  .panel.open { flex-basis:clamp(360px, 42%, 560px); }
+  .panel.wide { flex-basis:72%; }
+  .panel header { display:flex; gap:8px; align-items:flex-start; padding:10px 12px; border-bottom:1px solid var(--line); }
+  .panel header .d { width:10px; height:10px; border-radius:50%; margin-top:5px; flex-shrink:0; }
+  .panel header .ttl { font-weight:600; } .panel header .sub { font-size:12px; color:var(--muted); }
+  .panel header .sp { margin-left:auto; display:flex; gap:4px; }
+  .panel header button { border:none; background:none; cursor:pointer; color:var(--muted); border-radius:6px; padding:3px 6px; }
+  .panel header button:hover { background:#f1f0ec; }
+  .panel .tabs { display:flex; gap:4px; flex-wrap:wrap; padding:6px 10px; border-bottom:1px solid var(--line); font-size:12px; }
+  .panel .tabs button { border:none; background:none; cursor:pointer; color:var(--muted); padding:3px 8px; border-radius:6px; white-space:nowrap; }
+  .panel .tabs button.on { background:rgba(91,86,224,.12); color:var(--accent); }
+  .panel .content { padding:12px; overflow:auto; font-size:13px; }
+  .panel .content h1 { font-size:18px; margin:0 0 8px; } .panel .content h2 { font-size:15px; margin:14px 0 6px; }
+  .panel .content p { margin:0 0 8px; } .panel .content ul { margin:0 0 8px 18px; padding:0; }
 
-  .legend { position: absolute; left: 14px; bottom: 12px; font-size: 11px; color: var(--muted); display: flex; gap: 12px; z-index: 4; }
-  .legend i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
-  .hint { position: absolute; right: 14px; bottom: 12px; font-size: 11px; color: var(--muted); z-index: 4; max-width: 360px; text-align: right; }
+  /* responsive: narrow → content takes the WHOLE space, graph hidden */
+  .stage.narrow .graphpane { display:none; }
+  .stage.narrow .panel.open { flex-basis:100%; width:auto; }
+  .backbtn { display:none; }
+  .stage.narrow .panel.open .backbtn { display:inline-block; }
+
+  .legend { position:absolute; left:14px; bottom:12px; font-size:11px; color:var(--muted); display:flex; gap:12px; z-index:4; }
+  .legend i { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:4px; vertical-align:middle; }
+  .hint { position:absolute; right:14px; bottom:12px; font-size:11px; color:var(--muted); z-index:4; max-width:55%; text-align:right; }
+  .vp { position:absolute; left:14px; top:10px; font-size:11px; color:var(--muted); z-index:4; }
 </style>
 </head>
 <body>
 <div class="app">
   <aside class="rail">
     <div class="brand">durin</div>
-    <div class="nav"><div class="on">▣ Memoria</div><div style="margin-top:8px">✦ Skills</div></div>
+    <div class="nav"><span class="on">▣ Memoria</span><br/><span class="off">✦ Skills</span></div>
   </aside>
 
   <main class="main">
     <div class="topbar">
       <span class="title">Memoria</span>
       <span class="stats" id="stats">5 nodos · 4 enlaces</span>
-      <button class="backbtn" id="backbtn">← Grafo completo</button>
       <div class="search"><input id="search" placeholder="Buscar en memoria…" autocomplete="off" /></div>
     </div>
 
     <div class="stage" id="stage">
-      <svg class="edges" id="edges"></svg>
-      <!-- nodes injected by JS -->
-
-      <div class="preview" id="preview">
-        <div class="h"><span class="d"></span><span id="pv-title"></span></div>
-        <div class="body" id="pv-body"></div>
+      <div class="graphpane" id="graphpane">
+        <svg class="edges" id="edges"></svg>
+        <div class="vp" id="vp"></div>
+        <div class="preview" id="preview">
+          <div class="h"><span class="d"></span><span id="pv-title"></span></div>
+          <div class="body" id="pv-body"></div>
+        </div>
+        <aside class="results" id="results">
+          <div class="rh"><span id="rh-count">Search</span><span class="x" id="results-x">✕</span></div>
+          <div class="list" id="results-list"></div>
+        </aside>
+        <div class="legend"><span><i style="background:var(--topic)"></i>topic</span><span><i style="background:var(--session)"></i>session</span></div>
+        <div class="hint">Hover = resaltar+preview · Click = abre (el grafo se encoge y re-encaja) · ✕ = restaura</div>
       </div>
 
-      <!-- search results (left) -->
-      <aside class="results" id="results">
-        <div class="rh"><span id="rh-count">Search</span><span class="x" id="results-x">✕</span></div>
-        <div class="list" id="results-list"></div>
-      </aside>
-
-      <!-- THE single content panel (right) -->
+      <!-- THE single content panel — a COLUMN, not an overlay -->
       <aside class="panel" id="panel">
         <header>
+          <button class="backbtn" id="pn-back" title="Volver al grafo">←</button>
           <span class="d" id="pn-dot"></span>
           <div style="min-width:0">
             <div class="ttl" id="pn-title"></div>
@@ -147,188 +136,102 @@
         <div class="tabs" id="pn-tabs"></div>
         <div class="content" id="pn-content"></div>
       </aside>
-
-      <div class="legend"><span><i style="background:var(--topic)"></i>topic</span><span><i style="background:var(--session)"></i>session</span></div>
-      <div class="hint" id="hint">Hover = resaltar + preview · Click = abrir · ✕ = volver al grafo previo</div>
     </div>
   </main>
 </div>
 
 <script>
-// ---- fake data ----------------------------------------------------------
 const NODES = [
   { id:"topic:reaccion-adversa", type:"topic", name:"Reacción Adversa Vacuna Rabia", x:.52, y:.46,
-    body:`<h1>Reacción Adversa Vacunal</h1><p>Investigación clínica sobre reacciones adversas postvacunales (angioedema y urticaria) en caninos. Caso: Teckel hembra de 5 años vacunada con Zoetis.</p><h2>Mecanismo</h2><p>Hipersensibilidad tipo I (IgE) con desgranulación de mastocitos.</p><h2>Protocolo</h2><ul><li>Prednisolona 0.5-1 mg/kg IM/IV</li><li>Difenhidramina 2-4 mg/kg IM</li></ul>` },
-  { id:"topic:veterinaria-clinica", type:"topic", name:"Veterinaria Clínica", x:.34, y:.34,
-    body:`<h1>Veterinaria Clínica Canina</h1><p>Dominio de conocimiento clínico veterinario para caninos.</p>` },
-  { id:"topic:zoetis-vacuna", type:"topic", name:"Zoetis (vacuna)", x:.40, y:.62,
-    body:`<h1>Zoetis — Vacuna Rabia</h1><p>Marca de la vacuna implicada en el caso de referencia.</p>` },
-  { id:"session:ws-2db", type:"session", name:"necesito que… podamos…", x:.70, y:.40,
-    body:`<h1>Sesión websocket_2db…</h1><p>Conversación donde se creó la entidad (turno 8). 61 mensajes.</p>` },
-  { id:"session:cron-dream", type:"session", name:"The schedule… this re…", x:.64, y:.66,
-    body:`<h1>Sesión cron_dream</h1><p>Consolidación nocturna.</p>` },
+    body:`<h1>Reacción Adversa Vacunal</h1><p>Investigación clínica sobre reacciones adversas postvacunales en caninos. Caso: Teckel hembra de 5 años vacunada con Zoetis.</p><h2>Mecanismo</h2><p>Hipersensibilidad tipo I (IgE).</p><h2>Protocolo</h2><ul><li>Prednisolona 0.5-1 mg/kg</li><li>Difenhidramina 2-4 mg/kg</li></ul>` },
+  { id:"topic:veterinaria-clinica", type:"topic", name:"Veterinaria Clínica", x:.30, y:.30, body:`<h1>Veterinaria Clínica</h1><p>Dominio clínico veterinario.</p>` },
+  { id:"topic:zoetis-vacuna", type:"topic", name:"Zoetis (vacuna)", x:.36, y:.66, body:`<h1>Zoetis — Vacuna Rabia</h1><p>Marca implicada.</p>` },
+  { id:"session:ws-2db", type:"session", name:"necesito que… podamos…", x:.74, y:.36, body:`<h1>Sesión websocket_2db…</h1><p>Donde se creó la entidad (turno 8).</p>` },
+  { id:"session:cron-dream", type:"session", name:"The schedule… this re…", x:.68, y:.70, body:`<h1>Sesión cron_dream</h1><p>Consolidación nocturna.</p>` },
 ];
-const EDGES = [
-  ["topic:reaccion-adversa","topic:veterinaria-clinica"],
-  ["topic:reaccion-adversa","topic:zoetis-vacuna"],
-  ["topic:reaccion-adversa","session:ws-2db"],
-  ["topic:reaccion-adversa","session:cron-dream"],
-];
-// reference docs are NOT graph nodes — only reachable via search
-const REFERENCES = [
-  { id:"reference:reaccion-adversa-investigacion", name:"reaccion-adversa-…-investigacion",
-    body:`<h1>Reacción Adversa Vacunal: Angioedema y Urticaria</h1><p><b>Caso clínico de referencia</b></p><ul><li>Paciente: Teckel hembra, 5 años</li><li>Vacuna: Rabia (Zoetis)</li></ul><h2>1. Fisiopatología</h2><p>El angioedema postvacunal resulta de una hipersensibilidad tipo I (IgE)…</p><h2>Fuentes</h2><p>Ford RB (Today's Veterinary Practice), Moore GE (JAVMA 2005), MSD Veterinary Manual.</p>` },
-];
-const TABS_ENTITY = ["Info","Contenido","Entradas","Procedencia","History","Sources","Archive"];
-const TABS_REFERENCE = ["Contenido"];
+const EDGES = [["topic:reaccion-adversa","topic:veterinaria-clinica"],["topic:reaccion-adversa","topic:zoetis-vacuna"],["topic:reaccion-adversa","session:ws-2db"],["topic:reaccion-adversa","session:cron-dream"]];
+const REFERENCES = [{ id:"reference:reaccion-adversa-investigacion", name:"reaccion-adversa-…-investigacion", body:`<h1>Reacción Adversa Vacunal: Angioedema y Urticaria</h1><p><b>Caso de referencia</b></p><ul><li>Paciente: Teckel hembra, 5 años</li><li>Vacuna: Rabia (Zoetis)</li></ul><h2>1. Fisiopatología</h2><p>Hipersensibilidad tipo I (IgE)…</p><h2>Fuentes</h2><p>Ford RB, Moore GE (JAVMA 2005), MSD.</p>` }];
+const TABS_ENTITY=["Info","Contenido","Entradas","Procedencia","History","Sources","Archive"]; const TABS_REF=["Contenido"];
+const colorByType={topic:"var(--topic)",session:"var(--session)",reference:"var(--reference)"};
+const NARROW = 280; // min graph-column px; below this, content goes full-screen
 
-// ---- state --------------------------------------------------------------
-let openNodeId = null;     // what the panel currently shows (node id or reference id)
-let egoTemporary = false;  // true if we loaded an off-graph node and must restore on close
+let openId=null;
+const stage=document.getElementById("stage"), graphpane=document.getElementById("graphpane"), edgesSvg=document.getElementById("edges");
+const preview=document.getElementById("preview"), panel=document.getElementById("panel"), results=document.getElementById("results");
 
-const stage = document.getElementById("stage");
-const edgesSvg = document.getElementById("edges");
-const preview = document.getElementById("preview");
-const panel = document.getElementById("panel");
-const results = document.getElementById("results");
-const colorByType = { topic:"var(--topic)", session:"var(--session)", reference:"var(--reference)" };
+function nodeEl(id){ return graphpane.querySelector(`.node[data-id="${CSS.escape(id)}"]`); }
+function neighbors(id){ const s=new Set([id]); for(const[a,b]of EDGES){ if(a===id)s.add(b); if(b===id)s.add(a);} return s; }
 
-function nodeEl(id){ return document.querySelector(`.node[data-id="${CSS.escape(id)}"]`); }
-function neighbors(id){
-  const s = new Set([id]);
-  for(const [a,b] of EDGES){ if(a===id) s.add(b); if(b===id) s.add(a); }
-  return s;
-}
-
-// ---- render graph -------------------------------------------------------
 function layout(){
-  const w = stage.clientWidth, h = stage.clientHeight;
+  const w=graphpane.clientWidth, h=graphpane.clientHeight;
+  document.getElementById("vp").textContent = `graphpane ${w}×${h}px${stage.classList.contains("narrow")?" · NARROW → contenido full":""}`;
   for(const n of NODES){
-    let el = nodeEl(n.id);
-    if(!el){
-      el = document.createElement("div");
-      el.className = `node t-${n.type}`;
-      el.dataset.id = n.id;
-      el.innerHTML = `<div class="dot"></div><div class="label">${n.name}</div>`;
-      stage.appendChild(el);
-      el.addEventListener("mouseenter", ()=>onHover(n));
-      el.addEventListener("mouseleave", onHoverEnd);
-      el.addEventListener("click", ()=>openItem(n.id));
-    }
-    el.style.left = (n.x*w)+"px";
-    el.style.top  = (n.y*h)+"px";
+    let el=nodeEl(n.id);
+    if(!el){ el=document.createElement("div"); el.className=`node t-${n.type}`; el.dataset.id=n.id;
+      el.innerHTML=`<div class="dot"></div><div class="label">${n.name}</div>`; graphpane.appendChild(el);
+      el.addEventListener("mouseenter",()=>onHover(n)); el.addEventListener("mouseleave",onHoverEnd); el.addEventListener("click",e=>{e.stopPropagation(); openItem(n.id);}); }
+    el.style.left=(n.x*w)+"px"; el.style.top=(n.y*h)+"px";
   }
-  drawEdges();
-}
-function drawEdges(){
-  const w = stage.clientWidth, h = stage.clientHeight;
-  edgesSvg.innerHTML = EDGES.map(([a,b],i)=>{
-    const na = NODES.find(n=>n.id===a), nb = NODES.find(n=>n.id===b);
-    if(!na||!nb) return "";
-    return `<line class="edge" data-a="${a}" data-b="${b}" x1="${na.x*w}" y1="${na.y*h}" x2="${nb.x*w}" y2="${nb.y*h}"/>`;
-  }).join("");
+  const ww=graphpane.clientWidth||1, hh=graphpane.clientHeight||1;
+  edgesSvg.innerHTML=EDGES.map(([a,b])=>{const na=NODES.find(n=>n.id===a),nb=NODES.find(n=>n.id===b); if(!na||!nb)return""; return `<line class="edge" data-a="${a}" data-b="${b}" x1="${na.x*ww}" y1="${na.y*hh}" x2="${nb.x*ww}" y2="${nb.y*hh}"/>`;}).join("");
+  if(openId&&!openId.startsWith("reference:")) emphasize(openId);
 }
 
-// ---- emphasis (hover AND click share this; never sticks after restore) --
-function emphasize(id){
-  const lit = neighbors(id);
-  document.querySelectorAll(".node").forEach(el=>{
-    el.classList.toggle("lit", lit.has(el.dataset.id));
-    el.classList.toggle("dim", !lit.has(el.dataset.id));
-    el.classList.toggle("active", el.dataset.id===id);
-  });
-  edgesSvg.querySelectorAll(".edge").forEach(e=>{
-    const on = (e.dataset.a===id||e.dataset.b===id);
-    e.classList.toggle("lit", on); e.classList.toggle("dim", !on);
-  });
+function emphasize(id){ const lit=neighbors(id);
+  graphpane.querySelectorAll(".node").forEach(el=>{el.classList.toggle("lit",lit.has(el.dataset.id)); el.classList.toggle("dim",!lit.has(el.dataset.id)); el.classList.toggle("active",el.dataset.id===id);});
+  edgesSvg.querySelectorAll(".edge").forEach(e=>{const on=(e.dataset.a===id||e.dataset.b===id); e.classList.toggle("lit",on); e.classList.toggle("dim",!on);});
 }
-function clearEmphasis(){
-  document.querySelectorAll(".node").forEach(el=>el.classList.remove("lit","dim","active"));
-  edgesSvg.querySelectorAll(".edge").forEach(e=>e.classList.remove("lit","dim"));
-}
+function clearEmphasis(){ graphpane.querySelectorAll(".node").forEach(el=>el.classList.remove("lit","dim","active")); edgesSvg.querySelectorAll(".edge").forEach(e=>e.classList.remove("lit","dim")); }
 
-// ---- hover = survey (ephemeral) ----------------------------------------
-function onHover(n){
-  if(openNodeId) return;            // while a panel is open, hover doesn't fight it
-  emphasize(n.id);
-  const el = nodeEl(n.id);
-  preview.style.left = Math.min(el.offsetLeft+16, stage.clientWidth-260)+"px";
-  preview.style.top  = Math.min(el.offsetTop+16, stage.clientHeight-150)+"px";
-  preview.querySelector(".d").style.background = colorByType[n.type];
-  document.getElementById("pv-title").textContent = n.name;
-  document.getElementById("pv-body").innerHTML = n.body.replace(/<[^>]+>/g," ").slice(0,180)+"…";
-  preview.style.display = "block";
-}
-function onHoverEnd(){
-  if(openNodeId) return;
-  clearEmphasis();
-  preview.style.display = "none";
+function onHover(n){ if(openId)return; emphasize(n.id); const el=nodeEl(n.id);
+  preview.style.left=Math.min(el.offsetLeft+16, graphpane.clientWidth-250)+"px"; preview.style.top=Math.min(el.offsetTop+16, graphpane.clientHeight-150)+"px";
+  preview.querySelector(".d").style.background=colorByType[n.type]; document.getElementById("pv-title").textContent=n.name;
+  document.getElementById("pv-body").innerHTML=n.body.replace(/<[^>]+>/g," ").slice(0,160)+"…"; preview.style.display="block"; }
+function onHoverEnd(){ if(openId)return; clearEmphasis(); preview.style.display="none"; }
+
+function applyResponsive(){
+  // content goes full-screen only when the graph column would be uselessly
+  // small. Predict the panel width from the same clamp the CSS uses.
+  const open = panel.classList.contains("open");
+  if(!open){ stage.classList.remove("narrow"); return; }
+  const s = stage.clientWidth;
+  const frac = panel.classList.contains("wide") ? 0.72 : 0.42;
+  const panelW = Math.min(panel.classList.contains("wide") ? 99999 : 560, Math.max(360, s*frac));
+  stage.classList.toggle("narrow", (s - panelW) < NARROW);
 }
 
-// ---- click = open (ONE panel for everything) ---------------------------
-function openItem(id, opts={}){
-  preview.style.display = "none";
-  const isRef = id.startsWith("reference:");
-  const item = isRef ? REFERENCES.find(r=>r.id===id) : NODES.find(n=>n.id===id);
-  if(!item) return;
-
-  // off-graph node brought via search → temporary ego (restore on close)
-  if(opts.offGraph){ egoTemporary = true; }
-
-  openNodeId = id;
-  if(!isRef){ emphasize(id); }       // entities/sessions: focus IN PLACE, kept while open
-  else { clearEmphasis(); }          // references aren't nodes → nothing to focus
-
-  // fill THE panel
-  document.getElementById("pn-dot").style.background = colorByType[isRef?"reference":item.type];
-  document.getElementById("pn-title").textContent = item.name;
-  document.getElementById("pn-sub").textContent = isRef ? "reference" : id;
-  const tabs = isRef ? TABS_REFERENCE : TABS_ENTITY;
-  const tabsEl = document.getElementById("pn-tabs");
-  tabsEl.innerHTML = tabs.map((t,i)=>`<button class="${i===(isRef?0:1)?'on':''}">${t}</button>`).join("");
-  document.getElementById("pn-content").innerHTML = item.body;
+function openItem(id){
+  preview.style.display="none"; results.classList.remove("open"); // search is transient: closes on pick
+  const isRef=id.startsWith("reference:"); const item=isRef?REFERENCES.find(r=>r.id===id):NODES.find(n=>n.id===id); if(!item)return;
+  openId=id;
+  document.getElementById("pn-dot").style.background=colorByType[isRef?"reference":item.type];
+  document.getElementById("pn-title").textContent=item.name; document.getElementById("pn-sub").textContent=isRef?"reference":id;
+  const tabs=isRef?TABS_REF:TABS_ENTITY; document.getElementById("pn-tabs").innerHTML=tabs.map((t,i)=>`<button class="${i===(isRef?0:1)?'on':''}">${t}</button>`).join("");
+  document.getElementById("pn-content").innerHTML=item.body;
   panel.classList.add("open");
+  applyResponsive();
+  // re-fit nodes after the column transition settles
+  setTimeout(()=>{ if(!isRef) emphasize(id); else clearEmphasis(); layout(); }, 240);
+  if(!isRef) emphasize(id); else clearEmphasis();
 }
+function closePanel(){ panel.classList.remove("open","wide"); openId=null; clearEmphasis(); stage.classList.remove("narrow"); setTimeout(layout,240); }
 
-function closePanel(){
-  panel.classList.remove("open","wide");
-  openNodeId = null;
-  clearEmphasis();                   // <-- restores the graph to pre-click state
-  egoTemporary = false;
-}
+document.getElementById("pn-close").addEventListener("click",closePanel);
+document.getElementById("pn-back").addEventListener("click",closePanel);
+document.getElementById("pn-wide").addEventListener("click",()=>{ panel.classList.toggle("wide"); applyResponsive(); setTimeout(layout,240); });
+graphpane.addEventListener("click",e=>{ if(e.target===graphpane||e.target===edgesSvg){ if(openId)closePanel(); else {clearEmphasis(); preview.style.display="none";} }});
 
-document.getElementById("pn-close").addEventListener("click", closePanel);
-document.getElementById("pn-wide").addEventListener("click", ()=>panel.classList.toggle("wide"));
+const ALL=[{kind:"canonical",id:"topic:reaccion-adversa",title:"Reacción Adversa Vacuna Rabia en Caninos",snip:"entidad consolidada"},{kind:"reference",id:"reference:reaccion-adversa-investigacion",title:"reaccion-adversa-…-investigacion",snip:"documento de referencia"}];
+const search=document.getElementById("search");
+search.addEventListener("input",()=>{ const q=search.value.trim().toLowerCase(); if(!q){results.classList.remove("open");return;}
+  const hits=ALL.filter(r=>r.title.toLowerCase().includes(q)||true);
+  document.getElementById("rh-count").textContent=`Search · ${hits.length} resultados`;
+  document.getElementById("results-list").innerHTML=hits.map((r,i)=>`<div class="item" data-i="${i}"><span class="kind ${r.kind}">${r.kind}</span><span class="t">${r.title}</span><div class="s">${r.snip}</div></div>`).join("");
+  [...document.querySelectorAll("#results-list .item")].forEach((el,i)=>el.addEventListener("click",()=>openItem(hits[i].id)));
+  results.classList.add("open"); });
+document.getElementById("results-x").addEventListener("click",()=>{results.classList.remove("open"); search.value="";});
 
-// click empty stage = deselect / restore
-stage.addEventListener("click", (e)=>{ if(e.target===stage || e.target===edgesSvg){ if(openNodeId) closePanel(); else { clearEmphasis(); preview.style.display="none"; } }});
-
-// ---- search = SAME panel, consistent ------------------------------------
-const ALL_SEARCH = [
-  { kind:"canonical", id:"topic:reaccion-adversa", title:"Reacción Adversa Vacuna Rabia en Caninos", snip:"entidad consolidada" },
-  { kind:"reference", id:"reference:reaccion-adversa-investigacion", title:"reaccion-adversa-…-investigacion", snip:"documento de referencia ingestado" },
-];
-const search = document.getElementById("search");
-search.addEventListener("input", ()=>{
-  const q = search.value.trim().toLowerCase();
-  if(!q){ results.classList.remove("open"); return; }
-  const hits = ALL_SEARCH.filter(r=>r.title.toLowerCase().includes(q)||q.length>0);
-  document.getElementById("rh-count").textContent = `Search · ${hits.length} resultados`;
-  document.getElementById("results-list").innerHTML = hits.map((r,i)=>
-    `<div class="item" data-i="${i}"><span class="kind ${r.kind}">${r.kind}</span><span class="t">${r.title}</span><div class="s">${r.snip}</div></div>`).join("");
-  [...document.querySelectorAll("#results-list .item")].forEach((el,i)=>{
-    el.addEventListener("click", ()=>{
-      const r = hits[i];
-      const inGraph = NODES.some(n=>n.id===r.id);
-      openItem(r.id, { offGraph: !inGraph && !r.id.startsWith("reference:") });   // SAME panel for every result type
-    });
-  });
-  results.classList.add("open");
-});
-document.getElementById("results-x").addEventListener("click", ()=>{ results.classList.remove("open"); search.value=""; });
-
-layout();
-window.addEventListener("resize", layout);
+layout(); window.addEventListener("resize",()=>{ applyResponsive(); layout(); });
 </script>
 </body>
 </html>
