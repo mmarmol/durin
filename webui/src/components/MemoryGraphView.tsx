@@ -335,6 +335,18 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
   const searching = searchOpen && (search.trim().length > 0 || searchResults != null);
   recedeRef.current = searching;
 
+  // Mobile (Caso 4): no force-graph on a phone (it's near-useless on touch).
+  // Below this width the canvas is replaced by a tappable entity list and the
+  // panels go full-screen — one surface at a time.
+  const [compact, setCompact] = useState(
+    () => typeof window !== "undefined" && window.innerWidth < 720,
+  );
+  useEffect(() => {
+    const onResize = () => setCompact(window.innerWidth < 720);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
   // Edge popup state
   const [edgePopup, setEdgePopup] = useState<{
     x: number; y: number; detail: MemoryEdgeDetail | null; loading: boolean;
@@ -569,7 +581,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
       ro.disconnect();
     };
-  }, [_props.active, selected, focusRef, focusNeighbours, searchMatchSet, hiddenTypes]);
+  }, [_props.active, selected, focusRef, focusNeighbours, searchMatchSet, hiddenTypes, compact]);
 
   // Hit-test (for nodes AND edges). Skips nodes hidden by legend
   // toggles so the user can't accidentally select a node that's not
@@ -926,24 +938,57 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
             </span>
           </div>
         ) : null}
-        <canvas
-          ref={canvasRef}
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          onPointerLeave={() => {
-            hoverRef.current = null;
-            hoverIdRef.current = null;
-            if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
-            setHoverPreview(null);
-          }}
-          className="block h-full w-full"
-        />
+        {compact ? (
+          // Mobile (Caso 4): tappable entity list instead of the graph.
+          <div className="absolute inset-0 overflow-auto p-3">
+            <ul className="flex flex-col gap-1">
+              {(data?.nodes ?? [])
+                .filter((n) => !hiddenTypes.has(n.phantom ? "phantom" : n.type))
+                .map((n) => (
+                  <li key={n.id}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelected(n);
+                        setPanelExpanded(false);
+                        setActiveTab(n.phantom ? "info" : "body");
+                        setReferenceDetail(null);
+                      }}
+                      className="flex w-full items-center gap-2 rounded-md border border-border/40 px-3 py-2.5 text-left hover:bg-muted/60"
+                    >
+                      <span
+                        className="h-2.5 w-2.5 shrink-0 rounded-full"
+                        style={{ background: colorForType(n.type) }}
+                      />
+                      <span className="truncate text-sm font-medium">{n.name}</span>
+                      <span className="ml-auto shrink-0 text-[10px] uppercase tracking-wide text-muted-foreground">
+                        {n.phantom ? "phantom" : n.type}
+                      </span>
+                    </button>
+                  </li>
+                ))}
+            </ul>
+          </div>
+        ) : (
+          <canvas
+            ref={canvasRef}
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerUp}
+            onPointerLeave={() => {
+              hoverRef.current = null;
+              hoverIdRef.current = null;
+              if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+              setHoverPreview(null);
+            }}
+            className="block h-full w-full"
+          />
+        )}
 
         {/* Legend bottom-left — chips are click-to-toggle filters.
             Clicking a chip hides every node of that type; clicking
             again restores. Phantom is its own pseudo-type. */}
-        {typesLegend.length > 0 ? (
+        {typesLegend.length > 0 && !compact ? (
           <div className="absolute bottom-3 left-3 flex flex-wrap items-center gap-1 rounded-md bg-background/85 p-1 text-[11px] backdrop-blur">
             {typesLegend.map((t) => {
               const hidden = hiddenTypes.has(t.type);
@@ -999,7 +1044,10 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
 
         {/* Search results panel (left side, slides over) */}
         {searchOpen && search.trim() ? (
-          <aside className="absolute bottom-12 left-3 top-3 z-10 w-80 max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-lg border border-border/50 bg-card/95 shadow-lg backdrop-blur">
+          <aside className={cn(
+            "absolute bottom-12 left-3 top-3 z-10 max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-lg border border-border/50 bg-card/95 shadow-lg backdrop-blur",
+            compact ? "right-3 w-auto" : "w-80",
+          )}>
             <header className="flex items-center justify-between border-b border-border/40 px-3 py-2 text-xs">
               <span className="font-semibold">
                 Search · {searchResults ? `${searchDisplayed.length} results` : "…"}
@@ -1186,7 +1234,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
             className={cn(
               "mg-cpanel absolute right-3 top-3 z-10 flex max-w-[calc(100vw-1.5rem)] flex-col rounded-lg border border-border/50 bg-card/95 text-sm shadow-lg backdrop-blur",
               "transition-[width] duration-200 ease-out",
-              panelExpanded ? "w-[calc(100%-1.5rem)]" : "w-[22rem]",
+              compact || panelExpanded ? "w-[calc(100%-1.5rem)]" : "w-[22rem]",
             )}
             style={{ maxHeight: "calc(100% - 1.5rem)" }}
           >
@@ -1580,7 +1628,10 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
             reference search hit opens its rendered doc here. */}
         {referenceDetail && !selected ? (
           <aside
-            className="mg-cpanel absolute right-3 top-3 z-10 flex w-[min(58vw,44rem)] max-w-[calc(100vw-1.5rem)] flex-col rounded-lg border border-border/50 bg-card/95 text-sm shadow-lg backdrop-blur"
+            className={cn(
+              "mg-cpanel absolute right-3 top-3 z-10 flex max-w-[calc(100vw-1.5rem)] flex-col rounded-lg border border-border/50 bg-card/95 text-sm shadow-lg backdrop-blur",
+              compact ? "w-[calc(100%-1.5rem)]" : "w-[min(58vw,44rem)]",
+            )}
             style={{ maxHeight: "calc(100% - 1.5rem)" }}
           >
             <header className="flex items-start gap-2 border-b border-border/40 px-3 py-2">
