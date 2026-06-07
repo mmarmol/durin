@@ -1,5 +1,11 @@
 # HANDOFF — implementing entity → source-document linking (`derived_from`)
 
+> **STATUS: COMPLETE (2026-06-07).** All phases shipped on
+> `worktree-phantom-graph-policy-a` (not pushed). Commits: P0+P1 `3d0a785`,
+> P3 `1355537`, P7 `2b1d7cb`, P5 `5d61226`, Q1+P2 `dd86b80`, P4 `6461e4a`.
+> Full memory + agent-tools suite green (1285 passed); webui builds clean. The
+> sections below are the original resume notes, kept as the implementation record.
+
 Resume point for a fresh session. Read this + the plan, then continue.
 
 ## What this is

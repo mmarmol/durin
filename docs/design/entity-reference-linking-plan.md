@@ -1,6 +1,6 @@
 ---
 title: Entity → source-document linking (`derived_from`)
-status: plan v4 — code-validated + adversarially reviewed; all decisions locked; READY to implement
+status: IMPLEMENTED (2026-06-07) — all phases shipped on worktree-phantom-graph-policy-a; plan v4 below kept as the design record
 ---
 
 # End goals (user)
