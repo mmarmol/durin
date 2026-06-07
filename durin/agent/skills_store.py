@@ -575,6 +575,17 @@ def web_skill_reject(workspace: Path, name: str) -> tuple[int, dict]:
     return (400, res) if "error" in res else (200, res)
 
 
+def _persist_judge_result(qdir, source: str, verdict: str, findings: list, summary: str) -> None:
+    """Write the merged judge result to the quarantine ``.scan.json`` (shared by
+    the HTTP and websocket audit paths)."""
+    import json as _json
+
+    (qdir / ".scan.json").write_text(
+        _json.dumps({"source": source, "verdict": verdict, "findings": findings, "summary": summary}),
+        encoding="utf-8",
+    )
+
+
 def web_skill_judge(workspace: Path, name: str) -> tuple[int, dict]:
     """`GET /api/skills/{name}/judge` — run the LLM judge ON-DEMAND over a
     quarantined skill, merge its findings into the quarantine .scan.json, and
@@ -614,9 +625,7 @@ def web_skill_judge(workspace: Path, name: str) -> tuple[int, dict]:
             source = _json.loads(sj.read_text()).get("source", name)
         except Exception:  # noqa: BLE001
             pass
-    sj.write_text(_json.dumps({"source": source, "verdict": merged.verdict,
-                               "findings": findings, "summary": outcome.summary}),
-                  encoding="utf-8")
+    _persist_judge_result(qdir, source, merged.verdict, findings, outcome.summary)
     return 200, {"name": name, "verdict": merged.verdict, "findings": findings,
                  "summary": outcome.summary, "judged": True}
 
