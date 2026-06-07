@@ -93,6 +93,10 @@ def build_memory_graph(
     # type). Previously the graph only drew co-occurrence edges from entry tags,
     # so the new model's `relations` field rendered as 0 edges.
     relation_edges: list[tuple[str, str, str]] = []
+    # P5: entity → source-document links (`derived_from`). Collected here,
+    # emitted as a SEPARATE edge loop after reference nodes are registered so
+    # both endpoints exist (the both-endpoints guard would otherwise drop them).
+    derived_from_edges: list[tuple[str, str]] = []  # (entity_ref, reference_ref)
     for page_path in walk_class(workspace, "entities"):
         # `entities/<type>/<slug>.md` — derive `<type>` from the path.
         rel = page_path.relative_to(entities_root)
@@ -120,6 +124,9 @@ def build_memory_graph(
                 relation_edges.append(
                     (ref, to_ref, str(rel.get("type") or "related"))
                 )
+        for dref in (page.derived_from or []):
+            if str(dref).startswith("reference:"):
+                derived_from_edges.append((ref, str(dref)))
 
     # 2. Walk entry classes (episodic + stable + corpus): accumulate
     # per-ref entry count + pairwise co-occurrence counts. Skip refs not
@@ -252,6 +259,29 @@ def build_memory_graph(
             "phantom": True,
         }
 
+    # 3.7 (P5): references as first-class nodes. They have real content, so
+    # they are ALWAYS shown (linked or not — Q2/Q3). Walk `memory/references/`
+    # and emit one node per `<slug>.md`; weight = 1 + inbound derived_from count
+    # so they sit fairly in the node cap instead of being weight-0 tail-drops.
+    references_root = memory_root / "references"
+    if references_root.is_dir():
+        inbound: dict[str, int] = defaultdict(int)
+        for _src, ref_target in derived_from_edges:
+            inbound[ref_target] += 1
+        for ref_path in sorted(references_root.glob("*.md")):
+            slug = ref_path.stem
+            node_id = f"reference:{slug}"
+            if node_id in nodes_by_ref:  # never collides with entity ids
+                continue
+            title = _read_reference_title(ref_path) or slug
+            nodes_by_ref[node_id] = {
+                "id": node_id,
+                "type": "reference",
+                "name": title,
+                "aliases": [],
+                "weight": 1 + inbound.get(node_id, 0),
+            }
+
     # 4. Build the edge list. Only keep edges where both endpoints are
     # in the node set (defensive; same-ref edges already collapsed
     # by the sorted() dedup above).
@@ -272,6 +302,19 @@ def build_memory_graph(
                 "weight": 1,
             })
 
+    # P5: entity → reference (`derived_from`) as typed edges. Its own loop —
+    # NOT folded into the relations loop above (that reads page.relations).
+    # References are registered in step 3.7, so both endpoints exist here.
+    for entity_ref, ref_target in derived_from_edges:
+        if entity_ref in nodes_by_ref and ref_target in nodes_by_ref:
+            edges.append({
+                "source": entity_ref,
+                "target": ref_target,
+                "type": "derived_from",
+                "kind": "derived_from",
+                "weight": 1,
+            })
+
     # Session→entity edges. We keep them DIRECTIONAL conceptually
     # (a session links to the entities it discussed) but the JSON
     # shape stays the same — the renderer treats them as undirected
@@ -288,10 +331,14 @@ def build_memory_graph(
                     continue
                 edges.append({"source": sess_ref, "target": ent_ref, "weight": w})
 
-    # 5. Cap: prefer higher-weight nodes/edges, drop the tail.
+    # 5. Cap: prefer higher-weight nodes/edges, drop the tail. Q2/M3: floor the
+    # sort weight at 1 so a quiet entity (weight 0, e.g. freshly upserted with no
+    # edges) is not preferentially dropped beneath weight-1 reference nodes —
+    # both tiers are first-class consultation material. The stored/displayed
+    # `weight` (entries-referencing count) is unchanged; only the cap order is.
     nodes = sorted(
         nodes_by_ref.values(),
-        key=lambda n: (-int(n["weight"]), n["id"]),
+        key=lambda n: (-max(1, int(n["weight"])), n["id"]),
     )
     truncated_nodes = len(nodes) > max_nodes
     nodes = nodes[:max_nodes]
@@ -406,6 +453,36 @@ def build_entity_subgraph(
 
 
 _FIRST_USER_PREVIEW_MAX = 48
+
+
+def _read_reference_title(ref_path: Path) -> str | None:
+    """Return a reference's `title` from its frontmatter, or None.
+
+    References are written by `reference.py::ingest_reference` with a
+    `---`-delimited YAML frontmatter carrying `title`. We parse only the
+    frontmatter block (cheap; the body can be large).
+    """
+    try:
+        text = ref_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    if not text.startswith("---"):
+        return None
+    end = text.find("\n---", 3)
+    if end == -1:
+        return None
+    block = text[3:end]
+    try:
+        import yaml
+
+        fm = yaml.safe_load(block)
+    except Exception:  # noqa: BLE001
+        return None
+    if isinstance(fm, dict):
+        title = fm.get("title")
+        if isinstance(title, str) and title.strip():
+            return title.strip()
+    return None
 
 
 def _read_session_summary(jsonl_path: Path) -> tuple[str | None, int]:

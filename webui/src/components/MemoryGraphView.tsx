@@ -73,6 +73,8 @@ const TYPE_PALETTE: Record<string, string> = {
   // Sessions are deliberately grey-ish so they read as scaffolding
   // around the semantic entities, not as entities themselves.
   session: "#64748B",
+  // References (ingested source documents) — amber, distinct from `place`.
+  reference: "#D97706",
 };
 const FALLBACK_HUES = [200, 25, 145, 285, 60, 320, 95];
 
@@ -755,6 +757,19 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
       setDetail(null);
       setSessionDetail(null);
       setDetailError(null);
+      return;
+    }
+    // Reference nodes aren't entities — they have no entity-detail endpoint.
+    // Hand off to the reference panel (same path as a reference search hit):
+    // clear the selection and load the document into `referenceDetail`.
+    if (selected.type === "reference") {
+      const refId = selected.id;
+      setSelected(null);
+      if (tokenRef.current) {
+        void fetchMemoryEntry(tokenRef.current, refId)
+          .then((d) => setReferenceDetail(d))
+          .catch(() => setReferenceDetail(null));
+      }
       return;
     }
     let cancelled = false;
