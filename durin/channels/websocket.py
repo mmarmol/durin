@@ -1208,6 +1208,7 @@ class WebSocketChannel(BaseChannel):
         q = _query_first(query, "q") or ""
         scope = _query_first(query, "scope") or "all"
         level = _query_first(query, "level") or "warm"
+        kinds = _query_first(query, "kinds") or "all"
         try:
             cfg = load_config()
             workspace = cfg.workspace_path
@@ -1218,7 +1219,7 @@ class WebSocketChannel(BaseChannel):
             except (AttributeError, TypeError):
                 embedding_model = None
             payload = await search_memory_api(
-                workspace, q, scope=scope, level=level,
+                workspace, q, scope=scope, level=level, kinds=kinds,
                 embedding_model=embedding_model,
             )
         except Exception as exc:  # noqa: BLE001

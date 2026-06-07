@@ -156,7 +156,7 @@ function tickForces(
   }
 }
 
-type TabName = "info" | "body" | "history" | "sources" | "archive" | "entries";
+type TabName = "info" | "body" | "provenance" | "history" | "sources" | "archive" | "entries";
 type SessionTabName = "info" | "messages" | "events" | "memory_ops" | "entries";
 
 export function MemoryGraphView(_props: MemoryGraphViewProps) {
@@ -693,11 +693,10 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
       (async () => {
         if (!tokenRef.current) return;
         try {
-          // Skills are filtered client-side below (the backend's "fact"
-          // scope is declared in the schema but rejected by execute() —
-          // "invalid scope 'fact'" — so we use the default and drop skills
-          // ourselves; they have their own Skills view).
-          const r = await searchMemoryApi(tokenRef.current, q);
+          // kinds="fact" = everything EXCEPT skills (the proper backend
+          // filter; "fact" is a value of `kinds`, not `scope`). Skills have
+          // their own Skills view.
+          const r = await searchMemoryApi(tokenRef.current, q, { kinds: "fact" });
           if (!cancelled) {
             setSearchResults(r);
             setSearchError(null);
@@ -934,13 +933,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                 </div>
               ) : null}
               {(searchResults?.results ?? [])
-                // Drop skills — they belong to the Skills view, not memory
-                // search (backend "fact" scope that would do this is broken).
-                .filter(
-                  (r) =>
-                    String(r.class_name).toLowerCase() !== "skill" &&
-                    String(r.kind).toLowerCase() !== "skill",
-                )
+                // Skills already excluded server-side via kinds="fact".
                 // Collapse the N chunks of one source (same base uri before
                 // the `#idx`) into a single row — otherwise a reference doc
                 // floods the list with identical-looking fragments.
@@ -959,23 +952,27 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                     type="button"
                     key={`${r.uri}-${idx}`}
                     onClick={() => {
-                      // Canonical hit: bring the node in via its ego-graph
-                      // (works even if the global cap dropped it), centre on
-                      // it, and open its content.
-                      if (isCanon) {
-                        focusOnNode(id);
-                        const node =
-                          simNodesRef.current.find((n) => n.id === id) ?? {
-                            id,
-                            type: id.split(":")[0] || "unknown",
-                            name: (r.headline || id).replace(/^[a-z_]+:/, ""),
-                            weight: 0,
-                            aliases: [],
-                            phantom: false,
-                          };
-                        setSelected(node);
-                        setActiveTab(node.phantom ? "info" : "body");
-                      }
+                      // Pick the node to focus: a canonical hit IS an entity;
+                      // a fragment (entry/reference) points at the entities it
+                      // tags — focus the first one so a fragment still drills
+                      // into "the thing this is about".
+                      const target = isCanon ? id : (r.entities ?? [])[0];
+                      if (!target) return;
+                      focusOnNode(target);
+                      const node =
+                        simNodesRef.current.find((n) => n.id === target) ?? {
+                          id: target,
+                          type: target.split(":")[0] || "unknown",
+                          name: (isCanon ? r.headline || target : target).replace(
+                            /^[a-z_]+:/,
+                            "",
+                          ),
+                          weight: 0,
+                          aliases: [],
+                          phantom: false,
+                        };
+                      setSelected(node);
+                      setActiveTab(node.phantom ? "info" : "body");
                     }}
                     className="block w-full border-t border-border/30 px-3 py-2.5 text-left text-[13px] hover:bg-muted/60"
                   >
@@ -1163,6 +1160,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                       { id: "info", label: t("memoryGraph.tabInfo") },
                       { id: "body", label: t("memoryGraph.tabBody") },
                       { id: "entries", label: t("memoryGraph.tabEntries") },
+                      { id: "provenance", label: `${t("memoryGraph.provenance")}${detail?.provenance.length ? ` (${detail.provenance.length})` : ""}` },
                       { id: "history", label: `History${detail?.history.length ? ` (${detail.history.length})` : ""}` },
                       { id: "sources", label: `Sources${detail?.entries.length ? ` (${detail.entries.length})` : ""}` },
                       { id: "archive", label: `Archive${detail?.archive.length ? ` (${detail.archive.length})` : ""}` },
@@ -1173,6 +1171,12 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                     // hide them instead of showing dead tabs.
                     .filter((tab) =>
                       !selected.phantom || (tab.id !== "body" && tab.id !== "history"),
+                    )
+                    // "Procedencia" only when there are provenance events.
+                    .filter(
+                      (tab) =>
+                        tab.id !== "provenance" ||
+                        (detail?.provenance.length ?? 0) > 0,
                     )
                     .map((tab) => (
                     <button
@@ -1291,102 +1295,85 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                     )
                   ) : null}
 
-                  {activeTab === "history" ? (
-                    <div className="space-y-3">
-                      {/* Provenance: who/when/from-which-session each fact
-                          came from — the data durin always recorded but the
-                          panel never showed. The session origin is clickable
-                          (navigates to that session's detail). */}
-                      {detail.provenance.length > 0 ? (
-                        <div>
-                          <div className="mb-1 text-[10.5px] font-medium uppercase tracking-wide text-muted-foreground">
-                            {t("memoryGraph.provenance")}
-                          </div>
-                          {detail.page?.created_at ? (
-                            <p className="mb-2 text-[11px] text-muted-foreground">
-                              {t("memoryGraph.provCreated")}{" "}
-                              {detail.page.created_at.slice(0, 10)}
-                              {detail.page.author
-                                ? ` · ${detail.page.author}`
-                                : ""}
-                            </p>
-                          ) : null}
-                          <ul className="space-y-1.5">
-                            {detail.provenance.map((ev, i) => {
-                              const sessionInGraph =
-                                ev.session_stem != null &&
-                                (data?.nodes.some(
-                                  (n) => n.id === `session:${ev.session_stem}`,
-                                ) ?? false);
-                              return (
-                                <li
-                                  key={i}
-                                  className="rounded border border-border/40 bg-background/60 p-2"
-                                >
-                                  <div className="flex items-center justify-between text-[10.5px] text-muted-foreground">
-                                    <span>
-                                      {ev.kind === "relation"
-                                        ? t("memoryGraph.provRelation")
-                                        : t("memoryGraph.provAttribute")}
-                                      {ev.author ? ` · ${ev.author}` : ""}
-                                    </span>
-                                    <span>{ev.when ? ev.when.slice(0, 10) : ""}</span>
+                  {activeTab === "provenance" ? (
+                    detail.provenance.length === 0 ? (
+                      <p className="text-muted-foreground">
+                        {t("memoryGraph.noProvenance")}
+                      </p>
+                    ) : (
+                      <div>
+                        {detail.page?.created_at ? (
+                          <p className="mb-2 text-[11px] text-muted-foreground">
+                            {t("memoryGraph.provCreated")}{" "}
+                            {detail.page.created_at.slice(0, 10)}
+                            {detail.page.author ? ` · ${detail.page.author}` : ""}
+                          </p>
+                        ) : null}
+                        <ul className="space-y-1.5">
+                          {detail.provenance.map((ev, i) => {
+                            const sessionInGraph =
+                              ev.session_stem != null &&
+                              (data?.nodes.some(
+                                (n) => n.id === `session:${ev.session_stem}`,
+                              ) ?? false);
+                            return (
+                              <li
+                                key={i}
+                                className="rounded border border-border/40 bg-background/60 p-2"
+                              >
+                                <div className="flex items-center justify-between text-[10.5px] text-muted-foreground">
+                                  <span>
+                                    {ev.kind === "relation"
+                                      ? t("memoryGraph.provRelation")
+                                      : t("memoryGraph.provAttribute")}
+                                    {ev.author ? ` · ${ev.author}` : ""}
+                                  </span>
+                                  <span>{ev.when ? ev.when.slice(0, 10) : ""}</span>
+                                </div>
+                                {ev.detail ? (
+                                  <div className="mt-0.5 font-mono text-[11px] break-all">
+                                    {ev.detail}
                                   </div>
-                                  {ev.detail ? (
-                                    <div className="mt-0.5 font-mono text-[11px] break-all">
-                                      {ev.detail}
-                                    </div>
-                                  ) : null}
-                                  {sessionInGraph ? (
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        selectSessionByStem(
-                                          ev.session_stem!,
-                                          ev.when,
-                                        )
-                                      }
-                                      className="mt-1 text-[10.5px] text-primary hover:underline"
-                                    >
-                                      {t("memoryGraph.provFromSession")}
-                                      {ev.turn != null
-                                        ? ` · ${t("memoryGraph.provTurn", { turn: ev.turn })}`
-                                        : ""}{" "}
-                                      →
-                                    </button>
-                                  ) : ev.source_ref ? (
-                                    <div className="mt-1 text-[10.5px] text-muted-foreground break-all">
-                                      {ev.source_ref}
-                                    </div>
-                                  ) : null}
-                                </li>
-                              );
-                            })}
-                          </ul>
-                        </div>
-                      ) : null}
+                                ) : null}
+                                {sessionInGraph ? (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      selectSessionByStem(ev.session_stem!, ev.when)
+                                    }
+                                    className="mt-1 text-[10.5px] text-primary hover:underline"
+                                  >
+                                    {t("memoryGraph.provFromSession")}
+                                    {ev.turn != null
+                                      ? ` · ${t("memoryGraph.provTurn", { turn: ev.turn })}`
+                                      : ""}{" "}
+                                    →
+                                  </button>
+                                ) : ev.source_ref ? (
+                                  <div className="mt-1 text-[10.5px] text-muted-foreground break-all">
+                                    {ev.source_ref}
+                                  </div>
+                                ) : null}
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      </div>
+                    )
+                  ) : null}
 
-                      {/* Git history of the page file (absorption/edit trail). */}
-                      {detail.history.length > 0 ? (
-                        <div>
-                          <div className="mb-1 text-[10.5px] font-medium uppercase tracking-wide text-muted-foreground">
-                            Git
-                          </div>
-                          <ul className="space-y-2">
-                            {detail.history.map((c) => (
-                              <CommitItem key={c.sha} commit={c} />
-                            ))}
-                          </ul>
-                        </div>
-                      ) : null}
-
-                      {detail.provenance.length === 0 &&
-                      detail.history.length === 0 ? (
-                        <p className="text-muted-foreground">
-                          {t("memoryGraph.noHistory")}
-                        </p>
-                      ) : null}
-                    </div>
+                  {activeTab === "history" ? (
+                    detail.history.length === 0 ? (
+                      <p className="text-muted-foreground">
+                        {t("memoryGraph.noHistory")}
+                      </p>
+                    ) : (
+                      <ul className="space-y-2">
+                        {detail.history.map((c) => (
+                          <CommitItem key={c.sha} commit={c} />
+                        ))}
+                      </ul>
+                    )
                   ) : null}
 
                   {activeTab === "sources" ? (

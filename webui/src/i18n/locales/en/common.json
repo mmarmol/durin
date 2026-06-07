@@ -731,6 +731,7 @@
     "noConsolidatedHint": "Mentioned in episodic entries but no canonical entity page yet. Run <code>durin memory dream</code> to extract and create one.",
     "phantomWhatIs": "What this is (provisional)",
     "coMentions": "Co-mentions",
+    "noProvenance": "No provenance recorded.",
     "provenance": "Provenance",
     "provCreated": "Created",
     "provRelation": "relation",

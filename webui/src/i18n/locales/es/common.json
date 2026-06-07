@@ -732,6 +732,7 @@
     "noConsolidatedHint": "Mencionada en entradas episódicas pero aún sin página canónica de entidad. Ejecuta <code>durin memory dream</code> para extraerla y crear una.",
     "phantomWhatIs": "Qué es esto (provisional)",
     "coMentions": "Co-menciones",
+    "noProvenance": "Sin procedencia registrada.",
     "provenance": "Procedencia",
     "provCreated": "Creada",
     "provRelation": "relación",
