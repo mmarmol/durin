@@ -3,32 +3,34 @@
 > Reference for Durin's internals: what each system does and how it fits together.
 > **Keep updated** when modifying core modules.
 >
-> For the *direction* and *discarded approaches*, see [roadmap.md](roadmap.md) and [bitacora.md](bitacora.md).
+> For the *direction* and *discarded approaches*, see [roadmap.md](../roadmap.md) and [bitacora.md](../bitacora.md).
 
-This is the top-level index. Component-level architecture lives in `arch/` to keep each surface scannable:
+This is the top-level index. Component-level architecture lives alongside this
+file (plus the `memory/` and `skills/` subfolders) to keep each surface scannable:
 
 | Document | Scope |
 |---|---|
-| [arch/loop.md](arch/loop.md) | Iteration flow, runner guards, hooks, agent modes, long tasks, sessions, providers, sandboxing |
-| [arch/memory.md](arch/memory.md) | Entity-centric memory, dream consolidation, alias + vector indexes, retrieval, drill-down, absorption |
-| [arch/observability.md](arch/observability.md) | Telemetry, status, doctor, gateway daemon |
-| [arch/ux.md](arch/ux.md) | Interactive CLI, Textual TUI, secrets subsystem, design system, lifecycle commands, config layout, distribution |
+| [loop.md](loop.md) | Iteration flow, runner guards, hooks, agent modes, long tasks, sessions, providers, sandboxing |
+| [memory/](memory/00_overview.md) | Entity-centric memory, dream consolidation, alias + vector indexes, retrieval, drill-down, absorption, memory graph |
+| [skills/](skills/00_overview.md) | Skill discovery, three-tier surfacing, searchable skill pseudo-class, import + security floor |
+| [observability.md](observability.md) | Telemetry, status, doctor, gateway daemon |
+| [ux.md](ux.md) | Interactive CLI, Textual TUI, secrets subsystem, design system, lifecycle commands, config layout, distribution |
 
 ---
 
 ## 1. Origin and relationship with Nanobot
 
-Durin is a fork of [Nanobot](../vendor/nanobot/) (lightweight agent framework). After the May 2026 prune, Durin is essentially Nanobot plus a small set of plumbing additions:
+Durin is a fork of Nanobot (lightweight agent framework). After the May 2026 prune, Durin is essentially Nanobot plus a small set of plumbing additions:
 
 | Addition | What it provides |
 |---|---|
 | `providers/local_llama_provider.py` | Local LLM provider via `llama-cpp-python` |
 | `telemetry/` | Generic JSONL logger + rate-limit telemetry |
 | `durin_sdk.py` | Public SDK entry point (`Durin.from_config()`) |
-| `memory/` | Entity-centric memory: typed entries, dream consolidator, alias + vector indexes, absorption — see [arch/memory.md](arch/memory.md) |
+| `memory/` | Entity-centric memory: typed entries, dream consolidator, alias + vector indexes, absorption — see [memory/00_overview.md](memory/00_overview.md) |
 | `cli/memory_cmd.py` | `durin memory <subcommand>` for consolidation + drill-down |
 
-What Durin no longer carries: a previous "smart layer" (posture vector, plan tier system, deliberation V3, phase-aware temperatures, hook factory) was empirically refuted across V3–V8 experiments and removed. See `bitacora.md` for full rationale and `archive/06_log_experiments.md` for raw data.
+What Durin no longer carries: a previous "smart layer" (posture vector, plan tier system, deliberation V3, phase-aware temperatures, hook factory) was empirically refuted across V3–V8 experiments and removed. See `bitacora.md` for full rationale.
 
 The fork model is retained because the memory work needs tighter integration than a plugin API allows.
 
@@ -40,7 +42,7 @@ The fork model is retained because the memory work needs tighter integration tha
 durin/
 ├── agent/
 │   ├── loop.py            # AgentLoop — outer state machine, dispatch, sessions
-│   ├── runner.py          # AgentRunner — inner LLM/tool loop (see arch/loop.md)
+│   ├── runner.py          # AgentRunner — inner LLM/tool loop (see loop.md)
 │   ├── hook.py            # AgentHook + AgentHookContext + CompositeHook
 │   ├── context.py         # ContextBuilder — system prompt + history + skills
 │   ├── memory.py          # LEGACY MemoryStore + Dream over MEMORY.md / SOUL.md
@@ -49,6 +51,9 @@ durin/
 │   ├── subagent.py        # Spawn parallel sub-agents + lifecycle status retention
 │   ├── model_presets.py   # Named model + generation parameter sets
 │   ├── skills.py          # Skill discovery, on-demand loading
+│   ├── skill_registry.py / skill_resolve.py / skill_lifecycle.py   # Skills subsystem
+│   ├── skill_acquire.py / skill_curation.py / skill_drift.py / skill_usage.py
+│   ├── skills_import.py / skills_store.py / skills_surface.py / skills_frontmatter.py
 │   └── tools/             # All tool implementations
 │       ├── filesystem.py / search.py / shell.py / web.py / mcp.py / spawn.py
 │       ├── cron.py / long_task.py / message.py / self.py / notebook.py
@@ -61,10 +66,12 @@ durin/
 │       ├── interpret_image.py      # vision aux-model bridge
 │       ├── interpret_audio.py      # audio chat-multimodal aux-model bridge
 │       ├── memory_ingest.py        # entity-centric: copy artifact, return content
-│       ├── memory_store.py         # entity-centric: write entry + vector upsert
+│       ├── memory_upsert_entity.py # entity-centric: write/merge entity page + vector upsert
 │       ├── memory_search.py        # entity-centric: vector + entity-aware rerank
 │       ├── memory_drill.py         # entity-centric: resolve path#anchor
-│       ├── repo_overview.py / output_spill.py / image_generation.py
+│       ├── memory_forget.py        # entity-centric: tombstone + deindex
+│       ├── memory_store.py         # DISABLED in agent toolset (internal callers only)
+│       ├── repo_overview.py / output_spill.py
 │       └── context.py              # ToolContext + AuxProviderHandle
 ├── api/                   # HTTP/SSE/WebSocket transport layer
 ├── bus/                   # Internal message bus (InboundMessage, OutboundMessage)
@@ -80,36 +87,49 @@ durin/
 ├── config/                # Config schemas, loader, validation
 ├── cron/                  # Scheduled task service
 ├── heartbeat/             # Background heartbeats and timers
-├── memory/                # Entity-centric memory subsystem (see arch/memory.md)
+├── memory/                # Entity-centric memory subsystem (see memory/00_overview.md)
 │   ├── schema.py          # MemoryEntry pydantic model
 │   ├── entities.py        # <type>:<value> validation + SUGGESTED_TYPES
+│   ├── entity_page.py     # EntityPage parser (open-vocab frontmatter)
 │   ├── storage.py         # split_frontmatter + save_entry + load_entry
-│   ├── store.py           # store_memory (used by memory_store tool)
-│   ├── search.py          # grep fallback
-│   ├── drill.py           # markdown URI → addressed section
+│   ├── store.py           # store_memory (internal callers: compaction, ingest chunks)
 │   ├── ingestion.py       # ingest_artifact
+│   ├── memory_writer.py   # shared write path (tools + dream)
+│   ├── forget.py / deletion.py     # tombstone + deindex
+│   ├── drill.py / search.py        # drill-down URI resolve + grep fallback
+│   ├── search_pipeline.py # run_search_pipeline — composes the stages below
+│   ├── query_router.py    # query analysis / routing
+│   ├── fts_index.py / lexical_search.py   # FTS5 lexical layer
 │   ├── embedding.py       # FastembedProvider (lazy ONNX)
 │   ├── vector_index.py    # LanceDB-backed VectorIndex
-│   ├── entity_page.py     # EntityPage parser (open-vocab frontmatter)
-│   ├── aliases_index.py   # AliasIndex (rebuild-only, lazy)
-│   ├── aliases_cache.py   # process-wide shared cache (doc 25 §2.C)
-│   ├── absorb_judge.py    # LLM-judge for auto-absorb (doc 25 §2.D)
-│   ├── dream_runner.py    # auto-trigger runner + lock (doc 25 §2.A.1)
+│   ├── rrf_fusion.py      # reciprocal-rank fusion
 │   ├── entity_ranker.py   # RRF entity-aware reranker
-│   ├── dream.py           # DreamConsolidator (LLM + pydantic + retry)
+│   ├── cross_encoder.py   # optional cross-encoder rerank (opt-in)
+│   ├── indexer.py / index_meta.py  # index build + metadata
+│   ├── file_watcher.py    # workspace change watcher
+│   ├── health_check.py    # FTS/Lance/CE probes for `durin doctor`
+│   ├── graph.py / graph_api.py     # memory graph (typed edges, phantom nodes)
+│   ├── aliases_index.py   # AliasIndex (rebuild-only, lazy)
+│   ├── aliases_cache.py   # process-wide shared cache
+│   ├── always_on_dream.py / dream_passes.py    # dream cold path (5 passes: extract/derived_from/skill/refine/always_on)
+│   ├── extract_dream.py / refine_dream.py / derived_from_dream.py   # dream pass stages
+│   ├── reference.py        # references as first-class graph nodes (derived_from edges)
+│   ├── consolidator_tags.py # parse summary/entities/topics from consolidator
+│   ├── absorb_judge.py    # LLM-judge for auto-absorb
 │   ├── absorption.py      # EntityAbsorption (merge + archive + deindex)
+│   ├── skill_page.py      # skills as a searchable memory pseudo-class
 │   ├── provenance.py      # _MEMORY_AUTHOR ContextVar
 │   ├── paths.py           # workspace-scoped directory helpers
 │   ├── session_md.py      # <key>.jsonl → <key>.md formatter
-│   ├── consolidator_tags.py # parse summary/entities/topics from consolidator
 │   └── hot_layer.py       # identity + top headlines for stable prompt tier
+│   # (representative — memory/ has ~50 modules; see memory/00_overview.md)
 ├── pairing/               # Account pairing flow
-├── providers/             # LLM provider adapters (see arch/loop.md §6)
+├── providers/             # LLM provider adapters (see loop.md §6)
 ├── security/              # Auth, permissions, network SSRF guard
 │   └── secrets.py         # secret store + ${secret:} refs + redaction
-├── session/               # Session storage + state helpers (see arch/loop.md §5)
+├── session/               # Session storage + state helpers (see loop.md §5)
 ├── skills/                # Built-in skill markdown files
-├── telemetry/             # Generic JSONL logger (see arch/observability.md)
+├── telemetry/             # Generic JSONL logger (see observability.md)
 ├── templates/             # Prompt templates
 ├── utils/                 # Helpers (no business logic)
 │   └── git_repo.py        # GitRepo (dulwich) used by entity-centric memory
@@ -129,10 +149,10 @@ flowchart LR
     U["User input<br/>(CLI / TUI / Channel)"] --> CH["Channel adapter"]
     CH --> BUS["MessageBus<br/>InboundMessage"]
     BUS --> LOOP["AgentLoop._dispatch"]
-    LOOP --> RUN["AgentRunner.run<br/>(see arch/loop.md)"]
+    LOOP --> RUN["AgentRunner.run<br/>(see loop.md)"]
     RUN --> SESS["sessions/KEY.jsonl<br/>append-only"]
     RUN --> TOOLS["Tools<br/>(filesystem, memory, ...)"]
-    TOOLS --> MEM["Memory subsystem<br/>(see arch/memory.md)"]
+    TOOLS --> MEM["Memory subsystem<br/>(see memory/00_overview.md)"]
     RUN --> OUT["OutboundMessage"]
     OUT --> CH
 ```
@@ -162,15 +182,16 @@ tests/
 └── telemetry/      # Generic logger + schema catalog + cache.usage event
 ```
 
-Current: **~5290 tests passing, 16 skipped** (Python) + **~140** (webui).
+Current: **~5660 tests** (Python, `def test_` count) + **~140** (webui).
 
 ---
 
-## Last updated: 2026-05-23 (post-T1 entity-centric memory + arch/ split)
+## Last updated: 2026-06-07 (doc/code sync: module map + cross-links; design rationale folded back from archive)
 
 > Doc history: this used to be a single 1000-line file. May 23, 2026 split it
-> into the per-component docs under `arch/` with mermaid diagrams. The slim
-> top-level keeps the module map and origin story; details moved.
+> into per-component docs (siblings of this index, plus the `memory/` and
+> `skills/` subfolders) with mermaid diagrams. The slim top-level keeps the
+> module map and origin story; details moved.
 >
 > For the *why* behind each subsystem (what was tried, what was discarded),
 > see `bitacora.md`. This document only describes the current state.

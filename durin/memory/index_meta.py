@@ -15,7 +15,7 @@ relevant fields are:
 - ``previous_models`` (tuple of strings) — audit trail of model
   migrations.
 
-Phase 0 scope (per ``docs/archive/31_memory_implementation_roadmap.md`` §3
+Phase 0 scope (per ``docs/architecture/memory/02_indexing.md`` §7.2
 deliverable 6) is **the field plumbing**. The §7.2 enforcement
 consumer (refuse to operate on mismatch, auto-rebuild if absent)
 lands in a later phase that wires this into the indexer entry point.

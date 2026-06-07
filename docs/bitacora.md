@@ -655,7 +655,7 @@ In TTY UIs that mix synchronous prints with animated indicators, **two render pi
 
 ### What shipped
 
-`todo_write` tool registered as a core tool ([durin/agent/tools/todos.py](durin/agent/tools/todos.py)). Backed by session metadata helpers in [durin/session/todo_state.py](durin/session/todo_state.py). Wired into the runtime-context block of [durin/agent/context.py](durin/agent/context.py) so the current checklist survives compaction and is visible to the model on every turn.
+`todo_write` tool registered as a core tool ([durin/agent/tools/todos.py](../durin/agent/tools/todos.py)). Backed by session metadata helpers in [durin/session/todo_state.py](../durin/session/todo_state.py). Wired into the runtime-context block of [durin/agent/context.py](../durin/agent/context.py) so the current checklist survives compaction and is visible to the model on every turn.
 
 Schema is the flat list pattern adopted by all four reference agents (OpenHands, Hermes, OpenCode, OpenClaude): each item is `{content, status, activeForm}` where status is `pending` / `in_progress` / `completed`. Each tool call REPLACES the entire list — there is no add/update/delete triplet. The tool result echoes the rendered markdown checklist so the model has the text to paste back at the user in its next assistant message.
 
@@ -688,7 +688,7 @@ Echoing tool state back into the runtime-context block on every turn is what mak
 
 ### What shipped
 
-`sleep` tool ([durin/agent/tools/sleep.py](durin/agent/tools/sleep.py)). Single parameter `seconds: number` with optional `reason: string`. Blocks the current turn via `asyncio.sleep`, bounded between 0 and 300 seconds. Verified end-to-end against the live agent: requested 2.0s, actual elapsed 2.001s, telemetry emitted both `sleep.start` and `sleep.end` events.
+`sleep` tool ([durin/agent/tools/sleep.py](../durin/agent/tools/sleep.py)). Single parameter `seconds: number` with optional `reason: string`. Blocks the current turn via `asyncio.sleep`, bounded between 0 and 300 seconds. Verified end-to-end against the live agent: requested 2.0s, actual elapsed 2.001s, telemetry emitted both `sleep.start` and `sleep.end` events.
 
 ### Design decisions
 
@@ -717,7 +717,7 @@ For tools that have a "do nothing for N seconds" semantic, the surface area is g
 
 ### Symptom that triggered the work
 
-Only 6 of 20 tools emitted any telemetry (`read_file`, `edit_file`, `grep`, `repo_overview`, `shell`, `plan_mode`). Tools like `web_search`, `spawn`, `cron`, `todo_write`, `long_task` were dark — you could not answer "how many times was each tool used this session?" from telemetry. The session meta file ([durin/session/session_meta.py](durin/session/session_meta.py)) already had `msg_index` semantics for plan-event transitions, but tool calls were not represented at all.
+Only 6 of 20 tools emitted any telemetry (`read_file`, `edit_file`, `grep`, `repo_overview`, `shell`, `plan_mode`). Tools like `web_search`, `spawn`, `cron`, `todo_write`, `long_task` were dark — you could not answer "how many times was each tool used this session?" from telemetry. The session meta file ([durin/session/session_meta.py](../durin/session/session_meta.py)) already had `msg_index` semantics for plan-event transitions, but tool calls were not represented at all.
 
 ### What shipped
 
@@ -738,9 +738,9 @@ A new `type=tool_call` event in the session meta timeline. One event per tool in
 
 Implementation:
 
-1. [durin/session/session_meta.py](durin/session/session_meta.py) — added `make_tool_call_event(...)` and `append_events_batch(...)` (one read-modify-write for N events to keep parallel tool calls cheap).
-2. [durin/agent/runner.py](durin/agent/runner.py) — new `_run_tool_timed` wrapper measures wall time around each tool call and stamps `tool_call_id` + `duration_ms` onto the existing `tool_events` list. The legacy `{name, status, detail}` fields stay intact for backwards compatibility.
-3. [durin/agent/loop.py](durin/agent/loop.py) — `_run_agent_loop` now returns `tool_events` as a sixth tuple element; `_save_turn` accepts it, indexes by `tool_call_id`, and writes one meta event per persisted assistant-message tool call. Best-effort: wrapped in `suppress(Exception)` so a meta-file write failure never breaks the agent.
+1. [durin/session/session_meta.py](../durin/session/session_meta.py) — added `make_tool_call_event(...)` and `append_events_batch(...)` (one read-modify-write for N events to keep parallel tool calls cheap).
+2. [durin/agent/runner.py](../durin/agent/runner.py) — new `_run_tool_timed` wrapper measures wall time around each tool call and stamps `tool_call_id` + `duration_ms` onto the existing `tool_events` list. The legacy `{name, status, detail}` fields stay intact for backwards compatibility.
+3. [durin/agent/loop.py](../durin/agent/loop.py) — `_run_agent_loop` now returns `tool_events` as a sixth tuple element; `_save_turn` accepts it, indexes by `tool_call_id`, and writes one meta event per persisted assistant-message tool call. Best-effort: wrapped in `suppress(Exception)` so a meta-file write failure never breaks the agent.
 
 ### Why this design
 
@@ -771,7 +771,7 @@ When you have a persistence layer dedicated to "significant lifecycle events" (t
 
 ### What shipped
 
-`ask_user_question` tool ([durin/agent/tools/ask_user.py](durin/agent/tools/ask_user.py)). Parameters: `question: string` (required), `options: list[string]` (optional, 2-6 items). Records the question on `session.metadata["pending_question"]` with a fresh `question_id` + the option list, emits an `ask_user.question_asked` telemetry event, and returns a tool result that explicitly tells the model to "YIELD TO USER — present this question as your next assistant message and stop, do not call more tools".
+`ask_user_question` tool ([durin/agent/tools/ask_user.py](../durin/agent/tools/ask_user.py)). Parameters: `question: string` (required), `options: list[string]` (optional, 2-6 items). Records the question on `session.metadata["pending_question"]` with a fresh `question_id` + the option list, emits an `ask_user.question_asked` telemetry event, and returns a tool result that explicitly tells the model to "YIELD TO USER — present this question as your next assistant message and stop, do not call more tools".
 
 Allowed in every agent mode (plan, explore, build) — the tool only touches session metadata, never the workspace.
 
@@ -809,7 +809,7 @@ When a tool's value is mostly semantic (forcing a control-flow shift rather than
 
 ### What shipped
 
-`session_search` tool ([durin/agent/tools/session_search.py](durin/agent/tools/session_search.py)). Searches the current session's in-memory `session.messages` list for a keyword or regex and returns matches as `[msg_index] role: snippet`. Parameters:
+`session_search` tool ([durin/agent/tools/session_search.py](../durin/agent/tools/session_search.py)). Searches the current session's in-memory `session.messages` list for a keyword or regex and returns matches as `[msg_index] role: snippet`. Parameters:
 
 - `query: string` (required) — substring (default) or regex
 - `regex: bool` — opt into regex; invalid patterns surface as a clear tool error
@@ -849,7 +849,7 @@ For tools that operate on session-local state, the right substrate is almost alw
 
 ### What shipped
 
-Four new tools in [durin/agent/tools/subagent_lifecycle.py](durin/agent/tools/subagent_lifecycle.py):
+Four new tools in [durin/agent/tools/subagent_lifecycle.py](../durin/agent/tools/subagent_lifecycle.py):
 
 - `subagent_list` — task_id, label, state, iteration, age, tool-call count for every subagent the current session has spawned (running + retained history)
 - `subagent_status(task_id)` — detailed snapshot for one subagent (phase, iteration, recent tool calls, usage, error)
@@ -858,7 +858,7 @@ Four new tools in [durin/agent/tools/subagent_lifecycle.py](durin/agent/tools/su
 
 All allowed in plan mode — they only touch the manager's in-memory state, not the workspace.
 
-Companion changes in [durin/agent/subagent.py](durin/agent/subagent.py):
+Companion changes in [durin/agent/subagent.py](../durin/agent/subagent.py):
 
 - `SubagentStatus` gained `session_key`, `final_content`, `ended_at`
 - Done-callback no longer pops `_task_statuses` or `_session_tasks`; instead `_remember_finished` LRU-trims at `_max_status_history` (default 100). Statuses stick around so `subagent_output` can serve completed tasks turns later.
@@ -904,7 +904,7 @@ For background-task lifecycle, the most valuable affordance is **retention with 
 
 ### #6 subagent_monitor
 
-Fifth lifecycle tool in [durin/agent/tools/subagent_lifecycle.py](durin/agent/tools/subagent_lifecycle.py). Whereas `subagent_status` returns a full snapshot, `subagent_monitor` returns a **cursor-based diff**: the caller passes `after_event=N` (typically the `next_cursor` from the previous monitor call) and receives only the events the manager has accumulated since index N. The response also includes `next_cursor`, `phase`, `iteration`, `is_running`, and — when the task has finished in the meantime — the final output / error / stop_reason.
+Fifth lifecycle tool in [durin/agent/tools/subagent_lifecycle.py](../durin/agent/tools/subagent_lifecycle.py). Whereas `subagent_status` returns a full snapshot, `subagent_monitor` returns a **cursor-based diff**: the caller passes `after_event=N` (typically the `next_cursor` from the previous monitor call) and receives only the events the manager has accumulated since index N. The response also includes `next_cursor`, `phase`, `iteration`, `is_running`, and — when the task has finished in the meantime — the final output / error / stop_reason.
 
 The natural usage pattern is **poll-sleep-poll**:
 
@@ -926,7 +926,7 @@ Spawned a subagent that read DATA.md and returned its 3 markdown headings. Singl
 
 ### #7 cron `update` action
 
-Added `action="update"` to the existing `cron` tool ([durin/agent/tools/cron.py](durin/agent/tools/cron.py)). The underlying `CronService.update_job` already supported mutation; this commit just exposes it to the model with the same per-action parameter conventions as the rest of the tool (job_id + any of name / message / schedule / deliver).
+Added `action="update"` to the existing `cron` tool ([durin/agent/tools/cron.py](../durin/agent/tools/cron.py)). The underlying `CronService.update_job` already supported mutation; this commit just exposes it to the model with the same per-action parameter conventions as the rest of the tool (job_id + any of name / message / schedule / deliver).
 
 Validation rules:
 
