@@ -440,7 +440,17 @@
       "button": "Buscar",
       "empty": "Ninguna skill coincidió con esa búsqueda.",
       "installs_one": "{{count}} instalación",
-      "installs_other": "{{count}} instalaciones"
+      "installs_other": "{{count}} instalaciones",
+      "resultsCount_one": "{{count}} resultado",
+      "resultsCount_other": "{{count}} resultados",
+      "sortLabel": "Orden",
+      "sortInstalls": "Installs",
+      "sortName": "Nombre A–Z",
+      "sortRelevance": "Relevancia",
+      "showMore": "Mostrar más",
+      "noDescription": "Sin descripción disponible.",
+      "acquireExplainer": "Skills del registro público. Al importar, la skill queda en Pendientes para tu aprobación.",
+      "importByRef": "Importar por referencia"
     },
     "title": "Skills"
   },
