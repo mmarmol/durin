@@ -156,6 +156,9 @@ def _serialize_page(page: EntityPage) -> dict[str, Any]:
         # Relations were previously only visible as graph edges; surface
         # them in the panel too so provenance events can name them.
         "relations": [dict(r) for r in (page.relations or [])],
+        # Source documents this entity was distilled from (reference:<slug>),
+        # surfaced as a "Fuentes" section + navigable to the reference panel.
+        "derived_from": list(page.derived_from or []),
         "extra": extra,  # leftover frontmatter the parser didn't promote
         "body": page.body or "",
     }
@@ -226,6 +229,24 @@ def _provenance_events(page: EntityPage) -> list[dict[str, Any]]:
             events.append({
                 "kind": "attribute",
                 "detail": str(key),
+                "author": entry.get("author"),
+                "when": entry.get("extracted_at"),
+                "source_ref": entry.get("source_ref"),
+                "session_stem": stem,
+                "turn": turn,
+            })
+
+    # M1: per-link who/when for derived_from (ref-keyed provenance), or the
+    # Procedencia tab would never surface where each source link came from.
+    derived_from = prov.get("derived_from")
+    if isinstance(derived_from, dict):
+        for ref, entry in derived_from.items():
+            if not isinstance(entry, dict):
+                continue
+            stem, turn = _parse_source_ref(entry.get("source_ref"))
+            events.append({
+                "kind": "derived_from",
+                "detail": str(ref),
                 "author": entry.get("author"),
                 "when": entry.get("extracted_at"),
                 "source_ref": entry.get("source_ref"),
