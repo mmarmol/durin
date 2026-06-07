@@ -182,6 +182,15 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
   const rafRef = useRef<number | null>(null);
   const draggingRef = useRef<SimNode | null>(null);
   const hoverRef = useRef<SimNode | null>(null);
+  // Hover preview (Obsidian page-preview): debounced popover with the
+  // hovered node's rendered body. Refs drive the hot pointer path; only
+  // `hoverPreview` is React state. Bodies cached per node id.
+  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hoverIdRef = useRef<string | null>(null);
+  const hoverBodyCache = useRef<Map<string, string>>(new Map());
+  const [hoverPreview, setHoverPreview] = useState<
+    { node: MemoryGraphNode; x: number; y: number; body: string } | null
+  >(null);
 
   // Side panel state — branches by selected.type:
   //   - "session" → fetch MemorySessionDetail, render session tabs
@@ -642,8 +651,45 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
         drag.y = y;
       } else {
         const hit = hitTestNode(x, y) || hitTestEdge(x, y);
-        hoverRef.current = (hit && "weight" in hit && !("source" in hit)) ? (hit as SimNode) : null;
+        const node =
+          hit && "weight" in hit && !("source" in hit) ? (hit as SimNode) : null;
+        hoverRef.current = node;
         evt.currentTarget.style.cursor = hit ? "pointer" : "default";
+
+        // Debounced hover preview for entity nodes (sessions excluded).
+        const hid = node && node.type !== "session" ? node.id : null;
+        if (hid !== hoverIdRef.current) {
+          hoverIdRef.current = hid;
+          if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+          if (!hid || !node) {
+            setHoverPreview(null);
+          } else {
+            const px = x;
+            const py = y;
+            const hnode = node;
+            hoverTimerRef.current = setTimeout(() => {
+              const cached = hoverBodyCache.current.get(hid);
+              if (cached !== undefined) {
+                setHoverPreview({ node: hnode, x: px, y: py, body: cached });
+                return;
+              }
+              if (!tokenRef.current) return;
+              void fetchMemoryEntity(tokenRef.current, hid)
+                .then((d) => {
+                  const body = (d?.page?.body ?? "")
+                    .replace(/<!--[\s\S]*?-->/g, "")
+                    .trim()
+                    .slice(0, 400);
+                  hoverBodyCache.current.set(hid, body);
+                  // Only show if still hovering the same node.
+                  if (hoverIdRef.current === hid) {
+                    setHoverPreview({ node: hnode, x: px, y: py, body });
+                  }
+                })
+                .catch(() => {});
+            }, 350);
+          }
+        }
       }
     },
     [hitTestNode, hitTestEdge],
@@ -859,6 +905,9 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
           onPointerUp={onPointerUp}
           onPointerLeave={() => {
             hoverRef.current = null;
+            hoverIdRef.current = null;
+            if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+            setHoverPreview(null);
           }}
           className="block h-full w-full"
         />
@@ -1535,6 +1584,36 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
               )}
             </div>
           </aside>
+        ) : null}
+
+        {/* Hover preview (Obsidian page-preview): non-interactive popover with
+            the hovered node's rendered body snippet. */}
+        {hoverPreview && hoverPreview.node.id !== selected?.id ? (
+          <div
+            className="pointer-events-none absolute z-30 w-72 max-w-[calc(100vw-1.5rem)] rounded-lg border border-border/50 bg-card/95 p-2.5 text-xs shadow-lg backdrop-blur"
+            style={{
+              left: clamp(hoverPreview.x + 14, 8, (wrapRef.current?.clientWidth ?? 800) - 300),
+              top: clamp(hoverPreview.y + 14, 8, (wrapRef.current?.clientHeight ?? 600) - 200),
+            }}
+          >
+            <div className="mb-1 flex items-center gap-1.5">
+              <span
+                className="inline-block h-2 w-2 shrink-0 rounded-full"
+                style={{ background: colorForType(hoverPreview.node.type) }}
+              />
+              <span className="truncate font-semibold">{hoverPreview.node.name}</span>
+            </div>
+            {hoverPreview.body ? (
+              <p className="line-clamp-6 whitespace-pre-wrap text-[11px] leading-relaxed text-muted-foreground">
+                {hoverPreview.body}
+              </p>
+            ) : (
+              <p className="text-[11px] text-muted-foreground">
+                {hoverPreview.node.type}
+                {hoverPreview.node.phantom ? " · phantom" : ""}
+              </p>
+            )}
+          </div>
         ) : null}
       </div>
     </div>
