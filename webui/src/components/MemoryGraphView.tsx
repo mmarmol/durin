@@ -167,6 +167,9 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
   // global overview, so the node is centred even if the cap dropped it.
   const [focusGraph, setFocusGraph] = useState<MemoryGraphPayload | null>(null);
   const data = focusGraph ?? rawData;
+  // Reference docs (memory/references/*) aren't graph nodes; clicking a
+  // reference search hit opens its content in this side panel.
+  const [referenceDetail, setReferenceDetail] = useState<MemoryEntryDetail | null>(null);
   const { token } = useClient();
   const tokenRef = useRef(token);
   tokenRef.current = token;
@@ -574,6 +577,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
         setPanelExpanded(false);
         setActiveTab(hit.phantom ? "info" : "body");
         focusOnNode(hit.id);
+        setReferenceDetail(null);
         setEdgePopup(null);
         alphaRef.current = 0.4;
         evt.currentTarget.setPointerCapture(evt.pointerId);
@@ -960,12 +964,33 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                     type="button"
                     key={`${r.uri}-${idx}`}
                     onClick={() => {
+                      // Reference docs aren't graph nodes — open the content
+                      // in the side panel. The search uri is
+                      // `memory/reference/[reference:]<slug>`; normalise to the
+                      // `reference:<slug>` form get_entry_detail expects.
+                      if (r.class_name === "reference") {
+                        const slug = r.uri
+                          .replace(/^memory\/reference\//, "")
+                          .replace(/^reference:/, "")
+                          .split("#")[0];
+                        setSelected(null);
+                        if (tokenRef.current) {
+                          void fetchMemoryEntry(
+                            tokenRef.current,
+                            `reference:${slug}`,
+                          )
+                            .then((d) => setReferenceDetail(d))
+                            .catch(() => setReferenceDetail(null));
+                        }
+                        return;
+                      }
                       // Pick the node to focus: a canonical hit IS an entity;
-                      // a fragment (entry/reference) points at the entities it
-                      // tags — focus the first one so a fragment still drills
-                      // into "the thing this is about".
+                      // a fragment (entry) points at the entities it tags —
+                      // focus the first one so a fragment still drills into
+                      // "the thing this is about".
                       const target = isCanon ? id : (r.entities ?? [])[0];
                       if (!target) return;
+                      setReferenceDetail(null);
                       focusOnNode(target);
                       const node =
                         simNodesRef.current.find((n) => n.id === target) ?? {
@@ -1467,6 +1492,48 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
             <footer className="px-3 py-1.5 text-[10.5px] text-muted-foreground">
               {t("memoryGraph.interactionHint")}
             </footer>
+          </aside>
+        ) : null}
+
+        {/* Reference content panel — references aren't graph nodes, so a
+            reference search hit opens its rendered doc here. */}
+        {referenceDetail && !selected ? (
+          <aside
+            className="absolute right-3 top-3 z-10 flex w-[min(58vw,44rem)] max-w-[calc(100vw-1.5rem)] flex-col rounded-lg border border-border/50 bg-card/95 text-sm shadow-lg backdrop-blur"
+            style={{ maxHeight: "calc(100% - 1.5rem)" }}
+          >
+            <header className="flex items-start gap-2 border-b border-border/40 px-3 py-2">
+              <span className="mt-1 inline-block h-2.5 w-2.5 shrink-0 rounded-full bg-amber-500/70" />
+              <div className="min-w-0 flex-1">
+                <div className="truncate font-semibold">
+                  {referenceDetail.frontmatter.headline}
+                </div>
+                <div className="truncate text-xs text-muted-foreground">
+                  reference
+                  {referenceDetail.frontmatter.valid_from
+                    ? ` · ${referenceDetail.frontmatter.valid_from.slice(0, 10)}`
+                    : ""}
+                </div>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={t("memoryGraph.close")}
+                onClick={() => setReferenceDetail(null)}
+                className="h-6 w-6"
+              >
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            </header>
+            <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
+              {referenceDetail.body ? (
+                <MarkdownTextRenderer className="text-[12.5px] leading-relaxed">
+                  {referenceDetail.body.replace(/<!--[\s\S]*?-->/g, "").trim()}
+                </MarkdownTextRenderer>
+              ) : (
+                <p className="text-muted-foreground">{t("memoryGraph.noBody")}</p>
+              )}
+            </div>
           </aside>
         ) : null}
       </div>

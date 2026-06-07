@@ -687,13 +687,54 @@ def _parse_entry_uri(uri: str) -> tuple[str, str] | None:
     return parts[1], parts[2]
 
 
+def _split_frontmatter(raw: str) -> tuple[dict[str, Any], str]:
+    """Split a ``---`` YAML frontmatter block from a markdown doc body."""
+    if raw.startswith("---"):
+        parts = raw.split("---", 2)
+        if len(parts) >= 3:
+            import yaml
+
+            try:
+                fm = yaml.safe_load(parts[1]) or {}
+            except Exception:  # noqa: BLE001
+                fm = {}
+            return (fm if isinstance(fm, dict) else {}), parts[2].lstrip("\n")
+    return {}, raw
+
+
 def get_entry_detail(workspace: Path, uri: str) -> dict[str, Any] | None:
     """Return one entry's frontmatter + body, or ``None`` on bad URI / 404.
 
     Reads ``workspace/memory/<class>/<id>.md`` via
     :func:`durin.memory.storage.load_entry`. Used by the webui's
-    Entries tab when the operator opens a row.
+    Entries tab when the operator opens a row. Also resolves
+    ``reference:<slug>`` uris (ingested reference docs under
+    ``memory/references/``) so the webui can open a reference's content —
+    references aren't graph nodes or entries, but they ARE readable pages.
     """
+    if uri.startswith("reference:"):
+        from durin.memory.reference import load_reference
+
+        raw = load_reference(workspace, uri)
+        if raw is None:
+            return None
+        fm, body = _split_frontmatter(raw)
+        return {
+            "uri": uri,
+            "class_name": "reference",
+            "frontmatter": {
+                "id": uri,
+                "headline": str(fm.get("title") or uri.split(":", 1)[-1]),
+                "summary": "",
+                "valid_from": fm.get("ingested_at"),
+                "author": "ingested",
+                "entities": [],
+                "source_refs": [str(fm.get("source"))] if fm.get("source") else [],
+                "related": [],
+            },
+            "body": body,
+            "exists": True,
+        }
     parsed = _parse_entry_uri(uri)
     if parsed is None:
         return None
