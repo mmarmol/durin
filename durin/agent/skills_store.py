@@ -543,18 +543,32 @@ def web_skill_search(workspace: Path, query: str, limit: int = 0) -> tuple[int, 
 def web_skill_describe(ref: str) -> tuple[int, dict]:
     """`GET /api/skills/describe?ref=` — read-only peek at a registry skill's
     SKILL.md frontmatter ``description`` (lazy-loaded by the search UI on expand).
-    Never executes or writes anything. Any failure degrades to an empty string."""
-    from durin.agent import skills_import as si
-    from durin.agent.skills_frontmatter import split_frontmatter
 
+    Resolves the ref the same way import does (``resolve_candidates`` — which uses
+    the GitHub tree API to locate the actual SKILL.md, since a registry skillId is
+    a NAME, not a path), then fetches just that SKILL.md and reads its frontmatter.
+    Never executes or writes anything. Any failure degrades to an empty string."""
     ref = (ref or "").strip()
-    if not ref.startswith("github:"):
-        # clawhub hits already carry a description; other refs aren't peekable.
+    if not ref:
         return 200, {"ref": ref, "description": ""}
     try:
-        owner, repo, branch, skill_dir = si._parse_github_ref(ref)
-        path = f"{skill_dir}/SKILL.md" if skill_dir else "SKILL.md"
-        url = f"{si._GITHUB_RAW}/{owner}/{repo}/{branch}/{path}"
+        from durin.agent import skills_import as si
+        from durin.agent.skill_resolve import resolve_candidates
+        from durin.agent.skills_frontmatter import split_frontmatter
+
+        cands = resolve_candidates(ref).candidates
+        if not cands:
+            return 200, {"ref": ref, "description": ""}
+        cand = cands[0]
+        if cand.kind == "https":
+            url = cand.ref
+        elif cand.kind == "github":
+            owner, repo, branch, skill_dir = si._parse_github_ref(cand.ref)
+            path = f"{skill_dir}/SKILL.md" if skill_dir else "SKILL.md"
+            url = f"{si._GITHUB_RAW}/{owner}/{repo}/{branch}/{path}"
+        else:
+            # clawhub / local: the search hit already carries a description.
+            return 200, {"ref": ref, "description": ""}
         raw = si._http_get_bytes(url)[:65_536]
         data, _ = split_frontmatter(raw.decode("utf-8", errors="replace"))
         desc = str(data.get("description") or "").strip()
