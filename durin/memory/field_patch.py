@@ -67,8 +67,8 @@ def apply_field_patch(page: EntityPage, patch: FieldPatch) -> bool:
                 return False
         page.relations.append(dict(patch.value))
         # Q1: provenance keyed by (to, type), not positional index — merges
-        # cleanly. Lenient-migrate any legacy index-keyed list on first write.
-        rel_prov = coerce_relation_prov(prov.get("relations"), page.relations)
+        # cleanly.
+        rel_prov = coerce_relation_prov(prov.get("relations"))
         rel_prov[relation_prov_key(str(to), str(rtype))] = {
             "to": to, "type": rtype, **entry,
         }

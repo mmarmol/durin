@@ -384,14 +384,10 @@ def _merge_pages(
         merged_prov["attributes"] = attr_prov
 
     # relations provenance (bug fix, item B): previously dropped entirely on
-    # merge. Coerce both sides to the (to,type)-keyed dict form (lenient on any
-    # legacy index-list) and fold; canonical wins on a key conflict.
-    rel_prov = coerce_relation_prov(
-        (canonical.provenance or {}).get("relations"), canonical.relations,
-    )
-    absorbed_rel_prov = coerce_relation_prov(
-        (absorbed.provenance or {}).get("relations"), absorbed.relations,
-    )
+    # merge. Both sides are (to,type)-keyed dicts; fold them, canonical wins on
+    # a key conflict.
+    rel_prov = coerce_relation_prov((canonical.provenance or {}).get("relations"))
+    absorbed_rel_prov = coerce_relation_prov((absorbed.provenance or {}).get("relations"))
     for k, entry in absorbed_rel_prov.items():
         rel_prov.setdefault(k, entry)
     if rel_prov:

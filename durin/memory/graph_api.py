@@ -200,22 +200,12 @@ def _provenance_events(page: EntityPage) -> list[dict[str, Any]]:
     prov = page.provenance or {}
     events: list[dict[str, Any]] = []
 
-    relations = page.relations or []
     rel_prov = prov.get("relations")
-    # Q1: relation provenance is now a {(to,type)-key: entry} dict carrying
-    # `to`/`type`; lenient-read the legacy index-keyed list too.
-    rel_entries: list[dict[str, Any]] = []
-    if isinstance(rel_prov, dict):
-        rel_entries = [e for e in rel_prov.values() if isinstance(e, dict)]
-    elif isinstance(rel_prov, list):
-        for entry in rel_prov:
-            if not isinstance(entry, dict):
-                continue
-            idx = entry.get("index")
-            if isinstance(idx, int) and 0 <= idx < len(relations):
-                rel = relations[idx]
-                entry = {**entry, "to": rel.get("to"), "type": rel.get("type")}
-            rel_entries.append(entry)
+    # Q1: relation provenance is a {(to,type)-key: entry} dict carrying to/type.
+    rel_entries = (
+        [e for e in rel_prov.values() if isinstance(e, dict)]
+        if isinstance(rel_prov, dict) else []
+    )
     for entry in rel_entries:
         to = entry.get("to")
         detail = f"{entry.get('type', 'related')} → {to}" if to else None

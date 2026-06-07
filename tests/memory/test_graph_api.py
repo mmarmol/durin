@@ -123,14 +123,14 @@ def _provenanced_page(tmp_path: Path) -> Path:
         relations=[{"to": "topic:veterinaria", "type": "related_to"}],
         derived_from=["reference:rabies-investigation"],
         provenance={
-            "relations": [
-                {
-                    "index": 0,
+            "relations": {
+                "topic:veterinaria\x1frelated_to": {
+                    "to": "topic:veterinaria", "type": "related_to",
                     "source_ref": "[[sessions/websocket_abc123.md#turn-8]]",
                     "extracted_at": "2026-06-06T18:41:40.401981+00:00",
                     "author": "agent",
                 },
-            ],
+            },
             "attributes": {
                 "severity": {
                     "source_ref": "[[sessions/cli_direct.md#turn-3]]",
@@ -197,14 +197,14 @@ def test_provenance_non_session_ref_has_no_link(tmp_path: Path) -> None:
         type="topic", name="X",
         relations=[{"to": "topic:y", "type": "related_to"}],
         provenance={
-            "relations": [
-                {
-                    "index": 0,
+            "relations": {
+                "topic:y\x1frelated_to": {
+                    "to": "topic:y", "type": "related_to",
                     "source_ref": "memory_upsert_entity",  # fallback, not a session
                     "extracted_at": "2026-06-06T18:41:40+00:00",
                     "author": "agent",
                 },
-            ],
+            },
         },
         created_at=_dt.datetime(2026, 6, 6, tzinfo=_dt.timezone.utc),
     )
