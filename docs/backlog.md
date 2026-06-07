@@ -253,6 +253,52 @@ override puntual del config.
 **Estado**: pendiente — cambio acotado pero toca varias rutas; requiere test que
 verifique que con `DURIN_HOME` seteado ningún path cae en `~/.durin`.
 
+
+### Secrets — varias credenciales bypasean el secret store (consistencia)
+
+**Contexto**: el sistema de secrets (`store_secret`/`resolve_secret`, refs
+`${secret:NAME}` en config, `~/.durin/secrets.json` mode 0600) se aplicó bien a
+las **api_keys de providers**, a los **tokens de canales** (Slack/Discord/
+Telegram/Matrix, vía wizard) y a **Codex OAuth** (PR #50). Un audit (2026-06-07,
+verificado con file:line) detectó credenciales que quedaron **afuera** del
+sistema.
+
+**Bypasean — quedan plaintext en `config.json` o en un file store externo**:
+- **GitHub Copilot** OAuth → `FileTokenStorage` del kit, fuera de secrets
+  ([github_copilot_provider.py:33](../durin/providers/github_copilot_provider.py#L33)).
+  Es el mismo caso que Codex pre-#50. Fix: generalizar `_CodexSecretsStorage` a
+  un `SecretsTokenStorage` reusable + migración del archivo del kit + ajustar los
+  checks de "configured". Caveat: no es live-verificable sin login Copilot.
+- **Web search** api_key (Brave/Tavily/Kagi/Jina/…) → el webui la escribe **cruda**
+  en config.json (`set_value` → `setattr`, sin `store_secret`,
+  [websocket.py:1546](../durin/channels/websocket.py#L1546)). El tool sí hace
+  `resolve_secret` al usar, pero el valor queda plaintext. Fix: `store_secret` en
+  `_handle_settings_web_search_update` (como provider-update) + migración de las
+  existentes.
+- **MCP** `headers` / `env` → se pasan **crudos** al cliente HTTP/stdio, sin
+  resolución ([mcp.py:521,542,500](../durin/agent/tools/mcp.py#L521)). Fix:
+  resolver `${secret:}` en headers/env al construir el cliente (se editan a mano
+  en config, no hay UI — alcanza con soportar la resolución).
+- **Provider** `extra_headers` / `extra_body` → crudos; `factory` resuelve
+  `api_key` pero no estos ([factory.py:90,110](../durin/providers/factory.py#L90)).
+  Auth custom (p.ej. `X-API-Key: sk-…`) queda plaintext. Fix: resolver los dicts
+  al construir el provider.
+
+**Bug aparte (no es bypass de storage, es resolución rota)**:
+- **Transcripción de canales**: `_resolve_transcription_key`
+  ([manager.py:180](../durin/channels/manager.py#L180)) devuelve
+  `providers.<x>.api_key` **sin** `resolve_secret` → pasa el ref `${secret:}`
+  literal al provider de transcripción → la auth de voz falla cuando la key es un
+  secret (el caso normal). Fix: ~1 línea (`resolve_secret`).
+
+**Esfuerzo**: ~medio día, batcheable en 3 PRs — (a) web search; (b) MCP +
+extra_headers/body + transcripción; (c) Copilot. Patrón ya probado con Codex; el
+cuello es el ciclo de deploy, no el código.
+
+**Estado**: pendiente, **no bloquea** (todo funciona; lo que bypasea queda 0600
+plaintext en config, no expuesto a la red). Deuda de consistencia análoga a la
+que cerramos para Codex en #50.
+
 ---
 
-## Last updated: 2026-06-07 (merged origin/main: Codex OAuth/loopback fixes + P7 HTTP-server scope; P8 memory-graph Obsidian redesign CLOSED, Fase 3 clustering discarded → bitacora)
+## Last updated: 2026-06-07 (entity→source derived_from linking shipped + data migrated; merged origin/main: Codex OAuth/loopback + secrets audit; P8 memory-graph CLOSED)
