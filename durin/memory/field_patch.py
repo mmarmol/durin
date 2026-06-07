@@ -15,7 +15,7 @@ from durin.memory.field_provenance import incoming_wins, make_entry
 
 __all__ = ["FieldPatch", "apply_field_patch"]
 
-PatchKind = Literal["attribute", "relation", "alias", "body_append"]
+PatchKind = Literal["attribute", "relation", "alias", "body_append", "derived_from"]
 
 
 @dataclass
@@ -64,6 +64,24 @@ def apply_field_patch(page: EntityPage, patch: FieldPatch) -> bool:
         prov.setdefault("relations", []).append(
             {"index": len(page.relations) - 1, **entry}
         )
+        page.provenance = prov
+        return True
+
+    if patch.kind == "derived_from":
+        ref = patch.value if isinstance(patch.value, str) else str(patch.value)
+        # Per-link provenance keyed by the ref string (merge-safe, unlike the
+        # index-keyed relation provenance). Precedence like attributes.
+        df_prov = prov.get("derived_from") or {}
+        existing = df_prov.get(ref)
+        if ref in page.derived_from:
+            # Already linked; only a higher-authority/newer writer re-stamps.
+            # An identical entry is a true duplicate → no change.
+            if existing == entry or not incoming_wins(existing=existing, incoming=entry):
+                return False
+        else:
+            page.derived_from.append(ref)
+        df_prov[ref] = entry
+        prov["derived_from"] = df_prov
         page.provenance = prov
         return True
 

@@ -51,6 +51,10 @@ _KNOWN_FIELDS = frozenset(
         "updated_at",
         "attributes",
         "relations",
+        # Documents this entity was distilled from (list of `reference:<slug>`).
+        # General across entity types; navigational, not a semantic entity↔entity
+        # relation. Per-link provenance lives in provenance["derived_from"].
+        "derived_from",
         "provenance",
         # E19 (2026-05-28): explicit authorship parity with
         # `MemoryEntry.author`. Pre-E19 entity pages had no author
@@ -93,6 +97,8 @@ class EntityPage:
     # construct without surprises.
     attributes: dict[str, Any] = field(default_factory=dict)
     relations: list[dict[str, Any]] = field(default_factory=list)
+    # Source documents this entity was distilled from: `reference:<slug>` refs.
+    derived_from: list[str] = field(default_factory=list)
     provenance: dict[str, Any] = field(default_factory=dict)
 
     # E19 (2026-05-28): authorship parity with `MemoryEntry`. Pages
@@ -152,6 +158,12 @@ class EntityPage:
             for item in relations_raw:
                 if isinstance(item, dict):
                     relations.append(item)
+        # derived_from: list of `reference:<slug>`. Lenient read (known field,
+        # so it is NOT preserved via `extra` — must be parsed explicitly).
+        derived_from_raw = data.get("derived_from")
+        derived_from: list[str] = []
+        if isinstance(derived_from_raw, list):
+            derived_from = [str(d) for d in derived_from_raw if isinstance(d, str)]
         provenance_raw = data.get("provenance")
         provenance = provenance_raw if isinstance(provenance_raw, dict) else {}
 
@@ -174,6 +186,7 @@ class EntityPage:
             updated_at=updated_at,
             attributes=attributes,
             relations=relations,
+            derived_from=derived_from,
             provenance=provenance,
             author=author,
             extra=extra,
@@ -211,6 +224,8 @@ class EntityPage:
             frontmatter["attributes"] = dict(self.attributes)
         if self.relations:
             frontmatter["relations"] = [dict(r) for r in self.relations]
+        if self.derived_from:
+            frontmatter["derived_from"] = list(self.derived_from)
         if self.provenance:
             frontmatter["provenance"] = dict(self.provenance)
         # E19: emit `author` only when it differs from the safe
@@ -348,6 +363,14 @@ class EntityPage:
             if not isinstance(rel_type, str) or not rel_type.strip():
                 raise EntityPageError(
                     f"relations[{i}].type must be a non-empty string"
+                )
+        if not isinstance(self.derived_from, list):
+            raise EntityPageError("derived_from must be a list")
+        for i, ref in enumerate(self.derived_from):
+            # Holds only document refs — a valid entity ref shaped `reference:<slug>`.
+            if not _is_valid_entity_ref(ref) or not str(ref).startswith("reference:"):
+                raise EntityPageError(
+                    f"derived_from[{i}] {ref!r} must be a 'reference:<slug>' ref"
                 )
         if not isinstance(self.provenance, dict):
             raise EntityPageError("provenance must be a dict")

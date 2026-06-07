@@ -250,3 +250,58 @@ class TestWriteValidation:
         )
         # Should not raise.
         page.save(tmp_path / "marcelo.md")
+
+
+class TestDerivedFrom:
+    """`derived_from`: list of `reference:<slug>` source documents."""
+
+    def test_round_trip_preserves_derived_from(self, tmp_path: Path) -> None:
+        page = EntityPage(
+            type="topic", name="Rabies",
+            derived_from=["reference:rabies-investigation", "reference:vaccine-adr"],
+        )
+        path = tmp_path / "rabies.md"
+        page.save(path)
+        reloaded = EntityPage.from_file(path)
+        assert reloaded is not None
+        assert reloaded.derived_from == [
+            "reference:rabies-investigation",
+            "reference:vaccine-adr",
+        ]
+
+    def test_v1_page_defaults_empty_derived_from(self) -> None:
+        page = EntityPage.from_text(
+            "---\ntype: topic\nname: Rabies\naliases: []\n---\nbody\n"
+        )
+        assert page is not None
+        assert page.derived_from == []
+
+    def test_empty_derived_from_omitted_from_output(self, tmp_path: Path) -> None:
+        page = EntityPage(type="topic", name="Rabies")
+        page.save(tmp_path / "r.md")
+        assert "derived_from" not in (tmp_path / "r.md").read_text(encoding="utf-8")
+
+    def test_derived_from_not_list_falls_back_to_empty(self) -> None:
+        page = EntityPage.from_text(
+            "---\ntype: topic\nname: Rabies\nderived_from: nope\n---\nbody\n"
+        )
+        assert page is not None
+        assert page.derived_from == []
+
+    def test_derived_from_must_be_list(self) -> None:
+        page = EntityPage(
+            type="topic", name="Rabies",
+            derived_from={"not": "a list"},  # type: ignore[arg-type]
+        )
+        with pytest.raises(EntityPageError):
+            page.to_markdown()
+
+    def test_derived_from_entry_must_be_reference_ref(self) -> None:
+        # A valid entity ref but not a `reference:` → rejected (this field holds
+        # only document refs, not arbitrary entities).
+        page = EntityPage(
+            type="topic", name="Rabies",
+            derived_from=["person:marcelo"],
+        )
+        with pytest.raises(EntityPageError):
+            page.to_markdown()
