@@ -63,6 +63,27 @@ Buscar es un **modo lista + panel de lectura** (como mail/Finder). Mientras busc
 
 - Cuando hay un ego-grafo temporal cargado (solo por el caso off-cap), aparece "← Grafo completo". Cerrar el panel o tocar ese botón → restaura. (Si nunca se carga ego, el botón no aparece.)
 
+### Caso 4 — Mobile / compacto (no entra todo)
+
+Premisa: en pantalla chica **no hay side-by-side**. Una superficie por vez + navegación con "←" (back-stack). El split es solo desktop.
+
+**Dos tiers** (el quiebre es donde la columna grafo quedaría < ~300px ≈ ventana < ~720px):
+
+| | Desktop (≥ ~720px) | Compacto / mobile (< ~720px) |
+|---|---|---|
+| Layout | split: `[grafo \| contenido]` (re-encaja) | **una superficie full-screen por vez** |
+| Rail nav | visible | colapsa a hamburguesa (oculto) |
+| Gesto survey | **hover** (preview) | no existe (touch) → **tap = abre** |
+| Click/tap nodo | resalta + abre panel (columna) | abre contenido **full-screen** (← vuelve al grafo) |
+| Search | lista (izq) + lectura (der), grafo recede | **lista full-screen**; tap → contenido full-screen (← vuelve a la lista; ← otra vez → grafo) |
+| Cerrar | ✕ restaura | "←" sube un nivel en el stack |
+
+**Back-stack en compacto**:
+- Grafo → (tap nodo) → Contenido → ← → Grafo.
+- Grafo → (search) → Resultados → (tap) → Contenido → ← → Resultados → ← → Grafo.
+
+**Grafo en touch**: el force-graph es denso para dedos. Mobile **arranca pero apoya en search** (la lista full-screen es el camino principal); el grafo queda como exploración secundaria con pinch-zoom y targets más grandes. (A validar: ¿en mobile el landing debería ser search en vez del grafo? — decisión abierta mobile #1).
+
 ## Estados del panel (uno solo)
 
 | Estado | Cuándo | Qué muestra |
@@ -72,12 +93,14 @@ Buscar es un **modo lista + panel de lectura** (como mail/Finder). Mientras busc
 | abierto-ancho | botón ⤢ | igual, ancho completo para lectura |
 | reference | item es reference | header (reference) · contenido renderizado (sin tabs de entity) |
 
-## Decisiones abiertas (a confirmar en el mock)
+## Decisiones (resueltas)
 
-1. **¿Click centra el nodo** (pan/zoom) además de resaltar, o solo resalta en el lugar? (el mock hoy solo resalta — más simple, sin cámara).
-2. **Ego temporal**: ¿solo para off-cap (recomendado), o querés que cualquier click reemplace por ego? (recomiendo solo off-cap para no perder el contexto global).
-3. **Doble-click**: ¿lo eliminamos? (con click=abre, el doble-click sobra; el ⤢ del panel da el ancho completo).
-4. **Hover mientras hay panel abierto**: ¿se ignora (recomendado, no pelea con la selección) o también previsualiza?
+1. **Click NO centra (sin cámara/pan-zoom).** El grafo re-encaja en su columna y el nodo queda resaltado+agrandado; eso alcanza. El centrado real (cámara) es infra grande y el ego-grafo ya centra el caso off-cap. → **solo resalta en el lugar**.
+2. **Ego temporal SOLO off-cap.** Click normal resalta en el lugar (mantiene contexto global). El ego-reemplazo solo cuando el nodo no está en el grafo (search off-cap), y se revierte al cerrar. (Evita "queda filtrado").
+3. **Doble-click ELIMINADO.** Click abre; el ⤢ del panel da ancho completo. El doble-click solo agregaba ambigüedad.
+4. **Hover IGNORADO con panel abierto.** No pelea con la selección/contenido. En touch no hay hover (ver mobile).
+5. **Ancho del panel: 42%** por defecto en desktop, ⤢ → 72%. (Resizable por drag: futuro, no ahora).
+6. **Umbral a stacked: columna de grafo < ~300px** (≈ ventana < ~720px) → se pasa al modo compacto/mobile (ver abajo).
 
 ## Cómo evaluar el mock
 

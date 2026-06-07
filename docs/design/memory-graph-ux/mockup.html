@@ -86,6 +86,11 @@
   .backbtn { display:none; }
   .stage.narrow .panel.open .backbtn { display:inline-block; }
 
+  /* compact / mobile: one full-screen surface at a time, back navigation */
+  .app.compact .rail { display:none; }
+  .app.compact .results { left:0; top:0; right:0; bottom:0; width:auto; max-width:none; border:none; border-radius:0; box-shadow:none; }
+  .app.compact .panel.open .backbtn { display:inline-block; }
+
   .legend { position:absolute; left:14px; bottom:12px; font-size:11px; color:var(--muted); display:flex; gap:12px; z-index:4; }
   .legend i { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:4px; vertical-align:middle; }
   .hint { position:absolute; right:14px; bottom:12px; font-size:11px; color:var(--muted); z-index:4; max-width:55%; text-align:right; }
@@ -192,10 +197,13 @@ function onHover(n){ if(openId||graphpane.classList.contains("searching"))return
   document.getElementById("pv-body").innerHTML=n.body.replace(/<[^>]+>/g," ").slice(0,160)+"…"; preview.style.display="block"; }
 function onHoverEnd(){ if(openId)return; clearEmphasis(); preview.style.display="none"; }
 
+const appEl = document.querySelector(".app");
 function applyResponsive(){
-  // content goes full-screen only when the graph column would be uselessly
-  // small. Predict the panel width from the same clamp the CSS uses.
+  const compact = window.innerWidth < 720;            // mobile / compact tier
+  appEl.classList.toggle("compact", compact);
   const open = panel.classList.contains("open");
+  if(compact){ stage.classList.toggle("narrow", open); return; } // one surface at a time
+  // desktop: content full-screen only when the graph column would be uselessly small
   if(!open){ stage.classList.remove("narrow"); return; }
   const s = stage.clientWidth;
   const frac = panel.classList.contains("wide") ? 0.72 : 0.42;
@@ -244,7 +252,7 @@ search.addEventListener("input",()=>{ const q=search.value.trim().toLowerCase();
   results.classList.add("open"); });
 document.getElementById("results-x").addEventListener("click", exitSearch);
 
-layout(); window.addEventListener("resize",()=>{ applyResponsive(); layout(); });
+applyResponsive(); layout(); window.addEventListener("resize",()=>{ applyResponsive(); layout(); });
 </script>
 </body>
 </html>
