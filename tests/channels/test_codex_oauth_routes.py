@@ -22,11 +22,13 @@ def _req(path):
 
 
 def test_settings_payload_lists_codex_as_oauth(monkeypatch):
-    from durin.utils import oauth as oauth_utils
+    from durin.providers import codex_device_auth
 
     inst = _handler_instance()
-    # _settings_payload imports any_token_present from this module at call time.
-    monkeypatch.setattr(oauth_utils, "any_token_present", lambda name: False)
+    # _settings_payload imports codex_token_present from this module at call
+    # time to decide the codex row's `configured` flag — mock it so the test is
+    # hermetic regardless of the dev machine's real ~/.durin codex token.
+    monkeypatch.setattr(codex_device_auth, "codex_token_present", lambda: False)
     payload = inst._settings_payload()
     codex = [p for p in payload["providers"] if p["name"] == "openai_codex"]
     assert len(codex) == 1
