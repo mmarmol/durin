@@ -46,7 +46,7 @@ from typing import Any
 from durin.memory.entity_page import EntityPage
 from durin.memory.storage import load_entry
 
-__all__ = ["build_memory_graph"]
+__all__ = ["build_memory_graph", "build_entity_subgraph"]
 
 logger = logging.getLogger(__name__)
 
@@ -317,6 +317,89 @@ def build_memory_graph(
             "session_count": session_count,
             "truncated_nodes": truncated_nodes,
             "truncated_edges": truncated_edges,
+            "types": types_seen,
+        },
+    }
+
+
+def build_entity_subgraph(
+    workspace: Path,
+    ref: str,
+    *,
+    hops: int = 1,
+    max_neighbours: int = 150,
+) -> dict[str, Any]:
+    """Ego-graph for one node: ``ref`` + everything within ``hops`` edges.
+
+    Powers the webui's "focus" mode (Obsidian's local graph). The whole
+    point is that it is NOT subject to the global node cap — a node the
+    overview dropped (or that the user reached via search) is always
+    present here, centred, with just its neighbourhood around it.
+
+    Built by walking the full graph uncapped and keeping the BFS closure
+    of ``ref`` out to ``hops``. If ``ref`` has no drawn edges (e.g. an
+    isolated entity, or one whose only relations were degree-1 phantoms
+    suppressed by policy), the result is the single node — correct: it
+    genuinely connects to nothing yet. When ``ref`` isn't a real node at
+    all, a synthetic placeholder is returned so the panel still opens.
+    """
+    full = build_memory_graph(
+        workspace, max_nodes=100_000, max_edges=400_000,
+    )
+    nodes_by_id: dict[str, dict[str, Any]] = {n["id"]: n for n in full["nodes"]}
+    edges = full["edges"]
+
+    keep: set[str] = {ref}
+    frontier: set[str] = {ref}
+    for _ in range(max(1, hops)):
+        nxt: set[str] = set()
+        for e in edges:
+            s, t = e["source"], e["target"]
+            if s in frontier and t not in keep:
+                nxt.add(t)
+            elif t in frontier and s not in keep:
+                nxt.add(s)
+        if not nxt:
+            break
+        keep |= nxt
+        frontier = nxt
+
+    # Cap the neighbourhood (keep ref + highest-weight neighbours) so a
+    # mega-hub doesn't ship its whole 1-hop fan-out.
+    if len(keep) > max_neighbours + 1:
+        ranked = sorted(
+            (i for i in keep if i != ref),
+            key=lambda i: -int(nodes_by_id.get(i, {}).get("weight", 0)),
+        )
+        keep = {ref, *ranked[:max_neighbours]}
+
+    nodes = [nodes_by_id[i] for i in keep if i in nodes_by_id]
+    if ref not in nodes_by_id:
+        # ref isn't a drawn node (capped out with no edges, or pure
+        # placeholder) — synthesise it so focus still has a centre.
+        type_name, _, slug = ref.partition(":")
+        nodes.append({
+            "id": ref,
+            "type": type_name or "unknown",
+            "name": slug or ref,
+            "aliases": [],
+            "weight": 0,
+        })
+    sub_edges = [
+        e for e in edges if e["source"] in keep and e["target"] in keep
+    ]
+    types_seen = sorted({n["type"] for n in nodes})
+    return {
+        "nodes": nodes,
+        "edges": sub_edges,
+        "focus": ref,
+        "stats": {
+            "node_count": len(nodes),
+            "edge_count": len(sub_edges),
+            "phantom_count": sum(1 for n in nodes if n.get("phantom")),
+            "session_count": sum(1 for n in nodes if n["type"] == "session"),
+            "truncated_nodes": False,
+            "truncated_edges": False,
             "types": types_seen,
         },
     }

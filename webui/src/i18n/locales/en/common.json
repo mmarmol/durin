@@ -735,6 +735,7 @@
     "provCreated": "Created",
     "provRelation": "relation",
     "provAttribute": "attribute",
+    "backToFull": "Full graph",
     "provFromSession": "from session",
     "provTurn": "turn {{turn}}",
     "stats": "{{nodesLabel}} · {{edgesLabel}}",

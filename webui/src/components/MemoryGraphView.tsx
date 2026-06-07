@@ -26,6 +26,7 @@ import {
   fetchMemoryEntity,
   fetchMemoryEntry,
   fetchMemorySession,
+  fetchMemorySubgraph,
   forgetMemoryEntry,
   searchMemoryApi,
   type MemoryBacklinksPayload,
@@ -33,6 +34,7 @@ import {
   type MemoryEntityDetail,
   type MemoryEntryDetail,
   type MemoryGraphNode,
+  type MemoryGraphPayload,
   type MemorySearchPayload,
   type MemorySearchResult,
   type MemorySessionDetail,
@@ -159,7 +161,12 @@ type SessionTabName = "info" | "messages" | "events" | "memory_ops" | "entries";
 
 export function MemoryGraphView(_props: MemoryGraphViewProps) {
   const { t } = useTranslation();
-  const { data, loading, error, refresh } = useMemoryGraph(_props.active);
+  const { data: rawData, loading, error, refresh } = useMemoryGraph(_props.active);
+  // Focus mode (Obsidian local graph): when set, the canvas renders this
+  // ego-graph (a node + its neighbourhood, fetched uncapped) instead of the
+  // global overview, so the node is centred even if the cap dropped it.
+  const [focusGraph, setFocusGraph] = useState<MemoryGraphPayload | null>(null);
+  const data = focusGraph ?? rawData;
   const { token } = useClient();
   const tokenRef = useRef(token);
   tokenRef.current = token;
@@ -247,6 +254,21 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
   useEffect(() => {
     setFocusRef(selected ? selected.id : null);
   }, [selected?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Switch the canvas to a node's ego-graph (uncapped neighbourhood). Used by
+  // both graph clicks and search hits — so a searched node that the global
+  // cap dropped is still brought in, centred, with just its relations.
+  const focusOnNode = useCallback((ref: string) => {
+    if (!tokenRef.current) return;
+    void (async () => {
+      try {
+        const g = await fetchMemorySubgraph(tokenRef.current!, ref);
+        setFocusGraph(g);
+      } catch {
+        /* ego fetch failed — stay on the current graph */
+      }
+    })();
+  }, []);
 
   // Set of node types the user has toggled OFF in the legend. Default
   // empty = show all. Clicking a legend chip flips inclusion. Phantom
@@ -528,11 +550,12 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
         hit.vy = 0;
         draggingRef.current = hit;
         setSelected(hit);
-        // Single click = light "peek": compact panel + local-graph focus,
-        // the graph stays visible (doesn't get covered). Double click opens
-        // the full reading view — Obsidian's survey-vs-commit. See onDoubleClick.
+        // Single click opens (Obsidian-style) at compact width and re-centres
+        // the canvas on this node's ego-graph; double click expands the panel
+        // to the full reading view.
         setPanelExpanded(false);
-        setActiveTab("info");
+        setActiveTab(hit.phantom ? "info" : "body");
+        focusOnNode(hit.id);
         setEdgePopup(null);
         alphaRef.current = 0.4;
         evt.currentTarget.setPointerCapture(evt.pointerId);
@@ -569,7 +592,7 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
       setSelected(null);
       setEdgePopup(null);
     },
-    [hitTestNode, hitTestEdge],
+    [hitTestNode, hitTestEdge, focusOnNode],
   );
 
   // Double click = "commit": open the full reading view (content takes the
@@ -719,6 +742,15 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
               ? ` · ${t("memoryGraph.statsTruncated")}`
               : ""}
           </span>
+        ) : null}
+        {focusGraph ? (
+          <button
+            type="button"
+            onClick={() => setFocusGraph(null)}
+            className="rounded border border-border/40 px-2 py-0.5 text-[11px] text-primary hover:bg-muted"
+          >
+            ← {t("memoryGraph.backToFull")}
+          </button>
         ) : null}
         <div className="ml-auto flex items-center gap-2">
           <div className="relative">
@@ -927,13 +959,22 @@ export function MemoryGraphView(_props: MemoryGraphViewProps) {
                     type="button"
                     key={`${r.uri}-${idx}`}
                     onClick={() => {
-                      // For canonical: select that node in the graph if present.
+                      // Canonical hit: bring the node in via its ego-graph
+                      // (works even if the global cap dropped it), centre on
+                      // it, and open its content.
                       if (isCanon) {
-                        const node = simNodesRef.current.find((n) => n.id === id);
-                        if (node) {
-                          setSelected(node);
-                          setActiveTab(node.phantom ? "info" : "body");
-                        }
+                        focusOnNode(id);
+                        const node =
+                          simNodesRef.current.find((n) => n.id === id) ?? {
+                            id,
+                            type: id.split(":")[0] || "unknown",
+                            name: (r.headline || id).replace(/^[a-z_]+:/, ""),
+                            weight: 0,
+                            aliases: [],
+                            phantom: false,
+                          };
+                        setSelected(node);
+                        setActiveTab(node.phantom ? "info" : "body");
                       }
                     }}
                     className="block w-full border-t border-border/30 px-3 py-2.5 text-left text-[13px] hover:bg-muted/60"

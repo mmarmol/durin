@@ -820,6 +820,9 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/memory/graph":
             return self._handle_memory_graph(request)
 
+        if got == "/api/memory/subgraph":
+            return self._handle_memory_subgraph(request, query)
+
         if got == "/api/memory/search":
             return await self._handle_memory_search_api(request, query)
 
@@ -998,6 +1001,35 @@ class WebSocketChannel(BaseChannel):
         except Exception as exc:  # noqa: BLE001
             logger.exception("memory graph build failed")
             return _http_error(500, f"memory graph build failed: {exc}")
+        return _http_json_response(payload)
+
+    def _handle_memory_subgraph(
+        self, request: WsRequest, query: dict[str, list[str]]
+    ) -> Response:
+        """GET /api/memory/subgraph?ref=<type:slug>&hops=N — ego-graph.
+
+        Returns the node + its N-hop neighbourhood (default 1), UNcapped, so
+        the webui "focus" mode can centre any node — including one the global
+        overview dropped or that the user reached via search. See
+        :func:`durin.memory.graph.build_entity_subgraph`.
+        """
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        ref = _query_first(query, "ref") or ""
+        if ":" not in ref:
+            return _http_error(400, "ref must be '<type>:<slug>'")
+        try:
+            hops = int(_query_first(query, "hops") or "1")
+        except ValueError:
+            hops = 1
+        from durin.memory.graph import build_entity_subgraph
+
+        try:
+            workspace = self._endpoint_workspace()
+            payload = build_entity_subgraph(workspace, ref, hops=max(1, min(hops, 3)))
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("memory subgraph build failed")
+            return _http_error(500, f"memory subgraph build failed: {exc}")
         return _http_json_response(payload)
 
     def _handle_memory_entity(self, request: WsRequest, ref_encoded: str) -> Response:
