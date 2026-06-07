@@ -10,9 +10,14 @@ downstream needs to know the token came from device-code.
 from __future__ import annotations
 
 import base64
+import hashlib
+import http.server
 import json
+import os
+import socket
 import threading
 import time
+import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,6 +35,13 @@ DEVICE_REDIRECT_URI = f"{ISSUER}/deviceauth/callback"
 VERIFICATION_URI = f"{ISSUER}/codex/device"
 ORIGINATOR = "codex_cli_rs"
 _DEFAULT_TTL_S = 3600
+
+# Loopback (browser) flow — local installs only.
+AUTHORIZE_URL = f"{ISSUER}/oauth/authorize"
+SCOPE = "openid profile email offline_access"
+LOOPBACK_PORT = 1455
+# Must match exactly what's registered for the Codex client_id.
+LOOPBACK_REDIRECT = f"http://localhost:{LOOPBACK_PORT}/auth/callback"
 
 
 def _client() -> httpx.Client:
@@ -152,7 +164,11 @@ def poll_once(device_auth_id: str, user_code: str) -> PollResult:
     return PollResult(status="ok", token=token)
 
 
-def _exchange_and_store(authorization_code: str, code_verifier: str) -> Any:
+def _exchange_and_store(
+    authorization_code: str,
+    code_verifier: str,
+    redirect_uri: str = DEVICE_REDIRECT_URI,
+) -> Any:
     from oauth_cli_kit.models import OAuthToken
 
     with _client() as client:
@@ -161,7 +177,7 @@ def _exchange_and_store(authorization_code: str, code_verifier: str) -> Any:
             data={
                 "grant_type": "authorization_code",
                 "code": authorization_code,
-                "redirect_uri": DEVICE_REDIRECT_URI,
+                "redirect_uri": redirect_uri,
                 "client_id": CLIENT_ID,
                 "code_verifier": code_verifier,
             },
@@ -267,50 +283,175 @@ def login_blocking(
     raise RuntimeError("device-code login timed out")
 
 
+def _gen_pkce() -> tuple[str, str]:
+    """Return (code_verifier, code_challenge) for PKCE S256."""
+    verifier = base64.urlsafe_b64encode(os.urandom(64)).decode("ascii").rstrip("=")
+    digest = hashlib.sha256(verifier.encode("ascii")).digest()
+    challenge = base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+    return verifier, challenge
+
+
+def _build_authorize_url(challenge: str, state: str) -> str:
+    params = {
+        "response_type": "code",
+        "client_id": CLIENT_ID,
+        "redirect_uri": LOOPBACK_REDIRECT,
+        "scope": SCOPE,
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+        "state": state,
+        "id_token_add_organizations": "true",
+        "codex_cli_simplified_flow": "true",
+        "originator": ORIGINATOR,
+    }
+    return f"{AUTHORIZE_URL}?{urllib.parse.urlencode(params)}"
+
+
+class _CallbackResult:
+    def __init__(self) -> None:
+        self.code: str | None = None
+        self.done = threading.Event()
+
+
+def _make_callback_handler(state: str, result: _CallbackResult):
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            parsed = urllib.parse.urlparse(self.path)
+            if not parsed.path.endswith("/auth/callback"):
+                self.send_response(404)
+                self.end_headers()
+                return
+            qs = urllib.parse.parse_qs(parsed.query)
+            code = (qs.get("code") or [None])[0]
+            got_state = (qs.get("state") or [None])[0]
+            ok = bool(code) and got_state == state
+            if ok:
+                result.code = code
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            msg = (
+                "Conectado a durin. Ya podés cerrar esta pestaña."
+                if ok
+                else "No se pudo autorizar. Volvé a durin e intentá de nuevo."
+            )
+            self.wfile.write(
+                f"<!doctype html><meta charset=utf-8>"
+                f"<body style='font-family:sans-serif;padding:2rem'><h2>{msg}</h2></body>".encode()
+            )
+            result.done.set()
+
+        def log_message(self, *args: Any) -> None:  # silence stderr logging
+            return
+
+    return _Handler
+
+
+def _start_callback_servers(state: str, result: _CallbackResult) -> list[http.server.HTTPServer]:
+    """Serve the OAuth callback on 127.0.0.1 AND ::1.
+
+    The Codex client redirect_uri is ``http://localhost:1455/auth/callback``;
+    browsers resolve ``localhost`` to 127.0.0.1 (Chromium/Brave/Safari). The
+    kit's server bound only the first ``getaddrinfo`` result (::1 on macOS),
+    so the redirect hit 127.0.0.1 and got ECONNREFUSED. Bind both stacks.
+    """
+    handler = _make_callback_handler(state, result)
+    servers: list[http.server.HTTPServer] = []
+    for host, family in (("127.0.0.1", socket.AF_INET), ("::1", socket.AF_INET6)):
+
+        class _Srv(http.server.HTTPServer):
+            address_family = family
+
+        try:
+            srv = _Srv((host, LOOPBACK_PORT), handler)
+        except OSError as exc:
+            logger.debug("loopback bind {}:{} failed: {}", host, LOOPBACK_PORT, exc)
+            continue
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        servers.append(srv)
+    return servers
+
+
 _loopback_lock = threading.Lock()
 _loopback_state: dict[str, Any] = {"thread": None, "url": None}
 
 
-def start_loopback_login(*, wait_url_s: float = 6.0) -> str:
-    """Start the loopback PKCE login in a background thread; return the authorize URL.
+def start_loopback_login(*, max_wait_s: float = 180.0) -> str:
+    """Start the loopback PKCE login and return the authorize URL.
 
-    For LOCAL webui installs only: ``oauth-cli-kit`` serves the OAuth callback on
-    ``localhost:1455`` — reachable only when the browser runs on the gateway
-    machine — and writes the token to ``codex.json`` on success. Unlike
-    device-code, the loopback flow does not require enabling device authorization
-    in ChatGPT's security settings. The kit also opens the gateway's default
-    browser; the returned URL is surfaced as a manual fallback.
+    LOCAL webui installs only. We serve the OAuth callback ourselves on
+    127.0.0.1:1455 (and ::1) — the callback server is listening *before* this
+    returns, so the browser's redirect can never race it — then a background
+    thread waits for the code, exchanges it, and writes the token to
+    ``codex.json``. Unlike device-code, no ChatGPT security toggle is needed.
     """
-    from oauth_cli_kit import login_oauth_interactive
-
     with _loopback_lock:
         existing = _loopback_state.get("thread")
         if existing is not None and existing.is_alive() and _loopback_state.get("url"):
             return _loopback_state["url"]  # an attempt is already in flight
-        _loopback_state["url"] = None
-        captured: list[str] = []
+
+        verifier, challenge = _gen_pkce()
+        state = base64.urlsafe_b64encode(os.urandom(18)).decode("ascii").rstrip("=")
+        result = _CallbackResult()
+        servers = _start_callback_servers(state, result)
+        if not servers:
+            raise RuntimeError(f"could not start loopback callback server on :{LOOPBACK_PORT}")
+        url = _build_authorize_url(challenge, state)
 
         def _run() -> None:
             try:
-                login_oauth_interactive(
-                    print_fn=lambda s: captured.append(str(s)),
-                    prompt_fn=lambda s: "",
-                    originator=ORIGINATOR,
-                    storage=_strict_storage(),
-                )
+                if result.done.wait(timeout=max_wait_s) and result.code:
+                    _exchange_and_store(result.code, verifier, redirect_uri=LOOPBACK_REDIRECT)
             except Exception as exc:  # noqa: BLE001
                 logger.debug("codex loopback login ended: {}", exc)
+            finally:
+                for srv in servers:
+                    try:
+                        srv.shutdown()
+                    except Exception:  # noqa: BLE001
+                        pass
 
         thread = threading.Thread(target=_run, daemon=True)
         thread.start()
         _loopback_state["thread"] = thread
+        _loopback_state["url"] = url
+        return url
 
-    deadline = time.monotonic() + wait_url_s
-    prefix = f"{ISSUER}/oauth/authorize"
-    while time.monotonic() < deadline:
-        url = next((c for c in captured if c.startswith(prefix)), None)
-        if url:
-            _loopback_state["url"] = url
-            return url
-        time.sleep(0.1)
-    raise RuntimeError("could not obtain the authorization URL")
+
+def login_loopback_blocking(
+    print_fn: Callable[[str], None],
+    *,
+    open_browser: bool = True,
+    max_wait_s: float = 180.0,
+) -> Any:
+    """Run the loopback flow to completion (CLI use). Opens the browser, waits.
+
+    Same 127.0.0.1+::1 callback server as the webui path — fixes the kit's
+    IPv6-only bind that left the browser redirect refused on macOS.
+    """
+    import webbrowser
+
+    verifier, challenge = _gen_pkce()
+    state = base64.urlsafe_b64encode(os.urandom(18)).decode("ascii").rstrip("=")
+    result = _CallbackResult()
+    servers = _start_callback_servers(state, result)
+    if not servers:
+        raise RuntimeError(f"could not start loopback callback server on :{LOOPBACK_PORT}")
+    url = _build_authorize_url(challenge, state)
+    try:
+        print_fn(f"Abrí: {url}")
+        if open_browser:
+            try:
+                webbrowser.open(url)
+            except Exception:  # noqa: BLE001
+                pass
+        print_fn("Esperando la autorización en el navegador...")
+        if not result.done.wait(timeout=max_wait_s) or not result.code:
+            raise RuntimeError("loopback login timed out")
+        return _exchange_and_store(result.code, verifier, redirect_uri=LOOPBACK_REDIRECT)
+    finally:
+        for srv in servers:
+            try:
+                srv.shutdown()
+            except Exception:  # noqa: BLE001
+                pass
