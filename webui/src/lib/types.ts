@@ -150,6 +150,7 @@ export interface SettingsPayload {
     name: string;
     label: string;
     configured: boolean;
+    oauth?: boolean;
     api_key_hint?: string | null;
     api_base?: string | null;
     default_api_base?: string | null;

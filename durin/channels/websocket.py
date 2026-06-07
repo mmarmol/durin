@@ -1221,8 +1221,24 @@ class WebSocketChannel(BaseChannel):
         if defaults.provider != "auto":
             spec = find_by_name(defaults.provider)
             selected_provider = spec.name if spec else provider_name
+        from durin.utils.oauth import any_token_present
+
         providers = []
         for spec in PROVIDERS:
+            # OAuth providers with a webui connect flow (Codex) surface as
+            # normal rows whose "configured" reflects a stored token, not an
+            # API key. They're authorized via /api/oauth/codex/*, not the
+            # key/base form (which still rejects is_oauth providers).
+            if spec.name == "openai_codex":
+                providers.append(
+                    {
+                        "name": spec.name,
+                        "label": spec.label,
+                        "configured": any_token_present(spec.name),
+                        "oauth": True,
+                    }
+                )
+                continue
             provider_config = getattr(config.providers, spec.name, None)
             if provider_config is None or spec.is_oauth or spec.is_local:
                 continue
