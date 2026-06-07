@@ -19,7 +19,6 @@ import {
   approveSkill,
   getSkill,
   importSource,
-  judgeSkill,
   listQuarantine,
   listSkills,
   rejectSkill,
@@ -183,7 +182,7 @@ function SecurityReport({ row }: { row: QuarantineRow }) {
  * SKILL.md — a per-skill file tree is a later phase this layout leaves room for.
  */
 export function SkillsView() {
-  const { token } = useClient();
+  const { token, client } = useClient();
   const { t } = useTranslation();
   const [rows, setRows] = useState<SkillRow[] | null>(null);
   const [quarantine, setQuarantine] = useState<QuarantineRow[] | null>(null);
@@ -199,6 +198,7 @@ export function SkillsView() {
   const [importing, setImporting] = useState(false);
   const [importMsg, setImportMsg] = useState<string | null>(null);
   const [auditMsg, setAuditMsg] = useState<{ kind: "summary" | "error"; text: string } | null>(null);
+  const [auditLive, setAuditLive] = useState<string>("");
   const [picker, setPicker] = useState<SkillCandidate[] | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [searching, setSearching] = useState(false);
@@ -365,33 +365,42 @@ export function SkillsView() {
     [token, refresh],
   );
 
-  // On-demand "Audit with LLM": run the judge on this one quarantined skill,
-  // then refresh so its findings/verdict update. Runs regardless of the trigger.
+  // On-demand "Audit with LLM": stream the judge over the websocket. Reasoning
+  // arrives live on ``audit:<name>`` (latest line shown while it runs); the
+  // terminal ``skill_audit_done`` carries the structured result.
   const judgeOne = useCallback(
-    async (name: string) => {
+    (name: string) => {
       setActing(name);
       setAuditMsg(null);
-      try {
-        const r = await judgeSkill(token, name);
-        if (r.judged) {
-          setAuditMsg({
-            kind: "summary",
-            text: r.summary?.trim() || t("skills.audit.clean"),
-          });
-        } else {
-          setAuditMsg({
-            kind: "error",
-            text: t(`skills.audit.${r.error_code ?? "unreachable"}`),
-          });
-        }
-        await refresh();
-      } catch {
-        setAuditMsg({ kind: "error", text: t("skills.audit.unreachable") });
-      } finally {
-        setActing(null);
-      }
+      setAuditLive("");
+      const id = `audit:${name}`;
+      const off = client.onChat(
+        id,
+        (ev: {
+          event?: string;
+          text?: string;
+          judged?: boolean;
+          summary?: string;
+          error_code?: string;
+        }) => {
+          if (ev.event === "reasoning_delta" && ev.text) {
+            setAuditLive((prev) => (prev + ev.text).slice(-280));
+          } else if (ev.event === "skill_audit_done") {
+            off();
+            setAuditLive("");
+            setActing(null);
+            if (ev.judged) {
+              setAuditMsg({ kind: "summary", text: ev.summary?.trim() || t("skills.audit.clean") });
+            } else {
+              setAuditMsg({ kind: "error", text: t(`skills.audit.${ev.error_code ?? "unreachable"}`) });
+            }
+            void refresh();
+          }
+        },
+      );
+      client.judgeStream(name);
     },
-    [token, refresh, t],
+    [client, refresh, t],
   );
 
   // One-click "trust this source": append the suggested prefix to the allowlist
@@ -834,10 +843,17 @@ export function SkillsView() {
                   </div>
 
                   {acting === triageRow.name ? (
-                    <p className="mt-3 flex items-center gap-1.5 text-[12px] text-muted-foreground">
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
-                      {t("skills.audit.running")}
-                    </p>
+                    <div className="mt-3">
+                      <p className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+                        {t("skills.audit.running")}
+                      </p>
+                      {auditLive ? (
+                        <p className="mt-1 line-clamp-2 text-[11px] italic text-muted-foreground/80">
+                          {auditLive}
+                        </p>
+                      ) : null}
+                    </div>
                   ) : auditMsg ? (
                     auditMsg.kind === "summary" ? (
                       <div className="mt-3">
