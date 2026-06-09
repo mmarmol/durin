@@ -617,6 +617,21 @@ class SessionManager:
                 "Failed to regenerate session markdown view for {}",
                 session.key,
             )
+        else:
+            # Incrementally FTS-index the new turns so the session is
+            # lexically searchable as it happens (the memory file
+            # watcher only covers memory/, not sessions/). Best-effort
+            # for the same reason as above.
+            try:
+                from durin.memory.indexer import reindex_session_file
+
+                reindex_session_file(
+                    self.workspace, path.with_suffix(".md"),
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to index session turns for {}", session.key,
+                )
 
         self._cache[session.key] = session
 

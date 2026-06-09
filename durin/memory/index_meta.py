@@ -80,7 +80,11 @@ def skills_indexing_enabled() -> bool:
 # rows (vector Pass 3 + FTS skill loop). Pre-v5 indexes carry no skill
 # rows — the bump forces an auto-rebuild so existing workspaces pick
 # them up.
-CURRENT_SCHEMA_VERSION: int = 5
+# v6 (session-fts): raw session turns are FTS-indexed (one row per
+# turn, uri `sessions/<key>.md#turn-N`, type "session" — indexer
+# third pass). Pre-v6 indexes carry no session rows — the bump forces
+# an auto-rebuild so existing workspaces pick them up.
+CURRENT_SCHEMA_VERSION: int = 6
 
 
 @dataclass(frozen=True)

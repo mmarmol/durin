@@ -54,6 +54,9 @@ This document specifies the **hot path** that runs every time the agent calls `m
        │  RRF (Reciprocal Rank Fusion) cross-RRF between  │
        │  vector_results and lexical_results              │
        │  → unified ranked list (top-50)                  │
+       │  then: grep-verify boost (§7.4) — literal        │
+       │  confirmation of vector-only hits; type prior    │
+       │  (§7.5) — raw session turns ×0.85                │
        └────────────────────┬────────────────────────────┘
                             │
                             ▼
@@ -253,15 +256,21 @@ score-scale invariant — the raw BM25 value is read only for the
 sort within the lexical source; the rank position is all that
 crosses into the fusion step.
 
+**`ORDER BY rank` is load-bearing** (fixed 2026-06-09): SQLite FTS5
+returns MATCH results in rowid (insertion) order unless the query
+explicitly orders by rank. `FTSIndex._search` carries the clause; the
+"ranked list" fed to RRF was previously file-walk order, so rows
+indexed later always lost regardless of relevance.
+
 ---
 
 ## 6. Grep fallback (raw sessions and ingested)
 
-When `scope=undreamed` or `scope=all`, the pipeline also runs `search_undreamed(workspace, query)` — a literal `ripgrep`-style scan over `sessions/<id>/<id>.jsonl` and `ingested/<id>/`. These artifacts are not in LanceDB or FTS5 by design (see `01_data_and_entities.md` §3.1, §3.2; `02_indexing.md` §3.3).
+When `scope=undreamed` or `scope=all`, the pipeline also runs `search_undreamed(workspace, query)` — a literal `ripgrep`-style scan over the rendered `sessions/<key>.md` views and `ingested/<id>/`. Raw ingested artifacts are not in LanceDB or FTS5 by design (see `01_data_and_entities.md` §3.2). Sessions ARE FTS-indexed per turn since schema v6 (`02_indexing.md` §3.3.2); for them grep is the literal-substring complement and the recovery path when the index hasn't caught up — its anchored uris (`sessions/<key>.md#turn-N`) match the FTS rows', so RRF accumulates both contributions for the same turn.
 
-Results from this fallback enter the pipeline as a third source feeding into the RRF fusion in §7 (alongside vector + lexical). Per E13: there is no "normalised score" or "weighted merge" — RRF takes the per-source rank position only.
+Results from this fallback enter the pipeline as a third source feeding into the RRF fusion in §7 (alongside vector + lexical). Per E13: there is no "normalised score" or "weighted merge" — RRF takes the per-source rank position only. Grep session hits carry `type="session"` (like their FTS rows); raw-ingested hits keep the legacy default.
 
-This path is the only way short, non-indexed session turns or raw ingested artifacts become reachable. It is conceptually different from FTS5 and serves a different content layer.
+This path is the only way raw ingested artifacts and not-yet-indexed files become reachable. It is conceptually different from FTS5 and serves a different content layer.
 
 ---
 
@@ -310,6 +319,31 @@ The MVP intentionally does **not** include a pin-by-modality feature (i.e., guar
 - No mainstream system (mem0, hermes, openclaw, cognee, graphiti, letta) implements pin-by-modality.
 
 If bench shows that `keywords` is under-used and exact matches still get lost, the mitigation is to add a specificity-aware pin (using hit-count + pattern detection). Not in MVP.
+
+### 7.4 Grep-verify boost (2026-06-09)
+
+RRF only credits lexical evidence inside the lexical top-50. A doc that vector ranks high and that literally contains the query terms — but sat just past that cutoff — got no lexical contribution at all, so a semantically-near distractor (vector's known failure mode) could outrank a literally-confirmed hit.
+
+After fusion, `_grep_verify_boost` re-verifies every fused hit that has a vector source and no lexical source: a per-uri FTS MATCH using the query's own lexical route (unicode61 / trigram / LIKE — the same multilingual contract as the lexical tier; no disk reads, no language-specific heuristics). A confirmed hit gains:
+
+```
+score += w_lexical / (k + rank_in_vector)
+```
+
+Literal presence is exactly the lexical evidence the cutoff dropped, credited at the rank vector vouched for. When the agent passed `keywords`, that literal string is what gets verified (the stronger statement of literal intent). Emits `memory.recall.grep_verify` (candidates / verified / duration).
+
+This is NOT the pin-by-modality mechanism §7.3 declines: nothing is pinned or guaranteed visibility — the boost only corrects the evidence a ranked-list cutoff dropped, and the fused order still decides.
+
+### 7.5 Type prior (2026-06-09)
+
+After the grep-verify boost, `apply_type_priors` multiplies each fused score by a per-type prior and re-sorts:
+
+| type | prior |
+|---|---|
+| `session` (raw turns, §3.3.2 of doc 02) | **0.85** |
+| everything else | 1.0 (neutral) |
+
+One structural judgment only: a raw session turn is undistilled transcript, so at comparable evidence the curated entry/entity/summary should lead. Soft — a session whose raw fusion score clears the margin still wins; the hit is demoted, never suppressed. Runs before the entity-aware rerank (§8): an alias match is additional evidence and may legitimately re-elevate a session hit. Magnitudes beyond the direction (session < distilled) are deliberately NOT tuned without measurement.
 
 ### 7.2 Deduplication
 

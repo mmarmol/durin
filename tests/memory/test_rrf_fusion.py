@@ -8,18 +8,14 @@ weight is boosted from 0.7 to 2.5.
 
 from __future__ import annotations
 
-import pytest
-
 from durin.memory.rrf_fusion import (
     DEFAULT_K,
     DEFAULT_W_GREP,
     DEFAULT_W_LEXICAL,
     DEFAULT_W_LEXICAL_BOOSTED,
     DEFAULT_W_VECTOR,
-    FusedHit,
     fuse_rrf,
 )
-
 
 # ---------------------------------------------------------------------------
 # Constants — locked to spec values
@@ -181,3 +177,55 @@ def test_fused_hit_records_ranks_per_source() -> None:
     by_uri = {h.uri: h for h in hits}
     assert by_uri["a"].ranks == {"vector": 1, "lexical": 2}
     assert by_uri["b"].ranks == {"vector": 2, "lexical": 1}
+
+
+# ---------------------------------------------------------------------------
+# Type priors — distilled content outranks raw transcript at equal evidence
+# ---------------------------------------------------------------------------
+
+
+def test_type_priors_constant_is_soft_and_session_only() -> None:
+    """The prior encodes ONE structural judgment: a raw session turn
+    is less distilled than curated memory, so at comparable relevance
+    the distillate should lead. Soft (>= 0.8) so a session that is
+    clearly the better match still wins; nothing else is demoted."""
+    from durin.memory.rrf_fusion import DEFAULT_TYPE_PRIORS
+
+    assert DEFAULT_TYPE_PRIORS["session"] < 1.0
+    assert DEFAULT_TYPE_PRIORS["session"] >= 0.8
+    assert set(DEFAULT_TYPE_PRIORS) == {"session"}
+
+
+def test_apply_type_priors_scales_and_resorts() -> None:
+    from durin.memory.rrf_fusion import apply_type_priors
+
+    hits = fuse_rrf(
+        vector=[], lexical=["session-uri", "entry-uri"],
+        grep=["session-uri", "entry-uri"],
+    )
+    assert hits[0].uri == "session-uri"  # lexical+grep rank 1
+    out = apply_type_priors(
+        hits, types={"session-uri": "session", "entry-uri": "episodic"},
+    )
+    assert [h.uri for h in out] == ["entry-uri", "session-uri"]
+    by_uri = {h.uri: h for h in out}
+    orig = {h.uri: h for h in hits}
+    assert by_uri["entry-uri"].score == orig["entry-uri"].score
+    assert by_uri["session-uri"].score < orig["session-uri"].score
+
+
+def test_apply_type_priors_preserves_sources_and_ranks() -> None:
+    from durin.memory.rrf_fusion import apply_type_priors
+
+    hits = fuse_rrf(vector=["s"], lexical=["s"], grep=[])
+    out = apply_type_priors(hits, types={"s": "session"})
+    assert out[0].sources == hits[0].sources
+    assert out[0].ranks == hits[0].ranks
+
+
+def test_apply_type_priors_unknown_type_is_neutral() -> None:
+    from durin.memory.rrf_fusion import apply_type_priors
+
+    hits = fuse_rrf(vector=["x"], lexical=[], grep=[])
+    out = apply_type_priors(hits, types={})
+    assert out[0].score == hits[0].score

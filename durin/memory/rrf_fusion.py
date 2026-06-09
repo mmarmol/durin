@@ -26,11 +26,13 @@ from typing import Iterable, Sequence
 
 __all__ = [
     "DEFAULT_K",
+    "DEFAULT_TYPE_PRIORS",
     "DEFAULT_W_GREP",
     "DEFAULT_W_LEXICAL",
     "DEFAULT_W_LEXICAL_BOOSTED",
     "DEFAULT_W_VECTOR",
     "FusedHit",
+    "apply_type_priors",
     "fuse_rrf",
 ]
 
@@ -40,6 +42,14 @@ DEFAULT_W_VECTOR: float = 1.0
 DEFAULT_W_LEXICAL: float = 0.7
 DEFAULT_W_LEXICAL_BOOSTED: float = 2.5
 DEFAULT_W_GREP: float = 0.3
+
+# Per-type score multiplier applied AFTER fusion (see
+# :func:`apply_type_priors`). One structural judgment only: a raw
+# session turn is undistilled transcript, so at comparable evidence
+# the curated entry/entity should lead. Soft — a session whose raw
+# fusion score clears the prior's margin still wins; the session hit
+# is demoted, never suppressed. Types absent here are neutral (1.0).
+DEFAULT_TYPE_PRIORS: dict[str, float] = {"session": 0.85}
 
 
 @dataclass(frozen=True)
@@ -119,6 +129,35 @@ def fuse_rrf(
         )
 
     return hits
+
+
+def apply_type_priors(
+    hits: Sequence[FusedHit],
+    *,
+    types: dict[str, str],
+    priors: dict[str, float] | None = None,
+) -> list[FusedHit]:
+    """Scale each hit's fused score by its document type's prior and
+    re-sort. ``types`` maps uri → resolved type (from whichever source
+    carried the uri); unknown uris/types are neutral.
+
+    Runs after :func:`fuse_rrf` because the type isn't known inside
+    rank space — it lives in the per-source metadata the pipeline
+    resolves. Sources/ranks ride along untouched (diagnostics).
+    """
+    if priors is None:
+        priors = DEFAULT_TYPE_PRIORS
+    out = [
+        FusedHit(
+            uri=h.uri,
+            score=h.score * priors.get(types.get(h.uri, ""), 1.0),
+            sources=h.sources,
+            ranks=h.ranks,
+        )
+        for h in hits
+    ]
+    out.sort(key=lambda h: h.score, reverse=True)
+    return out
 
 
 # ---------------------------------------------------------------------------

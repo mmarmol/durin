@@ -117,7 +117,11 @@ The `.jsonl` is a stream of events (one JSON object per line). The `.meta.json` 
 }
 ```
 
-Sessions are **not parsed as markdown** by the memory system. They are searched via raw grep over `.jsonl` files. In v2, the `_last_summary.text` is vectorized into LanceDB with `uri=session:<id>` (see §6 in `02_indexing.md` once written).
+Sessions reach search through three layers (since index schema v6, 2026-06-09):
+
+- **FTS5 (lexical)** — the rendered `sessions/<key>.md` view is indexed one row per turn (`uri=sessions/<key>.md#turn-N`, `type="session"`; indexer third pass, `02_indexing.md` §3.3). Before v6 sessions were grep-only, which structurally capped raw conversational content at the grep source's RRF weight (0.3) — a session containing the best answer always lost to any indexed entry. The dream no longer distills sessions into episodic entries (legacy consolidator removed), so the FTS rows are this content's only indexed representation.
+- **Grep** — the literal-substring scan over the rendered markdown remains the recovery path (index not yet caught up) and the only path for `.meta.json` tag matches.
+- **Vector** — raw turns are NOT embedded (cost). The compaction summary is vectorized as `memory/session_summary/<sanitized_key>.md` like any other class.
 
 **Session turn anchors are stable.** When `session_md.py` renders a `.jsonl` to a deterministic markdown view, each turn gets an immutable `## turn-N` anchor. Numbering NEVER changes despite later consolidation or summary updates — `source_refs` like `session:<id>/turn-42` always point at the same content. This stability is the contract that makes provenance references durable across time.
 
