@@ -200,7 +200,8 @@ refine pass.
 | `aliases` | — | Alternate names / identifiers for this entity. Each becomes an `alias` field-patch. |
 | `relations` | — | Relations to other entities. Each item is an object with required `to` (`<type>:<slug>`) and `type` (relation kind, e.g. `partner`, `makes`, `works_at`); extra keys are allowed (`additional_properties=True`, e.g. `since`). Items missing `to`/`type` are skipped. |
 | `derived_from` | — | Source documents this entity was distilled from — the `reference:<slug>` ref(s) returned by `memory_ingest`. Each becomes a `derived_from` field-patch (append + dedup, ref-keyed provenance). Items not starting with `reference:` are skipped. |
-| `body` | — | Prose describing what you know about this entity. Appended via a `body_append` field-patch. |
+| `body` | — | Prose describing what you know about this entity. Applied via a `body_append` field-patch (default) or `body_replace` per `body_mode`. |
+| `body_mode` | — | How to apply `body`: `append` (default) adds an attributed section without losing prior prose; `replace` overwrites the whole body. Enum `["append", "replace"]`. A `replace` over a user-authored body degrades to an `append` (precedence `user > dream > agent` on `provenance.body`). |
 
 **Do NOT pass structured attributes.** The schema has no `attributes` param by
 design — the dream extracts typed attributes from the prose `body`. The agent

@@ -55,6 +55,24 @@ def test_tool_records_derived_from(tmp_path):
     assert prov["author"] == "agent"
 
 
+def test_tool_body_default_appends(tmp_path):
+    tool = MemoryUpsertEntityTool(workspace=str(tmp_path))
+    asyncio.run(tool.execute(ref="topic:t", name="T", body="First note."))
+    asyncio.run(tool.execute(ref="topic:t", body="Second note."))
+    page = _page(tmp_path, "topic:t")
+    assert "First note." in page.body and "Second note." in page.body
+
+
+def test_tool_body_replace_overwrites(tmp_path):
+    tool = MemoryUpsertEntityTool(workspace=str(tmp_path))
+    asyncio.run(tool.execute(ref="topic:t", name="T", body="Old, partly wrong prose."))
+    asyncio.run(tool.execute(
+        ref="topic:t", body="Clean corrected prose.", body_mode="replace"))
+    page = _page(tmp_path, "topic:t")
+    assert "Old, partly wrong prose." not in page.body
+    assert page.body.strip() == "Clean corrected prose."
+
+
 def test_tool_rejects_bad_ref(tmp_path):
     tool = MemoryUpsertEntityTool(workspace=str(tmp_path))
     out = asyncio.run(tool.execute(ref="not-a-ref", name="X"))
