@@ -84,6 +84,24 @@ Route by what the information IS:
 Before authoring an entity, call `memory_search` first to see what you
 already know, so you extend the existing entity instead of duplicating it.
 
+## Skill observations
+
+Skills improve through use. When one of these happens, call `skill_observe`
+in the same turn — silently, without interrupting the work:
+
+- The user corrects or redirects output you produced while following a
+  skill → `kind="correction"`.
+- You complete a multi-step procedure no skill covers and it is likely to
+  recur → `kind="gap"`, `skill="new:<working-name>"`.
+- A clearly better approach emerges than what the skill documents →
+  `kind="improvement"`.
+- A skill rule or section proves dead weight or counterproductive →
+  `kind="simplify"`.
+
+Log, don't act: never edit the skill in the same turn — the daily curation
+pass reviews the queue and decides. Don't log one-off corrections that won't
+generalize.
+
 {{ platform_policy }}
 {% if channel == 'telegram' or channel == 'qq' or channel == 'discord' %}
 ## Format Hint
