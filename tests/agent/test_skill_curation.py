@@ -56,7 +56,7 @@ def test_curate_noop_on_empty_delta(tmp_path):
     calls = []
     res = curate_catalog(ws / ".", judge=lambda p: calls.append(p) or '{"actions": []}')
     # NOTE: ws has one stable skill → delta empty → judge never called
-    assert res == {"reviewed": 0, "applied": 0, "deferred": 0}
+    assert res == {"reviewed": 0, "applied": 0, "deferred": 0, "observations": {"applied": 0, "declined": 0, "kept": 0}}
     assert calls == []
 
 
@@ -66,7 +66,7 @@ def test_curate_excludes_pristine_builtins(tmp_path):
     ws = tmp_path / "ws"; ws.mkdir()
     calls = []
     res = curate_catalog(ws, judge=lambda p: calls.append(p) or '{"actions": []}')
-    assert res == {"reviewed": 0, "applied": 0, "deferred": 0}
+    assert res == {"reviewed": 0, "applied": 0, "deferred": 0, "observations": {"applied": 0, "declined": 0, "kept": 0}}
     assert calls == []
 
 

@@ -1,5 +1,6 @@
 You curate a library of `auto` skills — procedural docs the agent writes for itself.
-You are given a set of skills to review (their full content) and, as light context
+You are given a set of skills to review (their full content), live observations
+logged while the skills were used (your evidence channel), and, as light context
 only, which skills were used recently. Your job is to decide whether any skills
 should be merged or improved, and to emit a strict JSON action list.
 
@@ -40,6 +41,40 @@ Which skills were used recently. Context only — NOT a value signal:
 {{ usage_json }}
 ```
 
+## Open observations (evidence)
+
+Feedback logged live while the skills were used — user corrections, coverage
+gaps, candidate improvements, pruning signals. Each record carries a `count`:
+how many times the same issue recurred. This is your primary evidence for
+`evolve` decisions:
+
+- `count >= 2` (recurring) is strong evidence — act on it with an `evolve`
+  unless the suggestion is wrong on its face.
+- `count == 1` (one-off) — answer `"keep"` unless the fix is trivially safe
+  (a wording fix, a factual correction). Do not build permanent rules from
+  single occurrences.
+- `kind: "simplify"` licenses REMOVAL: an `evolve` whose `new` text is
+  shorter or empty. Pruning dead weight is as valuable as adding rules.
+- A record with `skill: "all"` is cross-skill context, not tied to one skill.
+
+Answer EVERY record below with a disposition in the `observations` output
+array: `applied` (you emitted an action incorporating it), `declined` (you
+judged it wrong or harmful — it is remembered and never re-shown as open), or
+`keep` (plausible but not yet actionable; it stays open and may recur).
+
+```json
+{{ observations_json }}
+```
+
+## Previously declined observations (do not re-propose)
+
+These were reviewed and declined in earlier passes. Do not emit actions that
+re-introduce them:
+
+```json
+{{ declined_json }}
+```
+
 ## Upstream updates available (only for some skills)
 
 A few skills above were imported from an external source that has since published a
@@ -57,12 +92,17 @@ empty, ignore this section.
 ## Output
 
 Return a STRICT JSON object and nothing else — no prose, no markdown fences around
-it. Each entry of `actions` is either a `fuse` or an `evolve`:
+it. Each entry of `actions` is either a `fuse` or an `evolve`; `observations`
+carries one disposition per open observation shown above:
 
 ```json
 {"actions": [
   {"type": "fuse", "target": "<new-name>", "sources": ["a","b"], "content": "<full merged SKILL.md body>", "rationale": "<why>"},
   {"type": "evolve", "name": "<skill>", "old": "<exact text to replace>", "new": "<replacement>", "rationale": "<why>"}
+],
+ "observations": [
+  {"id": 1, "disposition": "applied"},
+  {"id": 2, "disposition": "keep"}
 ]}
 ```
 
@@ -70,8 +110,8 @@ For a `fuse`, `content` must be the full merged SKILL.md body of the new skill, 
 `sources` lists the names of the skills it replaces. For an `evolve`, `old` must be
 the exact text to replace within that skill's content, and `new` is the replacement.
 
-When nothing should change, return the empty list:
+When nothing should change, return empty lists:
 
 ```json
-{"actions": []}
+{"actions": [], "observations": []}
 ```
