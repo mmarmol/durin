@@ -230,8 +230,71 @@ the skill yourself from the conversation via `skill_write`.
 Reuse/extend an existing LOCAL skill instead of duplicating it. If the \
 conversation contains no reusable procedure, do nothing — don't call any tool.
 
-EXISTING SKILLS: {existing}
+The input may include LOGGED GAPS — procedures the agent already flagged as \
+uncovered while working, with a working name. Treat each gap as a strong \
+candidate; when you author a skill for one, use its working name VERBATIM as \
+the skill name so the gap can be closed automatically.
+
+EXISTING SKILLS: {existing}{principles}
 """
+
+_PRINCIPLES_BLOCK = """
+
+CROSS-CUTTING PRINCIPLES — every skill you author or adapt must comply:
+{principles}"""
+
+
+def _skill_extract_messages(workspace: Path, *, max_sessions: int) -> list[dict] | None:
+    """Assemble the skill-extract sub-agent's messages, or None when there is
+    nothing to mine: no recent sessions AND no logged gap observations."""
+    from durin.agent.skill_observations import active_principles, open_observations
+
+    sessions_text = _recent_sessions_text(workspace, max_sessions)
+    gaps = [r for r in open_observations(workspace)
+            if str(r.get("skill", "")).startswith("new:")]
+    if not sessions_text.strip() and not gaps:
+        return None
+
+    principles = active_principles(workspace)
+    principles_block = ""
+    if principles:
+        principles_block = _PRINCIPLES_BLOCK.format(principles="\n".join(
+            f"- {p.get('text')}" for p in principles))
+
+    user_parts: list[str] = []
+    if gaps:
+        gap_lines = "\n".join(
+            f"- {r.get('skill')}: {r.get('issue')} — {r.get('improvement')}"
+            f" (seen x{r.get('count', 1)})"
+            for r in gaps)
+        user_parts.append(f"=== LOGGED GAPS ===\n{gap_lines}")
+    if sessions_text.strip():
+        user_parts.append(sessions_text)
+
+    existing = _list_skills(workspace)
+    return [
+        {"role": "system",
+         "content": _SKILL_EXTRACT_PROMPT.format(
+             existing=", ".join(existing) or "(none)",
+             principles=principles_block)},
+        {"role": "user", "content": "\n\n".join(user_parts)},
+    ]
+
+
+def _resolve_gap_observations(workspace: Path) -> int:
+    """Mark gap observations APPLIED when their working name now exists as a
+    skill (the extractor is told to author under the gap's name verbatim).
+    Unmatched gaps stay OPEN and feed the next pass."""
+    from durin.agent.skill_observations import apply_dispositions, open_observations
+
+    existing = set(_list_skills(workspace))
+    done = [{"id": r.get("id"), "disposition": "applied"}
+            for r in open_observations(workspace)
+            if str(r.get("skill", "")).startswith("new:")
+            and str(r.get("skill"))[4:] in existing]
+    if not done:
+        return 0
+    return apply_dispositions(workspace, done).get("applied", 0)
 
 
 def _recent_sessions_text(workspace: Path, max_sessions: int) -> str:
@@ -321,8 +384,8 @@ async def _skill_extract_async(
     workspace: Path, *, provider: Any | None, model: str | None, max_sessions: int,
 ) -> dict:
     t0 = time.perf_counter()
-    sessions_text = _recent_sessions_text(workspace, max_sessions)
-    if not sessions_text.strip():
+    messages = _skill_extract_messages(workspace, max_sessions=max_sessions)
+    if messages is None:
         return {"skills_touched": 0, "reason": "no_sessions"}
 
     from durin.agent.runner import AgentRunner, AgentRunSpec
@@ -336,12 +399,6 @@ async def _skill_extract_async(
         from durin.providers.factory import make_provider
         provider = make_provider(load_config())
 
-    existing = _list_skills(workspace)
-    messages = [
-        {"role": "system",
-         "content": _SKILL_EXTRACT_PROMPT.format(existing=", ".join(existing) or "(none)")},
-        {"role": "user", "content": sessions_text},
-    ]
     try:
         result = await AgentRunner(provider).run(AgentRunSpec(
             initial_messages=messages, tools=tools, model=model or "glm-5.1",
@@ -353,7 +410,11 @@ async def _skill_extract_async(
 
     touched = sum(1 for ev in (result.tool_events or [])
                   if ev.get("name") == "skill_write")
+    gaps_closed = _resolve_gap_observations(workspace)
     duration_ms = int((time.perf_counter() - t0) * 1000)
-    _emit("memory.dream.skill_extract", skills_touched=touched, duration_ms=duration_ms)
-    logger.info("skill-extract dream: {} skill(s) touched in {}ms", touched, duration_ms)
-    return {"skills_touched": touched, "duration_ms": duration_ms}
+    _emit("memory.dream.skill_extract", skills_touched=touched,
+          gaps_closed=gaps_closed, duration_ms=duration_ms)
+    logger.info("skill-extract dream: {} skill(s) touched, {} gap(s) closed in {}ms",
+                touched, gaps_closed, duration_ms)
+    return {"skills_touched": touched, "gaps_closed": gaps_closed,
+            "duration_ms": duration_ms}
