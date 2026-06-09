@@ -104,7 +104,10 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
         if r.get("skill") in in_scope
     ]
 
-    prompt = _build_prompt(catalog, usage or {}, upstream, obs_shown, declined_shown)
+    principles = so.active_principles(workspace)
+
+    prompt = _build_prompt(catalog, usage or {}, upstream, obs_shown,
+                           declined_shown, principles)
     try:
         parsed = json.loads(judge(prompt)) or {}
     except (ValueError, TypeError):
@@ -128,6 +131,19 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
             r = ss.apply_skill_edit(workspace, a["name"], old=a["old"], new=a["new"],
                                     rationale=a.get("rationale", "evolve"))
             applied += 1 if r.get("ok") else 0
+        elif t == "principle":
+            r = so.add_principle(workspace, str(a.get("text", "")),
+                                 rationale=str(a.get("rationale", "")))
+            if r.get("ok"):
+                applied += 1
+            else:
+                logger.warning("curation: principle action rejected: %s", r.get("error"))
+        elif t == "retire_principle":
+            r = so.retire_principle(workspace, a.get("id", 0))
+            if r.get("ok"):
+                applied += 1
+            else:
+                logger.warning("curation: retire_principle rejected: %s", r.get("error"))
 
     # Per-observation dispositions — only for records the judge actually saw.
     shown_ids = {r.get("id") for r in obs_shown}
@@ -145,11 +161,15 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
 
 def _build_prompt(catalog: dict, usage: dict, upstream: dict | None = None,
                   observations: list[dict] | None = None,
-                  declined: list[dict] | None = None) -> str:
+                  declined: list[dict] | None = None,
+                  principles: list[dict] | None = None) -> str:
     from durin.utils.prompt_templates import render_template
     return render_template("agent/skill_curation.md", strip=True,
                            catalog_json=json.dumps(catalog, ensure_ascii=False),
                            usage_json=json.dumps(usage, ensure_ascii=False),
                            upstream_json=json.dumps(upstream or {}, ensure_ascii=False),
                            observations_json=json.dumps(observations or [], ensure_ascii=False),
-                           declined_json=json.dumps(declined or [], ensure_ascii=False))
+                           declined_json=json.dumps(declined or [], ensure_ascii=False),
+                           principles_json=json.dumps(
+                               [{"id": p.get("id"), "text": p.get("text")}
+                                for p in principles or []], ensure_ascii=False))

@@ -23,9 +23,11 @@ from durin.agent.skills_store import _safe_name, _skills_dir, _store_init
 logger = logging.getLogger(__name__)
 
 KINDS = ("correction", "gap", "improvement", "simplify")
+PRINCIPLES_CAP = 12
 
 _ACTIVE = ".observations.jsonl"
 _ARCHIVE = ".observations.archive.jsonl"
+_PRINCIPLES = ".principles.jsonl"
 
 
 def _active_path(workspace: Path) -> Path:
@@ -34,6 +36,10 @@ def _active_path(workspace: Path) -> Path:
 
 def _archive_path(workspace: Path) -> Path:
     return _skills_dir(workspace) / _ARCHIVE
+
+
+def _principles_path(workspace: Path) -> Path:
+    return _skills_dir(workspace) / _PRINCIPLES
 
 
 def _today() -> str:
@@ -191,6 +197,54 @@ def apply_dispositions(workspace: Path, dispositions: list[dict]) -> dict:
         sha = store.auto_commit(
             f"observations: {counts['applied']} applied, {counts['declined']} declined")
     return {**counts, "commit": sha}
+
+
+def active_principles(workspace: Path) -> list[dict]:
+    """Cross-cutting principles currently in force (checklist for prompts)."""
+    return [p for p in _read_records(_principles_path(Path(workspace)))
+            if p.get("status") == "active"]
+
+
+def add_principle(workspace: Path, text: str, rationale: str = "") -> dict:
+    """Promote a generalizable lesson to a cross-cutting principle.
+
+    Capped at ``PRINCIPLES_CAP`` active principles to bound the per-prompt
+    cost of the compliance checklist — retire one to make room.
+    """
+    workspace = Path(workspace)
+    if not text or not text.strip():
+        return {"error": "text is required"}
+    records = _read_records(_principles_path(workspace))
+    active = [p for p in records if p.get("status") == "active"]
+    norm = _norm(text)
+    if any(_norm(str(p.get("text", ""))) == norm for p in active):
+        return {"error": "principle already exists"}
+    if len(active) >= PRINCIPLES_CAP:
+        return {"error": f"principle cap reached ({PRINCIPLES_CAP}); retire one first"}
+    pid = max((int(p.get("id", 0)) for p in records), default=0) + 1
+    records.append({"id": pid, "text": text.strip(), "status": "active",
+                    "added": _today(),
+                    "rationale": rationale.strip() if rationale else ""})
+    _skills_dir(workspace).mkdir(parents=True, exist_ok=True)
+    store = _store_init(workspace)
+    _write_records(_principles_path(workspace), records)
+    sha = store.auto_commit(f"principle(#{pid}): added")
+    return {"ok": True, "id": pid, "commit": sha}
+
+
+def retire_principle(workspace: Path, pid: int) -> dict:
+    """Retire an active principle (kept in the file for history)."""
+    workspace = Path(workspace)
+    records = _read_records(_principles_path(workspace))
+    for p in records:
+        if int(p.get("id", 0)) == int(pid) and p.get("status") == "active":
+            p["status"] = "retired"
+            p["retired"] = _today()
+            _write_records(_principles_path(workspace), records)
+            store = _store_init(workspace)
+            sha = store.auto_commit(f"principle(#{pid}): retired")
+            return {"ok": True, "id": int(pid), "commit": sha}
+    return {"error": f"no active principle with id {pid}"}
 
 
 def archive_resolved(workspace: Path) -> int:

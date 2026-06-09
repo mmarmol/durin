@@ -75,6 +75,23 @@ re-introduce them:
 {{ declined_json }}
 ```
 
+## Cross-cutting principles (compliance checklist)
+
+Principles that apply to ALL skills. Check every skill under review against
+them; when one clearly violates a principle, emit an `evolve` that brings it
+into compliance. Two more action types manage this list:
+
+- `{"type": "principle", "text": "<the principle>", "rationale": "<why>"}` —
+  promote a lesson to a principle ONLY when the evidence generalizes beyond
+  one skill (e.g. a recurring `skill: "all"` observation). Be very sparing:
+  the list is capped and every entry costs prompt space forever.
+- `{"type": "retire_principle", "id": N}` — retire a principle that proved
+  wrong, obsolete, or subsumed by another.
+
+```json
+{{ principles_json }}
+```
+
 ## Upstream updates available (only for some skills)
 
 A few skills above were imported from an external source that has since published a

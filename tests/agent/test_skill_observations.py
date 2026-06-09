@@ -159,3 +159,51 @@ def test_archive_noop_when_nothing_resolved(tmp_path):
     ws = tmp_path / "ws"
     _log(ws)
     assert archive_resolved(ws) == 0
+
+
+# -- cross-cutting principles --------------------------------------------------
+
+from durin.agent.skill_observations import (
+    PRINCIPLES_CAP,
+    active_principles,
+    add_principle,
+    retire_principle,
+)
+
+
+def test_add_principle_assigns_id_and_commits(tmp_path):
+    ws = tmp_path / "ws"
+    res = add_principle(ws, "every skill with rules needs an enforcement step")
+    assert res["ok"] is True and res["id"] == 1 and res["commit"]
+    ps = active_principles(ws)
+    assert len(ps) == 1 and ps[0]["text"].startswith("every skill")
+
+
+def test_add_principle_rejects_empty_and_duplicate(tmp_path):
+    ws = tmp_path / "ws"
+    assert "error" in add_principle(ws, "  ")
+    add_principle(ws, "keep skills concise")
+    assert "error" in add_principle(ws, "Keep  skills concise")
+
+
+def test_add_principle_refuses_beyond_cap(tmp_path):
+    ws = tmp_path / "ws"
+    for i in range(PRINCIPLES_CAP):
+        assert add_principle(ws, f"principle number {i}")["ok"] is True
+    res = add_principle(ws, "one too many")
+    assert "error" in res
+    assert len(active_principles(ws)) == PRINCIPLES_CAP
+
+
+def test_retire_principle_frees_a_slot(tmp_path):
+    ws = tmp_path / "ws"
+    add_principle(ws, "first")
+    add_principle(ws, "second")
+    assert retire_principle(ws, 1)["ok"] is True
+    assert [p["id"] for p in active_principles(ws)] == [2]
+    assert add_principle(ws, "third")["id"] == 3
+
+
+def test_retire_unknown_principle_errors(tmp_path):
+    ws = tmp_path / "ws"
+    assert "error" in retire_principle(ws, 7)
