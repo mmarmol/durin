@@ -18,10 +18,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from durin.memory.fts_index import FTSIndex, fts_index_path
-
 
 # ---------------------------------------------------------------------------
 # Lifecycle
@@ -270,3 +267,50 @@ def test_explicit_close_after_open(tmp_path: Path) -> None:
     # Re-open and confirm persistence.
     with FTSIndex.open(tmp_path) as idx2:
         assert any(h.uri == "x" for h in idx2.search("t"))
+
+
+# ---------------------------------------------------------------------------
+# Ranking — MATCH results must come back in BM25 order, not rowid order
+# ---------------------------------------------------------------------------
+
+
+def test_search_returns_bm25_order_not_insertion_order(tmp_path: Path) -> None:
+    """FTS5 returns rowid (insertion) order unless the query says
+    ORDER BY rank. The pipeline feeds these hits to RRF as a ranked
+    list, so insertion order silently breaks the lexical ranking —
+    rows indexed later (e.g. sessions, indexed after memory/) would
+    always lose regardless of relevance."""
+    with FTSIndex.open(tmp_path) as idx:
+        # Inserted FIRST, weak match: one needle among many tokens.
+        idx.upsert(
+            uri="weak", path="a.md", type_="episodic", entity_type=None,
+            text="needle alpha beta gamma delta epsilon zeta eta theta",
+            mtime=1.0,
+        )
+        # Inserted SECOND, strong match: the needle dominates.
+        idx.upsert(
+            uri="strong", path="b.md", type_="episodic", entity_type=None,
+            text="needle needle needle needle",
+            mtime=1.0,
+        )
+        uris = [h.uri for h in idx.search("needle")]
+    assert uris == ["strong", "weak"]
+
+
+def test_search_trigram_returns_bm25_order(tmp_path: Path) -> None:
+    """Same ranking contract for the trigram (CJK) table. Tokens must
+    be >=3 chars — the trigram tokenizer can't index shorter ones
+    (that's why the query router sends short CJK to LIKE)."""
+    with FTSIndex.open(tmp_path) as idx:
+        idx.upsert(
+            uri="weak", path="a.md", type_="episodic", entity_type=None,
+            text="記憶装置 検索結果 設計文書 実装計画 評価基準",
+            mtime=1.0,
+        )
+        idx.upsert(
+            uri="strong", path="b.md", type_="episodic", entity_type=None,
+            text="記憶装置 記憶装置 記憶装置 記憶装置",
+            mtime=1.0,
+        )
+        uris = [h.uri for h in idx.search_trigram("記憶装置")]
+    assert uris == ["strong", "weak"]
