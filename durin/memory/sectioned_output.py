@@ -84,6 +84,10 @@ _SECTION_FOR_TYPE: dict[str, str] = {
     "episodic": "fragment",
     "stable": "fragment",
     "session_summary": "session",
+    # Raw per-turn session rows (FTS-indexed sessions). Distinct from
+    # `session_summary` (the compactor's rolling summary) so stats and
+    # the type prior can tell raw transcript from distilled content.
+    "session": "session",
     "corpus": "ingested",
 }
 
