@@ -34,7 +34,12 @@ _DESCRIPTION = (
     "from a document you ingested, pass `derived_from` with the "
     "`reference:<slug>` ref(s) memory_ingest returned, so the entity links back "
     "to its sources. Use this for facts about a THING; use memory_ingest for "
-    "documents."
+    "documents. By default the `body` is APPENDED to what is already there "
+    "(nothing is lost). Pass `body_mode: \"replace\"` only when you are "
+    "rewriting the whole body to correct or clean it up — and only when you "
+    "have the full current body in context. A replace cannot overwrite prose a "
+    "user authored (it degrades to an append); git history preserves prior "
+    "versions either way."
 )
 
 _PARAMETERS = tool_parameters_schema(
@@ -70,6 +75,14 @@ _PARAMETERS = tool_parameters_schema(
     ),
     body=StringSchema(
         "Prose describing what you know about this entity.", nullable=True
+    ),
+    body_mode=StringSchema(
+        "How to apply `body`: 'append' (default) adds an attributed section "
+        "without losing prior prose; 'replace' overwrites the whole body with "
+        "the text you pass. Use 'replace' only to correct/rewrite the full "
+        "body. A replace over a user-authored body degrades to an append.",
+        enum=["append", "replace"],
+        nullable=True,
     ),
 )
 
@@ -122,8 +135,10 @@ class MemoryUpsertEntityTool(Tool):
                     source_ref=src, at=now))
         body = kwargs.get("body")
         if body:
+            body_mode = str(kwargs.get("body_mode") or "append")
+            body_kind = "body_replace" if body_mode == "replace" else "body_append"
             patches.append(FieldPatch(
-                kind="body_append", value=str(body), author=None,
+                kind=body_kind, value=str(body), author=None,
                 source_ref=src, at=now))
         # §2.13: explicitly (re-)authoring an entity overrides a prior delete
         # tombstone — the user asked for it back.
