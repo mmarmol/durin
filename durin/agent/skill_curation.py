@@ -10,6 +10,14 @@ rest carries over (un-cursored → a later day), logged.
 
 Judges by CONTENT (Hermes rule: not usage counts). Judge is injected so the core
 is unit-testable without a provider. The day's usage is light context only.
+
+Observations (task-observer pattern): OPEN records in the observation queue are
+the judge's evidence channel — they pull their skill into the delta even when
+the body is unchanged, and the judge answers each shown record with a
+disposition (applied/declined/keep). Observations on `manual` skills or
+pristine builtins stay OPEN untouched: manual skills are the user's to edit,
+and builtins join the evolving set only once forked by an edit. "new:*"
+records are skill-extract input, never curation input.
 """
 from __future__ import annotations
 
@@ -18,18 +26,28 @@ import logging
 from pathlib import Path
 from typing import Callable
 
+from durin.agent import skill_observations as so
 from durin.agent import skills_store as ss
 
 DEFAULT_BUDGET = 50
 logger = logging.getLogger(__name__)
+
+_NO_OBS = {"applied": 0, "declined": 0, "kept": 0}
 
 
 def curate_catalog(workspace, *, judge: Callable[[str], str],
                    usage: dict | None = None, budget: int = DEFAULT_BUDGET,
                    drift_check: Callable | None = None,
                    allowlist=None) -> dict:
-    """One delta-curation pass. Returns {'reviewed', 'applied', 'deferred'}."""
+    """One delta-curation pass.
+
+    Returns {'reviewed', 'applied', 'deferred', 'observations'}.
+    """
     workspace = Path(workspace)
+    # Records APPLIED during the previous pass got their cycle of visibility —
+    # move them to the archive before building this pass's evidence.
+    so.archive_resolved(workspace)
+
     # Only the evolving WORKSPACE set: dream-created + forked skills. Pristine
     # builtins (source="builtin") are the stable seed — not re-curated/forked
     # until they're forked into the workspace by some other path.
@@ -38,8 +56,15 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
         if s["mode"] == "auto" and s["source"] == "workspace"
     ]
     delta = [n for n in auto if ss.needs_curation(workspace, n)]
+    # Observation-driven delta: an OPEN observation pulls its skill in even
+    # when the body is unchanged. ("all"/"new:*" records carry no reviewable
+    # skill; they ride along in the prompt / the skill-extract pass.)
+    open_obs = so.open_observations(workspace)
+    delta += sorted(n for n in {r.get("skill") for r in open_obs}
+                    if n in auto and n not in delta)
     if not delta:
-        return {"reviewed": 0, "applied": 0, "deferred": 0}
+        return {"reviewed": 0, "applied": 0, "deferred": 0,
+                "observations": dict(_NO_OBS)}
 
     selected = delta[:budget]
     deferred = len(delta) - len(selected)
@@ -68,11 +93,23 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
             # always consume the fetched upstream copy
             _shutil.rmtree(rep.qdir, ignore_errors=True)
 
-    prompt = _build_prompt(catalog, usage or {}, upstream)
+    # The judge sees OPEN observations for the skills under review (plus
+    # cross-skill "all" records), and the compact DECLINED history so it
+    # doesn't re-propose rejected changes.
+    in_scope = set(selected) | {"all"}
+    obs_shown = [r for r in open_obs if r.get("skill") in in_scope]
+    declined_shown = [
+        {"id": r.get("id"), "skill": r.get("skill"), "issue": r.get("issue")}
+        for r in so.declined_observations(workspace)
+        if r.get("skill") in in_scope
+    ]
+
+    prompt = _build_prompt(catalog, usage or {}, upstream, obs_shown, declined_shown)
     try:
-        actions = (json.loads(judge(prompt)) or {}).get("actions", [])
+        parsed = json.loads(judge(prompt)) or {}
     except (ValueError, TypeError):
-        actions = []
+        parsed = {}
+    actions = parsed.get("actions", [])
 
     applied = 0
     for a in actions:
@@ -92,15 +129,27 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
                                     rationale=a.get("rationale", "evolve"))
             applied += 1 if r.get("ok") else 0
 
+    # Per-observation dispositions — only for records the judge actually saw.
+    shown_ids = {r.get("id") for r in obs_shown}
+    dispositions = [d for d in parsed.get("observations", [])
+                    if d.get("id") in shown_ids]
+    obs_res = (so.apply_dispositions(workspace, dispositions)
+               if dispositions else dict(_NO_OBS))
+
     for n in selected:
         if ss.read_skill_content(workspace, n) is not None:
             ss.mark_curated(workspace, n)
-    return {"reviewed": len(selected), "applied": applied, "deferred": deferred}
+    return {"reviewed": len(selected), "applied": applied, "deferred": deferred,
+            "observations": {k: obs_res.get(k, 0) for k in _NO_OBS}}
 
 
-def _build_prompt(catalog: dict, usage: dict, upstream: dict | None = None) -> str:
+def _build_prompt(catalog: dict, usage: dict, upstream: dict | None = None,
+                  observations: list[dict] | None = None,
+                  declined: list[dict] | None = None) -> str:
     from durin.utils.prompt_templates import render_template
     return render_template("agent/skill_curation.md", strip=True,
                            catalog_json=json.dumps(catalog, ensure_ascii=False),
                            usage_json=json.dumps(usage, ensure_ascii=False),
-                           upstream_json=json.dumps(upstream or {}, ensure_ascii=False))
+                           upstream_json=json.dumps(upstream or {}, ensure_ascii=False),
+                           observations_json=json.dumps(observations or [], ensure_ascii=False),
+                           declined_json=json.dumps(declined or [], ensure_ascii=False))
