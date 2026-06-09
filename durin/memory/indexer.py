@@ -30,10 +30,11 @@ Text composition (doc 02 §5.2):
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 from durin.memory.entity_page import EntityPage
 from durin.memory.fts_index import FTSIndex
@@ -253,6 +254,18 @@ def rebuild_fts_index(workspace: Path) -> IndexStats:
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "indexer: upsert %s failed: %s", skill_md, exc,
+                )
+                errors += 1
+                continue
+            indexed += 1
+        # Third pass: sessions/<key>.md, one row per turn — see
+        # `_session_turn_payloads` for why sessions are FTS-indexed.
+        for payload in _session_turn_payloads(workspace):
+            try:
+                idx.upsert(**payload)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "indexer: upsert %s failed: %s", payload["uri"], exc,
                 )
                 errors += 1
                 continue
@@ -722,6 +735,98 @@ def _payload_for_skill(workspace: Path, skill_md: Path) -> Optional[dict]:
         "entity_type": None,
         "text": _skill_text(sp),
         "mtime": skill_md.stat().st_mtime,
+    }
+
+
+_SESSION_TURN_RE = re.compile(r"^##\s+(turn-\d+)\s*$")
+
+
+def _session_turn_payloads(workspace: Path) -> Iterator[dict]:
+    """Yield one upsert payload per turn of every rendered session.
+
+    Sessions were grep-only (not in FTS5/LanceDB), which structurally
+    capped raw conversational content at the grep source's RRF weight —
+    a session containing the best answer always lost to any indexed
+    entry. The dream no longer distills sessions into entries (legacy
+    consolidator removed), so the FTS row is this content's only
+    indexed representation.
+
+    Per-turn rows so the uri matches the grep path's
+    ``sessions/<key>.md#turn-N`` shape (H28 principle — same uri across
+    sources or RRF never accumulates) and BM25 isn't diluted by
+    transcript length. The turn header (role + timestamp) stays in the
+    indexed text: a hit shows when it was said without a schema change.
+    The preamble and the ``consolidated-1`` note are boilerplate, not
+    indexed.
+    """
+    sessions_dir = Path(workspace) / "sessions"
+    if not sessions_dir.is_dir():
+        return
+    for md_path in sorted(sessions_dir.glob("*.md")):
+        yield from _turn_payloads_for_md(md_path)
+
+
+def _turn_payloads_for_md(md_path: Path) -> Iterator[dict]:
+    """Per-turn upsert payloads for ONE rendered session markdown."""
+    try:
+        text = md_path.read_text(encoding="utf-8")
+        mtime = md_path.stat().st_mtime
+    except OSError:
+        return
+    rel_path = f"sessions/{md_path.stem}.md"
+    anchor = ""
+    buf: list[str] = []
+    for line in text.splitlines():
+        m = _SESSION_TURN_RE.match(line)
+        if m:
+            if anchor and "\n".join(buf).strip():
+                yield _session_payload(rel_path, anchor, buf, mtime)
+            anchor = m.group(1)
+            buf = []
+            continue
+        buf.append(line)
+    if anchor and "\n".join(buf).strip():
+        yield _session_payload(rel_path, anchor, buf, mtime)
+
+
+def reindex_session_file(workspace: Path, md_path: Path) -> int:
+    """Incrementally index the NEW turns of one rendered session.
+
+    The reactive path — the session save calls this after regenerating
+    ``sessions/<key>.md``, so a turn becomes lexically searchable as it
+    happens instead of waiting for the next full rebuild. Saves run per
+    message, so this is O(new turns): turn uris already in ``fts_meta``
+    are skipped (turns are append-only; the ``*(consolidated)*`` header
+    annotation on old turns may go stale in the indexed text until the
+    next rebuild — cosmetic, never searched for).
+
+    Returns the number of rows upserted.
+    """
+    md_path = Path(md_path)
+    payloads = list(_turn_payloads_for_md(md_path))
+    if not payloads:
+        return 0
+    written = 0
+    with FTSIndex.open(Path(workspace)) as idx:
+        known = idx.uris_with_prefix(f"sessions/{md_path.stem}.md#")
+        for payload in payloads:
+            if payload["uri"] in known:
+                continue
+            idx.upsert(**payload)
+            written += 1
+    return written
+
+
+def _session_payload(
+    rel_path: str, anchor: str, buf: list[str], mtime: float,
+) -> dict:
+    return {
+        "uri": f"{rel_path}#{anchor}",
+        "path": rel_path,
+        "type_": "session",
+        "entity_type": None,
+        "text": "\n".join(buf).strip(),
+        "mtime": mtime,
     }
 
 

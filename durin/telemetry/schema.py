@@ -813,6 +813,22 @@ class MemoryRecallRRFEvent(TypedDict):
     session_key: NotRequired[str | None]
 
 
+class MemoryRecallGrepVerifyEvent(TypedDict):
+    """Grep-verify boost step completed (doc 03 §7.4).
+
+    Emitted when the pipeline literally re-verified vector-sourced
+    hits that the lexical top-50 missed. ``candidates`` is how many
+    hits were checked; ``verified`` how many literally matched and
+    received the lexical-grade contribution.
+    """
+
+    candidates: int
+    verified: int
+    duration_ms: float
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
 class MemoryRecallRerankEvent(TypedDict):
     """Cross-encoder rerank step completed (doc 07 §4.4 / doc 03 §9).
 
@@ -1090,6 +1106,7 @@ EVENTS: dict[str, type] = {
     "memory.index.staleness_detected": MemoryIndexStalenessDetectedEvent,
     "memory.recall.lexical": MemoryRecallLexicalEvent,
     "memory.recall.rrf": MemoryRecallRRFEvent,
+    "memory.recall.grep_verify": MemoryRecallGrepVerifyEvent,
     "memory.recall.rerank": MemoryRecallRerankEvent,
     "memory.search.failure": MemoryRecallFailureEvent,
     "memory.skill_miss": MemorySkillMissEvent,
