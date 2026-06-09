@@ -33,8 +33,14 @@ from typing import Any, Optional
 
 from durin.memory.fts_index import FTSIndex
 from durin.memory.lexical_search import lexical_search
-from durin.memory.query_router import decide_lexical_route
-from durin.memory.rrf_fusion import fuse_rrf
+from durin.memory.query_router import LexicalRoute, decide_lexical_route
+from durin.memory.rrf_fusion import (
+    DEFAULT_K,
+    DEFAULT_W_LEXICAL,
+    FusedHit,
+    apply_type_priors,
+    fuse_rrf,
+)
 from durin.memory.sectioned_output import (
     SectionedHit,
     apply_per_source_cap,
@@ -101,9 +107,10 @@ def run_search_pipeline(
     lexical_uris = [h.uri for h in lexical_hits]
     lexical_meta = {h.uri: h for h in lexical_hits}
 
-    # Step 6 (doc 03) — grep fallback over raw sessions + ingested
-    # artifacts. These aren't in LanceDB/FTS5 by design; the only
-    # way to surface them is a direct file scan. Best-effort: a
+    # Step 6 (doc 03) — grep fallback over memory/, raw sessions and
+    # ingested artifacts. Sessions are FTS-indexed too (v6); grep
+    # remains their literal-scan source and the only path for raw
+    # ingested artifacts and not-yet-indexed files. Best-effort: a
     # failure here logs and degrades that source to empty.
     grep_hits = _safe_grep_fallback(
         workspace, decision.normalized_query, recovery=recovery,
@@ -119,6 +126,29 @@ def run_search_pipeline(
         # P3.3: auto-detected identifier (email/URL/UUID/path) gets
         # the same lexical boost as an explicit `keywords` param.
         keywords_provided=bool(keywords or decision.auto_keywords),
+    )
+
+    # Step 3a' — grep-verify boost. A vector-sourced hit the lexical
+    # top-50 missed, whose indexed text literally matches the query,
+    # gains the lexical-grade contribution the cutoff dropped. Runs
+    # before the type prior: it adds evidence; the prior then weighs
+    # the total.
+    fused = _grep_verify_boost(workspace, decision, fused,
+                               keywords=keywords)
+
+    # Step 3b — type prior. Raw session turns (FTS-indexed sessions)
+    # carry a soft demotion so the distilled entry/entity leads at
+    # comparable evidence; a clearly better session match still wins.
+    # Before the entity rerank: an alias match is extra evidence and
+    # may legitimately re-elevate a session hit.
+    fused = apply_type_priors(
+        fused,
+        types={
+            f.uri: _resolve_meta(
+                f.uri, vector_meta, lexical_meta, grep_meta=grep_meta,
+            ).get("type", "")
+            for f in fused
+        },
     )
 
     # Step 4 — entity-aware rerank (doc 03 §8). When the query
@@ -524,9 +554,11 @@ def _safe_grep_fallback(
     """Run the v1 grep fallback over memory/, sessions/, ingested/.
 
     Covers two complementary cases:
-    - Sessions and ingested artifacts not indexed by LanceDB/FTS5
-      (per `01_data_and_entities.md` §3.1-§3.2) — only reachable
-      via grep.
+    - Raw ingested artifacts, which are not indexed by LanceDB/FTS5
+      (per `01_data_and_entities.md` §3.2) — only reachable via
+      grep. (Sessions ARE FTS-indexed since schema v6; grep stays
+      their literal-substring source and the recovery path when the
+      index hasn't caught up.)
     - Memory entries written by callers that bypass the tool layer
       (tests, scripts) and therefore have no FTS row yet — grep
       over `memory/` recovers them so the search doesn't return
@@ -550,14 +582,119 @@ def _safe_grep_fallback(
         return []
     out: list[dict] = []
     for r in results:
+        if getattr(r, "source", "") == "sessions":
+            # Raw session turns: type "session" — the type prior and
+            # the section renderer key off it (the class_name fallback
+            # used to mislabel these "episodic").
+            hit_type = "session"
+        else:
+            hit_type = getattr(r, "class_name", "") or "episodic"
         out.append({
             "uri": r.uri,
             "path": getattr(r, "uri", ""),
-            "type": getattr(r, "class_name", "") or "episodic",
+            "type": hit_type,
             "snippet": getattr(r, "snippet", "")
                 or getattr(r, "headline", ""),
         })
     return out
+
+
+def _grep_verify_boost(
+    workspace: Path,
+    decision,
+    fused: list,
+    *,
+    keywords: Optional[str] = None,
+) -> list:
+    """Literal re-verification of vector-sourced hits (doc 03 §7.4).
+
+    RRF only credits lexical evidence inside the lexical top-50. A doc
+    vector ranks high that literally contains the query terms — but
+    sat just past that cutoff — got no lexical contribution, so a
+    semantically-near distractor could outrank a literally-confirmed
+    hit. For each fused hit with a vector source and no lexical
+    source, run a per-uri FTS MATCH (same tokenizers as the lexical
+    tier — language-neutral, route-aware, no disk reads). Confirmed
+    hits gain ``W_LEXICAL / (k + rank_in_vector)``: literal presence
+    is the lexical evidence the cutoff dropped, credited at the rank
+    vector vouched for. ``keywords``, when supplied, is the literal
+    string verified (the agent's explicit literal intent).
+
+    Best-effort: any failure returns the input unchanged.
+    """
+    candidates = [
+        h for h in fused
+        if "vector" in h.sources and "lexical" not in h.sources
+        and h.ranks.get("vector")
+    ]
+    target = (keywords or "").strip() or decision.normalized_query
+    if not candidates or not target:
+        return fused
+    import time as _time
+    t0 = _time.perf_counter()
+    verified: set[str] = set()
+    try:
+        with FTSIndex.open(workspace) as idx:
+            for h in candidates:
+                if _literal_match_for_uri(idx, decision.route, target, h.uri):
+                    verified.add(h.uri)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("search_pipeline: grep-verify failed: %s", exc)
+        return fused
+    try:
+        from durin.agent.tools._telemetry import emit_tool_event
+        emit_tool_event("memory.recall.grep_verify", {
+            "candidates": len(candidates),
+            "verified": len(verified),
+            "duration_ms": (_time.perf_counter() - t0) * 1000.0,
+        })
+    except Exception:  # pragma: no cover — telemetry never breaks search
+        pass
+    if not verified:
+        return fused
+    out = [
+        FusedHit(
+            uri=h.uri,
+            score=h.score + DEFAULT_W_LEXICAL / (
+                DEFAULT_K + h.ranks["vector"]),
+            sources=h.sources,
+            ranks=h.ranks,
+        ) if h.uri in verified else h
+        for h in fused
+    ]
+    out.sort(key=lambda h: h.score, reverse=True)
+    return out
+
+
+def _literal_match_for_uri(
+    idx: FTSIndex, route: LexicalRoute, target: str, uri: str,
+) -> bool:
+    """Does this uri's indexed text literally match ``target``?
+
+    Follows the query's lexical route so CJK verifies through the
+    trigram table and short-CJK through LIKE — the same multilingual
+    contract as the lexical tier itself.
+    """
+    from durin.memory.lexical_search import _quote_for_fts
+
+    conn = idx._conn  # noqa: SLF001 — same friend access as LIKE scan
+    if route is LexicalRoute.LIKE_SUBSTRING:
+        cur = conn.execute(
+            "SELECT 1 FROM memory_fts WHERE uri = ? AND text LIKE ? "
+            "LIMIT 1",
+            (uri, f"%{target}%"),
+        )
+        return cur.fetchone() is not None
+    table = (
+        "memory_fts_trigram" if route is LexicalRoute.TRIGRAM
+        else "memory_fts"
+    )
+    cur = conn.execute(
+        f"SELECT 1 FROM {table} WHERE {table} MATCH ? AND uri = ? "
+        f"LIMIT 1",
+        (_quote_for_fts(target), uri),
+    )
+    return cur.fetchone() is not None
 
 
 def _resolve_meta(

@@ -116,9 +116,12 @@ The model is **not configurable per-row**. All vectors in the index share this m
 |---|---|
 | `memory/entities/<type>/<slug>.md` (class_name = `entity_page`) | `memory/archive/**` (decision §3.6 of doc 01) |
 | `memory/episodic/<id>.md` (post-cursor + pre-cursor both) | `memory/pending/<id>.md` (intake buffer; walker/indexer skip it) |
-| `memory/stable/<id>.md` | `sessions/<id>/<id>.jsonl` (raw conversation transcripts) |
+| `memory/stable/<id>.md` | `sessions/<key>.jsonl` (the raw event stream; the rendered `.md` view is what gets indexed — see §3.3.2) |
 | `memory/corpus/<id>.md` | `ingested/<id>/source.*` (raw artifacts; only the derived `memory/corpus/<id>.md` chunks are indexed) |
-| `memory/session_summary/<sanitized_key>.md` (audit A10 — see §3.3.1) | `sessions/<id>/<id>.jsonl` (raw transcripts; never indexed) |
+| `memory/session_summary/<sanitized_key>.md` (audit A10 — see §3.3.1) | |
+| `sessions/<key>.md` — FTS only, one row per turn (schema v6 — see §3.3.2) | |
+
+> **§3.3.2 Raw session turns (session-fts, schema v6, 2026-06-09)**: the indexer's third pass walks `sessions/*.md` (the deterministic markdown views) and upserts one FTS row per `## turn-N` block: `uri=sessions/<key>.md#turn-N`, `type="session"`, text = the turn body including its `**role** · timestamp` header (so a hit shows when it was said without a schema change). The uri deliberately matches the grep path's anchored uri shape so RRF fusion accumulates both sources (the H28 same-uri principle). Per-turn rows — not per-file — so BM25 isn't diluted by transcript length. The preamble and `## consolidated-1` note are boilerplate and not indexed. Sessions are NOT vector-indexed (embedding cost); the compaction summary covers the semantic layer via `session_summary`. Reactive path: `SessionManager.save` calls `reindex_session_file` after regenerating the `.md` — incremental (only turn uris missing from `fts_meta` are inserted), so saves stay O(new turns). Rationale: sessions were grep-only, which structurally capped raw conversational content at `w_grep = 0.3` — a session holding the best literal answer could never outrank an indexed entry (see doc 03 §6-§7); and since the legacy consolidator was removed, no dream pass distills general session content into indexed entries anymore.
 
 > **§3.3.1 Session summaries (audit A10, 2026-05-28)**: when the consolidator persists a session summary (`Consolidator._persist_last_summary` in `durin/agent/memory.py`), it writes the canonical copy to `memory/session_summary/<sanitized_key>.md`. Pre-A10 sessions kept the text in `session.metadata["_last_summary"]` (JSON sidecar); A10 picks the single-source-of-truth path per A4 lessons — the JSON field is dropped on the next compaction and the markdown becomes authoritative. The walker picks the directory up automatically (`MEMORY_CLASSES` now includes `session_summary`), the indexer assigns `class_name="session_summary"`, and A9's 120-day half-life applies. The agent-facing `memory_store` enum deliberately excludes `session_summary` — only the compactor produces these rows.
 
@@ -548,7 +551,7 @@ All open decisions for this module have been resolved (2026-05-27) in line with 
 
 | # | Decision | Resolution | Applied in |
 |---|---|---|---|
-| **1** | What gets indexed | Entity pages + entries (episodic/stable/corpus) + session summaries. NOT indexed: archive, pending, raw sessions/jsonl, raw ingested files. | §3.3 |
+| **1** | What gets indexed | Entity pages + entries (episodic/stable/corpus) + session summaries + raw session turns (FTS-only, per-turn, schema v6 — §3.3.2). NOT indexed: archive, pending, raw session `.jsonl` streams, raw ingested files. | §3.3 |
 | **2** | Single vs multiple embedding models | **Single model per workspace** (default `intfloat/multilingual-e5-small` since 2026-05-30). Stored in `meta.json`; mismatch on startup forces rebuild. | §3.2, §7.2 |
 | **3** | Body in the vector row | **Not stored.** Body is read from disk on demand for cold-tier enrichment. Storing in LanceDB doubles index size for no retrieval benefit. | §3.1 |
 | **4** | Embedding text composition (entity pages) | **Shipped (v2.a, audit E9 2026-05-28):** `name` + `aliases` + `rendered_frontmatter` + `body`, hard cap 1500 chars. Frontmatter renders as prose; provenance + internal timestamps skipped; stateful attributes render `current` only. Optional `summary` slot **decided against** (audit G6, 2026-05-28; doc 08 §2.14). | §4.2 |

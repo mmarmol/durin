@@ -254,6 +254,24 @@ class FTSIndex:
         ).fetchone()
         return int(row[0]) if row else 0
 
+    def uris_with_prefix(self, prefix: str) -> set[str]:
+        """Indexed uris starting with ``prefix`` (meta-table scan).
+
+        Used by the incremental session reindex to skip turns that
+        already have rows. LIKE wildcards in the prefix are escaped so
+        keys containing ``_`` / ``%`` match literally.
+        """
+        like = (
+            prefix.replace("\\", "\\\\")
+            .replace("%", r"\%")
+            .replace("_", r"\_")
+        ) + "%"
+        cur = self._conn.execute(
+            "SELECT uri FROM fts_meta WHERE uri LIKE ? ESCAPE '\\'",
+            (like,),
+        )
+        return {u for (u,) in cur.fetchall()}
+
     def known_uris(self) -> Iterator[tuple[str, float]]:
         """Iterate ``(uri, mtime)`` for every indexed row.
 
@@ -269,10 +287,16 @@ class FTSIndex:
 
     def _search(self, table: str, query: str, *, limit: int) -> list[FTSHit]:
         """Both tables share the same row schema. We use a MATCH clause
-        with the FTS5 query as-is; the caller's job to sanitise."""
+        with the FTS5 query as-is; the caller's job to sanitise.
+
+        ``ORDER BY rank`` is load-bearing: without it FTS5 returns
+        MATCH results in rowid (insertion) order, so the "ranked"
+        list fed to RRF fusion was really file-walk order and rows
+        indexed later always lost regardless of BM25 relevance.
+        """
         cur = self._conn.execute(
             f"SELECT uri, path, type, entity_type FROM {table} "
-            f"WHERE {table} MATCH ? LIMIT ?",
+            f"WHERE {table} MATCH ? ORDER BY rank LIMIT ?",
             (query, limit),
         )
         return [
