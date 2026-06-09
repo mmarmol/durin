@@ -20,7 +20,30 @@ from durin.memory.field_provenance import (
 
 __all__ = ["FieldPatch", "apply_field_patch"]
 
-PatchKind = Literal["attribute", "relation", "alias", "body_append", "derived_from"]
+PatchKind = Literal[
+    "attribute", "relation", "alias", "body_append", "body_replace", "derived_from",
+]
+
+
+def _append_body(page: EntityPage, patch: FieldPatch) -> None:
+    """Append an attributed section to the body (the original body_append)."""
+    sep = "\n\n" if page.body and not page.body.endswith("\n") else "\n"
+    marker = f"<!-- {patch.author} {patch.source_ref} -->"
+    page.body = (page.body + sep + marker + "\n" + str(patch.value)).rstrip("\n")
+
+
+def _record_body_authority(
+    page: EntityPage, prov: dict[str, Any], entry: dict[str, Any]
+) -> None:
+    """Track the highest-authority body contributor in ``prov["body"]``.
+
+    Never downgrades: an agent append over a user-authored body keeps the body
+    owned by ``user`` (so a later agent ``body_replace`` cannot win and clobber
+    it). Mirrors the per-field precedence used for attributes/relations.
+    """
+    if incoming_wins(existing=prov.get("body"), incoming=entry):
+        prov["body"] = entry
+    page.provenance = prov
 
 
 @dataclass
@@ -101,9 +124,24 @@ def apply_field_patch(page: EntityPage, patch: FieldPatch) -> bool:
         return True
 
     if patch.kind == "body_append":
-        sep = "\n\n" if page.body and not page.body.endswith("\n") else "\n"
-        marker = f"<!-- {patch.author} {patch.source_ref} -->"
-        page.body = (page.body + sep + marker + "\n" + str(patch.value)).rstrip("\n")
+        _append_body(page, patch)
+        _record_body_authority(page, prov, entry)
+        return True
+
+    if patch.kind == "body_replace":
+        # Replace the whole body — but only if the incoming writer wins the
+        # body's per-field precedence (user > dream > agent; same rank → newer).
+        # On a win, set clean canonical prose with no append marker; git history
+        # preserves the prior body either way. On a loss (e.g. an agent trying
+        # to overwrite a user-authored body), degrade to a lossless append so
+        # the new prose is not dropped and the higher authority is preserved.
+        if incoming_wins(existing=prov.get("body"), incoming=entry):
+            page.body = str(patch.value).rstrip("\n")
+            prov["body"] = entry
+            page.provenance = prov
+            return True
+        _append_body(page, patch)
+        _record_body_authority(page, prov, entry)
         return True
 
     raise ValueError(f"unknown patch kind {patch.kind!r}")
