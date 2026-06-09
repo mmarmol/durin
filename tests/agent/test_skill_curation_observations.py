@@ -142,3 +142,44 @@ def test_manual_skills_not_pulled_into_delta_by_observations(tmp_path):
     assert res["reviewed"] == 0
     assert calls == []
     assert len(open_observations(ws)) == 1   # stays queued, untouched
+
+
+# -- cross-cutting principles in curation --------------------------------------
+
+from durin.agent.skill_observations import active_principles, add_principle
+
+
+def test_judge_can_promote_a_principle(tmp_path):
+    ws = tmp_path / "ws"
+    _mk(ws, "changed", "fresh body")
+    _obs(ws, skill="all", issue="every skill needs a verification step", count=2)
+
+    res = curate_catalog(ws, judge=lambda p: json.dumps({
+        "actions": [{"type": "principle",
+                     "text": "every skill with rules needs a verification step",
+                     "rationale": "recurred across skills"}],
+        "observations": [{"id": 1, "disposition": "applied"}]}))
+    assert res["applied"] == 1
+    ps = active_principles(ws)
+    assert len(ps) == 1 and "verification" in ps[0]["text"]
+
+
+def test_judge_can_retire_a_principle(tmp_path):
+    ws = tmp_path / "ws"
+    add_principle(ws, "obsolete rule")
+    _mk(ws, "changed", "fresh body")
+
+    res = curate_catalog(ws, judge=lambda p: json.dumps({
+        "actions": [{"type": "retire_principle", "id": 1}]}))
+    assert res["applied"] == 1
+    assert active_principles(ws) == []
+
+
+def test_active_principles_shown_to_judge(tmp_path):
+    ws = tmp_path / "ws"
+    add_principle(ws, "skills must name their verification command")
+    _mk(ws, "changed", "fresh body")
+
+    calls = []
+    curate_catalog(ws, judge=lambda p: calls.append(p) or '{"actions": []}')
+    assert "skills must name their verification command" in calls[0]
