@@ -24,6 +24,7 @@ ALLOWED_FRONTMATTER_KEYS = {
 }
 ALLOWED_RESOURCE_DIRS = {"scripts", "references", "assets"}
 PLACEHOLDER_MARKERS = ("[todo", "todo:")
+RESOURCE_LINK_RE = re.compile(r"\[[^\]]*\]\(((?:references|scripts|assets)/[^)#?]+)\)")
 
 
 def _extract_frontmatter(content: str) -> Optional[str]:
@@ -208,7 +209,19 @@ def validate_skill(skill_path):
             "Only SKILL.md, scripts/, references/, and assets/ are allowed."
         )
 
+    body = content.split("---", 2)[2] if content.count("---") >= 2 else content
+    _check_resource_links(skill_path, body, errors)
+
     return _build_result(errors, warnings)
+
+
+def _check_resource_links(skill_path: Path, body: str, errors: list[str]) -> None:
+    """Markdown links into resource dirs must resolve; inline-code paths are
+    illustrative by convention and are not checked."""
+    for match in RESOURCE_LINK_RE.finditer(body):
+        rel = match.group(1).strip()
+        if not (skill_path / rel).exists():
+            errors.append(f"Linked resource does not exist: {rel}")
 
 
 def _build_result(errors: list[str], warnings: list[str]) -> tuple[bool, str]:

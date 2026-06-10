@@ -145,3 +145,36 @@ def test_validate_skill_reports_all_errors_not_just_first(tmp_path: Path) -> Non
     assert not valid
     assert "TODO placeholder" in message
     assert "Unexpected file or directory in skill root" in message
+
+
+def test_validate_skill_rejects_broken_resource_link(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "broken-link-skill"
+    _write_skill(
+        skill_dir,
+        "broken-link-skill",
+        body="# Skill\n\nSee [the rubric](references/missing.md) for details.\n",
+    )
+
+    valid, message = quick_validate.validate_skill(skill_dir)
+
+    assert not valid
+    assert "Linked resource does not exist: references/missing.md" in message
+
+
+def test_validate_skill_accepts_resolved_link_and_ignores_inline_code(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "good-link-skill"
+    _write_skill(
+        skill_dir,
+        "good-link-skill",
+        body=(
+            "# Skill\n\nSee [the rubric](references/rubric.md).\n"
+            "Illustrative only: `references/imaginary.md` and `scripts/rotate_pdf.py`.\n"
+        ),
+    )
+    refs = skill_dir / "references"
+    refs.mkdir()
+    (refs / "rubric.md").write_text("# Rubric\n", encoding="utf-8")
+
+    valid, message = quick_validate.validate_skill(skill_dir)
+
+    assert valid, message
