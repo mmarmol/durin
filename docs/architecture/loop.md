@@ -86,6 +86,22 @@ All turn-scoped, defensive. They shape behaviour only when the model misbehaves 
   always run in Python, so results are identical with or without rg. The
   `tool.grep` telemetry event records which engine served each call.
 
+### Background processes (exec background=true)
+
+`exec(background=true)` runs the full guard pipeline (deny patterns,
+workspace boundary, env curation, sandbox wrap) and then hands the spawn to
+`durin/agent/tools/process_registry.py`: the process gets its own process
+group (`start_new_session=True`), stderr merged into stdout, and an asyncio
+reader task feeding a rolling 200 KB tail buffer. The `process` tool
+lists/polls/kills tracked processes (kill signals the whole group, SIGTERM →
+SIGKILL escalation); discovery is pure polling — pair with the `sleep` tool.
+Limits: 16 concurrent background processes, finished entries kept 30 min.
+`AgentLoop.close_mcp` kills all tracked groups on shutdown. v1 limitation
+(deliberate): no crash-recovery checkpoint — if the gateway dies, running
+background processes are orphaned (keep running, untracked). Telemetry:
+`process.spawn` / `process.exit` / `process.kill`. (Design adapted from
+hermes-agent's process registry, MIT.)
+
 ---
 
 ## 2. Hooks system
