@@ -246,3 +246,15 @@ def test_validate_skill_never_executes_scripts(tmp_path: Path) -> None:
 
     assert valid, message
     assert not sentinel.exists(), "validator must never execute skill scripts"
+
+
+def test_validate_skill_warns_on_oversized_skill_md(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "oversized-skill"
+    long_body = "# Skill\n" + ("filler line\n" * 520)
+    _write_skill(skill_dir, "oversized-skill", body=long_body)
+
+    valid, message = quick_validate.validate_skill(skill_dir)
+
+    assert valid  # warning, not error
+    assert "WARNING: SKILL.md is" in message
+    assert "500" in message
