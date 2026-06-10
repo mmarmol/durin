@@ -364,7 +364,11 @@
       "hint": "或回复反馈以完善计划"
     },
     "agentActivityReasoningOnly": "{{count}} 个步骤",
-    "agentActivityLiveReasoningOnly": "运行中… · {{count}} 个步骤"
+    "agentActivityLiveReasoningOnly": "运行中… · {{count}} 个步骤",
+    "toolBody": {
+      "collapse": "收起",
+      "more": "+{{count}} 行"
+    }
   },
   "lightbox": {
     "title": "图片预览",

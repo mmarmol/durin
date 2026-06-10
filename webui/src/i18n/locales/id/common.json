@@ -613,7 +613,11 @@
       "hint": "atau balas dengan masukan untuk menyempurnakannya"
     },
     "agentActivityReasoningOnly": "{{count}} langkah",
-    "agentActivityLiveReasoningOnly": "Bekerja… · {{count}} langkah"
+    "agentActivityLiveReasoningOnly": "Bekerja… · {{count}} langkah",
+    "toolBody": {
+      "collapse": "ciutkan",
+      "more": "+{{count}} lagi"
+    }
   },
   "lightbox": {
     "title": "Pratinjau gambar",

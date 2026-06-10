@@ -342,7 +342,11 @@
       "hint": "또는 피드백을 보내 계획을 다듬을 수 있습니다"
     },
     "agentActivityReasoningOnly": "{{count}} 단계",
-    "agentActivityLiveReasoningOnly": "작업 중… · {{count}} 단계"
+    "agentActivityLiveReasoningOnly": "작업 중… · {{count}} 단계",
+    "toolBody": {
+      "collapse": "접기",
+      "more": "+{{count}} 더"
+    }
   },
   "lightbox": {
     "title": "이미지 미리보기",

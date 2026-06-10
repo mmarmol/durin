@@ -79,6 +79,7 @@ interface ToolCallBlockProps {
 }
 
 export function ToolCallBlock({ event }: ToolCallBlockProps) {
+  const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const name = event.name || "tool";
   const summary = summaryLine(event);
@@ -115,7 +116,9 @@ export function ToolCallBlock({ event }: ToolCallBlockProps) {
             onClick={() => setExpanded((v) => !v)}
             className="ml-auto shrink-0 rounded px-1 text-[10.5px] text-muted-foreground underline-offset-2 hover:underline"
           >
-            {expanded ? "collapse" : `+${total - PREVIEW_LINES} more`}
+            {expanded
+              ? t("message.toolBody.collapse")
+              : t("message.toolBody.more", { count: total - PREVIEW_LINES })}
           </button>
         )}
       </div>
