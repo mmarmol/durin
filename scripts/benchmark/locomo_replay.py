@@ -57,7 +57,7 @@ async def _replay_async(args: argparse.Namespace) -> int:
 
     qa_id = prev.get("qa_id")
     if not qa_id:
-        print(f"[locomo_replay] trace has no qa_id", file=sys.stderr)
+        print("[locomo_replay] trace has no qa_id", file=sys.stderr)
         return 2
 
     try:
@@ -92,6 +92,7 @@ async def _replay_async(args: argparse.Namespace) -> int:
         max_iterations=args.max_iterations,
         timeout_s=args.timeout_s,
         enable_memory=not args.no_memory,
+        cross_encoder=not args.no_cross_encoder,
     )
 
     verdict_dict: dict[str, Any] = {
@@ -142,6 +143,9 @@ def main() -> int:
     parser.add_argument("--timeout-s", type=float, default=90.0)
     parser.add_argument("--no-memory", action="store_true",
                         help="Replay without memory seeding (ablation baseline).")
+    parser.add_argument("--no-cross-encoder", action="store_true",
+                        help="Replay with the cross-encoder reranker OFF "
+                             "(CE-demotion A/B; see 2026-06-10 forensics).")
     parser.add_argument("--log-level", default="WARNING")
     args = parser.parse_args()
     logging.basicConfig(

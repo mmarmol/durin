@@ -31,10 +31,8 @@ import argparse
 import asyncio
 import json
 import logging
-import os
 import subprocess
 import sys
-from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -270,6 +268,7 @@ async def _main_async(args: argparse.Namespace) -> int:
             max_iterations=args.max_iterations,
             timeout_s=args.timeout_s,
             enable_memory=not args.no_memory,
+            cross_encoder=not args.no_cross_encoder,
         )
         verdict_dict: dict[str, Any] = {
             "score": 0.0, "confidence": 0, "reasoning": "",
@@ -391,12 +390,12 @@ async def _main_async(args: argparse.Namespace) -> int:
         print(f"[locomo_run] recovered via retry: {recovered}/{len(infra_fail_qas)}")
 
     print(f"\n[locomo_run] done: {pass_count} pass · {fail_count} fail · {skip_count} skip")
-    print(f"[locomo_run] analyzing…")
+    print("[locomo_run] analyzing…")
     summary = analyze_run(run_dir)
     print(f"[locomo_run] score: {summary['score']:.3f} "
           f"({summary['n_pass']}/{summary['n_total']})")
     if summary.get("failure_breakdown"):
-        print(f"[locomo_run] failure breakdown:")
+        print("[locomo_run] failure breakdown:")
         for cat, n in summary["failure_breakdown"].items():
             print(f"  - {cat}: {n}")
     print(f"[locomo_run] artifacts in: {run_dir}")
@@ -490,6 +489,13 @@ def main() -> int:
         help="Ablation baseline: skip memory seeding. The agent answers "
              "cold (no conversation context injected). Run dir gets a "
              "_nomem suffix so results don't mix with memory-enabled runs.",
+    )
+    parser.add_argument(
+        "--no-cross-encoder", action="store_true",
+        help="Run with the cross-encoder reranker OFF. CE-demotion "
+             "forensics (2026-06-10) found the reranker pushing gold "
+             "hits out of the pre-CE top-10 in half the inspected "
+             "ranking-class fails; this flag enables the A/B.",
     )
     parser.add_argument(
         "--allow-undersupplied", action="store_true",

@@ -102,6 +102,7 @@ async def run_qa(
     max_iterations: int = DEFAULT_MAX_ITERATIONS,
     timeout_s: float = DEFAULT_PER_QA_TIMEOUT_S,
     enable_memory: bool = True,
+    cross_encoder: bool = True,
     log_path: Path | None = None,
 ) -> QATrace:
     """Run one QA end-to-end and return its trace.
@@ -167,7 +168,8 @@ async def run_qa(
     try:
         await asyncio.wait_for(
             _ask_agent(qa, workspace_root, model, max_iterations, trace,
-                       enable_memory=enable_memory, timeout_s=timeout_s),
+                       enable_memory=enable_memory, timeout_s=timeout_s,
+                       cross_encoder=cross_encoder),
             timeout=timeout_s,
         )
     except asyncio.TimeoutError:
@@ -541,6 +543,7 @@ async def _ask_agent(
     *,
     enable_memory: bool = True,
     timeout_s: float = DEFAULT_PER_QA_TIMEOUT_S,
+    cross_encoder: bool = True,
 ) -> None:
     """Drive durin's agent loop to answer the question.
 
@@ -584,8 +587,11 @@ async def _ask_agent(
         # ``conv-1-q15`` ("when did Jon host a dance competition")
         # where the fact was indexed but didn't surface high enough
         # in the warm-tier; cross-encoder reranking targets exactly
-        # that gap.
-        cfg.memory.search.cross_encoder.enabled = True
+        # that gap. CE-demotion forensics (2026-06-10) found the
+        # opposite failure too — gold already in the pre-CE top-10
+        # pushed OUT by the reranker in 6/12 inspected fails — so the
+        # flag is now a parameter for A/B ablations.
+        cfg.memory.search.cross_encoder.enabled = cross_encoder
 
     bus = MessageBus()
     loop_agent = AgentLoop.from_config(cfg, bus=bus)
