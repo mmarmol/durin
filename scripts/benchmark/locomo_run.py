@@ -255,8 +255,8 @@ async def _main_async(args: argparse.Namespace) -> int:
 
     # Build a single shared LLM invoker. The harness uses durin's own
     # provider plumbing internally; the judge talks directly via
-    # default_llm_invoke from durin.memory.dream (same z.ai plan).
-    from durin.memory.dream import default_llm_invoke
+    # default_llm_invoke from durin.memory.llm_invoke (same z.ai plan).
+    from durin.memory.llm_invoke import default_llm_invoke
 
     async def _run_one(qa, *, prefix: str) -> tuple[Any, dict[str, Any], bool]:
         """Run + judge a single QA. Returns (trace, verdict_dict, is_infra_fail)."""

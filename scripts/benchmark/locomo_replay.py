@@ -99,7 +99,7 @@ async def _replay_async(args: argparse.Namespace) -> int:
         "judge_model": args.judge_model,
     }
     try:
-        from durin.memory.dream import default_llm_invoke
+        from durin.memory.llm_invoke import default_llm_invoke
 
         v = judge_answer(
             qa.question, qa.answer, trace.got,
