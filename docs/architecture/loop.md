@@ -65,6 +65,8 @@ All turn-scoped, defensive. They shape behaviour only when the model misbehaves 
 
 **Orientation tool — `repo_overview`.** `agent/tools/repo_overview.py` returns a depth-bounded structure tree plus a detected ecosystem (package manager, entrypoints) so the model can orient before diving in. It is purely structural — no embeddings, no PageRank, no AST — and local-workspace only, reusing the filesystem `_IGNORE_DIRS` noise filter and emitting telemetry. (Adapted from the OpenCode pattern; durin's adjustments are local-path-only + ignore-dir reuse.)
 
+**MCP tool deferral (P3, 2026-06-10).** After MCP servers connect, `AgentLoop._maybe_defer_mcp_tools` checks the aggregate schema size of registered MCP tools against `tools.mcp_deferral.threshold_tokens` (default 20k, ~10% of a 200k window; `enabled: true`). Above it, `agent/tools/mcp_deferral.py` flips the wrappers' `Tool.llm_visible` to False — they stay registered/executable but `ToolRegistry.get_definitions` excludes their schemas — and registers two bridges: `mcp_find_tools(query)` (its description embeds a one-line-per-tool catalog; returns full schemas for matches) and `mcp_invoke(name, arguments)` (proxy execution, args validated at run time). Built-in tools are never deferred — the curated capability surface (memory_search included) must stay structurally visible. Below the threshold nothing changes.
+
 ### Tool write durability and fuzzy-edit matching
 
 - **Atomic writes**: every durable write performed by tools and the memory

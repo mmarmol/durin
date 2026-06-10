@@ -763,6 +763,23 @@ class AgentLoop:
             self._mcp_stacks.clear()
         finally:
             self._mcp_connecting = False
+        if self._mcp_connected:
+            self._maybe_defer_mcp_tools()
+
+    def _maybe_defer_mcp_tools(self) -> None:
+        """P3 (2026-06-10): hide oversized MCP surfaces behind the bridge.
+
+        Best-effort — a deferral failure must never block MCP usage;
+        the tools just ship un-deferred as before.
+        """
+        cfg = getattr(getattr(self.app_config, "tools", None), "mcp_deferral", None)
+        if cfg is None:
+            return
+        try:
+            from durin.agent.tools.mcp_deferral import maybe_defer_mcp_tools
+            maybe_defer_mcp_tools(self.tools, cfg)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("MCP deferral failed (tools ship un-deferred): {}", e)
 
     async def _warmup_memory_embedding(self) -> None:
         """Pre-load the embedding model in background so the first
