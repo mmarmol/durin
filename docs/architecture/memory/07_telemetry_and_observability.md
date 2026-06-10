@@ -99,6 +99,7 @@ first four required fields were emitted.
 | `duration_ms` | float | yes | Total search wall-clock |
 | `total_candidates` | int | yes | `vector_count + lexical_count` from the pipeline (pre-limit) |
 | `keywords` | string \| null | yes | The LLM-supplied keyword hint (`null` when omitted) |
+| `in_context_deduped` | int | optional | Hits collapsed to pointer lines because their rendered content was already in the caller's hot layer (P4, 2026-06-10; doc 03 §12.5). 0 when nothing deduped or dedup is off (subagent / direct constructions). |
 | `recovered_from` | list of strings | only on degraded run | Pipeline sources that raised and recovered (e.g. `["vector"]`) |
 | `recovery_duration_ms` | float | only on degraded run | Wall-clock spent inside the safe wrappers that swallowed failures |
 | `iteration` | int | optional | Agent iteration counter (auto-injected by `emit_tool_event`, audit F20 2026-05-28). Caller-supplied values win — subagents stamping the parent session pass it explicitly. |

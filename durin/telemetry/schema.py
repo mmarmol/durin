@@ -541,6 +541,10 @@ class MemoryRecallEvent(TypedDict):
     total_candidates: int
     skill_result_count: NotRequired[int]
     keywords: NotRequired[str | None]
+    # P4 (2026-06-10): hits collapsed to pointer lines because their
+    # rendered content was already in the caller's hot layer. 0 when
+    # nothing deduped or when dedup is off (subagent scope).
+    in_context_deduped: NotRequired[int]
     recovered_from: NotRequired[list[str]]
     recovery_duration_ms: NotRequired[float]
     iteration: NotRequired[int]

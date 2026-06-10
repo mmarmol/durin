@@ -555,6 +555,15 @@ This is **only applied to corpus** (the class where same-source clustering is st
 
 The cap value (`3`) lives in `durin.memory.sectioned_output.DEFAULT_MAX_PER_SOURCE` and is the **default** when nothing overrides. Audit G1 (2026-05-28) shipped the promised `memory.search.sectioning.max_per_source` config knob (`MemorySearchSectioningConfig.max_per_source: int = 3`). When set, the value flows through `run_search_pipeline(..., max_per_source=...)` and is honoured by both the main path and the archive path in `memory_search.execute`.
 
+### 12.5 Hot-layer dedup (P4, 2026-06-10)
+
+After the per-source cap, hits whose rendered body is already fully visible in the caller's hot layer collapse to pointer lines under a `## Matches shown in your Memory sections` section (uri + ts; the model can `memory_drill` for the full body). Implemented in `durin.memory.context_dedup`:
+
+- **Containment, never information loss**: a hit is deduped only when its rendered text (`summary > body > snippet`, whitespace-normalised) is a substring of the hot-layer `CANONICAL`/`FRAGMENT` block for the same ref. A hit carrying anything beyond the prefix excerpt passes through whole.
+- **Caller-aware**: only the agent tool path (`ToolContext.scope == "core"`, whose system prompt carries the hot layer) opts in via `MemorySearchTool.create()`. Subagents (focused prompt, no memory prefix), graph_api / webui search (human caller), and direct constructions see every hit — the constructor default is off.
+- **Degradation**: any hot-layer read failure keeps all hits; dedup must never cost a result.
+- Telemetry: `memory.recall.in_context_deduped` counts collapsed hits per call; deduped uris also surface in the response as `already_in_context`.
+
 ---
 
 ## 13. Latency guidelines (observable expectations, not SLAs)
