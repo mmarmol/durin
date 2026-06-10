@@ -311,6 +311,15 @@ class ToolExecSpillEvent(TypedDict):
     spill_error: NotRequired[str | None]
 
 
+class ExecuteCodeEvent(TypedDict):
+    """One execute_code run (programmatic tool calling sandbox)."""
+    status: str  # success | error | timeout
+    tool_calls_made: int
+    duration_ms: float
+    stdout_chars: int
+    exit_code: NotRequired[int | None]
+
+
 class PostEditCheckEvent(TypedDict):
     """A post-edit linter ran after write_file/edit_file (see
     ``durin/agent/tools/post_edit_check.py``)."""
@@ -1099,6 +1108,7 @@ EVENTS: dict[str, type] = {
     "tool.grep": ToolGrepEvent,
     "tool.exec.spill": ToolExecSpillEvent,
     "tool.post_edit_check": PostEditCheckEvent,
+    "tool.execute_code": ExecuteCodeEvent,
     "tool.repo_overview": ToolRepoOverviewEvent,
     "tool.list_dir": ToolListDirEvent,
     "tool.web_search": ToolWebSearchEvent,
@@ -1189,6 +1199,7 @@ __all__ = [
     "ToolGrepEvent",
     "ToolExecSpillEvent",
     "PostEditCheckEvent",
+    "ExecuteCodeEvent",
     "ProcessSpawnEvent",
     "ProcessExitEvent",
     "ProcessKillEvent",
