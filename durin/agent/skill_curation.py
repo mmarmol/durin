@@ -64,7 +64,8 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
                     if n in auto and n not in delta)
     if not delta:
         return {"reviewed": 0, "applied": 0, "deferred": 0,
-                "observations": dict(_NO_OBS)}
+                "observations": {**_NO_OBS, "open": len(open_obs)},
+                "principles": len(so.active_principles(workspace))}
 
     selected = delta[:budget]
     deferred = len(delta) - len(selected)
@@ -156,7 +157,9 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
         if ss.read_skill_content(workspace, n) is not None:
             ss.mark_curated(workspace, n)
     return {"reviewed": len(selected), "applied": applied, "deferred": deferred,
-            "observations": {k: obs_res.get(k, 0) for k in _NO_OBS}}
+            "observations": {**{k: obs_res.get(k, 0) for k in _NO_OBS},
+                             "open": len(so.open_observations(workspace))},
+            "principles": len(so.active_principles(workspace))}
 
 
 def _build_prompt(catalog: dict, usage: dict, upstream: dict | None = None,

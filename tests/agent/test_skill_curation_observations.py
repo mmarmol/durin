@@ -183,3 +183,15 @@ def test_active_principles_shown_to_judge(tmp_path):
     calls = []
     curate_catalog(ws, judge=lambda p: calls.append(p) or '{"actions": []}')
     assert "skills must name their verification command" in calls[0]
+
+
+def test_result_reports_open_and_principles_counts(tmp_path):
+    ws = tmp_path / "ws"
+    _mk(ws, "changed", "fresh body")
+    _obs(ws, skill="changed")              # stays open (judge keeps it)
+    add_principle(ws, "some standing rule")
+
+    res = curate_catalog(ws, judge=lambda p: json.dumps({
+        "actions": [], "observations": [{"id": 1, "disposition": "keep"}]}))
+    assert res["observations"]["open"] == 1
+    assert res["principles"] == 1
