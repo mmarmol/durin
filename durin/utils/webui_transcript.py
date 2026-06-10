@@ -14,7 +14,9 @@ from loguru import logger
 from durin.config.paths import get_webui_dir
 from durin.session.manager import SessionManager
 
-WEBUI_TRANSCRIPT_SCHEMA_VERSION = 3
+# v4: trace messages carry structured ``toolEvents`` (merged by call_id)
+# so rich tool blocks survive reload instead of flattening to text lines.
+WEBUI_TRANSCRIPT_SCHEMA_VERSION = 4
 _MAX_TRANSCRIPT_FILE_BYTES = 8 * 1024 * 1024
 
 
@@ -108,6 +110,37 @@ def tool_trace_lines_from_events(events: Any) -> list[str]:
         if t:
             lines.append(t)
     return lines
+
+
+def merge_tool_events(existing: list[dict[str, Any]] | None, incoming: Any) -> list[dict[str, Any]]:
+    """Merge a batch of tool events into an accumulator keyed by ``call_id``.
+
+    Mirror of the webui's ``mergeToolEvents`` (webui/src/lib/tool-traces.ts)
+    so live render and replay produce identical structures: one entry per
+    call carrying the latest phase, with name/arguments preserved from the
+    start event.
+    """
+    out: list[dict[str, Any]] = list(existing or [])
+    if not isinstance(incoming, list):
+        return out
+    for raw in incoming:
+        if not isinstance(raw, dict):
+            continue
+        call_id = raw.get("call_id")
+        if not isinstance(call_id, str) or not call_id:
+            out.append(raw)
+            continue
+        idx = next((i for i, e in enumerate(out) if e.get("call_id") == call_id), -1)
+        if idx == -1:
+            out.append(raw)
+            continue
+        merged = {**out[idx], **raw}
+        if raw.get("name") is None:
+            merged["name"] = out[idx].get("name")
+        if raw.get("arguments") is None:
+            merged["arguments"] = out[idx].get("arguments")
+        out[idx] = merged
+    return out
 
 
 def replay_transcript_to_ui_messages(
@@ -336,7 +369,13 @@ def replay_transcript_to_ui_messages(
                 structured = tool_trace_lines_from_events(rec.get("tool_events"))
                 text = rec.get("text")
                 trace_lines = structured if structured else ([text] if isinstance(text, str) and text else [])
-                if not trace_lines:
+                tool_events = rec.get("tool_events")
+                has_events = isinstance(tool_events, list) and len(tool_events) > 0
+                # A record carrying only end-phase events produces no trace
+                # line, but its structured payload must survive replay — the
+                # webui renders rich blocks (question panels, plan cards)
+                # from these events.
+                if not trace_lines and not has_events:
                     continue
                 last = messages[-1] if messages else None
                 if last and last.get("kind") == "trace" and not last.get("isStreaming"):
@@ -345,7 +384,8 @@ def replay_transcript_to_ui_messages(
                     messages[-1] = {
                         **last,
                         "traces": merged_traces,
-                        "content": trace_lines[-1],
+                        "content": trace_lines[-1] if trace_lines else last.get("content"),
+                        "toolEvents": merge_tool_events(last.get("toolEvents"), tool_events),
                     }
                 else:
                     messages.append(
@@ -353,8 +393,9 @@ def replay_transcript_to_ui_messages(
                             "id": _new_id("tr", idx),
                             "role": "tool",
                             "kind": "trace",
-                            "content": trace_lines[-1],
+                            "content": trace_lines[-1] if trace_lines else "",
                             "traces": trace_lines,
+                            "toolEvents": merge_tool_events(None, tool_events),
                             "createdAt": _ts_base + idx,
                         },
                     )
