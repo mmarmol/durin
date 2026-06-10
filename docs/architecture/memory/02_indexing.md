@@ -149,6 +149,8 @@ Each composer is the sole place that builds embedding text for its type, so the 
 
 **Shipped (v2.a, audit E9 2026-05-28):** `name + aliases + rendered_frontmatter + body`, in that order, until 1500-char budget exhausted. The optional `summary` slot from the v2 spec is **decided against** (audit G6, 2026-05-28) — see "`summary` slot — decided against" below and doc 08 §2.14.
 
+**The composed text deliberately omits the entity's own `type:` prefix** (Phase 0.1 finding). The embedded text is the bare name/aliases, never `project:durin`. Phase 0.1 measured `project:durin` vs `durin` at cosine **0.517**, against **0.755** for the bare name — the literal `type:` token introduces noise that pulls the page centroid away from the natural-language query (which never contains a `type:` prefix). The type lives only as structural metadata (`class_name` / `entities` columns), never as embedding tokens. (This is also why relation URIs are stripped to slug-only — see "Why slug-only" below.)
+
 Concretely for an entity page like Marcelo:
 
 ```
@@ -441,7 +443,7 @@ The walker `walk_memory(workspace, include_archive=False)` is the **single choke
 - Skips `memory/pending/**`.
 - Yields all other `.md` files under `memory/` (recursively, sorted by path).
 
-Audit E20 (2026-05-28) removed a stale fourth bullet that said the walker "also yields `sessions/<id>/<id>.meta.json` if a `_last_summary` is present". That contract was the pre-A10 path. Since A10 (2026-05-28) the session summary lives on disk as a real markdown file at `memory/session_summary/<sanitized_key>.md` (see [`session_summary_store.py`](../../durin/memory/session_summary_store.py)), so the walker treats it like any other class — there is no special peek into `sessions/<id>/meta.json` anymore.
+Audit E20 (2026-05-28) removed a stale fourth bullet that said the walker "also yields `sessions/<id>/<id>.meta.json` if a `_last_summary` is present". That contract was the pre-A10 path. Since A10 (2026-05-28) the session summary lives on disk as a real markdown file at `memory/session_summary/<sanitized_key>.md` (see [`session_summary_store.py`](../../../durin/memory/session_summary_store.py)), so the walker treats it like any other class — there is no special peek into `sessions/<id>/meta.json` anymore.
 
 The indexer always uses this walker. Any future scanner that needs to enumerate workspace markdown must use this walker too, or explicitly justify why.
 

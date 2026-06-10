@@ -170,10 +170,10 @@ The `aux_models.memory` config field — originally added to give the rewriter i
 **What survived audit A2:**
 
 1. **`valid_from` NOT exposed as tool parameter.** Verified facts:
-   - The field IS a real part of `MemoryEntry` ([`schema.py:40`](../../durin/memory/schema.py)) — declared in doc 01 §3.3.
-   - `store_memory(*, valid_from=date | None)` accepts it and defaults to `date.today()` when omitted ([`store.py:90`](../../durin/memory/store.py)).
+   - The field IS a real part of `MemoryEntry` ([`schema.py:40`](../../../durin/memory/schema.py)) — declared in doc 01 §3.3.
+   - `store_memory(*, valid_from=date | None)` accepts it and defaults to `date.today()` when omitted ([`store.py:90`](../../../durin/memory/store.py)).
    - Used downstream by hot_layer cursor compare, entity_ranker pre/post-cursor logic, fragment sort, and search result display.
-   - The one consumer that actually needs to back-date — the LoCoMo benchmark harness ([`scripts/benchmark/locomo_harness.py:227-233`](../../scripts/benchmark/locomo_harness.py)) — calls the pure `store_memory` function directly, NOT the tool, because seeding 1000s of turns through the agent loop would be orders of magnitude slower.
+   - The one consumer that actually needs to back-date — the LoCoMo benchmark harness ([`scripts/benchmark/locomo_harness.py:227-233`](../../../scripts/benchmark/locomo_harness.py)) — calls the pure `store_memory` function directly, NOT the tool, because seeding 1000s of turns through the agent loop would be orders of magnitude slower.
    
    So the tool-facing surface stays minimal: 99% of agent-in-conversation stores observe facts "now", `date.today()` is correct. The 1% back-dating case is either (a) seeding from outside the agent (handled by the pure function) or (b) post-hoc `.md` edit by the user (the file watcher under P2.3 reindexes the change). Adding a `valid_from` parameter to the tool would expose a knob the LLM would default-fill 99% of the time, while the legitimate back-date workflow already has its path.
 
@@ -181,7 +181,7 @@ The `aux_models.memory` config field — originally added to give the rewriter i
 
 3. **`body` is the persisted field, `content` is the tool parameter.** Doc 04 §3.1 v1 conflated the two planes. The asymmetry is deliberate: the LLM action is "store this content"; the persisted entry has a `body` field. We document the mapping (doc 04 §3.1 v2 calls it out) and keep `content` as the parameter name.
 
-4. **`headline` stays optional.** Auto-gen via `_auto_headline = " ".join(words[:10])` ([`store.py:106-109`](../../durin/memory/store.py)) is functional for LLM-generated content (the model tends to lead with the topic sentence). Forcing `required` would add latency to every store call to no clear benefit; if the agent has a sharper headline in mind, it can pass one.
+4. **`headline` stays optional.** Auto-gen via `_auto_headline = " ".join(words[:10])` ([`store.py:106-109`](../../../durin/memory/store.py)) is functional for LLM-generated content (the model tends to lead with the topic sentence). Forcing `required` would add latency to every store call to no clear benefit; if the agent has a sharper headline in mind, it can pass one.
 
 5. **`force` is documented.** Added in commit `d34b337` for the dedup near-duplicate flow (cosine ≥ 0.95 returns a warning; `force=true` overrides). Doc 04 v1 omitted it by oversight.
 
@@ -241,7 +241,7 @@ Aggregate metric `silent_retrieval_miss_rate` would gate activation of §2.F (ea
 
 **The concrete trigger that would change this**: an actual operator workflow where (1) and (2) and `cat`/`find` are demonstrably worse than a dedicated command. We have not seen one. The F2 "deferred until concrete operator workflow surfaces" wording was effectively a way to keep the items on the to-do list as a soft promise — but with no failure mode that would produce that workflow, the items would have sat in the backlog indefinitely. Honest classification: discarded.
 
-**Lesson** (recorded in personal memory, [feedback-stop-soft-deferrals](../../../../.claude/projects/-Users-marcelo-git-personal-durin/memory/feedback_stop_soft_deferrals.md)): "deferred until concrete trigger" without a written failure mode is the same as discarded — except it leaves a phantom to-do that returns each audit pass. When a feature is covered by existing surfaces and has no unique use case, mark it discarded with the reasoning, not deferred.
+**Lesson** (recorded in personal memory, feedback-stop-soft-deferrals): "deferred until concrete trigger" without a written failure mode is the same as discarded — except it leaves a phantom to-do that returns each audit pass. When a feature is covered by existing surfaces and has no unique use case, mark it discarded with the reasoning, not deferred.
 
 **Status**: removed from doc 08 §5 backlog (was added in F2, removed in G2). Doc 04 §11 lists them as "not implemented — covered by …" instead of strikethrough deferred. Doc 01 §3.6 + §10 row 4 updated to point at the three existing surfaces.
 
@@ -488,13 +488,13 @@ Forcing either into the other's shape produces a regression: the search renderer
 
 **The concrete trigger that would change this**: an *external* caller (outside `vector_index.py`) that must compose embedding text without knowing the item's concrete type. None exists; if one ever does, add the dispatcher back at that point — not preemptively to satisfy a doc string.
 
-**Status**: dispatcher removed from `vector_index.py`; doc 02 §4 rewritten to document the per-type composers directly. The F12 entry in the archived audit (`docs/archive/32_memory_audit_reconciliation.md` §F12) is now superseded by this reversal.
+**Status**: dispatcher removed from `vector_index.py`; doc 02 §4 rewritten to document the per-type composers directly. The F12 entry in a prior audit is now superseded by this reversal.
 
 ---
 
 ## 3. Operational risks (from doc 18 §10)
 
-The entity-centric memory design carries known operational risks. They were enumerated in `docs/archive/35_entity_centric_plan.md` §10 before the corpus was written. This section maps each risk to its status in v2 and identifies what (if anything) the corpus does to mitigate it.
+The entity-centric memory design carries known operational risks. They were enumerated before the corpus was written. This section maps each risk to its status in v2 and identifies what (if anything) the corpus does to mitigate it.
 
 | # | Risk | Status in v2 | Mitigation reference |
 |---|---|---|---|
@@ -746,7 +746,7 @@ Cases where mem0/graphiti/etc. do X, but we chose NOT X for explicit reasons. Us
 
 ## 7. Lessons learned (general)
 
-Distilled from the design process documented in `docs/archive/40_exploracion_datos_y_relaciones.md` and prior iterations:
+Distilled from the design process and prior iterations:
 
 ### Lesson 1 — Tool description is a weak signal
 
@@ -802,5 +802,5 @@ Building Dream right (consolidation, archive, dedup, drift control) eliminates m
 
 - Architectural decisions per module: each module's §10/§14/§16 (decisions tables).
 - Cross-corpus decisions: `00_overview.md` §10.
-- Prior exploration (Spanish, longer-form): `docs/archive/40_exploracion_datos_y_relaciones.md`.
+- Prior exploration (Spanish, longer-form).
 - Mem files documenting past failures: `~/.claude/projects/.../memory/feedback_*.md`, `project_g3b_query_rewriting_plan.md`.
