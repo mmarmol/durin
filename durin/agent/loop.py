@@ -28,6 +28,11 @@ from durin.agent.tools.file_state import FileStateStore, bind_file_states, reset
 from durin.agent.tools.message import MessageTool
 from durin.agent.tools.registry import ToolRegistry
 from durin.agent.tools.self import MyTool
+from durin.agent.user_payloads import (
+    PENDING_SECRET_KEY,
+    channel_renders_tool_payloads,
+    serialize_pending_interactions,
+)
 from durin.bus.events import OUTBOUND_META_AGENT_UI, InboundMessage, OutboundMessage
 from durin.bus.queue import MessageBus
 from durin.command import CommandContext, CommandRouter, register_builtin_commands
@@ -883,6 +888,23 @@ class AgentLoop:
 
         return _on_retry_wait
 
+    async def _maybe_publish_interaction_fallback(
+        self, *, channel: str, chat_id: str, session_key: str
+    ) -> None:
+        """Serialize pending interactive payloads as plain messages for
+        channels that can't render structured tool payloads (user_payloads.py)."""
+        if channel_renders_tool_payloads(channel):
+            return
+        try:
+            session = self.sessions.get_or_create(session_key)
+            texts = serialize_pending_interactions(session.metadata)
+        except Exception:  # noqa: BLE001 — fallback must never break the turn
+            return
+        for text in texts:
+            await self.bus.publish_outbound(OutboundMessage(
+                channel=channel, chat_id=chat_id, content=text,
+            ))
+
     def _persist_user_message_early(
         self,
         msg: InboundMessage,
@@ -899,6 +921,12 @@ class AgentLoop:
             extra: dict[str, Any] = {"media": list(media_paths)} if media_paths else {}
             extra.update(kwargs)
             text = msg.content if isinstance(msg.content, str) else ""
+            # The user's reply answers any pending interaction — clear the
+            # payloads so fallbacks/badges don't fire again next turn. The
+            # pending plan survives: /build owns its lifecycle (cmd_build).
+            if session.metadata is not None:
+                session.metadata.pop("pending_question", None)
+                session.metadata.pop(PENDING_SECRET_KEY, None)
             session.add_message("user", text, **extra)
             self._mark_pending_user_turn(session)
             self.sessions.save(session)
@@ -1339,7 +1367,11 @@ class AgentLoop:
                     )
                     if response is not None:
                         await self.bus.publish_outbound(response)
-                    elif msg.channel == "cli":
+                    await self._maybe_publish_interaction_fallback(
+                        channel=msg.channel, chat_id=msg.chat_id,
+                        session_key=session_key,
+                    )
+                    if response is None and msg.channel == "cli":
                         await self.bus.publish_outbound(OutboundMessage(
                             channel=msg.channel, chat_id=msg.chat_id,
                             content="", metadata=msg.metadata or {},
