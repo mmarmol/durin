@@ -160,12 +160,20 @@ class MemorySearchTool(Tool):
         *,
         app_config: Any | None = None,
         context_dedup: bool = False,
+        include_raw_results: bool = True,
     ) -> None:
         self._workspace = Path(workspace).expanduser()
         self._embedding_model = embedding_model
         self._vector_index: Optional[VectorIndex] = None
         self._vector_index_attempted = False
         self._app_config = app_config
+        # P4b (2026-06-10): the LLM only reads `sectioned_rendered` —
+        # the tool description teaches the marker format and nothing
+        # else — so shipping the raw `results` dicts to the model pays
+        # for every hit twice. `create()` (the agent tool path) drops
+        # them; programmatic callers (graph_api / webui, bench scripts)
+        # keep the structured array via this default.
+        self._include_raw_results = include_raw_results
         # P4 (2026-06-10): hot-layer dedup only makes sense when the
         # CALLER's system prompt actually carries the hot layer, so it
         # is opt-in: `create()` (the agent tool path) enables it for
@@ -293,6 +301,7 @@ class MemorySearchTool(Tool):
             embedding_model=model,
             app_config=app,
             context_dedup=getattr(ctx, "scope", "core") != "subagent",
+            include_raw_results=False,
         )
 
     def _get_vector_index(self) -> Optional[VectorIndex]:
@@ -602,12 +611,13 @@ class MemorySearchTool(Tool):
                 },
             )
         response: dict[str, Any] = {
-            "results": [r.to_dict() for r in results],
             "total": len(results),
             "strategy": strategy,
             "ranking": ranking,
             "sectioned_rendered": sectioned_rendered,
         }
+        if self._include_raw_results:
+            response["results"] = [r.to_dict() for r in results]
         if in_context_hits:
             response["already_in_context"] = [
                 h.uri for h in in_context_hits
@@ -645,10 +655,13 @@ class MemorySearchTool(Tool):
 
         archive_root = self._workspace / "memory" / "archive"
         if not archive_root.is_dir():
-            return {
-                "results": [], "total": 0,
+            empty: dict[str, Any] = {
+                "total": 0,
                 "strategy": "archive", "ranking": "default",
             }
+            if self._include_raw_results:
+                empty["results"] = []
+            return empty
 
         needle = query.lower()
         hits: list[Result] = []
@@ -788,13 +801,17 @@ class MemorySearchTool(Tool):
             )
         kept = {h.uri for h in capped}
         kept_results = [r for r in hits if r.uri in kept]
-        return {
-            "results": [r.to_dict() for r in kept_results],
+        archive_response: dict[str, Any] = {
             "total": len(kept_results),
             "strategy": "archive",
             "ranking": "default",
             "sectioned_rendered": render_sectioned(capped),
         }
+        if self._include_raw_results:
+            archive_response["results"] = [
+                r.to_dict() for r in kept_results
+            ]
+        return archive_response
 
     def _sectioned_to_result(
         self, hit: Any, *, level: str,

@@ -564,6 +564,10 @@ After the per-source cap, hits whose rendered body is already fully visible in t
 - **Degradation**: any hot-layer read failure keeps all hits; dedup must never cost a result.
 - Telemetry: `memory.recall.in_context_deduped` counts collapsed hits per call; deduped uris also surface in the response as `already_in_context`.
 
+### 12.6 LLM payload split (P4b, 2026-06-10)
+
+The tool response used to ship every hit twice to the model: the raw `results` dicts (headline/snippet/summary per hit) AND `sectioned_rendered` — the runner `json.dumps`'s the whole dict into the tool message. The tool description only teaches the marker format, so the raw array was pure duplication. `MemorySearchTool.create()` (the agent path, core and subagent alike) now constructs with `include_raw_results=False`: the LLM payload carries `sectioned_rendered` + metadata (`total`, `strategy`, `ranking`, `already_in_context`, degradation fields) only. Programmatic callers — `graph_api.search_memory_api` (webui), bench scripts, direct constructions — keep the structured `results` array via the constructor default.
+
 ---
 
 ## 13. Latency guidelines (observable expectations, not SLAs)
