@@ -300,3 +300,19 @@ que cerramos para Codex en #50.
 ---
 
 ## Last updated: 2026-06-07 (entity→source derived_from linking shipped + data migrated; merged origin/main: Codex OAuth/loopback + secrets audit; P8 memory-graph CLOSED)
+
+### P8 — Subagent announce blob: structured tool_events instead of text scrub
+
+**Context**: subagent completions are injected into the thread as a raw
+`[Subagent …] … Result: … Summarize this naturally` assistant-message blob.
+The webui trims the model-directed instructions client-side with substring
+surgery (`webui/src/lib/subagent-channel-display.ts`), which is fragile and
+still leaks protocol text on format drift. The 2026-06 tool-rendering work
+(payload-canonical contract, `durin/agent/user_payloads.py`) gave `spawn` /
+`subagent_*` lifecycle chips, but the completion announce itself still rides
+prose.
+
+**Direction**: emit the subagent result as a structured event (tool_events or
+a dedicated frame) so channels render a proper card (name, status, result
+body) and the client-side scrub can be deleted. Touches the subagent inject
+path (`durin/agent/subagent.py`) and the webui/TUI renderers.
