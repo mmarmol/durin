@@ -165,6 +165,7 @@ async def run_qa(
     )
 
     started = time.monotonic()
+    started_wall = time.time()
     try:
         await asyncio.wait_for(
             _ask_agent(qa, workspace_root, model, max_iterations, trace,
@@ -194,15 +195,23 @@ async def run_qa(
         # and post-bench analysis has to chase events across two
         # directories. Append the session log into the per-QA file so
         # the bench artefact is self-contained.
-        _merge_session_telemetry_into(telemetry_path, qa.qa_id, started)
+        _merge_session_telemetry_into(telemetry_path, qa.qa_id, started_wall)
     return trace
 
 
 def _merge_session_telemetry_into(
-    telemetry_path: Path, qa_id: str, started_monotonic: float,
+    telemetry_path: Path, qa_id: str, started_wall: float,
 ) -> None:
     """Append events from the session-scoped telemetry file into the
     per-QA bench file. Best-effort: failures degrade silently.
+
+    Only events stamped at/after ``started_wall`` (epoch seconds, with
+    1s of clock slack) are merged. The session file is keyed by
+    ``bench:<qa_id>`` + date, so it ACCUMULATES across runs of the same
+    QA on the same day — pre-fix, a re-run / replay / A-B run inherited
+    every earlier run's events, which poisoned post-hoc analysis (the
+    2026-06-10 CE-off run appeared to have cross-encoder rerank events
+    that actually belonged to the morning baseline).
     """
     try:
         from durin.telemetry.logger import get_session_logger
@@ -216,12 +225,21 @@ def _merge_session_telemetry_into(
     if not session_path.is_file() or session_path == telemetry_path:
         return
     try:
+        cutoff = started_wall - 1.0
+        kept: list[str] = []
+        with session_path.open("r", encoding="utf-8") as src:
+            for line in src:
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if float(event.get("ts", 0) or 0) >= cutoff:
+                    kept.append(line)
+        if not kept:
+            return
         existing = telemetry_path.read_text(encoding="utf-8") \
             if telemetry_path.exists() else ""
-        with session_path.open("r", encoding="utf-8") as src:
-            lines = src.readlines()
-        merged = existing + "".join(lines)
-        telemetry_path.write_text(merged, encoding="utf-8")
+        telemetry_path.write_text(existing + "".join(kept), encoding="utf-8")
     except Exception:  # noqa: BLE001
         return
 
