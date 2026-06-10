@@ -16,6 +16,7 @@ except ModuleNotFoundError:
     yaml = None
 
 MAX_SKILL_NAME_LENGTH = 64
+MAX_SKILL_MD_LINES = 500
 ALLOWED_FRONTMATTER_KEYS = {
     "name",
     "description",
@@ -215,6 +216,13 @@ def validate_skill(skill_path):
     _check_resource_links(skill_path, body, errors)
     _check_orphan_resources(skill_path, body, warnings)
     _check_script_syntax(skill_path, errors)
+
+    line_count = len(content.splitlines())
+    if line_count > MAX_SKILL_MD_LINES:
+        warnings.append(
+            f"SKILL.md is {line_count} lines (budget: {MAX_SKILL_MD_LINES}). "
+            "Move detail into references/."
+        )
 
     return _build_result(errors, warnings)
 
