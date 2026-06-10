@@ -85,6 +85,14 @@ All turn-scoped, defensive. They shape behaviour only when the model misbehaves 
   walk — gitignored agent dirs stay searchable); matching and formatting
   always run in Python, so results are identical with or without rg. The
   `tool.grep` telemetry event records which engine served each call.
+- **Post-edit check**: after a successful `write_file`/`edit_file`, a
+  user-configurable per-language linter (`tools.post_edit_check.checkers`,
+  extension → command template with `{file}`; default `py → ruff check`)
+  runs as a subprocess and its findings (capped at `max_lines`) are appended
+  to the tool result — the non-LSP equivalent of opencode's post-edit
+  diagnostics. Graceful skip on disabled config, unknown extension, missing
+  binary, timeout or checker crash: a check failure never breaks an edit.
+  `durin/agent/tools/post_edit_check.py`; telemetry `tool.post_edit_check`.
 
 ### Background processes (exec background=true)
 
