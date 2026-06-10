@@ -69,15 +69,20 @@ first). Both route through `skills_store.py` (provenance + commit). The in-sessi
 prompt (`templates/agent/skills_section.md`) also drives **acquire-on-gap** — see §5.
 
 **The skill-extract pass (autonomous).** `durin/memory/dream_passes.py::run_skill_extract_pass`
-→ `_skill_extract_async` is the skills arm of the daily `memory_dream` cron (§6). It mines
-the most recent **sessions** (`max_sessions`, default 3 — `_recent_sessions_text`, capped at
-~12k chars) and runs a sub-agent (`durin/agent/runner.py::AgentRunner`, `max_iterations=8`)
-whose system prompt (`_SKILL_EXTRACT_PROMPT`) asks it to author a skill **only when a
-reusable, recurring multi-step procedure appears**, reusing/extending an existing skill
-rather than duplicating it. The sub-agent is given a minimal toolset — `ReadFileTool`,
+→ `_skill_extract_async` is the skills arm of the daily `memory_dream` cron (§6). Its input
+(`_skill_extract_messages`) is the most recent **sessions** (`max_sessions`, default 3 —
+`_recent_sessions_text`, capped at ~12k chars) **plus the OPEN `new:*` gap observations**
+(§6a) rendered as a `LOGGED GAPS` block — distilled, pre-named skill candidates the agent
+flagged while working, so extraction can run even on a day with no sessions. It runs a
+sub-agent (`durin/agent/runner.py::AgentRunner`, `max_iterations=8`) whose system prompt
+(`_SKILL_EXTRACT_PROMPT`) asks it to author a skill **only when a reusable, recurring
+multi-step procedure appears**, reusing/extending an existing skill rather than duplicating
+it, complying with the active cross-cutting principles (§6a), and using a gap's working
+name **verbatim** — after the run, `_resolve_gap_observations` marks any gap whose name
+materialized as APPLIED. The sub-agent is given a minimal toolset — `ReadFileTool`,
 `EditFileTool`, and `SkillWriteTool` (NO registry/acquire tools). When it calls `skill_write`
 the write routes through `skills_store.py::dream_create_skill` (provenance `source=dream`,
-`mode=auto`, committed). On a quiet day with no sessions the pass returns early
+`mode=auto`, committed). On a quiet day with no sessions and no gaps the pass returns early
 (`reason="no_sessions"`) and never calls the LLM.
 
 This is the **create** path. See §6 for the single `memory_dream` cron and its passes.
@@ -175,11 +180,55 @@ in the memory architecture docs; they don't touch skills.)
 
 **Evolution — `curate_catalog`.** Reviews **only** the change-gated delta:
 `mode=="auto"` AND `source=="workspace"` skills (dream-created + forks; never pristine
-builtins) that `needs_curation` (body changed since last pass). An LLM judge proposes
-`evolve` (surgical old/new on the local body) or `fuse` (merge near-duplicates) actions;
-applied via `skills_store.py` (committed). Budget-capped per day with carry-over — it
-**never "reviews everything,"** only the delta. Imported skills are `mode=manual` and are
-**not** auto-curated.
+builtins) that `needs_curation` (body changed since last pass) — **plus** any auto
+workspace skill with an OPEN observation (§6a), even if its body is unchanged. An LLM
+judge proposes `evolve` (surgical old/new on the local body), `fuse` (merge
+near-duplicates), `principle`, or `retire_principle` actions; applied via
+`skills_store.py` / `skill_observations.py` (committed). Budget-capped per day with
+carry-over — it **never "reviews everything,"** only the delta. Imported skills are
+`mode=manual` and are **not** auto-curated.
+
+### 6a. Observation queue & cross-cutting principles (the evidence channel)
+
+The task-observer pattern, adopted 2026-06-10 — capture live feedback about
+skills the moment it occurs, queue it with states, and let the daily curation
+judge consume it as evidence (the cheap alternative to GEPA-style measured
+optimization, which needs an eval harness and per-run budget). This section is
+the as-built reference. Code: `durin/agent/skill_observations.py`.
+
+**Capture (in-loop, live).** The `skill_observe` core tool logs feedback the moment it
+occurs — `kind`: `correction` (user corrected output produced under a skill), `gap` (no
+skill covers a recurring procedure; `skill="new:<working-name>"`), `improvement`, or
+`simplify` (a rule/section is dead weight). The structural trigger is a per-turn block in
+`templates/agent/identity.md` ("Skill observations") — the tool description alone is a
+weak signal. **Log, don't act:** nothing mutates a skill in-session.
+
+**Store.** `<workspace>/skills/.observations.jsonl` in the skills GitStore (every change
+committed). Write-time dedup: a near-same issue for the same skill bumps `count` /
+`last_seen` instead of appending — `count >= 2` is the recurrence signal. States:
+`OPEN → APPLIED | DECLINED` (set by curation dispositions). APPLIED records get one
+pass of visibility, then `archive_resolved` moves them to
+`.observations.archive.jsonl` at the start of the next pass; DECLINED records stay in
+the active file as the judge's memory against re-proposing rejected changes.
+
+**Consumption (curation).** The judge receives OPEN observations for the skills under
+review (plus `skill:"all"` records) and the compact DECLINED history, with instructions:
+recurring (`count>=2`) records license `evolve`; one-offs stay `keep` unless trivially
+safe; `simplify` licenses removal. It answers every shown record with a disposition
+(`applied`/`declined`/`keep`) → `apply_dispositions`. Observations on `manual` skills or
+pristine builtins stay OPEN untouched (manual = user-owned; builtins join the evolving
+set only once forked). `new:*` records never reach curation — they are skill-extract
+input (§3).
+
+**Principles.** A generalizable lesson (typically a recurring `skill:"all"` observation)
+can be promoted by the judge via a `principle` action into
+`<workspace>/skills/.principles.jsonl` (capped at `PRINCIPLES_CAP=12`;
+`retire_principle` frees slots). Active principles are injected as a compliance
+checklist into BOTH the curation prompt (non-compliant skills get evolved) and the
+skill-extract prompt (new skills are born compliant).
+
+**Telemetry.** The cron summary line logs `obs_applied/obs_declined/obs_kept/obs_open` +
+`principles` per run (`cli/commands.py`); the skill-extract pass emits `gaps_closed`.
 
 **Drift → evolution (§8.D) — `skill_drift.py::check_upstream_drift`.** Wired into
 `curate_catalog`: for a skill whose `provenance.source` is a real repo, re-resolve +
@@ -240,6 +289,7 @@ adds an **approved executor**:
 | `skill_audit` | core | Run the §8.C scan on a skill; verdict + findings. |
 | `skills_list` | core | List available + quarantined skills. |
 | `skill_install_deps` | core | Install a skill's declared deps (dry-run→confirm, policy, via ExecTool). |
+| `skill_observe` | core | Log live skill feedback (correction/gap/improvement/simplify) to the observation queue (§6a). Log, don't act. |
 | `skill_acquire_seed` | **`dream`** (skill-extract pass) | Gated per-ref seed retrieval for autonomous acquisition (returns risk-free seeds only). `_scopes={"dream"}` keeps it out of the in-loop core agent; hand-registered in the daily skill-extract pass (`_build_skill_extract_tools`) — see §4 Path B. |
 
 Tools default to `core` scope (auto-loaded into the in-loop agent) unless they declare
@@ -273,7 +323,8 @@ interop standard (§8.B) · import + §8.C security floor (§6.B/§8.C) · disco
 upstream drift→evolution (§8.D) · unverified-origin sweep (Part C) · retrieval: searchable
 memory class + hot-tier (Spec-2) · acquire-on-gap **Paths A + B** (in-session + autonomous
 skill-extract, §6.C; Path B re-homed + live-verified 2026-06-06) · runtime install
-executor (P6 #1).
+executor (P6 #1) · observation queue + cross-cutting principles (§6a, task-observer
+pattern, 2026-06-10).
 
 **Pending (active):** P6 #2 (run bundled skill *scripts* through the tool gate) · P6 #3 (per-skill FS/net sandbox) ·
 extra discovery adapters (github-taps / well-known / lobehub). See `docs/backlog.md`.
