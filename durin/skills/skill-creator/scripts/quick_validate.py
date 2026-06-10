@@ -4,6 +4,8 @@ Minimal validator for durin skill folders.
 """
 
 import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
@@ -14,6 +16,7 @@ except ModuleNotFoundError:
     yaml = None
 
 MAX_SKILL_NAME_LENGTH = 64
+MAX_SKILL_MD_LINES = 500
 ALLOWED_FRONTMATTER_KEYS = {
     "name",
     "description",
@@ -24,6 +27,7 @@ ALLOWED_FRONTMATTER_KEYS = {
 }
 ALLOWED_RESOURCE_DIRS = {"scripts", "references", "assets"}
 PLACEHOLDER_MARKERS = ("[todo", "todo:")
+RESOURCE_LINK_RE = re.compile(r"\[[^\]]*\]\(((?:references|scripts|assets)/[^)#?]+)\)")
 
 
 def _extract_frontmatter(content: str) -> Optional[str]:
@@ -130,8 +134,14 @@ def _validate_description(description: str) -> Optional[str]:
 
 
 def validate_skill(skill_path):
-    """Validate a skill folder structure and required frontmatter."""
+    """Validate a skill folder. Returns (valid, message).
+
+    valid is False when any ERROR-level issue exists. WARNING-level issues
+    are reported in the message but do not fail validation.
+    """
     skill_path = Path(skill_path).resolve()
+    errors: list[str] = []
+    warnings: list[str] = []
 
     if not skill_path.exists():
         return False, f"Skill folder not found: {skill_path}"
@@ -155,37 +165,40 @@ def validate_skill(skill_path):
     if error:
         return False, error
 
+    # From here on, collect every issue instead of returning at the first.
     unexpected_keys = sorted(set(frontmatter.keys()) - ALLOWED_FRONTMATTER_KEYS)
     if unexpected_keys:
         allowed = ", ".join(sorted(ALLOWED_FRONTMATTER_KEYS))
         unexpected = ", ".join(unexpected_keys)
-        return (
-            False,
-            f"Unexpected key(s) in SKILL.md frontmatter: {unexpected}. Allowed properties are: {allowed}",
+        errors.append(
+            f"Unexpected key(s) in SKILL.md frontmatter: {unexpected}. Allowed properties are: {allowed}"
         )
 
     if "name" not in frontmatter:
-        return False, "Missing 'name' in frontmatter"
+        errors.append("Missing 'name' in frontmatter")
+    else:
+        name = frontmatter["name"]
+        if not isinstance(name, str):
+            errors.append(f"Name must be a string, got {type(name).__name__}")
+        else:
+            name_error = _validate_skill_name(name.strip(), skill_path.name)
+            if name_error:
+                errors.append(name_error)
+
     if "description" not in frontmatter:
-        return False, "Missing 'description' in frontmatter"
-
-    name = frontmatter["name"]
-    if not isinstance(name, str):
-        return False, f"Name must be a string, got {type(name).__name__}"
-    name_error = _validate_skill_name(name.strip(), skill_path.name)
-    if name_error:
-        return False, name_error
-
-    description = frontmatter["description"]
-    if not isinstance(description, str):
-        return False, f"Description must be a string, got {type(description).__name__}"
-    description_error = _validate_description(description)
-    if description_error:
-        return False, description_error
+        errors.append("Missing 'description' in frontmatter")
+    else:
+        description = frontmatter["description"]
+        if not isinstance(description, str):
+            errors.append(f"Description must be a string, got {type(description).__name__}")
+        else:
+            description_error = _validate_description(description)
+            if description_error:
+                errors.append(description_error)
 
     always = frontmatter.get("always")
     if always is not None and not isinstance(always, bool):
-        return False, f"'always' must be a boolean, got {type(always).__name__}"
+        errors.append(f"'always' must be a boolean, got {type(always).__name__}")
 
     for child in skill_path.iterdir():
         if child.name == "SKILL.md":
@@ -194,13 +207,83 @@ def validate_skill(skill_path):
             continue
         if child.is_symlink():
             continue
-        return (
-            False,
+        errors.append(
             f"Unexpected file or directory in skill root: {child.name}. "
-            "Only SKILL.md, scripts/, references/, and assets/ are allowed.",
+            "Only SKILL.md, scripts/, references/, and assets/ are allowed."
         )
 
-    return True, "Skill is valid!"
+    body = content.split("---", 2)[2] if content.count("---") >= 2 else content
+    _check_resource_links(skill_path, body, errors)
+    _check_orphan_resources(skill_path, body, warnings)
+    _check_script_syntax(skill_path, errors)
+
+    line_count = len(content.splitlines())
+    if line_count > MAX_SKILL_MD_LINES:
+        warnings.append(
+            f"SKILL.md is {line_count} lines (budget: {MAX_SKILL_MD_LINES}). "
+            "Move detail into references/."
+        )
+
+    return _build_result(errors, warnings)
+
+
+def _check_script_syntax(skill_path: Path, errors: list[str]) -> None:
+    """Syntax-check bundled scripts WITHOUT executing them — the validator may
+    run over untrusted skills."""
+    scripts_dir = skill_path / "scripts"
+    if not scripts_dir.is_dir():
+        return
+    for script in sorted(scripts_dir.rglob("*")):
+        if not script.is_file() or "__pycache__" in script.parts:
+            continue
+        if script.suffix == ".py":
+            try:
+                compile(script.read_text(encoding="utf-8"), str(script), "exec")
+            except (OSError, SyntaxError, ValueError) as exc:
+                errors.append(f"Script has syntax errors: {script.name} ({exc})")
+        elif script.suffix == ".sh":
+            bash = shutil.which("bash")
+            if bash is None:
+                continue
+            proc = subprocess.run(
+                [bash, "-n", str(script)], capture_output=True, text=True, timeout=10
+            )
+            if proc.returncode != 0:
+                stderr = proc.stderr.strip()
+                detail = stderr.splitlines()[-1] if stderr else "bash -n failed"
+                errors.append(f"Script has syntax errors: {script.name} ({detail})")
+
+
+def _check_orphan_resources(skill_path: Path, body: str, warnings: list[str]) -> None:
+    """references/ and scripts/ files the body never mentions are
+    undiscoverable by the agent. assets/ is exempt (used in output, not read)."""
+    for sub in ("references", "scripts"):
+        directory = skill_path / sub
+        if not directory.is_dir():
+            continue
+        for resource in sorted(directory.rglob("*")):
+            if not resource.is_file() or "__pycache__" in resource.parts:
+                continue
+            rel = resource.relative_to(skill_path).as_posix()
+            if rel not in body:
+                warnings.append(f"Resource never mentioned in SKILL.md: {rel}")
+
+
+def _check_resource_links(skill_path: Path, body: str, errors: list[str]) -> None:
+    """Markdown links into resource dirs must resolve; inline-code paths are
+    illustrative by convention and are not checked."""
+    for match in RESOURCE_LINK_RE.finditer(body):
+        rel = match.group(1).strip()
+        if not (skill_path / rel).exists():
+            errors.append(f"Linked resource does not exist: {rel}")
+
+
+def _build_result(errors: list[str], warnings: list[str]) -> tuple[bool, str]:
+    lines = [f"ERROR: {item}" for item in errors]
+    lines.extend(f"WARNING: {item}" for item in warnings)
+    if not lines:
+        return True, "Skill is valid!"
+    return not errors, "\n".join(lines)
 
 
 if __name__ == "__main__":
