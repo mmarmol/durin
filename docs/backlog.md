@@ -16,6 +16,29 @@
 
 ## §1 — Pendientes activos
 
+### MCP client hardening (deferred phase)
+
+**Context**: 2026-06-10 investigation (durin wrapper audit + hermes-agent MCP
+layer + OSS survey) concluded: keep the official `mcp` SDK, harden our wrapper
+— no Python library provides mid-session stdio reconnection (python-sdk #1022
+closed as not-planned), so the supervision layer is our code either way.
+hermes-agent's MCP layer (MIT) is the reference implementation to adapt.
+
+**Problem**: durin/agent/tools/mcp.py is example-grade: no crash recovery
+(tools go stale on a dead session), ImageContent/AudioContent lost via
+`str(block)`, `isError` ignored (errors look like success), single per-server
+timeout, no tools/list_changed, 1-shot retry with 1s fixed backoff.
+
+**Plan (when picked up)**: (1) result fidelity: isError + ImageContent via the
+read_file image pipeline + structuredContent; (2) per-tool timeouts via the
+SDK's per-call `read_timeout_seconds`; (3) supervision/reconnect layer
+(keepalive ping, exp backoff, re-discovery, explicit "server restarted, state
+lost" surfaced to the model); (4) tools/list_changed; (5) broader transient
+detection by exception class. OAuth/sampling deferred until remote servers
+matter. Precondition for browser-via-playwright-MCP.
+
+**Estado**: pendiente — investigación completa, implementación no iniciada.
+
 ### P3 — Comando para cambiar modelo es precario — autocompletion progresivo
 
 **Contexto**: TUI/web, comando `/model` (o equivalente) para cambiar el
