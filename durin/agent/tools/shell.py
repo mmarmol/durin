@@ -16,7 +16,12 @@ from pydantic import Field
 
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.sandbox import wrap_command
-from durin.agent.tools.schema import IntegerSchema, StringSchema, tool_parameters_schema
+from durin.agent.tools.schema import (
+    BooleanSchema,
+    IntegerSchema,
+    StringSchema,
+    tool_parameters_schema,
+)
 from durin.config.paths import get_media_dir
 from durin.config.schema import Base
 
@@ -56,6 +61,13 @@ class ExecToolConfig(Base):
             ),
             minimum=1,
             maximum=600,
+        ),
+        background=BooleanSchema(
+            description=(
+                "Run the command in the background and return a process id "
+                "immediately (for dev servers, builds, watchers). Poll or "
+                "stop it with the process tool; timeout does not apply."
+            ),
         ),
         required=["command"],
     )
@@ -173,7 +185,9 @@ class ExecTool(Tool):
             "Prefer read_file/write_file/edit_file over cat/echo/sed, "
             "and grep/glob over shell find/grep. "
             "Use -y or --yes flags to avoid interactive prompts. "
-            "Output is truncated at 10 000 chars; timeout defaults to 60s."
+            "Output is truncated at 10 000 chars; timeout defaults to 60s. "
+            "Set background=true for long-lived commands (servers, builds) "
+            "and manage them with the process tool."
         )
 
     @property
@@ -182,7 +196,7 @@ class ExecTool(Tool):
 
     async def execute(
         self, command: str, working_dir: str | None = None,
-        timeout: int | None = None, **kwargs: Any,
+        timeout: int | None = None, background: bool = False, **kwargs: Any,
     ) -> str:
         cwd = working_dir or self.working_dir or os.getcwd()
 
@@ -230,6 +244,24 @@ class ExecTool(Tool):
             else:
                 env["DURIN_PATH_APPEND"] = self.path_append
                 command = f'export PATH="$PATH{os.pathsep}$DURIN_PATH_APPEND"; {command}'
+
+        if background:
+            # Full guard pipeline (deny patterns, memory-vault guard,
+            # workspace boundary, sandbox wrap, env curation) already ran
+            # above — background mode adds no new privileges.
+            from durin.agent.tools.process_registry import get_process_registry
+            try:
+                sess = await get_process_registry().spawn(command, cwd=cwd, env=env)
+            except RuntimeError as e:
+                return f"Error: {e}"
+            return (
+                f"Started background process {sess.id} (pid {sess.pid}).\n"
+                f"Command: {command[:200]}\n"
+                "It keeps running across turns. Check it with "
+                f"process(action='poll', id='{sess.id}'); stop it with "
+                f"process(action='kill', id='{sess.id}'). Use sleep between "
+                "polls instead of busy-looping."
+            )
 
         try:
             process = await self._spawn(command, cwd, env)
