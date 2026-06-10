@@ -178,3 +178,33 @@ def test_validate_skill_accepts_resolved_link_and_ignores_inline_code(tmp_path: 
     valid, message = quick_validate.validate_skill(skill_dir)
 
     assert valid, message
+
+
+def test_validate_skill_warns_on_orphan_reference(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "orphan-skill"
+    _write_skill(skill_dir, "orphan-skill")
+    refs = skill_dir / "references"
+    refs.mkdir()
+    (refs / "lonely.md").write_text("# Never cited\n", encoding="utf-8")
+
+    valid, message = quick_validate.validate_skill(skill_dir)
+
+    assert valid  # warning, not error
+    assert "WARNING: Resource never mentioned in SKILL.md: references/lonely.md" in message
+
+
+def test_validate_skill_mention_in_code_block_counts(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "mentioned-skill"
+    _write_skill(
+        skill_dir,
+        "mentioned-skill",
+        body="# Skill\n\nRun:\n```bash\npython scripts/helper.py --quiet\n```\n",
+    )
+    scripts = skill_dir / "scripts"
+    scripts.mkdir()
+    (scripts / "helper.py").write_text("print('ok')\n", encoding="utf-8")
+
+    valid, message = quick_validate.validate_skill(skill_dir)
+
+    assert valid, message
+    assert "WARNING" not in message
