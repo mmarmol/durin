@@ -25,6 +25,7 @@ path as running it for the first time (essential for replay).
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import shutil
@@ -33,10 +34,10 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-import functools
-
 from durin.memory.provenance import author_scope
 from durin.memory.store import store_memory
+from durin.telemetry.logger import TelemetryLogger, bind_telemetry, reset_telemetry
+from scripts.benchmark.locomo_dataset import QA, Conversation
 
 
 def _agent_seeded(fn):
@@ -52,9 +53,6 @@ def _agent_seeded(fn):
         with author_scope("agent_created"):
             return fn(*args, **kwargs)
     return wrapper
-from durin.telemetry.logger import TelemetryLogger, bind_telemetry, reset_telemetry
-
-from scripts.benchmark.locomo_dataset import QA, Conversation
 
 __all__ = ["QATrace", "run_qa"]
 
@@ -169,7 +167,7 @@ async def run_qa(
     try:
         await asyncio.wait_for(
             _ask_agent(qa, workspace_root, model, max_iterations, trace,
-                       enable_memory=enable_memory),
+                       enable_memory=enable_memory, timeout_s=timeout_s),
             timeout=timeout_s,
         )
     except asyncio.TimeoutError:
@@ -542,6 +540,7 @@ async def _ask_agent(
     trace: QATrace,
     *,
     enable_memory: bool = True,
+    timeout_s: float = DEFAULT_PER_QA_TIMEOUT_S,
 ) -> None:
     """Drive durin's agent loop to answer the question.
 
@@ -653,7 +652,11 @@ async def _ask_agent(
 
     try:
         await bus.publish_inbound(msg)
-        await asyncio.wait_for(_drain_until_final(), timeout=DEFAULT_PER_QA_TIMEOUT_S)
+        # H23 follow-up (2026-06-10): honour the caller's per-QA cap.
+        # This wait used the module constant (90s), so --timeout-s 180
+        # never reached the inner wall — slow-provider days killed
+        # long adversarial turns at 90s with empty answers.
+        await asyncio.wait_for(_drain_until_final(), timeout=timeout_s)
     finally:
         # Stop the loop so it doesn't leak background tasks. Setting
         # _running=False lets the `while self._running` exit on the
