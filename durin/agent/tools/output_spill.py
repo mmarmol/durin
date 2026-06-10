@@ -21,6 +21,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from durin.utils.atomic_write import atomic_write_text
+
 _SPILL_SUBDIR = ".durin/spills"
 
 
@@ -88,7 +90,7 @@ def truncate_with_spill(
     try:
         root.mkdir(parents=True, exist_ok=True)
         spill_path = root / _spill_filename(tool_name, content)
-        spill_path.write_text(content, encoding="utf-8")
+        atomic_write_text(spill_path, content)
     except Exception as e:
         spill_error = str(e)[:80]
         spill_path = None

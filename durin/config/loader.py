@@ -44,6 +44,7 @@ from loguru import logger
 from pydantic import BaseModel
 
 from durin.config.schema import Config
+from durin.utils.atomic_write import atomic_write_text
 
 # Global variable to store current config path (for multi-instance support)
 _current_config_path: Path | None = None
@@ -131,10 +132,7 @@ def _migrate_to_split_layout(monolith_path: Path) -> None:
         if key.startswith("_") or value is None:
             continue
         target = split / f"{key}.json"
-        target.write_text(
-            json.dumps(value, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+        atomic_write_text(target, json.dumps(value, indent=2, ensure_ascii=False))
     # Keep the old config as a backup, just renamed. The user can
     # always `mv config.json.legacy config.json` to revert.
     backup = monolith_path.with_suffix(".json.legacy")
@@ -144,10 +142,7 @@ def _migrate_to_split_layout(monolith_path: Path) -> None:
         except OSError:
             pass
     # Marker file at the canonical path so tooling sees the layout.
-    monolith_path.write_text(
-        json.dumps({"_layout": "split"}, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    atomic_write_text(monolith_path, json.dumps({"_layout": "split"}, indent=2) + "\n")
 
 
 def _read_split_layout(config_path: Path) -> dict[str, Any]:
@@ -183,10 +178,7 @@ def _write_split_layout(data: dict[str, Any], config_path: Path) -> None:
             continue
         target = split / f"{key}.json"
         seen.add(target)
-        target.write_text(
-            json.dumps(data[key], indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
+        atomic_write_text(target, json.dumps(data[key], indent=2, ensure_ascii=False))
     # Remove stale per-topic files (e.g. a field whose value reverted
     # to default). Otherwise their old contents would survive forever.
     for existing in split.iterdir():
@@ -196,10 +188,7 @@ def _write_split_layout(data: dict[str, Any], config_path: Path) -> None:
             except OSError:
                 pass
     # Maintain the marker so `config.json` always returns split-mode info.
-    config_path.write_text(
-        json.dumps({"_layout": "split"}, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    atomic_write_text(config_path, json.dumps({"_layout": "split"}, indent=2) + "\n")
 
 
 def load_config(config_path: Path | None = None) -> Config:
@@ -288,8 +277,7 @@ def save_config(config: Config, config_path: Path | None = None) -> None:
         _write_split_layout(data, path)
         return
 
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    atomic_write_text(path, json.dumps(data, indent=2, ensure_ascii=False))
 
 
 def backup_config(config_path: Path | None = None) -> Path | None:

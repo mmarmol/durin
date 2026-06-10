@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from durin.memory.paths import ingested_entry_dir
+from durin.utils.atomic_write import atomic_write_text
 
 __all__ = ["IngestError", "ingest_artifact"]
 
@@ -73,9 +74,9 @@ def ingest_artifact(workspace: Path, source_path: Path) -> dict[str, Any]:
             "relations": [],
         },
     }
-    meta_path.write_text(
+    atomic_write_text(
+        meta_path,
         json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False),
-        encoding="utf-8",
     )
 
     return {

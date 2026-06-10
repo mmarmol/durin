@@ -99,6 +99,70 @@ class TestBlockAnchorUnit:
         m = _find_block_anchor_matches(content, old)
         assert m == []
 
+    def test_truncated_middle_rejected(self):
+        # Candidate middle is a truncated version of old_text's middle
+        # (the file has enough total lines, but the block lost two calls).
+        # The old metric scored this 1.0 (check_len=min() only compared the
+        # first line); containment scores 0.61 < 0.66 → must NOT match.
+        content = (
+            "import logging\n"
+            "\n"
+            "def setup():\n"
+            "    init_logging()\n"
+            "    return ctx\n"
+            "\n"
+            "def teardown():\n"
+            "    pass\n"
+        )
+        old = (
+            "def setup():\n"
+            "    init_logging()\n"
+            "    connect_db()\n"
+            "    load_config()\n"
+            "    return ctx"
+        )
+        m = _find_block_anchor_matches(content, old)
+        assert m == []
+
+    def test_single_candidate_rewritten_body_rejected(self):
+        # Same anchors, completely rewritten body (containment ~0.34).
+        # Already rejected by the old 0.5 threshold — kept as a regression
+        # guard for the new metric.
+        content = (
+            "def total(items):\n"
+            "    log.info(\"called\")\n"
+            "    raise NotImplementedError\n"
+            "    return result\n"
+        )
+        old = (
+            "def total(items):\n"
+            "    total = sum(items)\n"
+            "    return total / len(items)\n"
+            "    return result"
+        )
+        m = _find_block_anchor_matches(content, old)
+        assert m == []
+
+    def test_single_candidate_inserted_lines_match(self):
+        # Old middle lines all exist verbatim in the candidate; two extra
+        # comment lines were inserted (containment 1.0).
+        content = (
+            "class C:\n"
+            "    def __init__(self):\n"
+            "        # extra comment that\n"
+            "        # the model didn't see\n"
+            "        self.x = 1\n"
+            "    def m(self):\n"
+        )
+        old = (
+            "class C:\n"
+            "    def __init__(self):\n"
+            "        self.x = 1\n"
+            "    def m(self):"
+        )
+        m = _find_block_anchor_matches(content, old)
+        assert len(m) == 1
+
 
 # ---------------------------------------------------------------------------
 # Cascade strategy detection
@@ -265,3 +329,36 @@ class TestEditTelemetry:
         data = edit_events[0]["data"]
         assert data["outcome"] == "ambiguous"
         assert data["matches"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Fuzzy-match transparency (Task 6 — tool-quality-fixes plan)
+# ---------------------------------------------------------------------------
+
+
+class TestFuzzyMatchNotice:
+
+    @pytest.mark.asyncio
+    async def test_fuzzy_strategy_noted_in_message(self, tmp_path: Path):
+        from durin.agent.tools.filesystem import ReadFileTool
+        target = tmp_path / "f.py"
+        target.write_text("    foo()\n    bar()\n", encoding="utf-8")
+        await ReadFileTool(workspace=tmp_path).execute(path="f.py")
+        tool = EditFileTool(workspace=tmp_path)
+        # Unindented old_text only matches via the line_trimmed fallback.
+        result = await tool.execute(
+            path="f.py", old_text="foo()\nbar()", new_text="baz()",
+        )
+        assert "Successfully edited" in result
+        assert "line_trimmed" in result
+
+    @pytest.mark.asyncio
+    async def test_exact_match_has_no_notice(self, tmp_path: Path):
+        from durin.agent.tools.filesystem import ReadFileTool
+        target = tmp_path / "f.py"
+        target.write_text("x = 1\n", encoding="utf-8")
+        await ReadFileTool(workspace=tmp_path).execute(path="f.py")
+        tool = EditFileTool(workspace=tmp_path)
+        result = await tool.execute(path="f.py", old_text="x = 1", new_text="x = 2")
+        assert "Successfully edited" in result
+        assert "fallback" not in result
