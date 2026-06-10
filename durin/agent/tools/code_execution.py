@@ -49,6 +49,7 @@ _ALLOWED_TOOLS = (
     "list_dir",
     "web_search",
     "web_fetch",
+    "memory_search",
 )
 
 # (name, python signature, args-dict expression) for the generated stub.
@@ -70,6 +71,11 @@ _STUB_SPECS: tuple[tuple[str, str, str], ...] = (
      "{'query': query, 'count': count}"),
     ("web_fetch", "url",
      "{'url': url}"),
+    ("memory_search",
+     "query, scope='all', level='warm', keywords=None, limit=10, kinds='all'",
+     "{k: v for k, v in {'query': query, 'scope': scope, 'level': level, "
+     "'keywords': keywords, 'limit': limit, 'kinds': kinds}.items() "
+     "if v is not None}"),
 )
 
 _STUB_HEADER = '''"""durin_tools — RPC stubs for execute_code scripts (generated)."""
@@ -167,13 +173,14 @@ class ExecuteCodeTool(Tool):
             ReadFileTool,
             WriteFileTool,
         )
+        from durin.agent.tools.memory_search import MemorySearchTool
         from durin.agent.tools.search import GrepTool
         from durin.agent.tools.web import WebFetchTool, WebSearchTool
 
         instances: dict[str, Tool] = {}
         for tool_cls in (
             ReadFileTool, WriteFileTool, EditFileTool, ListDirTool,
-            GrepTool, WebFetchTool, WebSearchTool,
+            GrepTool, WebFetchTool, WebSearchTool, MemorySearchTool,
         ):
             try:
                 instance = tool_cls.create(ctx)
@@ -221,7 +228,11 @@ class ExecuteCodeTool(Tool):
         if not code:
             return json.dumps({"status": "error", "error": "Unknown code"})
         started = time.monotonic()
-        call_count = [0]
+        # Per-tool call counts: the primary "how is execute_code actually
+        # used" signal — distinguishes a real batch (many calls across a few
+        # tools) from a trivial 0-1 call script that a direct tool call would
+        # have served better.
+        tool_calls: dict[str, int] = {}
 
         async def handle_client(
             reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
@@ -231,7 +242,7 @@ class ExecuteCodeTool(Tool):
                     line = await reader.readline()
                     if not line:
                         break
-                    response = await self._dispatch(line, call_count)
+                    response = await self._dispatch(line, tool_calls)
                     writer.write(response + b"\n")
                     await writer.drain()
             except (ConnectionResetError, asyncio.IncompleteReadError):
@@ -272,13 +283,14 @@ class ExecuteCodeTool(Tool):
                 await server.wait_closed()
 
         duration = round(time.monotonic() - started, 3)
+        total_calls = sum(tool_calls.values())
         out_text = self._truncate_stdout(stdout.decode("utf-8", errors="replace"))
         err_text = stderr.decode("utf-8", errors="replace")[: self._config.max_stderr_bytes]
 
         result: dict[str, Any] = {
             "status": status,
             "output": out_text,
-            "tool_calls_made": call_count[0],
+            "tool_calls_made": total_calls,
             "duration_seconds": duration,
         }
         if status == "timeout":
@@ -292,14 +304,16 @@ class ExecuteCodeTool(Tool):
                 result["output"] = f"{out_text}\n--- stderr ---\n{err_text}".strip()
         emit_tool_event("tool.execute_code", {
             "status": result["status"],
-            "tool_calls_made": call_count[0],
+            "tool_calls_made": total_calls,
+            "tool_calls": dict(sorted(tool_calls.items())),
+            "code_chars": len(code),
             "duration_ms": round(duration * 1000, 1),
             "stdout_chars": len(out_text),
             "exit_code": proc.returncode,
         })
         return json.dumps(result, ensure_ascii=False)
 
-    async def _dispatch(self, line: bytes, call_count: list[int]) -> bytes:
+    async def _dispatch(self, line: bytes, tool_calls: dict[str, int]) -> bytes:
         """Validate + execute one RPC request; never raises."""
         try:
             request = json.loads(line)
@@ -314,13 +328,13 @@ class ExecuteCodeTool(Tool):
                 "error": f"tool '{tool_name}' is not available in execute_code "
                          f"(allowed: {', '.join(sorted(self._tools))})",
             }).encode()
-        if call_count[0] >= self._config.max_tool_calls:
+        if sum(tool_calls.values()) >= self._config.max_tool_calls:
             return json.dumps({
                 "ok": False,
                 "error": f"Tool call limit reached ({self._config.max_tool_calls}). "
                          "No more tool calls allowed in this execution.",
             }).encode()
-        call_count[0] += 1
+        tool_calls[tool_name] = tool_calls.get(tool_name, 0) + 1
         try:
             result = await self._tools[tool_name].execute(**args)
         except Exception as e:  # noqa: BLE001 — tool errors flow back to the script
