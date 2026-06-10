@@ -99,6 +99,70 @@ class TestBlockAnchorUnit:
         m = _find_block_anchor_matches(content, old)
         assert m == []
 
+    def test_truncated_middle_rejected(self):
+        # Candidate middle is a truncated version of old_text's middle
+        # (the file has enough total lines, but the block lost two calls).
+        # The old metric scored this 1.0 (check_len=min() only compared the
+        # first line); containment scores 0.61 < 0.66 → must NOT match.
+        content = (
+            "import logging\n"
+            "\n"
+            "def setup():\n"
+            "    init_logging()\n"
+            "    return ctx\n"
+            "\n"
+            "def teardown():\n"
+            "    pass\n"
+        )
+        old = (
+            "def setup():\n"
+            "    init_logging()\n"
+            "    connect_db()\n"
+            "    load_config()\n"
+            "    return ctx"
+        )
+        m = _find_block_anchor_matches(content, old)
+        assert m == []
+
+    def test_single_candidate_rewritten_body_rejected(self):
+        # Same anchors, completely rewritten body (containment ~0.34).
+        # Already rejected by the old 0.5 threshold — kept as a regression
+        # guard for the new metric.
+        content = (
+            "def total(items):\n"
+            "    log.info(\"called\")\n"
+            "    raise NotImplementedError\n"
+            "    return result\n"
+        )
+        old = (
+            "def total(items):\n"
+            "    total = sum(items)\n"
+            "    return total / len(items)\n"
+            "    return result"
+        )
+        m = _find_block_anchor_matches(content, old)
+        assert m == []
+
+    def test_single_candidate_inserted_lines_match(self):
+        # Old middle lines all exist verbatim in the candidate; two extra
+        # comment lines were inserted (containment 1.0).
+        content = (
+            "class C:\n"
+            "    def __init__(self):\n"
+            "        # extra comment that\n"
+            "        # the model didn't see\n"
+            "        self.x = 1\n"
+            "    def m(self):\n"
+        )
+        old = (
+            "class C:\n"
+            "    def __init__(self):\n"
+            "        self.x = 1\n"
+            "    def m(self):"
+        )
+        m = _find_block_anchor_matches(content, old)
+        assert len(m) == 1
+
 
 # ---------------------------------------------------------------------------
 # Cascade strategy detection
