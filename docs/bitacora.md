@@ -2116,4 +2116,24 @@ decisions below. **Read before re-proposing any of these.**
   and aren't. And when a threshold misbehaves, suspect the metric before tuning
   the number.
 
-## Last updated: 2026-06-10 (tool-quality phase: tree-sitter discarded, block-anchor metric superseded)
+### `fd`-accelerated list_dir recursive — discarded after verification (2026-06-10)
+
+- **What it was**: applying the grep ripgrep-prefilter pattern to `list_dir`
+  recursive (`os.walk`/`rglob` is slow on big trees) by shelling out to a fast
+  file-lister, `fd`, with a pure-Python fallback.
+- **What was learned**: two blockers found by checking the code + environment.
+  (1) `fd` is not installed (`rg` is — we already depend on it optionally), so the
+  fast path would be untested locally AND on CI (which skips heavy extras) — exactly
+  the "green tests ≠ working feature" trap. (2) `rg --files`, the binary we *do*
+  have, lists only files, unsorted-by-our-rule; `list_dir` recursive must emit files
+  AND directories (trailing `/`), lexicographically sorted. rg can't preserve that
+  contract, and the tests assert it.
+- **Why discarded**: the only viable binary is absent (untestable fast path) and the
+  present one breaks semantics. grep was a clean fit because it only needs
+  *files-with-matches* — rg's native output; list_dir is not. Re-open only if `fd`
+  becomes a declared dependency.
+- **Lesson**: the rg-prefilter win was specific to grep's output shape, not a general
+  "shell out to a faster lister" pattern. Verify the binary is actually present and
+  that its output preserves the tool's contract before generalizing a pattern.
+
+## Last updated: 2026-06-10 (tool-quality phase: tree-sitter + fd-list_dir discarded, block-anchor metric superseded, atomicity extended, execute_code allowlist +memory_search)
