@@ -119,17 +119,20 @@ def todos_ws_blob(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
 
 
 def render_todos_markdown(todos: list[dict[str, str]] | None) -> str:
-    """Render the list as a markdown checklist for user-facing display."""
+    """Render the list as a GFM-valid markdown checklist for user-facing display.
+
+    Only ``[x]``/``[ ]`` are GFM task-list markers — a ``[~]`` in-progress
+    marker renders as literal text, so in_progress items use an unchecked
+    box with the bold activeForm and an hourglass instead.
+    """
     if not todos:
         return "_(no todos)_"
     lines: list[str] = []
     for t in todos:
         if t["status"] == "completed":
-            box = "[x]"
+            lines.append(f"- [x] {t['content']}")
         elif t["status"] == "in_progress":
-            box = "[~]"
+            lines.append(f"- [ ] **{t['activeForm']}** ⏳")
         else:
-            box = "[ ]"
-        text = t["activeForm"] if t["status"] == "in_progress" else t["content"]
-        lines.append(f"- {box} {text}")
+            lines.append(f"- [ ] {t['content']}")
     return "\n".join(lines)
