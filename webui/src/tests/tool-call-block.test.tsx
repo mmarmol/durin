@@ -137,3 +137,20 @@ describe("ToolCallBlock — web sources", () => {
     expect(links[0]).toHaveAttribute("href", "https://example.com/durin");
   });
 });
+
+describe("ToolCallBlock — media tools", () => {
+  it("shows the media path in the interpret_image summary", () => {
+    render(
+      <ToolCallBlock
+        event={{
+          phase: "end",
+          call_id: "ii1",
+          name: "interpret_image",
+          arguments: { image_path: "media/photo.png", question: "what is it?" },
+          result: "A cat.",
+        }}
+      />,
+    );
+    expect(screen.getByText("media/photo.png")).toBeInTheDocument();
+  });
+});

@@ -49,7 +49,7 @@ function argStringList(args: unknown, key: string): string[] {
 function summaryLine(ev: ToolProgressEvent): string {
   const a = ev.arguments;
   for (const key of [
-    "path", "file_path", "filename", "command",
+    "path", "file_path", "filename", "image_path", "audio_path", "command",
     "url", "query", "pattern", "question", "name",
     "uri", "ref", "goal", "action", "source",
   ]) {
