@@ -29,7 +29,6 @@ from pathlib import Path
 from typing import Any
 
 from loguru import logger
-from pydantic import Field
 
 from durin.agent.tools._telemetry import emit_tool_event
 from durin.agent.tools.base import Tool, tool_parameters

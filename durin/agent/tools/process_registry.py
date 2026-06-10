@@ -26,8 +26,6 @@ from dataclasses import dataclass, field
 
 from loguru import logger
 
-from pydantic import Field
-
 from durin.agent.tools._telemetry import emit_tool_event
 from durin.config.schema import Base
 
