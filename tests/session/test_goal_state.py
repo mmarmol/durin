@@ -129,3 +129,25 @@ def test_runner_wall_llm_timeout_reads_session_when_metadata_missing(tmp_path):
     assert runner_wall_llm_timeout_s(sm, "c:d") == 0.0
     sess.metadata = {}
     assert runner_wall_llm_timeout_s(sm, "c:d") is None
+
+
+def test_ws_blob_includes_mode_and_pending_question():
+    """Non-default agent mode and a pending ask_user question ride the
+    goal_state frame so the webui can render badges/strips."""
+    meta = {
+        "agent_mode": "plan",
+        "pending_question": {
+            "question_id": "q", "question": "Color?", "options": ["red"],
+        },
+    }
+    blob = goal_state_ws_blob(meta)
+    assert blob["mode"] == "plan"
+    assert blob["pending_question"] == {"question": "Color?", "options": ["red"]}
+
+
+def test_ws_blob_defaults_omit_mode_and_question():
+    blob = goal_state_ws_blob({})
+    assert "pending_question" not in blob
+    assert "mode" not in blob
+    # Default mode is omitted to keep the frame small.
+    assert "mode" not in goal_state_ws_blob({"agent_mode": "build"})
