@@ -306,7 +306,9 @@
           }
         }
       },
-      "goalStateCloseAria": "目標を閉じる"
+      "goalStateCloseAria": "目標を閉じる",
+      "planMode": "プランモード（読み取り専用）",
+      "awaitingAnswer": "回答待ち"
     },
     "scrollToBottom": "一番下へスクロール"
   },

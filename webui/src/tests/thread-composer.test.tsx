@@ -229,3 +229,30 @@ describe("ThreadComposer", () => {
     expect(screen.queryByRole("button", { name: "Send message" })).not.toBeInTheDocument();
   });
 });
+
+describe("ThreadComposer — agent mode + pending question strip", () => {
+  it("shows a plan-mode badge from goalState.mode", () => {
+    render(
+      <ThreadComposer
+        onSend={vi.fn()}
+        placeholder="Type your message..."
+        goalState={{ active: false, mode: "plan" }}
+      />,
+    );
+    expect(screen.getByText(/plan/i)).toBeInTheDocument();
+  });
+
+  it("shows the pending question while the agent awaits an answer", () => {
+    render(
+      <ThreadComposer
+        onSend={vi.fn()}
+        placeholder="Type your message..."
+        goalState={{
+          active: false,
+          pending_question: { question: "Which color do you prefer?", options: [] },
+        }}
+      />,
+    );
+    expect(screen.getByText(/Which color do you prefer\?/)).toBeInTheDocument();
+  });
+});

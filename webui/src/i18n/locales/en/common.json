@@ -642,7 +642,9 @@
         "decode_failed": "Couldn't decode this image",
         "too_large": "Image is too large — try a smaller one",
         "io": "Couldn't read this file"
-      }
+      },
+      "planMode": "Plan mode (read-only)",
+      "awaitingAnswer": "Waiting for your answer"
     },
     "scrollToBottom": "Scroll to bottom"
   },

@@ -326,7 +326,9 @@
         "too_large": "图片太大，请换一张小一点的",
         "io": "无法读取该文件"
       },
-      "goalStateCloseAria": "关闭目标"
+      "goalStateCloseAria": "关闭目标",
+      "planMode": "计划模式（只读）",
+      "awaitingAnswer": "等待您的回答"
     },
     "scrollToBottom": "滚动到底部"
   },

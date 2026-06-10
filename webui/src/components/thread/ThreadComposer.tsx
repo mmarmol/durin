@@ -171,7 +171,13 @@ function RunElapsedStrip({
   const showTimer = startedAt != null;
   const stripLabel = goalStateStripPreview(goalState, t);
   const showGoal = !!stripLabel?.trim();
-  if (!showTimer && !showGoal) return null;
+  // Non-default agent mode (plan = read-only) and a pending ask_user
+  // question ride the same goal_state frame (durin/session/goal_state.py).
+  const mode = goalState?.mode?.trim() ?? "";
+  const showMode = mode.length > 0;
+  const pendingQuestion = goalState?.pending_question?.question?.trim() ?? "";
+  const showPendingQuestion = pendingQuestion.length > 0;
+  if (!showTimer && !showGoal && !showMode && !showPendingQuestion) return null;
 
   const objectiveFull = goalState?.objective?.trim() ?? "";
   const summaryFull = goalState?.ui_summary?.trim() ?? "";
@@ -304,6 +310,16 @@ function RunElapsedStrip({
           <Target className="h-4 w-4 shrink-0 text-primary/75" aria-hidden />
         )}
         <span className="flex min-w-0 flex-1 items-center gap-1.5 text-[12px] font-medium text-foreground/75">
+          {showMode ? (
+            <span
+              className={cn(
+                "inline-flex shrink-0 items-center gap-1 rounded-full border border-primary/30",
+                "bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary",
+              )}
+            >
+              📐 {mode === "plan" ? t("thread.composer.planMode") : mode}
+            </span>
+          ) : null}
           {timerTitle ? <span className="shrink-0">{timerTitle}</span> : null}
           {timerTitle && showGoal ? (
             <span className="shrink-0 text-muted-foreground/45" aria-hidden>
@@ -313,6 +329,14 @@ function RunElapsedStrip({
           {showGoal ? (
             <span className="truncate">
               {t("thread.composer.goalStateStrip", { label: stripLabel })}
+            </span>
+          ) : null}
+          {showPendingQuestion ? (
+            <span className="truncate text-foreground/85">
+              ❓ {t("thread.composer.awaitingAnswer")} ·{" "}
+              {pendingQuestion.length > 80
+                ? `${pendingQuestion.slice(0, 80)}…`
+                : pendingQuestion}
             </span>
           ) : null}
         </span>
@@ -710,7 +734,10 @@ export function ThreadComposer({
             ))}
           </div>
         ) : null}
-        {runStartedAt != null || goalState?.active ? (
+        {runStartedAt != null
+        || goalState?.active
+        || goalState?.mode
+        || goalState?.pending_question ? (
           <RunElapsedStrip startedAt={runStartedAt} goalState={goalState} />
         ) : null}
         <textarea

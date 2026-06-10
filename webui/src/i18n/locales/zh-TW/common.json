@@ -306,7 +306,9 @@
           }
         }
       },
-      "goalStateCloseAria": "關閉目標"
+      "goalStateCloseAria": "關閉目標",
+      "planMode": "計畫模式（唯讀）",
+      "awaitingAnswer": "等待您的回答"
     },
     "scrollToBottom": "捲動到底部"
   },

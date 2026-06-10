@@ -306,7 +306,9 @@
           }
         }
       },
-      "goalStateCloseAria": "Đóng mục tiêu"
+      "goalStateCloseAria": "Đóng mục tiêu",
+      "planMode": "Chế độ kế hoạch (chỉ đọc)",
+      "awaitingAnswer": "Đang chờ câu trả lời của bạn"
     },
     "scrollToBottom": "Cuộn xuống cuối"
   },
