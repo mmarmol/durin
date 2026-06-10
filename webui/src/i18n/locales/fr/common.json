@@ -327,7 +327,18 @@
     "agentActivityLiveSummary": "En cours… · {{reasoning}} étapes · {{tools}} appels d’outils",
     "agentActivityLiveToolsOnly": "En cours… · {{tools}} appels d’outils",
     "imageAttachment": "Pièce jointe image",
-    "turnLatencyTitle": "Temps de réponse (de bout en bout)"
+    "turnLatencyTitle": "Temps de réponse (de bout en bout)",
+    "askUser": {
+      "answered": "Répondu ci-dessous"
+    },
+    "todos": {
+      "title": "Liste de tâches"
+    },
+    "plan": {
+      "title": "Plan proposé",
+      "approve": "Approuver (/build)",
+      "hint": "ou répondez avec vos retours pour l'affiner"
+    }
   },
   "lightbox": {
     "title": "Aperçu de l’image",

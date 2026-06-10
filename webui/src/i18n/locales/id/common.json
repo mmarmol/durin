@@ -304,8 +304,15 @@
         "judgeModel": "Nama model untuk juri. Kosong menggunakan model memori default.",
         "tokenSecret": "Secret durin yang menyimpan token GitHub Anda. 'Tidak ada' = permintaan anonim (batas rate lebih rendah, tanpa repo privat)."
       },
-      "severity": { "caution": "Hati-hati (konfirmasi)", "dangerous": "Berbahaya (blokir)" },
-      "trigger": { "off": "Mati (hanya sesuai permintaan)", "uncertain": "Saat tidak pasti (penentu seri)", "always": "Selalu" },
+      "severity": {
+        "caution": "Hati-hati (konfirmasi)",
+        "dangerous": "Berbahaya (blokir)"
+      },
+      "trigger": {
+        "off": "Mati (hanya sesuai permintaan)",
+        "uncertain": "Saat tidak pasti (penentu seri)",
+        "always": "Selalu"
+      },
       "trustDescription": "Skill aman dari sumber tepercaya terpasang tanpa konfirmasi. Pola mencocokkan sumber berdasarkan awalan — mis. github:acme/, https://gitlab.com/acme/.",
       "noPatterns": "Belum ada pola tepercaya.",
       "patternPlaceholder": "github:owner/ atau https://host/path/",
@@ -582,7 +589,8 @@
     "askUser": {
       "placeholder": "Ketik jawabanmu, atau pilih opsi untuk mengedit",
       "send": "Kirim",
-      "sent": "Jawaban terkirim"
+      "sent": "Jawaban terkirim",
+      "answered": "Dijawab di bawah"
     },
     "copiedReply": "Balasan disalin",
     "copyReply": "Salin balasan",
@@ -593,6 +601,14 @@
       "save": "Simpan",
       "saving": "Menyimpan…",
       "stored": "Tersimpan — nilainya tidak pernah mencapai model"
+    },
+    "todos": {
+      "title": "Daftar tugas"
+    },
+    "plan": {
+      "title": "Rencana yang diusulkan",
+      "approve": "Setujui (/build)",
+      "hint": "atau balas dengan masukan untuk menyempurnakannya"
     }
   },
   "lightbox": {

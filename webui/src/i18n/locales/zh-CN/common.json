@@ -349,7 +349,18 @@
     "imageAttachment": "图片附件",
     "copyReply": "复制回复",
     "copiedReply": "已复制回复",
-    "turnLatencyTitle": "本轮耗时（端到端）"
+    "turnLatencyTitle": "本轮耗时（端到端）",
+    "askUser": {
+      "answered": "已在下方回答"
+    },
+    "todos": {
+      "title": "任务列表"
+    },
+    "plan": {
+      "title": "拟议计划",
+      "approve": "批准 (/build)",
+      "hint": "或回复反馈以完善计划"
+    }
   },
   "lightbox": {
     "title": "图片预览",

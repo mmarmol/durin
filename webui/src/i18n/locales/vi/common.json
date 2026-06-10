@@ -327,7 +327,18 @@
     "agentActivityLiveSummary": "Đang chạy… · {{reasoning}} bước · {{tools}} lần gọi công cụ",
     "agentActivityLiveToolsOnly": "Đang chạy… · {{tools}} lần gọi công cụ",
     "imageAttachment": "Tệp hình ảnh đính kèm",
-    "turnLatencyTitle": "Thời gian phản hồi (end-to-end)"
+    "turnLatencyTitle": "Thời gian phản hồi (end-to-end)",
+    "askUser": {
+      "answered": "Đã trả lời bên dưới"
+    },
+    "todos": {
+      "title": "Danh sách việc"
+    },
+    "plan": {
+      "title": "Kế hoạch đề xuất",
+      "approve": "Phê duyệt (/build)",
+      "hint": "hoặc trả lời kèm góp ý để tinh chỉnh"
+    }
   },
   "lightbox": {
     "title": "Xem trước ảnh",
