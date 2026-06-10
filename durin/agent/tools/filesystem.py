@@ -985,6 +985,11 @@ class EditFileTool(_FsTool):
                 "new_text_chars": len(new_text),
             })
             msg = f"Successfully edited {fp}"
+            if strategy and strategy != "exact":
+                msg += (
+                    f"\n(note: old_text matched via the '{strategy}' fallback, "
+                    "not exactly — re-read the file if the result looks unexpected)"
+                )
             if warning:
                 msg = f"{warning}\n{msg}"
             return msg
