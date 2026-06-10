@@ -174,11 +174,11 @@ class AskUserQuestionTool(Tool, ContextAware):
             for opt in cleaned_options:
                 body += f"  - {opt}\n"
         body += (
-            "\nYIELD TO USER. Present this exact question as your next "
-            "assistant message (you may add 1-2 lines of context, but "
-            "the question itself must be visible). Then STOP — do not "
-            "call more tools, do not start executing anything. The "
-            "user's next message is their answer; you will resume in "
+            "\nThe question has been presented to the user by the channel "
+            "(interactive panel or message) — do not repeat it verbatim in "
+            "your reply. STOP now: do not call more tools, do not start "
+            "executing anything. You may add one short line of context. "
+            "The user's next message is their answer; you will resume in "
             "the following turn with that answer in context."
         )
         return body
