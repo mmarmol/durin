@@ -19,7 +19,6 @@ subprocess env, Phase 2) and the agent ``need_secret`` flow (Phase 3).
 from __future__ import annotations
 
 import json
-import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
