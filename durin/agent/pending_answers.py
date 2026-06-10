@@ -28,11 +28,16 @@ _WAITERS: dict[str, asyncio.Future] = {}
 
 
 def create(session_key: str) -> asyncio.Future:
-    """Register a fresh waiter for *session_key*, replacing any stale one."""
+    """Register a fresh waiter for *session_key*, replacing any stale one.
+
+    Must be called from a coroutine: the future binds to the RUNNING loop
+    (``get_event_loop`` could return a stale policy loop under test
+    harnesses, making ``await`` hang forever).
+    """
     stale = _WAITERS.pop(session_key, None)
     if stale is not None and not stale.done():
         stale.cancel()
-    fut: asyncio.Future = asyncio.get_event_loop().create_future()
+    fut: asyncio.Future = asyncio.get_running_loop().create_future()
     _WAITERS[session_key] = fut
     return fut
 

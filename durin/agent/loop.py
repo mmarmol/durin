@@ -888,6 +888,28 @@ class AgentLoop:
 
         return _on_retry_wait
 
+    def _maybe_resolve_pending_answer(self, msg: InboundMessage, session_key: str) -> bool:
+        """Divert an inbound message to a blocked ask_user waiter.
+
+        Returns True when the message was consumed as the in-turn answer.
+        Slash commands are never consumed. A media-bearing reply cannot be
+        carried through a tool result — the waiter falls back to yield
+        semantics and the message continues through normal routing.
+        """
+        from durin.agent import pending_answers
+
+        if not pending_answers.is_waiting(session_key):
+            return False
+        text = (msg.content or "").strip()
+        if text.startswith("/"):
+            return False
+        if msg.media:
+            pending_answers.fallback(session_key)
+            return False
+        if not text:
+            return False
+        return pending_answers.resolve(session_key, text)
+
     async def _maybe_publish_interaction_fallback(
         self, *, channel: str, chat_id: str, session_key: str
     ) -> None:
@@ -1257,6 +1279,12 @@ class AgentLoop:
                 )
                 continue
             effective_key = self._effective_session_key(msg)
+            # Blocking ask_user (V2): a turn may be paused awaiting the
+            # user's answer. A plain-text reply resolves the in-turn waiter
+            # and is consumed here; anything else (commands, media) tells
+            # the waiter to fall back to yield semantics and routes on.
+            if self._maybe_resolve_pending_answer(msg, effective_key):
+                continue
             # If this session already has an active pending queue (i.e. a task
             # is processing this session), route the message there for mid-turn
             # injection instead of creating a competing task.
