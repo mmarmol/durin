@@ -218,6 +218,24 @@ class ContextCompositionEvent(TypedDict):
     estimated_total: int
 
 
+class TurnMemoryUsageEvent(TypedDict):
+    """Per-turn rollup of memory-recall tool activity, emitted once per
+    turn at save time (``AgentLoop._state_save``).
+
+    Gives turn-level denominators for silent-miss and prefetch
+    substitution analysis without reconstructing turn boundaries from
+    the raw event stream: a turn that answered without consulting
+    memory shows ``search_calls == 0``. Emitted on every turn,
+    including turns with zero tool calls — those rows ARE the signal.
+    """
+
+    search_calls: int          # memory_search invocations this turn
+    drill_calls: int           # memory_drill invocations this turn
+    tool_calls_total: int      # all tool calls this turn (denominator)
+    iteration: NotRequired[int]
+    session_key: NotRequired[str | None]
+
+
 # ===========================================================================
 # Agent mode (Sprint B / L3)
 # ===========================================================================
@@ -1116,6 +1134,7 @@ EVENTS: dict[str, type] = {
     # Cache / context engineering
     "cache.usage": CacheUsageEvent,
     "context.composition": ContextCompositionEvent,
+    "turn.memory_usage": TurnMemoryUsageEvent,
     "history_media.pruned": HistoryMediaPrunedEvent,
     # Agent mode (Sprint B / L3)
     "agent_mode.turn_start": AgentModeTurnStartEvent,

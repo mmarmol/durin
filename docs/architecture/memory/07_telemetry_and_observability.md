@@ -71,6 +71,7 @@ The `event` name is the catalog key. Payload schemas are declared in the `EVENTS
 | Embedding | `memory.embedding.*` | Model load (`.load`) + per-embed timing (`.embed`) from `FastembedProvider` | Provider performance + eviction signals |
 | Hot layer | `memory.hot_layer.failure` | When the hot-layer renderer fails to assemble a context block (read error, parse error) | Context-assembly resilience signal |
 | Health | `memory.health_check`, `memory.health.critical` | Every health-check tick (A11) + 3-strike escalation (A7) | Subsystem availability monitoring |
+| Turn rollup | `turn.memory_usage` | Once per turn at save time (`AgentLoop._state_save`), including turns with zero tool calls | Turn-level denominators for silent-miss and prefetch-substitution analysis (`search_calls == 0` rows are the signal) |
 
 Audit B10 (2026-05-28) added the `Embedding`, `Hot layer`, and `Health` rows — these events are emitted by the code but the original §3 table omitted them. The TypedDicts live in `durin/telemetry/schema.py`.
 
