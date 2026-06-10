@@ -226,6 +226,8 @@ flowchart LR
 
 `Consolidator.maybe_consolidate_by_tokens` (in `durin/agent/memory.py`) advances a cursor (`last_consolidated`) when the prompt exceeds budget — generates a narrative summary, persists to `history.jsonl`, writes to `.meta.json::derived._last_summary`, advances the cursor. **The raw `session.messages` list is never modified in-place** — only the cursor advances. The LLM sees `messages[last_consolidated:]` (capped by `max_messages`) + the summary.
 
+The session summary additionally carries a `Memory refs cited in this span` line (P5, 2026-06-10): refs surfaced by `memory_search`/`memory_drill` in the evicted turns, extracted mechanically from the tool results' section markers (`extract_cited_memory_refs`) and appended after the LLM output — the summarizer can't drop or hallucinate them. Pointers only; the model re-drills for bodies. `history.jsonl` (dream input) stays untouched.
+
 `SessionManager._DERIVED_METADATA_KEYS` is the canonical set of `session.metadata` keys that route to the sidecar's `derived` block instead of line-0.
 
 **In-memory per-turn shaping** (does not touch disk):
