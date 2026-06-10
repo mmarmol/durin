@@ -652,9 +652,10 @@ def _find_block_anchor_matches(content: str, old_text: str) -> list[_MatchSpan]:
     when ``old_text`` has 3+ lines — needs anchors top and bottom plus at
     least one middle line. Useful when the model knows the start and end of
     a block but the interior has changed slightly (reformatted, comment added,
-    whitespace shifted). When a single candidate exists we use a relaxed
-    similarity threshold; with multiple candidates we require stricter match
-    to avoid ambiguous rewrites.
+    whitespace shifted). Middle similarity is best-match containment of the
+    old lines in the candidate block (insertion-tolerant, truncation-
+    rejecting); thresholds are 0.66 for a single candidate and 0.85 when
+    several blocks share anchors.
     """
     old_lines = old_text.splitlines()
     if old_lines and old_lines[-1] == "":
@@ -692,26 +693,33 @@ def _find_block_anchor_matches(content: str, old_text: str) -> list[_MatchSpan]:
     if not candidates:
         return []
 
-    # Single candidate: relaxed (0.5). Multiple: strict (0.85). Avoids
-    # ambiguous rewrites when the file has many similar-looking blocks.
-    threshold = 0.5 if len(candidates) == 1 else 0.85
+    # Similarity = containment of old middle lines in the candidate middle:
+    # each old line scored against its BEST match among the candidate's
+    # middle lines (not index-aligned, so inserted lines — the strategy's
+    # whole purpose — don't misalign the comparison), averaged over ALL old
+    # lines (so a truncated candidate can't score on a lucky prefix the way
+    # check_len=min() allowed). Calibration on the suite's cases: insertions
+    # 1.0, rephrased comment 0.83, truncated middle 0.61, unrelated middle
+    # 0.44, rewritten body 0.34. Single candidate: 0.66. Multiple: 0.85.
+    threshold = 0.66 if len(candidates) == 1 else 0.85
     middle_old = [line.strip() for line in old_lines[1:-1]]
 
     matches: list[_MatchSpan] = []
     for start_line, end_line in candidates:
         middle_actual = [content_lines[k].strip() for k in range(start_line + 1, end_line)]
         if middle_old:
-            check_len = min(len(middle_old), len(middle_actual))
-            if check_len == 0:
+            if not middle_actual:
                 continue
             sim_sum = 0.0
-            for k in range(check_len):
-                a, b = middle_old[k], middle_actual[k]
-                if not a and not b:
+            for a in middle_old:
+                if not a:
                     sim_sum += 1.0
                     continue
-                sim_sum += difflib.SequenceMatcher(None, a, b).ratio()
-            similarity = sim_sum / check_len
+                sim_sum += max(
+                    difflib.SequenceMatcher(None, a, b).ratio()
+                    for b in middle_actual
+                )
+            similarity = sim_sum / len(middle_old)
         else:
             similarity = 1.0
 
