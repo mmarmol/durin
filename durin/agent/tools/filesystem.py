@@ -18,6 +18,7 @@ from durin.agent.tools.schema import (
     tool_parameters_schema,
 )
 from durin.telemetry.logger import current_telemetry
+from durin.utils.atomic_write import atomic_write_bytes, atomic_write_text
 from durin.utils.helpers import build_image_content_blocks, detect_image_mime
 
 
@@ -441,8 +442,7 @@ class WriteFileTool(_FsTool):
             if content is None:
                 raise ValueError("Unknown content")
             fp = self._resolve(path)
-            fp.parent.mkdir(parents=True, exist_ok=True)
-            fp.write_text(content, encoding="utf-8")
+            atomic_write_text(fp, content)
             self._file_states.record_write(fp)
             return f"Successfully wrote {len(content)} characters to {fp}"
         except PermissionError as e:
@@ -880,8 +880,7 @@ class EditFileTool(_FsTool):
             # Create-file semantics: old_text='' + file doesn't exist → create
             if not fp.exists():
                 if old_text == "":
-                    fp.parent.mkdir(parents=True, exist_ok=True)
-                    fp.write_text(new_text, encoding="utf-8")
+                    atomic_write_text(fp, new_text)
                     self._file_states.record_write(fp)
                     return f"Successfully created {fp}"
                 return self._file_not_found_msg(path, fp)
@@ -900,7 +899,7 @@ class EditFileTool(_FsTool):
                 content = raw.decode("utf-8")
                 if content.strip():
                     return f"Error: Cannot create file — {path} already exists and is not empty."
-                fp.write_text(new_text, encoding="utf-8")
+                atomic_write_text(fp, new_text)
                 self._file_states.record_write(fp)
                 return f"Successfully edited {fp}"
 
@@ -965,7 +964,7 @@ class EditFileTool(_FsTool):
             if uses_crlf:
                 new_content = new_content.replace("\n", "\r\n")
 
-            fp.write_bytes(new_content.encode("utf-8"))
+            atomic_write_bytes(fp, new_content.encode("utf-8"))
             self._file_states.record_write(fp)
             self._emit("tool.edit_file", {
                 "path": self._display_path(fp),

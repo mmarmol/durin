@@ -407,3 +407,30 @@ class TestWorkspaceRestriction:
         assert "Error" in result
         assert "outside" in result.lower()
         assert skill_file.read_text() == "# Weather\nOriginal content."
+
+
+# ---------------------------------------------------------------------------
+# Atomic writes (Task 2 — tool-quality-fixes plan)
+# ---------------------------------------------------------------------------
+
+class TestAtomicToolWrites:
+
+    @pytest.mark.asyncio
+    async def test_write_file_leaves_no_tmp(self, tmp_path):
+        from durin.agent.tools.filesystem import WriteFileTool
+        tool = WriteFileTool(workspace=tmp_path)
+        result = await tool.execute(path="out.txt", content="hello")
+        assert "Successfully wrote" in result
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["out.txt"]
+
+    @pytest.mark.asyncio
+    async def test_edit_file_leaves_no_tmp(self, tmp_path):
+        from durin.agent.tools.filesystem import EditFileTool, ReadFileTool
+        f = tmp_path / "code.py"
+        f.write_text("x = 1\n", encoding="utf-8")
+        await ReadFileTool(workspace=tmp_path).execute(path="code.py")
+        tool = EditFileTool(workspace=tmp_path)
+        result = await tool.execute(path="code.py", old_text="x = 1", new_text="x = 2")
+        assert "Successfully edited" in result
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["code.py"]
+        assert f.read_text(encoding="utf-8") == "x = 2\n"
