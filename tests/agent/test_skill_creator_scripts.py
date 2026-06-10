@@ -125,3 +125,145 @@ def test_package_skill_rejects_symlink(tmp_path: Path) -> None:
 
     assert archive_path is None
     assert not (tmp_path / "dist" / "symlink-skill.skill").exists()
+
+
+def _write_skill(skill_dir: Path, name: str, body: str = "# Skill\n", description: str = "Valid description") -> None:
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: {description}\n---\n{body}",
+        encoding="utf-8",
+    )
+
+
+def test_validate_skill_reports_all_errors_not_just_first(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "multi-error-skill"
+    _write_skill(skill_dir, "multi-error-skill", description='"[TODO: fill me in]"')
+    (skill_dir / "README.md").write_text("extra\n", encoding="utf-8")
+
+    valid, message = quick_validate.validate_skill(skill_dir)
+
+    assert not valid
+    assert "TODO placeholder" in message
+    assert "Unexpected file or directory in skill root" in message
+
+
+def test_validate_skill_rejects_broken_resource_link(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "broken-link-skill"
+    _write_skill(
+        skill_dir,
+        "broken-link-skill",
+        body="# Skill\n\nSee [the rubric](references/missing.md) for details.\n",
+    )
+
+    valid, message = quick_validate.validate_skill(skill_dir)
+
+    assert not valid
+    assert "Linked resource does not exist: references/missing.md" in message
+
+
+def test_validate_skill_accepts_resolved_link_and_ignores_inline_code(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "good-link-skill"
+    _write_skill(
+        skill_dir,
+        "good-link-skill",
+        body=(
+            "# Skill\n\nSee [the rubric](references/rubric.md).\n"
+            "Illustrative only: `references/imaginary.md` and `scripts/rotate_pdf.py`.\n"
+        ),
+    )
+    refs = skill_dir / "references"
+    refs.mkdir()
+    (refs / "rubric.md").write_text("# Rubric\n", encoding="utf-8")
+
+    valid, message = quick_validate.validate_skill(skill_dir)
+
+    assert valid, message
+
+
+def test_validate_skill_warns_on_orphan_reference(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "orphan-skill"
+    _write_skill(skill_dir, "orphan-skill")
+    refs = skill_dir / "references"
+    refs.mkdir()
+    (refs / "lonely.md").write_text("# Never cited\n", encoding="utf-8")
+
+    valid, message = quick_validate.validate_skill(skill_dir)
+
+    assert valid  # warning, not error
+    assert "WARNING: Resource never mentioned in SKILL.md: references/lonely.md" in message
+
+
+def test_validate_skill_mention_in_code_block_counts(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "mentioned-skill"
+    _write_skill(
+        skill_dir,
+        "mentioned-skill",
+        body="# Skill\n\nRun:\n```bash\npython scripts/helper.py --quiet\n```\n",
+    )
+    scripts = skill_dir / "scripts"
+    scripts.mkdir()
+    (scripts / "helper.py").write_text("print('ok')\n", encoding="utf-8")
+
+    valid, message = quick_validate.validate_skill(skill_dir)
+
+    assert valid, message
+    assert "WARNING" not in message
+
+
+def test_validate_skill_rejects_python_syntax_error(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "bad-script-skill"
+    _write_skill(
+        skill_dir,
+        "bad-script-skill",
+        body="# Skill\n\nUses scripts/broken.py for processing.\n",
+    )
+    scripts = skill_dir / "scripts"
+    scripts.mkdir()
+    (scripts / "broken.py").write_text("def oops(:\n", encoding="utf-8")
+
+    valid, message = quick_validate.validate_skill(skill_dir)
+
+    assert not valid
+    assert "Script has syntax errors: broken.py" in message
+
+
+def test_validate_skill_never_executes_scripts(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "sentinel-skill"
+    _write_skill(
+        skill_dir,
+        "sentinel-skill",
+        body="# Skill\n\nUses scripts/sentinel.py for processing.\n",
+    )
+    scripts = skill_dir / "scripts"
+    scripts.mkdir()
+    sentinel = tmp_path / "executed.flag"
+    (scripts / "sentinel.py").write_text(
+        f"from pathlib import Path\nPath({str(sentinel)!r}).write_text('ran')\n",
+        encoding="utf-8",
+    )
+
+    valid, message = quick_validate.validate_skill(skill_dir)
+
+    assert valid, message
+    assert not sentinel.exists(), "validator must never execute skill scripts"
+
+
+def test_validate_skill_warns_on_oversized_skill_md(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "oversized-skill"
+    long_body = "# Skill\n" + ("filler line\n" * 520)
+    _write_skill(skill_dir, "oversized-skill", body=long_body)
+
+    valid, message = quick_validate.validate_skill(skill_dir)
+
+    assert valid  # warning, not error
+    assert "WARNING: SKILL.md is" in message
+    assert "500" in message
+
+
+def test_init_skill_template_has_rubric_stubs_and_no_codex(tmp_path: Path) -> None:
+    skill_dir = init_skill.init_skill("stub-skill", tmp_path, [], include_examples=False)
+
+    content = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+    assert "## Common Pitfalls" in content
+    assert "## Verification Checklist" in content
+    assert "Codex" not in content

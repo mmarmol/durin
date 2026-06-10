@@ -88,10 +88,32 @@ Because durin shares the standard, importing is "copy the directory + stamp our 
 Everything else already works because the format is shared. The full import command is the
 §6.B plan (separate).
 
+## Creation-time validation (skill-creator)
+
+The bundled skill-creator skill ships `scripts/quick_validate.py`, the mechanical
+source of truth for authored-skill quality (the prose rubric lives next to it in
+`durin/skills/skill-creator/references/skill-rubric.md`; it is written to be reusable
+by curation judges — phase 3 of the 2026-06-10 redesign, not yet wired). The validator
+reports **all** issues in one pass, split by level: ERROR fails validation (exit 1),
+WARNING reports without failing (exit 0).
+
+| Check | Level |
+|---|---|
+| Frontmatter shape, key allowlist, name/description constraints, `always` type | ERROR |
+| Root directory allowlist (only SKILL.md, `scripts/`, `references/`, `assets/`) | ERROR |
+| Markdown links into `references/`/`scripts/`/`assets/` must resolve (inline-code paths are illustrative by convention, not checked) | ERROR |
+| Script syntax — `compile()` for `.py`, `bash -n` for `.sh`; scripts are **never executed** by the validator | ERROR |
+| `references/`/`scripts/` files never mentioned in the SKILL.md body (undiscoverable) | WARNING |
+| SKILL.md over 500 lines | WARNING |
+
+This is creation-time tooling: the runtime loader still performs no validation
+(see below).
+
 ## What durin deliberately does NOT do (yet)
 
 - Enforce `allowed-tools` / `compatibility` (advisory, preserved).
 - Honor another vendor's conditional-activation (`metadata.hermes.requires_toolsets`, etc.) —
   durin gates on its own `metadata.durin.requires` + the standard `platforms`.
-- Validate/lint authored skills against the agentskills.io name/description constraints
-  (a future export-quality check).
+- Validate/lint skills at load time against the agentskills.io constraints — creation-time
+  validation exists in the skill-creator (`quick_validate.py`, above), but the loader
+  accepts what it finds (a future export-quality check).
