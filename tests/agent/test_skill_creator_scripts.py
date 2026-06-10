@@ -125,3 +125,23 @@ def test_package_skill_rejects_symlink(tmp_path: Path) -> None:
 
     assert archive_path is None
     assert not (tmp_path / "dist" / "symlink-skill.skill").exists()
+
+
+def _write_skill(skill_dir: Path, name: str, body: str = "# Skill\n", description: str = "Valid description") -> None:
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: {description}\n---\n{body}",
+        encoding="utf-8",
+    )
+
+
+def test_validate_skill_reports_all_errors_not_just_first(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "multi-error-skill"
+    _write_skill(skill_dir, "multi-error-skill", description='"[TODO: fill me in]"')
+    (skill_dir / "README.md").write_text("extra\n", encoding="utf-8")
+
+    valid, message = quick_validate.validate_skill(skill_dir)
+
+    assert not valid
+    assert "TODO placeholder" in message
+    assert "Unexpected file or directory in skill root" in message

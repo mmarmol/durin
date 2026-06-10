@@ -130,8 +130,14 @@ def _validate_description(description: str) -> Optional[str]:
 
 
 def validate_skill(skill_path):
-    """Validate a skill folder structure and required frontmatter."""
+    """Validate a skill folder. Returns (valid, message).
+
+    valid is False when any ERROR-level issue exists. WARNING-level issues
+    are reported in the message but do not fail validation.
+    """
     skill_path = Path(skill_path).resolve()
+    errors: list[str] = []
+    warnings: list[str] = []
 
     if not skill_path.exists():
         return False, f"Skill folder not found: {skill_path}"
@@ -155,37 +161,40 @@ def validate_skill(skill_path):
     if error:
         return False, error
 
+    # From here on, collect every issue instead of returning at the first.
     unexpected_keys = sorted(set(frontmatter.keys()) - ALLOWED_FRONTMATTER_KEYS)
     if unexpected_keys:
         allowed = ", ".join(sorted(ALLOWED_FRONTMATTER_KEYS))
         unexpected = ", ".join(unexpected_keys)
-        return (
-            False,
-            f"Unexpected key(s) in SKILL.md frontmatter: {unexpected}. Allowed properties are: {allowed}",
+        errors.append(
+            f"Unexpected key(s) in SKILL.md frontmatter: {unexpected}. Allowed properties are: {allowed}"
         )
 
     if "name" not in frontmatter:
-        return False, "Missing 'name' in frontmatter"
+        errors.append("Missing 'name' in frontmatter")
+    else:
+        name = frontmatter["name"]
+        if not isinstance(name, str):
+            errors.append(f"Name must be a string, got {type(name).__name__}")
+        else:
+            name_error = _validate_skill_name(name.strip(), skill_path.name)
+            if name_error:
+                errors.append(name_error)
+
     if "description" not in frontmatter:
-        return False, "Missing 'description' in frontmatter"
-
-    name = frontmatter["name"]
-    if not isinstance(name, str):
-        return False, f"Name must be a string, got {type(name).__name__}"
-    name_error = _validate_skill_name(name.strip(), skill_path.name)
-    if name_error:
-        return False, name_error
-
-    description = frontmatter["description"]
-    if not isinstance(description, str):
-        return False, f"Description must be a string, got {type(description).__name__}"
-    description_error = _validate_description(description)
-    if description_error:
-        return False, description_error
+        errors.append("Missing 'description' in frontmatter")
+    else:
+        description = frontmatter["description"]
+        if not isinstance(description, str):
+            errors.append(f"Description must be a string, got {type(description).__name__}")
+        else:
+            description_error = _validate_description(description)
+            if description_error:
+                errors.append(description_error)
 
     always = frontmatter.get("always")
     if always is not None and not isinstance(always, bool):
-        return False, f"'always' must be a boolean, got {type(always).__name__}"
+        errors.append(f"'always' must be a boolean, got {type(always).__name__}")
 
     for child in skill_path.iterdir():
         if child.name == "SKILL.md":
@@ -194,13 +203,20 @@ def validate_skill(skill_path):
             continue
         if child.is_symlink():
             continue
-        return (
-            False,
+        errors.append(
             f"Unexpected file or directory in skill root: {child.name}. "
-            "Only SKILL.md, scripts/, references/, and assets/ are allowed.",
+            "Only SKILL.md, scripts/, references/, and assets/ are allowed."
         )
 
-    return True, "Skill is valid!"
+    return _build_result(errors, warnings)
+
+
+def _build_result(errors: list[str], warnings: list[str]) -> tuple[bool, str]:
+    lines = [f"ERROR: {item}" for item in errors]
+    lines.extend(f"WARNING: {item}" for item in warnings)
+    if not lines:
+        return True, "Skill is valid!"
+    return not errors, "\n".join(lines)
 
 
 if __name__ == "__main__":
