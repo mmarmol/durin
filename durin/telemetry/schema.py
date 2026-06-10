@@ -283,6 +283,7 @@ class ToolEditFileEvent(TypedDict):
 
 
 class ToolGrepEvent(TypedDict):
+    engine: NotRequired[str]  # "rg" (ripgrep pre-filter) | "python" (walk)
     pattern_len: int
     fixed_strings: bool
     case_insensitive: bool
@@ -310,6 +311,30 @@ class ToolExecSpillEvent(TypedDict):
     spill_error: NotRequired[str | None]
 
 
+class ProcessSpawnEvent(TypedDict):
+    """A background process was started via ``exec(background=true)``."""
+    proc_id: str
+    pid: int | None
+    command_chars: int
+
+
+class ProcessExitEvent(TypedDict):
+    """A tracked background process exited (reader observed EOF)."""
+    proc_id: str
+    pid: int | None
+    exit_code: int | None
+    runtime_s: float
+    output_chars: int
+
+
+class ProcessKillEvent(TypedDict):
+    """The ``process`` tool (or agent shutdown) killed a background
+    process group."""
+    proc_id: str
+    pid: int | None
+    force: bool
+
+
 class ToolRepoOverviewEvent(TypedDict):
     path: str
     depth: int
@@ -330,6 +355,7 @@ class ToolListDirEvent(TypedDict):
     path: str
     recursive: bool
     max_entries: int
+    offset: NotRequired[int]
     displayed: int
     total_before_cap: int
     truncated: bool
@@ -1076,6 +1102,10 @@ EVENTS: dict[str, type] = {
     "sleep.start": SleepStartEvent,
     "sleep.cancelled": SleepCancelledEvent,
     "sleep.end": SleepEndEvent,
+    # Background processes (exec background=true / process tool)
+    "process.spawn": ProcessSpawnEvent,
+    "process.exit": ProcessExitEvent,
+    "process.kill": ProcessKillEvent,
     # Memory subsystem (Phase 1)
     "memory.recall": MemoryRecallEvent,
     "memory.store": MemoryStoreEvent,
@@ -1146,6 +1176,9 @@ __all__ = [
     "ToolEditFileEvent",
     "ToolGrepEvent",
     "ToolExecSpillEvent",
+    "ProcessSpawnEvent",
+    "ProcessExitEvent",
+    "ProcessKillEvent",
     "ToolRepoOverviewEvent",
     "ToolListDirEvent",
     "ToolWebSearchEvent",
