@@ -329,3 +329,36 @@ class TestEditTelemetry:
         data = edit_events[0]["data"]
         assert data["outcome"] == "ambiguous"
         assert data["matches"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Fuzzy-match transparency (Task 6 — tool-quality-fixes plan)
+# ---------------------------------------------------------------------------
+
+
+class TestFuzzyMatchNotice:
+
+    @pytest.mark.asyncio
+    async def test_fuzzy_strategy_noted_in_message(self, tmp_path: Path):
+        from durin.agent.tools.filesystem import ReadFileTool
+        target = tmp_path / "f.py"
+        target.write_text("    foo()\n    bar()\n", encoding="utf-8")
+        await ReadFileTool(workspace=tmp_path).execute(path="f.py")
+        tool = EditFileTool(workspace=tmp_path)
+        # Unindented old_text only matches via the line_trimmed fallback.
+        result = await tool.execute(
+            path="f.py", old_text="foo()\nbar()", new_text="baz()",
+        )
+        assert "Successfully edited" in result
+        assert "line_trimmed" in result
+
+    @pytest.mark.asyncio
+    async def test_exact_match_has_no_notice(self, tmp_path: Path):
+        from durin.agent.tools.filesystem import ReadFileTool
+        target = tmp_path / "f.py"
+        target.write_text("x = 1\n", encoding="utf-8")
+        await ReadFileTool(workspace=tmp_path).execute(path="f.py")
+        tool = EditFileTool(workspace=tmp_path)
+        result = await tool.execute(path="f.py", old_text="x = 1", new_text="x = 2")
+        assert "Successfully edited" in result
+        assert "fallback" not in result
