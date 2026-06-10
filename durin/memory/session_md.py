@@ -144,5 +144,8 @@ def regenerate_session_md(
     """
     if md_path is None:
         md_path = jsonl_path.with_suffix(".md")
-    atomic_write_text(md_path, render_session_md(jsonl_path))
+    # fsync=False: this .md is a derived mirror regenerated from the jsonl
+    # on every save — SessionManager.save() deliberately avoids fsync on
+    # the per-turn hot path (see manager.py save docstring).
+    atomic_write_text(md_path, render_session_md(jsonl_path), fsync=False)
     return md_path

@@ -22,11 +22,18 @@ import tempfile
 from pathlib import Path
 
 
-def atomic_write_bytes(path: Path | str, data: bytes) -> Path:
+def atomic_write_bytes(path: Path | str, data: bytes, *, fsync: bool = True) -> Path:
     """Write ``data`` to ``path`` atomically. Returns the real (resolved) path.
 
     Raises ``OSError`` on failure; the original file (if any) is untouched
     and the temp file is removed.
+
+    ``fsync=False`` skips the disk flush while keeping the tmp+rename
+    atomicity (a crash can lose the latest content but never leaves a
+    truncated file). Use it for derived/regenerable artifacts written on
+    hot paths — e.g. the per-turn session .md mirror, which is rebuilt
+    from history.jsonl (see SessionManager.save's deliberate no-fsync
+    default).
     """
     target = Path(path)
     real = Path(os.path.realpath(target)) if target.is_symlink() else target
@@ -46,7 +53,8 @@ def atomic_write_bytes(path: Path | str, data: bytes) -> Path:
         with os.fdopen(fd, "wb") as f:
             f.write(data)
             f.flush()
-            os.fsync(f.fileno())
+            if fsync:
+                os.fsync(f.fileno())
         os.chmod(tmp, old_mode if old_mode is not None else 0o644)
         os.replace(tmp, real)
     except BaseException:
@@ -58,6 +66,8 @@ def atomic_write_bytes(path: Path | str, data: bytes) -> Path:
     return real
 
 
-def atomic_write_text(path: Path | str, content: str, encoding: str = "utf-8") -> Path:
+def atomic_write_text(
+    path: Path | str, content: str, encoding: str = "utf-8", *, fsync: bool = True,
+) -> Path:
     """Text variant of :func:`atomic_write_bytes`."""
-    return atomic_write_bytes(path, content.encode(encoding))
+    return atomic_write_bytes(path, content.encode(encoding), fsync=fsync)
