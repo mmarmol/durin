@@ -1039,6 +1039,11 @@ class EditFileTool(_FsTool):
             description="Maximum entries to return (default 200)",
             minimum=1,
         ),
+        offset=IntegerSchema(
+            0,
+            description="Skip the first N entries (pagination; default 0)",
+            minimum=0,
+        ),
         required=["path"],
     )
 )
@@ -1061,7 +1066,8 @@ class ListDirTool(_FsTool):
     def description(self) -> str:
         return (
             "List the contents of a directory. "
-            "Set recursive=true to explore nested structure. "
+            "Set recursive=true to explore nested structure; use offset to "
+            "page past max_entries. "
             "Common noise directories (.git, node_modules, __pycache__, etc.) are auto-ignored."
         )
 
@@ -1071,7 +1077,7 @@ class ListDirTool(_FsTool):
 
     async def execute(
         self, path: str | None = None, recursive: bool = False,
-        max_entries: int | None = None, **kwargs: Any,
+        max_entries: int | None = None, offset: int = 0, **kwargs: Any,
     ) -> str:
         try:
             if path is None:
@@ -1091,6 +1097,8 @@ class ListDirTool(_FsTool):
                     if any(p in self._IGNORE_DIRS for p in item.parts):
                         continue
                     total += 1
+                    if total <= offset:
+                        continue
                     if len(items) < cap:
                         rel = item.relative_to(dp)
                         items.append(f"{rel}/" if item.is_dir() else str(rel))
@@ -1099,6 +1107,8 @@ class ListDirTool(_FsTool):
                     if item.name in self._IGNORE_DIRS:
                         continue
                     total += 1
+                    if total <= offset:
+                        continue
                     if len(items) < cap:
                         pfx = "📁 " if item.is_dir() else "📄 "
                         items.append(f"{pfx}{item.name}")
@@ -1108,20 +1118,31 @@ class ListDirTool(_FsTool):
                     "path": self._display_path(dp),
                     "recursive": recursive,
                     "max_entries": cap,
+                    "offset": offset,
                     "displayed": 0,
                     "total_before_cap": 0,
                     "truncated": False,
                 })
                 return f"Directory {path} is empty"
 
+            if not items and total > 0:
+                return (
+                    f"(offset {offset} is beyond the end; "
+                    f"directory has {total} entries)"
+                )
+
             result = "\n".join(items)
-            truncated = total > cap
+            truncated = total > offset + cap
             if truncated:
-                result += f"\n\n(truncated, showing first {cap} of {total} entries)"
+                result += (
+                    f"\n\n(showing entries {offset + 1}-{offset + len(items)} "
+                    f"of {total}; use offset={offset + cap} to continue)"
+                )
             self._emit("tool.list_dir", {
                 "path": self._display_path(dp),
                 "recursive": recursive,
                 "max_entries": cap,
+                "offset": offset,
                 "displayed": len(items),
                 "total_before_cap": total,
                 "truncated": truncated,
