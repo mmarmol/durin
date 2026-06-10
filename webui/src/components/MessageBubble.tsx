@@ -11,12 +11,10 @@ import { useTranslation } from "react-i18next";
 
 import { ImageLightbox } from "@/components/ImageLightbox";
 import { MarkdownText, preloadMarkdownText } from "@/components/MarkdownText";
-import { DeliberationPanel } from "@/components/thread/DeliberationPanel";
-import { PosturePanel } from "@/components/thread/PosturePanel";
 import { ToolCallBlock } from "@/components/thread/ToolCallBlock";
 import { cn } from "@/lib/utils";
 import { formatTurnLatency } from "@/lib/format";
-import type { DeliberationResultData, PostureUpdateData, UIImage, UIMediaAttachment, UIMessage } from "@/lib/types";
+import type { UIImage, UIMediaAttachment, UIMessage } from "@/lib/types";
 
 interface MessageBubbleProps {
   message: UIMessage;
@@ -77,9 +75,6 @@ export function MessageBubble({
   }, [message.content]);
 
   if (message.kind === "trace") {
-    if (message.agentUI) {
-      return <AgentUIPanel message={message} animClass={baseAnim} />;
-    }
     return <TraceGroup message={message} animClass={baseAnim} />;
   }
 
@@ -609,56 +604,6 @@ export function ReasoningBubble({
           >
             {markdownSource}
           </MarkdownText>
-        </div>
-      )}
-    </div>
-  );
-}
-
-interface AgentUIPanelProps {
-  message: UIMessage;
-  animClass: string;
-}
-
-function AgentUIPanel({ message, animClass }: AgentUIPanelProps) {
-  const [open, setOpen] = useState(false);
-  const blob = message.agentUI;
-  if (!blob) return null;
-
-  const isPosture = blob.kind === "posture_update";
-  const isDelib = blob.kind === "deliberation_result";
-  const label = isPosture ? "Postura" : isDelib ? "Deliberación" : blob.kind;
-
-  return (
-    <div className={cn("w-full", animClass)}>
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className={cn(
-          "group flex w-full items-center gap-2 rounded-md px-2 py-1.5",
-          "text-xs text-muted-foreground transition-colors hover:bg-muted/45",
-        )}
-        aria-expanded={open}
-      >
-        <Sparkles className="h-3.5 w-3.5" aria-hidden />
-        <span className="font-medium">{label}</span>
-        <ChevronRight
-          aria-hidden
-          className={cn(
-            "ml-auto h-3.5 w-3.5 transition-transform duration-200",
-            open && "rotate-90",
-          )}
-        />
-      </button>
-      {open && (
-        <div
-          className={cn(
-            "mt-1 rounded-md border border-border/50 bg-muted/25 px-3 py-2",
-            "animate-in fade-in-0 slide-in-from-top-1 duration-200",
-          )}
-        >
-          {isPosture && <PosturePanel data={blob.data as PostureUpdateData} />}
-          {isDelib && <DeliberationPanel data={blob.data as DeliberationResultData} />}
         </div>
       )}
     </div>
