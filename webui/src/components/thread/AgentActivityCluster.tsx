@@ -25,8 +25,11 @@ function countToolCalls(messages: UIMessage[]): number {
   let n = 0;
   for (const m of messages) {
     if (m.kind !== "trace") continue;
+    // Structured events are the source of truth (same count TraceGroup
+    // renders); flat trace lines only back legacy payloads.
+    const structured = m.toolEvents?.length ?? 0;
     const lines = m.traces?.length ?? (m.content.trim() ? 1 : 0);
-    n += Math.max(lines, 1);
+    n += Math.max(structured, lines, 1);
   }
   return n;
 }

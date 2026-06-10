@@ -142,3 +142,18 @@ describe("ThreadMessages — hoisted tool blocks", () => {
     expect(screen.getByText(/daily-report/)).toBeInTheDocument();
   });
 });
+
+describe("ThreadMessages — cluster count source", () => {
+  it("cluster header count matches the structured event count", () => {
+    const messages: UIMessage[] = [
+      { id: "t1", role: "tool", kind: "trace", content: "", createdAt: 1,
+        traces: ["one-line"],
+        toolEvents: [
+          { phase: "end", call_id: "a", name: "read_file" },
+          { phase: "end", call_id: "b", name: "grep" },
+        ] },
+    ];
+    render(<ThreadMessages messages={messages} />);
+    expect(screen.getByText(/2/)).toBeInTheDocument();
+  });
+});

@@ -683,12 +683,10 @@ export function TraceGroup({ message, animClass }: TraceGroupProps) {
   const toolEvents = message.toolEvents ?? [];
   const hasStructured = toolEvents.length > 0;
   const count = hasStructured ? toolEvents.length : lines.length;
-  // An interaction tool (a question, a credential request) must not be
-  // buried in a collapsed trace — open the group when one is present.
-  const hasInteraction = toolEvents.some(
-    (ev) => ev.name === "ask_user_question" || ev.name === "request_secret",
-  );
-  const [open, setOpen] = useState(hasInteraction);
+  // Interactive tools never reach this group anymore — the display-class
+  // registry (lib/tool-display.ts) hoists them as first-class blocks, so
+  // the fold only ever holds supporting plumbing traces.
+  const [open, setOpen] = useState(false);
   return (
     <div className={cn("w-full", animClass)}>
       <button
