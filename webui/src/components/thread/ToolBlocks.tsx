@@ -227,6 +227,14 @@ function chipLabel(event: ToolProgressEvent): string {
       return `🎯 ${s("ui_summary") || s("goal").slice(0, 40) || "long task"}`.trim();
     case "enter_plan_mode":
       return "📐 plan mode";
+    case "memory_store":
+      return "🧠 memory saved";
+    case "memory_upsert_entity":
+      return `🧠 ${s("ref") || "entity updated"}`;
+    case "memory_forget":
+      return `🧠 forgot ${s("uri")}`.trim();
+    case "skill_import":
+      return `🧩 import ${s("source").slice(0, 40)}`.trim();
     default:
       return event.name ?? "tool";
   }

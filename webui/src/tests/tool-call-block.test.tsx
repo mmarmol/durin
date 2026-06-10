@@ -117,3 +117,23 @@ describe("ToolCallBlock — request_secret", () => {
     expect(await screen.findByText(/Saved/)).toBeInTheDocument();
   });
 });
+
+describe("ToolCallBlock — web sources", () => {
+  it("linkifies URLs in web_search results", () => {
+    render(
+      <ToolCallBlock
+        event={{
+          phase: "end",
+          call_id: "ws1",
+          name: "web_search",
+          arguments: { query: "durin agent" },
+          result:
+            "1. Durin docs — https://example.com/durin\n2. Repo — https://github.com/x/durin",
+        }}
+      />,
+    );
+    const links = screen.getAllByRole("link");
+    expect(links.length).toBe(2);
+    expect(links[0]).toHaveAttribute("href", "https://example.com/durin");
+  });
+});
