@@ -9,6 +9,7 @@ from typing import Any
 from durin.agent.tools.base import tool_parameters
 from durin.agent.tools.filesystem import _FsTool
 from durin.agent.tools.schema import IntegerSchema, StringSchema, tool_parameters_schema
+from durin.utils.atomic_write import atomic_write_text
 
 
 def _new_cell(source: str, cell_type: str = "code", generate_id: bool = False) -> dict:
@@ -112,7 +113,7 @@ class NotebookEditTool(_FsTool):
                 cell = _new_cell(new_source, cell_type, generate_id=True)
                 nb["cells"].append(cell)
                 fp.parent.mkdir(parents=True, exist_ok=True)
-                fp.write_text(json.dumps(nb, indent=1, ensure_ascii=False), encoding="utf-8")
+                atomic_write_text(fp, json.dumps(nb, indent=1, ensure_ascii=False))
                 return f"Successfully created {fp} with 1 cell"
 
             try:
@@ -129,7 +130,7 @@ class NotebookEditTool(_FsTool):
                     return f"Error: cell_index {cell_index} out of range (notebook has {len(cells)} cells)"
                 cells.pop(cell_index)
                 nb["cells"] = cells
-                fp.write_text(json.dumps(nb, indent=1, ensure_ascii=False), encoding="utf-8")
+                atomic_write_text(fp, json.dumps(nb, indent=1, ensure_ascii=False))
                 return f"Successfully deleted cell {cell_index} from {fp}"
 
             if edit_mode == "insert":
@@ -137,7 +138,7 @@ class NotebookEditTool(_FsTool):
                 cell = _new_cell(new_source, cell_type, generate_id=generate_id)
                 cells.insert(insert_at, cell)
                 nb["cells"] = cells
-                fp.write_text(json.dumps(nb, indent=1, ensure_ascii=False), encoding="utf-8")
+                atomic_write_text(fp, json.dumps(nb, indent=1, ensure_ascii=False))
                 return f"Successfully inserted cell at index {insert_at} in {fp}"
 
             # Default: replace
@@ -153,7 +154,7 @@ class NotebookEditTool(_FsTool):
                     del cells[cell_index]["outputs"]
                     cells[cell_index].pop("execution_count", None)
             nb["cells"] = cells
-            fp.write_text(json.dumps(nb, indent=1, ensure_ascii=False), encoding="utf-8")
+            atomic_write_text(fp, json.dumps(nb, indent=1, ensure_ascii=False))
             return f"Successfully edited cell {cell_index} in {fp}"
 
         except PermissionError as e:

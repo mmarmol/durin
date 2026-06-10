@@ -112,3 +112,18 @@ class TestFsyncOption:
         monkeypatch.setattr(aw.os, "fsync", counting_fsync)
         aw.atomic_write_text(tmp_path / "durable.md", "x")
         assert len(calls) == 1
+
+
+class TestModeOverride:
+
+    def test_mode_forces_permission_on_new_file(self, tmp_path):
+        target = tmp_path / "vault.json"
+        atomic_write_text(target, "{}", mode=0o600)
+        assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+    def test_mode_overrides_preserved_mode(self, tmp_path):
+        target = tmp_path / "vault.json"
+        target.write_text("{}", encoding="utf-8")
+        os.chmod(target, 0o644)
+        atomic_write_text(target, "{}", mode=0o600)
+        assert stat.S_IMODE(target.stat().st_mode) == 0o600

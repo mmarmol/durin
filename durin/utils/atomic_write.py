@@ -22,7 +22,9 @@ import tempfile
 from pathlib import Path
 
 
-def atomic_write_bytes(path: Path | str, data: bytes, *, fsync: bool = True) -> Path:
+def atomic_write_bytes(
+    path: Path | str, data: bytes, *, fsync: bool = True, mode: int | None = None,
+) -> Path:
     """Write ``data`` to ``path`` atomically. Returns the real (resolved) path.
 
     Raises ``OSError`` on failure; the original file (if any) is untouched
@@ -34,6 +36,11 @@ def atomic_write_bytes(path: Path | str, data: bytes, *, fsync: bool = True) -> 
     hot paths — e.g. the per-turn session .md mirror, which is rebuilt
     from history.jsonl (see SessionManager.save's deliberate no-fsync
     default).
+
+    ``mode`` forces the final file permission (e.g. ``0o600`` for secrets) —
+    ``mkstemp`` creates 0600 and a fresh file would otherwise land at 0644.
+    When ``mode`` is None the existing file's mode is preserved, or 0644 for
+    a new file.
     """
     target = Path(path)
     real = Path(os.path.realpath(target)) if target.is_symlink() else target
@@ -45,6 +52,10 @@ def atomic_write_bytes(path: Path | str, data: bytes, *, fsync: bool = True) -> 
     except OSError:
         pass
 
+    final_mode = mode if mode is not None else (
+        old_mode if old_mode is not None else 0o644
+    )
+
     fd, tmp_name = tempfile.mkstemp(
         dir=str(real.parent), prefix=f".{real.name}.", suffix=".tmp"
     )
@@ -55,7 +66,7 @@ def atomic_write_bytes(path: Path | str, data: bytes, *, fsync: bool = True) -> 
             f.flush()
             if fsync:
                 os.fsync(f.fileno())
-        os.chmod(tmp, old_mode if old_mode is not None else 0o644)
+        os.chmod(tmp, final_mode)
         os.replace(tmp, real)
     except BaseException:
         try:
@@ -67,7 +78,8 @@ def atomic_write_bytes(path: Path | str, data: bytes, *, fsync: bool = True) -> 
 
 
 def atomic_write_text(
-    path: Path | str, content: str, encoding: str = "utf-8", *, fsync: bool = True,
+    path: Path | str, content: str, encoding: str = "utf-8", *,
+    fsync: bool = True, mode: int | None = None,
 ) -> Path:
     """Text variant of :func:`atomic_write_bytes`."""
-    return atomic_write_bytes(path, content.encode(encoding), fsync=fsync)
+    return atomic_write_bytes(path, content.encode(encoding), fsync=fsync, mode=mode)
