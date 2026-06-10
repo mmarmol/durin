@@ -94,6 +94,23 @@ All turn-scoped, defensive. They shape behaviour only when the model misbehaves 
   binary, timeout or checker crash: a check failure never breaks an edit.
   `durin/agent/tools/post_edit_check.py`; telemetry `tool.post_edit_check`.
 
+### Programmatic tool calling (execute_code)
+
+`execute_code` runs a model-written Python script with RPC access to a
+whitelisted tool subset (read_file, write_file, edit_file, grep, list_dir,
+web_search, web_fetch) via a generated `durin_tools` stub: tool results stay
+in the script's variables and ONLY stdout returns to the model — token
+compression for batch operations (one tool result instead of 30).
+`durin/agent/tools/code_execution.py`: asyncio UDS server on the agent's own
+loop (durin is async-native, so hermes-agent's sync→async bridge is
+unnecessary; design otherwise adapted from its code_execution_tool, MIT).
+Server-side enforcement: tool allowlist, call cap (50), timeout (300 s),
+stdout 50 KB head/tail truncation; child env is curated (no ambient
+secrets), socket 0600 in a private tempdir. v1 is local + POSIX only
+(disabled on Windows); no exec stub (a script can already use subprocess —
+the deny-list's value is agent-facing ergonomics, not sandbox security).
+Config: `tools.code_execution.*`. Telemetry: `tool.execute_code`.
+
 ### Background processes (exec background=true)
 
 `exec(background=true)` runs the full guard pipeline (deny patterns,

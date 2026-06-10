@@ -11,6 +11,7 @@ from pydantic_settings import BaseSettings
 from durin.cron.types import CronSchedule
 
 if TYPE_CHECKING:
+    from durin.agent.tools.code_execution import CodeExecutionConfig
     from durin.agent.tools.post_edit_check import PostEditCheckConfig
     from durin.agent.tools.self import MyToolConfig
     from durin.agent.tools.shell import ExecToolConfig
@@ -781,6 +782,7 @@ class ToolsConfig(Base):
     exec: ExecToolConfig = Field(default_factory=lambda: _lazy_default("durin.agent.tools.shell", "ExecToolConfig"))
     my: MyToolConfig = Field(default_factory=lambda: _lazy_default("durin.agent.tools.self", "MyToolConfig"))
     post_edit_check: PostEditCheckConfig = Field(default_factory=lambda: _lazy_default("durin.agent.tools.post_edit_check", "PostEditCheckConfig"))
+    code_execution: CodeExecutionConfig = Field(default_factory=lambda: _lazy_default("durin.agent.tools.code_execution", "CodeExecutionConfig"))
     restrict_to_workspace: bool = False  # restrict all tool access to workspace directory
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
     ssrf_whitelist: list[str] = Field(default_factory=list)  # CIDR ranges to exempt from SSRF blocking (e.g. ["100.64.0.0/10"] for Tailscale)
@@ -1079,6 +1081,7 @@ def _resolve_tool_config_refs() -> None:
     """
     import sys
 
+    from durin.agent.tools.code_execution import CodeExecutionConfig
     from durin.agent.tools.post_edit_check import PostEditCheckConfig
     from durin.agent.tools.self import MyToolConfig
     from durin.agent.tools.shell import ExecToolConfig
@@ -1092,6 +1095,7 @@ def _resolve_tool_config_refs() -> None:
     mod.WebFetchConfig = WebFetchConfig  # type: ignore[attr-defined]
     mod.MyToolConfig = MyToolConfig  # type: ignore[attr-defined]
     mod.PostEditCheckConfig = PostEditCheckConfig  # type: ignore[attr-defined]
+    mod.CodeExecutionConfig = CodeExecutionConfig  # type: ignore[attr-defined]
 
     ToolsConfig.model_rebuild()
     Config.model_rebuild()
