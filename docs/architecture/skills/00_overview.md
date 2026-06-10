@@ -190,9 +190,11 @@ carry-over — it **never "reviews everything,"** only the delta. Imported skill
 
 ### 6a. Observation queue & cross-cutting principles (the evidence channel)
 
-The task-observer pattern, adopted 2026-06-10 (design:
-`.workdocs/research/skill_observations_proposal.md` at authoring time; this section is
-the as-built reference). Code: `durin/agent/skill_observations.py`.
+The task-observer pattern, adopted 2026-06-10 — capture live feedback about
+skills the moment it occurs, queue it with states, and let the daily curation
+judge consume it as evidence (the cheap alternative to GEPA-style measured
+optimization, which needs an eval harness and per-run budget). This section is
+the as-built reference. Code: `durin/agent/skill_observations.py`.
 
 **Capture (in-loop, live).** The `skill_observe` core tool logs feedback the moment it
 occurs — `kind`: `correction` (user corrected output produced under a skill), `gap` (no
