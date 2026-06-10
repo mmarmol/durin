@@ -2086,4 +2086,34 @@ decisions below. **Read before re-proposing any of these.**
 - **Why it was discarded**: the navigability value clustering would add is already delivered by the ego-graph; the remaining delta (community boundaries + LLM summaries) is disproportionate — a community-detection algorithm + recurring LLM summarisation cost + cluster-rendering UI — for marginal benefit, and untestable/irrelevant at durin's current scale. Per the backlog convention, an item whose use case is covered by existing surfaces is **discarded with rationale**, not deferred.
 - **Lesson**: when a later-shipped feature (ego-graph focus) absorbs the premise of a planned one, re-evaluate instead of building on inertia. The hairball is a *landing-view* problem; "focus on demand" beats "summarise everything up front." Re-open only on a concrete failure — e.g., the landing overview itself becomes unusable at scale *with* focus available.
 
-## Last updated: 2026-06-07 (memory-graph P8: Fase 3 clustering discarded as superseded by ego-graph focus)
+## Tool-quality phase: tree-sitter shell parsing discarded; flat block-anchor threshold superseded (2026-06-10)
+
+- **What it was (evaluated, not built)**: two candidates from the cross-agent tool
+  comparison (durin vs opencode/hermes-agent/openhands/Claude Code, research notes
+  in the local process folder, 2026-06-10):
+  1. Migrating the exec deny-list to opencode-style **tree-sitter command parsing**
+     (WASM bash/powershell grammars, AST extraction of file-path args).
+  2. Raising edit_file's block-anchor single-candidate similarity threshold from
+     0.5 to a **flat 0.85**.
+- **What was learned**:
+  1. opencode's tree-sitter machinery exists to feed an *interactive permission
+     prompt* (`ctx.ask()` with extracted paths); it fails closed and ships 3 WASM
+     modules. durin is a single-user autonomous agent whose deny-list protects
+     against model mistakes, not adversaries — the regex list plus
+     restrict_to_workspace covers that threat model at ~0 cost.
+  2. The flat 0.85 would have killed block-anchor's whole purpose (insertion
+     tolerance): the metric compared middle lines index-aligned, so legitimate
+     insertions scored 0.63–0.66. Measured on the suite's cases, the real holes
+     were index misalignment AND `check_len=min()` letting a *truncated* candidate
+     score 1.0. Best-match containment fixed both (insertions 1.0, truncated 0.61,
+     unrelated 0.44) with thresholds 0.66/0.85.
+- **Why discarded**: (1) interactive-prompt machinery without an interactive
+  approval flow is dead weight — re-open only if durin grows one. (2) the flat
+  threshold was a worse fix than changing the metric; superseded by containment
+  (shipped in the tool-quality branch).
+- **Lesson**: before importing a guard from another agent, check which *workflow*
+  it serves — a permission-prompt feeder and an autonomous deny-list look similar
+  and aren't. And when a threshold misbehaves, suspect the metric before tuning
+  the number.
+
+## Last updated: 2026-06-10 (tool-quality phase: tree-sitter discarded, block-anchor metric superseded)
