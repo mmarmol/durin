@@ -55,12 +55,18 @@ how many times the same issue recurred. This is your primary evidence for
   single occurrences.
 - `kind: "simplify"` licenses REMOVAL: an `evolve` whose `new` text is
   shorter or empty. Pruning dead weight is as valuable as adding rules.
+- Several OPEN records describing the SAME issue in different words count as
+  recurrence too — treat them like one record with `count >= 2`, and give
+  each the same disposition.
 - A record with `skill: "all"` is cross-skill context, not tied to one skill.
 
 Answer EVERY record below with a disposition in the `observations` output
-array: `applied` (you emitted an action incorporating it), `declined` (you
-judged it wrong or harmful — it is remembered and never re-shown as open), or
-`keep` (plausible but not yet actionable; it stays open and may recur).
+array: `applied` (you emitted an action incorporating it, OR the current
+skill body ALREADY incorporates the suggestion — it is resolved either way),
+`declined` (you judged the suggestion itself wrong or harmful — it is
+remembered and never re-shown as open; do NOT use this for suggestions that
+are correct but already addressed), or `keep` (plausible but not yet
+actionable; it stays open and may recur).
 
 ```json
 {{ observations_json }}

@@ -208,3 +208,25 @@ def test_retire_principle_frees_a_slot(tmp_path):
 def test_retire_unknown_principle_errors(tmp_path):
     ws = tmp_path / "ws"
     assert "error" in retire_principle(ws, 7)
+
+
+def test_paraphrased_issue_still_dedups(tmp_path):
+    # Live finding 2026-06-10: the LLM rephrases the same issue each time
+    # ("Step 2 says X" vs "Step 2 still says X. This is the SECOND time...").
+    # Containment missed it; word-overlap similarity must catch it.
+    ws = tmp_path / "ws"
+    _log(ws, issue='Step 2 says "Install from PyPI with pipx install durin-agent" '
+                   "but the gateway is NEVER installed from PyPI - it must be "
+                   "installed from the local wheel in dist/")
+    res = _log(ws, issue='Step 2 still says "Install from PyPI with pipx install '
+                         "durin-agent\". This is the SECOND time the user corrects "
+                         "this - install from the local wheel in dist/ instead")
+    assert res["id"] == 1
+    assert res["count"] == 2
+
+
+def test_unrelated_issue_same_skill_does_not_dedup(tmp_path):
+    ws = tmp_path / "ws"
+    _log(ws, issue="step 2 installs from the wrong source registry entirely")
+    res = _log(ws, issue="the restart step forgets to check the pid file first")
+    assert res["id"] == 2

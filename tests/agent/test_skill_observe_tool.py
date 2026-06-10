@@ -49,3 +49,29 @@ def test_create_reads_ctx(tmp_path):
     tool = SkillObserveTool.create(Ctx())
     _run(tool)
     assert open_observations(tmp_path)[0]["sessions"] == ["k1"]
+
+
+def test_set_context_binds_session_key_per_request(tmp_path):
+    # The in-loop registry is built ONCE without a session; the loop binds the
+    # session per request via ContextAware.set_context (found live 2026-06-10:
+    # observations logged with sessions=[] because create() captured None).
+    from durin.agent.tools.context import ContextAware, RequestContext
+
+    ws = tmp_path / "ws"
+    tool = SkillObserveTool(workspace=ws)
+    assert isinstance(tool, ContextAware)
+    tool.set_context(RequestContext(channel="cli", chat_id="direct",
+                                    session_key="cli:direct"))
+    _run(tool)
+    assert open_observations(ws)[0]["sessions"] == ["cli:direct"]
+
+
+def test_set_context_falls_back_to_channel_chat(tmp_path):
+    from durin.agent.tools.context import RequestContext
+
+    ws = tmp_path / "ws"
+    tool = SkillObserveTool(workspace=ws)
+    tool.set_context(RequestContext(channel="telegram", chat_id="42",
+                                    session_key=None))
+    _run(tool)
+    assert open_observations(ws)[0]["sessions"] == ["telegram:42"]
