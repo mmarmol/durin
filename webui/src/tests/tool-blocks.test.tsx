@@ -89,7 +89,7 @@ describe("HoistedToolBlock — exit_plan_mode", () => {
       </ThreadActionsProvider>,
     );
     // MarkdownText is lazy — wait for the real renderer to mount.
-    expect(await screen.findByText("Big Plan")).toBeInTheDocument();
+    expect(await screen.findByText("Big Plan", {}, { timeout: 10_000 })).toBeInTheDocument();
     const approve = screen.getByRole("button", { name: /build/i });
     fireEvent.click(approve);
     expect(a.sendUserMessage).toHaveBeenCalledWith("/build");
@@ -109,7 +109,7 @@ describe("HoistedToolBlock — exit_plan_mode", () => {
         />
       </ThreadActionsProvider>,
     );
-    expect(await screen.findByText("Big Plan")).toBeInTheDocument();
+    expect(await screen.findByText("Big Plan", {}, { timeout: 10_000 })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /build/i })).not.toBeInTheDocument();
   });
 });

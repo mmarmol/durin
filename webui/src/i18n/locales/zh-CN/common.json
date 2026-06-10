@@ -362,7 +362,9 @@
       "title": "拟议计划",
       "approve": "批准 (/build)",
       "hint": "或回复反馈以完善计划"
-    }
+    },
+    "agentActivityReasoningOnly": "{{count}} 个步骤",
+    "agentActivityLiveReasoningOnly": "运行中… · {{count}} 个步骤"
   },
   "lightbox": {
     "title": "图片预览",

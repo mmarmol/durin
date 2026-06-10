@@ -611,7 +611,9 @@
       "title": "Rencana yang diusulkan",
       "approve": "Setujui (/build)",
       "hint": "atau balas dengan masukan untuk menyempurnakannya"
-    }
+    },
+    "agentActivityReasoningOnly": "{{count}} langkah",
+    "agentActivityLiveReasoningOnly": "Bekerja… · {{count}} langkah"
   },
   "lightbox": {
     "title": "Pratinjau gambar",

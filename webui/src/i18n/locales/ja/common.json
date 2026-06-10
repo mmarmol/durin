@@ -340,7 +340,9 @@
       "title": "提案されたプラン",
       "approve": "承認 (/build)",
       "hint": "またはフィードバックを返信して改善できます"
-    }
+    },
+    "agentActivityReasoningOnly": "{{count}} ステップ",
+    "agentActivityLiveReasoningOnly": "実行中… · {{count}} ステップ"
   },
   "lightbox": {
     "title": "画像プレビュー",

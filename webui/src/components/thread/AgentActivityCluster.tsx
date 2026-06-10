@@ -61,28 +61,40 @@ export function AgentActivityCluster({
 
   const headerBusy = isTurnStreaming;
 
+  // With user-facing events hoisted out of the cluster, a reasoning-only
+  // cluster (toolCalls === 0) is common — show steps without "0 tool calls".
   const summary =
     isTurnStreaming
-      ? reasoningSteps > 0
+      ? reasoningSteps > 0 && toolCalls > 0
         ? t("message.agentActivityLiveSummary", {
             reasoning: reasoningSteps,
             tools: toolCalls,
             defaultValue: "Working… · {{reasoning}} steps · {{tools}} tool calls",
           })
-        : t("message.agentActivityLiveToolsOnly", {
-            tools: toolCalls,
-            defaultValue: "Working… · {{tools}} tool calls",
-          })
-      : reasoningSteps > 0
+        : reasoningSteps > 0
+          ? t("message.agentActivityLiveReasoningOnly", {
+              count: reasoningSteps,
+              defaultValue: "Working… · {{count}} steps",
+            })
+          : t("message.agentActivityLiveToolsOnly", {
+              tools: toolCalls,
+              defaultValue: "Working… · {{tools}} tool calls",
+            })
+      : reasoningSteps > 0 && toolCalls > 0
         ? t("message.agentActivitySummary", {
             reasoning: reasoningSteps,
             tools: toolCalls,
             defaultValue: "{{reasoning}} steps · {{tools}} tool calls",
           })
-        : t("message.agentActivityToolsOnly", {
-            tools: toolCalls,
-            defaultValue: "{{tools}} tool calls",
-          });
+        : reasoningSteps > 0
+          ? t("message.agentActivityReasoningOnly", {
+              count: reasoningSteps,
+              defaultValue: "{{count}} steps",
+            })
+          : t("message.agentActivityToolsOnly", {
+              tools: toolCalls,
+              defaultValue: "{{tools}} tool calls",
+            });
 
   const toggleOuter = () => {
     setUserToggledOuter(true);

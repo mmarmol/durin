@@ -696,7 +696,11 @@
     "agentActivitySummary_one": "{{reasoning}} pasos · {{tools}} llamada a herramienta",
     "agentActivityToolsOnly_one": "{{tools}} llamada a herramienta",
     "agentActivityLiveSummary_one": "Trabajando… · {{reasoning}} pasos · {{tools}} llamada a herramienta",
-    "agentActivityLiveToolsOnly_one": "Trabajando… · {{tools}} llamada a herramienta"
+    "agentActivityLiveToolsOnly_one": "Trabajando… · {{tools}} llamada a herramienta",
+    "agentActivityReasoningOnly": "{{count}} pasos",
+    "agentActivityReasoningOnly_one": "1 paso",
+    "agentActivityLiveReasoningOnly": "Trabajando… · {{count}} pasos",
+    "agentActivityLiveReasoningOnly_one": "Trabajando… · 1 paso"
   },
   "lightbox": {
     "title": "Vista previa de imagen",

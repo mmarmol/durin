@@ -345,7 +345,11 @@
     "agentActivitySummary_one": "{{reasoning}} étapes · {{tools}} appel d'outil",
     "agentActivityToolsOnly_one": "{{tools}} appel d'outil",
     "agentActivityLiveSummary_one": "En cours… · {{reasoning}} étapes · {{tools}} appel d'outil",
-    "agentActivityLiveToolsOnly_one": "En cours… · {{tools}} appel d'outil"
+    "agentActivityLiveToolsOnly_one": "En cours… · {{tools}} appel d'outil",
+    "agentActivityReasoningOnly": "{{count}} étapes",
+    "agentActivityReasoningOnly_one": "1 étape",
+    "agentActivityLiveReasoningOnly": "En cours… · {{count}} étapes",
+    "agentActivityLiveReasoningOnly_one": "En cours… · 1 étape"
   },
   "lightbox": {
     "title": "Aperçu de l’image",
