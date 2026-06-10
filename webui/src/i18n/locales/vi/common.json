@@ -340,7 +340,9 @@
       "title": "Kế hoạch đề xuất",
       "approve": "Phê duyệt (/build)",
       "hint": "hoặc trả lời kèm góp ý để tinh chỉnh"
-    }
+    },
+    "agentActivityReasoningOnly": "{{count}} bước",
+    "agentActivityLiveReasoningOnly": "Đang chạy… · {{count}} bước"
   },
   "lightbox": {
     "title": "Xem trước ảnh",

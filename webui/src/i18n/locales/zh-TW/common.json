@@ -340,7 +340,9 @@
       "title": "擬議計畫",
       "approve": "核准 (/build)",
       "hint": "或回覆意見以調整計畫"
-    }
+    },
+    "agentActivityReasoningOnly": "{{count}} 個步驟",
+    "agentActivityLiveReasoningOnly": "執行中… · {{count}} 個步驟"
   },
   "lightbox": {
     "title": "圖片預覽",

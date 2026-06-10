@@ -695,7 +695,11 @@
     "agentActivitySummary_one": "{{reasoning}} steps · {{tools}} tool call",
     "agentActivityToolsOnly_one": "{{tools}} tool call",
     "agentActivityLiveSummary_one": "Working… · {{reasoning}} steps · {{tools}} tool call",
-    "agentActivityLiveToolsOnly_one": "Working… · {{tools}} tool call"
+    "agentActivityLiveToolsOnly_one": "Working… · {{tools}} tool call",
+    "agentActivityReasoningOnly": "{{count}} steps",
+    "agentActivityReasoningOnly_one": "1 step",
+    "agentActivityLiveReasoningOnly": "Working… · {{count}} steps",
+    "agentActivityLiveReasoningOnly_one": "Working… · 1 step"
   },
   "lightbox": {
     "title": "Image preview",

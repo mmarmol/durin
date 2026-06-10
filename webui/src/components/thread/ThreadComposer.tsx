@@ -175,8 +175,10 @@ function RunElapsedStrip({
   // question ride the same goal_state frame (durin/session/goal_state.py).
   const mode = goalState?.mode?.trim() ?? "";
   const showMode = mode.length > 0;
+  // Hide the awaiting-answer strip while a turn is running — the answer
+  // (or the question's turn itself) is already being processed.
   const pendingQuestion = goalState?.pending_question?.question?.trim() ?? "";
-  const showPendingQuestion = pendingQuestion.length > 0;
+  const showPendingQuestion = pendingQuestion.length > 0 && !showTimer;
   if (!showTimer && !showGoal && !showMode && !showPendingQuestion) return null;
 
   const objectiveFull = goalState?.objective?.trim() ?? "";
