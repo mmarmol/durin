@@ -98,6 +98,7 @@ class ExecTool(Tool):
             allowed_env_keys=cfg.allowed_env_keys,
             allow_patterns=cfg.allow_patterns,
             deny_patterns=cfg.deny_patterns,
+            process_config=getattr(ctx.config, "process", None),
         )
 
     def __init__(
@@ -110,8 +111,10 @@ class ExecTool(Tool):
         sandbox: str = "",
         path_append: str = "",
         allowed_env_keys: list[str] | None = None,
+        process_config: Any = None,
     ):
         self.timeout = timeout
+        self._process_config = process_config
         self.working_dir = working_dir
         self.sandbox = sandbox
         self.deny_patterns = (deny_patterns or []) + [
@@ -251,7 +254,8 @@ class ExecTool(Tool):
             # above — background mode adds no new privileges.
             from durin.agent.tools.process_registry import get_process_registry
             try:
-                sess = await get_process_registry().spawn(command, cwd=cwd, env=env)
+                registry = get_process_registry(self._process_config)
+                sess = await registry.spawn(command, cwd=cwd, env=env)
             except RuntimeError as e:
                 return f"Error: {e}"
             return (
