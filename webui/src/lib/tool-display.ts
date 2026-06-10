@@ -29,6 +29,10 @@ const CHIPPED = new Set([
   "complete_goal",
   "long_task",
   "enter_plan_mode",
+  "memory_store",
+  "memory_upsert_entity",
+  "memory_forget",
+  "skill_import",
 ]);
 
 export function toolDisplayClass(name: string | undefined): ToolDisplayClass {

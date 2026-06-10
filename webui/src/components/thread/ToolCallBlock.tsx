@@ -51,6 +51,7 @@ function summaryLine(ev: ToolProgressEvent): string {
   for (const key of [
     "path", "file_path", "filename", "command",
     "url", "query", "pattern", "question", "name",
+    "uri", "ref", "goal", "action", "source",
   ]) {
     const v = argString(a, key);
     if (v) return v.length <= 90 ? v : v.slice(0, 87) + "…";
@@ -131,7 +132,18 @@ export function ToolCallBlock({ event }: ToolCallBlockProps) {
           <pre className="overflow-x-auto whitespace-pre-wrap break-words pb-1 font-mono text-[11px] leading-relaxed">
             {visible.map((ln, i) => (
               <div key={i} className={ln.className}>
-                {ln.text || " "}
+                {ln.href ? (
+                  <a
+                    href={ln.href}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    className="text-primary underline underline-offset-2 hover:opacity-80"
+                  >
+                    {ln.text}
+                  </a>
+                ) : (
+                  ln.text || " "
+                )}
               </div>
             ))}
           </pre>
@@ -339,7 +351,11 @@ export function RequestSecretPanel({ event }: { event: ToolProgressEvent }) {
 interface BodyLine {
   text: string;
   className?: string;
+  /** When set, the line renders as an external link (web sources). */
+  href?: string;
 }
+
+const URL_RE = /(https?:\/\/[^\s)>\]]+)/;
 
 /** Build the per-tool body as a list of (text, className) lines. */
 function renderBodyLines(ev: ToolProgressEvent): BodyLine[] {
@@ -376,10 +392,23 @@ function renderBodyLines(ev: ToolProgressEvent): BodyLine[] {
   // ask_user_question and request_secret are handled by their own
   // interactive panels (see ToolCallBlock), never as static body lines.
 
-  // Generic / read_file / list_dir / grep: just the result (or error).
   if (ev.error) {
     return [{ text: String(ev.error), className: "text-red-500/90" }];
   }
+
+  // web_search / web_fetch: linkify source URLs so results are clickable.
+  if (name === "web_search" || name === "web_fetch") {
+    const out = resultText(ev.result);
+    if (!out) return [];
+    return out.split("\n").map((l) => {
+      const m = URL_RE.exec(l);
+      return m
+        ? { text: l, className: "text-muted-foreground/90", href: m[1] }
+        : { text: l, className: "text-muted-foreground/90" };
+    });
+  }
+
+  // Generic / read_file / list_dir / grep: just the result (or error).
   const out = resultText(ev.result);
   if (!out) return [];
   return out.split("\n").map((l) => ({
