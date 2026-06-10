@@ -312,9 +312,15 @@ class ToolExecSpillEvent(TypedDict):
 
 
 class ExecuteCodeEvent(TypedDict):
-    """One execute_code run (programmatic tool calling sandbox)."""
+    """One execute_code run (programmatic tool calling sandbox).
+
+    ``tool_calls`` is the per-tool call histogram — the primary signal for
+    how the sandbox is actually used (real batch vs trivial 0-1 call script).
+    """
     status: str  # success | error | timeout
     tool_calls_made: int
+    tool_calls: NotRequired[dict[str, int]]
+    code_chars: NotRequired[int]
     duration_ms: float
     stdout_chars: int
     exit_code: NotRequired[int | None]

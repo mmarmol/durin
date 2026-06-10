@@ -135,3 +135,63 @@ def test_windows_disabled():
 
     if sys.platform == "win32":
         assert ExecuteCodeTool.enabled(Ctx) is False
+
+
+# ---------------------------------------------------------------------------
+# memory_search allowlist + telemetry (added with the allowlist extension)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_memory_search_available_in_sandbox(tmp_path):
+    """memory_search is reachable from a script and its result stays in the
+    script (only what it prints returns)."""
+    from durin.agent.tools.memory_search import MemorySearchTool
+
+    tool = ExecuteCodeTool(
+        tools={"memory_search": MemorySearchTool(workspace=tmp_path)},
+        config=CodeExecutionConfig(),
+        workspace=str(tmp_path),
+    )
+    code = (
+        "from durin_tools import memory_search\n"
+        "res = memory_search('anything', limit=3)\n"
+        "print('CALLED', type(res).__name__)\n"
+    )
+    result = json.loads(await tool.execute(code=code))
+    assert result["status"] == "success", result
+    assert "CALLED" in result["output"]
+    assert result["tool_calls_made"] == 1
+
+
+@pytest.mark.asyncio
+async def test_telemetry_records_per_tool_histogram(tmp_path):
+    from durin.telemetry.logger import (
+        TelemetryLogger,
+        bind_telemetry,
+        reset_telemetry,
+    )
+
+    (tmp_path / "a.txt").write_text("x", encoding="utf-8")
+    tool = _tool(tmp_path)
+    code = (
+        "from durin_tools import read_file\n"
+        "for _ in range(3):\n"
+        "    read_file('a.txt')\n"
+        "print('done')\n"
+    )
+    logger = TelemetryLogger(tmp_path / "tel.jsonl")
+    token = bind_telemetry(logger)
+    try:
+        await tool.execute(code=code)
+    finally:
+        reset_telemetry(token)
+
+    events = [
+        json.loads(line)
+        for line in (tmp_path / "tel.jsonl").read_text().splitlines() if line
+    ]
+    ev = next(e for e in events if e["type"] == "tool.execute_code")
+    assert ev["data"]["tool_calls_made"] == 3
+    assert ev["data"]["tool_calls"] == {"read_file": 3}
+    assert ev["data"]["code_chars"] > 0
