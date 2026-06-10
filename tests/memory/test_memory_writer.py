@@ -12,6 +12,7 @@ from durin.memory.memory_writer import write_entity
 from durin.memory.provenance import author_scope
 
 NOW = datetime(2026, 6, 5, tzinfo=timezone.utc)
+LATER = datetime(2026, 6, 6, tzinfo=timezone.utc)
 
 
 def _page_path(ws, ref):
@@ -61,6 +62,36 @@ def test_two_writers_different_fields_both_land(tmp_path):
     page = EntityPage.from_file(_page_path(ws, "company:mxhero"))
     assert any(r["to"] == "company:carahsoft" for r in page.relations)
     assert "mxHERO Inc." in page.aliases
+
+
+def test_body_replace_precedence_survives_persistence(tmp_path):
+    ws = tmp_path
+    # A user authors the body; prov["body"]=user must persist via git round-trip.
+    write_entity(ws, "topic:t",
+                 [FieldPatch(kind="body_append", value="User's careful notes.",
+                             author="user", source_ref="manual", at=NOW)], create=True)
+    # In a SEPARATE write, the agent tries to replace the whole body. It must
+    # read prov["body"]=user back from disk and degrade to a lossless append.
+    write_entity(ws, "topic:t",
+                 [FieldPatch(kind="body_replace", value="Agent rewrite.",
+                             author="agent", source_ref="s#t1", at=LATER)])
+    page = EntityPage.from_file(_page_path(ws, "topic:t"))
+    assert "User's careful notes." in page.body     # not clobbered across writes
+    assert "Agent rewrite." in page.body            # appended, not lost
+    assert page.provenance["body"]["author"] == "user"
+
+
+def test_body_replace_overwrites_agent_body_across_writes(tmp_path):
+    ws = tmp_path
+    write_entity(ws, "topic:t",
+                 [FieldPatch(kind="body_append", value="Old agent prose.",
+                             author="agent", source_ref="s#t1", at=NOW)], create=True)
+    write_entity(ws, "topic:t",
+                 [FieldPatch(kind="body_replace", value="Fresh canonical prose.",
+                             author="agent", source_ref="s#t2", at=LATER)])
+    page = EntityPage.from_file(_page_path(ws, "topic:t"))
+    assert "Old agent prose." not in page.body      # replaced cleanly
+    assert page.body.strip() == "Fresh canonical prose."
 
 
 def test_write_entity_sets_display_name(tmp_path):

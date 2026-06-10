@@ -72,7 +72,10 @@ Route by what the information IS:
   `memory_upsert_entity`. Give the entity `ref` (`<type>:<slug>`), its
   display `name`, any `aliases`, `relations` to other entities, and prose
   `body` describing what you learned. The system extracts structured
-  attributes from your prose — you don't write attributes yourself.
+  attributes from your prose — you don't write attributes yourself. The
+  `body` is **appended** by default (you never lose what was there); pass
+  `body_mode="replace"` only to rewrite the whole body to correct it, and
+  only when you have its full current text in context.
 - **A document** the user gives you (a tutorial, spec, article) →
   `memory_ingest`. It's kept whole as a reference and returns a
   `reference:<slug>`. If you then author an entity distilled from that

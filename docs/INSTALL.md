@@ -47,7 +47,7 @@ Every tag also produces a GitHub Release with the wheel + sdist
 attached:
 
 ```bash
-pipx install https://github.com/mmarmol/durin/releases/latest/download/durin_agent-0.1.0a1-py3-none-any.whl
+pipx install https://github.com/mmarmol/durin/releases/latest/download/durin_agent-0.1.0a10-py3-none-any.whl
 ```
 
 Replace the version in the URL with the release you want.
@@ -95,7 +95,7 @@ pip install -e ".[memory,mcp,web]"
 | `web` | `ddgs`, `readability-lxml` | The web-search and reader tools. |
 | `slack` | `slack-sdk`, `slackify-markdown` | Slack channel. |
 | `discord` | `discord.py` | Discord channel. |
-| `oauth` | `oauth-cli-kit` | OAuth login (`durin provider login …`). |
+| `oauth` | `oauth-cli-kit` | OAuth login (`durin oauth login …`). |
 | `local` | `llama-cpp-python`, `huggingface-hub` | Local GGUF model serving. |
 | `dev` | `pytest`, `ruff`, … | Run the test suite + lint. |
 
@@ -109,14 +109,14 @@ reader. See `docs/architecture/memory/` for the subsystem deep-dive.
 ### First-time configuration
 
 ```bash
-durin onboard           # creates ~/.durin/config.json with defaults
-durin onboard --wizard  # adds the interactive questionnaire on top
+durin onboard              # interactive wizard (default); creates ~/.durin/config.json
+durin onboard --no-wizard  # write schema defaults silently, skip the questionnaire
 ```
 
-Onboarding is **idempotent**: re-running with `--wizard` opens the
-questionnaire pre-filled from the current config; running without `--wizard`
-merges any new schema defaults into the existing file without overwriting
-your values.
+Onboarding is **idempotent**: re-running opens the wizard pre-filled from the
+current config; `--no-wizard` merges any new schema defaults into the existing
+file without overwriting your values. (`--advanced` is the legacy field-by-field
+walker.)
 
 After onboarding, drop your provider API key in `~/.durin/config.json`
 (field `providers.<vendor>.api_key`) or via `durin config set`:
@@ -179,9 +179,9 @@ plugins, not single-key edits:
 ```bash
 durin channels status
 durin channels login telegram
-durin provider login openai_codex
-durin provider login github_copilot
-durin provider logout github_copilot
+durin oauth login openai_codex
+durin oauth login github_copilot
+durin oauth logout github_copilot
 ```
 
 ---
@@ -194,7 +194,7 @@ thing:
 | Detected mode | What `durin upgrade` runs |
 |---|---|
 | Editable checkout (`pip install -e .`) | `git pull --ff-only` + `pip install -e .` |
-| Wheel install (PyPI / local wheel) | `pip install --upgrade durin` |
+| Wheel install (PyPI / local wheel) | `pip install --upgrade durin-agent` |
 
 Useful flags:
 
@@ -292,4 +292,4 @@ providers.<name>.api_key …` (or `durin config edit`).
 
 ---
 
-Last updated: 2026-05-20.
+Last updated: 2026-06-07.

@@ -2,8 +2,7 @@
 
 A feature maps to a pip extra declared in pyproject `[project.optional-dependencies]`.
 When a feature is activated but its extra is missing, `ensure_extra` installs it
-(gated by `config.install.auto_install_extras`). See
-docs/superpowers/specs/2026-06-06-auto-install-extras-design.md.
+(gated by `config.install.auto_install_extras`).
 """
 from __future__ import annotations
 

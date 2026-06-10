@@ -306,7 +306,7 @@ Examples:
 
 ### 4.1.1 Suggested starter types
 
-The vocabulary is open, but Dream needs a starting set so it doesn't invent arbitrary types from the first observation. The following 8 types form the **suggested starter set** (from `docs/archive/35_entity_centric_plan.md` §4, grounded in cognitive memory literature — Tulving tripartite, CoALA, Conway, Rosch prototype theory):
+The vocabulary is open, but Dream needs a starting set so it doesn't invent arbitrary types from the first observation. The following 8 types form the **suggested starter set** (grounded in cognitive memory literature — Tulving tripartite, CoALA, Conway, Rosch prototype theory):
 
 | Type | Tulving mapping | Cross-profession examples |
 |---|---|---|
@@ -421,6 +421,8 @@ If two distinct entities produce the same slug, a numeric suffix is added (`marc
 
 Why the episodic bootstrap exists: in a cold workspace (few or no canonical entity pages yet, but the agent is already recording raw facts via `/remember`), the alias index would otherwise be thin and the entity-aware ranker (§8 doc 03) would be inoperative. Bootstrapping from episodic ensures the ranker activates early, before the entity graph is populated.
 
+**Process-wide shared cache.** The three runtime `AliasIndex` consumers — `memory_search`, the refine pass, and `EntityAbsorption` — share a single in-memory instance keyed by `memory_root` (`durin/memory/aliases_cache.py::get_shared_alias_index`, a lazy double-checked-locked build) rather than each rebuilding from disk on first use (each rebuild parses every entity page). Because the consumers share one instance, mutations via `AliasIndex.refresh_for()` / `remove()` are visible to all immediately, so the common flow needs no explicit invalidation; `invalidate_alias_index(memory_root)` exists only for out-of-band edits (a user editing a page by hand, or tests).
+
 ### 4.6 Provenance
 
 Provenance tracks which `source_ref` produced each attribute or relation, recorded per field at write time (`durin/memory/field_provenance.py`). This is critical for:
@@ -461,18 +463,20 @@ Beyond tracking which entry produced a fact, the system tracks **who wrote each 
 | `agent_created` | The agent (via `memory_upsert_entity` / `memory_ingest`) or a dream pass wrote this entry/page. The dreams may auto-manage it: extend attributes, merge duplicate entities, etc. |
 | `user_authored` | A human wrote this entry/page directly (manual `.md` edit, `/remember`, or a UI surface marked as user-driven). The dreams **never** modify it. |
 
-**Default: `user_authored`** if nothing sets the context — i.e., the system assumes user authorship unless agent-driven code explicitly marks otherwise. This is the safe default: doing nothing leaves user content protected.
+**No default author at write time.** `current_author()` (`durin/memory/provenance.py`) **raises `MissingAuthorScopeError`** when called outside an active `author_scope()` — there is no implicit default. Every write path must declare its author explicitly. A silent default would make a forgotten `author_scope()` indistinguishable from an intentional choice, a mismarking class that has already corrupted benchmark and test fixtures. (Distinct from this write-time context: the `EntityPage.author` / `MemoryEntry.author` **schema field** still defaults to `user_authored` when a page object is constructed without one — the safe default for the *protection rule* below. The write-time context decides what value actually gets persisted.)
 
-**Mechanism: ContextVar.** `_MEMORY_AUTHOR` is a Python `ContextVar` that propagates across `await` and `asyncio.create_task` within a logical request, but stays isolated between concurrent tasks. Agent-driven code paths enter `author_scope("agent_created")` before writing:
+**Mechanism: ContextVar.** `_MEMORY_AUTHOR` is a Python `ContextVar` (sentinel default `None` = no active scope) that propagates across `await` and `asyncio.create_task` within a logical request, but stays isolated between concurrent tasks. **Both** paths enter a scope before writing — there is no "do nothing" path:
 
 ```python
 from durin.memory.provenance import author_scope
 
-# Agent-driven path:
+# Agent-driven path (memory_upsert_entity / memory_ingest / dream):
 with author_scope("agent_created"):
     await write_memory_entry(...)
 
-# User-driven path: no scope needed; defaults to "user_authored".
+# User-driven path (/remember, manual UI surface) — must wrap explicitly too:
+with author_scope("user_authored"):
+    await write_memory_entry(...)
 ```
 
 When the memory entry is persisted, `MemoryEntry.author` is set from `current_author()` and saved in the frontmatter (visible in the `.md` file).
@@ -487,7 +491,7 @@ The rationale: a user who edited a `.md` file explicitly stated this content mat
 
 - **Entity pages**: `refine_dream.py` (the dedup pass) skips any candidate pair where `page_a.author == "user_authored"` or `page_b.author == "user_authored"`, recording `reason="user_managed"` (it never merges a user-managed page). The `EntityPage.author` field defaults to `user_authored` for safety; the dreams set the field-level author to `dream` (via `memory_writer`) when they write, leaving user-set fields untouched.
 - **Fragments** (episodic / stable): there is no consolidation batch to filter — the two-track model never feeds fragments to a dream at all. `/remember` writes them as `user_authored`, so they are protected by construction and only ever retired manually.
-- **Field-level precedence** (orthogonal to the page-level flag): `field_patch`/`field_provenance` enforce **user > dream > agent** per field, so the extract dream's attribute writes never clobber a value a user set, even on an `agent_created` page.
+- **Field-level precedence** (orthogonal to the page-level flag): `field_patch`/`field_provenance` enforce **user > dream > agent** per field, so the extract dream's attribute writes never clobber a value a user set, even on an `agent_created` page. The **body** participates too: `body_append` and `body_replace` record `provenance.body`, and a `body_replace` only overwrites when the incoming writer wins that precedence — otherwise it degrades to a lossless append (so an agent `replace` can never wipe a body a user authored). The body is the one field with two write modes: `append` (default, additive) and `replace` (rewrite/correct); both are `merge, not blind-replace` because precedence gates the overwrite.
 
 **Note on the discrepancy in the prior schema field** (corrected 2026-05-27): an earlier draft of doc 01 listed `"agent_authored"` and `"dream"` as values; the code only has `"user_authored"` and `"agent_created"`. The schema field declaration in §3.3 has been corrected to match.
 
@@ -564,8 +568,8 @@ LanceDB + FTS5 index each corpus entry
 ### 5.3 Episodic lifecycle (two-track model)
 
 Episodic is **track 2: raw memory**. It is surfaced by recency in search and is
-**never** consolidated into entity pages, and **never** auto-archived (N3/N4,
-`../../qa/post_migration_audit_2026-06.md`). It is a separate track from the consolidated
+**never** consolidated into entity pages, and **never** auto-archived (N3/N4).
+It is a separate track from the consolidated
 entity pages — nothing folds a fragment into a page.
 
 ```
@@ -822,4 +826,3 @@ When this module is locked, the migration tasks above will move into `09_impleme
 - How the search pipeline uses these structures: `03_search_pipeline.md` (pending)
 - Tools that create/modify these: `04_agent_tools.md` (pending)
 - Dream passes (extract + refine): `05_dream_cold_path.md`
-- Prior exploratory discussion: `../archive/40_exploracion_datos_y_relaciones.md`

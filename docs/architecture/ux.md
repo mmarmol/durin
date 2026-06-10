@@ -168,7 +168,7 @@ Mode dispatch (`/plan`, `/build`, `/mode`) works in every channel. Native autoco
 
 ## 4. Secrets subsystem
 
-Full design: archived `docs/archive/11_secrets_design.md`. API keys are no longer stored inline in `config.json`. The store is `~/.durin/secrets.json` (mode `0600`, outside the config tree). Each entry has two axes — `service` (classification, non-unique) and `scope` (consumer authorization) — plus account/description/origin.
+API keys are no longer stored inline in `config.json`. The store is `~/.durin/secrets.json` (mode `0600`, outside the config tree). Each entry has two axes — `service` (classification, non-unique) and `scope` (consumer authorization) — plus account/description/origin.
 
 **At-rest threat model — isolation, not encryption.** The store is plaintext on a `0600` file, deliberately *not* encrypted. A passphrase-encrypted store would buy little: `$HOME` is already user-readable and the agent needs the value in clear to use it, so encryption-at-rest is theatre unless backed by an OS keyring or an external manager (see §4.3). What actually moves the needle is the value living **only** in the store and in the env of the one subprocess that needs it — never in `config.*`, the model context, or the chat. The same posture is used by hermes (`~/.hermes/.env`, 0600) and openclaw (`~/.openclaw/*.json`, 0600); neither encrypts at rest either.
 
@@ -253,8 +253,8 @@ One-shot CLI commands (`status`, `doctor`, `config`) are intentionally **not** t
 | `durin upgrade [--check\|--migrate-only\|--ref]` | `durin/cli/upgrade.py` | Detects editable vs wheel install; pulls + reinstalls + replays config migration. |
 | `durin uninstall [--purge --keep-* --workspace]` | `durin/cli/uninstall.py` | Enumerates state under `~/.durin` + `~/.cache/durin`, prompts, deletes. `--purge` self-uninstalls in a subprocess. |
 | `durin doctor [--ping --fix --json]` | `durin/cli/doctor.py` | Runs a battery of small checks and exits non-zero on any `fail`. See [observability.md](observability.md). |
-| `durin provider login/logout`, `durin channels login/status` | `durin/cli/commands.py` | OAuth + channel-specific auth (kept separate because not single-key edits). |
-| `durin memory <subcommand>` | `durin/cli/memory_cmd.py` | Memory consolidation + drill-down + absorption. See [memory.md](memory.md). |
+| `durin oauth login/logout`, `durin channels login/status` | `durin/cli/commands.py` | OAuth + channel-specific auth (kept separate because not single-key edits). |
+| `durin memory <subcommand>` | `durin/cli/memory_cmd.py` | Memory consolidation + drill-down + absorption. See [memory/00_overview.md](memory/00_overview.md). |
 
 ### Config edit pipeline
 

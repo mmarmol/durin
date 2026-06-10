@@ -6,8 +6,7 @@
 > Canonical reference for durin's skill document format. durin's `SKILL.md` **is the
 > [agentskills.io](https://agentskills.io/specification) open standard** (the same format
 > Hermes, OpenClaw, Pi, Claude Code, Codex, Cursor, and 30+ tools use) **plus durin's own
-> behavior under the `metadata.durin.*` vendor namespace**. Decision + rationale:
-> [`docs/superpowers/specs/2026-06-03-skill-interop-standard-design.md`](../../superpowers/specs/2026-06-03-skill-interop-standard-design.md).
+> behavior under the `metadata.durin.*` vendor namespace**.
 
 ## Why this matters
 

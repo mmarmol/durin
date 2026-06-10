@@ -235,7 +235,7 @@ class AgentRunSpec:
     # runner calls this each iteration to obtain the active mode and filters
     # the tool definitions sent to the LLM. Returns None → no filtering
     # (equivalent to BUILD_MODE = full access). See durin/agent/agent_mode.py
-    # and docs/archive/34_external_agents_review.md §L3.
+    # and docs/architecture/loop.md §3.
     mode_provider: Any | None = None
     # Inspired by pi's ``transformContext``: an optional callback that
     # receives the full message list right before it is sent to the

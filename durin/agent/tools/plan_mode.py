@@ -1,4 +1,4 @@
-"""Plan mode tools — Sprint B / L3 (docs/archive/34_external_agents_review.md).
+"""Plan mode tools — Sprint B / L3 (docs/architecture/loop.md §3).
 
 Two LLM-callable tools that work with the agent-mode system in
 ``durin/agent/agent_mode.py``:
