@@ -65,6 +65,27 @@ All turn-scoped, defensive. They shape behaviour only when the model misbehaves 
 
 **Orientation tool — `repo_overview`.** `agent/tools/repo_overview.py` returns a depth-bounded structure tree plus a detected ecosystem (package manager, entrypoints) so the model can orient before diving in. It is purely structural — no embeddings, no PageRank, no AST — and local-workspace only, reusing the filesystem `_IGNORE_DIRS` noise filter and emitting telemetry. (Adapted from the OpenCode pattern; durin's adjustments are local-path-only + ignore-dir reuse.)
 
+### Tool write durability and fuzzy-edit matching
+
+- **Atomic writes**: every durable write performed by tools and the memory
+  vault (`write_file`, `edit_file`, plan files, output spills, all
+  `durin/memory/` page writes) goes through
+  `durin/utils/atomic_write.py` — tempfile in the target directory + fsync +
+  `os.replace`, preserving file mode and updating symlinked targets in place.
+  A crash mid-write can no longer leave a truncated file. New durable write
+  sites MUST use these helpers instead of `Path.write_text`.
+- **edit_file block-anchor matching**: the block-anchor fallback scores
+  candidate blocks by best-match containment of `old_text`'s middle lines
+  (insertion-tolerant, truncation-rejecting), thresholds 0.66 (single
+  candidate) / 0.85 (multiple). Non-exact matches are disclosed in the tool
+  result so the model can re-verify. Calibration cases live in
+  `tests/tools/test_edit_block_anchor.py`.
+- **grep engine**: when ripgrep is installed it pre-filters candidate files
+  (`rg -l --no-ignore --hidden`, same ignore dirs and size cap as the Python
+  walk — gitignored agent dirs stay searchable); matching and formatting
+  always run in Python, so results are identical with or without rg. The
+  `tool.grep` telemetry event records which engine served each call.
+
 ---
 
 ## 2. Hooks system
