@@ -575,3 +575,51 @@ class TestSubagentHook:
         ctx = _make_hook_context(error="something broke")
         await hook.after_iteration(ctx)
         assert status.error == "something broke"
+
+
+class TestAnnounceStructuredFrame:
+    """_announce_result also emits a structured tool_events frame so
+    channels render a subagent card instead of relying on the model's
+    summary or text scrubs (payload-canonical contract)."""
+
+    @pytest.mark.asyncio
+    async def test_announce_publishes_inbound_and_structured_outbound(self, tmp_path):
+        sm = _manager(tmp_path)
+        sm.bus.publish_inbound = AsyncMock()
+        sm.bus.publish_outbound = AsyncMock()
+
+        await sm._announce_result(
+            "t1", "research", "find docs", "Found 3 docs.",
+            {"channel": "websocket", "chat_id": "42"}, "ok",
+        )
+
+        sm.bus.publish_inbound.assert_awaited_once()
+        sm.bus.publish_outbound.assert_awaited_once()
+        out = sm.bus.publish_outbound.call_args.args[0]
+        assert out.channel == "websocket"
+        assert out.chat_id == "42"
+        assert out.metadata["_tool_hint"] is True
+        events = out.metadata["_tool_events"]
+        assert len(events) == 1
+        ev = events[0]
+        assert ev["name"] == "subagent_result"
+        assert ev["phase"] == "end"
+        assert ev["call_id"] == "subagent:t1"
+        assert ev["arguments"] == {"label": "research", "task": "find docs"}
+        assert ev["result"] == "Found 3 docs."
+        assert "error" not in ev
+
+    @pytest.mark.asyncio
+    async def test_announce_error_variant_sets_error_field(self, tmp_path):
+        sm = _manager(tmp_path)
+        sm.bus.publish_inbound = AsyncMock()
+        sm.bus.publish_outbound = AsyncMock()
+
+        await sm._announce_result(
+            "t2", "deploy", "ship it", "Error: boom",
+            {"channel": "telegram", "chat_id": "9"}, "error",
+        )
+
+        ev = sm.bus.publish_outbound.call_args.args[0].metadata["_tool_events"][0]
+        assert ev["phase"] == "error"
+        assert ev["error"] == "Error: boom"

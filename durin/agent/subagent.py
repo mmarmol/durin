@@ -4,6 +4,7 @@ import asyncio
 import json
 import time
 import uuid
+from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -345,6 +346,32 @@ class SubagentManager:
         )
 
         await self.bus.publish_inbound(msg)
+
+        # Structured user-facing copy: a synthetic tool_event rides the
+        # existing tool_hint pipeline (websocket frame → webui card, TUI
+        # bubble, transcript replay). The inbound announce above remains
+        # the MODEL's context — the model adds a brief natural summary; the
+        # card shows the full result (payload-canonical contract,
+        # docs/architecture/ux.md).
+        event: dict[str, Any] = {
+            "version": 1,
+            "phase": "end" if status == "ok" else "error",
+            "call_id": f"subagent:{task_id}",
+            "name": "subagent_result",
+            "arguments": {"label": label, "task": task},
+            "result": result,
+        }
+        if status != "ok":
+            event["error"] = result
+        with suppress(Exception):
+            from durin.bus.events import OutboundMessage
+
+            await self.bus.publish_outbound(OutboundMessage(
+                channel=origin["channel"],
+                chat_id=origin["chat_id"],
+                content="",
+                metadata={"_tool_hint": True, "_tool_events": [event]},
+            ))
         logger.debug("Subagent [{}] announced result to {}:{}", task_id, origin['channel'], origin['chat_id'])
 
     @staticmethod
