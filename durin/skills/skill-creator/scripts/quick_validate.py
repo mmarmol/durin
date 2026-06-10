@@ -4,6 +4,8 @@ Minimal validator for durin skill folders.
 """
 
 import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
@@ -212,8 +214,36 @@ def validate_skill(skill_path):
     body = content.split("---", 2)[2] if content.count("---") >= 2 else content
     _check_resource_links(skill_path, body, errors)
     _check_orphan_resources(skill_path, body, warnings)
+    _check_script_syntax(skill_path, errors)
 
     return _build_result(errors, warnings)
+
+
+def _check_script_syntax(skill_path: Path, errors: list[str]) -> None:
+    """Syntax-check bundled scripts WITHOUT executing them — the validator may
+    run over untrusted skills."""
+    scripts_dir = skill_path / "scripts"
+    if not scripts_dir.is_dir():
+        return
+    for script in sorted(scripts_dir.rglob("*")):
+        if not script.is_file() or "__pycache__" in script.parts:
+            continue
+        if script.suffix == ".py":
+            try:
+                compile(script.read_text(encoding="utf-8"), str(script), "exec")
+            except (OSError, SyntaxError, ValueError) as exc:
+                errors.append(f"Script has syntax errors: {script.name} ({exc})")
+        elif script.suffix == ".sh":
+            bash = shutil.which("bash")
+            if bash is None:
+                continue
+            proc = subprocess.run(
+                [bash, "-n", str(script)], capture_output=True, text=True, timeout=10
+            )
+            if proc.returncode != 0:
+                stderr = proc.stderr.strip()
+                detail = stderr.splitlines()[-1] if stderr else "bash -n failed"
+                errors.append(f"Script has syntax errors: {script.name} ({detail})")
 
 
 def _check_orphan_resources(skill_path: Path, body: str, warnings: list[str]) -> None:
