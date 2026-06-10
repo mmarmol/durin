@@ -145,6 +145,32 @@ class TestLimits:
             await reg.kill(sess.id, force=True)
 
 
+class TestConfigOverride:
+
+    @pytest.mark.asyncio
+    async def test_config_overrides_limits(self, tmp_path):
+        from durin.agent.tools.process_registry import ProcessToolConfig
+        reg = ProcessRegistry(
+            max_running=ProcessToolConfig(max_running=1).max_running,
+            max_output_chars=500,
+            finished_ttl_s=10,
+        )
+        assert reg.max_running == 1
+        assert reg.max_output_chars == 500
+        assert reg.finished_ttl_s == 10
+        sess = await reg.spawn("sleep 5", cwd=str(tmp_path), env=_env())
+        try:
+            with pytest.raises(RuntimeError, match="Too many background processes"):
+                await reg.spawn("sleep 5", cwd=str(tmp_path), env=_env())
+        finally:
+            await reg.kill(sess.id, force=True)
+
+    def test_defaults_when_no_config(self):
+        reg = ProcessRegistry()
+        assert reg.max_running == ProcessRegistry.MAX_RUNNING
+        assert reg.max_output_chars == ProcessRegistry.MAX_OUTPUT_CHARS
+
+
 class TestShutdown:
 
     @pytest.mark.asyncio

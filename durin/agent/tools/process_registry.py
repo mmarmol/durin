@@ -26,9 +26,20 @@ from dataclasses import dataclass, field
 
 from loguru import logger
 
+from pydantic import Field
+
 from durin.agent.tools._telemetry import emit_tool_event
+from durin.config.schema import Base
 
 _IS_WINDOWS = sys.platform == "win32"
+
+
+class ProcessToolConfig(Base):
+    """Background-process registry knobs (exec background=true / process tool)."""
+
+    max_running: int = 16            # concurrent background processes
+    max_output_chars: int = 200_000  # rolling tail buffer per process
+    finished_ttl_s: int = 1800       # keep finished entries this long (30 min)
 
 
 @dataclass
@@ -56,12 +67,27 @@ class ProcessSession:
 class ProcessRegistry:
     """Process-global registry of background shell processes."""
 
+    # Class attrs are the defaults; instance attrs (set in __init__) are what
+    # the code reads, so config can override per-deployment.
     MAX_OUTPUT_CHARS = 200_000   # rolling tail per process
     MAX_RUNNING = 16             # concurrent background processes
     FINISHED_TTL_S = 1800.0      # finished entries pruned after 30 min
     MAX_FINISHED = 64
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        max_running: int | None = None,
+        max_output_chars: int | None = None,
+        finished_ttl_s: float | None = None,
+    ) -> None:
+        self.max_running = max_running if max_running is not None else self.MAX_RUNNING
+        self.max_output_chars = (
+            max_output_chars if max_output_chars is not None else self.MAX_OUTPUT_CHARS
+        )
+        self.finished_ttl_s = (
+            finished_ttl_s if finished_ttl_s is not None else self.FINISHED_TTL_S
+        )
         self._running: dict[str, ProcessSession] = {}
         self._finished: dict[str, ProcessSession] = {}
 
@@ -76,10 +102,10 @@ class ProcessRegistry:
         tool runs its full guard pipeline before handing off).
         """
         self._prune_finished()
-        if len(self._running) >= self.MAX_RUNNING:
+        if len(self._running) >= self.max_running:
             raise RuntimeError(
                 f"Too many background processes ({len(self._running)} running, "
-                f"max {self.MAX_RUNNING}). Kill one with the process tool first."
+                f"max {self.max_running}). Kill one with the process tool first."
             )
 
         if _IS_WINDOWS:
@@ -129,8 +155,8 @@ class ProcessRegistry:
                 if not chunk:
                     break
                 sess.output_buffer += chunk.decode("utf-8", errors="replace")
-                if len(sess.output_buffer) > self.MAX_OUTPUT_CHARS:
-                    sess.output_buffer = sess.output_buffer[-self.MAX_OUTPUT_CHARS:]
+                if len(sess.output_buffer) > self.max_output_chars:
+                    sess.output_buffer = sess.output_buffer[-self.max_output_chars:]
         except Exception as e:  # noqa: BLE001 — reader must never crash the loop
             logger.debug("process {} reader error: {}", sess.id, e)
         finally:
@@ -157,7 +183,7 @@ class ProcessRegistry:
         now = time.monotonic()
         stale = [
             sid for sid, s in self._finished.items()
-            if now - (s.finished_at or now) > self.FINISHED_TTL_S
+            if now - (s.finished_at or now) > self.finished_ttl_s
         ]
         for sid in stale:
             del self._finished[sid]
@@ -247,9 +273,22 @@ class ProcessRegistry:
 _registry: ProcessRegistry | None = None
 
 
-def get_process_registry() -> ProcessRegistry:
-    """Process-global singleton (durin is a single-process agent)."""
+def get_process_registry(
+    config: ProcessToolConfig | None = None,
+) -> ProcessRegistry:
+    """Process-global singleton (durin is a single-process agent).
+
+    ``config`` is applied only when the singleton is first created — the
+    first tool to touch the registry (exec or process) configures it.
+    """
     global _registry
     if _registry is None:
-        _registry = ProcessRegistry()
+        if config is not None:
+            _registry = ProcessRegistry(
+                max_running=config.max_running,
+                max_output_chars=config.max_output_chars,
+                finished_ttl_s=config.finished_ttl_s,
+            )
+        else:
+            _registry = ProcessRegistry()
     return _registry

@@ -120,7 +120,9 @@ group (`start_new_session=True`), stderr merged into stdout, and an asyncio
 reader task feeding a rolling 200 KB tail buffer. The `process` tool
 lists/polls/kills tracked processes (kill signals the whole group, SIGTERM →
 SIGKILL escalation); discovery is pure polling — pair with the `sleep` tool.
-Limits: 16 concurrent background processes, finished entries kept 30 min.
+Limits (configurable via `tools.process.{max_running, max_output_chars,
+finished_ttl_s}`): 16 concurrent background processes, 200 KB tail buffer,
+finished entries kept 30 min.
 `AgentLoop.close_mcp` kills all tracked groups on shutdown. v1 limitation
 (deliberate): no crash-recovery checkpoint — if the gateway dies, running
 background processes are orphaned (keep running, untracked). Telemetry:
