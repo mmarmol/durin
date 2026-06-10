@@ -258,3 +258,12 @@ def test_validate_skill_warns_on_oversized_skill_md(tmp_path: Path) -> None:
     assert valid  # warning, not error
     assert "WARNING: SKILL.md is" in message
     assert "500" in message
+
+
+def test_init_skill_template_has_rubric_stubs_and_no_codex(tmp_path: Path) -> None:
+    skill_dir = init_skill.init_skill("stub-skill", tmp_path, [], include_examples=False)
+
+    content = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+    assert "## Common Pitfalls" in content
+    assert "## Verification Checklist" in content
+    assert "Codex" not in content
