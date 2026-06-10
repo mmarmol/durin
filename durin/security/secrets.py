@@ -27,6 +27,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from durin.utils.atomic_write import atomic_write_text
+
 __all__ = [
     "SecretEntry",
     "SecretStore",
@@ -176,12 +178,14 @@ class SecretStore:
                 for name, entry in sorted(self._entries.items())
             },
         }
-        # O_CREAT with 0600 so the file is never briefly world-readable.
-        fd = os.open(self._path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2, ensure_ascii=False)
-        # Re-assert mode in case the file pre-existed with looser perms.
-        os.chmod(self._path, 0o600)
+        # Atomic write with mode 0600 — a crash mid-write must never leave a
+        # truncated vault (lost credentials), and the file must never be
+        # briefly world-readable (mode is forced even on a fresh file).
+        atomic_write_text(
+            self._path,
+            json.dumps(payload, indent=2, ensure_ascii=False),
+            mode=0o600,
+        )
 
     # -- queries ----------------------------------------------------------
     def get(self, name: str) -> SecretEntry | None:
@@ -576,14 +580,12 @@ def migrate_plaintext_provider_keys(config_path: Path | None = None) -> list[str
     store.save()
 
     if providers_file is not None:
-        providers_file.write_text(
-            _json.dumps(providers, indent=2, ensure_ascii=False), encoding="utf-8"
+        atomic_write_text(
+            providers_file, _json.dumps(providers, indent=2, ensure_ascii=False)
         )
     elif mono is not None:
         mono["providers"] = providers
-        path.write_text(
-            _json.dumps(mono, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
+        atomic_write_text(path, _json.dumps(mono, indent=2, ensure_ascii=False))
 
     get_secret_store(reload=True)
     return created
