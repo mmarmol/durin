@@ -28,7 +28,9 @@ async def test_records_pending_question_on_session_metadata(tmp_path):
 
     out = await tool.execute(question="Which framework?")
 
-    assert "YIELD TO USER" in out
+    assert "presented to the user" in out
+    assert "STOP" in out
+    assert "do not repeat" in out.lower()
     assert "Which framework?" in out
 
     sess = sm.get_or_create("cli:d")
@@ -119,9 +121,10 @@ async def test_no_session_context_errors_gracefully(tmp_path):
     # No request context set ⇒ no session resolution; the tool must
     # still return a useful result instead of crashing.
     out = await tool.execute(question="Does this still respond?")
-    # Falls through: no session metadata written, but the YIELD message
+    # Falls through: no session metadata written, but the yield message
     # is still returned so the model knows what to do.
-    assert "YIELD TO USER" in out
+    assert "presented to the user" in out
+    assert "STOP" in out
 
 
 @pytest.mark.asyncio
