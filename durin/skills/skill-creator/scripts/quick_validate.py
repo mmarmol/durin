@@ -211,8 +211,24 @@ def validate_skill(skill_path):
 
     body = content.split("---", 2)[2] if content.count("---") >= 2 else content
     _check_resource_links(skill_path, body, errors)
+    _check_orphan_resources(skill_path, body, warnings)
 
     return _build_result(errors, warnings)
+
+
+def _check_orphan_resources(skill_path: Path, body: str, warnings: list[str]) -> None:
+    """references/ and scripts/ files the body never mentions are
+    undiscoverable by the agent. assets/ is exempt (used in output, not read)."""
+    for sub in ("references", "scripts"):
+        directory = skill_path / sub
+        if not directory.is_dir():
+            continue
+        for resource in sorted(directory.rglob("*")):
+            if not resource.is_file() or "__pycache__" in resource.parts:
+                continue
+            rel = resource.relative_to(skill_path).as_posix()
+            if rel not in body:
+                warnings.append(f"Resource never mentioned in SKILL.md: {rel}")
 
 
 def _check_resource_links(skill_path: Path, body: str, errors: list[str]) -> None:
