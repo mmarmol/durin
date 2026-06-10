@@ -107,3 +107,48 @@ class TestRunPostEditCheck:
         cfg = PostEditCheckConfig()
         assert "py" in cfg.checkers
         assert "ruff" in cfg.checkers["py"]
+
+
+# ---------------------------------------------------------------------------
+# Integration with write_file / edit_file
+# ---------------------------------------------------------------------------
+
+
+class TestToolIntegration:
+
+    @pytest.mark.asyncio
+    async def test_write_file_appends_findings(self, tmp_path):
+        from durin.agent.tools.filesystem import WriteFileTool
+        cfg = _config(tmp_path, 'echo "fake-finding-W1"; exit 1')
+        tool = WriteFileTool(workspace=tmp_path, post_edit_config=cfg)
+        result = await tool.execute(path="mod.py", content="import os\n")
+        assert "Successfully wrote" in result
+        assert "fake-finding-W1" in result
+
+    @pytest.mark.asyncio
+    async def test_edit_file_appends_findings(self, tmp_path):
+        from durin.agent.tools.filesystem import EditFileTool, ReadFileTool
+        cfg = _config(tmp_path, 'echo "fake-finding-E1"; exit 1')
+        f = tmp_path / "mod.py"
+        f.write_text("x = 1\n", encoding="utf-8")
+        await ReadFileTool(workspace=tmp_path).execute(path="mod.py")
+        tool = EditFileTool(workspace=tmp_path, post_edit_config=cfg)
+        result = await tool.execute(path="mod.py", old_text="x = 1", new_text="x = 2")
+        assert "Successfully edited" in result
+        assert "fake-finding-E1" in result
+
+    @pytest.mark.asyncio
+    async def test_clean_checker_leaves_message_unchanged(self, tmp_path):
+        from durin.agent.tools.filesystem import WriteFileTool
+        cfg = _config(tmp_path, "exit 0")
+        tool = WriteFileTool(workspace=tmp_path, post_edit_config=cfg)
+        result = await tool.execute(path="mod.py", content="x = 1\n")
+        assert "Successfully wrote" in result
+        assert "post-edit check" not in result
+
+    @pytest.mark.asyncio
+    async def test_no_config_default_unchanged(self, tmp_path):
+        from durin.agent.tools.filesystem import WriteFileTool
+        tool = WriteFileTool(workspace=tmp_path)
+        result = await tool.execute(path="notes.md", content="hello")
+        assert "Successfully wrote" in result

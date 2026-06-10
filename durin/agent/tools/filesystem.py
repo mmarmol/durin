@@ -17,6 +17,7 @@ from durin.agent.tools.schema import (
     StringSchema,
     tool_parameters_schema,
 )
+from durin.agent.tools.post_edit_check import run_post_edit_check
 from durin.telemetry.logger import current_telemetry
 from durin.utils.atomic_write import atomic_write_bytes, atomic_write_text
 from durin.utils.helpers import build_image_content_blocks, detect_image_mime
@@ -31,10 +32,13 @@ class _FsTool(Tool):
         allowed_dir: Path | None = None,
         extra_allowed_dirs: list[Path] | None = None,
         file_states: FileStates | None = None,
+        post_edit_config: Any = None,
     ):
         self._workspace = workspace
         self._allowed_dir = allowed_dir
         self._extra_allowed_dirs = extra_allowed_dirs
+        # PostEditCheckConfig | None — only Write/Edit consume it.
+        self._post_edit_config = post_edit_config
         # Explicit state is used by isolated runners like Dream/subagents.
         # Main AgentLoop tools leave this unset and resolve state from the
         # current async task, which keeps shared tool instances session-safe.
@@ -56,6 +60,7 @@ class _FsTool(Tool):
             allowed_dir=allowed_dir,
             extra_allowed_dirs=extra_read,
             file_states=ctx.file_state_store,
+            post_edit_config=getattr(ctx.config, "post_edit_check", None),
         )
 
     @property
@@ -444,7 +449,11 @@ class WriteFileTool(_FsTool):
             fp = self._resolve(path)
             atomic_write_text(fp, content)
             self._file_states.record_write(fp)
-            return f"Successfully wrote {len(content)} characters to {fp}"
+            msg = f"Successfully wrote {len(content)} characters to {fp}"
+            check = await run_post_edit_check(fp, self._post_edit_config)
+            if check:
+                msg += check
+            return msg
         except PermissionError as e:
             return f"Error: {e}"
         except Exception as e:
@@ -990,6 +999,9 @@ class EditFileTool(_FsTool):
                     f"\n(note: old_text matched via the '{strategy}' fallback, "
                     "not exactly — re-read the file if the result looks unexpected)"
                 )
+            check = await run_post_edit_check(fp, self._post_edit_config)
+            if check:
+                msg += check
             if warning:
                 msg = f"{warning}\n{msg}"
             return msg
