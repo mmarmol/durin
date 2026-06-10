@@ -55,6 +55,10 @@ lost" surfaced to the model); (4) tools/list_changed; (5) broader transient
 detection by exception class. OAuth/sampling deferred until remote servers
 matter. Precondition for browser-via-playwright-MCP.
 
+**Notas de investigación** (máquina local, gitignored):
+`.workdocs/research/2026-06-10-mcp-client-investigation.md` y
+`.workdocs/research/2026-06-10-tool-gaps-deep-dive.md`.
+
 **Estado**: pendiente — investigación completa, implementación no iniciada.
 
 ### P3 — Comando para cambiar modelo es precario — autocompletion progresivo
