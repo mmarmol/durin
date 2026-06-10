@@ -1,0 +1,85 @@
+"""In-turn pending-answer registry for the blocking ``ask_user_question``.
+
+V2 of the ask_user contract (docs/architecture/ux.md): instead of yielding
+the turn, the tool awaits a Future registered here; the agent loop's inbound
+consumer resolves it with the user's next plain-text message, so the model
+continues the SAME turn with the answer as the tool result.
+
+Process-local by design: a blocked turn cannot survive a restart anyway —
+on any miss (timeout, media reply, restart) the tool falls back to the V1
+yield semantics, which `pending_question` session metadata keeps working.
+"""
+
+from __future__ import annotations
+
+import asyncio
+
+
+class _Fallback:
+    """Sentinel delivered when the waiter must fall back to yield semantics."""
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid
+        return "<pending_answers.FALLBACK>"
+
+
+FALLBACK = _Fallback()
+
+_WAITERS: dict[str, asyncio.Future] = {}
+
+
+def create(session_key: str) -> asyncio.Future:
+    """Register a fresh waiter for *session_key*, replacing any stale one."""
+    stale = _WAITERS.pop(session_key, None)
+    if stale is not None and not stale.done():
+        stale.cancel()
+    fut: asyncio.Future = asyncio.get_event_loop().create_future()
+    _WAITERS[session_key] = fut
+    return fut
+
+
+def is_waiting(session_key: str) -> bool:
+    """True when a live (unresolved) waiter exists for *session_key*."""
+    fut = _WAITERS.get(session_key)
+    return fut is not None and not fut.done()
+
+
+def _pop_live(session_key: str) -> asyncio.Future | None:
+    fut = _WAITERS.get(session_key)
+    if fut is None:
+        return None
+    del _WAITERS[session_key]
+    if fut.done():
+        return None
+    return fut
+
+
+def resolve(session_key: str, text: str) -> bool:
+    """Deliver *text* to the waiter. True when a live waiter consumed it."""
+    fut = _pop_live(session_key)
+    if fut is None:
+        return False
+    fut.set_result(text)
+    return True
+
+
+def fallback(session_key: str) -> bool:
+    """Tell the waiter to fall back to yield semantics (e.g. media reply)."""
+    fut = _pop_live(session_key)
+    if fut is None:
+        return False
+    fut.set_result(FALLBACK)
+    return True
+
+
+def discard(session_key: str, fut: asyncio.Future) -> None:
+    """Remove *fut* from the registry if it is still the registered waiter."""
+    if _WAITERS.get(session_key) is fut:
+        del _WAITERS[session_key]
+
+
+def reset() -> None:
+    """Clear all waiters (tests)."""
+    for fut in _WAITERS.values():
+        if not fut.done():
+            fut.cancel()
+    _WAITERS.clear()
