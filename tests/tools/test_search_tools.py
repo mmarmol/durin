@@ -222,6 +222,10 @@ async def test_grep_reports_skipped_binary_and_large_files(
     (tmp_path / "large.txt").write_text("x" * 20, encoding="utf-8")
 
     monkeypatch.setattr(GrepTool, "_MAX_FILE_BYTES", 10)
+    # Skip-counters are bookkeeping of the Python walk; under the rg
+    # pre-filter those files never reach the loop (rg skips binary/large
+    # too). Force the Python path so the counters are exercised.
+    monkeypatch.setattr("durin.agent.tools.search.shutil.which", lambda _: None)
     tool = GrepTool(workspace=tmp_path, allowed_dir=tmp_path)
     result = await tool.execute(pattern="needle", path=".")
 
@@ -305,3 +309,65 @@ def test_subagent_prompt_respects_disabled_skills(tmp_path: Path) -> None:
 
     assert "alpha" not in prompt
     assert "beta" in prompt
+
+
+# ---------------------------------------------------------------------------
+# ripgrep pre-filter (Task 8 — tool-quality-fixes plan)
+# ---------------------------------------------------------------------------
+
+import shutil as _shutil
+
+from durin.agent.tools.search import GrepTool as _GrepToolRg
+
+_HAS_RG = _shutil.which("rg") is not None
+
+
+class TestRipgrepPrefilter:
+
+    @pytest.fixture()
+    def tree(self, tmp_path):
+        (tmp_path / "a.py").write_text("needle_alpha = 1\n", encoding="utf-8")
+        (tmp_path / "b.py").write_text("nothing here\n", encoding="utf-8")
+        sub = tmp_path / "pkg"
+        sub.mkdir()
+        (sub / "c.py").write_text("x = needle_alpha\n", encoding="utf-8")
+        return tmp_path
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(not _HAS_RG, reason="ripgrep not installed")
+    async def test_rg_and_python_paths_agree(self, tree, monkeypatch):
+        tool = _GrepToolRg(workspace=tree)
+        rg_result = await tool.execute(
+            pattern="needle_alpha", path=str(tree), output_mode="content",
+        )
+        monkeypatch.setattr("durin.agent.tools.search.shutil.which", lambda _: None)
+        py_result = await tool.execute(
+            pattern="needle_alpha", path=str(tree), output_mode="content",
+        )
+        assert rg_result == py_result
+        assert "a.py" in rg_result and "c.py" in rg_result
+
+    @pytest.mark.asyncio
+    async def test_fallback_when_rg_missing(self, tree, monkeypatch):
+        monkeypatch.setattr("durin.agent.tools.search.shutil.which", lambda _: None)
+        tool = _GrepToolRg(workspace=tree)
+        result = await tool.execute(pattern="needle_alpha", path=str(tree))
+        assert "a.py" in result
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(not _HAS_RG, reason="ripgrep not installed")
+    async def test_python_only_regex_falls_back(self, tree):
+        # Lookbehind is unsupported by rg's default engine (exit 2) — the
+        # tool must silently fall back to the Python engine and still match.
+        tool = _GrepToolRg(workspace=tree)
+        result = await tool.execute(
+            pattern=r"(?<=needle_)alpha", path=str(tree), output_mode="content",
+        )
+        assert "a.py" in result
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(not _HAS_RG, reason="ripgrep not installed")
+    async def test_rg_no_matches(self, tree):
+        tool = _GrepToolRg(workspace=tree)
+        result = await tool.execute(pattern="zzz_not_there", path=str(tree))
+        assert "No matches found" in result
