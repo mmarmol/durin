@@ -5,7 +5,7 @@
 > guards, hook surface, agent modes, sessions, providers, sandboxing,
 > and long-running goals.
 >
-> See [memory.md](memory.md) for the memory subsystem,
+> See [memory/00_overview.md](memory/00_overview.md) for the memory subsystem,
 > [observability.md](observability.md) for telemetry/doctor/gateway,
 > [ux.md](ux.md) for CLI/TUI surfaces.
 
@@ -51,7 +51,8 @@ All turn-scoped, defensive. They shape behaviour only when the model misbehaves 
 | **Re-sanitize after `context_transform`** | Runs `drop_orphan_tool_results` + `backfill_missing_tool_results` once more after the optional transform, so a dropped message mid-pair doesn't ship an invalid `tool_use`/`tool_result` mismatch. | `runner.py::_build_request_kwargs` |
 | **Compaction grace window** | When `DURIN_LLM_TIMEOUT_S` is about to fire and `is_compacting` callback returns True, deadline extends once by `DURIN_COMPACTION_GRACE_S` (default 30s). Emits `compaction.grace_extended`. One-shot per request. | `runner.py::_await_with_compaction_grace` |
 | **Per-model `parallel_tool_calls` gating** | `agents.defaults.parallel_tool_calls` is a substring-keyed dict mapping model name → bool. Provider injects the flag only on match AND when `tools` is non-null. Emits `provider.parallel_tool_calls_injected` once per unique triple per process. | `OpenAICompatProvider._resolve_parallel_tool_calls` |
-| **Per-turn aggregate tool-result budget** | Sums tool result sizes; over `DURIN_TURN_BUDGET_CHARS` (default 200 KB) spills the largest not-yet-persisted results to disk, largest first, until aggregate fits. `=0` disables. Emits `turn_budget.enforced`. | `runner.py::_enforce_turn_budget` |
+| **Per-turn aggregate tool-result budget** (retroactive) | Sums tool result sizes; over `DURIN_TURN_BUDGET_CHARS` (default 200 KB) spills the largest not-yet-persisted results to disk, largest first, until aggregate fits. `=0` disables. Emits `turn_budget.enforced`. | `runner.py::_enforce_turn_budget` |
+| **Live per-tool output spill** (at moment of overflow) | Distinct from the retroactive turn budget: when a single tool's output exceeds its own budget, the FULL content is written to `<ws>/.durin/spills/` *as it overflows* (not later during compaction), and the model gets a truncated head+tail plus a `read_file` reference. Used by `exec`/shell. | `agent/tools/output_spill.py::truncate_with_spill` |
 | **Heartbeat session mode** | Default: one long-running `heartbeat` session (trimmed by `keep_recent_messages`). `heartbeat.isolatedSessions=true` gives each tick a fresh `heartbeat-<12hex>` session deleted after the run. | `heartbeat/service.py` |
 | **Pre-emptive compaction trigger** | Fires when `estimated_tokens > preemptive_compact_ratio * context_window` (default 0.5; 1M-window models override to ~0.15). Emits `compaction.preemptive_trigger`. | `agent/memory.py::Consolidator` |
 | **Mid-turn precheck signal** | After sanitize pipeline each iteration, estimates token cost; if over input budget, aborts with `stop_reason=mid_turn_precheck_overflow` BEFORE the LLM call. Emits `mid_turn_precheck.overflow`. | `runner.py::_mid_turn_precheck` |
@@ -61,6 +62,8 @@ All turn-scoped, defensive. They shape behaviour only when the model misbehaves 
 | **History image/audio prune** | Keeps most recent `DURIN_HISTORY_IMAGE_PRESERVE_TURNS` (default 3) intact; older user/tool messages get media blocks replaced with `[image data removed - already processed by model]` (or audio equivalent). Idempotent. Emits `history_media.pruned`. | `utils/history_image_prune.py` |
 | **3-tier system prompt** | Stable (identity → bootstrap → active-skills → catalog) + Context (active mode suffix) + Volatile (memory → recent history → archived summary), joined with `\n\n---\n\n`. Stable byte-identical across turns for cache hits. | `agent/context.py::ContextBuilder` |
 | **Post-compaction loop guard** | Armed for `DURIN_POST_COMPACTION_GUARD_WINDOW` (default 3) tool calls after a compaction round. Same `(name, args_hash, result_hash)` triple repeating `window_size` times aborts with `stop_reason=post_compaction_loop`. Emits `post_compaction_loop.tripped`. | `utils/post_compaction_guard.py` |
+
+**Orientation tool — `repo_overview`.** `agent/tools/repo_overview.py` returns a depth-bounded structure tree plus a detected ecosystem (package manager, entrypoints) so the model can orient before diving in. It is purely structural — no embeddings, no PageRank, no AST — and local-workspace only, reusing the filesystem `_IGNORE_DIRS` noise filter and emitting telemetry. (Adapted from the OpenCode pattern; durin's adjustments are local-path-only + ignore-dir reuse.)
 
 ---
 

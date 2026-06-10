@@ -200,7 +200,8 @@ refine pass.
 | `aliases` | — | Alternate names / identifiers for this entity. Each becomes an `alias` field-patch. |
 | `relations` | — | Relations to other entities. Each item is an object with required `to` (`<type>:<slug>`) and `type` (relation kind, e.g. `partner`, `makes`, `works_at`); extra keys are allowed (`additional_properties=True`, e.g. `since`). Items missing `to`/`type` are skipped. |
 | `derived_from` | — | Source documents this entity was distilled from — the `reference:<slug>` ref(s) returned by `memory_ingest`. Each becomes a `derived_from` field-patch (append + dedup, ref-keyed provenance). Items not starting with `reference:` are skipped. |
-| `body` | — | Prose describing what you know about this entity. Appended via a `body_append` field-patch. |
+| `body` | — | Prose describing what you know about this entity. Applied via a `body_append` field-patch (default) or `body_replace` per `body_mode`. |
+| `body_mode` | — | How to apply `body`: `append` (default) adds an attributed section without losing prior prose; `replace` overwrites the whole body. Enum `["append", "replace"]`. A `replace` over a user-authored body degrades to an `append` (precedence `user > dream > agent` on `provenance.body`). |
 
 **Do NOT pass structured attributes.** The schema has no `attributes` param by
 design — the dream extracts typed attributes from the prose `body`. The agent
@@ -343,7 +344,7 @@ the document grep-able.
 ```
 
 Notes:
-- `saved_to` and `meta_path` are paths returned from [`ingestion.py`](../../durin/memory/ingestion.py) (`result["source"]` / `result["meta_path"]`).
+- `saved_to` and `meta_path` are paths returned from [`ingestion.py`](../../../durin/memory/ingestion.py) (`result["source"]` / `result["meta_path"]`).
 - `reference` is the `reference:<slug>` id of the stored reference. It is present **only when the reference write succeeded** — the reference write is best-effort and does not roll back the verbatim ingest if it fails (the key is omitted on failure or when memory is disabled).
 - **Key order (C1):** `id` + `reference` are emitted **first**, before `content` (the whole doc). The agent result is head-truncated at 16 KB; placing the ref before the body keeps `reference:<slug>` readable on large documents so the entity-linking flow (`memory_upsert_entity(derived_from=[...])`) survives truncation.
 - `id` is `sha256(filename + "\0" + content)[:12]` — re-ingesting the same file is idempotent, but renaming the file before re-ingest produces a different id (and therefore a duplicate entry under `ingested/`). If the user wants to "update" a previously-ingested file, the workflow is: re-ingest, then archive the old `ingested/<old-id>/` directory manually (or accept the duplicate; both versions live in git history).
