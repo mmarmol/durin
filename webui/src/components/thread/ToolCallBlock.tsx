@@ -145,7 +145,7 @@ export function ToolCallBlock({ event }: ToolCallBlockProps) {
  * before sending; the field is also free-text for an "other" answer.
  * Submitting routes through ThreadActions as the user's next message.
  */
-function AskUserAnswer({ event }: { event: ToolProgressEvent }) {
+export function AskUserAnswer({ event }: { event: ToolProgressEvent }) {
   const { t } = useTranslation();
   const actions = useThreadActions();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -240,7 +240,7 @@ function AskUserAnswer({ event }: { event: ToolProgressEvent }) {
  * never enters the conversation or a URL. The agent is told only that
  * the secret now exists.
  */
-function RequestSecretPanel({ event }: { event: ToolProgressEvent }) {
+export function RequestSecretPanel({ event }: { event: ToolProgressEvent }) {
   const { t } = useTranslation();
   const actions = useThreadActions();
   const name = argString(event.arguments, "name") ?? "";

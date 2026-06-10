@@ -327,7 +327,18 @@
     "agentActivityLiveSummary": "進行中… · {{reasoning}} 步 · {{tools}} 次工具呼叫",
     "agentActivityLiveToolsOnly": "進行中… · {{tools}} 次工具呼叫",
     "imageAttachment": "圖片附件",
-    "turnLatencyTitle": "本輪耗時（端到端）"
+    "turnLatencyTitle": "本輪耗時（端到端）",
+    "askUser": {
+      "answered": "已於下方回答"
+    },
+    "todos": {
+      "title": "任務清單"
+    },
+    "plan": {
+      "title": "擬議計畫",
+      "approve": "核准 (/build)",
+      "hint": "或回覆意見以調整計畫"
+    }
   },
   "lightbox": {
     "title": "圖片預覽",

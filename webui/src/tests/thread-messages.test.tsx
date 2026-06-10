@@ -90,3 +90,55 @@ describe("ThreadMessages", () => {
     expect(screen.getAllByRole("button", { name: "Copy reply" })).toHaveLength(1);
   });
 });
+
+describe("ThreadMessages — hoisted tool blocks", () => {
+  it("hoists ask_user events out of the activity cluster", () => {
+    const messages: UIMessage[] = [
+      { id: "u1", role: "user", content: "hi", createdAt: 1 },
+      {
+        id: "t1", role: "tool", kind: "trace", content: "", createdAt: 2,
+        toolEvents: [
+          { phase: "end", call_id: "a", name: "read_file", arguments: { path: "x" } },
+          { phase: "end", call_id: "b", name: "ask_user_question",
+            arguments: { question: "Color?", options: ["red"] } },
+        ],
+      },
+    ];
+    render(<ThreadMessages messages={messages} />);
+    // The question panel is visible WITHOUT expanding anything:
+    expect(screen.getByText(/Color\?/)).toBeInTheDocument();
+    // read_file stays behind the collapsed cluster header:
+    expect(screen.queryByText(/read_file/)).not.toBeInTheDocument();
+  });
+
+  it("marks a hoisted question answered when a later user message exists", () => {
+    const messages: UIMessage[] = [
+      {
+        id: "t1", role: "tool", kind: "trace", content: "", createdAt: 1,
+        toolEvents: [
+          { phase: "end", call_id: "b", name: "ask_user_question",
+            arguments: { question: "Color?", options: ["red"] } },
+        ],
+      },
+      { id: "u2", role: "user", content: "red", createdAt: 2 },
+    ];
+    render(<ThreadMessages messages={messages} />);
+    expect(screen.getByText(/Color\?/)).toBeInTheDocument();
+    // Answered: no input affordance remains on the block.
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+  });
+
+  it("renders chips for lifecycle tools instead of burying them", () => {
+    const messages: UIMessage[] = [
+      {
+        id: "t1", role: "tool", kind: "trace", content: "", createdAt: 1,
+        toolEvents: [
+          { phase: "end", call_id: "c", name: "cron",
+            arguments: { action: "add", name: "daily-report" } },
+        ],
+      },
+    ];
+    render(<ThreadMessages messages={messages} />);
+    expect(screen.getByText(/daily-report/)).toBeInTheDocument();
+  });
+});
