@@ -699,7 +699,11 @@
     "agentActivityReasoningOnly": "{{count}} steps",
     "agentActivityReasoningOnly_one": "1 step",
     "agentActivityLiveReasoningOnly": "Working… · {{count}} steps",
-    "agentActivityLiveReasoningOnly_one": "Working… · 1 step"
+    "agentActivityLiveReasoningOnly_one": "Working… · 1 step",
+    "toolBody": {
+      "collapse": "collapse",
+      "more": "+{{count}} more"
+    }
   },
   "lightbox": {
     "title": "Image preview",

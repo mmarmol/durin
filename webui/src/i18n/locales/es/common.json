@@ -700,7 +700,11 @@
     "agentActivityReasoningOnly": "{{count}} pasos",
     "agentActivityReasoningOnly_one": "1 paso",
     "agentActivityLiveReasoningOnly": "Trabajando… · {{count}} pasos",
-    "agentActivityLiveReasoningOnly_one": "Trabajando… · 1 paso"
+    "agentActivityLiveReasoningOnly_one": "Trabajando… · 1 paso",
+    "toolBody": {
+      "collapse": "contraer",
+      "more": "+{{count}} más"
+    }
   },
   "lightbox": {
     "title": "Vista previa de imagen",

@@ -349,7 +349,11 @@
     "agentActivityReasoningOnly": "{{count}} étapes",
     "agentActivityReasoningOnly_one": "1 étape",
     "agentActivityLiveReasoningOnly": "En cours… · {{count}} étapes",
-    "agentActivityLiveReasoningOnly_one": "En cours… · 1 étape"
+    "agentActivityLiveReasoningOnly_one": "En cours… · 1 étape",
+    "toolBody": {
+      "collapse": "réduire",
+      "more": "+{{count}} de plus"
+    }
   },
   "lightbox": {
     "title": "Aperçu de l’image",

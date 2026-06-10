@@ -342,7 +342,11 @@
       "hint": "またはフィードバックを返信して改善できます"
     },
     "agentActivityReasoningOnly": "{{count}} ステップ",
-    "agentActivityLiveReasoningOnly": "実行中… · {{count}} ステップ"
+    "agentActivityLiveReasoningOnly": "実行中… · {{count}} ステップ",
+    "toolBody": {
+      "collapse": "折りたたむ",
+      "more": "+{{count}} 行"
+    }
   },
   "lightbox": {
     "title": "画像プレビュー",

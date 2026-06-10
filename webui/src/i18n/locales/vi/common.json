@@ -342,7 +342,11 @@
       "hint": "hoặc trả lời kèm góp ý để tinh chỉnh"
     },
     "agentActivityReasoningOnly": "{{count}} bước",
-    "agentActivityLiveReasoningOnly": "Đang chạy… · {{count}} bước"
+    "agentActivityLiveReasoningOnly": "Đang chạy… · {{count}} bước",
+    "toolBody": {
+      "collapse": "thu gọn",
+      "more": "+{{count}} dòng nữa"
+    }
   },
   "lightbox": {
     "title": "Xem trước ảnh",

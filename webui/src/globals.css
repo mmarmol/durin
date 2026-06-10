@@ -218,6 +218,18 @@
     --tw-prose-lead: hsl(var(--foreground));
   }
 
+  /* GFM task lists: hide the duplicate bullet marker and align the
+     checkbox so `- [x]` items read as a checklist, not "• ☐ item". */
+  .markdown-content li:has(> input[type="checkbox"]) {
+    list-style: none;
+    margin-left: -1.25rem;
+  }
+  .markdown-content li > input[type="checkbox"] {
+    margin-right: 0.4rem;
+    vertical-align: -0.1rem;
+    accent-color: hsl(var(--primary));
+  }
+
   /* CJK-friendly line-height: prose paragraphs default to 1.625 which is
      tight for Chinese/Japanese/Korean characters. Bump to 1.8 for better
      readability when the browser detects a CJK primary font. */
