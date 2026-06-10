@@ -357,6 +357,16 @@ class ToolCallBubble(Vertical):
         if self._name == "request_secret":
             a = self._args if isinstance(self._args, dict) else {}
             return _request_secret_renderable(a, None)
+        if self._name == "exit_plan_mode":
+            a = self._args if isinstance(self._args, dict) else {}
+            plan = str(a.get("plan") or "").strip()
+            if plan:
+                return Text(plan)
+        if self._name == "todo_write":
+            a = self._args if isinstance(self._args, dict) else {}
+            todos = a.get("todos")
+            if isinstance(todos, list):
+                return _todos_renderable(todos)
         # Default: show the args as JSON-ish.
         return _args_text(self._args)
 
@@ -381,6 +391,16 @@ class ToolCallBubble(Vertical):
         if self._name == "request_secret":
             a = self._args if isinstance(self._args, dict) else {}
             return _request_secret_renderable(a, result_text)
+        if self._name == "exit_plan_mode":
+            a = self._args if isinstance(self._args, dict) else {}
+            plan = str(a.get("plan") or "").strip()
+            if plan:
+                return Text(plan)
+        if self._name == "todo_write":
+            a = self._args if isinstance(self._args, dict) else {}
+            todos = a.get("todos")
+            if isinstance(todos, list):
+                return _todos_renderable(todos)
         if self._name in ("read_file", "list_dir", "grep"):
             text = _stringify_result(result, limit=800)
             return _linkify(text) if text else _args_text(self._args)
@@ -595,12 +615,32 @@ def _option_list(options: Any) -> list[str]:
     return [str(o).strip() for o in options if str(o).strip()]
 
 
+def _todos_renderable(todos: list) -> Text:
+    """Checklist body for ``todo_write``, rendered from the tool arguments."""
+    out = Text()
+    for t in todos:
+        if not isinstance(t, dict):
+            continue
+        status = str(t.get("status") or "pending")
+        if status == "completed":
+            out.append("✔ ", style="green")
+            out.append(str(t.get("content") or ""), style="dim")
+        elif status == "in_progress":
+            out.append("◐ ", style="yellow")
+            out.append(str(t.get("activeForm") or t.get("content") or ""), style="bold")
+        else:
+            out.append("○ ", style="dim")
+            out.append(str(t.get("content") or ""))
+        out.append("\n")
+    return out
+
+
 def _ask_user_renderable(question: str) -> Text:
     """Render the question line for ``ask_user_question``.
 
     Built from the call arguments — the raw tool result is an internal
-    ``YIELD TO USER`` instruction the user should never see. The options
-    render as separate clickable widgets below the body (see
+    yield instruction the user should never see. The options render as
+    separate clickable widgets below the body (see
     :meth:`ToolCallBubble.compose`).
     """
     text = Text()
