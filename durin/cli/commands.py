@@ -1394,9 +1394,10 @@ def _run_gateway(
                 _obs = summary.get("observations", {})
                 logger.info(
                     "skill curation: reviewed={} applied={} deferred={} "
-                    "obs_applied={} obs_declined={} obs_kept={}",
+                    "obs_applied={} obs_declined={} obs_kept={} obs_open={} principles={}",
                     summary["reviewed"], summary["applied"], summary["deferred"],
                     _obs.get("applied", 0), _obs.get("declined", 0), _obs.get("kept", 0),
+                    _obs.get("open", 0), summary.get("principles", 0),
                 )
             except Exception:
                 logger.exception("skill curation step (non-fatal) failed")
