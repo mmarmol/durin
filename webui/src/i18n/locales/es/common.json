@@ -643,7 +643,9 @@
         "reason": "Razonar",
         "search": "Buscar",
         "voice": "Entrada de voz"
-      }
+      },
+      "planMode": "Modo plan (solo lectura)",
+      "awaitingAnswer": "Esperando tu respuesta"
     },
     "scrollToBottom": "Desplazarse al final"
   },

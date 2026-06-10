@@ -306,7 +306,9 @@
           }
         }
       },
-      "goalStateCloseAria": "Fermer l’objectif"
+      "goalStateCloseAria": "Fermer l’objectif",
+      "planMode": "Mode plan (lecture seule)",
+      "awaitingAnswer": "En attente de votre réponse"
     },
     "scrollToBottom": "Faire défiler vers le bas"
   },

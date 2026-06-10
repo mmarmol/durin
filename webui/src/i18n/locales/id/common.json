@@ -564,7 +564,9 @@
         "reason": "Bernalar",
         "search": "Cari",
         "voice": "Input suara"
-      }
+      },
+      "planMode": "Mode rencana (hanya-baca)",
+      "awaitingAnswer": "Menunggu jawaban Anda"
     },
     "scrollToBottom": "Gulir ke bawah"
   },

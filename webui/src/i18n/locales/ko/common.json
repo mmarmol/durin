@@ -306,7 +306,9 @@
           }
         }
       },
-      "goalStateCloseAria": "목표 닫기"
+      "goalStateCloseAria": "목표 닫기",
+      "planMode": "계획 모드 (읽기 전용)",
+      "awaitingAnswer": "답변 대기 중"
     },
     "scrollToBottom": "맨 아래로 스크롤"
   },
