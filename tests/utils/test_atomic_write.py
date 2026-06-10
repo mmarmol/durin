@@ -79,3 +79,36 @@ class TestAtomicWriteBytes:
         target = tmp_path / "latin.txt"
         atomic_write_text(target, "ñandú", encoding="latin-1")
         assert target.read_bytes() == "ñandú".encode("latin-1")
+
+
+class TestFsyncOption:
+
+    def test_fsync_false_skips_disk_flush(self, tmp_path, monkeypatch):
+        import durin.utils.atomic_write as aw
+
+        calls = []
+        real_fsync = os.fsync
+
+        def counting_fsync(fd):
+            calls.append(fd)
+            return real_fsync(fd)
+
+        monkeypatch.setattr(aw.os, "fsync", counting_fsync)
+        target = tmp_path / "hot.md"
+        aw.atomic_write_text(target, "derived", fsync=False)
+        assert calls == []
+        assert target.read_text(encoding="utf-8") == "derived"
+
+    def test_fsync_default_flushes(self, tmp_path, monkeypatch):
+        import durin.utils.atomic_write as aw
+
+        calls = []
+        real_fsync = os.fsync
+
+        def counting_fsync(fd):
+            calls.append(fd)
+            return real_fsync(fd)
+
+        monkeypatch.setattr(aw.os, "fsync", counting_fsync)
+        aw.atomic_write_text(tmp_path / "durable.md", "x")
+        assert len(calls) == 1
