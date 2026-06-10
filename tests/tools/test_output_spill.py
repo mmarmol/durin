@@ -84,11 +84,13 @@ class TestTruncateWithSpill:
     def test_spill_write_failure_falls_back_gracefully(self, tmp_path: Path, monkeypatch):
         """When the spill write raises, content is still truncated, just w/o ref."""
 
-        # Patch Path.write_text to raise.
+        # Patch the atomic write helper (the spill write path) to raise.
         def boom(*args, **kwargs):
             raise OSError("simulated write failure")
 
-        monkeypatch.setattr(Path, "write_text", boom)
+        monkeypatch.setattr(
+            "durin.agent.tools.output_spill.atomic_write_text", boom
+        )
         content = "x" * 5000
         rendered, meta = truncate_with_spill(content, "exec", tmp_path, max_chars=200)
         assert meta["spilled"] is False

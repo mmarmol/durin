@@ -17,6 +17,7 @@ from pathlib import Path
 
 from durin.memory.entity_page import EntityPage
 from durin.memory.refine_dream import add_tombstone
+from durin.utils.atomic_write import atomic_write_text
 
 __all__ = [
     "is_deleted",
@@ -46,7 +47,7 @@ def _load_deleted(workspace: Path) -> set[str]:
 def _save_deleted(workspace: Path, refs: set[str]) -> None:
     p = _deleted_path(workspace)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(sorted(refs)), encoding="utf-8")
+    atomic_write_text(p, json.dumps(sorted(refs)))
 
 
 def is_deleted(workspace: Path, ref: str) -> bool:
@@ -69,7 +70,7 @@ def _archive_file(src: Path, dest: Path, stamp: dict[str, str]) -> None:
         text = "---\n" + stamp_lines + text[4:]
     else:
         text = "---\n" + stamp_lines + "---\n\n" + text
-    dest.write_text(text, encoding="utf-8")
+    atomic_write_text(dest, text)
     src.unlink()
 
 
@@ -122,8 +123,8 @@ def unmerge(workspace: Path, canonical: str, absorbed: str,
     restored = False
     if arch.exists() and not dest.exists():
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(_strip_archive_stamp(arch.read_text(encoding="utf-8")),
-                        encoding="utf-8")
+        atomic_write_text(
+            dest, _strip_archive_stamp(arch.read_text(encoding="utf-8")))
         arch.unlink()
         restored = True
     if restored:

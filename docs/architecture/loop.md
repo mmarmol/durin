@@ -65,6 +65,74 @@ All turn-scoped, defensive. They shape behaviour only when the model misbehaves 
 
 **Orientation tool — `repo_overview`.** `agent/tools/repo_overview.py` returns a depth-bounded structure tree plus a detected ecosystem (package manager, entrypoints) so the model can orient before diving in. It is purely structural — no embeddings, no PageRank, no AST — and local-workspace only, reusing the filesystem `_IGNORE_DIRS` noise filter and emitting telemetry. (Adapted from the OpenCode pattern; durin's adjustments are local-path-only + ignore-dir reuse.)
 
+### Tool write durability and fuzzy-edit matching
+
+- **Atomic writes**: every durable write performed by tools and the memory
+  vault (`write_file`, `edit_file`, plan files, output spills, all
+  `durin/memory/` page writes) goes through
+  `durin/utils/atomic_write.py` — tempfile in the target directory + fsync +
+  `os.replace`, preserving file mode and updating symlinked targets in place.
+  A crash mid-write can no longer leave a truncated file. New durable write
+  sites MUST use these helpers instead of `Path.write_text`.
+- **edit_file block-anchor matching**: the block-anchor fallback scores
+  candidate blocks by best-match containment of `old_text`'s middle lines
+  (insertion-tolerant, truncation-rejecting), thresholds 0.66 (single
+  candidate) / 0.85 (multiple). Non-exact matches are disclosed in the tool
+  result so the model can re-verify. Calibration cases live in
+  `tests/tools/test_edit_block_anchor.py`.
+- **grep engine**: when ripgrep is installed it pre-filters candidate files
+  (`rg -l --no-ignore --hidden`, same ignore dirs and size cap as the Python
+  walk — gitignored agent dirs stay searchable); matching and formatting
+  always run in Python, so results are identical with or without rg. The
+  `tool.grep` telemetry event records which engine served each call.
+- **Post-edit check**: after a successful `write_file`/`edit_file`, a
+  user-configurable per-language linter (`tools.post_edit_check.checkers`,
+  extension → command template with `{file}`; default `py → ruff check`)
+  runs as a subprocess and its findings (capped at `max_lines`) are appended
+  to the tool result — the non-LSP equivalent of opencode's post-edit
+  diagnostics. Graceful skip on disabled config, unknown extension, missing
+  binary, timeout or checker crash: a check failure never breaks an edit.
+  `durin/agent/tools/post_edit_check.py`; telemetry `tool.post_edit_check`.
+
+### Programmatic tool calling (execute_code)
+
+`execute_code` runs a model-written Python script with RPC access to a
+whitelisted, read-only/transform tool subset (read_file, write_file,
+edit_file, grep, list_dir, web_search, web_fetch, memory_search) via a
+generated `durin_tools` stub: tool results stay in the script's variables
+and ONLY stdout returns to the model — token compression for batch
+operations (one tool result instead of 30; e.g. query memory for many
+topics and dedup/rank in-script). `durin/agent/tools/code_execution.py`:
+asyncio UDS server on the agent's own loop (durin is async-native, so
+hermes-agent's sync→async bridge is unnecessary; design otherwise adapted
+from its code_execution_tool, MIT). Server-side enforcement: tool allowlist,
+call cap (50), timeout (300 s), stdout 50 KB head/tail truncation; child env
+is curated (no ambient secrets), socket 0600 in a private tempdir. v1 is
+local + POSIX only (disabled on Windows); no exec stub (a script can already
+use subprocess — the deny-list's value is agent-facing ergonomics, not
+sandbox security). The allowlist is deliberately read-only/idempotent — no
+message/memory-write/cron/spawn. Config: `tools.code_execution.*`.
+Telemetry: `tool.execute_code` carries a per-tool call histogram
+(`tool_calls`) + `code_chars` to show how the sandbox is actually used.
+
+### Background processes (exec background=true)
+
+`exec(background=true)` runs the full guard pipeline (deny patterns,
+workspace boundary, env curation, sandbox wrap) and then hands the spawn to
+`durin/agent/tools/process_registry.py`: the process gets its own process
+group (`start_new_session=True`), stderr merged into stdout, and an asyncio
+reader task feeding a rolling 200 KB tail buffer. The `process` tool
+lists/polls/kills tracked processes (kill signals the whole group, SIGTERM →
+SIGKILL escalation); discovery is pure polling — pair with the `sleep` tool.
+Limits (configurable via `tools.process.{max_running, max_output_chars,
+finished_ttl_s}`): 16 concurrent background processes, 200 KB tail buffer,
+finished entries kept 30 min.
+`AgentLoop.close_mcp` kills all tracked groups on shutdown. v1 limitation
+(deliberate): no crash-recovery checkpoint — if the gateway dies, running
+background processes are orphaned (keep running, untracked). Telemetry:
+`process.spawn` / `process.exit` / `process.kill`. (Design adapted from
+hermes-agent's process registry, MIT.)
+
 ---
 
 ## 2. Hooks system

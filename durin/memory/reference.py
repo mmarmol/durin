@@ -21,6 +21,7 @@ from pathlib import Path
 import yaml
 
 from durin.utils.helpers import estimate_text_tokens
+from durin.utils.atomic_write import atomic_write_text
 
 __all__ = [
     "ReferenceResult",
@@ -114,14 +115,15 @@ def ingest_reference(workspace: Path, title: str, content: str,
         "ingested_at": now, "chunk_count": len(chunks),
     }
     doc = f"---\n{yaml.safe_dump(fm, sort_keys=False).strip()}\n---\n\n{content.strip()}\n"
-    (root / f"{slug}.md").write_text(doc, encoding="utf-8")
+    atomic_write_text(root / f"{slug}.md", doc)
 
     chunk_recs = [
         {"idx": i, "parent": ref, "tokens": estimate_text_tokens(c), "text": c}
         for i, c in enumerate(chunks)
     ]
-    (root / f"{slug}.chunks.jsonl").write_text(
-        "\n".join(json.dumps(r) for r in chunk_recs), encoding="utf-8")
+    atomic_write_text(
+        root / f"{slug}.chunks.jsonl",
+        "\n".join(json.dumps(r) for r in chunk_recs))
     return ReferenceResult(ref=ref, path=str(root / f"{slug}.md"),
                            chunk_count=len(chunks))
 

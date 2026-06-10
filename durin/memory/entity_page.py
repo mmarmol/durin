@@ -26,6 +26,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from durin.utils.atomic_write import atomic_write_text
 from typing import Any
 
 import yaml
@@ -255,7 +256,7 @@ class EntityPage:
         text = self.to_markdown()
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(text, encoding="utf-8")
+        atomic_write_text(target, text)
 
     # ------------------------------------------------------------------
     # derived

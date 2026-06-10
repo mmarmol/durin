@@ -86,7 +86,7 @@ def test_graceful_failure_on_unwritable_workspace(
     def _explode(*_args, **_kwargs):
         raise PermissionError("read-only fs")
 
-    monkeypatch.setattr(Path, "write_text", _explode)
+    monkeypatch.setattr(vr, "atomic_write_text", _explode)
     result = ensure_vault_readme(tmp_path)
     assert result is False
     # The file should not have been created.

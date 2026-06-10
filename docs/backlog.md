@@ -16,6 +16,51 @@
 
 ## §1 — Pendientes activos
 
+### list_dir recursive perf — `os.scandir` (only if it ever bites)
+
+**Contexto**: 2026-06-10 tool-quality phase. `list_dir(recursive=true)` walks
+the tree with `Path.rglob`/`os.walk` (pure Python), slow on large trees.
+
+**Por qué no se hizo el fast-path con binario** (`fd`): `fd` no viene instalado
+por defecto en ningún SO (opt-in vía package manager; en Debian/Ubuntu el binario
+es `fdfind`, no `fd`), así que la fast-path estaría dormida para la mayoría y
+viajaría sin test en CI. `rg --files` no sirve: lista sólo archivos, y list_dir
+debe emitir archivos Y directorios ordenados. (Detalle en bitácora 2026-06-10.)
+
+**Propuesta correcta si la perf molesta**: optimizar el walk en Python puro con
+`os.scandir` (más rápido que `os.walk`/`rglob`, cero dependencias, testeable
+siempre). No `fd`.
+
+**Estado**: pendiente, sin disparador — abrir sólo si list_dir recursivo se
+vuelve un cuello de botella real.
+
+### MCP client hardening (deferred phase)
+
+**Context**: 2026-06-10 investigation (durin wrapper audit + hermes-agent MCP
+layer + OSS survey) concluded: keep the official `mcp` SDK, harden our wrapper
+— no Python library provides mid-session stdio reconnection (python-sdk #1022
+closed as not-planned), so the supervision layer is our code either way.
+hermes-agent's MCP layer (MIT) is the reference implementation to adapt.
+
+**Problem**: durin/agent/tools/mcp.py is example-grade: no crash recovery
+(tools go stale on a dead session), ImageContent/AudioContent lost via
+`str(block)`, `isError` ignored (errors look like success), single per-server
+timeout, no tools/list_changed, 1-shot retry with 1s fixed backoff.
+
+**Plan (when picked up)**: (1) result fidelity: isError + ImageContent via the
+read_file image pipeline + structuredContent; (2) per-tool timeouts via the
+SDK's per-call `read_timeout_seconds`; (3) supervision/reconnect layer
+(keepalive ping, exp backoff, re-discovery, explicit "server restarted, state
+lost" surfaced to the model); (4) tools/list_changed; (5) broader transient
+detection by exception class. OAuth/sampling deferred until remote servers
+matter. Precondition for browser-via-playwright-MCP.
+
+**Notas de investigación** (máquina local, gitignored):
+`.workdocs/research/2026-06-10-mcp-client-investigation.md` y
+`.workdocs/research/2026-06-10-tool-gaps-deep-dive.md`.
+
+**Estado**: pendiente — investigación completa, implementación no iniciada.
+
 ### P3 — Comando para cambiar modelo es precario — autocompletion progresivo
 
 **Contexto**: TUI/web, comando `/model` (o equivalente) para cambiar el

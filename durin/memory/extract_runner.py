@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from durin.memory.extract_dream import extract_entity
+from durin.utils.atomic_write import atomic_write_text
 
 __all__ = [
     "load_session",
@@ -92,7 +93,7 @@ def set_extract_cursor(jsonl_path: Path, n: int) -> None:
         except Exception:
             d = {}
     d.setdefault("derived", {})["extract_cursor"] = n
-    mp.write_text(json.dumps(d, indent=2), encoding="utf-8")
+    atomic_write_text(mp, json.dumps(d, indent=2))
 
 
 def run_extract_for_session(

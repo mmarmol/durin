@@ -260,8 +260,8 @@ class TestListDirTool:
         for i in range(10):
             (tmp_path / f"file_{i}.txt").write_text("x")
         result = await tool.execute(path=str(tmp_path), max_entries=3)
-        assert "truncated" in result
-        assert "3 of 10" in result
+        assert "showing entries 1-3 of 10" in result
+        assert "offset=3" in result
 
     @pytest.mark.asyncio
     async def test_empty_dir(self, tool, tmp_path):
@@ -407,3 +407,67 @@ class TestWorkspaceRestriction:
         assert "Error" in result
         assert "outside" in result.lower()
         assert skill_file.read_text() == "# Weather\nOriginal content."
+
+
+# ---------------------------------------------------------------------------
+# Atomic writes (Task 2 — tool-quality-fixes plan)
+# ---------------------------------------------------------------------------
+
+class TestAtomicToolWrites:
+
+    @pytest.mark.asyncio
+    async def test_write_file_leaves_no_tmp(self, tmp_path):
+        from durin.agent.tools.filesystem import WriteFileTool
+        tool = WriteFileTool(workspace=tmp_path)
+        result = await tool.execute(path="out.txt", content="hello")
+        assert "Successfully wrote" in result
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["out.txt"]
+
+    @pytest.mark.asyncio
+    async def test_edit_file_leaves_no_tmp(self, tmp_path):
+        from durin.agent.tools.filesystem import EditFileTool, ReadFileTool
+        f = tmp_path / "code.py"
+        f.write_text("x = 1\n", encoding="utf-8")
+        await ReadFileTool(workspace=tmp_path).execute(path="code.py")
+        tool = EditFileTool(workspace=tmp_path)
+        result = await tool.execute(path="code.py", old_text="x = 1", new_text="x = 2")
+        assert "Successfully edited" in result
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["code.py"]
+        assert f.read_text(encoding="utf-8") == "x = 2\n"
+
+
+# ---------------------------------------------------------------------------
+# list_dir offset pagination (Task 7 — tool-quality-fixes plan)
+# ---------------------------------------------------------------------------
+
+
+class TestListDirOffset:
+
+    @pytest.fixture()
+    def many_files(self, tmp_path):
+        for i in range(10):
+            (tmp_path / f"f{i:02d}.txt").write_text("x", encoding="utf-8")
+        return tmp_path
+
+    @pytest.mark.asyncio
+    async def test_offset_skips_entries(self, many_files):
+        tool = ListDirTool(workspace=many_files)
+        result = await tool.execute(path=str(many_files), max_entries=3, offset=3)
+        assert "f03.txt" in result
+        assert "f05.txt" in result
+        assert "f00.txt" not in result
+        assert "f06.txt" not in result
+
+    @pytest.mark.asyncio
+    async def test_truncation_note_advertises_next_offset(self, many_files):
+        tool = ListDirTool(workspace=many_files)
+        result = await tool.execute(path=str(many_files), max_entries=4)
+        assert "showing entries 1-4 of 10" in result
+        assert "offset=4" in result
+
+    @pytest.mark.asyncio
+    async def test_offset_beyond_end(self, many_files):
+        tool = ListDirTool(workspace=many_files)
+        result = await tool.execute(path=str(many_files), offset=99)
+        assert "beyond the end" in result
+        assert "10 entries" in result
