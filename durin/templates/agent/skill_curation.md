@@ -21,6 +21,11 @@ When unsure, do nothing. Prefer an empty action list over a speculative change.
   clarification, a missing step). Do not rewrite for style or preference.
 - NEVER touch user or `manual` skills. Only `auto` skills are given to you here, so
   act exclusively on the skills listed below.
+- Exception to the no-style rule — **English normalization**: the catalog norm is that
+  skills are authored entirely in English (name, description, body). When a skill under
+  review is written in another language (in whole or in part), emit an `evolve` that
+  translates the non-English text to English, preserving meaning and structure exactly.
+  This is a norm violation fix, not a style rewrite.
 - **The original is safe in git.** Each skill's original content is its first commit;
   your `evolve`/`fuse` edits are versioned on top. The original is always
   recoverable/diffable — evolve toward a concrete improvement without fear of losing it.

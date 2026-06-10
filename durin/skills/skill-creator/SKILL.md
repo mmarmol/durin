@@ -6,11 +6,10 @@ description: >-
   wants to design, create, edit, improve, audit, fix, validate, test, or package a
   skill, or mentions SKILL.md, skill scripts, skill references, or a skill description
   or triggering problem — even when the user does not say 'skill' explicitly but wants
-  to capture a repeatable workflow for reuse. TRIGGERS (EN): create a skill, modify a
-  skill, improve this skill, audit the skill, package the skill, the skill is not
-  triggering, turn this workflow into a skill. TRIGGERS (ES): crear skill, modificar
-  skill, actualizar skill, mejorar skill, auditar skill, empaquetar skill, skill no
-  funciona, añadir a la skill, falla la skill, revisar skill.
+  to capture a repeatable workflow for reuse. Trigger on these intents regardless of
+  the language the user writes in. TRIGGERS: create a skill, modify a skill, improve
+  this skill, audit the skill, package the skill, the skill is not triggering, the
+  skill fails, add this to the skill, turn this workflow into a skill.
 ---
 
 # Skill Creator
@@ -214,6 +213,10 @@ replace or delete placeholder files.
 The skill is being created for another instance of the agent to use. Include what is
 beneficial and non-obvious: procedural knowledge, domain-specific details, reusable
 assets.
+
+Author the skill entirely in English — name, description, body, script output, and
+comments — regardless of the language the conversation happens in (rubric block 3
+covers how the description stays language-agnostic for triggering).
 
 Work in this order:
 

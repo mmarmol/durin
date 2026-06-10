@@ -57,7 +57,11 @@ Description requirements:
   lives here, never in the body (the body loads only after triggering).
 - Deliberately pushy: name the user phrases and contexts that should pull the skill in,
   including the "even if the user doesn't say X" cases.
-- Trigger phrases in the languages users actually type (for durin: English and Spanish).
+- English only, like the rest of the skill. Skills are authored entirely in English —
+  name, description, body, scripts, comments — regardless of the user's language.
+  Triggering is done by a multilingual model, so instead of duplicating trigger
+  phrases per language, state that the triggers apply "regardless of the language the
+  user writes in".
 
 Bad query for the MUST list: "Create a skill" (too clean). Good: "ok the thing I do
 every monday with the sales csv, can we turn that into a skill or something so i don't

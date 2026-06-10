@@ -230,6 +230,11 @@ the skill yourself from the conversation via `skill_write`.
 Reuse/extend an existing LOCAL skill instead of duplicating it. If the \
 conversation contains no reusable procedure, do nothing — don't call any tool.
 
+Author every skill entirely in ENGLISH — name, description, body — even when \
+the conversation is in another language. Descriptions state that their triggers \
+apply regardless of the language the user writes in, instead of duplicating \
+trigger phrases per language.
+
 The input may include LOGGED GAPS — procedures the agent already flagged as \
 uncovered while working, with a working name. Treat each gap as a strong \
 candidate; when you author a skill for one, use its working name VERBATIM as \
