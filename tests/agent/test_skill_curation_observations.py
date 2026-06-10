@@ -9,6 +9,8 @@ import json
 from durin.agent import skills_store as ss
 from durin.agent.skill_curation import curate_catalog
 from durin.agent.skill_observations import (
+    active_principles,
+    add_principle,
     declined_observations,
     log_observation,
     open_observations,
@@ -145,8 +147,6 @@ def test_manual_skills_not_pulled_into_delta_by_observations(tmp_path):
 
 
 # -- cross-cutting principles in curation --------------------------------------
-
-from durin.agent.skill_observations import active_principles, add_principle
 
 
 def test_judge_can_promote_a_principle(tmp_path):

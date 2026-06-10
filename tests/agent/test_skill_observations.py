@@ -2,7 +2,17 @@
 
 Pure tmp_path tests over durin.agent.skill_observations — no provider, no LLM.
 """
-from durin.agent.skill_observations import log_observation, open_observations
+from durin.agent.skill_observations import (
+    PRINCIPLES_CAP,
+    active_principles,
+    add_principle,
+    apply_dispositions,
+    archive_resolved,
+    declined_observations,
+    log_observation,
+    open_observations,
+    retire_principle,
+)
 
 
 def _log(ws, **kw):
@@ -104,8 +114,6 @@ def test_open_observations_empty_when_no_store(tmp_path):
 
 # -- dispositions + archive (consumed by the curation pass) -------------------
 
-from durin.agent.skill_observations import apply_dispositions, archive_resolved, declined_observations
-
 
 def test_apply_dispositions_transitions_states(tmp_path):
     ws = tmp_path / "ws"
@@ -162,13 +170,6 @@ def test_archive_noop_when_nothing_resolved(tmp_path):
 
 
 # -- cross-cutting principles --------------------------------------------------
-
-from durin.agent.skill_observations import (
-    PRINCIPLES_CAP,
-    active_principles,
-    add_principle,
-    retire_principle,
-)
 
 
 def test_add_principle_assigns_id_and_commits(tmp_path):
