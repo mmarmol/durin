@@ -703,6 +703,9 @@
     "toolBody": {
       "collapse": "collapse",
       "more": "+{{count}} more"
+    },
+    "subagent": {
+      "title": "Subagent"
     }
   },
   "lightbox": {

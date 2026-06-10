@@ -18,6 +18,8 @@ const HOISTED = new Set([
   "request_secret",
   "todo_write",
   "exit_plan_mode",
+  // Synthetic event emitted by SubagentManager._announce_result.
+  "subagent_result",
 ]);
 
 const CHIPPED = new Set([

@@ -353,6 +353,9 @@
     "toolBody": {
       "collapse": "réduire",
       "more": "+{{count}} de plus"
+    },
+    "subagent": {
+      "title": "Sous-agent"
     }
   },
   "lightbox": {

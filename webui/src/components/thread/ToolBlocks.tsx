@@ -42,6 +42,8 @@ export function HoistedToolBlock({
       return <TodoListBlock event={event} />;
     case "exit_plan_mode":
       return <PlanBlock event={event} answered={answered} />;
+    case "subagent_result":
+      return <SubagentResultBlock event={event} />;
     default:
       return null;
   }
@@ -181,6 +183,44 @@ function PlanBlock({
           <span className="text-[11px] text-muted-foreground">
             {t("message.plan.hint")}
           </span>
+        </div>
+      ) : null}
+    </BlockShell>
+  );
+}
+
+function SubagentResultBlock({ event }: { event: ToolProgressEvent }) {
+  const { t } = useTranslation();
+  const a = args(event);
+  const label = typeof a.label === "string" ? a.label : "";
+  const task = typeof a.task === "string" ? a.task : "";
+  const failed = event.phase === "error";
+  const body =
+    typeof event.error === "string" && failed
+      ? event.error
+      : typeof event.result === "string"
+        ? event.result
+        : "";
+  return (
+    <BlockShell icon={<span aria-hidden>{failed ? "🛑" : "🤖"}</span>}>
+      <div className="mb-0.5 flex flex-wrap items-baseline gap-x-2">
+        <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+          {t("message.subagent.title")} · {label}
+        </span>
+        {task ? (
+          <span className="min-w-0 truncate text-[11.5px] text-muted-foreground/80">
+            {task}
+          </span>
+        ) : null}
+      </div>
+      {body ? (
+        <div
+          className={cn(
+            "max-h-72 overflow-y-auto scrollbar-thin",
+            failed && "text-red-500/90",
+          )}
+        >
+          <MarkdownText className="text-[13px]">{body}</MarkdownText>
         </div>
       ) : null}
     </BlockShell>

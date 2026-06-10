@@ -128,3 +128,40 @@ describe("ToolChipRow", () => {
     expect(screen.getByText(/telegram/)).toBeInTheDocument();
   });
 });
+
+describe("HoistedToolBlock — subagent_result", () => {
+  it("renders the subagent card with label, task and result", async () => {
+    render(
+      <HoistedToolBlock
+        answered={false}
+        event={{
+          phase: "end",
+          call_id: "subagent:t1",
+          name: "subagent_result",
+          arguments: { label: "research", task: "find docs" },
+          result: "Found **3 docs**.",
+        }}
+      />,
+    );
+    expect(screen.getByText(/research/)).toBeInTheDocument();
+    expect(screen.getByText(/find docs/)).toBeInTheDocument();
+    expect(await screen.findByText("3 docs", {}, { timeout: 10_000 })).toBeInTheDocument();
+  });
+
+  it("marks failed subagents with the error tone", () => {
+    render(
+      <HoistedToolBlock
+        answered={false}
+        event={{
+          phase: "error",
+          call_id: "subagent:t2",
+          name: "subagent_result",
+          arguments: { label: "deploy", task: "ship it" },
+          error: "Error: boom",
+        }}
+      />,
+    );
+    expect(screen.getByText(/deploy/)).toBeInTheDocument();
+    expect(screen.getByText(/Error: boom/)).toBeInTheDocument();
+  });
+});

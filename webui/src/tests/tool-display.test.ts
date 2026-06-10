@@ -43,3 +43,9 @@ describe("toolDisplayClass — tier-3 chips", () => {
     }
   });
 });
+
+describe("toolDisplayClass — subagent result", () => {
+  it("hoists subagent_result as a first-class card", () => {
+    expect(toolDisplayClass("subagent_result")).toBe("hoist");
+  });
+});
