@@ -199,10 +199,10 @@ def test_check_default_model_resolvable_ok(valid_config: Path) -> None:
 
 
 def test_check_executable_returns_ok_for_known_binary() -> None:
-    # `python` is guaranteed to exist when tests run.
-    py = sys.executable
-    name = Path(py).name
-    r = check_executable(name, required=True, hint="install it")
+    # The interpreter's *basename* is not reliably on PATH (macOS ships only
+    # python3), but shutil.which accepts a full path — and the running
+    # interpreter is guaranteed to exist and be executable.
+    r = check_executable(sys.executable, required=True, hint="install it")
     assert r.status == "ok"
     # The reported path should be a string.
     assert isinstance(r.message, str)

@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import signal
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -37,7 +38,9 @@ def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 def _spawn_dummy(args: list[str]) -> subprocess.Popen:
     """Start a long-running dummy process that we can SIGTERM-test."""
     return subprocess.Popen(
-        ["python", "-c", "import time; time.sleep(60)"],
+        # sys.executable, not bare "python": the latter is not on PATH in
+        # every environment (macOS ships only python3).
+        [sys.executable, "-c", "import time; time.sleep(60)"],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,

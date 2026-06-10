@@ -281,8 +281,10 @@ def test_max_iterations_default_is_twelve() -> None:
     # Re-fetch the real default from the script's argparse — direct
     # parse of the runner module is expensive, so check via help text.
     import subprocess
+    import sys
     out = subprocess.run(
-        ["python", "-m", "scripts.benchmark.locomo_run", "--help"],
+        # sys.executable, not bare "python" (not on PATH everywhere).
+        [sys.executable, "-m", "scripts.benchmark.locomo_run", "--help"],
         capture_output=True, text=True, timeout=15,
     ).stdout
     assert "default 12" in out.lower() or "(default 12)" in out, (
