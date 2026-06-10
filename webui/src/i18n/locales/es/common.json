@@ -691,7 +691,12 @@
       "title": "Plan propuesto",
       "approve": "Aprobar (/build)",
       "hint": "o responde con feedback para refinarlo"
-    }
+    },
+    "toolMany_one": "Se usó una herramienta",
+    "agentActivitySummary_one": "{{reasoning}} pasos · {{tools}} llamada a herramienta",
+    "agentActivityToolsOnly_one": "{{tools}} llamada a herramienta",
+    "agentActivityLiveSummary_one": "Trabajando… · {{reasoning}} pasos · {{tools}} llamada a herramienta",
+    "agentActivityLiveToolsOnly_one": "Trabajando… · {{tools}} llamada a herramienta"
   },
   "lightbox": {
     "title": "Vista previa de imagen",
