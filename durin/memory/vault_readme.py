@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from durin.utils.atomic_write import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +52,7 @@ def ensure_vault_readme(workspace: Path) -> bool:
         return False
     try:
         workspace.mkdir(parents=True, exist_ok=True)
-        target.write_text(_README_CONTENT, encoding="utf-8")
+        atomic_write_text(target, _README_CONTENT)
         logger.info("vault readme written at %s", target)
         return True
     except OSError as exc:
@@ -90,7 +91,7 @@ def ensure_class_indices(workspace: Path) -> int:
             continue
         content = _CLASS_INDEX_CONTENT.get(class_name, _CLASS_INDEX_DEFAULT)
         try:
-            target.write_text(content, encoding="utf-8")
+            atomic_write_text(target, content)
             logger.info("class index written at %s", target)
             written += 1
         except OSError as exc:

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from durin.utils.atomic_write import atomic_write_text
 from typing import Any
 
 __all__ = ["SessionMdError", "regenerate_session_md", "render_session_md"]
@@ -143,5 +144,5 @@ def regenerate_session_md(
     """
     if md_path is None:
         md_path = jsonl_path.with_suffix(".md")
-    md_path.write_text(render_session_md(jsonl_path), encoding="utf-8")
+    atomic_write_text(md_path, render_session_md(jsonl_path))
     return md_path
