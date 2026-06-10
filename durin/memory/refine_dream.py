@@ -22,6 +22,7 @@ from durin.memory.absorb_judge import JudgeError, judge_pair
 from durin.memory.absorption import EntityAbsorption
 from durin.memory.llm_invoke import default_llm_invoke
 from durin.memory.entity_page import EntityPage
+from durin.utils.atomic_write import atomic_write_text
 
 __all__ = ["is_tombstoned", "add_tombstone", "run_refine"]
 
@@ -79,7 +80,7 @@ def add_tombstone(workspace: Path, ref_a: str, ref_b: str) -> None:
             keys = set()
     keys.add(_pair_key(ref_a, ref_b))
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(sorted(keys)), encoding="utf-8")
+    atomic_write_text(p, json.dumps(sorted(keys)))
 
 
 def _load_page(workspace: Path, ref: str) -> EntityPage | None:
