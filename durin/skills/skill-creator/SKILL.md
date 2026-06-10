@@ -193,7 +193,8 @@ Examples of the analysis:
 
 Skip only if the skill already exists (then continue to the next step). When creating
 from scratch, always run `init_skill.py` — it generates a template directory with
-everything a skill requires:
+everything a skill requires. Script paths below are relative to this skill's own
+directory — resolve them to absolute paths when running from elsewhere:
 
 ```bash
 scripts/init_skill.py my-skill --path ./workspace/skills
