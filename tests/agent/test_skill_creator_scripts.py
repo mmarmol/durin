@@ -208,3 +208,41 @@ def test_validate_skill_mention_in_code_block_counts(tmp_path: Path) -> None:
 
     assert valid, message
     assert "WARNING" not in message
+
+
+def test_validate_skill_rejects_python_syntax_error(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "bad-script-skill"
+    _write_skill(
+        skill_dir,
+        "bad-script-skill",
+        body="# Skill\n\nUses scripts/broken.py for processing.\n",
+    )
+    scripts = skill_dir / "scripts"
+    scripts.mkdir()
+    (scripts / "broken.py").write_text("def oops(:\n", encoding="utf-8")
+
+    valid, message = quick_validate.validate_skill(skill_dir)
+
+    assert not valid
+    assert "Script has syntax errors: broken.py" in message
+
+
+def test_validate_skill_never_executes_scripts(tmp_path: Path) -> None:
+    skill_dir = tmp_path / "sentinel-skill"
+    _write_skill(
+        skill_dir,
+        "sentinel-skill",
+        body="# Skill\n\nUses scripts/sentinel.py for processing.\n",
+    )
+    scripts = skill_dir / "scripts"
+    scripts.mkdir()
+    sentinel = tmp_path / "executed.flag"
+    (scripts / "sentinel.py").write_text(
+        f"from pathlib import Path\nPath({str(sentinel)!r}).write_text('ran')\n",
+        encoding="utf-8",
+    )
+
+    valid, message = quick_validate.validate_skill(skill_dir)
+
+    assert valid, message
+    assert not sentinel.exists(), "validator must never execute skill scripts"
