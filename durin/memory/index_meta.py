@@ -84,7 +84,12 @@ def skills_indexing_enabled() -> bool:
 # turn, uri `sessions/<key>.md#turn-N`, type "session" — indexer
 # third pass). Pre-v6 indexes carry no session rows — the bump forces
 # an auto-rebuild so existing workspaces pick them up.
-CURRENT_SCHEMA_VERSION: int = 6
+# v7 (porter-stemming): `memory_fts` tokenizer gains Porter stemming
+# (LoCoMo forensics 2026-06-10: write/writes/writing were distinct
+# tokens, so morphological variants never matched). Pre-v7 indexes
+# were tokenized without stemming — the bump forces a rebuild so
+# query-time and index-time tokenization agree.
+CURRENT_SCHEMA_VERSION: int = 7
 
 
 @dataclass(frozen=True)

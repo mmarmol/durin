@@ -122,8 +122,9 @@ def test_current_schema_version_is_positive_int() -> None:
     assert CURRENT_SCHEMA_VERSION >= 1
 
 
-def test_schema_version_is_6_for_session_fts() -> None:
-    """v6 forces a rebuild so existing workspaces pick up the raw
-    session turn rows (one FTS row per ``## turn-N``, type "session" —
-    indexer third pass). v5 did the same for skill rows."""
-    assert CURRENT_SCHEMA_VERSION == 6
+def test_schema_version_is_7_for_porter_stemming() -> None:
+    """v7 forces a rebuild so existing indexes are re-tokenized with
+    Porter stemming on ``memory_fts`` — query-time and index-time
+    tokenization must agree or stemmed queries silently miss pre-v7
+    rows. v6 did the same for session-FTS rows, v5 for skill rows."""
+    assert CURRENT_SCHEMA_VERSION == 7
