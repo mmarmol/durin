@@ -3,10 +3,8 @@ import { ChevronRight, Layers } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { ReasoningBubble, StreamingLabelSheen, TraceGroup } from "@/components/MessageBubble";
-import { DeliberationPanel } from "@/components/thread/DeliberationPanel";
-import { PosturePanel } from "@/components/thread/PosturePanel";
 import { cn } from "@/lib/utils";
-import type { DeliberationResultData, PostureUpdateData, UIMessage } from "@/lib/types";
+import type { UIMessage } from "@/lib/types";
 
 /** Scrollport height for the Cursor-style “live trace” strip (tailwind spacing). */
 const CLUSTER_SCROLL_MAX_CLASS = "max-h-52";
@@ -151,20 +149,6 @@ export function AgentActivityCluster({
                       hasBodyBelow={false}
                       embeddedInCluster
                     />
-                  );
-                }
-                if (m.kind === "trace" && m.agentUI?.kind === "posture_update") {
-                  return (
-                    <div key={m.id} className="px-1">
-                      <PosturePanel data={m.agentUI.data as PostureUpdateData} />
-                    </div>
-                  );
-                }
-                if (m.kind === "trace" && m.agentUI?.kind === "deliberation_result") {
-                  return (
-                    <div key={m.id} className="px-1">
-                      <DeliberationPanel data={m.agentUI.data as DeliberationResultData} />
-                    </div>
                   );
                 }
                 if (m.kind === "trace") {
