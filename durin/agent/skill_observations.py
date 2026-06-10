@@ -83,6 +83,30 @@ def _norm(text: str) -> str:
     return re.sub(r"\s+", " ", text.strip().lower())
 
 
+_SIMILARITY_THRESHOLD = 0.5
+
+
+def _same_issue(a: str, b: str) -> bool:
+    """Whether two issue texts describe the same problem.
+
+    LLMs rephrase the same issue on every recurrence ("Step 2 says X" vs
+    "Step 2 STILL says X — second time"), so exact/containment matching alone
+    under-counts recurrence. Containment catches short rewordings; Jaccard
+    word overlap catches paraphrases.
+    """
+    na, nb = _norm(a), _norm(b)
+    if not na or not nb:
+        return False
+    if na in nb or nb in na:
+        return True
+    wa = set(re.findall(r"[\w/-]+", na))
+    wb = set(re.findall(r"[\w/-]+", nb))
+    if not wa or not wb:
+        return False
+    overlap = len(wa & wb) / len(wa | wb)
+    return overlap >= _SIMILARITY_THRESHOLD
+
+
 def _next_id(workspace: Path) -> int:
     ids = [int(r.get("id", 0)) for r in
            _read_records(_active_path(workspace)) + _read_records(_archive_path(workspace))]
@@ -112,12 +136,10 @@ def log_observation(workspace: Path, *, skill: str, kind: str, issue: str,
     store = _store_init(workspace)
     records = _read_records(_active_path(workspace))
 
-    norm_issue = _norm(issue)
     for rec in records:
         if rec.get("skill") != skill or rec.get("status") != "OPEN":
             continue
-        existing = _norm(str(rec.get("issue", "")))
-        if existing and (existing in norm_issue or norm_issue in existing):
+        if _same_issue(str(rec.get("issue", "")), issue):
             rec["count"] = int(rec.get("count", 1)) + 1
             rec["last_seen"] = _today()
             if session and session not in rec.get("sessions", []):

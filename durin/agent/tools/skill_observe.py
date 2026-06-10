@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import json
 import logging
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
 from durin.agent.tools.base import Tool, tool_parameters
+from durin.agent.tools.context import RequestContext
 from durin.agent.tools.schema import StringSchema, tool_parameters_schema
 
 logger = logging.getLogger(__name__)
@@ -56,7 +58,12 @@ class SkillObserveTool(Tool):
 
     def __init__(self, workspace: str | Path, session_key: str | None = None) -> None:
         self._workspace = Path(workspace).expanduser()
-        self._session_key = session_key
+        # The in-loop registry is built once and serves every session, so the
+        # current session arrives per request via set_context (ContextAware);
+        # the constructor value is the fallback for direct construction
+        # (sub-agents, tests).
+        self._session_key: ContextVar[str | None] = ContextVar(
+            "skill_observe_session_key", default=session_key)
 
     @property
     def name(self) -> str:
@@ -71,6 +78,10 @@ class SkillObserveTool(Tool):
         return cls(workspace=ctx.workspace,
                    session_key=getattr(ctx, "session_key", None))
 
+    def set_context(self, ctx: RequestContext) -> None:
+        """Bind the current request's session for observation provenance."""
+        self._session_key.set(ctx.session_key or f"{ctx.channel}:{ctx.chat_id}")
+
     async def execute(self, **kwargs: Any) -> str:
         from durin.agent.skill_observations import log_observation
 
@@ -81,6 +92,6 @@ class SkillObserveTool(Tool):
             issue=str(kwargs.get("issue", "")),
             improvement=str(kwargs.get("improvement", "")),
             principle=(str(kwargs["principle"]) if kwargs.get("principle") else None),
-            session=self._session_key,
+            session=self._session_key.get(),
         )
         return json.dumps(result, ensure_ascii=False)
