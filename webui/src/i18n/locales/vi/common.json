@@ -346,6 +346,9 @@
     "toolBody": {
       "collapse": "thu gọn",
       "more": "+{{count}} dòng nữa"
+    },
+    "subagent": {
+      "title": "Tác tử phụ"
     }
   },
   "lightbox": {

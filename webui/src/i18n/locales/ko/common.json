@@ -346,6 +346,9 @@
     "toolBody": {
       "collapse": "접기",
       "more": "+{{count}} 더"
+    },
+    "subagent": {
+      "title": "하위 에이전트"
     }
   },
   "lightbox": {

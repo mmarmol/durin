@@ -316,3 +316,11 @@ prose.
 a dedicated frame) so channels render a proper card (name, status, result
 body) and the client-side scrub can be deleted. Touches the subagent inject
 path (`durin/agent/subagent.py`) and the webui/TUI renderers.
+
+**Update (2026-06-10, same branch)**: the structured card SHIPPED —
+`_announce_result` now also emits a `subagent_result` tool_event and the
+webui renders a hoisted card (`SubagentResultBlock`); the TUI gets a generic
+bubble for free. Remaining scope: retire the echo-defense scrubs
+(`subagent-channel-display.ts`, `durin/utils/subagent_channel_display.py`)
+once models reliably stop echoing the inject blob, and slim the inject
+template if the card makes the model's narration redundant.

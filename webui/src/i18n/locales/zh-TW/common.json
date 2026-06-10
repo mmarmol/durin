@@ -346,6 +346,9 @@
     "toolBody": {
       "collapse": "收合",
       "more": "+{{count}} 行"
+    },
+    "subagent": {
+      "title": "子代理"
     }
   },
   "lightbox": {

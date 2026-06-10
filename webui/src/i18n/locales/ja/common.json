@@ -346,6 +346,9 @@
     "toolBody": {
       "collapse": "折りたたむ",
       "more": "+{{count}} 行"
+    },
+    "subagent": {
+      "title": "サブエージェント"
     }
   },
   "lightbox": {
