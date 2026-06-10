@@ -16,6 +16,24 @@
 
 ## §1 — Pendientes activos
 
+### list_dir recursive perf — `os.scandir` (only if it ever bites)
+
+**Contexto**: 2026-06-10 tool-quality phase. `list_dir(recursive=true)` walks
+the tree with `Path.rglob`/`os.walk` (pure Python), slow on large trees.
+
+**Por qué no se hizo el fast-path con binario** (`fd`): `fd` no viene instalado
+por defecto en ningún SO (opt-in vía package manager; en Debian/Ubuntu el binario
+es `fdfind`, no `fd`), así que la fast-path estaría dormida para la mayoría y
+viajaría sin test en CI. `rg --files` no sirve: lista sólo archivos, y list_dir
+debe emitir archivos Y directorios ordenados. (Detalle en bitácora 2026-06-10.)
+
+**Propuesta correcta si la perf molesta**: optimizar el walk en Python puro con
+`os.scandir` (más rápido que `os.walk`/`rglob`, cero dependencias, testeable
+siempre). No `fd`.
+
+**Estado**: pendiente, sin disparador — abrir sólo si list_dir recursivo se
+vuelve un cuello de botella real.
+
 ### MCP client hardening (deferred phase)
 
 **Context**: 2026-06-10 investigation (durin wrapper audit + hermes-agent MCP
