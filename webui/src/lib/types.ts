@@ -100,6 +100,10 @@ export interface GoalStateWsPayload {
   active: boolean;
   ui_summary?: string;
   objective?: string;
+  /** Agent mode when not default (e.g. "plan"). */
+  mode?: string;
+  /** Set while an ask_user_question awaits the user's reply. */
+  pending_question?: { question: string; options: string[] };
 }
 
 export interface ToolProgressEvent {

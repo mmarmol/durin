@@ -89,8 +89,23 @@ def goal_state_ws_blob(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
             blob["ui_summary"] = summary
         if objective:
             blob["objective"] = objective
-        return blob
-    return {"active": False}
+    else:
+        blob = {"active": False}
+    if metadata:
+        # Non-default agent mode and a pending question ride this frame so
+        # the webui composer can render badges/strips (Tasks C2/D4).
+        from durin.agent.agent_mode import DEFAULT_MODE, SESSION_MODE_KEY
+
+        mode = str(metadata.get(SESSION_MODE_KEY) or "")
+        if mode and mode != DEFAULT_MODE:
+            blob["mode"] = mode
+        pq = metadata.get("pending_question")
+        if isinstance(pq, Mapping) and pq.get("question"):
+            blob["pending_question"] = {
+                "question": str(pq.get("question") or ""),
+                "options": [str(o) for o in (pq.get("options") or [])],
+            }
+    return blob
 
 
 def runner_wall_llm_timeout_s(
