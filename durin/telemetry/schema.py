@@ -311,6 +311,17 @@ class ToolExecSpillEvent(TypedDict):
     spill_error: NotRequired[str | None]
 
 
+class PostEditCheckEvent(TypedDict):
+    """A post-edit linter ran after write_file/edit_file (see
+    ``durin/agent/tools/post_edit_check.py``)."""
+    path: str
+    checker: str
+    exit_code: int | None
+    issue_lines: int
+    duration_ms: float
+    skipped_reason: NotRequired[str]
+
+
 class ProcessSpawnEvent(TypedDict):
     """A background process was started via ``exec(background=true)``."""
     proc_id: str
@@ -1087,6 +1098,7 @@ EVENTS: dict[str, type] = {
     "tool.edit_file": ToolEditFileEvent,
     "tool.grep": ToolGrepEvent,
     "tool.exec.spill": ToolExecSpillEvent,
+    "tool.post_edit_check": PostEditCheckEvent,
     "tool.repo_overview": ToolRepoOverviewEvent,
     "tool.list_dir": ToolListDirEvent,
     "tool.web_search": ToolWebSearchEvent,
@@ -1176,6 +1188,7 @@ __all__ = [
     "ToolEditFileEvent",
     "ToolGrepEvent",
     "ToolExecSpillEvent",
+    "PostEditCheckEvent",
     "ProcessSpawnEvent",
     "ProcessExitEvent",
     "ProcessKillEvent",
