@@ -132,7 +132,7 @@ DURIN_SKIP_WEBUI_BUILD=1 python -m build
 
 # Install the wheel into a clean venv to verify it's self-contained.
 python -m venv /tmp/durin-dryrun && source /tmp/durin-dryrun/bin/activate
-pip install dist/durin_agent-0.1.0a1-py3-none-any.whl
+pip install dist/durin_agent-*.whl
 durin --version
 durin doctor
 deactivate
@@ -144,4 +144,4 @@ not ready to ship.
 
 ---
 
-Last updated: 2026-05-20 (D8).
+Last updated: 2026-06-07 (D8).

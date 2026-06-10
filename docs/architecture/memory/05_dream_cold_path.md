@@ -5,7 +5,7 @@ status: current — describes the shipped system (post-migration, 2026-06-06)
 last_updated: 2026-06-06
 audience: humans and LLMs implementing or modifying this system
 depends_on: 00_overview.md, 01_data_and_entities.md, 02_indexing.md
-related: 03_search_pipeline.md, 04_agent_tools.md, ../../qa/post_migration_audit_2026-06.md
+related: 03_search_pipeline.md, 04_agent_tools.md
 ---
 
 # Dream — cold-path consolidation
@@ -28,9 +28,7 @@ the state over time.
 > episodic→archive lifecycle, and a per-write threshold trigger. **All of that
 > is gone.** The settled model has five passes — in run order **extract /
 > derived_from / skill / refine / always_on** — that read from **sessions**, write through `memory_writer`'s CAS
-> commit path, and treat fragments as a separate raw track. The authoritative
-> record of what changed and why is `../../qa/post_migration_audit_2026-06.md` (A1-A5,
-> B1-B4, N1-N9); this doc honours those decisions.
+> commit path, and treat fragments as a separate raw track.
 
 ---
 
@@ -326,6 +324,20 @@ trailers (`Absorbed:`, `Into:`, `Reason:`, `Judge-Confidence:`) that
 `durin memory history` / `durin memory revert` parse. The commit messages are
 assembled inline by `memory_writer` / `absorption` (the legacy
 `dream_commit_message.py` builder was deleted — audit B1).
+
+**Git substrate (`durin/utils/git_repo.py`).** This history sits on a generic,
+subsystem-agnostic helper that wraps **dulwich** (pure-Python git) so durin needs
+no system `git` binary. It is deliberately not memory-specific: any subsystem can
+use it for local versioned storage. The contract:
+
+- **Strictly local.** durin never configures a remote; there is no push/pull. Sync
+  is a user opt-in concern, out of scope for the substrate.
+- **The owning subsystem decides** when to `init()` (idempotent), the commit
+  author/email (e.g. `durin-memory` vs `durin-dream` above), and which structured
+  trailers to emit.
+- **Commit-message convention:** `subject` + blank line + `body` + blank line +
+  RFC822 `Key: value` trailers. The trailers are parsed back on read, so a caller
+  can query e.g. which entities a commit touched without re-parsing the prose body.
 
 ### 4.1 Per-entity relation cap (soft / alert-only)
 
@@ -649,5 +661,3 @@ were actually processed. The next trigger or the daily cron retries.
   `memory_forget`) and the `/remember` fragment producer: `04_agent_tools.md`.
 - Telemetry event catalog: `07_telemetry_and_observability.md` and
   `durin/telemetry/schema.py`.
-- The authoritative migration record (what changed, A1-A5 / B1-B4 / N1-N7):
-  `../../qa/post_migration_audit_2026-06.md`.

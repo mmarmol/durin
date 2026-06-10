@@ -5,7 +5,7 @@ status: current — describes the shipped system (post-migration, 2026-06-06)
 last_updated: 2026-06-06
 audience: humans and LLMs implementing or modifying this system
 depends_on: 00_overview.md, 03_search_pipeline.md, 05_dream_cold_path.md
-related: 04_agent_tools.md, ../../qa/post_migration_audit_2026-06.md
+related: 04_agent_tools.md
 ---
 
 # Telemetry and observability
@@ -484,7 +484,14 @@ This is the event operators should alarm on.
 
 ## 10. Metrics derived from events
 
-These are aggregations the operator should track (via dashboards or periodic checks):
+These are aggregations the operator should track (via dashboards or periodic checks).
+
+They are computed by `durin/memory/stats.py` — a **read-only** aggregator that walks
+`~/.cache/durin/telemetry/*.jsonl` for events and the workspace filesystem for
+ground-truth counts — and surfaced via `durin memory stats [--days N] [--json]`
+(`cli/memory_cmd.py`). Aggregation is the prerequisite for evaluating any
+metric-gated decision: without it, gates like eager-inject or auto-absorb
+thresholds are faith-based rather than observable.
 
 ### 10.1 Hot-path health
 
@@ -648,6 +655,6 @@ None at the module level.
 - Tool calls that emit recall events: `04_agent_tools.md` §2-§5.
 - Search pipeline failure mode + recovery (which emit `memory.search.failure`): `03_search_pipeline.md` §14.
 - The four-pass dream (extract / refine / skill / always_on) that emits the `memory.dream.*` events: `05_dream_cold_path.md`.
-- Relation-cap alert-only decision (A3), cursor removal (N3), and the deleted dream cluster: `../../qa/post_migration_audit_2026-06.md`.
+- Relation-cap alert-only decision (A3), cursor removal (N3), and the deleted dream cluster.
 - Indexer write triggers (which emit `memory.index.write`): `02_indexing.md` §6.
 - Absorb-judge + relation-cap event schemas: `durin/telemetry/schema.py`.

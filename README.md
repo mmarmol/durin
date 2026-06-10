@@ -57,7 +57,7 @@ durin agent -m "hola"    # one-shot
 durin gateway start      # background daemon: webui dashboard + channels + cron
 durin gateway status     # is it running? where's the dashboard?
 durin gateway stop
-durin serve              # OpenAI-compatible API on :8000
+durin serve              # OpenAI-compatible API on :8900
 ```
 
 The browser dashboard is served by `durin gateway` when
@@ -98,8 +98,8 @@ Inside the TUI:
 
 - [docs/INSTALL.md](docs/INSTALL.md) — prerequisites, optional extras
 - [docs/architecture/README.md](docs/architecture/README.md) — system layout
-- [docs/09_daily_driver_plan.md](docs/09_daily_driver_plan.md) — daily-driver roadmap
-- [docs/roadmap.md](docs/roadmap.md) / [docs/bitacora.md](docs/bitacora.md) — historical context
+- [docs/roadmap.md](docs/roadmap.md) / [docs/bitacora.md](docs/bitacora.md) — direction and historical context
+- [docs/backlog.md](docs/backlog.md) — active pending work
 
 ## License
 

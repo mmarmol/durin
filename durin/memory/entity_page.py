@@ -1,7 +1,7 @@
 """Parser for entity pages: `memory/entities/<type>/<slug>.md`.
 
 Each page is a markdown document with a YAML frontmatter header followed
-by a free-form body. Per ``docs/archive/35_entity_centric_plan.md`` §3.2 the
+by a free-form body. Per ``docs/architecture/memory/01_data_and_entities.md`` §3.4 the
 **minimum required** frontmatter is:
 
     type: <type>             # lowercase [a-z][a-z0-9_]*
@@ -288,9 +288,7 @@ class EntityPage:
         - Dict with scalar / list-of-string values → include the values
           (NOT the keys, NOT nested dicts).
 
-        This matches the shapes the dream LLM emits in practice (see
-        ``docs/research/phase0_results.md``): some times ``identifiers``
-        comes as a flat list, sometimes as a typed dict ``{email: ...,
+        This matches the shapes the dream LLM emits in practice: sometimes ``identifiers`` comes as a flat list, sometimes as a typed dict ``{email: ...,
         slack: ...}``. Both surface here without prescribing the shape.
 
         Deduplicates while preserving insertion order.

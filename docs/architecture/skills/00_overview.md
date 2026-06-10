@@ -3,8 +3,6 @@
 > **What this is.** The single as-built reference for durin's skills subsystem: what
 > it does *today*, how the pieces fit, and where each lives in code. Companion:
 > [`01_format_and_interop.md`](01_format_and_interop.md) (the SKILL.md format contract).
-> Vision & roadmap (north star + what's deferred/discarded): `docs/archive/skills_evolutivas.md`.
-> Design rationale per feature: `docs/superpowers/specs/2026-06-*-skill-*-design.md`.
 >
 > Citations are **file + symbol** (stable across edits); grep the symbol to land on it.
 
@@ -216,7 +214,7 @@ drive curation — that's deliberate).
 ## 8. Runtime dependency install (P6 #1)
 
 A skill can declare OS/package dependencies (`metadata.<vendor>.install: [{kind, …}]`).
-Historically info-only (policy `never`). P6 #1 (plan `docs/archive/skills-plans/2026-06-04-skill-install-deps-p6.md`)
+Historically info-only (policy `never`). P6 #1
 adds an **approved executor**:
 - `skills_import.py::runnable_install_specs` turns *safe* specs into shell commands
   (brew/apt/pip/cargo/npm/go/uv), **dropping** any spec the §8.C scanner flagged

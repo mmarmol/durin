@@ -1,4 +1,4 @@
-"""Agent modes — Sprint B / L3 (docs/archive/34_external_agents_review.md).
+"""Agent modes — Sprint B / L3 (docs/architecture/loop.md §3).
 
 Permission-as-data agent modes. The loop doesn't have any conditional logic
 about "what to do in plan mode vs build mode"; modes are pure data, applied by

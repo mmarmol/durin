@@ -5,7 +5,7 @@ status: current — describes the shipped system (post-migration, 2026-06-06)
 last_updated: 2026-06-06
 audience: humans and LLMs implementing or modifying this system
 depends_on: 00_overview.md, 04_agent_tools.md, 05_dream_cold_path.md
-related: 07_telemetry_and_observability.md, ../../qa/post_migration_audit_2026-06.md
+related: 07_telemetry_and_observability.md
 ---
 
 # Prompts and instructions
@@ -305,7 +305,7 @@ Divergence is a bug. Updates flow from this document outward; never the other wa
 > + `rules.md` + `commit_format.md` + an `examples/` bundle, where the LLM emitted
 > JSON Patch (RFC 6902) ops over the entity page frontmatter — **was deleted**
 > with the `DreamConsolidator`/`DreamRunner` cluster. The settled cold path
-> (`05_dream_cold_path.md`, audit `../../qa/post_migration_audit_2026-06.md`) has **four passes**
+> (`05_dream_cold_path.md`) has **four passes**
 > and **no JSON-Patch envelope, no `===PATCH===`/`===BODY_DELTA===`/`===COMMIT===`
 > output, no `Cursor-after` trailer**. The only file left under `templates/dream/`
 > is `absorb_judge.md` (§5). The four pass prompts are described below.
@@ -690,7 +690,7 @@ If `read_hot_layer(workspace)` fails (disk error, parser error, missing files), 
 |---|---|---|---|
 | 1 | Source of truth for LLM-facing text | This document. The per-tool `.description` property (e.g. `MemorySearchTool.description` in `durin/agent/tools/memory_search.py`) + `templates/agent/identity.md` + `templates/dream/absorb_judge.md` + the in-code dream prompts (`extract_dream._EXTRACT_PROMPT`, `always_on_dream._RANK_PROMPT`, `dream_passes._SKILL_EXTRACT_PROMPT`) must match this doc verbatim. Divergence = bug. (Audit C9 + B1, 2026-05-28: the v1 text referenced `memory_*.py::DESCRIPTION` constants that never existed; the canonical text lives in `_PARAMETERS["description"]` and is emitted via `Tool.description` → `function.description` in the OpenAI spec — see §3.7.) | §3.7 |
 | 2 | Declarative not imperative phrasing | Validated by LoCoMo v2 (+3.9pp). "Don't answer cold" + "state source" + "issue 2-3 searches" worked; "USE BEFORE answering" did not. | §2.2 |
-| 3 | Dream prompts are built in code (NOT a multi-file package, NOT a skill) | The four passes build prompts in code (`extract_dream` / `always_on_dream` / `dream_passes`); only `absorb_judge.md` is a template file. The old JSON-Patch consolidator package (`consolidator.md` + `json_patch_reference.md` + `rules.md` + `commit_format.md` + `examples/`) was deleted with the `DreamConsolidator`/`DreamRunner` cluster (audit `../../qa/post_migration_audit_2026-06.md`). | §4 |
+| 3 | Dream prompts are built in code (NOT a multi-file package, NOT a skill) | The four passes build prompts in code (`extract_dream` / `always_on_dream` / `dream_passes`); only `absorb_judge.md` is a template file. The old JSON-Patch consolidator package (`consolidator.md` + `json_patch_reference.md` + `rules.md` + `commit_format.md` + `examples/`) was deleted with the `DreamConsolidator`/`DreamRunner` cluster. | §4 |
 | 4 | Extract output is a JSON attribute object, not JSON Patch | `build_extract_prompt` asks for `attribute_key → scalar/list`; applied as `FieldPatch`es via `memory_writer`. No JSON-Patch ops, no few-shot package — the RFC 6902 envelope and its examples are gone. | §4.1 |
 | 5 | Extract key-reuse framing | `EXISTING ATTRIBUTE KEYS` block drives per-entity schema-drift control (reuse a key when the meaning matches). Per-entity scope; cross-entity dedup is the refine pass. | §4.1 |
 | 6 | No commit-message section in any dream prompt | Commit messages are assembled inline by `memory_writer` / `absorption`; provenance is per-`FieldPatch` (`source_ref`). The old `===COMMIT===` / `Cursor-after` trailer contract is gone (audit B1). | §4.1 |
