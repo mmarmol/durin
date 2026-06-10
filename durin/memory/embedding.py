@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import threading
 import time
+import warnings
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -380,7 +381,22 @@ class FastembedProvider(EmbeddingProvider):
         # fastembed tries to resolve the model id. Idempotent.
         _register_custom_models()
         t0 = time.monotonic()
-        self._model = TextEmbedding(model_name=self._model_name)
+        # fastembed >=0.6 switched catalog E5 models from CLS to mean
+        # pooling and warns about the behaviour change on every load.
+        # Mean pooling IS the correct E5 behaviour (the E5 paper uses
+        # average pooling; our own e5-small registration above declares
+        # MEAN explicitly), and any model switch triggers a full vector
+        # rebuild (index_meta.embedding_model_id), so index and queries
+        # are always pooled consistently. Suppress just that warning —
+        # it reads as a problem to operators (onboard/doctor) when it
+        # describes the desired behaviour.
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=r".*uses mean pooling instead of CLS embedding.*",
+                category=UserWarning,
+            )
+            self._model = TextEmbedding(model_name=self._model_name)
         emit_tool_event(
             "memory.embedding.load",
             {
