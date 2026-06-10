@@ -1386,11 +1386,19 @@ def _run_gateway(
                     return default_llm_invoke(prompt, model=curation_model).text
 
                 from durin.agent.skill_drift import check_upstream_drift
+                from durin.agent.skill_usage import collect_recent_skill_calls
                 _allowlist = list(config.skills.security.allowlist)
-                summary = curate_catalog(workspace, judge=_judge,
+                _usage = collect_recent_skill_calls(workspace, within_hours=24)
+                summary = curate_catalog(workspace, judge=_judge, usage=_usage,
                                          drift_check=check_upstream_drift, allowlist=_allowlist)
-                logger.info("skill curation: reviewed={} applied={} deferred={}",
-                            summary["reviewed"], summary["applied"], summary["deferred"])
+                _obs = summary.get("observations", {})
+                logger.info(
+                    "skill curation: reviewed={} applied={} deferred={} "
+                    "obs_applied={} obs_declined={} obs_kept={} obs_open={} principles={}",
+                    summary["reviewed"], summary["applied"], summary["deferred"],
+                    _obs.get("applied", 0), _obs.get("declined", 0), _obs.get("kept", 0),
+                    _obs.get("open", 0), summary.get("principles", 0),
+                )
             except Exception:
                 logger.exception("skill curation step (non-fatal) failed")
             return None
