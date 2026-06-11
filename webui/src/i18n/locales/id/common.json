@@ -237,7 +237,7 @@
       "crossEncoderTest": "Tes",
       "description": "Atur subsistem memori — reranking pencarian dan auto-konsolidasi Dream.",
       "help": {
-        "crossEncoderEnabled": "Reranker second-pass opt-in. Menambahkan 300-1500 ms per query dan ~1 GB RAM tetapi meningkatkan kualitas pada query ambigu. Mati secara default.",
+        "crossEncoderEnabled": "Reranker second-pass opt-in. Menambahkan 300-1500 ms per query dan ~1 GB RAM dan dapat meningkatkan kualitas pada query ambigu. Mati secara default.",
         "crossEncoderModel": "Model yang digunakan saat reranker aktif. Default bekerja baik untuk query multibahasa; alternatif menukar ukuran dengan latensi.",
         "dreamEnabled": "Sakelar utama untuk dream otomatis. Saat mati, cron dan trigger reaktif dinonaktifkan; `durin memory dream` manual tetap berfungsi.",
         "dreamCron": "Ekspresi cron untuk pass harian extract / refine / skill. Default 0 3 * * * (3 pagi waktu lokal).",

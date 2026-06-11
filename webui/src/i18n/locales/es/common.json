@@ -239,7 +239,7 @@
       "crossEncoderTest": "Probar",
       "description": "Ajusta el subsistema de memoria — reranking de búsqueda y auto-consolidación de Dream.",
       "help": {
-        "crossEncoderEnabled": "Reranker opcional de segunda pasada. Agrega 300-1500 ms por consulta y ~1 GB de RAM, pero mejora la calidad en consultas ambiguas. Desactivado por defecto.",
+        "crossEncoderEnabled": "Reranker opcional de segunda pasada. Agrega 300-1500 ms por consulta y ~1 GB de RAM, y puede mejorar la calidad en consultas ambiguas. Desactivado por defecto.",
         "crossEncoderModel": "Modelo usado cuando el reranker está habilitado. El predeterminado funciona bien para consultas multilingües; las alternativas intercambian tamaño por latencia.",
         "dreamEnabled": "Interruptor maestro del dream automático. Apagado, desactiva el cron y los disparadores reactivos; el manual `durin memory dream` sigue funcionando.",
         "dreamCron": "Expresión cron para la pasada diaria de extract / refine / skills. Por defecto 0 3 * * * (3am local).",
