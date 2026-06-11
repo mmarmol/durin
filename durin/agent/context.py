@@ -18,7 +18,6 @@ from durin.session.todo_state import todos_runtime_lines
 from durin.utils.helpers import (
     current_time_str,
     detect_image_mime,
-    truncate_text,
 )
 from durin.utils.prompt_templates import render_template
 
@@ -448,7 +447,8 @@ class ContextBuilder:
                 extra = list(extra) + [
                     f"Approved plan ready at: {approved_path}",
                     "Start with updating your todo list using the todo_write "
-                    "tool if applicable. The plan file is accessible via "
+                    "tool if applicable — include the plan's Verification "
+                    "items as final todos. The plan file is accessible via "
                     "read_file at any time during implementation.",
                 ]
                 # One-shot: consume so we don't re-inject every turn.

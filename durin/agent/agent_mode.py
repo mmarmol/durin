@@ -24,6 +24,7 @@ Inspirations:
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -140,8 +141,11 @@ PLAN_MODE = AgentMode(
         "1. Read code, search, and gather what you need to understand the "
         "task. You may use `spawn` for parallel investigation if helpful.\n"
         "2. When you have a concrete plan, call `exit_plan_mode` with the "
-        "plan as a markdown string in the `plan` argument. The plan is "
-        "written to disk but **the user does not see it yet**.\n"
+        "plan as a markdown string in the `plan` argument. The plan MUST "
+        "include a `## Verification` section (or per-step `verify:` lines) "
+        "stating how each step's success will be checked — plans without "
+        "verification criteria are rejected. The plan is written to disk "
+        "but **the user does not see it yet**.\n"
         "3. **IMMEDIATELY AFTER** calling `exit_plan_mode`, your next "
         "assistant message MUST present the full plan content to the user "
         "in markdown — title, goal, numbered steps, files involved, and "
@@ -349,6 +353,67 @@ def plan_mode_runtime_lines(metadata: Any) -> list[str]:
 # compaction, the same store as the todo list.
 EXECUTING_PLAN_PATH_KEY = "executing_plan_path"
 
+# Stall stop-condition. Bookkeeping lives in session.metadata (same store
+# as the todo list, survives compaction). Surfacing only — the runtime
+# line nudges the model to reassess; nothing is blocked (the V7/V8
+# PlanHook lesson: restrict/surface via data, never force behavior via
+# code).
+PLAN_STALL_COUNT_KEY = "plan_stall_count"
+PLAN_STALL_FINGERPRINT_KEY = "plan_stall_fingerprint"
+PLAN_STALL_NOTICE_KEY = "plan_stall_notice"
+DEFAULT_PLAN_STALL_TURNS = 8
+
+
+def plan_stall_threshold(app_config: Any) -> int:
+    """Resolve ``agents.defaults.plan_stall_turns`` defensively.
+
+    Loop tests construct AgentLoop with ``app_config=None``; fall back to
+    the schema default so behavior matches a default config.
+    """
+    defaults = getattr(getattr(app_config, "agents", None), "defaults", None)
+    value = getattr(defaults, "plan_stall_turns", DEFAULT_PLAN_STALL_TURNS)
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return DEFAULT_PLAN_STALL_TURNS
+
+
+def update_plan_stall(metadata: Any, threshold: int) -> bool:
+    """Per-turn stall bookkeeping while an approved plan is executing.
+
+    Fingerprints the todo list (the execution cursor): an unchanged
+    fingerprint across turns increments the counter, any change resets it.
+    Once ``threshold`` consecutive stalled turns accumulate, sets
+    ``PLAN_STALL_NOTICE_KEY`` (rendered by ``executing_plan_runtime_lines``).
+    With no executing plan or ``threshold <= 0``, clears all stall keys.
+    Returns True while the notice is active.
+    """
+    if not isinstance(metadata, dict):
+        return False
+    if threshold <= 0 or not metadata.get(EXECUTING_PLAN_PATH_KEY):
+        for key in (
+            PLAN_STALL_COUNT_KEY,
+            PLAN_STALL_FINGERPRINT_KEY,
+            PLAN_STALL_NOTICE_KEY,
+        ):
+            metadata.pop(key, None)
+        return False
+    from durin.session.todo_state import parse_todos, todos_raw
+
+    todos = parse_todos(todos_raw(metadata)) or []
+    fingerprint = json.dumps(todos, sort_keys=True)
+    if metadata.get(PLAN_STALL_FINGERPRINT_KEY) == fingerprint:
+        count = int(metadata.get(PLAN_STALL_COUNT_KEY, 0)) + 1
+    else:
+        count = 0
+        metadata[PLAN_STALL_FINGERPRINT_KEY] = fingerprint
+    metadata[PLAN_STALL_COUNT_KEY] = count
+    if count >= threshold:
+        metadata[PLAN_STALL_NOTICE_KEY] = count
+        return True
+    metadata.pop(PLAN_STALL_NOTICE_KEY, None)
+    return False
+
 
 def executing_plan_runtime_lines(metadata: Any) -> list[str]:
     """Per-turn pointer to the approved plan currently being executed.
@@ -372,12 +437,21 @@ def executing_plan_runtime_lines(metadata: Any) -> list[str]:
     plan_path = metadata.get(EXECUTING_PLAN_PATH_KEY)
     if not isinstance(plan_path, str) or not plan_path.strip():
         return []
-    return [
+    lines = [
         f"📋 Executing approved plan: `{plan_path.strip()}`. Track step "
         "progress with your todo list (todo_write) — it is the source of "
         "truth for what's done; re-read the plan file for the full steps "
         "if needed.",
     ]
+    stall = metadata.get(PLAN_STALL_NOTICE_KEY)
+    if isinstance(stall, int) and stall > 0:
+        lines.append(
+            f"⚠️ No todo progress for {stall} consecutive turns on this "
+            "plan. Reassess now: continue only if genuinely advancing; "
+            "otherwise tell the user what is blocking you, or suggest "
+            "revising the plan with /plan. Do not keep looping silently."
+        )
+    return lines
 
 
 def clear_executing_plan_if_todos_done(metadata: Any) -> bool:

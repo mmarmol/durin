@@ -22,8 +22,8 @@ from durin.agent.agent_mode import (
     SESSION_MODE_KEY,
     SESSION_PRE_PLAN_KEY,
     AgentMode,
-    enter_plan_mode,
     clear_executing_plan_if_todos_done,
+    enter_plan_mode,
     executing_plan_runtime_lines,
     exit_plan_mode,
     filter_tools,
@@ -200,7 +200,7 @@ class TestFilterTools:
 class TestRunnerActiveToolDefinitions:
 
     def test_no_provider_returns_all(self):
-        from durin.agent.runner import AgentRunSpec, AgentRunner
+        from durin.agent.runner import AgentRunner, AgentRunSpec
         from durin.agent.tools.registry import ToolRegistry
 
         registry = ToolRegistry()
@@ -221,7 +221,7 @@ class TestRunnerActiveToolDefinitions:
         assert {d["function"]["name"] for d in out} == {"read_file", "edit_file"}
 
     def test_plan_provider_filters(self):
-        from durin.agent.runner import AgentRunSpec, AgentRunner
+        from durin.agent.runner import AgentRunner, AgentRunSpec
         from durin.agent.tools.registry import ToolRegistry
 
         registry = ToolRegistry()
@@ -243,7 +243,7 @@ class TestRunnerActiveToolDefinitions:
         assert names == {"read_file", "exit_plan_mode"}
 
     def test_provider_exception_falls_back_to_all(self):
-        from durin.agent.runner import AgentRunSpec, AgentRunner
+        from durin.agent.runner import AgentRunner, AgentRunSpec
         from durin.agent.tools.registry import ToolRegistry
 
         def _boom():
@@ -539,3 +539,136 @@ class TestClearExecutingPlanWhenDone:
         meta = {"todos": [self._todo("a", "completed")]}
         assert clear_executing_plan_if_todos_done(meta) is False
         assert clear_executing_plan_if_todos_done(None) is False
+
+
+class TestUpdatePlanStall:
+    """Stall stop-condition: surfacing only — the counter trips a runtime
+    reminder, it never blocks anything (the V7/V8 PlanHook stays refuted)."""
+
+    def _meta(self, todos=None):
+        from durin.agent.agent_mode import EXECUTING_PLAN_PATH_KEY
+        from durin.session.todo_state import TODOS_KEY
+
+        meta = {EXECUTING_PLAN_PATH_KEY: "/tmp/plan.md"}
+        if todos is not None:
+            meta[TODOS_KEY] = todos
+        return meta
+
+    def _todo(self, content, status="pending"):
+        return {"content": content, "status": status, "activeForm": content}
+
+    def test_unchanged_todos_increment_and_trip_notice_at_threshold(self):
+        from durin.agent.agent_mode import (
+            PLAN_STALL_NOTICE_KEY,
+            update_plan_stall,
+        )
+
+        meta = self._meta(todos=[self._todo("a")])
+        assert update_plan_stall(meta, threshold=2) is False  # turn 0: baseline
+        assert update_plan_stall(meta, threshold=2) is False  # turn 1: count=1
+        assert update_plan_stall(meta, threshold=2) is True   # turn 2: count=2
+        assert meta[PLAN_STALL_NOTICE_KEY] == 2
+
+    def test_todo_change_resets_counter_and_clears_notice(self):
+        from durin.agent.agent_mode import (
+            PLAN_STALL_NOTICE_KEY,
+            update_plan_stall,
+        )
+        from durin.session.todo_state import TODOS_KEY
+
+        meta = self._meta(todos=[self._todo("a")])
+        for _ in range(3):
+            update_plan_stall(meta, threshold=2)
+        assert PLAN_STALL_NOTICE_KEY in meta
+        meta[TODOS_KEY] = [self._todo("a", status="completed")]
+        assert update_plan_stall(meta, threshold=2) is False
+        assert PLAN_STALL_NOTICE_KEY not in meta
+
+    def test_no_executing_plan_clears_all_stall_keys(self):
+        from durin.agent.agent_mode import (
+            EXECUTING_PLAN_PATH_KEY,
+            PLAN_STALL_COUNT_KEY,
+            PLAN_STALL_FINGERPRINT_KEY,
+            PLAN_STALL_NOTICE_KEY,
+            update_plan_stall,
+        )
+
+        meta = self._meta(todos=[self._todo("a")])
+        for _ in range(3):
+            update_plan_stall(meta, threshold=2)
+        meta.pop(EXECUTING_PLAN_PATH_KEY)
+        assert update_plan_stall(meta, threshold=2) is False
+        for key in (
+            PLAN_STALL_COUNT_KEY,
+            PLAN_STALL_FINGERPRINT_KEY,
+            PLAN_STALL_NOTICE_KEY,
+        ):
+            assert key not in meta
+
+    def test_threshold_zero_disables(self):
+        from durin.agent.agent_mode import PLAN_STALL_COUNT_KEY, update_plan_stall
+
+        meta = self._meta(todos=[self._todo("a")])
+        for _ in range(5):
+            assert update_plan_stall(meta, threshold=0) is False
+        assert PLAN_STALL_COUNT_KEY not in meta
+
+    def test_runtime_lines_include_reassess_when_notice_set(self):
+        from durin.agent.agent_mode import (
+            PLAN_STALL_NOTICE_KEY,
+            executing_plan_runtime_lines,
+        )
+
+        meta = self._meta()
+        meta[PLAN_STALL_NOTICE_KEY] = 8
+        lines = executing_plan_runtime_lines(meta)
+        joined = "\n".join(lines)
+        assert "Executing approved plan" in joined
+        assert "8 consecutive turns" in joined
+        assert "Reassess" in joined
+
+    def test_runtime_lines_no_reassess_without_notice(self):
+        from durin.agent.agent_mode import executing_plan_runtime_lines
+
+        lines = executing_plan_runtime_lines(self._meta())
+        assert "Reassess" not in "\n".join(lines)
+
+
+def test_plan_stall_threshold_resolution():
+    from types import SimpleNamespace
+
+    from durin.agent.agent_mode import plan_stall_threshold
+
+    cfg = SimpleNamespace(agents=SimpleNamespace(defaults=SimpleNamespace(plan_stall_turns=3)))
+    assert plan_stall_threshold(cfg) == 3
+    assert plan_stall_threshold(None) == 8  # default when no app_config (tests)
+
+
+def test_plan_stall_turns_config_default():
+    from durin.config.schema import AgentDefaults
+
+    d = AgentDefaults()
+    assert d.plan_stall_turns == 8
+
+    disabled = AgentDefaults(plan_stall_turns=0)
+    assert disabled.plan_stall_turns == 0
+
+
+class TestVerificationGuidance:
+    """The model is told upfront that plans need verification criteria —
+    guidance that reduces lint-reject round-trips (the enforcement itself
+    is the exit_plan_mode lint)."""
+
+    def test_plan_mode_suffix_mentions_verification_requirement(self):
+        from durin.agent.agent_mode import PLAN_MODE
+
+        assert "## Verification" in PLAN_MODE.prompt_suffix
+        assert "verify:" in PLAN_MODE.prompt_suffix
+
+    def test_exit_plan_mode_schema_mentions_verification(self):
+        from durin.agent.tools.plan_mode import ExitPlanModeTool
+
+        tool = ExitPlanModeTool(sessions=None)
+        desc = tool.parameters["properties"]["plan"]["description"]
+        assert "## Verification" in desc
+        assert "rejected" in desc
