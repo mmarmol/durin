@@ -8,8 +8,6 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 from pydantic.alias_generators import to_camel
 from pydantic_settings import BaseSettings
 
-from durin.cron.types import CronSchedule
-
 if TYPE_CHECKING:
     from durin.agent.tools.code_execution import CodeExecutionConfig
     from durin.agent.tools.post_edit_check import PostEditCheckConfig
@@ -769,6 +767,21 @@ class MCPServerConfig(Base):
     enabled_tools: list[str] = Field(default_factory=lambda: ["*"])  # Only register these tools; accepts raw MCP names or wrapped mcp_<server>_<tool> names; ["*"] = all tools; [] = no tools
 
 
+class MCPDeferralConfig(Base):
+    """Defer MCP tool definitions behind a discovery bridge (P3, 2026-06-10).
+
+    When the aggregate schema size of registered MCP tools crosses
+    ``threshold_tokens``, their definitions stop shipping to the LLM;
+    two bridge tools (``mcp_find_tools`` / ``mcp_invoke``) take their
+    place. Built-in tools are never deferred. Below the threshold
+    everything registers as before — one small server doesn't pay the
+    discovery indirection.
+    """
+
+    enabled: bool = True
+    threshold_tokens: int = 20_000  # ~10% of a 200k context window
+
+
 def _lazy_default(module_path: str, class_name: str) -> Any:
     """Deferred import helper for ToolsConfig default factories."""
     import importlib
@@ -792,6 +805,7 @@ class ToolsConfig(Base):
     process: ProcessToolConfig = Field(default_factory=lambda: _lazy_default("durin.agent.tools.process_registry", "ProcessToolConfig"))
     restrict_to_workspace: bool = False  # restrict all tool access to workspace directory
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
+    mcp_deferral: MCPDeferralConfig = Field(default_factory=MCPDeferralConfig)
     ssrf_whitelist: list[str] = Field(default_factory=list)  # CIDR ranges to exempt from SSRF blocking (e.g. ["100.64.0.0/10"] for Tailscale)
 
 

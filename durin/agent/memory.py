@@ -441,6 +441,47 @@ _RAW_ARCHIVE_MAX_CHARS = 16_000       # fallback dump (LLM failed)
 _ARCHIVE_SUMMARY_MAX_CHARS = 8_000    # LLM-produced consolidation summary
 _HISTORY_ENTRY_HARD_CAP = 64_000      # emergency cap in append_history
 
+# P5 (2026-06-10): memory refs surfaced by memory tools in the evicted
+# span. The section markers are single-sourced in
+# `durin.memory.section_markers`; SKILL is excluded (procedures, not
+# located facts). Tool results are json-encoded in session messages, so
+# the pattern is not line-anchored.
+_CITED_REF_MARKER_RE = re.compile(
+    r"=== (?:CANONICAL|FRAGMENT|SESSION|INGESTED): (.+?) ==="
+)
+_CITED_REF_TOOLS = frozenset({"memory_search", "memory_drill"})
+_MAX_CITED_REFS = 20
+
+
+def extract_cited_memory_refs(messages: list[dict[str, Any]]) -> list[str]:
+    """Distinct memory refs surfaced by memory tools in *messages*.
+
+    Consolidation summarizes evicted turns away — including search
+    results the model fetched on purpose. The refs (not the content)
+    survive into the summary so the model keeps "I know where it is"
+    at pointer cost. Mechanical extraction, no LLM trust: scans tool
+    messages from memory_search / memory_drill for section markers and
+    returns refs first-seen-ordered, deduped, capped.
+    """
+    refs: list[str] = []
+    seen: set[str] = set()
+    for message in messages:
+        if message.get("role") != "tool":
+            continue
+        if message.get("name") not in _CITED_REF_TOOLS:
+            continue
+        content = message.get("content")
+        if not isinstance(content, str):
+            continue
+        for match in _CITED_REF_MARKER_RE.finditer(content):
+            ref = match.group(1).rsplit(" (", 1)[0].strip()
+            if ref and ref not in seen:
+                seen.add(ref)
+                refs.append(ref)
+                if len(refs) >= _MAX_CITED_REFS:
+                    return refs
+    return refs
+
 
 class Consolidator:
     """Lightweight consolidation: summarizes evicted messages into history.jsonl."""
@@ -829,6 +870,18 @@ class Consolidator:
             raw = response.content or "[no summary]"
             self.store.append_history(raw, max_chars=_ARCHIVE_SUMMARY_MAX_CHARS)
             summary, tags = parse_consolidator_response(raw)
+            # P5 (2026-06-10): the refs ride the session summary only —
+            # history.jsonl (dream input) stays untouched. Mechanical,
+            # appended after the LLM output so it can't be dropped or
+            # hallucinated by the summarizer.
+            cited = extract_cited_memory_refs(messages)
+            if summary and cited:
+                summary = (
+                    f"{summary}\n"
+                    "Memory refs cited in this span "
+                    "(memory_drill for full bodies): "
+                    + "; ".join(cited)
+                )
             return summary, tags
         except Exception:
             logger.warning("Consolidation LLM call failed, raw-dumping to history")

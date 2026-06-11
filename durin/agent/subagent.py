@@ -143,6 +143,7 @@ class SubagentManager:
             config=cfg,
             workspace=str(root.resolve()),
             file_state_store=FileStates(),
+            scope="subagent",
         )
         ToolLoader().load(ctx, registry, scope="subagent")
         return registry

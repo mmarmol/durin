@@ -25,6 +25,7 @@ path as running it for the first time (essential for replay).
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import shutil
@@ -33,10 +34,10 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-import functools
-
 from durin.memory.provenance import author_scope
 from durin.memory.store import store_memory
+from durin.telemetry.logger import TelemetryLogger, bind_telemetry, reset_telemetry
+from scripts.benchmark.locomo_dataset import QA, Conversation
 
 
 def _agent_seeded(fn):
@@ -52,9 +53,6 @@ def _agent_seeded(fn):
         with author_scope("agent_created"):
             return fn(*args, **kwargs)
     return wrapper
-from durin.telemetry.logger import TelemetryLogger, bind_telemetry, reset_telemetry
-
-from scripts.benchmark.locomo_dataset import QA, Conversation
 
 __all__ = ["QATrace", "run_qa"]
 
@@ -104,6 +102,7 @@ async def run_qa(
     max_iterations: int = DEFAULT_MAX_ITERATIONS,
     timeout_s: float = DEFAULT_PER_QA_TIMEOUT_S,
     enable_memory: bool = True,
+    cross_encoder: bool = True,
     log_path: Path | None = None,
 ) -> QATrace:
     """Run one QA end-to-end and return its trace.
@@ -166,10 +165,12 @@ async def run_qa(
     )
 
     started = time.monotonic()
+    started_wall = time.time()
     try:
         await asyncio.wait_for(
             _ask_agent(qa, workspace_root, model, max_iterations, trace,
-                       enable_memory=enable_memory),
+                       enable_memory=enable_memory, timeout_s=timeout_s,
+                       cross_encoder=cross_encoder),
             timeout=timeout_s,
         )
     except asyncio.TimeoutError:
@@ -194,15 +195,23 @@ async def run_qa(
         # and post-bench analysis has to chase events across two
         # directories. Append the session log into the per-QA file so
         # the bench artefact is self-contained.
-        _merge_session_telemetry_into(telemetry_path, qa.qa_id, started)
+        _merge_session_telemetry_into(telemetry_path, qa.qa_id, started_wall)
     return trace
 
 
 def _merge_session_telemetry_into(
-    telemetry_path: Path, qa_id: str, started_monotonic: float,
+    telemetry_path: Path, qa_id: str, started_wall: float,
 ) -> None:
     """Append events from the session-scoped telemetry file into the
     per-QA bench file. Best-effort: failures degrade silently.
+
+    Only events stamped at/after ``started_wall`` (epoch seconds, with
+    1s of clock slack) are merged. The session file is keyed by
+    ``bench:<qa_id>`` + date, so it ACCUMULATES across runs of the same
+    QA on the same day — pre-fix, a re-run / replay / A-B run inherited
+    every earlier run's events, which poisoned post-hoc analysis (the
+    2026-06-10 CE-off run appeared to have cross-encoder rerank events
+    that actually belonged to the morning baseline).
     """
     try:
         from durin.telemetry.logger import get_session_logger
@@ -216,12 +225,21 @@ def _merge_session_telemetry_into(
     if not session_path.is_file() or session_path == telemetry_path:
         return
     try:
+        cutoff = started_wall - 1.0
+        kept: list[str] = []
+        with session_path.open("r", encoding="utf-8") as src:
+            for line in src:
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if float(event.get("ts", 0) or 0) >= cutoff:
+                    kept.append(line)
+        if not kept:
+            return
         existing = telemetry_path.read_text(encoding="utf-8") \
             if telemetry_path.exists() else ""
-        with session_path.open("r", encoding="utf-8") as src:
-            lines = src.readlines()
-        merged = existing + "".join(lines)
-        telemetry_path.write_text(merged, encoding="utf-8")
+        telemetry_path.write_text(existing + "".join(kept), encoding="utf-8")
     except Exception:  # noqa: BLE001
         return
 
@@ -542,6 +560,8 @@ async def _ask_agent(
     trace: QATrace,
     *,
     enable_memory: bool = True,
+    timeout_s: float = DEFAULT_PER_QA_TIMEOUT_S,
+    cross_encoder: bool = True,
 ) -> None:
     """Drive durin's agent loop to answer the question.
 
@@ -585,8 +605,11 @@ async def _ask_agent(
         # ``conv-1-q15`` ("when did Jon host a dance competition")
         # where the fact was indexed but didn't surface high enough
         # in the warm-tier; cross-encoder reranking targets exactly
-        # that gap.
-        cfg.memory.search.cross_encoder.enabled = True
+        # that gap. CE-demotion forensics (2026-06-10) found the
+        # opposite failure too — gold already in the pre-CE top-10
+        # pushed OUT by the reranker in 6/12 inspected fails — so the
+        # flag is now a parameter for A/B ablations.
+        cfg.memory.search.cross_encoder.enabled = cross_encoder
 
     bus = MessageBus()
     loop_agent = AgentLoop.from_config(cfg, bus=bus)
@@ -653,7 +676,11 @@ async def _ask_agent(
 
     try:
         await bus.publish_inbound(msg)
-        await asyncio.wait_for(_drain_until_final(), timeout=DEFAULT_PER_QA_TIMEOUT_S)
+        # H23 follow-up (2026-06-10): honour the caller's per-QA cap.
+        # This wait used the module constant (90s), so --timeout-s 180
+        # never reached the inner wall — slow-provider days killed
+        # long adversarial turns at 90s with empty answers.
+        await asyncio.wait_for(_drain_until_final(), timeout=timeout_s)
     finally:
         # Stop the loop so it doesn't leak background tasks. Setting
         # _running=False lets the `while self._running` exit on the

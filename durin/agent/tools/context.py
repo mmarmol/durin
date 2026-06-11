@@ -63,3 +63,10 @@ class ToolContext:
     # treat ``None`` the same as a missing section and fall back to grep
     # / disabled behaviour.
     app_config: Any | None = None
+    # Which prompt profile the calling agent runs: "core" (the main
+    # loop's full stable tier, pinned memory + hot layer included) or
+    # "subagent" (focused prompt WITHOUT the memory prefix — see
+    # ``SubagentManager._build_subagent_prompt``). Tools that reason
+    # about what the caller already sees in its system prompt (e.g.
+    # ``memory_search`` hot-layer dedup) must key off this.
+    scope: str = "core"

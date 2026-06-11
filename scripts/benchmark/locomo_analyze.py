@@ -102,6 +102,11 @@ def analyze_run(run_dir: Path) -> dict[str, Any]:
         raise FileNotFoundError(f"no traces/ directory in {run_dir}")
 
     for trace_path in sorted(traces_dir.glob("*.json")):
+        # locomo_replay stashes the pre-replay trace as a
+        # `<qa>.previous.json` sidecar next to the live one — counting
+        # it double-counts the QA and resurrects the old verdict.
+        if trace_path.name.endswith(".previous.json"):
+            continue
         try:
             trace = json.loads(trace_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
@@ -289,7 +294,7 @@ def _write_failure_markdown(
         f"- reasoning: {verdict.get('reasoning', '')}"
     )
     lines.append("")
-    lines.append(f"## Run shape")
+    lines.append("## Run shape")
     lines.append(f"- iterations: {trace.get('iterations')}")
     lines.append(f"- stop_reason: {trace.get('stop_reason')}")
     lines.append(f"- duration_s: {trace.get('duration_s'):.2f}")

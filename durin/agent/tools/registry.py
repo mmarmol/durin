@@ -55,7 +55,13 @@ class ToolRegistry:
         if self._cached_definitions is not None:
             return self._cached_definitions
 
-        definitions = [tool.to_schema() for tool in self._tools.values()]
+        # Deferred tools (llm_visible False) stay registered/executable
+        # but their schemas don't ship to the model (P3, 2026-06-10).
+        definitions = [
+            tool.to_schema()
+            for tool in self._tools.values()
+            if getattr(tool, "llm_visible", True)
+        ]
         builtins: list[dict[str, Any]] = []
         mcp_tools: list[dict[str, Any]] = []
         for schema in definitions:
@@ -99,19 +105,19 @@ class ToolRegistry:
 
     async def execute(self, name: str, params: dict[str, Any]) -> Any:
         """Execute a tool by name with given parameters."""
-        _HINT = "\n\n[Analyze the error above and try a different approach.]"
+        _hint = "\n\n[Analyze the error above and try a different approach.]"
         tool, params, error = self.prepare_call(name, params)
         if error:
-            return error + _HINT
+            return error + _hint
 
         try:
             assert tool is not None  # guarded by prepare_call()
             result = await tool.execute(**params)
             if isinstance(result, str) and result.startswith("Error"):
-                return result + _HINT
+                return result + _hint
             return result
         except Exception as e:
-            return f"Error executing {name}: {str(e)}" + _HINT
+            return f"Error executing {name}: {str(e)}" + _hint
 
     @property
     def tool_names(self) -> list[str]:

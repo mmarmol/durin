@@ -4,8 +4,9 @@ Per `docs/architecture/memory/02_indexing.md` §5: one SQLite database at
 ``<workspace>/.durin/index/fts.sqlite`` with two FTS5 virtual tables
 sharing a bookkeeping table:
 
-  - ``memory_fts`` (``unicode61 remove_diacritics 2``) — Latin,
-    Cyrillic, Greek, Arabic and similar whitespace-separated scripts.
+  - ``memory_fts`` (``porter unicode61 remove_diacritics 2``) — Latin,
+    Cyrillic, Greek, Arabic and similar whitespace-separated scripts,
+    with English Porter stemming (write/writes/writing share a token).
   - ``memory_fts_trigram`` (``trigram``) — CJK + substring queries.
   - ``fts_meta`` (regular table) — per-uri mtime + indexed_at.
 
@@ -47,7 +48,13 @@ class FTSHit:
 # --- Schema ---------------------------------------------------------------
 
 _SCHEMA = [
-    # Default tokenizer table (Latin and similar).
+    # Default tokenizer table (Latin and similar). Porter stemming
+    # added 2026-06-10 (LoCoMo forensics, conv-3-q169): without it,
+    # `write` / `writes` / `writing` are distinct tokens and a query
+    # using one form never matches a doc using another. Porter is an
+    # English suffix-stripper — non-English tokens pass through mostly
+    # untouched (terminal-s plural stripping mildly helps Spanish);
+    # CJK is unaffected (routed to the trigram table).
     """
     CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
         uri UNINDEXED,
@@ -55,7 +62,7 @@ _SCHEMA = [
         type UNINDEXED,
         entity_type UNINDEXED,
         text,
-        tokenize = 'unicode61 remove_diacritics 2'
+        tokenize = 'porter unicode61 remove_diacritics 2'
     );
     """,
     # Trigram tokenizer table (CJK, substring search).

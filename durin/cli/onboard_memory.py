@@ -107,32 +107,27 @@ def prompt_memory_aux_model(
 # Verbatim from `docs/architecture/memory/06_prompts_and_instructions.md` §6.2.
 CROSS_ENCODER_QUESTION_TEXT: str = dedent(
     """\
-    Recommended: durin can use a cross-encoder reranker to improve
-    search quality. This adds 300-800ms latency per query and requires
-    ~600MB additional RAM. The default model is `BAAI/bge-reranker-base`
-    (MIT, multilingual, ~100M params).
+    Optional: a cross-encoder reranker can improve search quality, at a
+    cost of ~300-800ms per query and ~600MB RAM. Off by default.
 
-    For a personal agent this is worth enabling: the rerank's latency is
-    dwarfed by the LLM call that follows every search, while the ranking
-    gain is direct. Decline if you run on edge / RAM-constrained
-    hardware. You can change this anytime via the web dashboard.
-
-    Enable advanced reranker now? [Y/n]:
+    Enable cross-encoder reranker? [y/N]:
     """
 )
 
 
 def prompt_enable_cross_encoder(
-    current: bool = False, *, recommended: bool = True,
+    current: bool = False, *, recommended: bool = False,
 ) -> bool:
     """Render the Q6.2 question and return the user's choice.
 
-    The pre-selected answer is *recommended* (ON for the personal-agent
-    shape — see the question copy), so a fresh install defaults to Yes
-    while the config-level default stays OFF for CI / library safety.
-    *current* is only the abort fallback: Ctrl+C / abort preserves the
-    operator's existing value rather than silently applying the
-    recommendation.
+    Pre-selected answer is OFF (``recommended=False``): the 2026-06-11
+    LoCoMo A/B (CE replace 0.79 / off 0.78 / enriched+blend 0.77, a
+    statistical tie) showed the reranker doesn't move aggregate answer
+    quality on dialogue-style stores, so onboarding no longer pushes it
+    — it stays a deliberate opt-in. The config-level default was always
+    OFF (CI / library safety). *current* is the abort fallback: Ctrl+C
+    preserves the operator's existing value rather than applying the
+    default.
     """
     questionary = _get_questionary()
     answer: Any = questionary.confirm(

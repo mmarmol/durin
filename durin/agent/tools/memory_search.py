@@ -159,12 +159,28 @@ class MemorySearchTool(Tool):
         embedding_model: str | None = None,
         *,
         app_config: Any | None = None,
+        context_dedup: bool = False,
+        include_raw_results: bool = True,
     ) -> None:
         self._workspace = Path(workspace).expanduser()
         self._embedding_model = embedding_model
         self._vector_index: Optional[VectorIndex] = None
         self._vector_index_attempted = False
         self._app_config = app_config
+        # P4b (2026-06-10): the LLM only reads `sectioned_rendered` —
+        # the tool description teaches the marker format and nothing
+        # else — so shipping the raw `results` dicts to the model pays
+        # for every hit twice. `create()` (the agent tool path) drops
+        # them; programmatic callers (graph_api / webui, bench scripts)
+        # keep the structured array via this default.
+        self._include_raw_results = include_raw_results
+        # P4 (2026-06-10): hot-layer dedup only makes sense when the
+        # CALLER's system prompt actually carries the hot layer, so it
+        # is opt-in: `create()` (the agent tool path) enables it for
+        # the core scope. Direct constructions — graph_api / webui
+        # search, subagents, ad-hoc scripts — face callers with no hot
+        # layer in front of them and must see every hit.
+        self._context_dedup = context_dedup
         # Per doc 25 §2.C: alias index is shared process-wide via
         # durin.memory.aliases_cache, so the refine pass and
         # EntityAbsorption see updates as soon as we (or they) call
@@ -284,6 +300,8 @@ class MemorySearchTool(Tool):
             workspace=ctx.workspace,
             embedding_model=model,
             app_config=app,
+            context_dedup=getattr(ctx, "scope", "core") != "subagent",
+            include_raw_results=False,
         )
 
     def _get_vector_index(self) -> Optional[VectorIndex]:
@@ -491,7 +509,7 @@ class MemorySearchTool(Tool):
             apply_per_source_cap,
             render_sectioned,
         )
-        _TYPE_FROM_CLASS = {
+        _type_from_class = {
             "skill": "skill",
             "entity_page": "entity",
             "episodic": "episodic", "stable": "stable",
@@ -500,7 +518,7 @@ class MemorySearchTool(Tool):
         enriched_hits = [
             SectionedHit(
                 uri=r.uri,
-                type=_TYPE_FROM_CLASS.get(r.class_name, "episodic"),
+                type=_type_from_class.get(r.class_name, "episodic"),
                 path=r.uri,
                 score=0.0,
                 ts=r.valid_from,
@@ -513,9 +531,31 @@ class MemorySearchTool(Tool):
             for r in results
         ]
         capped_hits = apply_per_source_cap(enriched_hits)
+
+        # P4 (2026-06-10): hits whose rendered content is already
+        # visible in the caller's hot layer collapse to pointer lines.
+        # Containment-checked per ref — a hit carrying body beyond the
+        # prefix excerpt passes through whole. Disabled for subagents
+        # (their prompt has no hot layer; see __init__).
+        in_context_hits: list[SectionedHit] = []
+        if self._context_dedup:
+            from durin.memory.context_dedup import split_in_context
+            capped_hits, in_context_hits = split_in_context(
+                self._workspace, capped_hits,
+            )
+
         kept_uris = {h.uri for h in capped_hits}
         results = [r for r in results if r.uri in kept_uris]
         sectioned_rendered = render_sectioned(capped_hits)
+        if in_context_hits:
+            from durin.memory.context_dedup import (
+                render_in_context_section,
+            )
+            pointer_section = render_in_context_section(in_context_hits)
+            sectioned_rendered = (
+                f"{sectioned_rendered}\n\n{pointer_section}"
+                if sectioned_rendered else pointer_section
+            )
 
         # Strategy / ranking labels for downstream telemetry consumers
         # that pattern-match. We derive them from what the pipeline
@@ -549,6 +589,7 @@ class MemorySearchTool(Tool):
             "total_candidates": total_candidates,
             "skill_result_count": sum(1 for r in results if r.kind == "skill"),
             "keywords": keywords,
+            "in_context_deduped": len(in_context_hits),
         }
         if pipeline_result.recovered_from:
             recall_payload["recovered_from"] = list(
@@ -570,12 +611,17 @@ class MemorySearchTool(Tool):
                 },
             )
         response: dict[str, Any] = {
-            "results": [r.to_dict() for r in results],
             "total": len(results),
             "strategy": strategy,
             "ranking": ranking,
             "sectioned_rendered": sectioned_rendered,
         }
+        if self._include_raw_results:
+            response["results"] = [r.to_dict() for r in results]
+        if in_context_hits:
+            response["already_in_context"] = [
+                h.uri for h in in_context_hits
+            ]
         # P5.2: surface degraded-run info when the pipeline recovered
         # from a source failure. Omitted on clean runs to keep the
         # response shape minimal.
@@ -609,10 +655,13 @@ class MemorySearchTool(Tool):
 
         archive_root = self._workspace / "memory" / "archive"
         if not archive_root.is_dir():
-            return {
-                "results": [], "total": 0,
+            empty: dict[str, Any] = {
+                "total": 0,
                 "strategy": "archive", "ranking": "default",
             }
+            if self._include_raw_results:
+                empty["results"] = []
+            return empty
 
         needle = query.lower()
         hits: list[Result] = []
@@ -708,7 +757,7 @@ class MemorySearchTool(Tool):
             apply_per_source_cap,
             render_sectioned,
         )
-        _ARCHIVE_TYPE_FROM_CLASS = {
+        _archive_type_from_class = {
             "entity_page": "entity",
             "episodic": "episodic", "stable": "stable",
             "corpus": "corpus", "session_summary": "session_summary",
@@ -716,7 +765,7 @@ class MemorySearchTool(Tool):
         sectioned = [
             SectionedHit(
                 uri=r.uri,
-                type=_ARCHIVE_TYPE_FROM_CLASS.get(
+                type=_archive_type_from_class.get(
                     r.class_name, "episodic",
                 ),
                 path=r.uri,
@@ -752,13 +801,17 @@ class MemorySearchTool(Tool):
             )
         kept = {h.uri for h in capped}
         kept_results = [r for r in hits if r.uri in kept]
-        return {
-            "results": [r.to_dict() for r in kept_results],
+        archive_response: dict[str, Any] = {
             "total": len(kept_results),
             "strategy": "archive",
             "ranking": "default",
             "sectioned_rendered": render_sectioned(capped),
         }
+        if self._include_raw_results:
+            archive_response["results"] = [
+                r.to_dict() for r in kept_results
+            ]
+        return archive_response
 
     def _sectioned_to_result(
         self, hit: Any, *, level: str,
