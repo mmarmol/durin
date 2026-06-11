@@ -139,6 +139,78 @@ def _emit_relation_cap(ref: str, before: int, after: int) -> None:
         pass
 
 
+def _compose_entity_commit_message(
+    ref: str,
+    *,
+    is_new: bool,
+    name_changed: bool,
+    patches: list[FieldPatch],
+) -> bytes:
+    """Build an informative commit message for an entity write.
+
+    The subject names the entity and the kinds of field touched; the body
+    lists each change one per line; trailers carry the provenance
+    ``source_ref``(s) and the field-author scope. This is what makes the
+    ``git log`` / dashboard history readable instead of a wall of bare
+    ``upsert <ref>`` lines (the absorb path keeps its own richer format).
+    """
+    n_rel = sum(1 for p in patches if p.kind == "relation")
+    n_attr = sum(1 for p in patches if p.kind == "attribute")
+    n_alias = sum(1 for p in patches if p.kind == "alias")
+    n_src = sum(1 for p in patches if p.kind == "derived_from")
+    has_body = any(p.kind in ("body_append", "body_replace") for p in patches)
+
+    summary: list[str] = []
+    if name_changed:
+        summary.append("name")
+    if has_body:
+        summary.append("body")
+    if n_rel:
+        summary.append(f"+{n_rel} relation")
+    if n_attr:
+        summary.append(f"{n_attr} attribute")
+    if n_alias:
+        summary.append(f"{n_alias} alias")
+    if n_src:
+        summary.append(f"+{n_src} source")
+
+    subject = f"{'create' if is_new else 'update'} {ref}"
+    if summary:
+        subject += ": " + ", ".join(summary)
+
+    body_lines: list[str] = []
+    for p in patches:
+        if p.kind == "body_append":
+            body_lines.append("body append")
+        elif p.kind == "body_replace":
+            body_lines.append("body replace")
+        elif p.kind == "relation":
+            v = p.value or {}
+            body_lines.append(f"relation → {v.get('to', '?')} ({v.get('type', '?')})")
+        elif p.kind == "attribute":
+            body_lines.append(f"attribute {p.key}")
+        elif p.kind == "alias":
+            body_lines.append(f"alias {p.value}")
+        elif p.kind == "derived_from":
+            body_lines.append(f"derived_from {p.value}")
+
+    # dict.fromkeys preserves first-seen order while de-duplicating.
+    sources = list(dict.fromkeys(p.source_ref for p in patches if p.source_ref))
+    authors = list(dict.fromkeys(p.author for p in patches if p.author))
+
+    lines = [subject]
+    if body_lines:
+        lines += ["", *body_lines]
+    trailers: list[str] = []
+    if sources:
+        trailers.append(f"Source: {', '.join(sources)}")
+    if authors:
+        trailers.append(f"Author: {', '.join(authors)}")
+    if trailers:
+        lines += ["", *trailers]
+    return ("\n".join(lines) + "\n").encode("utf-8")
+
+
 def write_entity(
     workspace: Path,
     ref: str,
@@ -185,8 +257,10 @@ def write_entity(
         # the human-edit phase; here the writes are agent/dream by definition.)
         page.author = "agent_created"
 
+        is_new = raw is None
         changed = False
-        if name is not None and page.name != name:
+        name_changed = name is not None and page.name != name
+        if name_changed:
             page.name = name
             changed = True
         rel_before = len(page.relations)
@@ -201,7 +275,9 @@ def write_entity(
         new_commit = build_commit_with_file(
             root, base, rel, content,
             author=b"durin-memory <memory@durin.local>",
-            message=f"upsert {ref}".encode("utf-8"),
+            message=_compose_entity_commit_message(
+                ref, is_new=is_new, name_changed=name_changed, patches=patches,
+            ),
         )
         repo = Repo(str(root))
         try:
