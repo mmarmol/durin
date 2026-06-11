@@ -67,6 +67,20 @@ _ACTIVE_PLAN_PATH_KEY = "active_plan_path"
 # per-session directory.
 _SESSION_SLUG_RE = re.compile(r"[^\w\-]+")
 
+# Verification lint — format convention with English keywords (like
+# frontmatter keys), NOT content/language detection. Presence-only check:
+# quality of the criteria is judged by the human at /build, where the
+# approval gate now covers the *definition of done*, not just the steps.
+_VERIFICATION_HEADING_RE = re.compile(r"(?im)^#{1,6}\s+verification\b")
+_VERIFY_MARKER_RE = re.compile(r"(?im)^[\s\-*\d.)]*verify\s*:")
+
+
+def has_verification_criteria(plan: str) -> bool:
+    """True when *plan* contains a Verification heading or `verify:` lines."""
+    return bool(
+        _VERIFICATION_HEADING_RE.search(plan) or _VERIFY_MARKER_RE.search(plan)
+    )
+
 
 def _session_slug(session_key: str | None) -> str:
     """Filesystem-safe slug for *session_key*; defaults to ``default``."""
@@ -298,6 +312,15 @@ class ExitPlanModeTool(Tool, _PlanModeToolBase):
                 f"Error: `exit_plan_mode` can only be called while in plan "
                 f"mode (current mode: {current}). If your plan is already "
                 "approved, continue execution directly."
+            )
+
+        if not has_verification_criteria(plan):
+            return (
+                "Error: plan has no verification criteria. Add a "
+                "`## Verification` section (or per-step `verify:` lines) "
+                "stating how each step's success will be checked — a "
+                "command to run, an observable condition, or a test that "
+                "must pass. Then call `exit_plan_mode` again."
             )
 
         # Write the plan to disk. The directory lives inside the workspace
