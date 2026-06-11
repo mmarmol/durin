@@ -183,8 +183,10 @@ export function AskUserAnswer({ event }: { event: ToolProgressEvent }) {
   return (
     <div className="space-y-1.5 pb-1.5 pt-0.5">
       {question && (
+        // No ❓ prefix here: the container (hoisted block shell, or the
+        // tool-call header in the legacy fold) already carries the icon.
         <div className="text-[12px] leading-snug text-foreground/90">
-          ❓ {question}
+          {question}
         </div>
       )}
       {sent ? (

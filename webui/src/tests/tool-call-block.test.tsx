@@ -33,7 +33,10 @@ describe("ToolCallBlock — ask_user_question", () => {
 
   it("shows the question and the options as chips", () => {
     render(<ToolCallBlock event={askEvent} />);
-    expect(screen.getByText(/❓ Which database\?/)).toBeInTheDocument();
+    // The ❓ icon belongs to the container, not the question text (avoids
+    // a double ❓ when wrapped in the hoisted block's icon gutter). The
+    // question appears in the header summary AND the body, hence getAllByText.
+    expect(screen.getAllByText(/Which database\?/).length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "Postgres" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "SQLite" })).toBeInTheDocument();
     expect(screen.queryByText(/YIELD TO USER/)).not.toBeInTheDocument();
