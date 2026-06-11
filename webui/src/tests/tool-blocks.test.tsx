@@ -34,6 +34,10 @@ describe("HoistedToolBlock — ask_user_question", () => {
     expect(screen.getByText("red")).toBeInTheDocument();
     expect(screen.getByText("green")).toBeInTheDocument();
     expect(screen.getByRole("textbox")).toBeInTheDocument();
+    // Exactly one ❓ glyph — the block-shell gutter icon, not a second one
+    // from the inner question text.
+    const markCount = (document.body.textContent?.match(/❓/g) ?? []).length;
+    expect(markCount).toBe(1);
   });
 
   it("renders an answered question without input affordances", () => {
