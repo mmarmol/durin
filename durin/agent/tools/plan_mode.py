@@ -50,6 +50,7 @@ from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.context import ContextAware, RequestContext
 from durin.agent.tools.schema import StringSchema, tool_parameters_schema
 from durin.telemetry.logger import current_telemetry
+from durin.utils.atomic_write import atomic_write_text
 
 if TYPE_CHECKING:
     from durin.session.manager import SessionManager
@@ -309,7 +310,7 @@ class ExitPlanModeTool(Tool, _PlanModeToolBase):
         try:
             plan_dir.mkdir(parents=True, exist_ok=True)
             plan_path = _new_plan_path(plan_dir)
-            plan_path.write_text(plan, encoding="utf-8")
+            atomic_write_text(plan_path, plan)
         except OSError as e:
             return (
                 f"Error: could not write plan file to {plan_dir}: {e}"

@@ -1501,6 +1501,13 @@ class AgentLoop:
         if self._background_tasks:
             await asyncio.gather(*self._background_tasks, return_exceptions=True)
             self._background_tasks.clear()
+        # Kill orphan background process groups (exec background=true).
+        # Use the module global directly so shutdown never instantiates a
+        # registry that was never used.
+        from durin.agent.tools import process_registry as _proc_reg
+        if _proc_reg._registry is not None:
+            with suppress(Exception):
+                await _proc_reg._registry.shutdown()
         for name, stack in self._mcp_stacks.items():
             try:
                 await stack.aclose()

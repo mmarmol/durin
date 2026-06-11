@@ -283,6 +283,7 @@ class ToolEditFileEvent(TypedDict):
 
 
 class ToolGrepEvent(TypedDict):
+    engine: NotRequired[str]  # "rg" (ripgrep pre-filter) | "python" (walk)
     pattern_len: int
     fixed_strings: bool
     case_insensitive: bool
@@ -310,6 +311,56 @@ class ToolExecSpillEvent(TypedDict):
     spill_error: NotRequired[str | None]
 
 
+class ExecuteCodeEvent(TypedDict):
+    """One execute_code run (programmatic tool calling sandbox).
+
+    ``tool_calls`` is the per-tool call histogram — the primary signal for
+    how the sandbox is actually used (real batch vs trivial 0-1 call script).
+    """
+    status: str  # success | error | timeout
+    tool_calls_made: int
+    tool_calls: NotRequired[dict[str, int]]
+    code_chars: NotRequired[int]
+    duration_ms: float
+    stdout_chars: int
+    exit_code: NotRequired[int | None]
+
+
+class PostEditCheckEvent(TypedDict):
+    """A post-edit linter ran after write_file/edit_file (see
+    ``durin/agent/tools/post_edit_check.py``)."""
+    path: str
+    checker: str
+    exit_code: int | None
+    issue_lines: int
+    duration_ms: float
+    skipped_reason: NotRequired[str]
+
+
+class ProcessSpawnEvent(TypedDict):
+    """A background process was started via ``exec(background=true)``."""
+    proc_id: str
+    pid: int | None
+    command_chars: int
+
+
+class ProcessExitEvent(TypedDict):
+    """A tracked background process exited (reader observed EOF)."""
+    proc_id: str
+    pid: int | None
+    exit_code: int | None
+    runtime_s: float
+    output_chars: int
+
+
+class ProcessKillEvent(TypedDict):
+    """The ``process`` tool (or agent shutdown) killed a background
+    process group."""
+    proc_id: str
+    pid: int | None
+    force: bool
+
+
 class ToolRepoOverviewEvent(TypedDict):
     path: str
     depth: int
@@ -330,6 +381,7 @@ class ToolListDirEvent(TypedDict):
     path: str
     recursive: bool
     max_entries: int
+    offset: NotRequired[int]
     displayed: int
     total_before_cap: int
     truncated: bool
@@ -1075,6 +1127,8 @@ EVENTS: dict[str, type] = {
     "tool.edit_file": ToolEditFileEvent,
     "tool.grep": ToolGrepEvent,
     "tool.exec.spill": ToolExecSpillEvent,
+    "tool.post_edit_check": PostEditCheckEvent,
+    "tool.execute_code": ExecuteCodeEvent,
     "tool.repo_overview": ToolRepoOverviewEvent,
     "tool.list_dir": ToolListDirEvent,
     "tool.web_search": ToolWebSearchEvent,
@@ -1092,6 +1146,10 @@ EVENTS: dict[str, type] = {
     "sleep.start": SleepStartEvent,
     "sleep.cancelled": SleepCancelledEvent,
     "sleep.end": SleepEndEvent,
+    # Background processes (exec background=true / process tool)
+    "process.spawn": ProcessSpawnEvent,
+    "process.exit": ProcessExitEvent,
+    "process.kill": ProcessKillEvent,
     # Memory subsystem (Phase 1)
     "memory.recall": MemoryRecallEvent,
     "memory.store": MemoryStoreEvent,
@@ -1162,6 +1220,11 @@ __all__ = [
     "ToolEditFileEvent",
     "ToolGrepEvent",
     "ToolExecSpillEvent",
+    "PostEditCheckEvent",
+    "ExecuteCodeEvent",
+    "ProcessSpawnEvent",
+    "ProcessExitEvent",
+    "ProcessKillEvent",
     "ToolRepoOverviewEvent",
     "ToolListDirEvent",
     "ToolWebSearchEvent",

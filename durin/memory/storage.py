@@ -16,6 +16,7 @@ import yaml
 from pydantic import ValidationError
 
 from durin.memory.schema import MemoryEntry
+from durin.utils.atomic_write import atomic_write_text
 
 __all__ = [
     "FrontmatterError",
@@ -93,7 +94,7 @@ def save_entry(entry: MemoryEntry, path: Path) -> None:
     content = f"{_DELIMITER}\n{yaml_block}{_DELIMITER}\n"
     if body:
         content += f"\n{body}\n"
-    path.write_text(content, encoding="utf-8")
+    atomic_write_text(path, content)
 
 
 def load_entry(path: Path) -> MemoryEntry:

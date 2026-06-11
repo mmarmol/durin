@@ -19,6 +19,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+from durin.utils.atomic_write import atomic_write_text
 
 import yaml
 
@@ -107,7 +108,7 @@ def archive_episodic(
     dest_dir = workspace / "memory" / "archive" / "episodic"
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / episodic_path.name
-    dest.write_text(annotated, encoding="utf-8")
+    atomic_write_text(dest, annotated)
     episodic_path.unlink()
     return dest
 
@@ -156,7 +157,7 @@ def archive_entity(
     dest_dir = workspace / "memory" / "archive" / "entities" / rel.parts[0]
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / entity_path.name
-    dest.write_text(annotated, encoding="utf-8")
+    atomic_write_text(dest, annotated)
     entity_path.unlink()
     return dest
 
@@ -208,6 +209,6 @@ def archive_generic_entry(
     dest_dir = memory_root / "archive" / rel.parts[0]
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / entry_path.name
-    dest.write_text(annotated, encoding="utf-8")
+    atomic_write_text(dest, annotated)
     entry_path.unlink()
     return dest
