@@ -56,8 +56,10 @@ standard — see `01_format_and_interop.md`.
                                   memory_dream cron, curate_catalog pass: curate (evolve/fuse) + drift (§8.D)
 ```
 
-Five capabilities (vision §1, `skills_evolutivas.md`): **create · import · discover ·
-acquire · evolve**. All converge on the same versioned `adapted` skill in the git subtree.
+Six capabilities (vision §1, `skills_evolutivas.md`): **create · import · discover ·
+acquire · evolve · remove**. The first five converge on the same versioned `adapted` skill
+in the git subtree; **remove** (§3a) is their inverse — the only mutation that takes a skill
+out of the workspace.
 
 ---
 
@@ -86,6 +88,35 @@ the write routes through `skills_store.py::dream_create_skill` (provenance `sour
 (`reason="no_sessions"`) and never calls the LLM.
 
 This is the **create** path. See §6 for the single `memory_dream` cron and its passes.
+
+### 3a. Removal (remove / revert-to-builtin)
+
+The inverse of import — `skills_store.py::remove_skill`, the mirror of
+`install_imported_skill`. Like every mutation it routes through the one chokepoint and is a
+git commit, so a removal is recoverable from history. It **only ever** operates on the
+workspace dir (`<workspace>/skills/<name>/`); the package builtins (`durin/skills/`) are
+never touched. `skills_store.py::removable_action` classifies the target into three cases —
+the single source of truth surfaced as `removable` on each inventory row
+(`skills_surface.py::skills_inventory`) so the web panel and CLI offer the right action:
+
+| Case | Condition | `removable` | Effect |
+|---|---|---|---|
+| Imported / dream / fused | workspace dir exists, no builtin of same name | `remove` | skill disappears |
+| Forked builtin | workspace dir exists + a builtin of the same name | `revert` | workspace copy deleted → shipped builtin reappears |
+| Builtin (pure) | no workspace dir | `null` | refused — the package must not be touched |
+
+**Index side effect.** Both cases call `_unsync_index` (FTS row dropped by uri, vector row
+by id). This is correct for *revert* too: only workspace skills are indexed
+(`walk_skills` / `reindex_one_skill` are workspace-only — builtins are never in the search
+index), so dropping the fork's row restores the builtin's pre-fork (un-indexed) state. No
+builtin re-index is needed. This matches the uniform `_unsync_index` in `dream_fuse_skills`.
+
+**Surfaces (no agent tool — by design).** Removal is a destructive admin action, so it is
+*not* exposed as an LLM-callable tool. It is reachable from: the web panel
+(`GET /api/skills/{name}/remove` → `web_skill_remove`; a button in the skill detail pane with
+an inline confirmation), the CLI (`durin skill remove <name> [--yes]`), and the chat command
+(`/skills remove <name>`). Every path appends a `.durin/import-audit.log` entry
+(`action="remove"`, `result=remove|revert`).
 
 ---
 
@@ -324,7 +355,8 @@ upstream drift→evolution (§8.D) · unverified-origin sweep (Part C) · retrie
 memory class + hot-tier (Spec-2) · acquire-on-gap **Paths A + B** (in-session + autonomous
 skill-extract, §6.C; Path B re-homed + live-verified 2026-06-06) · runtime install
 executor (P6 #1) · observation queue + cross-cutting principles (§6a, task-observer
-pattern, 2026-06-10).
+pattern, 2026-06-10) · removal: remove / revert-to-builtin (§3a; web + CLI + chat, no
+agent tool, 2026-06-11).
 
 **Pending (active):** P6 #2 (run bundled skill *scripts* through the tool gate) · P6 #3 (per-skill FS/net sandbox) ·
 extra discovery adapters (github-taps / well-known / lobehub). See `docs/backlog.md`.
