@@ -541,6 +541,16 @@ class TestClearExecutingPlanWhenDone:
         assert clear_executing_plan_if_todos_done(None) is False
 
 
+def test_plan_stall_turns_config_default():
+    from durin.config.schema import AgentDefaults
+
+    d = AgentDefaults()
+    assert d.plan_stall_turns == 8
+
+    disabled = AgentDefaults(plan_stall_turns=0)
+    assert disabled.plan_stall_turns == 0
+
+
 class TestVerificationGuidance:
     """The model is told upfront that plans need verification criteria —
     guidance that reduces lint-reject round-trips (the enforcement itself

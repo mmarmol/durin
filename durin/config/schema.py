@@ -603,6 +603,10 @@ class AgentDefaults(Base):
     # yield semantics. See docs/architecture/ux.md.
     ask_user_blocking: bool = True
     ask_user_answer_timeout_s: int = Field(default=300, ge=10, le=3600)
+    plan_stall_turns: int = Field(
+        default=8, ge=0
+    )  # Turns without todo progress while executing an approved plan before
+    # a "reassess" reminder is injected into Runtime Context (0 = disabled).
     disabled_skills: list[str] = Field(default_factory=list)  # Skill names to exclude from loading (e.g. ["summarize", "skill-creator"])
     skills_hot_tier: SkillsHotTierConfig = Field(default_factory=SkillsHotTierConfig)
     max_messages: int = Field(
