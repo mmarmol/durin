@@ -2,6 +2,7 @@
 
 from durin.agent.user_payloads import (
     channel_renders_tool_payloads,
+    format_interactive_tool_event,
     serialize_pending_interactions,
 )
 
@@ -82,3 +83,30 @@ def test_serialize_long_plan_truncates():
 def test_serialize_empty_metadata():
     assert serialize_pending_interactions({}) == []
     assert serialize_pending_interactions(None) == []
+
+
+def test_format_interactive_tool_event_question():
+    out = format_interactive_tool_event({
+        "name": "ask_user_question",
+        "arguments": {"question": "Which color?", "options": ["red", "green"]},
+    })
+    assert "Which color?" in out
+    assert "1. red" in out
+
+
+def test_format_interactive_tool_event_secret_and_plan():
+    secret = format_interactive_tool_event({
+        "name": "request_secret",
+        "arguments": {"name": "GH", "service": "github", "purpose": ""},
+    })
+    assert "durin secret set GH" in secret
+    plan = format_interactive_tool_event({
+        "name": "exit_plan_mode",
+        "arguments": {"plan": "# P", "path": "p.md"},
+    })
+    assert "/build" in plan
+
+
+def test_format_interactive_tool_event_ignores_plumbing():
+    assert format_interactive_tool_event({"name": "read_file", "arguments": {}}) is None
+    assert format_interactive_tool_event(None) is None

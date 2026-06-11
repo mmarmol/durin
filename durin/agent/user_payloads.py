@@ -92,3 +92,28 @@ def serialize_pending_interactions(metadata: Mapping[str, Any] | None) -> list[s
             if text:
                 out.append(text)
     return out
+
+
+_EVENT_SERIALIZERS = {
+    "ask_user_question": _serialize_question,
+    "request_secret": _serialize_secret_request,
+    "exit_plan_mode": _serialize_plan_review,
+}
+
+
+def format_interactive_tool_event(event: Mapping[str, Any] | None) -> str | None:
+    """Plain-text rendering of an interactive tool_event's arguments.
+
+    For surfaces that consume tool_events but render text only (the plain
+    interactive CLI): the question/secret/plan must reach the user even
+    though the model no longer re-presents it in prose.
+    """
+    if not isinstance(event, Mapping):
+        return None
+    fn = _EVENT_SERIALIZERS.get(str(event.get("name") or ""))
+    if fn is None:
+        return None
+    arguments = event.get("arguments")
+    if not isinstance(arguments, Mapping):
+        return None
+    return fn(arguments)
