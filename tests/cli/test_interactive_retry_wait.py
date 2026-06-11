@@ -130,3 +130,46 @@ async def test_reasoning_shown_when_send_progress_disabled():
 
     assert handled is True
     assert calls == ["Let me think about this..."]
+
+
+@pytest.mark.asyncio
+async def test_interactive_ask_user_question_printed_once_with_single_mark():
+    """Blocking ask_user in the prompt_toolkit CLI: the start frame prints
+    the question (even with send_tool_hints disabled), the end frame does
+    NOT reprint it, and there is exactly one ❓."""
+    printed: list[str] = []
+    channels_config = SimpleNamespace(send_progress=True, send_tool_hints=False, show_reasoning=True)
+
+    async def fake_print(text: str, active_thinking: object | None, renderer=None) -> None:
+        printed.append(text)
+
+    start = SimpleNamespace(
+        content="ask_user_question(...)",
+        metadata={
+            "_progress": True, "_tool_hint": True,
+            "_tool_events": [{
+                "version": 1, "phase": "start", "call_id": "q1",
+                "name": "ask_user_question",
+                "arguments": {"question": "¿Qué color?", "options": ["Rojo", "Verde"]},
+            }],
+        },
+    )
+    end = SimpleNamespace(
+        content="",
+        metadata={
+            "_progress": True, "_tool_hint": False,
+            "_tool_events": [{
+                "version": 1, "phase": "end", "call_id": "q1",
+                "name": "ask_user_question", "result": "ok",
+            }],
+        },
+    )
+
+    with patch("durin.cli.commands._print_interactive_progress_line", side_effect=fake_print):
+        await commands._maybe_print_interactive_progress(start, None, channels_config)
+        await commands._maybe_print_interactive_progress(end, None, channels_config)
+
+    question_prints = [t for t in printed if "¿Qué color?" in t]
+    assert len(question_prints) == 1                 # printed once, not duplicated
+    assert question_prints[0].count("❓") == 1        # single mark
+    assert "1. Rojo" in question_prints[0]           # options surfaced
