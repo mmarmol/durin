@@ -262,7 +262,7 @@ class HealthChecker:
         try:
             import lancedb
             db = lancedb.connect(str(lance_dir))
-            db.table_names()
+            db.list_tables()
         except Exception as exc:  # noqa: BLE001
             return ("fail", f"lance probe: {exc}")
         return ("ok", "")

@@ -21,7 +21,11 @@ from typing import TYPE_CHECKING, Any
 
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.context import ContextAware, RequestContext
-from durin.agent.tools.schema import StringSchema, tool_parameters_schema
+from durin.agent.tools.schema import (
+    IntegerSchema,
+    StringSchema,
+    tool_parameters_schema,
+)
 from durin.bus.events import OutboundMessage
 from durin.session.goal_state import (
     GOAL_STATE_KEY,
@@ -94,6 +98,17 @@ class _GoalToolsMixin(ContextAware):
             max_length=120,
             nullable=True,
         ),
+        max_turns=IntegerSchema(
+            description=(
+                "Optional turn budget for this goal. Progress is mirrored "
+                "in Runtime Context as 'Turn budget: used/max'; when "
+                "exceeded you are reminded to wrap up via complete_goal "
+                "or renegotiate with the user. Surfacing only — nothing "
+                "is blocked."
+            ),
+            minimum=1,
+            nullable=True,
+        ),
         required=["goal"],
     )
 )
@@ -129,7 +144,13 @@ class LongTaskTool(Tool, _GoalToolsMixin):
             "If a goal is already active, finish it or call complete_goal before registering another."
         )
 
-    async def execute(self, goal: str, ui_summary: str | None = None, **kwargs: Any) -> str:
+    async def execute(
+        self,
+        goal: str,
+        ui_summary: str | None = None,
+        max_turns: int | None = None,
+        **kwargs: Any,
+    ) -> str:
         sess = self._session()
         if sess is None:
             return (
@@ -149,6 +170,9 @@ class LongTaskTool(Tool, _GoalToolsMixin):
             "ui_summary": summary,
             "started_at": _iso_now(),
         }
+        if isinstance(max_turns, int) and max_turns > 0:
+            blob["max_turns"] = max_turns
+            blob["turns_used"] = 0
         sess.metadata[GOAL_STATE_KEY] = blob
         discard_legacy_goal_state_key(sess.metadata)
         self._sessions.save(sess)

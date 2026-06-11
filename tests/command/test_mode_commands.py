@@ -325,6 +325,37 @@ class TestCmdBuild:
         assert result.metadata.get("_block_input_until_response") is True
 
     @pytest.mark.asyncio
+    async def test_build_trigger_seeds_verification_todos(self):
+        """The synthetic /build trigger instructs creating todos from the
+        plan steps INCLUDING its Verification items as final entries —
+        'all todos completed' then implies verification executed."""
+        from types import SimpleNamespace
+
+        from durin.agent.tools.plan_mode import _ACTIVE_PLAN_PATH_KEY
+
+        published: list = []
+
+        class _FakeBus:
+            async def publish_inbound(self, m):
+                published.append(m)
+
+        session = _session({
+            SESSION_MODE_KEY: "plan",
+            SESSION_PRE_PLAN_KEY: "build",
+            _ACTIVE_PLAN_PATH_KEY: "/tmp/plan.md",
+        })
+        loop = SimpleNamespace(bus=_FakeBus())
+        msg = InboundMessage(channel="cli", sender_id="u", chat_id="d", content="/build")
+        ctx = CommandContext(msg=msg, session=session, key=msg.session_key, raw="/build", loop=loop)
+
+        await cmd_build(ctx)
+        assert len(published) == 1
+        content = published[0].content
+        assert "todo_write" in content
+        assert "Verification" in content
+        assert "final todo" in content
+
+    @pytest.mark.asyncio
     async def test_build_with_no_plan_does_not_publish_trigger(self):
         """When /build runs without an approved plan path (e.g. just to
         switch modes), no synthetic trigger is needed."""

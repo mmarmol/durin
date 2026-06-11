@@ -965,7 +965,13 @@ async def cmd_build(ctx: CommandContext) -> OutboundMessage:
                 try:
                     trigger = dataclass_replace(
                         ctx.msg,
-                        content="Proceed with the approved plan.",
+                        content=(
+                            "Proceed with the approved plan. First create "
+                            "your todo list from the plan's steps with "
+                            "todo_write, including each item of its "
+                            "Verification section as final todo entries; "
+                            "then execute."
+                        ),
                     )
                     await ctx.loop.bus.publish_inbound(trigger)
                     expects_followup = True
