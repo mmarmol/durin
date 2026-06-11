@@ -921,12 +921,17 @@ class MemoryRecallRerankEvent(TypedDict):
     """Cross-encoder rerank step completed (doc 07 §4.4 / doc 03 §9).
 
     Emitted whenever the opt-in reranker ran. ``output_count``
-    reflects the top-N the pipeline carries forward.
+    reflects the candidates carried forward (the reordered top-50).
+    ``blend_alpha`` is the CE weight in the RRF/CE blend (0.0 when the
+    CE fell through); ``fallback`` is True when the CE failed to score
+    and the RRF order was kept verbatim (P-CE-blend, 2026-06-11).
     """
 
     input_count: int
     output_count: int
     duration_ms: float
+    blend_alpha: NotRequired[float]
+    fallback: NotRequired[bool]
     iteration: NotRequired[int]
     session_key: NotRequired[str | None]
 

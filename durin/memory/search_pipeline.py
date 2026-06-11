@@ -378,6 +378,52 @@ def _entity_aware_rerank(
 # ---------------------------------------------------------------------------
 
 
+# Weight of the (normalised) cross-encoder score in the final blend
+# (doc 03 §9.2). The CE is fused with the RRF score, not allowed to
+# replace the order outright. Calibrated 2026-06-11 by an offline
+# recall@10 sweep over the LoCoMo run (.workdocs/research/
+# ce_blend_sweep.py): α=0.4 / z-score maximised gold recall@10 (75.0%)
+# over both α=0 (RRF-only, 69.7%) and α=1 (full CE replace). 0 ≤ α ≤ 1;
+# α=0 disables the CE contribution, α=1 reverts to a pure CE reorder.
+DEFAULT_BLEND_ALPHA = 0.4
+
+
+def _zscore(values: list[float]) -> list[float]:
+    """Standardise to mean 0 / sd 1. Degenerate input (≤1 value or
+    zero variance) maps to all-zeros so the blend leans on the other
+    signal instead of dividing by ~0."""
+    n = len(values)
+    if n == 0:
+        return []
+    mean = sum(values) / n
+    var = sum((v - mean) ** 2 for v in values) / n
+    sd = var ** 0.5
+    if sd < 1e-9:
+        return [0.0] * n
+    return [(v - mean) / sd for v in values]
+
+
+def _rerank_doc_text(meta: dict, uri: str) -> str:
+    """Enriched (query, doc) text for the cross-encoder.
+
+    CE-demotion forensics (2026-06-11): scoring the 160-char snippet
+    alone made the reranker blind to the date (fatal for temporal
+    queries) and to the entry's own summary, so it demoted gold the
+    RRF stage had ranked correctly. The pipeline already carries
+    headline / valid_from / summary in `meta` (no disk read), so the
+    CE now scores ``<headline>. <date>. <summary|snippet>`` — the
+    single change that moved gold recall@10 from 53.9% (snippet) to
+    73.7% (enriched) in the offline sweep.
+    """
+    parts = [
+        meta.get("headline") or "",
+        str(meta.get("valid_from") or ""),
+        meta.get("summary") or meta.get("snippet") or "",
+    ]
+    text = ". ".join(p for p in parts if p)
+    return text or uri
+
+
 def _cross_encoder_rerank(
     reranker: Any,
     query: str,
@@ -388,67 +434,76 @@ def _cross_encoder_rerank(
     grep_meta: dict[str, dict] | None,
     top_n: int,
 ) -> list:
-    """Apply a cross-encoder rerank over the fused list (doc 03 §9).
+    """Blend a cross-encoder score into the fused order (doc 03 §9).
 
-    Builds (uri, doc_text) pairs by pulling the richest text the
-    pipeline already has for each hit — snippet falls back to
-    headline falls back to URI. Body is NOT pulled from disk here:
-    cross-encoder rerank is opt-in and runs on top-50 hits, so a
-    per-hit file read would add 50 IOPS to a step whose latency is
-    already dominated by the GPU/CPU model. If snippet+headline
-    quality turns out to limit rerank precision in benchmarks, the
-    fix is a CE-specific top-N body fetch inside this function, not
-    re-introducing a body column in LanceDB (audit A4).
+    Two design choices, both set by the 2026-06-11 offline sweep:
+
+    1. **Enriched input** — the CE scores ``<headline>. <date>.
+       <summary>`` (see :func:`_rerank_doc_text`), not the bare
+       snippet, so it stops demoting gold over a missing date/summary.
+    2. **Blend, not replace** — the final order is
+       ``α·zscore(ce) + (1-α)·zscore(rrf)`` over the top-50 candidates.
+       A hit the RRF stage scored high keeps that standing; the CE
+       nudges, it does not veto (which is what wrecked temporal
+       queries when it replaced the order outright).
+
+    Graceful degradation: a CE that fails to load / score (``score``
+    returns ``None``) leaves the RRF order untouched.
+
+    ``top_n`` is retained for signature compatibility; the blend
+    reorders all top-50 candidates and the downstream sectioning +
+    per-source cap + ``limit`` do the final trim.
     """
     import time as _time
 
-    from durin.memory.cross_encoder import rerank_hits
-
-    by_uri = {h.uri: h for h in fused}
-    pairs: list[tuple[str, str]] = []
-    for h in fused[:50]:  # cap input to 50 per doc 03 §9.3
-        meta = _resolve_meta(
-            h.uri, vector_meta, lexical_meta, grep_meta=grep_meta,
+    candidates = fused[:50]  # cap input to 50 per doc 03 §9.3
+    if not candidates:
+        return fused
+    docs = [
+        _rerank_doc_text(
+            _resolve_meta(h.uri, vector_meta, lexical_meta, grep_meta=grep_meta),
+            h.uri,
         )
-        doc = (
-            meta.get("snippet")
-            or meta.get("headline")
-            or h.uri
-        )
-        pairs.append((h.uri, doc))
+        for h in candidates
+    ]
 
     t0 = _time.perf_counter()
-    new_order = rerank_hits(
-        reranker, query=query, hits=pairs, top_n=top_n,
-    )
+    ce_scores = reranker.score(query, docs)
     duration_ms = (_time.perf_counter() - t0) * 1000.0
+
+    blended = ce_scores is not None and len(ce_scores) == len(candidates)
+    if blended:
+        rrf_norm = _zscore([float(h.score) for h in candidates])
+        ce_norm = _zscore([float(s) for s in ce_scores])
+        alpha = DEFAULT_BLEND_ALPHA
+        scored = [
+            (h, alpha * ce_norm[i] + (1 - alpha) * rrf_norm[i])
+            for i, h in enumerate(candidates)
+        ]
+        scored.sort(key=lambda x: x[1], reverse=True)
+        reordered = [h for h, _ in scored]
+    else:
+        # CE unavailable: keep the RRF order verbatim.
+        reordered = list(candidates)
+
     try:
         from durin.agent.tools._telemetry import emit_tool_event
         emit_tool_event(
             "memory.recall.rerank",
             {
-                "input_count": len(pairs),
-                "output_count": len(new_order),
+                "input_count": len(candidates),
+                "output_count": len(reordered),
                 "duration_ms": duration_ms,
+                "blend_alpha": DEFAULT_BLEND_ALPHA if blended else 0.0,
+                "fallback": not blended,
             },
         )
     except Exception:  # pragma: no cover
         pass
 
-    # Preserve FusedHit shape for downstream sectioning.
-    out: list = []
-    for uri in new_order:
-        h = by_uri.get(uri)
-        if h is not None:
-            out.append(h)
-    # Append any URIs the reranker dropped but were in `fused`
-    # AFTER the new_order (so the per-source cap still has material
-    # to draw from if top_n was small).
-    seen = set(new_order)
-    for h in fused:
-        if h.uri not in seen:
-            out.append(h)
-    return out
+    # Reordered top-50 + the tail beyond 50 (so the per-source cap
+    # still has material if the result set was larger than 50).
+    return reordered + fused[50:]
 
 
 def _safe_vector_search(

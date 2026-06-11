@@ -447,11 +447,23 @@ The configuration also exposes a `model` field so users can pick any of the alte
 
 ### 9.2 Input shape
 
-The cross-encoder receives `(query, doc_text)` pairs. The `doc_text` is composed similarly to the embedding text (§4 of doc 02) but capped at the model's context (1024 tokens for jina-v2). For entity pages, it's `name + summary + body_first_chars`. For entries, it's `headline + summary + body`.
+The cross-encoder receives `(query, doc_text)` pairs over the top-50 fused candidates. `doc_text` is `<headline>. <valid_from>. <summary>` (falling back to snippet, then uri), built from the `meta` the pipeline already resolved — **no extra disk read** (`_rerank_doc_text` in `search_pipeline.py`).
 
-### 9.3 Score combination
+Why the date and summary, not the bare snippet: CE-demotion forensics (2026-06-11) found that scoring the 160-char snippet alone made the reranker blind to the entry's date — fatal for temporal queries, where the answer lives in `valid_from` — and to its own summary. The reranker then demoted gold that the RRF stage had ranked correctly. An offline `recall@10` sweep (`.workdocs/research/ce_blend_sweep.py`) moved gold recall@10 from **53.9%** (snippet, full replace) to **73.7%** (enriched) — the single largest lever.
 
-When enabled, the cross-encoder score replaces the fused score for the top-50 set. Hits ranked below position 10 by the cross-encoder are dropped. The remaining top-10 carry forward.
+### 9.3 Score combination — blend, not replace
+
+The final order over the top-50 is a **z-score blend**:
+
+```
+final(hit) = α · zscore(ce_score) + (1 − α) · zscore(rrf_score)
+```
+
+with **α = `DEFAULT_BLEND_ALPHA` = 0.4** (`search_pipeline.py`). The CE is one signal fused with the RRF score, consistent with every other stage of the pipeline (vector/lexical/grep fusion, entity boost, type prior all *combine*); it is no longer allowed to **replace** the order outright. A hit the RRF stage scored high keeps that standing — the CE nudges, it does not veto.
+
+The previous behaviour (CE score replaces the fused order, drop below position 10) is the `α = 1` extreme. The same offline sweep showed `α = 0.4` / z-score maximising gold recall@10 (75.0%) over both `α = 0` (RRF-only, 69.7%) and `α = 1` (full replace) — the replace mode was actively *below* RRF-only because of the demotions above. The blend reorders all top-50 candidates; the downstream sectioning + per-source cap + `limit` do the final trim (so `cross_encoder_top_n` no longer hard-cuts at this step).
+
+Telemetry: `memory.recall.rerank` now carries `blend_alpha` and `fallback` (doc 07 §4.4).
 
 ### 9.4 Graceful degradation
 
