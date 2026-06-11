@@ -73,7 +73,36 @@ def goal_state_runtime_lines(metadata: Mapping[str, Any] | None) -> list[str]:
     hint = str(goal.get("ui_summary") or "").strip()
     if hint:
         out.append(f"Summary: {hint}")
+    max_turns = goal.get("max_turns")
+    if isinstance(max_turns, int) and max_turns > 0:
+        used = int(goal.get("turns_used", 0))
+        out.append(f"Turn budget: {used}/{max_turns}.")
+        if used >= max_turns:
+            out.append(
+                "Turn budget exceeded — wrap up now: call complete_goal "
+                "with an honest recap of where things stand, or ask the "
+                "user whether to extend the budget."
+            )
     return out
+
+
+def increment_goal_turns(metadata: MutableMapping[str, Any] | None) -> None:
+    """Per-turn bookkeeping: bump ``turns_used`` on an active budgeted goal.
+
+    No-op when there is no active goal or the goal has no ``max_turns``
+    (un-budgeted goals stay exactly as before). Writes the blob back as a
+    dict under :data:`GOAL_STATE_KEY` (migrating legacy string blobs).
+    """
+    if not isinstance(metadata, MutableMapping):
+        return
+    goal = parse_goal_state(_session_goal_raw(metadata))
+    if not isinstance(goal, dict) or goal.get("status") != "active":
+        return
+    if "max_turns" not in goal:
+        return
+    goal = dict(goal)
+    goal["turns_used"] = int(goal.get("turns_used", 0)) + 1
+    metadata[GOAL_STATE_KEY] = goal
 
 
 def goal_state_ws_blob(metadata: Mapping[str, Any] | None) -> dict[str, Any]:

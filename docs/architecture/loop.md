@@ -180,6 +180,12 @@ Session state lives in `session.metadata`:
 - `enter_plan_mode(reason?)` — switches into plan mode
 - `exit_plan_mode(plan)` — writes the plan to `<workspace>/.durin/plans/plan_<timestamp>.md` and yields to the user for approval. Does NOT actually exit plan mode — the user runs `/build`.
 
+**Verification lint (write-time)**. `exit_plan_mode` hard-rejects a plan without verification criteria: a `## Verification` heading or per-step `verify:` lines (`has_verification_criteria`). Presence check only — English format keywords like frontmatter keys, not content/language detection. Quality is judged by the human at `/build`: the approval gate covers the *definition of done*, not just the steps.
+
+**Verification enters the todo cursor**. The `/build` synthetic trigger instructs seeding the todo list from the plan's steps *including its Verification items as final entries*. `clear_executing_plan_if_todos_done` is unchanged — "all todos completed" now implies verification executed.
+
+**Stall stop-condition**. `update_plan_stall` (called per turn from `loop._state_save`, threshold `agents.defaults.plan_stall_turns`, default 8, 0 disables) fingerprints the todo list; after N consecutive turns without progress, `executing_plan_runtime_lines` appends a "reassess" line. Surfacing only — the V7/V8 PlanHook (forcing verify-before-complete via code) stays refuted; everything here is data the model and the user can see.
+
 **File-based plan storage**. Plans live in `<workspace>/.durin/plans/<session-slug>/plan_<timestamp>.md`. One subdirectory per session, one file per `exit_plan_mode` call. The user can edit the plan file directly with any editor; `/build` picks up the file content as-edited.
 
 **Plan flow with compaction survival**:
@@ -203,6 +209,8 @@ Session state lives in `session.metadata`:
 `durin/agent/tools/long_task.py` defines `LongTaskTool` (register an objective) and `CompleteGoalTool` (close with a recap). Goal state stored in `session.metadata[GOAL_STATE_KEY]` and mirrored into the runtime-context block each turn via `durin/session/goal_state.py`.
 
 After the prune, `complete_goal` no longer consults any plan-tier verification gate. Only requires an active goal.
+
+**Turn budget (optional)**. `long_task(max_turns=N)` stores `max_turns`/`turns_used` on the goal blob; `increment_goal_turns` (per turn, from `loop._state_save`) bumps the counter and `goal_state_runtime_lines` mirrors `Turn budget: used/max`, switching to a wrap-up instruction (`complete_goal` with an honest recap, or renegotiate) once exceeded. Surfacing only — nothing is blocked. `deadline` budgets were considered and dropped (heartbeat/cron cover time-based triggers).
 
 ---
 

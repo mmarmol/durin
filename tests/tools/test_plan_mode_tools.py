@@ -7,10 +7,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
-
 from durin.agent.agent_mode import (
-    PLAN_MODE,
     SESSION_MODE_KEY,
     SESSION_PRE_PLAN_KEY,
 )
@@ -40,6 +37,11 @@ class _FakeSessions:
 
 def _session(meta: dict | None = None):
     return SimpleNamespace(metadata=meta if meta is not None else {})
+
+
+# Minimal tail that satisfies the verification lint — tests that exercise
+# storage/metadata mechanics (not lint behavior) append this to their plans.
+_VERIF = "\n\n## Verification\n- verify: covered by test assertions"
 
 
 # ---------------------------------------------------------------------------
@@ -84,7 +86,7 @@ class TestEnterPlanModeTool:
         finally:
             reset_telemetry(token)
 
-        events = [json.loads(l) for l in log_path.read_text().splitlines() if l]
+        events = [json.loads(line) for line in log_path.read_text().splitlines() if line]
         switch = [e for e in events if e["type"] == "agent_mode.switch"]
         assert len(switch) == 1
         assert switch[0]["data"]["trigger"] == "tool"
@@ -105,7 +107,7 @@ class TestExitPlanModeTool:
         tool = ExitPlanModeTool(sessions=_FakeSessions(session), workspace=tmp_path)
         tool.set_context(RequestContext(channel="cli", chat_id="c", session_key="cli_chat42"))
 
-        plan_text = "# Plan\n\n1. Read files\n2. Apply edits"
+        plan_text = "# Plan\n\n1. Read files\n2. Apply edits" + _VERIF
         out = asyncio.run(tool.execute(plan=plan_text))
 
         # Plan path is in the tool result
@@ -139,7 +141,7 @@ class TestExitPlanModeTool:
         tool = ExitPlanModeTool(sessions=_FakeSessions(session), workspace=tmp_path)
         tool.set_context(RequestContext(channel="cli", chat_id="c", session_key="s"))
 
-        asyncio.run(tool.execute(plan="version 1"))
+        asyncio.run(tool.execute(plan="version 1" + _VERIF))
         first_path = session.metadata[_ACTIVE_PLAN_PATH_KEY]
 
         # Sleep briefly so timestamp differs; the ms suffix would handle
@@ -147,12 +149,12 @@ class TestExitPlanModeTool:
         import time as _t
         _t.sleep(0.01)
 
-        asyncio.run(tool.execute(plan="version 2 with refinement"))
+        asyncio.run(tool.execute(plan="version 2 with refinement" + _VERIF))
         second_path = session.metadata[_ACTIVE_PLAN_PATH_KEY]
 
         assert first_path != second_path
-        assert Path(first_path).read_text() == "version 1"
-        assert Path(second_path).read_text() == "version 2 with refinement"
+        assert Path(first_path).read_text() == "version 1" + _VERIF
+        assert Path(second_path).read_text() == "version 2 with refinement" + _VERIF
 
     def test_user_edit_to_plan_file_persists(self, tmp_path: Path):
         """The user can edit the plan file directly before /build — the
@@ -161,7 +163,7 @@ class TestExitPlanModeTool:
         tool = ExitPlanModeTool(sessions=_FakeSessions(session), workspace=tmp_path)
         tool.set_context(RequestContext(channel="cli", chat_id="c", session_key="s"))
 
-        asyncio.run(tool.execute(plan="step 1\nstep 2"))
+        asyncio.run(tool.execute(plan="step 1\nstep 2" + _VERIF))
         path = Path(session.metadata[_ACTIVE_PLAN_PATH_KEY])
 
         # Simulate the user editing the plan file directly
@@ -194,17 +196,67 @@ class TestExitPlanModeTool:
 
         token = bind_telemetry(logger)
         try:
-            asyncio.run(tool.execute(plan="# My plan\n- Step 1"))
+            asyncio.run(tool.execute(plan="# My plan\n- Step 1" + _VERIF))
         finally:
             reset_telemetry(token)
 
-        events = [json.loads(l) for l in log_path.read_text().splitlines() if l]
+        events = [json.loads(line) for line in log_path.read_text().splitlines() if line]
         presented = [e for e in events if e["type"] == "plan_mode.presented"]
         assert len(presented) == 1
         assert presented[0]["data"]["plan_chars"] > 0
         assert presented[0]["data"]["from_mode"] == "plan"
         assert presented[0]["data"]["plan_path"]
         assert Path(presented[0]["data"]["plan_path"]).exists()
+
+    def test_rejects_plan_without_verification_criteria(self, tmp_path: Path):
+        """Hard reject: a plan with no Verification section / verify: lines
+        is never written to disk (approved design 2026-06-11)."""
+        session = _session({SESSION_MODE_KEY: "plan", SESSION_PRE_PLAN_KEY: "build"})
+        tool = ExitPlanModeTool(sessions=_FakeSessions(session), workspace=tmp_path)
+        tool.set_context(RequestContext(channel="cli", chat_id="c", session_key="s"))
+
+        out = asyncio.run(tool.execute(plan="# Plan\n\n1. Edit file\n2. Run app"))
+
+        assert "Error" in out
+        assert "verification" in out.lower()
+        assert "## Verification" in out  # error must teach the fix
+        # Nothing persisted: no file, no metadata side effects
+        assert session.metadata.get(_ACTIVE_PLAN_PATH_KEY) is None
+        assert session.metadata.get("pending_plan_review") is None
+        assert not list(tmp_path.rglob("plan_*.md"))
+        # Session stays in plan mode for the retry
+        assert session.metadata[SESSION_MODE_KEY] == "plan"
+
+    def test_accepts_plan_with_verification_heading(self, tmp_path: Path):
+        session = _session({SESSION_MODE_KEY: "plan", SESSION_PRE_PLAN_KEY: "build"})
+        tool = ExitPlanModeTool(sessions=_FakeSessions(session), workspace=tmp_path)
+        tool.set_context(RequestContext(channel="cli", chat_id="c", session_key="s"))
+
+        plan = "# Plan\n\n1. Edit file\n\n## Verification\n- pytest tests/ passes"
+        out = asyncio.run(tool.execute(plan=plan))
+
+        assert "Error" not in out
+        assert session.metadata.get(_ACTIVE_PLAN_PATH_KEY) is not None
+
+    def test_accepts_plan_with_per_step_verify_markers(self, tmp_path: Path):
+        session = _session({SESSION_MODE_KEY: "plan", SESSION_PRE_PLAN_KEY: "build"})
+        tool = ExitPlanModeTool(sessions=_FakeSessions(session), workspace=tmp_path)
+        tool.set_context(RequestContext(channel="cli", chat_id="c", session_key="s"))
+
+        plan = "# Plan\n\n1. Edit file\n   verify: app boots\n2. Ship"
+        out = asyncio.run(tool.execute(plan=plan))
+
+        assert "Error" not in out
+
+    def test_verification_lint_is_case_insensitive(self, tmp_path: Path):
+        session = _session({SESSION_MODE_KEY: "plan", SESSION_PRE_PLAN_KEY: "build"})
+        tool = ExitPlanModeTool(sessions=_FakeSessions(session), workspace=tmp_path)
+        tool.set_context(RequestContext(channel="cli", chat_id="c", session_key="s"))
+
+        plan = "# Plan\n\n1. Step\n\n### VERIFICATION\n- check output"
+        out = asyncio.run(tool.execute(plan=plan))
+
+        assert "Error" not in out
 
 
 # ---------------------------------------------------------------------------
@@ -221,7 +273,7 @@ class TestPlanFileNaming:
         tool = ExitPlanModeTool(sessions=_FakeSessions(session), workspace=tmp_path)
         tool.set_context(RequestContext(channel="ws", chat_id="x", session_key="websocket:chat-42 alpha"))
 
-        asyncio.run(tool.execute(plan="content"))
+        asyncio.run(tool.execute(plan="content" + _VERIF))
         path = Path(session.metadata[_ACTIVE_PLAN_PATH_KEY])
         # Colons and spaces become underscores; dashes survive.
         assert path.parent.name == "websocket_chat-42_alpha"
@@ -236,8 +288,8 @@ class TestPlanFileNaming:
         tool_b = ExitPlanModeTool(sessions=_FakeSessions(sess_b), workspace=tmp_path)
         tool_b.set_context(RequestContext(channel="tg", chat_id="b", session_key="telegram_999"))
 
-        asyncio.run(tool_a.execute(plan="A plan"))
-        asyncio.run(tool_b.execute(plan="B plan"))
+        asyncio.run(tool_a.execute(plan="A plan" + _VERIF))
+        asyncio.run(tool_b.execute(plan="B plan" + _VERIF))
 
         path_a = Path(sess_a.metadata[_ACTIVE_PLAN_PATH_KEY])
         path_b = Path(sess_b.metadata[_ACTIVE_PLAN_PATH_KEY])
