@@ -34,6 +34,7 @@ from durin.agent.tools._telemetry import emit_tool_event
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.schema import StringSchema, tool_parameters_schema
 from durin.config.schema import Base
+from durin.utils.subprocess_cleanup import aclose_subprocess
 
 _IS_WINDOWS = sys.platform == "win32"
 
@@ -277,6 +278,8 @@ class ExecuteCodeTool(Tool):
                     status = "timeout"
                     await self._kill_tree(proc)
                     stdout, stderr = b"", b""
+                finally:
+                    await aclose_subprocess(proc)
             finally:
                 server.close()
                 await server.wait_closed()

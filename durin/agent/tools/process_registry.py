@@ -28,6 +28,7 @@ from loguru import logger
 
 from durin.agent.tools._telemetry import emit_tool_event
 from durin.config.schema import Base
+from durin.utils.subprocess_cleanup import aclose_subprocess
 
 _IS_WINDOWS = sys.platform == "win32"
 
@@ -160,17 +161,10 @@ class ProcessRegistry:
         finally:
             with suppress(Exception):
                 await process.wait()
-            # Close the subprocess transport inside the running loop. asyncio
-            # otherwise leaves it for GC, whose ``__del__`` runs after the
-            # loop is gone and raises "Event loop is closed" (a
-            # PytestUnraisableExceptionWarning under tests, noisy in prod).
-            with suppress(Exception):
-                transport = getattr(process, "_transport", None)
-                if transport is not None:
-                    transport.close()
-                    # Let the close() callbacks (connection_lost) run inside
-                    # the loop so the transport is fully torn down here.
-                    await asyncio.sleep(0)
+            # Close the subprocess transport inside the running loop, else its
+            # GC ``__del__`` runs after the loop is gone ("Event loop is
+            # closed"). See durin/utils/subprocess_cleanup.py.
+            await aclose_subprocess(process)
             sess.exited = True
             sess.exit_code = process.returncode
             self._move_to_finished(sess)
