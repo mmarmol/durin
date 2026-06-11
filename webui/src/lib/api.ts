@@ -343,6 +343,9 @@ export interface SkillRow {
   status?: "active" | "quarantined";
   verdict?: SkillVerdict;
   findings?: SkillFinding[];
+  /** Whether/how this skill can be removed: "remove" (workspace skill),
+   *  "revert" (forked builtin → shipped version), or null/absent (pure builtin). */
+  removable?: "remove" | "revert" | null;
 }
 
 /** A skill awaiting an import decision in `.durin/import-quarantine/` (§6.B fills these). */
@@ -499,6 +502,25 @@ export async function rejectSkill(
 ): Promise<{ ok?: boolean; error?: string }> {
   return request<{ ok?: boolean; error?: string }>(
     `${base}/api/skills/${encodeURIComponent(name)}/reject`,
+    token,
+  );
+}
+
+export interface RemoveResult {
+  ok?: boolean;
+  name?: string;
+  action?: "remove" | "revert";
+  commit?: string;
+  error?: string;
+}
+
+export async function removeSkill(
+  token: string,
+  name: string,
+  base: string = "",
+): Promise<RemoveResult> {
+  return request<RemoveResult>(
+    `${base}/api/skills/${encodeURIComponent(name)}/remove`,
     token,
   );
 }

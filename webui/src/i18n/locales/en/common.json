@@ -384,6 +384,12 @@
   },
   "skills": {
     "view": "View",
+    "remove": "Remove",
+    "revert": "Revert to builtin",
+    "removeConfirm": "Remove this skill? (recoverable via git)",
+    "revertConfirm": "Revert to the built-in version?",
+    "confirmRemove": "Confirm",
+    "cancel": "Cancel",
     "makeManual": "Make manual",
     "makeAuto": "Make auto",
     "modeAutoHint": "Auto: the agent decides when to use this skill.",

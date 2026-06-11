@@ -32,3 +32,21 @@ def test_quarantine_reads_dir_and_scanjson(tmp_path):
     out = {s["name"]: s for s in quarantined_skills(tmp_path)}
     assert out["pending"]["status"] == "quarantined"
     assert out["pending"]["source"] == "github:x/y" and out["pending"]["verdict"] == "caution"
+
+
+def test_inventory_carries_removable_action(tmp_path, monkeypatch):
+    from durin.agent import skills_store as ss
+
+    b = tmp_path / "builtin"
+    (b / "greet").mkdir(parents=True)
+    (b / "greet" / "SKILL.md").write_text(
+        "---\nname: greet\ndescription: hi\n---\nBody\n", encoding="utf-8")
+    monkeypatch.setattr(ss, "BUILTIN_SKILLS_DIR", b)
+
+    # `_skill` stamps provenance so sweep_unverified_skills keeps it active.
+    _skill(tmp_path, "mine")             # workspace-only → remove
+    ss.fork_on_write(tmp_path, "greet")  # forked builtin → revert
+
+    inv = {r["name"]: r for r in skills_inventory(tmp_path)}
+    assert inv["mine"]["removable"] == "remove"
+    assert inv["greet"]["removable"] == "revert"
