@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from durin.agent.skills_store import _loader, list_skills_info
+from durin.agent.skills_store import _loader, list_skills_info, removable_action
 from durin.security.skill_scan import scan_skill
 
 
@@ -34,11 +34,13 @@ def skills_inventory(workspace) -> list[dict]:
     workspace = Path(workspace)
     from durin.agent.skill_lifecycle import sweep_unverified_skills
     sweep_unverified_skills(workspace)
+    loader = _loader(workspace)
     dirs = _skill_dirs(workspace)
     out = []
     for info in list_skills_info(workspace):
         entry = dict(info)
         entry["status"] = "active"
+        entry["removable"] = removable_action(workspace, info["name"], loader)
         d = dirs.get(info["name"])
         if d is not None and d.is_dir():
             entry.update(_scan_payload(d))
