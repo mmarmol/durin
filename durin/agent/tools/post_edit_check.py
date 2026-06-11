@@ -24,6 +24,7 @@ from pydantic import Field
 
 from durin.agent.tools._telemetry import emit_tool_event
 from durin.config.schema import Base
+from durin.utils.subprocess_cleanup import aclose_subprocess
 
 _DEFAULT_CHECKERS: dict[str, str] = {
     # ruff is durin's own linter; skipped silently when not installed.
@@ -92,6 +93,7 @@ async def run_post_edit_check(
                 proc.kill()
             except ProcessLookupError:
                 pass
+            await aclose_subprocess(proc)
         logger.debug("post-edit check failed for {}: {}", fp, e)
         emit_tool_event("tool.post_edit_check", {
             "path": str(fp),
@@ -103,6 +105,7 @@ async def run_post_edit_check(
         })
         return None
 
+    await aclose_subprocess(proc)
     duration_ms = round((time.monotonic() - started) * 1000, 1)
     lines = [
         line for line in stdout.decode("utf-8", errors="replace").splitlines()
