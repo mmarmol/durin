@@ -160,6 +160,17 @@ class ProcessRegistry:
         finally:
             with suppress(Exception):
                 await process.wait()
+            # Close the subprocess transport inside the running loop. asyncio
+            # otherwise leaves it for GC, whose ``__del__`` runs after the
+            # loop is gone and raises "Event loop is closed" (a
+            # PytestUnraisableExceptionWarning under tests, noisy in prod).
+            with suppress(Exception):
+                transport = getattr(process, "_transport", None)
+                if transport is not None:
+                    transport.close()
+                    # Let the close() callbacks (connection_lost) run inside
+                    # the loop so the transport is fully torn down here.
+                    await asyncio.sleep(0)
             sess.exited = True
             sess.exit_code = process.returncode
             self._move_to_finished(sess)
