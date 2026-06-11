@@ -10,6 +10,7 @@ from durin.memory.git_plumbing import (
 )
 from durin.memory.memory_writer import write_entity
 from durin.memory.provenance import author_scope
+from durin.utils.git_repo import GitRepo
 
 NOW = datetime(2026, 6, 5, tzinfo=timezone.utc)
 LATER = datetime(2026, 6, 6, tzinfo=timezone.utc)
@@ -165,3 +166,45 @@ def test_default_field_author_from_scope(tmp_path):
                                  author=None, source_ref="s", at=NOW)], create=True)
     page = EntityPage.from_file(_page_path(ws, "company:scoped"))
     assert page.provenance["attributes"]["hq"]["author"] == "agent"
+
+
+# ---- enriched commit messages (B1) ---------------------------------------
+
+def _latest_commit(ws, ref):
+    type_, _, slug = ref.partition(":")
+    page = ws / "memory" / "entities" / type_ / f"{slug}.md"
+    return GitRepo(ws / "memory").log(page)[0]
+
+
+def test_create_commit_subject_says_create(tmp_path):
+    write_entity(tmp_path, "person:marcelo",
+                 [FieldPatch(kind="body_append", value="x", author="agent",
+                             source_ref="[[sessions/s.md#turn-0]]", at=NOW)],
+                 create=True, name="Marcelo")
+    assert _latest_commit(tmp_path, "person:marcelo").subject.startswith(
+        "create person:marcelo")
+
+
+def test_update_commit_subject_and_trailers_are_enriched(tmp_path):
+    ws = tmp_path
+    write_entity(ws, "patient:drako",
+                 [FieldPatch(kind="body_append", value="Stable patient.",
+                             author="agent", source_ref="[[sessions/s.md#turn-0]]",
+                             at=NOW)], create=True, name="Drako")
+    write_entity(ws, "patient:drako",
+                 [FieldPatch(kind="body_append", value="New finding.",
+                             author="agent", source_ref="[[sessions/s.md#turn-4]]",
+                             at=LATER),
+                  FieldPatch(kind="relation",
+                             value=dict(to="topic:cyst", type="has_condition"),
+                             author="agent", source_ref="[[sessions/s.md#turn-4]]",
+                             at=LATER)])
+
+    latest = _latest_commit(ws, "patient:drako")
+    # Subject names the entity and the kinds of change touched.
+    assert latest.subject.startswith("update patient:drako")
+    assert "body" in latest.subject
+    assert "relation" in latest.subject
+    # Trailers carry the provenance link and the field-author scope.
+    assert latest.trailers.get("Source") == ["[[sessions/s.md#turn-4]]"]
+    assert latest.trailers.get("Author") == ["agent"]
