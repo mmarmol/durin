@@ -24,6 +24,7 @@ from durin.agent.tools.schema import (
 )
 from durin.config.paths import get_media_dir
 from durin.config.schema import Base
+from durin.utils.subprocess_cleanup import aclose_subprocess
 
 _IS_WINDOWS = sys.platform == "win32"
 
@@ -282,6 +283,10 @@ class ExecTool(Tool):
                 await self._kill_process(process)
                 raise
 
+            # Close the subprocess transport inside the loop so its GC
+            # ``__del__`` doesn't fire post-loop (durin/utils/subprocess_cleanup.py).
+            await aclose_subprocess(process)
+
             output_parts = []
 
             if stdout:
@@ -356,6 +361,7 @@ class ExecTool(Tool):
             with suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(process.wait(), timeout=5.0)
         finally:
+            await aclose_subprocess(process)
             if not _IS_WINDOWS:
                 try:
                     os.waitpid(process.pid, os.WNOHANG)

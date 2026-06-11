@@ -53,8 +53,6 @@ export interface UIMessage {
   reasoningStreaming?: boolean;
   /** End-to-end wall time for this assistant turn (persisted ``latency_ms`` / ``turn_end``). */
   latencyMs?: number;
-  /** Structured agent UI data (posture, deliberation). */
-  agentUI?: AgentUIBlob;
   /** For trace rows: structured tool-call events merged by ``call_id``.
    * Carries name / arguments / result / error so the UI can render
    * rich blocks (code diffs, exec IN/OUT) instead of flat text traces.
@@ -68,38 +66,16 @@ export interface UIMessage {
   renderAs?: "text" | "markdown";
 }
 
-/** Structured UI blob on ``progress`` WS frames; channels may add more ``kind`` values later. */
-export interface AgentUIBlob {
-  kind: string;
-  data?: unknown;
-}
-
-export interface PostureUpdateData {
-  axes: Record<string, number>;
-  deltas: Record<string, number>;
-}
-
-export interface DeliberationProposal {
-  role: string;
-  content: string;
-  score: number;
-}
-
-export interface DeliberationResultData {
-  trigger: string;
-  winner: DeliberationProposal | null;
-  proposals: DeliberationProposal[];
-  threshold: number;
-  rounds_used: number;
-  under_doubt: boolean;
-  accepted: boolean;
-}
 
 /** WebSocket snapshot for sustained goals (`goal_state` events; keyed by ``chat_id``). */
 export interface GoalStateWsPayload {
   active: boolean;
   ui_summary?: string;
   objective?: string;
+  /** Agent mode when not default (e.g. "plan"). */
+  mode?: string;
+  /** Set while an ask_user_question awaits the user's reply. */
+  pending_question?: { question: string; options: string[] };
 }
 
 export interface ToolProgressEvent {
@@ -251,8 +227,9 @@ export type InboundEvent =
       kind?: "tool_hint" | "progress" | "reasoning";
       /** Server-measured turn wall time when this frame finishes an assistant reply. */
       latency_ms?: number;
-      /** Optional structured payload on progress frames (channel-specific). */
-      agent_ui?: AgentUIBlob;
+      /** Optional structured payload on progress frames (channel-specific).
+       * Ignored by the webui — kept in the wire type for forward compat. */
+      agent_ui?: { kind: string; data?: unknown };
       /** When 'text', the agent emitted pre-formatted plain text (slash
        * command output). The client should render verbatim with
        * whitespace preserved instead of feeding the body to Markdown.

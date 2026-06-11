@@ -447,6 +447,20 @@ async def _maybe_print_interactive_progress(
             return True
         await _print_cli_reasoning(msg.content, thinking, renderer)
         return True
+    if is_tool_hint:
+        # Interactive payloads (question/secret/plan) must reach the user
+        # even when text tool-hints are disabled — the model no longer
+        # re-presents them in prose (durin/agent/user_payloads.py).
+        from durin.agent.user_payloads import format_interactive_tool_event
+
+        printed_interaction = False
+        for event in metadata.get("_tool_events") or []:
+            text = format_interactive_tool_event(event)
+            if text:
+                await _print_interactive_progress_line(text, thinking, renderer)
+                printed_interaction = True
+        if printed_interaction:
+            return True
     if channels_config and is_tool_hint and not channels_config.send_tool_hints:
         return True
     if channels_config and not is_tool_hint and not channels_config.send_progress:

@@ -339,8 +339,15 @@
         "judgeModel": "Model name for the judge. Empty uses the default memory model.",
         "tokenSecret": "The durin secret holding your GitHub token. 'None' = anonymous requests (lower rate limit, no private repos)."
       },
-      "severity": { "caution": "Caution (confirm)", "dangerous": "Dangerous (block)" },
-      "trigger": { "off": "Off (on-demand only)", "uncertain": "When uncertain (tie-break)", "always": "Always" },
+      "severity": {
+        "caution": "Caution (confirm)",
+        "dangerous": "Dangerous (block)"
+      },
+      "trigger": {
+        "off": "Off (on-demand only)",
+        "uncertain": "When uncertain (tie-break)",
+        "always": "Always"
+      },
       "trustDescription": "A safe skill from a trusted source installs without a confirm. Patterns match the source by prefix — e.g. github:acme/, https://gitlab.com/acme/.",
       "noPatterns": "No trust patterns yet.",
       "patternPlaceholder": "github:owner/ or https://host/path/",
@@ -390,7 +397,10 @@
     "add": "Add skill",
     "acquireTitle": "Add a skill",
     "acquireHint": "Import from a path, URL, or repo, or search the registry. Every skill you bring in waits in Pending until you approve it.",
-    "tab": { "active": "Active", "pending": "Pending" },
+    "tab": {
+      "active": "Active",
+      "pending": "Pending"
+    },
     "pendingEmpty": "Nothing pending approval.",
     "pendingReason": "Imported from {{source}} · awaiting your approval",
     "pendingReasonBare": "Imported · awaiting your approval",
@@ -415,7 +425,12 @@
       "parse": "The audit response was unreadable. Retry.",
       "retry": "Retry audit"
     },
-    "verdict": { "safe": "Safe", "caution": "Caution", "dangerous": "Dangerous", "unscanned": "Not analyzed" },
+    "verdict": {
+      "safe": "Safe",
+      "caution": "Caution",
+      "dangerous": "Dangerous",
+      "unscanned": "Not analyzed"
+    },
     "import": {
       "placeholder": "Import a skill: path, https://…/SKILL.md, or github:owner/repo",
       "button": "Import",
@@ -627,7 +642,9 @@
         "decode_failed": "Couldn't decode this image",
         "too_large": "Image is too large — try a smaller one",
         "io": "Couldn't read this file"
-      }
+      },
+      "planMode": "Plan mode (read-only)",
+      "awaitingAnswer": "Waiting for your answer"
     },
     "scrollToBottom": "Scroll to bottom"
   },
@@ -637,7 +654,8 @@
     "askUser": {
       "placeholder": "Type your answer, or pick an option to edit",
       "send": "Send",
-      "sent": "Answer sent"
+      "sent": "Answer sent",
+      "answered": "Answered below"
     },
     "reqSecret": {
       "placeholder": "Paste the secret value",
@@ -664,7 +682,31 @@
     "copyReply": "Copy reply",
     "errorTitle": "The provider returned an error",
     "copiedReply": "Copied reply",
-    "turnLatencyTitle": "Response time (end-to-end)"
+    "turnLatencyTitle": "Response time (end-to-end)",
+    "todos": {
+      "title": "Task list"
+    },
+    "plan": {
+      "title": "Proposed plan",
+      "approve": "Approve (/build)",
+      "hint": "or reply with feedback to refine it"
+    },
+    "toolMany_one": "Used one tool",
+    "agentActivitySummary_one": "{{reasoning}} steps · {{tools}} tool call",
+    "agentActivityToolsOnly_one": "{{tools}} tool call",
+    "agentActivityLiveSummary_one": "Working… · {{reasoning}} steps · {{tools}} tool call",
+    "agentActivityLiveToolsOnly_one": "Working… · {{tools}} tool call",
+    "agentActivityReasoningOnly": "{{count}} steps",
+    "agentActivityReasoningOnly_one": "1 step",
+    "agentActivityLiveReasoningOnly": "Working… · {{count}} steps",
+    "agentActivityLiveReasoningOnly_one": "Working… · 1 step",
+    "toolBody": {
+      "collapse": "collapse",
+      "more": "+{{count}} more"
+    },
+    "subagent": {
+      "title": "Subagent"
+    }
   },
   "lightbox": {
     "title": "Image preview",
@@ -701,9 +743,17 @@
   },
   "logs": {
     "title": "Logs",
-    "tabs": { "gateway": "Gateway", "telemetry": "Telemetry" },
+    "tabs": {
+      "gateway": "Gateway",
+      "telemetry": "Telemetry"
+    },
     "searchPlaceholder": "Search…",
-    "filters": { "level": "level", "channel": "channel", "type": "type", "session": "session" },
+    "filters": {
+      "level": "level",
+      "channel": "channel",
+      "type": "type",
+      "session": "session"
+    },
     "rotation": "Rotation",
     "maxMb": "max MB",
     "retention": "Retention",

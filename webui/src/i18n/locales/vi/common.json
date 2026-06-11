@@ -306,7 +306,9 @@
           }
         }
       },
-      "goalStateCloseAria": "Đóng mục tiêu"
+      "goalStateCloseAria": "Đóng mục tiêu",
+      "planMode": "Chế độ kế hoạch (chỉ đọc)",
+      "awaitingAnswer": "Đang chờ câu trả lời của bạn"
     },
     "scrollToBottom": "Cuộn xuống cuối"
   },
@@ -327,7 +329,27 @@
     "agentActivityLiveSummary": "Đang chạy… · {{reasoning}} bước · {{tools}} lần gọi công cụ",
     "agentActivityLiveToolsOnly": "Đang chạy… · {{tools}} lần gọi công cụ",
     "imageAttachment": "Tệp hình ảnh đính kèm",
-    "turnLatencyTitle": "Thời gian phản hồi (end-to-end)"
+    "turnLatencyTitle": "Thời gian phản hồi (end-to-end)",
+    "askUser": {
+      "answered": "Đã trả lời bên dưới"
+    },
+    "todos": {
+      "title": "Danh sách việc"
+    },
+    "plan": {
+      "title": "Kế hoạch đề xuất",
+      "approve": "Phê duyệt (/build)",
+      "hint": "hoặc trả lời kèm góp ý để tinh chỉnh"
+    },
+    "agentActivityReasoningOnly": "{{count}} bước",
+    "agentActivityLiveReasoningOnly": "Đang chạy… · {{count}} bước",
+    "toolBody": {
+      "collapse": "thu gọn",
+      "more": "+{{count}} dòng nữa"
+    },
+    "subagent": {
+      "title": "Tác tử phụ"
+    }
   },
   "lightbox": {
     "title": "Xem trước ảnh",

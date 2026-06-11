@@ -574,3 +574,65 @@ async def test_request_secret_bubble_has_provide_row() -> None:
         await pilot.pause()
         row = bubble.query_one("#tc-secret-provide", Static)
         assert "secret" in _static_plain(row).lower()
+
+
+# ---------------------------------------------------------------------------
+# Payload-rendered tools — exit_plan_mode, todo_write (arguments are canonical)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_exit_plan_mode_body_shows_plan_from_arguments() -> None:
+    """The plan renders from arguments.plan, never from the result text
+    (the result is model-directed bookkeeping)."""
+    app = DurinApp(agent_loop=None)
+    async with app.run_test() as pilot:
+        chat = app.query_one(ChatView)
+        event = {
+            "version": 1, "phase": "end", "call_id": "pl1",
+            "name": "exit_plan_mode",
+            "arguments": {"plan": "# My Plan\n\n1. do a thing\n2. verify it"},
+            "result": (
+                "Plan saved to **p.md**. The plan has been presented to the "
+                "user by the channel…"
+            ),
+        }
+        bubble = ToolCallBubble(event)
+        chat.mount(bubble)
+        await pilot.pause()
+        bubble.update_from_event(event)
+        bubble._expanded = True
+        bubble._rerender_body_with_truncation()
+        await pilot.pause()
+        body = _body_plain(bubble)
+        assert "# My Plan" in body
+        assert "presented to the user" not in body
+
+
+@pytest.mark.asyncio
+async def test_todo_write_body_shows_checklist_from_arguments() -> None:
+    """todo_write renders status glyphs from arguments.todos."""
+    app = DurinApp(agent_loop=None)
+    async with app.run_test() as pilot:
+        chat = app.query_one(ChatView)
+        event = {
+            "version": 1, "phase": "end", "call_id": "td1",
+            "name": "todo_write",
+            "arguments": {"todos": [
+                {"content": "A", "status": "completed", "activeForm": "Doing A"},
+                {"content": "B", "status": "in_progress", "activeForm": "Doing B"},
+                {"content": "C", "status": "pending", "activeForm": "Doing C"},
+            ]},
+            "result": "Todo list updated:…",
+        }
+        bubble = ToolCallBubble(event)
+        chat.mount(bubble)
+        await pilot.pause()
+        bubble.update_from_event(event)
+        bubble._expanded = True
+        bubble._rerender_body_with_truncation()
+        await pilot.pause()
+        body = _body_plain(bubble)
+        assert "✔" in body and "A" in body
+        assert "Doing B" in body
+        assert "○" in body and "C" in body

@@ -600,6 +600,11 @@ class AgentDefaults(Base):
     bot_name: str = "durin"  # Display name shown in CLI prompts (e.g. "{name} is thinking...")
     bot_icon: str = "⚒️"  # Short icon (emoji or text) shown next to the bot name in CLI; "" to omit
     unified_session: bool = False  # Share one session across all channels (single-user multi-device)
+    # Blocking ask_user (V2): the tool awaits the user's next message inside
+    # the same turn instead of yielding; on timeout it degrades to the V1
+    # yield semantics. See docs/architecture/ux.md.
+    ask_user_blocking: bool = True
+    ask_user_answer_timeout_s: int = Field(default=300, ge=10, le=3600)
     disabled_skills: list[str] = Field(default_factory=list)  # Skill names to exclude from loading (e.g. ["summarize", "skill-creator"])
     skills_hot_tier: SkillsHotTierConfig = Field(default_factory=SkillsHotTierConfig)
     max_messages: int = Field(

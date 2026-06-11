@@ -75,9 +75,32 @@ async def test_request_secret_new_yields_with_command(store_at) -> None:
     out = await RequestSecretTool().execute(
         name="STRIPE_KEY", service="stripe", purpose="charge a card"
     )
-    assert "YIELD TO USER" in out
+    assert "presented to the user" in out
     assert "durin secret set STRIPE_KEY --service stripe --scope exec" in out
     assert "charge a card" in out
+
+
+async def test_request_secret_sets_pending_metadata(store_at, tmp_path) -> None:
+    """request_secret registers a pending_secret_request payload so channels
+    can render/serialize the prompt (user_payloads contract)."""
+    from durin.agent.tools.context import RequestContext
+    from durin.agent.user_payloads import PENDING_SECRET_KEY
+    from durin.session.manager import SessionManager
+
+    sm = SessionManager(tmp_path / "sessions")
+    tool = RequestSecretTool(sessions=sm)
+    tool.set_context(RequestContext(
+        channel="cli", chat_id="d", session_key="cli:d", metadata={},
+    ))
+    await tool.execute(name="GH_TOKEN", service="github", purpose="push")
+    payload = sm.get_or_create("cli:d").metadata.get(PENDING_SECRET_KEY)
+    assert payload == {"name": "GH_TOKEN", "service": "github", "purpose": "push"}
+
+
+async def test_request_secret_without_context_still_returns_block(store_at) -> None:
+    out = await RequestSecretTool().execute(name="GH_TOKEN", service="github")
+    assert "presented to the user" in out
+    assert "durin secret set GH_TOKEN" in out
 
 
 async def test_request_secret_rejects_bad_name(store_at) -> None:

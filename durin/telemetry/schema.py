@@ -429,6 +429,20 @@ class AskUserQuestionAskedEvent(TypedDict):
     option_count: int
 
 
+class AskUserAnswerReceivedEvent(TypedDict):
+    """Blocking ask_user (V2): the user's answer arrived in-turn and the
+    tool resumed the same turn with it."""
+    question_id: str
+    wait_ms: int
+
+
+class AskUserAnswerTimeoutEvent(TypedDict):
+    """Blocking ask_user (V2): no answer within the window — the tool
+    degraded to V1 yield semantics."""
+    question_id: str
+    timeout_s: int
+
+
 class AskVisionStartEvent(TypedDict):
     """``interpret_image`` bridge tool dispatched a request to the
     vision aux-model."""
@@ -1121,6 +1135,8 @@ EVENTS: dict[str, type] = {
     "tool.web_fetch": ToolWebFetchEvent,
     "tool.todo_write": ToolTodoWriteEvent,
     "ask_user.question_asked": AskUserQuestionAskedEvent,
+    "ask_user.answer_received": AskUserAnswerReceivedEvent,
+    "ask_user.answer_timeout": AskUserAnswerTimeoutEvent,
     "ask_vision.start": AskVisionStartEvent,
     "ask_vision.error": AskVisionErrorEvent,
     "ask_vision.end": AskVisionEndEvent,

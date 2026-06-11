@@ -949,6 +949,9 @@ async def cmd_build(ctx: CommandContext) -> OutboundMessage:
             ctx.session.metadata["approved_plan_path"] = plan_path
             ctx.session.metadata["executing_plan_path"] = plan_path
             ctx.session.metadata.pop(_ACTIVE_PLAN_PATH_KEY, None)
+            # The plan is approved — clear the pending review payload so
+            # channels stop rendering the approve affordance.
+            ctx.session.metadata.pop("pending_plan_review", None)
             # Update session meta: mark plan as approved (executing).
             _approve_executing_plan(ctx, plan_path)
             # Wake the agent: without an inbound message the runner stays

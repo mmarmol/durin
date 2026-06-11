@@ -53,3 +53,41 @@ def test_build_response_schema(monkeypatch, tmp_path) -> None:
     assert out["schemaVersion"] == WEBUI_TRANSCRIPT_SCHEMA_VERSION
     assert out["sessionKey"] == key
     assert len(out["messages"]) == 1
+
+
+def test_replay_preserves_tool_events() -> None:
+    """tool_hint records keep structured tool_events (merged by call_id) so
+    the webui renders the same rich blocks live and after reload."""
+    lines = [
+        {"event": "message", "kind": "tool_hint", "text": "exec(...)",
+         "tool_events": [{"version": 1, "phase": "start", "call_id": "c1",
+                          "name": "exec", "arguments": {"command": "ls"}}]},
+        {"event": "message", "kind": "tool_hint", "text": "",
+         "tool_events": [{"version": 1, "phase": "end", "call_id": "c1",
+                          "name": "exec", "result": "out.txt"}]},
+        {"event": "turn_end"},
+    ]
+    messages = replay_transcript_to_ui_messages(lines)
+    traces = [m for m in messages if m.get("kind") == "trace"]
+    assert len(traces) == 1
+    events = traces[0]["toolEvents"]
+    assert len(events) == 1                                  # merged by call_id
+    assert events[0]["phase"] == "end"
+    assert events[0]["arguments"] == {"command": "ls"}       # start args survive
+    assert events[0]["result"] == "out.txt"
+
+
+def test_replay_keeps_eventful_record_without_trace_lines() -> None:
+    """A tool_hint frame whose events carry no start phase (no formatted
+    trace line) must still survive replay — dropping it loses the payload."""
+    lines = [
+        {"event": "message", "kind": "tool_hint", "text": "",
+         "tool_events": [{"version": 1, "phase": "end", "call_id": "q1",
+                          "name": "ask_user_question",
+                          "arguments": {"question": "Color?", "options": ["red"]}}]},
+        {"event": "turn_end"},
+    ]
+    messages = replay_transcript_to_ui_messages(lines)
+    traces = [m for m in messages if m.get("kind") == "trace"]
+    assert len(traces) == 1
+    assert traces[0]["toolEvents"][0]["arguments"]["question"] == "Color?"

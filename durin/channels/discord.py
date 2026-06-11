@@ -399,12 +399,21 @@ class DiscordChannel(BaseChannel):
             has_user = bool(self.config.proxy_username)
             has_pass = bool(self.config.proxy_password)
             if has_user and has_pass:
+                import warnings
+
                 import aiohttp
 
-                proxy_auth = aiohttp.BasicAuth(
-                    login=self.config.proxy_username,
-                    password=self.config.proxy_password,
-                )
+                # discord.py's ``Client(proxy_auth=...)`` requires an
+                # ``aiohttp.BasicAuth`` instance — we cannot switch to the
+                # ``encode_basic_auth`` form aiohttp 4.0 will mandate without
+                # breaking discord.py's API. Suppress the forced deprecation
+                # warning narrowly until discord.py migrates.
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", DeprecationWarning)
+                    proxy_auth = aiohttp.BasicAuth(
+                        login=self.config.proxy_username,
+                        password=self.config.proxy_password,
+                    )
             elif has_user != has_pass:
                 self.logger.warning(
                     "proxy auth incomplete: both proxy_username and "

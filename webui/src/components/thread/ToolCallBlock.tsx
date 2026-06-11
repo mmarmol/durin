@@ -49,8 +49,9 @@ function argStringList(args: unknown, key: string): string[] {
 function summaryLine(ev: ToolProgressEvent): string {
   const a = ev.arguments;
   for (const key of [
-    "path", "file_path", "filename", "command",
+    "path", "file_path", "filename", "image_path", "audio_path", "command",
     "url", "query", "pattern", "question", "name",
+    "uri", "ref", "goal", "action", "source",
   ]) {
     const v = argString(a, key);
     if (v) return v.length <= 90 ? v : v.slice(0, 87) + "…";
@@ -79,6 +80,7 @@ interface ToolCallBlockProps {
 }
 
 export function ToolCallBlock({ event }: ToolCallBlockProps) {
+  const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const name = event.name || "tool";
   const summary = summaryLine(event);
@@ -115,7 +117,9 @@ export function ToolCallBlock({ event }: ToolCallBlockProps) {
             onClick={() => setExpanded((v) => !v)}
             className="ml-auto shrink-0 rounded px-1 text-[10.5px] text-muted-foreground underline-offset-2 hover:underline"
           >
-            {expanded ? "collapse" : `+${total - PREVIEW_LINES} more`}
+            {expanded
+              ? t("message.toolBody.collapse")
+              : t("message.toolBody.more", { count: total - PREVIEW_LINES })}
           </button>
         )}
       </div>
@@ -128,7 +132,18 @@ export function ToolCallBlock({ event }: ToolCallBlockProps) {
           <pre className="overflow-x-auto whitespace-pre-wrap break-words pb-1 font-mono text-[11px] leading-relaxed">
             {visible.map((ln, i) => (
               <div key={i} className={ln.className}>
-                {ln.text || " "}
+                {ln.href ? (
+                  <a
+                    href={ln.href}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                    className="text-primary underline underline-offset-2 hover:opacity-80"
+                  >
+                    {ln.text}
+                  </a>
+                ) : (
+                  ln.text || " "
+                )}
               </div>
             ))}
           </pre>
@@ -145,7 +160,7 @@ export function ToolCallBlock({ event }: ToolCallBlockProps) {
  * before sending; the field is also free-text for an "other" answer.
  * Submitting routes through ThreadActions as the user's next message.
  */
-function AskUserAnswer({ event }: { event: ToolProgressEvent }) {
+export function AskUserAnswer({ event }: { event: ToolProgressEvent }) {
   const { t } = useTranslation();
   const actions = useThreadActions();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -240,7 +255,7 @@ function AskUserAnswer({ event }: { event: ToolProgressEvent }) {
  * never enters the conversation or a URL. The agent is told only that
  * the secret now exists.
  */
-function RequestSecretPanel({ event }: { event: ToolProgressEvent }) {
+export function RequestSecretPanel({ event }: { event: ToolProgressEvent }) {
   const { t } = useTranslation();
   const actions = useThreadActions();
   const name = argString(event.arguments, "name") ?? "";
@@ -336,7 +351,11 @@ function RequestSecretPanel({ event }: { event: ToolProgressEvent }) {
 interface BodyLine {
   text: string;
   className?: string;
+  /** When set, the line renders as an external link (web sources). */
+  href?: string;
 }
+
+const URL_RE = /(https?:\/\/[^\s)>\]]+)/;
 
 /** Build the per-tool body as a list of (text, className) lines. */
 function renderBodyLines(ev: ToolProgressEvent): BodyLine[] {
@@ -373,10 +392,23 @@ function renderBodyLines(ev: ToolProgressEvent): BodyLine[] {
   // ask_user_question and request_secret are handled by their own
   // interactive panels (see ToolCallBlock), never as static body lines.
 
-  // Generic / read_file / list_dir / grep: just the result (or error).
   if (ev.error) {
     return [{ text: String(ev.error), className: "text-red-500/90" }];
   }
+
+  // web_search / web_fetch: linkify source URLs so results are clickable.
+  if (name === "web_search" || name === "web_fetch") {
+    const out = resultText(ev.result);
+    if (!out) return [];
+    return out.split("\n").map((l) => {
+      const m = URL_RE.exec(l);
+      return m
+        ? { text: l, className: "text-muted-foreground/90", href: m[1] }
+        : { text: l, className: "text-muted-foreground/90" };
+    });
+  }
+
+  // Generic / read_file / list_dir / grep: just the result (or error).
   const out = resultText(ev.result);
   if (!out) return [];
   return out.split("\n").map((l) => ({

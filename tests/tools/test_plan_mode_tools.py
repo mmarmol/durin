@@ -111,8 +111,16 @@ class TestExitPlanModeTool:
         # Plan path is in the tool result
         assert "plan_" in out and ".md" in out
         assert ".durin/plans" in out
-        # Plan preview is in the tool result
-        assert "1. Read files" in out
+        # The channel presents the plan (payload-canonical contract) — the
+        # result must NOT duplicate the plan body nor instruct re-presentation.
+        assert "presented to the user" in out
+        assert "/build" in out
+        assert "1. Read files" not in out
+        # The pending payload carries the plan for channel rendering/fallback.
+        pending = session.metadata.get("pending_plan_review")
+        assert pending is not None
+        assert pending["plan"] == plan_text
+        assert pending["path"].endswith(".md")
         # Session remains in plan mode
         assert session.metadata[SESSION_MODE_KEY] == "plan"
         # Active plan path tracked in session metadata

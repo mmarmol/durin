@@ -1,43 +1,45 @@
 """``ask_user_question`` tool — explicit clarification mid-turn.
 
 Lets the model pause its work to ask the user a specific question before
-proceeding. The pause is implemented as a yield: the tool result tells
-the model to present the question as its next assistant message and
-stop calling tools. The user's reply arrives as the next inbound message
-and naturally continues the conversation with the question in context.
+proceeding. Two pause semantics (docs/architecture/ux.md):
+
+- **Blocking V2 (default)**: the tool awaits the user's next plain-text
+  message inside the SAME turn (``durin/agent/pending_answers.py``); the
+  answer returns as the tool result and the model continues without a
+  turn boundary. The channel renders the question while the tool blocks
+  (webui panel / TUI bubble from the start tool_event; serialized message
+  for dumb channels, published here pre-block).
+- **Yield V1 (degradation path)**: on answer timeout, media replies, no
+  live loop consumer, non-interactive sessions (cron/heartbeat), or
+  ``ask_user_blocking=false`` — the turn ends and the user's next message
+  is the answer, with ``pending_question`` metadata keeping channel
+  rendering and the turn-end fallback serializer working.
 
 Why this isn't just "have the model type the question"
 
-- **Explicit yield semantics**: the tool result is an unambiguous "stop
-  here and wait" signal. Without the tool the model may keep guessing
-  parameters or call more tools instead of pausing.
-- **Telemetry**: we record where in a session the agent had to clarify,
-  which is useful signal for prompt-quality work.
-- **UI affordance hook**: ``options`` and a ``pending_question`` marker
-  in session metadata let future channels render a structured prompt
-  (clickable list, modal, etc.) instead of free-form text.
-
-Design notes (V1)
-
-- We do NOT publish a separate outbound message with the question. That
-  would duplicate visibility (the model's own assistant message also
-  states the question). Channels that want structured rendering read
-  ``session.metadata['pending_question']`` instead, set just before the
-  tool returns.
-- We do NOT block on the user's reply inside the tool. That would
-  require bus interception and a synchronous Future; the V1 ergonomics
-  (turn ends, next turn includes context) are good enough and ship now.
-  A future V2 can upgrade to a real in-turn pause without changing the
-  tool's public schema.
+- **Channel-rendered payload**: the question is presented by the channel
+  from the structured tool arguments — the model never re-presents it in
+  prose (weak-signal pattern; see the 2026-06 tool-rendering work).
+- **Explicit stop semantics**: the tool result is an unambiguous "answer
+  arrived, continue" or "stop here and wait" signal.
+- **Telemetry**: question_asked / answer_received / answer_timeout events
+  measure clarification behavior and in-turn answer latency.
 - The tool is allowed in every mode (plan, explore, build) — it never
   touches the workspace, only session metadata.
 """
 
 from __future__ import annotations
 
+import asyncio
+import time
 import uuid
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any
+
+from durin.agent.user_payloads import (
+    channel_renders_tool_payloads,
+    serialize_pending_interactions,
+)
 
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.context import ContextAware, RequestContext
@@ -87,8 +89,18 @@ class AskUserQuestionTool(Tool, ContextAware):
 
     _scopes = {"core"}
 
-    def __init__(self, sessions: "SessionManager") -> None:
+    def __init__(
+        self,
+        sessions: "SessionManager",
+        *,
+        bus: Any | None = None,
+        blocking: bool = True,
+        answer_timeout_s: float = 300,
+    ) -> None:
         self._sessions = sessions
+        self._bus = bus
+        self._blocking = blocking
+        self._answer_timeout_s = answer_timeout_s
         self._request_ctx: RequestContext | None = None
 
     def set_context(self, ctx: RequestContext) -> None:
@@ -98,7 +110,21 @@ class AskUserQuestionTool(Tool, ContextAware):
     def create(cls, ctx: Any) -> Tool:
         sessions = getattr(ctx, "sessions", None)
         assert sessions is not None  # guarded by enabled()
-        return cls(sessions=sessions)
+        blocking = True
+        timeout_s = 300.0
+        app_config = getattr(ctx, "app_config", None)
+        try:
+            defaults = app_config.agents.defaults
+            blocking = bool(defaults.ask_user_blocking)
+            timeout_s = float(defaults.ask_user_answer_timeout_s)
+        except AttributeError:
+            pass
+        return cls(
+            sessions=sessions,
+            bus=getattr(ctx, "bus", None),
+            blocking=blocking,
+            answer_timeout_s=timeout_s,
+        )
 
     @classmethod
     def enabled(cls, ctx: Any) -> bool:
@@ -111,14 +137,15 @@ class AskUserQuestionTool(Tool, ContextAware):
     @property
     def description(self) -> str:
         return (
-            "Ask the user a specific clarifying question and yield. Use "
-            "when you need a decision or piece of information that you "
-            "cannot reasonably guess from context — framework choice, "
-            "ambiguous file path, scope of change, etc. Do NOT use for "
-            "every minor decision; only when the answer materially "
-            "changes the next steps. The tool registers the question and "
-            "tells you to stop and present it as your next assistant "
-            "message; the user's next reply is their answer."
+            "Ask the user a specific clarifying question. Use when you "
+            "need a decision or piece of information that you cannot "
+            "reasonably guess from context — framework choice, ambiguous "
+            "file path, scope of change, etc. Do NOT use for every minor "
+            "decision; only when the answer materially changes the next "
+            "steps. The question is presented to the user by the channel; "
+            "when they answer promptly you receive the answer as this "
+            "tool's result and continue working, otherwise the turn "
+            "yields and their next message is the answer."
         )
 
     def _session(self) -> Any | None:
@@ -166,6 +193,20 @@ class AskUserQuestionTool(Tool, ContextAware):
             "option_count": len(cleaned_options or []),
         })
 
+        # Blocking V2: wait in-turn for the answer; degrade to the V1 yield
+        # contract on timeout, fallback sentinel, or missing session context.
+        session_key = self._request_ctx.session_key if self._request_ctx else None
+        if self._blocking and session is not None and session_key:
+            answer = await self._await_answer(session_key, question_id)
+            if answer is not None:
+                if session.metadata is not None:
+                    session.metadata.pop(PENDING_QUESTION_KEY, None)
+                    self._sessions.save(session)
+                return (
+                    f"The user answered: {answer!r}.\n"
+                    "Continue the task using this answer — do not re-ask."
+                )
+
         body = (
             f"Question registered (id={question_id}): {question!r}.\n"
         )
@@ -174,14 +215,69 @@ class AskUserQuestionTool(Tool, ContextAware):
             for opt in cleaned_options:
                 body += f"  - {opt}\n"
         body += (
-            "\nYIELD TO USER. Present this exact question as your next "
-            "assistant message (you may add 1-2 lines of context, but "
-            "the question itself must be visible). Then STOP — do not "
-            "call more tools, do not start executing anything. The "
-            "user's next message is their answer; you will resume in "
+            "\nThe question has been presented to the user by the channel "
+            "(interactive panel or message) — do not repeat it verbatim in "
+            "your reply. STOP now: do not call more tools, do not start "
+            "executing anything. You may add one short line of context. "
+            "The user's next message is their answer; you will resume in "
             "the following turn with that answer in context."
         )
         return body
+
+    async def _await_answer(self, session_key: str, question_id: str) -> str | None:
+        """Block until the user's in-turn answer; None means fall back to yield."""
+        from durin.agent import pending_answers
+
+        # No consumer (single-message mode) or non-interactive session
+        # (cron/heartbeat): nobody can ever resolve the wait — yield now.
+        if not pending_answers.can_block(session_key):
+            return None
+        await self._publish_dumb_channel_question(session_key)
+        fut = pending_answers.create(session_key)
+        started = time.monotonic()
+        try:
+            answer = await asyncio.wait_for(fut, timeout=self._answer_timeout_s)
+        except asyncio.TimeoutError:
+            self._emit("ask_user.answer_timeout", {
+                "question_id": question_id,
+                "timeout_s": int(self._answer_timeout_s),
+            })
+            return None
+        finally:
+            pending_answers.discard(session_key, fut)
+        if answer is pending_answers.FALLBACK or not isinstance(answer, str):
+            return None
+        self._emit("ask_user.answer_received", {
+            "question_id": question_id,
+            "wait_ms": int((time.monotonic() - started) * 1000),
+        })
+        return answer
+
+    async def _publish_dumb_channel_question(self, session_key: str) -> None:
+        """Pre-block question delivery for channels without payload rendering.
+
+        Rich channels already rendered the panel from the start tool_event;
+        the turn-end fallback serializer never fires while we block, so dumb
+        channels need the serialized question published here.
+        """
+        if self._bus is None or self._request_ctx is None:
+            return
+        channel = self._request_ctx.channel
+        if channel_renders_tool_payloads(channel):
+            return
+        session = self._session()
+        if session is None:
+            return
+        texts = serialize_pending_interactions(session.metadata)
+        for text in texts:
+            with suppress(Exception):
+                from durin.bus.events import OutboundMessage
+
+                await self._bus.publish_outbound(OutboundMessage(
+                    channel=channel,
+                    chat_id=self._request_ctx.chat_id,
+                    content=text,
+                ))
 
     @staticmethod
     def _emit(event_type: str, data: dict[str, Any]) -> None:
