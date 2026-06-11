@@ -166,6 +166,16 @@ class Tool(ABC):
         """Whether this tool should run alone even if concurrency is enabled."""
         return False
 
+    @property
+    def llm_visible(self) -> bool:
+        """Whether this tool's definition ships to the LLM.
+
+        Deferred MCP tools (P3, 2026-06-10) stay registered — and thus
+        executable via the ``mcp_invoke`` bridge — but their schemas
+        are excluded from the request's ``tools`` array.
+        """
+        return getattr(self, "_llm_visible", True)
+
     # --- Plugin metadata ---
 
     config_key: str = ""

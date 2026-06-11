@@ -16,7 +16,6 @@ from loguru import logger
 
 from durin.agent import model_presets as preset_helpers
 from durin.agent.context import ContextBuilder
-from durin.extras import ensure_or_note
 from durin.agent.hook import AgentHook, CompositeHook
 from durin.agent.memory import Consolidator
 from durin.agent.progress_hook import AgentProgressHook
@@ -37,6 +36,7 @@ from durin.bus.events import OUTBOUND_META_AGENT_UI, InboundMessage, OutboundMes
 from durin.bus.queue import MessageBus
 from durin.command import CommandContext, CommandRouter, register_builtin_commands
 from durin.config.schema import AgentDefaults, ModelPresetConfig
+from durin.extras import ensure_or_note
 from durin.providers.base import LLMProvider
 from durin.providers.factory import ProviderSnapshot
 from durin.session.goal_state import (
@@ -65,6 +65,24 @@ def _truncate_tool_output(content: str, max_chars: int, tool_name: str | None) -
     """Truncate ``content`` choosing direction based on the tool name."""
     direction = "tail" if (tool_name in _TAIL_TRUNCATION_TOOLS) else "head"
     return truncate_text_fn(content, max_chars, direction=direction)
+
+
+def emit_memory_usage_rollup(tools_used: list[str]) -> None:
+    """Emit the per-turn ``turn.memory_usage`` rollup at save time.
+
+    Emitted on EVERY turn, including turns with zero tool calls —
+    silent-miss analysis needs the rows where ``search_calls == 0``.
+    """
+    from durin.agent.tools._telemetry import emit_tool_event
+
+    emit_tool_event(
+        "turn.memory_usage",
+        {
+            "search_calls": tools_used.count("memory_search"),
+            "drill_calls": tools_used.count("memory_drill"),
+            "tool_calls_total": len(tools_used),
+        },
+    )
 
 
 if TYPE_CHECKING:
@@ -745,6 +763,23 @@ class AgentLoop:
             self._mcp_stacks.clear()
         finally:
             self._mcp_connecting = False
+        if self._mcp_connected:
+            self._maybe_defer_mcp_tools()
+
+    def _maybe_defer_mcp_tools(self) -> None:
+        """P3 (2026-06-10): hide oversized MCP surfaces behind the bridge.
+
+        Best-effort — a deferral failure must never block MCP usage;
+        the tools just ship un-deferred as before.
+        """
+        cfg = getattr(getattr(self.app_config, "tools", None), "mcp_deferral", None)
+        if cfg is None:
+            return
+        try:
+            from durin.agent.tools.mcp_deferral import maybe_defer_mcp_tools
+            maybe_defer_mcp_tools(self.tools, cfg)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("MCP deferral failed (tools ship un-deferred): {}", e)
 
     async def _warmup_memory_embedding(self) -> None:
         """Pre-load the embedding model in background so the first
@@ -1891,6 +1926,8 @@ class AgentLoop:
         _skill_calls = extract_skill_calls(_new_messages)
         if _skill_calls:
             ctx.session.metadata.setdefault("skill_calls", []).extend(_skill_calls)
+
+        emit_memory_usage_rollup(ctx.tools_used)
 
         ctx.turn_latency_ms = max(0, int((time.time() - ctx.turn_wall_started_at) * 1000))
         self._save_turn(

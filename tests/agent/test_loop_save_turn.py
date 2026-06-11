@@ -428,7 +428,7 @@ async def test_process_message_does_not_duplicate_early_persisted_user_message(t
     loop.consolidator.maybe_consolidate_by_tokens = AsyncMock(return_value=False)  # type: ignore[method-assign]
     loop._run_agent_loop = AsyncMock(return_value=(
         "done",
-        None,
+        [],
         [
             {"role": "system", "content": "system"},
             {"role": "user", "content": "hello"},
@@ -578,7 +578,7 @@ async def test_next_turn_after_crash_closes_pending_user_turn_before_new_input(t
 
     loop._run_agent_loop = AsyncMock(return_value=(
         "new answer",
-        None,
+        [],
         [
             {"role": "system", "content": "system"},
             {"role": "user", "content": "old question"},
@@ -683,7 +683,7 @@ async def test_stop_preserves_runtime_checkpoint_for_next_turn(tmp_path: Path) -
     async def resumed_run_agent_loop(initial_messages, **_kwargs):
         return (
             "next answer",
-            None,
+            [],
             [*initial_messages, {"role": "assistant", "content": "next answer"}],
             "stop",
             False,

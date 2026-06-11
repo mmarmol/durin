@@ -290,7 +290,7 @@
         "dreamAlwaysOnBudget": "Always-on budget (tokens)"
       },
       "help": {
-        "crossEncoderEnabled": "Opt-in second-pass reranker. Adds 300-1500 ms per query and ~1 GB RAM but improves quality on ambiguous queries. Off by default.",
+        "crossEncoderEnabled": "Opt-in second-pass reranker. Adds 300-1500 ms per query and ~1 GB RAM and can improve quality on ambiguous queries. Off by default.",
         "crossEncoderModel": "Model used when the reranker is enabled. The default works well for multilingual queries; alternatives trade size for latency.",
         "dreamEnabled": "Master switch for the automatic dream. When off, the cron and reactive triggers are disabled; the manual `durin memory dream` still works.",
         "dreamCron": "Cron expression for the daily extract / refine / skill pass. Default 0 3 * * * (3am local).",
