@@ -328,6 +328,12 @@ class ExitPlanModeTool(Tool, _PlanModeToolBase):
             with suppress(ValueError):
                 display = str(plan_path.relative_to(Path(self._workspace).resolve()))
 
+        # Expose the plan to channels: rich channels render a plan card from
+        # tool_events; dumb channels get the serialized fallback at turn end
+        # (durin/agent/user_payloads.py). /build clears this payload.
+        from durin.agent.user_payloads import PENDING_PLAN_KEY
+        session.metadata[PENDING_PLAN_KEY] = {"path": display, "plan": plan}
+
         self._emit("plan_mode.presented", {
             "plan_chars": len(plan),
             "from_mode": current,
@@ -362,24 +368,12 @@ class ExitPlanModeTool(Tool, _PlanModeToolBase):
 
         return (
             f"Plan saved to **{display}**.\n\n"
-            "**The user has NOT seen the plan yet** — saving to disk is "
-            "internal bookkeeping. Your next assistant message MUST present "
-            "the full plan content (verbatim or lightly cleaned up) so the "
-            "user can read and approve it. Do not collapse it into a "
-            "one-line summary — show the entire plan with its goal, steps, "
-            "files involved, and any open questions. End with an explicit "
-            "ask for the user to run `/build` to approve, phrased in the "
-            "same language the user has been writing in.\n\n"
-            "The session remains in PLAN MODE. The user can:\n"
-            f"- Open `{display}` in an editor and edit before approving\n"
-            "- Run `/build` to approve and resume — the agent will pick "
-            "up the file as it stands at that moment\n"
-            "- Send further messages to refine the plan; you may write "
-            "a new version with another `exit_plan_mode` call (the path "
-            "will be updated)\n\n"
-            "Do not emit more tool calls — the turn is yielded after you "
-            "present the plan.\n\n"
-            "--- Plan content (present this in your reply) ---\n"
-            f"{plan}\n"
-            "--- End plan ---"
+            "The plan has been presented to the user by the channel (plan "
+            "card or message) — do NOT paste the full plan into your reply. "
+            "Your next assistant message should be 1-3 lines: state that the "
+            "plan is ready for review and ask the user to run `/build` to "
+            "approve (in the language the user has been writing in). You may "
+            f"mention they can edit `{display}` before approving.\n\n"
+            "The session remains in PLAN MODE. Do not emit more tool calls — "
+            "the turn is yielded after your short message."
         )

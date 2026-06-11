@@ -28,6 +28,7 @@ from loguru import logger
 
 from durin.agent.tools._telemetry import emit_tool_event
 from durin.config.schema import Base
+from durin.utils.subprocess_cleanup import aclose_subprocess
 
 _IS_WINDOWS = sys.platform == "win32"
 
@@ -160,6 +161,10 @@ class ProcessRegistry:
         finally:
             with suppress(Exception):
                 await process.wait()
+            # Close the subprocess transport inside the running loop, else its
+            # GC ``__del__`` runs after the loop is gone ("Event loop is
+            # closed"). See durin/utils/subprocess_cleanup.py.
+            await aclose_subprocess(process)
             sess.exited = True
             sess.exit_code = process.returncode
             self._move_to_finished(sess)
@@ -241,6 +246,15 @@ class ProcessRegistry:
                 await asyncio.sleep(0.1)
             if not sess.exited:
                 self._signal_group(sess, signal.SIGKILL)
+        # Wait for the reader task to finish reaping (its finally does
+        # ``await process.wait()``). This closes the subprocess transport
+        # inside the running loop — otherwise its ``__del__`` runs after the
+        # loop is gone and raises "Event loop is closed"
+        # (PytestUnraisableExceptionWarning, and a noisy log in production).
+        reader = sess._reader_task
+        if reader is not None and not reader.done():
+            with suppress(Exception):
+                await asyncio.wait({reader}, timeout=5.0)
         emit_tool_event("process.kill", {
             "proc_id": sess.id,
             "pid": sess.pid,

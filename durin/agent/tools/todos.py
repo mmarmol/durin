@@ -207,8 +207,7 @@ class TodoWriteTool(Tool, ContextAware):
                 "only the first kept that status, the rest moved to "
                 "`pending`. Keep exactly one item active at a time._"
             )
-        return (
-            "Todo list updated. Present this to the user so they can "
-            "see the current plan:\n\n"
-            f"{rendered}{suffix}"
-        )
+        # The channel renders the checklist from the tool arguments (webui
+        # block / TUI bubble) — no re-presentation instruction needed. The
+        # rendered list stays in the result for the model's own context.
+        return f"Todo list updated:\n\n{rendered}{suffix}"

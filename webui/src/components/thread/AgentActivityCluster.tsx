@@ -3,10 +3,8 @@ import { ChevronRight, Layers } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { ReasoningBubble, StreamingLabelSheen, TraceGroup } from "@/components/MessageBubble";
-import { DeliberationPanel } from "@/components/thread/DeliberationPanel";
-import { PosturePanel } from "@/components/thread/PosturePanel";
 import { cn } from "@/lib/utils";
-import type { DeliberationResultData, PostureUpdateData, UIMessage } from "@/lib/types";
+import type { UIMessage } from "@/lib/types";
 
 /** Scrollport height for the Cursor-style “live trace” strip (tailwind spacing). */
 const CLUSTER_SCROLL_MAX_CLASS = "max-h-52";
@@ -25,8 +23,11 @@ function countToolCalls(messages: UIMessage[]): number {
   let n = 0;
   for (const m of messages) {
     if (m.kind !== "trace") continue;
+    // Structured events are the source of truth (same count TraceGroup
+    // renders); flat trace lines only back legacy payloads.
+    const structured = m.toolEvents?.length ?? 0;
     const lines = m.traces?.length ?? (m.content.trim() ? 1 : 0);
-    n += Math.max(lines, 1);
+    n += Math.max(structured, lines, 1);
   }
   return n;
 }
@@ -58,28 +59,40 @@ export function AgentActivityCluster({
 
   const headerBusy = isTurnStreaming;
 
+  // With user-facing events hoisted out of the cluster, a reasoning-only
+  // cluster (toolCalls === 0) is common — show steps without "0 tool calls".
   const summary =
     isTurnStreaming
-      ? reasoningSteps > 0
+      ? reasoningSteps > 0 && toolCalls > 0
         ? t("message.agentActivityLiveSummary", {
             reasoning: reasoningSteps,
             tools: toolCalls,
             defaultValue: "Working… · {{reasoning}} steps · {{tools}} tool calls",
           })
-        : t("message.agentActivityLiveToolsOnly", {
-            tools: toolCalls,
-            defaultValue: "Working… · {{tools}} tool calls",
-          })
-      : reasoningSteps > 0
+        : reasoningSteps > 0
+          ? t("message.agentActivityLiveReasoningOnly", {
+              count: reasoningSteps,
+              defaultValue: "Working… · {{count}} steps",
+            })
+          : t("message.agentActivityLiveToolsOnly", {
+              tools: toolCalls,
+              defaultValue: "Working… · {{tools}} tool calls",
+            })
+      : reasoningSteps > 0 && toolCalls > 0
         ? t("message.agentActivitySummary", {
             reasoning: reasoningSteps,
             tools: toolCalls,
             defaultValue: "{{reasoning}} steps · {{tools}} tool calls",
           })
-        : t("message.agentActivityToolsOnly", {
-            tools: toolCalls,
-            defaultValue: "{{tools}} tool calls",
-          });
+        : reasoningSteps > 0
+          ? t("message.agentActivityReasoningOnly", {
+              count: reasoningSteps,
+              defaultValue: "{{count}} steps",
+            })
+          : t("message.agentActivityToolsOnly", {
+              tools: toolCalls,
+              defaultValue: "{{tools}} tool calls",
+            });
 
   const toggleOuter = () => {
     setUserToggledOuter(true);
@@ -136,20 +149,6 @@ export function AgentActivityCluster({
                       hasBodyBelow={false}
                       embeddedInCluster
                     />
-                  );
-                }
-                if (m.kind === "trace" && m.agentUI?.kind === "posture_update") {
-                  return (
-                    <div key={m.id} className="px-1">
-                      <PosturePanel data={m.agentUI.data as PostureUpdateData} />
-                    </div>
-                  );
-                }
-                if (m.kind === "trace" && m.agentUI?.kind === "deliberation_result") {
-                  return (
-                    <div key={m.id} className="px-1">
-                      <DeliberationPanel data={m.agentUI.data as DeliberationResultData} />
-                    </div>
                   );
                 }
                 if (m.kind === "trace") {

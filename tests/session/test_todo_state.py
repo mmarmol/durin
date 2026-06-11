@@ -110,15 +110,18 @@ def test_ws_blob_returns_items_or_empty():
 
 
 def test_render_markdown_shows_status_boxes():
+    """Markers must be valid GFM — `[~]` renders as literal text in task
+    lists, so in_progress uses an unchecked box + bold activeForm + ⏳."""
     items = [
         {"content": "a", "status": "completed", "activeForm": "a-ing"},
         {"content": "b", "status": "in_progress", "activeForm": "b-ing"},
         {"content": "c", "status": "pending", "activeForm": "c-ing"},
     ]
     md = render_todos_markdown(items)
-    assert "[x] a" in md
-    assert "[~] b-ing" in md  # in_progress uses activeForm
-    assert "[ ] c" in md
+    assert "- [x] a" in md
+    assert "- [ ] **b-ing** ⏳" in md  # in_progress uses activeForm
+    assert "- [ ] c" in md
+    assert "[~]" not in md
 
 
 def test_render_markdown_empty():

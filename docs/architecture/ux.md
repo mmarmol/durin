@@ -36,6 +36,60 @@ flowchart LR
 
 Every surface funnels through the same `MessageBus` + `AgentLoop`. Agent behaviour is identical across channels; only the I/O layer differs. Drag-and-drop (CLI/TUI), slash-command palettes, and per-channel autocomplete are the surface-specific bits.
 
+### User-facing tool payloads: the channel renders, the model never re-presents
+
+Interactive and presentational tools (`ask_user_question`, `request_secret`,
+`exit_plan_mode`, `todo_write`) follow a payload-canonical contract
+(`durin/agent/user_payloads.py`):
+
+- **The structured payload is the only user-facing copy.** Tool *arguments*
+  carry the display content (question + options, plan markdown, todo items);
+  they ride the existing `tool_events` frames to every surface. Tool *results*
+  are model-directed bookkeeping and explicitly forbid re-stating the content
+  in prose — relying on the model to re-present was refuted as a weak signal
+  (see the 2026-06-10 tool-rendering audit).
+- **Rich channels render widgets from the payload.** `RICH_PAYLOAD_CHANNELS =
+  {"websocket", "cli"}`: the webui hoists these events out of the activity
+  cluster as first-class blocks (`webui/src/lib/tool-display.ts` →
+  `ToolBlocks.tsx`: question panel with option chips, secure secret prompt,
+  todo checklist, plan card with an Approve-`/build` action); the TUI renders
+  them in `ToolCallBubble` (clickable option rows, masked secret prompt, plan
+  and checklist bodies built from arguments).
+- **Dumb channels get a serialized fallback at turn end.** Tools register
+  pending payloads in session metadata (`pending_question`,
+  `pending_secret_request`, `pending_plan_review`);
+  `AgentLoop._maybe_publish_interaction_fallback` publishes them as plain
+  outbound messages for any channel outside the rich set (numbered options,
+  `durin secret set` instruction, truncated plan + `/build` hint).
+- **Lifecycle:** the user's next inbound message clears `pending_question` and
+  `pending_secret_request` (loop user-append); `/build` clears
+  `pending_plan_review` (`cmd_build`). Pending question + agent mode also ride
+  the `goal_state` WS frame so the webui composer can show an
+  awaiting-answer strip and a plan-mode badge.
+- **Blocking ask_user (V2):** by default (`agents.defaults.ask_user_blocking`),
+  `ask_user_question` does not yield — it awaits the user's next plain-text
+  message *inside the same turn* via the `durin/agent/pending_answers.py`
+  registry; the loop's inbound consumer resolves the waiter and the answer
+  returns as the tool result, so the model continues without a turn boundary.
+  Degradation to V1 yield semantics is automatic on: answer timeout
+  (`ask_user_answer_timeout_s`), media-bearing replies (routed as a normal
+  message), no live loop consumer (single-message mode), and non-interactive
+  sessions (`cron:`/`heartbeat:`/`system:`). Slash commands are never consumed
+  as answers; `/stop` cancels the blocked turn (priority dispatch precedes the
+  interception). Channel note: `ChannelManager` always forwards tool_hint
+  frames to payload-rendering channels (`send_tool_hints` only gates chat-text
+  hints) so the question panel renders *while* the tool blocks; the plain
+  interactive CLI prints interactive payloads from the same frames.
+- **Replay parity:** the webui transcript persists merged `tool_events`
+  (schema v4, `durin/utils/webui_transcript.py:merge_tool_events`), so hoisted
+  blocks survive reload; blocks render in answered/read-only state once a
+  later user message exists.
+
+The webui display class per tool (`hoist` / `chip` / `trace`) lives in
+`webui/src/lib/tool-display.ts`; lifecycle confirmations (spawn, cron,
+message, sleep, goal events, memory writes, skill imports) render as compact
+chips, and plumbing tools stay inside the collapsible activity cluster.
+
 ---
 
 ## 1. Interactive CLI (daily driver)

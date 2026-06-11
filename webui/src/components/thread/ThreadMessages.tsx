@@ -3,7 +3,9 @@ import {
   AgentActivityCluster,
   isAgentActivityMember,
 } from "@/components/thread/AgentActivityCluster";
-import type { UIMessage } from "@/lib/types";
+import { HoistedToolBlock, ToolChipRow } from "@/components/thread/ToolBlocks";
+import { toolDisplayClass } from "@/lib/tool-display";
+import type { ToolProgressEvent, UIMessage } from "@/lib/types";
 
 interface ThreadMessagesProps {
   messages: UIMessage[];
@@ -13,7 +15,9 @@ interface ThreadMessagesProps {
 
 export type DisplayUnit =
   | { type: "cluster"; messages: UIMessage[] }
-  | { type: "single"; message: UIMessage };
+  | { type: "single"; message: UIMessage }
+  | { type: "toolBlock"; event: ToolProgressEvent; answered: boolean; key: string }
+  | { type: "toolChips"; events: ToolProgressEvent[]; key: string };
 
 /** True when this unit index is the last assistant text slice before the next user message (or end of thread). */
 export function isFinalAssistantSliceBeforeNextUser(
@@ -30,6 +34,28 @@ export function isFinalAssistantSliceBeforeNextUser(
   return true;
 }
 
+/**
+ * Split a trace message's structured events by display class
+ * (lib/tool-display.ts): user-facing events leave the cluster as
+ * first-class blocks/chips; plumbing events stay as supporting evidence.
+ */
+function partitionTrace(m: UIMessage): {
+  rest: UIMessage | null;
+  hoisted: ToolProgressEvent[];
+  chips: ToolProgressEvent[];
+} {
+  const events = m.toolEvents ?? [];
+  if (events.length === 0) return { rest: m, hoisted: [], chips: [] };
+  const hoisted = events.filter((e) => toolDisplayClass(e.name) === "hoist");
+  const chips = events.filter((e) => toolDisplayClass(e.name) === "chip");
+  if (hoisted.length === 0 && chips.length === 0) {
+    return { rest: m, hoisted, chips };
+  }
+  const trace = events.filter((e) => toolDisplayClass(e.name) === "trace");
+  const rest = trace.length > 0 ? { ...m, toolEvents: trace } : null;
+  return { rest, hoisted, chips };
+}
+
 function buildDisplayUnits(messages: UIMessage[]): DisplayUnit[] {
   const out: DisplayUnit[] = [];
   let i = 0;
@@ -37,11 +63,38 @@ function buildDisplayUnits(messages: UIMessage[]): DisplayUnit[] {
     const m = messages[i];
     if (isAgentActivityMember(m)) {
       const cluster: UIMessage[] = [];
+      const hoisted: { event: ToolProgressEvent; msgId: string }[] = [];
+      const chips: { event: ToolProgressEvent; msgId: string }[] = [];
       while (i < messages.length && isAgentActivityMember(messages[i])) {
-        cluster.push(messages[i]);
+        const member = messages[i];
+        if (member.kind === "trace") {
+          const p = partitionTrace(member);
+          if (p.rest) cluster.push(p.rest);
+          hoisted.push(...p.hoisted.map((event) => ({ event, msgId: member.id })));
+          chips.push(...p.chips.map((event) => ({ event, msgId: member.id })));
+        } else {
+          cluster.push(member);
+        }
         i += 1;
       }
-      out.push({ type: "cluster", messages: cluster });
+      if (cluster.length > 0) out.push({ type: "cluster", messages: cluster });
+      if (chips.length > 0) {
+        out.push({
+          type: "toolChips",
+          events: chips.map((c) => c.event),
+          key: `chips-${chips[0].msgId}-${chips[0].event.call_id ?? "0"}`,
+        });
+      }
+      // An interaction is answered once any later user message exists.
+      const answered = messages.slice(i).some((later) => later.role === "user");
+      for (const h of hoisted) {
+        out.push({
+          type: "toolBlock",
+          event: h.event,
+          answered,
+          key: `block-${h.msgId}-${h.event.call_id ?? "0"}`,
+        });
+      }
       continue;
     }
     out.push({ type: "single", message: m });
@@ -75,6 +128,10 @@ export function ThreadMessages({ messages, isStreaming = false }: ThreadMessages
                 isTurnStreaming={isStreaming}
                 hasBodyBelow={hasBodyBelow}
               />
+            ) : unit.type === "toolBlock" ? (
+              <HoistedToolBlock event={unit.event} answered={unit.answered} />
+            ) : unit.type === "toolChips" ? (
+              <ToolChipRow events={unit.events} />
             ) : (
               <MessageBubble
                 message={unit.message}
@@ -97,12 +154,18 @@ function unitKey(unit: DisplayUnit, index: number): string {
     const anchor = unit.messages[0]?.id;
     return anchor != null ? `cluster-${anchor}` : `cluster-idx-${index}`;
   }
+  if (unit.type === "toolBlock" || unit.type === "toolChips") {
+    return unit.key;
+  }
   return unit.message.id;
 }
 
 function marginAfterPrevUnit(prev: DisplayUnit): string {
   if (prev.type === "cluster") {
     return "mt-4";
+  }
+  if (prev.type === "toolBlock" || prev.type === "toolChips") {
+    return "mt-2";
   }
   const p = prev.message;
   const denseP =

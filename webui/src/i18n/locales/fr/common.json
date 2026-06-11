@@ -306,7 +306,9 @@
           }
         }
       },
-      "goalStateCloseAria": "Fermer l’objectif"
+      "goalStateCloseAria": "Fermer l’objectif",
+      "planMode": "Mode plan (lecture seule)",
+      "awaitingAnswer": "En attente de votre réponse"
     },
     "scrollToBottom": "Faire défiler vers le bas"
   },
@@ -327,7 +329,34 @@
     "agentActivityLiveSummary": "En cours… · {{reasoning}} étapes · {{tools}} appels d’outils",
     "agentActivityLiveToolsOnly": "En cours… · {{tools}} appels d’outils",
     "imageAttachment": "Pièce jointe image",
-    "turnLatencyTitle": "Temps de réponse (de bout en bout)"
+    "turnLatencyTitle": "Temps de réponse (de bout en bout)",
+    "askUser": {
+      "answered": "Répondu ci-dessous"
+    },
+    "todos": {
+      "title": "Liste de tâches"
+    },
+    "plan": {
+      "title": "Plan proposé",
+      "approve": "Approuver (/build)",
+      "hint": "ou répondez avec vos retours pour l'affiner"
+    },
+    "toolMany_one": "Un outil utilisé",
+    "agentActivitySummary_one": "{{reasoning}} étapes · {{tools}} appel d'outil",
+    "agentActivityToolsOnly_one": "{{tools}} appel d'outil",
+    "agentActivityLiveSummary_one": "En cours… · {{reasoning}} étapes · {{tools}} appel d'outil",
+    "agentActivityLiveToolsOnly_one": "En cours… · {{tools}} appel d'outil",
+    "agentActivityReasoningOnly": "{{count}} étapes",
+    "agentActivityReasoningOnly_one": "1 étape",
+    "agentActivityLiveReasoningOnly": "En cours… · {{count}} étapes",
+    "agentActivityLiveReasoningOnly_one": "En cours… · 1 étape",
+    "toolBody": {
+      "collapse": "réduire",
+      "more": "+{{count}} de plus"
+    },
+    "subagent": {
+      "title": "Sous-agent"
+    }
   },
   "lightbox": {
     "title": "Aperçu de l’image",

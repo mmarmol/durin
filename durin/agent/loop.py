@@ -28,6 +28,11 @@ from durin.agent.tools.file_state import FileStateStore, bind_file_states, reset
 from durin.agent.tools.message import MessageTool
 from durin.agent.tools.registry import ToolRegistry
 from durin.agent.tools.self import MyTool
+from durin.agent.user_payloads import (
+    PENDING_SECRET_KEY,
+    channel_renders_tool_payloads,
+    serialize_pending_interactions,
+)
 from durin.bus.events import OUTBOUND_META_AGENT_UI, InboundMessage, OutboundMessage
 from durin.bus.queue import MessageBus
 from durin.command import CommandContext, CommandRouter, register_builtin_commands
@@ -883,6 +888,45 @@ class AgentLoop:
 
         return _on_retry_wait
 
+    def _maybe_resolve_pending_answer(self, msg: InboundMessage, session_key: str) -> bool:
+        """Divert an inbound message to a blocked ask_user waiter.
+
+        Returns True when the message was consumed as the in-turn answer.
+        Slash commands are never consumed. A media-bearing reply cannot be
+        carried through a tool result — the waiter falls back to yield
+        semantics and the message continues through normal routing.
+        """
+        from durin.agent import pending_answers
+
+        if not pending_answers.is_waiting(session_key):
+            return False
+        text = (msg.content or "").strip()
+        if text.startswith("/"):
+            return False
+        if msg.media:
+            pending_answers.fallback(session_key)
+            return False
+        if not text:
+            return False
+        return pending_answers.resolve(session_key, text)
+
+    async def _maybe_publish_interaction_fallback(
+        self, *, channel: str, chat_id: str, session_key: str
+    ) -> None:
+        """Serialize pending interactive payloads as plain messages for
+        channels that can't render structured tool payloads (user_payloads.py)."""
+        if channel_renders_tool_payloads(channel):
+            return
+        try:
+            session = self.sessions.get_or_create(session_key)
+            texts = serialize_pending_interactions(session.metadata)
+        except Exception:  # noqa: BLE001 — fallback must never break the turn
+            return
+        for text in texts:
+            await self.bus.publish_outbound(OutboundMessage(
+                channel=channel, chat_id=chat_id, content=text,
+            ))
+
     def _persist_user_message_early(
         self,
         msg: InboundMessage,
@@ -899,6 +943,12 @@ class AgentLoop:
             extra: dict[str, Any] = {"media": list(media_paths)} if media_paths else {}
             extra.update(kwargs)
             text = msg.content if isinstance(msg.content, str) else ""
+            # The user's reply answers any pending interaction — clear the
+            # payloads so fallbacks/badges don't fire again next turn. The
+            # pending plan survives: /build owns its lifecycle (cmd_build).
+            if session.metadata is not None:
+                session.metadata.pop("pending_question", None)
+                session.metadata.pop(PENDING_SECRET_KEY, None)
             session.add_message("user", text, **extra)
             self._mark_pending_user_turn(session)
             self.sessions.save(session)
@@ -1201,9 +1251,14 @@ class AgentLoop:
 
     async def run(self) -> None:
         """Run the agent loop, dispatching messages as tasks to stay responsive to /stop."""
+        from durin.agent import pending_answers
+
         self._running = True
         await self._connect_mcp()
         self._schedule_background(self._warmup_memory_embedding())
+        # Blocking ask_user may only wait while this consumer is alive to
+        # resolve answers (pending_answers.can_block).
+        pending_answers.set_consumer_active(True)
         logger.info("Agent loop started")
 
         while self._running:
@@ -1229,6 +1284,12 @@ class AgentLoop:
                 )
                 continue
             effective_key = self._effective_session_key(msg)
+            # Blocking ask_user (V2): a turn may be paused awaiting the
+            # user's answer. A plain-text reply resolves the in-turn waiter
+            # and is consumed here; anything else (commands, media) tells
+            # the waiter to fall back to yield semantics and routes on.
+            if self._maybe_resolve_pending_answer(msg, effective_key):
+                continue
             # If this session already has an active pending queue (i.e. a task
             # is processing this session), route the message there for mid-turn
             # injection instead of creating a competing task.
@@ -1339,7 +1400,11 @@ class AgentLoop:
                     )
                     if response is not None:
                         await self.bus.publish_outbound(response)
-                    elif msg.channel == "cli":
+                    await self._maybe_publish_interaction_fallback(
+                        channel=msg.channel, chat_id=msg.chat_id,
+                        session_key=session_key,
+                    )
+                    if response is None and msg.channel == "cli":
                         await self.bus.publish_outbound(OutboundMessage(
                             channel=msg.channel, chat_id=msg.chat_id,
                             content="", metadata=msg.metadata or {},
@@ -1458,7 +1523,13 @@ class AgentLoop:
 
     def stop(self) -> None:
         """Stop the agent loop."""
+        from durin.agent import pending_answers
+
         self._running = False
+        # The inbound consumer is going away — release any blocked ask_user
+        # waiters to yield semantics instead of letting them ride the timeout.
+        pending_answers.set_consumer_active(False)
+        pending_answers.reset()
         # A11: drain memory background services so the watchdog
         # Observer and health-check thread terminate cleanly.
         self._stop_memory_background_services()

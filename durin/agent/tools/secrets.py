@@ -17,10 +17,15 @@ See ``docs/11_secrets_design.md``.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from durin.agent.tools.base import Tool, tool_parameters
+from durin.agent.tools.context import ContextAware, RequestContext
 from durin.agent.tools.schema import StringSchema, tool_parameters_schema
+from durin.agent.user_payloads import PENDING_SECRET_KEY
+
+if TYPE_CHECKING:
+    from durin.session.manager import SessionManager
 
 
 @tool_parameters(tool_parameters_schema())
@@ -97,14 +102,29 @@ class ListSecretsTool(Tool):
         required=["name", "service"],
     )
 )
-class RequestSecretTool(Tool):
+class RequestSecretTool(Tool, ContextAware):
     """Ask the user for a credential the agent needs but lacks."""
 
     _scopes = {"core", "subagent"}
 
+    def __init__(self, sessions: "SessionManager | None" = None) -> None:
+        self._sessions = sessions
+        self._request_ctx: RequestContext | None = None
+
+    def set_context(self, ctx: RequestContext) -> None:
+        self._request_ctx = ctx
+
     @classmethod
     def create(cls, ctx: Any) -> Tool:
-        return cls()
+        return cls(sessions=getattr(ctx, "sessions", None))
+
+    def _session(self) -> Any | None:
+        if self._sessions is None or self._request_ctx is None:
+            return None
+        key = self._request_ctx.session_key
+        if not key:
+            return None
+        return self._sessions.get_or_create(key)
 
     @property
     def name(self) -> str:
@@ -161,6 +181,7 @@ class RequestSecretTool(Tool):
             )
 
         same_service = [n for n in store.find_by_service(service) if n != name]
+        self._register_pending(name, service, purpose)
         if same_service:
             return (
                 f"No secret named '{name}', but these already cover service "
@@ -173,19 +194,28 @@ class RequestSecretTool(Tool):
 
         return _request_block(name, service, purpose)
 
+    def _register_pending(self, name: str, service: str, purpose: str | None) -> None:
+        """Expose the request to channels (panel render / dumb-channel fallback)."""
+        session = self._session()
+        if session is None or session.metadata is None:
+            return
+        session.metadata[PENDING_SECRET_KEY] = {
+            "name": name, "service": service, "purpose": (purpose or "").strip(),
+        }
+        if self._sessions is not None:
+            self._sessions.save(session)
+
 
 def _request_block(name: str, service: str, purpose: str | None) -> str:
-    """The YIELD message instructing the user to store the secret."""
+    """Result body after registering a pending secret request."""
     cmd = f"durin secret set {name} --service {service} --scope exec"
     reason = f"\nReason: {purpose.strip()}" if purpose else ""
     return (
         f"Secret '{name}' is not stored.{reason}\n\n"
-        "YIELD TO USER. Present this exact instruction as your next "
-        "assistant message, then STOP — do not call more tools:\n\n"
-        f"  Please run this command and paste the secret at the hidden "
-        f"prompt (it goes straight to durin's secret store — not to me, "
-        f"and not into the chat):\n"
-        f"    {cmd}\n\n"
-        "After the user confirms they have run it, retry your task — the "
-        f"secret will be available to shell commands as ${name}."
+        "The request has been presented to the user by the channel (secure "
+        "prompt or instruction message) — do not repeat the instruction "
+        "verbatim. STOP now: do not call more tools. For your own context, "
+        f"the user will run: {cmd}\n"
+        "After the user confirms, retry your task — the secret will be "
+        f"available to shell commands as ${name}."
     )
