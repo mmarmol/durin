@@ -215,7 +215,18 @@ class ChannelManager:
         if ch is None:
             logger.warning("Progress check for unknown channel: {}", channel_name)
             return False
-        return ch.send_tool_hints if tool_hint else ch.send_progress
+        if tool_hint:
+            # ``send_tool_hints`` gates chat-TEXT hints. Channels that render
+            # structured tool payloads (webui panels, plan cards) depend on
+            # the START frame arriving while the tool runs — a blocking
+            # ask_user would otherwise show nothing to answer
+            # (durin/agent/user_payloads.py).
+            from durin.agent.user_payloads import channel_renders_tool_payloads
+
+            if channel_renders_tool_payloads(channel_name):
+                return True
+            return ch.send_tool_hints
+        return ch.send_progress
 
     def _resolve_bool_override(self, section: Any, key: str, default: bool) -> bool:
         """Return *key* from *section* if it is a bool, otherwise *default*.
