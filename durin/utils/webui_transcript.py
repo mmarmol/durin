@@ -377,8 +377,41 @@ def replay_transcript_to_ui_messages(
                 # from these events.
                 if not trace_lines and not has_events:
                     continue
+                # A later frame (e.g. a blocking ask_user's end-phase event)
+                # updates calls shown in an earlier trace row. When the
+                # user's answer was recorded between the start and end
+                # frames, that row is no longer last — merge by call_id
+                # wherever it lives so the block updates instead of
+                # duplicating (mirror of useDurinStream's live merge).
+                incoming_ids = {
+                    e.get("call_id")
+                    for e in (tool_events or [])
+                    if isinstance(e, dict) and isinstance(e.get("call_id"), str) and e.get("call_id")
+                }
+                target_idx = -1
+                if incoming_ids:
+                    for j in range(len(messages) - 1, -1, -1):
+                        m = messages[j]
+                        if m.get("kind") != "trace":
+                            continue
+                        existing = m.get("toolEvents") or []
+                        if any(
+                            isinstance(e, dict) and e.get("call_id") in incoming_ids
+                            for e in existing
+                        ):
+                            target_idx = j
+                            break
                 last = messages[-1] if messages else None
-                if last and last.get("kind") == "trace" and not last.get("isStreaming"):
+                if target_idx != -1:
+                    tgt = messages[target_idx]
+                    prev_traces = list(tgt.get("traces") or [tgt.get("content")])
+                    messages[target_idx] = {
+                        **tgt,
+                        "traces": prev_traces + trace_lines,
+                        "content": trace_lines[-1] if trace_lines else tgt.get("content"),
+                        "toolEvents": merge_tool_events(tgt.get("toolEvents"), tool_events),
+                    }
+                elif last and last.get("kind") == "trace" and not last.get("isStreaming"):
                     prev_traces = list(last.get("traces") or [last.get("content")])
                     merged_traces = prev_traces + trace_lines
                     messages[-1] = {

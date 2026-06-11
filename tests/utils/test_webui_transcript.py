@@ -91,3 +91,29 @@ def test_replay_keeps_eventful_record_without_trace_lines() -> None:
     traces = [m for m in messages if m.get("kind") == "trace"]
     assert len(traces) == 1
     assert traces[0]["toolEvents"][0]["arguments"]["question"] == "Color?"
+
+
+def test_replay_merges_blocking_tool_end_after_user_answer() -> None:
+    """Blocking ask_user: a user answer recorded between the start and end
+    tool_hint frames must not split the question into two rows on replay."""
+    lines = [
+        {"event": "message", "kind": "tool_hint", "text": "ask_user_question(...)",
+         "tool_events": [{"version": 1, "phase": "start", "call_id": "q1",
+                          "name": "ask_user_question",
+                          "arguments": {"question": "¿Color?", "options": ["Rojo"]}}]},
+        {"event": "user", "text": "Rojo"},
+        {"event": "message", "kind": "tool_hint", "text": "",
+         "tool_events": [{"version": 1, "phase": "end", "call_id": "q1",
+                          "name": "ask_user_question", "result": "ok"}]},
+        {"event": "turn_end"},
+    ]
+    messages = replay_transcript_to_ui_messages(lines)
+    traces = [m for m in messages if m.get("kind") == "trace"]
+    assert len(traces) == 1                                  # merged, not duplicated
+    events = traces[0]["toolEvents"]
+    assert len(events) == 1
+    assert events[0]["phase"] == "end"
+    assert events[0]["arguments"]["question"] == "¿Color?"   # start args survive
+    # The answer bubble is still its own message.
+    users = [m for m in messages if m.get("role") == "user"]
+    assert any(m.get("content") == "Rojo" for m in users)

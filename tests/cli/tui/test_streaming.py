@@ -154,3 +154,42 @@ async def test_user_submission_publishes_inbound(tmp_path) -> None:
         await _drain()
 
     assert any(m.content == "hola" and m.chat_id == "direct" for m in received)
+
+
+@pytest.mark.asyncio
+async def test_blocking_ask_user_does_not_duplicate_in_tui(tmp_path) -> None:
+    """E2E render check: a blocking ask_user's end frame must update the
+    SAME bubble created at start — even when the user's answer bubble was
+    mounted in between — so the question never duplicates (the webui's
+    dup bug does not exist here, keyed by call_id)."""
+    from durin.cli.tui.widgets import ToolCallBubble
+
+    bus = MessageBus()
+    app = DurinApp(agent_loop=_fake_agent_loop(bus, tmp_path))
+    async with app.run_test() as pilot:
+        chat = app.query_one(ChatView)
+        # 1. start frame → question bubble
+        await _inject(bus, "ask_user_question(...)", _tool_hint=True, _tool_events=[
+            {"version": 1, "phase": "start", "call_id": "q1",
+             "name": "ask_user_question",
+             "arguments": {"question": "¿Qué color?", "options": ["Rojo", "Verde"]}},
+        ])
+        await pilot.pause()
+        # 2. the user answers — a user bubble lands between start and end
+        chat.add_message("user", "Rojo")
+        await pilot.pause()
+        # 3. end frame for the SAME call_id
+        await _inject(bus, "", _tool_hint=True, _tool_events=[
+            {"version": 1, "phase": "end", "call_id": "q1",
+             "name": "ask_user_question", "result": "ok"},
+        ])
+        await pilot.pause()
+
+        bubbles = list(chat.query(ToolCallBubble))
+        # Exactly one tool bubble for q1 — no duplicate question.
+        assert len(bubbles) == 1
+        from tests.cli.tui.test_tool_call_bubble import _body_plain
+        body = _body_plain(bubbles[0])
+        assert "¿Qué color?" in body
+        # A single ❓ in the rendered question.
+        assert body.count("❓") == 1
