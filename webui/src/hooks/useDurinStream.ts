@@ -446,6 +446,36 @@ export function useDurinStream(
           const hasStructured = Array.isArray(ev.tool_events) && ev.tool_events.length > 0;
           if (lines.length === 0 && !hasStructured) return;
           setMessages((prev) => {
+            // A later frame (e.g. a blocking ask_user's end-phase event)
+            // updates calls already shown in an earlier trace row. If the
+            // user's optimistic answer bubble was inserted between the
+            // start and end frames, the earlier row is no longer last —
+            // merge by call_id wherever it lives so the block updates in
+            // place instead of duplicating.
+            const incomingIds = new Set(
+              (Array.isArray(ev.tool_events) ? ev.tool_events : [])
+                .map((e) => (e && typeof e === "object" ? (e as { call_id?: unknown }).call_id : undefined))
+                .filter((id): id is string => typeof id === "string" && id.length > 0),
+            );
+            if (incomingIds.size > 0) {
+              const idx = prev.findIndex(
+                (m) =>
+                  m.kind === "trace"
+                  && (m.toolEvents ?? []).some(
+                    (e) => typeof e.call_id === "string" && incomingIds.has(e.call_id),
+                  ),
+              );
+              if (idx !== -1) {
+                const target = prev[idx];
+                const merged: UIMessage = {
+                  ...target,
+                  traces: [...(target.traces ?? [target.content]), ...lines],
+                  toolEvents: mergeToolEvents(target.toolEvents, ev.tool_events),
+                  content: lines[lines.length - 1] ?? target.content,
+                };
+                return [...prev.slice(0, idx), merged, ...prev.slice(idx + 1)];
+              }
+            }
             const last = prev[prev.length - 1];
             if (last && last.kind === "trace" && !last.isStreaming) {
               const merged: UIMessage = {

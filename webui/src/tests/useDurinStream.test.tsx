@@ -203,6 +203,57 @@ describe("useDurinStream", () => {
     );
   });
 
+  it("merges a blocking tool's end frame into the existing row after an answer bubble", () => {
+    // Blocking ask_user: the start frame creates the question row, the user's
+    // optimistic answer bubble is inserted, then the end frame arrives. The
+    // end frame must merge into the SAME row (by call_id), not spawn a
+    // duplicate question block after the answer.
+    const fake = fakeClient();
+    const { result } = renderHook(() => useDurinStream("chat-block", EMPTY_MESSAGES), {
+      wrapper: wrap(fake.client),
+    });
+
+    act(() => {
+      fake.emit("chat-block", {
+        event: "message",
+        chat_id: "chat-block",
+        text: "ask_user_question(...)",
+        kind: "tool_hint",
+        tool_events: [
+          {
+            phase: "start",
+            call_id: "q1",
+            name: "ask_user_question",
+            arguments: { question: "¿Qué color?", options: ["Rojo", "Verde"] },
+          },
+        ],
+      });
+    });
+    act(() => {
+      result.current.send("Rojo");
+    });
+    act(() => {
+      fake.emit("chat-block", {
+        event: "message",
+        chat_id: "chat-block",
+        text: "",
+        kind: "tool_hint",
+        tool_events: [
+          { phase: "end", call_id: "q1", name: "ask_user_question", result: "ok" },
+        ],
+      });
+    });
+
+    const traces = result.current.messages.filter((m) => m.kind === "trace");
+    expect(traces).toHaveLength(1);
+    const events = traces[0].toolEvents ?? [];
+    expect(events).toHaveLength(1);
+    expect(events[0].call_id).toBe("q1");
+    expect(events[0].phase).toBe("end");
+    // start args survive the merge so the panel keeps its question.
+    expect((events[0].arguments as { question?: string }).question).toBe("¿Qué color?");
+  });
+
   it("accumulates reasoning_delta chunks on a placeholder until reasoning_end", () => {
     const fake = fakeClient();
     const { result } = renderHook(() => useDurinStream("chat-r", EMPTY_MESSAGES), {
