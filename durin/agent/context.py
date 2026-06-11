@@ -18,7 +18,6 @@ from durin.session.todo_state import todos_runtime_lines
 from durin.utils.helpers import (
     current_time_str,
     detect_image_mime,
-    truncate_text,
 )
 from durin.utils.prompt_templates import render_template
 
