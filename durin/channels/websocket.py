@@ -833,6 +833,10 @@ class WebSocketChannel(BaseChannel):
         if m:
             return await self._handle_skill_judge(request, m.group(1))
 
+        m = re.match(r"^/api/skills/([^/]+)/remove$", got)
+        if m:
+            return self._handle_skill_remove(request, m.group(1))
+
         m = re.match(r"^/api/skills/([^/]+)$", got)
         if m:
             return self._handle_skill_get(request, m.group(1))
@@ -1963,6 +1967,21 @@ class WebSocketChannel(BaseChannel):
             status, payload = ss.web_skill_reject(workspace, decoded)
         except Exception as exc:  # noqa: BLE001
             return _http_error(500, f"reject failed: {exc}")
+        return _http_json_response(payload, status=status)
+
+    def _handle_skill_remove(self, request: WsRequest, name: str) -> Response:
+        """`GET /api/skills/{name}/remove` — delete a workspace skill / revert a fork."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        decoded = _decode_api_key(name)
+        if decoded is None:
+            return _http_error(400, "invalid skill name")
+        from durin.agent import skills_store as ss
+        try:
+            workspace = self._endpoint_workspace()
+            status, payload = ss.web_skill_remove(workspace, decoded)
+        except Exception as exc:  # noqa: BLE001
+            return _http_error(500, f"remove failed: {exc}")
         return _http_json_response(payload, status=status)
 
     def _handle_cron_list(self, request: WsRequest) -> Response:
