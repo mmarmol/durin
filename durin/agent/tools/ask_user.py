@@ -233,6 +233,10 @@ class AskUserQuestionTool(Tool, ContextAware):
         """Block until the user's in-turn answer; None means fall back to yield."""
         from durin.agent import pending_answers
 
+        # No consumer (single-message mode) or non-interactive session
+        # (cron/heartbeat): nobody can ever resolve the wait — yield now.
+        if not pending_answers.can_block(session_key):
+            return None
         await self._publish_dumb_channel_question(session_key)
         fut = pending_answers.create(session_key)
         started = time.monotonic()

@@ -1251,9 +1251,14 @@ class AgentLoop:
 
     async def run(self) -> None:
         """Run the agent loop, dispatching messages as tasks to stay responsive to /stop."""
+        from durin.agent import pending_answers
+
         self._running = True
         await self._connect_mcp()
         self._schedule_background(self._warmup_memory_embedding())
+        # Blocking ask_user may only wait while this consumer is alive to
+        # resolve answers (pending_answers.can_block).
+        pending_answers.set_consumer_active(True)
         logger.info("Agent loop started")
 
         while self._running:
@@ -1511,7 +1516,13 @@ class AgentLoop:
 
     def stop(self) -> None:
         """Stop the agent loop."""
+        from durin.agent import pending_answers
+
         self._running = False
+        # The inbound consumer is going away — release any blocked ask_user
+        # waiters to yield semantics instead of letting them ride the timeout.
+        pending_answers.set_consumer_active(False)
+        pending_answers.reset()
         # A11: drain memory background services so the watchdog
         # Observer and health-check thread terminate cleanly.
         self._stop_memory_background_services()

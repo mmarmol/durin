@@ -154,8 +154,12 @@ def test_tool_discovered_by_loader():
 
 
 def _blocking_tool(sm: SessionManager, *, timeout_s: float = 5.0) -> AskUserQuestionTool:
+    from durin.agent import pending_answers as _pa
+
     t = AskUserQuestionTool(sessions=sm, blocking=True, answer_timeout_s=timeout_s)
     t.set_context(RequestContext(channel="cli", chat_id="d", session_key="cli:d", metadata={}))
+    # Blocking only engages while the loop consumer is alive (can_block).
+    _pa.set_consumer_active(True)
     return t
 
 
@@ -238,3 +242,36 @@ async def test_non_blocking_flag_keeps_v1(tmp_path):
     out = await tool.execute(question="Old style?")
     assert "presented to the user" in out
     assert "STOP" in out
+
+
+@pytest.mark.asyncio
+async def test_blocking_skipped_without_live_consumer(tmp_path):
+    """No loop consumer (single-message mode) → nobody can resolve the
+    wait — the tool must yield immediately instead of riding the timeout."""
+    from durin.agent import pending_answers as pa
+
+    pa.reset()  # consumer flag off
+    sm = SessionManager(tmp_path)
+    tool = AskUserQuestionTool(sessions=sm, blocking=True, answer_timeout_s=60)
+    tool.set_context(RequestContext(channel="cli", chat_id="d", session_key="cli:d", metadata={}))
+    out = await tool.execute(question="Anyone?")
+    assert "presented to the user" in out
+    assert "STOP" in out
+
+
+@pytest.mark.asyncio
+async def test_blocking_skipped_for_non_interactive_sessions(tmp_path):
+    """cron/heartbeat sessions never get interactive replies — yield now."""
+    from durin.agent import pending_answers as pa
+
+    pa.reset()
+    pa.set_consumer_active(True)
+    sm = SessionManager(tmp_path)
+    tool = AskUserQuestionTool(sessions=sm, blocking=True, answer_timeout_s=60)
+    tool.set_context(RequestContext(
+        channel="cli", chat_id="d", session_key="cron:job42", metadata={},
+    ))
+    out = await tool.execute(question="Anyone?")
+    assert "presented to the user" in out
+    assert "STOP" in out
+    pa.reset()

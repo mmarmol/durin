@@ -26,6 +26,27 @@ FALLBACK = _Fallback()
 
 _WAITERS: dict[str, asyncio.Future] = {}
 
+# True while AgentLoop.run()'s inbound consumer is active — the only thing
+# that can ever resolve a waiter. Without it (single-message mode, tests),
+# blocking would stall for the full timeout with nobody listening.
+_CONSUMER_ACTIVE = False
+
+# Sessions that never receive interactive replies: blocking there would
+# always end in a useless timeout.
+NON_INTERACTIVE_SESSION_PREFIXES = ("cron:", "heartbeat:", "system:")
+
+
+def set_consumer_active(active: bool) -> None:
+    global _CONSUMER_ACTIVE
+    _CONSUMER_ACTIVE = active
+
+
+def can_block(session_key: str | None) -> bool:
+    """True when an in-turn wait on *session_key* could ever be answered."""
+    if not _CONSUMER_ACTIVE or not session_key:
+        return False
+    return not session_key.startswith(NON_INTERACTIVE_SESSION_PREFIXES)
+
 
 def create(session_key: str) -> asyncio.Future:
     """Register a fresh waiter for *session_key*, replacing any stale one.
@@ -83,8 +104,10 @@ def discard(session_key: str, fut: asyncio.Future) -> None:
 
 
 def reset() -> None:
-    """Clear all waiters (tests)."""
+    """Clear all waiters and the consumer flag (tests)."""
+    global _CONSUMER_ACTIVE
     for fut in _WAITERS.values():
         if not fut.done():
             fut.cancel()
     _WAITERS.clear()
+    _CONSUMER_ACTIVE = False
