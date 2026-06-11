@@ -1,34 +1,29 @@
 """``ask_user_question`` tool — explicit clarification mid-turn.
 
 Lets the model pause its work to ask the user a specific question before
-proceeding. The pause is implemented as a yield: the tool result tells
-the model to present the question as its next assistant message and
-stop calling tools. The user's reply arrives as the next inbound message
-and naturally continues the conversation with the question in context.
+proceeding. Two pause semantics (docs/architecture/ux.md):
+
+- **Blocking V2 (default)**: the tool awaits the user's next plain-text
+  message inside the SAME turn (``durin/agent/pending_answers.py``); the
+  answer returns as the tool result and the model continues without a
+  turn boundary. The channel renders the question while the tool blocks
+  (webui panel / TUI bubble from the start tool_event; serialized message
+  for dumb channels, published here pre-block).
+- **Yield V1 (degradation path)**: on answer timeout, media replies, no
+  live loop consumer, non-interactive sessions (cron/heartbeat), or
+  ``ask_user_blocking=false`` — the turn ends and the user's next message
+  is the answer, with ``pending_question`` metadata keeping channel
+  rendering and the turn-end fallback serializer working.
 
 Why this isn't just "have the model type the question"
 
-- **Explicit yield semantics**: the tool result is an unambiguous "stop
-  here and wait" signal. Without the tool the model may keep guessing
-  parameters or call more tools instead of pausing.
-- **Telemetry**: we record where in a session the agent had to clarify,
-  which is useful signal for prompt-quality work.
-- **UI affordance hook**: ``options`` and a ``pending_question`` marker
-  in session metadata let future channels render a structured prompt
-  (clickable list, modal, etc.) instead of free-form text.
-
-Design notes (V1)
-
-- We do NOT publish a separate outbound message with the question. That
-  would duplicate visibility (the model's own assistant message also
-  states the question). Channels that want structured rendering read
-  ``session.metadata['pending_question']`` instead, set just before the
-  tool returns.
-- We do NOT block on the user's reply inside the tool. That would
-  require bus interception and a synchronous Future; the V1 ergonomics
-  (turn ends, next turn includes context) are good enough and ship now.
-  A future V2 can upgrade to a real in-turn pause without changing the
-  tool's public schema.
+- **Channel-rendered payload**: the question is presented by the channel
+  from the structured tool arguments — the model never re-presents it in
+  prose (weak-signal pattern; see the 2026-06 tool-rendering work).
+- **Explicit stop semantics**: the tool result is an unambiguous "answer
+  arrived, continue" or "stop here and wait" signal.
+- **Telemetry**: question_asked / answer_received / answer_timeout events
+  measure clarification behavior and in-turn answer latency.
 - The tool is allowed in every mode (plan, explore, build) — it never
   touches the workspace, only session metadata.
 """

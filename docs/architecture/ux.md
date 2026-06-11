@@ -66,6 +66,20 @@ Interactive and presentational tools (`ask_user_question`, `request_secret`,
   `pending_plan_review` (`cmd_build`). Pending question + agent mode also ride
   the `goal_state` WS frame so the webui composer can show an
   awaiting-answer strip and a plan-mode badge.
+- **Blocking ask_user (V2):** by default (`agents.defaults.ask_user_blocking`),
+  `ask_user_question` does not yield — it awaits the user's next plain-text
+  message *inside the same turn* via the `durin/agent/pending_answers.py`
+  registry; the loop's inbound consumer resolves the waiter and the answer
+  returns as the tool result, so the model continues without a turn boundary.
+  Degradation to V1 yield semantics is automatic on: answer timeout
+  (`ask_user_answer_timeout_s`), media-bearing replies (routed as a normal
+  message), no live loop consumer (single-message mode), and non-interactive
+  sessions (`cron:`/`heartbeat:`/`system:`). Slash commands are never consumed
+  as answers; `/stop` cancels the blocked turn (priority dispatch precedes the
+  interception). Channel note: `ChannelManager` always forwards tool_hint
+  frames to payload-rendering channels (`send_tool_hints` only gates chat-text
+  hints) so the question panel renders *while* the tool blocks; the plain
+  interactive CLI prints interactive payloads from the same frames.
 - **Replay parity:** the webui transcript persists merged `tool_events`
   (schema v4, `durin/utils/webui_transcript.py:merge_tool_events`), so hoisted
   blocks survive reload; blocks render in answered/read-only state once a
