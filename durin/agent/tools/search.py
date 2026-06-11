@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import fnmatch
 import os
 import re
+import shutil
 from contextlib import suppress
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, TypeVar
@@ -227,6 +229,62 @@ class GrepTool(_SearchTool):
             block.append(f"{marker} {line_no}| {lines[line_no - 1]}")
         return "\n".join(block)
 
+    _RG_TIMEOUT_SECONDS = 30
+
+    async def _rg_candidates(
+        self,
+        target: Path,
+        pattern: str,
+        *,
+        fixed_strings: bool,
+        case_insensitive: bool,
+    ) -> list[Path] | None:
+        """Pre-filter candidate files with ripgrep when it is installed.
+
+        Returns None when rg is unavailable or fails (unsupported pattern,
+        timeout, unexpected error) — the caller then falls back to the full
+        Python walk. Returns [] when rg ran fine and found nothing.
+        Parity with the Python path: --no-ignore --hidden (gitignored agent
+        dirs like .durin/ must stay searchable), same ignore dirs, same max
+        file size. rg only narrows the file list; matching/formatting still
+        happens in Python so results are identical either way.
+        """
+        rg = shutil.which("rg")
+        if rg is None or not target.is_dir():
+            return None
+        cmd = [
+            rg, "--files-with-matches", "--no-ignore", "--hidden",
+            "--max-filesize", str(self._MAX_FILE_BYTES),
+        ]
+        if fixed_strings:
+            cmd.append("--fixed-strings")
+        if case_insensitive:
+            cmd.append("--ignore-case")
+        for d in sorted(self._IGNORE_DIRS):
+            cmd.extend(["--glob", f"!**/{d}/**"])
+        cmd.extend(["--regexp", pattern, str(target)])
+        proc = None
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await asyncio.wait_for(
+                proc.communicate(), timeout=self._RG_TIMEOUT_SECONDS,
+            )
+        except (OSError, asyncio.TimeoutError):
+            if proc is not None:
+                with suppress(ProcessLookupError):
+                    proc.kill()
+            return None
+        if proc.returncode == 0:
+            lines = stdout.decode("utf-8", errors="replace").splitlines()
+            return sorted(Path(line) for line in lines if line)
+        if proc.returncode == 1:
+            return []  # clean run, zero matches
+        return None  # exit 2: pattern/IO error → Python fallback
+
     async def execute(
         self,
         pattern: str,
@@ -278,7 +336,14 @@ class GrepTool(_SearchTool):
             file_mtimes: dict[str, float] = {}
             root = target if target.is_dir() else target.parent
 
-            for file_path in self._iter_files(target):
+            candidates = await self._rg_candidates(
+                target,
+                pattern,
+                fixed_strings=fixed_strings,
+                case_insensitive=case_insensitive,
+            )
+            file_iter = candidates if candidates is not None else self._iter_files(target)
+            for file_path in file_iter:
                 rel_path = file_path.relative_to(root).as_posix()
                 if glob and not _match_glob(rel_path, file_path.name, glob):
                     continue
@@ -408,6 +473,7 @@ class GrepTool(_SearchTool):
             if notes:
                 result += "\n\n" + "\n".join(notes)
             self._emit("tool.grep", {
+                "engine": "rg" if candidates is not None else "python",
                 "pattern_len": len(pattern),
                 "fixed_strings": fixed_strings,
                 "case_insensitive": case_insensitive,

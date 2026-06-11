@@ -17,7 +17,9 @@ from durin.agent.tools.schema import (
     StringSchema,
     tool_parameters_schema,
 )
+from durin.agent.tools.post_edit_check import run_post_edit_check
 from durin.telemetry.logger import current_telemetry
+from durin.utils.atomic_write import atomic_write_bytes, atomic_write_text
 from durin.utils.helpers import build_image_content_blocks, detect_image_mime
 
 
@@ -30,10 +32,13 @@ class _FsTool(Tool):
         allowed_dir: Path | None = None,
         extra_allowed_dirs: list[Path] | None = None,
         file_states: FileStates | None = None,
+        post_edit_config: Any = None,
     ):
         self._workspace = workspace
         self._allowed_dir = allowed_dir
         self._extra_allowed_dirs = extra_allowed_dirs
+        # PostEditCheckConfig | None — only Write/Edit consume it.
+        self._post_edit_config = post_edit_config
         # Explicit state is used by isolated runners like Dream/subagents.
         # Main AgentLoop tools leave this unset and resolve state from the
         # current async task, which keeps shared tool instances session-safe.
@@ -55,6 +60,7 @@ class _FsTool(Tool):
             allowed_dir=allowed_dir,
             extra_allowed_dirs=extra_read,
             file_states=ctx.file_state_store,
+            post_edit_config=getattr(ctx.config, "post_edit_check", None),
         )
 
     @property
@@ -441,10 +447,13 @@ class WriteFileTool(_FsTool):
             if content is None:
                 raise ValueError("Unknown content")
             fp = self._resolve(path)
-            fp.parent.mkdir(parents=True, exist_ok=True)
-            fp.write_text(content, encoding="utf-8")
+            atomic_write_text(fp, content)
             self._file_states.record_write(fp)
-            return f"Successfully wrote {len(content)} characters to {fp}"
+            msg = f"Successfully wrote {len(content)} characters to {fp}"
+            check = await run_post_edit_check(fp, self._post_edit_config)
+            if check:
+                msg += check
+            return msg
         except PermissionError as e:
             return f"Error: {e}"
         except Exception as e:
@@ -652,9 +661,10 @@ def _find_block_anchor_matches(content: str, old_text: str) -> list[_MatchSpan]:
     when ``old_text`` has 3+ lines — needs anchors top and bottom plus at
     least one middle line. Useful when the model knows the start and end of
     a block but the interior has changed slightly (reformatted, comment added,
-    whitespace shifted). When a single candidate exists we use a relaxed
-    similarity threshold; with multiple candidates we require stricter match
-    to avoid ambiguous rewrites.
+    whitespace shifted). Middle similarity is best-match containment of the
+    old lines in the candidate block (insertion-tolerant, truncation-
+    rejecting); thresholds are 0.66 for a single candidate and 0.85 when
+    several blocks share anchors.
     """
     old_lines = old_text.splitlines()
     if old_lines and old_lines[-1] == "":
@@ -692,26 +702,33 @@ def _find_block_anchor_matches(content: str, old_text: str) -> list[_MatchSpan]:
     if not candidates:
         return []
 
-    # Single candidate: relaxed (0.5). Multiple: strict (0.85). Avoids
-    # ambiguous rewrites when the file has many similar-looking blocks.
-    threshold = 0.5 if len(candidates) == 1 else 0.85
+    # Similarity = containment of old middle lines in the candidate middle:
+    # each old line scored against its BEST match among the candidate's
+    # middle lines (not index-aligned, so inserted lines — the strategy's
+    # whole purpose — don't misalign the comparison), averaged over ALL old
+    # lines (so a truncated candidate can't score on a lucky prefix the way
+    # check_len=min() allowed). Calibration on the suite's cases: insertions
+    # 1.0, rephrased comment 0.83, truncated middle 0.61, unrelated middle
+    # 0.44, rewritten body 0.34. Single candidate: 0.66. Multiple: 0.85.
+    threshold = 0.66 if len(candidates) == 1 else 0.85
     middle_old = [line.strip() for line in old_lines[1:-1]]
 
     matches: list[_MatchSpan] = []
     for start_line, end_line in candidates:
         middle_actual = [content_lines[k].strip() for k in range(start_line + 1, end_line)]
         if middle_old:
-            check_len = min(len(middle_old), len(middle_actual))
-            if check_len == 0:
+            if not middle_actual:
                 continue
             sim_sum = 0.0
-            for k in range(check_len):
-                a, b = middle_old[k], middle_actual[k]
-                if not a and not b:
+            for a in middle_old:
+                if not a:
                     sim_sum += 1.0
                     continue
-                sim_sum += difflib.SequenceMatcher(None, a, b).ratio()
-            similarity = sim_sum / check_len
+                sim_sum += max(
+                    difflib.SequenceMatcher(None, a, b).ratio()
+                    for b in middle_actual
+                )
+            similarity = sim_sum / len(middle_old)
         else:
             similarity = 1.0
 
@@ -880,8 +897,7 @@ class EditFileTool(_FsTool):
             # Create-file semantics: old_text='' + file doesn't exist → create
             if not fp.exists():
                 if old_text == "":
-                    fp.parent.mkdir(parents=True, exist_ok=True)
-                    fp.write_text(new_text, encoding="utf-8")
+                    atomic_write_text(fp, new_text)
                     self._file_states.record_write(fp)
                     return f"Successfully created {fp}"
                 return self._file_not_found_msg(path, fp)
@@ -900,7 +916,7 @@ class EditFileTool(_FsTool):
                 content = raw.decode("utf-8")
                 if content.strip():
                     return f"Error: Cannot create file — {path} already exists and is not empty."
-                fp.write_text(new_text, encoding="utf-8")
+                atomic_write_text(fp, new_text)
                 self._file_states.record_write(fp)
                 return f"Successfully edited {fp}"
 
@@ -965,7 +981,7 @@ class EditFileTool(_FsTool):
             if uses_crlf:
                 new_content = new_content.replace("\n", "\r\n")
 
-            fp.write_bytes(new_content.encode("utf-8"))
+            atomic_write_bytes(fp, new_content.encode("utf-8"))
             self._file_states.record_write(fp)
             self._emit("tool.edit_file", {
                 "path": self._display_path(fp),
@@ -978,6 +994,14 @@ class EditFileTool(_FsTool):
                 "new_text_chars": len(new_text),
             })
             msg = f"Successfully edited {fp}"
+            if strategy and strategy != "exact":
+                msg += (
+                    f"\n(note: old_text matched via the '{strategy}' fallback, "
+                    "not exactly — re-read the file if the result looks unexpected)"
+                )
+            check = await run_post_edit_check(fp, self._post_edit_config)
+            if check:
+                msg += check
             if warning:
                 msg = f"{warning}\n{msg}"
             return msg
@@ -1027,6 +1051,11 @@ class EditFileTool(_FsTool):
             description="Maximum entries to return (default 200)",
             minimum=1,
         ),
+        offset=IntegerSchema(
+            0,
+            description="Skip the first N entries (pagination; default 0)",
+            minimum=0,
+        ),
         required=["path"],
     )
 )
@@ -1049,7 +1078,8 @@ class ListDirTool(_FsTool):
     def description(self) -> str:
         return (
             "List the contents of a directory. "
-            "Set recursive=true to explore nested structure. "
+            "Set recursive=true to explore nested structure; use offset to "
+            "page past max_entries. "
             "Common noise directories (.git, node_modules, __pycache__, etc.) are auto-ignored."
         )
 
@@ -1059,7 +1089,7 @@ class ListDirTool(_FsTool):
 
     async def execute(
         self, path: str | None = None, recursive: bool = False,
-        max_entries: int | None = None, **kwargs: Any,
+        max_entries: int | None = None, offset: int = 0, **kwargs: Any,
     ) -> str:
         try:
             if path is None:
@@ -1079,6 +1109,8 @@ class ListDirTool(_FsTool):
                     if any(p in self._IGNORE_DIRS for p in item.parts):
                         continue
                     total += 1
+                    if total <= offset:
+                        continue
                     if len(items) < cap:
                         rel = item.relative_to(dp)
                         items.append(f"{rel}/" if item.is_dir() else str(rel))
@@ -1087,6 +1119,8 @@ class ListDirTool(_FsTool):
                     if item.name in self._IGNORE_DIRS:
                         continue
                     total += 1
+                    if total <= offset:
+                        continue
                     if len(items) < cap:
                         pfx = "📁 " if item.is_dir() else "📄 "
                         items.append(f"{pfx}{item.name}")
@@ -1096,20 +1130,31 @@ class ListDirTool(_FsTool):
                     "path": self._display_path(dp),
                     "recursive": recursive,
                     "max_entries": cap,
+                    "offset": offset,
                     "displayed": 0,
                     "total_before_cap": 0,
                     "truncated": False,
                 })
                 return f"Directory {path} is empty"
 
+            if not items and total > 0:
+                return (
+                    f"(offset {offset} is beyond the end; "
+                    f"directory has {total} entries)"
+                )
+
             result = "\n".join(items)
-            truncated = total > cap
+            truncated = total > offset + cap
             if truncated:
-                result += f"\n\n(truncated, showing first {cap} of {total} entries)"
+                result += (
+                    f"\n\n(showing entries {offset + 1}-{offset + len(items)} "
+                    f"of {total}; use offset={offset + cap} to continue)"
+                )
             self._emit("tool.list_dir", {
                 "path": self._display_path(dp),
                 "recursive": recursive,
                 "max_entries": cap,
+                "offset": offset,
                 "displayed": len(items),
                 "total_before_cap": total,
                 "truncated": truncated,
