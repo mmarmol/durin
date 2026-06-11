@@ -241,6 +241,15 @@ class ProcessRegistry:
                 await asyncio.sleep(0.1)
             if not sess.exited:
                 self._signal_group(sess, signal.SIGKILL)
+        # Wait for the reader task to finish reaping (its finally does
+        # ``await process.wait()``). This closes the subprocess transport
+        # inside the running loop — otherwise its ``__del__`` runs after the
+        # loop is gone and raises "Event loop is closed"
+        # (PytestUnraisableExceptionWarning, and a noisy log in production).
+        reader = sess._reader_task
+        if reader is not None and not reader.done():
+            with suppress(Exception):
+                await asyncio.wait({reader}, timeout=5.0)
         emit_tool_event("process.kill", {
             "proc_id": sess.id,
             "pid": sess.pid,
