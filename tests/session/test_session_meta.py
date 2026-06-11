@@ -28,7 +28,6 @@ from durin.session.session_meta import (
     update_event,
 )
 
-
 # ---------------------------------------------------------------------------
 # Path resolution
 # ---------------------------------------------------------------------------
@@ -264,7 +263,6 @@ class TestPlanToolIntegration:
 
     def test_exit_plan_mode_writes_meta_event(self, tmp_path: Path):
         from durin.agent.agent_mode import (
-            PLAN_MODE,
             SESSION_MODE_KEY,
             SESSION_PRE_PLAN_KEY,
         )
@@ -286,7 +284,10 @@ class TestPlanToolIntegration:
         )
         tool.set_context(RequestContext(channel="cli", chat_id="c", session_key=session_key))
 
-        plan_text = "# Refactor authentication module\n\n1. Read code\n2. Apply OAuth"
+        plan_text = (
+            "# Refactor authentication module\n\n1. Read code\n2. Apply OAuth"
+            "\n\n## Verification\n- verify: noop"
+        )
         asyncio.run(tool.execute(plan=plan_text))
 
         # Meta file exists with a pending plan event
