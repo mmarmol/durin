@@ -1925,6 +1925,10 @@ class AgentLoop:
         # Stall stop-condition: clear runs first so a finished plan drops
         # its pointer and update_plan_stall then clears the stall keys.
         update_plan_stall(ctx.session.metadata, plan_stall_threshold(self.app_config))
+        # Turn budget on sustained goals: bump turns_used so the budget
+        # mirrored in Runtime Context stays current (no-op without budget).
+        from durin.session.goal_state import increment_goal_turns
+        increment_goal_turns(ctx.session.metadata)
 
         # E2 Part A: durable skill-usage signal. Scan only THIS turn's new
         # messages (the same slice _save_turn persists) so calls aren't
