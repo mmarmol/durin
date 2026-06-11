@@ -1625,7 +1625,23 @@ async def cmd_skills(ctx: CommandContext) -> OutboundMessage:
         suffix = f" ({sha})" if sha else ""
         return _reply(f"Skill `{name}` mode → **{want}**{suffix}.")
 
-    return _reply(f"Unknown `/skills` subcommand `{sub}`. Try `list` or `mode`.")
+    if sub == "remove":
+        name = rest.strip().split()[0] if rest.strip() else ""
+        if not name:
+            return _reply("Usage: `/skills remove <name>`")
+        action = ss.removable_action(workspace, name)
+        if action is None:
+            if ss.read_skill_content(workspace, name) is None:
+                return _reply(f"Skill `{name}` not found.")
+            return _reply(f"Builtin skill `{name}` cannot be removed.")
+        res = ss.remove_skill(workspace, name)
+        if "error" in res:
+            return _reply(res["error"])
+        done = "reverted to builtin" if res["action"] == "revert" else "removed"
+        suffix = f" ({res['commit']})" if res.get("commit") else ""
+        return _reply(f"Skill `{name}` {done}{suffix}.")
+
+    return _reply(f"Unknown `/skills` subcommand `{sub}`. Try `list`, `mode`, or `remove`.")
 
 
 async def cmd_remember(ctx: CommandContext) -> OutboundMessage:

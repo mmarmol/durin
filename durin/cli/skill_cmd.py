@@ -211,3 +211,39 @@ def cmd_quarantine() -> None:
             detail,
         )
     console.print(table)
+
+
+@skill_app.command("remove")
+def cmd_remove(
+    name: str = typer.Argument(..., help="Skill name to remove (workspace skills/<name>)."),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
+) -> None:
+    """Remove a workspace skill, or revert a forked builtin to the shipped version.
+
+    Pure builtins cannot be removed. The deletion is committed to the skills git
+    store, so it is recoverable.
+    """
+    from durin.agent import skills_store as ss
+
+    ws = _workspace_root()
+    action = ss.removable_action(ws, name)
+    if action is None:
+        # distinguish a pure builtin from a missing skill for a clear message
+        if ss.read_skill_content(ws, name) is None:
+            console.print(f"[red]Skill not found:[/red] {name}")
+        else:
+            console.print(f"[yellow]Builtin skills cannot be removed:[/yellow] {name}")
+        raise typer.Exit(code=1)
+
+    verb = "Revert to builtin" if action == "revert" else "Remove"
+    if not yes and not typer.confirm(f"{verb} '{name}'?"):
+        console.print("[dim]Aborted.[/dim]")
+        raise typer.Exit(code=1)
+
+    res = ss.remove_skill(ws, name)
+    if "error" in res:
+        console.print(f"[red]{res['error']}[/red]")
+        raise typer.Exit(code=1)
+    done = "reverted to builtin" if res["action"] == "revert" else "removed"
+    sha = f" ({res['commit']})" if res.get("commit") else ""
+    console.print(f"[green]Skill '{name}' {done}.[/green]{sha}")
