@@ -124,18 +124,17 @@ def test_default_is_false_when_currently_disabled(
 def test_cross_encoder_question_anchors() -> None:
     text = CROSS_ENCODER_QUESTION_TEXT
     assert "cross-encoder" in text.lower()
-    # H30 (2026-05-30): updated latency + RAM figures for the new
-    # default model (BAAI/bge-reranker-base, ~100M params vs the
-    # prior jina-v2 278M).
+    # Cost figures the user weighs the toggle against.
     assert "300-800ms" in text
     assert "~600MB" in text
-    assert "BAAI/bge-reranker-base" in text
-    # Recommended ON for the personal-agent shape: the copy must signal
-    # the recommendation and the prompt must default to Yes — Y (capital)
-    # signals the default. The config-level default stays OFF (CI-safe);
-    # the recommendation lives in onboarding.
-    assert "Recommended" in text
-    assert "[Y/n]" in text
+    # 2026-06-11: copy is now neutral (was a Yes-recommendation). The
+    # LoCoMo A/B found no aggregate gain, so onboarding presents it as
+    # an opt-in — N (capital) signals the default. Engineering rationale
+    # and the model name are deliberately omitted (kept minimal).
+    assert "Optional" in text
+    assert "Off by default" in text
+    assert "[y/N]" in text
+    assert "Recommended" not in text
 
 
 def test_cross_encoder_yes(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -146,15 +145,16 @@ def test_cross_encoder_yes(monkeypatch: pytest.MonkeyPatch) -> None:
     assert prompt_enable_cross_encoder(current=False) is True
 
 
-def test_cross_encoder_default_preserved(
+def test_cross_encoder_preselected_off(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Fresh prompt pre-selects No (recommended=False, 2026-06-11)."""
     fake = _FakeQuestionary(answer=False)
     monkeypatch.setattr(
         "durin.cli.onboard_memory._get_questionary", lambda: fake,
     )
-    prompt_enable_cross_encoder(current=True)
-    assert fake._default is True
+    prompt_enable_cross_encoder(current=False)
+    assert fake._default is False
 
 
 def test_none_answer_returns_current_value(

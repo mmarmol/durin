@@ -478,26 +478,23 @@ than failing.
 ### 6.2 Cross-encoder reranker (opt-in)
 
 ```
-Recommended: durin can use a cross-encoder reranker to improve search
-quality. This adds 300-800ms latency per query and requires ~600MB
-additional RAM. The default model is `BAAI/bge-reranker-base` (MIT,
-multilingual, ~100M params).
+Optional: a cross-encoder reranker can improve search quality, at a
+cost of ~300-800ms per query and ~600MB RAM. Off by default.
 
-For a personal agent this is worth enabling: the rerank's latency is
-dwarfed by the LLM call that follows every search, while the ranking
-gain is direct. Decline if you run on edge / RAM-constrained hardware.
-You can change this anytime via the web dashboard.
-
-Enable advanced reranker now? [Y/n]:
+Enable cross-encoder reranker? [y/N]:
 ```
 
-Default presented at onboarding: **Yes (recommended)**. Note this is the
-*onboarding* recommendation, not the config-level default: `MemorySearchConfig.cross_encoder.enabled` stays `False` so CI / test / headless
-environments that build a default config never trigger the one-time
-model download implicitly. The recommendation-ON lives in the wizard
-prompt (`prompt_enable_cross_encoder(recommended=True)`), which writes
-`true` into the operator's own config. Wording matches the trade-off
-discussion in `03_search_pipeline.md` §9.5.
+Default presented at onboarding: **No** (`prompt_enable_cross_encoder(recommended=False)`), matching the config-level default
+(`MemorySearchConfig.cross_encoder.enabled = False`). The 2026-06-11
+LoCoMo A/B (CE replace-mode 0.79 / off 0.78 / enriched+blend 0.77 — a
+statistical tie within replay variance) showed the reranker does not
+move aggregate answer quality on dialogue-style stores, so onboarding
+no longer recommends it and presents it as a deliberate opt-in. The
+copy stays minimal — what it does + what it costs — and omits the
+engineering rationale (which lives in `03_search_pipeline.md` §9). When
+enabled, the reranker runs the enriched-input + z-score blend
+(`03_search_pipeline.md` §9.2-9.3), strictly better than the old
+replace mode.
 
 ### 6.3 Auto-absorb (entity dedup post-Dream, opt-in)
 
@@ -694,7 +691,7 @@ If `read_hot_layer(workspace)` fails (disk error, parser error, missing files), 
 | 4 | Extract output is a JSON attribute object, not JSON Patch | `build_extract_prompt` asks for `attribute_key → scalar/list`; applied as `FieldPatch`es via `memory_writer`. No JSON-Patch ops, no few-shot package — the RFC 6902 envelope and its examples are gone. | §4.1 |
 | 5 | Extract key-reuse framing | `EXISTING ATTRIBUTE KEYS` block drives per-entity schema-drift control (reuse a key when the meaning matches). Per-entity scope; cross-entity dedup is the refine pass. | §4.1 |
 | 6 | No commit-message section in any dream prompt | Commit messages are assembled inline by `memory_writer` / `absorption`; provenance is per-`FieldPatch` (`source_ref`). The old `===COMMIT===` / `Cursor-after` trailer contract is gone (audit B1). | §4.1 |
-| 7 | Onboarding default for cross-encoder | OFF (matches §9.5 of doc 03). Wording communicates trade-off. | §6.2 |
+| 7 | Onboarding default for cross-encoder | OFF — onboarding now matches the config default (was a Yes-recommendation pre-2026-06-11; reverted after the LoCoMo A/B showed no aggregate gain). Minimal copy: what it does + cost. | §6.2 |
 | 8 | Structural markers carry only metadata | No valuative language. Class + URI + timestamp only. | §7.2 |
 
 ### Open
