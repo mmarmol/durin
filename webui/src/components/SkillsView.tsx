@@ -25,6 +25,7 @@ import {
   listQuarantine,
   listSkills,
   rejectSkill,
+  removeSkill,
   saveSkill,
   searchSkills,
   setSkillMode,
@@ -213,6 +214,7 @@ export function SkillsView() {
   const [descCache, setDescCache] = useState<Record<string, string | null>>({}); // null = loading
   const [importByRefOpen, setImportByRefOpen] = useState(false);
   const [acting, setActing] = useState<string | null>(null);
+  const [removeConfirm, setRemoveConfirm] = useState(false);
   const [gate, setGate] = useState<{
     name: string;
     confirm: boolean;
@@ -244,6 +246,10 @@ export function SkillsView() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    setRemoveConfirm(false);
+  }, [pane]);
 
   const doImport = useCallback(
     async (source: string) => {
@@ -391,6 +397,26 @@ export function SkillsView() {
     },
     [token, refresh],
   );
+
+  // Remove a workspace skill (or revert a forked builtin). The button is only
+  // shown when the server marked the row `removable`, so 400/404 are defensive.
+  const doRemove = useCallback(async () => {
+    if (pane.kind !== "skill") return;
+    const name = pane.name;
+    setBusy(true);
+    setError(null);
+    try {
+      await removeSkill(token, name);
+      setRemoveConfirm(false);
+      setDetail(null);
+      setPane({ kind: "empty" });
+      await refresh();
+    } catch (e) {
+      setError(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [pane, token, refresh]);
 
   // On-demand "Audit with LLM": stream the judge over the websocket. Reasoning
   // arrives live on ``audit:<name>`` (latest line shown while it runs); the
@@ -1141,6 +1167,44 @@ export function SkillsView() {
                         ? t("skills.makeManual")
                         : t("skills.makeAuto")}
                     </Button>
+                    {skillRow?.removable ? (
+                      removeConfirm ? (
+                        <div className="inline-flex items-center gap-2">
+                          <span className="text-[12px] text-muted-foreground">
+                            {skillRow.removable === "revert"
+                              ? t("skills.revertConfirm")
+                              : t("skills.removeConfirm")}
+                          </span>
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            disabled={busy}
+                            onClick={() => void doRemove()}
+                          >
+                            {t("skills.confirmRemove")}
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={busy}
+                            onClick={() => setRemoveConfirm(false)}
+                          >
+                            {t("skills.cancel")}
+                          </Button>
+                        </div>
+                      ) : (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={busy}
+                          onClick={() => setRemoveConfirm(true)}
+                        >
+                          {skillRow.removable === "revert"
+                            ? t("skills.revert")
+                            : t("skills.remove")}
+                        </Button>
+                      )
+                    ) : null}
                   </div>
                 </div>
 

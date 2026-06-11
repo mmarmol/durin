@@ -278,6 +278,54 @@ def set_mode(workspace: Path, name: str, mode: str) -> str | None:
     return sha
 
 
+def removable_action(workspace: Path, name: str,
+                     loader: SkillsLoader | None = None) -> str | None:
+    """Classify whether/how a skill can be removed.
+
+    - "remove": a pure workspace skill (imported / dream / fused) — deleting it
+      makes it disappear.
+    - "revert": a workspace copy that shadows a builtin of the same name (a fork)
+      — deleting the copy restores the shipped builtin.
+    - None: a pure builtin (no workspace copy) or an unknown name — nothing to
+      remove; the package dir must never be touched.
+    """
+    if not _safe_name(name):
+        return None
+    if not _skill_md(workspace, name).exists():
+        return None
+    loader = loader or _loader(workspace)
+    builtin_md = (loader.builtin_skills or BUILTIN_SKILLS_DIR) / name / "SKILL.md"
+    return "revert" if builtin_md.exists() else "remove"
+
+
+def remove_skill(workspace: Path, name: str) -> dict:
+    """Delete a workspace skill — the mirror of :func:`install_imported_skill`.
+
+    Removes the workspace ``skills/<name>/`` dir, commits the deletion to the
+    skills git store (so it is recoverable), evicts the skill from the memory
+    index, and appends an audit entry. Builtins (package) are never touched: a
+    forked builtin reverts to the shipped version, a pure builtin is refused.
+    """
+    if not _safe_name(name):
+        return {"error": "invalid skill name"}
+    loader = _loader(workspace)
+    action = removable_action(workspace, name, loader)
+    if action is None:
+        if loader.load_skill(name) is None:
+            return {"error": f"skill not found: {name}"}
+        return {"error": f"builtin skills cannot be removed: {name}"}
+    store = _store_init(workspace)
+    dest = _skills_dir(workspace) / name
+    shutil.rmtree(dest)
+    label = "revert to builtin" if action == "revert" else "remove"
+    sha = store.auto_commit(f"skill({name}): {label}")
+    _unsync_index(workspace, name)
+    # Local import avoids a circular import (skills_import imports skills_store).
+    from durin.agent.skills_import import _audit
+    _audit(workspace, name=name, action="remove", result=action, commit=sha)
+    return {"ok": True, "name": name, "action": action, "commit": sha}
+
+
 def _preview(before: str, after: str) -> str:
     return "".join(difflib.unified_diff(
         before.splitlines(keepends=True), after.splitlines(keepends=True),
@@ -610,6 +658,15 @@ def web_skill_reject(workspace: Path, name: str) -> tuple[int, dict]:
 
     res = reject_quarantined(workspace, name)
     return (400, res) if "error" in res else (200, res)
+
+
+def web_skill_remove(workspace: Path, name: str) -> tuple[int, dict]:
+    """`GET /api/skills/{name}/remove` — delete a workspace skill / revert a fork."""
+    res = remove_skill(workspace, name)
+    if "error" in res:
+        status = 404 if "not found" in res["error"] else 400
+        return status, res
+    return 200, res
 
 
 def _persist_judge_result(qdir, source: str, verdict: str, findings: list, summary: str) -> None:
