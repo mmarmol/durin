@@ -232,6 +232,9 @@ class EnterPlanModeTool(Tool, _PlanModeToolBase):
             "The complete plan in Markdown. Include the goal, the steps "
             "you will take (numbered or as a checklist), any files you "
             "intend to modify, and any open questions or assumptions. "
+            "REQUIRED: a `## Verification` section (or per-step `verify:` "
+            "lines) stating how each step's success will be checked — "
+            "plans without verification criteria are rejected. "
             "The user will see this verbatim and either run `/build` to "
             "approve, or send more messages to refine the plan.",
             max_length=20_000,

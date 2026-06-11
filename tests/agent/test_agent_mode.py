@@ -539,3 +539,23 @@ class TestClearExecutingPlanWhenDone:
         meta = {"todos": [self._todo("a", "completed")]}
         assert clear_executing_plan_if_todos_done(meta) is False
         assert clear_executing_plan_if_todos_done(None) is False
+
+
+class TestVerificationGuidance:
+    """The model is told upfront that plans need verification criteria —
+    guidance that reduces lint-reject round-trips (the enforcement itself
+    is the exit_plan_mode lint)."""
+
+    def test_plan_mode_suffix_mentions_verification_requirement(self):
+        from durin.agent.agent_mode import PLAN_MODE
+
+        assert "## Verification" in PLAN_MODE.prompt_suffix
+        assert "verify:" in PLAN_MODE.prompt_suffix
+
+    def test_exit_plan_mode_schema_mentions_verification(self):
+        from durin.agent.tools.plan_mode import ExitPlanModeTool
+
+        tool = ExitPlanModeTool(sessions=None)
+        desc = tool.parameters["properties"]["plan"]["description"]
+        assert "## Verification" in desc
+        assert "rejected" in desc
