@@ -22,8 +22,8 @@ from durin.agent.agent_mode import (
     SESSION_MODE_KEY,
     SESSION_PRE_PLAN_KEY,
     AgentMode,
-    enter_plan_mode,
     clear_executing_plan_if_todos_done,
+    enter_plan_mode,
     executing_plan_runtime_lines,
     exit_plan_mode,
     filter_tools,
@@ -200,7 +200,7 @@ class TestFilterTools:
 class TestRunnerActiveToolDefinitions:
 
     def test_no_provider_returns_all(self):
-        from durin.agent.runner import AgentRunSpec, AgentRunner
+        from durin.agent.runner import AgentRunner, AgentRunSpec
         from durin.agent.tools.registry import ToolRegistry
 
         registry = ToolRegistry()
@@ -221,7 +221,7 @@ class TestRunnerActiveToolDefinitions:
         assert {d["function"]["name"] for d in out} == {"read_file", "edit_file"}
 
     def test_plan_provider_filters(self):
-        from durin.agent.runner import AgentRunSpec, AgentRunner
+        from durin.agent.runner import AgentRunner, AgentRunSpec
         from durin.agent.tools.registry import ToolRegistry
 
         registry = ToolRegistry()
@@ -243,7 +243,7 @@ class TestRunnerActiveToolDefinitions:
         assert names == {"read_file", "exit_plan_mode"}
 
     def test_provider_exception_falls_back_to_all(self):
-        from durin.agent.runner import AgentRunSpec, AgentRunner
+        from durin.agent.runner import AgentRunner, AgentRunSpec
         from durin.agent.tools.registry import ToolRegistry
 
         def _boom():

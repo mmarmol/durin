@@ -28,7 +28,6 @@ from durin.session.session_meta import (
     update_event,
 )
 
-
 # ---------------------------------------------------------------------------
 # Path resolution
 # ---------------------------------------------------------------------------
@@ -264,7 +263,6 @@ class TestPlanToolIntegration:
 
     def test_exit_plan_mode_writes_meta_event(self, tmp_path: Path):
         from durin.agent.agent_mode import (
-            PLAN_MODE,
             SESSION_MODE_KEY,
             SESSION_PRE_PLAN_KEY,
         )

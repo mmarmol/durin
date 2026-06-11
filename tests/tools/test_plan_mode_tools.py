@@ -7,10 +7,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
-
 from durin.agent.agent_mode import (
-    PLAN_MODE,
     SESSION_MODE_KEY,
     SESSION_PRE_PLAN_KEY,
 )
@@ -89,7 +86,7 @@ class TestEnterPlanModeTool:
         finally:
             reset_telemetry(token)
 
-        events = [json.loads(l) for l in log_path.read_text().splitlines() if l]
+        events = [json.loads(line) for line in log_path.read_text().splitlines() if line]
         switch = [e for e in events if e["type"] == "agent_mode.switch"]
         assert len(switch) == 1
         assert switch[0]["data"]["trigger"] == "tool"
@@ -203,7 +200,7 @@ class TestExitPlanModeTool:
         finally:
             reset_telemetry(token)
 
-        events = [json.loads(l) for l in log_path.read_text().splitlines() if l]
+        events = [json.loads(line) for line in log_path.read_text().splitlines() if line]
         presented = [e for e in events if e["type"] == "plan_mode.presented"]
         assert len(presented) == 1
         assert presented[0]["data"]["plan_chars"] > 0
