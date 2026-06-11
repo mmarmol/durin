@@ -286,7 +286,10 @@ class TestPlanToolIntegration:
         )
         tool.set_context(RequestContext(channel="cli", chat_id="c", session_key=session_key))
 
-        plan_text = "# Refactor authentication module\n\n1. Read code\n2. Apply OAuth"
+        plan_text = (
+            "# Refactor authentication module\n\n1. Read code\n2. Apply OAuth"
+            "\n\n## Verification\n- verify: noop"
+        )
         asyncio.run(tool.execute(plan=plan_text))
 
         # Meta file exists with a pending plan event
