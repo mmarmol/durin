@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import logging
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
 from durin.agent.tools.base import Tool, tool_parameters
+from durin.agent.tools.context import ContextAware, RequestContext
 from durin.agent.tools.schema import BooleanSchema, StringSchema, tool_parameters_schema
 
 logger = logging.getLogger(__name__)
@@ -41,11 +43,17 @@ _PARAMETERS = tool_parameters_schema(
 
 
 @tool_parameters(_PARAMETERS)
-class SkillEditTool(Tool):
+class SkillEditTool(Tool, ContextAware):
     """skill_edit tool."""
 
     def __init__(self, workspace: str | Path) -> None:
         self._workspace = Path(workspace).expanduser()
+        self._session: ContextVar[str | None] = ContextVar("skill_edit_session", default=None)
+        self._model: ContextVar[str | None] = ContextVar("skill_edit_model", default=None)
+
+    def set_context(self, ctx: RequestContext) -> None:
+        self._session.set(ctx.session_key)
+        self._model.set((ctx.metadata or {}).get("model"))
 
     @property
     def name(self) -> str:
@@ -60,11 +68,12 @@ class SkillEditTool(Tool):
         return cls(workspace=ctx.workspace)
 
     async def execute(self, **kwargs: Any) -> Any:
-        from durin.agent.skills_store import apply_skill_edit
+        from durin.agent.skills_store import Attribution, apply_skill_edit
 
         name = str(kwargs.get("name", "")).strip()
         if not name:
             return {"error": "name is required"}
+        attribution = Attribution(actor="agent", session=self._session.get(), agent=self._model.get())
         return apply_skill_edit(
             self._workspace,
             name,
@@ -73,4 +82,5 @@ class SkillEditTool(Tool):
             rationale=str(kwargs.get("rationale", "")),
             file=str(kwargs.get("file") or "SKILL.md"),
             confirm=bool(kwargs.get("confirm", False)),
+            attribution=attribution,
         )

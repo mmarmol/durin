@@ -43,3 +43,18 @@ def test_attribution_none_yields_bare_commit(tmp_path: Path):
     dream_create_skill(tmp_path, "made", "---\nname: made\n---\nbody\n", "init")
     msg = _top_msg(tmp_path)
     assert "Actor:" not in msg  # unchanged from today
+
+
+import asyncio
+
+from durin.agent.tools.context import RequestContext
+from durin.agent.tools.skill_write import SkillWriteTool
+
+
+def test_skill_write_tool_stamps_session_and_model(tmp_path: Path):
+    tool = SkillWriteTool(workspace=tmp_path)
+    tool.set_context(RequestContext(channel="web", chat_id="c1", session_key="sess-xyz",
+                                    metadata={"model": "claude-opus-4-8"}))
+    asyncio.run(tool.execute(name="made", content="---\nname: made\n---\nbody\n", rationale="why"))
+    msg = _top_msg(tmp_path)
+    assert "Actor: agent" in msg and "Session: sess-xyz" in msg and "Agent: claude-opus-4-8" in msg

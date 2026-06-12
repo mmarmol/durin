@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import json
 import logging
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
 from durin.agent.tools.base import Tool, tool_parameters
+from durin.agent.tools.context import ContextAware, RequestContext
 from durin.agent.tools.schema import StringSchema, tool_parameters_schema
 
 logger = logging.getLogger(__name__)
@@ -35,7 +37,7 @@ _PARAMETERS = tool_parameters_schema(
 
 
 @tool_parameters(_PARAMETERS)
-class SkillWriteTool(Tool):
+class SkillWriteTool(Tool, ContextAware):
     """skill_write tool — the sanctioned skill-authoring tool.
 
     Used by the dream and available in-loop; routes through skills_store.
@@ -43,6 +45,12 @@ class SkillWriteTool(Tool):
 
     def __init__(self, workspace: str | Path) -> None:
         self._workspace = Path(workspace).expanduser()
+        self._session: ContextVar[str | None] = ContextVar("skill_write_session", default=None)
+        self._model: ContextVar[str | None] = ContextVar("skill_write_model", default=None)
+
+    def set_context(self, ctx: RequestContext) -> None:
+        self._session.set(ctx.session_key)
+        self._model.set((ctx.metadata or {}).get("model"))
 
     @property
     def name(self) -> str:
@@ -57,12 +65,14 @@ class SkillWriteTool(Tool):
         return cls(workspace=ctx.workspace)
 
     async def execute(self, **kwargs: Any) -> str:
-        from durin.agent.skills_store import dream_create_skill
+        from durin.agent.skills_store import Attribution, dream_create_skill
 
+        attribution = Attribution(actor="agent", session=self._session.get(), agent=self._model.get())
         result = dream_create_skill(
             self._workspace,
             str(kwargs.get("name", "")),
             str(kwargs.get("content", "")),
             str(kwargs.get("rationale", "")),
+            attribution=attribution,
         )
         return json.dumps(result, ensure_ascii=False)
