@@ -94,6 +94,142 @@ def _body_hash(text: str) -> str:
     return hashlib.sha256(body.encode("utf-8")).hexdigest()[:16]
 
 
+def _resolve_skill_dir(workspace: Path, name: str) -> Path | None:
+    """The directory holding the skill: the workspace copy if forked, else the
+    builtin package dir. None for an unsafe/unknown name."""
+    if not _safe_name(name):
+        return None
+    ws = _skills_dir(workspace) / name
+    if (ws / "SKILL.md").exists():
+        return ws
+    builtin = (_loader(workspace).builtin_skills or BUILTIN_SKILLS_DIR) / name
+    if (builtin / "SKILL.md").exists():
+        return builtin
+    return None
+
+
+def _is_text_bytes(raw: bytes) -> bool:
+    """Decode-probe: not text if it has a NUL byte or fails UTF-8."""
+    if b"\x00" in raw:
+        return False
+    try:
+        raw.decode("utf-8")
+        return True
+    except UnicodeDecodeError:
+        return False
+
+
+def skill_files(workspace: Path, name: str) -> list[dict]:
+    """Flat list of a skill's files: [{path, text, size}], sorted by path.
+    Skips dotfiles. Returns [] for an unsafe/unknown name."""
+    root = _resolve_skill_dir(workspace, name)
+    if root is None:
+        return []
+    out: list[dict] = []
+    for p in sorted(root.rglob("*")):
+        if not p.is_file():
+            continue
+        rel = p.relative_to(root)
+        if any(part.startswith(".") for part in rel.parts):
+            continue
+        raw = p.read_bytes()[:65_536]
+        out.append({"path": str(rel), "text": _is_text_bytes(raw), "size": p.stat().st_size})
+    return out
+
+
+def _safe_target(root: Path, relpath: str) -> Path | None:
+    """Resolve `relpath` under `root`, rejecting escapes. None if it escapes."""
+    target = (root / relpath).resolve()
+    if not target.is_relative_to(root.resolve()):
+        return None
+    return target
+
+
+def read_skill_file(workspace: Path, name: str, relpath: str) -> dict | None:
+    """Read one file. Returns {path, text, content} (content="" for binary),
+    or None for unsafe/unknown skill, traversal, or a missing file."""
+    root = _resolve_skill_dir(workspace, name)
+    if root is None:
+        return None
+    target = _safe_target(root, relpath)
+    if target is None or not target.is_file():
+        return None
+    raw = target.read_bytes()
+    if not _is_text_bytes(raw[:65_536]):
+        return {"path": relpath, "text": False, "content": ""}
+    return {"path": relpath, "text": True, "content": raw.decode("utf-8")}
+
+
+def _lint_script(relpath: str, content: str) -> dict | None:
+    """Blocking syntax lint for scripts. Returns an error dict on failure, else None.
+    .py -> in-process compile(); .sh -> `bash -n`. Unknown extensions / missing
+    bash -> no lint (None)."""
+    suffix = Path(relpath).suffix.lower()
+    if suffix == ".py":
+        try:
+            compile(content, relpath, "exec")
+            return None
+        except SyntaxError as exc:
+            return {"error": "syntax", "lang": "python",
+                    "detail": exc.msg or "syntax error", "line": exc.lineno or 0}
+    if suffix == ".sh":
+        try:
+            with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False, encoding="utf-8") as fh:
+                fh.write(content)
+                tmp = fh.name
+        except OSError:
+            return None
+        try:
+            env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": "/tmp"}
+            proc = subprocess.run(["bash", "-n", tmp], capture_output=True, text=True, env=env, timeout=10)
+        except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+            return None  # bash unavailable -> skip lint (best-effort)
+        finally:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+        if proc.returncode != 0:
+            return {"error": "syntax", "lang": "bash",
+                    "detail": (proc.stderr or "syntax error").strip(), "line": 0}
+    return None
+
+
+def save_skill_file(workspace: Path, name: str, relpath: str, content: str, *,
+                    rationale: str = "edit via web",
+                    attribution: "Attribution | None" = None) -> dict:
+    """Save one text file in a MANUAL skill: fork-on-write, script lint (blocking),
+    write, commit (with attribution trailers), security re-scan (non-blocking)."""
+    if not _safe_name(name):
+        return {"error": "invalid skill name"}
+    if read_mode(workspace, name) != "manual":
+        return {"error": "skill is not manual; flip it to manual to edit"}
+    lint = _lint_script(relpath, content)
+    if lint is not None:
+        return lint  # blocked - nothing written
+    store = _store_init(workspace)
+    dest = fork_on_write(workspace, name)
+    target = _safe_target(dest, relpath)
+    if target is None:
+        return {"error": "file escapes skill directory"}
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+    sha = store.auto_commit(f"skill({name}): {rationale}",
+                            trailers=attribution_to_trailers(attribution))
+    _sync_index(workspace, name)
+    payload = {"ok": True, "name": name, "path": relpath, "commit": sha}
+    # Non-blocking security re-scan so the UI can refresh the verdict badge.
+    try:
+        from durin.security.skill_scan import scan_skill
+        rep = scan_skill(dest)
+        payload["verdict"] = rep.verdict
+        payload["findings"] = [{"category": f.category, "severity": f.severity,
+                                "where": f.where, "detail": f.detail} for f in rep.findings]
+    except Exception as exc:  # noqa: BLE001 - scan is advisory, never fatal
+        logger.warning("post-save scan failed for %s: %s", name, exc)
+    return payload
+
+
 def _index_skills_enabled() -> bool:
     """Whether skill-memory-class indexing is configured on.
 
