@@ -53,6 +53,13 @@ def test_read_skill_file_missing_file(tmp_path: Path):
 from durin.agent.skills_store import set_mode, Attribution
 
 
+def test_save_skill_file_rejects_directory_path(tmp_path: Path):
+    _mk_skill(tmp_path, "demo")
+    set_mode(tmp_path, "demo", "manual")
+    res = save_skill_file(tmp_path, "demo", "references", "x")
+    assert "error" in res
+
+
 def test_save_skill_file_refuses_auto(tmp_path: Path):
     _mk_skill(tmp_path, "demo")  # workspace skill defaults to manual; force auto
     set_mode(tmp_path, "demo", "auto")
