@@ -1,143 +1,60 @@
+// webui/src/components/SkillHistory.tsx
 import { useTranslation } from "react-i18next";
-
 import type { SkillHistory as SkillHistoryData, SkillHistoryEntry } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
-interface Props {
-  history: SkillHistoryData;
-}
-
-/** Dot color for the timeline connector. */
-const ACTOR_DOT: Record<SkillHistoryEntry["actor"], string> = {
-  user: "bg-primary",
-  agent: "bg-sky-500",
-  curation: "bg-violet-500",
-  import: "bg-amber-500",
-  system: "bg-muted-foreground",
+const ACTOR_STYLE: Record<SkillHistoryEntry["actor"], { dot: string; chip: string }> = {
+  user: { dot: "bg-emerald-500", chip: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" },
+  agent: { dot: "bg-primary", chip: "bg-primary/10 text-primary" },
+  curation: { dot: "bg-violet-500", chip: "bg-violet-500/10 text-violet-600 dark:text-violet-400" },
+  import: { dot: "bg-amber-500", chip: "bg-amber-500/10 text-amber-600 dark:text-amber-400" },
+  system: { dot: "bg-muted-foreground/60", chip: "bg-muted text-muted-foreground" },
 };
 
-function ActorBadge({ actor }: { actor: SkillHistoryEntry["actor"] }) {
-  return (
-    <span
-      className={cn(
-        "shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium leading-none",
-        // background is lighter; we use the text-* class from ACTOR_COLOR
-        actor === "user" && "bg-primary/10 text-primary",
-        actor === "agent" && "bg-sky-500/10 text-sky-600 dark:text-sky-400",
-        actor === "curation" && "bg-violet-500/10 text-violet-600 dark:text-violet-400",
-        actor === "import" && "bg-amber-500/10 text-amber-600 dark:text-amber-400",
-        actor === "system" && "bg-muted text-muted-foreground",
-      )}
-    >
-      {actor}
-    </span>
-  );
+function Meta({ c }: { c: SkillHistoryEntry }) {
+  const parts = [c.sha, c.session ? `session ${c.session}` : null, c.agent].filter(Boolean);
+  return <div className="mt-0.5 font-mono text-[10.5px] text-muted-foreground">{parts.join(" · ")}</div>;
 }
 
-function TimelineEntry({ entry }: { entry: SkillHistoryEntry }) {
-  const date = new Date(entry.timestamp);
-  const dateStr = Number.isNaN(date.getTime())
-    ? entry.timestamp
-    : date.toLocaleString(undefined, {
-        month: "short",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      });
-
+export function SkillHistory({ data }: { data: SkillHistoryData }) {
+  const { t } = useTranslation();
+  const { provenance: p, commits } = data;
   return (
-    <div className="flex gap-3">
-      {/* Timeline dot + vertical connector */}
-      <div className="flex flex-col items-center">
-        <div className={cn("mt-1 h-2 w-2 shrink-0 rounded-full", ACTOR_DOT[entry.actor])} />
-        <div className="flex-1 w-px bg-border/40" />
-      </div>
-
-      {/* Content */}
-      <div className="min-w-0 pb-4">
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <ActorBadge actor={entry.actor} />
-          <span className="text-[11px] text-muted-foreground">{dateStr}</span>
-          {entry.sha ? (
-            <span className="font-mono text-[10px] text-muted-foreground/60">
-              {entry.sha.slice(0, 7)}
-            </span>
-          ) : null}
-        </div>
-        <p className="mt-0.5 text-[12px] leading-snug text-foreground">{entry.subject}</p>
-        {entry.session ? (
-          <p className="mt-0.5 truncate font-mono text-[10px] text-muted-foreground/60">
-            {entry.session}
-          </p>
+    <div className="flex flex-col">
+      <div className="flex flex-wrap gap-x-4 gap-y-1 border-b border-border/30 px-1 pb-3 text-[12px]">
+        {p.source ? (
+          <span><span className="text-muted-foreground">{t("skills.history.origin")}:</span> {p.source}</span>
+        ) : null}
+        {p.created_at ? (
+          <span><span className="text-muted-foreground">{t("skills.history.created")}:</span> {p.created_at}</span>
+        ) : null}
+        {p.verdict ? (
+          <span><span className="text-muted-foreground">{t("skills.security")}:</span> {p.verdict}</span>
         ) : null}
       </div>
-    </div>
-  );
-}
-
-/**
- * Presentational timeline of a skill's git history plus a provenance bar
- * (source origin, first-seen date, security verdict, fused-from ancestry).
- * i18n keys (`skills.history.*`, `skills.security`) are wired in Task 17.
- */
-export function SkillHistory({ history }: Props) {
-  const { t } = useTranslation();
-  const { provenance, commits } = history;
-
-  return (
-    <div className="flex flex-col gap-4">
-      {/* Provenance bar */}
-      {(provenance.source ||
-        provenance.created_at ||
-        provenance.verdict ||
-        (provenance.fused_from && provenance.fused_from.length > 0)) ? (
-        <div className="rounded-[8px] border border-border/40 bg-muted/20 px-3 py-2">
-          <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-            {t("skills.history.provenance")}
-          </p>
-          <dl className="flex flex-col gap-1">
-            {provenance.source ? (
-              <div className="flex gap-2 text-[12px]">
-                <dt className="shrink-0 text-muted-foreground">{t("skills.history.source")}</dt>
-                <dd className="truncate text-foreground">{provenance.source}</dd>
-              </div>
-            ) : null}
-            {provenance.created_at ? (
-              <div className="flex gap-2 text-[12px]">
-                <dt className="shrink-0 text-muted-foreground">{t("skills.history.createdAt")}</dt>
-                <dd className="text-foreground">{provenance.created_at}</dd>
-              </div>
-            ) : null}
-            {provenance.verdict ? (
-              <div className="flex gap-2 text-[12px]">
-                <dt className="shrink-0 text-muted-foreground">{t("skills.security")}</dt>
-                <dd className="text-foreground">{provenance.verdict}</dd>
-              </div>
-            ) : null}
-            {provenance.fused_from && provenance.fused_from.length > 0 ? (
-              <div className="flex gap-2 text-[12px]">
-                <dt className="shrink-0 text-muted-foreground">{t("skills.history.fusedFrom")}</dt>
-                <dd className="truncate text-foreground">{provenance.fused_from.join(", ")}</dd>
-              </div>
-            ) : null}
-          </dl>
-        </div>
-      ) : null}
-
-      {/* Commit timeline */}
       {commits.length === 0 ? (
-        <p className="text-[12px] text-muted-foreground">{t("skills.history.empty")}</p>
+        <p className="px-1 py-4 text-[13px] text-muted-foreground">{t("skills.history.empty")}</p>
       ) : (
-        <div>
-          <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-            {t("skills.history.title")}
-          </p>
-          <div className="flex flex-col">
-            {commits.map((entry) => (
-              <TimelineEntry key={entry.sha} entry={entry} />
-            ))}
-          </div>
-        </div>
+        <ul className="flex flex-col">
+          {commits.map((c) => {
+            const s = ACTOR_STYLE[c.actor] ?? ACTOR_STYLE.system;
+            return (
+              <li key={c.sha} className="flex gap-3 border-b border-border/20 px-1 py-2.5">
+                <span className={cn("mt-1.5 size-2.5 shrink-0 rounded-full", s.dot)} />
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-semibold", s.chip)}>
+                      {t(`skills.history.actor.${c.actor}`)}
+                    </span>
+                    <span className="text-[12.5px] text-foreground">{c.subject}</span>
+                  </div>
+                  <Meta c={c} />
+                </div>
+                <span className="shrink-0 whitespace-nowrap text-[10px] text-muted-foreground">{c.timestamp}</span>
+              </li>
+            );
+          })}
+        </ul>
       )}
     </div>
   );
