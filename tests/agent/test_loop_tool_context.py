@@ -84,6 +84,6 @@ async def test_loop_hook_preserves_metadata_when_resetting_tool_context(tmp_path
     assert cron.contexts[-1] == {
         "channel": "slack",
         "chat_id": "C123",
-        "metadata": metadata,
+        "metadata": {**metadata, "model": "test-model"},
         "session_key": "slack:C123:111.222",
     }

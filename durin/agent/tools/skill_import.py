@@ -20,10 +20,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
 from durin.agent.tools.base import Tool, tool_parameters
+from durin.agent.tools.context import ContextAware, RequestContext
 from durin.agent.tools.schema import BooleanSchema, StringSchema, tool_parameters_schema
 
 logger = logging.getLogger(__name__)
@@ -67,7 +69,7 @@ _PARAMETERS = tool_parameters_schema(
 
 
 @tool_parameters(_PARAMETERS)
-class SkillImportTool(Tool):
+class SkillImportTool(Tool, ContextAware):
     """skill_import tool — §6.B import over the §8.C floor."""
 
     def __init__(self, workspace: str | Path, allowlist: list[str] | None = None,
@@ -77,6 +79,12 @@ class SkillImportTool(Tool):
         self._allowlist = list(allowlist or [])
         self._caps = caps or (100, 3 * 1024 * 1024, 1024 * 1024)
         self._judge = judge or ("off", "", "caution")  # trigger off unless config says otherwise
+        self._session: ContextVar[str | None] = ContextVar("skill_import_session", default=None)
+        self._model: ContextVar[str | None] = ContextVar("skill_import_model", default=None)
+
+    def set_context(self, ctx: RequestContext) -> None:
+        self._session.set(ctx.session_key)
+        self._model.set((ctx.metadata or {}).get("model"))
 
     @property
     def name(self) -> str:
@@ -189,10 +197,14 @@ class SkillImportTool(Tool):
                 except Exception:  # noqa: BLE001
                     pass
             try:
+                from durin.agent.skills_store import Attribution
+                attribution = Attribution(actor="import", session=self._session.get(),
+                                         agent=self._model.get())
                 return await asyncio.to_thread(
                     install_imported_skill, self._workspace, qdir,
                     source=src, allowlist=self._allowlist,
-                    confirmed=confirm, override=override, replace=replace)
+                    confirmed=confirm, override=override, replace=replace,
+                    attribution=attribution)
             except SkillImportRefused as exc:
                 return {"refused": exc.action, "verdict": exc.verdict, "message": str(exc)}
 
