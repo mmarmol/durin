@@ -135,3 +135,15 @@ def test_skill_files_skips_pycache(tmp_path: Path):
     paths = {f["path"] for f in skill_files(tmp_path, "demo")}
     assert not any("__pycache__" in p for p in paths)
     assert "scripts/run.py" in paths  # real script still listed
+
+
+def test_skill_files_skips_hidden_dirs_and_files(tmp_path: Path):
+    _mk_skill(tmp_path, "demo")
+    root = tmp_path / "skills" / "demo"
+    (root / ".hidden").mkdir()
+    (root / ".hidden" / "secret.md").write_text("nope", encoding="utf-8")  # hidden dir
+    (root / "references" / ".env").write_text("KEY=1", encoding="utf-8")   # hidden file
+    (root / ".dotfile.md").write_text("nope", encoding="utf-8")            # top-level hidden
+    paths = {f["path"] for f in skill_files(tmp_path, "demo")}
+    assert not any(p.startswith(".") or "/." in p for p in paths)
+    assert "SKILL.md" in paths and "references/notes.md" in paths
