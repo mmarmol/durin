@@ -503,6 +503,7 @@ def _preview(before: str, after: str) -> str:
 def apply_skill_edit(
     workspace: Path, name: str, *, old: str, new: str, rationale: str,
     file: str = "SKILL.md", confirm: bool = False,
+    attribution: "Attribution | None" = None,
 ) -> dict:
     """The skill_edit operation: fork-on-write, mode gate, bounded replace, commit."""
     if not rationale or not rationale.strip():
@@ -542,7 +543,8 @@ def apply_skill_edit(
             "preview": _preview(content, updated),
         }
     target.write_text(updated, encoding="utf-8")
-    sha = store.auto_commit(f"skill({name}): {rationale.strip()}")
+    sha = store.auto_commit(f"skill({name}): {rationale.strip()}",
+                            trailers=attribution_to_trailers(attribution))
     _sync_index(workspace, name)
     return {"ok": True, "name": name, "file": file, "mode": mode, "commit": sha}
 
@@ -556,7 +558,7 @@ def save_skill_content(workspace: Path, name: str, content: str,
 
 
 def dream_create_skill(workspace: Path, name: str, content: str,
-                       rationale: str) -> dict:
+                       rationale: str, attribution: "Attribution | None" = None) -> dict:
     """Create a NEW skill authored by the dream: stamp mode=auto +
     provenance.source='dream', write SKILL.md, commit. Refuses to overwrite
     an existing skill (that path is an edit, not a create)."""
@@ -577,13 +579,15 @@ def dream_create_skill(workspace: Path, name: str, content: str,
         durin["provenance"] = {"source": "dream", "created_at": _today()}
 
     _update_md(md, _stamp)
-    sha = store.auto_commit(f"skill({name}): {rationale.strip()} [dream]")
+    sha = store.auto_commit(f"skill({name}): {rationale.strip()} [dream]",
+                            trailers=attribution_to_trailers(attribution))
     _sync_index(workspace, name)
     return {"ok": True, "name": name, "commit": sha}
 
 
 def dream_fuse_skills(workspace: Path, *, target: str, content: str,
-                      sources: list[str], rationale: str) -> dict:
+                      sources: list[str], rationale: str,
+                      attribution: "Attribution | None" = None) -> dict:
     """Fuse `sources` into a new `target` skill. Refuses any `manual` source.
     Writes target (source=dream, mode=auto), removes workspace sources /
     disables builtin sources, one commit."""
@@ -623,7 +627,8 @@ def dream_fuse_skills(workspace: Path, *, target: str, content: str,
                 f"metadata:\n  durin:\n    mode: auto\n"
                 f"    provenance:\n      source: dream\n      fused_into: {target}\n"
                 f"---\nFused into `{target}`.\n", encoding="utf-8")
-    sha = store.auto_commit(f"skill: fuse {sources} -> {target}: {rationale.strip()} [dream]")
+    sha = store.auto_commit(f"skill: fuse {sources} -> {target}: {rationale.strip()} [dream]",
+                            trailers=attribution_to_trailers(attribution))
     # Multi-op index fan-out: the new target enters the index; every source
     # leaves it (workspace sources are rmtree'd; builtin sources become
     # disabled tombstones, which must not stay searchable).
