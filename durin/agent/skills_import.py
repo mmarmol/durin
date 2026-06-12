@@ -324,7 +324,8 @@ def _safe_qname(name: str) -> bool:
 
 def install_imported_skill(workspace: Path, quarantine_dir: Path, *, source: str,
                            allowlist: list[str], confirmed: bool = False,
-                           override: bool = False, replace: bool = False) -> dict:
+                           override: bool = False, replace: bool = False,
+                           attribution: "Attribution | None" = None) -> dict:
     """Install a quarantined skill — but ONLY through the §8.C gate, enforced
     HERE in code (not in the tool/skill/UI): `block` (dangerous) needs
     `override`; `confirm` (code / caution / out-of-allowlist) needs `confirmed`
@@ -392,7 +393,9 @@ def install_imported_skill(workspace: Path, quarantine_dir: Path, *, source: str
         }
 
     _update_md(dest / "SKILL.md", _stamp)
-    sha = store.auto_commit(f"skill({name}): import from {source} [{verdict}]")
+    from durin.agent.skills_store import attribution_to_trailers
+    sha = store.auto_commit(f"skill({name}): import from {source} [{verdict}]",
+                            trailers=attribution_to_trailers(attribution))
     _sync_index(workspace, name)
     _audit(workspace, name=name, source=source, verdict=verdict, action=action,
            confirmed=bool(confirmed), overridden=bool(override), replaced=bool(replace),
