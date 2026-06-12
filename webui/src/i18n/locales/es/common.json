@@ -411,6 +411,22 @@
     "pendingReason": "Importada de {{source}} · esperando tu aprobación",
     "pendingReasonBare": "Importada · esperando tu aprobación",
     "security": "Seguridad",
+    "binaryFile": "Archivo binario — no editable.",
+    "lintError": "Error de sintaxis {{lang}} (línea {{line}}): {{detail}}",
+    "history": {
+      "tab": "Historial",
+      "loading": "Cargando historial…",
+      "empty": "Sin historial todavía.",
+      "origin": "Origen",
+      "created": "Creada",
+      "actor": {
+        "user": "Usuario",
+        "agent": "Agente",
+        "curation": "Curación",
+        "import": "Importación",
+        "system": "Sistema"
+      }
+    },
     "noFindings": "Sin hallazgos de seguridad.",
     "scanClean": "Scan sin riesgos detectados.",
     "unscannedHint": "Sin analizar todavía. Corré «Revisar con IA» para auditarla.",

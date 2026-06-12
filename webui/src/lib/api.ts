@@ -611,6 +611,82 @@ export async function setSkillMode(
   await request<{ ok: boolean }>(`${base}/api/skills/${encodeURIComponent(name)}/mode?${query}`, token);
 }
 
+export interface SkillFile {
+  path: string;
+  text: boolean;
+  size: number;
+}
+
+export interface SkillFileContent {
+  path: string;
+  text: boolean;
+  content: string;
+}
+
+/** Success: ok+commit (+verdict/findings from the re-scan). Failure: error.
+ *  A blocked script save returns error="syntax" with lang/detail/line. */
+export interface SaveFileResult {
+  ok?: boolean;
+  name?: string;
+  path?: string;
+  commit?: string;
+  verdict?: SkillVerdict;
+  findings?: SkillFinding[];
+  error?: string;
+  lang?: "python" | "bash";
+  detail?: string;
+  line?: number;
+}
+
+export interface SkillHistoryEntry {
+  sha: string;
+  timestamp: string;
+  subject: string;
+  actor: "user" | "agent" | "curation" | "import" | "system";
+  session: string | null;
+  agent: string | null;
+}
+
+export interface SkillHistory {
+  provenance: { source?: string; created_at?: string; verdict?: string; fused_from?: string[] };
+  commits: SkillHistoryEntry[];
+}
+
+export async function listSkillFiles(
+  token: string, name: string, base: string = "",
+): Promise<SkillFile[]> {
+  const res = await request<{ files: SkillFile[] }>(
+    `${base}/api/skills/${encodeURIComponent(name)}/files`, token);
+  return res.files;
+}
+
+export async function getSkillFile(
+  token: string, name: string, path: string, base: string = "",
+): Promise<SkillFileContent> {
+  const query = new URLSearchParams({ path });
+  return request<SkillFileContent>(
+    `${base}/api/skills/${encodeURIComponent(name)}/file?${query}`, token);
+}
+
+export async function saveSkillFile(
+  token: string, name: string, path: string, content: string, base: string = "",
+): Promise<SaveFileResult> {
+  const query = new URLSearchParams({ path, content });
+  // 200 (ok) and 400 (syntax / manual-gate) both carry a useful body; only 5xx throws.
+  const res = await fetch(
+    `${base}/api/skills/${encodeURIComponent(name)}/file/save?${query}`,
+    { headers: { Authorization: `Bearer ${token}` }, credentials: "same-origin" });
+  if (res.status >= 500) throw new ApiError(res.status, `HTTP ${res.status}`);
+  return (await res.json()) as SaveFileResult;
+}
+
+export async function getSkillHistory(
+  token: string, name: string, base: string = "",
+): Promise<SkillHistory> {
+  return request<SkillHistory>(
+    `${base}/api/skills/${encodeURIComponent(name)}/history`, token);
+}
+
 export interface ModelTestResult {
   status: "ok" | "warn" | "fail";
   message: string;

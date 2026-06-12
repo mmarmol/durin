@@ -342,6 +342,40 @@ cuello es el ciclo de deploy, no el código.
 plaintext en config, no expuesto a la red). Deuda de consistencia análoga a la
 que cerramos para Codex en #50.
 
+### Skill file editor — broaden script validation + syntax highlighting beyond .py/.sh
+
+**Context**: 2026-06-12 the webui Skills panel gained a file browser + per-file
+editing (manual mode). On save, scripts get a **blocking syntax lint**; the View
+tab renders code via `CodeBlock` (Prism). Both are intentionally narrow today:
+- Syntax lint (`skills_store.py::_lint_script`) covers `.py` (in-process
+  `compile()`) and `.sh` (`bash -n`) only. Every other text file saves with no
+  syntax check (the non-blocking security re-scan still runs).
+- View highlighting (`SkillsView.tsx`) maps `.py`→python, `.sh`→bash, everything
+  else→plain `text` (so `.js`/`.ts`/`.json`/`.yaml`/`.rb`/… are viewable/editable
+  but uncolored).
+
+Browse/view/edit already work for ALL text types — this is only about *validation
+depth* and *highlighting breadth*, not access.
+
+**Problem**: skills can bundle scripts in other popular formats (JS/TS, Ruby, Go,
+etc.) and data files (JSON/YAML/TOML). They get neither a save-time syntax guard
+nor language-aware highlighting.
+
+**Proposal (tentative, two independent slices)**:
+1. **Highlighting (cheap, no deps)**: extend the extension→language map fed to
+   `CodeBlock` (js, ts, tsx, json, yaml, toml, rb, go, rust, java, sql, …) —
+   Prism already supports them. Pure frontend, zero risk.
+2. **Validation (gated on interpreter availability)**: add blocking syntax lints
+   per language only where a checker can run without new hard deps and degrade to
+   "skip" when absent (mirror the `bash -n` best-effort pattern): e.g. `node
+   --check` for JS, `ruby -c`, `python -m json.tool`/a YAML parse for data files.
+   Never assume an interpreter is installed; missing → save as-is (no block).
+
+**Estado**: pendiente, sin priorizar — slice 1 es trivial; slice 2 necesita
+cuidar el "degrade gracefully" por lenguaje (no romper saves cuando falta el
+intérprete). Disparado por feedback de Marcelo (2026-06-12) sobre por qué solo
+`.py`/`.sh`.
+
 ---
 
 ## Last updated: 2026-06-07 (entity→source derived_from linking shipped + data migrated; merged origin/main: Codex OAuth/loopback + secrets audit; P8 memory-graph CLOSED)

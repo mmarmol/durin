@@ -11,6 +11,20 @@ from pathlib import Path
 from loguru import logger
 
 
+def _compose_with_trailers(message: str, trailers: dict[str, str] | None) -> str:
+    """Append a git-style trailer block (`Key: value` lines) after a blank line.
+
+    Mirrors the memory store's trailer convention
+    (:func:`durin.utils.git_repo._format_trailers`). Empty/None trailers leave
+    the subject untouched so a trailer-less commit looks exactly as before.
+    """
+    lines = [f"{k}: {v}" for k, v in (trailers or {}).items()
+             if v is not None and str(v) != ""]
+    if not lines:
+        return message
+    return message.rstrip("\n") + "\n\n" + "\n".join(lines)
+
+
 @dataclass
 class CommitInfo:
     sha: str  # Short SHA (8 chars)
@@ -138,9 +152,10 @@ class GitStore:
 
     # -- daily operations ------------------------------------------------------
 
-    def auto_commit(self, message: str) -> str | None:
+    def auto_commit(self, message: str, *, trailers: dict[str, str] | None = None) -> str | None:
         """Stage changes (tracked files, or the whole tree in subtree mode) and commit if any.
 
+        Optional `trailers` are appended as a git-style `Key: value` block.
         Returns the short commit SHA, or None if nothing to commit.
         """
         if not self.is_initialized():
@@ -160,7 +175,8 @@ class GitStore:
                     return None
                 porcelain.add(str(self._workspace), paths=self._tracked_files)
 
-            msg_bytes = message.encode("utf-8") if isinstance(message, str) else message
+            composed = _compose_with_trailers(message, trailers) if isinstance(message, str) else message
+            msg_bytes = composed.encode("utf-8") if isinstance(composed, str) else composed
             sha_bytes = porcelain.commit(
                 str(self._workspace),
                 message=msg_bytes,
@@ -284,8 +300,27 @@ class GitStore:
 
     # -- query -----------------------------------------------------------------
 
-    def log(self, max_entries: int = 20) -> list[CommitInfo]:
-        """Return simplified commit log."""
+    @staticmethod
+    def _path_sha(repo, tree, relpath: str) -> bytes | None:
+        """SHA of the tree/blob at `relpath` under `tree`, or None if absent."""
+        cur = tree
+        parts = [p for p in relpath.split("/") if p]
+        for i, part in enumerate(parts):
+            try:
+                _mode, sha = cur[part.encode()]
+            except KeyError:
+                return None
+            if i == len(parts) - 1:
+                return sha
+            obj = repo[sha]
+            if obj.type_name != b"tree":
+                return None
+            cur = obj
+        return None
+
+    def log(self, max_entries: int = 20, *, path: str | None = None) -> list[CommitInfo]:
+        """Return simplified commit log. When `path` is given, restrict to commits
+        whose tree at `path` differs from the parent's (i.e. that touched it)."""
         if not self.is_initialized():
             return []
 
@@ -304,17 +339,21 @@ class GitStore:
                     commit = repo[sha]
                     if commit.type_name != b"commit":
                         break
-                    ts = time.strftime(
-                        "%Y-%m-%d %H:%M",
-                        time.localtime(commit.commit_time),
-                    )
-                    msg = commit.message.decode("utf-8", errors="replace").strip()
-                    entries.append(CommitInfo(
-                        sha=sha.hex()[:8],
-                        message=msg,
-                        timestamp=ts,
-                    ))
-                    sha = commit.parents[0] if commit.parents else None
+                    parent = commit.parents[0] if commit.parents else None
+
+                    include = True
+                    if path is not None:
+                        cur_sha = self._path_sha(repo, repo[commit.tree], path)
+                        prev_sha = None
+                        if parent is not None:
+                            prev_sha = self._path_sha(repo, repo[repo[parent].tree], path)
+                        include = cur_sha != prev_sha
+
+                    if include:
+                        ts = time.strftime("%Y-%m-%d %H:%M", time.localtime(commit.commit_time))
+                        msg = commit.message.decode("utf-8", errors="replace").strip()
+                        entries.append(CommitInfo(sha=sha.hex()[:8], message=msg, timestamp=ts))
+                    sha = parent
 
             return entries
         except Exception:

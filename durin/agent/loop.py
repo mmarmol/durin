@@ -843,12 +843,14 @@ class AgentLoop:
         else:
             effective_key = f"{channel}:{chat_id}"
 
+        meta = dict(metadata or {})
+        meta.setdefault("model", self.model)
         request_ctx = RequestContext(
             channel=channel,
             chat_id=chat_id,
             message_id=message_id,
             session_key=effective_key,
-            metadata=dict(metadata or {}),
+            metadata=meta,
         )
 
         for name in self.tools.tool_names:

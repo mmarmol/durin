@@ -837,6 +837,22 @@ class WebSocketChannel(BaseChannel):
         if m:
             return self._handle_skill_remove(request, m.group(1))
 
+        m = re.match(r"^/api/skills/([^/]+)/files$", got)
+        if m:
+            return self._handle_skill_files(request, m.group(1))
+
+        m = re.match(r"^/api/skills/([^/]+)/file/save$", got)
+        if m:
+            return self._handle_skill_file_save(request, m.group(1))
+
+        m = re.match(r"^/api/skills/([^/]+)/file$", got)
+        if m:
+            return self._handle_skill_file(request, m.group(1))
+
+        m = re.match(r"^/api/skills/([^/]+)/history$", got)
+        if m:
+            return self._handle_skill_history(request, m.group(1))
+
         m = re.match(r"^/api/skills/([^/]+)$", got)
         if m:
             return self._handle_skill_get(request, m.group(1))
@@ -1753,6 +1769,74 @@ class WebSocketChannel(BaseChannel):
             status, payload = ss.web_save(workspace, decoded, content)
         except Exception as exc:  # noqa: BLE001
             return _http_error(500, f"skill save failed: {exc}")
+        return _http_json_response(payload, status=status)
+
+    def _handle_skill_files(self, request: WsRequest, name: str) -> Response:
+        """`GET /api/skills/{name}/files` — list a skill's files."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        decoded = _decode_api_key(name)
+        if decoded is None:
+            return _http_error(400, "invalid skill name")
+        from durin.agent import skills_store as ss
+        try:
+            status, payload = ss.web_files(self._endpoint_workspace(), decoded)
+        except Exception as exc:  # noqa: BLE001
+            return _http_error(500, f"skill files failed: {exc}")
+        return _http_json_response(payload, status=status)
+
+    def _handle_skill_file(self, request: WsRequest, name: str) -> Response:
+        """`GET /api/skills/{name}/file?path=...` — read one file."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        decoded = _decode_api_key(name)
+        if decoded is None:
+            return _http_error(400, "invalid skill name")
+        path = _query_first(_parse_query(request.path), "path")
+        if not path:
+            return _http_error(400, "path is required")
+        from durin.agent import skills_store as ss
+        try:
+            status, payload = ss.web_file_get(self._endpoint_workspace(), decoded, path)
+        except Exception as exc:  # noqa: BLE001
+            return _http_error(500, f"skill file read failed: {exc}")
+        return _http_json_response(payload, status=status)
+
+    def _handle_skill_file_save(self, request: WsRequest, name: str) -> Response:
+        """`GET /api/skills/{name}/file/save?path=&content=` — save one text file (manual)."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        decoded = _decode_api_key(name)
+        if decoded is None:
+            return _http_error(400, "invalid skill name")
+        query = _parse_query(request.path)
+        path = _query_first(query, "path")
+        content = _query_first(query, "content")
+        if not path:
+            return _http_error(400, "path is required")
+        if content is None:
+            return _http_error(400, "content is required")
+        from durin.agent import skills_store as ss
+        try:
+            status, payload = ss.web_file_save(
+                self._endpoint_workspace(), decoded, path, content,
+                attribution=ss.Attribution(actor="user"))
+        except Exception as exc:  # noqa: BLE001
+            return _http_error(500, f"skill file save failed: {exc}")
+        return _http_json_response(payload, status=status)
+
+    def _handle_skill_history(self, request: WsRequest, name: str) -> Response:
+        """`GET /api/skills/{name}/history` — provenance + attributed commit log."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        decoded = _decode_api_key(name)
+        if decoded is None:
+            return _http_error(400, "invalid skill name")
+        from durin.agent import skills_store as ss
+        try:
+            status, payload = ss.web_history(self._endpoint_workspace(), decoded)
+        except Exception as exc:  # noqa: BLE001
+            return _http_error(500, f"skill history failed: {exc}")
         return _http_json_response(payload, status=status)
 
     def _handle_skill_mode(self, request: WsRequest, name: str) -> Response:

@@ -10,7 +10,11 @@ import datetime as _dt
 import difflib
 import hashlib
 import logging
+import os
 import shutil
+import subprocess
+import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 from durin.agent.skills import BUILTIN_SKILLS_DIR, SkillsLoader
@@ -18,6 +22,29 @@ from durin.agent.skills_frontmatter import ensure_durin, join_frontmatter, split
 from durin.utils.gitstore import GitStore
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class Attribution:
+    """Who/what produced a skill mutation, stamped as git commit trailers.
+
+    `actor` is one of "user" | "agent" | "curation" | "import". `session` and
+    `agent` (model name) are optional and omitted when unknown.
+    """
+    actor: str
+    session: str | None = None
+    agent: str | None = None
+
+
+def attribution_to_trailers(attr: "Attribution | None") -> dict[str, str]:
+    """Render an Attribution as `{Actor, Session, Agent}` trailers (present keys only)."""
+    if attr is None:
+        return {}
+    out: dict[str, str] = {}
+    for key, val in (("Actor", attr.actor), ("Session", attr.session), ("Agent", attr.agent)):
+        if val is not None and str(val) != "":
+            out[key] = str(val)
+    return out
 
 
 def _skills_dir(workspace: Path) -> Path:
@@ -65,6 +92,149 @@ def _durin_blob(text: str) -> dict:
 def _body_hash(text: str) -> str:
     _data, body = split_frontmatter(text)
     return hashlib.sha256(body.encode("utf-8")).hexdigest()[:16]
+
+
+def _resolve_skill_dir(workspace: Path, name: str) -> Path | None:
+    """The directory holding the skill: the workspace copy if forked, else the
+    builtin package dir. None for an unsafe/unknown name."""
+    if not _safe_name(name):
+        return None
+    ws = _skills_dir(workspace) / name
+    if (ws / "SKILL.md").exists():
+        return ws
+    builtin = (_loader(workspace).builtin_skills or BUILTIN_SKILLS_DIR) / name
+    if (builtin / "SKILL.md").exists():
+        return builtin
+    return None
+
+
+def _is_text_bytes(raw: bytes) -> bool:
+    """Decode-probe: not text if it has a NUL byte or fails UTF-8."""
+    if b"\x00" in raw:
+        return False
+    try:
+        raw.decode("utf-8")
+        return True
+    except UnicodeDecodeError:
+        return False
+
+
+def skill_files(workspace: Path, name: str) -> list[dict]:
+    """Flat list of a skill's files: [{path, text, size}], sorted by path.
+    Skips hidden entries (any dotfile or dot-directory, at any depth) and build
+    junk (``__pycache__``). Returns [] for an unsafe/unknown name."""
+    root = _resolve_skill_dir(workspace, name)
+    if root is None:
+        return []
+    out: list[dict] = []
+    for p in sorted(root.rglob("*")):
+        if not p.is_file():
+            continue
+        rel = p.relative_to(root)
+        if any(part.startswith(".") or part == "__pycache__" for part in rel.parts):
+            continue
+        raw = p.read_bytes()[:65_536]
+        out.append({"path": str(rel), "text": _is_text_bytes(raw), "size": p.stat().st_size})
+    return out
+
+
+def _safe_target(root: Path, relpath: str) -> Path | None:
+    """Resolve `relpath` under `root`, rejecting escapes. None if it escapes.
+    Rejects absolute paths and any path containing '..' segments."""
+    p = Path(relpath)
+    if p.is_absolute() or ".." in p.parts:
+        return None
+    target = (root / relpath).resolve()
+    if not target.is_relative_to(root.resolve()):
+        return None
+    return target
+
+
+def read_skill_file(workspace: Path, name: str, relpath: str) -> dict | None:
+    """Read one file. Returns {path, text, content} (content="" for binary),
+    or None for unsafe/unknown skill, traversal, or a missing file."""
+    root = _resolve_skill_dir(workspace, name)
+    if root is None:
+        return None
+    target = _safe_target(root, relpath)
+    if target is None or not target.is_file():
+        return None
+    raw = target.read_bytes()
+    if not _is_text_bytes(raw[:65_536]):
+        return {"path": relpath, "text": False, "content": ""}
+    return {"path": relpath, "text": True, "content": raw.decode("utf-8")}
+
+
+def _lint_script(relpath: str, content: str) -> dict | None:
+    """Blocking syntax lint for scripts. Returns an error dict on failure, else None.
+    .py -> in-process compile(); .sh -> `bash -n`. Unknown extensions / missing
+    bash -> no lint (None)."""
+    suffix = Path(relpath).suffix.lower()
+    if suffix == ".py":
+        try:
+            compile(content, relpath, "exec")
+            return None
+        except SyntaxError as exc:
+            return {"error": "syntax", "lang": "python",
+                    "detail": exc.msg or "syntax error", "line": exc.lineno or 0}
+    if suffix == ".sh":
+        try:
+            with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False, encoding="utf-8") as fh:
+                fh.write(content)
+                tmp = fh.name
+        except OSError:
+            return None
+        try:
+            env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": "/tmp"}
+            proc = subprocess.run(["bash", "-n", tmp], capture_output=True, text=True, env=env, timeout=10)
+        except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+            return None  # bash unavailable -> skip lint (best-effort)
+        finally:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+        if proc.returncode != 0:
+            return {"error": "syntax", "lang": "bash",
+                    "detail": (proc.stderr or "syntax error").strip(), "line": 0}
+    return None
+
+
+def save_skill_file(workspace: Path, name: str, relpath: str, content: str, *,
+                    rationale: str = "edit via web",
+                    attribution: "Attribution | None" = None) -> dict:
+    """Save one text file in a MANUAL skill: fork-on-write, script lint (blocking),
+    write, commit (with attribution trailers), security re-scan (non-blocking)."""
+    if not _safe_name(name):
+        return {"error": "invalid skill name"}
+    if read_mode(workspace, name) != "manual":
+        return {"error": "skill is not manual; flip it to manual to edit"}
+    lint = _lint_script(relpath, content)
+    if lint is not None:
+        return lint  # blocked - nothing written
+    store = _store_init(workspace)
+    dest = fork_on_write(workspace, name)
+    target = _safe_target(dest, relpath)
+    if target is None:
+        return {"error": "file escapes skill directory"}
+    if target.exists() and target.is_dir():
+        return {"error": "path is a directory"}
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+    sha = store.auto_commit(f"skill({name}): {rationale}",
+                            trailers=attribution_to_trailers(attribution))
+    _sync_index(workspace, name)
+    payload = {"ok": True, "name": name, "path": relpath, "commit": sha}
+    # Non-blocking security re-scan so the UI can refresh the verdict badge.
+    try:
+        from durin.security.skill_scan import scan_skill
+        rep = scan_skill(dest)
+        payload["verdict"] = rep.verdict
+        payload["findings"] = [{"category": f.category, "severity": f.severity,
+                                "where": f.where, "detail": f.detail} for f in rep.findings]
+    except Exception as exc:  # noqa: BLE001 - scan is advisory, never fatal
+        logger.warning("post-save scan failed for %s: %s", name, exc)
+    return payload
 
 
 def _index_skills_enabled() -> bool:
@@ -336,6 +506,7 @@ def _preview(before: str, after: str) -> str:
 def apply_skill_edit(
     workspace: Path, name: str, *, old: str, new: str, rationale: str,
     file: str = "SKILL.md", confirm: bool = False,
+    attribution: "Attribution | None" = None,
 ) -> dict:
     """The skill_edit operation: fork-on-write, mode gate, bounded replace, commit."""
     if not rationale or not rationale.strip():
@@ -375,28 +546,22 @@ def apply_skill_edit(
             "preview": _preview(content, updated),
         }
     target.write_text(updated, encoding="utf-8")
-    sha = store.auto_commit(f"skill({name}): {rationale.strip()}")
+    sha = store.auto_commit(f"skill({name}): {rationale.strip()}",
+                            trailers=attribution_to_trailers(attribution))
     _sync_index(workspace, name)
     return {"ok": True, "name": name, "file": file, "mode": mode, "commit": sha}
 
 
 def save_skill_content(workspace: Path, name: str, content: str,
-                       rationale: str = "edit via web") -> dict:
+                       rationale: str = "edit via web",
+                       attribution: "Attribution | None" = None) -> dict:
     """Full-content overwrite of a MANUAL skill's SKILL.md (web edit surface)."""
-    if not _safe_name(name):
-        return {"error": "invalid skill name"}
-    if read_mode(workspace, name) != "manual":
-        return {"error": "skill is not manual; flip it to manual to edit"}
-    store = _store_init(workspace)  # ensure git repo exists before mutating files
-    dest = fork_on_write(workspace, name)
-    (dest / "SKILL.md").write_text(content, encoding="utf-8")
-    sha = store.auto_commit(f"skill({name}): {rationale}")
-    _sync_index(workspace, name)
-    return {"ok": True, "name": name, "commit": sha}
+    return save_skill_file(workspace, name, "SKILL.md", content,
+                           rationale=rationale, attribution=attribution)
 
 
 def dream_create_skill(workspace: Path, name: str, content: str,
-                       rationale: str) -> dict:
+                       rationale: str, attribution: "Attribution | None" = None) -> dict:
     """Create a NEW skill authored by the dream: stamp mode=auto +
     provenance.source='dream', write SKILL.md, commit. Refuses to overwrite
     an existing skill (that path is an edit, not a create)."""
@@ -417,13 +582,15 @@ def dream_create_skill(workspace: Path, name: str, content: str,
         durin["provenance"] = {"source": "dream", "created_at": _today()}
 
     _update_md(md, _stamp)
-    sha = store.auto_commit(f"skill({name}): {rationale.strip()} [dream]")
+    sha = store.auto_commit(f"skill({name}): {rationale.strip()} [dream]",
+                            trailers=attribution_to_trailers(attribution))
     _sync_index(workspace, name)
     return {"ok": True, "name": name, "commit": sha}
 
 
 def dream_fuse_skills(workspace: Path, *, target: str, content: str,
-                      sources: list[str], rationale: str) -> dict:
+                      sources: list[str], rationale: str,
+                      attribution: "Attribution | None" = None) -> dict:
     """Fuse `sources` into a new `target` skill. Refuses any `manual` source.
     Writes target (source=dream, mode=auto), removes workspace sources /
     disables builtin sources, one commit."""
@@ -463,7 +630,8 @@ def dream_fuse_skills(workspace: Path, *, target: str, content: str,
                 f"metadata:\n  durin:\n    mode: auto\n"
                 f"    provenance:\n      source: dream\n      fused_into: {target}\n"
                 f"---\nFused into `{target}`.\n", encoding="utf-8")
-    sha = store.auto_commit(f"skill: fuse {sources} -> {target}: {rationale.strip()} [dream]")
+    sha = store.auto_commit(f"skill: fuse {sources} -> {target}: {rationale.strip()} [dream]",
+                            trailers=attribution_to_trailers(attribution))
     # Multi-op index fan-out: the new target enters the index; every source
     # leaves it (workspace sources are rmtree'd; builtin sources become
     # disabled tombstones, which must not stay searchable).
@@ -471,6 +639,55 @@ def dream_fuse_skills(workspace: Path, *, target: str, content: str,
     for s in sources:
         _unsync_index(workspace, s)
     return {"ok": True, "target": target, "removed": list(sources), "commit": sha}
+
+
+def _parse_trailers(message: str) -> dict[str, str]:
+    """Parse a trailing `Key: value` block (Actor/Session/Agent) from a commit message."""
+    out: dict[str, str] = {}
+    for line in reversed(message.splitlines()):
+        s = line.strip()
+        if not s:
+            break  # blank line ends the trailer block (scanning bottom-up)
+        if ": " in s:
+            k, v = s.split(": ", 1)
+            if k in ("Actor", "Session", "Agent"):
+                out[k] = v.strip()
+    return out
+
+
+def _derive_actor(subject: str) -> str:
+    """Best-effort actor for a trailer-less (legacy) commit, from the subject."""
+    if "via web" in subject:
+        return "user"
+    if "[dream]" in subject or subject.startswith("skill: fuse"):
+        return "curation"
+    if "import from" in subject:
+        return "import"
+    if (": set mode=" in subject or ": curated @" in subject
+            or subject.endswith(": remove") or subject.endswith(": revert to builtin")):
+        return "system"
+    return "agent"
+
+
+def skill_history(workspace: Path, name: str) -> dict:
+    """Per-skill history: {provenance, commits:[{sha,timestamp,subject,actor,session,agent}]}."""
+    if _resolve_skill_dir(workspace, name) is None:
+        return {"provenance": {}, "commits": []}
+    text = read_skill_content(workspace, name) or ""
+    prov = _durin_blob(text).get("provenance")
+    commits: list[dict] = []
+    for c in _store(workspace).log(max_entries=200, path=name):
+        subject = c.message.splitlines()[0] if c.message else ""
+        tr = _parse_trailers(c.message)
+        commits.append({
+            "sha": c.sha,
+            "timestamp": c.timestamp,
+            "subject": subject,
+            "actor": tr.get("Actor") or _derive_actor(subject),
+            "session": tr.get("Session"),
+            "agent": tr.get("Agent"),
+        })
+    return {"provenance": prov if isinstance(prov, dict) else {}, "commits": commits}
 
 
 def web_list(workspace: Path) -> tuple[int, dict]:
@@ -795,3 +1012,29 @@ def web_mode(workspace: Path, name: str, value: str) -> tuple[int, dict]:
     except FileNotFoundError:
         return 404, {"error": f"skill not found: {name}"}
     return 200, {"ok": True, "name": name, "mode": value, "commit": sha}
+
+
+def web_files(workspace: Path, name: str) -> tuple[int, dict]:
+    if _resolve_skill_dir(workspace, name) is None:
+        return 404, {"error": f"skill not found: {name}"}
+    return 200, {"files": skill_files(workspace, name)}
+
+
+def web_file_get(workspace: Path, name: str, path: str) -> tuple[int, dict]:
+    res = read_skill_file(workspace, name, path)
+    if res is None:
+        return 404, {"error": "file not found"}
+    return 200, res
+
+
+def web_file_save(workspace: Path, name: str, path: str, content: str, *,
+                  attribution: "Attribution | None" = None) -> tuple[int, dict]:
+    res = save_skill_file(workspace, name, path, content,
+                          rationale=f"edited {path} via web", attribution=attribution)
+    return (200, res) if res.get("ok") else (400, res)
+
+
+def web_history(workspace: Path, name: str) -> tuple[int, dict]:
+    if _resolve_skill_dir(workspace, name) is None:
+        return 404, {"error": f"skill not found: {name}"}
+    return 200, skill_history(workspace, name)
