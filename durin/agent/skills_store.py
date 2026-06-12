@@ -10,7 +10,11 @@ import datetime as _dt
 import difflib
 import hashlib
 import logging
+import os
 import shutil
+import subprocess
+import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 from durin.agent.skills import BUILTIN_SKILLS_DIR, SkillsLoader
@@ -18,6 +22,29 @@ from durin.agent.skills_frontmatter import ensure_durin, join_frontmatter, split
 from durin.utils.gitstore import GitStore
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class Attribution:
+    """Who/what produced a skill mutation, stamped as git commit trailers.
+
+    `actor` is one of "user" | "agent" | "curation" | "import". `session` and
+    `agent` (model name) are optional and omitted when unknown.
+    """
+    actor: str
+    session: str | None = None
+    agent: str | None = None
+
+
+def attribution_to_trailers(attr: "Attribution | None") -> dict[str, str]:
+    """Render an Attribution as `{Actor, Session, Agent}` trailers (present keys only)."""
+    if attr is None:
+        return {}
+    out: dict[str, str] = {}
+    for key, val in (("Actor", attr.actor), ("Session", attr.session), ("Agent", attr.agent)):
+        if val is not None and str(val) != "":
+            out[key] = str(val)
+    return out
 
 
 def _skills_dir(workspace: Path) -> Path:
