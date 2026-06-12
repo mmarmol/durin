@@ -548,18 +548,11 @@ def apply_skill_edit(
 
 
 def save_skill_content(workspace: Path, name: str, content: str,
-                       rationale: str = "edit via web") -> dict:
+                       rationale: str = "edit via web",
+                       attribution: "Attribution | None" = None) -> dict:
     """Full-content overwrite of a MANUAL skill's SKILL.md (web edit surface)."""
-    if not _safe_name(name):
-        return {"error": "invalid skill name"}
-    if read_mode(workspace, name) != "manual":
-        return {"error": "skill is not manual; flip it to manual to edit"}
-    store = _store_init(workspace)  # ensure git repo exists before mutating files
-    dest = fork_on_write(workspace, name)
-    (dest / "SKILL.md").write_text(content, encoding="utf-8")
-    sha = store.auto_commit(f"skill({name}): {rationale}")
-    _sync_index(workspace, name)
-    return {"ok": True, "name": name, "commit": sha}
+    return save_skill_file(workspace, name, "SKILL.md", content,
+                           rationale=rationale, attribution=attribution)
 
 
 def dream_create_skill(workspace: Path, name: str, content: str,
