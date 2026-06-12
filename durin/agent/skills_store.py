@@ -216,6 +216,8 @@ def save_skill_file(workspace: Path, name: str, relpath: str, content: str, *,
     target = _safe_target(dest, relpath)
     if target is None:
         return {"error": "file escapes skill directory"}
+    if target.exists() and target.is_dir():
+        return {"error": "path is a directory"}
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
     sha = store.auto_commit(f"skill({name}): {rationale}",
