@@ -1009,3 +1009,29 @@ def web_mode(workspace: Path, name: str, value: str) -> tuple[int, dict]:
     except FileNotFoundError:
         return 404, {"error": f"skill not found: {name}"}
     return 200, {"ok": True, "name": name, "mode": value, "commit": sha}
+
+
+def web_files(workspace: Path, name: str) -> tuple[int, dict]:
+    if _resolve_skill_dir(workspace, name) is None:
+        return 404, {"error": f"skill not found: {name}"}
+    return 200, {"files": skill_files(workspace, name)}
+
+
+def web_file_get(workspace: Path, name: str, path: str) -> tuple[int, dict]:
+    res = read_skill_file(workspace, name, path)
+    if res is None:
+        return 404, {"error": "file not found"}
+    return 200, res
+
+
+def web_file_save(workspace: Path, name: str, path: str, content: str, *,
+                  attribution: "Attribution | None" = None) -> tuple[int, dict]:
+    res = save_skill_file(workspace, name, path, content,
+                          rationale=f"edited {path} via web", attribution=attribution)
+    return (200, res) if res.get("ok") else (400, res)
+
+
+def web_history(workspace: Path, name: str) -> tuple[int, dict]:
+    if _resolve_skill_dir(workspace, name) is None:
+        return 404, {"error": f"skill not found: {name}"}
+    return 200, skill_history(workspace, name)
