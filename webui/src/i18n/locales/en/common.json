@@ -411,6 +411,22 @@
     "pendingReason": "Imported from {{source}} · awaiting your approval",
     "pendingReasonBare": "Imported · awaiting your approval",
     "security": "Security",
+    "binaryFile": "Binary file — not editable.",
+    "lintError": "{{lang}} syntax error (line {{line}}): {{detail}}",
+    "history": {
+      "tab": "History",
+      "loading": "Loading history…",
+      "empty": "No history yet.",
+      "origin": "Origin",
+      "created": "Created",
+      "actor": {
+        "user": "User",
+        "agent": "Agent",
+        "curation": "Curation",
+        "import": "Import",
+        "system": "System"
+      }
+    },
     "noFindings": "No security findings.",
     "scanClean": "Scan found no risks.",
     "unscannedHint": "Not analyzed yet. Run “Audit with LLM” to review it.",
