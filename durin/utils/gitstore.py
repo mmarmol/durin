@@ -300,8 +300,27 @@ class GitStore:
 
     # -- query -----------------------------------------------------------------
 
-    def log(self, max_entries: int = 20) -> list[CommitInfo]:
-        """Return simplified commit log."""
+    @staticmethod
+    def _path_sha(repo, tree, relpath: str) -> bytes | None:
+        """SHA of the tree/blob at `relpath` under `tree`, or None if absent."""
+        cur = tree
+        parts = [p for p in relpath.split("/") if p]
+        for i, part in enumerate(parts):
+            try:
+                _mode, sha = cur[part.encode()]
+            except KeyError:
+                return None
+            if i == len(parts) - 1:
+                return sha
+            obj = repo[sha]
+            if obj.type_name != b"tree":
+                return None
+            cur = obj
+        return None
+
+    def log(self, max_entries: int = 20, *, path: str | None = None) -> list[CommitInfo]:
+        """Return simplified commit log. When `path` is given, restrict to commits
+        whose tree at `path` differs from the parent's (i.e. that touched it)."""
         if not self.is_initialized():
             return []
 
@@ -320,17 +339,21 @@ class GitStore:
                     commit = repo[sha]
                     if commit.type_name != b"commit":
                         break
-                    ts = time.strftime(
-                        "%Y-%m-%d %H:%M",
-                        time.localtime(commit.commit_time),
-                    )
-                    msg = commit.message.decode("utf-8", errors="replace").strip()
-                    entries.append(CommitInfo(
-                        sha=sha.hex()[:8],
-                        message=msg,
-                        timestamp=ts,
-                    ))
-                    sha = commit.parents[0] if commit.parents else None
+                    parent = commit.parents[0] if commit.parents else None
+
+                    include = True
+                    if path is not None:
+                        cur_sha = self._path_sha(repo, repo[commit.tree], path)
+                        prev_sha = None
+                        if parent is not None:
+                            prev_sha = self._path_sha(repo, repo[repo[parent].tree], path)
+                        include = cur_sha != prev_sha
+
+                    if include:
+                        ts = time.strftime("%Y-%m-%d %H:%M", time.localtime(commit.commit_time))
+                        msg = commit.message.decode("utf-8", errors="replace").strip()
+                        entries.append(CommitInfo(sha=sha.hex()[:8], message=msg, timestamp=ts))
+                    sha = parent
 
             return entries
         except Exception:
