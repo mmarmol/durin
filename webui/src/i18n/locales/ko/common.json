@@ -138,6 +138,22 @@
   },
   "skills": {
     "view": "보기",
+    "binaryFile": "Binary file — not editable.",
+    "lintError": "{{lang}} syntax error (line {{line}}): {{detail}}",
+    "history": {
+      "tab": "History",
+      "loading": "Loading history…",
+      "empty": "No history yet.",
+      "origin": "Origin",
+      "created": "Created",
+      "actor": {
+        "user": "User",
+        "agent": "Agent",
+        "curation": "Curation",
+        "import": "Import",
+        "system": "System"
+      }
+    },
     "makeManual": "수동으로 전환",
     "makeAuto": "자동으로 전환",
     "back": "뒤로",

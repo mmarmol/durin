@@ -380,6 +380,22 @@
   },
   "skills": {
     "view": "Lihat",
+    "binaryFile": "Binary file — not editable.",
+    "lintError": "{{lang}} syntax error (line {{line}}): {{detail}}",
+    "history": {
+      "tab": "History",
+      "loading": "Loading history…",
+      "empty": "No history yet.",
+      "origin": "Origin",
+      "created": "Created",
+      "actor": {
+        "user": "User",
+        "agent": "Agent",
+        "curation": "Curation",
+        "import": "Import",
+        "system": "System"
+      }
+    },
     "makeManual": "Jadikan manual",
     "makeAuto": "Jadikan auto",
     "back": "Kembali",

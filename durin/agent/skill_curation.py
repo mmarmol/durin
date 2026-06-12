@@ -123,7 +123,8 @@ def curate_catalog(workspace, *, judge: Callable[[str], str],
                 logger.warning("curation: skipping fuse with out-of-scope sources %s", a.get("sources"))
                 continue
             r = ss.dream_fuse_skills(workspace, target=a["target"], content=a["content"],
-                                     sources=a["sources"], rationale=a.get("rationale", "fuse"))
+                                     sources=a["sources"], rationale=a.get("rationale", "fuse"),
+                                     attribution=ss.Attribution(actor="curation"))
             applied += 1 if r.get("ok") else 0
         elif t == "evolve":
             if a.get("name") not in selected:

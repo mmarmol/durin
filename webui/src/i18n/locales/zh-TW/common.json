@@ -138,6 +138,22 @@
   },
   "skills": {
     "view": "檢視",
+    "binaryFile": "Binary file — not editable.",
+    "lintError": "{{lang}} syntax error (line {{line}}): {{detail}}",
+    "history": {
+      "tab": "History",
+      "loading": "Loading history…",
+      "empty": "No history yet.",
+      "origin": "Origin",
+      "created": "Created",
+      "actor": {
+        "user": "User",
+        "agent": "Agent",
+        "curation": "Curation",
+        "import": "Import",
+        "system": "System"
+      }
+    },
     "makeManual": "設為手動",
     "makeAuto": "設為自動",
     "back": "返回",
