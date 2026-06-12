@@ -12,7 +12,10 @@ import {
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { CodeBlock } from "@/components/CodeBlock";
 import { MarkdownText, preloadMarkdownText } from "@/components/MarkdownText";
+import { SkillFileTree } from "@/components/SkillFileTree";
+import { SkillHistory } from "@/components/SkillHistory";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -21,18 +24,23 @@ import {
   approveSkill,
   describeSkill,
   getSkill,
+  getSkillFile,
+  getSkillHistory,
   importSource,
   listQuarantine,
+  listSkillFiles,
   listSkills,
   rejectSkill,
   removeSkill,
-  saveSkill,
+  saveSkillFile,
   searchSkills,
   setSkillMode,
   type QuarantineRow,
   type SkillCandidate,
   type SkillDetail,
+  type SkillFile,
   type SkillFinding,
+  type SkillHistory as SkillHistoryData,
   type SkillRow,
   type SkillSearchHit,
   type SkillVerdict,
@@ -193,8 +201,14 @@ export function SkillsView() {
   const [listTab, setListTab] = useState<"active" | "pending">("active");
   const [pane, setPane] = useState<RightPane>({ kind: "empty" });
   const [detail, setDetail] = useState<SkillDetail | null>(null);
-  const [draft, setDraft] = useState("");
-  const [tab, setTab] = useState<"view" | "edit">("view");
+  const [tab, setTab] = useState<"view" | "edit" | "history">("view");
+  const [files, setFiles] = useState<SkillFile[]>([]);
+  const [selFile, setSelFile] = useState<string>("SKILL.md");
+  const [fileBody, setFileBody] = useState<string>(""); // last-loaded content of selFile
+  const [fileText, setFileText] = useState<boolean>(true); // selFile is text?
+  const [drafts, setDrafts] = useState<Record<string, string>>({}); // per-file unsaved edits
+  const [history, setHistory] = useState<SkillHistoryData | null>(null);
+  const [lintErr, setLintErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -475,7 +489,14 @@ export function SkillsView() {
     [token, t],
   );
 
-  const dirty = detail != null && draft !== detail.content;
+  const curDraft = drafts[selFile] ?? fileBody;
+  const dirty = curDraft !== fileBody;
+  const editable = detail?.mode === "manual" && fileText;
+
+  const setCurDraft = useCallback(
+    (v: string) => setDrafts((d) => ({ ...d, [selFile]: v })),
+    [selFile],
+  );
 
   const guardDirty = useCallback(
     () => !dirty || window.confirm(t("skills.discardPrompt")),
@@ -488,9 +509,15 @@ export function SkillsView() {
       if (!guardDirty()) return;
       setError(null);
       try {
-        const d = await getSkill(token, name);
+        const [d, fl] = await Promise.all([getSkill(token, name), listSkillFiles(token, name)]);
         setDetail(d);
-        setDraft(d.content);
+        setFiles(fl);
+        setSelFile("SKILL.md");
+        setFileBody(d.content);
+        setFileText(true);
+        setDrafts({});
+        setHistory(null);
+        setLintErr(null);
         setTab("view");
         setPane({ kind: "skill", name });
       } catch (e) {
@@ -499,6 +526,39 @@ export function SkillsView() {
     },
     [token, pane, guardDirty],
   );
+
+  const selectFile = useCallback(
+    async (path: string) => {
+      if (path === selFile || pane.kind !== "skill") return;
+      setLintErr(null);
+      if (path === "SKILL.md" && detail) {
+        setSelFile(path);
+        setFileBody(detail.content);
+        setFileText(true);
+        setTab("view");
+        return;
+      }
+      try {
+        const f = await getSkillFile(token, pane.name, path);
+        setSelFile(path);
+        setFileBody(f.content);
+        setFileText(f.text);
+        setTab("view");
+      } catch (e) {
+        setError(errMsg(e));
+      }
+    },
+    [token, pane, selFile, detail],
+  );
+
+  const loadHistory = useCallback(async () => {
+    if (pane.kind !== "skill") return;
+    try {
+      setHistory(await getSkillHistory(token, pane.name));
+    } catch (e) {
+      setError(errMsg(e));
+    }
+  }, [token, pane]);
 
   const openTriage = useCallback(
     (name: string) => {
@@ -527,19 +587,34 @@ export function SkillsView() {
   }, [guardDirty]);
 
   const save = useCallback(async () => {
-    if (!detail) return;
+    if (pane.kind !== "skill") return;
     setBusy(true);
     setError(null);
+    setLintErr(null);
     try {
-      await saveSkill(token, detail.name, draft);
-      setDetail({ ...detail, content: draft });
+      const res = await saveSkillFile(token, pane.name, selFile, curDraft);
+      if (res.error === "syntax") {
+        setLintErr(t("skills.lintError", { lang: res.lang, line: res.line, detail: res.detail }));
+        return;
+      }
+      if (res.error) {
+        setError(res.error);
+        return;
+      }
+      setFileBody(curDraft);
+      setDrafts((d) => {
+        const n = { ...d };
+        delete n[selFile];
+        return n;
+      });
+      if (selFile === "SKILL.md") setDetail((dd) => (dd ? { ...dd, content: curDraft } : dd));
       await refresh();
     } catch (e) {
       setError(errMsg(e));
     } finally {
       setBusy(false);
     }
-  }, [token, detail, draft, refresh]);
+  }, [token, pane, selFile, curDraft, refresh, t]);
 
   const toggleMode = useCallback(async () => {
     if (!detail) return;
@@ -550,7 +625,14 @@ export function SkillsView() {
       await setSkillMode(token, detail.name, next);
       const d = await getSkill(token, detail.name);
       setDetail(d);
-      setDraft(d.content);
+      setSelFile("SKILL.md");
+      setFileBody(d.content);
+      setFileText(true);
+      setDrafts((dr) => {
+        const n = { ...dr };
+        delete n["SKILL.md"];
+        return n;
+      });
       if (next !== "manual") setTab("view");
       await refresh();
     } catch (e) {
@@ -566,7 +648,6 @@ export function SkillsView() {
     pane.kind === "skill" ? (list.find((r) => r.name === pane.name) ?? null) : null;
   const triageRow =
     pane.kind === "triage" ? (quarList.find((q) => q.name === pane.name) ?? null) : null;
-  const editable = detail?.mode === "manual";
 
   // Client-side sort over the loaded hits. Missing installs sort last.
   const sortedHits = (hits ?? []).slice().sort((a, b) => {
@@ -1105,7 +1186,13 @@ export function SkillsView() {
                 {t("skills.selectPrompt")}
               </div>
             ) : (
-              <>
+              <div className="flex min-h-0 flex-1">
+                {files.length > 1 ? (
+                  <div className="w-44 shrink-0 overflow-y-auto border-r border-border/30">
+                    <SkillFileTree files={files} selected={selFile} onSelect={(p) => void selectFile(p)} />
+                  </div>
+                ) : null}
+                <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                 <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-border/30 px-4 py-3 sm:px-6">
                   <button
                     type="button"
@@ -1117,6 +1204,9 @@ export function SkillsView() {
                   <span className="text-[15px] font-semibold text-foreground">
                     {detail.name}
                   </span>
+                  {selFile !== "SKILL.md" ? (
+                    <span className="font-mono text-[12px] text-muted-foreground">{selFile}</span>
+                  ) : null}
                   <ModeBadge mode={detail.mode} />
                   <VerdictBadge verdict={skillRow?.verdict} />
                   {skillRow?.provenance?.source ? (
@@ -1155,6 +1245,21 @@ export function SkillsView() {
                         )}
                       >
                         {t("settings.actions.edit")}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTab("history");
+                          void loadHistory();
+                        }}
+                        className={cn(
+                          "rounded-[6px] px-2.5 py-1 text-[12px] transition-colors",
+                          tab === "history"
+                            ? "bg-primary/10 text-primary"
+                            : "text-muted-foreground hover:text-foreground",
+                        )}
+                      >
+                        {t("skills.history.tab")}
                       </button>
                     </div>
                     <Button
@@ -1218,14 +1323,37 @@ export function SkillsView() {
                 ) : null}
 
                 <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6">
-                  {tab === "view" ? (
-                    <div className="max-w-[78ch] text-[14px] leading-relaxed">
-                      <MarkdownText>{stripFrontmatter(detail.content)}</MarkdownText>
-                    </div>
+                  {tab === "history" ? (
+                    history ? (
+                      <SkillHistory data={history} />
+                    ) : (
+                      <div className="flex flex-1 items-center justify-center text-[13px] text-muted-foreground">
+                        <Loader2 className="mr-2 size-4 animate-spin" /> {t("skills.history.loading")}
+                      </div>
+                    )
+                  ) : tab === "view" ? (
+                    !fileText ? (
+                      <p className="text-[13px] text-muted-foreground">{t("skills.binaryFile")}</p>
+                    ) : selFile.endsWith(".md") ? (
+                      <div className="max-w-[78ch] text-[14px] leading-relaxed">
+                        <MarkdownText>{stripFrontmatter(fileBody)}</MarkdownText>
+                      </div>
+                    ) : (
+                      <CodeBlock
+                        language={
+                          selFile.endsWith(".py")
+                            ? "python"
+                            : selFile.endsWith(".sh")
+                              ? "bash"
+                              : "text"
+                        }
+                        code={fileBody}
+                      />
+                    )
                   ) : (
                     <Textarea
-                      value={draft}
-                      onChange={(e) => setDraft(e.target.value)}
+                      value={curDraft}
+                      onChange={(e) => setCurDraft(e.target.value)}
                       spellCheck={false}
                       className="h-full min-h-[24rem] w-full resize-none font-mono text-[12px] leading-relaxed"
                     />
@@ -1233,24 +1361,32 @@ export function SkillsView() {
                 </div>
 
                 {tab === "edit" && editable ? (
-                  <div className="flex shrink-0 items-center gap-3 border-t border-border/30 px-4 py-3 sm:px-6">
-                    <Button size="sm" disabled={!dirty || busy} onClick={() => void save()}>
-                      {t("settings.actions.save")}
-                    </Button>
-                    {dirty ? (
-                      <span className="text-[12px] text-muted-foreground">
-                        {t("settings.status.unsaved")}
-                      </span>
+                  <div className="flex shrink-0 flex-col gap-2 border-t border-border/30 px-4 py-3 sm:px-6">
+                    {lintErr ? (
+                      <p className="rounded-md bg-destructive/10 px-3 py-2 font-mono text-[12px] text-destructive">
+                        {lintErr}
+                      </p>
                     ) : null}
+                    <div className="flex items-center gap-3">
+                      <Button size="sm" disabled={!dirty || busy} onClick={() => void save()}>
+                        {t("settings.actions.save")}
+                      </Button>
+                      {dirty ? (
+                        <span className="text-[12px] text-muted-foreground">
+                          {t("settings.status.unsaved")}
+                        </span>
+                      ) : null}
+                    </div>
                   </div>
                 ) : null}
 
-                {!editable ? (
+                {!editable && tab !== "history" && detail?.mode === "auto" ? (
                   <div className="shrink-0 border-t border-border/30 px-4 py-3 text-[12px] text-muted-foreground sm:px-6">
                     {t("skills.autoReadonly")}
                   </div>
                 ) : null}
-              </>
+                </div>
+              </div>
             )}
           </section>
         </div>
