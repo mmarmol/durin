@@ -48,3 +48,42 @@ def test_read_skill_file_rejects_traversal(tmp_path: Path):
 def test_read_skill_file_missing_file(tmp_path: Path):
     _mk_skill(tmp_path, "demo")
     assert read_skill_file(tmp_path, "demo", "nope.md") is None
+
+
+from durin.agent.skills_store import set_mode, Attribution
+
+
+def test_save_skill_file_refuses_auto(tmp_path: Path):
+    _mk_skill(tmp_path, "demo")  # workspace skill defaults to manual; force auto
+    set_mode(tmp_path, "demo", "auto")
+    res = save_skill_file(tmp_path, "demo", "references/notes.md", "new", rationale="r")
+    assert "error" in res and "manual" in res["error"]
+
+
+def test_save_skill_file_writes_commits_and_rescans(tmp_path: Path):
+    _mk_skill(tmp_path, "demo")
+    set_mode(tmp_path, "demo", "manual")
+    res = save_skill_file(tmp_path, "demo", "references/notes.md", "updated body",
+                          rationale="edited references/notes.md via web",
+                          attribution=Attribution(actor="user"))
+    assert res["ok"] is True and res["commit"]
+    assert "verdict" in res  # security re-scan included (non-blocking)
+    assert (tmp_path / "skills" / "demo" / "references" / "notes.md").read_text() == "updated body"
+
+
+def test_save_skill_file_blocks_python_syntax_error(tmp_path: Path):
+    _mk_skill(tmp_path, "demo")
+    set_mode(tmp_path, "demo", "manual")
+    before = (tmp_path / "skills" / "demo" / "scripts" / "run.py").read_text()
+    res = save_skill_file(tmp_path, "demo", "scripts/run.py", "def (oops\n", rationale="r")
+    assert res.get("error") == "syntax" and res.get("lang") == "python"
+    assert isinstance(res.get("line"), int)
+    # NOT written
+    assert (tmp_path / "skills" / "demo" / "scripts" / "run.py").read_text() == before
+
+
+def test_save_skill_file_accepts_valid_python(tmp_path: Path):
+    _mk_skill(tmp_path, "demo")
+    set_mode(tmp_path, "demo", "manual")
+    res = save_skill_file(tmp_path, "demo", "scripts/run.py", "print(2)\n", rationale="r")
+    assert res["ok"] is True
