@@ -633,6 +633,55 @@ def dream_fuse_skills(workspace: Path, *, target: str, content: str,
     return {"ok": True, "target": target, "removed": list(sources), "commit": sha}
 
 
+def _parse_trailers(message: str) -> dict[str, str]:
+    """Parse a trailing `Key: value` block (Actor/Session/Agent) from a commit message."""
+    out: dict[str, str] = {}
+    for line in reversed(message.splitlines()):
+        s = line.strip()
+        if not s:
+            break  # blank line ends the trailer block (scanning bottom-up)
+        if ": " in s:
+            k, v = s.split(": ", 1)
+            if k in ("Actor", "Session", "Agent"):
+                out[k] = v.strip()
+    return out
+
+
+def _derive_actor(subject: str) -> str:
+    """Best-effort actor for a trailer-less (legacy) commit, from the subject."""
+    if "via web" in subject:
+        return "user"
+    if "[dream]" in subject or subject.startswith("skill: fuse"):
+        return "curation"
+    if "import from" in subject:
+        return "import"
+    if (": set mode=" in subject or ": curated @" in subject
+            or subject.endswith(": remove") or subject.endswith(": revert to builtin")):
+        return "system"
+    return "agent"
+
+
+def skill_history(workspace: Path, name: str) -> dict:
+    """Per-skill history: {provenance, commits:[{sha,timestamp,subject,actor,session,agent}]}."""
+    if _resolve_skill_dir(workspace, name) is None:
+        return {"provenance": {}, "commits": []}
+    text = read_skill_content(workspace, name) or ""
+    prov = _durin_blob(text).get("provenance")
+    commits: list[dict] = []
+    for c in _store(workspace).log(max_entries=200, path=name):
+        subject = c.message.splitlines()[0] if c.message else ""
+        tr = _parse_trailers(c.message)
+        commits.append({
+            "sha": c.sha,
+            "timestamp": c.timestamp,
+            "subject": subject,
+            "actor": tr.get("Actor") or _derive_actor(subject),
+            "session": tr.get("Session"),
+            "agent": tr.get("Agent"),
+        })
+    return {"provenance": prov if isinstance(prov, dict) else {}, "commits": commits}
+
+
 def web_list(workspace: Path) -> tuple[int, dict]:
     # Scan-augmented inventory (verdict + status) so the management panel can
     # surface security state. Imported locally to avoid a circular import
