@@ -29,3 +29,22 @@ def test_skill_files_unknown_skill_is_empty(tmp_path: Path):
 
 def test_skill_files_rejects_unsafe_name(tmp_path: Path):
     assert skill_files(tmp_path, "../etc") == []
+
+
+def test_read_skill_file_text_and_binary(tmp_path: Path):
+    _mk_skill(tmp_path, "demo")
+    md = read_skill_file(tmp_path, "demo", "references/notes.md")
+    assert md == {"path": "references/notes.md", "text": True, "content": "notes"}
+    png = read_skill_file(tmp_path, "demo", "logo.png")
+    assert png["text"] is False and png["content"] == ""
+
+
+def test_read_skill_file_rejects_traversal(tmp_path: Path):
+    _mk_skill(tmp_path, "demo")
+    assert read_skill_file(tmp_path, "demo", "../demo/SKILL.md") is None
+    assert read_skill_file(tmp_path, "demo", "/etc/passwd") is None
+
+
+def test_read_skill_file_missing_file(tmp_path: Path):
+    _mk_skill(tmp_path, "demo")
+    assert read_skill_file(tmp_path, "demo", "nope.md") is None

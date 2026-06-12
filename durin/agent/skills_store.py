@@ -138,7 +138,11 @@ def skill_files(workspace: Path, name: str) -> list[dict]:
 
 
 def _safe_target(root: Path, relpath: str) -> Path | None:
-    """Resolve `relpath` under `root`, rejecting escapes. None if it escapes."""
+    """Resolve `relpath` under `root`, rejecting escapes. None if it escapes.
+    Rejects absolute paths and any path containing '..' segments."""
+    p = Path(relpath)
+    if p.is_absolute() or ".." in p.parts:
+        return None
     target = (root / relpath).resolve()
     if not target.is_relative_to(root.resolve()):
         return None
