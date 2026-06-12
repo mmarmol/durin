@@ -29,3 +29,22 @@ def test_auto_commit_writes_trailers_into_log(tmp_path: Path):
     assert "skill(foo): create" in msg
     assert "Actor: agent" in msg
     assert "Agent: claude-opus-4-8" in msg
+
+
+def test_log_path_filters_to_one_skill(tmp_path: Path):
+    store = GitStore(tmp_path, subtree=True, label="skills")
+    store.init()
+    (tmp_path / "alpha").mkdir()
+    (tmp_path / "alpha" / "SKILL.md").write_text("a1", encoding="utf-8")
+    store.auto_commit("skill(alpha): create")
+    (tmp_path / "beta").mkdir()
+    (tmp_path / "beta" / "SKILL.md").write_text("b1", encoding="utf-8")
+    store.auto_commit("skill(beta): create")
+    (tmp_path / "alpha" / "SKILL.md").write_text("a2", encoding="utf-8")
+    store.auto_commit("skill(alpha): edit")
+
+    alpha = store.log(path="alpha")
+    subjects = [c.message.splitlines()[0] for c in alpha]
+    assert subjects == ["skill(alpha): edit", "skill(alpha): create"]
+    # beta's commit must not appear in alpha's history
+    assert all("beta" not in s for s in subjects)
