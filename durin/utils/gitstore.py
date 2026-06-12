@@ -11,6 +11,20 @@ from pathlib import Path
 from loguru import logger
 
 
+def _compose_with_trailers(message: str, trailers: dict[str, str] | None) -> str:
+    """Append a git-style trailer block (`Key: value` lines) after a blank line.
+
+    Mirrors the memory store's trailer convention
+    (:func:`durin.utils.git_repo._format_trailers`). Empty/None trailers leave
+    the subject untouched so a trailer-less commit looks exactly as before.
+    """
+    lines = [f"{k}: {v}" for k, v in (trailers or {}).items()
+             if v is not None and str(v) != ""]
+    if not lines:
+        return message
+    return message.rstrip("\n") + "\n\n" + "\n".join(lines)
+
+
 @dataclass
 class CommitInfo:
     sha: str  # Short SHA (8 chars)
@@ -138,9 +152,10 @@ class GitStore:
 
     # -- daily operations ------------------------------------------------------
 
-    def auto_commit(self, message: str) -> str | None:
+    def auto_commit(self, message: str, *, trailers: dict[str, str] | None = None) -> str | None:
         """Stage changes (tracked files, or the whole tree in subtree mode) and commit if any.
 
+        Optional `trailers` are appended as a git-style `Key: value` block.
         Returns the short commit SHA, or None if nothing to commit.
         """
         if not self.is_initialized():
@@ -160,7 +175,8 @@ class GitStore:
                     return None
                 porcelain.add(str(self._workspace), paths=self._tracked_files)
 
-            msg_bytes = message.encode("utf-8") if isinstance(message, str) else message
+            composed = _compose_with_trailers(message, trailers) if isinstance(message, str) else message
+            msg_bytes = composed.encode("utf-8") if isinstance(composed, str) else composed
             sha_bytes = porcelain.commit(
                 str(self._workspace),
                 message=msg_bytes,
