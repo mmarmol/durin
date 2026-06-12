@@ -121,7 +121,8 @@ def _is_text_bytes(raw: bytes) -> bool:
 
 def skill_files(workspace: Path, name: str) -> list[dict]:
     """Flat list of a skill's files: [{path, text, size}], sorted by path.
-    Skips dotfiles. Returns [] for an unsafe/unknown name."""
+    Skips dotfiles and build junk (``__pycache__``). Returns [] for an
+    unsafe/unknown name."""
     root = _resolve_skill_dir(workspace, name)
     if root is None:
         return []
@@ -130,7 +131,7 @@ def skill_files(workspace: Path, name: str) -> list[dict]:
         if not p.is_file():
             continue
         rel = p.relative_to(root)
-        if any(part.startswith(".") for part in rel.parts):
+        if any(part.startswith(".") or part == "__pycache__" for part in rel.parts):
             continue
         raw = p.read_bytes()[:65_536]
         out.append({"path": str(rel), "text": _is_text_bytes(raw), "size": p.stat().st_size})

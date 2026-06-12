@@ -125,3 +125,13 @@ def test_web_history_shape(tmp_path: Path):
     set_mode(tmp_path, "demo", "manual")
     status, payload = web_history(tmp_path, "demo")
     assert status == 200 and "provenance" in payload and isinstance(payload["commits"], list)
+
+
+def test_skill_files_skips_pycache(tmp_path: Path):
+    _mk_skill(tmp_path, "demo")
+    pyc_dir = tmp_path / "skills" / "demo" / "scripts" / "__pycache__"
+    pyc_dir.mkdir(parents=True)
+    (pyc_dir / "run.cpython-311.pyc").write_bytes(b"\x00\x01\x02")
+    paths = {f["path"] for f in skill_files(tmp_path, "demo")}
+    assert not any("__pycache__" in p for p in paths)
+    assert "scripts/run.py" in paths  # real script still listed
