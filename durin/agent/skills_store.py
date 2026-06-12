@@ -121,8 +121,8 @@ def _is_text_bytes(raw: bytes) -> bool:
 
 def skill_files(workspace: Path, name: str) -> list[dict]:
     """Flat list of a skill's files: [{path, text, size}], sorted by path.
-    Skips dotfiles and build junk (``__pycache__``). Returns [] for an
-    unsafe/unknown name."""
+    Skips hidden entries (any dotfile or dot-directory, at any depth) and build
+    junk (``__pycache__``). Returns [] for an unsafe/unknown name."""
     root = _resolve_skill_dir(workspace, name)
     if root is None:
         return []
