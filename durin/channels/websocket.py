@@ -2032,6 +2032,7 @@ class WebSocketChannel(BaseChannel):
         await self.send_reasoning_end(chat_id)
         merged = ScanReport(findings=det.findings + outcome.findings)
         merged.tools = outcome.tools
+        merged.judge_verdict = outcome.verdict
         findings = [{"category": f.category, "severity": f.severity, "where": f.where,
                      "detail": f.detail} for f in merged.findings]
         source = name

@@ -48,6 +48,9 @@ def skills_inventory(workspace) -> list[dict]:
         d = dirs.get(info["name"])
         if d is not None and d.is_dir():
             entry.update(_scan_payload(d))
+            prov_verdict = (info.get("provenance") or {}).get("verdict")
+            if prov_verdict:
+                entry["verdict"] = prov_verdict
         else:
             entry.update({"verdict": "safe", "findings": []})
 

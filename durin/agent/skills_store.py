@@ -1029,6 +1029,7 @@ def web_skill_judge(workspace: Path, name: str) -> tuple[int, dict]:
 
     merged = ScanReport(findings=det.findings + outcome.findings)
     merged.tools = outcome.tools
+    merged.judge_verdict = outcome.verdict
     findings = [{"category": f.category, "severity": f.severity, "where": f.where,
                  "detail": f.detail} for f in merged.findings]
     source = name

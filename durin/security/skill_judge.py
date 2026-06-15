@@ -229,6 +229,7 @@ def audit_skill(skill_dir: Path, *, judge_enabled: bool = False, judge_model: st
                               max_severity=judge_max_severity)
         rep.findings += outcome.findings
         rep.tools = outcome.tools
+        rep.judge_verdict = outcome.verdict
     except JudgeError as exc:
         logger.info("skill judge skipped (degraded): %s", exc)
     except Exception as exc:  # noqa: BLE001 — never let the judge break import
