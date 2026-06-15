@@ -285,11 +285,59 @@ async def test_call_recovers_after_session_expiry(live_mcp) -> None:
         conn._open_transport_streams = _open.__get__(conn, mc.MCPServerConnection)
 
         out = await conn.call_tool("echo", {"text": "recovered"}, timeout=3.0)
-        if isinstance(out, mc._ConnDown):
-            assert "restarted" in out.message
-        else:
-            assert out.content[0].text == "echo:recovered"
+        # Recovery must succeed: a real result, NOT the spurious "restarted" sentinel.
+        assert not isinstance(out, mc._ConnDown), (
+            f"Recovery returned _ConnDown instead of a real result: {out.message!r}"
+        )
+        assert out.content[0].text == "echo:recovered"
     await conn.aclose()
+
+
+async def test_timeout_then_success_same_session(live_mcp, monkeypatch) -> None:
+    """A per-tool timeout must NOT poison the session stream.
+
+    Call a tool that sleeps long under a short timeout (returns _ConnDown), then
+    immediately call a quick tool on the SAME connection — it must return its real
+    result, not another sentinel.
+    """
+    import durin.agent.tools.mcp_connection as mc
+
+    server = FastMCP("timeouts")
+
+    @server.tool()
+    async def slow_tool() -> str:
+        await asyncio.sleep(5)
+        return "slow"
+
+    @server.tool()
+    async def fast_tool() -> str:
+        return "fast"
+
+    async with _InProcessHarness(server) as h:
+        cfg = MCPServerConfig(command="x", tool_timeout=30)
+        registry = ToolRegistry()
+        conn = mc.MCPServerConnection("timeouts", cfg, registry)
+
+        async def _open(_self):
+            return h.client_streams[0], h.client_streams[1]
+
+        conn._open_transport_streams = _open.__get__(conn, mc.MCPServerConnection)
+        await conn.start()
+
+        # Short timeout: the watchdog cancels the in-flight request.
+        timeout_out = await conn.call_tool("slow_tool", {}, timeout=0.1)
+        assert isinstance(timeout_out, mc._ConnDown), (
+            f"Expected _ConnDown from timeout, got: {timeout_out!r}"
+        )
+
+        # Session stream must not be poisoned: the next call succeeds.
+        fast_out = await conn.call_tool("fast_tool", {}, timeout=5.0)
+        assert not isinstance(fast_out, mc._ConnDown), (
+            f"Session poisoned after timeout; fast_tool returned: {fast_out!r}"
+        )
+        assert fast_out.content[0].text == "fast"
+
+        await conn.aclose()
 
 
 async def test_cancel_propagates_and_aclose_is_clean(live_mcp) -> None:

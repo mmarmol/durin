@@ -614,7 +614,7 @@ class MCPServerConnection:
                     f"(MCP tool '{original_name}' on '{self.name}' timed out after {timeout}s)"
                 )
             if _is_session_expired_error(exc) or _is_transient_conn(exc):
-                recovered = await self._recover_and_retry_tool(original_name, arguments, timeout)
+                recovered = await self._recover_and_retry_tool(session, original_name, arguments, timeout)
                 if recovered is not None:
                     return recovered
             self._bump_error()
@@ -658,12 +658,12 @@ class MCPServerConnection:
                     with __import__("contextlib").suppress(asyncio.CancelledError, Exception):
                         await call_task
 
-    async def _recover_and_retry_tool(self, original_name, arguments, timeout):
+    async def _recover_and_retry_tool(self, stale: Any, original_name, arguments, timeout):
         """Request a transport reconnect, wait briefly for a fresh session,
         retry once. Returns the retry result, a state-lost sentinel, or None
         (caller falls through to the generic error)."""
         self._request_reconnect()
-        fresh = await self._await_fresh_session(timeout=15.0)
+        fresh = await self._await_fresh_session(stale, timeout=15.0)
         if fresh is None:
             return _ConnDown(
                 f"(MCP server '{self.name}' restarted; session state lost)"
@@ -678,26 +678,20 @@ class MCPServerConnection:
             logger.warning("MCP '{}' retry after reconnect failed: {}", self.name, exc)
             return None
 
-    async def _await_fresh_session(self, timeout: float) -> Any | None:
-        """Wait for the current session to tear down, then for a fresh one.
+    async def _await_fresh_session(self, stale: Any, timeout: float) -> Any | None:
+        """Wait for a reconnect to install a session distinct from ``stale``.
 
-        Two-phase: first wait for self.session to become None (in-task
-        teardown in progress), then wait for it to become non-None again
-        (fresh connect complete). Without the first phase, _await_fresh_session
-        would immediately return the stale session object that's still
-        referenced while _serve_once is unwinding.
+        Identity-based (not None-transition based): a fast reconnect's
+        ``session is None`` window can be sub-millisecond and invisible to the
+        poll, so we wait for ``self.session`` to become a NEW non-None object
+        instead. Bounded by ``timeout`` (returns None if reconnect never lands).
         """
         loop = asyncio.get_event_loop()
         deadline = loop.time() + timeout
-        # Phase 1: wait for the old session to be cleared.
         while loop.time() < deadline:
-            if self.session is None:
-                break
-            await asyncio.sleep(0.05)
-        # Phase 2: wait for a fresh session to appear.
-        while loop.time() < deadline:
-            if self.session is not None:
-                return self.session
+            current = self.session
+            if current is not None and current is not stale:
+                return current
             await asyncio.sleep(0.05)
         return None
 
@@ -725,7 +719,7 @@ class MCPServerConnection:
                 return _ConnDown(f"(MCP resource read on '{self.name}' timed out after {timeout}s)")
             if _is_session_expired_error(exc) or _is_transient_conn(exc):
                 self._request_reconnect()
-                fresh = await self._await_fresh_session(timeout=15.0)
+                fresh = await self._await_fresh_session(session, timeout=15.0)
                 if fresh is None:
                     return _ConnDown(
                         f"(MCP server '{self.name}' restarted; session state lost)"
@@ -766,7 +760,7 @@ class MCPServerConnection:
                 return _ConnDown(f"(MCP prompt '{name}' on '{self.name}' timed out after {timeout}s)")
             if _is_session_expired_error(exc) or _is_transient_conn(exc):
                 self._request_reconnect()
-                fresh = await self._await_fresh_session(timeout=15.0)
+                fresh = await self._await_fresh_session(session, timeout=15.0)
                 if fresh is None:
                     return _ConnDown(
                         f"(MCP server '{self.name}' restarted; session state lost)"
