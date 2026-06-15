@@ -20,8 +20,14 @@ such field).
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
+import http.server
+import os
 import re
+import socket
+import threading
+import urllib.parse
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -237,3 +243,139 @@ def build_oauth_provider(
         redirect_handler=redirect_handler,
         callback_handler=callback_handler,
     )
+
+
+# ---- SP-4c: loopback callback server + interactive handlers ----
+
+
+class LoopbackCallback:
+    """Localhost OAuth callback server for the interactive ``durin mcp login``.
+
+    Serves GET /callback on 127.0.0.1 (and ::1), verifies the CSRF ``state``,
+    and resolves :meth:`wait` with ``(code, state)`` — exactly the tuple the
+    SDK's ``callback_handler`` must return.
+
+    Usage::
+
+        cb = LoopbackCallback(port=1456)
+        cb.start()
+        try:
+            redirect_h, callback_h = make_interactive_handlers(cb)
+            provider = build_oauth_provider(..., redirect_handler=redirect_h, callback_handler=callback_h)
+            # ... run the OAuth flow ...
+        finally:
+            cb.stop()
+    """
+
+    def __init__(self, port: int) -> None:
+        self.port = port
+        self.state = base64.urlsafe_b64encode(os.urandom(18)).decode().rstrip("=")
+        self._loop: asyncio.AbstractEventLoop = asyncio.get_event_loop()
+        self._future: asyncio.Future[tuple[str, str | None]] = self._loop.create_future()
+        self._servers: list[http.server.HTTPServer] = []
+
+    def start(self) -> None:
+        """Start the callback server on 127.0.0.1 (and ::1 when available)."""
+        handler = self._make_handler()
+        for host, family in (("127.0.0.1", socket.AF_INET), ("::1", socket.AF_INET6)):
+
+            class _Srv(http.server.HTTPServer):
+                address_family = family
+
+            try:
+                srv = _Srv((host, self.port), handler)
+            except OSError as exc:
+                logger.debug("loopback bind {}:{} failed: {}", host, self.port, exc)
+                continue
+            if self.port == 0:
+                # OS assigned a free port — adopt it for all subsequent binds.
+                self.port = srv.server_address[1]
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            self._servers.append(srv)
+        if not self._servers:
+            raise RuntimeError(f"could not start loopback callback server on :{self.port}")
+
+    def _resolve(self, code: str, state: str | None) -> None:
+        if not self._future.done():
+            self._loop.call_soon_threadsafe(self._future.set_result, (code, state))
+
+    def _make_handler(self) -> type[http.server.BaseHTTPRequestHandler]:
+        cb = self
+
+        class _H(http.server.BaseHTTPRequestHandler):
+            def do_GET(self) -> None:  # noqa: N802
+                parsed = urllib.parse.urlparse(self.path)
+                if not parsed.path.endswith("/callback"):
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                qs = urllib.parse.parse_qs(parsed.query)
+                code = (qs.get("code") or [None])[0]
+                got = (qs.get("state") or [None])[0]
+                ok = bool(code) and got == cb.state
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.end_headers()
+                msg = (
+                    "Connected to durin. You can close this tab."
+                    if ok
+                    else "Authorization failed. Return to durin and retry."
+                )
+                self.wfile.write(
+                    f"<!doctype html><meta charset=utf-8>"
+                    f"<body style='font-family:sans-serif;padding:2rem'>"
+                    f"<h2>{msg}</h2></body>".encode()
+                )
+                if ok:
+                    cb._resolve(code, got)  # type: ignore[arg-type]
+
+            def log_message(self, *a: Any) -> None:  # silence
+                return
+
+        return _H
+
+    async def wait(self) -> tuple[str, str | None]:
+        """Await the OAuth code + state. Resolves once the browser redirects back."""
+        return await self._future
+
+    def stop(self) -> None:
+        """Shut down the callback servers."""
+        for srv in self._servers:
+            try:
+                srv.shutdown()
+            except Exception:  # noqa: BLE001
+                pass
+        self._servers = []
+
+
+def make_interactive_handlers(
+    callback: LoopbackCallback,
+    *,
+    open_browser: bool = True,
+) -> tuple[Callable[[str], Awaitable[None]], Callable[[], Awaitable[tuple[str, str | None]]]]:
+    """Return ``(redirect_handler, callback_handler)`` for ``durin mcp login``.
+
+    ``redirect_handler`` opens the user's browser at the authorize URL.
+    ``callback_handler`` blocks until the loopback server captures the code,
+    with a 5-minute timeout (matching the SDK's own default).
+    """
+
+    async def _redirect(authorization_url: str) -> None:
+        from rich.console import Console as _Console
+
+        _Console().print(
+            f"[dim]Opening browser for authorization…[/dim]\n"
+            f"[dim]If it doesn't open, visit:[/dim] {authorization_url}"
+        )
+        if open_browser:
+            import webbrowser
+
+            try:
+                webbrowser.open(authorization_url)
+            except Exception:  # noqa: BLE001
+                pass
+
+    async def _callback() -> tuple[str, str | None]:
+        return await asyncio.wait_for(callback.wait(), timeout=300)
+
+    return _redirect, _callback
