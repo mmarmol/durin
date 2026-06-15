@@ -7,6 +7,7 @@ import re
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Awaitable, Callable
 
 import durin.agent.skill_resolve as _resolve
 from durin.agent.skill_resolve import SkillCandidate
@@ -476,7 +477,6 @@ def runnable_install_specs(skill_dir) -> list[dict]:
     """Safe, runnable install specs as ``[{kind, value, command, needs_privileges}]``.
     A spec the §8.C scanner flags ``dangerous`` is dropped; the ``download`` kind is
     excluded (install manually). No execution here — see the skill_install_deps tool."""
-    from pathlib import Path
 
     from durin.security.skill_scan import validate_install_specs
 
@@ -521,6 +521,19 @@ def runnable_install_specs(skill_dir) -> list[dict]:
                 "needs_privileges": kind in _NEEDS_PRIV,
             })
     return out
+
+
+async def run_install_specs(specs: list[dict], *,
+                            exec_run: Callable[..., Awaitable[str]]) -> list[dict]:
+    results: list[dict] = []
+    for spec in specs:
+        cmd = spec["command"]
+        try:
+            output = await exec_run(command=cmd)
+            results.append({"command": cmd, "success": True, "output": str(output)[-2000:]})
+        except Exception as exc:  # noqa: BLE001
+            results.append({"command": cmd, "success": False, "error": str(exc)})
+    return results
 
 
 def trust_prefix_for(ref: str) -> str:
