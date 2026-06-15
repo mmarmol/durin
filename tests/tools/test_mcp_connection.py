@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from contextlib import asynccontextmanager
 
 import pytest
 from mcp.server.fastmcp import Context, FastMCP
@@ -743,3 +744,37 @@ async def test_resource_read_timeout() -> None:
         assert isinstance(out, mc._ConnDown)
         assert "timed out" in out.message.lower() or "failed" in out.message.lower()
         await conn.aclose()
+
+
+async def test_transport_http_falls_back_to_sse(monkeypatch) -> None:
+    import mcp.client.sse as _sse_mod
+    import mcp.client.streamable_http as _shttp_mod
+
+    import durin.agent.tools.mcp_connection as mc
+
+    calls: list[str] = []
+
+    @asynccontextmanager
+    async def fake_streamable(url, http_client=None):
+        calls.append("http")
+        raise ConnectionError("http endpoint not available")
+        yield  # noqa: unreachable
+
+    @asynccontextmanager
+    async def fake_sse(url, httpx_client_factory=None):
+        calls.append("sse")
+        yield object(), object()
+
+    monkeypatch.setattr(_shttp_mod, "streamable_http_client", fake_streamable)
+    monkeypatch.setattr(_sse_mod, "sse_client", fake_sse)
+    # Patch _probe_http_url in mcp_connection to always return True (no real network).
+    async def _always_reachable(url, timeout=3.0):
+        return True
+
+    monkeypatch.setattr(mc, "_probe_http_url", _always_reachable)
+
+    cfg = MCPServerConfig(type="streamableHttp", url="http://localhost:9/mcp")
+    conn = mc.MCPServerConnection("http", cfg, ToolRegistry())
+    read, write = await conn._open_transport_streams()
+    assert calls == ["http", "sse"]  # tried streamableHttp, fell back to SSE
+    await conn._close_transport_streams()
