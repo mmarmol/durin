@@ -12,9 +12,8 @@ from typing import Any, Mapping, Sequence
 from durin.agent.memory import MemoryStore
 from durin.agent.skill_usage import compute_working_set
 from durin.agent.skills import SkillsLoader
+from durin.agent.task_state import task_state_runtime_lines
 from durin.memory.hot_layer import read_hot_layer
-from durin.session.goal_state import goal_state_runtime_lines
-from durin.session.todo_state import todos_runtime_lines
 from durin.utils.helpers import (
     current_time_str,
     detect_image_mime,
@@ -413,30 +412,11 @@ class ContextBuilder:
         iteration: int | None = None,
     ) -> list[dict[str, Any]]:
         """Build the complete message list for an LLM call."""
-        from durin.agent.agent_mode import (
-            executing_plan_runtime_lines,
-            plan_mode_runtime_lines,
-        )
-
-        extra = goal_state_runtime_lines(session_metadata)
-        # Echo the agent's todo list so it survives compaction. Without
-        # this, the list lives only in session metadata and the model
-        # forgets it once the relevant tool result scrolls out.
-        extra = list(extra) + todos_runtime_lines(session_metadata)
-        # Per-turn plan-mode reminder (OpenClaude pattern). When the session
-        # is in plan mode, inject a strongly-worded reminder next to the
-        # current user message so the model can't "forget" the mode between
-        # turns the way it does when the constraint lives only in the
-        # system prompt.
-        extra = list(extra) + plan_mode_runtime_lines(session_metadata)
-        # Per-turn pointer to the approved plan currently executing. Re-
-        # derived from session.metadata every turn (same store + cadence as
-        # the todo echo above) so the "executing an approved plan" frame
-        # survives compaction. This replaces the carry-over the refuted
-        # `autocompact` module used to do by splicing plan content into the
-        # summary — here it's a lightweight pointer; progress lives in the
-        # todo list, so it does not make the model re-run completed steps.
-        extra = list(extra) + executing_plan_runtime_lines(session_metadata)
+        # Concern B: the task-state anchor groups goal + decision log + todos
+        # + executing-plan pointer under one <task-state> frame, re-injected
+        # every turn (derived from session.metadata, so it survives
+        # compaction). See durin/agent/task_state.py and docs/architecture/loop.md.
+        extra = task_state_runtime_lines(session_metadata)
         # Sprint B / file-based plans — after /build approves a plan,
         # surface the path so the next turn can read it without the user
         # having to copy/paste it. One-shot (consumed below); the persistent
