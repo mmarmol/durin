@@ -55,6 +55,7 @@ class DurinApp(App[None]):
         ("ctrl+l", "open_model_picker", "Model"),
         ("ctrl+y", "copy_last_assistant", "Copy"),
         ("ctrl+p", "open_command_palette", "Commands"),
+        ("ctrl+shift+l", "open_variant_picker", "Effort"),
     ]
 
     def __init__(
@@ -619,6 +620,10 @@ class DurinApp(App[None]):
         """Ctrl+P: open the command palette modal."""
         self._open_command_palette()
 
+    def action_open_variant_picker(self) -> None:
+        """Ctrl+Shift+L: open the reasoning effort picker."""
+        self._open_variant_picker()
+
     def action_copy_last_assistant(self) -> None:
         """Ctrl+Y: copy the last assistant message body to the clipboard.
 
@@ -745,6 +750,53 @@ class DurinApp(App[None]):
                 await self.action_abort()
             elif action == "quit":
                 self.exit()
+
+    @work
+    async def _open_variant_picker(self) -> None:
+        """Ctrl+Shift+L — pick reasoning effort level for the active model."""
+        from durin.cli.tui.screens.variant_picker import VariantPickerScreen
+
+        if self._agent_loop is None:
+            return
+
+        presets = self._agent_loop.model_presets
+        active_name = self._model_label()[1]
+        active_preset = presets.get(active_name)
+        active_effort = getattr(active_preset, "reasoning_effort", None)
+
+        selected = await self.push_screen_wait(
+            VariantPickerScreen(active=active_effort)
+        )
+        if not selected or selected == VariantPickerScreen._CANCEL_SENTINEL:
+            return
+
+        # "default" means effort=None (provider default).
+        effort: str | None = None if selected == "default" else selected
+
+        if active_preset is None:
+            return
+
+        # If the effort hasn't changed, do nothing.
+        current = getattr(active_preset, "reasoning_effort", None)
+        if current == effort:
+            return
+
+        # Create a temp preset variant with the new effort.
+        from durin.config.schema import ModelPresetConfig
+
+        variant_name = f"{active_name}:{selected}"
+        variant = ModelPresetConfig(
+            model=active_preset.model,
+            provider=active_preset.provider,
+            max_tokens=active_preset.max_tokens,
+            context_window_tokens=active_preset.context_window_tokens,
+            temperature=active_preset.temperature,
+            reasoning_effort=effort,
+            preemptive_compact_ratio=active_preset.preemptive_compact_ratio,
+        )
+        presets[variant_name] = variant
+        add_recent_model(variant_name)
+        await self._publish_inbound(f"/model {variant_name}", [])
 
     def _set_palette(self, name: str) -> None:
         """Switch the colour palette (the `/theme <name>` form)."""
