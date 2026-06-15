@@ -1,5 +1,6 @@
 """Textual widgets for the durin TUI."""
 
+from durin.cli.tui.widgets.activity_cluster import ActivityCluster
 from durin.cli.tui.widgets.chat_view import ChatView, MessageBubble
 from durin.cli.tui.widgets.completions_hint import CompletionsHint
 from durin.cli.tui.widgets.footer_bar import FooterBar
@@ -10,10 +11,13 @@ from durin.cli.tui.widgets.input_area import (
     MultiModeSuggester,
     SlashCommandSuggester,
 )
+from durin.cli.tui.widgets.sidebar_panel import SidebarPanel
+from durin.cli.tui.widgets.toast import ToastNotification
 from durin.cli.tui.widgets.tool_call_bubble import ToolCallBubble
 from durin.cli.tui.widgets.working_indicator import WorkingIndicator
 
 __all__ = [
+    "ActivityCluster",
     "AtFileSuggester",
     "ChatView",
     "CompletionsHint",
@@ -22,7 +26,9 @@ __all__ = [
     "InputArea",
     "MessageBubble",
     "MultiModeSuggester",
+    "SidebarPanel",
     "SlashCommandSuggester",
+    "ToastNotification",
     "ToolCallBubble",
     "WorkingIndicator",
 ]

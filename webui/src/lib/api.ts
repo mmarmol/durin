@@ -861,6 +861,7 @@ export interface ModelCapabilities {
   supports_vision: boolean;
   supports_audio_input: boolean;
   supports_function_calling: boolean;
+  supports_reasoning?: boolean;
 }
 
 export async function getModelCapabilities(

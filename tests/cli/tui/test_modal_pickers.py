@@ -14,6 +14,7 @@ from durin.cli.tui.app import DurinApp
 from durin.cli.tui.screens.session_picker import SessionEntry, SessionPickerScreen
 from durin.cli.tui.screens.model_picker import ModelPickerScreen
 from durin.cli.tui.widgets import ChatView, InputArea, MessageBubble
+from durin.config.schema import ModelPresetConfig
 
 
 def _fake_agent_loop(bus: MessageBus, tmp_path) -> SimpleNamespace:
@@ -28,7 +29,10 @@ def _fake_agent_loop(bus: MessageBus, tmp_path) -> SimpleNamespace:
         workspace=str(tmp_path),
         model="m",
         model_preset="default",
-        model_presets={"default": object(), "fast": object()},
+        model_presets={
+            "default": ModelPresetConfig(model="glm-5.2"),
+            "fast": ModelPresetConfig(model="glm-5-turbo"),
+        },
         context_window_tokens=200_000,
         sessions=SimpleNamespace(
             sessions_dir=sessions_dir,
@@ -95,13 +99,21 @@ async def test_session_picker_renders_entries() -> None:
 
 @pytest.mark.asyncio
 async def test_model_picker_renders_presets() -> None:
+    from durin.cli.tui.model_catalog import ModelEntry
+    from durin.providers.capabilities import ModelCapabilities
+
+    entries = [
+        ModelEntry("default", "auto", True, False, ModelCapabilities(model="default")),
+        ModelEntry("fast", "auto", True, False, ModelCapabilities(model="fast")),
+        ModelEntry("opus", "auto", True, False, ModelCapabilities(model="opus")),
+    ]
     app = DurinApp(agent_loop=None)
     async with app.run_test() as pilot:
-        screen = ModelPickerScreen(["default", "fast", "opus"], active="fast")
+        screen = ModelPickerScreen(entries, active="fast")
         app.push_screen(screen)
         await pilot.pause()
         from textual.widgets import OptionList
-        opts = app.screen.query_one(OptionList)
+        opts = app.screen.query_one("#model-picker-list", OptionList)
         labels = [str(opts.get_option_at_index(i).prompt) for i in range(opts.option_count)]
         assert any("fast" in lab and "← active" in lab for lab in labels)
         assert any("opus" in lab for lab in labels)

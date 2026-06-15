@@ -2447,6 +2447,7 @@ class WebSocketChannel(BaseChannel):
                 "supports_function_calling": bool(
                     getattr(caps, "supports_function_calling", False)
                 ),
+                "supports_reasoning": bool(getattr(caps, "supports_reasoning", False)),
             }
         )
 

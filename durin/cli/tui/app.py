@@ -29,7 +29,7 @@ from typing import Any
 from textual import __version__ as TEXTUAL_VERSION
 from textual import work
 from textual.app import App, ComposeResult
-from textual.containers import Vertical
+from textual.containers import Horizontal, Vertical
 from textual.widgets import Input
 
 from durin import __version__ as DURIN_VERSION
@@ -54,6 +54,9 @@ class DurinApp(App[None]):
         ("ctrl+t", "toggle_dark", "Theme"),
         ("ctrl+l", "open_model_picker", "Model"),
         ("ctrl+y", "copy_last_assistant", "Copy"),
+        ("ctrl+p", "open_command_palette", "Commands"),
+        ("ctrl+shift+l", "open_variant_picker", "Effort"),
+        ("ctrl+b", "toggle_sidebar", "Sidebar"),
     ]
 
     def __init__(
@@ -83,6 +86,8 @@ class DurinApp(App[None]):
         # Track active tool-call bubbles by call_id so the "end" event
         # updates the same widget the "start" event created.
         self._tool_bubbles: dict[str, Any] = {}
+        # ActivityCluster wrapping reasoning + tool bubbles during a turn.
+        self._active_cluster: Any = None
         self._bus_task: asyncio.Task | None = None
         self._consume_task: asyncio.Task | None = None
         # Fire-and-forget tasks (submit publishes, tool-bubble notes) parked
@@ -92,6 +97,18 @@ class DurinApp(App[None]):
         self._palette = "ithildin"
         self._mode = "dark"
         self._apply_durin_theme()
+
+    # ---- toast ---------------------------------------------------------------
+
+    def toast(self, message: str, level: str = "info", duration: float = 2.0) -> None:
+        """Show a transient toast notification at the top of the screen."""
+        from durin.cli.tui.widgets.toast import ToastNotification
+
+        try:
+            toast = ToastNotification(message, level=level, duration=duration)
+            self.mount(toast)
+        except Exception:  # noqa: BLE001
+            pass
 
     # ---- theme ------------------------------------------------------------
 
@@ -135,23 +152,25 @@ class DurinApp(App[None]):
     # ---- composition ------------------------------------------------------
 
     def compose(self) -> ComposeResult:
-        from durin.cli.tui.widgets import CompletionsHint
+        from durin.cli.tui.widgets import CompletionsHint, SidebarPanel
 
         session_label = f"{self._cli_channel}:{self._cli_chat_id}"
         session_meta = self._compute_session_meta()
-        with Vertical(id="main-layout"):
-            yield HeaderBar(session_label=session_label, session_meta=session_meta)
-            yield ChatView(id="chat")
-            yield CompletionsHint()
-            yield InputArea(
-                placeholder="message durin",
-                workspace=Path(self._agent_loop.workspace) if self._agent_loop else None,
-            )
-            yield FooterBar(
-                payload_getter=lambda: payload_from_loop(
-                    self._agent_loop, self._cli_channel, self._cli_chat_id
-                ),
-            )
+        with Horizontal(id="app-layout"):
+            yield SidebarPanel()
+            with Vertical(id="main-layout"):
+                yield HeaderBar(session_label=session_label, session_meta=session_meta)
+                yield ChatView(id="chat")
+                yield CompletionsHint()
+                yield InputArea(
+                    placeholder="message durin",
+                    workspace=Path(self._agent_loop.workspace) if self._agent_loop else None,
+                )
+                yield FooterBar(
+                    payload_getter=lambda: payload_from_loop(
+                        self._agent_loop, self._cli_channel, self._cli_chat_id
+                    ),
+                )
 
     def _compute_session_meta(self) -> str:
         """Return a short '47 msgs · 12h ago' string for the header.
@@ -189,6 +208,14 @@ class DurinApp(App[None]):
         # the scrollable history — and silently swallows keystrokes
         # until the user tabs or clicks into the input.
         self.query_one(InputArea).focus()
+
+        # Load prompt history for Up/Down recall
+        from durin.cli.tui.state import get_prompt_history
+
+        try:
+            self.query_one(InputArea).load_history(get_prompt_history())
+        except Exception:  # noqa: BLE001
+            pass
 
         if self._agent_loop is None:
             return
@@ -433,6 +460,10 @@ class DurinApp(App[None]):
 
         chat = self.query_one("#chat", ChatView)
         chat.add_message("user", value)
+        # Persist prompt to history for Up/Down recall
+        from durin.cli.tui.state import add_prompt
+
+        add_prompt(value)
         # Open a fresh assistant bubble for streaming. Tokens land via
         # the _stream_delta path in _consume_outbound.
         self._current_assistant_bubble = chat.add_message("assistant", "")
@@ -478,6 +509,49 @@ class DurinApp(App[None]):
             pass
         self._working_indicator = None
 
+    def _get_or_create_cluster(self) -> Any:
+        """Return the active ActivityCluster, creating one if needed.
+
+        The cluster groups reasoning + tool bubbles into a collapsible
+        section. It's finalized (collapsed + summary) when the assistant
+        text starts streaming.
+        """
+        from durin.cli.tui.widgets.activity_cluster import ActivityCluster
+
+        if self._active_cluster is not None:
+            try:
+                self._active_cluster.query_one("#cluster-header")
+                return self._active_cluster
+            except Exception:  # noqa: BLE001
+                self._active_cluster = None
+
+        try:
+            chat = self.query_one("#chat", ChatView)
+            cluster = ActivityCluster()
+            chat.mount(cluster)
+            chat.scroll_end(animate=False)
+            self._active_cluster = cluster
+            return cluster
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _finalize_cluster(self) -> None:
+        """Collapse the active cluster and switch its header to 'Done'."""
+        if self._active_cluster is not None:
+            try:
+                self._active_cluster.finalize()
+            except Exception:  # noqa: BLE001
+                pass
+            self._active_cluster = None
+        # Refresh the sidebar (files may have changed during the turn).
+        try:
+            from durin.cli.tui.widgets import SidebarPanel
+
+            sidebar = self.query_one(SidebarPanel)
+            sidebar.refresh_content()
+        except Exception:  # noqa: BLE001
+            pass
+
     def _render_tool_event(self, event: dict[str, Any]) -> None:
         """Add or update a ToolCallBubble for one tool-call lifecycle event."""
         from durin.cli.tui.widgets import ToolCallBubble
@@ -487,9 +561,17 @@ class DurinApp(App[None]):
 
         if phase == "start" or call_id not in self._tool_bubbles:
             try:
-                chat = self.query_one("#chat", ChatView)
+                from durin.cli.tui.widgets import ToolCallBubble
+
                 bubble = ToolCallBubble(event)
-                chat.mount(bubble)
+                cluster = self._get_or_create_cluster()
+                if cluster is not None:
+                    cluster.mount(bubble)
+                    cluster.add_tool_step()
+                else:
+                    chat = self.query_one("#chat", ChatView)
+                    chat.mount(bubble)
+                chat = self.query_one("#chat", ChatView)
                 chat.scroll_end(animate=False)
                 self._tool_bubbles[call_id] = bubble
             except Exception:  # noqa: BLE001
@@ -544,6 +626,23 @@ class DurinApp(App[None]):
         """Ctrl+L: open the model picker modal (D5.5)."""
         self._open_model_picker()
 
+    def action_open_command_palette(self) -> None:
+        """Ctrl+P: open the command palette modal."""
+        self._open_command_palette()
+
+    def action_open_variant_picker(self) -> None:
+        """Ctrl+Shift+L: open the reasoning effort picker."""
+        self._open_variant_picker()
+
+    def action_toggle_sidebar(self) -> None:
+        """Ctrl+B: toggle the left sidebar (Todos / Files / MCP)."""
+        from durin.cli.tui.widgets import SidebarPanel
+
+        sidebar = self.query_one(SidebarPanel)
+        sidebar.set_agent_loop(self._agent_loop)
+        sidebar.set_session_key(f"{self._cli_channel}:{self._cli_chat_id}")
+        sidebar.toggle()
+
     def action_copy_last_assistant(self) -> None:
         """Ctrl+Y: copy the last assistant message body to the clipboard.
 
@@ -592,19 +691,44 @@ class DurinApp(App[None]):
 
     @work
     async def _open_model_picker(self) -> None:
+        from durin.cli.tui.model_catalog import build_entries, infer_provider
         from durin.cli.tui.screens import ModelPickerScreen
+        from durin.cli.tui.state import add_recent_model, get_recent_models
+        from durin.config.loader import load_config
+        from durin.config.schema import ModelPresetConfig
 
-        presets = self._collect_model_presets()
-        active = self._model_label()[1]
-        if not presets:
-            chat = self.query_one("#chat", ChatView)
-            chat.add_message("system", "No model presets configured.")
+        if self._agent_loop is None:
             return
-        selected = await self.push_screen_wait(
-            ModelPickerScreen(presets, active=active)
+
+        config = load_config()
+        presets = self._agent_loop.model_presets
+        active = self._model_label()[1]
+        recent = get_recent_models()
+
+        entries = build_entries(
+            config=config,
+            presets=presets,
+            recent=recent,
+            active=active,
         )
-        if selected and selected != active:
-            await self._publish_inbound(f"/model {selected}", [])
+        if not entries:
+            chat = self.query_one("#chat", ChatView)
+            chat.add_message("system", "No models available.")
+            return
+
+        selected = await self.push_screen_wait(
+            ModelPickerScreen(entries, active=active)
+        )
+        if not selected or selected == active:
+            return
+
+        if selected not in presets:
+            provider = infer_provider(selected)
+            temp = ModelPresetConfig(model=selected, provider=provider)
+            presets[selected] = temp
+
+        add_recent_model(selected)
+        await self._publish_inbound(f"/model {selected}", [])
 
     @work
     async def _open_theme_picker(self) -> None:
@@ -616,6 +740,84 @@ class DurinApp(App[None]):
         )
         if selected and selected != self._palette:
             self._set_palette(selected)
+
+    @work
+    async def _open_command_palette(self) -> None:
+        """Ctrl+P — fuzzy-searchable palette of all commands and actions."""
+        from durin.cli.tui.screens.command_palette import CommandPaletteScreen
+
+        selected = await self.push_screen_wait(CommandPaletteScreen())
+        if not selected:
+            return
+
+        if selected.startswith("cmd:"):
+            # Publish the slash command (strip the "cmd:" prefix).
+            await self._publish_inbound(selected[4:], [])
+        elif selected.startswith("act:"):
+            action = selected[4:]
+            if action == "open_model_picker":
+                self._open_model_picker()
+            elif action == "open_theme_picker":
+                await self._open_theme_picker()
+            elif action == "open_session_picker":
+                await self._open_session_picker()
+            elif action == "copy_last":
+                self.action_copy_last_assistant()
+            elif action == "toggle_dark":
+                self.action_toggle_dark()
+            elif action == "abort":
+                await self.action_abort()
+            elif action == "toggle_sidebar":
+                self.action_toggle_sidebar()
+            elif action == "quit":
+                self.exit()
+
+    @work
+    async def _open_variant_picker(self) -> None:
+        """Ctrl+Shift+L — pick reasoning effort level for the active model."""
+        from durin.cli.tui.screens.variant_picker import VariantPickerScreen
+
+        if self._agent_loop is None:
+            return
+
+        presets = self._agent_loop.model_presets
+        active_name = self._model_label()[1]
+        active_preset = presets.get(active_name)
+        active_effort = getattr(active_preset, "reasoning_effort", None)
+
+        selected = await self.push_screen_wait(
+            VariantPickerScreen(active=active_effort)
+        )
+        if not selected or selected == VariantPickerScreen._CANCEL_SENTINEL:
+            return
+
+        # "default" means effort=None (provider default).
+        effort: str | None = None if selected == "default" else selected
+
+        if active_preset is None:
+            return
+
+        # If the effort hasn't changed, do nothing.
+        current = getattr(active_preset, "reasoning_effort", None)
+        if current == effort:
+            return
+
+        # Create a temp preset variant with the new effort.
+        from durin.config.schema import ModelPresetConfig
+
+        variant_name = f"{active_name}:{selected}"
+        variant = ModelPresetConfig(
+            model=active_preset.model,
+            provider=active_preset.provider,
+            max_tokens=active_preset.max_tokens,
+            context_window_tokens=active_preset.context_window_tokens,
+            temperature=active_preset.temperature,
+            reasoning_effort=effort,
+            preemptive_compact_ratio=active_preset.preemptive_compact_ratio,
+        )
+        presets[variant_name] = variant
+        add_recent_model(variant_name)
+        await self._publish_inbound(f"/model {variant_name}", [])
 
     def _set_palette(self, name: str) -> None:
         """Switch the colour palette (the `/theme <name>` form)."""
@@ -758,8 +960,19 @@ class DurinApp(App[None]):
             # drop the spinner.
             self._dismiss_working_indicator()
             if self._current_reasoning_bubble is None:
+                from durin.cli.tui.widgets.chat_view import MessageBubble
+
+                cluster = self._get_or_create_cluster()
+                bubble = MessageBubble(role="reasoning", body="")
+                if cluster is not None:
+                    cluster.mount(bubble)
+                    cluster.add_reasoning_step()
+                else:
+                    chat = self.query_one("#chat", ChatView)
+                    chat.mount(bubble)
                 chat = self.query_one("#chat", ChatView)
-                self._current_reasoning_bubble = chat.add_message("reasoning", "")
+                chat.scroll_end(animate=False)
+                self._current_reasoning_bubble = bubble
             self._current_reasoning_bubble.append(msg.content or "")
             return
         if meta.get("_reasoning_end"):
@@ -782,12 +995,21 @@ class DurinApp(App[None]):
         if meta.get("_stream_delta"):
             # Content is now flowing — drop the spinner.
             self._dismiss_working_indicator()
+            # Finalize the activity cluster (collapse reasoning + tools).
+            self._finalize_cluster()
             if self._current_assistant_bubble is not None:
                 self._current_assistant_bubble.append(msg.content or "")
             return
 
         if meta.get("_stream_end"):
+            # Check if the finalized assistant bubble looks like an error
+            if self._current_assistant_bubble is not None:
+                from durin.cli.tui.widgets.chat_view import looks_like_error
+
+                if looks_like_error(self._current_assistant_bubble.body or ""):
+                    self._current_assistant_bubble.mark_error()
             self._current_assistant_bubble = None
+            self._finalize_cluster()
             # Belt-and-suspenders: if a turn ends without any content
             # (rare error path), make sure the spinner doesn't linger.
             self._dismiss_working_indicator()
@@ -795,6 +1017,7 @@ class DurinApp(App[None]):
 
         if meta.get("_streamed"):
             # End-of-turn signal; UI already streamed via deltas.
+            self._finalize_cluster()
             self._dismiss_working_indicator()
             return
 

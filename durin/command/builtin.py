@@ -440,6 +440,55 @@ async def cmd_model(ctx: CommandContext) -> OutboundMessage:
     )
 
 
+async def cmd_effort(ctx: CommandContext) -> OutboundMessage:
+    """Set reasoning effort level for the active model preset."""
+    from durin.config.schema import ModelPresetConfig
+
+    loop = ctx.loop
+    args = ctx.args.strip().lower()
+    metadata = {**dict(ctx.msg.metadata or {}), "render_as": "text"}
+
+    valid = {"", "none", "low", "medium", "high", "max"}
+    if args and args not in valid:
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content=f"Invalid effort level `{args}`. Valid: {', '.join(sorted(v for v in valid if v))}.",
+            metadata=metadata,
+        )
+
+    active_name = _active_model_preset_name(loop)
+    base_preset = loop.model_presets.get(active_name)
+    if base_preset is None:
+        return OutboundMessage(
+            channel=ctx.msg.channel,
+            chat_id=ctx.msg.chat_id,
+            content="No active preset found.",
+            metadata=metadata,
+        )
+
+    effort_val = args or None
+    variant_name = f"{active_name}:{effort_val}" if effort_val else active_name
+    loop.model_presets[variant_name] = ModelPresetConfig(
+        model=base_preset.model,
+        provider=base_preset.provider,
+        max_tokens=base_preset.max_tokens,
+        context_window_tokens=base_preset.context_window_tokens,
+        temperature=base_preset.temperature,
+        reasoning_effort=effort_val,
+        preemptive_compact_ratio=base_preset.preemptive_compact_ratio,
+    )
+    loop.set_model_preset(variant_name)
+
+    label = effort_val if effort_val else "default"
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content=f"Reasoning effort set to `{label}` for `{base_preset.model}`.",
+        metadata=metadata,
+    )
+
+
 async def cmd_dream(ctx: CommandContext) -> OutboundMessage:
     """Manually trigger a Dream consolidation run."""
     import time
@@ -1969,6 +2018,8 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.exact("/status", cmd_status)
     router.exact("/model", cmd_model)
     router.prefix("/model ", cmd_model)
+    router.exact("/effort", cmd_effort)
+    router.prefix("/effort ", cmd_effort)
     router.exact("/history", cmd_history)
     router.prefix("/history ", cmd_history)
     router.exact("/goal", cmd_goal)
