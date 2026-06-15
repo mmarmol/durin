@@ -463,3 +463,31 @@ async def test_breaker_resets_on_reconnect(live_mcp, monkeypatch) -> None:
                 break
         assert conn.breaker_state() == mc.BreakerState.CLOSED
     await conn.aclose()
+
+
+# ---------------------------------------------------------------------------
+# Sub-phase 2d — tools/list_changed
+# ---------------------------------------------------------------------------
+
+
+async def test_list_changed_rediscovers_tools(live_mcp) -> None:
+    factory, harness = live_mcp
+    conn, registry = factory(keepalive_interval=10.0)
+    await conn.start()
+    assert registry.get("mcp_harness_added") is None
+
+    # Add a tool to the LIVE server, then make the server emit the
+    # notification via the emit_change tool.
+    async def added(x: int) -> int:
+        return x + 1
+
+    harness.server.add_tool(added, name="added")
+    await conn.call_tool("emit_change", {}, timeout=3.0)
+
+    # The handler schedules a decoupled refresh; wait for it to land.
+    for _ in range(60):
+        await asyncio.sleep(0.05)
+        if registry.get("mcp_harness_added") is not None:
+            break
+    assert registry.get("mcp_harness_added") is not None
+    await conn.aclose()

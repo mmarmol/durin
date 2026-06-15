@@ -146,6 +146,11 @@ class MCPServerConnection:
             getattr(cfg, "keepalive_interval", _KEEPALIVE_INTERVAL)
         )
 
+        # list_changed refresh state.
+        self._refresh_lock = asyncio.Lock()
+        self._pending_refresh: set[asyncio.Task] = set()
+        self._refresh_generation = 0
+
     # ----- transport -----
 
     async def _open_transport_streams(self):
@@ -270,8 +275,78 @@ class MCPServerConnection:
             await self._close_transport_streams()
 
     def _session_kwargs(self) -> dict:
-        """ClientSession kwargs. 2d adds message_handler here."""
-        return {}
+        return {"message_handler": self._make_message_handler()}
+
+    def _make_message_handler(self):
+        async def _handler(message) -> None:
+            try:
+                if isinstance(message, Exception):
+                    return
+                # Lazy lookup so the fake-mcp tests (sys.modules["mcp"] is a stub
+                # ModuleType with no real subpackage) don't ImportError at session
+                # construction time.
+                import sys as _sys
+                _types = _sys.modules.get("mcp.types")
+                if _types is None:
+                    try:
+                        import mcp.types as _types  # noqa: PLC0415
+                    except ImportError:
+                        return
+                ServerNotification = getattr(_types, "ServerNotification", None)
+                ToolListChangedNotification = getattr(_types, "ToolListChangedNotification", None)
+                if (
+                    ServerNotification is not None
+                    and ToolListChangedNotification is not None
+                    and isinstance(message, ServerNotification)
+                    and isinstance(message.root, ToolListChangedNotification)
+                ):
+                    logger.info("MCP server '{}': tools/list_changed", self.name)
+                    self._schedule_refresh()
+                    await asyncio.sleep(0)  # let tests observe the scheduled task
+            except Exception:  # noqa: BLE001
+                logger.exception("MCP '{}': message handler error", self.name)
+
+        return _handler
+
+    def _schedule_refresh(self) -> asyncio.Task:
+        task = asyncio.ensure_future(self._refresh_tools_task())
+        self._pending_refresh.add(task)
+        task.add_done_callback(self._pending_refresh.discard)
+        return task
+
+    async def _refresh_tools_task(self) -> None:
+        try:
+            await self._refresh_tools()
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            logger.exception("MCP '{}': dynamic refresh failed", self.name)
+
+    async def _refresh_tools(self) -> None:
+        if not self._advertises_tools():
+            return
+        async with self._refresh_lock:
+            session = self.session
+            if session is None:
+                return
+            old = set(self._registered_names)
+            async with self._rpc_lock:
+                tools_result = await session.list_tools()
+            new_mcp = tools_result.tools if hasattr(tools_result, "tools") else []
+            new_wrapped = {
+                _sanitize_name(f"mcp_{self.name}_{t.name}") for t in new_mcp
+            }
+            # In-place: deregister only names that vanished.
+            for stale in old - new_wrapped:
+                self._registry.unregister(stale)
+            await self._register_capabilities()
+            added = set(self._registered_names) - old
+            removed = old - set(self._registered_names)
+            if added or removed:
+                logger.warning(
+                    "MCP server '{}': tools changed — added {}, removed {}",
+                    self.name, sorted(added), sorted(removed),
+                )
 
     async def _wait_for_lifecycle_event(self) -> None:
         """Park until shutdown or reconnect; heartbeat the session between.
@@ -328,6 +403,11 @@ class MCPServerConnection:
                     await self._task
                 except asyncio.CancelledError:
                     pass
+        for task in list(self._pending_refresh):
+            task.cancel()
+        if self._pending_refresh:
+            await asyncio.gather(*self._pending_refresh, return_exceptions=True)
+            self._pending_refresh.clear()
         for tool_name in list(self._registered_names):
             self._registry.unregister(tool_name)
         self._registered_names = []
