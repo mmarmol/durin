@@ -776,6 +776,23 @@ class MCPOAuthConfig(Base):
     callback_port: int = 1456  # loopback callback port for `durin mcp login`
 
 
+class MCPSamplingConfig(Base):
+    """Governance for server-initiated ``sampling/createMessage`` (SP-6).
+
+    Sampling lets an MCP server ask durin's LLM to generate text. It is
+    **off by default** — a server only gains LLM access when the user opts
+    in. All limits below bound what a server can do once enabled.
+    """
+
+    enabled: bool = False
+    model: str | None = None
+    allowed_models: list[str] = Field(default_factory=list)
+    max_tokens_cap: int = 4096
+    requests_per_minute: int = 10
+    allow_tools: bool = True
+    max_tool_rounds: int = 4
+
+
 class MCPServerConfig(Base):
     """MCP server connection configuration (stdio or HTTP)."""
 
@@ -793,6 +810,7 @@ class MCPServerConfig(Base):
     oauth: bool | MCPOAuthConfig | None = None  # mark server as OAuth-requiring; True = DCR defaults
     allow_private_url: bool = False  # opt this server out of the SSRF private-IP block (off = blocked)
     spawn_egress_policy: Literal["warn", "refuse", "off"] = "warn"  # stdio: action on a shell-interpreter+egress-tool spawn shape
+    sampling: MCPSamplingConfig = Field(default_factory=MCPSamplingConfig)
 
     def oauth_config(self) -> "MCPOAuthConfig | None":
         """Normalize the oauth field to MCPOAuthConfig | None."""
