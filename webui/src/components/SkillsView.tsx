@@ -196,7 +196,7 @@ function SecurityReport({ row }: { row: QuarantineRow }) {
  * drills in. A skill is conceptually a directory; today the surface edits its
  * SKILL.md — a per-skill file tree is a later phase this layout leaves room for.
  */
-export function SkillsView() {
+export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => void }) {
   const { token, client } = useClient();
   const { t } = useTranslation();
   const [rows, setRows] = useState<SkillRow[] | null>(null);
@@ -1142,6 +1142,7 @@ export function SkillsView() {
                         skillName={triageRow.name}
                         token={token}
                         onResolved={refresh}
+                        onAskDurin={onAskDurin}
                       />
                     </div>
                   ) : null}
@@ -1379,6 +1380,7 @@ export function SkillsView() {
                         requirements={skillRow.requirements}
                         skillName={skillRow.name}
                         token={token}
+                        onAskDurin={onAskDurin}
                       />
                     )}
                   </div>

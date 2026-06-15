@@ -77,6 +77,10 @@ interface ThreadComposerProps {
   activeEffort?: string | null;
   /** Whether the active model supports reasoning. */
   canReason?: boolean;
+  /** Pre-fill the composer with this prompt (from skills "durin can help"). */
+  pendingPrompt?: string | null;
+  /** Called when pendingPrompt has been loaded into the textarea. */
+  onPromptConsumed?: () => void;
 }
 
 const COMMAND_ICONS: Record<string, LucideIcon> = {
@@ -395,6 +399,8 @@ export function ThreadComposer({
   onEffortPick,
   activeEffort = null,
   canReason = true,
+  pendingPrompt = null,
+  onPromptConsumed,
 }: ThreadComposerProps) {
   const { t } = useTranslation();
   const [value, setValue] = useState("");
@@ -408,6 +414,15 @@ export function ThreadComposer({
   const chipRefs = useRef(new Map<string, HTMLButtonElement>());
   const isHero = variant === "hero";
   const promptHistory = usePromptHistory();
+
+  useEffect(() => {
+    if (pendingPrompt) {
+      setValue(pendingPrompt);
+      onPromptConsumed?.();
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    }
+  }, [pendingPrompt, onPromptConsumed]);
+
   const resolvedPlaceholder = isStreaming
     ? t("thread.composer.placeholderStreaming")
     : placeholder ?? t("thread.composer.placeholderThread");

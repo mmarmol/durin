@@ -265,6 +265,7 @@ function Shell({
   const { sessions, loading, refresh, createChat, deleteChat, renameChat } = useSessions();
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [view, setView] = useState<ShellView>("chat");
+  const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
   const [desktopSidebarOpen, setDesktopSidebarOpen] =
     useState<boolean>(readSidebarOpen);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -533,6 +534,8 @@ function Shell({
             theme={theme}
             onToggleTheme={toggle}
             hideSidebarToggleOnDesktop={desktopSidebarOpen}
+            pendingPrompt={pendingPrompt}
+            onPromptConsumed={() => setPendingPrompt(null)}
           />
         </div>
         {view === "settings" && (
@@ -561,7 +564,10 @@ function Shell({
         )}
         {view === "skills" && (
           <div className="absolute inset-0 flex flex-col">
-            <SkillsView />
+            <SkillsView onAskDurin={(binName) => {
+              setView("chat");
+              setPendingPrompt(`Ayúdame a instalar ${binName}`);
+            }} />
           </div>
         )}
         {view === "changes" && (

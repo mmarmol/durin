@@ -74,11 +74,15 @@ class SkillImportTool(Tool, ContextAware):
 
     def __init__(self, workspace: str | Path, allowlist: list[str] | None = None,
                  caps: tuple[int, int, int] | None = None,
-                 judge: tuple[str, str, str] | None = None) -> None:
+                 judge: tuple[str, str, str] | None = None,
+                 install_policy: str = "approve",
+                 exec_run: Any = None) -> None:
         self._workspace = Path(workspace).expanduser()
         self._allowlist = list(allowlist or [])
         self._caps = caps or (100, 3 * 1024 * 1024, 1024 * 1024)
         self._judge = judge or ("off", "", "caution")  # trigger off unless config says otherwise
+        self._install_policy = install_policy
+        self._exec_run = exec_run
         self._session: ContextVar[str | None] = ContextVar("skill_import_session", default=None)
         self._model: ContextVar[str | None] = ContextVar("skill_import_model", default=None)
 
@@ -115,7 +119,19 @@ class SkillImportTool(Tool, ContextAware):
         if si is not None:
             j = si.llm_judge
             judge = (str(j.trigger or "off"), str(j.model or ""), str(j.max_severity or "caution"))
-        return cls(workspace=ctx.workspace, allowlist=allowlist, caps=caps, judge=judge)
+        install_policy = "approve"
+        try:
+            install_policy = str(ctx.app_config.skills.install_policy)
+        except Exception:  # noqa: BLE001
+            pass
+        exec_run = None
+        try:
+            from durin.agent.tools.shell import ExecTool
+            exec_run = ExecTool.create(ctx).execute
+        except Exception:  # noqa: BLE001
+            pass
+        return cls(workspace=ctx.workspace, allowlist=allowlist, caps=caps, judge=judge,
+                   install_policy=install_policy, exec_run=exec_run)
 
     @property
     def _qroot(self) -> Path:
@@ -200,11 +216,30 @@ class SkillImportTool(Tool, ContextAware):
                 from durin.agent.skills_store import Attribution
                 attribution = Attribution(actor="import", session=self._session.get(),
                                          agent=self._model.get())
-                return await asyncio.to_thread(
+                result = await asyncio.to_thread(
                     install_imported_skill, self._workspace, qdir,
                     source=src, allowlist=self._allowlist,
                     confirmed=confirm, override=override, replace=replace,
                     attribution=attribution)
+                # Auto-install deps if policy is "auto"
+                if self._install_policy == "auto" and self._exec_run is not None \
+                        and isinstance(result, dict) and not result.get("refused"):
+                    skill_name = result.get("name") or name
+                    skill_dir = self._workspace / ".durin" / "skills" / skill_name
+                    if not skill_dir.is_dir():
+                        skill_dir = self._workspace / "skills" / skill_name
+                    if skill_dir.is_dir():
+                        try:
+                            from durin.agent.skills_import import run_install_specs, runnable_install_specs
+                            specs = runnable_install_specs(skill_dir)
+                            if specs:
+                                deps_results = await run_install_specs(
+                                    specs, exec_run=self._exec_run)
+                                if deps_results:
+                                    result["deps_installed"] = deps_results
+                        except Exception:  # noqa: BLE001
+                            pass
+                return result
             except SkillImportRefused as exc:
                 return {"refused": exc.action, "verdict": exc.verdict, "message": str(exc)}
 
