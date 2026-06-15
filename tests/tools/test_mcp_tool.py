@@ -718,11 +718,11 @@ async def test_prompt_wrapper_execute_returns_text() -> None:
         assert name == "myprompt"
         msg1 = SimpleNamespace(
             role="user",
-            content=[_FakeTextContent("You are an expert on {{topic}}.")],
+            content=_FakeTextContent("You are an expert on {{topic}}."),
         )
         msg2 = SimpleNamespace(
             role="assistant",
-            content=[_FakeTextContent("Understood. Ask me anything.")],
+            content=_FakeTextContent("Understood. Ask me anything."),
         )
         return SimpleNamespace(messages=[msg1, msg2])
 
@@ -1314,5 +1314,17 @@ async def test_resource_wrapper_execute_image_blob_returns_image_block() -> None
 
     wrapper = _make_resource_wrapper(SimpleNamespace(read_resource=read_resource))
     result = await wrapper.execute()
+    assert isinstance(result, list)
+    assert any(b["type"] == "image_url" for b in result)
+
+
+@pytest.mark.asyncio
+async def test_prompt_wrapper_execute_image_message_returns_image_block() -> None:
+    async def get_prompt(name: str, arguments: dict | None = None) -> object:
+        msg = SimpleNamespace(role="user", content=_FakeImageContent(_PNG_1PX, "image/png"))
+        return SimpleNamespace(messages=[msg])
+
+    wrapper = _make_prompt_wrapper(SimpleNamespace(get_prompt=get_prompt))
+    result = await wrapper.execute(topic="x")
     assert isinstance(result, list)
     assert any(b["type"] == "image_url" for b in result)
