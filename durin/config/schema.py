@@ -761,6 +761,21 @@ class GatewayConfig(Base):
     )
 
 
+class MCPOAuthConfig(Base):
+    """OAuth settings for a remote MCP server.
+
+    Presence of an ``oauth`` value (``True`` or this object) marks the server
+    as OAuth-requiring. The SDK does dynamic client registration automatically;
+    ``client_id`` / ``client_secret`` are an optional static-registration
+    override. ``scope`` is an optional requested-scope hint.
+    """
+
+    scope: str | None = None
+    client_id: str | None = None  # static client registration (skips DCR)
+    client_secret: str | None = None
+    callback_port: int = 1456  # loopback callback port for `durin mcp login`
+
+
 class MCPServerConfig(Base):
     """MCP server connection configuration (stdio or HTTP)."""
 
@@ -775,6 +790,15 @@ class MCPServerConfig(Base):
     catalog_timeout: float = 1.5  # short tools/list timeout at connect so a hung server can't stall startup
     keepalive_interval: float = 180.0  # seconds between idle keepalive heartbeats
     enabled_tools: list[str] = Field(default_factory=lambda: ["*"])  # Only register these tools; accepts raw MCP names or wrapped mcp_<server>_<tool> names; ["*"] = all tools; [] = no tools
+    oauth: bool | MCPOAuthConfig | None = None  # mark server as OAuth-requiring; True = DCR defaults
+
+    def oauth_config(self) -> "MCPOAuthConfig | None":
+        """Normalize the oauth field to MCPOAuthConfig | None."""
+        if self.oauth is True:
+            return MCPOAuthConfig()
+        if isinstance(self.oauth, MCPOAuthConfig):
+            return self.oauth
+        return None
 
 
 class MCPDeferralConfig(Base):
