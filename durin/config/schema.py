@@ -810,6 +810,7 @@ class MCPServerConfig(Base):
     oauth: bool | MCPOAuthConfig | None = None  # mark server as OAuth-requiring; True = DCR defaults
     allow_private_url: bool = False  # opt this server out of the SSRF private-IP block (off = blocked)
     spawn_egress_policy: Literal["warn", "refuse", "off"] = "warn"  # stdio: action on a shell-interpreter+egress-tool spawn shape
+    malware_check: bool = True  # stdio: query OSV API for MAL-* advisories before spawning; fail-open on network error
     sampling: MCPSamplingConfig = Field(default_factory=MCPSamplingConfig)
 
     def oauth_config(self) -> "MCPOAuthConfig | None":
