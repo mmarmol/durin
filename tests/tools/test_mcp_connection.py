@@ -621,3 +621,60 @@ async def test_sdk_read_timeout_and_progress_contract() -> None:
         r = await session.call_tool("slow", {"seconds": 0.2}, progress_callback=pcb)
         assert r.content[0].text == "done"
         assert len(seen) >= 1
+
+
+async def test_per_tool_timeout_override(monkeypatch) -> None:
+    import durin.agent.tools.mcp_connection as mc
+
+    server = FastMCP("to")
+
+    @server.tool()
+    async def slow(seconds: float) -> str:
+        await asyncio.sleep(seconds)
+        return "done"
+
+    async with _InProcessHarness(server) as h:
+        cfg = MCPServerConfig(command="x", tool_timeout=30, tool_timeouts={"slow": 1})
+        registry = ToolRegistry()
+        conn = mc.MCPServerConnection("to", cfg, registry)
+
+        async def _open(_self):
+            return h.client_streams[0], h.client_streams[1]
+
+        conn._open_transport_streams = _open.__get__(conn, mc.MCPServerConnection)
+        await conn.start()
+        wrapper = registry.get("mcp_to_slow")
+        out = await wrapper.execute(seconds=5)
+        assert "timed out" in out.lower()
+        await conn.aclose()
+
+
+async def test_progress_resets_timeout() -> None:
+    import durin.agent.tools.mcp_connection as mc
+
+    server = FastMCP("prog")
+
+    @server.tool()
+    async def chatty(ctx: Context) -> str:
+        for i in range(20):
+            await ctx.report_progress(i, 20)
+            await asyncio.sleep(0.05)
+        return "done"
+
+    async with _InProcessHarness(server) as h:
+        # Base timeout 1s, but 20 progress ticks at 0.05s each = 1s total.
+        # With idle-deadline each tick resets the 0.3s window — so it should complete.
+        cfg = MCPServerConfig(command="x", tool_timeouts={"chatty": 1})
+        registry = ToolRegistry()
+        conn = mc.MCPServerConnection("prog", cfg, registry)
+
+        async def _open(_self):
+            return h.client_streams[0], h.client_streams[1]
+
+        conn._open_transport_streams = _open.__get__(conn, mc.MCPServerConnection)
+        await conn.start()
+        wrapper = registry.get("mcp_prog_chatty")
+        out = await wrapper.execute()
+        assert "done" in out
+        assert "timed out" not in out.lower()
+        await conn.aclose()

@@ -97,6 +97,10 @@ def _is_transient_conn(exc: BaseException) -> bool:
     return _is_transient(exc)
 
 
+def _is_timeout_error(exc: BaseException) -> bool:
+    return isinstance(exc, asyncio.TimeoutError) or "timed out while waiting" in str(exc).lower()
+
+
 # Reconnect / backoff constants (monkeypatchable in tests).
 _INITIAL_BACKOFF = 1.0
 _MAX_BACKOFF = 60.0
@@ -530,6 +534,11 @@ class MCPServerConnection:
         except asyncio.CancelledError:
             raise
         except BaseException as exc:  # noqa: BLE001
+            if _is_timeout_error(exc):
+                self._bump_error()
+                return _ConnDown(
+                    f"(MCP tool '{original_name}' on '{self.name}' timed out after {timeout}s)"
+                )
             if _is_session_expired_error(exc) or _is_transient_conn(exc):
                 recovered = await self._recover_and_retry_tool(original_name, arguments, timeout)
                 if recovered is not None:
@@ -539,11 +548,41 @@ class MCPServerConnection:
             return _ConnDown(f"MCP server '{self.name}' tool call failed: {type(exc).__name__}")
 
     async def _raw_call_tool(self, session, original_name, arguments, timeout):
+        """Call with an IDLE timeout that resets on progress (opencode behavior).
+
+        ``timeout`` is the max idle gap (seconds) with no progress. A tool that
+        keeps reporting progress stays alive; a tool that goes silent for
+        ``timeout`` seconds is cancelled and raises asyncio.TimeoutError.
+        """
+        loop = asyncio.get_event_loop()
+        last_progress = loop.time()
+
+        async def _progress(progress: float, total: float | None = None, message: str | None = None) -> None:
+            nonlocal last_progress
+            last_progress = loop.time()
+
         async with self._rpc_lock:
-            return await session.call_tool(
-                original_name, arguments=arguments,
-                read_timeout_seconds=_dt.timedelta(seconds=timeout),
+            call_task = asyncio.ensure_future(
+                session.call_tool(original_name, arguments=arguments, progress_callback=_progress)
             )
+            try:
+                while True:
+                    remaining = timeout - (loop.time() - last_progress)
+                    if remaining <= 0:
+                        call_task.cancel()
+                        with __import__("contextlib").suppress(asyncio.CancelledError, Exception):
+                            await call_task
+                        raise asyncio.TimeoutError(f"no progress for {timeout}s")
+                    done, _ = await asyncio.wait({call_task}, timeout=remaining)
+                    if call_task in done:
+                        return call_task.result()
+                    # No completion within remaining window — check if progress updated
+                    # (loop back to recalculate remaining from last_progress).
+            finally:
+                if not call_task.done():
+                    call_task.cancel()
+                    with __import__("contextlib").suppress(asyncio.CancelledError, Exception):
+                        await call_task
 
     async def _recover_and_retry_tool(self, original_name, arguments, timeout):
         """Request a transport reconnect, wait briefly for a fresh session,
