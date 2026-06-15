@@ -19,8 +19,11 @@ such field).
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import re
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from loguru import logger
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
@@ -125,3 +128,114 @@ class SecretsTokenStorage:
             store.save()
             get_secret_store(reload=True)
         return removed
+
+
+# ---- SP-4b: provider builder + headless redirect handler ----
+
+
+class NeedsInteractiveAuthError(Exception):
+    """Raised by the headless redirect handler: an agent run hit an OAuth
+    server with no usable token and cannot pop a browser. The message names
+    the `durin mcp login <server>` command the user must run."""
+
+
+def _redirect_uri(port: int) -> str:
+    return f"http://127.0.0.1:{port}/callback"
+
+
+def _client_metadata(cfg: Any, port: int) -> Any:
+    from mcp.shared.auth import OAuthClientMetadata
+
+    oc = cfg.oauth_config()
+    return OAuthClientMetadata(
+        client_name="durin",
+        redirect_uris=[_redirect_uri(port)],
+        grant_types=["authorization_code", "refresh_token"],
+        response_types=["code"],
+        scope=(oc.scope if oc else None),
+    )
+
+
+def make_headless_redirect_handler(server: str) -> Callable[[str], Awaitable[None]]:
+    """Return a redirect handler that refuses to open a browser in agent runs."""
+
+    async def _redirect(_authorization_url: str) -> None:
+        raise NeedsInteractiveAuthError(
+            f"MCP server '{server}' requires OAuth sign-in. "
+            f"Run: durin mcp login {server}"
+        )
+
+    return _redirect
+
+
+async def _headless_callback() -> tuple[str, str | None]:
+    # Never reached in headless mode — the redirect handler raises first.
+    raise NeedsInteractiveAuthError("interactive OAuth callback not available headless")
+
+
+def _seed_static_client(storage: SecretsTokenStorage, oc: Any, port: int) -> None:
+    """Persist a static client registration so the SDK skips DCR.
+
+    Best-effort: only writes if nothing is stored yet, so a later refresh/DCR
+    result isn't clobbered. Runs the async write synchronously (called from
+    __init__ outside of any running event loop).
+    """
+    from mcp.shared.auth import OAuthClientInformationFull as _OCIF
+
+    async def _maybe() -> None:
+        if await storage.get_client_info() is not None:
+            return
+        await storage.set_client_info(
+            _OCIF(
+                client_id=oc.client_id,
+                client_secret=oc.client_secret,
+                redirect_uris=[_redirect_uri(port)],
+            )
+        )
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.run(_maybe())
+        return
+    # Inside a running loop: schedule as a fire-and-forget task.
+    loop.create_task(_maybe())
+
+
+def build_oauth_provider(
+    server: str,
+    cfg: Any,
+    *,
+    headless: bool,
+    redirect_handler: Callable[[str], Awaitable[None]] | None = None,
+    callback_handler: Callable[[], Awaitable[tuple[str, str | None]]] | None = None,
+) -> Any:
+    """Construct the SDK OAuthClientProvider for ``server``.
+
+    ``headless=True`` (agent run) installs handlers that refuse to open a
+    browser. ``headless=False`` (CLI) expects interactive handlers passed in.
+    A static client_id (config override) is seeded into storage so the SDK
+    skips dynamic registration.
+
+    Returns an OAuthClientProvider, which is also an httpx.Auth.
+    """
+    from mcp.client.auth import OAuthClientProvider
+
+    oc = cfg.oauth_config()
+    port = oc.callback_port if oc else 1456
+    storage = SecretsTokenStorage(server, server_url=cfg.url or None)
+
+    if oc and oc.client_id:
+        _seed_static_client(storage, oc, port)
+
+    if headless:
+        redirect_handler = make_headless_redirect_handler(server)
+        callback_handler = _headless_callback
+
+    return OAuthClientProvider(
+        server_url=cfg.url,
+        client_metadata=_client_metadata(cfg, port),
+        storage=storage,
+        redirect_handler=redirect_handler,
+        callback_handler=callback_handler,
+    )
