@@ -771,6 +771,8 @@ class MCPServerConfig(Base):
     url: str = ""  # HTTP/SSE: endpoint URL
     headers: dict[str, str] = Field(default_factory=dict)  # HTTP/SSE: custom headers
     tool_timeout: int = 30  # seconds before a tool call is cancelled
+    tool_timeouts: dict[str, int] = Field(default_factory=dict)  # per-tool read-timeout override (raw tool name -> seconds)
+    catalog_timeout: float = 1.5  # short tools/list timeout at connect so a hung server can't stall startup
     keepalive_interval: float = 180.0  # seconds between idle keepalive heartbeats
     enabled_tools: list[str] = Field(default_factory=lambda: ["*"])  # Only register these tools; accepts raw MCP names or wrapped mcp_<server>_<tool> names; ["*"] = all tools; [] = no tools
 
