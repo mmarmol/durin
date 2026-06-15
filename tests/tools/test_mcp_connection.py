@@ -148,3 +148,26 @@ async def test_call_tool_when_down_returns_sentinel(live_mcp) -> None:
     assert isinstance(out, _ConnDown)
     assert "not connected" in out.message
     await conn.aclose()
+
+
+async def test_tool_wrapper_executes_through_connection(live_mcp) -> None:
+    factory, _harness = live_mcp
+    conn, registry = factory()
+    await conn.start()
+    wrapper = registry.get("mcp_harness_echo")
+    assert wrapper is not None
+    out = await wrapper.execute(text="world")
+    # FastMCP may append [structuredContent]; the text portion must be present.
+    assert "echo:world" in out
+    await conn.aclose()
+
+
+async def test_tool_wrapper_reports_breaker_sentinel(live_mcp) -> None:
+    factory, _harness = live_mcp
+    conn, registry = factory()
+    await conn.start()
+    wrapper = registry.get("mcp_harness_echo")
+    conn.session = None  # force the down sentinel
+    out = await wrapper.execute(text="x")
+    assert "not connected" in out
+    await conn.aclose()
