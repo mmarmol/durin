@@ -472,11 +472,26 @@ class MCPServerConnection:
             return None
 
     async def _await_fresh_session(self, timeout: float) -> Any | None:
-        deadline = asyncio.get_event_loop().time() + timeout
-        while asyncio.get_event_loop().time() < deadline:
+        """Wait for the current session to tear down, then for a fresh one.
+
+        Two-phase: first wait for self.session to become None (in-task
+        teardown in progress), then wait for it to become non-None again
+        (fresh connect complete). Without the first phase, _await_fresh_session
+        would immediately return the stale session object that's still
+        referenced while _serve_once is unwinding.
+        """
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + timeout
+        # Phase 1: wait for the old session to be cleared.
+        while loop.time() < deadline:
+            if self.session is None:
+                break
+            await asyncio.sleep(0.05)
+        # Phase 2: wait for a fresh session to appear.
+        while loop.time() < deadline:
             if self.session is not None:
                 return self.session
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.05)
         return None
 
     def _request_reconnect(self) -> None:
