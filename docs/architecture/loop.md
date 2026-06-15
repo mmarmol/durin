@@ -242,8 +242,9 @@ The session summary additionally carries a `Memory refs cited in this span` line
 
 **In-memory per-turn shaping** (does not touch disk):
 
-- `_microcompact` replaces older tool-result content with `[<tool> result omitted from context]` placeholders on the copy sent to the LLM.
+- `_microcompact` replaces older tool-result content (beyond the most recent `_MICROCOMPACT_KEEP_RECENT`) with a short, **recoverable** placeholder on the copy sent to the LLM: `[<tool> result omitted from context — full output (<N> chars) at <path>; use read_file to recover]`. Already-spilled results keep their existing spill path; never-spilled results are spilled to `.durin/tool-results/` on the spot so the omission is always recoverable. Only when no workspace is configured does it fall back to the opaque `[<tool> result omitted from context]`.
 - `_snip_history` further trims the copy from the start when it still doesn't fit the context window.
+- **Task-state anchor (concern B):** `build_messages` injects a `<task-state>` block every turn (`durin/agent/task_state.py`), grouping `goal_state`, the `decision_log`, and `todos`/`executing_plan` under `## Goal` / `## Decisions & findings` / `## Current focus`. All derive from `session.metadata`, so the block survives compaction. The `decision_log` (`durin/session/decision_log.py`) has two writers: the `note_decision` tool (real-time) and `Consolidator.extract_decisions`, which runs once per compaction over the just-archived span (`maybe_consolidate_by_tokens`). Caps (`decision_log_max_entries`/`decision_log_max_chars`) and the `decision_log_enabled` toggle are `AgentDefaults` config; writes emit `tool.note_decision` / `decision_log.extracted` / `decision_log.capped`.
 
 ### Session meta sidecar shape
 
