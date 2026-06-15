@@ -330,7 +330,7 @@ class MCPToolWrapper(Tool):
     def parameters(self) -> dict[str, Any]:
         return self._parameters
 
-    async def execute(self, **kwargs: Any) -> str:
+    async def execute(self, **kwargs: Any) -> str | list[dict[str, Any]]:
         from mcp import types
 
         for attempt in range(2):  # At most 1 retry
@@ -418,7 +418,7 @@ class MCPResourceWrapper(Tool):
     def read_only(self) -> bool:
         return True
 
-    async def execute(self, **kwargs: Any) -> str:
+    async def execute(self, **kwargs: Any) -> str | list[dict[str, Any]]:
         from mcp import types
 
         for attempt in range(2):
@@ -518,7 +518,7 @@ class MCPPromptWrapper(Tool):
     def read_only(self) -> bool:
         return True
 
-    async def execute(self, **kwargs: Any) -> str:
+    async def execute(self, **kwargs: Any) -> str | list[dict[str, Any]]:
         from mcp import types
         from mcp.shared.exceptions import McpError
 
