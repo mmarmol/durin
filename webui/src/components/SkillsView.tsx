@@ -1365,6 +1365,19 @@ export function SkillsView() {
                   </div>
                 ) : null}
 
+                {skillRow?.requirements && (
+                  <div className="shrink-0 border-b border-border/30 px-4 py-3 sm:px-6">
+                    <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      {t("skills.requirements.title")}
+                    </p>
+                    <TriageRequirements
+                      requirements={skillRow.requirements}
+                      skillName={skillRow.name}
+                      token={token}
+                    />
+                  </div>
+                )}
+
                 <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6">
                   {tab === "history" ? (
                     history ? (
@@ -1400,20 +1413,6 @@ export function SkillsView() {
                       spellCheck={false}
                       className="h-full min-h-[24rem] w-full resize-none font-mono text-[12px] leading-relaxed"
                     />
-                  )}
-                  {tab === "view" && skillRow?.requirements && (
-                    <details className="mt-3 rounded border border-border/60 p-2">
-                      <summary className="cursor-pointer text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                        {t("skills.requirements.title")}
-                      </summary>
-                      <div className="mt-2">
-                        <TriageRequirements
-                          requirements={skillRow.requirements}
-                          skillName={skillRow.name}
-                          token={token}
-                        />
-                      </div>
-                    </details>
                   )}
                 </div>
 

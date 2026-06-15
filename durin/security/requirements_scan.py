@@ -68,6 +68,9 @@ def _extract(skill_dir: Path, *, workspace: Path | None = None,
     platforms = _step1_platforms(data)
     for b in _step1_bins(data):
         bins_seen[b] = "declared"
+    for b in _step1_allowed_tools(data):
+        if b not in bins_seen:
+            bins_seen[b] = "declared"
     for e in _step1_env(data):
         env_seen[e] = "declared"
     compatibility = str(data.get("compatibility") or "").strip()
@@ -162,6 +165,25 @@ def _step1_env(data: dict) -> list[str]:
     return [str(e).strip() for e in env if str(e).strip()]
 
 
+_ALLOWED_TOOL_RE = re.compile(r"\w+\(([\w.-]+)[:\s)]")
+
+
+def _step1_allowed_tools(data: dict) -> list[str]:
+    """Extract binary names from the root-level ``allowed-tools`` frontmatter field.
+
+    Entries like ``Bash(agent-browser:*)`` yield ``agent-browser``.
+    Shell builtins and agent framework tools are filtered out."""
+    raw = data.get("allowed-tools")
+    if not isinstance(raw, str):
+        return []
+    out: list[str] = []
+    for m in _ALLOWED_TOOL_RE.finditer(raw):
+        tool = m.group(1).strip()
+        if tool and tool not in _SHELL_BUILTINS:
+            out.append(tool)
+    return out
+
+
 # --- Step 2: script shebangs ---
 def _step2_shebang_bins(scripts_dir: Path) -> list[str]:
     """Extract tools from shebangs: #!/usr/bin/env <tool>."""
@@ -175,11 +197,11 @@ def _step2_shebang_bins(scripts_dir: Path) -> list[str]:
             continue
         for m in re.finditer(r"^#!.*?env\s+(\S+)", text, re.MULTILINE):
             tool = m.group(1).strip()
-            if tool and tool not in ("bash", "sh", "python", "python3", "node", "ruby", "perl", "zsh"):
+            if tool and tool not in ("bash", "sh", "zsh", "env"):
                 out.append(tool)
         for m in re.finditer(r"^#!/(?:usr/)?bin/(\S+)", text, re.MULTILINE):
             tool = m.group(1).strip()
-            if tool and tool not in ("bash", "sh", "env", "python", "python3", "node", "ruby", "perl", "zsh"):
+            if tool and tool not in ("bash", "sh", "zsh", "env"):
                 out.append(tool)
     return out
 
@@ -191,10 +213,17 @@ _CMD_PATTERNS = [
     re.compile(r'\bexec\s*\(\s*["\']([a-zA-Z0-9_-]+)\s'),
     re.compile(r'^\s*([a-zA-Z0-9_-]+)\s', re.MULTILINE),
 ]
-_INTERPRETER_BINS = {"bash", "sh", "python", "python3", "node", "ruby", "perl", "zsh",
-                     "echo", "cd", "ls", "mkdir", "rm", "cp", "mv", "cat", "grep", "sed",
-                     "awk", "export", "source", "set", "exit", "if", "then", "fi", "for",
-                     "do", "done", "while", "return", "function", "sudo"}
+_SHELL_BUILTINS = {"bash", "sh", "zsh", "dash", "fish", "ksh", "tcsh", "csh",
+                   "echo", "cd", "ls", "mkdir", "rm", "cp", "mv", "cat", "grep", "sed",
+                   "awk", "export", "source", "set", "exit", "if", "then", "fi", "for",
+                   "do", "done", "while", "return", "function", "sudo", "env", "nohup",
+                   "kill", "date", "sleep", "tr", "ps", "sort", "head", "tail", "wc",
+                   "which", "dirname", "basename", "test", "true", "false", "case", "esac",
+                   "elif", "else", "shift", "unset", "local", "declare", "readonly",
+                   "trap", "wait", "jobs", "bg", "fg", "disown", "pushd", "popd"}
+_RUNTIME_RE = re.compile(
+    r'\b(node|npx|python3|python|ruby|perl|java|go|cargo|rustc|gcc|make|cmake)\b'
+)
 
 
 def _step3_script_bins(scripts_dir: Path) -> list[str]:
@@ -210,7 +239,12 @@ def _step3_script_bins(scripts_dir: Path) -> list[str]:
         for pat in _CMD_PATTERNS[:3]:
             for m in pat.finditer(text):
                 tool = m.group(1).strip()
-                if tool and tool not in _INTERPRETER_BINS:
+                if tool and tool not in _SHELL_BUILTINS:
+                    out.append(tool)
+        if p.suffix == ".sh":
+            for m in _RUNTIME_RE.finditer(text):
+                tool = m.group(1)
+                if tool and tool not in _SHELL_BUILTINS:
                     out.append(tool)
     return out
 
