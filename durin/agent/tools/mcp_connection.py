@@ -144,11 +144,13 @@ class MCPServerConnection:
         cfg: Any,
         registry: ToolRegistry,
         defer_cb: Callable[[], None] | None = None,
+        workspace: str | None = None,
     ) -> None:
         self.name = name
         self._cfg = cfg
         self._registry = registry
         self._defer_cb = defer_cb
+        self._workspace = workspace
 
         self.session: Any | None = None
         self.initialize_result: Any | None = None
@@ -492,7 +494,37 @@ class MCPServerConnection:
             await self._close_transport_streams()
 
     def _session_kwargs(self) -> dict:
-        return {"message_handler": self._make_message_handler()}
+        return {
+            "message_handler": self._make_message_handler(),
+            "list_roots_callback": self._make_list_roots_callback(),
+            "logging_callback": self._make_logging_callback(),
+        }
+
+    def _make_list_roots_callback(self):
+        async def _list_roots(context) -> Any:
+            import mcp.types as types
+
+            ws = self._workspace
+            if not ws:
+                return types.ListRootsResult(roots=[])
+            from pathlib import Path
+            uri = Path(ws).expanduser().resolve().as_uri()
+            return types.ListRootsResult(
+                roots=[types.Root(uri=uri, name="workspace")]
+            )
+
+        return _list_roots
+
+    def _make_logging_callback(self):
+        from durin.agent.tools.mcp_sampling import mcp_log_level_to_loguru
+
+        async def _logging(params) -> None:
+            level = mcp_log_level_to_loguru(getattr(params, "level", "info"))
+            src = getattr(params, "logger", None) or "server"
+            data = getattr(params, "data", "")
+            logger.log(level, "MCP '{}' [{}]: {}", self.name, src, data)
+
+        return _logging
 
     def _make_message_handler(self):
         async def _handler(message) -> None:
