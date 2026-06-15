@@ -43,6 +43,7 @@ def extract_requirements(skill_dir: Path, *, workspace: Path | None = None) -> d
             "compatibility": "",
             "installable": False,
             "blocked_by_platform": False,
+            "platform_conflict": False,
         }
 
 
@@ -84,6 +85,20 @@ def _extract(skill_dir: Path, *, workspace: Path | None = None) -> dict:
         if b not in bins_seen:
             bins_seen[b] = "heuristic:body"
 
+    # --- Step 5: platform inference from install specs ---
+    if not platforms:
+        inferred_plats = _step5_inferred_platforms(data)
+        if inferred_plats:
+            platforms = inferred_plats
+            platforms_inferred = True
+
+    # --- Conflict detection ---
+    platform_conflict = False
+    if not platforms_inferred and platforms:
+        inferred = _step5_inferred_platforms(data)
+        if inferred and not any(p in platforms for p in inferred):
+            platform_conflict = True
+
     return {
         "platforms": {"value": platforms, "inferred": platforms_inferred},
         "bins": [{"name": n, "origin": o, "available": None} for n, o in bins_seen.items()],
@@ -91,6 +106,7 @@ def _extract(skill_dir: Path, *, workspace: Path | None = None) -> dict:
         "compatibility": compatibility,
         "installable": False,
         "blocked_by_platform": False,
+        "platform_conflict": platform_conflict,
     }
 
 
@@ -214,3 +230,34 @@ def _step4_body_bins(body: str, catalog: dict) -> list[str]:
         if tool not in out:
             out.append(tool)
     return out
+
+
+# --- Step 5: platform inference from install specs ---
+
+_INSTALL_PLATFORM_MAP = {
+    "brew": "macos",
+    "cask": "macos",
+    "apt": "linux",
+}
+
+
+def _step5_inferred_platforms(data: dict) -> list[str]:
+    """Infer platforms from declared install specs (brew→macOS, apt→Linux)."""
+    meta = data.get("metadata")
+    if not isinstance(meta, dict):
+        return []
+    inferred: list[str] = []
+    for blob in meta.values():
+        if not isinstance(blob, dict):
+            continue
+        specs = blob.get("install")
+        if not isinstance(specs, list):
+            continue
+        for spec in specs:
+            if not isinstance(spec, dict):
+                continue
+            kind = str(spec.get("kind", ""))
+            plat = _INSTALL_PLATFORM_MAP.get(kind)
+            if plat and plat not in inferred:
+                inferred.append(plat)
+    return inferred

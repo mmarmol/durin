@@ -130,3 +130,47 @@ def test_step4_in_code_block_dropped(tmp_path):
     req = extract_requirements(d, workspace=tmp_path)
     bin_names = [b["name"] for b in req["bins"]]
     assert "gh" not in bin_names
+
+
+def test_step5_infer_platform_from_brew_spec(tmp_path):
+    d = _write_skill(tmp_path, "s", """
+name: s
+metadata:
+  durin:
+    install:
+      - kind: brew
+        formula: gh
+""")
+    req = extract_requirements(d)
+    assert "macos" in req["platforms"]["value"]
+    assert req["platforms"]["inferred"] is True
+
+
+def test_step5_declared_platforms_win_over_inferred(tmp_path):
+    d = _write_skill(tmp_path, "s", """
+name: s
+platforms: [linux]
+metadata:
+  durin:
+    install:
+      - kind: brew
+        formula: gh
+""")
+    req = extract_requirements(d)
+    assert req["platforms"]["value"] == ["linux"]
+    assert req["platforms"]["inferred"] is False
+
+
+def test_step5_conflict_warning_noted(tmp_path):
+    d = _write_skill(tmp_path, "s", """
+name: s
+platforms: [linux]
+metadata:
+  durin:
+    install:
+      - kind: brew
+        formula: gh
+""")
+    req = extract_requirements(d)
+    assert "linux" in req["platforms"]["value"]
+    assert req.get("platform_conflict") is True
