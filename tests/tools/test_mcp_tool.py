@@ -236,6 +236,26 @@ def test_wrapper_normalizes_nullable_property_type_union() -> None:
     assert wrapper.parameters["properties"]["name"] == {"type": "string", "nullable": True}
 
 
+def test_wrapper_expands_non_nullable_multi_type_array_to_anyof() -> None:
+    tool_def = SimpleNamespace(
+        name="demo",
+        description="demo tool",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "value": {"type": ["string", "integer"], "description": "x"},
+            },
+        },
+    )
+
+    wrapper = MCPToolWrapper(_FakeConn(SimpleNamespace(call_tool=None)), "test", tool_def)
+    prop = wrapper.parameters["properties"]["value"]
+
+    assert prop.get("anyOf") == [{"type": "string"}, {"type": "integer"}]
+    assert prop.get("description") == "x"
+    assert not isinstance(prop.get("type"), list), "type list must be removed"
+
+
 def test_wrapper_normalizes_nullable_property_anyof() -> None:
     tool_def = SimpleNamespace(
         name="demo",
