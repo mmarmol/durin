@@ -95,6 +95,18 @@ class DurinApp(App[None]):
         self._mode = "dark"
         self._apply_durin_theme()
 
+    # ---- toast ---------------------------------------------------------------
+
+    def toast(self, message: str, level: str = "info", duration: float = 2.0) -> None:
+        """Show a transient toast notification at the top of the screen."""
+        from durin.cli.tui.widgets.toast import ToastNotification
+
+        try:
+            toast = ToastNotification(message, level=level, duration=duration)
+            self.mount(toast)
+        except Exception:  # noqa: BLE001
+            pass
+
     # ---- theme ------------------------------------------------------------
 
     def _apply_durin_theme(self) -> None:
