@@ -9,7 +9,7 @@ import { StreamErrorNotice } from "@/components/thread/StreamErrorNotice";
 import { ThreadViewport } from "@/components/thread/ThreadViewport";
 import { useDurinStream, type SendImage } from "@/hooks/useDurinStream";
 import { useSessionHistory } from "@/hooks/useSessions";
-import { listSlashCommands } from "@/lib/api";
+import { listSlashCommands, getModelCapabilities } from "@/lib/api";
 import type { ChatSummary, SlashCommand, UIMessage } from "@/lib/types";
 import { normalizeLegacyLongTaskMessages } from "@/lib/thread-display-compat";
 import { scrubSubagentUiMessages } from "@/lib/subagent-channel-display";
@@ -75,6 +75,7 @@ export function ThreadShell({
   const [booting, setBooting] = useState(false);
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>([]);
   const [scrollToBottomSignal, setScrollToBottomSignal] = useState(0);
+  const [canReason, setCanReason] = useState(false);
   const pendingFirstRef = useRef<PendingFirstMessage | null>(null);
   const messageCacheRef = useRef<Map<string, UIMessage[]>>(new Map());
   /** Last chatId we associated with the in-memory thread (for cache-on-switch). */
@@ -224,6 +225,21 @@ export function ThreadShell({
     };
   }, [token]);
 
+  useEffect(() => {
+    if (!modelName) return;
+    let cancelled = false;
+    getModelCapabilities(token, modelName, "")
+      .then((caps) => {
+        if (!cancelled) setCanReason(!!caps.supports_reasoning);
+      })
+      .catch(() => {
+        if (!cancelled) setCanReason(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token, modelName]);
+
   const handleWelcomeSend = useCallback(
     async (content: string, images?: SendImage[]) => {
       if (booting) return;
@@ -262,6 +278,26 @@ export function ThreadShell({
     [handleThreadSend, client, chatId],
   );
 
+  const handleModelPick = useCallback(
+    (model: string) => {
+      const cid = chatId ?? client.defaultChatId;
+      if (cid) {
+        client.sendMessage(cid, `/model ${model}`);
+      }
+    },
+    [chatId, client],
+  );
+
+  const handleEffortPick = useCallback(
+    (effort: string) => {
+      const cid = chatId ?? client.defaultChatId;
+      if (cid) {
+        client.sendMessage(cid, `/effort ${effort}`);
+      }
+    },
+    [chatId, client],
+  );
+
   const composer = (
     <>
       {streamError ? (
@@ -292,6 +328,9 @@ export function ThreadShell({
           onStop={stop}
           runStartedAt={runStartedAt}
           goalState={goalState}
+          onModelPick={handleModelPick}
+          onEffortPick={handleEffortPick}
+          canReason={canReason}
         />
       ) : (
         <ThreadComposer
@@ -308,6 +347,9 @@ export function ThreadShell({
           slashCommands={slashCommands}
           runStartedAt={runStartedAt}
           goalState={goalState}
+          onModelPick={handleModelPick}
+          onEffortPick={handleEffortPick}
+          canReason={canReason}
         />
       )}
     </>

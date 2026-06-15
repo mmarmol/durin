@@ -4,6 +4,8 @@ import { DeleteConfirm } from "@/components/DeleteConfirm";
 import { Sidebar } from "@/components/Sidebar";
 import { MemoryGraphView } from "@/components/MemoryGraphView";
 import { SkillsView } from "@/components/SkillsView";
+import { ChangesView } from "@/components/ChangesView";
+import { ToastProvider } from "@/components/ui/toast";
 import { SettingsView } from "@/components/settings/SettingsView";
 import { ThreadShell } from "@/components/thread/ThreadShell";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
@@ -43,7 +45,7 @@ type BootState =
 const SIDEBAR_STORAGE_KEY = "durin-webui.sidebar";
 const RESTART_STARTED_KEY = "durin-webui.restartStartedAt";
 const SIDEBAR_WIDTH = 272;
-type ShellView = "chat" | "settings" | "memory_graph" | "skills";
+type ShellView = "chat" | "settings" | "memory_graph" | "skills" | "changes";
 
 function AuthForm({
   failed,
@@ -354,6 +356,11 @@ function Shell({
     setMobileSidebarOpen(false);
   }, []);
 
+  const onOpenChanges = useCallback(() => {
+    setView("changes");
+    setMobileSidebarOpen(false);
+  }, []);
+
   const onBackToChat = useCallback(() => {
     setView("chat");
     setMobileSidebarOpen(false);
@@ -463,10 +470,13 @@ function Shell({
     memoryGraphActive: view === "memory_graph",
     onOpenSkills,
     skillsActive: view === "skills",
+    onOpenChanges,
+    changesActive: view === "changes",
   };
   const showMainSidebar = view !== "settings";
 
   return (
+    <ToastProvider>
     <div className="relative flex h-full w-full overflow-hidden">
       {/* Desktop sidebar: in normal flow, so the thread area width stays honest. */}
       {showMainSidebar ? (
@@ -554,6 +564,15 @@ function Shell({
             <SkillsView />
           </div>
         )}
+        {view === "changes" && (
+          <div className="absolute inset-0 flex flex-col">
+            <ChangesView
+              onBack={onBackToChat}
+              onToggleSidebar={toggleSidebar}
+              hideSidebarToggleOnDesktop={desktopSidebarOpen}
+            />
+          </div>
+        )}
       </main>
 
       <DeleteConfirm
@@ -571,5 +590,6 @@ function Shell({
         </div>
       ) : null}
     </div>
+    </ToastProvider>
   );
 }
