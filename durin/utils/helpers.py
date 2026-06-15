@@ -288,6 +288,12 @@ def stringify_text_blocks(content: list[dict[str, Any]]) -> str | None:
     return "\n".join(parts)
 
 
+_PERSISTED_REFERENCE_MARKER = "[tool output persisted]"
+_PERSISTED_PATH_PREFIX = "Full output saved to: "
+_PERSISTED_SIZE_PREFIX = "Original size: "
+_PERSISTED_SIZE_SUFFIX = " chars"
+
+
 def _render_tool_result_reference(
     filepath: Path,
     *,
@@ -296,14 +302,37 @@ def _render_tool_result_reference(
     truncated_preview: bool,
 ) -> str:
     result = (
-        f"[tool output persisted]\n"
-        f"Full output saved to: {filepath}\n"
-        f"Original size: {original_size} chars\n"
+        f"{_PERSISTED_REFERENCE_MARKER}\n"
+        f"{_PERSISTED_PATH_PREFIX}{filepath}\n"
+        f"{_PERSISTED_SIZE_PREFIX}{original_size}{_PERSISTED_SIZE_SUFFIX}\n"
         f"Preview:\n{preview}"
     )
     if truncated_preview:
         result += "\n...\n(Read the saved file if you need the full output.)"
     return result
+
+
+def parse_persisted_reference(text: Any) -> tuple[str, int] | None:
+    """Return ``(path, original_size)`` if ``text`` is a persisted-output reference.
+
+    Mirrors the format produced by :func:`_render_tool_result_reference` so a
+    later compaction pass can preserve the recovery path instead of dropping
+    it. Returns ``None`` for anything that is not such a reference.
+    """
+    if not isinstance(text, str) or not text.startswith(_PERSISTED_REFERENCE_MARKER):
+        return None
+    path: str | None = None
+    size = 0
+    for line in text.splitlines():
+        if line.startswith(_PERSISTED_PATH_PREFIX):
+            path = line[len(_PERSISTED_PATH_PREFIX):].strip()
+        elif line.startswith(_PERSISTED_SIZE_PREFIX) and line.endswith(_PERSISTED_SIZE_SUFFIX):
+            digits = line[len(_PERSISTED_SIZE_PREFIX):-len(_PERSISTED_SIZE_SUFFIX)].strip()
+            if digits.isdigit():
+                size = int(digits)
+    if path:
+        return (path, size)
+    return None
 
 
 def _bucket_mtime(path: Path) -> float:
