@@ -147,7 +147,7 @@ def _fake_mcp_module(
             return False
 
     @asynccontextmanager
-    async def _fake_stdio_client(_params: object):
+    async def _fake_stdio_client(_params: object, errlog: object = None):
         yield object(), object()
 
     @asynccontextmanager
@@ -511,7 +511,7 @@ async def test_connect_mcp_servers_logs_stdio_pollution_hint(
         messages.append(message.format(*args))
 
     @asynccontextmanager
-    async def _broken_stdio_client(_params: object):
+    async def _broken_stdio_client(_params: object, errlog=None):
         raise RuntimeError("Parse error: Unexpected token 'INFO' before JSON-RPC headers")
         yield  # pragma: no cover
 
@@ -545,7 +545,7 @@ async def test_connect_mcp_servers_one_failure_does_not_block_others(
             return False
 
     @asynccontextmanager
-    async def _selective_stdio_client(params: object):
+    async def _selective_stdio_client(params: object, errlog=None):
         if params.command == "bad":
             raise RuntimeError("boom")
         yield params.command, object()
@@ -576,7 +576,7 @@ async def test_connect_mcp_servers_wraps_windows_stdio_launchers(
     captured: dict[str, object] = {}
 
     @asynccontextmanager
-    async def _capturing_stdio_client(params: object):
+    async def _capturing_stdio_client(params: object, errlog=None):
         captured["command"] = params.command
         captured["args"] = params.args
         captured["env"] = params.env
