@@ -96,3 +96,37 @@ metadata:
     gh = [b for b in req["bins"] if b["name"] == "gh"]
     assert len(gh) == 1
     assert gh[0]["origin"] == "declared"
+
+
+def test_step4_action_context_extracts_catalog_tool(tmp_path):
+    d = _write_skill(tmp_path, "s", "name: s",
+                     body="To list repos, run `gh` then `rg` for search.")
+    req = extract_requirements(d, workspace=tmp_path)
+    bin_names = [b["name"] for b in req["bins"]]
+    assert "gh" in bin_names
+    assert "rg" in bin_names
+    assert all(b["origin"] == "heuristic:body" for b in req["bins"])
+
+
+def test_step4_non_action_context_drops_tool(tmp_path):
+    d = _write_skill(tmp_path, "s", "name: s",
+                     body="This is similar to `gh` in some ways.")
+    req = extract_requirements(d, workspace=tmp_path)
+    bin_names = [b["name"] for b in req["bins"]]
+    assert "gh" not in bin_names
+
+
+def test_step4_unknown_tool_dropped(tmp_path):
+    d = _write_skill(tmp_path, "s", "name: s",
+                     body="To run things, use `totally-unknown-tool`.")
+    req = extract_requirements(d, workspace=tmp_path)
+    bin_names = [b["name"] for b in req["bins"]]
+    assert "totally-unknown-tool" not in bin_names
+
+
+def test_step4_in_code_block_dropped(tmp_path):
+    d = _write_skill(tmp_path, "s", "name: s",
+                     body="Example:\n```\nrun `gh`\n```\n")
+    req = extract_requirements(d, workspace=tmp_path)
+    bin_names = [b["name"] for b in req["bins"]]
+    assert "gh" not in bin_names

@@ -16,7 +16,7 @@ from durin.agent.skills_frontmatter import split_frontmatter
 logger = logging.getLogger(__name__)
 
 
-def extract_requirements(skill_dir: Path) -> dict:
+def extract_requirements(skill_dir: Path, *, workspace: Path | None = None) -> dict:
     """Run the heuristic pipeline over *skill_dir*.
 
     Returns a manifest dict::
@@ -33,7 +33,7 @@ def extract_requirements(skill_dir: Path) -> dict:
     Never raises — degrades to an empty manifest on any error.
     """
     try:
-        return _extract(Path(skill_dir))
+        return _extract(Path(skill_dir), workspace=workspace)
     except Exception:  # noqa: BLE001 — never block the scan pipeline
         logger.warning("requirements_scan failed for %s, returning empty manifest", skill_dir)
         return {
@@ -46,7 +46,7 @@ def extract_requirements(skill_dir: Path) -> dict:
         }
 
 
-def _extract(skill_dir: Path) -> dict:
+def _extract(skill_dir: Path, *, workspace: Path | None = None) -> dict:
     md = skill_dir / "SKILL.md"
     data: dict = {}
     body = ""
@@ -76,6 +76,13 @@ def _extract(skill_dir: Path) -> dict:
         for b in _step3_script_bins(scripts_dir):
             if b not in bins_seen:
                 bins_seen[b] = "heuristic:script"
+
+    # --- Step 4: body backtick-quoted tools (context + catalog gated) ---
+    from durin.security.tool_catalog import load_catalog
+    catalog = load_catalog(workspace)
+    for b in _step4_body_bins(body, catalog):
+        if b not in bins_seen:
+            bins_seen[b] = "heuristic:body"
 
     return {
         "platforms": {"value": platforms, "inferred": platforms_inferred},
@@ -180,4 +187,30 @@ def _step3_script_bins(scripts_dir: Path) -> list[str]:
                 tool = m.group(1).strip()
                 if tool and tool not in _INTERPRETER_BINS:
                     out.append(tool)
+    return out
+
+
+# --- Step 4: body backtick-quoted tools (context + catalog gated) ---
+
+_ACTION_VERBS = ("run", "execute", "use", "call", "install", "requires", "needs", "invoke")
+_BACKTICK_RE = re.compile(r"`([a-zA-Z0-9_-]+)`")
+
+
+def _step4_body_bins(body: str, catalog: dict) -> list[str]:
+    """Extract backtick-quoted tool names from SKILL.md body that appear within
+    ±5 words of an action verb AND exist in the tool catalog. Both gates must pass.
+    Backticks inside fenced code blocks are ignored."""
+    cleaned = re.sub(r"```.*?```", "", body, flags=re.DOTALL)
+    out: list[str] = []
+    for m in _BACKTICK_RE.finditer(cleaned):
+        tool = m.group(1).strip()
+        if tool not in catalog:
+            continue
+        start = max(0, m.start() - 40)
+        end = min(len(cleaned), m.end() + 40)
+        window = cleaned[start:end].lower()
+        if not any(verb in window for verb in _ACTION_VERBS):
+            continue
+        if tool not in out:
+            out.append(tool)
     return out
