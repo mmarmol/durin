@@ -678,3 +678,41 @@ async def test_progress_resets_timeout() -> None:
         assert "done" in out
         assert "timed out" not in out.lower()
         await conn.aclose()
+
+
+async def test_catalog_timeout_at_connect(monkeypatch) -> None:
+    import time
+
+    import durin.agent.tools.mcp_connection as mc
+
+    server = FastMCP("hang")
+
+    @server.tool()
+    async def ok() -> str:
+        return "ok"
+
+    async with _InProcessHarness(server) as h:
+        cfg = MCPServerConfig(command="x", catalog_timeout=0.2, tool_timeout=30)
+        registry = ToolRegistry()
+        conn = mc.MCPServerConnection("hang", cfg, registry)
+
+        async def _open(_self):
+            return h.client_streams[0], h.client_streams[1]
+
+        conn._open_transport_streams = _open.__get__(conn, mc.MCPServerConnection)
+
+        # Patch _register_capabilities to use a hanging list_tools.
+        orig_reg = conn._register_capabilities
+
+        async def patched():
+            conn.session.list_tools = lambda: asyncio.sleep(10)
+            await orig_reg()
+
+        conn._register_capabilities = patched
+        t0 = time.monotonic()
+        await conn.start()
+        elapsed = time.monotonic() - t0
+        # Each attempt aborts within catalog_timeout (0.2s).
+        # 3 retries + 1s+2s+4s backoff caps total around 7.6s.
+        assert elapsed < 10.0
+        await conn.aclose()
