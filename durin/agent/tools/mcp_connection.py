@@ -363,6 +363,9 @@ class MCPServerConnection:
             _disable_output_schema_validation(session)
             enabled = set(cfg.enabled_tools)
             allow_all = "*" in enabled
+            available_raw = [t.name for t in tools.tools]
+            available_wrapped = [_sanitize_name(f"mcp_{self.name}_{t.name}") for t in tools.tools]
+            matched: set[str] = set()
             for tool_def in tools.tools:
                 wrapped = _sanitize_name(f"mcp_{self.name}_{tool_def.name}")
                 if not allow_all and tool_def.name not in enabled and wrapped not in enabled:
@@ -371,6 +374,22 @@ class MCPServerConnection:
                     MCPToolWrapper(self, self.name, tool_def, tool_timeout=cfg.tool_timeout)
                 )
                 new_names.append(wrapped)
+                if enabled:
+                    if tool_def.name in enabled:
+                        matched.add(tool_def.name)
+                    if wrapped in enabled:
+                        matched.add(wrapped)
+            if enabled and not allow_all:
+                unmatched = sorted(enabled - matched)
+                if unmatched:
+                    logger.warning(
+                        "MCP server '{}': enabledTools entries not found: {}. "
+                        "Available raw names: {}. Available wrapped names: {}",
+                        self.name,
+                        ", ".join(unmatched),
+                        ", ".join(available_raw) or "(none)",
+                        ", ".join(available_wrapped) or "(none)",
+                    )
         else:
             logger.info("MCP server '{}': no tools capability; skipping tools/list", self.name)
 
