@@ -169,10 +169,31 @@ class MCPServerConnection:
             getattr(cfg, "keepalive_interval", _KEEPALIVE_INTERVAL)
         )
 
+        # OAuth provider (SP-4): built once per connection so refresh/DCR
+        # state persists across reconnects. None unless cfg marks oauth.
+        self._oauth_provider = self._build_oauth_provider()
+
         # list_changed refresh state.
         self._refresh_lock = asyncio.Lock()
         self._pending_refresh: set[asyncio.Task] = set()
         self._refresh_generation = 0
+
+    def _build_oauth_provider(self):
+        """Build the SDK OAuthClientProvider when cfg.oauth is set, else None.
+
+        Built once in __init__ so DCR/refresh state persists across reconnects
+        within the same process. Headless: refuses to open a browser; the user
+        must run `durin mcp login <server>` to obtain tokens.
+        """
+        cfg = self._cfg
+        oauth = getattr(cfg, "oauth", None)
+        if not oauth:
+            return None
+        if not getattr(cfg, "url", ""):
+            logger.warning("MCP '{}': oauth set but no url; ignoring", self.name)
+            return None
+        from durin.agent.tools.mcp_oauth import build_oauth_provider
+        return build_oauth_provider(self.name, cfg, headless=True)
 
     # ----- transport -----
 
@@ -239,7 +260,10 @@ class MCPServerConnection:
         if not await _probe_http_url(cfg.url):
             raise ConnectionError(f"{cfg.url} unreachable")
         self._http_client = httpx.AsyncClient(
-            headers=cfg.headers or None, follow_redirects=True, timeout=None
+            headers=cfg.headers or None,
+            follow_redirects=True,
+            timeout=None,
+            auth=self._oauth_provider,  # SP-4: None unless oauth configured
         )
         await self._http_client.__aenter__()
         self._transport_cm = streamable_http_client(cfg.url, http_client=self._http_client)
@@ -254,6 +278,8 @@ class MCPServerConnection:
         if not await _probe_http_url(cfg.url):
             raise ConnectionError(f"{cfg.url} unreachable")
 
+        provider = self._oauth_provider
+
         def factory(headers=None, timeout=None, auth=None):
             merged = {
                 "Accept": "application/json, text/event-stream",
@@ -261,7 +287,10 @@ class MCPServerConnection:
                 **(headers or {}),
             }
             return httpx.AsyncClient(
-                headers=merged or None, follow_redirects=True, timeout=timeout, auth=auth
+                headers=merged or None,
+                follow_redirects=True,
+                timeout=timeout,
+                auth=provider or auth,  # SP-4: provider drives auth when set
             )
 
         self._transport_cm = sse_client(cfg.url, httpx_client_factory=factory)
