@@ -21,9 +21,10 @@ interface Props {
   skillName: string;
   token: string;
   onResolved?: () => void;
+  onAskDurin?: (binName: string) => void;
 }
 
-export function TriageRequirements({ requirements, skillName,   token, onResolved }: Props) {
+export function TriageRequirements({ requirements, skillName,   token, onResolved, onAskDurin }: Props) {
   const { t } = useTranslation();
   const [installing, setInstalling] = useState<string | null>(null);
 
@@ -101,9 +102,19 @@ export function TriageRequirements({ requirements, skillName,   token, onResolve
                   </Button>
                 )}
                 {!bin.available && !bin.installable && (
-                  <span className="ml-auto text-[11px] text-primary cursor-pointer hover:underline">
-                    {t("skills.requirements.durinCanHelp")}
-                  </span>
+                  onAskDurin ? (
+                    <button
+                      type="button"
+                      onClick={() => onAskDurin(bin.name)}
+                      className="ml-auto text-[11px] text-primary cursor-pointer hover:underline"
+                    >
+                      {t("skills.requirements.durinCanHelp")}
+                    </button>
+                  ) : (
+                    <span className="ml-auto text-[11px] text-primary">
+                      {t("skills.requirements.durinCanHelp")}
+                    </span>
+                  )
                 )}
               </li>
             ))}

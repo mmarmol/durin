@@ -614,6 +614,22 @@
       "send": "Enviar mensaje",
       "stop": "Detener respuesta",
       "attachImage": "Adjuntar imagen",
+      "modelPicker": {
+        "search": "Buscar modelos…",
+        "suggested": "Sugeridos",
+        "all": "Todos",
+        "noMatch": "Sin coincidencias",
+        "empty": "Sin modelos disponibles"
+      },
+      "effort": {
+        "title": "Esfuerzo de razonamiento",
+        "default": "Auto",
+        "off": "Off",
+        "low": "Bajo",
+        "medium": "Medio",
+        "high": "Alto",
+        "max": "Máximo"
+      },
       "encoding": "Procesando…",
       "remove": "Quitar adjunto",
       "normalizedSizeHint": "{{orig}} → {{current}} (auto)",

@@ -4,6 +4,7 @@ import { DeleteConfirm } from "@/components/DeleteConfirm";
 import { Sidebar } from "@/components/Sidebar";
 import { MemoryGraphView } from "@/components/MemoryGraphView";
 import { SkillsView } from "@/components/SkillsView";
+import { ToastProvider } from "@/components/ui/toast";
 import { SettingsView } from "@/components/settings/SettingsView";
 import { ThreadShell } from "@/components/thread/ThreadShell";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
@@ -263,6 +264,7 @@ function Shell({
   const { sessions, loading, refresh, createChat, deleteChat, renameChat } = useSessions();
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [view, setView] = useState<ShellView>("chat");
+  const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
   const [desktopSidebarOpen, setDesktopSidebarOpen] =
     useState<boolean>(readSidebarOpen);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
@@ -467,6 +469,7 @@ function Shell({
   const showMainSidebar = view !== "settings";
 
   return (
+    <ToastProvider>
     <div className="relative flex h-full w-full overflow-hidden">
       {/* Desktop sidebar: in normal flow, so the thread area width stays honest. */}
       {showMainSidebar ? (
@@ -523,6 +526,8 @@ function Shell({
             theme={theme}
             onToggleTheme={toggle}
             hideSidebarToggleOnDesktop={desktopSidebarOpen}
+            pendingPrompt={pendingPrompt}
+            onPromptConsumed={() => setPendingPrompt(null)}
           />
         </div>
         {view === "settings" && (
@@ -551,7 +556,10 @@ function Shell({
         )}
         {view === "skills" && (
           <div className="absolute inset-0 flex flex-col">
-            <SkillsView />
+            <SkillsView onAskDurin={(binName) => {
+              setView("chat");
+              setPendingPrompt(`Ayúdame a instalar ${binName}`);
+            }} />
           </div>
         )}
       </main>
@@ -571,5 +579,6 @@ function Shell({
         </div>
       ) : null}
     </div>
+    </ToastProvider>
   );
 }
