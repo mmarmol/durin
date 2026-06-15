@@ -74,6 +74,27 @@ _TUI_ACTIONS: list[CommandEntry] = [
         shortcut="Esc",
     ),
     CommandEntry(
+        id="act:open_diff_viewer",
+        label="View file changes",
+        kind="action",
+        description="Browse working-tree diffs in a full-page viewer",
+        shortcut="Ctrl+G",
+    ),
+    CommandEntry(
+        id="act:open_command_palette",
+        label="Command palette",
+        kind="action",
+        description="Search and run any command",
+        shortcut="Ctrl+P",
+    ),
+    CommandEntry(
+        id="act:toggle_sidebar",
+        label="Toggle sidebar",
+        kind="action",
+        description="Show/hide Todos, Files, MCP panel",
+        shortcut="Ctrl+B",
+    ),
+    CommandEntry(
         id="act:quit",
         label="Quit durin",
         kind="action",
