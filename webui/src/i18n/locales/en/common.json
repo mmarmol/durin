@@ -614,6 +614,22 @@
       "send": "Send message",
       "stop": "Stop response",
       "attachImage": "Attach image",
+      "modelPicker": {
+        "search": "Search models…",
+        "suggested": "Suggested",
+        "all": "All models",
+        "noMatch": "No models match",
+        "empty": "No models available"
+      },
+      "effort": {
+        "title": "Reasoning effort",
+        "default": "Auto",
+        "off": "Off",
+        "low": "Low",
+        "medium": "Medium",
+        "high": "High",
+        "max": "Max"
+      },
       "tools": {
         "search": "Search",
         "reason": "Reason",
@@ -899,5 +915,14 @@
   },
   "list": {
     "scrollToBottom": "Scroll to bottom"
+  },
+  "changes": {
+    "title": "Changes",
+    "sidebarTitle": "Changes",
+    "refresh": "Refresh",
+    "empty": "No uncommitted changes",
+    "selectFile": "Select a file to view diff",
+    "noDiff": "No diff available",
+    "error": "Failed to load changes"
   }
 }
