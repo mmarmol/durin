@@ -205,6 +205,20 @@ def _safe_json(value: Any) -> str:
         return str(value)
 
 
+def _embedded_resource_to_parts(resource: Any, types: Any) -> list[Any]:
+    """Render an EmbeddedResource's inner contents faithfully."""
+    if isinstance(resource, types.TextResourceContents):
+        return [resource.text]
+    if isinstance(resource, types.BlobResourceContents):
+        mime = getattr(resource, "mimeType", None)
+        uri = getattr(resource, "uri", "")
+        img = _image_block_or_none(resource.blob, mime, f"(MCP resource: {uri})")
+        if img is not None:
+            return img
+        return [f"[MCP embedded resource: {uri}, {_b64_byte_len(resource.blob)} bytes]"]
+    return [_safe_json(resource)]
+
+
 def _content_block_to_parts(block: Any, types: Any) -> list[Any]:
     """Map one MCP ContentBlock to durin result parts (text str or image dict)."""
     if isinstance(block, types.TextContent):
@@ -212,6 +226,14 @@ def _content_block_to_parts(block: Any, types: Any) -> list[Any]:
     if isinstance(block, types.ImageContent):
         img = _image_block_or_none(block.data, block.mimeType, "(MCP image)")
         return img if img is not None else ["[MCP image: missing or invalid data]"]
+    if isinstance(block, types.AudioContent):
+        mime = block.mimeType or "unknown"
+        return [f"[MCP audio: {mime}, {_b64_byte_len(block.data)} bytes]"]
+    if isinstance(block, types.EmbeddedResource):
+        return _embedded_resource_to_parts(block.resource, types)
+    if isinstance(block, types.ResourceLink):
+        label = block.name or block.uri
+        return [f"[{label}]({block.uri})"]
     return [_safe_json(block)]
 
 

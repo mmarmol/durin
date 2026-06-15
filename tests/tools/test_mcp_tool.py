@@ -31,14 +31,34 @@ class _FakeTextResourceContents:
 
 
 class _FakeBlobResourceContents:
-    def __init__(self, blob: bytes) -> None:
+    def __init__(self, blob: bytes, uri: str = "file:///x", mimeType: str | None = None) -> None:
         self.blob = blob
+        self.uri = uri
+        self.mimeType = mimeType
 
 
 class _FakeImageContent:
     def __init__(self, data: str, mimeType: str | None) -> None:
         self.data = data
         self.mimeType = mimeType
+
+
+class _FakeAudioContent:
+    def __init__(self, data: str, mimeType: str | None) -> None:
+        self.data = data
+        self.mimeType = mimeType
+
+
+class _FakeEmbeddedResource:
+    def __init__(self, resource: object) -> None:
+        self.resource = resource
+
+
+class _FakeResourceLink:
+    def __init__(self, name: str | None, uri: str, description: str | None = None) -> None:
+        self.name = name
+        self.uri = uri
+        self.description = description
 
 
 @pytest.fixture
@@ -56,6 +76,9 @@ def _fake_mcp_module(
         TextResourceContents=_FakeTextResourceContents,
         BlobResourceContents=_FakeBlobResourceContents,
         ImageContent=_FakeImageContent,
+        AudioContent=_FakeAudioContent,
+        EmbeddedResource=_FakeEmbeddedResource,
+        ResourceLink=_FakeResourceLink,
     )
 
     class _FakeStdioServerParameters:
@@ -1014,3 +1037,77 @@ async def test_execute_is_error_empty_content() -> None:
     result = await wrapper.execute()
 
     assert result == "(MCP tool error) (unknown error)"
+
+
+@pytest.mark.asyncio
+async def test_execute_audio_content_placeholder() -> None:
+    async def call_tool(_name: str, arguments: dict) -> object:
+        data = _b64.b64encode(b"\x00\x01\x02\x03").decode()
+        return SimpleNamespace(
+            content=[_FakeAudioContent(data, "audio/wav")], isError=False
+        )
+
+    wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
+    result = await wrapper.execute()
+    assert result == "[MCP audio: audio/wav, 4 bytes]"
+
+
+@pytest.mark.asyncio
+async def test_execute_embedded_text_resource() -> None:
+    async def call_tool(_name: str, arguments: dict) -> object:
+        res = _FakeTextResourceContents("embedded text")
+        return SimpleNamespace(content=[_FakeEmbeddedResource(res)], isError=False)
+
+    wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
+    result = await wrapper.execute()
+    assert result == "embedded text"
+
+
+@pytest.mark.asyncio
+async def test_execute_embedded_blob_image_returns_image_block() -> None:
+    async def call_tool(_name: str, arguments: dict) -> object:
+        res = _FakeBlobResourceContents(_PNG_1PX, uri="file:///pic.png", mimeType="image/png")
+        return SimpleNamespace(content=[_FakeEmbeddedResource(res)], isError=False)
+
+    wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
+    result = await wrapper.execute()
+    assert isinstance(result, list)
+    assert any(b["type"] == "image_url" for b in result)
+
+
+@pytest.mark.asyncio
+async def test_execute_embedded_blob_non_image_placeholder() -> None:
+    async def call_tool(_name: str, arguments: dict) -> object:
+        blob = _b64.b64encode(b"\x00\x01\x02").decode()
+        res = _FakeBlobResourceContents(blob, uri="file:///x.bin", mimeType="application/octet-stream")
+        return SimpleNamespace(content=[_FakeEmbeddedResource(res)], isError=False)
+
+    wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
+    result = await wrapper.execute()
+    assert "MCP embedded resource" in result
+    assert "file:///x.bin" in result
+
+
+@pytest.mark.asyncio
+async def test_execute_resource_link() -> None:
+    async def call_tool(_name: str, arguments: dict) -> object:
+        link = _FakeResourceLink("docs", "https://example.com/docs")
+        return SimpleNamespace(content=[link], isError=False)
+
+    wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
+    result = await wrapper.execute()
+    assert result == "[docs](https://example.com/docs)"
+
+
+@pytest.mark.asyncio
+async def test_execute_unknown_block_renders_json() -> None:
+    class _Weird:
+        def model_dump(self, mode: str = "python") -> dict:
+            return {"kind": "weird", "n": 1}
+
+    async def call_tool(_name: str, arguments: dict) -> object:
+        return SimpleNamespace(content=[_Weird()], isError=False)
+
+    wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
+    result = await wrapper.execute()
+    assert result == '{"kind": "weird", "n": 1}'
