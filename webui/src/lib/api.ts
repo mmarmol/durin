@@ -346,6 +346,7 @@ export interface SkillRow {
   /** Whether/how this skill can be removed: "remove" (workspace skill),
    *  "revert" (forked builtin → shipped version), or null/absent (pure builtin). */
   removable?: "remove" | "revert" | null;
+  requirements?: SkillRequirements | null;
 }
 
 /** A skill awaiting an import decision in `.durin/import-quarantine/` (§6.B fills these). */
@@ -363,6 +364,7 @@ export interface QuarantineRow {
   needs?: "allow" | "confirm" | "block";
   /** Why approval is required, in structured form (rendered as plain language). */
   reasons?: { code: string; detail?: string }[];
+  requirements?: SkillRequirements | null;
 }
 
 export interface SkillDetail {
@@ -422,6 +424,7 @@ export interface ApproveResult {
   refused?: "block" | "confirm" | "invalid" | "exists";
   message?: string;
   error?: string;
+  deps_results?: Array<{ command: string; success: boolean; output?: string; error?: string }>;
 }
 
 export async function importSource(
@@ -456,16 +459,23 @@ export async function searchSkills(
   );
 }
 
+export interface SkillDescribeResult {
+  ref: string;
+  description: string;
+  platforms?: string[] | null;
+  requires?: { bins: string[]; env: string[] } | null;
+}
+
 /** Lazy SKILL.md description peek for a registry hit (search UI, on expand).
  *  Returns an empty description when none is available — never throws on 404. */
 export async function describeSkill(
   token: string,
   ref: string,
   base: string = "",
-): Promise<{ ref: string; description: string }> {
+): Promise<SkillDescribeResult> {
   const params = new URLSearchParams({ ref });
   try {
-    return await request<{ ref: string; description: string }>(
+    return await request<SkillDescribeResult>(
       `${base}/api/skills/describe?${params}`,
       token,
     );
@@ -474,16 +484,55 @@ export async function describeSkill(
   }
 }
 
+export interface RequirementBin {
+  name: string;
+  available: boolean;
+  installable?: boolean;
+  install_spec?: string;
+}
+
+export interface RequirementEnv {
+  name: string;
+  available: boolean;
+}
+
+export interface SkillRequirements {
+  platforms: string[];
+  platform_ok: boolean;
+  bins: RequirementBin[];
+  env: RequirementEnv[];
+  compatibility: string;
+}
+
+export async function installSkillDeps(
+  token: string,
+  name: string,
+  bin?: string,
+  base: string = "",
+): Promise<{ ok?: boolean; results?: Array<{ command: string; success: boolean; output?: string; error?: string }>; error?: string }> {
+  const params = new URLSearchParams();
+  if (bin) params.set("bin", bin);
+  const qs = params.toString();
+  const url = `${base}/api/skills/${encodeURIComponent(name)}/install-deps${qs ? `?${qs}` : ""}`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+    credentials: "same-origin",
+  });
+  if (res.status >= 500) throw new ApiError(res.status, `HTTP ${res.status}`);
+  return await res.json();
+}
+
 export async function approveSkill(
   token: string,
   name: string,
-  opts: { confirm?: boolean; override?: boolean; replace?: boolean } = {},
+  opts: { confirm?: boolean; override?: boolean; replace?: boolean; install_deps?: boolean } = {},
   base: string = "",
 ): Promise<ApproveResult> {
   const query = new URLSearchParams();
   if (opts.confirm) query.set("confirm", "true");
   if (opts.override) query.set("override", "true");
   if (opts.replace) query.set("replace", "true");
+  if (opts.install_deps) query.set("install_deps", "true");
   const qs = query.toString();
   const url = `${base}/api/skills/${encodeURIComponent(name)}/approve${qs ? `?${qs}` : ""}`;
   // 200 (installed) and 409 (gate refused) both carry a useful body; only 5xx throws.

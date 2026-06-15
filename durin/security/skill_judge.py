@@ -38,6 +38,7 @@ class JudgeOutcome:
     findings: list = field(default_factory=list)
     verdict: str = ""
     summary: str = ""
+    tools: list = field(default_factory=list)
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,11 @@ safe | caution | dangerous
 One finding per line as `severity | category | where | exact what and why`,
 where severity is one of info/caution/high/dangerous and where is the file or
 location. Write `none` if there are no concrete problems.
+===TOOLS===
+List every external CLI tool or binary the skill needs to run (commands
+invoked via shell, subprocess, exec, or referenced as prerequisites).
+One tool name per line (just the binary name, e.g. `gh`, `rg`, `ffmpeg`).
+Write `none` if the skill has no external tool dependencies.
 ===END===
 
 SKILL NAME: {name}
@@ -77,6 +83,7 @@ SKILL NAME: {name}
 _RE_FINDINGS = re.compile(r"===FINDINGS===\s*(?P<body>.*?)\s*===END===", re.IGNORECASE | re.DOTALL)
 _RE_SUMMARY = re.compile(r"===SUMMARY===\s*(?P<body>.*?)\s*===(?:VERDICT|FINDINGS)===", re.IGNORECASE | re.DOTALL)
 _RE_VERDICT = re.compile(r"===VERDICT===\s*(?P<body>.*?)\s*===FINDINGS===", re.IGNORECASE | re.DOTALL)
+_RE_TOOLS = re.compile(r"===TOOLS===\s*(?P<body>.*?)\s*===END===", re.IGNORECASE | re.DOTALL)
 
 
 class JudgeError(Exception):
@@ -133,6 +140,19 @@ def _parse_findings(raw: str, max_severity: str) -> list[Finding]:
     return out
 
 
+def _parse_tools(raw: str) -> list[str]:
+    m = _RE_TOOLS.search(raw)
+    if m is None:
+        return []
+    out: list[str] = []
+    for line in m.group("body").splitlines():
+        line = line.strip().lstrip("-").strip()
+        if not line or line.lower() == "none":
+            continue
+        out.append(line)
+    return out
+
+
 def _parse_outcome(raw: str, max_severity: str) -> JudgeOutcome:
     findings = _parse_findings(raw, max_severity)  # raises JudgeError if FINDINGS/END missing
     sm = _RE_SUMMARY.search(raw)
@@ -141,7 +161,8 @@ def _parse_outcome(raw: str, max_severity: str) -> JudgeOutcome:
     verdict = (vm.group("body").strip().lower() if vm else "")
     if verdict not in ("safe", "caution", "dangerous"):
         verdict = ""
-    return JudgeOutcome(findings=findings, verdict=verdict, summary=summary)
+    tools = _parse_tools(raw)
+    return JudgeOutcome(findings=findings, verdict=verdict, summary=summary, tools=tools)
 
 
 def judge_skill(skill_dir: Path, *, llm_invoke: LLMInvoke, model: str,
@@ -207,6 +228,8 @@ def audit_skill(skill_dir: Path, *, judge_enabled: bool = False, judge_model: st
         outcome = judge_skill(skill_dir, llm_invoke=invoke, model=model,
                               max_severity=judge_max_severity)
         rep.findings += outcome.findings
+        rep.tools = outcome.tools
+        rep.judge_verdict = outcome.verdict
     except JudgeError as exc:
         logger.info("skill judge skipped (degraded): %s", exc)
     except Exception as exc:  # noqa: BLE001 — never let the judge break import

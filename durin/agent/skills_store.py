@@ -815,7 +815,8 @@ def web_skill_describe(ref: str) -> tuple[int, dict]:
     Never executes or writes anything. Any failure degrades to an empty string."""
     ref = (ref or "").strip()
     if not ref:
-        return 200, {"ref": ref, "description": ""}
+        return 200, {"ref": ref, "description": "",
+                      "platforms": None, "requires": None}
     try:
         from durin.agent import skills_import as si
         from durin.agent.skill_resolve import resolve_candidates
@@ -823,7 +824,8 @@ def web_skill_describe(ref: str) -> tuple[int, dict]:
 
         cands = resolve_candidates(ref).candidates
         if not cands:
-            return 200, {"ref": ref, "description": ""}
+            return 200, {"ref": ref, "description": "",
+                          "platforms": None, "requires": None}
         cand = cands[0]
         if cand.kind == "https":
             url = cand.ref
@@ -832,20 +834,102 @@ def web_skill_describe(ref: str) -> tuple[int, dict]:
             path = f"{skill_dir}/SKILL.md" if skill_dir else "SKILL.md"
             url = f"{si._GITHUB_RAW}/{owner}/{repo}/{branch}/{path}"
         else:
-            # clawhub / local: the search hit already carries a description.
-            return 200, {"ref": ref, "description": ""}
+            return 200, {"ref": ref, "description": "",
+                          "platforms": None, "requires": None}
         raw = si._http_get_bytes(url)[:65_536]
         data, _ = split_frontmatter(raw.decode("utf-8", errors="replace"))
         desc = str(data.get("description") or "").strip()
-        return 200, {"ref": ref, "description": desc[:280]}
+        plats = data.get("platforms")
+        if isinstance(plats, str):
+            plats = [plats]
+        platforms = [str(p) for p in plats] if isinstance(plats, list) else None
+        requires = None
+        meta = data.get("metadata")
+        if isinstance(meta, dict):
+            durin = meta.get("durin")
+            if isinstance(durin, dict) and isinstance(durin.get("requires"), dict):
+                req = durin["requires"]
+                requires = {
+                    "bins": [str(b) for b in req.get("bins", [])] if isinstance(req.get("bins"), list) else [],
+                    "env": [str(e) for e in req.get("env", [])] if isinstance(req.get("env"), list) else [],
+                }
+                if not requires["bins"] and not requires["env"]:
+                    requires = None
+        return 200, {"ref": ref, "description": desc[:280],
+                      "platforms": platforms, "requires": requires}
     except Exception:  # noqa: BLE001 — describe is best-effort, never fatal
-        return 200, {"ref": ref, "description": ""}
+        return 200, {"ref": ref, "description": "",
+                      "platforms": None, "requires": None}
 
 
-def web_skill_approve(workspace: Path, name: str, *, confirm: bool,
-                      override: bool, replace: bool = False) -> tuple[int, dict]:
-    """`GET /api/skills/{name}/approve?confirm=&override=&replace=` — install a
-    quarantined skill through the §8.C gate. 409 with {refused} when refused."""
+async def web_skill_install_deps(workspace: Path, name: str, *,
+                                 bin_name: str | None = None,
+                                 exec_run=None) -> tuple[int, dict]:
+    """`GET /api/skills/{name}/install-deps` — install a skill's deps (or a
+    specific bin's install spec) via the exec gate. Returns per-command results."""
+    from durin.agent.skills_import import run_install_specs
+
+    skill_dir = Path(workspace) / "skills" / name
+    if not (skill_dir / "SKILL.md").is_file():
+        return 404, {"error": f"skill not found: {name}"}
+    if bin_name:
+        specs = _spec_for_bin(skill_dir, bin_name)
+    else:
+        from durin.agent.skills_import import runnable_install_specs
+        specs = runnable_install_specs(skill_dir)
+    if not specs:
+        return 200, {"ok": True, "results": [], "note": "no runnable install specs"}
+    if exec_run is None:
+        exec_run = _get_exec_run(workspace)
+    results = await run_install_specs(specs, exec_run=exec_run)
+    return 200, {"ok": True, "results": results}
+
+
+def _get_exec_run(workspace: Path):
+    """Create an async exec_run callable using the app config + ExecTool."""
+    from durin.agent.tools.shell import ExecTool
+    from durin.config.loader import load_config
+
+    cfg = load_config()
+
+    class _Ctx:
+        def __init__(self, ws, config):
+            self.workspace = ws
+            self.config = config
+
+    return ExecTool.create(_Ctx(workspace, cfg)).execute
+
+
+def _spec_for_bin(skill_dir: Path, bin_name: str) -> list[dict]:
+    """Find the runnable install spec for a specific bin name."""
+    from durin.security.tool_catalog import load_catalog
+    from durin.security.requirements_scan import _PLATFORM_INSTALL_KINDS, _current_platform
+
+    catalog = load_catalog(skill_dir.parent.parent)
+    entry = catalog.get(bin_name)
+    if not entry:
+        return []
+    platform = _current_platform()
+    valid_kinds = _PLATFORM_INSTALL_KINDS.get(platform, ())
+    primary = entry.get("primary", {})
+    if primary.get("kind") in valid_kinds:
+        return [{"kind": primary["kind"], "value": primary["value"],
+                 "command": f"{primary['kind']} install {primary['value']}",
+                 "needs_privileges": primary["kind"] == "apt"}]
+    for alt in entry.get("alternatives", []):
+        if alt.get("kind") in valid_kinds:
+            return [{"kind": alt["kind"], "value": alt["value"],
+                     "command": f"{alt['kind']} install {alt['value']}",
+                     "needs_privileges": alt["kind"] == "apt"}]
+    return []
+
+
+async def web_skill_approve(workspace: Path, name: str, *, confirm: bool,
+                            override: bool, replace: bool = False,
+                            install_deps: bool = False,
+                            exec_run=None) -> tuple[int, dict]:
+    """`GET /api/skills/{name}/approve?...&install_deps=true` — install a
+    quarantined skill through the §8.C gate, optionally auto-installing deps."""
     import json as _json
 
     from durin.agent.skills_import import SkillImportRefused, install_imported_skill
@@ -864,9 +948,18 @@ def web_skill_approve(workspace: Path, name: str, *, confirm: bool,
         res = install_imported_skill(workspace, qdir, source=source,
                                      allowlist=_import_allowlist(),
                                      confirmed=confirm, override=override, replace=replace)
-        return 200, res
     except SkillImportRefused as exc:
         return 409, {"refused": exc.action, "verdict": exc.verdict, "message": str(exc)}
+
+    if install_deps and exec_run:
+        from durin.agent.skills_import import runnable_install_specs, run_install_specs
+        skill_dir = Path(workspace) / "skills" / name
+        specs = runnable_install_specs(skill_dir)
+        if specs:
+            res["deps_results"] = await run_install_specs(specs, exec_run=exec_run)
+        else:
+            res["deps_results"] = []
+    return 200, res
 
 
 def web_skill_reject(workspace: Path, name: str) -> tuple[int, dict]:
@@ -888,13 +981,21 @@ def web_skill_remove(workspace: Path, name: str) -> tuple[int, dict]:
 
 def _persist_judge_result(qdir, source: str, verdict: str, findings: list, summary: str) -> None:
     """Write the merged judge result to the quarantine ``.scan.json`` (shared by
-    the HTTP and websocket audit paths)."""
+    the HTTP and websocket audit paths). Preserves existing keys (e.g.
+    ``requirements``) from a prior ``fetch_candidate`` scan."""
     import json as _json
 
-    (qdir / ".scan.json").write_text(
-        _json.dumps({"source": source, "verdict": verdict, "findings": findings, "summary": summary}),
-        encoding="utf-8",
-    )
+    sj = qdir / ".scan.json"
+    data: dict = {}
+    if sj.is_file():
+        try:
+            loaded = _json.loads(sj.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                data = loaded
+        except Exception:  # noqa: BLE001
+            pass
+    data.update({"source": source, "verdict": verdict, "findings": findings, "summary": summary})
+    sj.write_text(_json.dumps(data), encoding="utf-8")
 
 
 def web_skill_judge(workspace: Path, name: str) -> tuple[int, dict]:
@@ -927,6 +1028,8 @@ def web_skill_judge(workspace: Path, name: str) -> tuple[int, dict]:
                      "error": str(exc), "error_code": code}
 
     merged = ScanReport(findings=det.findings + outcome.findings)
+    merged.tools = outcome.tools
+    merged.judge_verdict = outcome.verdict
     findings = [{"category": f.category, "severity": f.severity, "where": f.where,
                  "detail": f.detail} for f in merged.findings]
     source = name

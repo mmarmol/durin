@@ -36,6 +36,10 @@ def skills_inventory(workspace) -> list[dict]:
     sweep_unverified_skills(workspace)
     loader = _loader(workspace)
     dirs = _skill_dirs(workspace)
+    from durin.security.requirements_scan import resolve_display
+    from durin.security.tool_catalog import load_catalog
+    from durin.agent.skills_frontmatter import split_frontmatter
+    catalog = load_catalog(workspace)
     out = []
     for info in list_skills_info(workspace):
         entry = dict(info)
@@ -44,8 +48,31 @@ def skills_inventory(workspace) -> list[dict]:
         d = dirs.get(info["name"])
         if d is not None and d.is_dir():
             entry.update(_scan_payload(d))
+            prov_verdict = (info.get("provenance") or {}).get("verdict")
+            if prov_verdict:
+                entry["verdict"] = prov_verdict
         else:
             entry.update({"verdict": "safe", "findings": []})
+
+        req_manifest = None
+        md = d / "SKILL.md" if d else None
+        if md and md.is_file():
+            try:
+                fdata, _ = split_frontmatter(md.read_text(encoding="utf-8"))
+                durin = (fdata.get("metadata") or {}).get("durin", {})
+                if isinstance(durin, dict) and isinstance(durin.get("requirements"), dict):
+                    req_manifest = durin["requirements"]
+            except Exception:  # noqa: BLE001
+                pass
+        if req_manifest:
+            entry["requirements"] = resolve_display(
+                req_manifest, catalog=catalog)
+        elif d is not None and d.is_dir():
+            from durin.security.requirements_scan import extract_requirements
+            req_manifest = extract_requirements(d, workspace=workspace)
+            entry["requirements"] = resolve_display(req_manifest, catalog=catalog)
+        else:
+            entry["requirements"] = None
         out.append(entry)
     return out
 
@@ -59,6 +86,9 @@ def quarantined_skills(workspace) -> list[dict]:
     out = []
     if not qroot.is_dir():
         return out
+    from durin.security.requirements_scan import resolve_display
+    from durin.security.tool_catalog import load_catalog
+    catalog = load_catalog(workspace)
     for d in sorted(qroot.iterdir()):
         if not (d / "SKILL.md").is_file():
             continue
@@ -66,6 +96,7 @@ def quarantined_skills(workspace) -> list[dict]:
                  "verdict": "", "findings": [], "trust_prefix": "", "install_specs": [],
                  "needs": "confirm", "reasons": []}
         sj = d / ".scan.json"
+        meta = None
         if sj.is_file():
             try:
                 meta = json.loads(sj.read_text())
@@ -74,6 +105,12 @@ def quarantined_skills(workspace) -> list[dict]:
                 entry["findings"] = meta.get("findings", [])
             except Exception:
                 pass
+        raw_req = meta.get("requirements") if isinstance(meta, dict) else None
+        if isinstance(raw_req, dict):
+            entry["requirements"] = resolve_display(
+                raw_req, catalog=catalog)
+        else:
+            entry["requirements"] = None
         from durin.agent.skills_import import declared_install_specs, trust_prefix_for
         entry["install_specs"] = declared_install_specs(d)
         if entry["source"]:

@@ -92,8 +92,6 @@ class SkillInstallDepsTool(Tool):
             return {**base, "ran": False,
                     "note": "DRY RUN — review with the user (note any needs_privileges), "
                             "then call again with confirm=true"}
-        results = []
-        for cmd in commands:
-            output = await self._exec_run(command=cmd)
-            results.append({"command": cmd, "output": str(output)[-2000:]})
+        from durin.agent.skills_import import run_install_specs
+        results = await run_install_specs(specs, exec_run=self._exec_run)
         return {**base, "ran": True, "results": results}

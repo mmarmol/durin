@@ -823,7 +823,7 @@ class WebSocketChannel(BaseChannel):
 
         m = re.match(r"^/api/skills/([^/]+)/approve$", got)
         if m:
-            return self._handle_skill_approve(request, m.group(1))
+            return await self._handle_skill_approve(request, m.group(1))
 
         m = re.match(r"^/api/skills/([^/]+)/reject$", got)
         if m:
@@ -852,6 +852,10 @@ class WebSocketChannel(BaseChannel):
         m = re.match(r"^/api/skills/([^/]+)/history$", got)
         if m:
             return self._handle_skill_history(request, m.group(1))
+
+        m = re.match(r"^/api/skills/([^/]+)/install-deps$", got)
+        if m:
+            return await self._handle_skill_install_deps(request, m.group(1))
 
         m = re.match(r"^/api/skills/([^/]+)$", got)
         if m:
@@ -1939,8 +1943,8 @@ class WebSocketChannel(BaseChannel):
             return _http_error(500, f"token test failed: {exc}")
         return _http_json_response(payload, status=status)
 
-    def _handle_skill_approve(self, request: WsRequest, name: str) -> Response:
-        """`GET /api/skills/{name}/approve?confirm=&override=` — install through the gate."""
+    async def _handle_skill_approve(self, request: WsRequest, name: str) -> Response:
+        """`GET /api/skills/{name}/approve?confirm=&override=&install_deps=`"""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         decoded = _decode_api_key(name)
@@ -1950,15 +1954,36 @@ class WebSocketChannel(BaseChannel):
         confirm = (_query_first(query, "confirm") or "").lower() in ("1", "true", "yes")
         override = (_query_first(query, "override") or "").lower() in ("1", "true", "yes")
         replace = (_query_first(query, "replace") or "").lower() in ("1", "true", "yes")
+        install_deps = (_query_first(query, "install_deps") or "").lower() in ("1", "true", "yes")
         from durin.agent import skills_store as ss
         from durin.config.loader import load_config
         try:
             workspace = self._endpoint_workspace()
-            status, payload = ss.web_skill_approve(workspace, decoded,
-                                                   confirm=confirm, override=override,
-                                                   replace=replace)
+            exec_run = ss._get_exec_run(workspace) if install_deps else None
+            status, payload = await ss.web_skill_approve(
+                workspace, decoded, confirm=confirm, override=override,
+                replace=replace, install_deps=install_deps, exec_run=exec_run)
         except Exception as exc:  # noqa: BLE001
             return _http_error(500, f"approve failed: {exc}")
+        return _http_json_response(payload, status=status)
+
+    async def _handle_skill_install_deps(self, request: WsRequest, name: str) -> Response:
+        """`GET /api/skills/{name}/install-deps?bin=` — install deps for a skill."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        decoded = _decode_api_key(name)
+        if decoded is None:
+            return _http_error(400, "invalid skill name")
+        query = _parse_query(request.path)
+        bin_name = _query_first(query, "bin")
+        from durin.agent import skills_store as ss
+        try:
+            workspace = self._endpoint_workspace()
+            exec_run = ss._get_exec_run(workspace)
+            status, payload = await ss.web_skill_install_deps(
+                workspace, decoded, bin_name=bin_name, exec_run=exec_run)
+        except Exception as exc:  # noqa: BLE001
+            return _http_error(500, f"install-deps failed: {exc}")
         return _http_json_response(payload, status=status)
 
     async def _run_skill_audit(self, connection: Any, name: str) -> None:
@@ -2006,6 +2031,8 @@ class WebSocketChannel(BaseChannel):
 
         await self.send_reasoning_end(chat_id)
         merged = ScanReport(findings=det.findings + outcome.findings)
+        merged.tools = outcome.tools
+        merged.judge_verdict = outcome.verdict
         findings = [{"category": f.category, "severity": f.severity, "where": f.where,
                      "detail": f.detail} for f in merged.findings]
         source = name
