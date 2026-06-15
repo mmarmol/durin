@@ -78,6 +78,8 @@ def format_entry(entry: ModelEntry) -> str:
     Meta: ``1000K ctx · reasoning ✓ · vision ✗``
     """
     caps = entry.capabilities
+    if caps is None:
+        return entry.name
     parts: list[str] = []
     if caps.max_input_tokens:
         parts.append(f"{_fmt_ctx(caps.max_input_tokens)} ctx")

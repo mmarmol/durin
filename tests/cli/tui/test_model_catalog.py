@@ -111,6 +111,20 @@ def test_format_entry_shows_context_window():
     assert "reasoning" in text.lower()
 
 
+def test_format_entry_none_capabilities():
+    from durin.cli.tui.model_catalog import ModelEntry, format_entry
+
+    entry = ModelEntry(
+        name="unknown-model",
+        provider="auto",
+        is_preset=False,
+        is_recent=False,
+        capabilities=None,
+    )
+    text = format_entry(entry)
+    assert text == "unknown-model"
+
+
 def _preset(model: str):
     from durin.config.schema import ModelPresetConfig
 
