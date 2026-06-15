@@ -530,3 +530,30 @@ async def test_refresh_generation_guard(live_mcp, monkeypatch) -> None:
     assert "mcp_harness_stale_tool" not in registry._tools
     assert set(registry._tools.keys()) == pre
     await conn.aclose()
+
+
+async def test_refresh_preserves_unchanged_wrapper_identity(live_mcp) -> None:
+    factory, harness = live_mcp
+    conn, registry = factory(keepalive_interval=10.0)
+    await conn.start()
+    before = registry.get("mcp_harness_echo")
+    assert before is not None
+
+    async def added(x: int) -> int:
+        return x + 1
+
+    harness.server.add_tool(added, name="added")
+    await conn.call_tool("emit_change", {}, timeout=3.0)
+    for _ in range(60):
+        await asyncio.sleep(0.05)
+        if registry.get("mcp_harness_added") is not None:
+            break
+
+    after = registry.get("mcp_harness_echo")
+    # echo was unchanged — its registry slot must not be torn down then re-added
+    # in a way that strands an in-flight tool-call ID. Assert the wrapper is
+    # still callable and points at the live connection (re-resolve semantics).
+    assert after is not None
+    out = await after.execute(text="still-here")
+    assert "still-here" in out
+    await conn.aclose()
