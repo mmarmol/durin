@@ -19,18 +19,15 @@ from typing import Any, Callable
 
 from loguru import logger
 
-from durin.agent.tools.registry import ToolRegistry
-
-# Reuse SP-1 transport helpers + render-free building blocks from mcp.py.
 from durin.agent.tools.mcp import (
-    _normalize_windows_stdio_command,
-    _probe_http_url,
-    _sanitize_name,
-    _disable_output_schema_validation,
-    MCPToolWrapper,
-    MCPResourceWrapper,
     MCPPromptWrapper,
+    MCPResourceWrapper,
+    MCPToolWrapper,
+    _disable_output_schema_validation,
+    _normalize_windows_stdio_command,
+    _sanitize_name,
 )
+from durin.agent.tools.registry import ToolRegistry
 
 
 @dataclass

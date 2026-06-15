@@ -6,7 +6,7 @@ import asyncio
 import dataclasses
 import os
 import time
-from contextlib import AsyncExitStack, nullcontext, suppress
+from contextlib import nullcontext, suppress
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
@@ -373,7 +373,7 @@ class AgentLoop:
         self._max_messages = max_messages if max_messages > 0 else 120
         self._running = False
         self._mcp_servers = mcp_servers or {}
-        self._mcp_stacks: dict[str, AsyncExitStack] = {}
+        self._mcp_connections: dict[str, Any] = {}
         self._mcp_connected = False
         self._mcp_connecting = False
         # Last-known telemetry snapshots, cached in-memory so /status
@@ -746,22 +746,24 @@ class AgentLoop:
         from durin.agent.tools.mcp import connect_mcp_servers
 
         try:
-            self._mcp_stacks = await connect_mcp_servers(self._mcp_servers, self.tools)
-            if self._mcp_stacks:
+            self._mcp_connections = await connect_mcp_servers(
+                self._mcp_servers, self.tools, defer_cb=self._maybe_defer_mcp_tools
+            )
+            if self._mcp_connections:
                 self._mcp_connected = True
             else:
                 logger.warning("No MCP servers connected successfully (will retry next message)")
         except asyncio.CancelledError:
             logger.warning("MCP connection cancelled (will retry next message)")
-            self._mcp_stacks.clear()
+            self._mcp_connections.clear()
         except ImportError:
             res = ensure_or_note("mcp", config=getattr(self, "app_config", None))
             if res.status in ("present", "installed"):
                 try:
-                    self._mcp_stacks = await connect_mcp_servers(
-                        self._mcp_servers, self.tools
+                    self._mcp_connections = await connect_mcp_servers(
+                        self._mcp_servers, self.tools, defer_cb=self._maybe_defer_mcp_tools
                     )
-                    if self._mcp_stacks:
+                    if self._mcp_connections:
                         self._mcp_connected = True
                 except BaseException as e:  # noqa: BLE001
                     logger.warning("Failed to connect MCP after install: {}", e)
@@ -769,7 +771,7 @@ class AgentLoop:
                 logger.warning("MCP unavailable: {}", res.message)
         except BaseException as e:
             logger.warning("Failed to connect MCP servers (will retry next message): {}", e)
-            self._mcp_stacks.clear()
+            self._mcp_connections.clear()
         finally:
             self._mcp_connecting = False
         if self._mcp_connected:
@@ -1554,12 +1556,12 @@ class AgentLoop:
         if _proc_reg._registry is not None:
             with suppress(Exception):
                 await _proc_reg._registry.shutdown()
-        for name, stack in self._mcp_stacks.items():
+        for name, conn in self._mcp_connections.items():
             try:
-                await stack.aclose()
-            except (RuntimeError, BaseExceptionGroup):
+                await conn.aclose()
+            except Exception:  # noqa: BLE001
                 logger.debug("MCP server '{}' cleanup error (can be ignored)", name)
-        self._mcp_stacks.clear()
+        self._mcp_connections.clear()
 
     def _schedule_background(self, coro) -> None:
         """Schedule a coroutine as a tracked background task (drained on shutdown)."""

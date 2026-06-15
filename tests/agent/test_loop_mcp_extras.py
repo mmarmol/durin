@@ -10,7 +10,7 @@ def test_connect_mcp_installs_then_retries(monkeypatch):
     calls = {"ensure": 0, "connect": 0}
     seq = iter([ImportError("no mcp"), []])
 
-    async def fake_connect(servers, tools):
+    async def fake_connect(servers, tools, **kwargs):
         v = next(seq)
         if isinstance(v, ImportError):
             raise v
@@ -32,7 +32,7 @@ def test_connect_mcp_installs_then_retries(monkeypatch):
     lp._mcp_connected = False
     lp._mcp_connecting = False
     lp._mcp_servers = [object()]
-    lp._mcp_stacks = []
+    lp._mcp_connections = {}
     lp.tools = []
     lp.app_config = None
     asyncio.run(lp._connect_mcp())
