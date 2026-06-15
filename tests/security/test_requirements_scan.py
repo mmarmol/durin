@@ -54,3 +54,45 @@ def test_empty_skill_dir_does_not_crash(tmp_path):
     d.mkdir()
     req = extract_requirements(d)
     assert req["bins"] == []
+
+
+def test_step2_shebang_extracts_tool(tmp_path):
+    d = _write_skill(tmp_path, "s", "name: s")
+    sdir = d / "scripts"
+    sdir.mkdir()
+    (sdir / "run.sh").write_text("#!/usr/bin/env ffmpeg\nffmpeg -i input.mp4\n")
+    req = extract_requirements(d)
+    bin_names = [b["name"] for b in req["bins"]]
+    assert "ffmpeg" in bin_names
+    assert all(b["origin"] == "heuristic:script" for b in req["bins"] if b["name"] == "ffmpeg")
+
+
+def test_step3_subprocess_invocation_extracts_tool(tmp_path):
+    d = _write_skill(tmp_path, "s", "name: s")
+    sdir = d / "scripts"
+    sdir.mkdir()
+    (sdir / "deploy.py").write_text(
+        "import subprocess\n"
+        'subprocess.run(["gh", "repo", "create"])\n'
+    )
+    req = extract_requirements(d)
+    bin_names = [b["name"] for b in req["bins"]]
+    assert "gh" in bin_names
+    assert any(b["origin"] == "heuristic:script" for b in req["bins"] if b["name"] == "gh")
+
+
+def test_declared_wins_over_heuristic(tmp_path):
+    d = _write_skill(tmp_path, "s", """
+name: s
+metadata:
+  durin:
+    requires:
+      bins: [gh]
+""")
+    sdir = d / "scripts"
+    sdir.mkdir()
+    (sdir / "x.py").write_text("import subprocess\nsubprocess.run(['gh', 'pr', 'list'])\n")
+    req = extract_requirements(d)
+    gh = [b for b in req["bins"] if b["name"] == "gh"]
+    assert len(gh) == 1
+    assert gh[0]["origin"] == "declared"

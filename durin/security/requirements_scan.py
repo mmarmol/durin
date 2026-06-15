@@ -67,6 +67,16 @@ def _extract(skill_dir: Path) -> dict:
         env_seen[e] = "declared"
     compatibility = str(data.get("compatibility") or "").strip()
 
+    # --- Steps 2-3: script analysis (only adds non-declared bins) ---
+    scripts_dir = skill_dir / "scripts"
+    if scripts_dir.is_dir():
+        for b in _step2_shebang_bins(scripts_dir):
+            if b not in bins_seen:
+                bins_seen[b] = "heuristic:script"
+        for b in _step3_script_bins(scripts_dir):
+            if b not in bins_seen:
+                bins_seen[b] = "heuristic:script"
+
     return {
         "platforms": {"value": platforms, "inferred": platforms_inferred},
         "bins": [{"name": n, "origin": o, "available": None} for n, o in bins_seen.items()],
@@ -118,3 +128,56 @@ def _step1_env(data: dict) -> list[str]:
     if not isinstance(env, list):
         return []
     return [str(e).strip() for e in env if str(e).strip()]
+
+
+# --- Step 2: script shebangs ---
+def _step2_shebang_bins(scripts_dir: Path) -> list[str]:
+    """Extract tools from shebangs: #!/usr/bin/env <tool>."""
+    out: list[str] = []
+    for p in sorted(scripts_dir.rglob("*")):
+        if not p.is_file():
+            continue
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for m in re.finditer(r"^#!.*?env\s+(\S+)", text, re.MULTILINE):
+            tool = m.group(1).strip()
+            if tool and tool not in ("bash", "sh", "python", "python3", "node", "ruby", "perl", "zsh"):
+                out.append(tool)
+        for m in re.finditer(r"^#!/(?:usr/)?bin/(\S+)", text, re.MULTILINE):
+            tool = m.group(1).strip()
+            if tool and tool not in ("bash", "sh", "env", "python", "python3", "node", "ruby", "perl", "zsh"):
+                out.append(tool)
+    return out
+
+
+# --- Step 3: script command invocations ---
+_CMD_PATTERNS = [
+    re.compile(r'subprocess\.(?:run|call|Popen|check_output|check_call)\s*\(\s*\[?\s*["\']([a-zA-Z0-9_-]+)["\']'),
+    re.compile(r'shell\s*\(\s*["\']([a-zA-Z0-9_-]+)\s'),
+    re.compile(r'\bexec\s*\(\s*["\']([a-zA-Z0-9_-]+)\s'),
+    re.compile(r'^\s*([a-zA-Z0-9_-]+)\s', re.MULTILINE),
+]
+_INTERPRETER_BINS = {"bash", "sh", "python", "python3", "node", "ruby", "perl", "zsh",
+                     "echo", "cd", "ls", "mkdir", "rm", "cp", "mv", "cat", "grep", "sed",
+                     "awk", "export", "source", "set", "exit", "if", "then", "fi", "for",
+                     "do", "done", "while", "return", "function", "sudo"}
+
+
+def _step3_script_bins(scripts_dir: Path) -> list[str]:
+    """Extract tools invoked via subprocess/shell/exec in script files."""
+    out: list[str] = []
+    for p in sorted(scripts_dir.rglob("*")):
+        if not p.is_file():
+            continue
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for pat in _CMD_PATTERNS[:3]:
+            for m in pat.finditer(text):
+                tool = m.group(1).strip()
+                if tool and tool not in _INTERPRETER_BINS:
+                    out.append(tool)
+    return out
