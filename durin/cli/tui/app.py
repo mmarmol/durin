@@ -29,7 +29,7 @@ from typing import Any
 from textual import __version__ as TEXTUAL_VERSION
 from textual import work
 from textual.app import App, ComposeResult
-from textual.containers import Vertical
+from textual.containers import Horizontal, Vertical
 from textual.widgets import Input
 
 from durin import __version__ as DURIN_VERSION
@@ -56,6 +56,7 @@ class DurinApp(App[None]):
         ("ctrl+y", "copy_last_assistant", "Copy"),
         ("ctrl+p", "open_command_palette", "Commands"),
         ("ctrl+shift+l", "open_variant_picker", "Effort"),
+        ("ctrl+b", "toggle_sidebar", "Sidebar"),
     ]
 
     def __init__(
@@ -151,23 +152,25 @@ class DurinApp(App[None]):
     # ---- composition ------------------------------------------------------
 
     def compose(self) -> ComposeResult:
-        from durin.cli.tui.widgets import CompletionsHint
+        from durin.cli.tui.widgets import CompletionsHint, SidebarPanel
 
         session_label = f"{self._cli_channel}:{self._cli_chat_id}"
         session_meta = self._compute_session_meta()
-        with Vertical(id="main-layout"):
-            yield HeaderBar(session_label=session_label, session_meta=session_meta)
-            yield ChatView(id="chat")
-            yield CompletionsHint()
-            yield InputArea(
-                placeholder="message durin",
-                workspace=Path(self._agent_loop.workspace) if self._agent_loop else None,
-            )
-            yield FooterBar(
-                payload_getter=lambda: payload_from_loop(
-                    self._agent_loop, self._cli_channel, self._cli_chat_id
-                ),
-            )
+        with Horizontal(id="app-layout"):
+            yield SidebarPanel()
+            with Vertical(id="main-layout"):
+                yield HeaderBar(session_label=session_label, session_meta=session_meta)
+                yield ChatView(id="chat")
+                yield CompletionsHint()
+                yield InputArea(
+                    placeholder="message durin",
+                    workspace=Path(self._agent_loop.workspace) if self._agent_loop else None,
+                )
+                yield FooterBar(
+                    payload_getter=lambda: payload_from_loop(
+                        self._agent_loop, self._cli_channel, self._cli_chat_id
+                    ),
+                )
 
     def _compute_session_meta(self) -> str:
         """Return a short '47 msgs · 12h ago' string for the header.
@@ -534,13 +537,20 @@ class DurinApp(App[None]):
 
     def _finalize_cluster(self) -> None:
         """Collapse the active cluster and switch its header to 'Done'."""
-        if self._active_cluster is None:
-            return
+        if self._active_cluster is not None:
+            try:
+                self._active_cluster.finalize()
+            except Exception:  # noqa: BLE001
+                pass
+            self._active_cluster = None
+        # Refresh the sidebar (files may have changed during the turn).
         try:
-            self._active_cluster.finalize()
+            from durin.cli.tui.widgets import SidebarPanel
+
+            sidebar = self.query_one(SidebarPanel)
+            sidebar.refresh_content()
         except Exception:  # noqa: BLE001
             pass
-        self._active_cluster = None
 
     def _render_tool_event(self, event: dict[str, Any]) -> None:
         """Add or update a ToolCallBubble for one tool-call lifecycle event."""
@@ -623,6 +633,15 @@ class DurinApp(App[None]):
     def action_open_variant_picker(self) -> None:
         """Ctrl+Shift+L: open the reasoning effort picker."""
         self._open_variant_picker()
+
+    def action_toggle_sidebar(self) -> None:
+        """Ctrl+B: toggle the left sidebar (Todos / Files / MCP)."""
+        from durin.cli.tui.widgets import SidebarPanel
+
+        sidebar = self.query_one(SidebarPanel)
+        sidebar.set_agent_loop(self._agent_loop)
+        sidebar.set_session_key(f"{self._cli_channel}:{self._cli_chat_id}")
+        sidebar.toggle()
 
     def action_copy_last_assistant(self) -> None:
         """Ctrl+Y: copy the last assistant message body to the clipboard.
