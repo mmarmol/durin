@@ -314,7 +314,8 @@ class MCPToolWrapper(Tool):
         self._description = tool_def.description or tool_def.name
         raw_schema = tool_def.inputSchema or {"type": "object", "properties": {}}
         self._parameters = _normalize_schema_for_openai(raw_schema)
-        self._tool_timeout = tool_timeout
+        per_tool = getattr(getattr(connection, "_cfg", None), "tool_timeouts", {}) or {}
+        self._tool_timeout = per_tool.get(tool_def.name, tool_timeout)
 
     @property
     def name(self) -> str:
