@@ -64,6 +64,10 @@ def skills_inventory(workspace) -> list[dict]:
         if req_manifest:
             entry["requirements"] = resolve_display(
                 req_manifest, catalog=catalog)
+        elif d is not None and d.is_dir():
+            from durin.security.requirements_scan import extract_requirements
+            req_manifest = extract_requirements(d, workspace=workspace)
+            entry["requirements"] = resolve_display(req_manifest, catalog=catalog)
         else:
             entry["requirements"] = None
         out.append(entry)
