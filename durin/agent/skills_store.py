@@ -924,10 +924,12 @@ def _spec_for_bin(skill_dir: Path, bin_name: str) -> list[dict]:
     return []
 
 
-def web_skill_approve(workspace: Path, name: str, *, confirm: bool,
-                      override: bool, replace: bool = False) -> tuple[int, dict]:
-    """`GET /api/skills/{name}/approve?confirm=&override=&replace=` — install a
-    quarantined skill through the §8.C gate. 409 with {refused} when refused."""
+async def web_skill_approve(workspace: Path, name: str, *, confirm: bool,
+                            override: bool, replace: bool = False,
+                            install_deps: bool = False,
+                            exec_run=None) -> tuple[int, dict]:
+    """`GET /api/skills/{name}/approve?...&install_deps=true` — install a
+    quarantined skill through the §8.C gate, optionally auto-installing deps."""
     import json as _json
 
     from durin.agent.skills_import import SkillImportRefused, install_imported_skill
@@ -946,9 +948,18 @@ def web_skill_approve(workspace: Path, name: str, *, confirm: bool,
         res = install_imported_skill(workspace, qdir, source=source,
                                      allowlist=_import_allowlist(),
                                      confirmed=confirm, override=override, replace=replace)
-        return 200, res
     except SkillImportRefused as exc:
         return 409, {"refused": exc.action, "verdict": exc.verdict, "message": str(exc)}
+
+    if install_deps and exec_run:
+        from durin.agent.skills_import import runnable_install_specs, run_install_specs
+        skill_dir = Path(workspace) / "skills" / name
+        specs = runnable_install_specs(skill_dir)
+        if specs:
+            res["deps_results"] = await run_install_specs(specs, exec_run=exec_run)
+        else:
+            res["deps_results"] = []
+    return 200, res
 
 
 def web_skill_reject(workspace: Path, name: str) -> tuple[int, dict]:
