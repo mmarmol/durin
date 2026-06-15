@@ -12,6 +12,7 @@ tool-call IDs.
 from __future__ import annotations
 
 import asyncio
+import sys
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable
@@ -28,6 +29,24 @@ from durin.agent.tools.mcp import (
     _sanitize_name,
 )
 from durin.agent.tools.registry import ToolRegistry
+from durin.config.paths import get_logs_dir
+
+_mcp_stderr_handle = None  # module-level shared handle
+
+
+def _mcp_stderr_log():
+    """Shared append handle for MCP-server stderr so server banners don't
+    corrupt the TUI (the SDK defaults errlog to sys.stderr). Line-buffered,
+    errors replaced; falls back to sys.stderr if the file can't be opened."""
+    global _mcp_stderr_handle
+    if _mcp_stderr_handle is not None:
+        return _mcp_stderr_handle
+    try:
+        path = get_logs_dir() / "mcp-stderr.log"
+        _mcp_stderr_handle = open(path, "a", buffering=1, errors="replace")  # noqa: SIM115
+    except Exception:  # noqa: BLE001
+        _mcp_stderr_handle = sys.stderr
+    return _mcp_stderr_handle
 
 
 @dataclass
@@ -203,7 +222,13 @@ class MCPServerConnection:
             cfg.command, cfg.args, cfg.env or None
         )
         params = StdioServerParameters(command=command, args=args, env=env)
-        self._transport_cm = stdio_client(params)
+        errlog = _mcp_stderr_log()
+        try:
+            errlog.write(f"\n=== MCP server '{self.name}' stdio session ===\n")
+            errlog.flush()
+        except Exception:  # noqa: BLE001
+            pass
+        self._transport_cm = stdio_client(params, errlog=errlog)
         return await self._transport_cm.__aenter__()
 
     async def _open_streamable_http(self):

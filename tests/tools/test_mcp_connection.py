@@ -827,3 +827,33 @@ async def test_transport_http_falls_back_to_sse(monkeypatch) -> None:
     read, write = await conn._open_transport_streams()
     assert calls == ["http", "sse"]  # tried streamableHttp, fell back to SSE
     await conn._close_transport_streams()
+
+
+# ---------------------------------------------------------------------------
+# SP-3 — stderr routing
+# ---------------------------------------------------------------------------
+
+
+async def test_stdio_errlog_routed_to_logfile(monkeypatch, tmp_path) -> None:
+    import durin.agent.tools.mcp_connection as mc
+
+    monkeypatch.setattr(mc, "_mcp_stderr_handle", None)
+    monkeypatch.setattr(mc, "get_logs_dir", lambda: tmp_path)
+
+    captured = {}
+
+    @asynccontextmanager
+    async def fake_stdio_client(params, errlog=None):
+        captured["errlog"] = errlog
+        yield object(), object()
+
+    monkeypatch.setattr("mcp.client.stdio.stdio_client", fake_stdio_client)
+
+    cfg = MCPServerConfig(command="fake")
+    conn = mc.MCPServerConnection("srv", cfg, ToolRegistry())
+    await conn._open_stdio()
+
+    import sys as _sys
+    assert captured["errlog"] is not _sys.stderr
+    log = tmp_path / "mcp-stderr.log"
+    assert log.exists() and "srv" in log.read_text()
