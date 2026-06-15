@@ -1,0 +1,18 @@
+{
+  "gh": {
+    "primary": {"kind": "brew", "value": "gh"},
+    "alternatives": [{"kind": "apt", "value": "gh"}]
+  },
+  "rg": {
+    "primary": {"kind": "brew", "value": "ripgrep"},
+    "alternatives": [{"kind": "apt", "value": "ripgrep"}]
+  },
+  "jq": {
+    "primary": {"kind": "brew", "value": "jq"},
+    "alternatives": [{"kind": "apt", "value": "jq"}]
+  },
+  "ffmpeg": {
+    "primary": {"kind": "brew", "value": "ffmpeg"},
+    "alternatives": [{"kind": "apt", "value": "ffmpeg"}]
+  }
+}
