@@ -587,3 +587,37 @@ async def test_refresh_reapplies_p3_deferral(live_mcp) -> None:
             break
     assert calls["n"] >= 2  # re-applied after refresh
     await conn.aclose()
+
+
+async def test_sdk_read_timeout_and_progress_contract() -> None:
+    """Guard: the native call_tool timeout raises McpError and progress fires."""
+    import datetime as dt
+
+    from mcp.shared.exceptions import McpError
+    from mcp.shared.memory import create_connected_server_and_client_session as connect
+
+    server = FastMCP("contract")
+
+    @server.tool()
+    async def slow(seconds: float, ctx: Context) -> str:
+        n = max(1, int(seconds / 0.02))
+        for i in range(n):
+            await ctx.report_progress(i, n)
+            await asyncio.sleep(0.02)
+        return "done"
+
+    async with connect(server) as session:
+        await session.initialize()
+        with pytest.raises(McpError):
+            await session.call_tool(
+                "slow", {"seconds": 1.0},
+                read_timeout_seconds=dt.timedelta(milliseconds=100),
+            )
+        seen: list[float] = []
+
+        async def pcb(progress: float, total: float | None = None, message: str | None = None) -> None:
+            seen.append(progress)
+
+        r = await session.call_tool("slow", {"seconds": 0.2}, progress_callback=pcb)
+        assert r.content[0].text == "done"
+        assert len(seen) >= 1
