@@ -988,3 +988,29 @@ async def test_execute_text_only_still_returns_string() -> None:
     result = await wrapper.execute()
 
     assert result == "hello\n42"
+
+
+@pytest.mark.asyncio
+async def test_execute_is_error_returns_error_marker() -> None:
+    async def call_tool(_name: str, arguments: dict) -> object:
+        return SimpleNamespace(
+            content=[_FakeTextContent("boom: bad arg")], isError=True
+        )
+
+    wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
+    result = await wrapper.execute()
+
+    assert isinstance(result, str)
+    assert result.startswith("(MCP tool error)")
+    assert "boom: bad arg" in result
+
+
+@pytest.mark.asyncio
+async def test_execute_is_error_empty_content() -> None:
+    async def call_tool(_name: str, arguments: dict) -> object:
+        return SimpleNamespace(content=[], isError=True)
+
+    wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
+    result = await wrapper.execute()
+
+    assert result == "(MCP tool error) (unknown error)"

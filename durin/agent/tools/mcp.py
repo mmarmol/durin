@@ -231,6 +231,12 @@ def _render_tool_result(result: Any, types: Any) -> str | list[dict[str, Any]]:
     return _parts_to_result(parts)
 
 
+def _render_tool_error(result: Any, types: Any) -> str:
+    """Render an isError result as an explicit error string (credential redaction is SP-5)."""
+    parts = [b.text for b in result.content if isinstance(b, types.TextContent)]
+    return "(MCP tool error) " + ("\n".join(parts) or "(unknown error)")
+
+
 class MCPToolWrapper(Tool):
     """Wraps a single MCP server tool as a durin Tool."""
 
@@ -304,6 +310,8 @@ class MCPToolWrapper(Tool):
                 )
                 return f"(MCP tool call failed: {type(exc).__name__})"
             else:
+                if getattr(result, "isError", False):
+                    return _render_tool_error(result, types)
                 return _render_tool_result(result, types)
 
         return "(MCP tool call failed)"  # Unreachable, but satisfies type checkers
