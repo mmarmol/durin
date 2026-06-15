@@ -747,7 +747,11 @@ class AgentLoop:
 
         try:
             self._mcp_connections = await connect_mcp_servers(
-                self._mcp_servers, self.tools, defer_cb=self._maybe_defer_mcp_tools
+                self._mcp_servers, self.tools,
+                defer_cb=self._maybe_defer_mcp_tools,
+                provider=self.provider,
+                default_model=self.model,
+                workspace=str(self.workspace) if self.workspace else None,
             )
             if self._mcp_connections:
                 self._mcp_connected = True
@@ -761,7 +765,11 @@ class AgentLoop:
             if res.status in ("present", "installed"):
                 try:
                     self._mcp_connections = await connect_mcp_servers(
-                        self._mcp_servers, self.tools, defer_cb=self._maybe_defer_mcp_tools
+                        self._mcp_servers, self.tools,
+                        defer_cb=self._maybe_defer_mcp_tools,
+                        provider=self.provider,
+                        default_model=self.model,
+                        workspace=str(self.workspace) if self.workspace else None,
                     )
                     if self._mcp_connections:
                         self._mcp_connected = True

@@ -145,12 +145,14 @@ class MCPServerConnection:
         registry: ToolRegistry,
         defer_cb: Callable[[], None] | None = None,
         workspace: str | None = None,
+        sampling_runner: Any | None = None,
     ) -> None:
         self.name = name
         self._cfg = cfg
         self._registry = registry
         self._defer_cb = defer_cb
         self._workspace = workspace
+        self._sampling_runner = sampling_runner
 
         self.session: Any | None = None
         self.initialize_result: Any | None = None
@@ -494,11 +496,21 @@ class MCPServerConnection:
             await self._close_transport_streams()
 
     def _session_kwargs(self) -> dict:
-        return {
+        kwargs: dict = {
             "message_handler": self._make_message_handler(),
             "list_roots_callback": self._make_list_roots_callback(),
             "logging_callback": self._make_logging_callback(),
         }
+        runner = self._sampling_runner
+        if runner is not None:
+            import mcp.types as types
+
+            kwargs["sampling_callback"] = self._make_sampling_callback()
+            if runner.governance.allow_tools:
+                kwargs["sampling_capabilities"] = types.SamplingCapability(
+                    tools=types.SamplingToolsCapability()
+                )
+        return kwargs
 
     def _make_list_roots_callback(self):
         async def _list_roots(context) -> Any:
@@ -525,6 +537,25 @@ class MCPServerConnection:
             logger.log(level, "MCP '{}' [{}]: {}", self.name, src, data)
 
         return _logging
+
+    def _make_sampling_callback(self):
+        async def _sampling(context, params) -> Any:
+            runner = self._sampling_runner
+            if runner is None:
+                import mcp.types as types
+                return types.ErrorData(
+                    code=types.INVALID_REQUEST, message="sampling not enabled"
+                )
+            try:
+                return await runner.run(params)
+            except Exception as e:  # noqa: BLE001
+                import mcp.types as types
+                logger.exception("MCP '{}': sampling callback error", self.name)
+                return types.ErrorData(
+                    code=types.INTERNAL_ERROR, message=f"sampling failed: {e}"
+                )
+
+        return _sampling
 
     def _make_message_handler(self):
         async def _handler(message) -> None:

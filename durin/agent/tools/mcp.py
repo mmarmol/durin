@@ -454,8 +454,39 @@ class MCPPromptWrapper(Tool):
         return _parts_to_result(parts)
 
 
+def _build_sampling_runner(cfg: Any, provider: Any, default_model: str | None) -> Any:
+    """Build a SamplingRunner when the server opts into sampling and a provider
+    was threaded in. Returns None otherwise (no sampling capability advertised)."""
+    sampling = getattr(cfg, "sampling", None)
+    if sampling is None or not getattr(sampling, "enabled", False):
+        return None
+    if provider is None:
+        from loguru import logger as _logger
+        _logger.warning(
+            "MCP server has sampling.enabled but no LLM provider was wired; "
+            "sampling disabled for this server."
+        )
+        return None
+    from durin.agent.tools.mcp_sampling import SamplingGovernance, SamplingRunner
+
+    model = getattr(sampling, "model", None) or default_model
+    if model is None:
+        return None
+    return SamplingRunner(
+        provider=provider,
+        default_model=model,
+        governance=SamplingGovernance.from_config(sampling),
+    )
+
+
 async def connect_mcp_servers(
-    mcp_servers: dict, registry: ToolRegistry, defer_cb: Any = None
+    mcp_servers: dict,
+    registry: ToolRegistry,
+    defer_cb: Any = None,
+    *,
+    provider: Any = None,
+    default_model: str | None = None,
+    workspace: str | None = None,
 ) -> dict[str, Any]:
     """Connect to configured MCP servers, returning one supervised connection each.
 
@@ -463,12 +494,20 @@ async def connect_mcp_servers(
     owns the session lifecycle (connect, discover, serve, reconnect, teardown).
     ``defer_cb`` (optional) is re-invoked after every (re)registration so the
     P3 MCP deferral stays applied across reconnects and list_changed refreshes.
+    ``provider``, ``default_model``, and ``workspace`` are threaded to each
+    connection to support server-initiated sampling (SP-6) and roots.
     """
     from durin.agent.tools.mcp_connection import MCPServerConnection
 
     connections: dict[str, Any] = {}
     for name, cfg in mcp_servers.items():
-        conn = MCPServerConnection(name, cfg, registry, defer_cb=defer_cb)
+        sampling_runner = _build_sampling_runner(cfg, provider, default_model)
+        conn = MCPServerConnection(
+            name, cfg, registry,
+            defer_cb=defer_cb,
+            sampling_runner=sampling_runner,
+            workspace=workspace,
+        )
         try:
             ok = await conn.start()
         except Exception as e:  # noqa: BLE001
