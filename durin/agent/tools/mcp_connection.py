@@ -454,7 +454,8 @@ class MCPServerConnection:
         new_names: list[str] = []
 
         if self._advertises_tools():
-            tools = await session.list_tools()
+            catalog_timeout = float(getattr(cfg, "catalog_timeout", 1.5))
+            tools = await asyncio.wait_for(session.list_tools(), timeout=catalog_timeout)
             _disable_output_schema_validation(session)
             enabled = set(cfg.enabled_tools)
             allow_all = "*" in enabled
