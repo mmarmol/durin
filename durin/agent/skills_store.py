@@ -981,13 +981,21 @@ def web_skill_remove(workspace: Path, name: str) -> tuple[int, dict]:
 
 def _persist_judge_result(qdir, source: str, verdict: str, findings: list, summary: str) -> None:
     """Write the merged judge result to the quarantine ``.scan.json`` (shared by
-    the HTTP and websocket audit paths)."""
+    the HTTP and websocket audit paths). Preserves existing keys (e.g.
+    ``requirements``) from a prior ``fetch_candidate`` scan."""
     import json as _json
 
-    (qdir / ".scan.json").write_text(
-        _json.dumps({"source": source, "verdict": verdict, "findings": findings, "summary": summary}),
-        encoding="utf-8",
-    )
+    sj = qdir / ".scan.json"
+    data: dict = {}
+    if sj.is_file():
+        try:
+            loaded = _json.loads(sj.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                data = loaded
+        except Exception:  # noqa: BLE001
+            pass
+    data.update({"source": source, "verdict": verdict, "findings": findings, "summary": summary})
+    sj.write_text(_json.dumps(data), encoding="utf-8")
 
 
 def web_skill_judge(workspace: Path, name: str) -> tuple[int, dict]:
@@ -1020,6 +1028,7 @@ def web_skill_judge(workspace: Path, name: str) -> tuple[int, dict]:
                      "error": str(exc), "error_code": code}
 
     merged = ScanReport(findings=det.findings + outcome.findings)
+    merged.tools = outcome.tools
     findings = [{"category": f.category, "severity": f.severity, "where": f.where,
                  "detail": f.detail} for f in merged.findings]
     source = name
