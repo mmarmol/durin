@@ -17,6 +17,7 @@ from durin.agent.tools.mcp import (
     _sanitize_name,
     connect_mcp_servers,
 )
+from durin.agent.tools.mcp_connection import MCPServerConnection
 from durin.agent.tools.registry import ToolRegistry
 from durin.config.schema import MCPServerConfig
 
@@ -60,6 +61,53 @@ class _FakeResourceLink:
         self.name = name
         self.uri = uri
         self.description = description
+
+
+class _FakeConn:
+    """Stand-in MCPServerConnection for wrapper unit tests.
+
+    Returns whatever its ``session`` yields, mirroring the real
+    connection's call surface (call_tool/read_resource/get_prompt).
+    Exceptions from the session are caught and returned as _ConnDown,
+    matching what the real connection does for non-transient failures.
+    """
+
+    def __init__(self, session: object | None) -> None:
+        self.session = session
+        self.name = "test"
+
+    async def call_tool(self, name, arguments, timeout):
+        from durin.agent.tools.mcp_connection import _ConnDown
+        if self.session is None:
+            return _ConnDown("MCP server 'test' is not connected")
+        try:
+            return await self.session.call_tool(name, arguments=arguments)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            return _ConnDown(f"MCP server 'test' tool call failed: {type(exc).__name__}")
+
+    async def read_resource(self, uri, timeout):
+        from durin.agent.tools.mcp_connection import _ConnDown
+        if self.session is None:
+            return _ConnDown("MCP server 'test' is not connected")
+        try:
+            return await self.session.read_resource(uri)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            return _ConnDown(f"MCP server 'test' resource read failed: {type(exc).__name__}")
+
+    async def get_prompt(self, name, arguments, timeout):
+        from durin.agent.tools.mcp_connection import _ConnDown
+        if self.session is None:
+            return _ConnDown("MCP server 'test' is not connected")
+        try:
+            return await self.session.get_prompt(name, arguments=arguments)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            return _ConnDown(f"MCP server 'test' prompt call failed: {type(exc).__name__}")
 
 
 @pytest.fixture
@@ -146,7 +194,7 @@ def _make_wrapper(session: object, *, timeout: float = 0.1) -> MCPToolWrapper:
         description="demo tool",
         inputSchema={"type": "object", "properties": {}},
     )
-    return MCPToolWrapper(session, "test", tool_def, tool_timeout=timeout)
+    return MCPToolWrapper(_FakeConn(session), "test", tool_def, tool_timeout=timeout)
 
 
 def test_wrapper_preserves_non_nullable_unions() -> None:
@@ -163,7 +211,7 @@ def test_wrapper_preserves_non_nullable_unions() -> None:
         },
     )
 
-    wrapper = MCPToolWrapper(SimpleNamespace(call_tool=None), "test", tool_def)
+    wrapper = MCPToolWrapper(_FakeConn(SimpleNamespace(call_tool=None)), "test", tool_def)
 
     assert wrapper.parameters["properties"]["value"]["anyOf"] == [
         {"type": "string"},
@@ -183,7 +231,7 @@ def test_wrapper_normalizes_nullable_property_type_union() -> None:
         },
     )
 
-    wrapper = MCPToolWrapper(SimpleNamespace(call_tool=None), "test", tool_def)
+    wrapper = MCPToolWrapper(_FakeConn(SimpleNamespace(call_tool=None)), "test", tool_def)
 
     assert wrapper.parameters["properties"]["name"] == {"type": "string", "nullable": True}
 
@@ -203,7 +251,7 @@ def test_wrapper_normalizes_nullable_property_anyof() -> None:
         },
     )
 
-    wrapper = MCPToolWrapper(SimpleNamespace(call_tool=None), "test", tool_def)
+    wrapper = MCPToolWrapper(_FakeConn(SimpleNamespace(call_tool=None)), "test", tool_def)
 
     assert wrapper.parameters["properties"]["name"] == {
         "type": "string",
@@ -318,48 +366,7 @@ async def test_execute_returns_text_blocks() -> None:
     assert result == "hello\n42"
 
 
-@pytest.mark.asyncio
-async def test_execute_returns_timeout_message() -> None:
-    async def call_tool(_name: str, arguments: dict) -> object:
-        await asyncio.sleep(1)
-        return SimpleNamespace(content=[])
-
-    wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool), timeout=0.01)
-
-    result = await wrapper.execute()
-
-    assert result == "(MCP tool call timed out after 0.01s)"
-
-
-@pytest.mark.asyncio
-async def test_execute_handles_server_cancelled_error() -> None:
-    async def call_tool(_name: str, arguments: dict) -> object:
-        raise asyncio.CancelledError()
-
-    wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
-
-    result = await wrapper.execute()
-
-    assert result == "(MCP tool call was cancelled)"
-
-
-@pytest.mark.asyncio
-async def test_execute_re_raises_external_cancellation() -> None:
-    started = asyncio.Event()
-
-    async def call_tool(_name: str, arguments: dict) -> object:
-        started.set()
-        await asyncio.sleep(60)
-        return SimpleNamespace(content=[])
-
-    wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool), timeout=10)
-    task = asyncio.create_task(wrapper.execute())
-    await asyncio.wait_for(started.wait(), timeout=1.0)
-
-    task.cancel()
-
-    with pytest.raises(asyncio.CancelledError):
-        await task
+# timeout/cancel behavior moved to test_mcp_connection (SP-2 2b/2e)
 
 
 @pytest.mark.asyncio
@@ -371,7 +378,7 @@ async def test_execute_handles_generic_exception() -> None:
 
     result = await wrapper.execute()
 
-    assert result == "(MCP tool call failed: RuntimeError)"
+    assert "failed" in result and "RuntimeError" in result
 
 
 def _make_tool_def(name: str) -> SimpleNamespace:
@@ -389,7 +396,22 @@ def _make_fake_session(tool_names: list[str]) -> SimpleNamespace:
     async def list_tools() -> SimpleNamespace:
         return SimpleNamespace(tools=[_make_tool_def(name) for name in tool_names])
 
-    return SimpleNamespace(initialize=initialize, list_tools=list_tools)
+    async def list_resources() -> SimpleNamespace:
+        return SimpleNamespace(resources=[])
+
+    async def list_prompts() -> SimpleNamespace:
+        return SimpleNamespace(prompts=[])
+
+    async def send_ping() -> None:
+        return None
+
+    return SimpleNamespace(
+        initialize=initialize,
+        list_tools=list_tools,
+        list_resources=list_resources,
+        list_prompts=list_prompts,
+        send_ping=send_ping,
+    )
 
 
 @pytest.mark.asyncio
@@ -402,10 +424,10 @@ async def test_connect_mcp_servers_enabled_tools_supports_raw_names(
         {"test": MCPServerConfig(command="fake", enabled_tools=["demo"])},
         registry,
     )
-    for stack in stacks.values():
-        await stack.aclose()
-
     assert registry.tool_names == ["mcp_test_demo"]
+    assert isinstance(list(stacks.values())[0], MCPServerConnection)
+    for conn in stacks.values():
+        await conn.aclose()
 
 
 @pytest.mark.asyncio
@@ -418,10 +440,9 @@ async def test_connect_mcp_servers_enabled_tools_defaults_to_all(
         {"test": MCPServerConfig(command="fake")},
         registry,
     )
-    for stack in stacks.values():
-        await stack.aclose()
-
     assert registry.tool_names == ["mcp_test_demo", "mcp_test_other"]
+    for conn in stacks.values():
+        await conn.aclose()
 
 
 @pytest.mark.asyncio
@@ -434,10 +455,9 @@ async def test_connect_mcp_servers_enabled_tools_supports_wrapped_names(
         {"test": MCPServerConfig(command="fake", enabled_tools=["mcp_test_demo"])},
         registry,
     )
-    for stack in stacks.values():
-        await stack.aclose()
-
     assert registry.tool_names == ["mcp_test_demo"]
+    for conn in stacks.values():
+        await conn.aclose()
 
 
 @pytest.mark.asyncio
@@ -450,10 +470,9 @@ async def test_connect_mcp_servers_enabled_tools_empty_list_registers_none(
         {"test": MCPServerConfig(command="fake", enabled_tools=[])},
         registry,
     )
-    for stack in stacks.values():
-        await stack.aclose()
-
     assert registry.tool_names == []
+    for conn in stacks.values():
+        await conn.aclose()
 
 
 @pytest.mark.asyncio
@@ -467,20 +486,19 @@ async def test_connect_mcp_servers_enabled_tools_warns_on_unknown_entries(
     def _warning(message: str, *args: object) -> None:
         warnings.append(message.format(*args))
 
-    monkeypatch.setattr("durin.agent.tools.mcp.logger.warning", _warning)
+    monkeypatch.setattr("durin.agent.tools.mcp_connection.logger.warning", _warning)
 
     stacks = await connect_mcp_servers(
         {"test": MCPServerConfig(command="fake", enabled_tools=["unknown"])},
         registry,
     )
-    for stack in stacks.values():
-        await stack.aclose()
-
     assert registry.tool_names == []
     assert warnings
     assert "enabledTools entries not found: unknown" in warnings[-1]
     assert "Available raw names: demo" in warnings[-1]
     assert "Available wrapped names: mcp_test_demo" in warnings[-1]
+    for conn in stacks.values():
+        await conn.aclose()
 
 
 @pytest.mark.asyncio
@@ -543,11 +561,10 @@ async def test_connect_mcp_servers_one_failure_does_not_block_others(
         },
         registry,
     )
-    for stack in stacks.values():
-        await stack.aclose()
-
     assert registry.tool_names == ["mcp_good_demo"]
     assert set(stacks) == {"good"}
+    for conn in stacks.values():
+        await conn.aclose()
 
 
 @pytest.mark.asyncio
@@ -584,8 +601,8 @@ async def test_connect_mcp_servers_wraps_windows_stdio_launchers(
         },
         registry,
     )
-    for stack in stacks.values():
-        await stack.aclose()
+    for conn in stacks.values():
+        await conn.aclose()
 
     assert captured["command"] == r"C:\Windows\System32\cmd.exe"
     assert captured["args"] == ["/d", "/c", "npx", "-y", "chrome-devtools-mcp@latest"]
@@ -606,11 +623,11 @@ def _make_resource_def(
 
 
 def _make_resource_wrapper(session: object, *, timeout: float = 0.1) -> MCPResourceWrapper:
-    return MCPResourceWrapper(session, "srv", _make_resource_def(), resource_timeout=timeout)
+    return MCPResourceWrapper(_FakeConn(session), "srv", _make_resource_def(), resource_timeout=timeout)
 
 
 def test_resource_wrapper_properties() -> None:
-    wrapper = MCPResourceWrapper(None, "myserver", _make_resource_def())
+    wrapper = MCPResourceWrapper(_FakeConn(None), "myserver", _make_resource_def())
     assert wrapper.name == "mcp_myserver_resource_myres"
     assert "[MCP Resource]" in wrapper.description
     assert "A test resource" in wrapper.description
@@ -646,15 +663,7 @@ async def test_resource_wrapper_execute_handles_blob() -> None:
     assert "3 bytes" in result
 
 
-@pytest.mark.asyncio
-async def test_resource_wrapper_execute_handles_timeout() -> None:
-    async def read_resource(uri: str) -> object:
-        await asyncio.sleep(1)
-        return SimpleNamespace(contents=[])
-
-    wrapper = _make_resource_wrapper(SimpleNamespace(read_resource=read_resource), timeout=0.01)
-    result = await wrapper.execute()
-    assert result == "(MCP resource read timed out after 0.01s)"
+# timeout behavior moved to test_mcp_connection (SP-2 2b/2e)
 
 
 @pytest.mark.asyncio
@@ -664,7 +673,7 @@ async def test_resource_wrapper_execute_handles_error() -> None:
 
     wrapper = _make_resource_wrapper(SimpleNamespace(read_resource=read_resource))
     result = await wrapper.execute()
-    assert result == "(MCP resource read failed: RuntimeError)"
+    assert "failed" in result and "RuntimeError" in result
 
 
 # ---------------------------------------------------------------------------
@@ -681,13 +690,13 @@ def _make_prompt_def(
 
 
 def _make_prompt_wrapper(session: object, *, timeout: float = 0.1) -> MCPPromptWrapper:
-    return MCPPromptWrapper(session, "srv", _make_prompt_def(), prompt_timeout=timeout)
+    return MCPPromptWrapper(_FakeConn(session), "srv", _make_prompt_def(), prompt_timeout=timeout)
 
 
 def test_prompt_wrapper_properties() -> None:
     arg1 = SimpleNamespace(name="topic", required=True)
     arg2 = SimpleNamespace(name="style", required=False)
-    wrapper = MCPPromptWrapper(None, "myserver", _make_prompt_def(arguments=[arg1, arg2]))
+    wrapper = MCPPromptWrapper(_FakeConn(None), "myserver", _make_prompt_def(arguments=[arg1, arg2]))
     assert wrapper.name == "mcp_myserver_prompt_myprompt"
     assert "[MCP Prompt]" in wrapper.description
     assert "A test prompt" in wrapper.description
@@ -699,13 +708,13 @@ def test_prompt_wrapper_properties() -> None:
 
 
 def test_prompt_wrapper_no_arguments() -> None:
-    wrapper = MCPPromptWrapper(None, "myserver", _make_prompt_def())
+    wrapper = MCPPromptWrapper(_FakeConn(None), "myserver", _make_prompt_def())
     assert wrapper.parameters == {"type": "object", "properties": {}, "required": []}
 
 
 def test_prompt_wrapper_preserves_argument_descriptions() -> None:
     arg = SimpleNamespace(name="topic", required=True, description="The subject to discuss")
-    wrapper = MCPPromptWrapper(None, "srv", _make_prompt_def(arguments=[arg]))
+    wrapper = MCPPromptWrapper(_FakeConn(None), "srv", _make_prompt_def(arguments=[arg]))
     assert wrapper.parameters["properties"]["topic"] == {
         "type": "string",
         "description": "The subject to discuss",
@@ -732,28 +741,10 @@ async def test_prompt_wrapper_execute_returns_text() -> None:
     assert "Understood. Ask me anything." in result
 
 
-@pytest.mark.asyncio
-async def test_prompt_wrapper_execute_handles_timeout() -> None:
-    async def get_prompt(name: str, arguments: dict | None = None) -> object:
-        await asyncio.sleep(1)
-        return SimpleNamespace(messages=[])
-
-    wrapper = _make_prompt_wrapper(SimpleNamespace(get_prompt=get_prompt), timeout=0.01)
-    result = await wrapper.execute()
-    assert result == "(MCP prompt call timed out after 0.01s)"
+# timeout behavior moved to test_mcp_connection (SP-2 2b/2e)
 
 
-@pytest.mark.asyncio
-async def test_prompt_wrapper_execute_handles_mcp_error() -> None:
-    from mcp.shared.exceptions import McpError
-
-    async def get_prompt(name: str, arguments: dict | None = None) -> object:
-        raise McpError(code=42, message="invalid argument")
-
-    wrapper = _make_prompt_wrapper(SimpleNamespace(get_prompt=get_prompt))
-    result = await wrapper.execute()
-    assert "invalid argument" in result
-    assert "code 42" in result
+# mcp_error behavior moved to test_mcp_connection (SP-2 2b/2e)
 
 
 @pytest.mark.asyncio
@@ -763,7 +754,7 @@ async def test_prompt_wrapper_execute_handles_error() -> None:
 
     wrapper = _make_prompt_wrapper(SimpleNamespace(get_prompt=get_prompt))
     result = await wrapper.execute()
-    assert result == "(MCP prompt call failed: RuntimeError)"
+    assert "failed" in result and "RuntimeError" in result
 
 
 # ---------------------------------------------------------------------------
@@ -806,11 +797,15 @@ def _make_fake_session_with_capabilities(
             )
         return SimpleNamespace(prompts=prompts)
 
+    async def send_ping() -> None:
+        return None
+
     return SimpleNamespace(
         initialize=initialize,
         list_tools=list_tools,
         list_resources=list_resources,
         list_prompts=list_prompts,
+        send_ping=send_ping,
     )
 
 
@@ -828,12 +823,11 @@ async def test_connect_registers_resources_and_prompts(
         {"test": MCPServerConfig(command="fake")},
         registry,
     )
-    for stack in stacks.values():
-        await stack.aclose()
-
     assert "mcp_test_tool_a" in registry.tool_names
     assert "mcp_test_resource_res_b" in registry.tool_names
     assert "mcp_test_prompt_prompt_c" in registry.tool_names
+    for conn in stacks.values():
+        await conn.aclose()
 
 
 # ---------------------------------------------------------------------------
@@ -872,7 +866,7 @@ def test_tool_wrapper_sanitizes_name() -> None:
         description="tool with spaces",
         inputSchema={"type": "object", "properties": {}},
     )
-    wrapper = MCPToolWrapper(SimpleNamespace(call_tool=None), "srv", tool_def)
+    wrapper = MCPToolWrapper(_FakeConn(SimpleNamespace(call_tool=None)), "srv", tool_def)
     assert wrapper.name == "mcp_srv_My_Tool"
 
 
@@ -882,7 +876,7 @@ def test_resource_wrapper_sanitizes_name() -> None:
         uri="file:///pg/info",
         description="PG info",
     )
-    wrapper = MCPResourceWrapper(None, "srv", resource_def)
+    wrapper = MCPResourceWrapper(_FakeConn(None), "srv", resource_def)
     assert wrapper.name == "mcp_srv_resource_PostgreSQL_System_Information"
 
 
@@ -893,7 +887,7 @@ def test_prompt_wrapper_sanitizes_name() -> None:
         arguments=None,
     )
     # Hyphens are allowed, so this should pass through unchanged
-    wrapper = MCPPromptWrapper(None, "my server", prompt_def)
+    wrapper = MCPPromptWrapper(_FakeConn(None), "my server", prompt_def)
     assert wrapper.name == "mcp_my_server_prompt_design-schema"
 
 
@@ -903,7 +897,7 @@ def test_tool_wrapper_preserves_original_name_for_mcp_call() -> None:
         description="tool with spaces",
         inputSchema={"type": "object", "properties": {}},
     )
-    wrapper = MCPToolWrapper(SimpleNamespace(call_tool=None), "srv", tool_def)
+    wrapper = MCPToolWrapper(_FakeConn(SimpleNamespace(call_tool=None)), "srv", tool_def)
     # The sanitized API-facing name differs from the original MCP name
     assert wrapper.name == "mcp_srv_My_Tool"
     assert wrapper._original_name == "My Tool"
@@ -923,10 +917,9 @@ async def test_connect_mcp_servers_sanitizes_resource_names(
         {"test": MCPServerConfig(command="fake")},
         registry,
     )
-    for stack in stacks.values():
-        await stack.aclose()
-
     assert "mcp_test_resource_PostgreSQL_System_Information" in registry.tool_names
+    for conn in stacks.values():
+        await conn.aclose()
 
 
 @pytest.mark.asyncio
@@ -941,10 +934,9 @@ async def test_connect_mcp_servers_enabled_tools_matches_sanitized_name(
         {"test": MCPServerConfig(command="fake", enabled_tools=["mcp_test_My_Tool"])},
         registry,
     )
-    for stack in stacks.values():
-        await stack.aclose()
-
     assert registry.tool_names == ["mcp_test_My_Tool"]
+    for conn in stacks.values():
+        await conn.aclose()
 
 
 # ---------------------------------------------------------------------------
@@ -1198,7 +1190,7 @@ def test_schema_prunes_required_not_in_properties() -> None:
             "required": ["a", "ghost"],
         },
     )
-    wrapper = MCPToolWrapper(SimpleNamespace(call_tool=None), "test", tool_def)
+    wrapper = MCPToolWrapper(_FakeConn(SimpleNamespace(call_tool=None)), "test", tool_def)
     assert wrapper.parameters["required"] == ["a"]
 
 
@@ -1212,7 +1204,7 @@ def test_schema_keeps_valid_required() -> None:
             "required": ["a", "b"],
         },
     )
-    wrapper = MCPToolWrapper(SimpleNamespace(call_tool=None), "test", tool_def)
+    wrapper = MCPToolWrapper(_FakeConn(SimpleNamespace(call_tool=None)), "test", tool_def)
     assert wrapper.parameters["required"] == ["a", "b"]
 
 
@@ -1231,7 +1223,7 @@ def test_schema_rewrites_definitions_to_defs() -> None:
             "definitions": {"Foo": {"type": "string"}},
         },
     )
-    wrapper = MCPToolWrapper(SimpleNamespace(call_tool=None), "test", tool_def)
+    wrapper = MCPToolWrapper(_FakeConn(SimpleNamespace(call_tool=None)), "test", tool_def)
     params = wrapper.parameters
     assert "definitions" not in params
     assert params["$defs"] == {"Foo": {"type": "string"}}
@@ -1250,7 +1242,7 @@ def test_schema_rewrites_nested_defs_ref_in_anyof() -> None:
             "definitions": {"Foo": {"type": "string"}, "Bar": {"type": "integer"}},
         },
     )
-    wrapper = MCPToolWrapper(SimpleNamespace(call_tool=None), "test", tool_def)
+    wrapper = MCPToolWrapper(_FakeConn(SimpleNamespace(call_tool=None)), "test", tool_def)
     params = wrapper.parameters
     assert "definitions" not in params
     assert set(params["$defs"]) == {"Foo", "Bar"}
@@ -1299,10 +1291,9 @@ async def test_connect_disables_output_schema_validation(
     stacks = await connect_mcp_servers(
         {"test": MCPServerConfig(command="fake")}, registry
     )
-    for stack in stacks.values():
-        await stack.aclose()
-
     assert session._tool_output_schemas["demo"] is None
+    for conn in stacks.values():
+        await conn.aclose()
 
 
 @pytest.mark.asyncio
