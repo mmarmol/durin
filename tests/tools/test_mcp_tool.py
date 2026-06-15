@@ -1178,3 +1178,36 @@ async def test_execute_image_content_empty_decoded_falls_back_to_text() -> None:
     result = await wrapper.execute()
     assert isinstance(result, str)
     assert "MCP image" in result
+
+
+# ---------------------------------------------------------------------------
+# _normalize_schema_for_openai: required pruning (Task 5)
+# ---------------------------------------------------------------------------
+
+
+def test_schema_prunes_required_not_in_properties() -> None:
+    tool_def = SimpleNamespace(
+        name="demo",
+        description="demo",
+        inputSchema={
+            "type": "object",
+            "properties": {"a": {"type": "string"}},
+            "required": ["a", "ghost"],
+        },
+    )
+    wrapper = MCPToolWrapper(SimpleNamespace(call_tool=None), "test", tool_def)
+    assert wrapper.parameters["required"] == ["a"]
+
+
+def test_schema_keeps_valid_required() -> None:
+    tool_def = SimpleNamespace(
+        name="demo",
+        description="demo",
+        inputSchema={
+            "type": "object",
+            "properties": {"a": {"type": "string"}, "b": {"type": "integer"}},
+            "required": ["a", "b"],
+        },
+    )
+    wrapper = MCPToolWrapper(SimpleNamespace(call_tool=None), "test", tool_def)
+    assert wrapper.parameters["required"] == ["a", "b"]

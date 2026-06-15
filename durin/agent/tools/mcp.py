@@ -165,7 +165,12 @@ def _normalize_schema_for_openai(schema: Any) -> dict[str, Any]:
         return normalized
 
     normalized.setdefault("properties", {})
-    normalized.setdefault("required", [])
+    required = normalized.get("required")
+    if isinstance(required, list):
+        props = normalized["properties"]
+        normalized["required"] = [k for k in required if k in props]
+    else:
+        normalized.setdefault("required", [])
     return normalized
 
 
