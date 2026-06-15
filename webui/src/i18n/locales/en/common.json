@@ -472,7 +472,19 @@
       "judge": "Audit with LLM",
       "unresolved": "Could not resolve a skill from that source. Ask the agent in chat to investigate the link.",
       "blockedTitle": "Install {{name}}?",
-      "blockedDesc": "Some dependencies can't be auto-installed. You can resolve them later."
+      "blockedDesc": "Some dependencies can't be auto-installed. You can resolve them later.",
+      "depsInstalled": "{{count}} dependencies installed",
+      "depsPartial": "{{ok}} installed, {{failed}} failed"
+    },
+    "requirements": {
+      "title": "Requirements",
+      "platform": "Platform",
+      "platformMismatch": "Not available on your platform",
+      "tools": "Tools",
+      "environment": "Environment",
+      "install": "Install",
+      "durinCanHelp": "[durin can help]",
+      "needs": "Needs"
     },
     "search": {
       "placeholder": "Search the registry for skills",

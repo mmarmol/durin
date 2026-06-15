@@ -14,8 +14,10 @@ import { useTranslation } from "react-i18next";
 
 import { CodeBlock } from "@/components/CodeBlock";
 import { MarkdownText, preloadMarkdownText } from "@/components/MarkdownText";
+import { ApproveBlockedModal } from "@/components/ApproveBlockedModal";
 import { SkillFileTree } from "@/components/SkillFileTree";
 import { SkillHistory } from "@/components/SkillHistory";
+import { TriageRequirements } from "@/components/TriageRequirements";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -37,6 +39,7 @@ import {
   setSkillMode,
   type QuarantineRow,
   type SkillCandidate,
+  type SkillDescribeResult,
   type SkillDetail,
   type SkillFile,
   type SkillFinding,
@@ -225,7 +228,7 @@ export function SkillsView() {
   const [sortBy, setSortBy] = useState<"installs" | "name" | "relevance">("installs");
   const [searchLimit, setSearchLimit] = useState(10);
   const [expanded, setExpanded] = useState<string | null>(null);
-  const [descCache, setDescCache] = useState<Record<string, string | null>>({}); // null = loading
+  const [descCache, setDescCache] = useState<Record<string, SkillDescribeResult | null>>({}); // null = loading
   const [importByRefOpen, setImportByRefOpen] = useState(false);
   const [acting, setActing] = useState<string | null>(null);
   const [removeConfirm, setRemoveConfirm] = useState(false);
@@ -236,6 +239,7 @@ export function SkillsView() {
     replace: boolean;
     ask: "confirm" | "block" | "exists";
   } | null>(null);
+  const [showBlockedModal, setShowBlockedModal] = useState<{ name: string; bins: string[] } | null>(null);
 
   useEffect(() => {
     preloadMarkdownText();
@@ -329,7 +333,7 @@ export function SkillsView() {
       if (descCache[hit.ref] !== undefined) return;
       setDescCache((c) => ({ ...c, [hit.ref]: null }));
       const r = await describeSkill(token, hit.ref);
-      setDescCache((c) => ({ ...c, [hit.ref]: r.description }));
+      setDescCache((c) => ({ ...c, [hit.ref]: r }));
     },
     [token, expanded, descCache],
   );
@@ -339,14 +343,23 @@ export function SkillsView() {
   // confirmation (code/caution/out-of-allowlist) or a dangerous override, and
   // we surface that as an INLINE prompt in the triage pane (no native dialog).
   const approve = useCallback(
-    async (name: string) => {
+    async (name: string, opts?: { install_deps?: boolean }) => {
       setActing(name);
       setImportMsg(null);
       try {
-        const res = await approveSkill(token, name);
+        const res = await approveSkill(token, name, opts);
         if (res.ok) {
           setGate(null);
           setPane({ kind: "empty" });
+          if (res.deps_results && res.deps_results.length > 0) {
+            const failed = res.deps_results.filter((r) => !r.success);
+            const ok = res.deps_results.filter((r) => r.success);
+            setImportMsg(
+              failed.length > 0
+                ? t("skills.import.depsPartial", { ok: ok.length, failed: failed.length })
+                : t("skills.import.depsInstalled", { count: ok.length }),
+            );
+          }
           await refresh();
         } else if (res.refused === "confirm" || res.refused === "block" || res.refused === "exists") {
           setGate({ name, confirm: false, override: false, replace: false, ask: res.refused });
@@ -359,8 +372,18 @@ export function SkillsView() {
         setActing(null);
       }
     },
-    [token, refresh],
+    [token, refresh, t],
   );
+
+  const triageApprove = (name: string) => {
+    const row = quarList.find((r) => r.name === name);
+    const req = row?.requirements;
+    if (req && req.bins.some((b) => !b.available && !b.installable)) {
+      setShowBlockedModal({ name, bins: req.bins.filter((b) => !b.available && !b.installable).map((b) => b.name) });
+    } else {
+      void approve(name, { install_deps: true });
+    }
+  };
 
   // Accept the gate's current ask, accumulate the matching flag, and retry —
   // chaining if the server then asks for another (e.g. confirm -> exists).
@@ -864,7 +887,7 @@ export function SkillsView() {
                         const desc =
                           h.registry === "clawhub" || !h.ref.startsWith("github:")
                             ? h.description
-                            : descCache[h.ref];
+                            : descCache[h.ref]?.description;
                         const open = expanded === h.ref;
                         return (
                           <div
@@ -912,6 +935,20 @@ export function SkillsView() {
                                     )}
                                   </span>
                                 ) : null}
+                                {descCache[h.ref]?.platforms && descCache[h.ref]!.platforms!.length > 0 && (
+                                  <div className="mt-1 flex gap-1">
+                                    {descCache[h.ref]!.platforms!.map((p) => (
+                                      <span key={p} className="rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
+                                        {p === "macos" ? "macOS" : p === "linux" ? "Linux" : p}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                                {descCache[h.ref]?.requires?.bins && descCache[h.ref]!.requires!.bins.length > 0 && (
+                                  <p className="mt-1 text-[11px] text-muted-foreground">
+                                    {t("skills.requirements.needs")}: {descCache[h.ref]!.requires!.bins.slice(0, 3).join(", ")}
+                                  </p>
+                                )}
                                 <span className="truncate text-[11px] text-muted-foreground/70">
                                   {h.ref}
                                 </span>
@@ -1095,12 +1132,18 @@ export function SkillsView() {
                     )
                   ) : null}
 
-                  {triageRow.install_specs && triageRow.install_specs.length > 0 ? (
-                    <p className="mt-3 text-[11px] text-muted-foreground">
-                      {t("skills.import.declaredDeps", {
-                        deps: triageRow.install_specs.join(", "),
-                      })}
-                    </p>
+                  {triageRow.requirements ? (
+                    <div className="mt-4">
+                      <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        {t("skills.requirements.title")}
+                      </p>
+                      <TriageRequirements
+                        requirements={triageRow.requirements}
+                        skillName={triageRow.name}
+                        token={token}
+                        onResolved={refresh}
+                      />
+                    </div>
                   ) : null}
 
                   {importMsg ? (
@@ -1146,7 +1189,7 @@ export function SkillsView() {
                       <Button
                         size="sm"
                         disabled={acting === triageRow.name}
-                        onClick={() => void approve(triageRow.name)}
+                        onClick={() => triageApprove(triageRow.name)}
                       >
                         {t("skills.import.approve")}
                       </Button>
@@ -1358,6 +1401,20 @@ export function SkillsView() {
                       className="h-full min-h-[24rem] w-full resize-none font-mono text-[12px] leading-relaxed"
                     />
                   )}
+                  {tab === "view" && skillRow?.requirements && (
+                    <details className="mt-3 rounded border border-border/60 p-2">
+                      <summary className="cursor-pointer text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        {t("skills.requirements.title")}
+                      </summary>
+                      <div className="mt-2">
+                        <TriageRequirements
+                          requirements={skillRow.requirements}
+                          skillName={skillRow.name}
+                          token={token}
+                        />
+                      </div>
+                    </details>
+                  )}
                 </div>
 
                 {tab === "edit" && editable ? (
@@ -1390,6 +1447,18 @@ export function SkillsView() {
             )}
           </section>
         </div>
+      )}
+      {showBlockedModal && (
+        <ApproveBlockedModal
+          skillName={showBlockedModal.name}
+          nonInstallableBins={showBlockedModal.bins}
+          onApprove={() => {
+            const m = showBlockedModal;
+            setShowBlockedModal(null);
+            void approve(m.name, { install_deps: true });
+          }}
+          onCancel={() => setShowBlockedModal(null)}
+        />
       )}
     </div>
   );

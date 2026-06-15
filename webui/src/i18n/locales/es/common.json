@@ -470,7 +470,21 @@
       "trusted": "Confiado {{prefix}} — futuros imports sanos de ahí se saltan el confirm.",
       "declaredDeps": "Dependencias declaradas (no se ejecutan): {{deps}}",
       "judge": "Revisar con IA",
-      "unresolved": "No se pudo resolver una skill desde esa fuente. Pedíle al agente en el chat que investigue el link."
+      "unresolved": "No se pudo resolver una skill desde esa fuente. Pedíle al agente en el chat que investigue el link.",
+      "blockedTitle": "¿Instalar {{name}}?",
+      "blockedDesc": "Algunas dependencias no se pueden autoinstalar. Podés resolverlas después.",
+      "depsInstalled": "{{count}} dependencias instaladas",
+      "depsPartial": "{{ok}} instaladas, {{failed}} fallaron"
+    },
+    "requirements": {
+      "title": "Requisitos",
+      "platform": "Plataforma",
+      "platformMismatch": "No disponible en tu plataforma",
+      "tools": "Herramientas",
+      "environment": "Variables de entorno",
+      "install": "Instalar",
+      "durinCanHelp": "[durin puede ayudar]",
+      "needs": "Necesita"
     },
     "search": {
       "placeholder": "Buscar skills en el registro",

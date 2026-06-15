@@ -240,7 +240,7 @@ describe("SkillsView security surface", () => {
     expect(await screen.findByText(/serious risk/i)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Force install" }));
 
-    expect(api.approveSkill).toHaveBeenNthCalledWith(1, "tok", "evil");
+    expect(api.approveSkill).toHaveBeenNthCalledWith(1, "tok", "evil", { install_deps: true });
     expect(api.approveSkill).toHaveBeenNthCalledWith(2, "tok", "evil", {
       confirm: false,
       override: true,
@@ -269,6 +269,7 @@ describe("SkillsView security surface", () => {
     expect(await screen.findByText(/already installed/i)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Replace" }));
 
+    expect(api.approveSkill).toHaveBeenNthCalledWith(1, "tok", "dup", { install_deps: true });
     expect(api.approveSkill).toHaveBeenNthCalledWith(2, "tok", "dup", {
       confirm: false,
       override: false,
