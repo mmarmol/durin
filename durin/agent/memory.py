@@ -1053,6 +1053,7 @@ class Consolidator:
                             "ratio": self.preemptive_compact_ratio,
                         })
 
+            consolidated_start = session.last_consolidated
             for round_num in range(self._MAX_CONSOLIDATION_ROUNDS):
                 if estimated <= target:
                     break
@@ -1129,6 +1130,45 @@ class Consolidator:
                             "post-compaction hook raised for {}",
                             session.key,
                         )
+                # Concern B (task-state anchor): one LLM call per compaction
+                # extracts key decisions/findings from the span just archived
+                # and appends them to the decision log so they survive in
+                # runtime context after the raw messages leave the window.
+                # Best-effort: failures must never break consolidation.
+                if self.decision_log_enabled:
+                    try:
+                        span = session.messages[consolidated_start:session.last_consolidated]
+                        decisions = await self.extract_decisions(span)
+                        if decisions:
+                            from datetime import datetime, timezone
+
+                            from durin.session.decision_log import add_decision
+
+                            ts = datetime.now(timezone.utc).isoformat()
+                            total_dropped = 0
+                            for decision in decisions:
+                                _, dropped = add_decision(
+                                    session.metadata, decision, source="auto", ts=ts,
+                                    max_entries=self.decision_log_max_entries,
+                                    max_chars=self.decision_log_max_chars,
+                                )
+                                total_dropped += dropped
+                            self.sessions.save(session)
+                            _dec_logger = current_telemetry()
+                            if _dec_logger is not None:
+                                with suppress(Exception):
+                                    _dec_logger.log("decision_log.extracted", {
+                                        "count": len(decisions),
+                                        "session_key": session.key,
+                                    })
+                                    if total_dropped:
+                                        _dec_logger.log("decision_log.capped", {
+                                            "dropped": total_dropped,
+                                            "source": "auto",
+                                            "session_key": session.key,
+                                        })
+                    except Exception:
+                        logger.exception("Decision extraction failed for {}", session.key)
         finally:
             lock.release()
 
