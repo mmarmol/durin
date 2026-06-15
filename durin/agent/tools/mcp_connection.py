@@ -641,12 +641,15 @@ class MCPServerConnection:
             return _ConnDown(f"MCP server '{self.name}' is not connected")
         try:
             async with self._rpc_lock:
-                result = await session.read_resource(uri)
+                result = await asyncio.wait_for(session.read_resource(uri), timeout=timeout)
             self._reset_breaker()
             return result
         except asyncio.CancelledError:
             raise
         except BaseException as exc:  # noqa: BLE001
+            if _is_timeout_error(exc):
+                self._bump_error()
+                return _ConnDown(f"(MCP resource read on '{self.name}' timed out after {timeout}s)")
             if _is_session_expired_error(exc) or _is_transient_conn(exc):
                 self._request_reconnect()
                 fresh = await self._await_fresh_session(timeout=15.0)
@@ -656,7 +659,7 @@ class MCPServerConnection:
                     )
                 try:
                     async with self._rpc_lock:
-                        result = await fresh.read_resource(uri)
+                        result = await asyncio.wait_for(fresh.read_resource(uri), timeout=timeout)
                     self._reset_breaker()
                     return result
                 except asyncio.CancelledError:
@@ -664,6 +667,7 @@ class MCPServerConnection:
                 except BaseException:  # noqa: BLE001
                     pass
             self._bump_error()
+            logger.warning("MCP '{}' resource read failed: {}", self.name, exc)
             return _ConnDown(f"MCP server '{self.name}' resource read failed: {type(exc).__name__}")
 
     async def get_prompt(self, name: str, arguments: dict, timeout: float) -> Any:
@@ -676,12 +680,17 @@ class MCPServerConnection:
             return _ConnDown(f"MCP server '{self.name}' is not connected")
         try:
             async with self._rpc_lock:
-                result = await session.get_prompt(name, arguments=arguments)
+                result = await asyncio.wait_for(
+                    session.get_prompt(name, arguments=arguments), timeout=timeout
+                )
             self._reset_breaker()
             return result
         except asyncio.CancelledError:
             raise
         except BaseException as exc:  # noqa: BLE001
+            if _is_timeout_error(exc):
+                self._bump_error()
+                return _ConnDown(f"(MCP prompt '{name}' on '{self.name}' timed out after {timeout}s)")
             if _is_session_expired_error(exc) or _is_transient_conn(exc):
                 self._request_reconnect()
                 fresh = await self._await_fresh_session(timeout=15.0)
@@ -691,7 +700,9 @@ class MCPServerConnection:
                     )
                 try:
                     async with self._rpc_lock:
-                        result = await fresh.get_prompt(name, arguments=arguments)
+                        result = await asyncio.wait_for(
+                            fresh.get_prompt(name, arguments=arguments), timeout=timeout
+                        )
                     self._reset_breaker()
                     return result
                 except asyncio.CancelledError:
@@ -699,6 +710,7 @@ class MCPServerConnection:
                 except BaseException:  # noqa: BLE001
                     pass
             self._bump_error()
+            logger.warning("MCP '{}' prompt '{}' failed: {}", self.name, name, exc)
             return _ConnDown(f"MCP server '{self.name}' prompt call failed: {type(exc).__name__}")
 
     # ----- circuit breaker -----

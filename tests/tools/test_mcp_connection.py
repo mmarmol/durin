@@ -716,3 +716,30 @@ async def test_catalog_timeout_at_connect(monkeypatch) -> None:
         # 3 retries + 1s+2s+4s backoff caps total around 7.6s.
         assert elapsed < 10.0
         await conn.aclose()
+
+
+async def test_resource_read_timeout() -> None:
+    import durin.agent.tools.mcp_connection as mc
+    from pydantic import AnyUrl
+
+    server = FastMCP("res")
+
+    @server.resource("test://slow")
+    async def slow_res() -> str:
+        await asyncio.sleep(5)
+        return "data"
+
+    async with _InProcessHarness(server) as h:
+        cfg = MCPServerConfig(command="x", tool_timeout=1)
+        registry = ToolRegistry()
+        conn = mc.MCPServerConnection("res", cfg, registry)
+
+        async def _open(_self):
+            return h.client_streams[0], h.client_streams[1]
+
+        conn._open_transport_streams = _open.__get__(conn, mc.MCPServerConnection)
+        await conn.start()
+        out = await conn.read_resource(AnyUrl("test://slow"), timeout=0.3)
+        assert isinstance(out, mc._ConnDown)
+        assert "timed out" in out.message.lower() or "failed" in out.message.lower()
+        await conn.aclose()
