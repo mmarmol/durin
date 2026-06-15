@@ -916,14 +916,5 @@
   },
   "list": {
     "scrollToBottom": "Bajar al final"
-  },
-  "changes": {
-    "title": "Cambios",
-    "sidebarTitle": "Cambios",
-    "refresh": "Actualizar",
-    "empty": "Sin cambios sin confirmar",
-    "selectFile": "Selecciona un archivo para ver el diff",
-    "noDiff": "Diff no disponible",
-    "error": "Error al cargar cambios"
   }
 }

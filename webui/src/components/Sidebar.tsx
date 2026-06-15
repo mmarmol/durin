@@ -6,7 +6,6 @@ import {
   Settings,
   Sparkles,
   SquarePen,
-  GitCompare,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -30,8 +29,6 @@ interface SidebarProps {
   memoryGraphActive?: boolean;
   onOpenSkills?: () => void;
   skillsActive?: boolean;
-  onOpenChanges?: () => void;
-  changesActive?: boolean;
   onCollapse: () => void;
 }
 
@@ -173,25 +170,6 @@ export function Sidebar(props: SidebarProps) {
           >
             <Sparkles className="h-3.5 w-3.5" aria-hidden />
             {t("skills.title")}
-          </Button>
-        </div>
-      ) : null}
-      {props.onOpenChanges ? (
-        <div className="px-2.5 pb-2">
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={props.onOpenChanges}
-            className={cn(
-              "h-8 w-full justify-start gap-2 rounded-full px-2.5 text-[12.5px] font-medium",
-              props.changesActive
-                ? "bg-sidebar-accent/80 text-sidebar-foreground"
-                : "text-sidebar-foreground/85 hover:bg-sidebar-accent/75 hover:text-sidebar-foreground",
-            )}
-            aria-pressed={!!props.changesActive}
-          >
-            <GitCompare className="h-3.5 w-3.5" aria-hidden />
-            {t("changes.sidebarTitle")}
           </Button>
         </div>
       ) : null}

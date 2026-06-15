@@ -74,13 +74,6 @@ _TUI_ACTIONS: list[CommandEntry] = [
         shortcut="Esc",
     ),
     CommandEntry(
-        id="act:open_diff_viewer",
-        label="View file changes",
-        kind="action",
-        description="Browse working-tree diffs in a full-page viewer",
-        shortcut="Ctrl+G",
-    ),
-    CommandEntry(
         id="act:open_command_palette",
         label="Command palette",
         kind="action",
