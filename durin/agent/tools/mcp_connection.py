@@ -293,13 +293,13 @@ class MCPServerConnection:
                         import mcp.types as _types  # noqa: PLC0415
                     except ImportError:
                         return
-                ServerNotification = getattr(_types, "ServerNotification", None)
-                ToolListChangedNotification = getattr(_types, "ToolListChangedNotification", None)
+                _server_notification_cls = getattr(_types, "ServerNotification", None)
+                _list_changed_cls = getattr(_types, "ToolListChangedNotification", None)
                 if (
-                    ServerNotification is not None
-                    and ToolListChangedNotification is not None
-                    and isinstance(message, ServerNotification)
-                    and isinstance(message.root, ToolListChangedNotification)
+                    _server_notification_cls is not None
+                    and _list_changed_cls is not None
+                    and isinstance(message, _server_notification_cls)
+                    and isinstance(message.root, _list_changed_cls)
                 ):
                     logger.info("MCP server '{}': tools/list_changed", self.name)
                     self._schedule_refresh()

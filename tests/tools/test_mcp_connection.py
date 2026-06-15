@@ -493,9 +493,7 @@ async def test_list_changed_rediscovers_tools(live_mcp) -> None:
     await conn.aclose()
 
 
-async def test_refresh_generation_guard(live_mcp, monkeypatch) -> None:
-    import durin.agent.tools.mcp_connection as mc
-
+async def test_refresh_generation_guard(live_mcp) -> None:
     factory, harness = live_mcp
     conn, registry = factory(keepalive_interval=10.0)
     await conn.start()
