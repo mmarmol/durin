@@ -720,8 +720,9 @@ async def test_catalog_timeout_at_connect(monkeypatch) -> None:
 
 
 async def test_resource_read_timeout() -> None:
-    import durin.agent.tools.mcp_connection as mc
     from pydantic import AnyUrl
+
+    import durin.agent.tools.mcp_connection as mc
 
     server = FastMCP("res")
 
@@ -758,7 +759,7 @@ async def test_transport_http_falls_back_to_sse(monkeypatch) -> None:
     async def fake_streamable(url, http_client=None):
         calls.append("http")
         raise ConnectionError("http endpoint not available")
-        yield  # noqa: unreachable
+        yield  # type: ignore[misc]
 
     @asynccontextmanager
     async def fake_sse(url, httpx_client_factory=None):
