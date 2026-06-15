@@ -689,6 +689,7 @@ async def connect_mcp_servers(
             await session.initialize()
 
             tools = await session.list_tools()
+            _disable_output_schema_validation(session)
             enabled_tools = set(cfg.enabled_tools)
             allow_all_tools = "*" in enabled_tools
             registered_count = 0

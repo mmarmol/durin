@@ -1281,3 +1281,22 @@ def test_disable_output_schema_validation_no_attr_is_noop() -> None:
 
     session = SimpleNamespace()  # no _tool_output_schemas
     _disable_output_schema_validation(session)  # must not raise
+
+
+@pytest.mark.asyncio
+async def test_connect_disables_output_schema_validation(
+    fake_mcp_runtime: dict[str, object | None],
+) -> None:
+    session = _make_fake_session(["demo"])
+    session._tool_output_schemas = {
+        "demo": {"type": "object", "properties": {"x": {"$ref": "#/$defs/Missing"}}}
+    }
+    fake_mcp_runtime["session"] = session
+    registry = ToolRegistry()
+    stacks = await connect_mcp_servers(
+        {"test": MCPServerConfig(command="fake")}, registry
+    )
+    for stack in stacks.values():
+        await stack.aclose()
+
+    assert session._tool_output_schemas["demo"] is None
