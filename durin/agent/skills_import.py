@@ -395,6 +395,15 @@ def install_imported_skill(workspace: Path, quarantine_dir: Path, *, source: str
             "content_hash": chash,
             "created_at": _today(),
         }
+        sj = quarantine_dir / ".scan.json"
+        if sj.is_file():
+            try:
+                scan = json.loads(sj.read_text())
+                req = scan.get("requirements")
+                if isinstance(req, dict):
+                    durin["requirements"] = req
+            except Exception:  # noqa: BLE001
+                pass
 
     _update_md(dest / "SKILL.md", _stamp)
     from durin.agent.skills_store import attribution_to_trailers
