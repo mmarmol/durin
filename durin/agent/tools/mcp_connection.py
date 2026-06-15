@@ -25,6 +25,7 @@ from durin.agent.tools.mcp import (
     MCPToolWrapper,
     _disable_output_schema_validation,
     _normalize_windows_stdio_command,
+    _probe_http_url,
     _sanitize_name,
 )
 from durin.agent.tools.registry import ToolRegistry
@@ -161,9 +162,40 @@ class MCPServerConnection:
         """Open the transport and return (read_stream, write_stream).
 
         Lives in its own coroutine so the in-process test harness can
-        monkeypatch it. The async-context objects it enters are owned by
-        run()'s ``async with`` (entered + exited in the task).
+        monkeypatch it. Selects stdio / SSE / streamableHttp based on
+        ``cfg.type`` (auto-detected if None). streamableHttp falls back
+        to SSE on failure, with an auth-aware early exit.
         """
+        cfg = self._cfg
+        transport = cfg.type or self._infer_transport()
+        if transport == "stdio":
+            return await self._open_stdio()
+        if transport == "sse":
+            return await self._open_sse()
+        if transport == "streamableHttp":
+            try:
+                return await self._open_streamable_http()
+            except BaseException as exc:  # noqa: BLE001
+                if _is_auth_error(exc):
+                    # 401/OAuth error: SSE won't fix it — fail fast.
+                    raise
+                logger.warning(
+                    "MCP server '{}': streamableHttp failed ({}), falling back to SSE",
+                    self.name, type(exc).__name__,
+                )
+                await self._close_transport_streams()
+                return await self._open_sse()
+        raise ValueError(f"MCP server '{self.name}': unknown transport '{transport}'")
+
+    def _infer_transport(self) -> str:
+        cfg = self._cfg
+        if cfg.command:
+            return "stdio"
+        if cfg.url:
+            return "sse" if cfg.url.rstrip("/").endswith("/sse") else "streamableHttp"
+        raise ValueError(f"MCP server '{self.name}': no command or url configured")
+
+    async def _open_stdio(self):
         from mcp import StdioServerParameters
         from mcp.client.stdio import stdio_client
 
@@ -173,14 +205,56 @@ class MCPServerConnection:
         )
         params = StdioServerParameters(command=command, args=args, env=env)
         self._transport_cm = stdio_client(params)
-        read, write = await self._transport_cm.__aenter__()
+        return await self._transport_cm.__aenter__()
+
+    async def _open_streamable_http(self):
+        import httpx
+        from mcp.client.streamable_http import streamable_http_client
+
+        cfg = self._cfg
+        if not await _probe_http_url(cfg.url):
+            raise ConnectionError(f"{cfg.url} unreachable")
+        self._http_client = httpx.AsyncClient(
+            headers=cfg.headers or None, follow_redirects=True, timeout=None
+        )
+        await self._http_client.__aenter__()
+        self._transport_cm = streamable_http_client(cfg.url, http_client=self._http_client)
+        read, write, _ = await self._transport_cm.__aenter__()
         return read, write
 
+    async def _open_sse(self):
+        import httpx
+        from mcp.client.sse import sse_client
+
+        cfg = self._cfg
+        if not await _probe_http_url(cfg.url):
+            raise ConnectionError(f"{cfg.url} unreachable")
+
+        def factory(headers=None, timeout=None, auth=None):
+            merged = {
+                "Accept": "application/json, text/event-stream",
+                **(cfg.headers or {}),
+                **(headers or {}),
+            }
+            return httpx.AsyncClient(
+                headers=merged or None, follow_redirects=True, timeout=timeout, auth=auth
+            )
+
+        self._transport_cm = sse_client(cfg.url, httpx_client_factory=factory)
+        return await self._transport_cm.__aenter__()
+
     async def _close_transport_streams(self) -> None:
+        import contextlib
         cm = getattr(self, "_transport_cm", None)
         if cm is not None:
-            await cm.__aexit__(None, None, None)
+            with contextlib.suppress(Exception):
+                await cm.__aexit__(None, None, None)
             self._transport_cm = None
+        client = getattr(self, "_http_client", None)
+        if client is not None:
+            with contextlib.suppress(Exception):
+                await client.__aexit__(None, None, None)
+            self._http_client = None
 
     # ----- lifecycle -----
 
