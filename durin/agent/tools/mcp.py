@@ -43,6 +43,27 @@ def _sanitize_name(name: str) -> str:
     return _SANITIZE_RE.sub("_", re.sub(r"[^a-zA-Z0-9_-]", "_", name))
 
 
+def _disable_output_schema_validation(session: Any) -> None:
+    """Disable the SDK's strict outputSchema validation for this session.
+
+    The mcp SDK validates ``structuredContent`` against each tool's
+    ``outputSchema`` inside ``call_tool`` (via jsonschema) and RAISES on a
+    structurally-invalid schema, an unresolvable ``$ref``, or output that does
+    not match the server's own declared schema — turning a successful server
+    call into a client-side exception. durin passes ``structuredContent`` to the
+    model as a JSON appendix and never depends on it conforming, so we null out
+    the SDK's private per-tool schema cache after discovery. Detecting only the
+    "broken" schemas is not robust (an unresolvable ``$ref`` only fails when an
+    instance exercises it), so we disable validation wholesale. The private
+    attribute name is pinned by a test so a SDK rename surfaces in CI.
+    """
+    cache = getattr(session, "_tool_output_schemas", None)
+    if not isinstance(cache, dict):
+        return
+    for name in list(cache):
+        cache[name] = None
+
+
 def _is_transient(exc: BaseException) -> bool:
     """Check if an exception looks like a transient connection error."""
     return type(exc).__name__ in _TRANSIENT_EXC_NAMES

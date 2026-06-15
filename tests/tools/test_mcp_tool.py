@@ -1253,3 +1253,31 @@ def test_schema_rewrites_nested_defs_ref_in_anyof() -> None:
     assert set(params["$defs"]) == {"Foo", "Bar"}
     refs = [b["$ref"] for b in params["properties"]["x"]["anyOf"]]
     assert refs == ["#/$defs/Foo", "#/$defs/Bar"]
+
+
+# ---------------------------------------------------------------------------
+# Output-schema validation opt-out: the SDK validates structuredContent against
+# outputSchema in call_tool and raises (broken schema / unresolvable $ref /
+# non-conforming output). durin passes structuredContent to the model as a JSON
+# appendix and does not need this, so we disable it by nulling the SDK's cache.
+# ---------------------------------------------------------------------------
+
+
+def test_disable_output_schema_validation_nulls_all() -> None:
+    from durin.agent.tools.mcp import _disable_output_schema_validation
+
+    session = SimpleNamespace(
+        _tool_output_schemas={
+            "good": {"type": "object", "properties": {"n": {"type": "integer"}}},
+            "broken": {"type": "object", "properties": {"x": {"$ref": "#/$defs/Missing"}}},
+        }
+    )
+    _disable_output_schema_validation(session)
+    assert session._tool_output_schemas == {"good": None, "broken": None}
+
+
+def test_disable_output_schema_validation_no_attr_is_noop() -> None:
+    from durin.agent.tools.mcp import _disable_output_schema_validation
+
+    session = SimpleNamespace()  # no _tool_output_schemas
+    _disable_output_schema_validation(session)  # must not raise
