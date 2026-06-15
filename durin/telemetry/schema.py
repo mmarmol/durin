@@ -439,6 +439,26 @@ class ToolTodoWriteEvent(TypedDict):
     coerced_multiple_in_progress: bool
 
 
+class ToolNoteDecisionEvent(TypedDict):
+    """A decision/finding was recorded via the note_decision tool (concern B)."""
+
+    total: int
+
+
+class DecisionLogCappedEvent(TypedDict):
+    """Oldest decision-log entries dropped to keep the task-state anchor within caps."""
+
+    dropped: int
+    source: str  # "tool" | "auto"
+
+
+class DecisionLogExtractedEvent(TypedDict):
+    """Decisions auto-extracted from a compacted span into the task-state anchor (concern B)."""
+
+    count: int
+    session_key: str
+
+
 class AskUserQuestionAskedEvent(TypedDict):
     """``ask_user_question`` tool surfaced a structured prompt to the
     user; the turn is paused awaiting their selection."""
@@ -1162,6 +1182,9 @@ EVENTS: dict[str, type] = {
     "tool.web_search": ToolWebSearchEvent,
     "tool.web_fetch": ToolWebFetchEvent,
     "tool.todo_write": ToolTodoWriteEvent,
+    "tool.note_decision": ToolNoteDecisionEvent,
+    "decision_log.capped": DecisionLogCappedEvent,
+    "decision_log.extracted": DecisionLogExtractedEvent,
     "ask_user.question_asked": AskUserQuestionAskedEvent,
     "ask_user.answer_received": AskUserAnswerReceivedEvent,
     "ask_user.answer_timeout": AskUserAnswerTimeoutEvent,
@@ -1258,6 +1281,9 @@ __all__ = [
     "ToolWebSearchEvent",
     "ToolWebFetchEvent",
     "ToolTodoWriteEvent",
+    "ToolNoteDecisionEvent",
+    "DecisionLogCappedEvent",
+    "DecisionLogExtractedEvent",
     "AskUserQuestionAskedEvent",
     "AskVisionStartEvent",
     "AskVisionErrorEvent",

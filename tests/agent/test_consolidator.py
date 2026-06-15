@@ -28,7 +28,7 @@ def mock_provider():
 def consolidator(store, mock_provider):
     sessions = MagicMock()
     sessions.save = MagicMock()
-    return Consolidator(
+    cons = Consolidator(
         store=store,
         provider=mock_provider,
         model="test-model",
@@ -38,6 +38,10 @@ def consolidator(store, mock_provider):
         get_tool_definitions=MagicMock(return_value=[]),
         max_completion_tokens=100,
     )
+    # Stub out decision extraction so these tests don't trigger an extra
+    # provider call (test_consolidator_decisions.py covers that code path).
+    cons.extract_decisions = AsyncMock(return_value=[])
+    return cons
 
 
 class TestConsolidatorSummarize:

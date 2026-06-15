@@ -511,6 +511,9 @@ class Consolidator:
         max_completion_tokens: int = 4096,
         consolidation_ratio: float = 0.5,
         preemptive_compact_ratio: float = 0.5,
+        decision_log_enabled: bool = True,
+        decision_log_max_entries: int = 10,
+        decision_log_max_chars: int = 1500,
     ):
         self.store = store
         self.provider = provider
@@ -534,6 +537,11 @@ class Consolidator:
         # in ``ModelPresetConfig.preemptive_compact_ratio`` for per-preset
         # overrides; otherwise inherits from ``AgentDefaults``.
         self.preemptive_compact_ratio = preemptive_compact_ratio
+        # Concern B (task-state anchor): caps + toggle for the auto-extracted
+        # decision log written at compaction. See durin/session/decision_log.py.
+        self.decision_log_enabled = decision_log_enabled
+        self.decision_log_max_entries = decision_log_max_entries
+        self.decision_log_max_chars = decision_log_max_chars
         self._build_messages = build_messages
         self._get_tool_definitions = get_tool_definitions
         self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
@@ -888,6 +896,50 @@ class Consolidator:
             self.store.raw_archive(messages)
             return None, empty_tags
 
+    async def extract_decisions(self, messages: list[dict]) -> list[str]:
+        """Extract key task decisions/findings from a span via LLM (best-effort).
+
+        Concern B (task-state anchor): runs once per compaction over the span
+        just archived, so the model keeps *why* it did things even after the
+        raw messages leave the window. Returns a flat list of one-line
+        decisions, or [] on empty input, "(none)", or any LLM failure
+        (degraded output must never crash compaction).
+        """
+        if not messages:
+            return []
+        try:
+            formatted = MemoryStore._format_messages(messages)
+            formatted = self._truncate_to_token_budget(formatted)
+            response = await self.provider.chat_with_retry(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": render_template(
+                            "agent/consolidator_decisions.md",
+                            strip=True,
+                        ),
+                    },
+                    {"role": "user", "content": formatted},
+                ],
+                tools=None,
+                tool_choice=None,
+            )
+            if response.finish_reason == "error":
+                return []
+            raw = (response.content or "").strip()
+            if not raw or raw.lower() == "(none)":
+                return []
+            out: list[str] = []
+            for line in raw.splitlines():
+                cleaned = line.strip().lstrip("-*•").strip()
+                if cleaned and cleaned.lower() != "(none)":
+                    out.append(cleaned[:400])
+            return out
+        except Exception:
+            logger.warning("Decision extraction LLM call failed; skipping")
+            return []
+
     async def maybe_consolidate_by_tokens(
         self,
         session: Session,
@@ -1001,6 +1053,7 @@ class Consolidator:
                             "ratio": self.preemptive_compact_ratio,
                         })
 
+            consolidated_start = session.last_consolidated
             for round_num in range(self._MAX_CONSOLIDATION_ROUNDS):
                 if estimated <= target:
                     break
@@ -1077,6 +1130,45 @@ class Consolidator:
                             "post-compaction hook raised for {}",
                             session.key,
                         )
+                # Concern B (task-state anchor): one LLM call per compaction
+                # extracts key decisions/findings from the span just archived
+                # and appends them to the decision log so they survive in
+                # runtime context after the raw messages leave the window.
+                # Best-effort: failures must never break consolidation.
+                if self.decision_log_enabled:
+                    try:
+                        span = session.messages[consolidated_start:session.last_consolidated]
+                        decisions = await self.extract_decisions(span)
+                        if decisions:
+                            from datetime import timezone
+
+                            from durin.session.decision_log import add_decision
+
+                            ts = datetime.now(timezone.utc).isoformat()
+                            total_dropped = 0
+                            for decision in decisions:
+                                _, dropped = add_decision(
+                                    session.metadata, decision, source="auto", ts=ts,
+                                    max_entries=self.decision_log_max_entries,
+                                    max_chars=self.decision_log_max_chars,
+                                )
+                                total_dropped += dropped
+                            self.sessions.save(session)
+                            _dec_logger = current_telemetry()
+                            if _dec_logger is not None:
+                                with suppress(Exception):
+                                    _dec_logger.log("decision_log.extracted", {
+                                        "count": len(decisions),
+                                        "session_key": session.key,
+                                    })
+                                    if total_dropped:
+                                        _dec_logger.log("decision_log.capped", {
+                                            "dropped": total_dropped,
+                                            "source": "auto",
+                                            "session_key": session.key,
+                                        })
+                    except Exception:
+                        logger.exception("Decision extraction failed for {}", session.key)
         finally:
             lock.release()
 
