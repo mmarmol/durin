@@ -33,6 +33,8 @@ from durin.config.paths import get_logs_dir
 
 _mcp_stderr_handle = None  # module-level shared handle
 
+_MCP_MAX_REDIRECTS = 5  # cap redirect chains on MCP HTTP transports (DoS / redirect-loop guard)
+
 
 def _mcp_stderr_log():
     """Shared append handle for MCP-server stderr so server banners don't
@@ -178,6 +180,9 @@ class MCPServerConnection:
         self._pending_refresh: set[asyncio.Task] = set()
         self._refresh_generation = 0
 
+        # SP-5b: injection-scan findings (deterministic test hook; also drives WARNING log).
+        self._injection_findings: list[tuple[str, list[str]]] = []
+
     def _build_oauth_provider(self):
         """Build the SDK OAuthClientProvider when cfg.oauth is set, else None.
 
@@ -194,6 +199,95 @@ class MCPServerConnection:
             return None
         from durin.agent.tools.mcp_oauth import build_oauth_provider
         return build_oauth_provider(self.name, cfg, headless=True)
+
+    # ----- SP-5 security helpers -----
+
+    def _build_http_client(self, extra_kwargs: dict) -> "Any":
+        """Build the MCP transport's httpx client.
+
+        SSRF posture: unless this server is explicitly opted out via
+        ``allow_private_url`` (or an SDK proxy takes over egress), the client
+        is built through ``ssrf_safe_async_client`` so every request — initial
+        and each redirect hop — is resolved, validated against the blocked
+        private/loopback/link-local/metadata networks, and pinned to the
+        validated IP (closing the DNS-rebinding TOCTOU). The global
+        ``tools.ssrf_whitelist`` (already applied at config load) still
+        governs which private ranges are exempt.
+        """
+        import httpx
+
+        from durin.security.network import ssrf_safe_async_client
+
+        if getattr(self._cfg, "allow_private_url", False):
+            return httpx.AsyncClient(**extra_kwargs)
+        return ssrf_safe_async_client(**extra_kwargs)
+
+    def _sse_client_factory(self):
+        """Return the httpx client factory for the SSE transport.
+
+        Extracted so it is independently testable and so _open_sse stays
+        focused on the transport lifecycle.
+        """
+        cfg = self._cfg
+        provider = self._oauth_provider
+
+        def factory(headers=None, timeout=None, auth=None):
+            merged = {
+                "Accept": "application/json, text/event-stream",
+                **(cfg.headers or {}),
+                **(headers or {}),
+            }
+            return self._build_http_client(
+                dict(
+                    headers=merged or None,
+                    follow_redirects=True,
+                    max_redirects=_MCP_MAX_REDIRECTS,
+                    timeout=timeout,
+                    auth=provider or auth,  # SP-4: provider drives auth when set
+                )
+            )
+
+        return factory
+
+    def _scan_metadata(self, kind: str, item_name: str, *texts: object) -> None:
+        """Warn (never block) on structural injection markers in untrusted
+        MCP metadata. ``texts`` are the description/name fields to scan."""
+        from durin.agent.tools.mcp_security import scan_injection
+
+        codes: set[str] = set()
+        for t in texts:
+            codes.update(scan_injection(t))
+        if codes:
+            self._injection_findings.append((f"{kind}:{item_name}", sorted(codes)))
+            logger.warning(
+                "MCP server '{}': {} '{}' metadata flagged ({}). "
+                "Registered anyway — inspect this server's {} description.",
+                self.name, kind, item_name, ", ".join(sorted(codes)), kind,
+            )
+
+    def _enforce_spawn_policy(self, command: str, args: object) -> None:
+        """Check spawn command for interpreter+egress shape; enforce per policy."""
+        policy = getattr(self._cfg, "spawn_egress_policy", "warn")
+        if policy == "off":
+            return
+        from durin.agent.tools.mcp_security import scan_spawn_command
+
+        codes = scan_spawn_command(command, args)
+        if not codes:
+            return
+        detail = ", ".join(codes)
+        if policy == "refuse":
+            raise PermissionError(
+                f"MCP server '{self.name}': refusing to spawn — command matches "
+                f"network-egress shape ({detail}). Set spawn_egress_policy='warn' "
+                f"to allow, or fix the command/args."
+            )
+        logger.warning(
+            "MCP server '{}': spawn command matches network-egress shape ({}). "
+            "Spawning anyway (spawn_egress_policy='warn'). Verify this server entry "
+            "came from a trusted source.",
+            self.name, detail,
+        )
 
     # ----- transport -----
 
@@ -239,6 +333,7 @@ class MCPServerConnection:
         from mcp.client.stdio import stdio_client
 
         cfg = self._cfg
+        self._enforce_spawn_policy(cfg.command, cfg.args)
         command, args, env = _normalize_windows_stdio_command(
             cfg.command, cfg.args, cfg.env or None
         )
@@ -253,17 +348,19 @@ class MCPServerConnection:
         return await self._transport_cm.__aenter__()
 
     async def _open_streamable_http(self):
-        import httpx
         from mcp.client.streamable_http import streamable_http_client
 
         cfg = self._cfg
         if not await _probe_http_url(cfg.url):
             raise ConnectionError(f"{cfg.url} unreachable")
-        self._http_client = httpx.AsyncClient(
-            headers=cfg.headers or None,
-            follow_redirects=True,
-            timeout=None,
-            auth=self._oauth_provider,  # SP-4: None unless oauth configured
+        self._http_client = self._build_http_client(
+            dict(
+                headers=cfg.headers or None,
+                follow_redirects=True,
+                max_redirects=_MCP_MAX_REDIRECTS,
+                timeout=None,
+                auth=self._oauth_provider,  # SP-4: None unless oauth configured
+            )
         )
         await self._http_client.__aenter__()
         self._transport_cm = streamable_http_client(cfg.url, http_client=self._http_client)
@@ -271,29 +368,12 @@ class MCPServerConnection:
         return read, write
 
     async def _open_sse(self):
-        import httpx
         from mcp.client.sse import sse_client
 
         cfg = self._cfg
         if not await _probe_http_url(cfg.url):
             raise ConnectionError(f"{cfg.url} unreachable")
-
-        provider = self._oauth_provider
-
-        def factory(headers=None, timeout=None, auth=None):
-            merged = {
-                "Accept": "application/json, text/event-stream",
-                **(cfg.headers or {}),
-                **(headers or {}),
-            }
-            return httpx.AsyncClient(
-                headers=merged or None,
-                follow_redirects=True,
-                timeout=timeout,
-                auth=provider or auth,  # SP-4: provider drives auth when set
-            )
-
-        self._transport_cm = sse_client(cfg.url, httpx_client_factory=factory)
+        self._transport_cm = sse_client(cfg.url, httpx_client_factory=self._sse_client_factory())
         return await self._transport_cm.__aenter__()
 
     async def _close_transport_streams(self) -> None:
@@ -598,6 +678,7 @@ class MCPServerConnection:
                 wrapped = _sanitize_name(f"mcp_{self.name}_{tool_def.name}")
                 if not allow_all and tool_def.name not in enabled and wrapped not in enabled:
                     continue
+                self._scan_metadata("tool", tool_def.name, tool_def.description)
                 self._registry.register(
                     MCPToolWrapper(self, self.name, tool_def, tool_timeout=cfg.tool_timeout)
                 )
@@ -624,6 +705,7 @@ class MCPServerConnection:
         try:
             resources = await session.list_resources()
             for resource in resources.resources:
+                self._scan_metadata("resource", str(resource.uri), resource.description, str(resource.uri))
                 w = MCPResourceWrapper(self, self.name, resource, resource_timeout=cfg.tool_timeout)
                 self._registry.register(w)
                 new_names.append(w.name)
@@ -633,6 +715,7 @@ class MCPServerConnection:
         try:
             prompts = await session.list_prompts()
             for prompt in prompts.prompts:
+                self._scan_metadata("prompt", prompt.name, prompt.description)
                 w = MCPPromptWrapper(self, self.name, prompt, prompt_timeout=cfg.tool_timeout)
                 self._registry.register(w)
                 new_names.append(w.name)
