@@ -557,3 +557,35 @@ async def test_refresh_preserves_unchanged_wrapper_identity(live_mcp) -> None:
     out = await after.execute(text="still-here")
     assert "still-here" in out
     await conn.aclose()
+
+
+async def test_refresh_reapplies_p3_deferral(live_mcp) -> None:
+    import durin.agent.tools.mcp_connection as mc
+
+    factory, harness = live_mcp
+    registry = ToolRegistry()
+    cfg = MCPServerConfig(command="x", keepalive_interval=10.0)
+    calls = {"n": 0}
+    conn = mc.MCPServerConnection(
+        "harness", cfg, registry,
+        defer_cb=lambda: calls.__setitem__("n", calls["n"] + 1),
+    )
+
+    async def _open(_self):
+        return harness.client_streams[0], harness.client_streams[1]
+
+    conn._open_transport_streams = _open.__get__(conn, mc.MCPServerConnection)
+    await conn.start()
+    assert calls["n"] == 1  # initial registration
+
+    async def added2(x: int) -> int:
+        return x + 1
+
+    harness.server.add_tool(added2, name="added2")
+    await conn.call_tool("emit_change", {}, timeout=3.0)
+    for _ in range(60):
+        await asyncio.sleep(0.05)
+        if calls["n"] >= 2:
+            break
+    assert calls["n"] >= 2  # re-applied after refresh
+    await conn.aclose()
