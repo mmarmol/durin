@@ -32,7 +32,7 @@ class _FakeTextResourceContents:
 
 
 class _FakeBlobResourceContents:
-    def __init__(self, blob: bytes, uri: str = "file:///x", mime_type: str | None = None) -> None:
+    def __init__(self, blob: str, uri: str = "file:///x", mime_type: str | None = None) -> None:
         self.blob = blob
         self.uri = uri
         self.mimeType = mime_type
