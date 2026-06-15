@@ -190,3 +190,79 @@ async def test_sse_factory_uses_provider_auth(tmp_path, monkeypatch):
     # Emulate the SDK calling the factory with auth=<provider>
     captured_factory["factory"](auth=conn._oauth_provider)
     assert captured["auth"] is conn._oauth_provider
+
+
+# ---------------------------------------------------------------------------
+# SP-4d: auth-401 mid-run surfaces needs-reauth sentinel
+# ---------------------------------------------------------------------------
+
+
+def _http_401():
+    import httpx
+
+    req = httpx.Request("POST", "https://api.example/mcp")
+    resp = httpx.Response(401, request=req)
+    return httpx.HTTPStatusError("401", request=req, response=resp)
+
+
+async def test_call_tool_401_yields_reauth_sentinel(tmp_path, monkeypatch):
+    """An OAuth 401 on call_tool must return a _ConnDown naming durin mcp login."""
+    _point_store_at(tmp_path, monkeypatch)
+    from durin.agent.tools.mcp_connection import MCPServerConnection, _ConnDown
+    from durin.agent.tools.registry import ToolRegistry
+    from durin.config.schema import MCPServerConfig
+
+    cfg = MCPServerConfig(url="https://api.example/mcp", oauth=True)
+    conn = MCPServerConnection("acme", cfg, ToolRegistry())
+
+    class _Session:
+        async def call_tool(self, *a, **k):
+            raise _http_401()
+
+    conn.session = _Session()
+
+    out = await conn.call_tool("do_thing", {}, timeout=5)
+    assert isinstance(out, _ConnDown)
+    assert "durin mcp login acme" in out.message
+    # Auth 401 is NOT a transient drop — must NOT request reconnect.
+    assert not conn._reconnect_event.is_set()
+
+
+async def test_non_oauth_401_is_generic(tmp_path, monkeypatch):
+    """A 401 on a non-oauth server must NOT produce a reauth hint."""
+    _point_store_at(tmp_path, monkeypatch)
+    from durin.agent.tools.mcp_connection import MCPServerConnection, _ConnDown
+    from durin.agent.tools.registry import ToolRegistry
+    from durin.config.schema import MCPServerConfig
+
+    cfg = MCPServerConfig(url="https://api.example/mcp")  # no oauth
+    conn = MCPServerConnection("plain", cfg, ToolRegistry())
+
+    class _Session:
+        async def call_tool(self, *a, **k):
+            raise _http_401()
+
+    conn.session = _Session()
+
+    out = await conn.call_tool("do_thing", {}, timeout=5)
+    assert isinstance(out, _ConnDown)
+    assert "durin mcp login" not in out.message
+
+
+async def test_oauth_401_does_not_trigger_reconnect(tmp_path, monkeypatch):
+    """An OAuth 401 must not set _reconnect_event (reconnect won't fix auth)."""
+    _point_store_at(tmp_path, monkeypatch)
+    from durin.agent.tools.mcp_connection import MCPServerConnection
+    from durin.agent.tools.registry import ToolRegistry
+    from durin.config.schema import MCPServerConfig
+
+    cfg = MCPServerConfig(url="https://api.example/mcp", oauth=True)
+    conn = MCPServerConnection("acme", cfg, ToolRegistry())
+
+    class _Session:
+        async def call_tool(self, *a, **k):
+            raise _http_401()
+
+    conn.session = _Session()
+    await conn.call_tool("x", {}, timeout=5)
+    assert not conn._reconnect_event.is_set()

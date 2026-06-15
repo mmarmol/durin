@@ -343,9 +343,14 @@ class MCPServerConnection:
                 if not self._ready.is_set():
                     # Initial connect failed.
                     if _is_auth_error(exc):
+                        hint = (
+                            f" Run: durin mcp login {self.name}"
+                            if self._oauth_provider is not None
+                            else ""
+                        )
                         logger.warning(
-                            "MCP server '{}': initial auth failed, not retrying: {}",
-                            self.name, exc,
+                            "MCP server '{}': initial auth failed, not retrying: {}.{}",
+                            self.name, exc, hint,
                         )
                         self._error = exc
                         self._ready.set()
@@ -662,6 +667,16 @@ class MCPServerConnection:
         except asyncio.CancelledError:
             raise
         except BaseException as exc:  # noqa: BLE001
+            if _is_auth_error(exc) and self._oauth_provider is not None:
+                # SP-4d: OAuth 401 the SDK couldn't silently refresh → ask the
+                # user to re-auth. NOT a transient drop, so no reconnect/retry.
+                self._bump_error()
+                logger.warning("MCP '{}': OAuth 401 — re-auth required", self.name)
+                return _ConnDown(
+                    f"MCP server '{self.name}' needs OAuth re-authentication. "
+                    f"Run: durin mcp login {self.name} — do NOT retry this tool "
+                    f"until sign-in completes."
+                )
             if _is_timeout_error(exc):
                 self._bump_error()
                 return _ConnDown(
