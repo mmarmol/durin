@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 
 _MAX_RECENT = 5
+_MAX_PROMPT_HISTORY = 50
 
 _state_dir: Path | None = None
 
@@ -66,4 +67,29 @@ def add_recent_model(model: str) -> None:
     models.insert(0, model)
     models = models[:_MAX_RECENT]
     data["recent_models"] = models
+    _save(data)
+
+
+def get_prompt_history() -> list[str]:
+    """Return the list of submitted prompts (most recent last)."""
+    data = _load()
+    history = data.get("prompt_history", [])
+    if not isinstance(history, list):
+        return []
+    return [str(p) for p in history if isinstance(p, str)]
+
+
+def add_prompt(text: str) -> None:
+    """Append *text* to the prompt history, cap at 50 entries."""
+    text = text.strip()
+    if not text:
+        return
+    data = _load()
+    history = data.get("prompt_history", [])
+    if not isinstance(history, list):
+        history = []
+    history = [str(p) for p in history if isinstance(p, str)]
+    history.append(text)
+    history = history[-_MAX_PROMPT_HISTORY:]
+    data["prompt_history"] = history
     _save(data)

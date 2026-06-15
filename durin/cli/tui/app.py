@@ -192,6 +192,14 @@ class DurinApp(App[None]):
         # until the user tabs or clicks into the input.
         self.query_one(InputArea).focus()
 
+        # Load prompt history for Up/Down recall
+        from durin.cli.tui.state import get_prompt_history
+
+        try:
+            self.query_one(InputArea).load_history(get_prompt_history())
+        except Exception:  # noqa: BLE001
+            pass
+
         if self._agent_loop is None:
             return
         bus = getattr(self._agent_loop, "bus", None)
@@ -435,6 +443,10 @@ class DurinApp(App[None]):
 
         chat = self.query_one("#chat", ChatView)
         chat.add_message("user", value)
+        # Persist prompt to history for Up/Down recall
+        from durin.cli.tui.state import add_prompt
+
+        add_prompt(value)
         # Open a fresh assistant bubble for streaming. Tokens land via
         # the _stream_delta path in _consume_outbound.
         self._current_assistant_bubble = chat.add_message("assistant", "")
