@@ -161,6 +161,23 @@ metadata:
     assert req["platforms"]["inferred"] is False
 
 
+def test_merge_llm_tools(tmp_path):
+    d = _write_skill(tmp_path, "s", "name: s")
+    req = extract_requirements(d, llm_tools=["gh", "ffmpeg"])
+    bin_names = [b["name"] for b in req["bins"]]
+    assert "gh" in bin_names and "ffmpeg" in bin_names
+    assert all(b["origin"] == "llm" for b in req["bins"])
+
+
+def test_heuristic_wins_over_llm(tmp_path):
+    d = _write_skill(tmp_path, "s", "name: s",
+                     body="To list repos, run `gh`.")
+    req = extract_requirements(d, workspace=tmp_path, llm_tools=["gh"])
+    gh = [b for b in req["bins"] if b["name"] == "gh"]
+    assert len(gh) == 1
+    assert gh[0]["origin"] == "heuristic:body"
+
+
 def test_step5_conflict_warning_noted(tmp_path):
     d = _write_skill(tmp_path, "s", """
 name: s

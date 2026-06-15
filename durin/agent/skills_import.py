@@ -280,11 +280,15 @@ def fetch_candidate(cand: SkillCandidate, *, quarantine_root: Path,
     run_judge = _should_judge(qdir, cand.ref, judge_trigger, allowlist or [])
     rep = audit_skill(qdir, judge_enabled=run_judge, judge_model=judge_model,
                       judge_max_severity=judge_max_severity)
+    from durin.security.requirements_scan import extract_requirements
+
+    req_manifest = extract_requirements(qdir, llm_tools=getattr(rep, "tools", []))
     (qdir / ".scan.json").write_text(json.dumps({
         "source": cand.ref,
         "verdict": rep.verdict,
         "findings": [{"category": f.category, "severity": f.severity,
                       "where": f.where, "detail": f.detail} for f in rep.findings],
+        "requirements": req_manifest,
     }), encoding="utf-8")
     return qdir
 

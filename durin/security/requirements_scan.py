@@ -16,7 +16,8 @@ from durin.agent.skills_frontmatter import split_frontmatter
 logger = logging.getLogger(__name__)
 
 
-def extract_requirements(skill_dir: Path, *, workspace: Path | None = None) -> dict:
+def extract_requirements(skill_dir: Path, *, workspace: Path | None = None,
+                         llm_tools: list[str] | None = None) -> dict:
     """Run the heuristic pipeline over *skill_dir*.
 
     Returns a manifest dict::
@@ -33,7 +34,7 @@ def extract_requirements(skill_dir: Path, *, workspace: Path | None = None) -> d
     Never raises — degrades to an empty manifest on any error.
     """
     try:
-        return _extract(Path(skill_dir), workspace=workspace)
+        return _extract(Path(skill_dir), workspace=workspace, llm_tools=llm_tools or [])
     except Exception:  # noqa: BLE001 — never block the scan pipeline
         logger.warning("requirements_scan failed for %s, returning empty manifest", skill_dir)
         return {
@@ -47,7 +48,8 @@ def extract_requirements(skill_dir: Path, *, workspace: Path | None = None) -> d
         }
 
 
-def _extract(skill_dir: Path, *, workspace: Path | None = None) -> dict:
+def _extract(skill_dir: Path, *, workspace: Path | None = None,
+             llm_tools: list[str] | None = None) -> dict:
     md = skill_dir / "SKILL.md"
     data: dict = {}
     body = ""
@@ -84,6 +86,11 @@ def _extract(skill_dir: Path, *, workspace: Path | None = None) -> dict:
     for b in _step4_body_bins(body, catalog):
         if b not in bins_seen:
             bins_seen[b] = "heuristic:body"
+
+    # --- LLM-discovered tools (lowest priority, merged after all heuristics) ---
+    for tool in (llm_tools or []):
+        if tool not in bins_seen:
+            bins_seen[tool] = "llm"
 
     # --- Step 5: platform inference from install specs ---
     if not platforms:
