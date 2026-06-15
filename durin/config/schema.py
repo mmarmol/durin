@@ -791,6 +791,8 @@ class MCPServerConfig(Base):
     keepalive_interval: float = 180.0  # seconds between idle keepalive heartbeats
     enabled_tools: list[str] = Field(default_factory=lambda: ["*"])  # Only register these tools; accepts raw MCP names or wrapped mcp_<server>_<tool> names; ["*"] = all tools; [] = no tools
     oauth: bool | MCPOAuthConfig | None = None  # mark server as OAuth-requiring; True = DCR defaults
+    allow_private_url: bool = False  # opt this server out of the SSRF private-IP block (off = blocked)
+    spawn_egress_policy: Literal["warn", "refuse", "off"] = "warn"  # stdio: action on a shell-interpreter+egress-tool spawn shape
 
     def oauth_config(self) -> "MCPOAuthConfig | None":
         """Normalize the oauth field to MCPOAuthConfig | None."""
