@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64 as _b64
 import sys
 from contextlib import asynccontextmanager
 from types import ModuleType, SimpleNamespace
@@ -31,22 +32,22 @@ class _FakeTextResourceContents:
 
 
 class _FakeBlobResourceContents:
-    def __init__(self, blob: bytes, uri: str = "file:///x", mimeType: str | None = None) -> None:
+    def __init__(self, blob: bytes, uri: str = "file:///x", mime_type: str | None = None) -> None:
         self.blob = blob
         self.uri = uri
-        self.mimeType = mimeType
+        self.mimeType = mime_type
 
 
 class _FakeImageContent:
-    def __init__(self, data: str, mimeType: str | None) -> None:
+    def __init__(self, data: str, mime_type: str | None) -> None:
         self.data = data
-        self.mimeType = mimeType
+        self.mimeType = mime_type
 
 
 class _FakeAudioContent:
-    def __init__(self, data: str, mimeType: str | None) -> None:
+    def __init__(self, data: str, mime_type: str | None) -> None:
         self.data = data
-        self.mimeType = mimeType
+        self.mimeType = mime_type
 
 
 class _FakeEmbeddedResource:
@@ -946,8 +947,6 @@ async def test_connect_mcp_servers_enabled_tools_matches_sanitized_name(
 # Result fidelity: ImageContent + guard #90710
 # ---------------------------------------------------------------------------
 
-import base64 as _b64
-
 _PNG_1PX = _b64.b64encode(
     bytes.fromhex(
         "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4"
@@ -1066,7 +1065,7 @@ async def test_execute_embedded_text_resource() -> None:
 @pytest.mark.asyncio
 async def test_execute_embedded_blob_image_returns_image_block() -> None:
     async def call_tool(_name: str, arguments: dict) -> object:
-        res = _FakeBlobResourceContents(_PNG_1PX, uri="file:///pic.png", mimeType="image/png")
+        res = _FakeBlobResourceContents(_PNG_1PX, uri="file:///pic.png", mime_type="image/png")
         return SimpleNamespace(content=[_FakeEmbeddedResource(res)], isError=False)
 
     wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
@@ -1079,7 +1078,7 @@ async def test_execute_embedded_blob_image_returns_image_block() -> None:
 async def test_execute_embedded_blob_non_image_placeholder() -> None:
     async def call_tool(_name: str, arguments: dict) -> object:
         blob = _b64.b64encode(b"\x00\x01\x02").decode()
-        res = _FakeBlobResourceContents(blob, uri="file:///x.bin", mimeType="application/octet-stream")
+        res = _FakeBlobResourceContents(blob, uri="file:///x.bin", mime_type="application/octet-stream")
         return SimpleNamespace(content=[_FakeEmbeddedResource(res)], isError=False)
 
     wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
