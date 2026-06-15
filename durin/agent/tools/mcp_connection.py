@@ -338,6 +338,14 @@ class MCPServerConnection:
 
         cfg = self._cfg
         self._enforce_spawn_policy(cfg.command, cfg.args)
+        if getattr(cfg, "malware_check", True):
+            from durin.agent.tools.mcp_security import check_package_for_malware
+
+            finding = check_package_for_malware(cfg.command, cfg.args)
+            if finding:
+                raise PermissionError(
+                    f"MCP server '{self.name}': {finding}"
+                )
         command, args, env = _normalize_windows_stdio_command(
             cfg.command, cfg.args, cfg.env or None
         )

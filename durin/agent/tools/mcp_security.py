@@ -13,10 +13,17 @@ hard blocks (except the command scan under an explicit ``refuse`` policy).
 
 from __future__ import annotations
 
+import json
+import logging
 import os
 import re
+import urllib.error
+import urllib.request
+from typing import Optional, Tuple
 
 from durin.security.network import _URL_RE  # reuse the existing URL matcher
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Injection-scan patterns (structural, language-agnostic)
@@ -125,3 +132,167 @@ def scan_spawn_command(command: str, args: object) -> list[str]:
     if contains_internal_url(joined):
         codes.append("internal_url")
     return codes
+
+
+# ---------------------------------------------------------------------------
+# OSV malware preflight (supply-chain / typosquat guard)
+# ---------------------------------------------------------------------------
+
+_OSV_ENDPOINT = "https://api.osv.dev/v1/query"
+_OSV_TIMEOUT = 3  # seconds; tight — fail-open on slow infra
+
+# Package runners and their ecosystems.
+_PACKAGE_RUNNERS: dict[str, str] = {
+    "npx": "npm",
+    "npx.cmd": "npm",
+    "npm": "npm",
+    "pnpm": "npm",
+    "bunx": "npm",
+    "uvx": "PyPI",
+    "uvx.cmd": "PyPI",
+    "pipx": "PyPI",
+}
+
+# In-process cache: (package, ecosystem) → list[vuln_dict] | None
+# None means "not yet queried"; [] means "queried, no malware".
+_osv_cache: dict[tuple[str, str], list[dict]] = {}
+
+
+def clear_osv_cache() -> None:
+    """Clear the in-process OSV query cache (exposed for tests)."""
+    _osv_cache.clear()
+
+
+def check_package_for_malware(command: str, args: list) -> Optional[str]:
+    """Check if an MCP stdio package has known malware advisories.
+
+    Inspects *command* (e.g. ``npx``, ``uvx``) and *args* to extract the
+    package name and ecosystem, then queries the OSV API for MAL-* advisories.
+
+    Returns an error string if malware is found, or ``None`` if clean /
+    unrecognised / fail-open. Never raises.
+    """
+    base = os.path.basename((command or "").strip()).lower()
+    ecosystem = _PACKAGE_RUNNERS.get(base)
+    if not ecosystem:
+        return None
+
+    package, version = _extract_package(args, ecosystem, base)
+    if not package:
+        return None
+
+    cache_key = (package, ecosystem)
+    if cache_key in _osv_cache:
+        vulns = _osv_cache[cache_key]
+    else:
+        try:
+            vulns = _query_osv(package, ecosystem, version)
+        except Exception as exc:  # noqa: BLE001 — fail-open
+            logger.debug(
+                "OSV malware check failed for %s/%s (allowing): %s",
+                ecosystem, package, exc,
+            )
+            return None
+        _osv_cache[cache_key] = vulns
+
+    # Guard: only MAL-* ids constitute malware (defense-in-depth if _query_osv is replaced)
+    mal_vulns = [v for v in vulns if v.get("id", "").startswith("MAL-")]
+    if not mal_vulns:
+        return None
+
+    ids = ", ".join(v["id"] for v in mal_vulns[:3])
+    return (
+        f"MCP server refused: package '{package}' ({ecosystem}) has known "
+        f"malware advisories: {ids}. Remove it from your MCP config or use "
+        f"a trusted source."
+    )
+
+
+def _extract_package(
+    args: list, ecosystem: str, runner: str
+) -> Tuple[Optional[str], Optional[str]]:
+    """Extract (package_name, version_or_None) from runner args.
+
+    Skips leading flags (-y, --yes, etc.).  For ``npm exec`` the first
+    positional is the sub-command ("exec") so we drop it first.
+    """
+    if not args:
+        return None, None
+
+    items = list(args)
+
+    # ``npm exec -y pkg`` — drop the "exec" sub-command
+    if runner == "npm" and items and not items[0].startswith("-"):
+        items = items[1:]
+
+    token: Optional[str] = None
+    take_next = False
+    for arg in items:
+        if not isinstance(arg, str):
+            continue
+        if take_next:
+            token = arg
+            break
+        if arg in ("--package", "-p"):
+            take_next = True
+            continue
+        if arg.startswith("--package="):
+            token = arg[len("--package="):]
+            break
+        if arg.startswith("-"):
+            continue
+        token = arg
+        break
+
+    if not token:
+        return None, None
+
+    if ecosystem == "npm":
+        return _parse_npm_package(token)
+    return _parse_pypi_package(token)
+
+
+def _parse_npm_package(token: str) -> Tuple[Optional[str], Optional[str]]:
+    """Parse @scope/name@version or name@version."""
+    if token.startswith("@"):
+        m = re.match(r"^(@[^/]+/[^@]+)(?:@(.+))?$", token)
+        if m:
+            return m.group(1), m.group(2)
+        return token, None
+    if "@" in token:
+        name, _, ver = token.rpartition("@")
+        return name, (ver if ver != "latest" else None)
+    return token, None
+
+
+def _parse_pypi_package(token: str) -> Tuple[Optional[str], Optional[str]]:
+    """Parse name[extras]==version."""
+    m = re.match(r"^([A-Za-z0-9._-]+)(?:\[[^\]]*\])?(?:==(.+))?$", token)
+    if m:
+        return m.group(1), m.group(2)
+    return token, None
+
+
+def _query_osv(
+    package: str, ecosystem: str, version: Optional[str] = None
+) -> list[dict]:
+    """POST to OSV API and return only MAL-* advisories. Raises on any error."""
+    payload: dict = {"package": {"name": package, "ecosystem": ecosystem}}
+    if version:
+        payload["version"] = version
+
+    data = json.dumps(payload).encode()
+    req = urllib.request.Request(
+        _OSV_ENDPOINT,
+        data=data,
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "durin-osv-preflight/1.0",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=_OSV_TIMEOUT) as resp:
+        result = json.loads(resp.read())
+
+    vulns = result.get("vulns", [])
+    return [v for v in vulns if v.get("id", "").startswith("MAL-")]
