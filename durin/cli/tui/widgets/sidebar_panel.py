@@ -145,7 +145,7 @@ class SidebarPanel(Static):
         todos = self._gather_todos(self._session_key)
         files = self._gather_files()
         mcp = self._gather_mcp()
-        self.update(self._render(todos, files, mcp))
+        self.update(self._format_content(todos, files, mcp))
 
     # ---- data gathering ----------------------------------------------------
 
@@ -205,7 +205,7 @@ class SidebarPanel(Static):
 
     # ---- rendering ---------------------------------------------------------
 
-    def _render(
+    def _format_content(
         self,
         todos: list[dict[str, str]],
         files: list[tuple[str, str]],
