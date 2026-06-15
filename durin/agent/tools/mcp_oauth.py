@@ -180,13 +180,11 @@ def _seed_static_client(storage: SecretsTokenStorage, oc: Any, port: int) -> Non
     result isn't clobbered. Runs the async write synchronously (called from
     __init__ outside of any running event loop).
     """
-    from mcp.shared.auth import OAuthClientInformationFull as _OCIF
-
     async def _maybe() -> None:
         if await storage.get_client_info() is not None:
             return
         await storage.set_client_info(
-            _OCIF(
+            OAuthClientInformationFull(
                 client_id=oc.client_id,
                 client_secret=oc.client_secret,
                 redirect_uris=[_redirect_uri(port)],
