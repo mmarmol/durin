@@ -72,3 +72,37 @@ def test_audit_degrades_silently_on_judge_error(tmp_path):
         raise RuntimeError("no api key")
     rep = audit_skill(_mk(tmp_path), judge_enabled=True, judge_model="m", llm_invoke=_boom)
     assert rep.verdict == "safe"   # a clean skill is never blocked by an unavailable judge
+
+
+def test_parse_tools_from_judge_response(tmp_path):
+    from durin.security.skill_judge import _parse_outcome
+
+    raw = (
+        "===SUMMARY===\nClean skill.\n===VERDICT===\nsafe\n"
+        "===FINDINGS===\nnone\n"
+        "===TOOLS===\ngh\nffmpeg\n===END===\n"
+    )
+    outcome = _parse_outcome(raw, "caution")
+    assert outcome.tools == ["gh", "ffmpeg"]
+
+
+def test_parse_tools_none(tmp_path):
+    from durin.security.skill_judge import _parse_outcome
+
+    raw = (
+        "===SUMMARY===\nClean.\n===VERDICT===\nsafe\n"
+        "===FINDINGS===\nnone\n===TOOLS===\nnone\n===END===\n"
+    )
+    outcome = _parse_outcome(raw, "caution")
+    assert outcome.tools == []
+
+
+def test_parse_tools_missing_marker_returns_empty(tmp_path):
+    from durin.security.skill_judge import _parse_outcome
+
+    raw = (
+        "===SUMMARY===\nClean.\n===VERDICT===\nsafe\n"
+        "===FINDINGS===\nnone\n===END===\n"
+    )
+    outcome = _parse_outcome(raw, "caution")
+    assert outcome.tools == []

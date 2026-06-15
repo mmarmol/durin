@@ -24,6 +24,7 @@ class Finding:
 @dataclass
 class ScanReport:
     findings: list[Finding] = field(default_factory=list)
+    tools: list = field(default_factory=list)
 
     @property
     def verdict(self) -> str:
