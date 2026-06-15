@@ -1,6 +1,8 @@
 """MCP client: connects to MCP servers and wraps their tools as native durin tools."""
 
 import asyncio
+import base64
+import json
 import os
 import re
 import shutil
@@ -13,6 +15,7 @@ from loguru import logger
 
 from durin.agent.tools.base import Tool
 from durin.agent.tools.registry import ToolRegistry
+from durin.utils.helpers import build_image_content_blocks
 
 # Transient connection errors that warrant a single retry.
 # These typically happen when an MCP server restarts or a network
@@ -166,6 +169,68 @@ def _normalize_schema_for_openai(schema: Any) -> dict[str, Any]:
     return normalized
 
 
+def _b64_byte_len(data: Any) -> int:
+    """Decoded byte length of a base64 string, for size placeholders."""
+    try:
+        return len(base64.b64decode(data))
+    except Exception:
+        return 0
+
+
+def _image_block_or_none(data: Any, mime: Any, label: str) -> list[dict[str, Any]] | None:
+    """Native image content blocks, or None when data/mime are missing/invalid.
+
+    Guard for anthropics/issue#90710: emitting an image block with undefined
+    data or media-type makes Anthropic 400 and poisons the whole message history
+    on every replay. Never emit a half-built image block.
+    """
+    if not data or not isinstance(mime, str) or not mime.startswith("image/"):
+        return None
+    try:
+        raw = base64.b64decode(data)
+    except Exception:
+        return None
+    if not raw:
+        return None
+    return build_image_content_blocks(raw, mime, "", label)
+
+
+def _safe_json(value: Any) -> str:
+    """Faithful JSON of an unknown block (forward-compat), never str(block) garbage."""
+    dump = getattr(value, "model_dump", None)
+    try:
+        obj = dump(mode="json") if callable(dump) else value
+        return json.dumps(obj, ensure_ascii=False, default=str)
+    except Exception:
+        return str(value)
+
+
+def _content_block_to_parts(block: Any, types: Any) -> list[Any]:
+    """Map one MCP ContentBlock to durin result parts (text str or image dict)."""
+    if isinstance(block, types.TextContent):
+        return [block.text]
+    if isinstance(block, types.ImageContent):
+        img = _image_block_or_none(block.data, block.mimeType, "(MCP image)")
+        return img if img is not None else ["[MCP image: missing or invalid data]"]
+    return [_safe_json(block)]
+
+
+def _parts_to_result(parts: list[Any]) -> str | list[dict[str, Any]]:
+    """Join text parts to a string; if any image dict is present, return blocks."""
+    if any(isinstance(p, dict) for p in parts):
+        return [p if isinstance(p, dict) else {"type": "text", "text": str(p)} for p in parts]
+    text = "\n".join(str(p) for p in parts)
+    return text or "(no output)"
+
+
+def _render_tool_result(result: Any, types: Any) -> str | list[dict[str, Any]]:
+    """Render a CallToolResult into a faithful string or list of content blocks."""
+    parts: list[Any] = []
+    for block in result.content:
+        parts.extend(_content_block_to_parts(block, types))
+    return _parts_to_result(parts)
+
+
 class MCPToolWrapper(Tool):
     """Wraps a single MCP server tool as a durin Tool."""
 
@@ -239,14 +304,7 @@ class MCPToolWrapper(Tool):
                 )
                 return f"(MCP tool call failed: {type(exc).__name__})"
             else:
-                # Success — extract result
-                parts = []
-                for block in result.content:
-                    if isinstance(block, types.TextContent):
-                        parts.append(block.text)
-                    else:
-                        parts.append(str(block))
-                return "\n".join(parts) or "(no output)"
+                return _render_tool_result(result, types)
 
         return "(MCP tool call failed)"  # Unreachable, but satisfies type checkers
 

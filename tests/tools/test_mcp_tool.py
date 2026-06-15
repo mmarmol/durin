@@ -35,6 +35,12 @@ class _FakeBlobResourceContents:
         self.blob = blob
 
 
+class _FakeImageContent:
+    def __init__(self, data: str, mimeType: str | None) -> None:
+        self.data = data
+        self.mimeType = mimeType
+
+
 @pytest.fixture
 def fake_mcp_runtime() -> dict[str, object | None]:
     return {"session": None}
@@ -49,6 +55,7 @@ def _fake_mcp_module(
         TextContent=_FakeTextContent,
         TextResourceContents=_FakeTextResourceContents,
         BlobResourceContents=_FakeBlobResourceContents,
+        ImageContent=_FakeImageContent,
     )
 
     class _FakeStdioServerParameters:
@@ -910,3 +917,74 @@ async def test_connect_mcp_servers_enabled_tools_matches_sanitized_name(
         await stack.aclose()
 
     assert registry.tool_names == ["mcp_test_My_Tool"]
+
+
+# ---------------------------------------------------------------------------
+# Result fidelity: ImageContent + guard #90710
+# ---------------------------------------------------------------------------
+
+import base64 as _b64
+
+_PNG_1PX = _b64.b64encode(
+    bytes.fromhex(
+        "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4"
+        "890000000a49444154789c6360000002000100ffff03000006000557bfabd400"
+        "00000049454e44ae426082"
+    )
+).decode()
+
+
+@pytest.mark.asyncio
+async def test_execute_image_content_returns_image_block() -> None:
+    async def call_tool(_name: str, arguments: dict) -> object:
+        return SimpleNamespace(
+            content=[_FakeImageContent(_PNG_1PX, "image/png")], isError=False
+        )
+
+    wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
+    result = await wrapper.execute()
+
+    assert isinstance(result, list)
+    image_blocks = [b for b in result if b["type"] == "image_url"]
+    assert len(image_blocks) == 1
+    assert image_blocks[0]["image_url"]["url"].startswith("data:image/png;base64,")
+
+
+@pytest.mark.asyncio
+async def test_execute_image_content_missing_data_falls_back_to_text() -> None:
+    async def call_tool(_name: str, arguments: dict) -> object:
+        return SimpleNamespace(
+            content=[_FakeImageContent("", "image/png")], isError=False
+        )
+
+    wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
+    result = await wrapper.execute()
+
+    assert isinstance(result, str)
+    assert "MCP image" in result
+
+
+@pytest.mark.asyncio
+async def test_execute_image_content_non_image_mime_falls_back_to_text() -> None:
+    async def call_tool(_name: str, arguments: dict) -> object:
+        return SimpleNamespace(
+            content=[_FakeImageContent(_PNG_1PX, "application/octet-stream")],
+            isError=False,
+        )
+
+    wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
+    result = await wrapper.execute()
+
+    assert isinstance(result, str)
+    assert "MCP image" in result
+
+
+@pytest.mark.asyncio
+async def test_execute_text_only_still_returns_string() -> None:
+    async def call_tool(_name: str, arguments: dict) -> object:
+        return SimpleNamespace(content=[_FakeTextContent("hello"), 42], isError=False)
+
+    wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
+    result = await wrapper.execute()
+
+    assert result == "hello\n42"
