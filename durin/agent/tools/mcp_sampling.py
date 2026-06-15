@@ -214,7 +214,9 @@ class SamplingRunner:
         model = requested or self.default_model
 
         if gov.allowed_models:
-            if model not in gov.allowed_models:
+            # The operator's own default_model is always permitted; allowed_models
+            # restricts SERVER-requested overrides, not the operator's own default.
+            if model != self.default_model and model not in gov.allowed_models:
                 return None, types.ErrorData(
                     code=types.INVALID_REQUEST,
                     message=f"sampling model '{model}' is not in the allowed list",
