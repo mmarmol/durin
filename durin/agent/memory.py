@@ -511,6 +511,9 @@ class Consolidator:
         max_completion_tokens: int = 4096,
         consolidation_ratio: float = 0.5,
         preemptive_compact_ratio: float = 0.5,
+        decision_log_enabled: bool = True,
+        decision_log_max_entries: int = 10,
+        decision_log_max_chars: int = 1500,
     ):
         self.store = store
         self.provider = provider
@@ -534,6 +537,11 @@ class Consolidator:
         # in ``ModelPresetConfig.preemptive_compact_ratio`` for per-preset
         # overrides; otherwise inherits from ``AgentDefaults``.
         self.preemptive_compact_ratio = preemptive_compact_ratio
+        # Concern B (task-state anchor): caps + toggle for the auto-extracted
+        # decision log written at compaction. See durin/session/decision_log.py.
+        self.decision_log_enabled = decision_log_enabled
+        self.decision_log_max_entries = decision_log_max_entries
+        self.decision_log_max_chars = decision_log_max_chars
         self._build_messages = build_messages
         self._get_tool_definitions = get_tool_definitions
         self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
