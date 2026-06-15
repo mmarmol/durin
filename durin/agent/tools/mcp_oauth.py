@@ -179,6 +179,10 @@ async def _headless_callback() -> tuple[str, str | None]:
     raise NeedsInteractiveAuthError("interactive OAuth callback not available headless")
 
 
+# Strong refs to fire-and-forget seed tasks so CPython doesn't GC them mid-run.
+_PENDING_SEED_TASKS: set[asyncio.Task] = set()
+
+
 def _seed_static_client(storage: SecretsTokenStorage, oc: Any, port: int) -> None:
     """Persist a static client registration so the SDK skips DCR.
 
@@ -202,8 +206,11 @@ def _seed_static_client(storage: SecretsTokenStorage, oc: Any, port: int) -> Non
     except RuntimeError:
         asyncio.run(_maybe())
         return
-    # Inside a running loop: schedule as a fire-and-forget task.
-    loop.create_task(_maybe())
+    # Inside a running loop: schedule a task, keeping a strong reference so it
+    # isn't garbage-collected before it runs (asyncio.create_task caveat).
+    task = loop.create_task(_maybe())
+    _PENDING_SEED_TASKS.add(task)
+    task.add_done_callback(_PENDING_SEED_TASKS.discard)
 
 
 def build_oauth_provider(
