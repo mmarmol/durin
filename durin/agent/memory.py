@@ -896,6 +896,50 @@ class Consolidator:
             self.store.raw_archive(messages)
             return None, empty_tags
 
+    async def extract_decisions(self, messages: list[dict]) -> list[str]:
+        """Extract key task decisions/findings from a span via LLM (best-effort).
+
+        Concern B (task-state anchor): runs once per compaction over the span
+        just archived, so the model keeps *why* it did things even after the
+        raw messages leave the window. Returns a flat list of one-line
+        decisions, or [] on empty input, "(none)", or any LLM failure
+        (degraded output must never crash compaction).
+        """
+        if not messages:
+            return []
+        try:
+            formatted = MemoryStore._format_messages(messages)
+            formatted = self._truncate_to_token_budget(formatted)
+            response = await self.provider.chat_with_retry(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": render_template(
+                            "agent/consolidator_decisions.md",
+                            strip=True,
+                        ),
+                    },
+                    {"role": "user", "content": formatted},
+                ],
+                tools=None,
+                tool_choice=None,
+            )
+            if response.finish_reason == "error":
+                return []
+            raw = (response.content or "").strip()
+            if not raw or raw.lower() == "(none)":
+                return []
+            out: list[str] = []
+            for line in raw.splitlines():
+                cleaned = line.strip().lstrip("-*•").strip()
+                if cleaned and cleaned.lower() != "(none)":
+                    out.append(cleaned[:400])
+            return out
+        except Exception:
+            logger.warning("Decision extraction LLM call failed; skipping")
+            return []
+
     async def maybe_consolidate_by_tokens(
         self,
         session: Session,
