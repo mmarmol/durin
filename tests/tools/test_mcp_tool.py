@@ -1233,3 +1233,23 @@ def test_schema_rewrites_definitions_to_defs() -> None:
     assert "definitions" not in params
     assert params["$defs"] == {"Foo": {"type": "string"}}
     assert params["properties"]["x"]["$ref"] == "#/$defs/Foo"
+
+
+def test_schema_rewrites_nested_defs_ref_in_anyof() -> None:
+    tool_def = SimpleNamespace(
+        name="demo",
+        description="demo",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "x": {"anyOf": [{"$ref": "#/definitions/Foo"}, {"$ref": "#/definitions/Bar"}]},
+            },
+            "definitions": {"Foo": {"type": "string"}, "Bar": {"type": "integer"}},
+        },
+    )
+    wrapper = MCPToolWrapper(SimpleNamespace(call_tool=None), "test", tool_def)
+    params = wrapper.parameters
+    assert "definitions" not in params
+    assert set(params["$defs"]) == {"Foo", "Bar"}
+    refs = [b["$ref"] for b in params["properties"]["x"]["anyOf"]]
+    assert refs == ["#/$defs/Foo", "#/$defs/Bar"]
