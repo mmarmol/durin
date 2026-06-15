@@ -35,6 +35,9 @@ def test_connect_mcp_installs_then_retries(monkeypatch):
     lp._mcp_connections = {}
     lp.tools = []
     lp.app_config = None
+    lp.provider = None
+    lp.model = None
+    lp.workspace = None
     asyncio.run(lp._connect_mcp())
     assert calls["ensure"] == 1
     assert calls["connect"] == 1
