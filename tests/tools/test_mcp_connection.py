@@ -171,3 +171,295 @@ async def test_tool_wrapper_reports_breaker_sentinel(live_mcp) -> None:
     out = await wrapper.execute(text="x")
     assert "not connected" in out
     await conn.aclose()
+
+
+# ---------------------------------------------------------------------------
+# Sub-phase 2b — Reconnect
+# ---------------------------------------------------------------------------
+
+
+async def test_reconnect_after_transport_death(live_mcp, monkeypatch) -> None:
+    import durin.agent.tools.mcp_connection as mc
+
+    factory, harness = live_mcp
+    conn, registry = factory(keepalive_interval=0.1)
+    monkeypatch.setattr(mc, "_INITIAL_BACKOFF", 0.05, raising=False)
+    monkeypatch.setattr(mc, "_MAX_BACKOFF", 0.2, raising=False)
+    await conn.start()
+    assert conn.session is not None
+
+    fresh = _build_server()
+    async with _InProcessHarness(fresh) as fresh_harness:
+
+        async def _open(_self):
+            return fresh_harness.client_streams[0], fresh_harness.client_streams[1]
+
+        conn._open_transport_streams = _open.__get__(conn, mc.MCPServerConnection)
+        harness.kill_server()
+        # Wait for the connection to come back on the fresh server.
+        for _ in range(100):
+            await asyncio.sleep(0.05)
+            if conn.session is not None and conn.breaker_state().name == "CLOSED":
+                try:
+                    r = await conn.call_tool("echo", {"text": "rev"}, timeout=2.0)
+                    if getattr(r, "content", None):
+                        break
+                except Exception:
+                    continue
+        assert conn.session is not None
+        r = await conn.call_tool("echo", {"text": "rev"}, timeout=2.0)
+        assert r.content[0].text == "echo:rev"
+    await conn.aclose()
+
+
+async def test_initial_connect_gives_up_after_three(monkeypatch) -> None:
+    import durin.agent.tools.mcp_connection as mc
+
+    monkeypatch.setattr(mc, "_INITIAL_BACKOFF", 0.01, raising=False)
+    monkeypatch.setattr(mc, "_MAX_BACKOFF", 0.02, raising=False)
+    cfg = MCPServerConfig(command="x")
+    registry = ToolRegistry()
+    conn = mc.MCPServerConnection("dead", cfg, registry)
+
+    attempts = {"n": 0}
+
+    async def _always_fail(_self):
+        attempts["n"] += 1
+        raise ConnectionRefusedError("nope")
+
+    conn._open_transport_streams = _always_fail.__get__(conn, mc.MCPServerConnection)
+
+    ok = await conn.start()
+    assert ok is False
+    assert attempts["n"] == mc._MAX_INITIAL_CONNECT_RETRIES + 1  # first try + retries
+
+
+async def test_initial_auth_failure_does_not_retry(monkeypatch) -> None:
+    import httpx
+
+    import durin.agent.tools.mcp_connection as mc
+
+    cfg = MCPServerConfig(command="x")
+    conn = mc.MCPServerConnection("authsrv", cfg, ToolRegistry())
+
+    attempts = {"n": 0}
+
+    async def _auth_fail(_self):
+        attempts["n"] += 1
+        resp = httpx.Response(401, request=httpx.Request("GET", "http://x"))
+        raise httpx.HTTPStatusError("401", request=resp.request, response=resp)
+
+    conn._open_transport_streams = _auth_fail.__get__(conn, mc.MCPServerConnection)
+
+    ok = await conn.start()
+    assert ok is False
+    assert attempts["n"] == 1  # fail-fast, no backoff retries
+
+
+async def test_call_recovers_after_session_expiry(live_mcp) -> None:
+    import durin.agent.tools.mcp_connection as mc
+
+    factory, harness = live_mcp
+    conn, _registry = factory(keepalive_interval=10.0)
+    await conn.start()
+
+    real_session = conn.session
+    state = {"raised": False}
+    orig_call = real_session.call_tool
+
+    async def flaky_call(name, **kw):
+        if not state["raised"]:
+            state["raised"] = True
+            raise RuntimeError("Invalid or expired session")
+        return await orig_call(name, **kw)
+
+    real_session.call_tool = flaky_call
+
+    fresh = _build_server()
+    async with _InProcessHarness(fresh) as fh:
+
+        async def _open(_self):
+            return fh.client_streams[0], fh.client_streams[1]
+
+        conn._open_transport_streams = _open.__get__(conn, mc.MCPServerConnection)
+
+        out = await conn.call_tool("echo", {"text": "recovered"}, timeout=3.0)
+        if isinstance(out, mc._ConnDown):
+            assert "restarted" in out.message
+        else:
+            assert out.content[0].text == "echo:recovered"
+    await conn.aclose()
+
+
+async def test_cancel_propagates_and_aclose_is_clean(live_mcp) -> None:
+    factory, _harness = live_mcp
+    conn, _registry = factory(keepalive_interval=10.0)
+    await conn.start()
+    assert conn.session is not None
+    conn._task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await conn._task
+    await conn.aclose()
+    assert conn.session is None
+
+
+async def test_call_tool_native_timeout_returns_sentinel(live_mcp) -> None:
+    import durin.agent.tools.mcp_connection as mc
+
+    factory, _harness = live_mcp
+    conn, _registry = factory()
+    await conn.start()
+    out = await conn.call_tool("echo", {"text": "x"}, timeout=0.0005)
+    assert isinstance(out, mc._ConnDown)
+    assert "failed" in out.message or "timed out" in out.message.lower()
+    await conn.aclose()
+
+
+# ---------------------------------------------------------------------------
+# Sub-phase 2c — Keepalive + circuit breaker
+# ---------------------------------------------------------------------------
+
+
+async def test_keepalive_tool_server_uses_list_tools(live_mcp) -> None:
+    """Real FastMCP tool server: _advertises_tools() is True, heartbeat lists."""
+    factory, _harness = live_mcp
+    conn, _registry = factory(keepalive_interval=0.1)
+    await conn.start()
+    assert conn._advertises_tools() is True
+    list_calls = {"n": 0}
+    orig = conn.session.list_tools
+
+    async def counted_list(*a, **k):
+        list_calls["n"] += 1
+        return await orig(*a, **k)
+
+    conn.session.list_tools = counted_list
+    await asyncio.sleep(0.35)  # a couple keepalive cycles
+    assert list_calls["n"] >= 1
+    assert conn.session is not None  # no spurious reconnect
+    await conn.aclose()
+
+
+async def test_keepalive_prompt_only_uses_ping(live_mcp) -> None:
+    """Capability-gated branch: when the server omits the tools capability,
+    the heartbeat uses send_ping instead of list_tools."""
+    factory, _harness = live_mcp
+    conn, _registry = factory(keepalive_interval=0.1)
+    await conn.start()
+    # Simulate a server that does NOT advertise the tools capability.
+    conn.initialize_result.capabilities.tools = None
+    assert conn._advertises_tools() is False
+    ping_calls = {"n": 0}
+    orig_ping = conn.session.send_ping
+
+    async def counted_ping():
+        ping_calls["n"] += 1
+        return await orig_ping()
+
+    conn.session.send_ping = counted_ping
+
+    async def boom(*a, **k):
+        raise AssertionError("keepalive used list_tools for a prompt-only server")
+
+    conn.session.list_tools = boom
+    await asyncio.sleep(0.35)
+    assert ping_calls["n"] >= 1
+    assert conn.session is not None  # no spurious reconnect (-32601 avoided)
+    await conn.aclose()
+
+
+async def test_keepalive_detects_dead_idle_session(live_mcp) -> None:
+    factory, harness = live_mcp
+    conn, _registry = factory(keepalive_interval=0.1)
+    await conn.start()
+    assert conn.session is not None
+    # No fresh streams given: after kill, reconnect attempts fail, so the
+    # connection's session goes (and stays) None — proving keepalive noticed.
+    harness.kill_server()
+    for _ in range(60):
+        await asyncio.sleep(0.05)
+        if conn.session is None:
+            break
+    assert conn.session is None
+    await conn.aclose()
+
+
+async def test_breaker_opens_after_threshold(live_mcp, monkeypatch) -> None:
+    import durin.agent.tools.mcp_connection as mc
+
+    factory, _harness = live_mcp
+    conn, _registry = factory(keepalive_interval=10.0)
+    await conn.start()
+
+    async def boom(_self, *a, **k):
+        raise ValueError("boom")
+
+    monkeypatch.setattr(mc.MCPServerConnection, "_raw_call_tool", boom)
+
+    for _ in range(mc._CIRCUIT_BREAKER_THRESHOLD):
+        out = await conn.call_tool("echo", {"text": "x"}, timeout=2.0)
+        assert isinstance(out, mc._ConnDown)
+    assert conn.breaker_state() == mc.BreakerState.OPEN
+
+    # Next call short-circuits WITHOUT hitting the session.
+    out = await conn.call_tool("echo", {"text": "x"}, timeout=2.0)
+    assert isinstance(out, mc._ConnDown)
+    assert "Do NOT retry" in out.message and "Auto-retry" in out.message
+    await conn.aclose()
+
+
+async def test_breaker_half_open_then_close_on_success(live_mcp, monkeypatch) -> None:
+    import durin.agent.tools.mcp_connection as mc
+
+    monkeypatch.setattr(mc, "_CIRCUIT_BREAKER_COOLDOWN_SEC", 0.1, raising=False)
+    factory, _harness = live_mcp
+    conn, _registry = factory(keepalive_interval=10.0)
+    await conn.start()
+
+    state = {"fail": True}
+    orig = conn._raw_call_tool
+
+    async def maybe(_self, session, name, args, timeout):
+        if state["fail"]:
+            raise ValueError("boom")
+        return await orig(session, name, args, timeout)
+
+    monkeypatch.setattr(mc.MCPServerConnection, "_raw_call_tool", maybe)
+
+    for _ in range(mc._CIRCUIT_BREAKER_THRESHOLD):
+        await conn.call_tool("echo", {"text": "x"}, timeout=2.0)
+    assert conn.breaker_state() == mc.BreakerState.OPEN
+    await asyncio.sleep(0.15)  # cooldown elapses -> half-open
+    assert conn.breaker_state() == mc.BreakerState.HALF_OPEN
+    state["fail"] = False  # probe succeeds
+    out = await conn.call_tool("echo", {"text": "ok"}, timeout=2.0)
+    assert out.content[0].text == "echo:ok"
+    assert conn.breaker_state() == mc.BreakerState.CLOSED
+    await conn.aclose()
+
+
+async def test_breaker_resets_on_reconnect(live_mcp, monkeypatch) -> None:
+    import durin.agent.tools.mcp_connection as mc
+
+    factory, _harness = live_mcp
+    conn, _registry = factory(keepalive_interval=10.0)
+    await conn.start()
+    # Open the breaker manually.
+    conn._error_count = mc._CIRCUIT_BREAKER_THRESHOLD
+    conn._breaker_opened_at = asyncio.get_event_loop().time()
+    assert conn.breaker_state() == mc.BreakerState.OPEN
+    # A reconnect (fresh _serve_once) resets it.
+    fresh = _build_server()
+    async with _InProcessHarness(fresh) as fh:
+
+        async def _open(_self):
+            return fh.client_streams[0], fh.client_streams[1]
+
+        conn._open_transport_streams = _open.__get__(conn, mc.MCPServerConnection)
+        conn._request_reconnect()
+        for _ in range(60):
+            await asyncio.sleep(0.05)
+            if conn.breaker_state() == mc.BreakerState.CLOSED and conn.session is not None:
+                break
+        assert conn.breaker_state() == mc.BreakerState.CLOSED
+    await conn.aclose()
