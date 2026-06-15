@@ -193,6 +193,8 @@ class InputArea(Input):
         ("alt+enter", "insert_newline", "Newline"),
         ("ctrl+j", "insert_newline", "Newline"),  # most terminals send ^J on Ctrl+Enter
         ("tab", "accept_suggestion", "Complete"),
+        ("up", "history_prev", "History ↑"),
+        ("down", "history_next", "History ↓"),
     ]
 
     DEFAULT_CSS = """
@@ -235,6 +237,40 @@ class InputArea(Input):
             placeholder=placeholder,
             suggester=suggester or default_suggester,
         )
+        self._history: list[str] = []
+        self._history_index: int = -1  # -1 = not browsing
+
+    def load_history(self, prompts: list[str]) -> None:
+        """Load prompt history for Up/Down recall."""
+        self._history = prompts
+        self._history_index = -1
+
+    def action_history_prev(self) -> None:
+        """Up arrow: recall previous prompt from history."""
+        if not self._history:
+            return
+        if self._history_index == -1:
+            # Start browsing from the last entry
+            self._history_index = len(self._history) - 1
+        elif self._history_index > 0:
+            self._history_index -= 1
+        else:
+            return
+        self.value = self._history[self._history_index]
+        self.cursor_position = len(self.value)
+
+    def action_history_next(self) -> None:
+        """Down arrow: recall next prompt (or clear if at end)."""
+        if self._history_index == -1:
+            return
+        if self._history_index < len(self._history) - 1:
+            self._history_index += 1
+            self.value = self._history[self._history_index]
+        else:
+            # Reached the end — clear and exit browsing mode
+            self._history_index = -1
+            self.value = ""
+        self.cursor_position = len(self.value)
 
     def action_insert_newline(self) -> None:
         """Inject ``\\n`` at the cursor; preserved in the submitted value."""
