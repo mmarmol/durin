@@ -57,7 +57,6 @@ class DurinApp(App[None]):
         ("ctrl+p", "open_command_palette", "Commands"),
         ("ctrl+shift+l", "open_variant_picker", "Effort"),
         ("ctrl+b", "toggle_sidebar", "Sidebar"),
-        ("ctrl+g", "open_diff_viewer", "Diff"),
     ]
 
     def __init__(
@@ -644,23 +643,6 @@ class DurinApp(App[None]):
         sidebar.set_session_key(f"{self._cli_channel}:{self._cli_chat_id}")
         sidebar.toggle()
 
-    def action_open_diff_viewer(self) -> None:
-        """Ctrl+G: open the full-page diff viewer."""
-        self._open_diff_viewer()
-
-    @work
-    async def _open_diff_viewer(self) -> None:
-        from pathlib import Path
-
-        from durin.cli.tui.screens.diff_viewer import DiffViewerScreen
-
-        workspace: Path | None = None
-        if self._agent_loop is not None:
-            workspace = getattr(self._agent_loop, "workspace", None)
-        if workspace is None:
-            workspace = Path.cwd()
-        self.app.push_screen(DiffViewerScreen(workspace))
-
     def action_copy_last_assistant(self) -> None:
         """Ctrl+Y: copy the last assistant message body to the clipboard.
 
@@ -785,8 +767,6 @@ class DurinApp(App[None]):
                 self.action_toggle_dark()
             elif action == "abort":
                 await self.action_abort()
-            elif action == "open_diff_viewer":
-                self._open_diff_viewer()
             elif action == "toggle_sidebar":
                 self.action_toggle_sidebar()
             elif action == "quit":

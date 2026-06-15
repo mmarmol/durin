@@ -915,14 +915,5 @@
   },
   "list": {
     "scrollToBottom": "Scroll to bottom"
-  },
-  "changes": {
-    "title": "Changes",
-    "sidebarTitle": "Changes",
-    "refresh": "Refresh",
-    "empty": "No uncommitted changes",
-    "selectFile": "Select a file to view diff",
-    "noDiff": "No diff available",
-    "error": "Failed to load changes"
   }
 }

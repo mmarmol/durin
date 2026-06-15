@@ -878,25 +878,6 @@ export async function getModelCapabilities(
   );
 }
 
-export interface ChangeFile {
-  marker: string;
-  path: string;
-}
-
-export async function getChanges(token: string, base: string = ""): Promise<{ files: ChangeFile[]; error?: string }> {
-  return request<{ files: ChangeFile[]; error?: string }>(`${base}/api/changes`, token);
-}
-
-export async function getDiff(token: string, file: string = "", base: string = ""): Promise<{ diff: string; error?: string }> {
-  const params = new URLSearchParams();
-  if (file) params.set("file", file);
-  const qs = params.toString();
-  return request<{ diff: string; error?: string }>(
-    `${base}/api/diff${qs ? `?${qs}` : ""}`,
-    token,
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Logs viewer (read-only): gateway + telemetry
 // ---------------------------------------------------------------------------
