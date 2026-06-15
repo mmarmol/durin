@@ -1150,3 +1150,31 @@ async def test_execute_no_structured_content_unchanged() -> None:
     wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
     result = await wrapper.execute()
     assert result == "plain"
+
+
+@pytest.mark.asyncio
+async def test_execute_image_content_bad_base64_falls_back_to_text() -> None:
+    async def call_tool(_name: str, arguments: dict) -> object:
+        # "a" is not a valid base64 length -> b64decode raises -> guarded
+        return SimpleNamespace(
+            content=[_FakeImageContent("a", "image/png")], isError=False
+        )
+
+    wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
+    result = await wrapper.execute()
+    assert isinstance(result, str)
+    assert "MCP image" in result
+
+
+@pytest.mark.asyncio
+async def test_execute_image_content_empty_decoded_falls_back_to_text() -> None:
+    async def call_tool(_name: str, arguments: dict) -> object:
+        # whitespace decodes to empty bytes -> guarded by `if not raw`
+        return SimpleNamespace(
+            content=[_FakeImageContent("   ", "image/png")], isError=False
+        )
+
+    wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
+    result = await wrapper.execute()
+    assert isinstance(result, str)
+    assert "MCP image" in result
