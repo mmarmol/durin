@@ -51,4 +51,4 @@ class WorkingIndicator(Static):
         self._render_frame()
 
     def _render_frame(self) -> None:
-        self.update(f"{self._FRAMES[self._frame]} {self._label}")
+        self.update(f"{self._FRAMES[self._frame]} {self._label}  ·  Esc to stop")

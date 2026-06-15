@@ -19,6 +19,7 @@ import {
   History,
   ImageIcon,
   Loader2,
+  Paperclip,
   Plus,
   RotateCw,
   Sparkles,
@@ -806,7 +807,7 @@ export function ThreadComposer({
                   : "h-7.5 w-7.5 border border-border/55 bg-card shadow-[0_2px_8px_rgba(15,23,42,0.05)] hover:bg-card",
               )}
             >
-              <Plus className={cn(isHero ? "h-5 w-5" : "h-4 w-4")} />
+              <Paperclip className={cn(isHero ? "h-5 w-5" : "h-4 w-4")} />
             </Button>
             {modelLabel ? (
               <span

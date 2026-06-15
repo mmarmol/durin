@@ -18,6 +18,7 @@ exercises Rich's full pipeline and matches what a live terminal sees.
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
 from rich.markdown import Markdown
@@ -31,6 +32,16 @@ __all__ = ["ChatView", "MessageBubble"]
 
 
 Role = Literal["user", "assistant", "tool", "system", "reasoning", "banner", "logo"]
+
+
+_ERROR_RE = re.compile(r"^\s*Error(\s*\(|:\s| calling )", re.MULTILINE)
+
+
+def looks_like_error(text: str) -> bool:
+    """Detect provider/API error patterns in assistant text."""
+    if not text:
+        return False
+    return bool(_ERROR_RE.search(text))
 
 
 class MessageBubble(Static):
@@ -82,6 +93,13 @@ class MessageBubble(Static):
     MessageBubble.logo {
         padding: 1 2 0 4;
         margin: 0 2;
+    }
+    MessageBubble.error {
+        background: $boost;
+        border: round $error 50%;
+        color: $error;
+        padding: 1 2;
+        margin: 1 2;
     }
     """
 
@@ -144,6 +162,10 @@ class MessageBubble(Static):
         if not delta:
             return
         self.body = (self.body or "") + delta
+
+    def mark_error(self) -> None:
+        """Apply error CSS styling (red border + error color)."""
+        self.add_class("error")
 
 
 class ChatView(VerticalScroll):

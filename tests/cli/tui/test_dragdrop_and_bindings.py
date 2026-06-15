@@ -12,6 +12,7 @@ from durin.bus.events import InboundMessage
 from durin.bus.queue import MessageBus
 from durin.cli.tui.app import DurinApp
 from durin.cli.tui.widgets import ChatView, InputArea, MessageBubble
+from durin.config.schema import ModelPresetConfig
 
 
 def _fake_agent_loop(bus: MessageBus, tmp_path) -> SimpleNamespace:
@@ -30,6 +31,10 @@ def _fake_agent_loop(bus: MessageBus, tmp_path) -> SimpleNamespace:
         model="m",
         model_preset="default",
         context_window_tokens=200_000,
+        model_presets={
+            "default": ModelPresetConfig(model="glm-5.2"),
+            "fast": ModelPresetConfig(model="glm-5-turbo"),
+        },
         sessions=SimpleNamespace(
             get_or_create=lambda key: SimpleNamespace(messages=[], metadata={})
         ),
@@ -140,7 +145,10 @@ async def test_ctrl_l_opens_model_picker(tmp_path) -> None:
 
     bus = MessageBus()
     loop = _fake_agent_loop(bus, tmp_path)
-    loop.model_presets = {"default": object(), "fast": object()}
+    loop.model_presets = {
+        "default": ModelPresetConfig(model="glm-5.2"),
+        "fast": ModelPresetConfig(model="glm-5-turbo"),
+    }
     app = DurinApp(agent_loop=loop)
     async with app.run_test() as pilot:
         await pilot.press("ctrl+l")
