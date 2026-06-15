@@ -491,3 +491,42 @@ async def test_list_changed_rediscovers_tools(live_mcp) -> None:
             break
     assert registry.get("mcp_harness_added") is not None
     await conn.aclose()
+
+
+async def test_refresh_generation_guard(live_mcp, monkeypatch) -> None:
+    import durin.agent.tools.mcp_connection as mc
+
+    factory, harness = live_mcp
+    conn, registry = factory(keepalive_interval=10.0)
+    await conn.start()
+    captured_session = conn.session
+
+    # Add a tool on the server side (this is what the slow refresh would pick up).
+    async def stale_tool(x: int) -> int:
+        return x
+
+    harness.server.add_tool(stale_tool, name="stale_tool")
+
+    # Make list_tools slow so we can bump the generation mid-refresh.
+    orig_list = captured_session.list_tools
+
+    async def slow_list(*a, **k):
+        await asyncio.sleep(0.2)
+        return await orig_list(*a, **k)
+
+    captured_session.list_tools = slow_list
+
+    # Snapshot the registry before the stale refresh would apply.
+    pre = set(registry._tools.keys())
+
+    # Start a refresh, then invalidate it by bumping the generation
+    # (simulating a reconnect that produced a newer catalog).
+    task = conn._schedule_refresh()
+    await asyncio.sleep(0.05)
+    conn._refresh_generation += 1  # newer generation wins
+    await asyncio.gather(task, return_exceptions=True)
+    # The stale refresh must NOT have mutated the registry
+    # (stale_tool must not appear).
+    assert "mcp_harness_stale_tool" not in registry._tools
+    assert set(registry._tools.keys()) == pre
+    await conn.aclose()
