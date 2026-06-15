@@ -34,32 +34,42 @@ siempre). No `fd`.
 **Estado**: pendiente, sin disparador — abrir sólo si list_dir recursivo se
 vuelve un cuello de botella real.
 
-### MCP client hardening (deferred phase)
+### MCP client: best-in-class (paridad-o-mejor vs hermes/opencode/openclaw)
 
-**Context**: 2026-06-10 investigation (durin wrapper audit + hermes-agent MCP
-layer + OSS survey) concluded: keep the official `mcp` SDK, harden our wrapper
-— no Python library provides mid-session stdio reconnection (python-sdk #1022
-closed as not-planned), so the supervision layer is our code either way.
-hermes-agent's MCP layer (MIT) is the reference implementation to adapt.
+**Contexto**: 2026-06-10 investigation concluyó: mantener el SDK oficial `mcp` +
+hardenear nuestro wrapper (ninguna lib Python da reconnection stdio mid-session;
+python-sdk #1022 not-planned). **2026-06-15**: el alcance se amplió de "hardening del
+cliente" a **superset best-in-class** — paridad-o-mejor que hermes-agent, opencode y
+openclaw en las 13 dimensiones (matriz en el doc maestro). Comparativa hecha contra los
+3 repos en `git_personal/` (reportes verificados a file:line).
 
-**Problem**: durin/agent/tools/mcp.py is example-grade: no crash recovery
-(tools go stale on a dead session), ImageContent/AudioContent lost via
-`str(block)`, `isError` ignored (errors look like success), single per-server
-timeout, no tools/list_changed, 1-shot retry with 1s fixed backoff.
+**Problema**: `durin/agent/tools/mcp.py` era example-grade: sesión directa (stale forever
+en crash), `str(block)` lossy (perdía Image/Audio/Embedded), `isError` ignorado, timeout
+per-server único, sin reconnect/keepalive/circuit-breaker/list_changed, sin OAuth, schema
+sólo nullable. (El SDK 1.27.1 además valida outputSchema y revienta `call_tool` ante un
+`$ref` roto.)
 
-**Plan (when picked up)**: (1) result fidelity: isError + ImageContent via the
-read_file image pipeline + structuredContent; (2) per-tool timeouts via the
-SDK's per-call `read_timeout_seconds`; (3) supervision/reconnect layer
-(keepalive ping, exp backoff, re-discovery, explicit "server restarted, state
-lost" surfaced to the model); (4) tools/list_changed; (5) broader transient
-detection by exception class. OAuth/sampling deferred until remote servers
-matter. Precondition for browser-via-playwright-MCP.
+**Plan**: descompuesto en 6 sub-proyectos (cada uno spec→plan→PRs), secuencia
+SP-1 → SP-2 → {SP-3,4,5 paralelo} → SP-6:
+- **SP-1** fidelidad de resultado + schema sanitization — **IMPLEMENTADO** en la branch
+  `worktree-mcp-sp1-fidelity-schema` (no mergeado aún): los 3 wrappers con fidelidad
+  completa (isError, Image+guard #90710, audio/embedded/resource_link/unknown→JSON,
+  structuredContent), schema (required-pruning, $defs), output-schema opt-out total.
+  15 commits, 71 tests unitarios, superficie MCP 110 verde.
+- **SP-2** supervisión/reconnect (pivote arquitectónico: `MCPServerConnection`,
+  task-per-server, keepalive, circuit breaker, list_changed, timeouts, transport fallback).
+- **SP-3** stdio hygiene (orphan-kill, stderr→log, env-scrub).
+- **SP-4** OAuth (PKCE + DCR + cold-load + 401 dedup; `durin mcp login`).
+- **SP-5** security (cred-redaction, injection-scan, SSRF).
+- **SP-6** server→cliente (sampling, roots, logging).
 
-**Notas de investigación** (máquina local, gitignored):
+**Doc maestro** (matriz de paridad + detalle de los 6 SP + hechos del SDK + notas de
+implementación de SP-1): `.workdocs/superpowers/specs/2026-06-15-mcp-best-in-class-design.md`.
+**Notas de investigación** (gitignored):
 `.workdocs/research/2026-06-10-mcp-client-investigation.md` y
 `.workdocs/research/2026-06-10-tool-gaps-deep-dive.md`.
 
-**Estado**: pendiente — investigación completa, implementación no iniciada.
+**Estado**: SP-1 implementado (2026-06-15, branch sin mergear); SP-2..6 pendientes.
 
 ### P3 — Comando para cambiar modelo es precario — autocompletion progresivo
 
