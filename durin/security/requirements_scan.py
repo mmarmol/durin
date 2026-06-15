@@ -8,7 +8,9 @@ only add items not already declared. See the spec for full design.
 from __future__ import annotations
 
 import logging
+import os
 import re
+import shutil
 from pathlib import Path
 
 from durin.agent.skills_frontmatter import split_frontmatter
@@ -268,3 +270,71 @@ def _step5_inferred_platforms(data: dict) -> list[str]:
             if plat and plat not in inferred:
                 inferred.append(plat)
     return inferred
+
+
+# --- Display-model resolver ---
+
+_PLATFORM_ALIASES = {"darwin": "macos", "win32": "windows"}
+_PLATFORM_INSTALL_KINDS = {"macos": ("brew", "cask"), "linux": ("apt",)}
+
+
+def _current_platform() -> str:
+    import sys
+    plat = sys.platform
+    return _PLATFORM_ALIASES.get(plat, plat)
+
+
+def resolve_display(manifest: dict, *, platform: str | None = None,
+                    catalog: dict | None = None) -> dict:
+    """Transform the internal manifest into the API display model.
+
+    - Strips all ``origin`` fields.
+    - Resolves ``available`` via live ``shutil.which`` / ``os.environ``.
+    - Computes ``installable`` + ``install_spec`` per bin using catalog.
+    - Computes ``platform_ok``.
+    """
+    catalog = catalog or {}
+    if platform is None:
+        platform = _current_platform()
+
+    plats = manifest.get("platforms", {}).get("value", [])
+    if not plats:
+        platform_ok = True
+    else:
+        platform_ok = platform in plats
+
+    valid_kinds = _PLATFORM_INSTALL_KINDS.get(platform, ())
+    bins_out = []
+    for b in manifest.get("bins", []):
+        name = b["name"]
+        available = shutil.which(name) is not None
+        entry: dict = {"name": name, "available": available}
+        cat_entry = catalog.get(name)
+        if cat_entry:
+            primary = cat_entry.get("primary", {})
+            if primary.get("kind") in valid_kinds:
+                entry["installable"] = True
+                entry["install_spec"] = f"{primary['kind']}: {primary['value']}"
+            else:
+                for alt in cat_entry.get("alternatives", []):
+                    if alt.get("kind") in valid_kinds:
+                        entry["installable"] = True
+                        entry["install_spec"] = f"{alt['kind']}: {alt['value']}"
+                        break
+                else:
+                    entry["installable"] = False
+        else:
+            entry["installable"] = False
+        bins_out.append(entry)
+
+    env_out = []
+    for e in manifest.get("env", []):
+        env_out.append({"name": e["name"], "available": bool(os.environ.get(e["name"]))})
+
+    return {
+        "platforms": plats,
+        "platform_ok": platform_ok,
+        "bins": bins_out,
+        "env": env_out,
+        "compatibility": manifest.get("compatibility", ""),
+    }

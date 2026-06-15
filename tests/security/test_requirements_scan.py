@@ -1,7 +1,7 @@
 # tests/security/test_requirements_scan.py
 from pathlib import Path
 
-from durin.security.requirements_scan import extract_requirements
+from durin.security.requirements_scan import extract_requirements, resolve_display
 
 
 def _write_skill(tmp_path: Path, name: str, frontmatter: str, body: str = "Hello.") -> Path:
@@ -191,3 +191,53 @@ metadata:
     req = extract_requirements(d)
     assert "linux" in req["platforms"]["value"]
     assert req.get("platform_conflict") is True
+
+
+def test_resolve_display_strips_origins(tmp_path):
+    manifest = {
+        "platforms": {"value": ["macos"], "inferred": False},
+        "bins": [
+            {"name": "gh", "origin": "declared", "available": None},
+            {"name": "ffmpeg", "origin": "heuristic:body", "available": None},
+        ],
+        "env": [{"name": "TOKEN", "origin": "declared", "available": None}],
+        "compatibility": "Needs brew.",
+        "installable": False,
+        "blocked_by_platform": False,
+        "platform_conflict": False,
+    }
+    display = resolve_display(manifest, platform="macos", catalog={"ffmpeg": {"primary": {"kind": "brew", "value": "ffmpeg"}}})
+    assert all("origin" not in b for b in display["bins"])
+    assert "origin" not in display
+    assert display["platform_ok"] is True
+    assert display["bins"][0]["available"] in (True, False)
+
+
+def test_resolve_display_platform_mismatch(tmp_path):
+    manifest = {
+        "platforms": {"value": ["linux"], "inferred": False},
+        "bins": [],
+        "env": [],
+        "compatibility": "",
+        "installable": False,
+        "blocked_by_platform": False,
+        "platform_conflict": False,
+    }
+    display = resolve_display(manifest, platform="macos", catalog={})
+    assert display["platform_ok"] is False
+
+
+def test_resolve_display_installable_computed(tmp_path):
+    manifest = {
+        "platforms": {"value": [], "inferred": False},
+        "bins": [{"name": "gh", "origin": "declared", "available": None}],
+        "env": [],
+        "compatibility": "",
+        "installable": False,
+        "blocked_by_platform": False,
+        "platform_conflict": False,
+    }
+    display = resolve_display(manifest, platform="macos", catalog={"gh": {"primary": {"kind": "brew", "value": "gh"}}})
+    gh = [b for b in display["bins"] if b["name"] == "gh"][0]
+    assert gh["installable"] is True
+    assert gh["install_spec"] == "brew: gh"
