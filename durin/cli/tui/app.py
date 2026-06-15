@@ -883,6 +883,12 @@ class DurinApp(App[None]):
             return
 
         if meta.get("_stream_end"):
+            # Check if the finalized assistant bubble looks like an error
+            if self._current_assistant_bubble is not None:
+                from durin.cli.tui.widgets.chat_view import looks_like_error
+
+                if looks_like_error(self._current_assistant_bubble.body or ""):
+                    self._current_assistant_bubble.mark_error()
             self._current_assistant_bubble = None
             self._finalize_cluster()
             # Belt-and-suspenders: if a turn ends without any content
