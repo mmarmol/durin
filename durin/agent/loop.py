@@ -278,6 +278,9 @@ class AgentLoop:
         timezone: str | None = None,
         consolidation_ratio: float = 0.5,
         preemptive_compact_ratio: float = 0.5,
+        decision_log_enabled: bool = True,
+        decision_log_max_entries: int = 10,
+        decision_log_max_chars: int = 1500,
         max_messages: int = 120,
         hooks: list[AgentHook] | None = None,
         unified_session: bool = False,
@@ -402,6 +405,9 @@ class AgentLoop:
             max_completion_tokens=provider.generation.max_tokens,
             consolidation_ratio=consolidation_ratio,
             preemptive_compact_ratio=preemptive_compact_ratio,
+            decision_log_enabled=decision_log_enabled,
+            decision_log_max_entries=decision_log_max_entries,
+            decision_log_max_chars=decision_log_max_chars,
         )
         self.model_presets: dict[str, ModelPresetConfig] = model_presets or {}
         self._active_preset: str | None = None
@@ -606,6 +612,9 @@ class AgentLoop:
             disabled_skills=defaults.disabled_skills,
             consolidation_ratio=defaults.consolidation_ratio,
             preemptive_compact_ratio=defaults.preemptive_compact_ratio,
+            decision_log_enabled=defaults.decision_log_enabled,
+            decision_log_max_entries=defaults.decision_log_max_entries,
+            decision_log_max_chars=defaults.decision_log_max_chars,
             max_messages=defaults.max_messages,
             tools_config=config.tools,
             app_config=config,
