@@ -302,6 +302,49 @@ async def test_model_not_in_whitelist_is_rejected():
 
 
 @pytest.mark.asyncio
+async def test_operator_default_always_permitted_even_when_not_in_allowlist():
+    """operator default_model is allowed regardless of allowed_models contents."""
+    p = _FakeProvider(LLMResponse(content="ok", finish_reason="stop"))
+    # allowed_models does NOT include "durin-default" (the default_model in _runner)
+    runner = _runner(p, allowed_models=["some-other-model"])
+    params = _sampling_params()  # no modelPreferences → resolves to default
+    res = await runner.run(params)
+    assert isinstance(res, _types.CreateMessageResult), (
+        f"Expected CreateMessageResult, got {res!r} — "
+        "operator default was incorrectly blocked by allowed_models"
+    )
+    assert res.model == "m-default"
+
+
+@pytest.mark.asyncio
+async def test_server_requested_model_not_in_allowlist_is_rejected():
+    """A server-requested model that is not in allowed_models is rejected."""
+    p = _FakeProvider(LLMResponse(content="ok", finish_reason="stop"))
+    runner = _runner(p, allowed_models=["some-other-model"])
+    params = _sampling_params()
+    params.modelPreferences = _types.ModelPreferences(
+        hints=[_types.ModelHint(name="forbidden-model")]
+    )
+    res = await runner.run(params)
+    assert isinstance(res, _types.ErrorData)
+    assert "model" in res.message.lower()
+
+
+@pytest.mark.asyncio
+async def test_server_requested_model_in_allowlist_is_permitted():
+    """A server-requested model that IS in allowed_models is permitted."""
+    p = _FakeProvider(LLMResponse(content="ok", finish_reason="stop"))
+    runner = _runner(p, allowed_models=["some-other-model"])
+    params = _sampling_params()
+    params.modelPreferences = _types.ModelPreferences(
+        hints=[_types.ModelHint(name="some-other-model")]
+    )
+    res = await runner.run(params)
+    assert isinstance(res, _types.CreateMessageResult)
+    assert res.model == "some-other-model"
+
+
+@pytest.mark.asyncio
 async def test_tool_round_bound_forces_text_after_cap():
     p = _FakeProvider(LLMResponse(
         content=None, finish_reason="tool_calls",
