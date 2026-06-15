@@ -11,6 +11,8 @@ from durin.cli.tui.widgets.input_area import (
     MultiModeSuggester,
     SlashCommandSuggester,
 )
+from durin.cli.tui.widgets.sidebar_panel import SidebarPanel
+from durin.cli.tui.widgets.toast import ToastNotification
 from durin.cli.tui.widgets.tool_call_bubble import ToolCallBubble
 from durin.cli.tui.widgets.working_indicator import WorkingIndicator
 
@@ -24,7 +26,9 @@ __all__ = [
     "InputArea",
     "MessageBubble",
     "MultiModeSuggester",
+    "SidebarPanel",
     "SlashCommandSuggester",
+    "ToastNotification",
     "ToolCallBubble",
     "WorkingIndicator",
 ]
