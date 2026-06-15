@@ -20,7 +20,6 @@ import {
   ImageIcon,
   Loader2,
   Paperclip,
-  Plus,
   RotateCw,
   Sparkles,
   Square,
@@ -40,6 +39,9 @@ import {
   MAX_IMAGES_PER_MESSAGE,
 } from "@/hooks/useAttachedImages";
 import { useClipboardAndDrop } from "@/hooks/useClipboardAndDrop";
+import { usePromptHistory } from "@/hooks/usePromptHistory";
+import { ModelPickerPopover } from "@/components/thread/ModelPickerPopover";
+import { ReasoningEffortPicker } from "@/components/thread/ReasoningEffortPicker";
 import type { SendImage } from "@/hooks/useDurinStream";
 import type { SlashCommand, GoalStateWsPayload } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -67,6 +69,14 @@ interface ThreadComposerProps {
   runStartedAt?: number | null;
   /** Sustained objective for this chat (WebSocket ``goal_state``). */
   goalState?: GoalStateWsPayload;
+  /** Called when user picks a model from the popover. */
+  onModelPick?: (model: string) => void;
+  /** Called when user picks a reasoning effort level. */
+  onEffortPick?: (effort: string) => void;
+  /** Active reasoning effort, if known. */
+  activeEffort?: string | null;
+  /** Whether the active model supports reasoning. */
+  canReason?: boolean;
 }
 
 const COMMAND_ICONS: Record<string, LucideIcon> = {
@@ -381,17 +391,23 @@ export function ThreadComposer({
   onStop,
   runStartedAt = null,
   goalState,
+  onModelPick,
+  onEffortPick,
+  activeEffort = null,
+  canReason = true,
 }: ThreadComposerProps) {
   const { t } = useTranslation();
   const [value, setValue] = useState("");
   const [inlineError, setInlineError] = useState<string | null>(null);
   const [slashMenuDismissed, setSlashMenuDismissed] = useState(false);
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const chipRefs = useRef(new Map<string, HTMLButtonElement>());
   const isHero = variant === "hero";
+  const promptHistory = usePromptHistory();
   const resolvedPlaceholder = isStreaming
     ? t("thread.composer.placeholderStreaming")
     : placeholder ?? t("thread.composer.placeholderThread");
@@ -587,6 +603,8 @@ export function ThreadComposer({
           }))
         : undefined;
     onSend(trimmed, payload);
+    promptHistory.addEntry(trimmed);
+    promptHistory.reset();
     setValue("");
     setInlineError(null);
     // Bubble owns the data URL copy; safe to revoke every staged blob
@@ -624,6 +642,21 @@ export function ThreadComposer({
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       submit();
+    }
+    // Prompt history navigation (only when slash menu is closed)
+    if (!showSlashMenu && e.key === "ArrowUp" && e.currentTarget.selectionStart === 0) {
+      const prev = promptHistory.navigateUp(value);
+      if (prev !== null) {
+        e.preventDefault();
+        setValue(prev);
+      }
+    }
+    if (!showSlashMenu && e.key === "ArrowDown" && e.currentTarget.selectionStart === value.length) {
+      const next = promptHistory.navigateDown();
+      if (next !== null) {
+        e.preventDefault();
+        setValue(next);
+      }
     }
   };
 
@@ -810,22 +843,43 @@ export function ThreadComposer({
               <Paperclip className={cn(isHero ? "h-5 w-5" : "h-4 w-4")} />
             </Button>
             {modelLabel ? (
-              <span
-                title={modelLabel}
-                className={cn(
-                  "inline-flex min-w-0 items-center gap-1.5 rounded-full border px-2.5 py-1",
-                  "border-foreground/10 bg-foreground/[0.035] font-medium text-foreground/80",
-                  isHero
-                    ? "max-w-[13rem] text-[12px] shadow-[0_2px_8px_rgba(15,23,42,0.04)]"
-                    : "max-w-[10rem] text-[10.5px] shadow-[0_2px_8px_rgba(15,23,42,0.035)]",
-                )}
-              >
-                <span
-                  aria-hidden
-                  className="h-1.5 w-1.5 flex-none rounded-full bg-emerald-500/80"
-                />
-                <span className="truncate">{modelLabel}</span>
-              </span>
+              <div className="relative">
+                <button
+                  type="button"
+                  disabled={!onModelPick}
+                  onClick={() => onModelPick && setModelPickerOpen((v) => !v)}
+                  title={modelLabel}
+                  className={cn(
+                    "inline-flex min-w-0 items-center gap-1.5 rounded-full border px-2.5 py-1",
+                    "border-foreground/10 bg-foreground/[0.035] font-medium text-foreground/80",
+                    isHero
+                      ? "max-w-[13rem] text-[12px] shadow-[0_2px_8px_rgba(15,23,42,0.04)]"
+                      : "max-w-[10rem] text-[10.5px] shadow-[0_2px_8px_rgba(15,23,42,0.035)]",
+                    onModelPick && "cursor-pointer hover:bg-foreground/[0.06] transition-colors",
+                  )}
+                >
+                  <span
+                    aria-hidden
+                    className="h-1.5 w-1.5 flex-none rounded-full bg-emerald-500/80"
+                  />
+                  <span className="truncate">{modelLabel}</span>
+                </button>
+                {onModelPick ? (
+                  <ModelPickerPopover
+                    open={modelPickerOpen}
+                    onClose={() => setModelPickerOpen(false)}
+                    onSelect={onModelPick}
+                    activeModel={modelLabel}
+                  />
+                ) : null}
+              </div>
+            ) : null}
+            {onEffortPick && canReason ? (
+              <ReasoningEffortPicker
+                activeEffort={activeEffort}
+                onSelect={onEffortPick}
+                disabled={disabled}
+              />
             ) : null}
             <span className="hidden select-none text-[10.5px] text-muted-foreground/60 sm:inline">
               {t("thread.composer.sendHint")}

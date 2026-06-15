@@ -867,6 +867,12 @@ class WebSocketChannel(BaseChannel):
         if got == "/api/models":
             return self._handle_models_list(request)
 
+        if got == "/api/changes":
+            return self._handle_changes(request)
+
+        if re.match(r"^/api/diff$", got):
+            return self._handle_diff(request, query)
+
         if got == "/api/memory/graph":
             return self._handle_memory_graph(request)
 
@@ -2447,8 +2453,99 @@ class WebSocketChannel(BaseChannel):
                 "supports_function_calling": bool(
                     getattr(caps, "supports_function_calling", False)
                 ),
+                "supports_reasoning": bool(getattr(caps, "supports_reasoning", False)),
             }
         )
+
+    def _handle_changes(self, request: WsRequest) -> Response:
+        """`GET /api/changes` — git status --porcelain for the workspace."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        import subprocess
+
+        workspace = self._workspace_root()
+        if workspace is None:
+            return _http_json_response({"files": [], "error": "no workspace"})
+
+        try:
+            result = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=str(workspace),
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            files = []
+            for line in result.stdout.strip().splitlines():
+                if not line.strip():
+                    continue
+                marker = line[:2]
+                path = line[3:].strip()
+                files.append({"marker": marker.strip(), "path": path})
+            return _http_json_response({"files": files})
+        except Exception:
+            return _http_json_response({"files": [], "error": "git failed"})
+
+    def _handle_diff(self, request: WsRequest, query: list[tuple[str, str]]) -> Response:
+        """`GET /api/diff?file=<path>` — git diff for a single file."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        import subprocess
+
+        workspace = self._workspace_root()
+        if workspace is None:
+            return _http_json_response({"diff": "", "error": "no workspace"})
+
+        file_path = (_query_first(query, "file") or "").strip()
+        try:
+            if file_path:
+                # Check if untracked
+                check = subprocess.run(
+                    ["git", "status", "--porcelain", "--", file_path],
+                    cwd=str(workspace),
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                line = check.stdout.strip()
+                if line.startswith("??"):
+                    # Untracked: diff against /dev/null
+                    result = subprocess.run(
+                        ["git", "diff", "--no-index", "/dev/null", file_path],
+                        cwd=str(workspace),
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                    )
+                else:
+                    result = subprocess.run(
+                        ["git", "diff", "--", file_path],
+                        cwd=str(workspace),
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                    )
+            else:
+                result = subprocess.run(
+                    ["git", "diff"],
+                    cwd=str(workspace),
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+            return _http_json_response({"diff": result.stdout})
+        except Exception:
+            return _http_json_response({"diff": "", "error": "git failed"})
+
+    def _workspace_root(self) -> Path | None:
+        """Resolve the workspace path for git operations."""
+        from durin.config.loader import load_config
+
+        try:
+            cfg = load_config()
+            return Path(cfg.workspace_dir).resolve() if cfg.workspace_dir else Path.cwd()
+        except Exception:
+            return Path.cwd()
 
     def _handle_channels_list(self, request: WsRequest) -> Response:
         """`GET /api/channels` — discovered channels + enabled state.
