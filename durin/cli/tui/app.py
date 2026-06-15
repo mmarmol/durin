@@ -83,6 +83,8 @@ class DurinApp(App[None]):
         # Track active tool-call bubbles by call_id so the "end" event
         # updates the same widget the "start" event created.
         self._tool_bubbles: dict[str, Any] = {}
+        # ActivityCluster wrapping reasoning + tool bubbles during a turn.
+        self._active_cluster: Any = None
         self._bus_task: asyncio.Task | None = None
         self._consume_task: asyncio.Task | None = None
         # Fire-and-forget tasks (submit publishes, tool-bubble notes) parked
@@ -478,6 +480,42 @@ class DurinApp(App[None]):
             pass
         self._working_indicator = None
 
+    def _get_or_create_cluster(self) -> Any:
+        """Return the active ActivityCluster, creating one if needed.
+
+        The cluster groups reasoning + tool bubbles into a collapsible
+        section. It's finalized (collapsed + summary) when the assistant
+        text starts streaming.
+        """
+        from durin.cli.tui.widgets.activity_cluster import ActivityCluster
+
+        if self._active_cluster is not None:
+            try:
+                self._active_cluster.query_one("#cluster-header")
+                return self._active_cluster
+            except Exception:  # noqa: BLE001
+                self._active_cluster = None
+
+        try:
+            chat = self.query_one("#chat", ChatView)
+            cluster = ActivityCluster()
+            chat.mount(cluster)
+            chat.scroll_end(animate=False)
+            self._active_cluster = cluster
+            return cluster
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _finalize_cluster(self) -> None:
+        """Collapse the active cluster and switch its header to 'Done'."""
+        if self._active_cluster is None:
+            return
+        try:
+            self._active_cluster.finalize()
+        except Exception:  # noqa: BLE001
+            pass
+        self._active_cluster = None
+
     def _render_tool_event(self, event: dict[str, Any]) -> None:
         """Add or update a ToolCallBubble for one tool-call lifecycle event."""
         from durin.cli.tui.widgets import ToolCallBubble
@@ -487,9 +525,17 @@ class DurinApp(App[None]):
 
         if phase == "start" or call_id not in self._tool_bubbles:
             try:
-                chat = self.query_one("#chat", ChatView)
+                from durin.cli.tui.widgets import ToolCallBubble
+
                 bubble = ToolCallBubble(event)
-                chat.mount(bubble)
+                cluster = self._get_or_create_cluster()
+                if cluster is not None:
+                    cluster.mount(bubble)
+                    cluster.add_tool_step()
+                else:
+                    chat = self.query_one("#chat", ChatView)
+                    chat.mount(bubble)
+                chat = self.query_one("#chat", ChatView)
                 chat.scroll_end(animate=False)
                 self._tool_bubbles[call_id] = bubble
             except Exception:  # noqa: BLE001
@@ -783,8 +829,19 @@ class DurinApp(App[None]):
             # drop the spinner.
             self._dismiss_working_indicator()
             if self._current_reasoning_bubble is None:
+                from durin.cli.tui.widgets.chat_view import MessageBubble
+
+                cluster = self._get_or_create_cluster()
+                bubble = MessageBubble(role="reasoning", body="")
+                if cluster is not None:
+                    cluster.mount(bubble)
+                    cluster.add_reasoning_step()
+                else:
+                    chat = self.query_one("#chat", ChatView)
+                    chat.mount(bubble)
                 chat = self.query_one("#chat", ChatView)
-                self._current_reasoning_bubble = chat.add_message("reasoning", "")
+                chat.scroll_end(animate=False)
+                self._current_reasoning_bubble = bubble
             self._current_reasoning_bubble.append(msg.content or "")
             return
         if meta.get("_reasoning_end"):
@@ -807,12 +864,15 @@ class DurinApp(App[None]):
         if meta.get("_stream_delta"):
             # Content is now flowing — drop the spinner.
             self._dismiss_working_indicator()
+            # Finalize the activity cluster (collapse reasoning + tools).
+            self._finalize_cluster()
             if self._current_assistant_bubble is not None:
                 self._current_assistant_bubble.append(msg.content or "")
             return
 
         if meta.get("_stream_end"):
             self._current_assistant_bubble = None
+            self._finalize_cluster()
             # Belt-and-suspenders: if a turn ends without any content
             # (rare error path), make sure the spinner doesn't linger.
             self._dismiss_working_indicator()
@@ -820,6 +880,7 @@ class DurinApp(App[None]):
 
         if meta.get("_streamed"):
             # End-of-turn signal; UI already streamed via deltas.
+            self._finalize_cluster()
             self._dismiss_working_indicator()
             return
 
