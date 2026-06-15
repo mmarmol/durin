@@ -592,19 +592,44 @@ class DurinApp(App[None]):
 
     @work
     async def _open_model_picker(self) -> None:
+        from durin.cli.tui.model_catalog import build_entries, infer_provider
         from durin.cli.tui.screens import ModelPickerScreen
+        from durin.cli.tui.state import add_recent_model, get_recent_models
+        from durin.config.loader import load_config
+        from durin.config.schema import ModelPresetConfig
 
-        presets = self._collect_model_presets()
-        active = self._model_label()[1]
-        if not presets:
-            chat = self.query_one("#chat", ChatView)
-            chat.add_message("system", "No model presets configured.")
+        if self._agent_loop is None:
             return
-        selected = await self.push_screen_wait(
-            ModelPickerScreen(presets, active=active)
+
+        config = load_config()
+        presets = self._agent_loop.model_presets
+        active = self._model_label()[1]
+        recent = get_recent_models()
+
+        entries = build_entries(
+            config=config,
+            presets=presets,
+            recent=recent,
+            active=active,
         )
-        if selected and selected != active:
-            await self._publish_inbound(f"/model {selected}", [])
+        if not entries:
+            chat = self.query_one("#chat", ChatView)
+            chat.add_message("system", "No models available.")
+            return
+
+        selected = await self.push_screen_wait(
+            ModelPickerScreen(entries, active=active)
+        )
+        if not selected or selected == active:
+            return
+
+        if selected not in presets:
+            provider = infer_provider(selected)
+            temp = ModelPresetConfig(model=selected, provider=provider)
+            presets[selected] = temp
+
+        add_recent_model(selected)
+        await self._publish_inbound(f"/model {selected}", [])
 
     @work
     async def _open_theme_picker(self) -> None:

@@ -14,6 +14,7 @@ from durin.cli.tui.app import DurinApp
 from durin.cli.tui.screens.session_picker import SessionEntry, SessionPickerScreen
 from durin.cli.tui.screens.model_picker import ModelPickerScreen
 from durin.cli.tui.widgets import ChatView, InputArea, MessageBubble
+from durin.config.schema import ModelPresetConfig
 
 
 def _fake_agent_loop(bus: MessageBus, tmp_path) -> SimpleNamespace:
@@ -28,7 +29,10 @@ def _fake_agent_loop(bus: MessageBus, tmp_path) -> SimpleNamespace:
         workspace=str(tmp_path),
         model="m",
         model_preset="default",
-        model_presets={"default": object(), "fast": object()},
+        model_presets={
+            "default": ModelPresetConfig(model="glm-5.2"),
+            "fast": ModelPresetConfig(model="glm-5-turbo"),
+        },
         context_window_tokens=200_000,
         sessions=SimpleNamespace(
             sessions_dir=sessions_dir,
