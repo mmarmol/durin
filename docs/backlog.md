@@ -51,17 +51,20 @@ sólo nullable. (El SDK 1.27.1 además valida outputSchema y revienta `call_tool
 
 **Plan**: descompuesto en 6 sub-proyectos (cada uno spec→plan→PRs), secuencia
 SP-1 → SP-2 → {SP-3,4,5 paralelo} → SP-6:
-- **SP-1** fidelidad de resultado + schema sanitization — **IMPLEMENTADO** en la branch
-  `worktree-mcp-sp1-fidelity-schema` (no mergeado aún): los 3 wrappers con fidelidad
-  completa (isError, Image+guard #90710, audio/embedded/resource_link/unknown→JSON,
-  structuredContent), schema (required-pruning, $defs), output-schema opt-out total.
-  15 commits, 71 tests unitarios, superficie MCP 110 verde.
-- **SP-2** supervisión/reconnect (pivote arquitectónico: `MCPServerConnection`,
-  task-per-server, keepalive, circuit breaker, list_changed, timeouts, transport fallback).
-- **SP-3** stdio hygiene (orphan-kill, stderr→log, env-scrub).
-- **SP-4** OAuth (PKCE + DCR + cold-load + 401 dedup; `durin mcp login`).
-- **SP-5** security (cred-redaction, injection-scan, SSRF).
-- **SP-6** server→cliente (sampling, roots, logging).
+- **SP-1** fidelidad + schema — **IMPLEMENTADO**: 3 wrappers (isError, Image+guard #90710,
+  audio/embedded/resource_link/unknown→JSON, structuredContent); schema (required-pruning,
+  $defs, type-array→anyOf); output-schema opt-out total.
+- **SP-2** supervisión/reconnect — **IMPLEMENTADO**: `MCPServerConnection` task-per-server +
+  live-session-indirection, reconnect/backoff, keepalive capability-aware, circuit breaker
+  3-state, tools/list_changed, per-tool/progress/dual timeouts, HTTP→SSE fallback (tests con server real).
+- **SP-3** stdio hygiene — **IMPLEMENTADO**: stderr→logfile + OSV malware-preflight (orphan-kill +
+  env-scrub ya los da el SDK 1.27.2; Linux-OOM = macOS-N/A).
+- **SP-4** OAuth — **IMPLEMENTADO**: `SecretsTokenStorage` sobre el secret store de durin + wiring
+  (httpx.Auth) + `durin mcp login/logout/status` + auth-401 reauth. **Cierra el item secrets-bypass.**
+- **SP-5** security — **IMPLEMENTADO**: SSRF wiring (motor `network.py` ya existía) + injection-scan
+  vendor-agnostic + command exfil-blocklist. (cred-redaction ya la da el runner.)
+- **SP-6** server→cliente — **IMPLEMENTADO**: roots + logging + sampling (al provider primario,
+  off-by-default, governance RPM/token/model/round-caps).
 
 **Doc maestro** (matriz de paridad + detalle de los 6 SP + hechos del SDK + notas de
 implementación de SP-1): `.workdocs/superpowers/specs/2026-06-15-mcp-best-in-class-design.md`.
@@ -69,7 +72,9 @@ implementación de SP-1): `.workdocs/superpowers/specs/2026-06-15-mcp-best-in-cl
 `.workdocs/research/2026-06-10-mcp-client-investigation.md` y
 `.workdocs/research/2026-06-10-tool-gaps-deep-dive.md`.
 
-**Estado**: SP-1 implementado (2026-06-15, branch sin mergear); SP-2..6 pendientes.
+**Estado**: **los 6 sub-proyectos IMPLEMENTADOS** (2026-06-16) en la branch
+`worktree-mcp-sp1-fidelity-schema` (~55 commits, **250 tests MCP verdes**, ruff limpio, sin mergear).
+Pendiente: review conjunta + integración (merge/PR) + 1 verificación live manual del flujo OAuth.
 
 ### P3 — Comando para cambiar modelo es precario — autocompletion progresivo
 
