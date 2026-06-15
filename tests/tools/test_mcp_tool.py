@@ -635,11 +635,15 @@ async def test_resource_wrapper_execute_returns_text() -> None:
 @pytest.mark.asyncio
 async def test_resource_wrapper_execute_handles_blob() -> None:
     async def read_resource(uri: str) -> object:
-        return SimpleNamespace(contents=[_FakeBlobResourceContents(b"\x00\x01\x02")])
+        blob = _b64.b64encode(b"\x00\x01\x02").decode()
+        return SimpleNamespace(
+            contents=[_FakeBlobResourceContents(blob, uri="file:///x.bin")]
+        )
 
     wrapper = _make_resource_wrapper(SimpleNamespace(read_resource=read_resource))
     result = await wrapper.execute()
-    assert "[Binary resource: 3 bytes]" in result
+    assert "MCP embedded resource" in result
+    assert "3 bytes" in result
 
 
 @pytest.mark.asyncio
@@ -1299,3 +1303,16 @@ async def test_connect_disables_output_schema_validation(
         await stack.aclose()
 
     assert session._tool_output_schemas["demo"] is None
+
+
+@pytest.mark.asyncio
+async def test_resource_wrapper_execute_image_blob_returns_image_block() -> None:
+    async def read_resource(uri: str) -> object:
+        return SimpleNamespace(
+            contents=[_FakeBlobResourceContents(_PNG_1PX, uri="file:///pic.png", mime_type="image/png")]
+        )
+
+    wrapper = _make_resource_wrapper(SimpleNamespace(read_resource=read_resource))
+    result = await wrapper.execute()
+    assert isinstance(result, list)
+    assert any(b["type"] == "image_url" for b in result)

@@ -462,15 +462,10 @@ class MCPResourceWrapper(Tool):
                 )
                 return f"(MCP resource read failed: {type(exc).__name__})"
             else:
-                parts: list[str] = []
+                parts: list[Any] = []
                 for block in result.contents:
-                    if isinstance(block, types.TextResourceContents):
-                        parts.append(block.text)
-                    elif isinstance(block, types.BlobResourceContents):
-                        parts.append(f"[Binary resource: {len(block.blob)} bytes]")
-                    else:
-                        parts.append(str(block))
-                return "\n".join(parts) or "(no output)"
+                    parts.extend(_embedded_resource_to_parts(block, types))
+                return _parts_to_result(parts)
 
         return "(MCP resource read failed)"  # Unreachable
 
