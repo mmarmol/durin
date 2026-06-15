@@ -176,6 +176,10 @@ def _normalize_schema_for_openai(schema: Any) -> dict[str, Any]:
         if "null" in raw_type and len(non_null) == 1:
             normalized["type"] = non_null[0]
             normalized["nullable"] = True
+        elif "null" not in raw_type and len(non_null) >= 2:
+            # Non-nullable multi-type: expand to anyOf of single-type schemas.
+            other_keys = {k: v for k, v in normalized.items() if k != "type"}
+            normalized = {**other_keys, "anyOf": [{"type": t} for t in non_null]}
 
     for key in ("oneOf", "anyOf"):
         nullable_branch = _extract_nullable_branch(normalized.get(key))
