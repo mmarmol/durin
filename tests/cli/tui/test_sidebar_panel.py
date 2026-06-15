@@ -89,7 +89,7 @@ def test_gather_files_no_loop():
 
 def test_render_empty_state():
     panel = SidebarPanel()
-    output = panel._render([], [], [])
+    output = panel._format_content([], [], [])
     assert "TODO" in output
     assert "No todos" in output
     assert "FILES" in output
@@ -105,7 +105,7 @@ def test_render_with_todos():
         {"content": "Fix bug", "status": "in_progress", "activeForm": "Fixing bug"},
         {"content": "Write docs", "status": "pending", "activeForm": "Writing docs"},
     ]
-    output = panel._render(todos, [], [])
+    output = panel._format_content(todos, [], [])
     assert "Run tests" in output
     assert "Fixing bug" in output
     assert "Write docs" in output
@@ -115,7 +115,7 @@ def test_render_with_todos():
 def test_render_with_files():
     panel = SidebarPanel()
     files = [("M", "src/app.py"), ("?", "new_file.py")]
-    output = panel._render([], files, [])
+    output = panel._format_content([], files, [])
     assert "src/app.py" in output
     assert "new_file.py" in output
     assert "(2 changed)" in output
@@ -124,7 +124,7 @@ def test_render_with_files():
 def test_render_with_mcp():
     panel = SidebarPanel()
     mcp = [("fetch", True), ("github", False)]
-    output = panel._render([], [], mcp)
+    output = panel._format_content([], [], mcp)
     assert "fetch" in output
     assert "github" in output
     assert "(1/2)" in output  # 1 connected out of 2
@@ -133,7 +133,7 @@ def test_render_with_mcp():
 def test_render_truncates_long_file_list():
     panel = SidebarPanel()
     files = [("M", f"file_{i}.py") for i in range(25)]
-    output = panel._render([], files, [])
+    output = panel._format_content([], files, [])
     assert "file_0.py" in output
     assert "+5 more" in output
 
