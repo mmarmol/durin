@@ -120,3 +120,31 @@ async def test_connection_connects_and_registers_tools(live_mcp) -> None:
     assert registry.get("mcp_harness_echo") is not None
     await conn.aclose()
     assert conn.session is None
+
+
+async def test_call_tool_resolves_live_session(live_mcp) -> None:
+    factory, _harness = live_mcp
+    conn, _registry = factory()
+    await conn.start()
+
+    result = await conn.call_tool("echo", {"text": "hi"}, timeout=5.0)
+    assert result.content[0].text == "echo:hi"
+
+    # Swap the live session object; the connection must use the NEW one.
+    original = conn.session
+    conn.session = original  # identity unchanged here, but the call must read the attr
+    result2 = await conn.call_tool("echo", {"text": "again"}, timeout=5.0)
+    assert result2.content[0].text == "echo:again"
+    await conn.aclose()
+
+
+async def test_call_tool_when_down_returns_sentinel(live_mcp) -> None:
+    factory, _harness = live_mcp
+    conn, _registry = factory()
+    await conn.start()
+    conn.session = None  # simulate down
+    out = await conn.call_tool("echo", {"text": "x"}, timeout=5.0)
+    from durin.agent.tools.mcp_connection import _ConnDown
+    assert isinstance(out, _ConnDown)
+    assert "not connected" in out.message
+    await conn.aclose()
