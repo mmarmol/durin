@@ -36,6 +36,8 @@ interface ThreadShellProps {
   theme?: "light" | "dark";
   onToggleTheme?: () => void;
   hideSidebarToggleOnDesktop?: boolean;
+  pendingPrompt?: string | null;
+  onPromptConsumed?: () => void;
 }
 
 function toModelBadgeLabel(modelName: string | null): string | null {
@@ -60,6 +62,8 @@ export function ThreadShell({
   theme = "light",
   onToggleTheme = () => {},
   hideSidebarToggleOnDesktop = false,
+  pendingPrompt = null,
+  onPromptConsumed,
 }: ThreadShellProps) {
   const { t } = useTranslation();
   const chatId = session?.chatId ?? null;
@@ -331,6 +335,8 @@ export function ThreadShell({
           onModelPick={handleModelPick}
           onEffortPick={handleEffortPick}
           canReason={canReason}
+          pendingPrompt={pendingPrompt}
+          onPromptConsumed={onPromptConsumed}
         />
       ) : (
         <ThreadComposer
@@ -350,6 +356,8 @@ export function ThreadShell({
           onModelPick={handleModelPick}
           onEffortPick={handleEffortPick}
           canReason={canReason}
+          pendingPrompt={pendingPrompt}
+          onPromptConsumed={onPromptConsumed}
         />
       )}
     </>
