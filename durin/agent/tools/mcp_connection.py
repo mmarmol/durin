@@ -265,6 +265,7 @@ class MCPServerConnection:
             read, write = await self._open_transport_streams()
             async with ClientSession(read, write, **self._session_kwargs()) as session:
                 self.initialize_result = await session.initialize()
+                self._refresh_generation += 1  # invalidate any in-flight refresh from prior session
                 self.session = session
                 await self._register_capabilities()
                 self._reset_breaker()
@@ -325,13 +326,26 @@ class MCPServerConnection:
     async def _refresh_tools(self) -> None:
         if not self._advertises_tools():
             return
+        my_generation = self._refresh_generation
+        my_session = self.session
+        if my_session is None:
+            return
         async with self._refresh_lock:
-            session = self.session
-            if session is None:
+            # Generation guard: a newer refresh (or reconnect) superseded us.
+            if my_generation != self._refresh_generation:
+                logger.debug("MCP '{}': stale refresh (gen) — skipping", self.name)
+                return
+            # Identity guard: session was replaced since we were scheduled.
+            if my_session is not self.session:
+                logger.debug("MCP '{}': stale refresh (identity) — skipping", self.name)
                 return
             old = set(self._registered_names)
             async with self._rpc_lock:
-                tools_result = await session.list_tools()
+                tools_result = await my_session.list_tools()
+            # Re-check after the await: the world may have moved.
+            if my_generation != self._refresh_generation or my_session is not self.session:
+                logger.debug("MCP '{}': refresh invalidated mid-flight — skipping", self.name)
+                return
             new_mcp = tools_result.tools if hasattr(tools_result, "tools") else []
             new_wrapped = {
                 _sanitize_name(f"mcp_{self.name}_{t.name}") for t in new_mcp
