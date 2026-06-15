@@ -1111,3 +1111,42 @@ async def test_execute_unknown_block_renders_json() -> None:
     wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
     result = await wrapper.execute()
     assert result == '{"kind": "weird", "n": 1}'
+
+
+@pytest.mark.asyncio
+async def test_execute_structured_content_appended() -> None:
+    async def call_tool(_name: str, arguments: dict) -> object:
+        return SimpleNamespace(
+            content=[_FakeTextContent("summary")],
+            structuredContent={"count": 3},
+            isError=False,
+        )
+
+    wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
+    result = await wrapper.execute()
+    assert "summary" in result
+    assert "[structuredContent]" in result
+    assert '"count": 3' in result
+
+
+@pytest.mark.asyncio
+async def test_execute_structured_content_only() -> None:
+    async def call_tool(_name: str, arguments: dict) -> object:
+        return SimpleNamespace(content=[], structuredContent={"k": "v"}, isError=False)
+
+    wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
+    result = await wrapper.execute()
+    assert "[structuredContent]" in result
+    assert '"k": "v"' in result
+
+
+@pytest.mark.asyncio
+async def test_execute_no_structured_content_unchanged() -> None:
+    async def call_tool(_name: str, arguments: dict) -> object:
+        return SimpleNamespace(
+            content=[_FakeTextContent("plain")], structuredContent=None, isError=False
+        )
+
+    wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
+    result = await wrapper.execute()
+    assert result == "plain"

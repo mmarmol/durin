@@ -250,6 +250,9 @@ def _render_tool_result(result: Any, types: Any) -> str | list[dict[str, Any]]:
     parts: list[Any] = []
     for block in result.content:
         parts.extend(_content_block_to_parts(block, types))
+    structured = getattr(result, "structuredContent", None)
+    if structured is not None:
+        parts.append("[structuredContent]\n" + _safe_json(structured))
     return _parts_to_result(parts)
 
 
