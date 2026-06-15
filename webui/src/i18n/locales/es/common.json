@@ -484,7 +484,8 @@
       "environment": "Variables de entorno",
       "install": "Instalar",
       "durinCanHelp": "[durin puede ayudar]",
-      "needs": "Necesita"
+      "needs": "Necesita",
+      "none": "Sin requisitos detectados"
     },
     "search": {
       "placeholder": "Buscar skills en el registro",

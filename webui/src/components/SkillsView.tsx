@@ -1356,7 +1356,7 @@ export function SkillsView() {
                   </div>
                 </div>
 
-                {skillRow && skillRow.findings && skillRow.findings.length > 0 ? (
+                {skillRow && skillRow.verdict !== "safe" && skillRow.findings && skillRow.findings.length > 0 ? (
                   <div className="shrink-0 border-b border-border/30 bg-amber-500/5 px-4 py-3 sm:px-6">
                     <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                       {t("skills.security")}
@@ -1370,11 +1370,17 @@ export function SkillsView() {
                     <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                       {t("skills.requirements.title")}
                     </p>
-                    <TriageRequirements
-                      requirements={skillRow.requirements}
-                      skillName={skillRow.name}
-                      token={token}
-                    />
+                    {skillRow.requirements.bins.length === 0 &&
+                     skillRow.requirements.env.length === 0 &&
+                     skillRow.requirements.platforms.length === 0 ? (
+                      <p className="text-[12px] text-muted-foreground">{t("skills.requirements.none")}</p>
+                    ) : (
+                      <TriageRequirements
+                        requirements={skillRow.requirements}
+                        skillName={skillRow.name}
+                        token={token}
+                      />
+                    )}
                   </div>
                 )}
 

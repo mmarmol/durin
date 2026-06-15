@@ -484,7 +484,8 @@
       "environment": "Environment",
       "install": "Install",
       "durinCanHelp": "[durin can help]",
-      "needs": "Needs"
+      "needs": "Needs",
+      "none": "No requirements detected"
     },
     "search": {
       "placeholder": "Search the registry for skills",
