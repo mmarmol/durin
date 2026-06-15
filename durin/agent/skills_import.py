@@ -7,6 +7,7 @@ import re
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Awaitable, Callable
 
 import durin.agent.skill_resolve as _resolve
 from durin.agent.skill_resolve import SkillCandidate
@@ -280,11 +281,15 @@ def fetch_candidate(cand: SkillCandidate, *, quarantine_root: Path,
     run_judge = _should_judge(qdir, cand.ref, judge_trigger, allowlist or [])
     rep = audit_skill(qdir, judge_enabled=run_judge, judge_model=judge_model,
                       judge_max_severity=judge_max_severity)
+    from durin.security.requirements_scan import extract_requirements
+
+    req_manifest = extract_requirements(qdir, llm_tools=getattr(rep, "tools", []))
     (qdir / ".scan.json").write_text(json.dumps({
         "source": cand.ref,
         "verdict": rep.verdict,
         "findings": [{"category": f.category, "severity": f.severity,
                       "where": f.where, "detail": f.detail} for f in rep.findings],
+        "requirements": req_manifest,
     }), encoding="utf-8")
     return qdir
 
@@ -391,6 +396,15 @@ def install_imported_skill(workspace: Path, quarantine_dir: Path, *, source: str
             "content_hash": chash,
             "created_at": _today(),
         }
+        sj = quarantine_dir / ".scan.json"
+        if sj.is_file():
+            try:
+                scan = json.loads(sj.read_text())
+                req = scan.get("requirements")
+                if isinstance(req, dict):
+                    durin["requirements"] = req
+            except Exception:  # noqa: BLE001
+                pass
 
     _update_md(dest / "SKILL.md", _stamp)
     from durin.agent.skills_store import attribution_to_trailers
@@ -463,7 +477,6 @@ def runnable_install_specs(skill_dir) -> list[dict]:
     """Safe, runnable install specs as ``[{kind, value, command, needs_privileges}]``.
     A spec the §8.C scanner flags ``dangerous`` is dropped; the ``download`` kind is
     excluded (install manually). No execution here — see the skill_install_deps tool."""
-    from pathlib import Path
 
     from durin.security.skill_scan import validate_install_specs
 
@@ -508,6 +521,19 @@ def runnable_install_specs(skill_dir) -> list[dict]:
                 "needs_privileges": kind in _NEEDS_PRIV,
             })
     return out
+
+
+async def run_install_specs(specs: list[dict], *,
+                            exec_run: Callable[..., Awaitable[str]]) -> list[dict]:
+    results: list[dict] = []
+    for spec in specs:
+        cmd = spec["command"]
+        try:
+            output = await exec_run(command=cmd)
+            results.append({"command": cmd, "success": True, "output": str(output)[-2000:]})
+        except Exception as exc:  # noqa: BLE001
+            results.append({"command": cmd, "success": False, "error": str(exc)})
+    return results
 
 
 def trust_prefix_for(ref: str) -> str:

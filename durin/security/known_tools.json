@@ -1,0 +1,34 @@
+{
+  "gh": {
+    "primary": {"kind": "brew", "value": "gh"},
+    "alternatives": [{"kind": "apt", "value": "gh"}]
+  },
+  "rg": {
+    "primary": {"kind": "brew", "value": "ripgrep"},
+    "alternatives": [{"kind": "apt", "value": "ripgrep"}]
+  },
+  "jq": {
+    "primary": {"kind": "brew", "value": "jq"},
+    "alternatives": [{"kind": "apt", "value": "jq"}]
+  },
+  "ffmpeg": {
+    "primary": {"kind": "brew", "value": "ffmpeg"},
+    "alternatives": [{"kind": "apt", "value": "ffmpeg"}]
+  },
+  "node": {
+    "primary": {"kind": "brew", "value": "node"},
+    "alternatives": [{"kind": "apt", "value": "nodejs"}]
+  },
+  "npx": {
+    "primary": {"kind": "brew", "value": "node"},
+    "alternatives": [{"kind": "apt", "value": "nodejs"}]
+  },
+  "python3": {
+    "primary": {"kind": "brew", "value": "python@3.12"},
+    "alternatives": [{"kind": "apt", "value": "python3"}]
+  },
+  "ruby": {
+    "primary": {"kind": "brew", "value": "ruby"},
+    "alternatives": [{"kind": "apt", "value": "ruby"}]
+  }
+}

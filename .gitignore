@@ -41,6 +41,7 @@ Thumbs.db
 
 # Tools
 .claude
+.superpowers
 .pytest_cache
 .coverage
 

@@ -24,9 +24,13 @@ class Finding:
 @dataclass
 class ScanReport:
     findings: list[Finding] = field(default_factory=list)
+    tools: list = field(default_factory=list)
+    judge_verdict: str | None = None
 
     @property
     def verdict(self) -> str:
+        if self.judge_verdict:
+            return self.judge_verdict
         if not self.findings:
             return "safe"
         return _VERDICT[max(_SEV[f.severity] for f in self.findings)]
