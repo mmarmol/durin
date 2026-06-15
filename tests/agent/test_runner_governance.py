@@ -27,6 +27,20 @@ def _make_loop(tmp_path):
         loop = AgentLoop(bus=bus, provider=provider, workspace=tmp_path)
     return loop
 
+
+def _microcompact_spec(**overrides):
+    from durin.agent.runner import AgentRunSpec
+
+    params = dict(
+        initial_messages=[],
+        tools=MagicMock(),
+        model="test-model",
+        max_iterations=1,
+        max_tool_result_chars=_MAX_TOOL_RESULT_CHARS,
+    )
+    params.update(overrides)
+    return AgentRunSpec(**params)
+
 async def test_runner_uses_raw_messages_when_context_governance_fails():
     from durin.agent.runner import AgentRunSpec, AgentRunner
 
@@ -412,7 +426,8 @@ async def test_microcompact_replaces_old_tool_results():
             "content": long_content,
         })
 
-    result = AgentRunner._microcompact(messages)
+    runner = AgentRunner(MagicMock())
+    result = runner._microcompact(_microcompact_spec(), messages)
     tool_msgs = [m for m in result if m.get("role") == "tool"]
     stale_count = total - _MICROCOMPACT_KEEP_RECENT
     compacted = [m for m in tool_msgs if "omitted from context" in str(m.get("content", ""))]
@@ -439,7 +454,8 @@ async def test_microcompact_preserves_short_results():
             "content": "short",
         })
 
-    result = AgentRunner._microcompact(messages)
+    runner = AgentRunner(MagicMock())
+    result = runner._microcompact(_microcompact_spec(), messages)
     assert result is messages  # no copy needed — all stale results are short
 
 
@@ -462,8 +478,82 @@ async def test_microcompact_skips_non_compactable_tools():
             "content": long_content,
         })
 
-    result = AgentRunner._microcompact(messages)
+    runner = AgentRunner(MagicMock())
+    result = runner._microcompact(_microcompact_spec(), messages)
     assert result is messages  # no compactable tools found
+
+
+@pytest.mark.asyncio
+async def test_microcompact_keeps_recovery_path_when_result_already_spilled(tmp_path):
+    """A stale result that was already spilled keeps its file path + read_file
+    hint so the model can still recover it — not an opaque placeholder."""
+    from durin.agent.runner import AgentRunner, _MICROCOMPACT_KEEP_RECENT
+
+    spill_path = tmp_path / ".durin" / "tool-results" / "sess" / "c0.txt"
+    spill_path.parent.mkdir(parents=True, exist_ok=True)
+    spill_path.write_text("FULL ORIGINAL OUTPUT")
+    preview = "P" * 1200
+    marker = (
+        "[tool output persisted]\n"
+        f"Full output saved to: {spill_path}\n"
+        "Original size: 50000 chars\n"
+        f"Preview:\n{preview}\n...\n(Read the saved file if you need the full output.)"
+    )
+
+    total = _MICROCOMPACT_KEEP_RECENT + 3
+    messages: list[dict] = [{"role": "system", "content": "sys"}]
+    for i in range(total):
+        messages.append({
+            "role": "assistant", "content": "",
+            "tool_calls": [{"id": f"c{i}", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}],
+        })
+        messages.append({
+            "role": "tool", "tool_call_id": f"c{i}", "name": "read_file",
+            "content": marker if i == 0 else "x" * 600,
+        })
+
+    runner = AgentRunner(MagicMock())
+    spec = _microcompact_spec(workspace=tmp_path, session_key="sess")
+    result = runner._microcompact(spec, messages)
+
+    stale = result[2]  # oldest tool result (i=0)
+    content = str(stale["content"])
+    assert str(spill_path) in content        # recovery path preserved
+    assert "read_file" in content            # recovery hint present
+    assert preview not in content            # 1200-char preview dropped (actually compacted)
+
+
+@pytest.mark.asyncio
+async def test_microcompact_spills_unpersisted_result_and_references_file(tmp_path):
+    """A stale raw (never-spilled) result gets spilled to disk and the
+    placeholder references the new file so it stays recoverable."""
+    from durin.agent.runner import AgentRunner, _MICROCOMPACT_KEEP_RECENT
+
+    original = "RAW-" + "z" * 600
+    total = _MICROCOMPACT_KEEP_RECENT + 3
+    messages: list[dict] = [{"role": "system", "content": "sys"}]
+    for i in range(total):
+        messages.append({
+            "role": "assistant", "content": "",
+            "tool_calls": [{"id": f"c{i}", "type": "function", "function": {"name": "grep", "arguments": "{}"}}],
+        })
+        messages.append({
+            "role": "tool", "tool_call_id": f"c{i}", "name": "grep",
+            "content": original,
+        })
+
+    runner = AgentRunner(MagicMock())
+    spec = _microcompact_spec(workspace=tmp_path, session_key="sess")
+    result = runner._microcompact(spec, messages)
+
+    stale = result[2]  # oldest tool result (i=0)
+    content = str(stale["content"])
+    assert "read_file" in content            # recovery hint present
+    spill_file = tmp_path / ".durin" / "tool-results" / "sess" / "c0.txt"
+    assert spill_file.exists()               # spilled on the spot
+    assert spill_file.read_text() == original
+    assert str(spill_file) in content        # placeholder points at it
+    assert result[-1]["content"] == original  # recent results untouched
 
 
 def test_governance_repairs_orphans_after_snip():

@@ -27,6 +27,7 @@ from durin.utils.helpers import (
     extract_reasoning,
     find_legal_message_start,
     maybe_persist_tool_result,
+    parse_persisted_reference,
     strip_think,
     truncate_text,
 )
@@ -496,7 +497,7 @@ class AgentRunner:
                                 "iteration": iteration,
                                 "session_key": spec.session_key,
                             })
-                messages_for_model = self._microcompact(messages_for_model)
+                messages_for_model = self._microcompact(spec, messages_for_model)
                 messages_for_model = self._apply_tool_result_budget(spec, messages_for_model)
                 messages_for_model = self._snip_history(spec, messages_for_model)
                 # Snipping may have created new orphans; clean them up.
@@ -2027,9 +2028,15 @@ class AgentRunner:
             offset += 1
         return updated
 
-    @staticmethod
-    def _microcompact(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Replace old compactable tool results with one-line summaries."""
+    def _microcompact(self, spec: AgentRunSpec, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Replace old compactable tool results with a recoverable one-line reference.
+
+        Results beyond the most recent ``_MICROCOMPACT_KEEP_RECENT`` are
+        collapsed to a short placeholder to reclaim context. Unlike a blind
+        drop, the placeholder keeps a pointer to the spilled file so the model
+        can ``read_file`` to recover the full output: already-spilled results
+        keep their existing path, never-spilled results are spilled on the spot.
+        """
         compactable_indices: list[int] = []
         for idx, msg in enumerate(messages):
             if msg.get("role") == "tool" and msg.get("name") in _COMPACTABLE_TOOLS:
@@ -2045,13 +2052,44 @@ class AgentRunner:
             content = msg.get("content")
             if not isinstance(content, str) or len(content) < _MICROCOMPACT_MIN_CHARS:
                 continue
-            name = msg.get("name", "tool")
-            summary = f"[{name} result omitted from context]"
+            summary = self._microcompact_reference(spec, msg, idx, content)
             if updated is None:
                 updated = [dict(m) for m in messages]
             updated[idx]["content"] = summary
 
         return updated if updated is not None else messages
+
+    def _microcompact_reference(
+        self,
+        spec: AgentRunSpec,
+        msg: dict[str, Any],
+        idx: int,
+        content: str,
+    ) -> str:
+        """Build the recoverable omission placeholder for one stale tool result."""
+        name = msg.get("name", "tool")
+        ref = parse_persisted_reference(content)
+        if ref is None:
+            # Never spilled (result fit under max_tool_result_chars). Spill it
+            # now so the omission stays recoverable; max_chars=1 forces it.
+            call_id = str(msg.get("tool_call_id") or f"tool_{idx}")
+            try:
+                spilled = maybe_persist_tool_result(
+                    spec.workspace, spec.session_key, call_id, content, max_chars=1,
+                )
+            except Exception:
+                logger.exception("microcompact spill failed for {}", call_id)
+                spilled = None
+            if isinstance(spilled, str):
+                ref = parse_persisted_reference(spilled)
+        if ref is not None:
+            path, size = ref
+            return (
+                f"[{name} result omitted from context — full output "
+                f"({size} chars) at {path}; use read_file to recover]"
+            )
+        # No workspace to spill to: keep the (lossy) opaque marker, but honest.
+        return f"[{name} result omitted from context]"
 
     def _apply_tool_result_budget(
         self,
