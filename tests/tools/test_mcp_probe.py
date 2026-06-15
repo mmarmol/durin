@@ -2,13 +2,12 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from durin.agent.tools.mcp import _probe_http_url, connect_mcp_servers
 from durin.agent.tools.registry import ToolRegistry
-
 
 # ---------------------------------------------------------------------------
 # _probe_http_url unit tests
@@ -47,16 +46,12 @@ async def test_probe_uses_default_port_for_http():
 # ---------------------------------------------------------------------------
 
 def _make_http_cfg(url: str, transport: str = "streamableHttp"):
-    cfg = MagicMock()
-    cfg.type = transport
-    cfg.url = url
-    cfg.command = None
-    cfg.args = []
-    cfg.env = {}
-    cfg.headers = None
-    cfg.tool_timeout = 30
-    cfg.enabled_tools = ["*"]
-    return cfg
+    # Use a real MCPServerConfig (not MagicMock) so new fields like `oauth`,
+    # `malware_check`, `spawn_egress_policy` take their real defaults instead of
+    # truthy mocks that wrongly trigger OAuth/security paths.
+    from durin.config.schema import MCPServerConfig
+
+    return MCPServerConfig(type=transport, url=url, tool_timeout=30, enabled_tools=["*"])
 
 
 @pytest.mark.asyncio
@@ -91,15 +86,11 @@ async def test_probe_not_called_for_stdio():
         return await original_probe(url, **kw)
 
     with patch("durin.agent.tools.mcp._probe_http_url", _spy_probe):
-        cfg = MagicMock()
-        cfg.type = "stdio"
-        cfg.url = None
-        cfg.command = "nonexistent-command-xyz"
-        cfg.args = []
-        cfg.env = None
-        cfg.headers = None
-        cfg.tool_timeout = 30
-        cfg.enabled_tools = ["*"]
+        from durin.config.schema import MCPServerConfig
+
+        cfg = MCPServerConfig(
+            type="stdio", command="nonexistent-command-xyz", tool_timeout=30, enabled_tools=["*"]
+        )
         registry = ToolRegistry()
         await connect_mcp_servers({"s": cfg}, registry)
 
