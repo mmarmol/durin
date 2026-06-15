@@ -128,11 +128,27 @@ def _extract_nullable_branch(options: Any) -> tuple[dict[str, Any], bool] | None
     return None
 
 
+def _rewrite_defs(schema: Any) -> Any:
+    """Rewrite JSON-Schema `definitions`->`$defs` and matching `$ref`s (Kimi/Moonshot)."""
+    if isinstance(schema, dict):
+        out: dict[str, Any] = {}
+        for key, value in schema.items():
+            new_key = "$defs" if key == "definitions" else key
+            if key == "$ref" and isinstance(value, str):
+                value = value.replace("#/definitions/", "#/$defs/")
+            out[new_key] = _rewrite_defs(value)
+        return out
+    if isinstance(schema, list):
+        return [_rewrite_defs(item) for item in schema]
+    return schema
+
+
 def _normalize_schema_for_openai(schema: Any) -> dict[str, Any]:
     """Normalize only nullable JSON Schema patterns for tool definitions."""
     if not isinstance(schema, dict):
         return {"type": "object", "properties": {}}
 
+    schema = _rewrite_defs(schema)
     normalized = dict(schema)
 
     raw_type = normalized.get("type")

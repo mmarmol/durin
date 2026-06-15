@@ -1211,3 +1211,25 @@ def test_schema_keeps_valid_required() -> None:
     )
     wrapper = MCPToolWrapper(SimpleNamespace(call_tool=None), "test", tool_def)
     assert wrapper.parameters["required"] == ["a", "b"]
+
+
+# ---------------------------------------------------------------------------
+# _normalize_schema_for_openai: $defs rewrite (Task 6)
+# ---------------------------------------------------------------------------
+
+
+def test_schema_rewrites_definitions_to_defs() -> None:
+    tool_def = SimpleNamespace(
+        name="demo",
+        description="demo",
+        inputSchema={
+            "type": "object",
+            "properties": {"x": {"$ref": "#/definitions/Foo"}},
+            "definitions": {"Foo": {"type": "string"}},
+        },
+    )
+    wrapper = MCPToolWrapper(SimpleNamespace(call_tool=None), "test", tool_def)
+    params = wrapper.parameters
+    assert "definitions" not in params
+    assert params["$defs"] == {"Foo": {"type": "string"}}
+    assert params["properties"]["x"]["$ref"] == "#/$defs/Foo"
