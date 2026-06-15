@@ -452,6 +452,13 @@ class DecisionLogCappedEvent(TypedDict):
     source: str  # "tool" | "auto"
 
 
+class DecisionLogExtractedEvent(TypedDict):
+    """Decisions auto-extracted from a compacted span into the task-state anchor (concern B)."""
+
+    count: int
+    session_key: str
+
+
 class AskUserQuestionAskedEvent(TypedDict):
     """``ask_user_question`` tool surfaced a structured prompt to the
     user; the turn is paused awaiting their selection."""
@@ -1177,6 +1184,7 @@ EVENTS: dict[str, type] = {
     "tool.todo_write": ToolTodoWriteEvent,
     "tool.note_decision": ToolNoteDecisionEvent,
     "decision_log.capped": DecisionLogCappedEvent,
+    "decision_log.extracted": DecisionLogExtractedEvent,
     "ask_user.question_asked": AskUserQuestionAskedEvent,
     "ask_user.answer_received": AskUserAnswerReceivedEvent,
     "ask_user.answer_timeout": AskUserAnswerTimeoutEvent,
@@ -1275,6 +1283,7 @@ __all__ = [
     "ToolTodoWriteEvent",
     "ToolNoteDecisionEvent",
     "DecisionLogCappedEvent",
+    "DecisionLogExtractedEvent",
     "AskUserQuestionAskedEvent",
     "AskVisionStartEvent",
     "AskVisionErrorEvent",
