@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from durin.agent.memory import Consolidator
+from durin.agent.memory import Consolidator, MemoryStore
+from durin.session.manager import Session
 
 
 def _consolidator(llm_content):
@@ -72,3 +74,65 @@ async def test_extracted_decisions_write_to_metadata_with_caps():
     stored = parse_decisions(session_meta[DECISION_LOG_KEY])
     assert [e["text"] for e in stored] == ["chose separate call", "found ordering bug"]
     assert all(e["source"] == "auto" for e in stored)
+
+
+@pytest.mark.asyncio
+async def test_maybe_consolidate_persists_extracted_decisions(tmp_path):
+    """maybe_consolidate_by_tokens drives the real persist path: extract_decisions
+    result is written via add_decision(source='auto') into session.metadata and
+    saved via sessions.save — verifying the call-site wiring in memory.py."""
+    from durin.session.decision_log import DECISION_LOG_KEY, parse_decisions
+
+    store = MemoryStore(tmp_path)
+    sessions = MagicMock()
+    sessions.save = MagicMock()
+
+    cons = Consolidator(
+        store=store,
+        provider=MagicMock(),
+        model="test-model",
+        sessions=sessions,
+        context_window_tokens=1000,
+        build_messages=MagicMock(return_value=[]),
+        get_tool_definitions=MagicMock(return_value=[]),
+        max_completion_tokens=100,
+        decision_log_enabled=True,
+        decision_log_max_entries=10,
+        decision_log_max_chars=1500,
+    )
+
+    # Build a real Session with enough messages so a boundary exists.
+    # Messages at indices 0 and 50 are "user" so pick_consolidation_boundary
+    # can find a legal eviction boundary at index 50.
+    session = Session(key="test:decisions")
+    for i in range(70):
+        role = "user" if i in {0, 50} else "assistant"
+        session.add_message(role, f"m{i}")
+
+    # Force the token estimate above the trigger so a consolidation round fires.
+    # Two return values: first above trigger (forces round), second below target
+    # (exits loop after one round).
+    cons.estimate_session_prompt_tokens = MagicMock(
+        side_effect=[(1200, "tiktoken"), (400, "tiktoken")]
+    )
+
+    # Stub archive to return a truthy summary (required for if last_summary: to fire).
+    cons.archive = AsyncMock(return_value=("did work and decided things", {"entities": [], "topics": []}))
+
+    # Stub extract_decisions on THIS instance to return the two decisions.
+    # This overrides the shared fixture's [] stub and exercises the call-site
+    # wiring (span → if decisions: → add_decision → sessions.save → telemetry).
+    cons.extract_decisions = AsyncMock(return_value=["chose separate call", "found ordering bug"])
+
+    await cons.maybe_consolidate_by_tokens(session)
+
+    # The two decisions must have been written into the real metadata dict.
+    assert DECISION_LOG_KEY in session.metadata, "decision log not written to session.metadata"
+    stored = parse_decisions(session.metadata[DECISION_LOG_KEY])
+    texts = [e["text"] for e in stored]
+    assert "chose separate call" in texts
+    assert "found ordering bug" in texts
+    assert all(e["source"] == "auto" for e in stored)
+    # sessions.save must have been called (once for the compaction round,
+    # once for the decision log write).
+    assert sessions.save.call_count >= 2

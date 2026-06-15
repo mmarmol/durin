@@ -1140,7 +1140,7 @@ class Consolidator:
                         span = session.messages[consolidated_start:session.last_consolidated]
                         decisions = await self.extract_decisions(span)
                         if decisions:
-                            from datetime import datetime, timezone
+                            from datetime import timezone
 
                             from durin.session.decision_log import add_decision
 
