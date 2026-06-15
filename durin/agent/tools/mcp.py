@@ -571,20 +571,10 @@ class MCPPromptWrapper(Tool):
                 )
                 return f"(MCP prompt call failed: {type(exc).__name__})"
             else:
-                parts: list[str] = []
+                parts: list[Any] = []
                 for message in result.messages:
-                    content = message.content
-                    if isinstance(content, types.TextContent):
-                        parts.append(content.text)
-                    elif isinstance(content, list):
-                        for block in content:
-                            if isinstance(block, types.TextContent):
-                                parts.append(block.text)
-                            else:
-                                parts.append(str(block))
-                    else:
-                        parts.append(str(content))
-                return "\n".join(parts) or "(no output)"
+                    parts.extend(_content_block_to_parts(message.content, types))
+                return _parts_to_result(parts)
 
         return "(MCP prompt call failed)"  # Unreachable
 
