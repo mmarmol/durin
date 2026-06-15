@@ -1,6 +1,8 @@
 """Tests for SP-4b: MCPServerConfig.oauth field + provider builder + headless redirect."""
 from __future__ import annotations
 
+import pytest
+
 import durin.security.secrets as _secrets
 
 
@@ -14,14 +16,17 @@ def _point_store_at(tmp_path, monkeypatch):
 
 # ---- 4b.1: MCPServerConfig.oauth field ----
 
+
 def test_oauth_field_defaults_off():
     from durin.config.schema import MCPServerConfig
+
     cfg = MCPServerConfig(url="https://api.example/mcp")
     assert cfg.oauth is None
 
 
 def test_oauth_bool_true():
     from durin.config.schema import MCPServerConfig
+
     cfg = MCPServerConfig.model_validate(
         {"url": "https://api.example/mcp", "oauth": True}
     )
@@ -30,6 +35,7 @@ def test_oauth_bool_true():
 
 def test_oauth_dict_with_scope_and_client():
     from durin.config.schema import MCPServerConfig
+
     cfg = MCPServerConfig.model_validate(
         {
             "url": "https://api.example/mcp",
@@ -42,12 +48,14 @@ def test_oauth_dict_with_scope_and_client():
 
 def test_oauth_config_normalizer_none():
     from durin.config.schema import MCPServerConfig
+
     cfg = MCPServerConfig(url="https://api.example/mcp")
     assert cfg.oauth_config() is None
 
 
 def test_oauth_config_normalizer_bool():
-    from durin.config.schema import MCPServerConfig, MCPOAuthConfig
+    from durin.config.schema import MCPOAuthConfig, MCPServerConfig
+
     cfg = MCPServerConfig.model_validate({"url": "https://api.example/mcp", "oauth": True})
     oc = cfg.oauth_config()
     assert isinstance(oc, MCPOAuthConfig)
@@ -56,7 +64,8 @@ def test_oauth_config_normalizer_bool():
 
 
 def test_oauth_config_normalizer_dict():
-    from durin.config.schema import MCPServerConfig, MCPOAuthConfig
+    from durin.config.schema import MCPOAuthConfig, MCPServerConfig
+
     cfg = MCPServerConfig.model_validate(
         {"url": "https://api.example/mcp", "oauth": {"scope": "read", "callbackPort": 1457}}
     )
@@ -68,15 +77,14 @@ def test_oauth_config_normalizer_dict():
 
 # ---- 4b.2: provider builder + headless redirect ----
 
-import pytest
-
 
 def test_build_provider_is_httpx_auth(tmp_path, monkeypatch):
     _point_store_at(tmp_path, monkeypatch)
     import httpx
     from mcp.client.auth import OAuthClientProvider
-    from durin.config.schema import MCPServerConfig
+
     from durin.agent.tools.mcp_oauth import build_oauth_provider
+    from durin.config.schema import MCPServerConfig
 
     cfg = MCPServerConfig(url="https://api.example/mcp", oauth=True)
     provider = build_oauth_provider("acme", cfg, headless=True)
@@ -86,8 +94,8 @@ def test_build_provider_is_httpx_auth(tmp_path, monkeypatch):
 
 def test_build_provider_metadata(tmp_path, monkeypatch):
     _point_store_at(tmp_path, monkeypatch)
-    from durin.config.schema import MCPServerConfig
     from durin.agent.tools.mcp_oauth import build_oauth_provider
+    from durin.config.schema import MCPServerConfig
 
     cfg = MCPServerConfig.model_validate(
         {"url": "https://api.example/mcp", "oauth": {"scope": "read", "callbackPort": 1457}}
