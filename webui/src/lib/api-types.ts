@@ -1181,11 +1181,17 @@ export interface components {
         };
         /**
          * ForgetResult
-         * @description Result of an archive operation.  ``result`` drives HTTP status.
+         * @description Result of an archive operation.  ``result`` drives the HTTP ``status``
+         *     (200 archived/not_found, 403 protected, 400 invalid).
          */
         ForgetResult: {
             /** Result */
             result: string;
+            /**
+             * Status
+             * @default 200
+             */
+            status: number;
         };
         /** GithubTokenTestQuery */
         GithubTokenTestQuery: {
