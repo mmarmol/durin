@@ -358,7 +358,11 @@
       "testToken": "Test",
       "tokenOk": "Token OK — {{remaining}} API requests remaining.",
       "tokenTestError": "Token test failed.",
-      "modelPlaceholder": "default model"
+      "modelPlaceholder": "default model",
+      "modelTestOk": "Model OK — responds correctly.",
+      "modelTestError": "Could not test the model.",
+      "modelTestFailed": "Model test failed. You can still save it if you're sure.",
+      "saveAnyway": "Save anyway"
     },
     "cron": {
       "title": "Scheduled jobs",

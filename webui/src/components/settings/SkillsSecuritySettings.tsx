@@ -6,10 +6,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   getConfig,
+  listModels,
   listSecrets,
   setConfigValue,
   testGithubToken,
+  testModel,
   type GithubTokenTestResult,
+  type ModelTestResult,
 } from "@/lib/api";
 import { SettingsGroup, SettingsRow, SettingsSectionTitle } from "./primitives";
 
@@ -177,6 +180,7 @@ export function SkillsSecuritySettings({ token }: { token: string }) {
           >
             <ModelField
               value={v.judgeModel}
+              token={token}
               disabled={false}
               saving={savingPath === "skills.security.llm_judge.model"}
               onSave={(m) => void onSave("skills.security.llm_judge.model", m)}
@@ -314,25 +318,117 @@ export function SkillsSecuritySettings({ token }: { token: string }) {
   );
 }
 
-function ModelField({ value, disabled, saving, onSave }: {
-  value: string; disabled: boolean; saving: boolean; onSave: (m: string) => void;
+function ModelField({ value, token, disabled, onSave }: {
+  value: string; token: string; disabled: boolean; saving: boolean; onSave: (m: string) => void;
 }) {
   const { t } = useTranslation();
   const [draft, setDraft] = useState(value);
+  const [models, setModels] = useState<string[]>([]);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<ModelTestResult | null>(null);
+  const [forceSave, setForceSave] = useState(false);
   useEffect(() => setDraft(value), [value]);
+
+  useEffect(() => {
+    let cancelled = false;
+    listModels(token, "")
+      .then((cat) => {
+        if (!cancelled) {
+          const merged = Array.from(new Set([...(cat.suggested ?? []), ...(cat.models ?? [])]));
+          setModels(merged);
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [token]);
+
+  const runTest = useCallback(async (model: string): Promise<ModelTestResult | null> => {
+    if (!model.trim()) return null;
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const result = await testModel(token, { model: model.trim() });
+      setTestResult(result);
+      return result;
+    } catch {
+      const err: ModelTestResult = { status: "fail", message: t("settings.skillsSecurity.modelTestError"), fix: "" };
+      setTestResult(err);
+      return err;
+    } finally {
+      setTesting(false);
+    }
+  }, [token, t]);
+
+  const handleSave = useCallback(async () => {
+    const model = draft.trim();
+    if (!model || model === value) return;
+    setForceSave(false);
+    const result = await runTest(model);
+    if (result && result.status === "fail") {
+      setForceSave(true);
+      return;
+    }
+    onSave(model);
+  }, [draft, value, runTest, onSave]);
+
+  const handleForceSave = useCallback(() => {
+    setForceSave(false);
+    onSave(draft.trim());
+  }, [draft, onSave]);
+
+  const changed = draft.trim() !== value && draft.trim().length > 0;
+
   return (
-    <div className="flex items-center gap-2">
-      <Input
-        value={draft}
-        disabled={disabled}
-        onChange={(e) => setDraft(e.target.value)}
-        placeholder={t("settings.skillsSecurity.modelPlaceholder")}
-        className="w-[180px] text-[12px]"
-      />
-      <Button size="sm" variant="outline" disabled={disabled || saving || draft === value}
-        onClick={() => onSave(draft.trim())}>
-        {t("settings.actions.save")}
-      </Button>
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center gap-2">
+        <Input
+          value={draft}
+          disabled={disabled}
+          onChange={(e) => { setDraft(e.target.value); setTestResult(null); setForceSave(false); }}
+          placeholder={t("settings.skillsSecurity.modelPlaceholder")}
+          className="w-[180px] text-[12px]"
+          list="judge-model-list"
+        />
+        <datalist id="judge-model-list">
+          {models.map((m) => (
+            <option key={m} value={m} />
+          ))}
+        </datalist>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={disabled || testing || !changed}
+          onClick={() => void handleSave()}
+        >
+          {testing ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : forceSave ? (
+            t("settings.skillsSecurity.saveAnyway")
+          ) : (
+            t("settings.actions.save")
+          )}
+        </Button>
+      </div>
+      {testResult ? (
+        <p className={`text-[11px] ${testResult.status === "ok" ? "text-emerald-500" : testResult.status === "warn" ? "text-amber-500" : "text-destructive"}`}>
+          {testResult.status === "ok"
+            ? t("settings.skillsSecurity.modelTestOk")
+            : `${testResult.status === "warn" ? "⚠ " : "✗ "}${testResult.message}`}
+        </p>
+      ) : null}
+      {forceSave ? (
+        <p className="text-[11px] text-muted-foreground">
+          {t("settings.skillsSecurity.modelTestFailed")}
+          {" "}
+          <button
+            type="button"
+            onClick={handleForceSave}
+            className="underline hover:text-foreground"
+          >
+            {t("settings.skillsSecurity.saveAnyway")}
+          </button>
+        </p>
+      ) : null}
     </div>
   );
 }

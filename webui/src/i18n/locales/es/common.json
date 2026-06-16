@@ -325,7 +325,11 @@
       "testToken": "Probar",
       "tokenOk": "Token OK — quedan {{remaining}} requests de API.",
       "tokenTestError": "Falló la prueba del token.",
-      "modelPlaceholder": "modelo por default"
+      "modelPlaceholder": "modelo por default",
+      "modelTestOk": "Modelo OK — responde correctamente.",
+      "modelTestError": "No se pudo probar el modelo.",
+      "modelTestFailed": "La prueba del modelo falló. Puedes guardarlo de todos modos si estás seguro.",
+      "saveAnyway": "Guardar de todos modos"
     },
     "secrets": {
       "addTitle": "Agregar un secreto",
