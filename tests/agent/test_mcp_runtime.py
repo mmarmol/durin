@@ -3,6 +3,7 @@ connect/disconnect, and the McpRuntime accessor."""
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -114,3 +115,53 @@ async def test_disconnect_mcp_server_unknown_raises(tmp_path):
     loop = _loop(tmp_path, {})
     with pytest.raises(KeyError):
         await loop.disconnect_mcp_server("nope")
+
+
+# --- McpRuntime accessor --------------------------------------------------
+
+
+def test_mcp_runtime_live_status_reports_per_connection():
+    from durin.agent.mcp_runtime import McpRuntime
+    from durin.agent.tools.mcp_connection import BreakerState
+
+    registry = MagicMock()
+    registry.get.side_effect = lambda n: (
+        SimpleNamespace(description="tool A") if n == "mcp_x_a" else None
+    )
+
+    conn_ok = MagicMock()
+    conn_ok.breaker_state.return_value = BreakerState.CLOSED
+    conn_ok._error = None
+    conn_ok._registered_names = ["mcp_x_a"]
+
+    conn_bad = MagicMock()
+    conn_bad.breaker_state.return_value = BreakerState.OPEN
+    conn_bad._error = RuntimeError("boom")
+    conn_bad._registered_names = []
+
+    loop = SimpleNamespace(
+        tools=registry, _mcp_connections={"x": conn_ok, "y": conn_bad}
+    )
+    status = McpRuntime(loop).live_status()
+
+    assert status["x"].breaker_state == "closed"
+    assert status["x"].error is None
+    assert status["x"].tools == [("mcp_x_a", "tool A")]
+    assert status["y"].breaker_state == "open"
+    assert status["y"].error == "boom"
+    assert status["y"].tools == []
+
+
+async def test_mcp_runtime_connect_disconnect_delegate():
+    from durin.agent.mcp_runtime import McpRuntime
+
+    loop = MagicMock()
+    loop.connect_mcp_server = AsyncMock()
+    loop.disconnect_mcp_server = AsyncMock()
+    rt = McpRuntime(loop)
+
+    await rt.connect("x")
+    await rt.disconnect("x")
+
+    loop.connect_mcp_server.assert_awaited_once_with("x")
+    loop.disconnect_mcp_server.assert_awaited_once_with("x")
