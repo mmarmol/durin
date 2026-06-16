@@ -2349,10 +2349,8 @@
         },
         "summary": "Return effective config (secrets masked) + JSON schema",
         "x-required-scope": "config:read"
-      }
-    },
-    "/api/v1/config/set": {
-      "get": {
+      },
+      "post": {
         "operationId": "config_set",
         "requestBody": {
           "content": {
@@ -2381,6 +2379,33 @@
       }
     },
     "/api/v1/cron": {
+      "delete": {
+        "operationId": "cron_remove",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CronRemoveCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CronRemoveResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Remove a non-system cron job by id",
+        "x-required-scope": "cron:write"
+      },
       "get": {
         "operationId": "cron_list",
         "requestBody": {
@@ -2409,37 +2434,8 @@
         "x-required-scope": "cron:read"
       }
     },
-    "/api/v1/cron/remove": {
-      "get": {
-        "operationId": "cron_remove",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CronRemoveCommand"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CronRemoveResult"
-                }
-              }
-            },
-            "description": "Success"
-          }
-        },
-        "summary": "Remove a non-system cron job by id",
-        "x-required-scope": "cron:write"
-      }
-    },
     "/api/v1/cron/run": {
-      "get": {
+      "post": {
         "operationId": "cron_run",
         "requestBody": {
           "content": {
@@ -2468,7 +2464,7 @@
       }
     },
     "/api/v1/cron/toggle": {
-      "get": {
+      "post": {
         "operationId": "cron_toggle",
         "requestBody": {
           "content": {
@@ -2497,7 +2493,7 @@
       }
     },
     "/api/v1/extras/ensure": {
-      "get": {
+      "post": {
         "operationId": "health_extras_ensure",
         "requestBody": {
           "content": {
@@ -2526,7 +2522,7 @@
       }
     },
     "/api/v1/extras/restart": {
-      "get": {
+      "post": {
         "operationId": "health_extras_restart",
         "requestBody": {
           "content": {
@@ -2729,6 +2725,33 @@
       }
     },
     "/api/v1/memory/entry": {
+      "delete": {
+        "operationId": "memory_forget",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemoryForgetCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForgetResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Archive a memory entry",
+        "x-required-scope": "memory:write"
+      },
       "get": {
         "operationId": "memory_entry",
         "requestBody": {
@@ -2755,35 +2778,6 @@
         },
         "summary": "One entry's frontmatter + body",
         "x-required-scope": "memory:read"
-      }
-    },
-    "/api/v1/memory/forget": {
-      "get": {
-        "operationId": "memory_forget",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MemoryForgetCommand"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ForgetResult"
-                }
-              }
-            },
-            "description": "Success"
-          }
-        },
-        "summary": "Archive a memory entry",
-        "x-required-scope": "memory:write"
       }
     },
     "/api/v1/memory/graph": {
@@ -2989,8 +2983,8 @@
         "x-required-scope": "config:read"
       }
     },
-    "/api/v1/oauth/codex/disconnect": {
-      "get": {
+    "/api/v1/oauth/codex": {
+      "delete": {
         "operationId": "oauth_disconnect",
         "requestBody": {
           "content": {
@@ -3048,7 +3042,7 @@
       }
     },
     "/api/v1/oauth/codex/start": {
-      "get": {
+      "post": {
         "operationId": "oauth_start",
         "requestBody": {
           "content": {
@@ -3077,7 +3071,7 @@
       }
     },
     "/api/v1/oauth/codex/start-loopback": {
-      "get": {
+      "post": {
         "operationId": "oauth_start_loopback",
         "requestBody": {
           "content": {
@@ -3135,6 +3129,33 @@
       }
     },
     "/api/v1/secrets": {
+      "delete": {
+        "operationId": "secrets_delete",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SecretDeleteCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretDeleteResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Delete a secret by name",
+        "x-required-scope": "secrets:write"
+      },
       "get": {
         "operationId": "secrets_list",
         "requestBody": {
@@ -3161,35 +3182,6 @@
         },
         "summary": "List secret metadata (values never returned)",
         "x-required-scope": "secrets:read"
-      }
-    },
-    "/api/v1/secrets/delete": {
-      "get": {
-        "operationId": "secrets_delete",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SecretDeleteCommand"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SecretDeleteResult"
-                }
-              }
-            },
-            "description": "Success"
-          }
-        },
-        "summary": "Delete a secret by name",
-        "x-required-scope": "secrets:write"
       }
     },
     "/api/v1/sessions": {
@@ -3221,8 +3213,8 @@
         "x-required-scope": "sessions:read"
       }
     },
-    "/api/v1/sessions/{key}/delete": {
-      "get": {
+    "/api/v1/sessions/{key}": {
+      "delete": {
         "operationId": "sessions_delete",
         "requestBody": {
           "content": {
@@ -3280,7 +3272,7 @@
       }
     },
     "/api/v1/sessions/{key}/rename": {
-      "get": {
+      "post": {
         "operationId": "sessions_rename",
         "requestBody": {
           "content": {
@@ -3364,39 +3356,8 @@
         },
         "summary": "Return the full settings payload (secrets masked)",
         "x-required-scope": "settings:read"
-      }
-    },
-    "/api/v1/settings/provider/update": {
-      "get": {
-        "operationId": "settings_provider_update",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SettingsProviderUpdateCommand"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SettingsResult"
-                }
-              }
-            },
-            "description": "Success"
-          }
-        },
-        "summary": "Update provider API key and/or base URL (key stored as secret ref)",
-        "x-required-scope": "settings:write"
-      }
-    },
-    "/api/v1/settings/update": {
-      "get": {
+      },
+      "post": {
         "operationId": "settings_update",
         "requestBody": {
           "content": {
@@ -3424,8 +3385,37 @@
         "x-required-scope": "settings:write"
       }
     },
-    "/api/v1/settings/web-search/update": {
-      "get": {
+    "/api/v1/settings/provider": {
+      "post": {
+        "operationId": "settings_provider_update",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettingsProviderUpdateCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Update provider API key and/or base URL (key stored as secret ref)",
+        "x-required-scope": "settings:write"
+      }
+    },
+    "/api/v1/settings/web-search": {
+      "post": {
         "operationId": "settings_web_search_update",
         "requestBody": {
           "content": {
@@ -3541,7 +3531,7 @@
       }
     },
     "/api/v1/skills/import": {
-      "get": {
+      "post": {
         "operationId": "skills_import_skill",
         "requestBody": {
           "content": {
@@ -3657,6 +3647,33 @@
       }
     },
     "/api/v1/skills/{name}": {
+      "delete": {
+        "operationId": "skills_remove",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillRemoveCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillsResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Delete a workspace skill / revert a fork",
+        "x-required-scope": "skills:write"
+      },
       "get": {
         "operationId": "skills_get",
         "requestBody": {
@@ -3686,7 +3703,7 @@
       }
     },
     "/api/v1/skills/{name}/approve": {
-      "get": {
+      "post": {
         "operationId": "skills_approve",
         "requestBody": {
           "content": {
@@ -3744,7 +3761,7 @@
       }
     },
     "/api/v1/skills/{name}/file/save": {
-      "get": {
+      "post": {
         "operationId": "skills_file_save",
         "requestBody": {
           "content": {
@@ -3831,7 +3848,7 @@
       }
     },
     "/api/v1/skills/{name}/install-deps": {
-      "get": {
+      "post": {
         "operationId": "skills_install_deps",
         "requestBody": {
           "content": {
@@ -3889,7 +3906,7 @@
       }
     },
     "/api/v1/skills/{name}/mode": {
-      "get": {
+      "post": {
         "operationId": "skills_mode",
         "requestBody": {
           "content": {
@@ -3917,8 +3934,8 @@
         "x-required-scope": "skills:write"
       }
     },
-    "/api/v1/skills/{name}/reject": {
-      "get": {
+    "/api/v1/skills/{name}/quarantine": {
+      "delete": {
         "operationId": "skills_reject",
         "requestBody": {
           "content": {
@@ -3946,37 +3963,8 @@
         "x-required-scope": "skills:write"
       }
     },
-    "/api/v1/skills/{name}/remove": {
-      "get": {
-        "operationId": "skills_remove",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SkillRemoveCommand"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SkillsResult"
-                }
-              }
-            },
-            "description": "Success"
-          }
-        },
-        "summary": "Delete a workspace skill / revert a fork",
-        "x-required-scope": "skills:write"
-      }
-    },
     "/api/v1/skills/{name}/save": {
-      "get": {
+      "post": {
         "operationId": "skills_save",
         "requestBody": {
           "content": {

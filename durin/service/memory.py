@@ -293,8 +293,8 @@ class MemoryService:
     # -- writes --------------------------------------------------------------
 
     @route(
-        "GET",
-        "/api/v1/memory/forget",
+        "DELETE",
+        "/api/v1/memory/entry",
         scope=Scope.MEMORY_WRITE.value,
         request_model=MemoryForgetCommand,
         response_model=ForgetResult,

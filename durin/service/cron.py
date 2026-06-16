@@ -211,8 +211,8 @@ class CronService:
         )
 
     @route(
-        "GET",
-        "/api/v1/cron/remove",
+        "DELETE",
+        "/api/v1/cron",
         scope=Scope.CRON_WRITE.value,
         request_model=CronRemoveCommand,
         response_model=CronRemoveResult,
@@ -229,7 +229,7 @@ class CronService:
         return CronRemoveResult(result=result)
 
     @route(
-        "GET",
+        "POST",
         "/api/v1/cron/run",
         scope=Scope.CRON_WRITE.value,
         request_model=CronRunCommand,
@@ -258,7 +258,7 @@ class CronService:
         return CronRunResult(started=True)
 
     @route(
-        "GET",
+        "POST",
         "/api/v1/cron/toggle",
         scope=Scope.CRON_WRITE.value,
         request_model=CronToggleCommand,

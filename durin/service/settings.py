@@ -204,8 +204,8 @@ class SettingsService:
         return self._payload()
 
     @route(
-        "GET",
-        "/api/v1/settings/update",
+        "POST",
+        "/api/v1/settings",
         scope=Scope.SETTINGS_WRITE.value,
         request_model=SettingsUpdateCommand,
         response_model=SettingsResult,
@@ -259,8 +259,8 @@ class SettingsService:
         return self._payload(requires_restart=False)
 
     @route(
-        "GET",
-        "/api/v1/settings/provider/update",
+        "POST",
+        "/api/v1/settings/provider",
         scope=Scope.SETTINGS_WRITE.value,
         request_model=SettingsProviderUpdateCommand,
         response_model=SettingsResult,
@@ -321,8 +321,8 @@ class SettingsService:
         return self._payload(requires_restart=False)
 
     @route(
-        "GET",
-        "/api/v1/settings/web-search/update",
+        "POST",
+        "/api/v1/settings/web-search",
         scope=Scope.SETTINGS_WRITE.value,
         request_model=SettingsWebSearchUpdateCommand,
         response_model=SettingsResult,

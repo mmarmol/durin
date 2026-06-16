@@ -208,8 +208,8 @@ class SessionsService:
         return WebuiThreadResult(data={})
 
     @route(
-        "GET",
-        "/api/v1/sessions/{key}/delete",
+        "DELETE",
+        "/api/v1/sessions/{key}",
         scope=Scope.SESSIONS_WRITE.value,
         request_model=SessionDeleteCommand,
         response_model=SessionDeleteResult,
@@ -229,7 +229,7 @@ class SessionsService:
         return SessionDeleteResult(deleted=bool(deleted))
 
     @route(
-        "GET",
+        "POST",
         "/api/v1/sessions/{key}/rename",
         scope=Scope.SESSIONS_WRITE.value,
         request_model=SessionRenameCommand,

@@ -328,7 +328,7 @@ class SkillsService:
     # -- writes --------------------------------------------------------------
 
     @route(
-        "GET",
+        "POST",
         "/api/v1/skills/{name}/save",
         scope=Scope.SKILLS_WRITE.value,
         request_model=SkillSaveCommand,
@@ -343,7 +343,7 @@ class SkillsService:
         return SkillsResult(status=status, data=payload)
 
     @route(
-        "GET",
+        "POST",
         "/api/v1/skills/{name}/file/save",
         scope=Scope.SKILLS_WRITE.value,
         request_model=SkillFileSaveCommand,
@@ -364,7 +364,7 @@ class SkillsService:
         return SkillsResult(status=status, data=payload)
 
     @route(
-        "GET",
+        "POST",
         "/api/v1/skills/{name}/mode",
         scope=Scope.SKILLS_WRITE.value,
         request_model=SkillModeCommand,
@@ -379,7 +379,7 @@ class SkillsService:
         return SkillsResult(status=status, data=payload)
 
     @route(
-        "GET",
+        "POST",
         "/api/v1/skills/import",
         scope=Scope.SKILLS_WRITE.value,
         request_model=SkillsImportCommand,
@@ -396,7 +396,7 @@ class SkillsService:
         return SkillsResult(status=status, data=payload)
 
     @route(
-        "GET",
+        "POST",
         "/api/v1/skills/{name}/approve",
         scope=Scope.SKILLS_WRITE.value,
         request_model=SkillApproveCommand,
@@ -420,7 +420,7 @@ class SkillsService:
         return SkillsResult(status=status, data=payload)
 
     @route(
-        "GET",
+        "POST",
         "/api/v1/skills/{name}/install-deps",
         scope=Scope.SKILLS_WRITE.value,
         request_model=SkillInstallDepsCommand,
@@ -440,8 +440,8 @@ class SkillsService:
         return SkillsResult(status=status, data=payload)
 
     @route(
-        "GET",
-        "/api/v1/skills/{name}/reject",
+        "DELETE",
+        "/api/v1/skills/{name}/quarantine",
         scope=Scope.SKILLS_WRITE.value,
         request_model=SkillRejectCommand,
         response_model=SkillsResult,
@@ -455,8 +455,8 @@ class SkillsService:
         return SkillsResult(status=status, data=payload)
 
     @route(
-        "GET",
-        "/api/v1/skills/{name}/remove",
+        "DELETE",
+        "/api/v1/skills/{name}",
         scope=Scope.SKILLS_WRITE.value,
         request_model=SkillRemoveCommand,
         response_model=SkillsResult,

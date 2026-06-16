@@ -147,7 +147,7 @@ class HealthService:
         )
 
     @route(
-        "GET",
+        "POST",
         "/api/v1/extras/ensure",
         scope=Scope.SYSTEM_WRITE.value,
         request_model=ExtrasEnsureCommand,
@@ -178,7 +178,7 @@ class HealthService:
         )
 
     @route(
-        "GET",
+        "POST",
         "/api/v1/extras/restart",
         scope=Scope.SYSTEM_WRITE.value,
         request_model=ExtrasRestartCommand,

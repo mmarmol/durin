@@ -1,14 +1,14 @@
-"""Starlette ASGI app — the new HTTP front door (SP4).
+"""Starlette ASGI app — the HTTP front door (SP4 reads + SP5 writes).
 
 Exports:
     resolve_principal_from_headers  — extract + verify a bearer token.
-    build_api_app                   — build the read-only Starlette app.
+    build_api_app                   — build the Starlette app (reads + writes).
 
-The app mounts every GET route whose scope ends in ``:read`` from the
-registry, adapts it generically (path params + query params → request
-model), and maps DomainError codes to RFC-9457 problem+json responses.
-Write routes (POST/PATCH/DELETE) are mounted by SP5, which reuses the
-same generic adapter extended for JSON-body parsing.
+The app mounts every ``@route``-decorated service method from the registry:
+- GET + ``:read`` scope  → read handler (query/path params → request model).
+- POST/DELETE/PATCH      → write handler (JSON body merged with path params).
+
+DomainError codes are mapped to RFC-9457 problem+json responses.
 
 The controller (durin/cli/commands.py) is responsible for:
     - building the ServiceRegistry with real deps,
@@ -129,13 +129,30 @@ def _is_read_route(bound: BoundRoute) -> bool:
     return scope is None or scope.endswith(":read")
 
 
+def _is_write_route(bound: BoundRoute) -> bool:
+    """True for non-GET routes (POST, DELETE, PATCH, …)."""
+    return bound.spec.verb != "GET"
+
+
+def _build_422(exc: ValidationError) -> Response:
+    body = json.dumps(
+        {
+            "type": "urn:durin:error:validation_failed",
+            "title": "Unprocessable Entity",
+            "status": 422,
+            "detail": exc.errors(),
+        }
+    )
+    return Response(body, status_code=422, media_type="application/problem+json")
+
+
 def _build_handler(
     bound: BoundRoute,
     *,
     auth: AuthService,
     static_token: str,
 ) -> Callable:
-    """Return an async Starlette handler for a single BoundRoute.
+    """Return an async Starlette handler for a read (GET) BoundRoute.
 
     Path params and query params (including multi-value lists via .getlist)
     are merged by field name and passed to the request_model constructor.
@@ -174,15 +191,71 @@ def _build_handler(
             try:
                 model = request_model(**params)
             except ValidationError as exc:
-                body = json.dumps(
-                    {
-                        "type": "urn:durin:error:validation_failed",
-                        "title": "Unprocessable Entity",
-                        "status": 422,
-                        "detail": exc.errors(),
-                    }
-                )
-                return Response(body, status_code=422, media_type="application/problem+json")
+                return _build_422(exc)
+        else:
+            model = None
+
+        try:
+            if model is not None:
+                result = await handler(model, principal)
+            else:
+                result = await handler(principal)
+        except DomainError as exc:
+            return _problem_response(exc)
+
+        return JSONResponse(result.model_dump(by_alias=True))
+
+    return endpoint
+
+
+def _build_write_handler(
+    bound: BoundRoute,
+    *,
+    auth: AuthService,
+    static_token: str,
+) -> Callable:
+    """Return an async Starlette handler for a write (POST/DELETE/PATCH) BoundRoute.
+
+    The Command is built from ``await request.json()`` merged with path params.
+    Path params win for any key present in both (e.g. ``{key}``, ``{name}``).
+    An absent or empty body is treated as ``{}`` (allows DELETE with path-only params).
+    The handler:
+      1. Resolves the principal (401 if missing).
+      2. Parses the JSON body (empty/absent → {}) merged with path params.
+      3. Builds the request model (422 on ValidationError).
+      4. Awaits the service handler (DomainError → problem+json).
+      5. Returns JSONResponse(result.model_dump(by_alias=True)).
+    """
+    request_model = bound.spec.request_model
+    handler = bound.handler
+
+    async def endpoint(request: Request) -> Response:
+        principal = resolve_principal_from_headers(
+            request.headers, auth=auth, static_token=static_token
+        )
+        if principal is None:
+            return _problem_response(
+                UnauthenticatedError("Missing or invalid bearer token")
+            )
+
+        params: dict[str, Any] = {}
+        if request_model is not None:
+            # Parse JSON body; treat missing/empty body as {}.
+            body_bytes = await request.body()
+            if body_bytes:
+                try:
+                    body_data = json.loads(body_bytes)
+                    if isinstance(body_data, dict):
+                        params.update(body_data)
+                except (json.JSONDecodeError, ValueError):
+                    pass
+            # Path params always win over body fields.
+            params.update(dict(request.path_params))
+
+            try:
+                model = request_model(**params)
+            except ValidationError as exc:
+                return _build_422(exc)
         else:
             model = None
 
@@ -225,13 +298,16 @@ def build_api_app(
     auth: AuthService,
     static_token: str = "",
 ) -> Starlette:
-    """Build the read-only Starlette ASGI app.
+    """Build the Starlette ASGI app (reads + writes).
 
     Mounts:
-    - ``GET /api/v1/health``    — unauthenticated liveness probe.
-    - One Starlette Route per GET ``@route`` whose scope ends in ``:read``.
+    - ``GET /api/v1/health``         — unauthenticated liveness probe.
+    - One Starlette Route per GET ``@route`` with ``:read`` scope (read handler).
+    - One Starlette Route per non-GET ``@route`` (write handler, JSON body).
 
-    Write routes (POST/PATCH/DELETE) are mounted by SP5.
+    Multiple routes on the same path (e.g. GET + POST /api/v1/settings) are
+    collapsed into a single Starlette Route with both verbs listed; Starlette
+    dispatches by method.
 
     Args:
         registry:     ServiceRegistry with all services registered.
@@ -244,10 +320,12 @@ def build_api_app(
     ]
 
     for bound in registry.routes:
-        if not _is_read_route(bound):
-            continue
-        handler = _build_handler(bound, auth=auth, static_token=static_token)
-        routes.append(Route(bound.spec.path, handler, methods=["GET"]))
+        if _is_read_route(bound):
+            h = _build_handler(bound, auth=auth, static_token=static_token)
+            routes.append(Route(bound.spec.path, h, methods=["GET"]))
+        elif _is_write_route(bound):
+            h = _build_write_handler(bound, auth=auth, static_token=static_token)
+            routes.append(Route(bound.spec.path, h, methods=[bound.spec.verb]))
 
     return Starlette(
         routes=routes,
