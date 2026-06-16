@@ -33,7 +33,6 @@ from websockets.http11 import Response
 from durin.bus.events import OUTBOUND_META_AGENT_UI, OutboundMessage
 from durin.bus.queue import MessageBus
 from durin.channels.base import BaseChannel
-from durin.command.builtin import builtin_command_palette
 from durin.config.paths import get_media_dir
 from durin.config.schema import Base
 from durin.providers.codex_device_auth import (
@@ -590,8 +589,12 @@ class WebSocketChannel(BaseChannel):
         registry.register("settings", SettingsService())
         registry.register("config", ConfigService())
         registry.register("skills", SkillsService(workspace=self._endpoint_workspace()))
+        from durin.service.commands import CommandsService
+        from durin.service.health import HealthService
         from durin.service.memory import MemoryService
         registry.register("memory", MemoryService(workspace_resolver=self._endpoint_workspace))
+        registry.register("health", HealthService())
+        registry.register("commands", CommandsService())
         return registry
 
     def _endpoint_workspace(self) -> Path:
@@ -761,7 +764,7 @@ class WebSocketChannel(BaseChannel):
             return await self._handle_settings(request)
 
         if got == "/api/commands":
-            return self._handle_commands(request)
+            return await self._handle_commands(request)
 
         if got == "/api/settings/update":
             return await self._handle_settings_update(request)
@@ -812,7 +815,7 @@ class WebSocketChannel(BaseChannel):
             return await self._handle_config_set(request)
 
         if got == "/api/logs":
-            return self._handle_logs_list(request)
+            return await self._handle_logs_list(request)
 
         if got == "/api/skills":
             return await self._handle_skills_list(request)
@@ -931,11 +934,11 @@ class WebSocketChannel(BaseChannel):
             return await self._handle_cross_encoder_test(request, query)
 
         if got == "/api/extras/status":
-            return self._handle_extras_status(request, query)
+            return await self._handle_extras_status(request, query)
         if got == "/api/extras/ensure":
             return await self._handle_extras_ensure(request, query)
         if got == "/api/extras/restart":
-            return self._handle_extras_restart(request)
+            return await self._handle_extras_restart(request)
 
         m = re.match(r"^/api/sessions/([^/]+)/messages$", got)
         if m:
@@ -1331,10 +1334,19 @@ class WebSocketChannel(BaseChannel):
         codex_disconnect()
         return _http_json_response(self._codex_status_payload())
 
-    def _handle_commands(self, request: WsRequest) -> Response:
+    async def _handle_commands(self, request: WsRequest) -> Response:
+        """`GET /api/commands` — shim → CommandsService.list."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
-        return _http_json_response({"commands": builtin_command_palette()})
+        from durin.service.commands import CommandsListQuery
+
+        try:
+            result = await self._services.get("commands").list(
+                CommandsListQuery(), Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
+        return _http_json_response(result.model_dump())
 
     async def _handle_settings_update(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
@@ -2024,41 +2036,33 @@ class WebSocketChannel(BaseChannel):
             return _domain_error_response(err)
         return _http_json_response(result.model_dump(by_alias=True))
 
-    def _handle_logs_list(self, request: WsRequest) -> Response:
-        """`GET /api/logs?source=&...` — read-only log viewer (gateway/telemetry).
-
-        Reads JSONL log segments newest-first with transparent gz
-        decompression, grep-before-parse, before_ts cursor pagination, and
-        a bounded scan window. The telemetry backend is NOT touched — this
-        only reads the existing files.
-        """
+    async def _handle_logs_list(self, request: WsRequest) -> Response:
+        """`GET /api/logs?source=&...` — shim → HealthService.logs_list."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
-        from pathlib import Path
+        from durin.service.health import LogsListQuery
 
-        from durin.cli.gateway_daemon import daemon_logs_path
-        from durin.logs.reader import compute_facets, read_page
-
-        query = _parse_query(request.path)
-        log_query = _logs_query_from_params(query)
-        if log_query.source == "telemetry":
-            directory = Path.home() / ".cache" / "durin" / "telemetry"
-        else:
-            directory = daemon_logs_path().parent
-        try:
-            page = read_page(directory, log_query)
-            facets = compute_facets(directory, log_query.source)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"log read failed: {exc}")
-        return _http_json_response(
-            {
-                "lines": page.lines,
-                "facets": facets,
-                "next_cursor": page.next_cursor,
-                "scanned_through_ts": page.scanned_through_ts,
-                "has_more": page.has_more,
-            }
+        raw = _parse_query(request.path)
+        lq = _logs_query_from_params(raw)
+        query = LogsListQuery(
+            source=lq.source,
+            q=lq.q,
+            before_ts=lq.before_ts,
+            window_hours=lq.window_hours,
+            limit=lq.limit,
+            level=list(lq.filters.get("level") or []),
+            channel=list(lq.filters.get("channel") or []),
+            session=list(lq.filters.get("session") or []),
+            type=list(lq.filters.get("type") or []),
         )
+        try:
+            result = await self._services.get("health").logs_list(
+                query, Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
+        # Wire format is snake_case (matches original handler) — do not use by_alias.
+        return _http_json_response(result.model_dump())
 
     async def _handle_models_list(self, request: WsRequest) -> Response:
         """`GET /api/models?provider=X&capability=Y` — shim → ConfigService.models_list."""
@@ -2148,60 +2152,69 @@ class WebSocketChannel(BaseChannel):
         # Wire format is snake_case (matches original handler) — do not use by_alias.
         return _http_json_response(result.model_dump())
 
-    def _handle_extras_status(self, request: WsRequest, query: dict) -> Response:
-        """`GET /api/extras/status?feature=<f>` — is the feature's pip extra
-        importable, and what would installing it cost / require?"""
+    async def _handle_extras_status(self, request: WsRequest, query: dict) -> Response:
+        """`GET /api/extras/status?feature=<f>` — shim → HealthService.extras_status."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
-        from durin.extras import REGISTRY, _module_present
+        from durin.service.health import ExtrasStatusQuery
 
         feature = (_query_first(query, "feature") or "").strip()
-        fe = REGISTRY.get(feature)
-        if fe is None:
-            return _http_error(400, f"unknown feature '{feature}'")
-        return _http_json_response(
-            {
-                "present": _module_present(fe.module),
-                "extra": fe.extra,
-                "approx_size": fe.approx_size,
-                "needs_restart": fe.needs_restart,
-                "label": fe.label,
-            }
-        )
+        try:
+            result = await self._services.get("health").extras_status(
+                ExtrasStatusQuery(feature=feature), Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
+        # Wire format is snake_case (matches original handler) — do not use by_alias.
+        return _http_json_response(result.model_dump())
 
     async def _handle_extras_ensure(self, request: WsRequest, query: dict) -> Response:
-        """`POST /api/extras/ensure?feature=<f>&restart=<bool>` — install the
-        feature's extra (off-loop; may take minutes for heavy deps) and, if it
-        installed something that needs a restart and the caller opted in, kick a
-        gateway restart."""
+        """`GET /api/extras/ensure?feature=<f>&restart=<bool>` — shim → HealthService.extras_ensure.
+
+        The service performs the install and signals whether a restart is needed;
+        the actual subprocess spawn stays here (loop/process concern).
+        """
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
-        import asyncio
-
-        from durin.config.loader import load_config
-        from durin.extras import REGISTRY, ensure_extra
+        from durin.service.health import ExtrasEnsureCommand
 
         feature = (_query_first(query, "feature") or "").strip()
-        if feature not in REGISTRY:
-            return _http_error(400, f"unknown feature '{feature}'")
         restart = (_query_first(query, "restart") or "").lower() in ("1", "true", "yes")
-        res = await asyncio.to_thread(ensure_extra, feature, config=load_config())
-        out = {
-            "status": res.status,
-            "needs_restart": res.needs_restart,
-            "message": res.message,
-        }
-        if res.status == "installed" and restart and res.needs_restart:
+        try:
+            result = await self._services.get("health").extras_ensure(
+                ExtrasEnsureCommand(feature=feature, restart=restart), Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
+        if result.restarting:
             self._spawn_gateway_restart()
+        out = {
+            "status": result.status,
+            "needs_restart": result.needs_restart,
+            "message": result.message,
+        }
+        if result.restarting:
             out["restarting"] = True
         return _http_json_response(out)
 
-    def _handle_extras_restart(self, request: WsRequest) -> Response:
-        """`POST /api/extras/restart` — restart the gateway daemon."""
+    async def _handle_extras_restart(self, request: WsRequest) -> Response:
+        """`GET /api/extras/restart` — shim → HealthService.extras_restart.
+
+        The service returns the decision; subprocess spawn stays here.
+        """
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
+        from durin.service.health import ExtrasRestartCommand
+
+        try:
+            result = await self._services.get("health").extras_restart(
+                ExtrasRestartCommand(), Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
         self._spawn_gateway_restart()
-        return _http_json_response({"restarting": True})
+        # Wire format is snake_case — do not use by_alias.
+        return _http_json_response(result.model_dump())
 
     @staticmethod
     def _spawn_gateway_restart() -> None:
