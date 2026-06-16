@@ -8,7 +8,7 @@ auth + parse + serialize wrapper.
 Result shape
 ------------
 Graph-API payloads are large/dynamic dicts.  All read methods share a single
-``MemoryResult`` with ``data: dict[str, Any]`` (escape hatch — SP3 can tighten).
+``MemoryResult`` with ``data: dict[str, Any]`` (escape hatch — open by design).
 ``ForgetResult`` is kept separate because its ``result`` field drives HTTP status
 selection in the shim.
 

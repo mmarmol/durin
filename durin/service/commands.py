@@ -5,7 +5,7 @@ Trivial: delegates directly to ``builtin_command_palette()``.
 
 Escape hatch: ``CommandsResult.commands`` is ``list[Any]`` — the palette items
 are plain dicts built by ``builtin_command_palette()`` and not modelled here
-(SP3 can tighten).
+(open by design).
 """
 
 from __future__ import annotations

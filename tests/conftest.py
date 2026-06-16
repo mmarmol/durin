@@ -42,6 +42,26 @@ os.environ["TERM"] = "dumb"
 os.environ["COLUMNS"] = "200"
 
 
+# Starlette's TestClient defaults the ASGI scope's client address to
+# ("testclient", 50000), which is NOT a loopback IP. durin's /webui/bootstrap
+# gates unauthenticated ADMIN-token minting on a real localhost peer when no
+# token_issue_secret is set (durin/api/asgi.py bootstrap_handler + _is_localhost).
+# An in-process TestClient genuinely IS a local client, so default its peer to
+# 127.0.0.1 for the whole suite. Tests exercising the remote-rejection path pass
+# client=(...) explicitly.
+import starlette.testclient as _starlette_testclient  # noqa: E402
+
+_orig_testclient_init = _starlette_testclient.TestClient.__init__
+
+
+def _testclient_init_localhost(self, *args, **kwargs):
+    kwargs.setdefault("client", ("127.0.0.1", 0))
+    return _orig_testclient_init(self, *args, **kwargs)
+
+
+_starlette_testclient.TestClient.__init__ = _testclient_init_localhost
+
+
 @pytest.fixture(autouse=True)
 def _test_default_author_scope():
     with author_scope("agent_created"):

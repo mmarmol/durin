@@ -14,7 +14,7 @@ step 10); they are NOT extracted here.
 ``SettingsResult.providers`` and ``SettingsResult.web_search`` are typed as
 ``dict[str, Any]`` / ``list[dict[str, Any]]`` because the shapes are built
 dynamically from the provider registry and the web-search option tables.
-SP3 can tighten these into proper sub-models once the wire shape is frozen.
+These can tighten into proper sub-models if the wire shape is ever frozen.
 
 Extracted from ``durin/channels/websocket.py`` in SP1; the channel shims it
 left behind were removed in SP8, so this service is now the sole owner.
@@ -66,7 +66,7 @@ class SettingsResult(Result):
 
     ``agent``, ``providers``, ``web_search``, and ``runtime`` mirror the keys
     the existing handler returns.  The nested structures are ``dict[str, Any]``
-    escape hatches — SP3 can tighten them.
+    escape hatches — open by design.
     """
 
     agent: dict[str, Any]

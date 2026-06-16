@@ -37,6 +37,14 @@ def test_issue_stores_hash_not_plaintext(store, tmp_path):
     assert entry["hash"] == _hash_token(entry["salt"], plaintext)
 
 
+def test_store_file_is_not_world_readable(store, tmp_path):
+    # SEC-2: the store holds the media HMAC secret + token hashes; its file must
+    # be 0600 (owner-only), like secrets.json — never world/group readable.
+    store.issue(["secrets:read"])
+    mode = (tmp_path / "api_tokens.json").stat().st_mode & 0o777
+    assert mode == 0o600, f"expected 0600, got {oct(mode)}"
+
+
 def test_issue_stores_scopes_and_label(store):
     token_id, _ = store.issue(["settings:read", "cron:read"], label="ci-bot")
     tokens = {t["token_id"]: t for t in store.list_tokens()}

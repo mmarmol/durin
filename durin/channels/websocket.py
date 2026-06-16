@@ -54,18 +54,6 @@ def _strip_trailing_slash(path: str) -> str:
     return path or "/"
 
 
-def _humanize_interval_ms(every_ms: int) -> str:
-    """Render an ``every`` interval with the largest whole unit instead of raw
-    seconds, so a cron row reads ``every 2h`` rather than ``every 7200s``."""
-    secs = every_ms // 1000
-    if secs <= 0:
-        return "0s"
-    for unit_secs, suffix in ((86400, "d"), (3600, "h"), (60, "m")):
-        if secs % unit_secs == 0:
-            return f"{secs // unit_secs}{suffix}"
-    return f"{secs}s"
-
-
 def _normalize_config_path(path: str) -> str:
     return _strip_trailing_slash(path)
 
@@ -76,14 +64,9 @@ class WebSocketConfig(Base):
     Clients connect with URLs like ``ws://{host}:{port}{path}?client_id=...&token=...``.
     - ``client_id``: Used for ``allow_from`` authorization; if omitted, a value is generated and logged.
     - ``token``: If non-empty, the ``token`` query param may match this static secret; short-lived tokens
-      from ``token_issue_path`` are also accepted.
-    - ``token_issue_path``: If non-empty, **GET** (HTTP/1.1) to this path returns JSON
-      ``{"token": "...", "expires_in": <seconds>}``; use ``?token=...`` when opening the WebSocket.
-      Must differ from ``path`` (the WS upgrade path). If the client runs in the **same process** as
-      durin and shares the asyncio loop, use a thread or async HTTP client for GET—do not call
-      blocking ``urllib`` or synchronous ``httpx`` from inside a coroutine.
-    - ``token_issue_secret``: If non-empty, token requests must send ``Authorization: Bearer <secret>`` or
-      ``X-Durin-Auth: <secret>``.
+      minted by ``GET /webui/bootstrap`` are also accepted.
+    - ``token_issue_secret``: If non-empty, ``GET /webui/bootstrap`` must present the secret via
+      ``Authorization: Bearer <secret>`` or ``X-Durin-Auth: <secret>`` (the reverse-proxy deployment path).
     - ``websocket_requires_token``: If True, the handshake must include a valid token (static or issued and not expired).
     - Each connection has its own session: a unique ``chat_id`` maps to the agent session internally.
     - ``media`` field in outbound messages contains local filesystem paths; remote clients need a
@@ -95,7 +78,6 @@ class WebSocketConfig(Base):
     port: int = 8765
     path: str = "/"
     token: str = ""
-    token_issue_path: str = ""
     token_issue_secret: str = ""
     token_ttl_s: int = Field(default=300, ge=30, le=86_400)
     websocket_requires_token: bool = True
@@ -117,24 +99,6 @@ class WebSocketConfig(Base):
         if not value.startswith("/"):
             raise ValueError('path must start with "/"')
         return _normalize_config_path(value)
-
-    @field_validator("token_issue_path")
-    @classmethod
-    def token_issue_path_format(cls, value: str) -> str:
-        value = value.strip()
-        if not value:
-            return ""
-        if not value.startswith("/"):
-            raise ValueError('token_issue_path must start with "/"')
-        return _normalize_config_path(value)
-
-    @model_validator(mode="after")
-    def token_issue_path_differs_from_ws_path(self) -> Self:
-        if not self.token_issue_path:
-            return self
-        if _normalize_config_path(self.token_issue_path) == _normalize_config_path(self.path):
-            raise ValueError("token_issue_path must differ from path (the WebSocket upgrade path)")
-        return self
 
     @model_validator(mode="after")
     def wildcard_host_requires_auth(self) -> Self:
@@ -703,39 +667,6 @@ class WebSocketChannel(BaseChannel):
             return False
         return True
 
-    def _handle_token_issue_http(self, request: Any) -> HttpResult:
-        secret = self.config.token_issue_secret.strip()
-        if secret:
-            if not _issue_route_secret_matches(request.headers, secret):
-                return _http_error(401, "Unauthorized")
-        else:
-            self.logger.warning(
-                "token_issue_path is set but token_issue_secret is empty; "
-                "any client can obtain connection tokens — set token_issue_secret for production."
-            )
-        self._purge_expired_issued_tokens()
-        if len(self._issued_tokens) >= self._MAX_ISSUED_TOKENS:
-            self.logger.error(
-                "too many outstanding issued tokens ({}), rejecting issuance",
-                len(self._issued_tokens),
-            )
-            return _http_json_response({"error": "too many outstanding tokens"}, status=429)
-        # Persist via store (restart-survival) and dual-write to in-memory pool.
-        auth_svc = self._services.get("auth")
-        if auth_svc is not None:
-            _, token_value = auth_svc._store.issue(
-                [Scope.ADMIN.value],
-                label="token-issue",
-                ttl_s=float(self.config.token_ttl_s),
-            )
-        else:
-            token_value = f"nbwt_{secrets.token_urlsafe(32)}"
-        self._issued_tokens[token_value] = time.monotonic() + float(self.config.token_ttl_s)
-
-        return _http_json_response(
-            {"token": token_value, "expires_in": self.config.token_ttl_s}
-        )
-
     # -- HTTP endpoints (bootstrap, media) ----------------------------------
 
     def _handle_bootstrap(self, connection: Any, request: Any) -> HttpResult:
@@ -789,68 +720,6 @@ class WebSocketChannel(BaseChannel):
                 "requires_secret": bool(secret),
             }
         )
-
-    def _fresh_cron_service(self):
-        """Build a non-running CronService bound to the workspace's
-        store path. Read-only ops (`list_jobs`) work directly; mutating
-        ops (`remove_job`, `enable_job`) write to the action.jsonl log
-        which the gateway's running service drains on its next tick.
-        Avoids reaching across processes for a shared CronService
-        handle — mirrors how the SecretStore endpoints work.
-        """
-        from durin.config.loader import load_config
-        from durin.cron.service import CronService
-
-        cfg = load_config()
-        path = cfg.workspace_path / "cron" / "jobs.json"
-        return CronService(path)
-
-    def _cron_job_to_dict(self, job) -> dict:
-        sched = job.schedule
-        # Render a human label per schedule kind. The full structured
-        # data also goes out so the frontend can format dates locally.
-        if sched.kind == "every":
-            label = f"every {_humanize_interval_ms(sched.every_ms or 0)}"
-        elif sched.kind == "cron":
-            tz = f" ({sched.tz})" if sched.tz else ""
-            label = f"{sched.expr}{tz}"
-        elif sched.kind == "at":
-            label = f"once at {sched.at_ms}"
-        else:
-            label = sched.kind
-        is_system = job.payload.kind == "system_event"
-        return {
-            "id": job.id,
-            "name": job.name,
-            "enabled": job.enabled,
-            "is_system": is_system,
-            "schedule": {
-                "kind": sched.kind,
-                "label": label,
-                "expr": sched.expr,
-                "every_ms": sched.every_ms,
-                "at_ms": sched.at_ms,
-                "tz": sched.tz,
-            },
-            # System jobs hide their message — usually internal references
-            # to consolidation prompts that aren't useful to surface.
-            "message": "" if is_system else job.payload.message,
-            "channel": job.payload.channel or "",
-            "state": {
-                "next_run_at_ms": job.state.next_run_at_ms,
-                "last_run_at_ms": job.state.last_run_at_ms,
-                "last_status": job.state.last_status,
-                "last_error": job.state.last_error,
-                # True while a run (scheduled or manual) is in flight — lets
-                # the webui disable "Run now" and show a spinner.
-                "executing": bool(
-                    self._cron_service is not None
-                    and self._cron_service.is_executing(job.id)
-                ),
-            },
-            "created_at_ms": job.created_at_ms,
-            "updated_at_ms": job.updated_at_ms,
-        }
 
     async def _run_skill_audit(self, connection: Any, name: str) -> None:
         """Stream an on-demand LLM audit of a quarantined skill: reasoning deltas
@@ -923,11 +792,6 @@ class WebSocketChannel(BaseChannel):
             [sys.executable, "-m", "durin", "gateway", "restart"],
             start_new_session=True,
         )
-
-    @staticmethod
-    def _is_websocket_channel_session_key(key: str) -> bool:
-        """True when *key* is a ``websocket:…`` session exposed on this HTTP surface."""
-        return key.startswith("websocket:")
 
     def _try_append_webui_transcript(self, chat_id: str, wire: dict[str, Any]) -> None:
         sk = f"websocket:{chat_id}"
@@ -1105,50 +969,6 @@ class WebSocketChannel(BaseChannel):
                 # MIME-sniffing an octet-stream fallback into executable HTML.
                 ("X-Content-Type-Options", "nosniff"),
             ],
-        )
-
-    def _serve_static(self, request_path: str) -> HttpResult | None:
-        """Resolve *request_path* against the built SPA directory; SPA fallback to index.html."""
-        assert self._static_dist_path is not None
-        rel = request_path.lstrip("/")
-        if not rel:
-            rel = "index.html"
-        # Reject path-traversal attempts and absolute targets.
-        if ".." in rel.split("/") or rel.startswith("/"):
-            return _http_error(403, "Forbidden")
-        candidate = (self._static_dist_path / rel).resolve()
-        try:
-            candidate.relative_to(self._static_dist_path)
-        except ValueError:
-            return _http_error(403, "Forbidden")
-        if not candidate.is_file():
-            # SPA history-mode fallback: unknown routes serve index.html so the
-            # client-side router can render them.
-            index = self._static_dist_path / "index.html"
-            if index.is_file():
-                candidate = index
-            else:
-                return None
-        try:
-            body = candidate.read_bytes()
-        except OSError as e:
-            self.logger.warning("static: failed to read {}: {}", candidate, e)
-            return _http_error(500, "Internal Server Error")
-        ctype, _ = mimetypes.guess_type(candidate.name)
-        if ctype is None:
-            ctype = "application/octet-stream"
-        if ctype.startswith("text/") or ctype in {"application/javascript", "application/json"}:
-            ctype = f"{ctype}; charset=utf-8"
-        # Hash-named build assets are cache-friendly; index.html must stay fresh.
-        if candidate.name == "index.html":
-            cache = "no-cache"
-        else:
-            cache = "public, max-age=31536000, immutable"
-        return _http_response(
-            body,
-            status=200,
-            content_type=ctype,
-            extra_headers=[("Cache-Control", cache)],
         )
 
     def _ws_auth_ok(self, query: dict[str, list[str]]) -> bool:
