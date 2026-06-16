@@ -1,23 +1,21 @@
 """HTTP endpoint tests for the P12 entry browse / forget / backlinks routes.
 
-Spawns a real ``WebSocketChannel`` on a test port, mints a bootstrap
-token, and exercises the three new ``/api/memory/{entry,forget,backlinks}``
-routes through HTTP. Smoke-level — the deep behaviour is covered by
+Uses the unified Starlette ASGI app (``build_gateway_http_app``) via
+``TestClient`` instead of spawning a real WebSocketChannel socket.
+Smoke-level — the deep behaviour is covered by
 ``test_graph_api_entries.py`` (calling the helpers directly).
 """
 
 from __future__ import annotations
 
-import asyncio
-import functools
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
 import pytest
+from starlette.testclient import TestClient
 
+from durin.api.asgi import build_gateway_http_app
 from durin.channels.websocket import WebSocketChannel
 
 
@@ -45,24 +43,6 @@ def _seed_entry(
     return p
 
 
-def _ch(bus: Any, port: int) -> WebSocketChannel:
-    cfg: dict[str, Any] = {
-        "enabled": True,
-        "allowFrom": ["*"],
-        "host": "127.0.0.1",
-        "port": port,
-        "path": "/",
-        "websocketRequiresToken": False,
-    }
-    return WebSocketChannel(cfg, bus, session_manager=None)
-
-
-async def _get(url: str, headers: dict[str, str] | None = None) -> httpx.Response:
-    return await asyncio.to_thread(
-        functools.partial(httpx.get, url, headers=headers or {}, timeout=5.0),
-    )
-
-
 @pytest.fixture()
 def bus() -> MagicMock:
     b = MagicMock()
@@ -71,10 +51,16 @@ def bus() -> MagicMock:
 
 
 @pytest.fixture()
-def patched_workspace(tmp_path: Path):
-    """Patch load_config to return a workspace pointing at tmp_path,
-    with memory disabled (so the vector-cleanup branch in
-    forget_entry is a no-op without needing fastembed)."""
+def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bus: MagicMock):
+    """Unified ASGI test client with isolated data dir and workspace.
+
+    Memory is disabled so the vector-cleanup branch in forget_entry is a
+    no-op without needing fastembed.
+    """
+    data_dir = tmp_path / "durin_data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("durin.config.paths.get_data_dir", lambda: data_dir)
+
     fake_cfg = SimpleNamespace(
         workspace_path=tmp_path,
         memory=SimpleNamespace(
@@ -82,143 +68,128 @@ def patched_workspace(tmp_path: Path):
             embedding=SimpleNamespace(model=""),
         ),
     )
+
+    spa = tmp_path / "dist"
+    spa.mkdir()
+    (spa / "index.html").write_text(
+        "<!doctype html><title>durin</title><div id=root></div>", encoding="utf-8"
+    )
+
+    cfg = {
+        "enabled": True,
+        "allowFrom": ["*"],
+        "host": "127.0.0.1",
+        "port": 8765,
+        "path": "/",
+        "websocketRequiresToken": False,
+    }
+
     with patch("durin.config.loader.load_config", return_value=fake_cfg):
-        yield tmp_path
+        channel = WebSocketChannel(cfg, bus)
+        registry = channel._services
+        auth = registry.get("auth")
+        app = build_gateway_http_app(channel, registry, auth=auth, static_dist_path=spa)
+        yield TestClient(app)
 
 
-@pytest.mark.asyncio
-async def test_memory_entry_routes_require_bearer(
-    bus: MagicMock, patched_workspace: Path,
+def _token(client: TestClient) -> str:
+    r = client.get("/webui/bootstrap")
+    assert r.status_code == 200, r.text
+    return r.json()["token"]
+
+
+def test_memory_entry_routes_require_bearer(
+    client: TestClient,
 ) -> None:
     """All 3 new routes return 401 without a valid token."""
-    channel = _ch(bus, port=29950)
-    server_task = asyncio.create_task(channel.start())
-    await asyncio.sleep(0.3)
-    try:
-        for path in (
-            "/api/memory/entry?uri=memory/episodic/x",
-            "/api/memory/forget?uri=memory/episodic/x",
-            "/api/memory/backlinks?uri=memory/episodic/x",
-        ):
-            r = await _get(f"http://127.0.0.1:29950{path}")
-            assert r.status_code == 401, f"expected 401 for {path}, got {r.status_code}"
-    finally:
-        await channel.stop()
-        await server_task
+    for path in (
+        "/api/memory/entry?uri=memory/episodic/x",
+        "/api/memory/forget?uri=memory/episodic/x",
+        "/api/memory/backlinks?uri=memory/episodic/x",
+    ):
+        r = client.get(path)
+        assert r.status_code == 401, f"expected 401 for {path}, got {r.status_code}"
 
 
-@pytest.mark.asyncio
-async def test_memory_entry_endpoint_returns_payload(
-    bus: MagicMock, patched_workspace: Path,
+def test_memory_entry_endpoint_returns_payload(
+    tmp_path: Path, client: TestClient,
 ) -> None:
     _seed_entry(
-        patched_workspace, class_name="episodic", entry_id="obs-1",
+        tmp_path, class_name="episodic", entry_id="obs-1",
         body="Alice loves rust",
     )
-    channel = _ch(bus, port=29951)
-    server_task = asyncio.create_task(channel.start())
-    await asyncio.sleep(0.3)
-    try:
-        boot = await _get("http://127.0.0.1:29951/webui/bootstrap")
-        token = boot.json()["token"]
-        auth = {"Authorization": f"Bearer {token}"}
+    tok = _token(client)
+    auth = {"Authorization": f"Bearer {tok}"}
 
-        r = await _get(
-            "http://127.0.0.1:29951/api/memory/entry?uri=memory/episodic/obs-1",
-            headers=auth,
-        )
-        assert r.status_code == 200
-        body = r.json()
-        assert body["uri"] == "memory/episodic/obs-1"
-        assert body["class_name"] == "episodic"
-        assert "Alice loves rust" in body["body"]
+    r = client.get(
+        "/api/memory/entry?uri=memory/episodic/obs-1",
+        headers=auth,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["uri"] == "memory/episodic/obs-1"
+    assert body["class_name"] == "episodic"
+    assert "Alice loves rust" in body["body"]
 
-        # 404 when the entry doesn't exist.
-        r404 = await _get(
-            "http://127.0.0.1:29951/api/memory/entry?uri=memory/episodic/ghost",
-            headers=auth,
-        )
-        assert r404.status_code == 404
-    finally:
-        await channel.stop()
-        await server_task
+    # 404 when the entry doesn't exist.
+    r404 = client.get(
+        "/api/memory/entry?uri=memory/episodic/ghost",
+        headers=auth,
+    )
+    assert r404.status_code == 404
 
 
-@pytest.mark.asyncio
-async def test_memory_forget_endpoint_archives_and_protects(
-    bus: MagicMock, patched_workspace: Path,
+def test_memory_forget_endpoint_archives_and_protects(
+    tmp_path: Path, client: TestClient,
 ) -> None:
-    _seed_entry(patched_workspace, class_name="episodic", entry_id="obs-2")
-    channel = _ch(bus, port=29952)
-    server_task = asyncio.create_task(channel.start())
-    await asyncio.sleep(0.3)
-    try:
-        boot = await _get("http://127.0.0.1:29952/webui/bootstrap")
-        token = boot.json()["token"]
-        auth = {"Authorization": f"Bearer {token}"}
+    _seed_entry(tmp_path, class_name="episodic", entry_id="obs-2")
+    auth = {"Authorization": f"Bearer {_token(client)}"}
 
-        # Happy path: archive an existing entry.
-        r = await _get(
-            "http://127.0.0.1:29952/api/memory/forget?uri=memory/episodic/obs-2",
-            headers=auth,
-        )
-        assert r.status_code == 200
-        assert r.json() == {"result": "archived"}
-        assert not (
-            patched_workspace / "memory" / "episodic" / "obs-2.md"
-        ).exists()
-        assert (
-            patched_workspace / "memory" / "archive" / "episodic" / "obs-2.md"
-        ).exists()
+    # Happy path: archive an existing entry.
+    r = client.get(
+        "/api/memory/forget?uri=memory/episodic/obs-2",
+        headers=auth,
+    )
+    assert r.status_code == 200
+    assert r.json() == {"result": "archived"}
+    assert not (tmp_path / "memory" / "episodic" / "obs-2.md").exists()
+    assert (tmp_path / "memory" / "archive" / "episodic" / "obs-2.md").exists()
 
-        # Protected: entity URIs return 403.
-        r_protected = await _get(
-            "http://127.0.0.1:29952/api/memory/forget?uri=memory/entities/person/marcelo",
-            headers=auth,
-        )
-        assert r_protected.status_code == 403
-        assert r_protected.json()["result"] == "protected"
+    # Protected: entity URIs return 403.
+    r_protected = client.get(
+        "/api/memory/forget?uri=memory/entities/person/marcelo",
+        headers=auth,
+    )
+    assert r_protected.status_code == 403
+    assert r_protected.json()["result"] == "protected"
 
-        # Invalid URI returns 400.
-        r_bad = await _get(
-            "http://127.0.0.1:29952/api/memory/forget?uri=garbage",
-            headers=auth,
-        )
-        assert r_bad.status_code == 400
-        assert r_bad.json()["result"] == "invalid"
-    finally:
-        await channel.stop()
-        await server_task
+    # Invalid URI returns 400.
+    r_bad = client.get(
+        "/api/memory/forget?uri=garbage",
+        headers=auth,
+    )
+    assert r_bad.status_code == 400
+    assert r_bad.json()["result"] == "invalid"
 
 
-@pytest.mark.asyncio
-async def test_memory_backlinks_endpoint(
-    bus: MagicMock, patched_workspace: Path,
+def test_memory_backlinks_endpoint(
+    tmp_path: Path, client: TestClient,
 ) -> None:
-    _seed_entry(patched_workspace, class_name="episodic", entry_id="target")
+    _seed_entry(tmp_path, class_name="episodic", entry_id="target")
     _seed_entry(
-        patched_workspace, class_name="episodic", entry_id="ref",
+        tmp_path, class_name="episodic", entry_id="ref",
         body="see [[memory/episodic/target]] for more",
         entities=("person:bob",),
     )
-    channel = _ch(bus, port=29953)
-    server_task = asyncio.create_task(channel.start())
-    await asyncio.sleep(0.3)
-    try:
-        boot = await _get("http://127.0.0.1:29953/webui/bootstrap")
-        token = boot.json()["token"]
-        auth = {"Authorization": f"Bearer {token}"}
+    auth = {"Authorization": f"Bearer {_token(client)}"}
 
-        r = await _get(
-            "http://127.0.0.1:29953/api/memory/backlinks?uri=memory/episodic/target",
-            headers=auth,
-        )
-        assert r.status_code == 200
-        body = r.json()
-        assert body["uri"] == "memory/episodic/target"
-        assert len(body["backlinks"]) == 1
-        assert body["backlinks"][0]["uri"] == "memory/episodic/ref"
-        assert body["truncated"] is False
-    finally:
-        await channel.stop()
-        await server_task
+    r = client.get(
+        "/api/memory/backlinks?uri=memory/episodic/target",
+        headers=auth,
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["uri"] == "memory/episodic/target"
+    assert len(body["backlinks"]) == 1
+    assert body["backlinks"][0]["uri"] == "memory/episodic/ref"
+    assert body["truncated"] is False

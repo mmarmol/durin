@@ -523,10 +523,13 @@ def build_gateway_http_app(
             await websocket.close(1008)
             return
 
-        await websocket.accept()
-
         client_id_raw = websocket.query_params.get("client_id", "")
-        client_id = client_id_raw.strip()
+        client_id = client_id_raw.strip()[:128] if client_id_raw else ""
+        if not channel.is_allowed(client_id):
+            await websocket.close(1008)
+            return
+
+        await websocket.accept()
 
         adapter = StarletteConnectionAdapter(websocket)
         try:

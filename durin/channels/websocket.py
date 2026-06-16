@@ -25,7 +25,6 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from loguru import logger
 from pydantic import Field, field_validator, model_validator
-from websockets.asyncio.server import ServerConnection, serve
 from websockets.datastructures import Headers
 from websockets.exceptions import ConnectionClosed
 from websockets.http11 import Request as WsRequest
@@ -606,13 +605,6 @@ class WebSocketChannel(BaseChannel):
         self._issued_tokens: dict[str, float] = {}
         # Multi-use tokens for HTTP routes served beside WS; checked but not consumed.
         self._api_tokens: dict[str, float] = {}
-        self._stop_event: asyncio.Event | None = None
-        self._server_task: asyncio.Task[None] | None = None
-        # When False, start() skips opening the websockets socket server —
-        # the gateway runs a unified uvicorn server instead and drives this
-        # channel through _run_connection directly. Set to False by the
-        # gateway before channels.start_all() when legacy_ws_server is off.
-        self._serve_own_server: bool = True
         self._session_manager = session_manager
         self._static_dist_path: Path | None = (
             static_dist_path.resolve() if static_dist_path is not None else None
@@ -2924,59 +2916,6 @@ class WebSocketChannel(BaseChannel):
         redirect_lib_logging("websockets", level="WARNING")
 
         self._running = True
-        self._stop_event = asyncio.Event()
-
-        # Unified-server mode: the gateway runs uvicorn and routes WebSocket
-        # connections via the Starlette endpoint; this channel must not open
-        # its own socket. Return immediately so ChannelManager's start_all()
-        # call completes without blocking on a socket that will never exist.
-        if not self._serve_own_server:
-            return
-
-        ssl_context = self._build_ssl_context()
-        scheme = "wss" if ssl_context else "ws"
-
-        async def process_request(
-            connection: ServerConnection,
-            request: WsRequest,
-        ) -> Any:
-            return await self._dispatch_http(connection, request)
-
-        async def handler(connection: ServerConnection) -> None:
-            await self._connection_loop(connection)
-
-        self.logger.info(
-            "WebSocket server listening on {}://{}:{}{}",
-            scheme,
-            self.config.host,
-            self.config.port,
-            self.config.path,
-        )
-        if self.config.token_issue_path:
-            self.logger.info(
-                "WebSocket token issue route: {}://{}:{}{}",
-                scheme,
-                self.config.host,
-                self.config.port,
-                _normalize_config_path(self.config.token_issue_path),
-            )
-
-        async def runner() -> None:
-            async with serve(
-                handler,
-                self.config.host,
-                self.config.port,
-                process_request=process_request,
-                max_size=self.config.max_message_bytes,
-                ping_interval=self.config.ping_interval_s,
-                ping_timeout=self.config.ping_timeout_s,
-                ssl=ssl_context,
-            ):
-                assert self._stop_event is not None
-                await self._stop_event.wait()
-
-        self._server_task = asyncio.create_task(runner())
-        await self._server_task
 
     async def _connection_loop(self, connection: Any) -> None:
         """Entry point for the websockets transport path.
@@ -3287,19 +3226,6 @@ class WebSocketChannel(BaseChannel):
         if not self._running:
             return
         self._running = False
-        if self._stop_event:
-            self._stop_event.set()
-        if self._server_task:
-            try:
-                await self._server_task
-            except asyncio.CancelledError:
-                # Expected: the server task is cancelled during shutdown. It is a
-                # BaseException (not Exception), so without this it escapes the
-                # handler below and surfaces as an "uncaught exception" on every stop.
-                pass
-            except Exception as e:
-                self.logger.warning("server task error during shutdown: {}", e)
-            self._server_task = None
         self._subs.clear()
         self._conn_chats.clear()
         self._conn_default.clear()

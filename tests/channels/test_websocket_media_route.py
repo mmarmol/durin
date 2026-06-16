@@ -10,24 +10,22 @@ These tests cover the two halves end-to-end plus the adversarial edges
 
 from __future__ import annotations
 
-import asyncio
-import functools
 import hashlib
 import hmac
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
 import pytest
+from starlette.testclient import TestClient
 
+from durin.bus.queue import MessageBus
 from durin.channels.websocket import (
     WebSocketChannel,
     _b64url_decode,
     _b64url_encode,
 )
 from durin.session.manager import Session, SessionManager
-
 
 # PNG magic bytes + a couple of sentinel bytes so we can verify byte-for-byte
 # round-trip of the served payload. Stays under mimetype + size limits.
@@ -40,24 +38,37 @@ _PNG_BYTES = (
 )
 
 
-def _ch(
-    bus: Any,
+def _make_client(
+    tmp_path: Path,
+    monkeypatch: Any,
     *,
     session_manager: SessionManager | None = None,
-    port: int,
-) -> WebSocketChannel:
-    return WebSocketChannel(
-        {
-            "enabled": True,
-            "allowFrom": ["*"],
-            "host": "127.0.0.1",
-            "port": port,
-            "path": "/",
-            "websocketRequiresToken": False,
-        },
-        bus,
-        session_manager=session_manager,
-    )
+    media_dir: Path | None = None,
+) -> tuple[WebSocketChannel, TestClient]:
+    """Build a TestClient backed by the unified ASGI app.
+
+    If *media_dir* is given, ``get_media_dir`` is patched to return it for the
+    duration of the test (caller must patch in their own context if needed).
+    """
+    from durin.api.asgi import build_gateway_http_app
+
+    data_dir = tmp_path / "durin_data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("durin.config.paths.get_data_dir", lambda: data_dir)
+
+    cfg = {
+        "enabled": True,
+        "allowFrom": ["*"],
+        "host": "127.0.0.1",
+        "port": 8765,
+        "path": "/",
+        "websocketRequiresToken": False,
+    }
+    channel = WebSocketChannel(cfg, MessageBus(), session_manager=session_manager)
+    registry = channel._services
+    auth = registry.get("auth")
+    app = build_gateway_http_app(channel, registry, auth=auth)
+    return channel, TestClient(app, raise_server_exceptions=True)
 
 
 @pytest.fixture()
@@ -65,14 +76,6 @@ def bus() -> MagicMock:
     b = MagicMock()
     b.publish_inbound = AsyncMock()
     return b
-
-
-async def _http_get(
-    url: str, headers: dict[str, str] | None = None
-) -> httpx.Response:
-    return await asyncio.to_thread(
-        functools.partial(httpx.get, url, headers=headers or {}, timeout=5.0)
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -94,7 +97,10 @@ def test_sign_media_path_rejects_paths_outside_media_root(
     outside.write_text("nope")
     media = tmp_path / "media"
     media.mkdir()
-    channel = _ch(bus, port=0)
+    channel = WebSocketChannel(
+        {"enabled": True, "allowFrom": ["*"], "host": "127.0.0.1", "port": 0, "path": "/", "websocketRequiresToken": False},
+        bus,
+    )
     with patch("durin.channels.websocket.get_media_dir", return_value=media):
         assert channel._sign_media_path(outside) is None
         # Traversal via the media root is also rejected — the resolve() step
@@ -109,7 +115,10 @@ def test_sign_media_path_round_trips_via_hmac(
     media = tmp_path / "media"
     media.mkdir()
     (media / "a.png").write_bytes(_PNG_BYTES)
-    channel = _ch(bus, port=0)
+    channel = WebSocketChannel(
+        {"enabled": True, "allowFrom": ["*"], "host": "127.0.0.1", "port": 0, "path": "/", "websocketRequiresToken": False},
+        bus,
+    )
     with patch("durin.channels.websocket.get_media_dir", return_value=media):
         url = channel._sign_media_path(media / "a.png")
     assert url is not None
@@ -124,31 +133,22 @@ def test_sign_media_path_round_trips_via_hmac(
 
 
 # ---------------------------------------------------------------------------
-# /api/media/<sig>/<payload>: the serving handler
+# /api/media/{sig}/{payload}: the serving handler
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_media_route_serves_signed_file(
-    bus: MagicMock, tmp_path: Path
-) -> None:
+def test_media_route_serves_signed_file(tmp_path: Path, monkeypatch: Any) -> None:
     """Valid signature + existing file => 200 with correct bytes + MIME."""
     media = tmp_path / "media"
     media.mkdir()
     target = media / "round-trip.png"
     target.write_bytes(_PNG_BYTES)
 
-    channel = _ch(bus, port=29920)
     with patch("durin.channels.websocket.get_media_dir", return_value=media):
+        channel, client = _make_client(tmp_path, monkeypatch)
         url_path = channel._sign_media_path(target)
         assert url_path is not None
-        server_task = asyncio.create_task(channel.start())
-        await asyncio.sleep(0.3)
-        try:
-            resp = await _http_get(f"http://127.0.0.1:29920{url_path}")
-        finally:
-            await channel.stop()
-            await server_task
+        resp = client.get(url_path)
 
     assert resp.status_code == 200
     assert resp.content == _PNG_BYTES
@@ -159,10 +159,7 @@ async def test_media_route_serves_signed_file(
     assert resp.headers.get("x-content-type-options") == "nosniff"
 
 
-@pytest.mark.asyncio
-async def test_media_route_rejects_bad_signature(
-    bus: MagicMock, tmp_path: Path
-) -> None:
+def test_media_route_rejects_bad_signature(tmp_path: Path, monkeypatch: Any) -> None:
     """A payload re-signed with a different secret must 401.
 
     Protects against a restart: old URLs baked into a stale tab become
@@ -172,8 +169,8 @@ async def test_media_route_rejects_bad_signature(
     media.mkdir()
     (media / "f.png").write_bytes(_PNG_BYTES)
 
-    channel = _ch(bus, port=29921)
     with patch("durin.channels.websocket.get_media_dir", return_value=media):
+        channel, client = _make_client(tmp_path, monkeypatch)
         good = channel._sign_media_path(media / "f.png")
         assert good is not None
         _, payload = good[len("/api/media/"):].split("/", 1)
@@ -182,20 +179,13 @@ async def test_media_route_rejects_bad_signature(
             b"\x00" * 32, payload.encode("ascii"), hashlib.sha256
         ).digest()[:16]
         forged = f"/api/media/{_b64url_encode(forged_mac)}/{payload}"
+        resp = client.get(forged)
 
-        server_task = asyncio.create_task(channel.start())
-        await asyncio.sleep(0.3)
-        try:
-            resp = await _http_get(f"http://127.0.0.1:29921{forged}")
-        finally:
-            await channel.stop()
-            await server_task
     assert resp.status_code == 401
 
 
-@pytest.mark.asyncio
-async def test_media_route_rejects_path_traversal_payload(
-    bus: MagicMock, tmp_path: Path
+def test_media_route_rejects_path_traversal_payload(
+    tmp_path: Path, monkeypatch: Any
 ) -> None:
     """Even a validly-signed ``..`` payload must not escape the media root.
 
@@ -208,30 +198,21 @@ async def test_media_route_rejects_path_traversal_payload(
     secret_file = tmp_path / "secret.txt"
     secret_file.write_text("classified")
 
-    channel = _ch(bus, port=29922)
-    # Hand-craft a traversal payload the legit signer would refuse to mint.
-    payload = _b64url_encode(b"../secret.txt")
-    mac = hmac.new(
-        channel._media_secret, payload.encode("ascii"), hashlib.sha256
-    ).digest()[:16]
-    url = f"/api/media/{_b64url_encode(mac)}/{payload}"
-
     with patch("durin.channels.websocket.get_media_dir", return_value=media):
-        server_task = asyncio.create_task(channel.start())
-        await asyncio.sleep(0.3)
-        try:
-            resp = await _http_get(f"http://127.0.0.1:29922{url}")
-        finally:
-            await channel.stop()
-            await server_task
+        channel, client = _make_client(tmp_path, monkeypatch)
+        # Hand-craft a traversal payload the legit signer would refuse to mint.
+        payload = _b64url_encode(b"../secret.txt")
+        mac = hmac.new(
+            channel._media_secret, payload.encode("ascii"), hashlib.sha256
+        ).digest()[:16]
+        url = f"/api/media/{_b64url_encode(mac)}/{payload}"
+        resp = client.get(url)
+
     assert resp.status_code == 404
     assert b"classified" not in resp.content
 
 
-@pytest.mark.asyncio
-async def test_media_route_404s_missing_file(
-    bus: MagicMock, tmp_path: Path
-) -> None:
+def test_media_route_404s_missing_file(tmp_path: Path, monkeypatch: Any) -> None:
     """A signed URL for a file that no longer exists degrades to 404 so the
     client can fall back to the placeholder tile instead of breaking."""
     media = tmp_path / "media"
@@ -239,24 +220,18 @@ async def test_media_route_404s_missing_file(
     target = media / "gone.png"
     target.write_bytes(_PNG_BYTES)
 
-    channel = _ch(bus, port=29923)
     with patch("durin.channels.websocket.get_media_dir", return_value=media):
+        channel, client = _make_client(tmp_path, monkeypatch)
         url_path = channel._sign_media_path(target)
         assert url_path is not None
         target.unlink()  # the file vanishes between signing and fetching
-        server_task = asyncio.create_task(channel.start())
-        await asyncio.sleep(0.3)
-        try:
-            resp = await _http_get(f"http://127.0.0.1:29923{url_path}")
-        finally:
-            await channel.stop()
-            await server_task
+        resp = client.get(url_path)
+
     assert resp.status_code == 404
 
 
-@pytest.mark.asyncio
-async def test_media_route_degrades_non_image_to_octet_stream(
-    bus: MagicMock, tmp_path: Path
+def test_media_route_degrades_non_image_to_octet_stream(
+    tmp_path: Path, monkeypatch: Any
 ) -> None:
     """A non-image extension must not be served as its native MIME.
 
@@ -267,20 +242,15 @@ async def test_media_route_degrades_non_image_to_octet_stream(
     media.mkdir()
     (media / "scary.html").write_bytes(b"<script>alert(1)</script>")
 
-    channel = _ch(bus, port=29924)
     with patch("durin.channels.websocket.get_media_dir", return_value=media):
+        channel, client = _make_client(tmp_path, monkeypatch)
         payload = _b64url_encode(b"scary.html")
         mac = hmac.new(
             channel._media_secret, payload.encode("ascii"), hashlib.sha256
         ).digest()[:16]
         url = f"/api/media/{_b64url_encode(mac)}/{payload}"
-        server_task = asyncio.create_task(channel.start())
-        await asyncio.sleep(0.3)
-        try:
-            resp = await _http_get(f"http://127.0.0.1:29924{url}")
-        finally:
-            await channel.stop()
-            await server_task
+        resp = client.get(url)
+
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("application/octet-stream")
     # nosniff is the actual defence when we downgrade to octet-stream:
@@ -293,9 +263,8 @@ async def test_media_route_degrades_non_image_to_octet_stream(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_session_messages_exposes_signed_media_urls(
-    bus: MagicMock, tmp_path: Path
+def test_session_messages_exposes_signed_media_urls(
+    tmp_path: Path, monkeypatch: Any
 ) -> None:
     """The read path must map persisted ``media`` paths onto signed URLs
     and strip the raw path — the client never learns the server's layout."""
@@ -310,40 +279,38 @@ async def test_session_messages_exposes_signed_media_urls(
     sess.add_message("assistant", "nice")
     sm.save(sess)
 
-    channel = _ch(bus, session_manager=sm, port=29925)
     with patch("durin.channels.websocket.get_media_dir", return_value=media):
-        server_task = asyncio.create_task(channel.start())
-        await asyncio.sleep(0.3)
-        try:
-            boot = await _http_get("http://127.0.0.1:29925/webui/bootstrap")
-            token = boot.json()["token"]
-            auth = {"Authorization": f"Bearer {token}"}
-            resp = await _http_get(
-                "http://127.0.0.1:29925/api/sessions/websocket:media-hydrate/messages",
-                headers=auth,
-            )
-            body = resp.json()
-            # The signed URL round-trips end-to-end: fetching it yields the same bytes.
-            user_msg = next(m for m in body["messages"] if m["role"] == "user")
-            urls = user_msg["media_urls"]
-            assert isinstance(urls, list) and len(urls) == 1
-            assert urls[0]["name"] == "u.png"
-            assert urls[0]["url"].startswith("/api/media/")
-            # Raw paths must not leak to the wire.
-            assert "media" not in user_msg
+        channel, client = _make_client(tmp_path, monkeypatch, session_manager=sm)
 
-            # And the URL actually works.
-            fetched = await _http_get(f"http://127.0.0.1:29925{urls[0]['url']}")
-            assert fetched.status_code == 200
-            assert fetched.content == _PNG_BYTES
-        finally:
-            await channel.stop()
-            await server_task
+        boot = client.get("/webui/bootstrap")
+        assert boot.status_code == 200
+        token = boot.json()["token"]
+        auth = {"Authorization": f"Bearer {token}"}
+
+        resp = client.get(
+            "/api/sessions/websocket:media-hydrate/messages",
+            headers=auth,
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+
+        # The signed URL round-trips end-to-end: fetching it yields the same bytes.
+        user_msg = next(m for m in body["messages"] if m["role"] == "user")
+        urls = user_msg["media_urls"]
+        assert isinstance(urls, list) and len(urls) == 1
+        assert urls[0]["name"] == "u.png"
+        assert urls[0]["url"].startswith("/api/media/")
+        # Raw paths must not leak to the wire.
+        assert "media" not in user_msg
+
+        # And the URL actually works.
+        fetched = client.get(urls[0]["url"])
+        assert fetched.status_code == 200
+        assert fetched.content == _PNG_BYTES
 
 
-@pytest.mark.asyncio
-async def test_session_messages_skips_vanished_media(
-    bus: MagicMock, tmp_path: Path
+def test_session_messages_skips_vanished_media(
+    tmp_path: Path, monkeypatch: Any
 ) -> None:
     """Paths that no longer resolve inside the media root produce no URL —
     the message is still delivered, just without the preview."""
@@ -355,26 +322,24 @@ async def test_session_messages_skips_vanished_media(
     sess.add_message("user", "missing pic", media=[str(media / "absent.png")])
     sm.save(sess)
 
-    channel = _ch(bus, session_manager=sm, port=29926)
     with patch("durin.channels.websocket.get_media_dir", return_value=media):
-        server_task = asyncio.create_task(channel.start())
-        await asyncio.sleep(0.3)
-        try:
-            boot = await _http_get("http://127.0.0.1:29926/webui/bootstrap")
-            token = boot.json()["token"]
-            resp = await _http_get(
-                "http://127.0.0.1:29926/api/sessions/websocket:vanished/messages",
-                headers={"Authorization": f"Bearer {token}"},
-            )
-            user_msg = next(m for m in resp.json()["messages"] if m["role"] == "user")
-            # absent.png lives inside the media root so it *does* get a signed
-            # URL (we don't stat the file at signing time — that would slow
-            # the listing). Fetching the URL is where the 404 surfaces.
-            urls = user_msg.get("media_urls") or []
-            assert len(urls) == 1
-            fetched = await _http_get(f"http://127.0.0.1:29926{urls[0]['url']}")
-            assert fetched.status_code == 404
-            assert "media" not in user_msg
-        finally:
-            await channel.stop()
-            await server_task
+        channel, client = _make_client(tmp_path, monkeypatch, session_manager=sm)
+
+        boot = client.get("/webui/bootstrap")
+        assert boot.status_code == 200
+        token = boot.json()["token"]
+
+        resp = client.get(
+            "/api/sessions/websocket:vanished/messages",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        user_msg = next(m for m in resp.json()["messages"] if m["role"] == "user")
+        # absent.png lives inside the media root so it *does* get a signed
+        # URL (we don't stat the file at signing time — that would slow
+        # the listing). Fetching the URL is where the 404 surfaces.
+        urls = user_msg.get("media_urls") or []
+        assert len(urls) == 1
+        fetched = client.get(urls[0]["url"])
+        assert fetched.status_code == 404
+        assert "media" not in user_msg
