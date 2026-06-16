@@ -576,6 +576,7 @@ class WebSocketChannel(BaseChannel):
         from durin.service.secrets import SecretsService
         from durin.service.sessions import SessionsService
         from durin.service.settings import SettingsService
+        from durin.service.skills import SkillsService
 
         registry = ServiceRegistry(
             config=self.config,
@@ -588,6 +589,7 @@ class WebSocketChannel(BaseChannel):
         registry.register("sessions", SessionsService(session_manager=self._session_manager))
         registry.register("settings", SettingsService())
         registry.register("config", ConfigService())
+        registry.register("skills", SkillsService(workspace=self._endpoint_workspace()))
         return registry
 
     def _endpoint_workspace(self) -> Path:
@@ -811,21 +813,21 @@ class WebSocketChannel(BaseChannel):
             return self._handle_logs_list(request)
 
         if got == "/api/skills":
-            return self._handle_skills_list(request)
+            return await self._handle_skills_list(request)
 
         # Exact matches BEFORE the `([^/]+)` patterns so "quarantine"/"resolve"/
         # "import" are not captured as skill names by `^/api/skills/([^/]+)$`.
         if got == "/api/skills/quarantine":
-            return self._handle_skills_quarantine(request)
+            return await self._handle_skills_quarantine(request)
 
         if got == "/api/skills/resolve":
-            return self._handle_skills_resolve(request)
+            return await self._handle_skills_resolve(request)
 
         if got == "/api/skills/import":
-            return self._handle_skills_import(request)
+            return await self._handle_skills_import(request)
 
         if got == "/api/skills/github-token-test":
-            return self._handle_skills_github_token_test(request)
+            return await self._handle_skills_github_token_test(request)
 
         if got == "/api/skills/search":
             return await self._handle_skill_search(request)
@@ -835,11 +837,11 @@ class WebSocketChannel(BaseChannel):
 
         m = re.match(r"^/api/skills/([^/]+)/save$", got)
         if m:
-            return self._handle_skill_save(request, m.group(1))
+            return await self._handle_skill_save(request, m.group(1))
 
         m = re.match(r"^/api/skills/([^/]+)/mode$", got)
         if m:
-            return self._handle_skill_mode(request, m.group(1))
+            return await self._handle_skill_mode(request, m.group(1))
 
         m = re.match(r"^/api/skills/([^/]+)/approve$", got)
         if m:
@@ -847,7 +849,7 @@ class WebSocketChannel(BaseChannel):
 
         m = re.match(r"^/api/skills/([^/]+)/reject$", got)
         if m:
-            return self._handle_skill_reject(request, m.group(1))
+            return await self._handle_skill_reject(request, m.group(1))
 
         m = re.match(r"^/api/skills/([^/]+)/judge$", got)
         if m:
@@ -855,23 +857,23 @@ class WebSocketChannel(BaseChannel):
 
         m = re.match(r"^/api/skills/([^/]+)/remove$", got)
         if m:
-            return self._handle_skill_remove(request, m.group(1))
+            return await self._handle_skill_remove(request, m.group(1))
 
         m = re.match(r"^/api/skills/([^/]+)/files$", got)
         if m:
-            return self._handle_skill_files(request, m.group(1))
+            return await self._handle_skill_files(request, m.group(1))
 
         m = re.match(r"^/api/skills/([^/]+)/file/save$", got)
         if m:
-            return self._handle_skill_file_save(request, m.group(1))
+            return await self._handle_skill_file_save(request, m.group(1))
 
         m = re.match(r"^/api/skills/([^/]+)/file$", got)
         if m:
-            return self._handle_skill_file(request, m.group(1))
+            return await self._handle_skill_file(request, m.group(1))
 
         m = re.match(r"^/api/skills/([^/]+)/history$", got)
         if m:
-            return self._handle_skill_history(request, m.group(1))
+            return await self._handle_skill_history(request, m.group(1))
 
         m = re.match(r"^/api/skills/([^/]+)/install-deps$", got)
         if m:
@@ -879,7 +881,7 @@ class WebSocketChannel(BaseChannel):
 
         m = re.match(r"^/api/skills/([^/]+)$", got)
         if m:
-            return self._handle_skill_get(request, m.group(1))
+            return await self._handle_skill_get(request, m.group(1))
 
         if got == "/api/channels":
             return await self._handle_channels_list(request)
@@ -1569,50 +1571,51 @@ class WebSocketChannel(BaseChannel):
             "updated_at_ms": job.updated_at_ms,
         }
 
-    def _handle_skills_list(self, request: WsRequest) -> Response:
-        """`GET /api/skills` — list installed skills + the skills store HEAD."""
+    async def _handle_skills_list(self, request: WsRequest) -> Response:
+        """`GET /api/skills` — shim → SkillsService.list."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
-        from durin.agent import skills_store as ss
-        from durin.config.loader import load_config
-        try:
-            workspace = self._endpoint_workspace()
-            status, payload = ss.web_list(workspace)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"skills list failed: {exc}")
-        return _http_json_response(payload, status=status)
+        from durin.service.skills import SkillsListQuery
 
-    def _handle_skills_quarantine(self, request: WsRequest) -> Response:
-        """`GET /api/skills/quarantine` — list skills awaiting an import decision."""
+        try:
+            result = await self._services.get("skills").list(SkillsListQuery(), Principal.local())
+        except DomainError as err:
+            return _domain_error_response(err)
+        return _http_json_response(result.data, status=result.status)
+
+    async def _handle_skills_quarantine(self, request: WsRequest) -> Response:
+        """`GET /api/skills/quarantine` — shim → SkillsService.quarantine."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
-        from durin.agent import skills_store as ss
-        from durin.config.loader import load_config
-        try:
-            workspace = self._endpoint_workspace()
-            status, payload = ss.web_quarantine(workspace)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"skills quarantine failed: {exc}")
-        return _http_json_response(payload, status=status)
+        from durin.service.skills import SkillsQuarantineQuery
 
-    def _handle_skill_get(self, request: WsRequest, name: str) -> Response:
-        """`GET /api/skills/{name}` — fetch a skill's mode + SKILL.md content."""
+        try:
+            result = await self._services.get("skills").quarantine(
+                SkillsQuarantineQuery(), Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
+        return _http_json_response(result.data, status=result.status)
+
+    async def _handle_skill_get(self, request: WsRequest, name: str) -> Response:
+        """`GET /api/skills/{name}` — shim → SkillsService.get."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         decoded = _decode_api_key(name)
         if decoded is None:
             return _http_error(400, "invalid skill name")
-        from durin.agent import skills_store as ss
-        from durin.config.loader import load_config
-        try:
-            workspace = self._endpoint_workspace()
-            status, payload = ss.web_get(workspace, decoded)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"skill read failed: {exc}")
-        return _http_json_response(payload, status=status)
+        from durin.service.skills import SkillGetQuery
 
-    def _handle_skill_save(self, request: WsRequest, name: str) -> Response:
-        """`GET /api/skills/{name}/save?content=...` — overwrite a MANUAL skill."""
+        try:
+            result = await self._services.get("skills").get(
+                SkillGetQuery(name=decoded), Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
+        return _http_json_response(result.data, status=result.status)
+
+    async def _handle_skill_save(self, request: WsRequest, name: str) -> Response:
+        """`GET /api/skills/{name}/save?content=...` — shim → SkillsService.save."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         decoded = _decode_api_key(name)
@@ -1622,31 +1625,35 @@ class WebSocketChannel(BaseChannel):
         content = _query_first(query, "content")
         if content is None:
             return _http_error(400, "content is required")
-        from durin.agent import skills_store as ss
-        from durin.config.loader import load_config
-        try:
-            workspace = self._endpoint_workspace()
-            status, payload = ss.web_save(workspace, decoded, content)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"skill save failed: {exc}")
-        return _http_json_response(payload, status=status)
+        from durin.service.skills import SkillSaveCommand
 
-    def _handle_skill_files(self, request: WsRequest, name: str) -> Response:
-        """`GET /api/skills/{name}/files` — list a skill's files."""
+        try:
+            result = await self._services.get("skills").save(
+                SkillSaveCommand(name=decoded, content=content), Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
+        return _http_json_response(result.data, status=result.status)
+
+    async def _handle_skill_files(self, request: WsRequest, name: str) -> Response:
+        """`GET /api/skills/{name}/files` — shim → SkillsService.files."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         decoded = _decode_api_key(name)
         if decoded is None:
             return _http_error(400, "invalid skill name")
-        from durin.agent import skills_store as ss
-        try:
-            status, payload = ss.web_files(self._endpoint_workspace(), decoded)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"skill files failed: {exc}")
-        return _http_json_response(payload, status=status)
+        from durin.service.skills import SkillFilesQuery
 
-    def _handle_skill_file(self, request: WsRequest, name: str) -> Response:
-        """`GET /api/skills/{name}/file?path=...` — read one file."""
+        try:
+            result = await self._services.get("skills").files(
+                SkillFilesQuery(name=decoded), Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
+        return _http_json_response(result.data, status=result.status)
+
+    async def _handle_skill_file(self, request: WsRequest, name: str) -> Response:
+        """`GET /api/skills/{name}/file?path=...` — shim → SkillsService.file_get."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         decoded = _decode_api_key(name)
@@ -1655,15 +1662,18 @@ class WebSocketChannel(BaseChannel):
         path = _query_first(_parse_query(request.path), "path")
         if not path:
             return _http_error(400, "path is required")
-        from durin.agent import skills_store as ss
-        try:
-            status, payload = ss.web_file_get(self._endpoint_workspace(), decoded, path)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"skill file read failed: {exc}")
-        return _http_json_response(payload, status=status)
+        from durin.service.skills import SkillFileQuery
 
-    def _handle_skill_file_save(self, request: WsRequest, name: str) -> Response:
-        """`GET /api/skills/{name}/file/save?path=&content=` — save one text file (manual)."""
+        try:
+            result = await self._services.get("skills").file_get(
+                SkillFileQuery(name=decoded, path=path), Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
+        return _http_json_response(result.data, status=result.status)
+
+    async def _handle_skill_file_save(self, request: WsRequest, name: str) -> Response:
+        """`GET /api/skills/{name}/file/save?path=&content=` — shim → SkillsService.file_save."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         decoded = _decode_api_key(name)
@@ -1676,83 +1686,87 @@ class WebSocketChannel(BaseChannel):
             return _http_error(400, "path is required")
         if content is None:
             return _http_error(400, "content is required")
-        from durin.agent import skills_store as ss
-        try:
-            status, payload = ss.web_file_save(
-                self._endpoint_workspace(), decoded, path, content,
-                attribution=ss.Attribution(actor="user"))
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"skill file save failed: {exc}")
-        return _http_json_response(payload, status=status)
+        from durin.service.skills import SkillFileSaveCommand
 
-    def _handle_skill_history(self, request: WsRequest, name: str) -> Response:
-        """`GET /api/skills/{name}/history` — provenance + attributed commit log."""
+        try:
+            result = await self._services.get("skills").file_save(
+                SkillFileSaveCommand(name=decoded, path=path, content=content), Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
+        return _http_json_response(result.data, status=result.status)
+
+    async def _handle_skill_history(self, request: WsRequest, name: str) -> Response:
+        """`GET /api/skills/{name}/history` — shim → SkillsService.history."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         decoded = _decode_api_key(name)
         if decoded is None:
             return _http_error(400, "invalid skill name")
-        from durin.agent import skills_store as ss
-        try:
-            status, payload = ss.web_history(self._endpoint_workspace(), decoded)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"skill history failed: {exc}")
-        return _http_json_response(payload, status=status)
+        from durin.service.skills import SkillHistoryQuery
 
-    def _handle_skill_mode(self, request: WsRequest, name: str) -> Response:
-        """`GET /api/skills/{name}/mode?value=auto|manual` — set a skill's mode."""
+        try:
+            result = await self._services.get("skills").history(
+                SkillHistoryQuery(name=decoded), Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
+        return _http_json_response(result.data, status=result.status)
+
+    async def _handle_skill_mode(self, request: WsRequest, name: str) -> Response:
+        """`GET /api/skills/{name}/mode?value=auto|manual` — shim → SkillsService.mode."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         decoded = _decode_api_key(name)
         if decoded is None:
             return _http_error(400, "invalid skill name")
-        query = _parse_query(request.path)
-        value = (_query_first(query, "value") or "").strip()
-        from durin.agent import skills_store as ss
-        from durin.config.loader import load_config
-        try:
-            workspace = self._endpoint_workspace()
-            status, payload = ss.web_mode(workspace, decoded, value)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"skill mode failed: {exc}")
-        return _http_json_response(payload, status=status)
+        value = (_query_first(_parse_query(request.path), "value") or "").strip()
+        from durin.service.skills import SkillModeCommand
 
-    def _handle_skills_resolve(self, request: WsRequest) -> Response:
-        """`GET /api/skills/resolve?source=` — list the candidates a source points at."""
+        try:
+            result = await self._services.get("skills").mode(
+                SkillModeCommand(name=decoded, value=value), Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
+        return _http_json_response(result.data, status=result.status)
+
+    async def _handle_skills_resolve(self, request: WsRequest) -> Response:
+        """`GET /api/skills/resolve?source=` — shim → SkillsService.resolve."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         source = (_query_first(_parse_query(request.path), "source") or "").strip()
         if not source:
             return _http_error(400, "source is required")
-        from durin.agent import skills_store as ss
-        from durin.config.loader import load_config
-        try:
-            workspace = self._endpoint_workspace()
-            status, payload = ss.web_import_resolve(workspace, source)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"resolve failed: {exc}")
-        return _http_json_response(payload, status=status)
+        from durin.service.skills import SkillsResolveQuery
 
-    def _handle_skills_import(self, request: WsRequest) -> Response:
-        """`GET /api/skills/import?source=` — fetch one candidate to quarantine + scan."""
+        try:
+            result = await self._services.get("skills").resolve(
+                SkillsResolveQuery(source=source), Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
+        return _http_json_response(result.data, status=result.status)
+
+    async def _handle_skills_import(self, request: WsRequest) -> Response:
+        """`GET /api/skills/import?source=` — shim → SkillsService.import_skill."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         source = (_query_first(_parse_query(request.path), "source") or "").strip()
         if not source:
             return _http_error(400, "source is required")
-        from durin.agent import skills_store as ss
-        from durin.config.loader import load_config
+        from durin.service.skills import SkillsImportCommand
+
         try:
-            workspace = self._endpoint_workspace()
-            status, payload = ss.web_import_fetch(workspace, source)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"import failed: {exc}")
-        return _http_json_response(payload, status=status)
+            result = await self._services.get("skills").import_skill(
+                SkillsImportCommand(source=source), Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
+        return _http_json_response(result.data, status=result.status)
 
     async def _handle_skill_search(self, request: WsRequest) -> Response:
-        """`GET /api/skills/search?query=&limit=` — search the configured registries.
-        Async + off-thread: `web_skill_search` drives the registries via
-        `asyncio.run`, so it MUST run in a worker thread, never the event loop."""
+        """`GET /api/skills/search?query=&limit=` — shim → SkillsService.search (async off-thread)."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         query = _parse_query(request.path)
@@ -1763,44 +1777,50 @@ class WebSocketChannel(BaseChannel):
             limit = int(_query_first(query, "limit") or 0)
         except ValueError:
             limit = 0
-        from durin.agent import skills_store as ss
-        from durin.config.loader import load_config
+        from durin.service.skills import SkillSearchQuery
+
         try:
-            workspace = self._endpoint_workspace()
-            status, payload = await asyncio.to_thread(ss.web_skill_search, workspace, q, limit)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"search failed: {exc}")
-        return _http_json_response(payload, status=status)
+            result = await self._services.get("skills").search(
+                SkillSearchQuery(q=q, limit=limit), Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
+        return _http_json_response(result.data, status=result.status)
 
     async def _handle_skill_describe(self, request: WsRequest) -> Response:
-        """`GET /api/skills/describe?ref=` — lazy SKILL.md description peek. Async +
-        off-thread (it makes an outbound HTTP fetch)."""
+        """`GET /api/skills/describe?ref=` — shim → SkillsService.describe (async off-thread)."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         ref = (_query_first(_parse_query(request.path), "ref") or "").strip()
         if not ref:
             return _http_error(400, "ref is required")
-        from durin.agent import skills_store as ss
-        try:
-            status, payload = await asyncio.to_thread(ss.web_skill_describe, ref)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"describe failed: {exc}")
-        return _http_json_response(payload, status=status)
+        from durin.service.skills import SkillDescribeQuery
 
-    def _handle_skills_github_token_test(self, request: WsRequest) -> Response:
-        """`GET /api/skills/github-token-test?secret=` — verify a GitHub-token secret."""
+        try:
+            result = await self._services.get("skills").describe(
+                SkillDescribeQuery(ref=ref), Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
+        return _http_json_response(result.data, status=result.status)
+
+    async def _handle_skills_github_token_test(self, request: WsRequest) -> Response:
+        """`GET /api/skills/github-token-test?secret=` — shim → SkillsService.github_token_test."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         secret = (_query_first(_parse_query(request.path), "secret") or "").strip()
-        from durin.agent import skills_store as ss
+        from durin.service.skills import GithubTokenTestQuery
+
         try:
-            status, payload = ss.web_github_token_test(secret)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"token test failed: {exc}")
-        return _http_json_response(payload, status=status)
+            result = await self._services.get("skills").github_token_test(
+                GithubTokenTestQuery(secret=secret), Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
+        return _http_json_response(result.data, status=result.status)
 
     async def _handle_skill_approve(self, request: WsRequest, name: str) -> Response:
-        """`GET /api/skills/{name}/approve?confirm=&override=&install_deps=`"""
+        """`GET /api/skills/{name}/approve?confirm=&override=&install_deps=` — shim → SkillsService.approve."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         decoded = _decode_api_key(name)
@@ -1811,36 +1831,37 @@ class WebSocketChannel(BaseChannel):
         override = (_query_first(query, "override") or "").lower() in ("1", "true", "yes")
         replace = (_query_first(query, "replace") or "").lower() in ("1", "true", "yes")
         install_deps = (_query_first(query, "install_deps") or "").lower() in ("1", "true", "yes")
-        from durin.agent import skills_store as ss
-        from durin.config.loader import load_config
+        from durin.service.skills import SkillApproveCommand
+
         try:
-            workspace = self._endpoint_workspace()
-            exec_run = ss._get_exec_run(workspace) if install_deps else None
-            status, payload = await ss.web_skill_approve(
-                workspace, decoded, confirm=confirm, override=override,
-                replace=replace, install_deps=install_deps, exec_run=exec_run)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"approve failed: {exc}")
-        return _http_json_response(payload, status=status)
+            result = await self._services.get("skills").approve(
+                SkillApproveCommand(
+                    name=decoded, confirm=confirm, override=override,
+                    replace=replace, install_deps=install_deps,
+                ),
+                Principal.local(),
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
+        return _http_json_response(result.data, status=result.status)
 
     async def _handle_skill_install_deps(self, request: WsRequest, name: str) -> Response:
-        """`GET /api/skills/{name}/install-deps?bin=` — install deps for a skill."""
+        """`GET /api/skills/{name}/install-deps?bin=` — shim → SkillsService.install_deps."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         decoded = _decode_api_key(name)
         if decoded is None:
             return _http_error(400, "invalid skill name")
-        query = _parse_query(request.path)
-        bin_name = _query_first(query, "bin")
-        from durin.agent import skills_store as ss
+        bin_name = _query_first(_parse_query(request.path), "bin")
+        from durin.service.skills import SkillInstallDepsCommand
+
         try:
-            workspace = self._endpoint_workspace()
-            exec_run = ss._get_exec_run(workspace)
-            status, payload = await ss.web_skill_install_deps(
-                workspace, decoded, bin_name=bin_name, exec_run=exec_run)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"install-deps failed: {exc}")
-        return _http_json_response(payload, status=status)
+            result = await self._services.get("skills").install_deps(
+                SkillInstallDepsCommand(name=decoded, bin_name=bin_name), Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
+        return _http_json_response(result.data, status=result.status)
 
     async def _run_skill_audit(self, connection: Any, name: str) -> None:
         """Stream an on-demand LLM audit of a quarantined skill: reasoning deltas
@@ -1904,52 +1925,55 @@ class WebSocketChannel(BaseChannel):
                                summary=outcome.summary)
 
     async def _handle_skill_judge(self, request: WsRequest, name: str) -> Response:
-        """`GET /api/skills/{name}/judge` — run the LLM judge on-demand. Async +
-        off-thread so the (multi-second) model call doesn't stall the event loop."""
+        """`GET /api/skills/{name}/judge` — shim → SkillsService.judge (async off-thread)."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         decoded = _decode_api_key(name)
         if decoded is None:
             return _http_error(400, "invalid skill name")
-        from durin.agent import skills_store as ss
-        from durin.config.loader import load_config
-        try:
-            workspace = self._endpoint_workspace()
-            status, payload = await asyncio.to_thread(ss.web_skill_judge, workspace, decoded)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"judge failed: {exc}")
-        return _http_json_response(payload, status=status)
+        from durin.service.skills import SkillJudgeQuery
 
-    def _handle_skill_reject(self, request: WsRequest, name: str) -> Response:
-        """`GET /api/skills/{name}/reject` — discard a quarantined skill."""
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        decoded = _decode_api_key(name)
-        if decoded is None:
-            return _http_error(400, "invalid skill name")
-        from durin.agent import skills_store as ss
-        from durin.config.loader import load_config
         try:
-            workspace = self._endpoint_workspace()
-            status, payload = ss.web_skill_reject(workspace, decoded)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"reject failed: {exc}")
-        return _http_json_response(payload, status=status)
+            result = await self._services.get("skills").judge(
+                SkillJudgeQuery(name=decoded), Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
+        return _http_json_response(result.data, status=result.status)
 
-    def _handle_skill_remove(self, request: WsRequest, name: str) -> Response:
-        """`GET /api/skills/{name}/remove` — delete a workspace skill / revert a fork."""
+    async def _handle_skill_reject(self, request: WsRequest, name: str) -> Response:
+        """`GET /api/skills/{name}/reject` — shim → SkillsService.reject."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         decoded = _decode_api_key(name)
         if decoded is None:
             return _http_error(400, "invalid skill name")
-        from durin.agent import skills_store as ss
+        from durin.service.skills import SkillRejectCommand
+
         try:
-            workspace = self._endpoint_workspace()
-            status, payload = ss.web_skill_remove(workspace, decoded)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"remove failed: {exc}")
-        return _http_json_response(payload, status=status)
+            result = await self._services.get("skills").reject(
+                SkillRejectCommand(name=decoded), Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
+        return _http_json_response(result.data, status=result.status)
+
+    async def _handle_skill_remove(self, request: WsRequest, name: str) -> Response:
+        """`GET /api/skills/{name}/remove` — shim → SkillsService.remove."""
+        if not self._check_api_token(request):
+            return _http_error(401, "Unauthorized")
+        decoded = _decode_api_key(name)
+        if decoded is None:
+            return _http_error(400, "invalid skill name")
+        from durin.service.skills import SkillRemoveCommand
+
+        try:
+            result = await self._services.get("skills").remove(
+                SkillRemoveCommand(name=decoded), Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
+        return _http_json_response(result.data, status=result.status)
 
     async def _handle_cron_list(self, request: WsRequest) -> Response:
         """`GET /api/cron` — list all scheduled jobs."""
