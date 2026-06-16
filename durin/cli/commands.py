@@ -1794,9 +1794,12 @@ def _run_gateway(
         # graceful shutdown.
         loop = asyncio.get_running_loop()
         gathered: asyncio.Future | None = None
+        api_server = None  # SP4: uvicorn front door, set below if gateway.api_port
 
         def _request_shutdown(signame: str) -> None:
             logger.info("Gateway received {}; shutting down gracefully.", signame)
+            if api_server is not None:
+                api_server.should_exit = True
             if gathered is not None and not gathered.done():
                 gathered.cancel()
 
@@ -1816,6 +1819,53 @@ def _run_gateway(
                 channels.start_all(),
                 _health_server(config.gateway.host, port),
             ]
+            # SP4: optional read-only Starlette front door on a 2nd port, served
+            # as a coroutine in this same loop (like _health_server). Off unless
+            # gateway.api_port is set.
+            if config.gateway.api_port:
+                import contextlib as _contextlib
+
+                import uvicorn
+
+                from durin.api.asgi import build_api_app
+                from durin.service.wiring import build_service_registry
+
+                api_registry = build_service_registry(
+                    config=config,
+                    session_manager=session_manager,
+                    cron_service=cron,
+                    bus=bus,
+                )
+                # The static token (if any) lives on the websocket channel
+                # section, which may be a dict or a parsed WebSocketConfig.
+                _ws_cfg = getattr(config.channels, "websocket", None)
+                if isinstance(_ws_cfg, dict):
+                    _static_token = _ws_cfg.get("token") or ""
+                elif _ws_cfg is not None:
+                    _static_token = getattr(_ws_cfg, "token", "") or ""
+                else:
+                    _static_token = ""
+                api_app = build_api_app(
+                    api_registry,
+                    auth=api_registry.get("auth"),
+                    static_token=_static_token,
+                )
+                api_server = uvicorn.Server(
+                    uvicorn.Config(
+                        api_app,
+                        host=config.gateway.host,
+                        port=config.gateway.api_port,
+                        log_level="warning",
+                    )
+                )
+                # The gateway owns SIGINT/SIGTERM via loop.add_signal_handler;
+                # uvicorn must NOT install its own — neuter capture_signals.
+                api_server.capture_signals = _contextlib.nullcontext
+                tasks.append(api_server.serve())
+                console.print(
+                    f"[green]✓[/green] API endpoint: "
+                    f"http://{config.gateway.host}:{config.gateway.api_port}/api/v1"
+                )
             if open_browser_url:
                 tasks.append(_open_browser_when_ready())
             gathered = asyncio.gather(*tasks)
