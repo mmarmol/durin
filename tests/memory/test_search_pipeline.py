@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from durin.memory.entity_page import EntityPage
 from durin.memory.indexer import rebuild_fts_index
 from durin.memory.search_pipeline import (

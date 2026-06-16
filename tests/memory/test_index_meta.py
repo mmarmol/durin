@@ -18,8 +18,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 from durin.memory.index_meta import (
     CURRENT_SCHEMA_VERSION,
     IndexMeta,

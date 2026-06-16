@@ -8,7 +8,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
-import pytest
 from pydantic import BaseModel, Field
 
 from durin.cli import onboard as onboard_wizard
@@ -636,8 +635,8 @@ class TestValidateFieldConstraint:
 
     def test_real_send_max_retries_field(self):
         """Validate against the actual ChannelsConfig.send_max_retries field."""
-        from durin.config.schema import ChannelsConfig
         from durin.cli.onboard import _validate_field_constraint
+        from durin.config.schema import ChannelsConfig
 
         field_info = ChannelsConfig.model_fields["send_max_retries"]
         assert _validate_field_constraint(3, field_info) is None
@@ -829,12 +828,11 @@ class TestMainMenuUpdate:
 
     def test_main_menu_dispatch_includes_channel_common(self):
         """Main menu dispatch should route [H] to Channel Common."""
-        from durin.cli.onboard import run_onboard
 
         # We verify by checking the dispatch table is set up correctly
         # The menu items are defined inline in run_onboard, so we test
         # that _configure_general_settings handles the new sections.
-        from durin.cli.onboard import _SETTINGS_SECTIONS, _SETTINGS_GETTER, _SETTINGS_SETTER
+        from durin.cli.onboard import _SETTINGS_GETTER, _SETTINGS_SECTIONS, _SETTINGS_SETTER
 
         assert "Channel Common" in _SETTINGS_SECTIONS
         assert "Channel Common" in _SETTINGS_GETTER
@@ -842,7 +840,7 @@ class TestMainMenuUpdate:
 
     def test_main_menu_dispatch_includes_api_server(self):
         """Main menu dispatch should route [I] to API Server."""
-        from durin.cli.onboard import _SETTINGS_SECTIONS, _SETTINGS_GETTER, _SETTINGS_SETTER
+        from durin.cli.onboard import _SETTINGS_GETTER, _SETTINGS_SECTIONS, _SETTINGS_SETTER
 
         assert "API Server" in _SETTINGS_SECTIONS
         assert "API Server" in _SETTINGS_GETTER
@@ -994,6 +992,7 @@ class TestIsStrOrNone:
 
     def test_optional_str_true(self):
         from typing import Optional
+
         from durin.cli.onboard import _is_str_or_none
 
         assert _is_str_or_none(Optional[str]) is True
@@ -1015,7 +1014,7 @@ class TestConfigurePydanticModelEmptyString:
     def test_optional_str_empty_string_becomes_none(self, monkeypatch):
         """Entering '' for an optional str field should set it to None."""
         from pydantic import BaseModel
-        from durin.cli.onboard import _is_str_or_none
+
 
         class M(BaseModel):
             api_key: str | None = None

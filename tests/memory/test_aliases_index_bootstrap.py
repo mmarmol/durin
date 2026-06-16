@@ -24,8 +24,6 @@ from __future__ import annotations
 import datetime
 from pathlib import Path
 
-import pytest
-
 from durin.memory.aliases_index import AliasIndex
 from durin.memory.entity_page import EntityPage
 from durin.memory.store import store_memory

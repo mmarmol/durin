@@ -12,8 +12,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import pytest
-
 from durin.telemetry.schema import EVENTS
 
 _DURIN_ROOT = Path(__file__).resolve().parent.parent.parent / "durin"
@@ -83,8 +81,8 @@ def test_every_emitted_event_is_in_the_catalog():
     catalogued = _registered_events()
     missing = emitted - catalogued
     assert not missing, (
-        f"Telemetry events emitted in source but missing from "
-        f"durin/telemetry/schema.py::EVENTS:\n  - " + "\n  - ".join(sorted(missing))
+        "Telemetry events emitted in source but missing from "
+        "durin/telemetry/schema.py::EVENTS:\n  - " + "\n  - ".join(sorted(missing))
         + "\nAdd a TypedDict + catalog entry for each."
     )
 
@@ -97,8 +95,8 @@ def test_no_orphan_catalog_entries():
     catalogued = _registered_events()
     orphan = catalogued - emitted
     assert not orphan, (
-        f"Telemetry events registered in catalog but never emitted in "
-        f"source:\n  - " + "\n  - ".join(sorted(orphan))
+        "Telemetry events registered in catalog but never emitted in "
+        "source:\n  - " + "\n  - ".join(sorted(orphan))
         + "\nRemove the catalog entry or wire up the emit site."
     )
 
@@ -116,7 +114,6 @@ def test_catalog_values_are_typeddicts():
     """The catalog value must be a class (the TypedDict). Tightens the
     contract: a typo like ``EVENTS["foo.bar"] = None`` would silently
     pass without this."""
-    import typing
     for event_type, td in EVENTS.items():
         assert isinstance(td, type), (
             f"event {event_type!r}: catalog value must be a TypedDict class, "

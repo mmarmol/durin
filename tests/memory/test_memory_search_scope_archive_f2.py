@@ -21,8 +21,6 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-import pytest
-
 
 def _seed_archive(tmp_path: Path) -> None:
     """Place one archived episodic + one archived entity page so the
@@ -115,9 +113,9 @@ def test_scope_archive_returns_empty_when_no_archive(tmp_path: Path) -> None:
 def test_scope_archive_excludes_non_archived_content(tmp_path: Path) -> None:
     """Active (non-archived) memory MUST NOT appear in archive scope —
     the surface is for recovery, not a "search everything" mode."""
+    from durin.agent.tools.memory_search import MemorySearchTool
     from durin.memory.entity_page import EntityPage
     from durin.memory.indexer import rebuild_fts_index
-    from durin.agent.tools.memory_search import MemorySearchTool
 
     # Seed an active entity page AND an archived episodic.
     EntityPage(

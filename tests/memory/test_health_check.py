@@ -44,10 +44,8 @@ def test_clean_workspace_reports_all_ok(tmp_path: Path) -> None:
 
 def test_drift_detected_triggers_repair(tmp_path: Path) -> None:
     """A `missing_row` drift triggers a re-index of the missing file."""
-    import os
-    import time as _time
-    from durin.memory.health_check import HealthChecker
     from durin.memory.fts_index import FTSIndex
+    from durin.memory.health_check import HealthChecker
     _seed(tmp_path)
     # Add a new entity directly (bypassing the tool re-index hook) so
     # the file has no FTS row → missing_row drift.

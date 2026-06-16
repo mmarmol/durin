@@ -6,7 +6,6 @@ history.jsonl (e.g. ``"cursor": "abc"``).  The original ``_next_cursor`` and
 ``TypeError`` / ``ValueError``, blocking all subsequent history appends.
 """
 
-import json
 
 import pytest
 
@@ -159,6 +158,7 @@ class TestCursorValidationInvariant:
         warning, subsequent reads on the same store stay quiet.  Without
         this, a poisoned file produces one warning per agent turn."""
         import logging
+
         from loguru import logger as loguru_logger
 
         store.history_file.write_text(

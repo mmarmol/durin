@@ -24,8 +24,6 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-import pytest
-
 from durin.agent.tools.memory_search import MemorySearchTool
 from durin.memory.indexer import rebuild_fts_index
 

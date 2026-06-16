@@ -4,9 +4,9 @@ from unittest.mock import MagicMock
 import pytest
 
 from durin.agent.loop import AgentLoop
+from durin.agent.tools.context import RequestContext
 from durin.bus.queue import MessageBus
 from durin.providers.base import LLMResponse, ToolCallRequest
-from durin.agent.tools.context import RequestContext
 
 
 class _ContextRecordingTool:

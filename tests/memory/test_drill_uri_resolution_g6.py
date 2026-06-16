@@ -111,7 +111,7 @@ def test_drill_returns_clear_error_for_unknown_entity(
     """`memory/entity_page/<type>:<slug>` where the file does not exist
     raises DrillError with a message that includes the canonical URI
     (not just the failed disk path) so the agent can act on it."""
-    from durin.memory.drill import drill, DrillError
+    from durin.memory.drill import DrillError, drill
 
     _seed_workspace(tmp_path)
     with pytest.raises(DrillError) as exc:

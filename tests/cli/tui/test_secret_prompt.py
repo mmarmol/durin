@@ -33,12 +33,14 @@ async def test_secret_prompt_stores_value(monkeypatch, tmp_path) -> None:
         await pilot.pause()
 
     assert result == [True]
-    from durin.security.secrets import SecretStore
+    from durin.security.secrets import get_secret_store
 
-    entry = SecretStore(path=secrets_path).load().get("STRIPE_KEY")
+    entry = get_secret_store(reload=True).get("STRIPE_KEY")
     assert entry is not None
     assert entry.value == "sk_live_abc123"
+    assert entry.service == "stripe"
     assert entry.scope == ["exec"]
+    assert entry.origin == "tui"
 
 
 @pytest.mark.asyncio
@@ -59,4 +61,16 @@ async def test_secret_prompt_cancel_stores_nothing(monkeypatch, tmp_path) -> Non
         await pilot.pause()
 
     assert result == [False]
+    assert not secrets_path.exists()
+
+
+def test_save_empty_value_does_not_write(monkeypatch, tmp_path) -> None:
+    secrets_path = tmp_path / "secrets.json"
+    monkeypatch.setattr(
+        "durin.security.secrets._default_secrets_path", lambda: secrets_path
+    )
+    screen = SecretPromptScreen(name="TUI_TOKEN", service="github")
+    # Calling _save directly is safe for the empty-value path:
+    # _show_error swallows its own NoMatches; _save returns before any store call.
+    screen._save("   ")
     assert not secrets_path.exists()

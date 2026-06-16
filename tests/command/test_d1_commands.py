@@ -26,7 +26,6 @@ from durin.command.builtin import (
 )
 from durin.command.router import CommandContext
 
-
 # ---------------------------------------------------------------------------
 # fixtures
 # ---------------------------------------------------------------------------

@@ -21,7 +21,6 @@ from durin.cli.onboard_memory import (
     prompt_memory_aux_model,
 )
 
-
 # ---------------------------------------------------------------------------
 # Static contract — question text exists and contains the spec anchors
 # ---------------------------------------------------------------------------

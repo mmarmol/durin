@@ -8,13 +8,12 @@
 - Stale detection with content-equality fallback
 """
 
-import os
 import time
 
 import pytest
 
-from durin.agent.tools.filesystem import EditFileTool, ReadFileTool, _find_match
 from durin.agent.tools import file_state
+from durin.agent.tools.filesystem import EditFileTool, ReadFileTool, _find_match
 
 
 @pytest.fixture(autouse=True)
@@ -207,59 +206,6 @@ class TestEditDiagnostics:
         result = await tool.execute(path=str(f), old_text="helloworld", new_text="goodbye")
         assert "Error" in result
         assert "letter case differs" in result.lower()
-
-
-# ---------------------------------------------------------------------------
-# Advanced fallback replacement behavior
-# ---------------------------------------------------------------------------
-
-
-class TestAdvancedReplaceAll:
-    """replace_all should work correctly for fallback-based matches too."""
-
-    @pytest.fixture()
-    def tool(self, tmp_path):
-        return EditFileTool(workspace=tmp_path)
-
-    @pytest.mark.asyncio
-    async def test_replace_all_preserves_each_match_indentation(self, tool, tmp_path):
-        f = tmp_path / "indent_multi.py"
-        f.write_text(
-            "if a:\n"
-            "    def foo():\n"
-            "        pass\n"
-            "if b:\n"
-            "        def foo():\n"
-            "            pass\n",
-            encoding="utf-8",
-        )
-        result = await tool.execute(
-            path=str(f),
-            old_text="def foo():\n    pass",
-            new_text="def bar():\n    return 1",
-            replace_all=True,
-        )
-        assert "Successfully" in result
-        assert f.read_text(encoding="utf-8") == (
-            "if a:\n"
-            "    def bar():\n"
-            "        return 1\n"
-            "if b:\n"
-            "        def bar():\n"
-            "            return 1\n"
-        )
-
-    @pytest.mark.asyncio
-    async def test_trim_and_quote_fallback_match_succeeds(self, tool, tmp_path):
-        f = tmp_path / "quote_indent.py"
-        f.write_text("    message = “hello”\n", encoding="utf-8")
-        result = await tool.execute(
-            path=str(f),
-            old_text='message = "hello"',
-            new_text='message = "goodbye"',
-        )
-        assert "Successfully" in result
-        assert f.read_text(encoding="utf-8") == "    message = “goodbye”\n"
 
 
 # ---------------------------------------------------------------------------

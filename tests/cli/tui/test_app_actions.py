@@ -67,8 +67,9 @@ async def test_spinner_appears_on_submit_and_disappears_on_first_delta() -> None
     """The 'thinking…' spinner mounts on submit and unmounts on first content."""
     import asyncio
     from types import SimpleNamespace
-    from durin.bus.queue import MessageBus
+
     from durin.bus.events import OutboundMessage
+    from durin.bus.queue import MessageBus
     from durin.cli.tui.widgets import InputArea
 
     async def _idle() -> None:
@@ -118,8 +119,9 @@ async def test_spinner_dismissed_by_reasoning_delta_too() -> None:
     """A reasoning chunk before any content also dismisses the spinner."""
     import asyncio
     from types import SimpleNamespace
-    from durin.bus.queue import MessageBus
+
     from durin.bus.events import OutboundMessage
+    from durin.bus.queue import MessageBus
     from durin.cli.tui.widgets import InputArea
 
     async def _idle() -> None:
@@ -166,8 +168,9 @@ async def test_spinner_dismissed_by_plain_content() -> None:
     a 'thinking…' indicator spinning forever (real bug user reported)."""
     import asyncio
     from types import SimpleNamespace
-    from durin.bus.queue import MessageBus
+
     from durin.bus.events import OutboundMessage
+    from durin.bus.queue import MessageBus
     from durin.cli.tui.widgets import InputArea
 
     async def _idle() -> None:
@@ -210,8 +213,9 @@ async def test_retry_wait_messages_are_silent() -> None:
     """`_retry_wait` outbound messages must NOT create any bubble."""
     import asyncio
     from types import SimpleNamespace
-    from durin.bus.queue import MessageBus
+
     from durin.bus.events import OutboundMessage
+    from durin.bus.queue import MessageBus
     from durin.cli.tui.widgets import InputArea
 
     async def _idle() -> None:

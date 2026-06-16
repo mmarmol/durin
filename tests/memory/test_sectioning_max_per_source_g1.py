@@ -67,7 +67,8 @@ def test_cap_override_changes_behavior(
     Uses `apply_per_source_cap` directly so the test stays
     deterministic without rebuilding indexes."""
     from durin.memory.sectioned_output import (
-        SectionedHit, apply_per_source_cap,
+        SectionedHit,
+        apply_per_source_cap,
     )
 
     hits = [

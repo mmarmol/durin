@@ -7,7 +7,6 @@ from pathlib import Path
 
 from durin.memory.consolidator_tags import parse_consolidator_response
 
-
 # ---------------------------------------------------------------------------
 # Parser unit tests
 # ---------------------------------------------------------------------------

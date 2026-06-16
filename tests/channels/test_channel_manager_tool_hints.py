@@ -11,8 +11,8 @@ regardless of the text-hint flag.
 from __future__ import annotations
 
 from durin.bus.queue import MessageBus
-from durin.channels.manager import ChannelManager
 from durin.channels.base import BaseChannel
+from durin.channels.manager import ChannelManager
 from durin.config.schema import Config
 
 

@@ -20,7 +20,6 @@ import pytest
 import durin.memory.embedding as embedding_module
 from durin.memory.embedding import EmbeddingProvider, FastembedProvider
 
-
 # Catalog snapshot used across tests; matches the real fastembed 0.8.0
 # catalog for the models the wizard offers.
 #
@@ -443,7 +442,7 @@ def test_register_custom_models_idempotent() -> None:
 def test_list_supported_models_includes_custom_after_registration() -> None:
     """`list_supported_models()` calls `_register_custom_models()`
     internally, so the returned dict must include the custom models."""
-    from durin.memory.embedding import list_supported_models, _CUSTOM_MODELS
+    from durin.memory.embedding import _CUSTOM_MODELS, list_supported_models
 
     with _inject_fake_fastembed():
         catalog = list_supported_models()

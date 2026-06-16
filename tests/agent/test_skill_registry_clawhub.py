@@ -1,4 +1,4 @@
-from durin.agent.skill_registry import ClawHubRegistry, SkillSearchHit, build_adapters
+from durin.agent.skill_registry import ClawHubRegistry, build_adapters
 
 
 class _Resp:

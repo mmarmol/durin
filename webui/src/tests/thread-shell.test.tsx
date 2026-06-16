@@ -692,7 +692,7 @@ describe("ThreadShell", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
-        if (url.endsWith("/api/commands")) {
+        if (url.endsWith("/api/v1/commands")) {
           return httpJson({
             commands: [
               {
@@ -726,7 +726,7 @@ describe("ThreadShell", () => {
     );
 
     await waitFor(() => expect(fetch).toHaveBeenCalledWith(
-      "/api/commands",
+      "/api/v1/commands",
       expect.objectContaining({
         headers: { Authorization: "Bearer tok" },
       }),

@@ -11,8 +11,8 @@ import pytest
 from durin.bus.events import InboundMessage
 from durin.bus.queue import MessageBus
 from durin.cli.tui.app import DurinApp
-from durin.cli.tui.screens.session_picker import SessionEntry, SessionPickerScreen
 from durin.cli.tui.screens.model_picker import ModelPickerScreen
+from durin.cli.tui.screens.session_picker import SessionEntry, SessionPickerScreen
 from durin.cli.tui.widgets import ChatView, InputArea, MessageBubble
 from durin.config.schema import ModelPresetConfig
 

@@ -17,7 +17,7 @@ import pytest
 from durin.bus.events import InboundMessage, OutboundMessage
 from durin.bus.queue import MessageBus
 from durin.cli.tui.app import DurinApp
-from durin.cli.tui.widgets import ChatView, FooterBar, MessageBubble
+from durin.cli.tui.widgets import ChatView, MessageBubble
 
 
 def _fake_agent_loop(bus: MessageBus, tmp_path) -> SimpleNamespace:

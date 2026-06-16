@@ -7,8 +7,6 @@ sentence > word > char boundaries.
 
 from __future__ import annotations
 
-import pytest
-
 from durin.memory.text_splitter import (
     DEFAULT_CHUNK_SIZE,
     DEFAULT_OVERLAP,

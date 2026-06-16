@@ -178,8 +178,8 @@ async def test_estimator_exception_does_not_break_turn(monkeypatch):
 
 def test_precheck_helper_returns_none_when_under_budget(monkeypatch):
     """Direct unit test of the helper for clean failure semantics."""
-    from durin.agent.runner import AgentRunner, AgentRunSpec
     from durin.agent import runner as runner_mod
+    from durin.agent.runner import AgentRunner, AgentRunSpec
 
     monkeypatch.setattr(
         runner_mod,
@@ -201,8 +201,8 @@ def test_precheck_helper_returns_none_when_under_budget(monkeypatch):
 
 
 def test_precheck_helper_returns_estimate_when_over_budget(monkeypatch):
-    from durin.agent.runner import AgentRunner, AgentRunSpec
     from durin.agent import runner as runner_mod
+    from durin.agent.runner import AgentRunner, AgentRunSpec
 
     monkeypatch.setattr(
         runner_mod,

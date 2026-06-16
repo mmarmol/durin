@@ -9,7 +9,6 @@ import pytest
 
 from durin.agent.tools.process_registry import (
     ProcessRegistry,
-    ProcessSession,
 )
 
 pytestmark = pytest.mark.skipif(

@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 
 from durin.agent.skills_surface import quarantined_skills, skills_inventory
 

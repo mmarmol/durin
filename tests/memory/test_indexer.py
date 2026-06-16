@@ -8,10 +8,7 @@ files (incremental mode).
 
 from __future__ import annotations
 
-from datetime import date
 from pathlib import Path
-
-import pytest
 
 from durin.memory.entity_page import EntityPage
 from durin.memory.fts_index import FTSIndex
@@ -22,7 +19,6 @@ from durin.memory.indexer import (
 )
 from durin.memory.schema import MemoryEntry
 from durin.memory.storage import save_entry
-
 
 # ---------------------------------------------------------------------------
 # Helpers

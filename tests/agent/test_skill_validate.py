@@ -1,4 +1,3 @@
-from pathlib import Path
 
 from durin.agent.skills_import import validate_skill
 

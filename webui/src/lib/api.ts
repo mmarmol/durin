@@ -57,6 +57,22 @@ async function request<T>(
   return (await res.json()) as T;
 }
 
+function post<T>(url: string, token: string, body: unknown): Promise<T> {
+  return request<T>(url, token, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+function del<T>(url: string, token: string, body: unknown): Promise<T> {
+  return request<T>(url, token, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
 function splitKey(key: string): { channel: string; chatId: string } {
   const idx = key.indexOf(":");
   if (idx === -1) return { channel: "", chatId: key };
@@ -75,7 +91,7 @@ export async function listSessions(
     preview?: string;
   };
   const body = await request<{ sessions: Row[] }>(
-    `${base}/api/sessions`,
+    `${base}/api/v1/sessions`,
     token,
   );
   return body.sessions.map((s) => ({
@@ -94,14 +110,16 @@ export async function fetchWebuiThread(
   key: string,
   base: string = "",
 ): Promise<WebuiThreadPersistedPayload | null> {
-  const url = `${base}/api/sessions/${encodeURIComponent(key)}/webui-thread`;
+  const url = `${base}/api/v1/sessions/${encodeURIComponent(key)}/webui-thread`;
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${token}` },
     credentials: "same-origin",
   });
   if (res.status === 404) return null;
   if (!res.ok) throw new ApiError(res.status, `HTTP ${res.status}`);
-  return (await res.json()) as WebuiThreadPersistedPayload;
+  const envelope = await res.json();
+  // v1 wraps the payload under {data: {...}}
+  return (envelope.data ?? envelope) as WebuiThreadPersistedPayload;
 }
 
 export async function deleteSession(
@@ -109,9 +127,10 @@ export async function deleteSession(
   key: string,
   base: string = "",
 ): Promise<boolean> {
-  const body = await request<{ deleted: boolean }>(
-    `${base}/api/sessions/${encodeURIComponent(key)}/delete`,
+  const body = await del<{ deleted: boolean }>(
+    `${base}/api/v1/sessions/${encodeURIComponent(key)}`,
     token,
+    { key },
   );
   return body.deleted;
 }
@@ -127,10 +146,11 @@ export async function renameSession(
 ): Promise<string> {
   const trimmed = title.trim();
   if (!trimmed) throw new ApiError(400, "title is required");
-  const url =
-    `${base}/api/sessions/${encodeURIComponent(key)}/rename` +
-    `?title=${encodeURIComponent(trimmed)}`;
-  const body = await request<{ title: string }>(url, token);
+  const body = await post<{ title: string }>(
+    `${base}/api/v1/sessions/${encodeURIComponent(key)}/rename`,
+    token,
+    { key, title: trimmed },
+  );
   return body.title;
 }
 
@@ -138,7 +158,7 @@ export async function fetchSettings(
   token: string,
   base: string = "",
 ): Promise<SettingsPayload> {
-  return request<SettingsPayload>(`${base}/api/settings`, token);
+  return request<SettingsPayload>(`${base}/api/v1/settings`, token);
 }
 
 export async function listSlashCommands(
@@ -152,7 +172,7 @@ export async function listSlashCommands(
     icon: string;
     arg_hint?: string;
   };
-  const body = await request<{ commands: Row[] }>(`${base}/api/commands`, token);
+  const body = await request<{ commands: Row[] }>(`${base}/api/v1/commands`, token);
   return body.commands
     .filter((command) => !["/stop", "/restart"].includes(command.command))
     .map((command) => ({
@@ -169,10 +189,10 @@ export async function updateSettings(
   update: SettingsUpdate,
   base: string = "",
 ): Promise<SettingsPayload> {
-  const query = new URLSearchParams();
-  if (update.model !== undefined) query.set("model", update.model);
-  if (update.provider !== undefined) query.set("provider", update.provider);
-  return request<SettingsPayload>(`${base}/api/settings/update?${query}`, token);
+  const body: Record<string, string> = {};
+  if (update.model !== undefined) body.model = update.model;
+  if (update.provider !== undefined) body.provider = update.provider;
+  return post<SettingsPayload>(`${base}/api/v1/settings`, token, body);
 }
 
 export async function updateProviderSettings(
@@ -180,14 +200,10 @@ export async function updateProviderSettings(
   update: ProviderSettingsUpdate,
   base: string = "",
 ): Promise<SettingsPayload> {
-  const query = new URLSearchParams();
-  query.set("provider", update.provider);
-  if (update.apiKey !== undefined) query.set("api_key", update.apiKey);
-  if (update.apiBase !== undefined) query.set("api_base", update.apiBase);
-  return request<SettingsPayload>(
-    `${base}/api/settings/provider/update?${query}`,
-    token,
-  );
+  const body: Record<string, string | null> = { provider: update.provider };
+  if (update.apiKey !== undefined) body.apiKey = update.apiKey;
+  if (update.apiBase !== undefined) body.apiBase = update.apiBase;
+  return post<SettingsPayload>(`${base}/api/v1/settings/provider`, token, body);
 }
 
 export async function updateWebSearchSettings(
@@ -195,14 +211,10 @@ export async function updateWebSearchSettings(
   update: WebSearchSettingsUpdate,
   base: string = "",
 ): Promise<SettingsPayload> {
-  const query = new URLSearchParams();
-  query.set("provider", update.provider);
-  if (update.apiKey !== undefined) query.set("api_key", update.apiKey);
-  if (update.baseUrl !== undefined) query.set("base_url", update.baseUrl);
-  return request<SettingsPayload>(
-    `${base}/api/settings/web-search/update?${query}`,
-    token,
-  );
+  const body: Record<string, string | null> = { provider: update.provider };
+  if (update.apiKey !== undefined) body.apiKey = update.apiKey;
+  if (update.baseUrl !== undefined) body.baseUrl = update.baseUrl;
+  return post<SettingsPayload>(`${base}/api/v1/settings/web-search`, token, body);
 }
 
 export async function listSecrets(
@@ -210,7 +222,7 @@ export async function listSecrets(
   base: string = "",
 ): Promise<SecretEntry[]> {
   const res = await request<{ secrets: SecretEntry[] }>(
-    `${base}/api/secrets`,
+    `${base}/api/v1/secrets`,
     token,
   );
   return res.secrets;
@@ -224,8 +236,7 @@ export async function deleteSecret(
   name: string,
   base: string = "",
 ): Promise<void> {
-  const query = new URLSearchParams({ name });
-  await request<{ ok: boolean }>(`${base}/api/secrets/delete?${query}`, token);
+  await del<{ ok: boolean }>(`${base}/api/v1/secrets`, token, { name });
 }
 
 // -- cron jobs (P11) ---------------------------------------------------
@@ -260,7 +271,7 @@ export async function listCronJobs(
   token: string,
   base: string = "",
 ): Promise<CronJobRow[]> {
-  const res = await request<{ jobs: CronJobRow[] }>(`${base}/api/cron`, token);
+  const res = await request<{ jobs: CronJobRow[] }>(`${base}/api/v1/cron`, token);
   return res.jobs;
 }
 
@@ -269,8 +280,7 @@ export async function removeCronJob(
   id: string,
   base: string = "",
 ): Promise<void> {
-  const query = new URLSearchParams({ id });
-  await request<{ result: string }>(`${base}/api/cron/remove?${query}`, token);
+  await del<{ result: string }>(`${base}/api/v1/cron`, token, { id });
 }
 
 export async function toggleCronJob(
@@ -279,25 +289,25 @@ export async function toggleCronJob(
   enabled: boolean,
   base: string = "",
 ): Promise<CronJobRow> {
-  const query = new URLSearchParams({ id, enabled: String(enabled) });
-  const res = await request<{ job: CronJobRow }>(
-    `${base}/api/cron/toggle?${query}`,
+  const res = await post<{ job: CronJobRow }>(
+    `${base}/api/v1/cron/toggle`,
     token,
+    { id, enabled },
   );
   return res.job;
 }
 
-/** POST-style GET /api/cron/run?id=… — trigger a job now (background).
+/** Trigger a job now (background).
  * `started:false` means it was already running (overlap guard). */
 export async function runCronJob(
   token: string,
   id: string,
   base: string = "",
 ): Promise<{ started: boolean; reason?: string }> {
-  const query = new URLSearchParams({ id });
-  return await request<{ started: boolean; reason?: string }>(
-    `${base}/api/cron/run?${query}`,
+  return post<{ started: boolean; reason?: string }>(
+    `${base}/api/v1/cron/run`,
     token,
+    { id },
   );
 }
 
@@ -305,7 +315,7 @@ export async function getConfig(
   token: string,
   base: string = "",
 ): Promise<ConfigSnapshot> {
-  return request<ConfigSnapshot>(`${base}/api/config`, token);
+  return request<ConfigSnapshot>(`${base}/api/v1/config`, token);
 }
 
 export async function setConfigValue(
@@ -314,10 +324,10 @@ export async function setConfigValue(
   value: unknown,
   base: string = "",
 ): Promise<Record<string, unknown>> {
-  const query = new URLSearchParams({ key, value: JSON.stringify(value) });
-  const res = await request<{ ok: boolean; config: Record<string, unknown> }>(
-    `${base}/api/config/set?${query}`,
+  const res = await post<{ ok: boolean; config: Record<string, unknown> }>(
+    `${base}/api/v1/config`,
     token,
+    { key, value: JSON.stringify(value) },
   );
   return res.config;
 }
@@ -377,19 +387,19 @@ export async function listSkills(
   token: string,
   base: string = "",
 ): Promise<SkillRow[]> {
-  const res = await request<{ skills: SkillRow[] }>(`${base}/api/skills`, token);
-  return res.skills;
+  const res = await request<{ data: { skills: SkillRow[] } }>(`${base}/api/v1/skills`, token);
+  return res.data.skills;
 }
 
 export async function listQuarantine(
   token: string,
   base: string = "",
 ): Promise<QuarantineRow[]> {
-  const res = await request<{ quarantined: QuarantineRow[] }>(
-    `${base}/api/skills/quarantine`,
+  const res = await request<{ data: { quarantined: QuarantineRow[] } }>(
+    `${base}/api/v1/skills/quarantine`,
     token,
   );
-  return res.quarantined;
+  return res.data.quarantined;
 }
 
 // -- skill import (§6.B) -----------------------------------------------------
@@ -432,8 +442,8 @@ export async function importSource(
   source: string,
   base: string = "",
 ): Promise<ImportResult> {
-  const query = new URLSearchParams({ source });
-  return request<ImportResult>(`${base}/api/skills/import?${query}`, token);
+  const res = await post<{ data: ImportResult }>(`${base}/api/v1/skills/import`, token, { source });
+  return res.data;
 }
 
 /** A registry search hit. `ref` is the importable source (feed it to
@@ -452,11 +462,12 @@ export async function searchSkills(
   limit = 0,
   base: string = "",
 ): Promise<{ hits: SkillSearchHit[] }> {
-  const params = new URLSearchParams({ query, limit: String(limit) });
-  return request<{ hits: SkillSearchHit[] }>(
-    `${base}/api/skills/search?${params}`,
+  const params = new URLSearchParams({ q: query, limit: String(limit) });
+  const res = await request<{ data: { hits: SkillSearchHit[] } }>(
+    `${base}/api/v1/skills/search?${params}`,
     token,
   );
+  return res.data;
 }
 
 export interface SkillDescribeResult {
@@ -475,10 +486,11 @@ export async function describeSkill(
 ): Promise<SkillDescribeResult> {
   const params = new URLSearchParams({ ref });
   try {
-    return await request<SkillDescribeResult>(
-      `${base}/api/skills/describe?${params}`,
+    const res = await request<{ data: SkillDescribeResult }>(
+      `${base}/api/v1/skills/describe?${params}`,
       token,
     );
+    return res.data;
   } catch {
     return { ref, description: "" };
   }
@@ -510,16 +522,21 @@ export async function installSkillDeps(
   bin?: string,
   base: string = "",
 ): Promise<{ ok?: boolean; results?: Array<{ command: string; success: boolean; output?: string; error?: string }>; error?: string }> {
-  const params = new URLSearchParams();
-  if (bin) params.set("bin", bin);
-  const qs = params.toString();
-  const url = `${base}/api/skills/${encodeURIComponent(name)}/install-deps${qs ? `?${qs}` : ""}`;
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
+  const body: Record<string, string> = { name };
+  if (bin) body.binName = bin;
+  const res = await fetch(`${base}/api/v1/skills/${encodeURIComponent(name)}/install-deps`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
     credentials: "same-origin",
+    body: JSON.stringify(body),
   });
   if (res.status >= 500) throw new ApiError(res.status, `HTTP ${res.status}`);
-  return await res.json();
+  const envelope = await res.json();
+  // 2xx → data; a 4xx is problem+json with the payload under details.
+  return envelope.details ?? envelope.data ?? envelope;
 }
 
 export async function approveSkill(
@@ -528,20 +545,25 @@ export async function approveSkill(
   opts: { confirm?: boolean; override?: boolean; replace?: boolean; install_deps?: boolean } = {},
   base: string = "",
 ): Promise<ApproveResult> {
-  const query = new URLSearchParams();
-  if (opts.confirm) query.set("confirm", "true");
-  if (opts.override) query.set("override", "true");
-  if (opts.replace) query.set("replace", "true");
-  if (opts.install_deps) query.set("install_deps", "true");
-  const qs = query.toString();
-  const url = `${base}/api/skills/${encodeURIComponent(name)}/approve${qs ? `?${qs}` : ""}`;
-  // 200 (installed) and 409 (gate refused) both carry a useful body; only 5xx throws.
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
+  const body: Record<string, unknown> = { name };
+  if (opts.confirm) body.confirm = true;
+  if (opts.override) body.override = true;
+  if (opts.replace) body.replace = true;
+  if (opts.install_deps) body.installDeps = true;
+  // 2xx carries the result in `data`; a 409 (gate refused) is problem+json with
+  // the gate payload under `details`; only 5xx throws.
+  const res = await fetch(`${base}/api/v1/skills/${encodeURIComponent(name)}/approve`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
     credentials: "same-origin",
+    body: JSON.stringify(body),
   });
   if (res.status >= 500) throw new ApiError(res.status, `HTTP ${res.status}`);
-  return (await res.json()) as ApproveResult;
+  const envelope = await res.json();
+  return (envelope.details ?? envelope.data ?? envelope) as ApproveResult;
 }
 
 export async function rejectSkill(
@@ -549,10 +571,12 @@ export async function rejectSkill(
   name: string,
   base: string = "",
 ): Promise<{ ok?: boolean; error?: string }> {
-  return request<{ ok?: boolean; error?: string }>(
-    `${base}/api/skills/${encodeURIComponent(name)}/reject`,
+  const res = await del<{ data: { ok?: boolean; error?: string } }>(
+    `${base}/api/v1/skills/${encodeURIComponent(name)}/quarantine`,
     token,
+    { name },
   );
+  return res.data ?? res;
 }
 
 export interface RemoveResult {
@@ -568,10 +592,12 @@ export async function removeSkill(
   name: string,
   base: string = "",
 ): Promise<RemoveResult> {
-  return request<RemoveResult>(
-    `${base}/api/skills/${encodeURIComponent(name)}/remove`,
+  const res = await del<{ data: RemoveResult }>(
+    `${base}/api/v1/skills/${encodeURIComponent(name)}`,
     token,
+    { name },
   );
+  return res.data ?? res;
 }
 
 export interface JudgeResult {
@@ -591,10 +617,11 @@ export async function judgeSkill(
   name: string,
   base: string = "",
 ): Promise<JudgeResult> {
-  return request<JudgeResult>(
-    `${base}/api/skills/${encodeURIComponent(name)}/judge`,
+  const res = await request<{ data: JudgeResult }>(
+    `${base}/api/v1/skills/${encodeURIComponent(name)}/judge`,
     token,
   );
+  return res.data;
 }
 
 export interface GithubTokenTestResult {
@@ -610,10 +637,11 @@ export async function testGithubToken(
   base: string = "",
 ): Promise<GithubTokenTestResult> {
   const query = new URLSearchParams({ secret });
-  return request<GithubTokenTestResult>(
-    `${base}/api/skills/github-token-test?${query}`,
+  const res = await request<{ data: GithubTokenTestResult }>(
+    `${base}/api/v1/skills/github-token-test?${query}`,
     token,
   );
+  return res.data;
 }
 
 /** Add a trust-pattern prefix to the import allowlist (one-click "trust source").
@@ -637,7 +665,8 @@ export async function getSkill(
   name: string,
   base: string = "",
 ): Promise<SkillDetail> {
-  return request<SkillDetail>(`${base}/api/skills/${encodeURIComponent(name)}`, token);
+  const res = await request<{ data: SkillDetail }>(`${base}/api/v1/skills/${encodeURIComponent(name)}`, token);
+  return res.data;
 }
 
 export async function saveSkill(
@@ -646,8 +675,11 @@ export async function saveSkill(
   content: string,
   base: string = "",
 ): Promise<void> {
-  const query = new URLSearchParams({ content });
-  await request<{ ok: boolean }>(`${base}/api/skills/${encodeURIComponent(name)}/save?${query}`, token);
+  await post<{ data: { ok: boolean } }>(
+    `${base}/api/v1/skills/${encodeURIComponent(name)}/save`,
+    token,
+    { name, content },
+  );
 }
 
 export async function setSkillMode(
@@ -656,8 +688,11 @@ export async function setSkillMode(
   value: "auto" | "manual",
   base: string = "",
 ): Promise<void> {
-  const query = new URLSearchParams({ value });
-  await request<{ ok: boolean }>(`${base}/api/skills/${encodeURIComponent(name)}/mode?${query}`, token);
+  await post<{ data: { ok: boolean } }>(
+    `${base}/api/v1/skills/${encodeURIComponent(name)}/mode`,
+    token,
+    { name, value },
+  );
 }
 
 export interface SkillFile {
@@ -704,36 +739,47 @@ export interface SkillHistory {
 export async function listSkillFiles(
   token: string, name: string, base: string = "",
 ): Promise<SkillFile[]> {
-  const res = await request<{ files: SkillFile[] }>(
-    `${base}/api/skills/${encodeURIComponent(name)}/files`, token);
-  return res.files;
+  const res = await request<{ data: { files: SkillFile[] } }>(
+    `${base}/api/v1/skills/${encodeURIComponent(name)}/files`, token);
+  return res.data.files;
 }
 
 export async function getSkillFile(
   token: string, name: string, path: string, base: string = "",
 ): Promise<SkillFileContent> {
   const query = new URLSearchParams({ path });
-  return request<SkillFileContent>(
-    `${base}/api/skills/${encodeURIComponent(name)}/file?${query}`, token);
+  const res = await request<{ data: SkillFileContent }>(
+    `${base}/api/v1/skills/${encodeURIComponent(name)}/file?${query}`, token);
+  return res.data;
 }
 
 export async function saveSkillFile(
   token: string, name: string, path: string, content: string, base: string = "",
 ): Promise<SaveFileResult> {
-  const query = new URLSearchParams({ path, content });
-  // 200 (ok) and 400 (syntax / manual-gate) both carry a useful body; only 5xx throws.
+  // 2xx carries the result in `data`; a 4xx (syntax / manual-gate) is problem+json
+  // with the payload under `details`; only 5xx throws.
   const res = await fetch(
-    `${base}/api/skills/${encodeURIComponent(name)}/file/save?${query}`,
-    { headers: { Authorization: `Bearer ${token}` }, credentials: "same-origin" });
+    `${base}/api/v1/skills/${encodeURIComponent(name)}/file/save`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      credentials: "same-origin",
+      body: JSON.stringify({ name, path, content }),
+    });
   if (res.status >= 500) throw new ApiError(res.status, `HTTP ${res.status}`);
-  return (await res.json()) as SaveFileResult;
+  const envelope = await res.json();
+  return (envelope.details ?? envelope.data ?? envelope) as SaveFileResult;
 }
 
 export async function getSkillHistory(
   token: string, name: string, base: string = "",
 ): Promise<SkillHistory> {
-  return request<SkillHistory>(
-    `${base}/api/skills/${encodeURIComponent(name)}/history`, token);
+  const res = await request<{ data: SkillHistory }>(
+    `${base}/api/v1/skills/${encodeURIComponent(name)}/history`, token);
+  return res.data;
 }
 
 export interface ModelTestResult {
@@ -752,7 +798,7 @@ export async function testModel(
   if (opts.provider) query.set("provider", opts.provider);
   const qs = query.toString();
   return request<ModelTestResult>(
-    `${base}/api/model/test${qs ? `?${qs}` : ""}`,
+    `${base}/api/v1/model/test${qs ? `?${qs}` : ""}`,
     token,
   );
 }
@@ -777,7 +823,7 @@ export async function testCrossEncoderModel(
 ): Promise<CrossEncoderTestResult> {
   const query = new URLSearchParams({ model });
   return request<CrossEncoderTestResult>(
-    `${base}/api/memory/cross-encoder/test?${query.toString()}`,
+    `${base}/api/v1/memory/cross-encoder/test?${query.toString()}`,
     token,
   );
 }
@@ -796,7 +842,10 @@ export async function getExtraStatus(
   base: string = "",
 ): Promise<ExtraStatus> {
   const q = new URLSearchParams({ feature });
-  return request<ExtraStatus>(`${base}/api/extras/status?${q.toString()}`, token);
+  return request<ExtraStatus>(
+    `${base}/api/v1/extras/status?${q.toString()}`,
+    token,
+  );
 }
 
 export interface EnsureExtraResult {
@@ -812,8 +861,11 @@ export async function ensureExtra(
   restart: boolean,
   base: string = "",
 ): Promise<EnsureExtraResult> {
-  const q = new URLSearchParams({ feature, restart: String(restart) });
-  return request<EnsureExtraResult>(`${base}/api/extras/ensure?${q.toString()}`, token);
+  return post<EnsureExtraResult>(
+    `${base}/api/v1/extras/ensure`,
+    token,
+    { feature, restart },
+  );
 }
 
 export interface ChannelInfo {
@@ -828,7 +880,7 @@ export async function listChannels(
   base: string = "",
 ): Promise<ChannelInfo[]> {
   const res = await request<{ channels: ChannelInfo[] }>(
-    `${base}/api/channels`,
+    `${base}/api/v1/channels`,
     token,
   );
   return res.channels;
@@ -850,7 +902,7 @@ export async function listModels(
   if (capability) params.set("capability", capability);
   const qs = params.toString();
   return request<ModelCatalog>(
-    `${base}/api/models${qs ? `?${qs}` : ""}`,
+    `${base}/api/v1/models${qs ? `?${qs}` : ""}`,
     token,
   );
 }
@@ -873,7 +925,7 @@ export async function getModelCapabilities(
   const query = new URLSearchParams({ model });
   if (provider) query.set("provider", provider);
   return request<ModelCapabilities>(
-    `${base}/api/model/capabilities?${query}`,
+    `${base}/api/v1/model/capabilities?${query}`,
     token,
   );
 }
@@ -927,10 +979,10 @@ export async function fetchLogs(
     const vals = params[key];
     if (vals && vals.length) sp.set(key, vals.join(","));
   }
-  if (params.beforeTs != null) sp.set("before_ts", String(params.beforeTs));
-  if (params.windowHours != null) sp.set("window_hours", String(params.windowHours));
+  if (params.beforeTs != null) sp.set("beforeTs", String(params.beforeTs));
+  if (params.windowHours != null) sp.set("windowHours", String(params.windowHours));
   if (params.limit != null) sp.set("limit", String(params.limit));
-  return request<LogPage>(`${base}/api/logs?${sp.toString()}`, token);
+  return request<LogPage>(`${base}/api/v1/logs?${sp.toString()}`, token);
 }
 
 // ---------------------------------------------------------------------------
@@ -969,7 +1021,8 @@ export async function fetchMemoryGraph(
   token: string,
   base: string = "",
 ): Promise<MemoryGraphPayload> {
-  return request<MemoryGraphPayload>(`${base}/api/memory/graph`, token);
+  const res = await request<{ data: MemoryGraphPayload }>(`${base}/api/v1/memory/graph`, token);
+  return res.data;
 }
 
 /** Ego-graph (focus mode): a node + its N-hop neighbourhood, uncapped, so
@@ -983,10 +1036,11 @@ export async function fetchMemorySubgraph(
   const base = opts.base ?? "";
   const params = new URLSearchParams({ ref });
   if (opts.hops) params.set("hops", String(opts.hops));
-  return request<MemoryGraphPayload>(
-    `${base}/api/memory/subgraph?${params}`,
+  const res = await request<{ data: MemoryGraphPayload }>(
+    `${base}/api/v1/memory/subgraph?${params}`,
     token,
   );
+  return res.data;
 }
 
 export interface MemoryEntityDetail {
@@ -1052,14 +1106,15 @@ export async function fetchMemoryEntity(
   ref: string,
   base: string = "",
 ): Promise<MemoryEntityDetail | null> {
-  const url = `${base}/api/memory/entity/${encodeURIComponent(ref)}`;
+  const url = `${base}/api/v1/memory/entity/${encodeURIComponent(ref)}`;
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${token}` },
     credentials: "same-origin",
   });
   if (res.status === 404) return null;
   if (!res.ok) throw new ApiError(res.status, `HTTP ${res.status}`);
-  return (await res.json()) as MemoryEntityDetail;
+  const envelope = await res.json();
+  return (envelope.data ?? envelope) as MemoryEntityDetail;
 }
 
 export interface MemorySearchResult {
@@ -1093,10 +1148,11 @@ export async function searchMemoryApi(
   if (opts.level) params.set("level", opts.level);
   if (opts.kinds) params.set("kinds", opts.kinds);
   const base = opts.base ?? "";
-  return request<MemorySearchPayload>(
-    `${base}/api/memory/search?${params}`,
+  const res = await request<{ data: MemorySearchPayload }>(
+    `${base}/api/v1/memory/search?${params}`,
     token,
   );
+  return res.data;
 }
 
 export interface MemoryEdgeDetail {
@@ -1120,8 +1176,9 @@ export async function fetchMemoryEdge(
   base: string = "",
 ): Promise<MemoryEdgeDetail> {
   const url =
-    `${base}/api/memory/edge/${encodeURIComponent(source)}/${encodeURIComponent(target)}`;
-  return request<MemoryEdgeDetail>(url, token);
+    `${base}/api/v1/memory/edge/${encodeURIComponent(source)}/${encodeURIComponent(target)}`;
+  const res = await request<{ data: MemoryEdgeDetail }>(url, token);
+  return res.data;
 }
 
 // ---------------------------------------------------------------------------
@@ -1157,52 +1214,62 @@ export interface MemoryBacklinksPayload {
   truncated: boolean;
 }
 
-/** GET /api/memory/entry?uri=… — full frontmatter + body for one entry. */
+/** GET /api/v1/memory/entry?uri=… — full frontmatter + body for one entry. */
 export async function fetchMemoryEntry(
   token: string,
   uri: string,
   base: string = "",
 ): Promise<MemoryEntryDetail | null> {
-  const url = `${base}/api/memory/entry?uri=${encodeURIComponent(uri)}`;
+  const url = `${base}/api/v1/memory/entry?uri=${encodeURIComponent(uri)}`;
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${token}` },
     credentials: "same-origin",
   });
   if (res.status === 404) return null;
   if (!res.ok) throw new ApiError(res.status, `HTTP ${res.status}`);
-  return (await res.json()) as MemoryEntryDetail;
+  const envelope = await res.json();
+  return (envelope.data ?? envelope) as MemoryEntryDetail;
 }
 
-/** GET /api/memory/forget?uri=… — archive an entry. Returns the
- *  backend's ``{result}`` payload verbatim so the UI can branch on
+/** DELETE /api/v1/memory/entry with body {uri} — archive an entry. Returns
+ *  ``{result, detail?}``: a 2xx is ``{result: "archived"}``; a failure is
+ *  problem+json (403 protected / 404 not_found / 422 invalid) whose outcome is
+ *  read from ``details.result`` — so the UI still branches on
  *  ``"archived" | "not_found" | "protected" | "invalid"``. */
 export async function forgetMemoryEntry(
   token: string,
   uri: string,
   base: string = "",
 ): Promise<{ result: string; detail?: string }> {
-  const url = `${base}/api/memory/forget?uri=${encodeURIComponent(uri)}`;
+  const url = `${base}/api/v1/memory/entry`;
   const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
+    method: "DELETE",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
     credentials: "same-origin",
+    body: JSON.stringify({ uri }),
   });
-  // 200, 400, 403 all carry a JSON body with `result` — surface it
-  // verbatim so the caller picks the message. Only network / 5xx
-  // errors throw.
+  // 2xx → {result: "archived"}; a 4xx is problem+json whose domain outcome is
+  // under details.result. Only network / 5xx errors throw.
   if (res.status >= 500) {
     throw new ApiError(res.status, `HTTP ${res.status}`);
   }
-  return (await res.json()) as { result: string; detail?: string };
+  const body = await res.json();
+  if (res.ok) return { result: body.result };
+  return { result: body.details?.result ?? "invalid", detail: body.detail };
 }
 
-/** GET /api/memory/backlinks?uri=… — entries that reference this one. */
+/** GET /api/v1/memory/backlinks?uri=… — entries that reference this one. */
 export async function fetchMemoryBacklinks(
   token: string,
   uri: string,
   base: string = "",
 ): Promise<MemoryBacklinksPayload> {
-  const url = `${base}/api/memory/backlinks?uri=${encodeURIComponent(uri)}`;
-  return request<MemoryBacklinksPayload>(url, token);
+  const url = `${base}/api/v1/memory/backlinks?uri=${encodeURIComponent(uri)}`;
+  const res = await request<{ data: MemoryBacklinksPayload }>(url, token);
+  return res.data;
 }
 
 export interface MemorySessionDetail {
@@ -1249,14 +1316,15 @@ export async function fetchMemorySession(
   stem: string,
   base: string = "",
 ): Promise<MemorySessionDetail | null> {
-  const url = `${base}/api/memory/session/${encodeURIComponent(stem)}`;
+  const url = `${base}/api/v1/memory/session/${encodeURIComponent(stem)}`;
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${token}` },
     credentials: "same-origin",
   });
   if (res.status === 404) return null;
   if (!res.ok) throw new ApiError(res.status, `HTTP ${res.status}`);
-  return (await res.json()) as MemorySessionDetail;
+  const envelope = await res.json();
+  return (envelope.data ?? envelope) as MemorySessionDetail;
 }
 
 export interface CodexStatus {
@@ -1285,25 +1353,24 @@ export async function fetchCodexStatus(
   token: string,
   base: string = "",
 ): Promise<CodexStatus> {
-  return request<CodexStatus>(`${base}/api/oauth/codex/status`, token);
+  return request<CodexStatus>(`${base}/api/v1/oauth/codex/status`, token);
 }
 
 export async function startCodexDeviceAuth(
   token: string,
   base: string = "",
 ): Promise<CodexDeviceChallenge> {
-  return request<CodexDeviceChallenge>(`${base}/api/oauth/codex/start`, token);
+  return post<CodexDeviceChallenge>(`${base}/api/v1/oauth/codex/start`, token, {});
 }
 
 export async function startCodexLoopbackAuth(
   token: string,
   base: string = "",
 ): Promise<{ authorize_url: string }> {
-  // GET, not POST: the channel's HTTP layer is served over the websockets
-  // handshake parser, which rejects non-GET methods (see backlog P7).
-  return request<{ authorize_url: string }>(
-    `${base}/api/oauth/codex/start-loopback`,
+  return post<{ authorize_url: string }>(
+    `${base}/api/v1/oauth/codex/start-loopback`,
     token,
+    { isLocal: false },
   );
 }
 
@@ -1314,10 +1381,10 @@ export async function pollCodexDeviceAuth(
   base: string = "",
 ): Promise<CodexPollResult> {
   const q = new URLSearchParams();
-  q.set("device_auth_id", deviceAuthId);
-  q.set("user_code", userCode);
+  q.set("deviceAuthId", deviceAuthId);
+  q.set("userCode", userCode);
   return request<CodexPollResult>(
-    `${base}/api/oauth/codex/poll?${q}`,
+    `${base}/api/v1/oauth/codex/poll?${q}`,
     token,
   );
 }
@@ -1326,7 +1393,5 @@ export async function disconnectCodex(
   token: string,
   base: string = "",
 ): Promise<CodexStatus> {
-  // GET: the channel's HTTP layer (websockets handshake parser) rejects
-  // non-GET methods (see backlog P7). Carries no sensitive query params.
-  return request<CodexStatus>(`${base}/api/oauth/codex/disconnect`, token);
+  return del<CodexStatus>(`${base}/api/v1/oauth/codex`, token, {});
 }

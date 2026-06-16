@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from durin.memory.fts_index import FTSIndex
 from durin.memory.lexical_search import lexical_search
 from durin.memory.query_router import decide_lexical_route

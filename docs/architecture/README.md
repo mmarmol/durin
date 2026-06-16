@@ -14,6 +14,7 @@ file (plus the `memory/` and `skills/` subfolders) to keep each surface scannabl
 | [memory/](memory/00_overview.md) | Entity-centric memory, dream consolidation, alias + vector indexes, retrieval, drill-down, absorption, memory graph |
 | [skills/](skills/00_overview.md) | Skill discovery, three-tier surfacing, searchable skill pseudo-class, import + security floor |
 | [observability.md](observability.md) | Telemetry, status, doctor, gateway daemon |
+| [api.md](api.md) | Service core, unified ASGI gateway, OpenAPI contract, persisted auth |
 | [ux.md](ux.md) | Interactive CLI, Textual TUI, secrets subsystem, design system, lifecycle commands, config layout, distribution |
 
 ---

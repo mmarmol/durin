@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
-from typing import Any
 
 import pytest
 
 from durin.bus.events import InboundMessage
 from durin.bus.queue import MessageBus
 from durin.cli.tui.app import DurinApp
-from durin.cli.tui.widgets import ChatView, InputArea, MessageBubble
+from durin.cli.tui.widgets import ChatView, InputArea
 from durin.config.schema import ModelPresetConfig
 
 

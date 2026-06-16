@@ -8,7 +8,6 @@ import pytest
 
 from durin.memory.drill import DrillError, drill, extract_section
 
-
 # ---------------------------------------------------------------------------
 # extract_section (pure)
 # ---------------------------------------------------------------------------
@@ -241,7 +240,7 @@ async def test_uris_rejects_empty_list(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_uris_rejects_oversize_list(tmp_path: Path) -> None:
-    from durin.agent.tools.memory_drill import MemoryDrillTool, MAX_BATCH_URIS
+    from durin.agent.tools.memory_drill import MAX_BATCH_URIS, MemoryDrillTool
     tool = MemoryDrillTool(workspace=tmp_path)
     too_many = [f"memory/episodic/x{i}" for i in range(MAX_BATCH_URIS + 1)]
     result = await tool.execute(uris=too_many)

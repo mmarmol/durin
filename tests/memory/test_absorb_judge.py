@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -17,7 +15,6 @@ from durin.memory.absorb_judge import (
     judge_pair,
 )
 from durin.memory.entity_page import EntityPage
-
 
 # ---------------------------------------------------------------------------
 # template loader

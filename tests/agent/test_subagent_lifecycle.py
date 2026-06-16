@@ -17,7 +17,6 @@ from durin.agent.subagent import (
 from durin.bus.queue import MessageBus
 from durin.providers.base import LLMProvider
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

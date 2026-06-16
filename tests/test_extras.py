@@ -2,8 +2,8 @@ import tomllib
 import types
 from pathlib import Path
 
-from durin.extras import REGISTRY, FeatureExtra
 import durin.extras as ex
+from durin.extras import REGISTRY, FeatureExtra
 
 
 def test_registry_extras_exist_in_pyproject():

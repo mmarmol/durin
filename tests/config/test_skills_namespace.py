@@ -1,4 +1,4 @@
-from durin.config.schema import Config, DEFAULT_SKILL_ALLOWLIST
+from durin.config.schema import DEFAULT_SKILL_ALLOWLIST, Config
 
 
 def test_skills_namespace_defaults():
