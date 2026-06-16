@@ -335,3 +335,49 @@ class McpService:
         if self._runtime is not None and cmd.name in self._live():
             await self._runtime.disconnect(cmd.name)
         return McpOkResult(ok=True)
+
+    def _set_enabled(self, name: str, enabled: bool) -> MCPServerConfig:
+        """Persist a server's enabled flag; return the (mutated) config."""
+        from durin.config.loader import get_config_path, load_config, save_config
+
+        cfg = load_config()
+        sc = cfg.tools.mcp_servers.get(name)
+        if sc is None:
+            raise NotFoundError("no such MCP server", details={"name": name})
+        sc.enabled = enabled
+        save_config(cfg, get_config_path())
+        return sc
+
+    @route(
+        "POST",
+        "/api/v1/mcp/servers/{name}/enable",
+        scope=Scope.MCP_WRITE.value,
+        request_model=McpServerNameCommand,
+        response_model=McpServerDetail,
+        summary="Enable a server and connect it",
+    )
+    async def enable(
+        self, cmd: McpServerNameCommand, principal: Principal
+    ) -> McpServerDetail:
+        principal.require(Scope.MCP_WRITE)
+        sc = self._set_enabled(cmd.name, True)
+        if self._runtime is not None:
+            await self._runtime.connect(cmd.name, sc)
+        return await self._build_detail(cmd.name, sc)
+
+    @route(
+        "POST",
+        "/api/v1/mcp/servers/{name}/disable",
+        scope=Scope.MCP_WRITE.value,
+        request_model=McpServerNameCommand,
+        response_model=McpServerDetail,
+        summary="Disable a server and disconnect it",
+    )
+    async def disable(
+        self, cmd: McpServerNameCommand, principal: Principal
+    ) -> McpServerDetail:
+        principal.require(Scope.MCP_WRITE)
+        sc = self._set_enabled(cmd.name, False)
+        if self._runtime is not None and cmd.name in self._live():
+            await self._runtime.disconnect(cmd.name)
+        return await self._build_detail(cmd.name, sc)
