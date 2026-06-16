@@ -13,7 +13,6 @@ memory / history / session summary change.
 
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -96,7 +95,6 @@ def test_context_layer_between_stable_and_volatile(builder, monkeypatch):
     """
     _set_memory(builder, "Some memory.")
     # Mock the mode lookup so the suffix is deterministic.
-    from durin.agent import context as ctx_mod
     fake_mode = MagicMock()
     fake_mode.prompt_suffix = "[ACTIVE MODE: PLAN]"
 

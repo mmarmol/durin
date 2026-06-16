@@ -6,12 +6,12 @@ from pathlib import Path
 
 import pytest
 
+from durin.cli.tui.app import DurinApp
 from durin.cli.tui.widgets import (
     AtFileSuggester,
     InputArea,
     MultiModeSuggester,
 )
-from durin.cli.tui.app import DurinApp
 
 
 def _make_ws(tmp_path: Path) -> Path:

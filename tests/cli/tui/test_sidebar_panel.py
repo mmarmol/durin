@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from durin.cli.tui.widgets.sidebar_panel import SidebarPanel
@@ -147,7 +146,6 @@ def test_toggle_makes_panel_visible():
 
     pytest.importorskip("textual")
     from textual.app import App, ComposeResult
-    from textual.widgets import Static
 
     class _TestApp(App[None]):
         def compose(self) -> ComposeResult:

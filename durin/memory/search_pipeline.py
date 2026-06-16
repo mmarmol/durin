@@ -381,9 +381,9 @@ def _entity_aware_rerank(
 # Weight of the (normalised) cross-encoder score in the final blend
 # (doc 03 §9.2). The CE is fused with the RRF score, not allowed to
 # replace the order outright. Calibrated 2026-06-11 by an offline
-# recall@10 sweep over the LoCoMo run (.workdocs/research/
-# ce_blend_sweep.py): α=0.4 / z-score maximised gold recall@10 (75.0%)
-# over both α=0 (RRF-only, 69.7%) and α=1 (full CE replace). 0 ≤ α ≤ 1;
+# recall@10 sweep over the LoCoMo run: α=0.4 / z-score maximised gold
+# recall@10 (75.0%) over both α=0 (RRF-only, 69.7%) and α=1 (full CE
+# replace). 0 ≤ α ≤ 1;
 # α=0 disables the CE contribution, α=1 reverts to a pure CE reorder.
 DEFAULT_BLEND_ALPHA = 0.4
 

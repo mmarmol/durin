@@ -7,13 +7,9 @@ the scorer so the heavy dep isn't required for CI.
 
 from __future__ import annotations
 
-from typing import Optional
-
-import pytest
-
 from durin.memory.cross_encoder import (
-    CrossEncoderReranker,
     DEFAULT_MODEL,
+    CrossEncoderReranker,
 )
 
 
@@ -152,6 +148,7 @@ def test_failed_load_retries_after_retry_window() -> None:
     after the retry window has elapsed. Inside the window, score()
     returns None without re-attempting the load."""
     from unittest.mock import patch
+
     from durin.memory.cross_encoder import CrossEncoderReranker
 
     load_attempts = []
@@ -187,6 +184,7 @@ def test_successful_load_does_not_retry() -> None:
         def score(self, pairs): return [0.5] * len(pairs)
 
     from unittest.mock import patch
+
     from durin.memory.cross_encoder import CrossEncoderReranker
 
     load_attempts = []

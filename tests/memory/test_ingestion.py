@@ -9,7 +9,6 @@ import pytest
 
 from durin.memory.ingestion import IngestError, ingest_artifact
 
-
 # ---------------------------------------------------------------------------
 # ingest_artifact (pure function)
 # ---------------------------------------------------------------------------

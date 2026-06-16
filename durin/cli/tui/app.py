@@ -26,13 +26,13 @@ import json
 from pathlib import Path
 from typing import Any
 
-from textual import __version__ as TEXTUAL_VERSION
+from textual import __version__ as TEXTUAL_VERSION  # noqa: N812 — descriptive version alias
 from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Input
 
-from durin import __version__ as DURIN_VERSION
+from durin import __version__ as DURIN_VERSION  # noqa: N812 — descriptive version alias
 from durin.cli.tui.widgets import ChatView, FooterBar, HeaderBar, InputArea, MessageBubble
 from durin.cli.tui.widgets.footer_bar import payload_from_loop
 
@@ -803,6 +803,7 @@ class DurinApp(App[None]):
             return
 
         # Create a temp preset variant with the new effort.
+        from durin.cli.tui.state import add_recent_model
         from durin.config.schema import ModelPresetConfig
 
         variant_name = f"{active_name}:{selected}"

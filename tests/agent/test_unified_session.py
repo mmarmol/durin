@@ -12,7 +12,6 @@ Covers:
 """
 
 import asyncio
-import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -26,7 +25,6 @@ from durin.command.builtin import cmd_new, register_builtin_commands
 from durin.command.router import CommandContext, CommandRouter
 from durin.config.schema import AgentDefaults, Config
 from durin.session.manager import Session, SessionManager
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -415,7 +413,7 @@ class TestStopCommandWithUnifiedSession:
         from durin.agent.loop import UNIFIED_SESSION_KEY
 
         loop = _make_loop(tmp_path, unified_session=True)
-        
+
         # Create a message from telegram channel
         msg = _make_msg(channel="telegram", chat_id="123456")
 

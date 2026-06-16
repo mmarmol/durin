@@ -59,7 +59,7 @@ class _DelayTool(Tool):
 
 @pytest.mark.asyncio
 async def test_runner_batches_read_only_tools_before_exclusive_work():
-    from durin.agent.runner import AgentRunSpec, AgentRunner
+    from durin.agent.runner import AgentRunner, AgentRunSpec
 
     tools = ToolRegistry()
     shared_events: list[str] = []
@@ -99,7 +99,7 @@ async def test_runner_batches_read_only_tools_before_exclusive_work():
 
 @pytest.mark.asyncio
 async def test_runner_does_not_batch_exclusive_read_only_tools():
-    from durin.agent.runner import AgentRunSpec, AgentRunner
+    from durin.agent.runner import AgentRunner, AgentRunSpec
 
     tools = ToolRegistry()
     shared_events: list[str] = []
@@ -143,7 +143,7 @@ async def test_runner_does_not_batch_exclusive_read_only_tools():
 
 @pytest.mark.asyncio
 async def test_runner_blocks_repeated_external_fetches():
-    from durin.agent.runner import AgentRunSpec, AgentRunner
+    from durin.agent.runner import AgentRunner, AgentRunSpec
 
     provider = MagicMock()
     captured_final_call: list[dict] = []
@@ -213,7 +213,7 @@ class _FailingTool(Tool):
 async def test_loop_detection_blocks_repeated_failed_call():
     """A second identical call to a tool that already failed in this turn
     must short-circuit with the loop-block message instead of re-executing."""
-    from durin.agent.runner import AgentRunSpec, AgentRunner, _LOOP_BLOCK_MESSAGE
+    from durin.agent.runner import _LOOP_BLOCK_MESSAGE, AgentRunner, AgentRunSpec
 
     tools = ToolRegistry()
     failing = _FailingTool()
@@ -253,7 +253,7 @@ async def test_loop_detection_blocks_repeated_failed_call():
 async def test_loop_detection_allows_different_args():
     """The same tool with DIFFERENT arguments must NOT be blocked, even after
     a failure with a different arg set."""
-    from durin.agent.runner import AgentRunSpec, AgentRunner
+    from durin.agent.runner import AgentRunner, AgentRunSpec
 
     tools = ToolRegistry()
     failing = _FailingTool()
@@ -312,7 +312,7 @@ async def test_runner_serializes_mutation_between_reads():
     together even though both are read-only, because reordering would break
     the read-after-write semantics the model expects.
     """
-    from durin.agent.runner import AgentRunSpec, AgentRunner
+    from durin.agent.runner import AgentRunner, AgentRunSpec
 
     tools = ToolRegistry()
     shared_events: list[str] = []
@@ -357,7 +357,7 @@ async def test_reasoning_truncation_triggers_specialized_recovery():
     Instead, append the partial reasoning + the reasoning-truncation cue,
     and continue with a fresh LLM call.
     """
-    from durin.agent.runner import AgentRunSpec, AgentRunner
+    from durin.agent.runner import AgentRunner, AgentRunSpec
     from durin.utils.runtime import REASONING_TRUNCATION_PROMPT
 
     provider = MagicMock()
@@ -435,7 +435,7 @@ async def test_runner_denies_tool_when_mode_disallows():
     """When the mode_provider returns a mode that disallows the tool, the
     runner short-circuits with a clear denial — the tool never executes."""
     from durin.agent.agent_mode import PLAN_MODE
-    from durin.agent.runner import AgentRunSpec, AgentRunner
+    from durin.agent.runner import AgentRunner, AgentRunSpec
 
     tools = ToolRegistry()
     tool = _BenignTool(name="edit_file")  # edit_file is denied by PLAN_MODE
@@ -467,7 +467,7 @@ async def test_runner_denies_tool_when_mode_disallows():
 async def test_runner_no_denial_in_build_mode():
     """BUILD mode has no restrictions — the tool executes normally."""
     from durin.agent.agent_mode import BUILD_MODE
-    from durin.agent.runner import AgentRunSpec, AgentRunner
+    from durin.agent.runner import AgentRunner, AgentRunSpec
 
     tools = ToolRegistry()
     tool = _BenignTool(name="edit_file")

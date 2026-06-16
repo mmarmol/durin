@@ -27,15 +27,14 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-import pytest
-
 
 def test_render_block_has_end_marker() -> None:
     """Every block carries an `=== END KIND ===` close so the LLM can
     boundary-detect without relying on section intros.
     """
     from durin.memory.sectioned_output import (
-        SectionedHit, _render_block,
+        SectionedHit,
+        _render_block,
     )
 
     hit = SectionedHit(
@@ -54,7 +53,8 @@ def test_render_block_canonical_uses_ts_when_present() -> None:
     """When ``hit.ts`` is set, the canonical header carries
     `(consolidated <ts>)` instead of `(canonical entity page)`."""
     from durin.memory.sectioned_output import (
-        SectionedHit, _render_block,
+        SectionedHit,
+        _render_block,
     )
 
     hit = SectionedHit(
@@ -70,7 +70,8 @@ def test_render_block_canonical_uses_ts_when_present() -> None:
 def test_render_block_prefers_summary_over_snippet() -> None:
     """Body inside the block is `summary > body > snippet`."""
     from durin.memory.sectioned_output import (
-        SectionedHit, _render_block,
+        SectionedHit,
+        _render_block,
     )
 
     hit = SectionedHit(
@@ -90,7 +91,8 @@ def test_render_block_prefers_summary_over_snippet() -> None:
 
 def test_render_block_falls_back_to_body_then_snippet() -> None:
     from durin.memory.sectioned_output import (
-        SectionedHit, _render_block,
+        SectionedHit,
+        _render_block,
     )
 
     no_summary = SectionedHit(
@@ -116,7 +118,8 @@ def test_render_block_entities_tail_for_fragments(
     to canonical pages. Canonical blocks skip it (the URI IS the
     entity ref)."""
     from durin.memory.sectioned_output import (
-        SectionedHit, _render_block,
+        SectionedHit,
+        _render_block,
     )
 
     frag = SectionedHit(
@@ -148,9 +151,9 @@ def test_memory_search_response_has_sectioned_rendered(
     string with section intros + per-block markers + END closes.
     Per-row `rendered` field is gone (WebUI uses raw fields; LLM uses
     the sectioned string)."""
+    from durin.agent.tools.memory_search import MemorySearchTool
     from durin.memory.entity_page import EntityPage
     from durin.memory.indexer import rebuild_fts_index
-    from durin.agent.tools.memory_search import MemorySearchTool
 
     EntityPage(
         type="person", name="Marcelo",
@@ -179,9 +182,9 @@ def test_sectioned_rendered_includes_section_intros(
     ("Consolidated entity pages — the main memory; ..."). Pre-F4 the
     intros never reached the LLM because `memory_search` rendered
     per-row via `Result.render_block`."""
+    from durin.agent.tools.memory_search import MemorySearchTool
     from durin.memory.entity_page import EntityPage
     from durin.memory.indexer import rebuild_fts_index
-    from durin.agent.tools.memory_search import MemorySearchTool
 
     EntityPage(
         type="person", name="Marcelo",

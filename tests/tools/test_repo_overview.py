@@ -10,7 +10,6 @@ import pytest
 
 from durin.agent.tools import file_state
 from durin.agent.tools.repo_overview import (
-    _DEFAULT_DEPTH,
     _STRUCTURE_LIMIT,
     RepoOverviewTool,
 )

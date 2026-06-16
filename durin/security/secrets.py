@@ -126,6 +126,18 @@ def scope_allows(scope: list[str], consumer: str) -> bool:
     return False
 
 
+def mask_secret_hint(secret: str | None) -> str | None:
+    """A safe display hint for a secret value: first 4 + last 4 chars (or
+    bullets for short/absent values). Never reveals a usable credential — used
+    by the secrets API to show a recognizable hint without the value.
+    """
+    if not secret:
+        return None
+    if len(secret) <= 8:
+        return "••••"
+    return f"{secret[:4]}••••{secret[-4:]}"
+
+
 def _default_secrets_path() -> Path:
     """``secrets.json`` sits next to the active config (testable)."""
     from durin.config.loader import get_config_path

@@ -36,17 +36,16 @@ import uuid
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any
 
-from durin.agent.user_payloads import (
-    channel_renders_tool_payloads,
-    serialize_pending_interactions,
-)
-
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.context import ContextAware, RequestContext
 from durin.agent.tools.schema import (
     ArraySchema,
     StringSchema,
     tool_parameters_schema,
+)
+from durin.agent.user_payloads import (
+    channel_renders_tool_payloads,
+    serialize_pending_interactions,
 )
 from durin.telemetry.logger import current_telemetry
 

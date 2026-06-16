@@ -8,9 +8,8 @@ from pathlib import Path
 import pytest
 
 from durin.memory.provenance import author_scope
-from durin.memory.store import StoreError, store_memory
 from durin.memory.storage import load_entry
-
+from durin.memory.store import StoreError, store_memory
 
 # ---------------------------------------------------------------------------
 # store_memory (pure function)

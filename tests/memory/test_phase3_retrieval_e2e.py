@@ -17,7 +17,6 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
-from typing import Iterable
 
 import pytest
 
@@ -28,10 +27,9 @@ from durin.memory.entity_ranker import (
     extract_query_entities,
     rank_with_entities,
 )
-from durin.memory.store import store_memory
 from durin.memory.storage import load_entry
+from durin.memory.store import store_memory
 from durin.memory.vector_index import VectorIndex, vector_index_available
-
 
 pytestmark = pytest.mark.skipif(
     not vector_index_available(),
@@ -188,7 +186,7 @@ def test_retrieval_l1_light_end_to_end(
     )
 
     ids = [r.record["id"] for r in ranked]
-    print(f"\n=== Phase 3 e2e ranked results ===\n")
+    print("\n=== Phase 3 e2e ranked results ===\n")
     for r in ranked:
         print(f"  {r.adjusted_score:.4f}  {r.record['id']:<60}  {r.signals}")
 

@@ -20,7 +20,6 @@ from durin.bus.queue import MessageBus
 from durin.cli.tui.app import DurinApp
 from durin.cli.tui.widgets import InputArea, SlashCommandSuggester
 
-
 # ---------------------------------------------------------------------------
 # SlashCommandSuggester
 # ---------------------------------------------------------------------------

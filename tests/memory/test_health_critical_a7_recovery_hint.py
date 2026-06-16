@@ -27,7 +27,6 @@ from durin.memory.health_check import (
     _emit_critical,
 )
 
-
 _TARGET_RE = re.compile(r"--target\s+(\S+)")
 
 

@@ -1,6 +1,7 @@
 """Tests for abbreviate_path utility."""
 
 import os
+
 from durin.utils.path import abbreviate_path
 
 

@@ -22,8 +22,6 @@ from __future__ import annotations
 import datetime
 from pathlib import Path
 
-import pytest
-
 from durin.memory.paths import MEMORY_CLASSES
 from durin.memory.session_summary_store import (
     SESSION_SUMMARY_CLASS,
@@ -33,7 +31,6 @@ from durin.memory.session_summary_store import (
     session_summary_path,
     write_session_summary,
 )
-
 
 # ---------------------------------------------------------------------------
 # walker / class registration

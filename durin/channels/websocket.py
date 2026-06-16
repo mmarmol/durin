@@ -5,10 +5,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
-import email.utils
 import hashlib
 import hmac
-import http
 import json
 import mimetypes
 import re
@@ -20,43 +18,32 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Self
-from urllib.parse import parse_qs, unquote, urlparse
 
 from loguru import logger
 from pydantic import Field, field_validator, model_validator
-from websockets.asyncio.server import ServerConnection, serve
-from websockets.datastructures import Headers
 from websockets.exceptions import ConnectionClosed
-from websockets.http11 import Request as WsRequest
-from websockets.http11 import Response
 
 from durin.bus.events import OUTBOUND_META_AGENT_UI, OutboundMessage
 from durin.bus.queue import MessageBus
 from durin.channels.base import BaseChannel
-from durin.command.builtin import builtin_command_palette
 from durin.config.paths import get_media_dir
 from durin.config.schema import Base
-from durin.providers.codex_device_auth import (
-    disconnect as codex_disconnect,
+from durin.service import DomainError, Principal, ServiceRegistry
+from durin.service.principal import Scope
+from durin.service.types import (
+    ForbiddenError,
+    NotFoundError,
+    TooManyRequestsError,
+    UnauthenticatedError,
+    ValidationFailedError,
 )
-from durin.providers.codex_device_auth import (
-    existing_codex_session,
-    request_device_code,
-    start_loopback_login,
-)
-from durin.providers.codex_device_auth import (
-    poll_once as codex_poll_once,
-)
-from durin.providers.codex_models import list_codex_models
 from durin.session.goal_state import goal_state_ws_blob
 from durin.utils.helpers import safe_filename
 from durin.utils.media_decode import (
     FileSizeExceeded,
     save_base64_data_url,
 )
-from durin.utils.subagent_channel_display import scrub_subagent_messages_for_channel
-from durin.utils.webui_thread_disk import delete_webui_thread
-from durin.utils.webui_transcript import append_transcript_object, build_webui_thread_response
+from durin.utils.webui_transcript import append_transcript_object
 from durin.utils.webui_turn_helpers import websocket_turn_wall_started_at
 
 if TYPE_CHECKING:
@@ -70,18 +57,6 @@ def _strip_trailing_slash(path: str) -> str:
     return path or "/"
 
 
-def _humanize_interval_ms(every_ms: int) -> str:
-    """Render an ``every`` interval with the largest whole unit instead of raw
-    seconds, so a cron row reads ``every 2h`` rather than ``every 7200s``."""
-    secs = every_ms // 1000
-    if secs <= 0:
-        return "0s"
-    for unit_secs, suffix in ((86400, "d"), (3600, "h"), (60, "m")):
-        if secs % unit_secs == 0:
-            return f"{secs // unit_secs}{suffix}"
-    return f"{secs}s"
-
-
 def _normalize_config_path(path: str) -> str:
     return _strip_trailing_slash(path)
 
@@ -92,14 +67,9 @@ class WebSocketConfig(Base):
     Clients connect with URLs like ``ws://{host}:{port}{path}?client_id=...&token=...``.
     - ``client_id``: Used for ``allow_from`` authorization; if omitted, a value is generated and logged.
     - ``token``: If non-empty, the ``token`` query param may match this static secret; short-lived tokens
-      from ``token_issue_path`` are also accepted.
-    - ``token_issue_path``: If non-empty, **GET** (HTTP/1.1) to this path returns JSON
-      ``{"token": "...", "expires_in": <seconds>}``; use ``?token=...`` when opening the WebSocket.
-      Must differ from ``path`` (the WS upgrade path). If the client runs in the **same process** as
-      durin and shares the asyncio loop, use a thread or async HTTP client for GET—do not call
-      blocking ``urllib`` or synchronous ``httpx`` from inside a coroutine.
-    - ``token_issue_secret``: If non-empty, token requests must send ``Authorization: Bearer <secret>`` or
-      ``X-Durin-Auth: <secret>``.
+      minted by ``GET /webui/bootstrap`` are also accepted.
+    - ``token_issue_secret``: If non-empty, ``GET /webui/bootstrap`` must present the secret via
+      ``Authorization: Bearer <secret>`` or ``X-Durin-Auth: <secret>`` (the reverse-proxy deployment path).
     - ``websocket_requires_token``: If True, the handshake must include a valid token (static or issued and not expired).
     - Each connection has its own session: a unique ``chat_id`` maps to the agent session internally.
     - ``media`` field in outbound messages contains local filesystem paths; remote clients need a
@@ -111,7 +81,6 @@ class WebSocketConfig(Base):
     port: int = 8765
     path: str = "/"
     token: str = ""
-    token_issue_path: str = ""
     token_issue_secret: str = ""
     token_ttl_s: int = Field(default=300, ge=30, le=86_400)
     websocket_requires_token: bool = True
@@ -134,24 +103,6 @@ class WebSocketConfig(Base):
             raise ValueError('path must start with "/"')
         return _normalize_config_path(value)
 
-    @field_validator("token_issue_path")
-    @classmethod
-    def token_issue_path_format(cls, value: str) -> str:
-        value = value.strip()
-        if not value:
-            return ""
-        if not value.startswith("/"):
-            raise ValueError('token_issue_path must start with "/"')
-        return _normalize_config_path(value)
-
-    @model_validator(mode="after")
-    def token_issue_path_differs_from_ws_path(self) -> Self:
-        if not self.token_issue_path:
-            return self
-        if _normalize_config_path(self.token_issue_path) == _normalize_config_path(self.path):
-            raise ValueError("token_issue_path must differ from path (the WebSocket upgrade path)")
-        return self
-
     @model_validator(mode="after")
     def wildcard_host_requires_auth(self) -> Self:
         if self.host not in ("0.0.0.0", "::"):
@@ -162,20 +113,6 @@ class WebSocketConfig(Base):
             "host is 0.0.0.0 (all interfaces) but neither token nor "
             "token_issue_secret is set — set one to prevent unauthenticated access"
         )
-
-
-def _http_json_response(data: dict[str, Any], *, status: int = 200) -> Response:
-    body = json.dumps(data, ensure_ascii=False).encode("utf-8")
-    headers = Headers(
-        [
-            ("Date", email.utils.formatdate(usegmt=True)),
-            ("Connection", "close"),
-            ("Content-Length", str(len(body))),
-            ("Content-Type", "application/json; charset=utf-8"),
-        ]
-    )
-    reason = http.HTTPStatus(status).phrase
-    return Response(status, reason, headers, body)
 
 
 def publish_runtime_model_update(
@@ -225,45 +162,10 @@ def _resolve_bootstrap_model_name(
     return _default_model_name_from_config()
 
 
-def _parse_request_path(path_with_query: str) -> tuple[str, dict[str, list[str]]]:
-    """Parse normalized path and query parameters in one pass."""
-    parsed = urlparse("ws://x" + path_with_query)
-    path = _strip_trailing_slash(parsed.path or "/")
-    return path, parse_qs(parsed.query, keep_blank_values=True)
-
-
-def _normalize_http_path(path_with_query: str) -> str:
-    """Return the path component (no query string), with trailing slash normalized (root stays ``/``)."""
-    return _parse_request_path(path_with_query)[0]
-
-
-def _parse_query(path_with_query: str) -> dict[str, list[str]]:
-    return _parse_request_path(path_with_query)[1]
-
-
 def _query_first(query: dict[str, list[str]], key: str) -> str | None:
     """Return the first value for *key*, or None."""
     values = query.get(key)
     return values[0] if values else None
-
-
-def _request_host_is_local(request: WsRequest) -> bool:
-    """True when the browser reached the webui via localhost.
-
-    Used to decide whether the loopback OAuth flow (callback on localhost:1455,
-    served by this gateway) can reach the user's browser — only when both run on
-    the same machine, i.e. the dashboard was opened at localhost/127.0.0.1/::1.
-    """
-    try:
-        host = request.headers.get("Host") or request.headers.get("host") or ""
-    except Exception:  # noqa: BLE001
-        host = ""
-    host = host.strip()
-    if host.startswith("["):  # bracketed IPv6, e.g. [::1]:8765
-        host = host[1:].split("]", 1)[0]
-    else:
-        host = host.rsplit(":", 1)[0] if host.count(":") == 1 else host
-    return host in ("localhost", "127.0.0.1", "::1")
 
 
 def _logs_query_from_params(query: dict[str, list[str]]):
@@ -295,28 +197,6 @@ def _logs_query_from_params(query: dict[str, list[str]]):
         limit=max(1, min(int(limit), 1000)) if limit else 200,
         filters=filters,
     )
-
-
-def _mask_secret_hint(secret: str | None) -> str | None:
-    if not secret:
-        return None
-    if len(secret) <= 8:
-        return "••••"
-    return f"{secret[:4]}••••{secret[-4:]}"
-
-
-_WEB_SEARCH_PROVIDER_OPTIONS: tuple[dict[str, str], ...] = (
-    {"name": "duckduckgo", "label": "DuckDuckGo", "credential": "none"},
-    {"name": "brave", "label": "Brave Search", "credential": "api_key"},
-    {"name": "tavily", "label": "Tavily", "credential": "api_key"},
-    {"name": "searxng", "label": "SearXNG", "credential": "base_url"},
-    {"name": "jina", "label": "Jina", "credential": "api_key"},
-    {"name": "kagi", "label": "Kagi", "credential": "api_key"},
-    {"name": "olostep", "label": "Olostep", "credential": "api_key"},
-)
-_WEB_SEARCH_PROVIDER_BY_NAME = {
-    provider["name"]: provider for provider in _WEB_SEARCH_PROVIDER_OPTIONS
-}
 
 
 def _parse_inbound_payload(raw: str) -> str | None:
@@ -411,25 +291,16 @@ def _extract_data_url_mime(url: str) -> str | None:
 
 _LOCALHOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
-# Matches the legacy chat-id pattern but allows file-system-safe stems too,
-# so the API can address sessions whose keys came from non-WebSocket channels.
-_API_KEY_RE = re.compile(r"^[A-Za-z0-9_:.-]{1,128}$")
 
+def _peer_is_loopback(peer: Any) -> bool:
+    """True when *peer* (a ``(host, port)`` tuple/Address, or None) is loopback.
 
-def _decode_api_key(raw_key: str) -> str | None:
-    """Decode a percent-encoded API path segment, then validate the result."""
-    key = unquote(raw_key)
-    if _API_KEY_RE.match(key) is None:
-        return None
-    return key
-
-
-def _is_localhost(connection: Any) -> bool:
-    """Return True if *connection* originated from the loopback interface."""
-    addr = getattr(connection, "remote_address", None)
-    if not addr:
+    The adapter passes Starlette's ``request.client`` (an ``Address`` namedtuple,
+    or None when the server omits the peer — then we fail closed → False).
+    """
+    if not peer:
         return False
-    host = addr[0] if isinstance(addr, tuple) else addr
+    host = peer[0] if isinstance(peer, (tuple, list)) else peer
     if not isinstance(host, str):
         return False
     # ``::ffff:127.0.0.1`` is loopback in IPv6-mapped form.
@@ -438,47 +309,12 @@ def _is_localhost(connection: Any) -> bool:
     return host in _LOCALHOSTS
 
 
-def _http_response(
-    body: bytes,
-    *,
-    status: int = 200,
-    content_type: str = "text/plain; charset=utf-8",
-    extra_headers: list[tuple[str, str]] | None = None,
-) -> Response:
-    headers = [
-        ("Date", email.utils.formatdate(usegmt=True)),
-        ("Connection", "close"),
-        ("Content-Length", str(len(body))),
-        ("Content-Type", content_type),
-    ]
-    if extra_headers:
-        headers.extend(extra_headers)
-    reason = http.HTTPStatus(status).phrase
-    return Response(status, reason, Headers(headers), body)
-
-
-def _http_error(status: int, message: str | None = None) -> Response:
-    body = (message or http.HTTPStatus(status).phrase).encode("utf-8")
-    return _http_response(body, status=status)
-
-
 def _bearer_token(headers: Any) -> str | None:
     """Pull a Bearer token out of standard or query-style headers."""
     auth = headers.get("Authorization") or headers.get("authorization")
     if auth and auth.lower().startswith("bearer "):
         return auth[7:].strip() or None
     return None
-
-
-def _is_websocket_upgrade(request: WsRequest) -> bool:
-    """Detect an actual WS upgrade; plain HTTP GETs to the same path should fall through."""
-    upgrade = request.headers.get("Upgrade") or request.headers.get("upgrade")
-    connection = request.headers.get("Connection") or request.headers.get("connection")
-    if not upgrade or "websocket" not in upgrade.lower():
-        return False
-    if not connection or "upgrade" not in connection.lower():
-        return False
-    return True
 
 
 def _b64url_encode(data: bytes) -> str:
@@ -521,6 +357,50 @@ def _issue_route_secret_matches(headers: Any, configured_secret: str) -> bool:
     return hmac.compare_digest(header_token.strip(), configured_secret)
 
 
+class ConnectionAdapter:
+    """Transport-agnostic seam around a single WebSocket connection.
+
+    Step 1 (this commit): wraps a ``websockets.ServerConnection`` and delegates
+    all I/O to it.  Step 3 will add a Starlette-``WebSocket``-backed subclass so
+    the chat logic (``_connection_loop``, ``_safe_send_to``, ``_send_event``)
+    never touches the transport library directly.
+
+    The instance is used as the identity key in ``_subs`` / ``_conn_chats`` /
+    ``_conn_default`` — default object identity (``id(self)``) provides the
+    stable, hashable key each connection needs.
+    """
+
+    __slots__ = ("_conn", "_iter")
+
+    def __init__(self, conn: Any) -> None:
+        self._conn = conn
+        self._iter: Any = None
+
+    async def send_text(self, raw: str) -> None:
+        """Send a text frame; delegates to the underlying connection."""
+        await self._conn.send(raw)
+
+    @property
+    def remote(self) -> Any:
+        """Remote address of the underlying connection (same shape as ``remote_address``)."""
+        return getattr(self._conn, "remote_address", None)
+
+    def __aiter__(self) -> "ConnectionAdapter":
+        self._iter = self._conn.__aiter__()
+        return self
+
+    async def __anext__(self) -> Any:
+        if self._iter is None:
+            self._iter = self._conn.__aiter__()
+        return await self._iter.__anext__()
+
+    async def close(self, code: int = 1000, reason: str = "") -> None:
+        """Close the underlying connection (used by the Starlette adapter in step 3)."""
+        close_fn = getattr(self._conn, "close", None)
+        if close_fn is not None:
+            await close_fn(code, reason)
+
+
 class WebSocketChannel(BaseChannel):
     """Run a local WebSocket server; forward text/JSON messages to the message bus."""
 
@@ -549,10 +429,6 @@ class WebSocketChannel(BaseChannel):
         self._conn_default: dict[Any, str] = {}
         # Single-use tokens consumed at WebSocket handshake.
         self._issued_tokens: dict[str, float] = {}
-        # Multi-use tokens for HTTP routes served beside WS; checked but not consumed.
-        self._api_tokens: dict[str, float] = {}
-        self._stop_event: asyncio.Event | None = None
-        self._server_task: asyncio.Task[None] | None = None
         self._session_manager = session_manager
         self._static_dist_path: Path | None = (
             static_dist_path.resolve() if static_dist_path is not None else None
@@ -564,11 +440,32 @@ class WebSocketChannel(BaseChannel):
         self._cron_service = cron_service
         # Strong refs to fire-and-forget run-now tasks (else GC'd mid-run).
         self._background_run_tasks: set[asyncio.Task] = set()
-        # Process-local secret used to HMAC-sign media URLs. The signed URL is
-        # the capability — anyone who holds a valid URL can fetch that one
-        # file, nothing else. The secret regenerates on restart so links
-        # become self-expiring (callers just refresh the session list).
-        self._media_secret: bytes = secrets.token_bytes(32)
+        # Persistent HMAC secret for media URL signing.  Lives in the token
+        # store so signed URLs survive a process restart (SP2).
+        from durin.security.api_tokens import ApiTokenStore as _ApiTokenStore
+
+        self._media_secret: bytes = _ApiTokenStore().get_or_create_media_secret()
+        # Service-core registry: domain logic extracted out of this channel
+        # (SP1). The HTTP handlers are now thin shims that call these services.
+        # Built here so the deps are available; services are registered as each
+        # domain is extracted.
+        self._services: ServiceRegistry = self._build_services(bus)
+
+    def _build_services(self, bus: MessageBus) -> ServiceRegistry:
+        """Construct the registry holding the extracted domain services.
+
+        Delegates to the shared :func:`durin.service.wiring.build_service_registry`
+        so the websocket shims and the SP4 Starlette front door serve the SAME
+        wired service set.
+        """
+        from durin.service.wiring import build_service_registry
+
+        return build_service_registry(
+            config=self.config,
+            session_manager=self._session_manager,
+            cron_service=self._cron_service,
+            bus=bus,
+        )
 
     def _endpoint_workspace(self) -> Path:
         """The gateway's ACTUAL workspace for read-only memory endpoints.
@@ -638,7 +535,7 @@ class WebSocketChannel(BaseChannel):
         payload.update(fields)
         raw = json.dumps(payload, ensure_ascii=False)
         try:
-            await connection.send(raw)
+            await connection.send_text(raw)
         except ConnectionClosed:
             self._cleanup_connection(connection)
         except Exception as e:
@@ -689,1302 +586,54 @@ class WebSocketChannel(BaseChannel):
             return False
         return True
 
-    def _handle_token_issue_http(self, connection: Any, request: Any) -> Any:
-        secret = self.config.token_issue_secret.strip()
-        if secret:
-            if not _issue_route_secret_matches(request.headers, secret):
-                return connection.respond(401, "Unauthorized")
-        else:
-            self.logger.warning(
-                "token_issue_path is set but token_issue_secret is empty; "
-                "any client can obtain connection tokens — set token_issue_secret for production."
-            )
-        self._purge_expired_issued_tokens()
-        if len(self._issued_tokens) >= self._MAX_ISSUED_TOKENS:
-            self.logger.error(
-                "too many outstanding issued tokens ({}), rejecting issuance",
-                len(self._issued_tokens),
-            )
-            return _http_json_response({"error": "too many outstanding tokens"}, status=429)
-        token_value = f"nbwt_{secrets.token_urlsafe(32)}"
-        self._issued_tokens[token_value] = time.monotonic() + float(self.config.token_ttl_s)
-
-        return _http_json_response(
-            {"token": token_value, "expires_in": self.config.token_ttl_s}
-        )
-
-    # -- HTTP dispatch ------------------------------------------------------
-
-    async def _dispatch_http(self, connection: Any, request: WsRequest) -> Any:
-        """Route an inbound HTTP request to a handler or to the WS upgrade path."""
-        got, query = _parse_request_path(request.path)
-
-        # 1. Token issue endpoint (legacy, optional, gated by configured secret).
-        if self.config.token_issue_path:
-            issue_expected = _normalize_config_path(self.config.token_issue_path)
-            if got == issue_expected:
-                return self._handle_token_issue_http(connection, request)
-
-        # 2. Bootstrap (`/webui/bootstrap`): mint WS/API tokens + shared session metadata.
-        if got == "/webui/bootstrap":
-            return self._handle_bootstrap(connection, request)
-
-        # 3. REST handlers co-located with this channel (sessions, settings, …).
-        if got == "/api/sessions":
-            return self._handle_sessions_list(request)
-
-        if got == "/api/settings":
-            return self._handle_settings(request)
-
-        if got == "/api/commands":
-            return self._handle_commands(request)
-
-        if got == "/api/settings/update":
-            return self._handle_settings_update(request)
-
-        if got == "/api/settings/provider/update":
-            return self._handle_settings_provider_update(request)
-
-        if got == "/api/settings/web-search/update":
-            return self._handle_settings_web_search_update(request)
-
-        if got == "/api/oauth/codex/status":
-            return self._handle_codex_oauth_status(request)
-
-        if got == "/api/oauth/codex/start":
-            return self._handle_codex_oauth_start(request)
-
-        if got == "/api/oauth/codex/start-loopback":
-            return self._handle_codex_oauth_start_loopback(request)
-
-        if got == "/api/oauth/codex/poll":
-            return self._handle_codex_oauth_poll(request)
-
-        if got == "/api/oauth/codex/disconnect":
-            return self._handle_codex_oauth_disconnect(request)
-
-        if got == "/api/secrets":
-            return self._handle_secrets_list(request)
-
-        if got == "/api/secrets/delete":
-            return self._handle_secret_delete(request)
-
-        if got == "/api/cron":
-            return self._handle_cron_list(request)
-
-        if got == "/api/cron/remove":
-            return self._handle_cron_remove(request)
-
-        if got == "/api/cron/toggle":
-            return self._handle_cron_toggle(request)
-
-        if got == "/api/cron/run":
-            return self._handle_cron_run(request)
-
-        if got == "/api/config":
-            return self._handle_config_get(request)
-
-        if got == "/api/config/set":
-            return self._handle_config_set(request)
-
-        if got == "/api/logs":
-            return self._handle_logs_list(request)
-
-        if got == "/api/skills":
-            return self._handle_skills_list(request)
-
-        # Exact matches BEFORE the `([^/]+)` patterns so "quarantine"/"resolve"/
-        # "import" are not captured as skill names by `^/api/skills/([^/]+)$`.
-        if got == "/api/skills/quarantine":
-            return self._handle_skills_quarantine(request)
-
-        if got == "/api/skills/resolve":
-            return self._handle_skills_resolve(request)
-
-        if got == "/api/skills/import":
-            return self._handle_skills_import(request)
-
-        if got == "/api/skills/github-token-test":
-            return self._handle_skills_github_token_test(request)
-
-        if got == "/api/skills/search":
-            return await self._handle_skill_search(request)
-
-        if got == "/api/skills/describe":
-            return await self._handle_skill_describe(request)
-
-        m = re.match(r"^/api/skills/([^/]+)/save$", got)
-        if m:
-            return self._handle_skill_save(request, m.group(1))
-
-        m = re.match(r"^/api/skills/([^/]+)/mode$", got)
-        if m:
-            return self._handle_skill_mode(request, m.group(1))
-
-        m = re.match(r"^/api/skills/([^/]+)/approve$", got)
-        if m:
-            return await self._handle_skill_approve(request, m.group(1))
-
-        m = re.match(r"^/api/skills/([^/]+)/reject$", got)
-        if m:
-            return self._handle_skill_reject(request, m.group(1))
-
-        m = re.match(r"^/api/skills/([^/]+)/judge$", got)
-        if m:
-            return await self._handle_skill_judge(request, m.group(1))
-
-        m = re.match(r"^/api/skills/([^/]+)/remove$", got)
-        if m:
-            return self._handle_skill_remove(request, m.group(1))
-
-        m = re.match(r"^/api/skills/([^/]+)/files$", got)
-        if m:
-            return self._handle_skill_files(request, m.group(1))
-
-        m = re.match(r"^/api/skills/([^/]+)/file/save$", got)
-        if m:
-            return self._handle_skill_file_save(request, m.group(1))
-
-        m = re.match(r"^/api/skills/([^/]+)/file$", got)
-        if m:
-            return self._handle_skill_file(request, m.group(1))
-
-        m = re.match(r"^/api/skills/([^/]+)/history$", got)
-        if m:
-            return self._handle_skill_history(request, m.group(1))
-
-        m = re.match(r"^/api/skills/([^/]+)/install-deps$", got)
-        if m:
-            return await self._handle_skill_install_deps(request, m.group(1))
-
-        m = re.match(r"^/api/skills/([^/]+)$", got)
-        if m:
-            return self._handle_skill_get(request, m.group(1))
-
-        if got == "/api/channels":
-            return self._handle_channels_list(request)
-
-        if got == "/api/models":
-            return self._handle_models_list(request)
-
-        if got == "/api/memory/graph":
-            return self._handle_memory_graph(request)
-
-        if got == "/api/memory/subgraph":
-            return self._handle_memory_subgraph(request, query)
-
-        if got == "/api/memory/search":
-            return await self._handle_memory_search_api(request, query)
-
-        m = re.match(r"^/api/memory/entity/(.+)$", got)
-        if m:
-            return self._handle_memory_entity(request, m.group(1))
-
-        m = re.match(r"^/api/memory/session/(.+)$", got)
-        if m:
-            return self._handle_memory_session(request, m.group(1))
-
-        m = re.match(r"^/api/memory/edge/([^/]+)/([^/]+)$", got)
-        if m:
-            return self._handle_memory_edge(request, m.group(1), m.group(2))
-
-        if got == "/api/memory/entry":
-            return self._handle_memory_entry(request, query)
-
-        if got == "/api/memory/forget":
-            return self._handle_memory_forget(request, query)
-
-        if got == "/api/memory/backlinks":
-            return self._handle_memory_backlinks(request, query)
-
-        if got == "/api/model/test":
-            return await self._handle_model_test(request)
-
-        if got == "/api/model/capabilities":
-            return self._handle_model_capabilities(request)
-
-        if got == "/api/memory/cross-encoder/test":
-            return await self._handle_cross_encoder_test(request, query)
-
-        if got == "/api/extras/status":
-            return self._handle_extras_status(request, query)
-        if got == "/api/extras/ensure":
-            return await self._handle_extras_ensure(request, query)
-        if got == "/api/extras/restart":
-            return self._handle_extras_restart(request)
-
-        m = re.match(r"^/api/sessions/([^/]+)/messages$", got)
-        if m:
-            return self._handle_session_messages(request, m.group(1))
-
-        m = re.match(r"^/api/sessions/([^/]+)/webui-thread$", got)
-        if m:
-            return self._handle_webui_thread_get(request, m.group(1))
-
-        # NOTE: websockets' HTTP parser only accepts GET, so we cannot expose a
-        # true ``DELETE`` verb. The action is folded into the path instead.
-        m = re.match(r"^/api/sessions/([^/]+)/delete$", got)
-        if m:
-            return self._handle_session_delete(request, m.group(1))
-
-        # P2 (doc 20): user-driven rename. Same constraint as delete —
-        # GET-only HTTP, action folded into the path. New title arrives
-        # as a ``title`` query param (URL-encoded).
-        m = re.match(r"^/api/sessions/([^/]+)/rename$", got)
-        if m:
-            return self._handle_session_rename(request, m.group(1))
-
-        # Signed media fetch: ``<sig>`` is an HMAC over ``<payload>``; the
-        # payload decodes to a path inside :func:`get_media_dir`. See
-        # :meth:`_sign_media_path` for the inverse direction used to build
-        # these URLs when replaying a session.
-        m = re.match(r"^/api/media/([A-Za-z0-9_-]+)/([A-Za-z0-9_-]+)$", got)
-        if m:
-            return self._handle_media_fetch(m.group(1), m.group(2))
-
-        # 4. WebSocket upgrade (the channel's primary purpose). Only run the
-        # handshake gate on requests that actually ask to upgrade; otherwise
-        # a bare ``GET /`` from the browser would be rejected as an
-        # unauthorized WS handshake instead of serving the SPA's index.html.
-        expected_ws = self._expected_path()
-        if got == expected_ws and _is_websocket_upgrade(request):
-            client_id = _query_first(query, "client_id") or ""
-            if len(client_id) > 128:
-                client_id = client_id[:128]
-            if not self.is_allowed(client_id):
-                return connection.respond(403, "Forbidden")
-            return self._authorize_websocket_handshake(connection, query)
-
-        # 5. Static SPA serving (only if a build directory was wired in).
-        if self._static_dist_path is not None:
-            response = self._serve_static(got)
-            if response is not None:
-                return response
-
-        return connection.respond(404, "Not Found")
-
-    # -- HTTP route handlers ------------------------------------------------
-
-    def _check_api_token(self, request: WsRequest) -> bool:
-        """Validate a request against the API token pool (multi-use, TTL-bound)."""
-        self._purge_expired_api_tokens()
-        token = _bearer_token(request.headers) or _query_first(
-            _parse_query(request.path), "token"
-        )
-        if not token:
-            return False
-        expiry = self._api_tokens.get(token)
-        if expiry is None or time.monotonic() > expiry:
-            self._api_tokens.pop(token, None)
-            return False
-        return True
-
-    def _purge_expired_api_tokens(self) -> None:
-        now = time.monotonic()
-        for token_key, expiry in list(self._api_tokens.items()):
-            if now > expiry:
-                self._api_tokens.pop(token_key, None)
-
-    def _handle_bootstrap(self, connection: Any, request: Any) -> Response:
-        # When a secret is configured (token_issue_secret or static token),
-        # validate it regardless of source IP.  This secures deployments
-        # behind a reverse proxy where all connections appear as localhost.
+    # -- HTTP endpoints (bootstrap, media) ----------------------------------
+
+    def bootstrap(self, *, peer: Any, headers: Any) -> dict[str, Any]:
+        """Mint a short-lived ADMIN token + session metadata for the webui.
+
+        Gates (raised as DomainError → problem+json by the adapter):
+        - a configured ``token_issue_secret``/static ``token`` must match the
+          request header (secures deployments behind a reverse proxy where every
+          connection appears local);
+        - with NO secret, only a loopback *peer* may mint (local-dev mode);
+        - the issued-token pool is capped to bound runaway growth.
+        """
         secret = self.config.token_issue_secret.strip() or self.config.token.strip()
         if secret:
-            if not _issue_route_secret_matches(request.headers, secret):
-                return _http_error(401, "Unauthorized")
-        elif not _is_localhost(connection):
-            # No secret configured: only allow localhost (local dev mode).
-            return _http_error(403, "bootstrap is localhost-only")
+            if not _issue_route_secret_matches(headers, secret):
+                raise UnauthenticatedError("invalid bootstrap secret")
+        elif not _peer_is_loopback(peer):
+            raise ForbiddenError("bootstrap is localhost-only")
         # Cap outstanding tokens to avoid runaway growth from a misbehaving client.
         self._purge_expired_issued_tokens()
-        self._purge_expired_api_tokens()
-        if (
-            len(self._issued_tokens) >= self._MAX_ISSUED_TOKENS
-            or len(self._api_tokens) >= self._MAX_ISSUED_TOKENS
-        ):
-            return _http_response(
-                json.dumps({"error": "too many outstanding tokens"}).encode("utf-8"),
-                status=429,
-                content_type="application/json; charset=utf-8",
+        if len(self._issued_tokens) >= self._MAX_ISSUED_TOKENS:
+            raise TooManyRequestsError("too many outstanding tokens")
+        # Mint via the persisted store so this token survives a restart (SP2).
+        # The store generates a fresh plaintext; we use that as the token so
+        # the hash in the store always matches what we hand to the client.
+        auth_svc = self._services.get("auth")
+        if auth_svc is not None:
+            _, token = auth_svc._store.issue(
+                [Scope.ADMIN.value],
+                label="bootstrap",
+                ttl_s=float(self.config.token_ttl_s),
             )
-        token = f"nbwt_{secrets.token_urlsafe(32)}"
-        expiry = time.monotonic() + float(self.config.token_ttl_s)
-        # Same string registered in both pools: the WS handshake consumes one copy
-        # while the REST surface keeps validating the other until TTL expiry.
-        self._issued_tokens[token] = expiry
-        self._api_tokens[token] = expiry
-        return _http_json_response(
-            {
-                "token": token,
-                "ws_path": self._expected_path(),
-                "expires_in": self.config.token_ttl_s,
-                "model_name": _resolve_bootstrap_model_name(self._runtime_model_name),
-                # True when this deploy gates bootstrap on a setup
-                # secret (token_issue_secret or static token). The
-                # webui uses this to decide whether to expose a
-                # "Logout" affordance — without a secret in play,
-                # logout would just strand the user on an auth form
-                # they have nothing to type into (the bootstrap
-                # auto-mints tokens for localhost). UX trap removed
-                # by hiding the button when requires_secret=false.
-                "requires_secret": bool(secret),
-            }
-        )
-
-    def _handle_memory_graph(self, request: WsRequest) -> Response:
-        """GET /api/memory/graph — entity-centric memory as nodes + edges.
-
-        Read-only over ``memory/entities/<type>/*.md`` + episodic
-        co-occurrence. Powers the Obsidian-style graph view in the
-        webui. No LLM call, no mutation. See
-        :func:`durin.memory.graph.build_memory_graph` for the shape.
-        """
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        from durin.config.loader import load_config
-        from durin.memory.graph import build_memory_graph
-
-        try:
-            workspace = self._endpoint_workspace()
-            payload = build_memory_graph(workspace)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("memory graph build failed")
-            return _http_error(500, f"memory graph build failed: {exc}")
-        return _http_json_response(payload)
-
-    def _handle_memory_subgraph(
-        self, request: WsRequest, query: dict[str, list[str]]
-    ) -> Response:
-        """GET /api/memory/subgraph?ref=<type:slug>&hops=N — ego-graph.
-
-        Returns the node + its N-hop neighbourhood (default 1), UNcapped, so
-        the webui "focus" mode can centre any node — including one the global
-        overview dropped or that the user reached via search. See
-        :func:`durin.memory.graph.build_entity_subgraph`.
-        """
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        ref = _query_first(query, "ref") or ""
-        if ":" not in ref:
-            return _http_error(400, "ref must be '<type>:<slug>'")
-        try:
-            hops = int(_query_first(query, "hops") or "1")
-        except ValueError:
-            hops = 1
-        from durin.memory.graph import build_entity_subgraph
-
-        try:
-            workspace = self._endpoint_workspace()
-            payload = build_entity_subgraph(workspace, ref, hops=max(1, min(hops, 3)))
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("memory subgraph build failed")
-            return _http_error(500, f"memory subgraph build failed: {exc}")
-        return _http_json_response(payload)
-
-    def _handle_memory_entity(self, request: WsRequest, ref_encoded: str) -> Response:
-        """GET /api/memory/entity/<ref> — full page + history + archive + entries.
-
-        ``<ref>`` is the entity reference (``type:slug``) URL-encoded —
-        ``person%3Amarcelo``. Returns 404 when the canonical page is
-        missing on disk. See :func:`graph_api.get_entity_detail`.
-        """
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        from urllib.parse import unquote
-
-        from durin.config.loader import load_config
-        from durin.memory.graph_api import get_entity_detail
-
-        ref = unquote(ref_encoded)
-        try:
-            workspace = self._endpoint_workspace()
-            payload = get_entity_detail(workspace, ref)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("memory entity detail failed for {}", ref)
-            return _http_error(500, f"entity detail failed: {exc}")
-        if payload is None:
-            return _http_error(404, f"entity not found: {ref}")
-        return _http_json_response(payload)
-
-    def _handle_memory_session(
-        self, request: WsRequest, stem_encoded: str,
-    ) -> Response:
-        """GET /api/memory/session/<stem> — session detail for the graph view.
-
-        ``<stem>`` is the filename stem (e.g. ``cli_direct``,
-        ``websocket_<uuid>``), URL-encoded. Returns 404 when the
-        corresponding ``sessions/<stem>.jsonl`` doesn't exist.
-        """
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        from urllib.parse import unquote
-
-        from durin.config.loader import load_config
-        from durin.memory.graph_api import get_session_detail
-
-        stem = unquote(stem_encoded)
-        try:
-            workspace = self._endpoint_workspace()
-            payload = get_session_detail(workspace, stem)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("memory session detail failed for {}", stem)
-            return _http_error(500, f"session detail failed: {exc}")
-        if payload is None:
-            return _http_error(404, f"session not found: {stem}")
-        return _http_json_response(payload)
-
-    def _handle_memory_entry(
-        self, request: WsRequest, query: dict[str, list[str]],
-    ) -> Response:
-        """GET /api/memory/entry?uri=memory/<class>/<id> — one entry's frontmatter + body.
-
-        Distinct from ``_handle_memory_entity`` (which serves entity
-        PAGES under ``memory/entities/``). This handler is for the
-        individual entries — episodic / stable / corpus /
-        session_summary — that the P12 Entries panel browses.
-        """
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        from durin.config.loader import load_config
-        from durin.memory.graph_api import get_entry_detail
-
-        uri = (_query_first(query, "uri") or "").strip()
-        try:
-            workspace = self._endpoint_workspace()
-            payload = get_entry_detail(workspace, uri)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("memory entry detail failed for {}", uri)
-            return _http_error(500, f"entry detail failed: {exc}")
-        if payload is None:
-            return _http_error(404, f"entry not found: {uri}")
-        return _http_json_response(payload)
-
-    def _handle_memory_forget(
-        self, request: WsRequest, query: dict[str, list[str]],
-    ) -> Response:
-        """GET /api/memory/forget?uri=memory/<class>/<id> — archive an entry.
-
-        Returns ``{"result": "archived"|"not_found"|"protected"|"invalid"}``.
-        HTTP status mirrors the result: 200 archived/not_found,
-        403 protected, 400 invalid. (Operators can distinguish "URI
-        was malformed" from "URI named a real entry that's gone"
-        without parsing the body.)
-        """
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        from durin.config.loader import load_config
-        from durin.memory.graph_api import forget_entry
-
-        uri = (_query_first(query, "uri") or "").strip()
-        try:
-            workspace = self._endpoint_workspace()
-            payload = forget_entry(workspace, uri)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("memory forget failed for {}", uri)
-            return _http_error(500, f"forget failed: {exc}")
-        result = payload.get("result")
-        if result == "protected":
-            # 403 + payload so the UI can switch on result text too.
-            return _http_json_response(payload, status=403)
-        if result == "invalid":
-            return _http_json_response(payload, status=400)
-        return _http_json_response(payload)
-
-    def _handle_memory_backlinks(
-        self, request: WsRequest, query: dict[str, list[str]],
-    ) -> Response:
-        """GET /api/memory/backlinks?uri=memory/<class>/<id> — entries that reference this one.
-
-        Walks ``memory/`` (excluding archive / pending) once and returns
-        up to 50 hits (``truncated`` flag indicates more were found).
-        Synchronous; benchmark target is < 100 ms over O(thousands) of
-        entries.
-        """
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        from durin.config.loader import load_config
-        from durin.memory.graph_api import get_entry_backlinks
-
-        uri = (_query_first(query, "uri") or "").strip()
-        try:
-            workspace = self._endpoint_workspace()
-            payload = get_entry_backlinks(workspace, uri)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("memory backlinks failed for {}", uri)
-            return _http_error(500, f"backlinks failed: {exc}")
-        return _http_json_response(payload)
-
-    def _handle_memory_edge(
-        self, request: WsRequest, source_enc: str, target_enc: str,
-    ) -> Response:
-        """GET /api/memory/edge/<source>/<target> — entries co-mentioning both.
-
-        Both refs URL-encoded. Returns the raw evidence behind a graph
-        edge: episodic entries that tag BOTH refs.
-        """
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        from urllib.parse import unquote
-
-        from durin.config.loader import load_config
-        from durin.memory.graph_api import get_edge_detail
-
-        a = unquote(source_enc)
-        b = unquote(target_enc)
-        try:
-            workspace = self._endpoint_workspace()
-            payload = get_edge_detail(workspace, a, b)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("memory edge detail failed for {} ↔ {}", a, b)
-            return _http_error(500, f"edge detail failed: {exc}")
-        return _http_json_response(payload)
-
-    async def _handle_memory_search_api(
-        self, request: WsRequest, query: dict[str, list[str]],
-    ) -> Response:
-        """GET /api/memory/search?q=…&scope=…&level=… — same shape as memory_search tool.
-
-        Mirrors the LLM tool's surface so the webui filter behaves
-        identically to what the agent sees. Results carry ``kind`` +
-        ``rendered`` per doc 25 §2.H so canonical vs fragment markers
-        stay consistent across paths.
-        """
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        from durin.config.loader import load_config
-        from durin.memory.graph_api import search_memory_api
-
-        q = _query_first(query, "q") or ""
-        scope = _query_first(query, "scope") or "all"
-        level = _query_first(query, "level") or "warm"
-        kinds = _query_first(query, "kinds") or "all"
-        try:
-            cfg = load_config()
-            workspace = cfg.workspace_path
-            embedding_model = None
-            try:
-                if cfg.memory.enabled:
-                    embedding_model = cfg.memory.embedding.model
-            except (AttributeError, TypeError):
-                embedding_model = None
-            payload = await search_memory_api(
-                workspace, q, scope=scope, level=level, kinds=kinds,
-                embedding_model=embedding_model,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("memory search api failed")
-            return _http_error(500, f"memory search failed: {exc}")
-        return _http_json_response(payload)
-
-    def _handle_sessions_list(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        if self._session_manager is None:
-            return _http_error(503, "session manager unavailable")
-        sessions = self._session_manager.list_sessions()
-        # Sidebar/chat listing for WS-backed sessions only — CLI / Slack / etc.
-        # keys are not intended for resume over this HTTP surface.
-        cleaned = [
-            {k: v for k, v in s.items() if k != "path"}
-            for s in sessions
-            if isinstance(s.get("key"), str) and s["key"].startswith("websocket:")
-        ]
-        return _http_json_response({"sessions": cleaned})
-
-    def _settings_payload(self, *, requires_restart: bool = False) -> dict[str, Any]:
-        from durin.config.loader import get_config_path, load_config
-        from durin.providers.registry import PROVIDERS, find_by_name
-
-        config = load_config()
-        defaults = config.agents.defaults
-        provider_name = config.get_provider_name(defaults.model) or defaults.provider
-        provider = config.get_provider(defaults.model)
-        selected_provider = provider_name
-        if defaults.provider != "auto":
-            spec = find_by_name(defaults.provider)
-            selected_provider = spec.name if spec else provider_name
-        from durin.providers.codex_device_auth import codex_token_present
-
-        providers = []
-        for spec in PROVIDERS:
-            # OAuth providers with a webui connect flow (Codex) surface as
-            # normal rows whose "configured" reflects a stored token, not an
-            # API key. They're authorized via /api/oauth/codex/*, not the
-            # key/base form (which still rejects is_oauth providers).
-            if spec.name == "openai_codex":
-                providers.append(
-                    {
-                        "name": spec.name,
-                        "label": spec.label,
-                        "configured": codex_token_present(),
-                        "oauth": True,
-                    }
-                )
-                continue
-            provider_config = getattr(config.providers, spec.name, None)
-            if provider_config is None or spec.is_oauth or spec.is_local:
-                continue
-            providers.append(
-                {
-                    "name": spec.name,
-                    "label": spec.label,
-                    "configured": bool(provider_config.api_key),
-                    "api_key_hint": _mask_secret_hint(provider_config.api_key),
-                    "api_base": provider_config.api_base,
-                    "default_api_base": spec.default_api_base or None,
-                }
-            )
-        search_config = config.tools.web.search
-        search_provider = (
-            search_config.provider
-            if search_config.provider in _WEB_SEARCH_PROVIDER_BY_NAME
-            else "duckduckgo"
-        )
-        return {
-            "agent": {
-                "model": defaults.model,
-                "provider": selected_provider,
-                "resolved_provider": provider_name,
-                "has_api_key": bool(provider and provider.api_key),
-            },
-            "providers": providers,
-            "web_search": {
-                "provider": search_provider,
-                "api_key_hint": _mask_secret_hint(search_config.api_key),
-                "base_url": search_config.base_url or None,
-                "providers": list(_WEB_SEARCH_PROVIDER_OPTIONS),
-            },
-            "runtime": {
-                "config_path": str(get_config_path().expanduser()),
-            },
-            "requires_restart": requires_restart,
-        }
-
-    def _handle_settings(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        return _http_json_response(self._settings_payload())
-
-    def _codex_status_payload(self) -> dict[str, Any]:
-        info = existing_codex_session()
-        if info is None:
-            return {"connected": False}
-        return {
-            "connected": True,
-            "email": info.email,
-            "plan": info.plan,
-            "source": info.source,
-        }
-
-    def _handle_codex_oauth_status(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        payload = self._codex_status_payload()
-        # Loopback (no device-auth toggle) only works when the browser is on
-        # the gateway machine — i.e. the webui was reached via localhost.
-        payload["can_loopback"] = _request_host_is_local(request)
-        return _http_json_response(payload)
-
-    def _handle_codex_oauth_start_loopback(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        if not _request_host_is_local(request):
-            return _http_error(400, "loopback unavailable on a remote gateway; use device code")
-        try:
-            url = start_loopback_login()
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(502, f"loopback login failed to start: {exc}")
-        return _http_json_response({"authorize_url": url})
-
-    def _handle_codex_oauth_start(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            ch = request_device_code()
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(502, f"device code request failed: {exc}")
-        return _http_json_response(
-            {
-                "user_code": ch.user_code,
-                "verification_uri": ch.verification_uri,
-                "device_auth_id": ch.device_auth_id,
-                "interval": ch.interval,
-                "expires_in": ch.expires_in,
-            }
-        )
-
-    def _handle_codex_oauth_poll(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        query = _parse_query(request.path)
-        device_auth_id = (_query_first(query, "device_auth_id") or "").strip()
-        user_code = (_query_first(query, "user_code") or "").strip()
-        if not device_auth_id or not user_code:
-            return _http_error(400, "device_auth_id and user_code are required")
-        res = codex_poll_once(device_auth_id, user_code)
-        payload: dict[str, Any] = {"status": res.status}
-        if res.status == "ok":
-            payload.update(self._codex_status_payload())
-        if res.status == "error":
-            payload["error"] = res.error
-        return _http_json_response(payload)
-
-    def _handle_codex_oauth_disconnect(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        codex_disconnect()
-        return _http_json_response(self._codex_status_payload())
-
-    def _handle_commands(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        return _http_json_response({"commands": builtin_command_palette()})
-
-    def _handle_settings_update(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        from durin.config.loader import load_config, save_config
-        from durin.providers.registry import find_by_name
-
-        query = _parse_query(request.path)
-        config = load_config()
-        defaults = config.agents.defaults
-        changed = False
-
-        model = _query_first(query, "model")
-        if model is not None:
-            model = model.strip()
-            if not model:
-                return _http_error(400, "model is required")
-            if defaults.model != model:
-                defaults.model = model
-                changed = True
-
-        provider = _query_first(query, "provider")
-        if provider is not None:
-            provider = provider.strip()
-            if not provider:
-                return _http_error(400, "provider is required")
-            spec = find_by_name(provider)
-            if spec is None:
-                return _http_error(400, "unknown provider")
-            provider_config = getattr(config.providers, provider, None)
-            # OAuth providers carry a stored token, not an api_key.
-            if spec.name == "openai_codex":
-                from durin.providers.codex_device_auth import codex_token_present
-
-                configured = codex_token_present()
-            elif getattr(spec, "is_oauth", False):
-                from durin.utils.oauth import any_token_present
-
-                configured = any_token_present(spec.name)
-            else:
-                configured = bool(provider_config and provider_config.api_key)
-            if not configured:
-                return _http_error(400, "provider is not configured")
-            if defaults.provider != provider:
-                defaults.provider = provider
-                changed = True
-
-        if changed:
-            save_config(config)
-        # LLM provider/model changes are hot-reloaded by AgentLoop before each
-        # new turn via the provider snapshot loader, so a restart is unnecessary.
-        return _http_json_response(self._settings_payload(requires_restart=False))
-
-    def _handle_settings_provider_update(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        from durin.config.loader import load_config, save_config
-        from durin.providers.registry import find_by_name
-
-        query = _parse_query(request.path)
-        provider_name = (_query_first(query, "provider") or "").strip()
-        if not provider_name:
-            return _http_error(400, "provider is required")
-        spec = find_by_name(provider_name)
-        if spec is None or spec.is_oauth or spec.is_local:
-            return _http_error(400, "unknown provider")
-
-        config = load_config()
-        provider_config = getattr(config.providers, spec.name, None)
-        if provider_config is None:
-            return _http_error(400, "unknown provider")
-
-        changed = False
-        if "api_key" in query or "apiKey" in query:
-            api_key = _query_first(query, "api_key")
-            if api_key is None:
-                api_key = _query_first(query, "apiKey")
-            api_key = (api_key or "").strip() or None
-            # Store the key in the secret store and keep only a
-            # ${secret:} reference in config — the dashboard must not
-            # write plaintext (see docs/11_secrets_design.md).
-            from durin.security.secrets import is_secret_ref, store_secret
-
-            if api_key and not is_secret_ref(api_key):
-                api_key = store_secret(
-                    f"{spec.name}_API_KEY",
-                    api_key,
-                    service=f"provider:{spec.name}",
-                    scope=[f"provider:{spec.name}"],
-                    description=f"{spec.name} API key",
-                    origin="webui",
-                )
-            if provider_config.api_key != api_key:
-                provider_config.api_key = api_key
-                changed = True
-
-        if "api_base" in query or "apiBase" in query:
-            api_base = _query_first(query, "api_base")
-            if api_base is None:
-                api_base = _query_first(query, "apiBase")
-            api_base = (api_base or "").strip() or None
-            if provider_config.api_base != api_base:
-                provider_config.api_base = api_base
-                changed = True
-
-        if changed:
-            save_config(config)
-        # API key/base changes are picked up by the next provider snapshot refresh.
-        return _http_json_response(self._settings_payload(requires_restart=False))
-
-    def _handle_settings_web_search_update(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        from durin.config.loader import load_config, save_config
-
-        query = _parse_query(request.path)
-        provider_name = (_query_first(query, "provider") or "").strip().lower()
-        provider_option = _WEB_SEARCH_PROVIDER_BY_NAME.get(provider_name)
-        if provider_option is None:
-            return _http_error(400, "unknown web search provider")
-
-        config = load_config()
-        search_config = config.tools.web.search
-        previous_provider = search_config.provider
-        changed = False
-
-        def set_value(attr: str, value: str | None) -> None:
-            nonlocal changed
-            if getattr(search_config, attr) != value:
-                setattr(search_config, attr, value)
-                changed = True
-
-        if search_config.provider != provider_name:
-            search_config.provider = provider_name
-            changed = True
-
-        credential = provider_option["credential"]
-        if credential == "none":
-            set_value("api_key", "")
-            set_value("base_url", "")
-        elif credential == "base_url":
-            base_url = _query_first(query, "base_url")
-            if base_url is None:
-                base_url = _query_first(query, "baseUrl")
-            base_url = base_url.strip() if base_url is not None else None
-            if not base_url and previous_provider == provider_name and search_config.base_url:
-                base_url = search_config.base_url
-            if not base_url:
-                return _http_error(400, "base_url is required")
-            set_value("base_url", base_url)
-            set_value("api_key", "")
         else:
-            api_key = _query_first(query, "api_key")
-            if api_key is None:
-                api_key = _query_first(query, "apiKey")
-            api_key = api_key.strip() if api_key is not None else None
-            if not api_key and previous_provider == provider_name and search_config.api_key:
-                api_key = search_config.api_key
-            if not api_key:
-                return _http_error(400, "api_key is required")
-            set_value("api_key", api_key)
-            set_value("base_url", "")
-
-        if changed:
-            save_config(config)
-        return _http_json_response(self._settings_payload(requires_restart=False))
-
-    # -- secret store --------------------------------------------------------
-
-    def _handle_secrets_list(self, request: WsRequest) -> Response:
-        """`GET /api/secrets` — entries' metadata. Never returns a value."""
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        from durin.security.secrets import SecretStore
-
-        store = SecretStore().load()
-        items = [
-            {
-                "name": name,
-                "service": entry.service,
-                "account": entry.account or "",
-                "description": entry.description,
-                "scope": list(entry.scope),
-                "origin": entry.origin,
-                "created_at": entry.created_at,
-                "value_hint": _mask_secret_hint(entry.value),
-            }
-            for name, entry in sorted(store.all().items())
-        ]
-        return _http_json_response({"secrets": items})
-
-    # A secret is created/updated over the websocket — see the
-    # ``secret_store`` envelope in ``_handle_secret_store_envelope``.
-    # The value rides a JSON frame, never a URL query.
-
-    def _handle_secret_delete(self, request: WsRequest) -> Response:
-        """`GET /api/secrets/delete` — remove a secret."""
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        from durin.security.secrets import SecretStore, get_secret_store
-
-        name = (_query_first(_parse_query(request.path), "name") or "").strip()
-        store = SecretStore().load()
-        if not store.remove(name):
-            return _http_error(404, "no such secret")
-        store.save()
-        get_secret_store(reload=True)
-        return _http_json_response({"ok": True})
-
-    # -- cron API (P11) ----------------------------------------------------
-
-    def _fresh_cron_service(self):
-        """Build a non-running CronService bound to the workspace's
-        store path. Read-only ops (`list_jobs`) work directly; mutating
-        ops (`remove_job`, `enable_job`) write to the action.jsonl log
-        which the gateway's running service drains on its next tick.
-        Avoids reaching across processes for a shared CronService
-        handle — mirrors how the SecretStore endpoints work.
-        """
-        from durin.config.loader import load_config
-        from durin.cron.service import CronService
-
-        cfg = load_config()
-        path = cfg.workspace_path / "cron" / "jobs.json"
-        return CronService(path)
-
-    def _cron_job_to_dict(self, job) -> dict:
-        sched = job.schedule
-        # Render a human label per schedule kind. The full structured
-        # data also goes out so the frontend can format dates locally.
-        if sched.kind == "every":
-            label = f"every {_humanize_interval_ms(sched.every_ms or 0)}"
-        elif sched.kind == "cron":
-            tz = f" ({sched.tz})" if sched.tz else ""
-            label = f"{sched.expr}{tz}"
-        elif sched.kind == "at":
-            label = f"once at {sched.at_ms}"
-        else:
-            label = sched.kind
-        is_system = job.payload.kind == "system_event"
+            token = f"nbwt_{secrets.token_urlsafe(32)}"
+        # The WS handshake consumes a single-use token from _issued_tokens.
+        self._issued_tokens[token] = time.monotonic() + float(self.config.token_ttl_s)
         return {
-            "id": job.id,
-            "name": job.name,
-            "enabled": job.enabled,
-            "is_system": is_system,
-            "schedule": {
-                "kind": sched.kind,
-                "label": label,
-                "expr": sched.expr,
-                "every_ms": sched.every_ms,
-                "at_ms": sched.at_ms,
-                "tz": sched.tz,
-            },
-            # System jobs hide their message — usually internal references
-            # to consolidation prompts that aren't useful to surface.
-            "message": "" if is_system else job.payload.message,
-            "channel": job.payload.channel or "",
-            "state": {
-                "next_run_at_ms": job.state.next_run_at_ms,
-                "last_run_at_ms": job.state.last_run_at_ms,
-                "last_status": job.state.last_status,
-                "last_error": job.state.last_error,
-                # True while a run (scheduled or manual) is in flight — lets
-                # the webui disable "Run now" and show a spinner.
-                "executing": bool(
-                    self._cron_service is not None
-                    and self._cron_service.is_executing(job.id)
-                ),
-            },
-            "created_at_ms": job.created_at_ms,
-            "updated_at_ms": job.updated_at_ms,
+            "token": token,
+            "ws_path": self._expected_path(),
+            "expires_in": self.config.token_ttl_s,
+            "model_name": _resolve_bootstrap_model_name(self._runtime_model_name),
+            # True when this deploy gates bootstrap on a setup secret
+            # (token_issue_secret or static token). The webui uses this to decide
+            # whether to expose a "Logout" affordance — without a secret in play,
+            # logout would strand the user on an auth form they have nothing to
+            # type into (bootstrap auto-mints for localhost).
+            "requires_secret": bool(secret),
         }
-
-    def _handle_skills_list(self, request: WsRequest) -> Response:
-        """`GET /api/skills` — list installed skills + the skills store HEAD."""
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        from durin.agent import skills_store as ss
-        from durin.config.loader import load_config
-        try:
-            workspace = self._endpoint_workspace()
-            status, payload = ss.web_list(workspace)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"skills list failed: {exc}")
-        return _http_json_response(payload, status=status)
-
-    def _handle_skills_quarantine(self, request: WsRequest) -> Response:
-        """`GET /api/skills/quarantine` — list skills awaiting an import decision."""
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        from durin.agent import skills_store as ss
-        from durin.config.loader import load_config
-        try:
-            workspace = self._endpoint_workspace()
-            status, payload = ss.web_quarantine(workspace)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"skills quarantine failed: {exc}")
-        return _http_json_response(payload, status=status)
-
-    def _handle_skill_get(self, request: WsRequest, name: str) -> Response:
-        """`GET /api/skills/{name}` — fetch a skill's mode + SKILL.md content."""
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        decoded = _decode_api_key(name)
-        if decoded is None:
-            return _http_error(400, "invalid skill name")
-        from durin.agent import skills_store as ss
-        from durin.config.loader import load_config
-        try:
-            workspace = self._endpoint_workspace()
-            status, payload = ss.web_get(workspace, decoded)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"skill read failed: {exc}")
-        return _http_json_response(payload, status=status)
-
-    def _handle_skill_save(self, request: WsRequest, name: str) -> Response:
-        """`GET /api/skills/{name}/save?content=...` — overwrite a MANUAL skill."""
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        decoded = _decode_api_key(name)
-        if decoded is None:
-            return _http_error(400, "invalid skill name")
-        query = _parse_query(request.path)
-        content = _query_first(query, "content")
-        if content is None:
-            return _http_error(400, "content is required")
-        from durin.agent import skills_store as ss
-        from durin.config.loader import load_config
-        try:
-            workspace = self._endpoint_workspace()
-            status, payload = ss.web_save(workspace, decoded, content)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"skill save failed: {exc}")
-        return _http_json_response(payload, status=status)
-
-    def _handle_skill_files(self, request: WsRequest, name: str) -> Response:
-        """`GET /api/skills/{name}/files` — list a skill's files."""
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        decoded = _decode_api_key(name)
-        if decoded is None:
-            return _http_error(400, "invalid skill name")
-        from durin.agent import skills_store as ss
-        try:
-            status, payload = ss.web_files(self._endpoint_workspace(), decoded)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"skill files failed: {exc}")
-        return _http_json_response(payload, status=status)
-
-    def _handle_skill_file(self, request: WsRequest, name: str) -> Response:
-        """`GET /api/skills/{name}/file?path=...` — read one file."""
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        decoded = _decode_api_key(name)
-        if decoded is None:
-            return _http_error(400, "invalid skill name")
-        path = _query_first(_parse_query(request.path), "path")
-        if not path:
-            return _http_error(400, "path is required")
-        from durin.agent import skills_store as ss
-        try:
-            status, payload = ss.web_file_get(self._endpoint_workspace(), decoded, path)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"skill file read failed: {exc}")
-        return _http_json_response(payload, status=status)
-
-    def _handle_skill_file_save(self, request: WsRequest, name: str) -> Response:
-        """`GET /api/skills/{name}/file/save?path=&content=` — save one text file (manual)."""
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        decoded = _decode_api_key(name)
-        if decoded is None:
-            return _http_error(400, "invalid skill name")
-        query = _parse_query(request.path)
-        path = _query_first(query, "path")
-        content = _query_first(query, "content")
-        if not path:
-            return _http_error(400, "path is required")
-        if content is None:
-            return _http_error(400, "content is required")
-        from durin.agent import skills_store as ss
-        try:
-            status, payload = ss.web_file_save(
-                self._endpoint_workspace(), decoded, path, content,
-                attribution=ss.Attribution(actor="user"))
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"skill file save failed: {exc}")
-        return _http_json_response(payload, status=status)
-
-    def _handle_skill_history(self, request: WsRequest, name: str) -> Response:
-        """`GET /api/skills/{name}/history` — provenance + attributed commit log."""
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        decoded = _decode_api_key(name)
-        if decoded is None:
-            return _http_error(400, "invalid skill name")
-        from durin.agent import skills_store as ss
-        try:
-            status, payload = ss.web_history(self._endpoint_workspace(), decoded)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"skill history failed: {exc}")
-        return _http_json_response(payload, status=status)
-
-    def _handle_skill_mode(self, request: WsRequest, name: str) -> Response:
-        """`GET /api/skills/{name}/mode?value=auto|manual` — set a skill's mode."""
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        decoded = _decode_api_key(name)
-        if decoded is None:
-            return _http_error(400, "invalid skill name")
-        query = _parse_query(request.path)
-        value = (_query_first(query, "value") or "").strip()
-        from durin.agent import skills_store as ss
-        from durin.config.loader import load_config
-        try:
-            workspace = self._endpoint_workspace()
-            status, payload = ss.web_mode(workspace, decoded, value)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"skill mode failed: {exc}")
-        return _http_json_response(payload, status=status)
-
-    def _handle_skills_resolve(self, request: WsRequest) -> Response:
-        """`GET /api/skills/resolve?source=` — list the candidates a source points at."""
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        source = (_query_first(_parse_query(request.path), "source") or "").strip()
-        if not source:
-            return _http_error(400, "source is required")
-        from durin.agent import skills_store as ss
-        from durin.config.loader import load_config
-        try:
-            workspace = self._endpoint_workspace()
-            status, payload = ss.web_import_resolve(workspace, source)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"resolve failed: {exc}")
-        return _http_json_response(payload, status=status)
-
-    def _handle_skills_import(self, request: WsRequest) -> Response:
-        """`GET /api/skills/import?source=` — fetch one candidate to quarantine + scan."""
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        source = (_query_first(_parse_query(request.path), "source") or "").strip()
-        if not source:
-            return _http_error(400, "source is required")
-        from durin.agent import skills_store as ss
-        from durin.config.loader import load_config
-        try:
-            workspace = self._endpoint_workspace()
-            status, payload = ss.web_import_fetch(workspace, source)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"import failed: {exc}")
-        return _http_json_response(payload, status=status)
-
-    async def _handle_skill_search(self, request: WsRequest) -> Response:
-        """`GET /api/skills/search?query=&limit=` — search the configured registries.
-        Async + off-thread: `web_skill_search` drives the registries via
-        `asyncio.run`, so it MUST run in a worker thread, never the event loop."""
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        query = _parse_query(request.path)
-        q = (_query_first(query, "query") or "").strip()
-        if not q:
-            return _http_error(400, "query is required")
-        try:
-            limit = int(_query_first(query, "limit") or 0)
-        except ValueError:
-            limit = 0
-        from durin.agent import skills_store as ss
-        from durin.config.loader import load_config
-        try:
-            workspace = self._endpoint_workspace()
-            status, payload = await asyncio.to_thread(ss.web_skill_search, workspace, q, limit)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"search failed: {exc}")
-        return _http_json_response(payload, status=status)
-
-    async def _handle_skill_describe(self, request: WsRequest) -> Response:
-        """`GET /api/skills/describe?ref=` — lazy SKILL.md description peek. Async +
-        off-thread (it makes an outbound HTTP fetch)."""
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        ref = (_query_first(_parse_query(request.path), "ref") or "").strip()
-        if not ref:
-            return _http_error(400, "ref is required")
-        from durin.agent import skills_store as ss
-        try:
-            status, payload = await asyncio.to_thread(ss.web_skill_describe, ref)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"describe failed: {exc}")
-        return _http_json_response(payload, status=status)
-
-    def _handle_skills_github_token_test(self, request: WsRequest) -> Response:
-        """`GET /api/skills/github-token-test?secret=` — verify a GitHub-token secret."""
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        secret = (_query_first(_parse_query(request.path), "secret") or "").strip()
-        from durin.agent import skills_store as ss
-        try:
-            status, payload = ss.web_github_token_test(secret)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"token test failed: {exc}")
-        return _http_json_response(payload, status=status)
-
-    async def _handle_skill_approve(self, request: WsRequest, name: str) -> Response:
-        """`GET /api/skills/{name}/approve?confirm=&override=&install_deps=`"""
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        decoded = _decode_api_key(name)
-        if decoded is None:
-            return _http_error(400, "invalid skill name")
-        query = _parse_query(request.path)
-        confirm = (_query_first(query, "confirm") or "").lower() in ("1", "true", "yes")
-        override = (_query_first(query, "override") or "").lower() in ("1", "true", "yes")
-        replace = (_query_first(query, "replace") or "").lower() in ("1", "true", "yes")
-        install_deps = (_query_first(query, "install_deps") or "").lower() in ("1", "true", "yes")
-        from durin.agent import skills_store as ss
-        from durin.config.loader import load_config
-        try:
-            workspace = self._endpoint_workspace()
-            exec_run = ss._get_exec_run(workspace) if install_deps else None
-            status, payload = await ss.web_skill_approve(
-                workspace, decoded, confirm=confirm, override=override,
-                replace=replace, install_deps=install_deps, exec_run=exec_run)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"approve failed: {exc}")
-        return _http_json_response(payload, status=status)
-
-    async def _handle_skill_install_deps(self, request: WsRequest, name: str) -> Response:
-        """`GET /api/skills/{name}/install-deps?bin=` — install deps for a skill."""
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        decoded = _decode_api_key(name)
-        if decoded is None:
-            return _http_error(400, "invalid skill name")
-        query = _parse_query(request.path)
-        bin_name = _query_first(query, "bin")
-        from durin.agent import skills_store as ss
-        try:
-            workspace = self._endpoint_workspace()
-            exec_run = ss._get_exec_run(workspace)
-            status, payload = await ss.web_skill_install_deps(
-                workspace, decoded, bin_name=bin_name, exec_run=exec_run)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"install-deps failed: {exc}")
-        return _http_json_response(payload, status=status)
 
     async def _run_skill_audit(self, connection: Any, name: str) -> None:
         """Stream an on-demand LLM audit of a quarantined skill: reasoning deltas
@@ -2047,578 +696,6 @@ class WebSocketChannel(BaseChannel):
                                judged=True, verdict=merged.verdict, findings=findings,
                                summary=outcome.summary)
 
-    async def _handle_skill_judge(self, request: WsRequest, name: str) -> Response:
-        """`GET /api/skills/{name}/judge` — run the LLM judge on-demand. Async +
-        off-thread so the (multi-second) model call doesn't stall the event loop."""
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        decoded = _decode_api_key(name)
-        if decoded is None:
-            return _http_error(400, "invalid skill name")
-        from durin.agent import skills_store as ss
-        from durin.config.loader import load_config
-        try:
-            workspace = self._endpoint_workspace()
-            status, payload = await asyncio.to_thread(ss.web_skill_judge, workspace, decoded)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"judge failed: {exc}")
-        return _http_json_response(payload, status=status)
-
-    def _handle_skill_reject(self, request: WsRequest, name: str) -> Response:
-        """`GET /api/skills/{name}/reject` — discard a quarantined skill."""
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        decoded = _decode_api_key(name)
-        if decoded is None:
-            return _http_error(400, "invalid skill name")
-        from durin.agent import skills_store as ss
-        from durin.config.loader import load_config
-        try:
-            workspace = self._endpoint_workspace()
-            status, payload = ss.web_skill_reject(workspace, decoded)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"reject failed: {exc}")
-        return _http_json_response(payload, status=status)
-
-    def _handle_skill_remove(self, request: WsRequest, name: str) -> Response:
-        """`GET /api/skills/{name}/remove` — delete a workspace skill / revert a fork."""
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        decoded = _decode_api_key(name)
-        if decoded is None:
-            return _http_error(400, "invalid skill name")
-        from durin.agent import skills_store as ss
-        try:
-            workspace = self._endpoint_workspace()
-            status, payload = ss.web_skill_remove(workspace, decoded)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"remove failed: {exc}")
-        return _http_json_response(payload, status=status)
-
-    def _handle_cron_list(self, request: WsRequest) -> Response:
-        """`GET /api/cron` — list all scheduled jobs (including disabled
-        + system jobs). System jobs are flagged so the UI can disable
-        the delete button for them."""
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        try:
-            cron = self._fresh_cron_service()
-            jobs = cron.list_jobs(include_disabled=True)
-            return _http_json_response({
-                "jobs": [self._cron_job_to_dict(j) for j in jobs],
-            })
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"could not load cron jobs: {exc}")
-
-    def _handle_cron_remove(self, request: WsRequest) -> Response:
-        """`GET /api/cron/remove?id=...` — remove a non-system job."""
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        job_id = (_query_first(_parse_query(request.path), "id") or "").strip()
-        if not job_id:
-            return _http_error(400, "id is required")
-        try:
-            cron = self._fresh_cron_service()
-            result = cron.remove_job(job_id)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"could not remove job: {exc}")
-        if result == "not_found":
-            return _http_error(404, "no such job")
-        if result == "protected":
-            return _http_error(403, "system job; cannot remove")
-        return _http_json_response({"result": result})
-
-    def _handle_cron_run(self, request: WsRequest) -> Response:
-        """`GET /api/cron/run?id=...` — manually trigger a job now.
-
-        Dispatches the run on the LIVE scheduler in the background (the dream
-        job can take minutes; we don't block the request). The scheduler's
-        in-process guard refuses an overlapping run, so a job already in
-        flight returns ``started: false`` instead of double-executing.
-        """
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        if self._cron_service is None:
-            return _http_error(503, "scheduler not available")
-        job_id = (_query_first(_parse_query(request.path), "id") or "").strip()
-        if not job_id:
-            return _http_error(400, "id is required")
-        if self._cron_service.get_job(job_id) is None:
-            return _http_error(404, "no such job")
-        if self._cron_service.is_executing(job_id):
-            return _http_json_response({"started": False, "reason": "already_running"})
-
-        async def _run() -> None:
-            try:
-                await self._cron_service.run_job(job_id, force=True)
-            except Exception:  # noqa: BLE001
-                logger.exception("cron run-now failed for {}", job_id)
-
-        task = asyncio.create_task(_run())
-        self._background_run_tasks.add(task)
-        task.add_done_callback(self._background_run_tasks.discard)
-        return _http_json_response({"started": True})
-
-    def _handle_cron_toggle(self, request: WsRequest) -> Response:
-        """`GET /api/cron/toggle?id=...&enabled=true|false` — enable
-        or disable a job without removing it."""
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        query = _parse_query(request.path)
-        job_id = (_query_first(query, "id") or "").strip()
-        enabled_raw = (_query_first(query, "enabled") or "").strip().lower()
-        if not job_id:
-            return _http_error(400, "id is required")
-        enabled = enabled_raw in ("1", "true", "yes")
-        try:
-            cron = self._fresh_cron_service()
-            job = cron.enable_job(job_id, enabled=enabled)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"could not toggle job: {exc}")
-        if job is None:
-            return _http_error(404, "no such job")
-        return _http_json_response({"job": self._cron_job_to_dict(job)})
-
-    # -- generic config API (web parity Phase B) ---------------------------
-
-    def _handle_config_get(self, request: WsRequest) -> Response:
-        """`GET /api/config` — full effective config (secret-masked) + schema.
-
-        The web equivalent of `durin config show`. Returns every field
-        with its current value (defaults filled in) so the dashboard can
-        render a settings form, plus the JSON schema for that form.
-        """
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        from durin.cli.config_cmd import load_raw_config, mask_secrets, validate_dict
-        from durin.config.loader import get_config_path
-        from durin.config.schema import Config
-
-        raw = load_raw_config(get_config_path())
-        try:
-            effective = validate_dict(raw).model_dump(mode="json", by_alias=True)
-        except Exception:  # noqa: BLE001
-            effective = raw
-        return _http_json_response(
-            {
-                "config": mask_secrets(effective),
-                "schema": Config.model_json_schema(by_alias=True),
-            }
-        )
-
-    def _handle_config_set(self, request: WsRequest) -> Response:
-        """`GET /api/config/set` — set one dotted key, schema-validated.
-
-        The web equivalent of `durin config set`. ``value`` is JSON-
-        decoded when possible (so booleans / numbers / objects work),
-        else kept as a string. A schema-invalid value is rejected
-        without writing.
-        """
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        from durin.cli.config_cmd import (
-            _normalize_dotted_path,
-            load_raw_config,
-            mask_secrets,
-            parse_value,
-            set_at,
-            validate_dict,
-        )
-        from durin.config.loader import get_config_path, save_config
-
-        query = _parse_query(request.path)
-        key = (_query_first(query, "key") or "").strip()
-        if not key:
-            return _http_error(400, "key is required")
-        raw_value = _query_first(query, "value")
-        if raw_value is None:
-            return _http_error(400, "value is required")
-
-        path = get_config_path()
-        try:
-            canonical = validate_dict(load_raw_config(path)).model_dump(
-                mode="json", by_alias=True
-            )
-        except Exception as e:  # noqa: BLE001
-            return _http_error(400, f"on-disk config is invalid: {e}")
-        new_data = set_at(canonical, _normalize_dotted_path(key), parse_value(raw_value))
-        try:
-            config = validate_dict(new_data)
-        except Exception as e:  # noqa: BLE001
-            return _http_error(400, f"validation failed: {e}")
-        save_config(config, path)
-        return _http_json_response(
-            {
-                "ok": True,
-                "config": mask_secrets(
-                    config.model_dump(mode="json", by_alias=True)
-                ),
-            }
-        )
-
-    def _handle_logs_list(self, request: WsRequest) -> Response:
-        """`GET /api/logs?source=&...` — read-only log viewer (gateway/telemetry).
-
-        Reads JSONL log segments newest-first with transparent gz
-        decompression, grep-before-parse, before_ts cursor pagination, and
-        a bounded scan window. The telemetry backend is NOT touched — this
-        only reads the existing files.
-        """
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        from pathlib import Path
-
-        from durin.cli.gateway_daemon import daemon_logs_path
-        from durin.logs.reader import compute_facets, read_page
-
-        query = _parse_query(request.path)
-        log_query = _logs_query_from_params(query)
-        if log_query.source == "telemetry":
-            directory = Path.home() / ".cache" / "durin" / "telemetry"
-        else:
-            directory = daemon_logs_path().parent
-        try:
-            page = read_page(directory, log_query)
-            facets = compute_facets(directory, log_query.source)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"log read failed: {exc}")
-        return _http_json_response(
-            {
-                "lines": page.lines,
-                "facets": facets,
-                "next_cursor": page.next_cursor,
-                "scanned_through_ts": page.scanned_through_ts,
-                "has_more": page.has_more,
-            }
-        )
-
-    def _handle_models_list(self, request: WsRequest) -> Response:
-        """`GET /api/models?provider=X&capability=Y` — model catalog for the picker.
-
-        ``suggested`` is the curated per-provider shortlist
-        (``DEFAULT_MODELS[provider]``); ``models`` is the catalog filtered
-        by:
-
-        - ``capability``: ``vision`` keeps only models with
-          ``supports_vision`` truthy; ``audio`` keeps
-          ``supports_audio_input``; omit or ``text`` for no filter.
-        - ``provider``: keeps only models whose id matches a keyword of
-          the provider's ``ProviderSpec`` (the same heuristic
-          ``_match_provider`` uses to auto-route by model name). Empty
-          provider keeps the full catalog (filtered only by capability).
-          For providers with no keywords (e.g. ``custom``, gateways like
-          OpenRouter) we keep the full catalog too — they can route
-          anything, so there's nothing to filter against.
-
-        Image-generation models are always excluded — the picker is for
-        chat/completion bridges only.
-        """
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        from durin.cli.onboard_wizard import DEFAULT_MODELS
-        from durin.providers.registry import find_by_name
-
-        query = _parse_query(request.path)
-        provider = (_query_first(query, "provider") or "").strip()
-        capability = (_query_first(query, "capability") or "").strip().lower()
-
-        if provider in ("openai-codex", "openai_codex"):
-            access = None
-            try:
-                from oauth_cli_kit import get_token
-                from oauth_cli_kit.providers import OPENAI_CODEX_PROVIDER
-
-                from durin.providers.codex_device_auth import _strict_storage
-
-                tok = get_token(OPENAI_CODEX_PROVIDER, _strict_storage())
-                access = tok.access if tok else None
-            except Exception:  # noqa: BLE001
-                access = None
-            models = list_codex_models(access)
-            return _http_json_response({"suggested": models, "models": models})
-
-        suggested = list(DEFAULT_MODELS.get(provider, ()))
-
-        # Resolve provider keywords once. Empty tuple means "don't filter"
-        # (gateway / custom / unknown provider).
-        #
-        # Coding-plan variants (e.g. `zai_coding_plan` is the same
-        # backend as `zhipu`, just a different endpoint with separate
-        # quota) borrow their base provider's keywords so the catalog
-        # surfaces the same models. The plan's own keywords are
-        # intentionally rare (so auto-routing doesn't accidentally pick
-        # them) — they shouldn't double as a model-filter heuristic.
-        _plan_base = {
-            "zai_coding_plan": "zhipu",
-            "volcengine_coding_plan": "volcengine",
-            "byteplus_coding_plan": "byteplus",
-        }
-        provider_keywords: tuple[str, ...] = ()
-        if provider:
-            lookup_name = _plan_base.get(provider, provider)
-            spec = find_by_name(lookup_name)
-            if spec is not None:
-                provider_keywords = spec.keywords
-
-        def _capability_ok(info: object) -> bool:
-            if capability in ("", "text"):
-                return True
-            if not isinstance(info, dict):
-                # Without capability metadata we can't prove the model
-                # supports the modality — drop conservatively.
-                return False
-            if capability == "vision":
-                return bool(info.get("supports_vision"))
-            if capability == "audio":
-                return bool(info.get("supports_audio_input"))
-            return True
-
-        def _provider_ok(mid: str) -> bool:
-            if not provider_keywords:
-                return True
-            mid_lower = mid.lower()
-            mid_normalized = mid_lower.replace("-", "_")
-            for kw in provider_keywords:
-                kw_lower = kw.lower()
-                if kw_lower in mid_lower or kw_lower.replace("-", "_") in mid_normalized:
-                    return True
-            return False
-
-        catalog: list[str] = []
-        try:
-            from durin.providers.capabilities import _load_capabilities_snapshot
-
-            models = _load_capabilities_snapshot() or {}
-            catalog = sorted(
-                mid
-                for mid, info in models.items()
-                if isinstance(mid, str)
-                # Exclude pure image-generation models from the chat pickers
-                # (vision / audio / text) — durin has no image-gen feature.
-                and (
-                    not isinstance(info, dict)
-                    or info.get("mode") != "image_generation"
-                )
-                and _capability_ok(info)
-                and _provider_ok(mid)
-            )
-        except Exception:  # noqa: BLE001
-            catalog = []
-
-        # Trim suggested by the same capability filter so the curated
-        # shortlist doesn't surface (e.g.) a text-only model in the vision
-        # picker. Unknown ids in the snapshot stay (charity for fresh
-        # picks the catalog doesn't have yet).
-        if capability in ("vision", "audio", "image"):
-            try:
-                from durin.providers.capabilities import _load_capabilities_snapshot
-
-                snapshot = _load_capabilities_snapshot() or {}
-            except Exception:  # noqa: BLE001
-                snapshot = {}
-            suggested = [
-                m for m in suggested
-                if m not in snapshot or _capability_ok(snapshot.get(m))
-            ]
-
-        return _http_json_response({"suggested": suggested, "models": catalog})
-
-    def _handle_model_capabilities(self, request: WsRequest) -> Response:
-        """`GET /api/model/capabilities?model=&provider=` — what a model supports."""
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        query = _parse_query(request.path)
-        model = (_query_first(query, "model") or "").strip()
-        provider = (_query_first(query, "provider") or "").strip() or None
-        if not model:
-            return _http_error(400, "model is required")
-        try:
-            from durin.providers.capabilities import get_model_capabilities
-
-            caps = get_model_capabilities(model, provider)
-        except Exception as e:  # noqa: BLE001
-            return _http_error(400, f"could not resolve capabilities: {e}")
-        return _http_json_response(
-            {
-                "model": model,
-                "max_input_tokens": getattr(caps, "max_input_tokens", None),
-                "supports_vision": bool(getattr(caps, "supports_vision", False)),
-                "supports_audio_input": bool(getattr(caps, "supports_audio_input", False)),
-                "supports_function_calling": bool(
-                    getattr(caps, "supports_function_calling", False)
-                ),
-                "supports_reasoning": bool(getattr(caps, "supports_reasoning", False)),
-            }
-        )
-
-    def _handle_channels_list(self, request: WsRequest) -> Response:
-        """`GET /api/channels` — discovered channels + enabled state.
-
-        Lets the dashboard's curated Channels section enable a channel
-        and know which credential field it needs — config the generic
-        `/api/config` form can't create from scratch.
-        """
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        from durin.channels.registry import discover_all
-        from durin.config.loader import load_config
-
-        # First match wins — channels expose exactly one primary credential.
-        cred_fields = (
-            "token", "bot_token", "app_token", "appId", "app_id",
-            "api_key", "claw_token", "access_token",
-        )
-        config = load_config()
-        extra = getattr(config.channels, "__pydantic_extra__", None) or {}
-        items: list[dict[str, Any]] = []
-        for name, cls in sorted(discover_all().items()):
-            section = extra.get(name)
-            enabled = (
-                bool(section.get("enabled")) if isinstance(section, dict) else False
-            )
-            credential_field = None
-            try:
-                defaults = cls.default_config() if hasattr(cls, "default_config") else {}
-                credential_field = next(
-                    (f for f in cred_fields if f in defaults), None
-                )
-            except Exception:  # noqa: BLE001
-                credential_field = None
-            items.append(
-                {
-                    "name": name,
-                    "display_name": getattr(cls, "display_name", name),
-                    "enabled": enabled,
-                    "credential_field": credential_field,
-                }
-            )
-        return _http_json_response({"channels": items})
-
-    async def _handle_model_test(self, request: WsRequest) -> Response:
-        """`GET /api/model/test` — a real round-trip to a model.
-
-        Tests the given ``model``/``provider`` (defaults to the
-        configured ones) so the dashboard can verify a pick before the
-        user commits it. Async so the ping doesn't block the gateway
-        event loop.
-        """
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        from durin.cli.doctor import check_model_ping_async
-        from durin.config.loader import load_config
-
-        query = _parse_query(request.path)
-        model = (_query_first(query, "model") or "").strip()
-        provider = (_query_first(query, "provider") or "").strip()
-        try:
-            cfg = load_config()
-        except Exception as e:  # noqa: BLE001
-            return _http_error(400, f"could not load config: {e}")
-        if model:
-            cfg.agents.defaults.model = model
-            cfg.agents.defaults.model_preset = None  # honor the override
-        if provider:
-            cfg.agents.defaults.provider = provider
-        result = await check_model_ping_async(cfg=cfg)
-        return _http_json_response(
-            {
-                "status": result.status,
-                "message": result.message,
-                "fix": result.fix or "",
-            }
-        )
-
-    async def _handle_cross_encoder_test(
-        self, request: WsRequest, query: dict,
-    ) -> Response:
-        """`GET /api/memory/cross-encoder/test?model=<id>` — probe a
-        cross-encoder model id by loading + running a trivial score.
-
-        Audit B12 (2026-05-28). Replaces the previously-considered
-        hardcoded enum: any model id that the user wants to evaluate
-        can be tested live, with the result surfaced to the webui
-        before the value is committed to config.
-
-        The load is potentially slow (model download + warmup). Run
-        it in a thread so the gateway event loop stays responsive.
-        """
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        import asyncio
-
-        from durin.memory.cross_encoder import probe_model
-
-        model = (_query_first(query, "model") or "").strip()
-        if not model:
-            return _http_error(400, "missing required `model` query param")
-        try:
-            result = await asyncio.to_thread(probe_model, model)
-        except Exception as exc:  # noqa: BLE001
-            return _http_json_response(
-                {
-                    "status": "fail",
-                    "message": f"unexpected error: {type(exc).__name__}: {exc}",
-                    "model_id": model,
-                    "duration_ms": 0.0,
-                },
-            )
-        return _http_json_response(result)
-
-    def _handle_extras_status(self, request: WsRequest, query: dict) -> Response:
-        """`GET /api/extras/status?feature=<f>` — is the feature's pip extra
-        importable, and what would installing it cost / require?"""
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        from durin.extras import REGISTRY, _module_present
-
-        feature = (_query_first(query, "feature") or "").strip()
-        fe = REGISTRY.get(feature)
-        if fe is None:
-            return _http_error(400, f"unknown feature '{feature}'")
-        return _http_json_response(
-            {
-                "present": _module_present(fe.module),
-                "extra": fe.extra,
-                "approx_size": fe.approx_size,
-                "needs_restart": fe.needs_restart,
-                "label": fe.label,
-            }
-        )
-
-    async def _handle_extras_ensure(self, request: WsRequest, query: dict) -> Response:
-        """`POST /api/extras/ensure?feature=<f>&restart=<bool>` — install the
-        feature's extra (off-loop; may take minutes for heavy deps) and, if it
-        installed something that needs a restart and the caller opted in, kick a
-        gateway restart."""
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        import asyncio
-
-        from durin.config.loader import load_config
-        from durin.extras import REGISTRY, ensure_extra
-
-        feature = (_query_first(query, "feature") or "").strip()
-        if feature not in REGISTRY:
-            return _http_error(400, f"unknown feature '{feature}'")
-        restart = (_query_first(query, "restart") or "").lower() in ("1", "true", "yes")
-        res = await asyncio.to_thread(ensure_extra, feature, config=load_config())
-        out = {
-            "status": res.status,
-            "needs_restart": res.needs_restart,
-            "message": res.message,
-        }
-        if res.status == "installed" and restart and res.needs_restart:
-            self._spawn_gateway_restart()
-            out["restarting"] = True
-        return _http_json_response(out)
-
-    def _handle_extras_restart(self, request: WsRequest) -> Response:
-        """`POST /api/extras/restart` — restart the gateway daemon."""
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        self._spawn_gateway_restart()
-        return _http_json_response({"restarting": True})
-
     @staticmethod
     def _spawn_gateway_restart() -> None:
         import subprocess
@@ -2629,52 +706,6 @@ class WebSocketChannel(BaseChannel):
             [sys.executable, "-m", "durin", "gateway", "restart"],
             start_new_session=True,
         )
-
-    @staticmethod
-    def _is_websocket_channel_session_key(key: str) -> bool:
-        """True when *key* is a ``websocket:…`` session exposed on this HTTP surface."""
-        return key.startswith("websocket:")
-
-    def _handle_session_messages(self, request: WsRequest, key: str) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        if self._session_manager is None:
-            return _http_error(503, "session manager unavailable")
-        decoded_key = _decode_api_key(key)
-        if decoded_key is None:
-            return _http_error(400, "invalid session key")
-        # Only ``websocket:…`` sessions are listed/served here — same boundary as
-        # ``/api/sessions``. Block handcrafted URLs from probing CLI / Slack / etc.
-        if not self._is_websocket_channel_session_key(decoded_key):
-            return _http_error(404, "session not found")
-        data = self._session_manager.read_session_file(decoded_key)
-        if data is None:
-            return _http_error(404, "session not found")
-        messages = data.get("messages")
-        if isinstance(messages, list):
-            scrub_subagent_messages_for_channel(messages)
-        # Decorate persisted user messages with signed media URLs so the
-        # client can render previews. The raw on-disk ``media`` paths are
-        # stripped on the way out — they leak server filesystem layout and
-        # the client never needs them once it has the signed fetch URL.
-        self._augment_media_urls(data)
-        return _http_json_response(data)
-
-    def _handle_webui_thread_get(self, request: WsRequest, key: str) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        decoded_key = _decode_api_key(key)
-        if decoded_key is None:
-            return _http_error(400, "invalid session key")
-        if not self._is_websocket_channel_session_key(decoded_key):
-            return _http_error(404, "session not found")
-        data = build_webui_thread_response(
-            decoded_key,
-            augment_user_media=self._augment_transcript_user_media,
-        )
-        if data is None:
-            return _http_error(404, "webui thread not found")
-        return _http_json_response(data)
 
     def _try_append_webui_transcript(self, chat_id: str, wire: dict[str, Any]) -> None:
         sk = f"websocket:{chat_id}"
@@ -2806,180 +837,77 @@ class WebSocketChannel(BaseChannel):
             return None
         return {"url": signed, "name": path.name}
 
-    def _handle_media_fetch(self, sig: str, payload: str) -> Response:
-        """Serve a single media file previously signed via
-        :meth:`_sign_media_path`. Validates the signature, decodes the
-        payload to a relative path, and streams the file bytes with a
-        long-lived immutable cache header (the URL already encodes the
-        file identity, so caches can be aggressive)."""
+    def media_fetch(self, sig: str, payload: str) -> tuple[bytes, str, list[tuple[str, str]]]:
+        """Serve a single media file previously signed via :meth:`_sign_media_path`.
+
+        Validates the signature, decodes the payload to a relative path, and
+        returns ``(body, content_type, headers)`` with a long-lived immutable
+        cache (the URL already encodes the file identity). Raises DomainError on a
+        bad signature (401), bad payload (422), or missing file (404) — the
+        adapter renders those as problem+json.
+        """
         try:
             provided_mac = _b64url_decode(sig)
-        except (ValueError, binascii.Error):
-            return _http_error(401, "invalid signature")
+        except (ValueError, binascii.Error) as exc:
+            raise UnauthenticatedError("invalid media signature") from exc
         expected_mac = hmac.new(
             self._media_secret, payload.encode("ascii"), hashlib.sha256
         ).digest()[:16]
         if not hmac.compare_digest(expected_mac, provided_mac):
-            return _http_error(401, "invalid signature")
+            raise UnauthenticatedError("invalid media signature")
         try:
-            rel_bytes = _b64url_decode(payload)
-            rel_str = rel_bytes.decode("utf-8")
-        except (ValueError, binascii.Error, UnicodeDecodeError):
-            return _http_error(400, "invalid payload")
+            rel_str = _b64url_decode(payload).decode("utf-8")
+        except (ValueError, binascii.Error, UnicodeDecodeError) as exc:
+            raise ValidationFailedError("invalid media payload") from exc
         # An attacker who somehow bypassed the HMAC check would still need
         # the resolved path to escape the media root; guard defensively.
         try:
             media_root = get_media_dir().resolve()
             candidate = (media_root / rel_str).resolve()
             candidate.relative_to(media_root)
-        except (OSError, ValueError):
-            return _http_error(404, "not found")
+        except (OSError, ValueError) as exc:
+            raise NotFoundError("media not found") from exc
         if not candidate.is_file():
-            return _http_error(404, "not found")
+            raise NotFoundError("media not found")
         try:
             body = candidate.read_bytes()
-        except OSError:
-            return _http_error(500, "read error")
+        except OSError as exc:
+            raise DomainError("media read error") from exc
         mime, _ = mimetypes.guess_type(candidate.name)
         if mime not in _MEDIA_ALLOWED_MIMES:
             mime = "application/octet-stream"
-        return _http_response(
-            body,
-            content_type=mime,
-            extra_headers=[
-                ("Cache-Control", "private, max-age=31536000, immutable"),
-                # Paired with the MIME whitelist above: prevents browsers from
-                # MIME-sniffing an octet-stream fallback into executable HTML.
-                ("X-Content-Type-Options", "nosniff"),
-            ],
-        )
+        return body, mime, [
+            ("Cache-Control", "private, max-age=31536000, immutable"),
+            # Paired with the MIME whitelist above: prevents browsers from
+            # MIME-sniffing an octet-stream fallback into executable HTML.
+            ("X-Content-Type-Options", "nosniff"),
+        ]
 
-    def _handle_session_delete(self, request: WsRequest, key: str) -> Response:
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        if self._session_manager is None:
-            return _http_error(503, "session manager unavailable")
-        decoded_key = _decode_api_key(key)
-        if decoded_key is None:
-            return _http_error(400, "invalid session key")
-        # Same boundary as ``_handle_session_messages``: mutations apply only to
-        # websocket-channel sessions; deletion unlinks local JSONL — keep scope narrow.
-        if not self._is_websocket_channel_session_key(decoded_key):
-            return _http_error(404, "session not found")
-        deleted = self._session_manager.delete_session(decoded_key)
-        delete_webui_thread(decoded_key)
-        return _http_json_response({"deleted": bool(deleted)})
+    def _ws_auth_ok(self, query: dict[str, list[str]]) -> bool:
+        """Return True if the WebSocket handshake is authorised.
 
-    def _handle_session_rename(self, request: WsRequest, key: str) -> Response:
-        """P2 (doc 20): set a user-edited title for a webui session.
-
-        Pulls ``?title=...`` from the query string, persists it into the
-        session metadata via the same fields :func:`maybe_generate_webui_title`
-        uses (``title`` + ``title_user_edited``). Marking
-        ``title_user_edited`` blocks future auto-regeneration so the
-        user's choice sticks. Trims + caps at the same length the LLM
-        title generator does to avoid one path producing values the
-        other refuses to display.
+        Called by the Starlette WebSocket endpoint (``chat_ws_endpoint`` in
+        ``durin/api/asgi.py``).
+        Side-effect: consumes a single-use issued token when one is accepted.
         """
-        if not self._check_api_token(request):
-            return _http_error(401, "Unauthorized")
-        if self._session_manager is None:
-            return _http_error(503, "session manager unavailable")
-        decoded_key = _decode_api_key(key)
-        if decoded_key is None:
-            return _http_error(400, "invalid session key")
-        if not self._is_websocket_channel_session_key(decoded_key):
-            return _http_error(404, "session not found")
-
-        from durin.utils.webui_titles import (
-            TITLE_MAX_CHARS,
-            WEBUI_TITLE_METADATA_KEY,
-            WEBUI_TITLE_USER_EDITED_METADATA_KEY,
-            clean_generated_title,
-        )
-
-        query = _parse_query(request.path)
-        raw_title = _query_first(query, "title") or ""
-        title = clean_generated_title(raw_title)
-        if not title:
-            return _http_error(400, "title is required")
-        if len(title) > TITLE_MAX_CHARS:
-            title = title[: TITLE_MAX_CHARS - 1].rstrip() + "…"
-
-        if not self._session_manager.exists(decoded_key):
-            return _http_error(404, "session not found")
-        # Mutate the cached instance (not a fresh `_load` snapshot) so an
-        # in-flight turn holding the same session sees the title and its
-        # end-of-turn save does not clobber it — and vice versa (B2).
-        session = self._session_manager.get_or_create(decoded_key)
-        session.metadata[WEBUI_TITLE_METADATA_KEY] = title
-        session.metadata[WEBUI_TITLE_USER_EDITED_METADATA_KEY] = True
-        self._session_manager.save(session)
-        return _http_json_response({"title": title})
-
-    def _serve_static(self, request_path: str) -> Response | None:
-        """Resolve *request_path* against the built SPA directory; SPA fallback to index.html."""
-        assert self._static_dist_path is not None
-        rel = request_path.lstrip("/")
-        if not rel:
-            rel = "index.html"
-        # Reject path-traversal attempts and absolute targets.
-        if ".." in rel.split("/") or rel.startswith("/"):
-            return _http_error(403, "Forbidden")
-        candidate = (self._static_dist_path / rel).resolve()
-        try:
-            candidate.relative_to(self._static_dist_path)
-        except ValueError:
-            return _http_error(403, "Forbidden")
-        if not candidate.is_file():
-            # SPA history-mode fallback: unknown routes serve index.html so the
-            # client-side router can render them.
-            index = self._static_dist_path / "index.html"
-            if index.is_file():
-                candidate = index
-            else:
-                return None
-        try:
-            body = candidate.read_bytes()
-        except OSError as e:
-            self.logger.warning("static: failed to read {}: {}", candidate, e)
-            return _http_error(500, "Internal Server Error")
-        ctype, _ = mimetypes.guess_type(candidate.name)
-        if ctype is None:
-            ctype = "application/octet-stream"
-        if ctype.startswith("text/") or ctype in {"application/javascript", "application/json"}:
-            ctype = f"{ctype}; charset=utf-8"
-        # Hash-named build assets are cache-friendly; index.html must stay fresh.
-        if candidate.name == "index.html":
-            cache = "no-cache"
-        else:
-            cache = "public, max-age=31536000, immutable"
-        return _http_response(
-            body,
-            status=200,
-            content_type=ctype,
-            extra_headers=[("Cache-Control", cache)],
-        )
-
-    def _authorize_websocket_handshake(self, connection: Any, query: dict[str, list[str]]) -> Any:
         supplied = _query_first(query, "token")
         static_token = self.config.token.strip()
 
         if static_token:
             if supplied and hmac.compare_digest(supplied, static_token):
-                return None
+                return True
             if supplied and self._take_issued_token_if_valid(supplied):
-                return None
-            return connection.respond(401, "Unauthorized")
+                return True
+            return False
 
         if self.config.websocket_requires_token:
             if supplied and self._take_issued_token_if_valid(supplied):
-                return None
-            return connection.respond(401, "Unauthorized")
+                return True
+            return False
 
         if supplied:
             self._take_issued_token_if_valid(supplied)
-        return None
+        return True
 
     async def start(self) -> None:
         from durin.utils.logging_bridge import redirect_lib_logging
@@ -2987,59 +915,15 @@ class WebSocketChannel(BaseChannel):
         redirect_lib_logging("websockets", level="WARNING")
 
         self._running = True
-        self._stop_event = asyncio.Event()
 
-        ssl_context = self._build_ssl_context()
-        scheme = "wss" if ssl_context else "ws"
+    async def _run_connection(self, adapter: Any, client_id: str) -> None:
+        """Transport-agnostic chat loop.
 
-        async def process_request(
-            connection: ServerConnection,
-            request: WsRequest,
-        ) -> Any:
-            return await self._dispatch_http(connection, request)
-
-        async def handler(connection: ServerConnection) -> None:
-            await self._connection_loop(connection)
-
-        self.logger.info(
-            "WebSocket server listening on {}://{}:{}{}",
-            scheme,
-            self.config.host,
-            self.config.port,
-            self.config.path,
-        )
-        if self.config.token_issue_path:
-            self.logger.info(
-                "WebSocket token issue route: {}://{}:{}{}",
-                scheme,
-                self.config.host,
-                self.config.port,
-                _normalize_config_path(self.config.token_issue_path),
-            )
-
-        async def runner() -> None:
-            async with serve(
-                handler,
-                self.config.host,
-                self.config.port,
-                process_request=process_request,
-                max_size=self.config.max_message_bytes,
-                ping_interval=self.config.ping_interval_s,
-                ping_timeout=self.config.ping_timeout_s,
-                ssl=ssl_context,
-            ):
-                assert self._stop_event is not None
-                await self._stop_event.wait()
-
-        self._server_task = asyncio.create_task(runner())
-        await self._server_task
-
-    async def _connection_loop(self, connection: Any) -> None:
-        request = connection.request
-        path_part = request.path if request else "/"
-        _, query = _parse_request_path(path_part)
-        client_id_raw = _query_first(query, "client_id")
-        client_id = client_id_raw.strip() if client_id_raw else ""
+        Accepts a pre-built ConnectionAdapter (websockets or Starlette-backed)
+        and a pre-parsed client_id string.  Called by:
+        - ``_connection_loop``  — websockets path (step 1).
+        - The Starlette WebSocket endpoint  — Starlette path (step 3).
+        """
         if not client_id:
             client_id = f"anon-{uuid.uuid4().hex[:12]}"
         elif len(client_id) > 128:
@@ -3049,7 +933,7 @@ class WebSocketChannel(BaseChannel):
         default_chat_id = str(uuid.uuid4())
 
         try:
-            await connection.send(
+            await adapter.send_text(
                 json.dumps(
                     {
                         "event": "ready",
@@ -3060,11 +944,11 @@ class WebSocketChannel(BaseChannel):
                 )
             )
             # Register only after ready is successfully sent to avoid out-of-order sends
-            self._conn_default[connection] = default_chat_id
-            self._attach(connection, default_chat_id)
+            self._conn_default[adapter] = default_chat_id
+            self._attach(adapter, default_chat_id)
             await self._hydrate_after_subscribe(default_chat_id)
 
-            async for raw in connection:
+            async for raw in adapter:
                 if isinstance(raw, bytes):
                     try:
                         raw = raw.decode("utf-8")
@@ -3074,7 +958,7 @@ class WebSocketChannel(BaseChannel):
 
                 envelope = _parse_envelope(raw)
                 if envelope is not None:
-                    await self._dispatch_envelope(connection, client_id, envelope)
+                    await self._dispatch_envelope(adapter, client_id, envelope)
                     continue
 
                 content = _parse_inbound_payload(raw)
@@ -3087,13 +971,13 @@ class WebSocketChannel(BaseChannel):
                     sender_id=client_id,
                     chat_id=default_chat_id,
                     content=content,
-                    metadata={"remote": getattr(connection, "remote_address", None)},
+                    metadata={"remote": adapter.remote},
                     is_dm=False,
                 )
         except Exception as e:
             self.logger.debug("connection ended: {}", e)
         finally:
-            self._cleanup_connection(connection)
+            self._cleanup_connection(adapter)
 
     def _save_envelope_media(
         self,
@@ -3221,7 +1105,7 @@ class WebSocketChannel(BaseChannel):
             # Auto-attach on first use so clients can one-shot without a separate attach.
             self._attach(connection, cid)
             await self._hydrate_after_subscribe(cid)
-            metadata: dict[str, Any] = {"remote": getattr(connection, "remote_address", None)}
+            metadata: dict[str, Any] = {"remote": getattr(connection, "remote", None)}
             if envelope.get("webui") is True:
                 metadata["webui"] = True
             await self._handle_message(
@@ -3255,15 +1139,12 @@ class WebSocketChannel(BaseChannel):
         """Write a credential to the secret store from a ``secret_store`` frame.
 
         The value rides the JSON frame — never a URL query — and is never
-        placed into the agent conversation. On success the agent on
-        ``chat_id`` is told the secret exists (metadata only, no value)
-        so it can resume.
+        placed into the agent conversation. The write itself is delegated to
+        ``SecretsService.store`` (the single source of truth); this handler owns
+        only the wire framing: the ``secret_stored`` event and the agent-resume
+        notification on ``chat_id``.
         """
-        from durin.security.secrets import (
-            SecretStore,
-            get_secret_store,
-            is_valid_secret_name,
-        )
+        from durin.service.secrets import SecretStoreCommand
 
         request_id = str(envelope.get("request_id") or "")
 
@@ -3274,13 +1155,6 @@ class WebSocketChannel(BaseChannel):
 
         name = str(envelope.get("name") or "").strip()
         service = str(envelope.get("service") or "").strip()
-        if not is_valid_secret_name(name):
-            await _fail("invalid secret name (use UPPER_SNAKE)")
-            return
-        if not service:
-            await _fail("service is required")
-            return
-
         raw_scope = envelope.get("scope")
         scope = (
             [str(s).strip() for s in raw_scope if str(s).strip()]
@@ -3288,28 +1162,22 @@ class WebSocketChannel(BaseChannel):
             else []
         )
         try:
-            store = SecretStore().load()
-            existing = store.get(name)
-            # An empty value on an existing secret is a metadata-only
-            # edit — keep the stored credential, change scope/etc.
-            value = envelope.get("value")
-            if not isinstance(value, str) or not value:
-                if existing is None:
-                    await _fail("value is required for a new secret")
-                    return
-                value = existing.value
-            store.put(
-                name,
-                value=value,
-                service=service,
-                account=(str(envelope.get("account") or "").strip() or None),
-                description=str(envelope.get("description") or "").strip(),
-                scope=scope,
-                origin=existing.origin if existing else "webui",
+            await self._services.get("secrets").store(
+                SecretStoreCommand(
+                    name=name,
+                    value=str(envelope.get("value") or ""),
+                    service=service,
+                    account=str(envelope.get("account") or "").strip(),
+                    description=str(envelope.get("description") or "").strip(),
+                    scope=scope,
+                    origin="webui",
+                ),
+                Principal.local(),
             )
-            store.save()
-            get_secret_store(reload=True)
-        except Exception as exc:  # noqa: BLE001
+        except DomainError as err:
+            await _fail(err.message)
+            return
+        except Exception as exc:  # noqa: BLE001 — disk/IO failures still owe the client an event
             await _fail(f"could not store secret: {exc}")
             return
 
@@ -3343,29 +1211,15 @@ class WebSocketChannel(BaseChannel):
         if not self._running:
             return
         self._running = False
-        if self._stop_event:
-            self._stop_event.set()
-        if self._server_task:
-            try:
-                await self._server_task
-            except asyncio.CancelledError:
-                # Expected: the server task is cancelled during shutdown. It is a
-                # BaseException (not Exception), so without this it escapes the
-                # handler below and surfaces as an "uncaught exception" on every stop.
-                pass
-            except Exception as e:
-                self.logger.warning("server task error during shutdown: {}", e)
-            self._server_task = None
         self._subs.clear()
         self._conn_chats.clear()
         self._conn_default.clear()
         self._issued_tokens.clear()
-        self._api_tokens.clear()
 
     async def _safe_send_to(self, connection: Any, raw: str, *, label: str = "") -> None:
         """Send a raw frame to one connection, cleaning up on ConnectionClosed."""
         try:
-            await connection.send(raw)
+            await connection.send_text(raw)
         except ConnectionClosed:
             self._cleanup_connection(connection)
             self.logger.warning("connection gone{}", label)

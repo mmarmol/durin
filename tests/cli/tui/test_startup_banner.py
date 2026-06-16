@@ -5,8 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-import pytest
-
 from durin.cli.tui.startup import (
     build_startup_banner,
     categorize_tools,
