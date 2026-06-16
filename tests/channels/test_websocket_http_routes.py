@@ -478,7 +478,8 @@ def test_skills_import_then_approve_installs(
     # a safe but out-of-allowlist skill needs confirm: bare approve is refused.
     refused = client.post("/api/v1/skills/imported/approve", headers=auth, json={})
     assert refused.status_code == 409
-    assert refused.json()["data"]["refused"] == "confirm"
+    # problem+json: the gate payload is echoed under "details".
+    assert refused.json()["details"]["refused"] == "confirm"
     ok = client.post(
         "/api/v1/skills/imported/approve", headers=auth, json={"confirm": True}
     )

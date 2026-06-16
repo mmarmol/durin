@@ -106,8 +106,9 @@ first. Patterns worth noting:
   callback.
 - **memory** (`service/memory.py`) — thin wrapper over `durin.memory.graph_api`.
   Built with a `workspace_resolver` callable (re-evaluated per call) rather
-  than a captured path. `ForgetResult` (`memory.py:50`) carries a `status: int`
-  that the adapter promotes to the HTTP code.
+  than a captured path. `forget` returns a success-only `ForgetResult`
+  (`memory.py:50`); the failure outcomes (protected/not_found/invalid) are
+  raised as DomainErrors so they render as problem+json like every other 4xx.
 
 The full service set: `secrets`, `cron`, `sessions`, `settings`, `config`,
 `skills`, `memory`, `health`, `commands`, `oauth`, `auth`.
@@ -152,9 +153,7 @@ seam between the Python services and the TS client types.
 whole HTTP+WS surface. `build_gateway_http_app` (`asgi.py:470`) composes it;
 the controller (`durin/cli/commands.py:1828`) builds the dependency-wired
 registry, calls the factory, and runs `uvicorn.Server(...).serve()` as one
-task in the gateway's event loop. The optional second-port server
-(`gateway.api_port`, `schema.py:765`) is an off-by-default deployment knob
-that mounts only `build_api_app` — not the primary door.
+task in the gateway's event loop.
 
 ### What the gateway app assembles
 
@@ -209,9 +208,11 @@ input is `await request.json()` (absent/empty body → `{}`) merged with path
 params (path wins). Used for POST/DELETE/PATCH.
 
 `_result_response` (`asgi.py:205`) serializes `result.model_dump()` at status
-200, except when the result carries an **integer** `status` attribute (only
-`SkillsResult` and `ForgetResult` do), which becomes the HTTP code — e.g. 409
-when a skill import needs confirmation.
+200 — a returned `Result` is always a success. Every non-2xx outcome is raised
+as a `DomainError` (the skills approval gate → `ConflictError` 409, forget of a
+protected entry → `ForbiddenError` 403) and rendered as problem+json by
+`_problem_response`, with any domain payload echoed in the `details` member, so
+the API has ONE error format for every 4xx/5xx.
 
 ### Wire-shape conventions
 

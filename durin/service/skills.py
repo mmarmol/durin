@@ -27,7 +27,15 @@ from typing import Any
 
 from durin.service.principal import Principal, Scope
 from durin.service.registry import route
-from durin.service.types import Command, Query, Result
+from durin.service.types import (
+    Command,
+    ConflictError,
+    DomainError,
+    NotFoundError,
+    Query,
+    Result,
+    ValidationFailedError,
+)
 
 # ---------------------------------------------------------------------------
 # Shared result — all web_* calls return (status, payload)
@@ -35,10 +43,30 @@ from durin.service.types import Command, Query, Result
 
 
 class SkillsResult(Result):
-    """Carries a store status code + raw payload dict (escape hatch)."""
+    """A successful skills response — ``data`` is the raw store payload.
 
-    status: int
+    The store returns ``(status, payload)``; a non-2xx status is raised as a
+    DomainError by :func:`_skills_result` (payload echoed in ``details``) so the
+    front door renders it as problem+json. Returned SkillsResults are 2xx only.
+    """
+
     data: dict[str, Any]
+
+
+def _skills_result(status: int, payload: dict[str, Any]) -> SkillsResult:
+    """Map the store's ``(status, payload)`` to a 2xx ``SkillsResult`` or raise the
+    matching DomainError (payload echoed in ``details``): 400 → validation (422),
+    404 → not-found, 409 → conflict (the approval gate). Any other non-2xx is an
+    unexpected store result → an internal error (500)."""
+    if 200 <= status < 300:
+        return SkillsResult(data=payload)
+    message = str(
+        payload.get("error") or payload.get("message") or f"skills request failed ({status})"
+    )
+    err_cls = {400: ValidationFailedError, 404: NotFoundError, 409: ConflictError}.get(status)
+    if err_cls is None:
+        raise DomainError(message, details=payload)  # unexpected store status → 500
+    raise err_cls(message, details=payload)
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +196,7 @@ class SkillsService:
         from durin.agent import skills_store as ss
 
         status, payload = ss.web_list(self._workspace)
-        return SkillsResult(status=status, data=payload)
+        return _skills_result(status, payload)
 
     @route(
         "GET",
@@ -183,7 +211,7 @@ class SkillsService:
         from durin.agent import skills_store as ss
 
         status, payload = ss.web_quarantine(self._workspace)
-        return SkillsResult(status=status, data=payload)
+        return _skills_result(status, payload)
 
     @route(
         "GET",
@@ -198,7 +226,7 @@ class SkillsService:
         from durin.agent import skills_store as ss
 
         status, payload = ss.web_get(self._workspace, query.name)
-        return SkillsResult(status=status, data=payload)
+        return _skills_result(status, payload)
 
     @route(
         "GET",
@@ -213,7 +241,7 @@ class SkillsService:
         from durin.agent import skills_store as ss
 
         status, payload = ss.web_files(self._workspace, query.name)
-        return SkillsResult(status=status, data=payload)
+        return _skills_result(status, payload)
 
     @route(
         "GET",
@@ -228,7 +256,7 @@ class SkillsService:
         from durin.agent import skills_store as ss
 
         status, payload = ss.web_file_get(self._workspace, query.name, query.path)
-        return SkillsResult(status=status, data=payload)
+        return _skills_result(status, payload)
 
     @route(
         "GET",
@@ -243,7 +271,7 @@ class SkillsService:
         from durin.agent import skills_store as ss
 
         status, payload = ss.web_history(self._workspace, query.name)
-        return SkillsResult(status=status, data=payload)
+        return _skills_result(status, payload)
 
     @route(
         "GET",
@@ -258,7 +286,7 @@ class SkillsService:
         from durin.agent import skills_store as ss
 
         status, payload = ss.web_import_resolve(self._workspace, query.source)
-        return SkillsResult(status=status, data=payload)
+        return _skills_result(status, payload)
 
     @route(
         "GET",
@@ -275,7 +303,7 @@ class SkillsService:
         status, payload = await asyncio.to_thread(
             ss.web_skill_search, self._workspace, query.q, query.limit
         )
-        return SkillsResult(status=status, data=payload)
+        return _skills_result(status, payload)
 
     @route(
         "GET",
@@ -290,7 +318,7 @@ class SkillsService:
         from durin.agent import skills_store as ss
 
         status, payload = await asyncio.to_thread(ss.web_skill_describe, query.ref)
-        return SkillsResult(status=status, data=payload)
+        return _skills_result(status, payload)
 
     @route(
         "GET",
@@ -307,7 +335,7 @@ class SkillsService:
         from durin.agent import skills_store as ss
 
         status, payload = ss.web_github_token_test(query.secret)
-        return SkillsResult(status=status, data=payload)
+        return _skills_result(status, payload)
 
     @route(
         "GET",
@@ -324,7 +352,7 @@ class SkillsService:
         status, payload = await asyncio.to_thread(
             ss.web_skill_judge, self._workspace, query.name
         )
-        return SkillsResult(status=status, data=payload)
+        return _skills_result(status, payload)
 
     # -- writes --------------------------------------------------------------
 
@@ -341,7 +369,7 @@ class SkillsService:
         from durin.agent import skills_store as ss
 
         status, payload = ss.web_save(self._workspace, cmd.name, cmd.content)
-        return SkillsResult(status=status, data=payload)
+        return _skills_result(status, payload)
 
     @route(
         "POST",
@@ -362,7 +390,7 @@ class SkillsService:
             cmd.content,
             attribution=ss.Attribution(actor="user"),
         )
-        return SkillsResult(status=status, data=payload)
+        return _skills_result(status, payload)
 
     @route(
         "POST",
@@ -377,7 +405,7 @@ class SkillsService:
         from durin.agent import skills_store as ss
 
         status, payload = ss.web_mode(self._workspace, cmd.name, cmd.value)
-        return SkillsResult(status=status, data=payload)
+        return _skills_result(status, payload)
 
     @route(
         "POST",
@@ -394,7 +422,7 @@ class SkillsService:
         from durin.agent import skills_store as ss
 
         status, payload = ss.web_import_fetch(self._workspace, cmd.source)
-        return SkillsResult(status=status, data=payload)
+        return _skills_result(status, payload)
 
     @route(
         "POST",
@@ -418,7 +446,7 @@ class SkillsService:
             install_deps=cmd.install_deps,
             exec_run=exec_run,
         )
-        return SkillsResult(status=status, data=payload)
+        return _skills_result(status, payload)
 
     @route(
         "POST",
@@ -438,7 +466,7 @@ class SkillsService:
         status, payload = await ss.web_skill_install_deps(
             self._workspace, cmd.name, bin_name=cmd.bin_name, exec_run=exec_run
         )
-        return SkillsResult(status=status, data=payload)
+        return _skills_result(status, payload)
 
     @route(
         "DELETE",
@@ -453,7 +481,7 @@ class SkillsService:
         from durin.agent import skills_store as ss
 
         status, payload = ss.web_skill_reject(self._workspace, cmd.name)
-        return SkillsResult(status=status, data=payload)
+        return _skills_result(status, payload)
 
     @route(
         "DELETE",
@@ -468,4 +496,4 @@ class SkillsService:
         from durin.agent import skills_store as ss
 
         status, payload = ss.web_skill_remove(self._workspace, cmd.name)
-        return SkillsResult(status=status, data=payload)
+        return _skills_result(status, payload)

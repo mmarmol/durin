@@ -162,15 +162,16 @@ def test_memory_forget_endpoint_archives_and_protects(
         headers=auth, json={"uri": "memory/entities/person/marcelo"},
     )
     assert r_protected.status_code == 403
-    assert r_protected.json()["result"] == "protected"
+    # problem+json: the domain outcome is echoed under "details".
+    assert r_protected.json()["details"]["result"] == "protected"
 
-    # Invalid URI returns 400.
+    # Invalid URI returns 422 (ValidationFailedError).
     r_bad = client.request(
         "DELETE", "/api/v1/memory/entry",
         headers=auth, json={"uri": "garbage"},
     )
-    assert r_bad.status_code == 400
-    assert r_bad.json()["result"] == "invalid"
+    assert r_bad.status_code == 422
+    assert r_bad.json()["details"]["result"] == "invalid"
 
 
 def test_memory_backlinks_endpoint(

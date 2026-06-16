@@ -125,18 +125,25 @@ _ERROR_TITLE: dict[str, str] = {
 
 
 def _problem_response(err: DomainError) -> Response:
-    """Map a DomainError to an RFC-9457 application/problem+json response."""
+    """Map a DomainError to an RFC-9457 application/problem+json response.
+
+    ``details`` (when present) is echoed as an extension member so a domain
+    payload — e.g. the skills approval gate's ``{refused, verdict, message}`` or
+    forget's ``{result}`` — reaches the client inside the one error format.
+    """
     status = _ERROR_STATUS.get(err.code, 500)
     title = _ERROR_TITLE.get(err.code, "Internal Server Error")
-    body = json.dumps(
-        {
-            "type": f"urn:durin:error:{err.code}",
-            "title": title,
-            "status": status,
-            "detail": err.message,
-        }
+    problem: dict[str, Any] = {
+        "type": f"urn:durin:error:{err.code}",
+        "title": title,
+        "status": status,
+        "detail": err.message,
+    }
+    if err.details:
+        problem["details"] = err.details
+    return Response(
+        json.dumps(problem), status_code=status, media_type="application/problem+json"
     )
-    return Response(body, status_code=status, media_type="application/problem+json")
 
 
 # ---------------------------------------------------------------------------
@@ -204,22 +211,13 @@ def _build_422(exc: ValidationError) -> Response:
 
 
 def _result_response(result: Any) -> JSONResponse:
-    """Serialize a service ``Result`` to JSON.
+    """Serialize a service ``Result`` to a 200 JSON response.
 
-    Some domain results carry an ``int`` ``status`` that becomes the HTTP status
-    code — a deliberate "domain-status response" pattern, distinct from the
-    problem+json error mapping: the body IS the domain payload and the status is
-    a domain outcome the client branches on, not an error. Two results use it —
-    ``SkillsResult`` (the skills store's gate status, e.g. ``409`` confirm-required)
-    and ``ForgetResult`` (``403`` protected / ``400`` invalid). The webui reads the
-    body for these non-2xx codes and only throws on 5xx (see webui/src/lib/api.ts
-    ``forgetMemoryEntry`` / the skills web_* callers). Every other result has no
-    ``status`` (or a *string* one, which is data, not an HTTP code) → ``200``.
+    A returned ``Result`` is always a success: every non-2xx outcome is raised as
+    a ``DomainError`` and rendered as problem+json by :func:`_problem_response`,
+    so the API has ONE error format for every 4xx/5xx.
     """
-    status = getattr(result, "status", None)
-    return JSONResponse(
-        result.model_dump(), status_code=status if isinstance(status, int) else 200
-    )
+    return JSONResponse(result.model_dump())
 
 
 def _build_handler(

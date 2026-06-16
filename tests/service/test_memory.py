@@ -24,7 +24,7 @@ from durin.service.memory import (
     MemoryService,
 )
 from durin.service.principal import Principal
-from durin.service.types import ForbiddenError, NotFoundError
+from durin.service.types import ForbiddenError, NotFoundError, ValidationFailedError
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -103,26 +103,29 @@ async def test_forget_archives_entry(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_forget_not_found(tmp_path: Path) -> None:
     svc = _service(tmp_path)
-    result = await svc.forget(
-        MemoryForgetCommand(uri="memory/episodic/nonexistent"), Principal.local()
-    )
-    assert result.result == "not_found"
+    with pytest.raises(NotFoundError) as exc:
+        await svc.forget(
+            MemoryForgetCommand(uri="memory/episodic/nonexistent"), Principal.local()
+        )
+    assert exc.value.details["result"] == "not_found"
 
 
 @pytest.mark.asyncio
 async def test_forget_protected(tmp_path: Path) -> None:
     svc = _service(tmp_path)
-    result = await svc.forget(
-        MemoryForgetCommand(uri="memory/entities/person/marcelo"), Principal.local()
-    )
-    assert result.result == "protected"
+    with pytest.raises(ForbiddenError) as exc:
+        await svc.forget(
+            MemoryForgetCommand(uri="memory/entities/person/marcelo"), Principal.local()
+        )
+    assert exc.value.details["result"] == "protected"
 
 
 @pytest.mark.asyncio
 async def test_forget_invalid_uri(tmp_path: Path) -> None:
     svc = _service(tmp_path)
-    result = await svc.forget(MemoryForgetCommand(uri="garbage"), Principal.local())
-    assert result.result == "invalid"
+    with pytest.raises(ValidationFailedError) as exc:
+        await svc.forget(MemoryForgetCommand(uri="garbage"), Principal.local())
+    assert exc.value.details["result"] == "invalid"
 
 
 # ---------------------------------------------------------------------------

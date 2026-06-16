@@ -1181,17 +1181,15 @@ export interface components {
         };
         /**
          * ForgetResult
-         * @description Result of an archive operation.  ``result`` drives the HTTP ``status``
-         *     (200 archived/not_found, 403 protected, 400 invalid).
+         * @description Result of a SUCCESSFUL archive — ``result`` is always ``"archived"``.
+         *
+         *     The failure outcomes are raised as DomainErrors so the front door renders
+         *     them as problem+json (one error format): protected → ``ForbiddenError`` (403),
+         *     invalid → ``ValidationFailedError`` (422), not_found → ``NotFoundError`` (404).
          */
         ForgetResult: {
             /** Result */
             result: string;
-            /**
-             * Status
-             * @default 200
-             */
-            status: number;
         };
         /** GithubTokenTestQuery */
         GithubTokenTestQuery: {
@@ -1904,15 +1902,17 @@ export interface components {
         };
         /**
          * SkillsResult
-         * @description Carries a store status code + raw payload dict (escape hatch).
+         * @description A successful skills response — ``data`` is the raw store payload.
+         *
+         *     The store returns ``(status, payload)``; a non-2xx status is raised as a
+         *     DomainError by :func:`_skills_result` (payload echoed in ``details``) so the
+         *     front door renders it as problem+json. Returned SkillsResults are 2xx only.
          */
         SkillsResult: {
             /** Data */
             data: {
                 [key: string]: unknown;
             };
-            /** Status */
-            status: number;
         };
         /** TokenMetadata */
         TokenMetadata: {
