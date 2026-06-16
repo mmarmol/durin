@@ -559,39 +559,20 @@ class WebSocketChannel(BaseChannel):
         self._services: ServiceRegistry = self._build_services(bus)
 
     def _build_services(self, bus: MessageBus) -> ServiceRegistry:
-        """Construct the registry holding the extracted domain services."""
-        from durin.service.config import ConfigService
-        from durin.service.cron import CronService
-        from durin.service.secrets import SecretsService
-        from durin.service.sessions import SessionsService
-        from durin.service.settings import SettingsService
-        from durin.service.skills import SkillsService
+        """Construct the registry holding the extracted domain services.
 
-        registry = ServiceRegistry(
+        Delegates to the shared :func:`durin.service.wiring.build_service_registry`
+        so the websocket shims and the SP4 Starlette front door serve the SAME
+        wired service set.
+        """
+        from durin.service.wiring import build_service_registry
+
+        return build_service_registry(
             config=self.config,
             session_manager=self._session_manager,
             cron_service=self._cron_service,
             bus=bus,
         )
-        registry.register("secrets", SecretsService())
-        registry.register("cron", CronService(cron_scheduler=self._cron_service))
-        registry.register("sessions", SessionsService(session_manager=self._session_manager))
-        registry.register("settings", SettingsService())
-        registry.register("config", ConfigService())
-        registry.register("skills", SkillsService(workspace=self._endpoint_workspace()))
-        from durin.service.commands import CommandsService
-        from durin.service.health import HealthService
-        from durin.service.memory import MemoryService
-        registry.register("memory", MemoryService(workspace_resolver=self._endpoint_workspace))
-        registry.register("health", HealthService())
-        registry.register("commands", CommandsService())
-        from durin.security.api_tokens import ApiTokenStore
-        from durin.service.auth import AuthService
-        from durin.service.oauth import OAuthService
-
-        registry.register("oauth", OAuthService())
-        registry.register("auth", AuthService(ApiTokenStore()))
-        return registry
 
     def _endpoint_workspace(self) -> Path:
         """The gateway's ACTUAL workspace for read-only memory endpoints.
