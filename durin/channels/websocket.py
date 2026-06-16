@@ -56,8 +56,6 @@ from durin.utils.media_decode import (
     FileSizeExceeded,
     save_base64_data_url,
 )
-from durin.utils.subagent_channel_display import scrub_subagent_messages_for_channel
-from durin.utils.webui_thread_disk import delete_webui_thread
 from durin.utils.webui_transcript import append_transcript_object, build_webui_thread_response
 from durin.utils.webui_turn_helpers import websocket_turn_wall_started_at
 
@@ -591,6 +589,7 @@ class WebSocketChannel(BaseChannel):
         """Construct the registry holding the extracted domain services."""
         from durin.service.cron import CronService
         from durin.service.secrets import SecretsService
+        from durin.service.sessions import SessionsService
 
         registry = ServiceRegistry(
             config=self.config,
@@ -600,6 +599,7 @@ class WebSocketChannel(BaseChannel):
         )
         registry.register("secrets", SecretsService())
         registry.register("cron", CronService(cron_scheduler=self._cron_service))
+        registry.register("sessions", SessionsService(session_manager=self._session_manager))
         return registry
 
     def _endpoint_workspace(self) -> Path:
@@ -763,7 +763,7 @@ class WebSocketChannel(BaseChannel):
 
         # 3. REST handlers co-located with this channel (sessions, settings, …).
         if got == "/api/sessions":
-            return self._handle_sessions_list(request)
+            return await self._handle_sessions_list(request)
 
         if got == "/api/settings":
             return self._handle_settings(request)
@@ -947,24 +947,24 @@ class WebSocketChannel(BaseChannel):
 
         m = re.match(r"^/api/sessions/([^/]+)/messages$", got)
         if m:
-            return self._handle_session_messages(request, m.group(1))
+            return await self._handle_session_messages(request, m.group(1))
 
         m = re.match(r"^/api/sessions/([^/]+)/webui-thread$", got)
         if m:
-            return self._handle_webui_thread_get(request, m.group(1))
+            return await self._handle_webui_thread_get(request, m.group(1))
 
         # NOTE: websockets' HTTP parser only accepts GET, so we cannot expose a
         # true ``DELETE`` verb. The action is folded into the path instead.
         m = re.match(r"^/api/sessions/([^/]+)/delete$", got)
         if m:
-            return self._handle_session_delete(request, m.group(1))
+            return await self._handle_session_delete(request, m.group(1))
 
         # P2 (doc 20): user-driven rename. Same constraint as delete —
         # GET-only HTTP, action folded into the path. New title arrives
         # as a ``title`` query param (URL-encoded).
         m = re.match(r"^/api/sessions/([^/]+)/rename$", got)
         if m:
-            return self._handle_session_rename(request, m.group(1))
+            return await self._handle_session_rename(request, m.group(1))
 
         # Signed media fetch: ``<sig>`` is an HMAC over ``<payload>``; the
         # payload decodes to a path inside :func:`get_media_dir`. See
@@ -1309,20 +1309,18 @@ class WebSocketChannel(BaseChannel):
             return _http_error(500, f"memory search failed: {exc}")
         return _http_json_response(payload)
 
-    def _handle_sessions_list(self, request: WsRequest) -> Response:
+    async def _handle_sessions_list(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
-        if self._session_manager is None:
-            return _http_error(503, "session manager unavailable")
-        sessions = self._session_manager.list_sessions()
-        # Sidebar/chat listing for WS-backed sessions only — CLI / Slack / etc.
-        # keys are not intended for resume over this HTTP surface.
-        cleaned = [
-            {k: v for k, v in s.items() if k != "path"}
-            for s in sessions
-            if isinstance(s.get("key"), str) and s["key"].startswith("websocket:")
-        ]
-        return _http_json_response({"sessions": cleaned})
+        from durin.service.sessions import SessionsListQuery
+
+        try:
+            result = await self._services.get("sessions").list(
+                SessionsListQuery(), Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
+        return _http_json_response({"sessions": result.sessions})
 
     def _settings_payload(self, *, requires_restart: bool = False) -> dict[str, Any]:
         from durin.config.loader import get_config_path, load_config
@@ -2654,39 +2652,44 @@ class WebSocketChannel(BaseChannel):
         """True when *key* is a ``websocket:…`` session exposed on this HTTP surface."""
         return key.startswith("websocket:")
 
-    def _handle_session_messages(self, request: WsRequest, key: str) -> Response:
+    async def _handle_session_messages(self, request: WsRequest, key: str) -> Response:
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
-        if self._session_manager is None:
-            return _http_error(503, "session manager unavailable")
         decoded_key = _decode_api_key(key)
         if decoded_key is None:
             return _http_error(400, "invalid session key")
-        # Only ``websocket:…`` sessions are listed/served here — same boundary as
-        # ``/api/sessions``. Block handcrafted URLs from probing CLI / Slack / etc.
-        if not self._is_websocket_channel_session_key(decoded_key):
-            return _http_error(404, "session not found")
-        data = self._session_manager.read_session_file(decoded_key)
-        if data is None:
-            return _http_error(404, "session not found")
-        messages = data.get("messages")
-        if isinstance(messages, list):
-            scrub_subagent_messages_for_channel(messages)
+        from durin.service.sessions import SessionMessagesQuery
+
+        try:
+            result = await self._services.get("sessions").messages(
+                SessionMessagesQuery(key=decoded_key), Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
         # Decorate persisted user messages with signed media URLs so the
         # client can render previews. The raw on-disk ``media`` paths are
         # stripped on the way out — they leak server filesystem layout and
         # the client never needs them once it has the signed fetch URL.
-        self._augment_media_urls(data)
-        return _http_json_response(data)
+        self._augment_media_urls(result.data)
+        return _http_json_response(result.data)
 
-    def _handle_webui_thread_get(self, request: WsRequest, key: str) -> Response:
+    async def _handle_webui_thread_get(self, request: WsRequest, key: str) -> Response:
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         decoded_key = _decode_api_key(key)
         if decoded_key is None:
             return _http_error(400, "invalid session key")
-        if not self._is_websocket_channel_session_key(decoded_key):
-            return _http_error(404, "session not found")
+        from durin.service.sessions import WebuiThreadQuery
+
+        try:
+            await self._services.get("sessions").webui_thread(
+                WebuiThreadQuery(key=decoded_key), Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
+        # The service validated the key; the signing callback (_augment_transcript_user_media)
+        # HMAC-signs file paths using this channel's per-process _media_secret — it cannot
+        # live in a pure service method, so the build happens here in the shim.
         data = build_webui_thread_response(
             decoded_key,
             augment_user_media=self._augment_transcript_user_media,
@@ -2873,68 +2876,40 @@ class WebSocketChannel(BaseChannel):
             ],
         )
 
-    def _handle_session_delete(self, request: WsRequest, key: str) -> Response:
+    async def _handle_session_delete(self, request: WsRequest, key: str) -> Response:
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
-        if self._session_manager is None:
-            return _http_error(503, "session manager unavailable")
         decoded_key = _decode_api_key(key)
         if decoded_key is None:
             return _http_error(400, "invalid session key")
-        # Same boundary as ``_handle_session_messages``: mutations apply only to
-        # websocket-channel sessions; deletion unlinks local JSONL — keep scope narrow.
-        if not self._is_websocket_channel_session_key(decoded_key):
-            return _http_error(404, "session not found")
-        deleted = self._session_manager.delete_session(decoded_key)
-        delete_webui_thread(decoded_key)
-        return _http_json_response({"deleted": bool(deleted)})
+        from durin.service.sessions import SessionDeleteCommand
 
-    def _handle_session_rename(self, request: WsRequest, key: str) -> Response:
-        """P2 (doc 20): set a user-edited title for a webui session.
+        try:
+            result = await self._services.get("sessions").delete(
+                SessionDeleteCommand(key=decoded_key), Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
+        return _http_json_response(result.model_dump())
 
-        Pulls ``?title=...`` from the query string, persists it into the
-        session metadata via the same fields :func:`maybe_generate_webui_title`
-        uses (``title`` + ``title_user_edited``). Marking
-        ``title_user_edited`` blocks future auto-regeneration so the
-        user's choice sticks. Trims + caps at the same length the LLM
-        title generator does to avoid one path producing values the
-        other refuses to display.
-        """
+    async def _handle_session_rename(self, request: WsRequest, key: str) -> Response:
+        """P2 (doc 20): set a user-edited title for a webui session."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
-        if self._session_manager is None:
-            return _http_error(503, "session manager unavailable")
         decoded_key = _decode_api_key(key)
         if decoded_key is None:
             return _http_error(400, "invalid session key")
-        if not self._is_websocket_channel_session_key(decoded_key):
-            return _http_error(404, "session not found")
-
-        from durin.utils.webui_titles import (
-            TITLE_MAX_CHARS,
-            WEBUI_TITLE_METADATA_KEY,
-            WEBUI_TITLE_USER_EDITED_METADATA_KEY,
-            clean_generated_title,
-        )
+        from durin.service.sessions import SessionRenameCommand
 
         query = _parse_query(request.path)
         raw_title = _query_first(query, "title") or ""
-        title = clean_generated_title(raw_title)
-        if not title:
-            return _http_error(400, "title is required")
-        if len(title) > TITLE_MAX_CHARS:
-            title = title[: TITLE_MAX_CHARS - 1].rstrip() + "…"
-
-        if not self._session_manager.exists(decoded_key):
-            return _http_error(404, "session not found")
-        # Mutate the cached instance (not a fresh `_load` snapshot) so an
-        # in-flight turn holding the same session sees the title and its
-        # end-of-turn save does not clobber it — and vice versa (B2).
-        session = self._session_manager.get_or_create(decoded_key)
-        session.metadata[WEBUI_TITLE_METADATA_KEY] = title
-        session.metadata[WEBUI_TITLE_USER_EDITED_METADATA_KEY] = True
-        self._session_manager.save(session)
-        return _http_json_response({"title": title})
+        try:
+            result = await self._services.get("sessions").rename(
+                SessionRenameCommand(key=decoded_key, title=raw_title), Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
+        return _http_json_response(result.model_dump())
 
     def _serve_static(self, request_path: str) -> Response | None:
         """Resolve *request_path* against the built SPA directory; SPA fallback to index.html."""

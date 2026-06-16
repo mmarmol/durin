@@ -1733,7 +1733,8 @@ def test_is_valid_chat_id(value: Any, expected: bool) -> None:
     assert _is_valid_chat_id(value) is expected
 
 
-def test_handle_webui_thread_get_returns_json(tmp_path, monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_handle_webui_thread_get_returns_json(tmp_path, monkeypatch) -> None:
     from urllib.parse import quote
 
     from websockets.datastructures import Headers
@@ -1749,7 +1750,7 @@ def test_handle_webui_thread_get_returns_json(tmp_path, monkeypatch) -> None:
     channel._api_tokens["tok"] = time.monotonic() + 300.0
     enc = quote(key, safe="")
     req = Request(f"/api/sessions/{enc}/webui-thread", Headers([("Authorization", "Bearer tok")]))
-    resp = channel._handle_webui_thread_get(req, enc)
+    resp = await channel._handle_webui_thread_get(req, enc)
     assert resp.status_code == 200
     body = json.loads(resp.body.decode())
     assert body["sessionKey"] == key
