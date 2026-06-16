@@ -608,6 +608,11 @@ class WebSocketChannel(BaseChannel):
         self._api_tokens: dict[str, float] = {}
         self._stop_event: asyncio.Event | None = None
         self._server_task: asyncio.Task[None] | None = None
+        # When False, start() skips opening the websockets socket server —
+        # the gateway runs a unified uvicorn server instead and drives this
+        # channel through _run_connection directly. Set to False by the
+        # gateway before channels.start_all() when legacy_ws_server is off.
+        self._serve_own_server: bool = True
         self._session_manager = session_manager
         self._static_dist_path: Path | None = (
             static_dist_path.resolve() if static_dist_path is not None else None
@@ -2920,6 +2925,13 @@ class WebSocketChannel(BaseChannel):
 
         self._running = True
         self._stop_event = asyncio.Event()
+
+        # Unified-server mode: the gateway runs uvicorn and routes WebSocket
+        # connections via the Starlette endpoint; this channel must not open
+        # its own socket. Return immediately so ChannelManager's start_all()
+        # call completes without blocking on a socket that will never exist.
+        if not self._serve_own_server:
+            return
 
         ssl_context = self._build_ssl_context()
         scheme = "wss" if ssl_context else "ws"
