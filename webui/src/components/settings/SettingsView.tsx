@@ -789,6 +789,13 @@ function readAux(config: Record<string, unknown> | null, kind: string): AuxModel
   };
 }
 
+function readJudgeModel(config: Record<string, unknown> | null): string {
+  const skills = config?.skills as Record<string, unknown> | undefined;
+  const sec = skills?.security as Record<string, unknown> | undefined;
+  const judge = sec?.llm_judge as Record<string, unknown> | undefined;
+  return typeof judge?.model === "string" ? judge.model : "";
+}
+
 function modelCapsSummary(
   caps: ModelCapabilities | null,
   t: (key: string, opts?: Record<string, unknown>) => string,
@@ -802,6 +809,161 @@ function modelCapsSummary(
     parts.push(t("settings.models.capsContext", { tokens: `${k}K` }));
   }
   return parts.join(" · ");
+}
+
+/** Judge model editor — ModelPicker + test + clear, no provider
+ *  dropdown (judge inherits the main model's provider). Empty string
+ *  means "use the main/default model" — shown as a hint.
+ */
+function JudgeModelControl({
+  current,
+  busy,
+  provider,
+  token,
+  onSave,
+  onClear,
+}: {
+  current: string;
+  busy: boolean;
+  provider: string;
+  token: string;
+  onSave: (model: string) => void;
+  onClear: () => void;
+}) {
+  const { t } = useTranslation();
+  const [model, setModel] = useState(current);
+  const [testing, setTesting] = useState(false);
+  const [test, setTest] = useState<ModelTestResult | null>(null);
+  const [caps, setCaps] = useState<ModelCapabilities | null>(null);
+
+  useEffect(() => {
+    setModel(current);
+    setTest(null);
+  }, [current]);
+
+  useEffect(() => {
+    if (!model.trim()) {
+      setCaps(null);
+      return;
+    }
+    let cancelled = false;
+    getModelCapabilities(token, model.trim(), provider)
+      .then((c) => {
+        if (!cancelled) setCaps(c);
+      })
+      .catch(() => {
+        if (!cancelled) setCaps(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token, model, provider]);
+
+  const dirty = model.trim() !== current.trim();
+
+  const runTest = async () => {
+    if (!model.trim()) return;
+    setTesting(true);
+    setTest(null);
+    try {
+      setTest(await testModel(token, { model: model.trim(), provider }));
+    } catch {
+      setTest({ status: "fail", message: t("settings.models.testError"), fix: "" });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  if (!current && !model.trim()) {
+    return (
+      <div className="flex items-center gap-2">
+        <span className="text-[12px] text-muted-foreground">
+          {t("settings.models.usesMain")}
+        </span>
+        <ModelPicker
+          token={token}
+          provider={provider}
+          value={model}
+          onChange={setModel}
+          capability="text"
+        />
+        {dirty && model.trim() ? (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={busy}
+            onClick={() => onSave(model.trim())}
+            className="rounded-full"
+          >
+            {t("settings.models.save")}
+          </Button>
+        ) : null}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col items-end gap-2">
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <ModelPicker
+          token={token}
+          provider={provider}
+          value={model}
+          onChange={setModel}
+          capability="text"
+        />
+      </div>
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        {test ? (
+          <span
+            className={cn(
+              "text-[12px]",
+              test.status === "ok" ? "text-emerald-600" : "text-destructive",
+            )}
+            title={test.message}
+          >
+            {test.status === "ok" ? "✓ " : "✗ "}
+            <span className="truncate max-w-[220px] inline-block align-bottom">
+              {test.message}
+            </span>
+          </span>
+        ) : null}
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!dirty || busy || !model.trim()}
+          onClick={() => onSave(model.trim())}
+          className="rounded-full"
+        >
+          {t("settings.models.save")}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={testing || busy || !model.trim()}
+          onClick={() => void runTest()}
+          className="rounded-full"
+          title={t("settings.models.testRowHint")}
+        >
+          {testing ? t("settings.models.testing") : t("settings.models.testRow")}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={busy}
+          onClick={onClear}
+          className="rounded-full text-muted-foreground"
+        >
+          {t("settings.models.clear")}
+        </Button>
+      </div>
+      {caps && model.trim() ? (
+        <span className="text-[11px] text-muted-foreground">
+          {modelCapsSummary(caps, t)}
+        </span>
+      ) : null}
+    </div>
+  );
 }
 
 /** Compact vision/audio aux-model editor — provider dropdown +
@@ -1289,6 +1451,20 @@ function ModelBlockRows({
     [token],
   );
 
+  const saveJudge = useCallback(
+    async (model: string) => {
+      setBusy("judge");
+      try {
+        setConfig(await setConfigValue(token, "skills.security.llm_judge.model", model));
+      } catch {
+        // ignore
+      } finally {
+        setBusy(null);
+      }
+    },
+    [token],
+  );
+
   return (
     <>
       <SettingsRow title={t("settings.models.capabilities")}>
@@ -1337,6 +1513,19 @@ function ModelBlockRows({
           configuredProviders={configuredProviders}
           token={token}
           capability="text"
+        />
+      </SettingsRow>
+      <SettingsRow
+        title={t("settings.models.judge")}
+        description={t("settings.models.judgeHint")}
+      >
+        <JudgeModelControl
+          current={readJudgeModel(config)}
+          busy={busy === "judge"}
+          provider={provider}
+          token={token}
+          onSave={(m) => void saveJudge(m)}
+          onClear={() => void saveJudge("")}
         />
       </SettingsRow>
     </>
