@@ -47,7 +47,6 @@ from durin.providers.codex_device_auth import (
 from durin.providers.codex_device_auth import (
     poll_once as codex_poll_once,
 )
-from durin.providers.codex_models import list_codex_models
 from durin.service import DomainError, Principal, ServiceRegistry
 from durin.session.goal_state import goal_state_ws_blob
 from durin.utils.helpers import safe_filename
@@ -572,6 +571,7 @@ class WebSocketChannel(BaseChannel):
 
     def _build_services(self, bus: MessageBus) -> ServiceRegistry:
         """Construct the registry holding the extracted domain services."""
+        from durin.service.config import ConfigService
         from durin.service.cron import CronService
         from durin.service.secrets import SecretsService
         from durin.service.sessions import SessionsService
@@ -587,6 +587,7 @@ class WebSocketChannel(BaseChannel):
         registry.register("cron", CronService(cron_scheduler=self._cron_service))
         registry.register("sessions", SessionsService(session_manager=self._session_manager))
         registry.register("settings", SettingsService())
+        registry.register("config", ConfigService())
         return registry
 
     def _endpoint_workspace(self) -> Path:
@@ -801,10 +802,10 @@ class WebSocketChannel(BaseChannel):
             return await self._handle_cron_run(request)
 
         if got == "/api/config":
-            return self._handle_config_get(request)
+            return await self._handle_config_get(request)
 
         if got == "/api/config/set":
-            return self._handle_config_set(request)
+            return await self._handle_config_set(request)
 
         if got == "/api/logs":
             return self._handle_logs_list(request)
@@ -881,10 +882,10 @@ class WebSocketChannel(BaseChannel):
             return self._handle_skill_get(request, m.group(1))
 
         if got == "/api/channels":
-            return self._handle_channels_list(request)
+            return await self._handle_channels_list(request)
 
         if got == "/api/models":
-            return self._handle_models_list(request)
+            return await self._handle_models_list(request)
 
         if got == "/api/memory/graph":
             return self._handle_memory_graph(request)
@@ -920,7 +921,7 @@ class WebSocketChannel(BaseChannel):
             return await self._handle_model_test(request)
 
         if got == "/api/model/capabilities":
-            return self._handle_model_capabilities(request)
+            return await self._handle_model_capabilities(request)
 
         if got == "/api/memory/cross-encoder/test":
             return await self._handle_cross_encoder_test(request, query)
@@ -2033,50 +2034,23 @@ class WebSocketChannel(BaseChannel):
 
     # -- generic config API (web parity Phase B) ---------------------------
 
-    def _handle_config_get(self, request: WsRequest) -> Response:
-        """`GET /api/config` — full effective config (secret-masked) + schema.
-
-        The web equivalent of `durin config show`. Returns every field
-        with its current value (defaults filled in) so the dashboard can
-        render a settings form, plus the JSON schema for that form.
-        """
+    async def _handle_config_get(self, request: WsRequest) -> Response:
+        """`GET /api/config` — shim → ConfigService.get."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
-        from durin.cli.config_cmd import load_raw_config, mask_secrets, validate_dict
-        from durin.config.loader import get_config_path
-        from durin.config.schema import Config
+        from durin.service.config import ConfigGetQuery
 
-        raw = load_raw_config(get_config_path())
         try:
-            effective = validate_dict(raw).model_dump(mode="json", by_alias=True)
-        except Exception:  # noqa: BLE001
-            effective = raw
-        return _http_json_response(
-            {
-                "config": mask_secrets(effective),
-                "schema": Config.model_json_schema(by_alias=True),
-            }
-        )
+            result = await self._services.get("config").get(ConfigGetQuery(), Principal.local())
+        except DomainError as err:
+            return _domain_error_response(err)
+        return _http_json_response(result.model_dump(by_alias=True))
 
-    def _handle_config_set(self, request: WsRequest) -> Response:
-        """`GET /api/config/set` — set one dotted key, schema-validated.
-
-        The web equivalent of `durin config set`. ``value`` is JSON-
-        decoded when possible (so booleans / numbers / objects work),
-        else kept as a string. A schema-invalid value is rejected
-        without writing.
-        """
+    async def _handle_config_set(self, request: WsRequest) -> Response:
+        """`GET /api/config/set` — shim → ConfigService.set."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
-        from durin.cli.config_cmd import (
-            _normalize_dotted_path,
-            load_raw_config,
-            mask_secrets,
-            parse_value,
-            set_at,
-            validate_dict,
-        )
-        from durin.config.loader import get_config_path, save_config
+        from durin.service.config import ConfigSetCommand
 
         query = _parse_query(request.path)
         key = (_query_first(query, "key") or "").strip()
@@ -2086,27 +2060,13 @@ class WebSocketChannel(BaseChannel):
         if raw_value is None:
             return _http_error(400, "value is required")
 
-        path = get_config_path()
         try:
-            canonical = validate_dict(load_raw_config(path)).model_dump(
-                mode="json", by_alias=True
+            result = await self._services.get("config").set(
+                ConfigSetCommand(key=key, value=raw_value), Principal.local()
             )
-        except Exception as e:  # noqa: BLE001
-            return _http_error(400, f"on-disk config is invalid: {e}")
-        new_data = set_at(canonical, _normalize_dotted_path(key), parse_value(raw_value))
-        try:
-            config = validate_dict(new_data)
-        except Exception as e:  # noqa: BLE001
-            return _http_error(400, f"validation failed: {e}")
-        save_config(config, path)
-        return _http_json_response(
-            {
-                "ok": True,
-                "config": mask_secrets(
-                    config.model_dump(mode="json", by_alias=True)
-                ),
-            }
-        )
+        except DomainError as err:
+            return _domain_error_response(err)
+        return _http_json_response(result.model_dump(by_alias=True))
 
     def _handle_logs_list(self, request: WsRequest) -> Response:
         """`GET /api/logs?source=&...` — read-only log viewer (gateway/telemetry).
@@ -2144,277 +2104,93 @@ class WebSocketChannel(BaseChannel):
             }
         )
 
-    def _handle_models_list(self, request: WsRequest) -> Response:
-        """`GET /api/models?provider=X&capability=Y` — model catalog for the picker.
-
-        ``suggested`` is the curated per-provider shortlist
-        (``DEFAULT_MODELS[provider]``); ``models`` is the catalog filtered
-        by:
-
-        - ``capability``: ``vision`` keeps only models with
-          ``supports_vision`` truthy; ``audio`` keeps
-          ``supports_audio_input``; omit or ``text`` for no filter.
-        - ``provider``: keeps only models whose id matches a keyword of
-          the provider's ``ProviderSpec`` (the same heuristic
-          ``_match_provider`` uses to auto-route by model name). Empty
-          provider keeps the full catalog (filtered only by capability).
-          For providers with no keywords (e.g. ``custom``, gateways like
-          OpenRouter) we keep the full catalog too — they can route
-          anything, so there's nothing to filter against.
-
-        Image-generation models are always excluded — the picker is for
-        chat/completion bridges only.
-        """
+    async def _handle_models_list(self, request: WsRequest) -> Response:
+        """`GET /api/models?provider=X&capability=Y` — shim → ConfigService.models_list."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
-        from durin.cli.onboard_wizard import DEFAULT_MODELS
-        from durin.providers.registry import find_by_name
+        from durin.service.config import ModelsListQuery
 
         query = _parse_query(request.path)
         provider = (_query_first(query, "provider") or "").strip()
         capability = (_query_first(query, "capability") or "").strip().lower()
-
-        if provider in ("openai-codex", "openai_codex"):
-            access = None
-            try:
-                from oauth_cli_kit import get_token
-                from oauth_cli_kit.providers import OPENAI_CODEX_PROVIDER
-
-                from durin.providers.codex_device_auth import _strict_storage
-
-                tok = get_token(OPENAI_CODEX_PROVIDER, _strict_storage())
-                access = tok.access if tok else None
-            except Exception:  # noqa: BLE001
-                access = None
-            models = list_codex_models(access)
-            return _http_json_response({"suggested": models, "models": models})
-
-        suggested = list(DEFAULT_MODELS.get(provider, ()))
-
-        # Resolve provider keywords once. Empty tuple means "don't filter"
-        # (gateway / custom / unknown provider).
-        #
-        # Coding-plan variants (e.g. `zai_coding_plan` is the same
-        # backend as `zhipu`, just a different endpoint with separate
-        # quota) borrow their base provider's keywords so the catalog
-        # surfaces the same models. The plan's own keywords are
-        # intentionally rare (so auto-routing doesn't accidentally pick
-        # them) — they shouldn't double as a model-filter heuristic.
-        _plan_base = {
-            "zai_coding_plan": "zhipu",
-            "volcengine_coding_plan": "volcengine",
-            "byteplus_coding_plan": "byteplus",
-        }
-        provider_keywords: tuple[str, ...] = ()
-        if provider:
-            lookup_name = _plan_base.get(provider, provider)
-            spec = find_by_name(lookup_name)
-            if spec is not None:
-                provider_keywords = spec.keywords
-
-        def _capability_ok(info: object) -> bool:
-            if capability in ("", "text"):
-                return True
-            if not isinstance(info, dict):
-                # Without capability metadata we can't prove the model
-                # supports the modality — drop conservatively.
-                return False
-            if capability == "vision":
-                return bool(info.get("supports_vision"))
-            if capability == "audio":
-                return bool(info.get("supports_audio_input"))
-            return True
-
-        def _provider_ok(mid: str) -> bool:
-            if not provider_keywords:
-                return True
-            mid_lower = mid.lower()
-            mid_normalized = mid_lower.replace("-", "_")
-            for kw in provider_keywords:
-                kw_lower = kw.lower()
-                if kw_lower in mid_lower or kw_lower.replace("-", "_") in mid_normalized:
-                    return True
-            return False
-
-        catalog: list[str] = []
         try:
-            from durin.providers.capabilities import _load_capabilities_snapshot
-
-            models = _load_capabilities_snapshot() or {}
-            catalog = sorted(
-                mid
-                for mid, info in models.items()
-                if isinstance(mid, str)
-                # Exclude pure image-generation models from the chat pickers
-                # (vision / audio / text) — durin has no image-gen feature.
-                and (
-                    not isinstance(info, dict)
-                    or info.get("mode") != "image_generation"
-                )
-                and _capability_ok(info)
-                and _provider_ok(mid)
+            result = await self._services.get("config").models_list(
+                ModelsListQuery(provider=provider, capability=capability), Principal.local()
             )
-        except Exception:  # noqa: BLE001
-            catalog = []
+        except DomainError as err:
+            return _domain_error_response(err)
+        return _http_json_response(result.model_dump(by_alias=True))
 
-        # Trim suggested by the same capability filter so the curated
-        # shortlist doesn't surface (e.g.) a text-only model in the vision
-        # picker. Unknown ids in the snapshot stay (charity for fresh
-        # picks the catalog doesn't have yet).
-        if capability in ("vision", "audio", "image"):
-            try:
-                from durin.providers.capabilities import _load_capabilities_snapshot
-
-                snapshot = _load_capabilities_snapshot() or {}
-            except Exception:  # noqa: BLE001
-                snapshot = {}
-            suggested = [
-                m for m in suggested
-                if m not in snapshot or _capability_ok(snapshot.get(m))
-            ]
-
-        return _http_json_response({"suggested": suggested, "models": catalog})
-
-    def _handle_model_capabilities(self, request: WsRequest) -> Response:
-        """`GET /api/model/capabilities?model=&provider=` — what a model supports."""
+    async def _handle_model_capabilities(self, request: WsRequest) -> Response:
+        """`GET /api/model/capabilities?model=&provider=` — shim → ConfigService.model_capabilities."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
+        from durin.service.config import ModelCapabilitiesQuery
+
         query = _parse_query(request.path)
         model = (_query_first(query, "model") or "").strip()
         provider = (_query_first(query, "provider") or "").strip() or None
         if not model:
             return _http_error(400, "model is required")
         try:
-            from durin.providers.capabilities import get_model_capabilities
+            result = await self._services.get("config").model_capabilities(
+                ModelCapabilitiesQuery(model=model, provider=provider), Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
+        # Wire format is snake_case (matches original handler) — do not use by_alias.
+        return _http_json_response(result.model_dump())
 
-            caps = get_model_capabilities(model, provider)
-        except Exception as e:  # noqa: BLE001
-            return _http_error(400, f"could not resolve capabilities: {e}")
-        return _http_json_response(
-            {
-                "model": model,
-                "max_input_tokens": getattr(caps, "max_input_tokens", None),
-                "supports_vision": bool(getattr(caps, "supports_vision", False)),
-                "supports_audio_input": bool(getattr(caps, "supports_audio_input", False)),
-                "supports_function_calling": bool(
-                    getattr(caps, "supports_function_calling", False)
-                ),
-                "supports_reasoning": bool(getattr(caps, "supports_reasoning", False)),
-            }
-        )
-
-    def _handle_channels_list(self, request: WsRequest) -> Response:
-        """`GET /api/channels` — discovered channels + enabled state.
-
-        Lets the dashboard's curated Channels section enable a channel
-        and know which credential field it needs — config the generic
-        `/api/config` form can't create from scratch.
-        """
+    async def _handle_channels_list(self, request: WsRequest) -> Response:
+        """`GET /api/channels` — shim → ConfigService.channels_list."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
-        from durin.channels.registry import discover_all
-        from durin.config.loader import load_config
+        from durin.service.config import ChannelsListQuery
 
-        # First match wins — channels expose exactly one primary credential.
-        cred_fields = (
-            "token", "bot_token", "app_token", "appId", "app_id",
-            "api_key", "claw_token", "access_token",
-        )
-        config = load_config()
-        extra = getattr(config.channels, "__pydantic_extra__", None) or {}
-        items: list[dict[str, Any]] = []
-        for name, cls in sorted(discover_all().items()):
-            section = extra.get(name)
-            enabled = (
-                bool(section.get("enabled")) if isinstance(section, dict) else False
+        try:
+            result = await self._services.get("config").channels_list(
+                ChannelsListQuery(), Principal.local()
             )
-            credential_field = None
-            try:
-                defaults = cls.default_config() if hasattr(cls, "default_config") else {}
-                credential_field = next(
-                    (f for f in cred_fields if f in defaults), None
-                )
-            except Exception:  # noqa: BLE001
-                credential_field = None
-            items.append(
-                {
-                    "name": name,
-                    "display_name": getattr(cls, "display_name", name),
-                    "enabled": enabled,
-                    "credential_field": credential_field,
-                }
-            )
-        return _http_json_response({"channels": items})
+        except DomainError as err:
+            return _domain_error_response(err)
+        return _http_json_response(result.model_dump(by_alias=True))
 
     async def _handle_model_test(self, request: WsRequest) -> Response:
-        """`GET /api/model/test` — a real round-trip to a model.
-
-        Tests the given ``model``/``provider`` (defaults to the
-        configured ones) so the dashboard can verify a pick before the
-        user commits it. Async so the ping doesn't block the gateway
-        event loop.
-        """
+        """`GET /api/model/test` — shim → ConfigService.model_test (async probe)."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
-        from durin.cli.doctor import check_model_ping_async
-        from durin.config.loader import load_config
+        from durin.service.config import ModelTestQuery
 
         query = _parse_query(request.path)
         model = (_query_first(query, "model") or "").strip()
         provider = (_query_first(query, "provider") or "").strip()
         try:
-            cfg = load_config()
-        except Exception as e:  # noqa: BLE001
-            return _http_error(400, f"could not load config: {e}")
-        if model:
-            cfg.agents.defaults.model = model
-            cfg.agents.defaults.model_preset = None  # honor the override
-        if provider:
-            cfg.agents.defaults.provider = provider
-        result = await check_model_ping_async(cfg=cfg)
-        return _http_json_response(
-            {
-                "status": result.status,
-                "message": result.message,
-                "fix": result.fix or "",
-            }
-        )
+            result = await self._services.get("config").model_test(
+                ModelTestQuery(model=model, provider=provider), Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
+        return _http_json_response(result.model_dump(by_alias=True))
 
     async def _handle_cross_encoder_test(
         self, request: WsRequest, query: dict,
     ) -> Response:
-        """`GET /api/memory/cross-encoder/test?model=<id>` — probe a
-        cross-encoder model id by loading + running a trivial score.
-
-        Audit B12 (2026-05-28). Replaces the previously-considered
-        hardcoded enum: any model id that the user wants to evaluate
-        can be tested live, with the result surfaced to the webui
-        before the value is committed to config.
-
-        The load is potentially slow (model download + warmup). Run
-        it in a thread so the gateway event loop stays responsive.
-        """
+        """`GET /api/memory/cross-encoder/test?model=<id>` — shim → ConfigService.cross_encoder_test."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
-        import asyncio
-
-        from durin.memory.cross_encoder import probe_model
+        from durin.service.config import CrossEncoderTestQuery
 
         model = (_query_first(query, "model") or "").strip()
         if not model:
             return _http_error(400, "missing required `model` query param")
         try:
-            result = await asyncio.to_thread(probe_model, model)
-        except Exception as exc:  # noqa: BLE001
-            return _http_json_response(
-                {
-                    "status": "fail",
-                    "message": f"unexpected error: {type(exc).__name__}: {exc}",
-                    "model_id": model,
-                    "duration_ms": 0.0,
-                },
+            result = await self._services.get("config").cross_encoder_test(
+                CrossEncoderTestQuery(model=model), Principal.local()
             )
-        return _http_json_response(result)
+        except DomainError as err:
+            return _domain_error_response(err)
+        # Wire format is snake_case (matches original handler) — do not use by_alias.
+        return _http_json_response(result.model_dump())
 
     def _handle_extras_status(self, request: WsRequest, query: dict) -> Response:
         """`GET /api/extras/status?feature=<f>` — is the feature's pip extra
