@@ -29,6 +29,12 @@ _LOCK = threading.Lock()
 
 _EMPTY: dict[str, Any] = {"media_secret": None, "tokens": {}}
 
+# Bound store growth: bootstrap mints one token per webui load, so without a
+# cap + expiry purge the file would grow without limit (the old in-memory pool
+# had the same MAX). Expired tokens are dropped on every issue; if the live set
+# still exceeds the cap, the oldest are evicted.
+_MAX_TOKENS = 10_000
+
 
 def _hash_token(salt_hex: str, plaintext: str) -> str:
     """Return SHA-256 hex of ``salt_bytes + plaintext.encode()``."""
@@ -71,6 +77,27 @@ class ApiTokenStore:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         _write_text_atomic(self._path, json.dumps(data, indent=2, ensure_ascii=False))
 
+    @staticmethod
+    def _purge_expired(data: dict[str, Any], now: float) -> None:
+        """Drop tokens whose expiry has passed — bounds store growth."""
+        toks = data["tokens"]
+        for tid in [
+            t
+            for t, e in toks.items()
+            if e.get("expires_at") is not None and e["expires_at"] < now
+        ]:
+            del toks[tid]
+
+    @staticmethod
+    def _enforce_cap(data: dict[str, Any]) -> None:
+        """Keep at most ``_MAX_TOKENS`` live tokens, evicting the oldest."""
+        toks = data["tokens"]
+        if len(toks) < _MAX_TOKENS:
+            return
+        oldest = sorted(toks.items(), key=lambda kv: kv[1].get("created_at") or 0.0)
+        for tid, _entry in oldest[: len(toks) - _MAX_TOKENS + 1]:
+            del toks[tid]
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -96,6 +123,8 @@ class ApiTokenStore:
 
         with _LOCK:
             data = self._load()
+            self._purge_expired(data, now)
+            self._enforce_cap(data)
             data["tokens"][token_id] = {
                 "hash": hash_hex,
                 "salt": salt_hex,

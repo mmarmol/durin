@@ -155,3 +155,27 @@ def test_tokens_persist_across_new_store_instance(tmp_path):
     entry = s2.resolve(plaintext)
     assert entry is not None
     assert entry["token_id"] == token_id
+
+
+# ---------------------------------------------------------------------------
+# purge + cap (bound store growth — bootstrap mints one token per webui load)
+# ---------------------------------------------------------------------------
+
+
+def test_issue_purges_expired_tokens(store):
+    expired_id, _ = store.issue(["admin"], ttl_s=-1)  # already expired
+    live_id, _ = store.issue(["admin"], ttl_s=3600)
+    ids = {t["token_id"] for t in store.list_tokens()}
+    assert expired_id not in ids  # dropped on the second issue
+    assert live_id in ids
+
+
+def test_issue_enforces_cap(store, monkeypatch):
+    import durin.security.api_tokens as mod
+
+    monkeypatch.setattr(mod, "_MAX_TOKENS", 3)
+    ids = [store.issue(["admin"], ttl_s=3600)[0] for _ in range(5)]
+    live = {t["token_id"] for t in store.list_tokens()}
+    assert len(live) <= 3  # never exceeds the cap
+    assert ids[-1] in live  # newest kept
+    assert ids[0] not in live  # oldest evicted
