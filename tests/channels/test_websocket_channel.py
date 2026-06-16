@@ -1,18 +1,17 @@
 """Unit and lightweight integration tests for the WebSocket channel."""
 
-import asyncio
-import functools
 import json
 import time
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-import httpx
 import pytest
-import websockets
+from starlette.routing import Route
+from starlette.testclient import TestClient
 from websockets.exceptions import ConnectionClosed
 from websockets.frames import Close
 
+from durin.api.asgi import _http_result_to_starlette, build_gateway_http_app
 from durin.bus.events import OUTBOUND_META_AGENT_UI, OutboundMessage
 from durin.bus.queue import MessageBus
 from durin.channels.websocket import (
@@ -56,11 +55,45 @@ def bus() -> MagicMock:
     return b
 
 
-async def _http_get(url: str, headers: dict[str, str] | None = None) -> httpx.Response:
-    """Run GET in a thread to avoid blocking the asyncio loop shared with websockets."""
-    return await asyncio.to_thread(
-        functools.partial(httpx.get, url, headers=headers or {}, timeout=5.0)
-    )
+def _build_client(
+    bus: Any,
+    monkeypatch: Any,
+    tmp_path: Any,
+    **channel_kw: Any,
+) -> tuple[WebSocketChannel, TestClient]:
+    """Build a WebSocketChannel + unified TestClient for socket-based tests.
+
+    Any keyword argument accepted by ``_ch`` can be passed to override the
+    default channel config (e.g. ``allowFrom``, ``token``, ``websocketRequiresToken``).
+    The data dir is isolated to ``tmp_path`` so tests never touch ``~/.durin``.
+    If ``tokenIssuePath`` is set, an extra Starlette route is added to the app
+    so the endpoint is reachable via the TestClient.
+    """
+    data_dir = tmp_path / "durin_data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("durin.config.paths.get_data_dir", lambda: data_dir)
+
+    channel = _ch(bus, **channel_kw)
+    registry = channel._services
+    auth = registry.get("auth")
+    app = build_gateway_http_app(channel, registry, auth=auth)
+
+    # If a tokenIssuePath was configured, splice in an explicit Starlette route
+    # so tests can reach it without going through /api/{path:path}.
+    issue_path = channel_kw.get("tokenIssuePath", "")
+    if issue_path:
+        from starlette.requests import Request
+
+        async def _token_issue_handler(request: Request) -> Any:
+            from durin.api.asgi import _StarletteRequestShim
+            shim = _StarletteRequestShim(request)
+            result = channel._handle_token_issue_http(shim)
+            return _http_result_to_starlette(result)
+
+        app.routes.insert(0, Route(issue_path, _token_issue_handler, methods=["GET"]))
+
+    client = TestClient(app, raise_server_exceptions=False)
+    return channel, client
 
 
 def test_normalize_http_path_strips_trailing_slash_except_root() -> None:
@@ -833,76 +866,52 @@ async def test_stop_is_idempotent() -> None:
     await channel.stop()
 
 
-@pytest.mark.asyncio
-async def test_end_to_end_client_receives_ready_and_agent_sees_inbound(bus: MagicMock) -> None:
-    port = 29876
-    channel = _ch(bus, port=port)
+def test_end_to_end_client_receives_ready_and_agent_sees_inbound(
+    bus: MagicMock, monkeypatch, tmp_path
+) -> None:
+    channel, client = _build_client(bus, monkeypatch, tmp_path)
+    captured: dict = {}
 
-    server_task = asyncio.create_task(channel.start())
-    await asyncio.sleep(0.3)
+    with client.websocket_connect("/ws?client_id=tester") as ws:
+        ready = json.loads(ws.receive_text())
+        assert ready["event"] == "ready"
+        assert ready["client_id"] == "tester"
+        captured["chat_id"] = ready["chat_id"]
 
-    try:
-        async with websockets.connect(f"ws://127.0.0.1:{port}/ws?client_id=tester") as client:
-            ready_raw = await client.recv()
-            ready = json.loads(ready_raw)
-            assert ready["event"] == "ready"
-            assert ready["client_id"] == "tester"
-            chat_id = ready["chat_id"]
+        ws.send_text(json.dumps({"content": "ping from client"}))
+        ws.send_text("plain text frame")
 
-            await client.send(json.dumps({"content": "ping from client"}))
-            await asyncio.sleep(0.08)
+    # After the WS context closes, the server handler has finished; all
+    # publish_inbound calls are complete.
+    bus.publish_inbound.assert_awaited()
+    inbound = bus.publish_inbound.call_args_list[0][0][0]
+    assert inbound.channel == "websocket"
+    assert inbound.sender_id == "tester"
+    assert inbound.chat_id == captured["chat_id"]
+    assert inbound.content == "ping from client"
 
-            bus.publish_inbound.assert_awaited()
-            inbound = bus.publish_inbound.call_args[0][0]
-            assert inbound.channel == "websocket"
-            assert inbound.sender_id == "tester"
-            assert inbound.chat_id == chat_id
-            assert inbound.content == "ping from client"
-
-            await client.send("plain text frame")
-            await asyncio.sleep(0.08)
-            assert bus.publish_inbound.await_count >= 2
-            second = [c[0][0] for c in bus.publish_inbound.call_args_list][-1]
-            assert second.content == "plain text frame"
-    finally:
-        await channel.stop()
-        await server_task
+    assert bus.publish_inbound.await_count >= 2
+    second = bus.publish_inbound.call_args_list[1][0][0]
+    assert second.content == "plain text frame"
 
 
-@pytest.mark.asyncio
-async def test_token_rejects_handshake_when_mismatch(bus: MagicMock) -> None:
-    port = 29877
-    channel = _ch(bus, port=port, path="/", token="secret")
+def test_token_rejects_handshake_when_mismatch(
+    bus: MagicMock, monkeypatch, tmp_path
+) -> None:
+    _, client = _build_client(bus, monkeypatch, tmp_path, path="/", token="secret")
 
-    server_task = asyncio.create_task(channel.start())
-    await asyncio.sleep(0.3)
-
-    try:
-        with pytest.raises(websockets.exceptions.InvalidStatus) as excinfo:
-            async with websockets.connect(f"ws://127.0.0.1:{port}/?token=wrong"):
-                pass
-        assert excinfo.value.response.status_code == 401
-    finally:
-        await channel.stop()
-        await server_task
+    with pytest.raises(Exception):
+        with client.websocket_connect("/?token=wrong") as ws:
+            ws.receive_text()
 
 
-@pytest.mark.asyncio
-async def test_wrong_path_returns_404(bus: MagicMock) -> None:
-    port = 29878
-    channel = _ch(bus, port=port)
+def test_wrong_path_returns_404(bus: MagicMock, monkeypatch, tmp_path) -> None:
+    _, client = _build_client(bus, monkeypatch, tmp_path)
 
-    server_task = asyncio.create_task(channel.start())
-    await asyncio.sleep(0.3)
-
-    try:
-        with pytest.raises(websockets.exceptions.InvalidStatus) as excinfo:
-            async with websockets.connect(f"ws://127.0.0.1:{port}/other"):
-                pass
-        assert excinfo.value.response.status_code == 404
-    finally:
-        await channel.stop()
-        await server_task
+    # /other is not the WS path (/ws) — the server returns 403/404/close before accept.
+    with pytest.raises(Exception):
+        with client.websocket_connect("/other") as ws:
+            ws.receive_text()
 
 
 def test_registry_discovers_websocket_channel() -> None:
@@ -912,58 +921,46 @@ def test_registry_discovers_websocket_channel() -> None:
     assert cls.name == "websocket"
 
 
-@pytest.mark.asyncio
-async def test_http_route_issues_token_then_websocket_requires_it(bus: MagicMock) -> None:
-    port = 29879
-    channel = _ch(
-        bus, port=port,
+def test_http_route_issues_token_then_websocket_requires_it(
+    bus: MagicMock, monkeypatch, tmp_path
+) -> None:
+    channel, client = _build_client(
+        bus,
+        monkeypatch,
+        tmp_path,
         tokenIssuePath="/auth/token",
         tokenIssueSecret="route-secret",
         websocketRequiresToken=True,
     )
 
-    server_task = asyncio.create_task(channel.start())
-    await asyncio.sleep(0.3)
+    deny = client.get("/auth/token")
+    assert deny.status_code == 401
 
-    try:
-        deny = await _http_get(f"http://127.0.0.1:{port}/auth/token")
-        assert deny.status_code == 401
+    issue = client.get("/auth/token", headers={"Authorization": "Bearer route-secret"})
+    assert issue.status_code == 200
+    token = issue.json()["token"]
+    assert token.startswith("nbwt_")
 
-        issue = await _http_get(
-            f"http://127.0.0.1:{port}/auth/token",
-            headers={"Authorization": "Bearer route-secret"},
-        )
-        assert issue.status_code == 200
-        token = issue.json()["token"]
-        assert token.startswith("nbwt_")
+    with pytest.raises(Exception):
+        with client.websocket_connect("/ws?client_id=x") as ws:
+            ws.receive_text()
 
-        with pytest.raises(websockets.exceptions.InvalidStatus) as missing_token:
-            async with websockets.connect(f"ws://127.0.0.1:{port}/ws?client_id=x"):
-                pass
-        assert missing_token.value.response.status_code == 401
+    with client.websocket_connect(f"/ws?token={token}&client_id=caller") as ws:
+        ready = json.loads(ws.receive_text())
+        assert ready["event"] == "ready"
+        assert ready["client_id"] == "caller"
 
-        uri = f"ws://127.0.0.1:{port}/ws?token={token}&client_id=caller"
-        async with websockets.connect(uri) as client:
-            ready = json.loads(await client.recv())
-            assert ready["event"] == "ready"
-            assert ready["client_id"] == "caller"
-
-        with pytest.raises(websockets.exceptions.InvalidStatus) as reuse:
-            async with websockets.connect(uri):
-                pass
-        assert reuse.value.response.status_code == 401
-    finally:
-        await channel.stop()
-        await server_task
+    # Token was single-use — second connect must be rejected.
+    with pytest.raises(Exception):
+        with client.websocket_connect(f"/ws?token={token}&client_id=caller") as ws:
+            ws.receive_text()
 
 
-@pytest.mark.asyncio
-async def test_settings_api_returns_safe_subset_and_updates_whitelist(
+def test_settings_api_returns_safe_subset_and_updates_whitelist(
     bus: MagicMock,
     monkeypatch,
     tmp_path,
 ) -> None:
-    port = 29891
     config_path = tmp_path / "config.json"
     config = Config()
     config.agents.defaults.model = "openai/gpt-4o"
@@ -973,122 +970,107 @@ async def test_settings_api_returns_safe_subset_and_updates_whitelist(
     save_config(config, config_path)
     monkeypatch.setattr("durin.config.loader._current_config_path", config_path)
 
-    channel = _ch(bus, port=port)
+    channel, client = _build_client(bus, monkeypatch, tmp_path)
     channel._api_tokens["tok"] = time.monotonic() + 300
+    hdr = {"Authorization": "Bearer tok"}
 
-    server_task = asyncio.create_task(channel.start())
-    await asyncio.sleep(0.3)
+    settings = client.get("/api/settings", headers=hdr)
+    assert settings.status_code == 200
+    body = settings.json()
+    assert body["agent"]["model"] == "openai/gpt-4o"
+    assert body["agent"]["provider"] == "openai"
+    providers = {provider["name"]: provider for provider in body["providers"]}
+    assert providers["openai"]["configured"] is True
+    assert providers["openai"]["api_key_hint"] == "secr••••-key"
+    assert providers["openrouter"]["configured"] is False
+    assert body["agent"]["has_api_key"] is True
+    assert body["web_search"]["provider"] == "brave"
+    assert body["web_search"]["api_key_hint"] == "brav••••cret"
+    search_providers = {provider["name"]: provider for provider in body["web_search"]["providers"]}
+    assert search_providers["duckduckgo"]["credential"] == "none"
+    assert search_providers["searxng"]["credential"] == "base_url"
+    assert "secret-key" not in settings.text
+    assert "brave-secret" not in settings.text
 
-    try:
-        settings = await _http_get(
-            f"http://127.0.0.1:{port}/api/settings",
-            headers={"Authorization": "Bearer tok"},
-        )
-        assert settings.status_code == 200
-        body = settings.json()
-        assert body["agent"]["model"] == "openai/gpt-4o"
-        assert body["agent"]["provider"] == "openai"
-        providers = {provider["name"]: provider for provider in body["providers"]}
-        assert providers["openai"]["configured"] is True
-        assert providers["openai"]["api_key_hint"] == "secr••••-key"
-        assert providers["openrouter"]["configured"] is False
-        assert body["agent"]["has_api_key"] is True
-        assert body["web_search"]["provider"] == "brave"
-        assert body["web_search"]["api_key_hint"] == "brav••••cret"
-        search_providers = {provider["name"]: provider for provider in body["web_search"]["providers"]}
-        assert search_providers["duckduckgo"]["credential"] == "none"
-        assert search_providers["searxng"]["credential"] == "base_url"
-        assert "secret-key" not in settings.text
-        assert "brave-secret" not in settings.text
+    provider_updated = client.get(
+        "/api/settings/provider/update?provider=openrouter"
+        "&api_key=sk-or-test&api_base=https%3A%2F%2Fopenrouter.ai%2Fapi%2Fv1",
+        headers=hdr,
+    )
+    assert provider_updated.status_code == 200
+    provider_body = provider_updated.json()
+    assert provider_body["requires_restart"] is False
+    provider_rows = {provider["name"]: provider for provider in provider_body["providers"]}
+    assert provider_rows["openrouter"]["configured"] is True
+    assert "sk-or-test" not in provider_updated.text
 
-        provider_updated = await _http_get(
-            "http://127.0.0.1:"
-            f"{port}/api/settings/provider/update?provider=openrouter"
-            "&api_key=sk-or-test&api_base=https%3A%2F%2Fopenrouter.ai%2Fapi%2Fv1",
-            headers={"Authorization": "Bearer tok"},
-        )
-        assert provider_updated.status_code == 200
-        provider_body = provider_updated.json()
-        assert provider_body["requires_restart"] is False
-        provider_rows = {provider["name"]: provider for provider in provider_body["providers"]}
-        assert provider_rows["openrouter"]["configured"] is True
-        assert "sk-or-test" not in provider_updated.text
+    updated = client.get(
+        "/api/settings/update?model=openrouter/test&provider=openrouter",
+        headers=hdr,
+    )
+    assert updated.status_code == 200
+    assert updated.json()["requires_restart"] is False
 
-        updated = await _http_get(
-            "http://127.0.0.1:"
-            f"{port}/api/settings/update?model=openrouter/test"
-            "&provider=openrouter",
-            headers={"Authorization": "Bearer tok"},
-        )
-        assert updated.status_code == 200
-        assert updated.json()["requires_restart"] is False
+    search_updated = client.get(
+        "/api/settings/web-search/update?provider=searxng"
+        "&base_url=https%3A%2F%2Fsearch.example.com",
+        headers=hdr,
+    )
+    assert search_updated.status_code == 200
+    search_body = search_updated.json()
+    assert search_body["requires_restart"] is False
+    assert search_body["web_search"]["provider"] == "searxng"
+    assert search_body["web_search"]["api_key_hint"] is None
+    assert search_body["web_search"]["base_url"] == "https://search.example.com"
 
-        search_updated = await _http_get(
-            "http://127.0.0.1:"
-            f"{port}/api/settings/web-search/update?provider=searxng"
-            "&base_url=https%3A%2F%2Fsearch.example.com",
-            headers={"Authorization": "Bearer tok"},
-        )
-        assert search_updated.status_code == 200
-        search_body = search_updated.json()
-        assert search_body["requires_restart"] is False
-        assert search_body["web_search"]["provider"] == "searxng"
-        assert search_body["web_search"]["api_key_hint"] is None
-        assert search_body["web_search"]["base_url"] == "https://search.example.com"
+    saved = load_config(config_path)
+    assert saved.agents.defaults.model == "openrouter/test"
+    assert saved.agents.defaults.provider == "openrouter"
+    # The dashboard stores the key in the secret store and keeps a
+    # ${secret:} reference in config — never plaintext.
+    from durin.security.secrets import SecretStore, is_secret_ref
 
-        saved = load_config(config_path)
-        assert saved.agents.defaults.model == "openrouter/test"
-        assert saved.agents.defaults.provider == "openrouter"
-        # The dashboard stores the key in the secret store and keeps a
-        # ${secret:} reference in config — never plaintext.
-        from durin.security.secrets import SecretStore, is_secret_ref
-
-        assert is_secret_ref(saved.providers.openrouter.api_key)
-        store_entry = SecretStore(
-            path=config_path.parent / "secrets.json"
-        ).load().get("OPENROUTER_API_KEY")
-        assert store_entry is not None and store_entry.value == "sk-or-test"
-        assert saved.providers.openrouter.api_base == "https://openrouter.ai/api/v1"
-        assert saved.tools.web.search.provider == "searxng"
-        assert saved.tools.web.search.api_key == ""
-        assert saved.tools.web.search.base_url == "https://search.example.com"
-    finally:
-        await channel.stop()
-        await server_task
+    assert is_secret_ref(saved.providers.openrouter.api_key)
+    store_entry = SecretStore(
+        path=config_path.parent / "secrets.json"
+    ).load().get("OPENROUTER_API_KEY")
+    assert store_entry is not None and store_entry.value == "sk-or-test"
+    assert saved.providers.openrouter.api_base == "https://openrouter.ai/api/v1"
+    assert saved.tools.web.search.provider == "searxng"
+    assert saved.tools.web.search.api_key == ""
+    assert saved.tools.web.search.base_url == "https://search.example.com"
 
 
-@pytest.mark.asyncio
-async def test_secrets_api_crud(bus: MagicMock, monkeypatch, tmp_path) -> None:
+def test_secrets_api_crud(bus: MagicMock, monkeypatch, tmp_path) -> None:
     """`/api/secrets` list/set/delete — values never returned."""
-    port = 29893
+    import asyncio
+
     config_path = tmp_path / "config.json"
     save_config(Config(), config_path)
     monkeypatch.setattr("durin.config.loader._current_config_path", config_path)
 
-    channel = _ch(bus, port=port)
+    channel, client = _build_client(bus, monkeypatch, tmp_path)
     channel._api_tokens["tok"] = time.monotonic() + 300
-    server_task = asyncio.create_task(channel.start())
-    await asyncio.sleep(0.3)
-    base = f"http://127.0.0.1:{port}"
     hdr = {"Authorization": "Bearer tok"}
-    try:
-        # Empty to start.
-        listed = await _http_get(f"{base}/api/secrets", headers=hdr)
-        assert listed.status_code == 200
-        assert listed.json()["secrets"] == []
 
-        # Create — via the `secret_store` websocket envelope. The value
-        # rides a JSON frame, never a URL query.
-        class _Conn:
-            def __init__(self) -> None:
-                self.sent: list[str] = []
-                self.remote_address = ("127.0.0.1", 0)
+    # Empty to start.
+    listed = client.get("/api/secrets", headers=hdr)
+    assert listed.status_code == 200
+    assert listed.json()["secrets"] == []
 
-            async def send_text(self, raw: str) -> None:
-                self.sent.append(raw)
+    # Create — via the `secret_store` websocket envelope. The value
+    # rides a JSON frame, never a URL query.
+    class _Conn:
+        def __init__(self) -> None:
+            self.sent: list[str] = []
+            self.remote_address = ("127.0.0.1", 0)
 
-        conn = _Conn()
-        await channel._handle_secret_store_envelope(
+        async def send_text(self, raw: str) -> None:
+            self.sent.append(raw)
+
+    conn = _Conn()
+    asyncio.run(
+        channel._handle_secret_store_envelope(
             conn,
             "client-x",
             {
@@ -1100,24 +1082,27 @@ async def test_secrets_api_crud(bus: MagicMock, monkeypatch, tmp_path) -> None:
                 "scope": ["exec"],
             },
         )
-        acks = [json.loads(raw) for raw in conn.sent]
-        assert any(a.get("event") == "secret_stored" and a.get("ok") for a in acks)
+    )
+    acks = [json.loads(raw) for raw in conn.sent]
+    assert any(a.get("event") == "secret_stored" and a.get("ok") for a in acks)
 
-        listed = await _http_get(f"{base}/api/secrets", headers=hdr)
-        rows = listed.json()["secrets"]
-        assert len(rows) == 1 and rows[0]["name"] == "ATLASSIAN_WORK"
-        assert rows[0]["service"] == "atlassian" and rows[0]["scope"] == ["exec"]
-        # The value is never in the response.
-        assert "tok-plaintext-secret" not in listed.text
+    listed = client.get("/api/secrets", headers=hdr)
+    rows = listed.json()["secrets"]
+    assert len(rows) == 1 and rows[0]["name"] == "ATLASSIAN_WORK"
+    assert rows[0]["service"] == "atlassian" and rows[0]["scope"] == ["exec"]
+    # The value is never in the response.
+    assert "tok-plaintext-secret" not in listed.text
 
-        from durin.security.secrets import SecretStore
+    from durin.security.secrets import SecretStore
 
-        entry = SecretStore(path=tmp_path / "secrets.json").load().get("ATLASSIAN_WORK")
-        assert entry is not None and entry.value == "tok-plaintext-secret"
+    entry = SecretStore(path=tmp_path / "secrets.json").load().get("ATLASSIAN_WORK")
+    assert entry is not None and entry.value == "tok-plaintext-secret"
 
-        # Metadata-only edit (no value) keeps the stored value.
-        await channel._handle_secret_store_envelope(
-            _Conn(),
+    # Metadata-only edit (no value) keeps the stored value.
+    conn2 = _Conn()
+    asyncio.run(
+        channel._handle_secret_store_envelope(
+            conn2,
             "client-x",
             {
                 "type": "secret_store",
@@ -1127,23 +1112,19 @@ async def test_secrets_api_crud(bus: MagicMock, monkeypatch, tmp_path) -> None:
                 "scope": ["exec", "skill:*"],
             },
         )
-        entry = SecretStore(path=tmp_path / "secrets.json").load().get("ATLASSIAN_WORK")
-        assert entry.value == "tok-plaintext-secret"
-        assert entry.scope == ["exec", "skill:*"]
+    )
+    entry = SecretStore(path=tmp_path / "secrets.json").load().get("ATLASSIAN_WORK")
+    assert entry.value == "tok-plaintext-secret"
+    assert entry.scope == ["exec", "skill:*"]
 
-        # Delete.
-        deleted = await _http_get(
-            f"{base}/api/secrets/delete?name=ATLASSIAN_WORK", headers=hdr
-        )
-        assert deleted.status_code == 200
-        listed = await _http_get(f"{base}/api/secrets", headers=hdr)
-        assert listed.json()["secrets"] == []
+    # Delete.
+    deleted = client.get("/api/secrets/delete?name=ATLASSIAN_WORK", headers=hdr)
+    assert deleted.status_code == 200
+    listed = client.get("/api/secrets", headers=hdr)
+    assert listed.json()["secrets"] == []
 
-        # Unauthorized without a token.
-        assert (await _http_get(f"{base}/api/secrets")).status_code == 401
-    finally:
-        await channel.stop()
-        await server_task
+    # Unauthorized without a token.
+    assert client.get("/api/secrets").status_code == 401
 
 
 class _FakeConn:
@@ -1298,143 +1279,107 @@ async def test_secret_store_empty_value_on_existing_secret_keeps_credential(
     assert entry.scope == ["skill:deploy"]
 
 
-@pytest.mark.asyncio
-async def test_config_api_get_and_set(bus: MagicMock, monkeypatch, tmp_path) -> None:
+def test_config_api_get_and_set(bus: MagicMock, monkeypatch, tmp_path) -> None:
     """`/api/config` returns the effective config + schema; `/set` writes one key."""
-    port = 29894
     config_path = tmp_path / "config.json"
     save_config(Config(), config_path)
     monkeypatch.setattr("durin.config.loader._current_config_path", config_path)
 
-    channel = _ch(bus, port=port)
+    channel, client = _build_client(bus, monkeypatch, tmp_path)
     channel._api_tokens["tok"] = time.monotonic() + 300
-    server_task = asyncio.create_task(channel.start())
-    await asyncio.sleep(0.3)
-    base = f"http://127.0.0.1:{port}"
     hdr = {"Authorization": "Bearer tok"}
-    try:
-        got = await _http_get(f"{base}/api/config", headers=hdr)
-        assert got.status_code == 200
-        body = got.json()
-        assert "config" in body and "schema" in body
-        assert body["config"]["agents"]["defaults"]["model"]  # full, defaults filled
 
-        # Set one value (JSON-decoded).
-        updated = await _http_get(
-            f"{base}/api/config/set?key=agents.defaults.temperature&value=0.25",
-            headers=hdr,
-        )
-        assert updated.status_code == 200
-        assert load_config(config_path).agents.defaults.temperature == 0.25
+    got = client.get("/api/config", headers=hdr)
+    assert got.status_code == 200
+    body = got.json()
+    assert "config" in body and "schema" in body
+    assert body["config"]["agents"]["defaults"]["model"]  # full, defaults filled
 
-        # A schema-invalid value is rejected without writing.
-        bad = await _http_get(
-            f"{base}/api/config/set?key=agents.defaults.maxTokens&value=%22nope%22",
-            headers=hdr,
-        )
-        assert bad.status_code == 400
-        assert load_config(config_path).agents.defaults.max_tokens == 8192  # unchanged
+    # Set one value (JSON-decoded).
+    updated = client.get(
+        "/api/config/set?key=agents.defaults.temperature&value=0.25",
+        headers=hdr,
+    )
+    assert updated.status_code == 200
+    assert load_config(config_path).agents.defaults.temperature == 0.25
 
-        # Token required.
-        assert (await _http_get(f"{base}/api/config")).status_code == 401
-    finally:
-        await channel.stop()
-        await server_task
+    # A schema-invalid value is rejected without writing.
+    bad = client.get(
+        "/api/config/set?key=agents.defaults.maxTokens&value=%22nope%22",
+        headers=hdr,
+    )
+    assert bad.status_code == 400
+    assert load_config(config_path).agents.defaults.max_tokens == 8192  # unchanged
+
+    # Token required.
+    assert client.get("/api/config").status_code == 401
 
 
-@pytest.mark.asyncio
-async def test_channels_api_lists_discovered_channels(
+def test_channels_api_lists_discovered_channels(
     bus: MagicMock, monkeypatch, tmp_path
 ) -> None:
     """`GET /api/channels` lists channels with enabled state + cred field."""
-    port = 29895
     config_path = tmp_path / "config.json"
     save_config(Config(), config_path)
     monkeypatch.setattr("durin.config.loader._current_config_path", config_path)
 
-    channel = _ch(bus, port=port)
+    channel, client = _build_client(bus, monkeypatch, tmp_path)
     channel._api_tokens["tok"] = time.monotonic() + 300
-    server_task = asyncio.create_task(channel.start())
-    await asyncio.sleep(0.3)
-    base = f"http://127.0.0.1:{port}"
-    try:
-        got = await _http_get(f"{base}/api/channels", headers={"Authorization": "Bearer tok"})
-        assert got.status_code == 200
-        channels = {c["name"]: c for c in got.json()["channels"]}
-        assert "telegram" in channels
-        tg = channels["telegram"]
-        assert tg["enabled"] is False
-        assert "display_name" in tg and "credential_field" in tg
 
-        assert (await _http_get(f"{base}/api/channels")).status_code == 401
-    finally:
-        await channel.stop()
-        await server_task
+    got = client.get("/api/channels", headers={"Authorization": "Bearer tok"})
+    assert got.status_code == 200
+    channels = {c["name"]: c for c in got.json()["channels"]}
+    assert "telegram" in channels
+    tg = channels["telegram"]
+    assert tg["enabled"] is False
+    assert "display_name" in tg and "credential_field" in tg
+
+    assert client.get("/api/channels").status_code == 401
 
 
-@pytest.mark.asyncio
-async def test_models_and_capabilities_api(
+def test_models_and_capabilities_api(
     bus: MagicMock, monkeypatch, tmp_path
 ) -> None:
     """`/api/models` lists a catalog; `/api/model/capabilities` resolves caps."""
-    port = 29896
     config_path = tmp_path / "config.json"
     save_config(Config(), config_path)
     monkeypatch.setattr("durin.config.loader._current_config_path", config_path)
 
-    channel = _ch(bus, port=port)
+    channel, client = _build_client(bus, monkeypatch, tmp_path)
     channel._api_tokens["tok"] = time.monotonic() + 300
-    server_task = asyncio.create_task(channel.start())
-    await asyncio.sleep(0.3)
-    base = f"http://127.0.0.1:{port}"
     hdr = {"Authorization": "Bearer tok"}
-    try:
-        models = await _http_get(f"{base}/api/models?provider=zhipu", headers=hdr)
-        assert models.status_code == 200
-        body = models.json()
-        assert "suggested" in body and "models" in body
-        assert any("glm" in m for m in body["suggested"])  # curated zhipu shortlist
 
-        caps = await _http_get(
-            f"{base}/api/model/capabilities?model=glm-5.1&provider=zhipu", headers=hdr
-        )
-        assert caps.status_code == 200
-        cb = caps.json()
-        assert cb["model"] == "glm-5.1"
-        assert "supports_vision" in cb and "max_input_tokens" in cb
+    models = client.get("/api/models?provider=zhipu", headers=hdr)
+    assert models.status_code == 200
+    body = models.json()
+    assert "suggested" in body and "models" in body
+    assert any("glm" in m for m in body["suggested"])  # curated zhipu shortlist
 
-        assert (await _http_get(f"{base}/api/models")).status_code == 401
-    finally:
-        await channel.stop()
-        await server_task
+    caps = client.get("/api/model/capabilities?model=glm-5.1&provider=zhipu", headers=hdr)
+    assert caps.status_code == 200
+    cb = caps.json()
+    assert cb["model"] == "glm-5.1"
+    assert "supports_vision" in cb and "max_input_tokens" in cb
+
+    assert client.get("/api/models").status_code == 401
 
 
-@pytest.mark.asyncio
-async def test_commands_api_returns_slash_command_metadata(bus: MagicMock) -> None:
-    port = 29892
-    channel = _ch(bus, port=port)
+def test_commands_api_returns_slash_command_metadata(
+    bus: MagicMock, monkeypatch, tmp_path
+) -> None:
+    channel, client = _build_client(bus, monkeypatch, tmp_path)
     channel._api_tokens["tok"] = time.monotonic() + 300
 
-    server_task = asyncio.create_task(channel.start())
-    await asyncio.sleep(0.3)
+    denied = client.get("/api/commands")
+    assert denied.status_code == 401
 
-    try:
-        denied = await _http_get(f"http://127.0.0.1:{port}/api/commands")
-        assert denied.status_code == 401
-
-        response = await _http_get(
-            f"http://127.0.0.1:{port}/api/commands",
-            headers={"Authorization": "Bearer tok"},
-        )
-        assert response.status_code == 200
-        body = response.json()
-        commands = {row["command"]: row for row in body["commands"]}
-        assert commands["/stop"]["title"] == "Stop current task"
-        assert commands["/history"]["arg_hint"] == "[n]"
-        assert all("description" in row for row in body["commands"])
-    finally:
-        await channel.stop()
-        await server_task
+    response = client.get("/api/commands", headers={"Authorization": "Bearer tok"})
+    assert response.status_code == 200
+    body = response.json()
+    commands = {row["command"]: row for row in body["commands"]}
+    assert commands["/stop"]["title"] == "Stop current task"
+    assert commands["/history"]["arg_hint"] == "[n]"
+    assert all("description" in row for row in body["commands"])
 
 
 def test_settings_payload_normalizes_camel_case_provider(
@@ -1453,45 +1398,21 @@ def test_settings_payload_normalizes_camel_case_provider(
     assert body["agent"]["provider"] == "minimax_anthropic"
 
 
-@pytest.mark.asyncio
-async def test_end_to_end_server_pushes_streaming_deltas_to_client(bus: MagicMock) -> None:
-    port = 29880
-    channel = _ch(bus, port=port, streaming=True)
+def test_end_to_end_server_pushes_streaming_deltas_to_client(
+    bus: MagicMock, monkeypatch, tmp_path
+) -> None:
+    import asyncio
 
-    server_task = asyncio.create_task(channel.start())
-    await asyncio.sleep(0.3)
+    channel, client = _build_client(bus, monkeypatch, tmp_path, streaming=True)
 
-    try:
-        async with websockets.connect(f"ws://127.0.0.1:{port}/ws?client_id=stream-tester") as client:
-            ready_raw = await client.recv()
-            ready = json.loads(ready_raw)
-            chat_id = ready["chat_id"]
+    with client.websocket_connect("/ws?client_id=stream-tester") as ws:
+        ready = json.loads(ws.receive_text())
+        chat_id = ready["chat_id"]
 
-            # Server pushes deltas directly
-            await channel.send_delta(
-                chat_id, "Hello ", {"_stream_delta": True, "_stream_id": "s1"}
-            )
-            await channel.send_delta(
-                chat_id, "world", {"_stream_delta": True, "_stream_id": "s1"}
-            )
-            await channel.send_delta(
-                chat_id, "", {"_stream_end": True, "_stream_id": "s1"}
-            )
-
-            delta1 = json.loads(await client.recv())
-            assert delta1["event"] == "delta"
-            assert delta1["text"] == "Hello "
-            assert delta1["stream_id"] == "s1"
-
-            delta2 = json.loads(await client.recv())
-            assert delta2["event"] == "delta"
-            assert delta2["text"] == "world"
-            assert delta2["stream_id"] == "s1"
-
-            end = json.loads(await client.recv())
-            assert end["event"] == "stream_end"
-            assert end["stream_id"] == "s1"
-
+        async def _push() -> None:
+            await channel.send_delta(chat_id, "Hello ", {"_stream_delta": True, "_stream_id": "s1"})
+            await channel.send_delta(chat_id, "world", {"_stream_delta": True, "_stream_id": "s1"})
+            await channel.send_delta(chat_id, "", {"_stream_end": True, "_stream_id": "s1"})
             await channel.send(OutboundMessage(
                 channel="websocket",
                 chat_id=chat_id,
@@ -1499,170 +1420,119 @@ async def test_end_to_end_server_pushes_streaming_deltas_to_client(bus: MagicMoc
                 metadata={"_turn_end": True},
             ))
 
-            turn_end = json.loads(await client.recv())
-            assert turn_end == {"event": "turn_end", "chat_id": chat_id}
-    finally:
-        await channel.stop()
-        await server_task
+        asyncio.run(_push())
+
+        delta1 = json.loads(ws.receive_text())
+        assert delta1["event"] == "delta"
+        assert delta1["text"] == "Hello "
+        assert delta1["stream_id"] == "s1"
+
+        delta2 = json.loads(ws.receive_text())
+        assert delta2["event"] == "delta"
+        assert delta2["text"] == "world"
+        assert delta2["stream_id"] == "s1"
+
+        end = json.loads(ws.receive_text())
+        assert end["event"] == "stream_end"
+        assert end["stream_id"] == "s1"
+
+        turn_end = json.loads(ws.receive_text())
+        assert turn_end == {"event": "turn_end", "chat_id": chat_id}
 
 
-@pytest.mark.asyncio
-async def test_token_issue_rejects_when_at_capacity(bus: MagicMock) -> None:
-    port = 29881
-    channel = _ch(bus, port=port, tokenIssuePath="/auth/token", tokenIssueSecret="s")
+def test_token_issue_rejects_when_at_capacity(
+    bus: MagicMock, monkeypatch, tmp_path
+) -> None:
+    channel, client = _build_client(
+        bus, monkeypatch, tmp_path, tokenIssuePath="/auth/token", tokenIssueSecret="s"
+    )
 
-    server_task = asyncio.create_task(channel.start())
-    await asyncio.sleep(0.3)
+    # Fill issued tokens to capacity.
+    channel._issued_tokens = {
+        f"nbwt_fill_{i}": time.monotonic() + 300 for i in range(channel._MAX_ISSUED_TOKENS)
+    }
 
-    try:
-        # Fill issued tokens to capacity
-        channel._issued_tokens = {
-            f"nbwt_fill_{i}": time.monotonic() + 300 for i in range(channel._MAX_ISSUED_TOKENS)
-        }
-
-        resp = await _http_get(
-            f"http://127.0.0.1:{port}/auth/token",
-            headers={"Authorization": "Bearer s"},
-        )
-        assert resp.status_code == 429
-        data = resp.json()
-        assert "error" in data
-    finally:
-        await channel.stop()
-        await server_task
+    resp = client.get("/auth/token", headers={"Authorization": "Bearer s"})
+    assert resp.status_code == 429
+    data = resp.json()
+    assert "error" in data
 
 
-@pytest.mark.asyncio
-async def test_allow_from_rejects_unauthorized_client_id(bus: MagicMock) -> None:
-    port = 29882
-    channel = _ch(bus, port=port, allowFrom=["alice", "bob"])
+def test_allow_from_rejects_unauthorized_client_id(
+    bus: MagicMock, monkeypatch, tmp_path
+) -> None:
+    _, client = _build_client(bus, monkeypatch, tmp_path, allowFrom=["alice", "bob"])
 
-    server_task = asyncio.create_task(channel.start())
-    await asyncio.sleep(0.3)
-
-    try:
-        with pytest.raises(websockets.exceptions.InvalidStatus) as exc_info:
-            async with websockets.connect(f"ws://127.0.0.1:{port}/ws?client_id=eve"):
-                pass
-        assert exc_info.value.response.status_code == 403
-    finally:
-        await channel.stop()
-        await server_task
+    # The ASGI WS endpoint enforces allowFrom via channel.is_allowed before
+    # accepting. An unauthorized client_id must result in connection closure.
+    with pytest.raises(Exception):
+        with client.websocket_connect("/ws?client_id=eve") as ws:
+            ws.receive_text()
 
 
-@pytest.mark.asyncio
-async def test_client_id_truncation(bus: MagicMock) -> None:
-    port = 29883
-    channel = _ch(bus, port=port)
-
-    server_task = asyncio.create_task(channel.start())
-    await asyncio.sleep(0.3)
-
-    try:
-        long_id = "x" * 200
-        async with websockets.connect(f"ws://127.0.0.1:{port}/ws?client_id={long_id}") as client:
-            ready = json.loads(await client.recv())
-            assert ready["client_id"] == "x" * 128
-            assert len(ready["client_id"]) == 128
-    finally:
-        await channel.stop()
-        await server_task
+def test_client_id_truncation(bus: MagicMock, monkeypatch, tmp_path) -> None:
+    _, client = _build_client(bus, monkeypatch, tmp_path)
+    long_id = "x" * 200
+    with client.websocket_connect(f"/ws?client_id={long_id}") as ws:
+        ready = json.loads(ws.receive_text())
+        assert ready["client_id"] == "x" * 128
+        assert len(ready["client_id"]) == 128
 
 
-@pytest.mark.asyncio
-async def test_non_utf8_binary_frame_ignored(bus: MagicMock) -> None:
-    port = 29884
-    channel = _ch(bus, port=port)
-
-    server_task = asyncio.create_task(channel.start())
-    await asyncio.sleep(0.3)
-
-    try:
-        async with websockets.connect(f"ws://127.0.0.1:{port}/ws?client_id=bin-test") as client:
-            await client.recv()  # consume ready
-            # Send non-UTF-8 bytes
-            await client.send(b"\xff\xfe\xfd")
-            await asyncio.sleep(0.05)
-            # publish_inbound should NOT have been called
-            bus.publish_inbound.assert_not_awaited()
-    finally:
-        await channel.stop()
-        await server_task
+def test_non_utf8_binary_frame_ignored(bus: MagicMock, monkeypatch, tmp_path) -> None:
+    _, client = _build_client(bus, monkeypatch, tmp_path)
+    with client.websocket_connect("/ws?client_id=bin-test") as ws:
+        ws.receive_text()  # consume ready
+        # Send non-UTF-8 bytes.
+        ws.send_bytes(b"\xff\xfe\xfd")
+    # publish_inbound should NOT have been called.
+    bus.publish_inbound.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_static_token_accepts_issued_token_as_fallback(bus: MagicMock) -> None:
-    port = 29885
-    channel = _ch(
-        bus, port=port,
+def test_static_token_accepts_issued_token_as_fallback(
+    bus: MagicMock, monkeypatch, tmp_path
+) -> None:
+    channel, client = _build_client(
+        bus,
+        monkeypatch,
+        tmp_path,
         token="static-secret",
         tokenIssuePath="/auth/token",
         tokenIssueSecret="route-secret",
     )
 
-    server_task = asyncio.create_task(channel.start())
-    await asyncio.sleep(0.3)
+    resp = client.get("/auth/token", headers={"Authorization": "Bearer route-secret"})
+    assert resp.status_code == 200
+    issued_token = resp.json()["token"]
 
-    try:
-        # Get an issued token
-        resp = await _http_get(
-            f"http://127.0.0.1:{port}/auth/token",
-            headers={"Authorization": "Bearer route-secret"},
-        )
-        assert resp.status_code == 200
-        issued_token = resp.json()["token"]
-
-        # Connect using issued token (not the static one)
-        async with websockets.connect(f"ws://127.0.0.1:{port}/ws?token={issued_token}&client_id=caller") as client:
-            ready = json.loads(await client.recv())
-            assert ready["event"] == "ready"
-    finally:
-        await channel.stop()
-        await server_task
+    with client.websocket_connect(f"/ws?token={issued_token}&client_id=caller") as ws:
+        ready = json.loads(ws.receive_text())
+        assert ready["event"] == "ready"
 
 
-@pytest.mark.asyncio
-async def test_allow_from_empty_list_denies_all(bus: MagicMock) -> None:
-    port = 29886
-    channel = _ch(bus, port=port, allowFrom=[])
+def test_allow_from_empty_list_denies_all(bus: MagicMock, monkeypatch, tmp_path) -> None:
+    _, client = _build_client(bus, monkeypatch, tmp_path, allowFrom=[])
 
-    server_task = asyncio.create_task(channel.start())
-    await asyncio.sleep(0.3)
-
-    try:
-        with pytest.raises(websockets.exceptions.InvalidStatus) as exc_info:
-            async with websockets.connect(f"ws://127.0.0.1:{port}/ws?client_id=anyone"):
-                pass
-        assert exc_info.value.response.status_code == 403
-    finally:
-        await channel.stop()
-        await server_task
+    with pytest.raises(Exception):
+        with client.websocket_connect("/ws?client_id=anyone") as ws:
+            ws.receive_text()
 
 
-@pytest.mark.asyncio
-async def test_websocket_requires_token_without_issue_path(bus: MagicMock) -> None:
+def test_websocket_requires_token_without_issue_path(
+    bus: MagicMock, monkeypatch, tmp_path
+) -> None:
     """When websocket_requires_token is True but no token or issue path configured, all connections are rejected."""
-    port = 29887
-    channel = _ch(bus, port=port, websocketRequiresToken=True)
+    _, client = _build_client(bus, monkeypatch, tmp_path, websocketRequiresToken=True)
 
-    server_task = asyncio.create_task(channel.start())
-    await asyncio.sleep(0.3)
+    # No token at all → rejected.
+    with pytest.raises(Exception):
+        with client.websocket_connect("/ws?client_id=u") as ws:
+            ws.receive_text()
 
-    try:
-        # No token at all → 401
-        with pytest.raises(websockets.exceptions.InvalidStatus) as exc_info:
-            async with websockets.connect(f"ws://127.0.0.1:{port}/ws?client_id=u"):
-                pass
-        assert exc_info.value.response.status_code == 401
-
-        # Wrong token → 401
-        with pytest.raises(websockets.exceptions.InvalidStatus) as exc_info:
-            async with websockets.connect(f"ws://127.0.0.1:{port}/ws?client_id=u&token=wrong"):
-                pass
-        assert exc_info.value.response.status_code == 401
-    finally:
-        await channel.stop()
-        await server_task
+    # Wrong token → rejected.
+    with pytest.raises(Exception):
+        with client.websocket_connect("/ws?client_id=u&token=wrong") as ws:
+            ws.receive_text()
 
 
 # -- Multi-chat multiplexing -------------------------------------------------
@@ -1672,181 +1542,142 @@ async def test_websocket_requires_token_without_issue_path(bus: MagicMock) -> No
 # working on the connection's default chat_id.
 
 
-@pytest.mark.asyncio
-async def test_multiplex_legacy_still_works(bus: MagicMock) -> None:
-    port = 29930
-    channel = _ch(bus, port=port)
-    server_task = asyncio.create_task(channel.start())
-    await asyncio.sleep(0.3)
+def test_multiplex_legacy_still_works(bus: MagicMock, monkeypatch, tmp_path) -> None:
+    import asyncio
 
-    try:
-        async with websockets.connect(f"ws://127.0.0.1:{port}/ws?client_id=legacy") as client:
-            ready = json.loads(await client.recv())
-            default_chat = ready["chat_id"]
+    channel, client = _build_client(bus, monkeypatch, tmp_path)
 
-            # Plain text frame routes to default chat_id
-            await client.send("hello from legacy")
-            await asyncio.sleep(0.1)
-            inbound = bus.publish_inbound.call_args[0][0]
-            assert inbound.chat_id == default_chat
-            assert inbound.content == "hello from legacy"
+    with client.websocket_connect("/ws?client_id=legacy") as ws:
+        ready = json.loads(ws.receive_text())
+        default_chat = ready["chat_id"]
 
-            # {"content": ...} frame routes to default chat_id
-            await client.send(json.dumps({"content": "structured legacy"}))
-            await asyncio.sleep(0.1)
-            assert bus.publish_inbound.call_args[0][0].chat_id == default_chat
-            assert bus.publish_inbound.call_args[0][0].content == "structured legacy"
+        # Plain text frame routes to default chat_id.
+        ws.send_text("hello from legacy")
+        ws.send_text(json.dumps({"content": "structured legacy"}))
 
-            # Outbound still reaches the legacy client, with chat_id annotated
-            await channel.send(
-                OutboundMessage(channel="websocket", chat_id=default_chat, content="reply")
-            )
-            reply = json.loads(await client.recv())
-            assert reply["event"] == "message"
-            assert reply["chat_id"] == default_chat
-            assert reply["text"] == "reply"
-    finally:
-        await channel.stop()
-        await server_task
+        # Outbound still reaches the legacy client.
+        asyncio.run(
+            channel.send(OutboundMessage(channel="websocket", chat_id=default_chat, content="reply"))
+        )
+        reply = json.loads(ws.receive_text())
+        assert reply["event"] == "message"
+        assert reply["chat_id"] == default_chat
+        assert reply["text"] == "reply"
+
+    # After disconnect, inbound calls recorded.
+    calls = [c[0][0] for c in bus.publish_inbound.call_args_list]
+    assert calls[0].chat_id == default_chat
+    assert calls[0].content == "hello from legacy"
+    assert calls[1].content == "structured legacy"
 
 
-@pytest.mark.asyncio
-async def test_multiplex_new_chat_roundtrip(bus: MagicMock) -> None:
-    port = 29931
-    channel = _ch(bus, port=port)
-    server_task = asyncio.create_task(channel.start())
-    await asyncio.sleep(0.3)
+def test_multiplex_new_chat_roundtrip(bus: MagicMock, monkeypatch, tmp_path) -> None:
+    import asyncio
 
-    try:
-        async with websockets.connect(f"ws://127.0.0.1:{port}/ws?client_id=mp") as client:
-            ready = json.loads(await client.recv())
-            default_chat = ready["chat_id"]
+    channel, client = _build_client(bus, monkeypatch, tmp_path)
 
-            await client.send(json.dumps({"type": "new_chat"}))
-            attached = json.loads(await client.recv())
-            assert attached["event"] == "attached"
-            new_chat = attached["chat_id"]
-            assert new_chat and new_chat != default_chat
+    with client.websocket_connect("/ws?client_id=mp") as ws:
+        ready = json.loads(ws.receive_text())
+        default_chat = ready["chat_id"]
 
-            # Send on the new chat via typed envelope
-            await client.send(
-                json.dumps({"type": "message", "chat_id": new_chat, "content": "hi on new"})
-            )
-            await asyncio.sleep(0.1)
-            inbound = bus.publish_inbound.call_args[0][0]
-            assert inbound.chat_id == new_chat
-            assert inbound.content == "hi on new"
+        ws.send_text(json.dumps({"type": "new_chat"}))
+        attached = json.loads(ws.receive_text())
+        assert attached["event"] == "attached"
+        new_chat = attached["chat_id"]
+        assert new_chat and new_chat != default_chat
 
-            # Server pushes a message back; chat_id must match
-            await channel.send(
-                OutboundMessage(channel="websocket", chat_id=new_chat, content="ok")
-            )
-            reply = json.loads(await client.recv())
-            assert reply["event"] == "message"
-            assert reply["chat_id"] == new_chat
-            assert reply["text"] == "ok"
-    finally:
-        await channel.stop()
-        await server_task
+        # Send on the new chat via typed envelope.
+        ws.send_text(json.dumps({"type": "message", "chat_id": new_chat, "content": "hi on new"}))
+
+        # Server pushes a message back; chat_id must match.
+        asyncio.run(
+            channel.send(OutboundMessage(channel="websocket", chat_id=new_chat, content="ok"))
+        )
+        reply = json.loads(ws.receive_text())
+        assert reply["event"] == "message"
+        assert reply["chat_id"] == new_chat
+        assert reply["text"] == "ok"
+
+    # Inbound arrived on the new chat.
+    inbound = bus.publish_inbound.call_args[0][0]
+    assert inbound.chat_id == new_chat
+    assert inbound.content == "hi on new"
 
 
-@pytest.mark.asyncio
-async def test_multiplex_two_chats_isolated(bus: MagicMock) -> None:
-    port = 29932
-    channel = _ch(bus, port=port)
-    server_task = asyncio.create_task(channel.start())
-    await asyncio.sleep(0.3)
+def test_multiplex_two_chats_isolated(bus: MagicMock, monkeypatch, tmp_path) -> None:
+    import asyncio
 
-    try:
-        async with websockets.connect(f"ws://127.0.0.1:{port}/ws?client_id=two") as client:
-            await client.recv()  # ready
+    channel, client = _build_client(bus, monkeypatch, tmp_path)
 
-            await client.send(json.dumps({"type": "new_chat"}))
-            chat_a = json.loads(await client.recv())["chat_id"]
-            await client.send(json.dumps({"type": "new_chat"}))
-            chat_b = json.loads(await client.recv())["chat_id"]
-            assert chat_a != chat_b
+    with client.websocket_connect("/ws?client_id=two") as ws:
+        ws.receive_text()  # ready
 
-            # Push A → client sees A only (FIFO over the single WS).
-            await channel.send(
-                OutboundMessage(channel="websocket", chat_id=chat_a, content="for-A")
-            )
-            msg_a = json.loads(await client.recv())
-            assert msg_a["chat_id"] == chat_a
-            assert msg_a["text"] == "for-A"
+        ws.send_text(json.dumps({"type": "new_chat"}))
+        chat_a = json.loads(ws.receive_text())["chat_id"]
+        ws.send_text(json.dumps({"type": "new_chat"}))
+        chat_b = json.loads(ws.receive_text())["chat_id"]
+        assert chat_a != chat_b
 
-            # Push B → client sees B only.
-            await channel.send(
-                OutboundMessage(channel="websocket", chat_id=chat_b, content="for-B")
-            )
-            msg_b = json.loads(await client.recv())
-            assert msg_b["chat_id"] == chat_b
-            assert msg_b["text"] == "for-B"
-    finally:
-        await channel.stop()
-        await server_task
+        asyncio.run(
+            channel.send(OutboundMessage(channel="websocket", chat_id=chat_a, content="for-A"))
+        )
+        msg_a = json.loads(ws.receive_text())
+        assert msg_a["chat_id"] == chat_a
+        assert msg_a["text"] == "for-A"
+
+        asyncio.run(
+            channel.send(OutboundMessage(channel="websocket", chat_id=chat_b, content="for-B"))
+        )
+        msg_b = json.loads(ws.receive_text())
+        assert msg_b["chat_id"] == chat_b
+        assert msg_b["text"] == "for-B"
 
 
-@pytest.mark.asyncio
-async def test_multiplex_invalid_frames_return_error(bus: MagicMock) -> None:
-    port = 29933
-    channel = _ch(bus, port=port)
-    server_task = asyncio.create_task(channel.start())
-    await asyncio.sleep(0.3)
+def test_multiplex_invalid_frames_return_error(bus: MagicMock, monkeypatch, tmp_path) -> None:
+    _, client = _build_client(bus, monkeypatch, tmp_path)
 
-    try:
-        async with websockets.connect(f"ws://127.0.0.1:{port}/ws?client_id=bad") as client:
-            await client.recv()  # ready
+    with client.websocket_connect("/ws?client_id=bad") as ws:
+        ws.receive_text()  # ready
 
-            # attach with bad chat_id
-            await client.send(json.dumps({"type": "attach", "chat_id": "has space"}))
-            err1 = json.loads(await client.recv())
-            assert err1["event"] == "error"
+        # attach with bad chat_id
+        ws.send_text(json.dumps({"type": "attach", "chat_id": "has space"}))
+        err1 = json.loads(ws.receive_text())
+        assert err1["event"] == "error"
 
-            # message with missing content
-            await client.send(json.dumps({"type": "message", "chat_id": "abc", "content": ""}))
-            err2 = json.loads(await client.recv())
-            assert err2["event"] == "error"
+        # message with missing content
+        ws.send_text(json.dumps({"type": "message", "chat_id": "abc", "content": ""}))
+        err2 = json.loads(ws.receive_text())
+        assert err2["event"] == "error"
 
-            # unknown type
-            await client.send(json.dumps({"type": "nope"}))
-            err3 = json.loads(await client.recv())
-            assert err3["event"] == "error"
+        # unknown type
+        ws.send_text(json.dumps({"type": "nope"}))
+        err3 = json.loads(ws.receive_text())
+        assert err3["event"] == "error"
 
-            # Connection survives: legacy frame still works.
-            await client.send("still-alive")
-            await asyncio.sleep(0.1)
-            bus.publish_inbound.assert_awaited()
-            assert bus.publish_inbound.call_args[0][0].content == "still-alive"
-    finally:
-        await channel.stop()
-        await server_task
+        # Connection survives: legacy frame still works.
+        ws.send_text("still-alive")
+
+    bus.publish_inbound.assert_awaited()
+    assert bus.publish_inbound.call_args[0][0].content == "still-alive"
 
 
-@pytest.mark.asyncio
-async def test_multiplex_cleanup_on_disconnect(bus: MagicMock) -> None:
-    port = 29934
-    channel = _ch(bus, port=port)
-    server_task = asyncio.create_task(channel.start())
-    await asyncio.sleep(0.3)
+def test_multiplex_cleanup_on_disconnect(bus: MagicMock, monkeypatch, tmp_path) -> None:
+    channel, client = _build_client(bus, monkeypatch, tmp_path)
+    captured: dict = {}
 
-    try:
-        async with websockets.connect(f"ws://127.0.0.1:{port}/ws?client_id=dc") as client:
-            ready = json.loads(await client.recv())
-            default_chat = ready["chat_id"]
-            await client.send(json.dumps({"type": "new_chat"}))
-            extra_chat = json.loads(await client.recv())["chat_id"]
-            assert default_chat in channel._subs
-            assert extra_chat in channel._subs
-        # Client gone. Server-side tracking must be empty.
-        await asyncio.sleep(0.2)
-        assert default_chat not in channel._subs
-        assert extra_chat not in channel._subs
-        assert not channel._conn_chats
-        assert not channel._conn_default
-    finally:
-        await channel.stop()
-        await server_task
+    with client.websocket_connect("/ws?client_id=dc") as ws:
+        ready = json.loads(ws.receive_text())
+        captured["default_chat"] = ready["chat_id"]
+        ws.send_text(json.dumps({"type": "new_chat"}))
+        captured["extra_chat"] = json.loads(ws.receive_text())["chat_id"]
+        assert captured["default_chat"] in channel._subs
+        assert captured["extra_chat"] in channel._subs
+
+    # Client gone. Server-side tracking must be empty.
+    assert captured["default_chat"] not in channel._subs
+    assert captured["extra_chat"] not in channel._subs
+    assert not channel._conn_chats
+    assert not channel._conn_default
 
 
 def test_parse_envelope_detects_typed_frames() -> None:

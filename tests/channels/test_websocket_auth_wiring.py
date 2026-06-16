@@ -15,8 +15,6 @@ import types
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
 from durin.channels.websocket import WebSocketChannel
 from durin.security.api_tokens import ApiTokenStore
 from durin.service.principal import Scope
@@ -142,14 +140,12 @@ def test_restart_survival_persisted_token(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_bootstrap_token_resolves_via_store(tmp_path, monkeypatch):
+def test_bootstrap_token_resolves_via_store(tmp_path, monkeypatch):
     """Bootstrap mints a token into the store; clearing in-memory dicts still
     leaves the token resolvable (restart-survival at the channel level)."""
-    import asyncio
-    import functools
+    from starlette.testclient import TestClient
 
-    import httpx
+    from durin.api.asgi import build_gateway_http_app
 
     monkeypatch.setattr("durin.config.paths.get_data_dir", lambda: tmp_path)
     ch = _channel(tmp_path)
@@ -157,31 +153,24 @@ async def test_bootstrap_token_resolves_via_store(tmp_path, monkeypatch):
     store_path = tmp_path / "api_tokens.json"
     ch._services.get("auth")._store._path = store_path
 
-    # Start the server.
-    port = 29970
-    ch.config.port = port
-    ch.config.host = "127.0.0.1"
-    server_task = asyncio.create_task(ch.start())
-    await asyncio.sleep(0.3)
-    try:
-        boot = await asyncio.to_thread(
-            functools.partial(httpx.get, f"http://127.0.0.1:{port}/webui/bootstrap", timeout=5.0)
-        )
-        assert boot.status_code == 200
-        token = boot.json()["token"]
+    registry = ch._services
+    auth = registry.get("auth")
+    app = build_gateway_http_app(ch, registry, auth=auth)
+    client = TestClient(app)
 
-        # Clear in-memory dicts to simulate a restart.
-        ch._api_tokens.clear()
-        ch._issued_tokens.clear()
+    boot = client.get("/webui/bootstrap")
+    assert boot.status_code == 200
+    token = boot.json()["token"]
 
-        # Token must still resolve via the persisted store.
-        req = _req(headers={"Authorization": f"Bearer {token}"})
-        principal = ch._resolve_principal(req)
-        assert principal is not None, "bootstrap token must resolve after in-memory dicts are cleared"
-        assert principal.has_scope(Scope.ADMIN)
-    finally:
-        await ch.stop()
-        await server_task
+    # Clear in-memory dicts to simulate a restart.
+    ch._api_tokens.clear()
+    ch._issued_tokens.clear()
+
+    # Token must still resolve via the persisted store.
+    req = _req(headers={"Authorization": f"Bearer {token}"})
+    principal = ch._resolve_principal(req)
+    assert principal is not None, "bootstrap token must resolve after in-memory dicts are cleared"
+    assert principal.has_scope(Scope.ADMIN)
 
 
 # ---------------------------------------------------------------------------

@@ -1818,71 +1818,66 @@ def _run_gateway(
             await cron.start()
             await heartbeat.start()
 
-            # Step 4: unified uvicorn server (default path, legacy_ws_server=False).
-            # Build the full gateway app (WS chat + /api/v1 + legacy /api/* + SPA)
-            # and serve it via uvicorn on the websocket channel's port.  The channel
-            # is stripped of its own socket server so it acts purely as the handler.
-            if not config.gateway.legacy_ws_server:
-                import contextlib as _contextlib_unified
+            # Unified uvicorn server: the gateway serves WS chat + /api/v1 +
+            # legacy /api/* + SPA via a single Starlette app on the websocket
+            # channel's port.  The channel acts purely as the handler.
+            import contextlib as _contextlib_unified
 
-                import uvicorn as _uvicorn_unified
+            import uvicorn as _uvicorn_unified
 
-                from durin.api.asgi import build_gateway_http_app as _build_gw_app
-                from durin.service.wiring import build_service_registry as _build_reg
+            from durin.api.asgi import build_gateway_http_app as _build_gw_app
+            from durin.service.wiring import build_service_registry as _build_reg
 
-                _ws_channel = channels.get_channel("websocket")
-                if _ws_channel is not None:
-                    # Suppress the channel's own websockets.serve() — uvicorn drives it.
-                    _ws_channel._serve_own_server = False  # type: ignore[attr-defined]
+            _ws_channel = channels.get_channel("websocket")
+            if _ws_channel is not None:
+                _unified_registry = _build_reg(
+                    config=config,
+                    session_manager=session_manager,
+                    cron_service=cron,
+                    bus=bus,
+                )
+                # Static token lives on the websocket channel config.
+                _ws_cfg_u = getattr(config.channels, "websocket", None)
+                if isinstance(_ws_cfg_u, dict):
+                    _static_token_u = _ws_cfg_u.get("token") or ""
+                elif _ws_cfg_u is not None:
+                    _static_token_u = getattr(_ws_cfg_u, "token", "") or ""
+                else:
+                    _static_token_u = ""
 
-                    _unified_registry = _build_reg(
-                        config=config,
-                        session_manager=session_manager,
-                        cron_service=cron,
-                        bus=bus,
-                    )
-                    # Static token lives on the websocket channel config.
-                    _ws_cfg_u = getattr(config.channels, "websocket", None)
-                    if isinstance(_ws_cfg_u, dict):
-                        _static_token_u = _ws_cfg_u.get("token") or ""
-                    elif _ws_cfg_u is not None:
-                        _static_token_u = getattr(_ws_cfg_u, "token", "") or ""
-                    else:
-                        _static_token_u = ""
-
-                    _unified_app = _build_gw_app(
-                        _ws_channel,
-                        _unified_registry,
-                        auth=_unified_registry.get("auth"),
-                        static_token=_static_token_u,
-                        static_dist_path=_ws_channel._static_dist_path,
-                    )
-                    _ws_port = _ws_channel.config.port  # type: ignore[attr-defined]
-                    _ws_host = _ws_channel.config.host  # type: ignore[attr-defined]
-                    _ws_ssl_cert = getattr(_ws_channel.config, "ssl_certfile", "") or ""
-                    _ws_ssl_key = getattr(_ws_channel.config, "ssl_keyfile", "") or ""
-                    _uvicorn_kwargs: dict = dict(
-                        host=_ws_host,
-                        port=_ws_port,
-                        log_level="warning",
-                        ws_max_size=_ws_channel.config.max_message_bytes,  # type: ignore[attr-defined]
-                        ws_ping_interval=_ws_channel.config.ping_interval_s,  # type: ignore[attr-defined]
-                        ws_ping_timeout=_ws_channel.config.ping_timeout_s,  # type: ignore[attr-defined]
-                    )
-                    if _ws_ssl_cert and _ws_ssl_key:
-                        _uvicorn_kwargs["ssl_certfile"] = _ws_ssl_cert
-                        _uvicorn_kwargs["ssl_keyfile"] = _ws_ssl_key
-                    unified_server = _uvicorn_unified.Server(
-                        _uvicorn_unified.Config(_unified_app, **_uvicorn_kwargs)
-                    )
-                    # The gateway owns SIGINT/SIGTERM; uvicorn must not install its own.
-                    unified_server.capture_signals = _contextlib_unified.nullcontext
-                    _scheme = "wss" if (_ws_ssl_cert and _ws_ssl_key) else "ws"
-                    console.print(
-                        f"[green]✓[/green] Unified gateway: "
-                        f"{_scheme}://{_ws_host}:{_ws_port} "
-                        f"(WS + /api/v1 + SPA)"
-                    )
+                _unified_app = _build_gw_app(
+                    _ws_channel,
+                    _unified_registry,
+                    auth=_unified_registry.get("auth"),
+                    static_token=_static_token_u,
+                    static_dist_path=_ws_channel._static_dist_path,
+                )
+                _ws_port = _ws_channel.config.port  # type: ignore[attr-defined]
+                _ws_host = _ws_channel.config.host  # type: ignore[attr-defined]
+                _ws_ssl_cert = getattr(_ws_channel.config, "ssl_certfile", "") or ""
+                _ws_ssl_key = getattr(_ws_channel.config, "ssl_keyfile", "") or ""
+                _uvicorn_kwargs: dict = dict(
+                    host=_ws_host,
+                    port=_ws_port,
+                    log_level="warning",
+                    ws_max_size=_ws_channel.config.max_message_bytes,  # type: ignore[attr-defined]
+                    ws_ping_interval=_ws_channel.config.ping_interval_s,  # type: ignore[attr-defined]
+                    ws_ping_timeout=_ws_channel.config.ping_timeout_s,  # type: ignore[attr-defined]
+                )
+                if _ws_ssl_cert and _ws_ssl_key:
+                    _uvicorn_kwargs["ssl_certfile"] = _ws_ssl_cert
+                    _uvicorn_kwargs["ssl_keyfile"] = _ws_ssl_key
+                unified_server = _uvicorn_unified.Server(
+                    _uvicorn_unified.Config(_unified_app, **_uvicorn_kwargs)
+                )
+                # The gateway owns SIGINT/SIGTERM; uvicorn must not install its own.
+                unified_server.capture_signals = _contextlib_unified.nullcontext
+                _scheme = "wss" if (_ws_ssl_cert and _ws_ssl_key) else "ws"
+                console.print(
+                    f"[green]✓[/green] Unified gateway: "
+                    f"{_scheme}://{_ws_host}:{_ws_port} "
+                    f"(WS + /api/v1 + SPA)"
+                )
 
             tasks = [
                 agent.run(),
