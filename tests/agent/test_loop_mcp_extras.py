@@ -31,7 +31,7 @@ def test_connect_mcp_installs_then_retries(monkeypatch):
     lp = loop_mod.AgentLoop.__new__(loop_mod.AgentLoop)
     lp._mcp_connected = False
     lp._mcp_connecting = False
-    lp._mcp_servers = [object()]
+    lp._mcp_servers = {"x": object()}  # _mcp_servers is always a dict[name, cfg]
     lp._mcp_connections = {}
     lp.tools = []
     lp.app_config = None

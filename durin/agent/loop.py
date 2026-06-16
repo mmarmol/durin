@@ -745,9 +745,17 @@ class AgentLoop:
         self._mcp_connecting = True
         from durin.agent.tools.mcp import connect_mcp_servers
 
+        # Only connect servers the user has left enabled; the full configured
+        # set stays in self._mcp_servers so a disabled server can be connected
+        # at runtime (connect_mcp_server) without a gateway restart.
+        enabled_servers = {
+            name: cfg
+            for name, cfg in self._mcp_servers.items()
+            if getattr(cfg, "enabled", True)
+        }
         try:
             self._mcp_connections = await connect_mcp_servers(
-                self._mcp_servers, self.tools,
+                enabled_servers, self.tools,
                 defer_cb=self._maybe_defer_mcp_tools,
                 provider=self.provider,
                 default_model=self.model,
@@ -765,7 +773,7 @@ class AgentLoop:
             if res.status in ("present", "installed"):
                 try:
                     self._mcp_connections = await connect_mcp_servers(
-                        self._mcp_servers, self.tools,
+                        enabled_servers, self.tools,
                         defer_cb=self._maybe_defer_mcp_tools,
                         provider=self.provider,
                         default_model=self.model,
