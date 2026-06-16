@@ -528,13 +528,6 @@ def build_gateway_http_app(
         result = channel._handle_media_fetch(sig, payload)
         return _http_result_to_starlette(result)
 
-    # -- legacy /api/* catch-all --------------------------------------------
-
-    async def legacy_api_handler(request: Request) -> Response:
-        shim = _StarletteRequestShim(request)
-        result = await channel._dispatch_legacy_http(shim)
-        return _http_result_to_starlette(result)
-
     # -- signed v1 session reads --------------------------------------------
     # Media-URL signing (and the webui-thread build) needs this channel's
     # per-process ``_media_secret`` — an adapter concern the generic /api/v1
@@ -645,8 +638,6 @@ def build_gateway_http_app(
             media_handler,
             methods=["GET"],
         ),
-        # Legacy /api/* — all other channel-owned routes.
-        Route("/api/{path:path}", legacy_api_handler, methods=["GET"]),
     ]
 
     # SPA static files (optional).
