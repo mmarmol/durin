@@ -759,9 +759,11 @@ class GatewayConfig(Base):
         validation_alias=AliasChoices("webuiEnabled", "webui_enabled"),
         serialization_alias="webuiEnabled",
     )
-    # When set, the gateway also serves the Starlette read-only API on this
-    # second port. Off by default (None) — existing behaviour is unchanged.
-    # Set via `gateway.api_port: 18791` to activate the new HTTP front door.
+    # When set, the gateway also serves the full /api/v1 front door (reads +
+    # writes) on this separate port — the unified server already serves it on
+    # the ws-port, so this is an opt-in for deployments that want the API
+    # isolated on its own port. Off by default (None); existing behaviour
+    # unchanged. Set via `gateway.api_port: 18791`.
     api_port: int | None = None
 
 
