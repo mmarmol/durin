@@ -3,12 +3,13 @@ import json
 
 import durin.channels.websocket as ws
 from durin.service.health import HealthService
+from durin.service.principal import Principal
 from durin.service.registry import ServiceRegistry
 
 
 def _channel():
     c = ws.WebSocketChannel.__new__(ws.WebSocketChannel)
-    c._check_api_token = lambda req: True
+    c._resolve_principal = lambda req: Principal.local()
     registry = ServiceRegistry()
     registry.register("health", HealthService())
     c._services = registry
