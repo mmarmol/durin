@@ -202,6 +202,21 @@ def _build_422(exc: ValidationError) -> Response:
     return Response(body, status_code=422, media_type="application/problem+json")
 
 
+def _result_response(result: Any) -> JSONResponse:
+    """Serialize a service ``Result`` to JSON.
+
+    An ``int`` ``status`` attribute becomes the HTTP status code — only
+    ``SkillsResult`` carries one (the skills store's own HTTP status for the
+    import/approve/reject gate, e.g. ``409`` when a confirm is required). Every
+    other result has no ``status`` (or a *string* one, which is data, not an
+    HTTP code) and is served as ``200``.
+    """
+    status = getattr(result, "status", None)
+    return JSONResponse(
+        result.model_dump(), status_code=status if isinstance(status, int) else 200
+    )
+
+
 def _build_handler(
     bound: BoundRoute,
     *,
@@ -259,7 +274,7 @@ def _build_handler(
         except DomainError as exc:
             return _problem_response(exc)
 
-        return JSONResponse(result.model_dump())
+        return _result_response(result)
 
     return endpoint
 
@@ -323,7 +338,7 @@ def _build_write_handler(
         except DomainError as exc:
             return _problem_response(exc)
 
-        return JSONResponse(result.model_dump())
+        return _result_response(result)
 
     return endpoint
 
@@ -375,7 +390,19 @@ def build_api_app(
         Route("/api/v1/health", _health_handler, methods=["GET"]),
     ]
 
-    for bound in registry.routes:
+    # Order routes so a literal segment is matched before a ``{param}`` at the
+    # same position. Routes are collected in alphabetical method-name order, so
+    # without this GET ``/skills/{name}`` shadows the literal ``/skills/quarantine``,
+    # ``/skills/resolve``, ``/skills/search`` (Starlette matches in list order,
+    # first match wins). Mapping a ``{param}`` segment to a high sentinel sorts
+    # it after every literal — the universally-correct "most specific first".
+    def _route_order(bound: BoundRoute) -> list[str]:
+        return [
+            "￿" if seg.startswith("{") else seg
+            for seg in bound.spec.path.split("/")
+        ]
+
+    for bound in sorted(registry.routes, key=_route_order):
         if _is_read_route(bound):
             h = _build_handler(bound, auth=auth, static_token=static_token)
             routes.append(Route(bound.spec.path, h, methods=["GET"]))

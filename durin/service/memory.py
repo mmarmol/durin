@@ -48,9 +48,11 @@ class MemoryResult(Result):
 
 
 class ForgetResult(Result):
-    """Result of an archive operation.  ``result`` drives HTTP status."""
+    """Result of an archive operation.  ``result`` drives the HTTP ``status``
+    (200 archived/not_found, 403 protected, 400 invalid)."""
 
     result: str  # "archived" | "not_found" | "protected" | "invalid"
+    status: int = 200
 
 
 # ---------------------------------------------------------------------------
@@ -308,4 +310,6 @@ class MemoryService:
 
         ws = self._workspace_resolver()
         payload = forget_entry(ws, cmd.uri)
-        return ForgetResult(result=payload.get("result", "invalid"))
+        result = payload.get("result", "invalid")
+        status = {"protected": 403, "invalid": 400}.get(result, 200)
+        return ForgetResult(result=result, status=status)

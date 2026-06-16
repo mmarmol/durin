@@ -101,14 +101,15 @@ def _token(client: TestClient) -> str:
 def test_memory_entry_routes_require_bearer(
     client: TestClient,
 ) -> None:
-    """All 3 new routes return 401 without a valid token."""
-    for path in (
-        "/api/memory/entry?uri=memory/episodic/x",
-        "/api/memory/forget?uri=memory/episodic/x",
-        "/api/memory/backlinks?uri=memory/episodic/x",
-    ):
-        r = client.get(path)
-        assert r.status_code == 401, f"expected 401 for {path}, got {r.status_code}"
+    """All 3 routes return 401 without a valid token."""
+    assert client.get("/api/v1/memory/entry?uri=memory/episodic/x").status_code == 401
+    assert client.get("/api/v1/memory/backlinks?uri=memory/episodic/x").status_code == 401
+    assert (
+        client.request(
+            "DELETE", "/api/v1/memory/entry", json={"uri": "memory/episodic/x"}
+        ).status_code
+        == 401
+    )
 
 
 def test_memory_entry_endpoint_returns_payload(
@@ -122,18 +123,18 @@ def test_memory_entry_endpoint_returns_payload(
     auth = {"Authorization": f"Bearer {tok}"}
 
     r = client.get(
-        "/api/memory/entry?uri=memory/episodic/obs-1",
+        "/api/v1/memory/entry?uri=memory/episodic/obs-1",
         headers=auth,
     )
     assert r.status_code == 200
-    body = r.json()
+    body = r.json()["data"]
     assert body["uri"] == "memory/episodic/obs-1"
     assert body["class_name"] == "episodic"
     assert "Alice loves rust" in body["body"]
 
     # 404 when the entry doesn't exist.
     r404 = client.get(
-        "/api/memory/entry?uri=memory/episodic/ghost",
+        "/api/v1/memory/entry?uri=memory/episodic/ghost",
         headers=auth,
     )
     assert r404.status_code == 404
@@ -146,27 +147,27 @@ def test_memory_forget_endpoint_archives_and_protects(
     auth = {"Authorization": f"Bearer {_token(client)}"}
 
     # Happy path: archive an existing entry.
-    r = client.get(
-        "/api/memory/forget?uri=memory/episodic/obs-2",
-        headers=auth,
+    r = client.request(
+        "DELETE", "/api/v1/memory/entry",
+        headers=auth, json={"uri": "memory/episodic/obs-2"},
     )
     assert r.status_code == 200
-    assert r.json() == {"result": "archived"}
+    assert r.json()["result"] == "archived"
     assert not (tmp_path / "memory" / "episodic" / "obs-2.md").exists()
     assert (tmp_path / "memory" / "archive" / "episodic" / "obs-2.md").exists()
 
     # Protected: entity URIs return 403.
-    r_protected = client.get(
-        "/api/memory/forget?uri=memory/entities/person/marcelo",
-        headers=auth,
+    r_protected = client.request(
+        "DELETE", "/api/v1/memory/entry",
+        headers=auth, json={"uri": "memory/entities/person/marcelo"},
     )
     assert r_protected.status_code == 403
     assert r_protected.json()["result"] == "protected"
 
     # Invalid URI returns 400.
-    r_bad = client.get(
-        "/api/memory/forget?uri=garbage",
-        headers=auth,
+    r_bad = client.request(
+        "DELETE", "/api/v1/memory/entry",
+        headers=auth, json={"uri": "garbage"},
     )
     assert r_bad.status_code == 400
     assert r_bad.json()["result"] == "invalid"
@@ -184,11 +185,11 @@ def test_memory_backlinks_endpoint(
     auth = {"Authorization": f"Bearer {_token(client)}"}
 
     r = client.get(
-        "/api/memory/backlinks?uri=memory/episodic/target",
+        "/api/v1/memory/backlinks?uri=memory/episodic/target",
         headers=auth,
     )
     assert r.status_code == 200
-    body = r.json()
+    body = r.json()["data"]
     assert body["uri"] == "memory/episodic/target"
     assert len(body["backlinks"]) == 1
     assert body["backlinks"][0]["uri"] == "memory/episodic/ref"

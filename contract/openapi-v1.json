@@ -572,11 +572,16 @@
         "type": "object"
       },
       "ForgetResult": {
-        "description": "Result of an archive operation.  ``result`` drives HTTP status.",
+        "description": "Result of an archive operation.  ``result`` drives the HTTP ``status``\n(200 archived/not_found, 403 protected, 400 invalid).",
         "properties": {
           "result": {
             "title": "Result",
             "type": "string"
+          },
+          "status": {
+            "default": 200,
+            "title": "Status",
+            "type": "integer"
           }
         },
         "required": [

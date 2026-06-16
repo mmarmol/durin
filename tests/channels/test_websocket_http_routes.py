@@ -119,23 +119,23 @@ def test_sessions_routes_require_bearer_token(
     client = _make_client(bus, session_manager=sm)
 
     # Unauthenticated → 401.
-    deny = client.get("/api/sessions")
+    deny = client.get("/api/v1/sessions")
     assert deny.status_code == 401
 
     # Mint a token via bootstrap, then call the API with it.
     tok = _token(client)
     auth = {"Authorization": f"Bearer {tok}"}
 
-    listing = client.get("/api/sessions", headers=auth)
+    listing = client.get("/api/v1/sessions", headers=auth)
     assert listing.status_code == 200
     keys = [s["key"] for s in listing.json()["sessions"]]
     assert "websocket:abc" in keys
     # Server stays an opaque source: filesystem paths must not leak to the wire.
     assert all("path" not in s for s in listing.json()["sessions"])
 
-    msgs = client.get("/api/sessions/websocket:abc/messages", headers=auth)
+    msgs = client.get("/api/v1/sessions/websocket:abc/messages", headers=auth)
     assert msgs.status_code == 200
-    body = msgs.json()
+    body = msgs.json()["data"]
     assert body["key"] == "websocket:abc"
     assert [m["role"] for m in body["messages"]] == ["user", "assistant"]
 
@@ -161,7 +161,7 @@ def test_sessions_list_only_returns_websocket_sessions_by_default(
     tok = _token(client)
     auth = {"Authorization": f"Bearer {tok}"}
 
-    listing = client.get("/api/sessions", headers=auth)
+    listing = client.get("/api/v1/sessions", headers=auth)
     assert listing.status_code == 200
     keys = {s["key"] for s in listing.json()["sessions"]}
     # Only websocket-channel sessions are part of the webui surface; CLI /
@@ -186,7 +186,7 @@ def test_session_delete_removes_file(
     assert path.exists()
     webui_path = tmp_path / "webui" / f"{SessionManager.safe_key('websocket:doomed')}.jsonl"
     assert webui_path.is_file()
-    resp = client.get("/api/sessions/websocket:doomed/delete", headers=auth)
+    resp = client.delete("/api/v1/sessions/websocket:doomed", headers=auth)
     assert resp.status_code == 200
     assert resp.json()["deleted"] is True
     assert not path.exists()
@@ -203,14 +203,14 @@ def test_session_routes_accept_percent_encoded_websocket_keys(
     tok = _token(client)
     auth = {"Authorization": f"Bearer {tok}"}
 
-    msgs = client.get("/api/sessions/websocket%3Aencoded-key/messages", headers=auth)
+    msgs = client.get("/api/v1/sessions/websocket%3Aencoded-key/messages", headers=auth)
     assert msgs.status_code == 200
-    assert msgs.json()["key"] == "websocket:encoded-key"
+    assert msgs.json()["data"]["key"] == "websocket:encoded-key"
 
     path = sm._get_session_path("websocket:encoded-key")
     assert path.exists()
-    deleted = client.get(
-        "/api/sessions/websocket%3Aencoded-key/delete", headers=auth
+    deleted = client.delete(
+        "/api/v1/sessions/websocket%3Aencoded-key", headers=auth
     )
     assert deleted.status_code == 200
     assert deleted.json()["deleted"] is True
@@ -236,13 +236,13 @@ def test_session_routes_reject_non_websocket_keys(
 
     # The webui list already hides non-websocket sessions; handcrafted URLs
     # should hit the same boundary rather than exposing or deleting them.
-    msgs = client.get("/api/sessions/cli:direct/messages", headers=auth)
+    msgs = client.get("/api/v1/sessions/cli:direct/messages", headers=auth)
     assert msgs.status_code == 404
 
     doomed = sm._get_session_path("slack:C123")
     assert doomed.exists()
-    deny_delete = client.get(
-        "/api/sessions/slack:C123/delete", headers=auth
+    deny_delete = client.delete(
+        "/api/v1/sessions/slack:C123", headers=auth
     )
     assert deny_delete.status_code == 404
     assert doomed.exists()
@@ -271,9 +271,10 @@ def test_rename_during_active_turn_preserves_title_and_messages(
     cached = sm.get_or_create("websocket:test")
     cached.add_message("user", "in-flight-msg")
 
-    resp = client.get(
-        "/api/sessions/websocket:test/rename?title=Renamed",
+    resp = client.post(
+        "/api/v1/sessions/websocket:test/rename",
         headers=auth,
+        json={"title": "Renamed"},
     )
     assert resp.status_code == 200
 
@@ -303,8 +304,8 @@ def test_delete_during_active_turn_is_not_resurrected(
     cached = sm.get_or_create("websocket:doomed")
     cached.add_message("user", "mid-turn")
 
-    resp = client.get(
-        "/api/sessions/websocket:doomed/delete",
+    resp = client.delete(
+        "/api/v1/sessions/websocket:doomed",
         headers=auth,
     )
     assert resp.status_code == 200
@@ -328,7 +329,7 @@ def test_session_routes_reject_invalid_key(
 
     # Invalid characters in the key -> regex match fails -> 404
     # (route doesn't match, falls through to channel 404).
-    resp = client.get("/api/sessions/bad%20key/messages", headers=auth)
+    resp = client.get("/api/v1/sessions/bad%20key/messages", headers=auth)
     assert resp.status_code in {400, 404}
 
 
@@ -401,9 +402,9 @@ def test_skills_quarantine_route_not_shadowed_by_skill_name(
     tok = _token(client)
     auth = {"Authorization": f"Bearer {tok}"}
 
-    resp = client.get("/api/skills/quarantine", headers=auth)
+    resp = client.get("/api/v1/skills/quarantine", headers=auth)
     assert resp.status_code == 200
-    body = resp.json()
+    body = resp.json()["data"]
     # Routed to the quarantine handler: payload has the quarantine list,
     # NOT a skill-get shape (which would 404 "skill not found: quarantine"
     # or return a {name, mode, content} body for a skill named quarantine).
@@ -445,10 +446,10 @@ def test_skills_resolve_route_lists_local_candidates(
     tok = _token(client)
     auth = {"Authorization": f"Bearer {tok}"}
     resp = client.get(
-        f"/api/skills/resolve?source={quote(str(src))}", headers=auth
+        f"/api/v1/skills/resolve?source={quote(str(src))}", headers=auth
     )
     assert resp.status_code == 200
-    body = resp.json()
+    body = resp.json()["data"]
     # routed to resolve (not skill-get with name='resolve')
     assert "candidates" in body
     assert "imported" in {c["name"] for c in body["candidates"]}
@@ -468,19 +469,21 @@ def test_skills_import_then_approve_installs(
 
     tok = _token(client)
     auth = {"Authorization": f"Bearer {tok}"}
-    imp = client.get(
-        f"/api/skills/import?source={quote(str(src))}", headers=auth
+    imp = client.post(
+        "/api/v1/skills/import", headers=auth, json={"source": str(src)}
     )
     assert imp.status_code == 200
-    body = imp.json()
+    body = imp.json()["data"]
     assert body["quarantined"] == "imported"
     assert body["verdict"] == "safe"
     # a safe but out-of-allowlist skill needs confirm: bare approve is refused.
-    refused = client.get("/api/skills/imported/approve", headers=auth)
+    refused = client.post("/api/v1/skills/imported/approve", headers=auth, json={})
     assert refused.status_code == 409
-    assert refused.json()["refused"] == "confirm"
-    ok = client.get("/api/skills/imported/approve?confirm=true", headers=auth)
-    assert ok.status_code == 200 and ok.json()["ok"]
+    assert refused.json()["data"]["refused"] == "confirm"
+    ok = client.post(
+        "/api/v1/skills/imported/approve", headers=auth, json={"confirm": True}
+    )
+    assert ok.status_code == 200 and ok.json()["data"]["ok"]
     assert (ws / "skills" / "imported" / "SKILL.md").is_file()
 
 
@@ -503,9 +506,9 @@ def test_skill_judge_route_runs_on_demand(
 
     tok = _token(client)
     auth = {"Authorization": f"Bearer {tok}"}
-    resp = client.get("/api/skills/cand/judge", headers=auth)
+    resp = client.get("/api/v1/skills/cand/judge", headers=auth)
     assert resp.status_code == 200
-    body = resp.json()
+    body = resp.json()["data"]
     assert body["judged"] is True
     assert body["verdict"] == "caution"
     assert any(f["category"].startswith("llm:") for f in body["findings"])
@@ -527,10 +530,10 @@ def test_github_token_test_route_not_shadowed(
     tok = _token(client)
     auth = {"Authorization": f"Bearer {tok}"}
     resp = client.get(
-        "/api/skills/github-token-test?secret=ghx", headers=auth
+        "/api/v1/skills/github-token-test?secret=ghx", headers=auth
     )
     assert resp.status_code == 200
-    body = resp.json()
+    body = resp.json()["data"]
     assert body["ok"] is False and "content" not in body  # token-test shape, no network
 
 
@@ -548,10 +551,10 @@ def test_skill_reject_route_removes_quarantine(
 
     tok = _token(client)
     auth = {"Authorization": f"Bearer {tok}"}
-    client.get(f"/api/skills/import?source={quote(str(src))}", headers=auth)
+    client.post("/api/v1/skills/import", headers=auth, json={"source": str(src)})
     assert (ws / ".durin" / "import-quarantine" / "imported").is_dir()
-    rej = client.get("/api/skills/imported/reject", headers=auth)
-    assert rej.status_code == 200 and rej.json()["ok"]
+    rej = client.delete("/api/v1/skills/imported/quarantine", headers=auth)
+    assert rej.status_code == 200 and rej.json()["data"]["ok"]
     assert not (ws / ".durin" / "import-quarantine" / "imported").exists()
 
 
