@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from durin.providers import codex_device_auth as cda
 from durin.service.oauth import (
     OAuthDisconnectCommand,
     OAuthPollQuery,
@@ -57,7 +58,7 @@ def _remote_none() -> Principal:
 async def test_status_connected(monkeypatch):
     info = _FakeSessionInfo(email="u@x.com", plan="pro", source="durin")
     monkeypatch.setattr(
-        "durin.providers.codex_device_auth.existing_codex_session", lambda: info
+        cda, "existing_codex_session", lambda: info
     )
     result = await OAuthService().status(OAuthStatusQuery(is_local=False), _local())
     assert result.connected is True
@@ -69,7 +70,7 @@ async def test_status_connected(monkeypatch):
 
 async def test_status_disconnected(monkeypatch):
     monkeypatch.setattr(
-        "durin.providers.codex_device_auth.existing_codex_session", lambda: None
+        cda, "existing_codex_session", lambda: None
     )
     result = await OAuthService().status(OAuthStatusQuery(is_local=False), _local())
     assert result.connected is False
@@ -78,7 +79,7 @@ async def test_status_disconnected(monkeypatch):
 
 async def test_status_can_loopback_local(monkeypatch):
     monkeypatch.setattr(
-        "durin.providers.codex_device_auth.existing_codex_session", lambda: None
+        cda, "existing_codex_session", lambda: None
     )
     result = await OAuthService().status(OAuthStatusQuery(is_local=True), _local())
     assert result.can_loopback is True
@@ -86,7 +87,7 @@ async def test_status_can_loopback_local(monkeypatch):
 
 async def test_status_can_loopback_remote(monkeypatch):
     monkeypatch.setattr(
-        "durin.providers.codex_device_auth.existing_codex_session", lambda: None
+        cda, "existing_codex_session", lambda: None
     )
     result = await OAuthService().status(OAuthStatusQuery(is_local=False), _local())
     assert result.can_loopback is False
@@ -94,7 +95,7 @@ async def test_status_can_loopback_remote(monkeypatch):
 
 async def test_status_requires_read_scope(monkeypatch):
     monkeypatch.setattr(
-        "durin.providers.codex_device_auth.existing_codex_session", lambda: None
+        cda, "existing_codex_session", lambda: None
     )
     with pytest.raises(ForbiddenError):
         await OAuthService().status(OAuthStatusQuery(), _remote_none())
@@ -107,7 +108,7 @@ async def test_status_requires_read_scope(monkeypatch):
 
 async def test_start_loopback_local_returns_url(monkeypatch):
     monkeypatch.setattr(
-        "durin.providers.codex_device_auth.start_loopback_login",
+        cda, "start_loopback_login",
         lambda **_kw: "https://auth.openai.com/oauth/authorize?x=1",
     )
     result = await OAuthService().start_loopback(
@@ -127,7 +128,7 @@ async def test_start_loopback_upstream_failure_raises_unavailable(monkeypatch):
     def _fail(**_kw):
         raise RuntimeError("port in use")
 
-    monkeypatch.setattr("durin.providers.codex_device_auth.start_loopback_login", _fail)
+    monkeypatch.setattr(cda, "start_loopback_login", _fail)
     with pytest.raises(UnavailableError, match="loopback login failed"):
         await OAuthService().start_loopback(
             OAuthStartLoopbackCommand(is_local=True), _local()
@@ -163,7 +164,7 @@ async def test_start_returns_challenge(monkeypatch):
         interval=5,
         expires_in=900,
     )
-    monkeypatch.setattr("durin.providers.codex_device_auth.request_device_code", lambda: ch)
+    monkeypatch.setattr(cda, "request_device_code", lambda: ch)
     result = await OAuthService().start(OAuthStartCommand(), _local())
     assert result.user_code == "WXYZ-1"
     assert result.device_auth_id == "dev_1"
@@ -175,7 +176,7 @@ async def test_start_upstream_failure_raises_unavailable(monkeypatch):
     def _fail():
         raise RuntimeError("network error")
 
-    monkeypatch.setattr("durin.providers.codex_device_auth.request_device_code", _fail)
+    monkeypatch.setattr(cda, "request_device_code", _fail)
     with pytest.raises(UnavailableError, match="device code request failed"):
         await OAuthService().start(OAuthStartCommand(), _local())
 
@@ -192,7 +193,7 @@ async def test_start_requires_write_scope():
 
 async def test_poll_pending(monkeypatch):
     monkeypatch.setattr(
-        "durin.providers.codex_device_auth.poll_once",
+        cda, "poll_once",
         lambda did, uc: _FakePollResult(status="pending"),
     )
     result = await OAuthService().poll(
@@ -206,10 +207,10 @@ async def test_poll_pending(monkeypatch):
 async def test_poll_ok_includes_session(monkeypatch):
     info = _FakeSessionInfo(email="u@x.com", plan="pro", source="durin")
     monkeypatch.setattr(
-        "durin.providers.codex_device_auth.existing_codex_session", lambda: info
+        cda, "existing_codex_session", lambda: info
     )
     monkeypatch.setattr(
-        "durin.providers.codex_device_auth.poll_once",
+        cda, "poll_once",
         lambda did, uc: _FakePollResult(status="ok"),
     )
     result = await OAuthService().poll(
@@ -222,7 +223,7 @@ async def test_poll_ok_includes_session(monkeypatch):
 
 async def test_poll_error_includes_message(monkeypatch):
     monkeypatch.setattr(
-        "durin.providers.codex_device_auth.poll_once",
+        cda, "poll_once",
         lambda did, uc: _FakePollResult(status="error", error="expired"),
     )
     result = await OAuthService().poll(
@@ -254,10 +255,10 @@ async def test_poll_requires_read_scope():
 async def test_disconnect_returns_disconnected_status(monkeypatch):
     disconnected = []
     monkeypatch.setattr(
-        "durin.providers.codex_device_auth.disconnect", lambda: disconnected.append(True)
+        cda, "disconnect", lambda: disconnected.append(True)
     )
     monkeypatch.setattr(
-        "durin.providers.codex_device_auth.existing_codex_session", lambda: None
+        cda, "existing_codex_session", lambda: None
     )
     result = await OAuthService().disconnect(OAuthDisconnectCommand(), _local())
     assert result.connected is False
