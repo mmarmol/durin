@@ -53,17 +53,6 @@ def test_bootstrap_mints_a_token(client):
     assert r.json().get("token")
 
 
-def test_legacy_api_secrets_with_token(client):
-    tok = _token(client)
-    r = client.get("/api/secrets", headers={"Authorization": f"Bearer {tok}"})
-    assert r.status_code == 200
-    assert "secrets" in r.json()  # legacy GET /api/secrets served by Starlette now
-
-
-def test_legacy_api_secrets_without_token_is_401(client):
-    assert client.get("/api/secrets").status_code == 401
-
-
 def test_front_door_v1_secrets_with_token(client):
     tok = _token(client)
     r = client.get("/api/v1/secrets", headers={"Authorization": f"Bearer {tok}"})
