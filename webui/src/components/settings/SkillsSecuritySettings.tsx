@@ -158,8 +158,8 @@ export function SkillsSecuritySettings({ token }: { token: string }) {
             </select>
           </SettingsRow>
           <SettingsRow
-            title={t("settings.skillsSecurity.rows.judgeMaxSeverity")}
-            description={t("settings.skillsSecurity.help.judgeMaxSeverity")}
+            title={t("settings.skillSecurity.rows.judgeMaxSeverity")}
+            description={t("settings.skillSecurity.help.judgeMaxSeverity")}
           >
             <select
               value={v.judgeMaxSeverity}
@@ -167,20 +167,9 @@ export function SkillsSecuritySettings({ token }: { token: string }) {
               onChange={(e) => void onSave("skills.security.llm_judge.max_severity", e.target.value)}
               className="rounded-[8px] border border-border/60 bg-background px-2 py-1 text-[13px] disabled:opacity-50"
             >
-              <option value="caution">{t("settings.skillsSecurity.severity.caution")}</option>
-              <option value="dangerous">{t("settings.skillsSecurity.severity.dangerous")}</option>
+              <option value="caution">{t("settings.skillSecurity.severity.caution")}</option>
+              <option value="dangerous">{t("settings.skillSecurity.severity.dangerous")}</option>
             </select>
-          </SettingsRow>
-          <SettingsRow
-            title={t("settings.skillsSecurity.rows.judgeModel")}
-            description={t("settings.skillsSecurity.help.judgeModel")}
-          >
-            <ModelField
-              value={v.judgeModel}
-              disabled={false}
-              saving={savingPath === "skills.security.llm_judge.model"}
-              onSave={(m) => void onSave("skills.security.llm_judge.model", m)}
-            />
           </SettingsRow>
         </SettingsGroup>
       </section>
@@ -310,29 +299,6 @@ export function SkillsSecuritySettings({ token }: { token: string }) {
           />
         </SettingsGroup>
       </section>
-    </div>
-  );
-}
-
-function ModelField({ value, disabled, saving, onSave }: {
-  value: string; disabled: boolean; saving: boolean; onSave: (m: string) => void;
-}) {
-  const { t } = useTranslation();
-  const [draft, setDraft] = useState(value);
-  useEffect(() => setDraft(value), [value]);
-  return (
-    <div className="flex items-center gap-2">
-      <Input
-        value={draft}
-        disabled={disabled}
-        onChange={(e) => setDraft(e.target.value)}
-        placeholder={t("settings.skillsSecurity.modelPlaceholder")}
-        className="w-[180px] text-[12px]"
-      />
-      <Button size="sm" variant="outline" disabled={disabled || saving || draft === value}
-        onClick={() => onSave(draft.trim())}>
-        {t("settings.actions.save")}
-      </Button>
     </div>
   );
 }
