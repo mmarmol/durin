@@ -125,7 +125,7 @@ class SessionsService:
 
     @route(
         "GET",
-        "/api/sessions",
+        "/api/v1/sessions",
         scope=Scope.SESSIONS_READ.value,
         request_model=SessionsListQuery,
         response_model=SessionsListResult,
@@ -146,7 +146,7 @@ class SessionsService:
 
     @route(
         "GET",
-        "/api/sessions/{key}/messages",
+        "/api/v1/sessions/{key}/messages",
         scope=Scope.SESSIONS_READ.value,
         request_model=SessionMessagesQuery,
         response_model=SessionMessagesResult,
@@ -176,7 +176,7 @@ class SessionsService:
 
     @route(
         "GET",
-        "/api/sessions/{key}/webui-thread",
+        "/api/v1/sessions/{key}/webui-thread",
         scope=Scope.SESSIONS_READ.value,
         request_model=WebuiThreadQuery,
         response_model=WebuiThreadResult,
@@ -209,7 +209,7 @@ class SessionsService:
 
     @route(
         "GET",
-        "/api/sessions/{key}/delete",
+        "/api/v1/sessions/{key}/delete",
         scope=Scope.SESSIONS_WRITE.value,
         request_model=SessionDeleteCommand,
         response_model=SessionDeleteResult,
@@ -230,7 +230,7 @@ class SessionsService:
 
     @route(
         "GET",
-        "/api/sessions/{key}/rename",
+        "/api/v1/sessions/{key}/rename",
         scope=Scope.SESSIONS_WRITE.value,
         request_model=SessionRenameCommand,
         response_model=SessionRenameResult,

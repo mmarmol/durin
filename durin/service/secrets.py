@@ -48,7 +48,7 @@ class SecretsService:
 
     @route(
         "GET",
-        "/api/secrets",
+        "/api/v1/secrets",
         scope=Scope.SECRETS_READ.value,
         request_model=SecretsListQuery,
         response_model=SecretsListResult,
@@ -76,7 +76,7 @@ class SecretsService:
 
     @route(
         "GET",
-        "/api/secrets/delete",
+        "/api/v1/secrets/delete",
         scope=Scope.SECRETS_WRITE.value,
         request_model=SecretDeleteCommand,
         response_model=SecretDeleteResult,

@@ -124,7 +124,7 @@ class MemoryService:
 
     @route(
         "GET",
-        "/api/memory/graph",
+        "/api/v1/memory/graph",
         scope=Scope.MEMORY_READ.value,
         request_model=MemoryGraphQuery,
         response_model=MemoryResult,
@@ -142,7 +142,7 @@ class MemoryService:
 
     @route(
         "GET",
-        "/api/memory/subgraph",
+        "/api/v1/memory/subgraph",
         scope=Scope.MEMORY_READ.value,
         request_model=MemorySubgraphQuery,
         response_model=MemoryResult,
@@ -160,7 +160,7 @@ class MemoryService:
 
     @route(
         "GET",
-        "/api/memory/entity/{ref}",
+        "/api/v1/memory/entity/{ref}",
         scope=Scope.MEMORY_READ.value,
         request_model=MemoryEntityQuery,
         response_model=MemoryResult,
@@ -181,7 +181,7 @@ class MemoryService:
 
     @route(
         "GET",
-        "/api/memory/session/{stem}",
+        "/api/v1/memory/session/{stem}",
         scope=Scope.MEMORY_READ.value,
         request_model=MemorySessionQuery,
         response_model=MemoryResult,
@@ -202,7 +202,7 @@ class MemoryService:
 
     @route(
         "GET",
-        "/api/memory/entry",
+        "/api/v1/memory/entry",
         scope=Scope.MEMORY_READ.value,
         request_model=MemoryEntryQuery,
         response_model=MemoryResult,
@@ -223,7 +223,7 @@ class MemoryService:
 
     @route(
         "GET",
-        "/api/memory/backlinks",
+        "/api/v1/memory/backlinks",
         scope=Scope.MEMORY_READ.value,
         request_model=MemoryBacklinksQuery,
         response_model=MemoryResult,
@@ -241,7 +241,7 @@ class MemoryService:
 
     @route(
         "GET",
-        "/api/memory/edge/{a}/{b}",
+        "/api/v1/memory/edge/{a}/{b}",
         scope=Scope.MEMORY_READ.value,
         request_model=MemoryEdgeQuery,
         response_model=MemoryResult,
@@ -259,7 +259,7 @@ class MemoryService:
 
     @route(
         "GET",
-        "/api/memory/search",
+        "/api/v1/memory/search",
         scope=Scope.MEMORY_READ.value,
         request_model=MemorySearchQuery,
         response_model=MemoryResult,
@@ -294,7 +294,7 @@ class MemoryService:
 
     @route(
         "GET",
-        "/api/memory/forget",
+        "/api/v1/memory/forget",
         scope=Scope.MEMORY_WRITE.value,
         request_model=MemoryForgetCommand,
         response_model=ForgetResult,

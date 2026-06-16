@@ -107,6 +107,13 @@ cross-encoder = [
     # gated behind the extra rather than in `memory`.
     "sentence-transformers>=3.0,<6.0",
 ]
+api = [
+    # Starlette ASGI framework + uvicorn server for the new HTTP front door (SP4).
+    # Both are transitively installed via mcp, but declared here so any install
+    # path without [mcp] still gets them.
+    "starlette>=1.3,<2",
+    "uvicorn>=0.49,<1",
+]
 dev = [
     "pytest>=9.0.0,<10.0.0",
     "pytest-asyncio>=1.3.0,<2.0.0",

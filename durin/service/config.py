@@ -185,7 +185,7 @@ class ConfigService:
 
     @route(
         "GET",
-        "/api/config",
+        "/api/v1/config",
         scope=Scope.CONFIG_READ.value,
         request_model=ConfigGetQuery,
         response_model=ConfigGetResult,
@@ -209,7 +209,7 @@ class ConfigService:
 
     @route(
         "GET",
-        "/api/config/set",
+        "/api/v1/config/set",
         scope=Scope.CONFIG_WRITE.value,
         request_model=ConfigSetCommand,
         response_model=ConfigSetResult,
@@ -249,7 +249,7 @@ class ConfigService:
 
     @route(
         "GET",
-        "/api/models",
+        "/api/v1/models",
         scope=Scope.CONFIG_READ.value,
         request_model=ModelsListQuery,
         response_model=ModelsListResult,
@@ -348,7 +348,7 @@ class ConfigService:
 
     @route(
         "GET",
-        "/api/model/capabilities",
+        "/api/v1/model/capabilities",
         scope=Scope.CONFIG_READ.value,
         request_model=ModelCapabilitiesQuery,
         response_model=ModelCapabilitiesResult,
@@ -375,7 +375,7 @@ class ConfigService:
 
     @route(
         "GET",
-        "/api/channels",
+        "/api/v1/channels",
         scope=Scope.CONFIG_READ.value,
         request_model=ChannelsListQuery,
         response_model=ChannelsListResult,
@@ -416,7 +416,7 @@ class ConfigService:
 
     @route(
         "GET",
-        "/api/model/test",
+        "/api/v1/model/test",
         scope=Scope.CONFIG_READ.value,
         request_model=ModelTestQuery,
         response_model=ModelTestResult,
@@ -451,7 +451,7 @@ class ConfigService:
 
     @route(
         "GET",
-        "/api/memory/cross-encoder/test",
+        "/api/v1/memory/cross-encoder/test",
         scope=Scope.CONFIG_READ.value,
         request_model=CrossEncoderTestQuery,
         response_model=CrossEncoderTestResult,

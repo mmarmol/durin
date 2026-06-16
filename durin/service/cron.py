@@ -193,7 +193,7 @@ class CronService:
 
     @route(
         "GET",
-        "/api/cron",
+        "/api/v1/cron",
         scope=Scope.CRON_READ.value,
         request_model=CronListQuery,
         response_model=CronListResult,
@@ -212,7 +212,7 @@ class CronService:
 
     @route(
         "GET",
-        "/api/cron/remove",
+        "/api/v1/cron/remove",
         scope=Scope.CRON_WRITE.value,
         request_model=CronRemoveCommand,
         response_model=CronRemoveResult,
@@ -230,7 +230,7 @@ class CronService:
 
     @route(
         "GET",
-        "/api/cron/run",
+        "/api/v1/cron/run",
         scope=Scope.CRON_WRITE.value,
         request_model=CronRunCommand,
         response_model=CronRunResult,
@@ -259,7 +259,7 @@ class CronService:
 
     @route(
         "GET",
-        "/api/cron/toggle",
+        "/api/v1/cron/toggle",
         scope=Scope.CRON_WRITE.value,
         request_model=CronToggleCommand,
         response_model=CronToggleResult,
