@@ -3215,15 +3215,12 @@ class WebSocketChannel(BaseChannel):
         """Write a credential to the secret store from a ``secret_store`` frame.
 
         The value rides the JSON frame — never a URL query — and is never
-        placed into the agent conversation. On success the agent on
-        ``chat_id`` is told the secret exists (metadata only, no value)
-        so it can resume.
+        placed into the agent conversation. The write itself is delegated to
+        ``SecretsService.store`` (the single source of truth); this handler owns
+        only the wire framing: the ``secret_stored`` event and the agent-resume
+        notification on ``chat_id``.
         """
-        from durin.security.secrets import (
-            SecretStore,
-            get_secret_store,
-            is_valid_secret_name,
-        )
+        from durin.service.secrets import SecretStoreCommand
 
         request_id = str(envelope.get("request_id") or "")
 
@@ -3234,13 +3231,6 @@ class WebSocketChannel(BaseChannel):
 
         name = str(envelope.get("name") or "").strip()
         service = str(envelope.get("service") or "").strip()
-        if not is_valid_secret_name(name):
-            await _fail("invalid secret name (use UPPER_SNAKE)")
-            return
-        if not service:
-            await _fail("service is required")
-            return
-
         raw_scope = envelope.get("scope")
         scope = (
             [str(s).strip() for s in raw_scope if str(s).strip()]
@@ -3248,28 +3238,22 @@ class WebSocketChannel(BaseChannel):
             else []
         )
         try:
-            store = SecretStore().load()
-            existing = store.get(name)
-            # An empty value on an existing secret is a metadata-only
-            # edit — keep the stored credential, change scope/etc.
-            value = envelope.get("value")
-            if not isinstance(value, str) or not value:
-                if existing is None:
-                    await _fail("value is required for a new secret")
-                    return
-                value = existing.value
-            store.put(
-                name,
-                value=value,
-                service=service,
-                account=(str(envelope.get("account") or "").strip() or None),
-                description=str(envelope.get("description") or "").strip(),
-                scope=scope,
-                origin=existing.origin if existing else "webui",
+            await self._services.get("secrets").store(
+                SecretStoreCommand(
+                    name=name,
+                    value=str(envelope.get("value") or ""),
+                    service=service,
+                    account=str(envelope.get("account") or "").strip(),
+                    description=str(envelope.get("description") or "").strip(),
+                    scope=scope,
+                    origin="webui",
+                ),
+                Principal.local(),
             )
-            store.save()
-            get_secret_store(reload=True)
-        except Exception as exc:  # noqa: BLE001
+        except DomainError as err:
+            await _fail(err.message)
+            return
+        except Exception as exc:  # noqa: BLE001 — disk/IO failures still owe the client an event
             await _fail(f"could not store secret: {exc}")
             return
 
