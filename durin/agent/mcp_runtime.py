@@ -54,8 +54,8 @@ class McpRuntime:
             )
         return out
 
-    async def connect(self, name: str) -> None:
-        await self._loop.connect_mcp_server(name)
+    async def connect(self, name: str, cfg: Any = None) -> None:
+        await self._loop.connect_mcp_server(name, cfg)
 
     async def disconnect(self, name: str) -> None:
         await self._loop.disconnect_mcp_server(name)

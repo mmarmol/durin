@@ -16,7 +16,14 @@ from typing import TYPE_CHECKING
 from durin.config.schema import MCPServerConfig
 from durin.service.principal import Principal, Scope
 from durin.service.registry import route
-from durin.service.types import Command, NotFoundError, Query, Result
+from durin.service.types import (
+    Command,
+    ConflictError,
+    NotFoundError,
+    Query,
+    Result,
+    ValidationFailedError,
+)
 
 if TYPE_CHECKING:
     from durin.agent.mcp_runtime import McpRuntime, RawConnState
@@ -137,6 +144,17 @@ def _target(sc: MCPServerConfig) -> str:
     return sc.url
 
 
+def _validate_upsert(name: str, sc: MCPServerConfig) -> None:
+    """Reject obviously-unusable server definitions (pydantic validates the rest)."""
+    if not name or not name.strip():
+        raise ValidationFailedError("server name is required", details={"field": "name"})
+    if not sc.command and not sc.url:
+        raise ValidationFailedError(
+            "a server needs a command (stdio) or a url (http)",
+            details={"field": "config"},
+        )
+
+
 # ---------------------------------------------------------------------------
 # Service
 # ---------------------------------------------------------------------------
@@ -219,8 +237,11 @@ class McpService:
         sc = load_config().tools.mcp_servers.get(query.name)
         if sc is None:
             raise NotFoundError("no such MCP server", details={"name": query.name})
-        raw = self._live().get(query.name)
-        required, authed = await self._oauth_flags(query.name, sc)
+        return await self._build_detail(query.name, sc)
+
+    async def _build_detail(self, name: str, sc: MCPServerConfig) -> McpServerDetail:
+        raw = self._live().get(name)
+        required, authed = await self._oauth_flags(name, sc)
         status, error = derive_status(
             enabled=sc.enabled,
             oauth_required=required,
@@ -232,7 +253,7 @@ class McpService:
             for (tname, desc) in (raw.tools if raw else [])
         ]
         return McpServerDetail(
-            name=query.name,
+            name=name,
             transport=_transport(sc),
             target=_target(sc),
             enabled=sc.enabled,
@@ -243,3 +264,74 @@ class McpService:
             tools=tools,
             config=sc,
         )
+
+    @route(
+        "POST",
+        "/api/v1/mcp/servers",
+        scope=Scope.MCP_WRITE.value,
+        request_model=McpServerUpsertCommand,
+        response_model=McpServerDetail,
+        summary="Add an MCP server",
+    )
+    async def add(
+        self, cmd: McpServerUpsertCommand, principal: Principal
+    ) -> McpServerDetail:
+        principal.require(Scope.MCP_WRITE)
+        _validate_upsert(cmd.name, cmd.config)
+        from durin.config.loader import get_config_path, load_config, save_config
+
+        cfg = load_config()
+        if cmd.name in cfg.tools.mcp_servers:
+            raise ConflictError("MCP server already exists", details={"name": cmd.name})
+        cfg.tools.mcp_servers[cmd.name] = cmd.config
+        save_config(cfg, get_config_path())
+        if cmd.config.enabled and self._runtime is not None:
+            await self._runtime.connect(cmd.name, cmd.config)
+        return await self._build_detail(cmd.name, cmd.config)
+
+    @route(
+        "PATCH",
+        "/api/v1/mcp/servers/{name}",
+        scope=Scope.MCP_WRITE.value,
+        request_model=McpServerUpsertCommand,
+        response_model=McpServerDetail,
+        summary="Replace an MCP server's config",
+    )
+    async def update(
+        self, cmd: McpServerUpsertCommand, principal: Principal
+    ) -> McpServerDetail:
+        principal.require(Scope.MCP_WRITE)
+        _validate_upsert(cmd.name, cmd.config)
+        from durin.config.loader import get_config_path, load_config, save_config
+
+        cfg = load_config()
+        if cmd.name not in cfg.tools.mcp_servers:
+            raise NotFoundError("no such MCP server", details={"name": cmd.name})
+        cfg.tools.mcp_servers[cmd.name] = cmd.config
+        save_config(cfg, get_config_path())
+        # Persist-only: a live connection keeps running with its current config
+        # until the next enable/disable toggle re-applies it.
+        return await self._build_detail(cmd.name, cmd.config)
+
+    @route(
+        "DELETE",
+        "/api/v1/mcp/servers/{name}",
+        scope=Scope.MCP_WRITE.value,
+        request_model=McpServerNameCommand,
+        response_model=McpOkResult,
+        summary="Remove an MCP server",
+    )
+    async def remove(
+        self, cmd: McpServerNameCommand, principal: Principal
+    ) -> McpOkResult:
+        principal.require(Scope.MCP_WRITE)
+        from durin.config.loader import get_config_path, load_config, save_config
+
+        cfg = load_config()
+        if cmd.name not in cfg.tools.mcp_servers:
+            raise NotFoundError("no such MCP server", details={"name": cmd.name})
+        del cfg.tools.mcp_servers[cmd.name]
+        save_config(cfg, get_config_path())
+        if self._runtime is not None and cmd.name in self._live():
+            await self._runtime.disconnect(cmd.name)
+        return McpOkResult(ok=True)
