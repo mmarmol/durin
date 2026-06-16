@@ -152,6 +152,19 @@ target-version = "py311"
 select = ["E", "F", "I", "N", "W"]
 ignore = ["E501"]
 
+[tool.ruff.lint.per-file-ignores]
+# Heavy modules are imported lazily inside the gateway entrypoint to keep CLI
+# startup fast — intentional imports after code.
+"durin/cli/commands.py" = ["E402"]
+# Bundled example skill content (shipped, not durin source) follows its own style.
+"durin/skills/**" = ["N806"]
+# Ad-hoc benchmark/analysis scripts.
+"scripts/**" = ["N803", "N806"]
+# Test code intentionally relaxes naming/style: pytest.importorskip imports
+# (E402), non-pep8 fixture/mock/constant names (N8xx), inline setup statements
+# (E702), short loop vars (E741), and unused result bindings (F841).
+"tests/**" = ["E402", "E702", "E741", "F841", "N801", "N802", "N803", "N805", "N806", "N812", "N816"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]

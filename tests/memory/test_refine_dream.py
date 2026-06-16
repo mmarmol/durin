@@ -104,8 +104,9 @@ def test_refine_quarantines_fresh_entities_min_age_hours(tmp_path):
     for ref, name in (("company:a", "A Inc"), ("company:a2", "A Incorporated")):
         write_entity(tmp_path, ref, [FieldPatch(kind="alias", value="A", author="agent",
                      source_ref="s", at=now)], create=True, name=name)
-    judge = lambda p, **k: ("===VERDICT===\nsame\n===CONFIDENCE===\n99\n"
-                            "===REASONING===\nx\n===END===")
+    def judge(p, **k):
+        return ("===VERDICT===\nsame\n===CONFIDENCE===\n99\n"
+                                "===REASONING===\nx\n===END===")
     quarantined = run_refine(tmp_path, llm_invoke=judge, min_age_hours=99999)
     assert not quarantined["merged"]
     assert any(s["reason"] == "quarantine" for s in quarantined["skipped"])

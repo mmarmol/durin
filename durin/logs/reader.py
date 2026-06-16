@@ -202,7 +202,7 @@ def read_page(directory: Path, query: LogQuery) -> LogPage:
     if hit_window and not collected:
         has_more = True  # nothing in window but older data exists -> offer widen
     return LogPage(
-        lines=[{"ts": l.ts, "fields": l.fields, "raw": l.raw} for l in collected],
+        lines=[{"ts": e.ts, "fields": e.fields, "raw": e.raw} for e in collected],
         next_cursor=next_cursor,
         scanned_through_ts=scanned_through_ts,
         has_more=has_more,
