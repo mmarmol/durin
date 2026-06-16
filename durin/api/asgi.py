@@ -3,6 +3,7 @@
 Exports:
     resolve_principal_from_headers  — extract + verify a bearer token.
     build_api_app                   — build the Starlette app (reads + writes).
+    build_gateway_http_app          — full gateway HTTP surface (step 2 of ASGI unify).
 
 The app mounts every ``@route``-decorated service method from the registry:
 - GET + ``:read`` scope  → read handler (query/path params → request model).
@@ -21,7 +22,8 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import Callable
-from typing import Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from pydantic import ValidationError
 from starlette.applications import Starlette
@@ -29,7 +31,8 @@ from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
-from starlette.routing import Route
+from starlette.routing import Mount, Route
+from starlette.staticfiles import StaticFiles
 
 from durin.service.auth import AuthService
 from durin.service.principal import Principal, Scope
@@ -43,6 +46,9 @@ from durin.service.types import (
     UnavailableError,
     ValidationFailedError,
 )
+
+if TYPE_CHECKING:
+    from durin.channels.websocket import HttpResult, WebSocketChannel
 
 # ---------------------------------------------------------------------------
 # DomainError → HTTP status map
@@ -335,3 +341,170 @@ def build_api_app(
 
 async def _health_handler(_request: Request) -> Response:
     return JSONResponse({"status": "ok"})
+
+
+# ---------------------------------------------------------------------------
+# Transport adapter: HttpResult → Starlette Response
+# ---------------------------------------------------------------------------
+
+
+def _http_result_to_starlette(result: HttpResult) -> Response:
+    """Convert a transport-neutral HttpResult to a Starlette Response."""
+    return Response(
+        content=result.body,
+        status_code=result.status,
+        headers=result.headers,
+    )
+
+
+# ---------------------------------------------------------------------------
+# WsRequest duck-type shim
+# ---------------------------------------------------------------------------
+
+
+class _StarletteRequestShim:
+    """Minimal duck-type shim that makes a Starlette Request look like a
+    ``WsRequest`` to the ``_handle_*`` channel methods.
+
+    The channel handlers only access:
+    - ``request.headers`` — for bearer token and X-Durin-Auth.
+    - ``request.path``    — for path + query string (parsed by helpers).
+    """
+
+    def __init__(self, request: Request) -> None:
+        self._request = request
+
+    @property
+    def headers(self) -> Any:
+        return self._request.headers
+
+    @property
+    def path(self) -> str:
+        path = self._request.url.path
+        query = self._request.url.query
+        return f"{path}?{query}" if query else path
+
+
+# ---------------------------------------------------------------------------
+# Gateway HTTP app factory
+# ---------------------------------------------------------------------------
+
+
+def build_gateway_http_app(
+    channel: "WebSocketChannel",
+    registry: ServiceRegistry,
+    *,
+    auth: AuthService,
+    static_token: str = "",
+    static_dist_path: Path | None = None,
+) -> Starlette:
+    """Build a Starlette ASGI app serving the full gateway HTTP surface.
+
+    Mounts (in priority order):
+    - ``GET /api/v1/*``                — new service front door (build_api_app routes).
+    - ``GET /webui/bootstrap``         — token mint + session metadata.
+    - ``GET /api/media/{sig}/{payload}`` — signed media fetch.
+    - ``GET /api/*``                   — legacy channel REST routes (shim-forwarded).
+    - Static SPA files at ``/``        — served from ``static_dist_path`` if provided,
+                                         with SPA history-mode fallback to index.html.
+
+    The legacy ``/api/*`` routes delegate to the channel's ``_handle_*`` methods via
+    a ``_StarletteRequestShim``.  The channel's ``_handle_*`` methods now return
+    ``HttpResult`` (transport-neutral); :func:`_http_result_to_starlette` converts them.
+
+    Args:
+        channel:          The live WebSocketChannel (owns business logic + token store).
+        registry:         ServiceRegistry for ``/api/v1/*`` routes.
+        auth:             AuthService for ``/api/v1/*`` bearer resolution.
+        static_token:     Static bearer token for ``/api/v1/*``.
+        static_dist_path: If provided, serve the built SPA from this directory.
+                          Falls back to ``channel._static_dist_path`` if None.
+    """
+    from durin.channels.websocket import HttpResult as _HttpResult
+
+    resolved_static = static_dist_path or channel._static_dist_path
+
+    # -- /webui/bootstrap ---------------------------------------------------
+
+    class _LocalConn:
+        """Fake 'connection' that looks like localhost to _handle_bootstrap."""
+
+        remote_address = ("127.0.0.1", 0)
+
+        @staticmethod
+        def respond(status: int, body: str) -> _HttpResult:
+            from durin.channels.websocket import _http_error
+            return _http_error(status, body)
+
+    _local_conn = _LocalConn()
+
+    async def bootstrap_handler(request: Request) -> Response:
+        shim = _StarletteRequestShim(request)
+        result = channel._handle_bootstrap(_local_conn, shim)
+        return _http_result_to_starlette(result)
+
+    # -- /api/media/{sig}/{payload} -----------------------------------------
+
+    async def media_handler(request: Request) -> Response:
+        sig = request.path_params["sig"]
+        payload = request.path_params["payload"]
+        result = channel._handle_media_fetch(sig, payload)
+        return _http_result_to_starlette(result)
+
+    # -- legacy /api/* catch-all --------------------------------------------
+
+    async def legacy_api_handler(request: Request) -> Response:
+        shim = _StarletteRequestShim(request)
+        result = await channel._dispatch_legacy_http(shim)
+        return _http_result_to_starlette(result)
+
+    # -- assemble routes ----------------------------------------------------
+
+    # Build the /api/v1/* routes from the service registry. build_api_app's
+    # routes already carry the full "/api/v1/..." path, so splice them in at the
+    # top level — mounting under "/api/v1" would double the prefix.
+    api_app = build_api_app(registry, auth=auth, static_token=static_token)
+
+    routes: list[Any] = [
+        # /api/v1/* — new front door (highest priority).
+        *api_app.routes,
+        # /webui/bootstrap — token mint.
+        Route("/webui/bootstrap", bootstrap_handler, methods=["GET"]),
+        # /api/media/{sig}/{payload} — signed media.
+        Route(
+            "/api/media/{sig}/{payload}",
+            media_handler,
+            methods=["GET"],
+        ),
+        # Legacy /api/* — all other channel-owned routes.
+        Route("/api/{path:path}", legacy_api_handler, methods=["GET"]),
+    ]
+
+    # SPA static files (optional).
+    if resolved_static is not None and resolved_static.is_dir():
+        routes.append(
+            Mount("/", app=_SpaStaticFiles(directory=str(resolved_static), html=True))
+        )
+
+    return Starlette(
+        routes=routes,
+        middleware=[Middleware(RequestIdMiddleware)],
+    )
+
+
+class _SpaStaticFiles(StaticFiles):
+    """StaticFiles subclass with SPA history-mode fallback.
+
+    When a path is not found among static assets, serves ``index.html``
+    instead of raising a 404, so the client-side router can handle it.
+    """
+
+    async def get_response(self, path: str, scope: Any) -> Response:
+        from starlette.exceptions import HTTPException
+
+        try:
+            return await super().get_response(path, scope)
+        except HTTPException as exc:
+            if exc.status_code == 404:
+                return await super().get_response("index.html", scope)
+            raise

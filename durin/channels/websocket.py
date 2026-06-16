@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import dataclasses
 import email.utils
 import hashlib
 import hmac
@@ -162,25 +163,52 @@ _DOMAIN_ERROR_STATUS: dict[str, int] = {
 }
 
 
-def _domain_error_response(err: DomainError) -> Response:
+@dataclasses.dataclass
+class HttpResult:
+    """Transport-neutral HTTP response.
+
+    All ``_handle_*`` methods and ``_http_*`` helpers return this instead of a
+    websockets ``Response`` directly.  Two adapters convert it at the boundary:
+    - :func:`_http_result_to_ws_response` — for the still-live websockets server.
+    - :func:`http_result_to_starlette` (in ``durin/api/asgi.py``) — for Starlette.
+
+    ``status_code`` is provided as an alias for ``status`` so that existing
+    unit tests that call ``_handle_*`` directly and assert ``resp.status_code``
+    continue to work without changes.
+    """
+
+    status: int
+    headers: dict[str, str]
+    body: bytes
+
+    @property
+    def status_code(self) -> int:
+        return self.status
+
+
+def _http_result_to_ws_response(result: HttpResult) -> Response:
+    """Adapt an HttpResult to the websockets Response the existing server expects."""
+    reason = http.HTTPStatus(result.status).phrase
+    ws_headers = Headers(list(result.headers.items()))
+    return Response(result.status, reason, ws_headers, result.body)
+
+
+def _domain_error_response(err: DomainError) -> HttpResult:
     """Map a service-layer ``DomainError`` to the HTTP response the legacy
     handlers returned — a plain-text body with the matching status."""
     status = _DOMAIN_ERROR_STATUS.get(err.code, 500)
     return _http_error(status, err.message)
 
 
-def _http_json_response(data: dict[str, Any], *, status: int = 200) -> Response:
+def _http_json_response(data: dict[str, Any], *, status: int = 200) -> HttpResult:
     body = json.dumps(data, ensure_ascii=False).encode("utf-8")
-    headers = Headers(
-        [
-            ("Date", email.utils.formatdate(usegmt=True)),
-            ("Connection", "close"),
-            ("Content-Length", str(len(body))),
-            ("Content-Type", "application/json; charset=utf-8"),
-        ]
-    )
-    reason = http.HTTPStatus(status).phrase
-    return Response(status, reason, headers, body)
+    headers = {
+        "Date": email.utils.formatdate(usegmt=True),
+        "Connection": "close",
+        "Content-Length": str(len(body)),
+        "Content-Type": "application/json; charset=utf-8",
+    }
+    return HttpResult(status=status, headers=headers, body=body)
 
 
 def publish_runtime_model_update(
@@ -427,20 +455,20 @@ def _http_response(
     status: int = 200,
     content_type: str = "text/plain; charset=utf-8",
     extra_headers: list[tuple[str, str]] | None = None,
-) -> Response:
-    headers = [
-        ("Date", email.utils.formatdate(usegmt=True)),
-        ("Connection", "close"),
-        ("Content-Length", str(len(body))),
-        ("Content-Type", content_type),
-    ]
+) -> HttpResult:
+    headers: dict[str, str] = {
+        "Date": email.utils.formatdate(usegmt=True),
+        "Connection": "close",
+        "Content-Length": str(len(body)),
+        "Content-Type": content_type,
+    }
     if extra_headers:
-        headers.extend(extra_headers)
-    reason = http.HTTPStatus(status).phrase
-    return Response(status, reason, Headers(headers), body)
+        for k, v in extra_headers:
+            headers[k] = v
+    return HttpResult(status=status, headers=headers, body=body)
 
 
-def _http_error(status: int, message: str | None = None) -> Response:
+def _http_error(status: int, message: str | None = None) -> HttpResult:
     body = (message or http.HTTPStatus(status).phrase).encode("utf-8")
     return _http_response(body, status=status)
 
@@ -737,11 +765,11 @@ class WebSocketChannel(BaseChannel):
             return False
         return True
 
-    def _handle_token_issue_http(self, connection: Any, request: Any) -> Any:
+    def _handle_token_issue_http(self, request: Any) -> HttpResult:
         secret = self.config.token_issue_secret.strip()
         if secret:
             if not _issue_route_secret_matches(request.headers, secret):
-                return connection.respond(401, "Unauthorized")
+                return _http_error(401, "Unauthorized")
         else:
             self.logger.warning(
                 "token_issue_path is set but token_issue_secret is empty; "
@@ -773,223 +801,228 @@ class WebSocketChannel(BaseChannel):
     # -- HTTP dispatch ------------------------------------------------------
 
     async def _dispatch_http(self, connection: Any, request: WsRequest) -> Any:
-        """Route an inbound HTTP request to a handler or to the WS upgrade path."""
+        """Route an inbound HTTP request to a handler or to the WS upgrade path.
+
+        Returns an HttpResult for HTTP responses (adapted to websockets Response at
+        the call site in process_request), or the result of connection.respond /
+        _authorize_websocket_handshake for the WS upgrade path (None = allow).
+        """
         got, query = _parse_request_path(request.path)
 
         # 1. Token issue endpoint (legacy, optional, gated by configured secret).
         if self.config.token_issue_path:
             issue_expected = _normalize_config_path(self.config.token_issue_path)
             if got == issue_expected:
-                return self._handle_token_issue_http(connection, request)
+                return _http_result_to_ws_response(self._handle_token_issue_http(request))
 
         # 2. Bootstrap (`/webui/bootstrap`): mint WS/API tokens + shared session metadata.
         if got == "/webui/bootstrap":
-            return self._handle_bootstrap(connection, request)
+            return _http_result_to_ws_response(self._handle_bootstrap(connection, request))
 
         # 3. REST handlers co-located with this channel (sessions, settings, …).
         if got == "/api/sessions":
-            return await self._handle_sessions_list(request)
+            return _http_result_to_ws_response(await self._handle_sessions_list(request))
 
         if got == "/api/settings":
-            return await self._handle_settings(request)
+            return _http_result_to_ws_response(await self._handle_settings(request))
 
         if got == "/api/commands":
-            return await self._handle_commands(request)
+            return _http_result_to_ws_response(await self._handle_commands(request))
 
         if got == "/api/settings/update":
-            return await self._handle_settings_update(request)
+            return _http_result_to_ws_response(await self._handle_settings_update(request))
 
         if got == "/api/settings/provider/update":
-            return await self._handle_settings_provider_update(request)
+            return _http_result_to_ws_response(await self._handle_settings_provider_update(request))
 
         if got == "/api/settings/web-search/update":
-            return await self._handle_settings_web_search_update(request)
+            return _http_result_to_ws_response(await self._handle_settings_web_search_update(request))
 
         if got == "/api/oauth/codex/status":
-            return await self._handle_codex_oauth_status(request)
+            return _http_result_to_ws_response(await self._handle_codex_oauth_status(request))
 
         if got == "/api/oauth/codex/start":
-            return await self._handle_codex_oauth_start(request)
+            return _http_result_to_ws_response(await self._handle_codex_oauth_start(request))
 
         if got == "/api/oauth/codex/start-loopback":
-            return await self._handle_codex_oauth_start_loopback(request)
+            return _http_result_to_ws_response(await self._handle_codex_oauth_start_loopback(request))
 
         if got == "/api/oauth/codex/poll":
-            return await self._handle_codex_oauth_poll(request)
+            return _http_result_to_ws_response(await self._handle_codex_oauth_poll(request))
 
         if got == "/api/oauth/codex/disconnect":
-            return await self._handle_codex_oauth_disconnect(request)
+            return _http_result_to_ws_response(await self._handle_codex_oauth_disconnect(request))
 
         if got == "/api/secrets":
-            return await self._handle_secrets_list(request)
+            return _http_result_to_ws_response(await self._handle_secrets_list(request))
 
         if got == "/api/secrets/delete":
-            return await self._handle_secret_delete(request)
+            return _http_result_to_ws_response(await self._handle_secret_delete(request))
 
         if got == "/api/cron":
-            return await self._handle_cron_list(request)
+            return _http_result_to_ws_response(await self._handle_cron_list(request))
 
         if got == "/api/cron/remove":
-            return await self._handle_cron_remove(request)
+            return _http_result_to_ws_response(await self._handle_cron_remove(request))
 
         if got == "/api/cron/toggle":
-            return await self._handle_cron_toggle(request)
+            return _http_result_to_ws_response(await self._handle_cron_toggle(request))
 
         if got == "/api/cron/run":
-            return await self._handle_cron_run(request)
+            return _http_result_to_ws_response(await self._handle_cron_run(request))
 
         if got == "/api/config":
-            return await self._handle_config_get(request)
+            return _http_result_to_ws_response(await self._handle_config_get(request))
 
         if got == "/api/config/set":
-            return await self._handle_config_set(request)
+            return _http_result_to_ws_response(await self._handle_config_set(request))
 
         if got == "/api/logs":
-            return await self._handle_logs_list(request)
+            return _http_result_to_ws_response(await self._handle_logs_list(request))
 
         if got == "/api/skills":
-            return await self._handle_skills_list(request)
+            return _http_result_to_ws_response(await self._handle_skills_list(request))
 
         # Exact matches BEFORE the `([^/]+)` patterns so "quarantine"/"resolve"/
         # "import" are not captured as skill names by `^/api/skills/([^/]+)$`.
         if got == "/api/skills/quarantine":
-            return await self._handle_skills_quarantine(request)
+            return _http_result_to_ws_response(await self._handle_skills_quarantine(request))
 
         if got == "/api/skills/resolve":
-            return await self._handle_skills_resolve(request)
+            return _http_result_to_ws_response(await self._handle_skills_resolve(request))
 
         if got == "/api/skills/import":
-            return await self._handle_skills_import(request)
+            return _http_result_to_ws_response(await self._handle_skills_import(request))
 
         if got == "/api/skills/github-token-test":
-            return await self._handle_skills_github_token_test(request)
+            return _http_result_to_ws_response(await self._handle_skills_github_token_test(request))
 
         if got == "/api/skills/search":
-            return await self._handle_skill_search(request)
+            return _http_result_to_ws_response(await self._handle_skill_search(request))
 
         if got == "/api/skills/describe":
-            return await self._handle_skill_describe(request)
+            return _http_result_to_ws_response(await self._handle_skill_describe(request))
 
         m = re.match(r"^/api/skills/([^/]+)/save$", got)
         if m:
-            return await self._handle_skill_save(request, m.group(1))
+            return _http_result_to_ws_response(await self._handle_skill_save(request, m.group(1)))
 
         m = re.match(r"^/api/skills/([^/]+)/mode$", got)
         if m:
-            return await self._handle_skill_mode(request, m.group(1))
+            return _http_result_to_ws_response(await self._handle_skill_mode(request, m.group(1)))
 
         m = re.match(r"^/api/skills/([^/]+)/approve$", got)
         if m:
-            return await self._handle_skill_approve(request, m.group(1))
+            return _http_result_to_ws_response(await self._handle_skill_approve(request, m.group(1)))
 
         m = re.match(r"^/api/skills/([^/]+)/reject$", got)
         if m:
-            return await self._handle_skill_reject(request, m.group(1))
+            return _http_result_to_ws_response(await self._handle_skill_reject(request, m.group(1)))
 
         m = re.match(r"^/api/skills/([^/]+)/judge$", got)
         if m:
-            return await self._handle_skill_judge(request, m.group(1))
+            return _http_result_to_ws_response(await self._handle_skill_judge(request, m.group(1)))
 
         m = re.match(r"^/api/skills/([^/]+)/remove$", got)
         if m:
-            return await self._handle_skill_remove(request, m.group(1))
+            return _http_result_to_ws_response(await self._handle_skill_remove(request, m.group(1)))
 
         m = re.match(r"^/api/skills/([^/]+)/files$", got)
         if m:
-            return await self._handle_skill_files(request, m.group(1))
+            return _http_result_to_ws_response(await self._handle_skill_files(request, m.group(1)))
 
         m = re.match(r"^/api/skills/([^/]+)/file/save$", got)
         if m:
-            return await self._handle_skill_file_save(request, m.group(1))
+            return _http_result_to_ws_response(await self._handle_skill_file_save(request, m.group(1)))
 
         m = re.match(r"^/api/skills/([^/]+)/file$", got)
         if m:
-            return await self._handle_skill_file(request, m.group(1))
+            return _http_result_to_ws_response(await self._handle_skill_file(request, m.group(1)))
 
         m = re.match(r"^/api/skills/([^/]+)/history$", got)
         if m:
-            return await self._handle_skill_history(request, m.group(1))
+            return _http_result_to_ws_response(await self._handle_skill_history(request, m.group(1)))
 
         m = re.match(r"^/api/skills/([^/]+)/install-deps$", got)
         if m:
-            return await self._handle_skill_install_deps(request, m.group(1))
+            return _http_result_to_ws_response(await self._handle_skill_install_deps(request, m.group(1)))
 
         m = re.match(r"^/api/skills/([^/]+)$", got)
         if m:
-            return await self._handle_skill_get(request, m.group(1))
+            return _http_result_to_ws_response(await self._handle_skill_get(request, m.group(1)))
 
         if got == "/api/channels":
-            return await self._handle_channels_list(request)
+            return _http_result_to_ws_response(await self._handle_channels_list(request))
 
         if got == "/api/models":
-            return await self._handle_models_list(request)
+            return _http_result_to_ws_response(await self._handle_models_list(request))
 
         if got == "/api/memory/graph":
-            return await self._handle_memory_graph(request)
+            return _http_result_to_ws_response(await self._handle_memory_graph(request))
 
         if got == "/api/memory/subgraph":
-            return await self._handle_memory_subgraph(request, query)
+            return _http_result_to_ws_response(await self._handle_memory_subgraph(request, query))
 
         if got == "/api/memory/search":
-            return await self._handle_memory_search_api(request, query)
+            return _http_result_to_ws_response(await self._handle_memory_search_api(request, query))
 
         m = re.match(r"^/api/memory/entity/(.+)$", got)
         if m:
-            return await self._handle_memory_entity(request, m.group(1))
+            return _http_result_to_ws_response(await self._handle_memory_entity(request, m.group(1)))
 
         m = re.match(r"^/api/memory/session/(.+)$", got)
         if m:
-            return await self._handle_memory_session(request, m.group(1))
+            return _http_result_to_ws_response(await self._handle_memory_session(request, m.group(1)))
 
         m = re.match(r"^/api/memory/edge/([^/]+)/([^/]+)$", got)
         if m:
-            return await self._handle_memory_edge(request, m.group(1), m.group(2))
+            return _http_result_to_ws_response(await self._handle_memory_edge(request, m.group(1), m.group(2)))
 
         if got == "/api/memory/entry":
-            return await self._handle_memory_entry(request, query)
+            return _http_result_to_ws_response(await self._handle_memory_entry(request, query))
 
         if got == "/api/memory/forget":
-            return await self._handle_memory_forget(request, query)
+            return _http_result_to_ws_response(await self._handle_memory_forget(request, query))
 
         if got == "/api/memory/backlinks":
-            return await self._handle_memory_backlinks(request, query)
+            return _http_result_to_ws_response(await self._handle_memory_backlinks(request, query))
 
         if got == "/api/model/test":
-            return await self._handle_model_test(request)
+            return _http_result_to_ws_response(await self._handle_model_test(request))
 
         if got == "/api/model/capabilities":
-            return await self._handle_model_capabilities(request)
+            return _http_result_to_ws_response(await self._handle_model_capabilities(request))
 
         if got == "/api/memory/cross-encoder/test":
-            return await self._handle_cross_encoder_test(request, query)
+            return _http_result_to_ws_response(await self._handle_cross_encoder_test(request, query))
 
         if got == "/api/extras/status":
-            return await self._handle_extras_status(request, query)
+            return _http_result_to_ws_response(await self._handle_extras_status(request, query))
         if got == "/api/extras/ensure":
-            return await self._handle_extras_ensure(request, query)
+            return _http_result_to_ws_response(await self._handle_extras_ensure(request, query))
         if got == "/api/extras/restart":
-            return await self._handle_extras_restart(request)
+            return _http_result_to_ws_response(await self._handle_extras_restart(request))
 
         m = re.match(r"^/api/sessions/([^/]+)/messages$", got)
         if m:
-            return await self._handle_session_messages(request, m.group(1))
+            return _http_result_to_ws_response(await self._handle_session_messages(request, m.group(1)))
 
         m = re.match(r"^/api/sessions/([^/]+)/webui-thread$", got)
         if m:
-            return await self._handle_webui_thread_get(request, m.group(1))
+            return _http_result_to_ws_response(await self._handle_webui_thread_get(request, m.group(1)))
 
         # NOTE: websockets' HTTP parser only accepts GET, so we cannot expose a
         # true ``DELETE`` verb. The action is folded into the path instead.
         m = re.match(r"^/api/sessions/([^/]+)/delete$", got)
         if m:
-            return await self._handle_session_delete(request, m.group(1))
+            return _http_result_to_ws_response(await self._handle_session_delete(request, m.group(1)))
 
         # P2 (doc 20): user-driven rename. Same constraint as delete —
         # GET-only HTTP, action folded into the path. New title arrives
         # as a ``title`` query param (URL-encoded).
         m = re.match(r"^/api/sessions/([^/]+)/rename$", got)
         if m:
-            return await self._handle_session_rename(request, m.group(1))
+            return _http_result_to_ws_response(await self._handle_session_rename(request, m.group(1)))
 
         # Signed media fetch: ``<sig>`` is an HMAC over ``<payload>``; the
         # payload decodes to a path inside :func:`get_media_dir`. See
@@ -997,7 +1030,7 @@ class WebSocketChannel(BaseChannel):
         # these URLs when replaying a session.
         m = re.match(r"^/api/media/([A-Za-z0-9_-]+)/([A-Za-z0-9_-]+)$", got)
         if m:
-            return self._handle_media_fetch(m.group(1), m.group(2))
+            return _http_result_to_ws_response(self._handle_media_fetch(m.group(1), m.group(2)))
 
         # 4. WebSocket upgrade (the channel's primary purpose). Only run the
         # handshake gate on requests that actually ask to upgrade; otherwise
@@ -1014,11 +1047,171 @@ class WebSocketChannel(BaseChannel):
 
         # 5. Static SPA serving (only if a build directory was wired in).
         if self._static_dist_path is not None:
-            response = self._serve_static(got)
-            if response is not None:
-                return response
+            result = self._serve_static(got)
+            if result is not None:
+                return _http_result_to_ws_response(result)
 
         return connection.respond(404, "Not Found")
+
+    async def _dispatch_legacy_http(self, request: Any) -> HttpResult:
+        """Serve a legacy ``/api/*`` request from Starlette (transport-neutral path).
+
+        Called by ``build_gateway_http_app``'s catch-all route.  Unlike
+        ``_dispatch_http``, this method:
+        - Takes any duck-type request (``_StarletteRequestShim`` or WsRequest).
+        - Returns ``HttpResult`` directly (no websockets adapter wrapping).
+        - Does NOT handle the WS upgrade path or the SPA (both routed earlier in
+          the Starlette router).
+        - Does NOT handle ``/webui/bootstrap`` or ``/api/media/…`` (routed earlier).
+        """
+        got, query = _parse_request_path(request.path)
+
+        if got == "/api/sessions":
+            return await self._handle_sessions_list(request)
+        if got == "/api/settings":
+            return await self._handle_settings(request)
+        if got == "/api/commands":
+            return await self._handle_commands(request)
+        if got == "/api/settings/update":
+            return await self._handle_settings_update(request)
+        if got == "/api/settings/provider/update":
+            return await self._handle_settings_provider_update(request)
+        if got == "/api/settings/web-search/update":
+            return await self._handle_settings_web_search_update(request)
+        if got == "/api/oauth/codex/status":
+            return await self._handle_codex_oauth_status(request)
+        if got == "/api/oauth/codex/start":
+            return await self._handle_codex_oauth_start(request)
+        if got == "/api/oauth/codex/start-loopback":
+            return await self._handle_codex_oauth_start_loopback(request)
+        if got == "/api/oauth/codex/poll":
+            return await self._handle_codex_oauth_poll(request)
+        if got == "/api/oauth/codex/disconnect":
+            return await self._handle_codex_oauth_disconnect(request)
+        if got == "/api/secrets":
+            return await self._handle_secrets_list(request)
+        if got == "/api/secrets/delete":
+            return await self._handle_secret_delete(request)
+        if got == "/api/cron":
+            return await self._handle_cron_list(request)
+        if got == "/api/cron/remove":
+            return await self._handle_cron_remove(request)
+        if got == "/api/cron/toggle":
+            return await self._handle_cron_toggle(request)
+        if got == "/api/cron/run":
+            return await self._handle_cron_run(request)
+        if got == "/api/config":
+            return await self._handle_config_get(request)
+        if got == "/api/config/set":
+            return await self._handle_config_set(request)
+        if got == "/api/logs":
+            return await self._handle_logs_list(request)
+        if got == "/api/skills":
+            return await self._handle_skills_list(request)
+        if got == "/api/skills/quarantine":
+            return await self._handle_skills_quarantine(request)
+        if got == "/api/skills/resolve":
+            return await self._handle_skills_resolve(request)
+        if got == "/api/skills/import":
+            return await self._handle_skills_import(request)
+        if got == "/api/skills/github-token-test":
+            return await self._handle_skills_github_token_test(request)
+        if got == "/api/skills/search":
+            return await self._handle_skill_search(request)
+        if got == "/api/skills/describe":
+            return await self._handle_skill_describe(request)
+
+        m = re.match(r"^/api/skills/([^/]+)/save$", got)
+        if m:
+            return await self._handle_skill_save(request, m.group(1))
+        m = re.match(r"^/api/skills/([^/]+)/mode$", got)
+        if m:
+            return await self._handle_skill_mode(request, m.group(1))
+        m = re.match(r"^/api/skills/([^/]+)/approve$", got)
+        if m:
+            return await self._handle_skill_approve(request, m.group(1))
+        m = re.match(r"^/api/skills/([^/]+)/reject$", got)
+        if m:
+            return await self._handle_skill_reject(request, m.group(1))
+        m = re.match(r"^/api/skills/([^/]+)/judge$", got)
+        if m:
+            return await self._handle_skill_judge(request, m.group(1))
+        m = re.match(r"^/api/skills/([^/]+)/remove$", got)
+        if m:
+            return await self._handle_skill_remove(request, m.group(1))
+        m = re.match(r"^/api/skills/([^/]+)/files$", got)
+        if m:
+            return await self._handle_skill_files(request, m.group(1))
+        m = re.match(r"^/api/skills/([^/]+)/file/save$", got)
+        if m:
+            return await self._handle_skill_file_save(request, m.group(1))
+        m = re.match(r"^/api/skills/([^/]+)/file$", got)
+        if m:
+            return await self._handle_skill_file(request, m.group(1))
+        m = re.match(r"^/api/skills/([^/]+)/history$", got)
+        if m:
+            return await self._handle_skill_history(request, m.group(1))
+        m = re.match(r"^/api/skills/([^/]+)/install-deps$", got)
+        if m:
+            return await self._handle_skill_install_deps(request, m.group(1))
+        m = re.match(r"^/api/skills/([^/]+)$", got)
+        if m:
+            return await self._handle_skill_get(request, m.group(1))
+
+        if got == "/api/channels":
+            return await self._handle_channels_list(request)
+        if got == "/api/models":
+            return await self._handle_models_list(request)
+        if got == "/api/memory/graph":
+            return await self._handle_memory_graph(request)
+        if got == "/api/memory/subgraph":
+            return await self._handle_memory_subgraph(request, query)
+        if got == "/api/memory/search":
+            return await self._handle_memory_search_api(request, query)
+
+        m = re.match(r"^/api/memory/entity/(.+)$", got)
+        if m:
+            return await self._handle_memory_entity(request, m.group(1))
+        m = re.match(r"^/api/memory/session/(.+)$", got)
+        if m:
+            return await self._handle_memory_session(request, m.group(1))
+        m = re.match(r"^/api/memory/edge/([^/]+)/([^/]+)$", got)
+        if m:
+            return await self._handle_memory_edge(request, m.group(1), m.group(2))
+
+        if got == "/api/memory/entry":
+            return await self._handle_memory_entry(request, query)
+        if got == "/api/memory/forget":
+            return await self._handle_memory_forget(request, query)
+        if got == "/api/memory/backlinks":
+            return await self._handle_memory_backlinks(request, query)
+        if got == "/api/model/test":
+            return await self._handle_model_test(request)
+        if got == "/api/model/capabilities":
+            return await self._handle_model_capabilities(request)
+        if got == "/api/memory/cross-encoder/test":
+            return await self._handle_cross_encoder_test(request, query)
+        if got == "/api/extras/status":
+            return await self._handle_extras_status(request, query)
+        if got == "/api/extras/ensure":
+            return await self._handle_extras_ensure(request, query)
+        if got == "/api/extras/restart":
+            return await self._handle_extras_restart(request)
+
+        m = re.match(r"^/api/sessions/([^/]+)/messages$", got)
+        if m:
+            return await self._handle_session_messages(request, m.group(1))
+        m = re.match(r"^/api/sessions/([^/]+)/webui-thread$", got)
+        if m:
+            return await self._handle_webui_thread_get(request, m.group(1))
+        m = re.match(r"^/api/sessions/([^/]+)/delete$", got)
+        if m:
+            return await self._handle_session_delete(request, m.group(1))
+        m = re.match(r"^/api/sessions/([^/]+)/rename$", got)
+        if m:
+            return await self._handle_session_rename(request, m.group(1))
+
+        return _http_error(404, "Not Found")
 
     # -- HTTP route handlers ------------------------------------------------
 
@@ -1078,7 +1271,7 @@ class WebSocketChannel(BaseChannel):
             if now > expiry:
                 self._api_tokens.pop(token_key, None)
 
-    def _handle_bootstrap(self, connection: Any, request: Any) -> Response:
+    def _handle_bootstrap(self, connection: Any, request: Any) -> HttpResult:
         # When a secret is configured (token_issue_secret or static token),
         # validate it regardless of source IP.  This secures deployments
         # behind a reverse proxy where all connections appear as localhost.
@@ -1136,7 +1329,7 @@ class WebSocketChannel(BaseChannel):
             }
         )
 
-    async def _handle_memory_graph(self, request: WsRequest) -> Response:
+    async def _handle_memory_graph(self, request: WsRequest) -> HttpResult:
         """GET /api/memory/graph — entity-centric memory as nodes + edges."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -1153,7 +1346,7 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_memory_subgraph(
         self, request: WsRequest, query: dict[str, list[str]]
-    ) -> Response:
+    ) -> HttpResult:
         """GET /api/memory/subgraph?ref=<type:slug>&hops=N — ego-graph."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -1175,7 +1368,7 @@ class WebSocketChannel(BaseChannel):
             return _domain_error_response(err)
         return _http_json_response(result.data)
 
-    async def _handle_memory_entity(self, request: WsRequest, ref_encoded: str) -> Response:
+    async def _handle_memory_entity(self, request: WsRequest, ref_encoded: str) -> HttpResult:
         """GET /api/memory/entity/<ref> — full page + history + archive + entries."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -1195,7 +1388,7 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_memory_session(
         self, request: WsRequest, stem_encoded: str,
-    ) -> Response:
+    ) -> HttpResult:
         """GET /api/memory/session/<stem> — session detail for the graph view."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -1215,7 +1408,7 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_memory_entry(
         self, request: WsRequest, query: dict[str, list[str]],
-    ) -> Response:
+    ) -> HttpResult:
         """GET /api/memory/entry?uri=memory/<class>/<id> — one entry's frontmatter + body."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -1233,7 +1426,7 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_memory_forget(
         self, request: WsRequest, query: dict[str, list[str]],
-    ) -> Response:
+    ) -> HttpResult:
         """GET /api/memory/forget?uri=memory/<class>/<id> — archive an entry.
 
         Returns ``{"result": "archived"|"not_found"|"protected"|"invalid"}``.
@@ -1261,7 +1454,7 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_memory_backlinks(
         self, request: WsRequest, query: dict[str, list[str]],
-    ) -> Response:
+    ) -> HttpResult:
         """GET /api/memory/backlinks?uri=memory/<class>/<id> — entries that reference this one."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -1279,7 +1472,7 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_memory_edge(
         self, request: WsRequest, source_enc: str, target_enc: str,
-    ) -> Response:
+    ) -> HttpResult:
         """GET /api/memory/edge/<source>/<target> — entries co-mentioning both."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -1300,7 +1493,7 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_memory_search_api(
         self, request: WsRequest, query: dict[str, list[str]],
-    ) -> Response:
+    ) -> HttpResult:
         """GET /api/memory/search?q=…&scope=…&level=… — same shape as memory_search tool."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -1320,7 +1513,7 @@ class WebSocketChannel(BaseChannel):
             return _domain_error_response(err)
         return _http_json_response(result.data)
 
-    async def _handle_sessions_list(self, request: WsRequest) -> Response:
+    async def _handle_sessions_list(self, request: WsRequest) -> HttpResult:
         principal = self._resolve_principal(request)
         if principal is None:
             return _http_error(401, "Unauthorized")
@@ -1338,7 +1531,7 @@ class WebSocketChannel(BaseChannel):
         """Thin wrapper — delegates to ``SettingsService._payload`` (moved in SP1)."""
         return self._services.get("settings")._payload(requires_restart=requires_restart).model_dump()
 
-    async def _handle_settings(self, request: WsRequest) -> Response:
+    async def _handle_settings(self, request: WsRequest) -> HttpResult:
         principal = self._resolve_principal(request)
         if principal is None:
             return _http_error(401, "Unauthorized")
@@ -1352,7 +1545,7 @@ class WebSocketChannel(BaseChannel):
             return _domain_error_response(err)
         return _http_json_response(result.model_dump())
 
-    async def _handle_codex_oauth_status(self, request: WsRequest) -> Response:
+    async def _handle_codex_oauth_status(self, request: WsRequest) -> HttpResult:
         """`GET /api/oauth/codex/status` — shim → OAuthService.status."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -1368,7 +1561,7 @@ class WebSocketChannel(BaseChannel):
             return _domain_error_response(err)
         return _http_json_response(result.model_dump(exclude_none=True))
 
-    async def _handle_codex_oauth_start_loopback(self, request: WsRequest) -> Response:
+    async def _handle_codex_oauth_start_loopback(self, request: WsRequest) -> HttpResult:
         """`GET /api/oauth/codex/start-loopback` — shim → OAuthService.start_loopback."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -1389,7 +1582,7 @@ class WebSocketChannel(BaseChannel):
             return _domain_error_response(err)
         return _http_json_response(result.model_dump())
 
-    async def _handle_codex_oauth_start(self, request: WsRequest) -> Response:
+    async def _handle_codex_oauth_start(self, request: WsRequest) -> HttpResult:
         """`GET /api/oauth/codex/start` — shim → OAuthService.start."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -1407,7 +1600,7 @@ class WebSocketChannel(BaseChannel):
             return _domain_error_response(err)
         return _http_json_response(result.model_dump())
 
-    async def _handle_codex_oauth_poll(self, request: WsRequest) -> Response:
+    async def _handle_codex_oauth_poll(self, request: WsRequest) -> HttpResult:
         """`GET /api/oauth/codex/poll` — shim → OAuthService.poll."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -1426,7 +1619,7 @@ class WebSocketChannel(BaseChannel):
             return _domain_error_response(err)
         return _http_json_response(result.model_dump(exclude_none=True))
 
-    async def _handle_codex_oauth_disconnect(self, request: WsRequest) -> Response:
+    async def _handle_codex_oauth_disconnect(self, request: WsRequest) -> HttpResult:
         """`GET /api/oauth/codex/disconnect` — shim → OAuthService.disconnect."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -1444,7 +1637,7 @@ class WebSocketChannel(BaseChannel):
             result.model_dump(exclude_none=True, exclude={"can_loopback"})
         )
 
-    async def _handle_commands(self, request: WsRequest) -> Response:
+    async def _handle_commands(self, request: WsRequest) -> HttpResult:
         """`GET /api/commands` — shim → CommandsService.list."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -1459,7 +1652,7 @@ class WebSocketChannel(BaseChannel):
             return _domain_error_response(err)
         return _http_json_response(result.model_dump())
 
-    async def _handle_settings_update(self, request: WsRequest) -> Response:
+    async def _handle_settings_update(self, request: WsRequest) -> HttpResult:
         principal = self._resolve_principal(request)
         if principal is None:
             return _http_error(401, "Unauthorized")
@@ -1477,7 +1670,7 @@ class WebSocketChannel(BaseChannel):
             return _domain_error_response(err)
         return _http_json_response(result.model_dump())
 
-    async def _handle_settings_provider_update(self, request: WsRequest) -> Response:
+    async def _handle_settings_provider_update(self, request: WsRequest) -> HttpResult:
         principal = self._resolve_principal(request)
         if principal is None:
             return _http_error(401, "Unauthorized")
@@ -1507,7 +1700,7 @@ class WebSocketChannel(BaseChannel):
             return _domain_error_response(err)
         return _http_json_response(result.model_dump())
 
-    async def _handle_settings_web_search_update(self, request: WsRequest) -> Response:
+    async def _handle_settings_web_search_update(self, request: WsRequest) -> HttpResult:
         principal = self._resolve_principal(request)
         if principal is None:
             return _http_error(401, "Unauthorized")
@@ -1535,7 +1728,7 @@ class WebSocketChannel(BaseChannel):
 
     # -- secret store --------------------------------------------------------
 
-    async def _handle_secrets_list(self, request: WsRequest) -> Response:
+    async def _handle_secrets_list(self, request: WsRequest) -> HttpResult:
         """`GET /api/secrets` — entries' metadata. Never returns a value."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -1551,7 +1744,7 @@ class WebSocketChannel(BaseChannel):
     # ``secret_store`` envelope in ``_handle_secret_store_envelope``.
     # The value rides a JSON frame, never a URL query.
 
-    async def _handle_secret_delete(self, request: WsRequest) -> Response:
+    async def _handle_secret_delete(self, request: WsRequest) -> HttpResult:
         """`GET /api/secrets/delete` — remove a secret."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -1631,7 +1824,7 @@ class WebSocketChannel(BaseChannel):
             "updated_at_ms": job.updated_at_ms,
         }
 
-    async def _handle_skills_list(self, request: WsRequest) -> Response:
+    async def _handle_skills_list(self, request: WsRequest) -> HttpResult:
         """`GET /api/skills` — shim → SkillsService.list."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -1644,7 +1837,7 @@ class WebSocketChannel(BaseChannel):
             return _domain_error_response(err)
         return _http_json_response(result.data, status=result.status)
 
-    async def _handle_skills_quarantine(self, request: WsRequest) -> Response:
+    async def _handle_skills_quarantine(self, request: WsRequest) -> HttpResult:
         """`GET /api/skills/quarantine` — shim → SkillsService.quarantine."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -1659,7 +1852,7 @@ class WebSocketChannel(BaseChannel):
             return _domain_error_response(err)
         return _http_json_response(result.data, status=result.status)
 
-    async def _handle_skill_get(self, request: WsRequest, name: str) -> Response:
+    async def _handle_skill_get(self, request: WsRequest, name: str) -> HttpResult:
         """`GET /api/skills/{name}` — shim → SkillsService.get."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -1677,7 +1870,7 @@ class WebSocketChannel(BaseChannel):
             return _domain_error_response(err)
         return _http_json_response(result.data, status=result.status)
 
-    async def _handle_skill_save(self, request: WsRequest, name: str) -> Response:
+    async def _handle_skill_save(self, request: WsRequest, name: str) -> HttpResult:
         """`GET /api/skills/{name}/save?content=...` — shim → SkillsService.save."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -1699,7 +1892,7 @@ class WebSocketChannel(BaseChannel):
             return _domain_error_response(err)
         return _http_json_response(result.data, status=result.status)
 
-    async def _handle_skill_files(self, request: WsRequest, name: str) -> Response:
+    async def _handle_skill_files(self, request: WsRequest, name: str) -> HttpResult:
         """`GET /api/skills/{name}/files` — shim → SkillsService.files."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -1717,7 +1910,7 @@ class WebSocketChannel(BaseChannel):
             return _domain_error_response(err)
         return _http_json_response(result.data, status=result.status)
 
-    async def _handle_skill_file(self, request: WsRequest, name: str) -> Response:
+    async def _handle_skill_file(self, request: WsRequest, name: str) -> HttpResult:
         """`GET /api/skills/{name}/file?path=...` — shim → SkillsService.file_get."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -1738,7 +1931,7 @@ class WebSocketChannel(BaseChannel):
             return _domain_error_response(err)
         return _http_json_response(result.data, status=result.status)
 
-    async def _handle_skill_file_save(self, request: WsRequest, name: str) -> Response:
+    async def _handle_skill_file_save(self, request: WsRequest, name: str) -> HttpResult:
         """`GET /api/skills/{name}/file/save?path=&content=` — shim → SkillsService.file_save."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -1763,7 +1956,7 @@ class WebSocketChannel(BaseChannel):
             return _domain_error_response(err)
         return _http_json_response(result.data, status=result.status)
 
-    async def _handle_skill_history(self, request: WsRequest, name: str) -> Response:
+    async def _handle_skill_history(self, request: WsRequest, name: str) -> HttpResult:
         """`GET /api/skills/{name}/history` — shim → SkillsService.history."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -1781,7 +1974,7 @@ class WebSocketChannel(BaseChannel):
             return _domain_error_response(err)
         return _http_json_response(result.data, status=result.status)
 
-    async def _handle_skill_mode(self, request: WsRequest, name: str) -> Response:
+    async def _handle_skill_mode(self, request: WsRequest, name: str) -> HttpResult:
         """`GET /api/skills/{name}/mode?value=auto|manual` — shim → SkillsService.mode."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -1800,7 +1993,7 @@ class WebSocketChannel(BaseChannel):
             return _domain_error_response(err)
         return _http_json_response(result.data, status=result.status)
 
-    async def _handle_skills_resolve(self, request: WsRequest) -> Response:
+    async def _handle_skills_resolve(self, request: WsRequest) -> HttpResult:
         """`GET /api/skills/resolve?source=` — shim → SkillsService.resolve."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -1818,7 +2011,7 @@ class WebSocketChannel(BaseChannel):
             return _domain_error_response(err)
         return _http_json_response(result.data, status=result.status)
 
-    async def _handle_skills_import(self, request: WsRequest) -> Response:
+    async def _handle_skills_import(self, request: WsRequest) -> HttpResult:
         """`GET /api/skills/import?source=` — shim → SkillsService.import_skill."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -1836,7 +2029,7 @@ class WebSocketChannel(BaseChannel):
             return _domain_error_response(err)
         return _http_json_response(result.data, status=result.status)
 
-    async def _handle_skill_search(self, request: WsRequest) -> Response:
+    async def _handle_skill_search(self, request: WsRequest) -> HttpResult:
         """`GET /api/skills/search?query=&limit=` — shim → SkillsService.search (async off-thread)."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -1859,7 +2052,7 @@ class WebSocketChannel(BaseChannel):
             return _domain_error_response(err)
         return _http_json_response(result.data, status=result.status)
 
-    async def _handle_skill_describe(self, request: WsRequest) -> Response:
+    async def _handle_skill_describe(self, request: WsRequest) -> HttpResult:
         """`GET /api/skills/describe?ref=` — shim → SkillsService.describe (async off-thread)."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -1877,7 +2070,7 @@ class WebSocketChannel(BaseChannel):
             return _domain_error_response(err)
         return _http_json_response(result.data, status=result.status)
 
-    async def _handle_skills_github_token_test(self, request: WsRequest) -> Response:
+    async def _handle_skills_github_token_test(self, request: WsRequest) -> HttpResult:
         """`GET /api/skills/github-token-test?secret=` — shim → SkillsService.github_token_test."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -1893,7 +2086,7 @@ class WebSocketChannel(BaseChannel):
             return _domain_error_response(err)
         return _http_json_response(result.data, status=result.status)
 
-    async def _handle_skill_approve(self, request: WsRequest, name: str) -> Response:
+    async def _handle_skill_approve(self, request: WsRequest, name: str) -> HttpResult:
         """`GET /api/skills/{name}/approve?confirm=&override=&install_deps=` — shim → SkillsService.approve."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -1920,7 +2113,7 @@ class WebSocketChannel(BaseChannel):
             return _domain_error_response(err)
         return _http_json_response(result.data, status=result.status)
 
-    async def _handle_skill_install_deps(self, request: WsRequest, name: str) -> Response:
+    async def _handle_skill_install_deps(self, request: WsRequest, name: str) -> HttpResult:
         """`GET /api/skills/{name}/install-deps?bin=` — shim → SkillsService.install_deps."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -2000,7 +2193,7 @@ class WebSocketChannel(BaseChannel):
                                judged=True, verdict=merged.verdict, findings=findings,
                                summary=outcome.summary)
 
-    async def _handle_skill_judge(self, request: WsRequest, name: str) -> Response:
+    async def _handle_skill_judge(self, request: WsRequest, name: str) -> HttpResult:
         """`GET /api/skills/{name}/judge` — shim → SkillsService.judge (async off-thread)."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -2018,7 +2211,7 @@ class WebSocketChannel(BaseChannel):
             return _domain_error_response(err)
         return _http_json_response(result.data, status=result.status)
 
-    async def _handle_skill_reject(self, request: WsRequest, name: str) -> Response:
+    async def _handle_skill_reject(self, request: WsRequest, name: str) -> HttpResult:
         """`GET /api/skills/{name}/reject` — shim → SkillsService.reject."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -2036,7 +2229,7 @@ class WebSocketChannel(BaseChannel):
             return _domain_error_response(err)
         return _http_json_response(result.data, status=result.status)
 
-    async def _handle_skill_remove(self, request: WsRequest, name: str) -> Response:
+    async def _handle_skill_remove(self, request: WsRequest, name: str) -> HttpResult:
         """`GET /api/skills/{name}/remove` — shim → SkillsService.remove."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -2054,7 +2247,7 @@ class WebSocketChannel(BaseChannel):
             return _domain_error_response(err)
         return _http_json_response(result.data, status=result.status)
 
-    async def _handle_cron_list(self, request: WsRequest) -> Response:
+    async def _handle_cron_list(self, request: WsRequest) -> HttpResult:
         """`GET /api/cron` — list all scheduled jobs."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -2067,7 +2260,7 @@ class WebSocketChannel(BaseChannel):
             return _domain_error_response(err)
         return _http_json_response(result.model_dump())
 
-    async def _handle_cron_remove(self, request: WsRequest) -> Response:
+    async def _handle_cron_remove(self, request: WsRequest) -> HttpResult:
         """`GET /api/cron/remove?id=...` — remove a non-system job."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -2085,7 +2278,7 @@ class WebSocketChannel(BaseChannel):
             return _domain_error_response(err)
         return _http_json_response(result.model_dump())
 
-    async def _handle_cron_run(self, request: WsRequest) -> Response:
+    async def _handle_cron_run(self, request: WsRequest) -> HttpResult:
         """`GET /api/cron/run?id=...` — manually trigger a job now.
 
         The service validates whether the job can run and returns the decision.
@@ -2118,7 +2311,7 @@ class WebSocketChannel(BaseChannel):
             task.add_done_callback(self._background_run_tasks.discard)
         return _http_json_response(decision.model_dump(exclude_none=True))
 
-    async def _handle_cron_toggle(self, request: WsRequest) -> Response:
+    async def _handle_cron_toggle(self, request: WsRequest) -> HttpResult:
         """`GET /api/cron/toggle?id=...&enabled=true|false` — enable or disable a job."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -2141,7 +2334,7 @@ class WebSocketChannel(BaseChannel):
 
     # -- generic config API (web parity Phase B) ---------------------------
 
-    async def _handle_config_get(self, request: WsRequest) -> Response:
+    async def _handle_config_get(self, request: WsRequest) -> HttpResult:
         """`GET /api/config` — shim → ConfigService.get."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -2154,7 +2347,7 @@ class WebSocketChannel(BaseChannel):
             return _domain_error_response(err)
         return _http_json_response(result.model_dump(by_alias=True))
 
-    async def _handle_config_set(self, request: WsRequest) -> Response:
+    async def _handle_config_set(self, request: WsRequest) -> HttpResult:
         """`GET /api/config/set` — shim → ConfigService.set."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -2177,7 +2370,7 @@ class WebSocketChannel(BaseChannel):
             return _domain_error_response(err)
         return _http_json_response(result.model_dump(by_alias=True))
 
-    async def _handle_logs_list(self, request: WsRequest) -> Response:
+    async def _handle_logs_list(self, request: WsRequest) -> HttpResult:
         """`GET /api/logs?source=&...` — shim → HealthService.logs_list."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -2206,7 +2399,7 @@ class WebSocketChannel(BaseChannel):
         # Wire format is snake_case (matches original handler) — do not use by_alias.
         return _http_json_response(result.model_dump())
 
-    async def _handle_models_list(self, request: WsRequest) -> Response:
+    async def _handle_models_list(self, request: WsRequest) -> HttpResult:
         """`GET /api/models?provider=X&capability=Y` — shim → ConfigService.models_list."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -2224,7 +2417,7 @@ class WebSocketChannel(BaseChannel):
             return _domain_error_response(err)
         return _http_json_response(result.model_dump(by_alias=True))
 
-    async def _handle_model_capabilities(self, request: WsRequest) -> Response:
+    async def _handle_model_capabilities(self, request: WsRequest) -> HttpResult:
         """`GET /api/model/capabilities?model=&provider=` — shim → ConfigService.model_capabilities."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -2245,7 +2438,7 @@ class WebSocketChannel(BaseChannel):
         # Wire format is snake_case (matches original handler) — do not use by_alias.
         return _http_json_response(result.model_dump())
 
-    async def _handle_channels_list(self, request: WsRequest) -> Response:
+    async def _handle_channels_list(self, request: WsRequest) -> HttpResult:
         """`GET /api/channels` — shim → ConfigService.channels_list."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -2260,7 +2453,7 @@ class WebSocketChannel(BaseChannel):
             return _domain_error_response(err)
         return _http_json_response(result.model_dump(by_alias=True))
 
-    async def _handle_model_test(self, request: WsRequest) -> Response:
+    async def _handle_model_test(self, request: WsRequest) -> HttpResult:
         """`GET /api/model/test` — shim → ConfigService.model_test (async probe)."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -2280,7 +2473,7 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_cross_encoder_test(
         self, request: WsRequest, query: dict,
-    ) -> Response:
+    ) -> HttpResult:
         """`GET /api/memory/cross-encoder/test?model=<id>` — shim → ConfigService.cross_encoder_test."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -2299,7 +2492,7 @@ class WebSocketChannel(BaseChannel):
         # Wire format is snake_case (matches original handler) — do not use by_alias.
         return _http_json_response(result.model_dump())
 
-    async def _handle_extras_status(self, request: WsRequest, query: dict) -> Response:
+    async def _handle_extras_status(self, request: WsRequest, query: dict) -> HttpResult:
         """`GET /api/extras/status?feature=<f>` — shim → HealthService.extras_status."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -2316,7 +2509,7 @@ class WebSocketChannel(BaseChannel):
         # Wire format is snake_case (matches original handler) — do not use by_alias.
         return _http_json_response(result.model_dump())
 
-    async def _handle_extras_ensure(self, request: WsRequest, query: dict) -> Response:
+    async def _handle_extras_ensure(self, request: WsRequest, query: dict) -> HttpResult:
         """`GET /api/extras/ensure?feature=<f>&restart=<bool>` — shim → HealthService.extras_ensure.
 
         The service performs the install and signals whether a restart is needed;
@@ -2346,7 +2539,7 @@ class WebSocketChannel(BaseChannel):
             out["restarting"] = True
         return _http_json_response(out)
 
-    async def _handle_extras_restart(self, request: WsRequest) -> Response:
+    async def _handle_extras_restart(self, request: WsRequest) -> HttpResult:
         """`GET /api/extras/restart` — shim → HealthService.extras_restart.
 
         The service returns the decision; subprocess spawn stays here.
@@ -2382,7 +2575,7 @@ class WebSocketChannel(BaseChannel):
         """True when *key* is a ``websocket:…`` session exposed on this HTTP surface."""
         return key.startswith("websocket:")
 
-    async def _handle_session_messages(self, request: WsRequest, key: str) -> Response:
+    async def _handle_session_messages(self, request: WsRequest, key: str) -> HttpResult:
         principal = self._resolve_principal(request)
         if principal is None:
             return _http_error(401, "Unauthorized")
@@ -2404,7 +2597,7 @@ class WebSocketChannel(BaseChannel):
         self._augment_media_urls(result.data)
         return _http_json_response(result.data)
 
-    async def _handle_webui_thread_get(self, request: WsRequest, key: str) -> Response:
+    async def _handle_webui_thread_get(self, request: WsRequest, key: str) -> HttpResult:
         principal = self._resolve_principal(request)
         if principal is None:
             return _http_error(401, "Unauthorized")
@@ -2560,7 +2753,7 @@ class WebSocketChannel(BaseChannel):
             return None
         return {"url": signed, "name": path.name}
 
-    def _handle_media_fetch(self, sig: str, payload: str) -> Response:
+    def _handle_media_fetch(self, sig: str, payload: str) -> HttpResult:
         """Serve a single media file previously signed via
         :meth:`_sign_media_path`. Validates the signature, decodes the
         payload to a relative path, and streams the file bytes with a
@@ -2608,7 +2801,7 @@ class WebSocketChannel(BaseChannel):
             ],
         )
 
-    async def _handle_session_delete(self, request: WsRequest, key: str) -> Response:
+    async def _handle_session_delete(self, request: WsRequest, key: str) -> HttpResult:
         principal = self._resolve_principal(request)
         if principal is None:
             return _http_error(401, "Unauthorized")
@@ -2625,7 +2818,7 @@ class WebSocketChannel(BaseChannel):
             return _domain_error_response(err)
         return _http_json_response(result.model_dump())
 
-    async def _handle_session_rename(self, request: WsRequest, key: str) -> Response:
+    async def _handle_session_rename(self, request: WsRequest, key: str) -> HttpResult:
         """P2 (doc 20): set a user-edited title for a webui session."""
         principal = self._resolve_principal(request)
         if principal is None:
@@ -2645,7 +2838,7 @@ class WebSocketChannel(BaseChannel):
             return _domain_error_response(err)
         return _http_json_response(result.model_dump())
 
-    def _serve_static(self, request_path: str) -> Response | None:
+    def _serve_static(self, request_path: str) -> HttpResult | None:
         """Resolve *request_path* against the built SPA directory; SPA fallback to index.html."""
         assert self._static_dist_path is not None
         rel = request_path.lstrip("/")
