@@ -763,6 +763,11 @@ class GatewayConfig(Base):
     # second port. Off by default (None) — existing behaviour is unchanged.
     # Set via `gateway.api_port: 18791` to activate the new HTTP front door.
     api_port: int | None = None
+    # When False (default), the gateway serves ONE unified Starlette app via
+    # uvicorn on the websocket port (WS chat + /api/v1 + legacy /api/* + SPA).
+    # Set to True to roll back to the legacy ``websockets.serve`` path where
+    # the WebSocketChannel owns the socket directly.
+    legacy_ws_server: bool = False
 
 
 class MCPServerConfig(Base):
