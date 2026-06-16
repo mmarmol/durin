@@ -2,6 +2,10 @@ import type {
   ChatSummary,
   ProviderSettingsUpdate,
   ConfigSnapshot,
+  McpOauthLoginResult,
+  McpServerConfig,
+  McpServerDetail,
+  McpServerSummary,
   SecretEntry,
   SettingsPayload,
   SettingsUpdate,
@@ -68,6 +72,14 @@ function post<T>(url: string, token: string, body: unknown): Promise<T> {
 function del<T>(url: string, token: string, body: unknown): Promise<T> {
   return request<T>(url, token, {
     method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+function patch<T>(url: string, token: string, body: unknown): Promise<T> {
+  return request<T>(url, token, {
+    method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
@@ -1394,4 +1406,97 @@ export async function disconnectCodex(
   base: string = "",
 ): Promise<CodexStatus> {
   return del<CodexStatus>(`${base}/api/v1/oauth/codex`, token, {});
+}
+
+// --- MCP server management -------------------------------------------------
+
+function mcpPath(name: string, suffix = ""): string {
+  return `/api/v1/mcp/servers/${encodeURIComponent(name)}${suffix}`;
+}
+
+export async function listMcpServers(
+  token: string,
+  base: string = "",
+): Promise<McpServerSummary[]> {
+  const res = await request<{ servers: McpServerSummary[] }>(
+    `${base}/api/v1/mcp/servers`,
+    token,
+  );
+  return res.servers;
+}
+
+export async function getMcpServer(
+  token: string,
+  name: string,
+  base: string = "",
+): Promise<McpServerDetail> {
+  return request<McpServerDetail>(`${base}${mcpPath(name)}`, token);
+}
+
+export async function addMcpServer(
+  token: string,
+  name: string,
+  config: McpServerConfig,
+  base: string = "",
+): Promise<McpServerDetail> {
+  return post<McpServerDetail>(`${base}/api/v1/mcp/servers`, token, {
+    name,
+    config,
+  });
+}
+
+export async function updateMcpServer(
+  token: string,
+  name: string,
+  config: McpServerConfig,
+  base: string = "",
+): Promise<McpServerDetail> {
+  return patch<McpServerDetail>(`${base}${mcpPath(name)}`, token, {
+    name,
+    config,
+  });
+}
+
+export async function removeMcpServer(
+  token: string,
+  name: string,
+  base: string = "",
+): Promise<void> {
+  await del<{ ok: boolean }>(`${base}${mcpPath(name)}`, token, {});
+}
+
+export async function enableMcpServer(
+  token: string,
+  name: string,
+  base: string = "",
+): Promise<McpServerDetail> {
+  return post<McpServerDetail>(`${base}${mcpPath(name, "/enable")}`, token, {});
+}
+
+export async function disableMcpServer(
+  token: string,
+  name: string,
+  base: string = "",
+): Promise<McpServerDetail> {
+  return post<McpServerDetail>(`${base}${mcpPath(name, "/disable")}`, token, {});
+}
+
+export async function mcpOauthLogin(
+  token: string,
+  name: string,
+  base: string = "",
+): Promise<McpOauthLoginResult> {
+  return post<McpOauthLoginResult>(
+    `${base}${mcpPath(name, "/oauth/login")}`,
+    token,
+    {},
+  );
+}
+
+export async function mcpOauthLogout(
+  token: string,
+  name: string,
+  base: string = "",
+): Promise<void> {
+  await post<{ ok: boolean }>(`${base}${mcpPath(name, "/oauth/logout")}`, token, {});
 }
