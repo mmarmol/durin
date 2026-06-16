@@ -266,6 +266,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/mcp/servers/{name}/oauth/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start interactive OAuth sign-in; returns the authorization URL */
+        post: operations["mcp_oauth_login"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/mcp/servers/{name}/oauth/logout": {
         parameters: {
             query?: never;
@@ -1545,6 +1562,13 @@ export interface components {
             /** Servers */
             servers: components["schemas"]["McpServerSummary"][];
         };
+        /** McpOauthLoginResult */
+        McpOauthLoginResult: {
+            /** Authorization Url */
+            authorization_url: string;
+            /** State */
+            state: string;
+        };
         /** McpOkResult */
         McpOkResult: {
             /** Ok */
@@ -2804,6 +2828,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["McpServerDetail"];
+                };
+            };
+        };
+    };
+    mcp_oauth_login: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["McpServerNameCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpOauthLoginResult"];
                 };
             };
         };
