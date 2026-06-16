@@ -220,8 +220,8 @@ async def test_send_delivers_json_message_with_media_and_reply() -> None:
     )
     await channel.send(msg)
 
-    mock_ws.send.assert_awaited_once()
-    payload = json.loads(mock_ws.send.call_args[0][0])
+    mock_ws.send_text.assert_awaited_once()
+    payload = json.loads(mock_ws.send_text.call_args[0][0])
     assert payload["event"] == "message"
     assert payload["chat_id"] == "chat-1"
     assert payload["text"] == "hello"
@@ -239,7 +239,7 @@ async def test_send_broadcasts_runtime_model_updates() -> None:
     publish_runtime_model_update(bus, "openai/gpt-4.1", "fast")
     await channel.send(bus.outbound.get_nowait())
 
-    payload = json.loads(mock_ws.send.call_args[0][0])
+    payload = json.loads(mock_ws.send_text.call_args[0][0])
     assert payload["event"] == "runtime_model_updated"
     assert payload["model_name"] == "openai/gpt-4.1"
     assert payload["model_preset"] == "fast"
@@ -292,7 +292,7 @@ async def test_send_stages_external_media_as_signed_url(monkeypatch, tmp_path) -
         )
     )
 
-    payload = json.loads(mock_ws.send.call_args[0][0])
+    payload = json.loads(mock_ws.send_text.call_args[0][0])
     assert payload["media"] == [str(external)]
     assert payload["media_urls"][0]["name"] == "clip.mp4"
     assert payload["media_urls"][0]["url"].startswith("/api/media/")
@@ -312,7 +312,7 @@ async def test_send_removes_connection_on_connection_closed() -> None:
     bus = MagicMock()
     channel = WebSocketChannel({"enabled": True, "allowFrom": ["*"]}, bus)
     mock_ws = AsyncMock()
-    mock_ws.send.side_effect = ConnectionClosed(Close(1006, ""), Close(1006, ""), True)
+    mock_ws.send_text.side_effect = ConnectionClosed(Close(1006, ""), Close(1006, ""), True)
     channel._attach(mock_ws, "chat-1")
 
     msg = OutboundMessage(channel="websocket", chat_id="chat-1", content="hello")
@@ -352,7 +352,7 @@ async def test_send_progress_includes_structured_tool_events() -> None:
         },
     ))
 
-    payload = json.loads(mock_ws.send.await_args.args[0])
+    payload = json.loads(mock_ws.send_text.await_args.args[0])
     assert payload["event"] == "message"
     assert payload["kind"] == "tool_hint"
     assert payload["tool_events"] == [
@@ -389,7 +389,7 @@ async def test_send_message_propagates_render_as_text_metadata() -> None:
         metadata={"render_as": "text"},
     ))
 
-    payload = json.loads(mock_ws.send.await_args.args[0])
+    payload = json.loads(mock_ws.send_text.await_args.args[0])
     assert payload["event"] == "message"
     assert payload["render_as"] == "text"
 
@@ -410,7 +410,7 @@ async def test_send_message_without_render_as_omits_field() -> None:
         metadata={},
     ))
 
-    payload = json.loads(mock_ws.send.await_args.args[0])
+    payload = json.loads(mock_ws.send_text.await_args.args[0])
     assert payload["event"] == "message"
     assert "render_as" not in payload
 
@@ -433,7 +433,7 @@ async def test_send_progress_includes_agent_ui_blob() -> None:
         metadata={"_progress": True, OUTBOUND_META_AGENT_UI: blob},
     ))
 
-    payload = json.loads(mock_ws.send.await_args.args[0])
+    payload = json.loads(mock_ws.send_text.await_args.args[0])
     assert payload["event"] == "message"
     assert payload["kind"] == "progress"
     assert payload["agent_ui"] == blob
@@ -444,7 +444,7 @@ async def test_send_delta_removes_connection_on_connection_closed() -> None:
     bus = MagicMock()
     channel = WebSocketChannel({"enabled": True, "allowFrom": ["*"], "streaming": True}, bus)
     mock_ws = AsyncMock()
-    mock_ws.send.side_effect = ConnectionClosed(Close(1006, ""), Close(1006, ""), True)
+    mock_ws.send_text.side_effect = ConnectionClosed(Close(1006, ""), Close(1006, ""), True)
     channel._attach(mock_ws, "chat-1")
 
     await channel.send_delta("chat-1", "chunk", {"_stream_delta": True, "_stream_id": "s1"})
@@ -463,9 +463,9 @@ async def test_send_delta_emits_delta_and_stream_end() -> None:
     await channel.send_delta("chat-1", "part", {"_stream_delta": True, "_stream_id": "sid"})
     await channel.send_delta("chat-1", "", {"_stream_end": True, "_stream_id": "sid"})
 
-    assert mock_ws.send.await_count == 2
-    first = json.loads(mock_ws.send.call_args_list[0][0][0])
-    second = json.loads(mock_ws.send.call_args_list[1][0][0])
+    assert mock_ws.send_text.await_count == 2
+    first = json.loads(mock_ws.send_text.call_args_list[0][0][0])
+    second = json.loads(mock_ws.send_text.call_args_list[1][0][0])
     assert first["event"] == "delta"
     assert first["chat_id"] == "chat-1"
     assert first["text"] == "part"
@@ -488,8 +488,8 @@ async def test_send_reasoning_delta_emits_streaming_frame() -> None:
         {"_reasoning_delta": True, "_stream_id": "r1"},
     )
 
-    mock_ws.send.assert_awaited_once()
-    payload = json.loads(mock_ws.send.await_args.args[0])
+    mock_ws.send_text.assert_awaited_once()
+    payload = json.loads(mock_ws.send_text.await_args.args[0])
     assert payload["event"] == "reasoning_delta"
     assert payload["chat_id"] == "chat-1"
     assert payload["text"] == "step-by-step thinking"
@@ -505,7 +505,7 @@ async def test_send_reasoning_end_emits_close_frame() -> None:
 
     await channel.send_reasoning_end("chat-1", {"_reasoning_end": True, "_stream_id": "r1"})
 
-    payload = json.loads(mock_ws.send.await_args.args[0])
+    payload = json.loads(mock_ws.send_text.await_args.args[0])
     assert payload == {"event": "reasoning_end", "chat_id": "chat-1", "stream_id": "r1"}
 
 
@@ -526,9 +526,9 @@ async def test_send_reasoning_one_shot_expands_to_delta_plus_end() -> None:
         metadata={"_reasoning": True},
     ))
 
-    assert mock_ws.send.await_count == 2
-    first = json.loads(mock_ws.send.call_args_list[0][0][0])
-    second = json.loads(mock_ws.send.call_args_list[1][0][0])
+    assert mock_ws.send_text.await_count == 2
+    first = json.loads(mock_ws.send_text.call_args_list[0][0][0])
+    second = json.loads(mock_ws.send_text.call_args_list[1][0][0])
     assert first["event"] == "reasoning_delta"
     assert first["text"] == "thinking"
     assert second["event"] == "reasoning_end"
@@ -543,7 +543,7 @@ async def test_send_reasoning_delta_drops_empty_chunks() -> None:
 
     await channel.send_reasoning_delta("chat-1", "", {"_reasoning_delta": True})
 
-    mock_ws.send.assert_not_awaited()
+    mock_ws.send_text.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -570,8 +570,8 @@ async def test_send_turn_end_emits_turn_end_event() -> None:
         metadata={"_turn_end": True},
     ))
 
-    mock_ws.send.assert_awaited_once()
-    body = json.loads(mock_ws.send.await_args.args[0])
+    mock_ws.send_text.assert_awaited_once()
+    body = json.loads(mock_ws.send_text.await_args.args[0])
     assert body == {"event": "turn_end", "chat_id": "chat-1"}
 
 
@@ -589,8 +589,8 @@ async def test_send_turn_end_includes_latency_ms_when_present() -> None:
         metadata={"_turn_end": True, "latency_ms": 1500},
     ))
 
-    mock_ws.send.assert_awaited_once()
-    body = json.loads(mock_ws.send.await_args.args[0])
+    mock_ws.send_text.assert_awaited_once()
+    body = json.loads(mock_ws.send_text.await_args.args[0])
     assert body == {"event": "turn_end", "chat_id": "chat-1", "latency_ms": 1500}
 
 
@@ -609,8 +609,8 @@ async def test_send_turn_end_includes_goal_state_when_present() -> None:
         metadata={"_turn_end": True, "goal_state": blob},
     ))
 
-    mock_ws.send.assert_awaited_once()
-    body = json.loads(mock_ws.send.await_args.args[0])
+    mock_ws.send_text.assert_awaited_once()
+    body = json.loads(mock_ws.send_text.await_args.args[0])
     assert body == {"event": "turn_end", "chat_id": "chat-1", "goal_state": blob}
 
 
@@ -632,8 +632,8 @@ async def test_send_goal_status_running_emits_event_with_started_at() -> None:
         },
     ))
 
-    mock_ws.send.assert_awaited_once()
-    body = json.loads(mock_ws.send.await_args.args[0])
+    mock_ws.send_text.assert_awaited_once()
+    body = json.loads(mock_ws.send_text.await_args.args[0])
     assert body == {
         "event": "goal_status",
         "chat_id": "chat-1",
@@ -660,8 +660,8 @@ async def test_send_goal_status_idle_omits_started_at() -> None:
         },
     ))
 
-    mock_ws.send.assert_awaited_once()
-    body = json.loads(mock_ws.send.await_args.args[0])
+    mock_ws.send_text.assert_awaited_once()
+    body = json.loads(mock_ws.send_text.await_args.args[0])
     assert body == {"event": "goal_status", "chat_id": "chat-1", "status": "idle"}
 
 
@@ -684,9 +684,9 @@ async def test_send_goal_state_emits_blob_per_chat() -> None:
         },
     ))
 
-    mock_a.send.assert_awaited_once()
-    mock_b.send.assert_not_called()
-    body = json.loads(mock_a.send.await_args.args[0])
+    mock_a.send_text.assert_awaited_once()
+    mock_b.send_text.assert_not_called()
+    body = json.loads(mock_a.send_text.await_args.args[0])
     assert body == {
         "event": "goal_state",
         "chat_id": "chat-a",
@@ -702,7 +702,7 @@ async def test_maybe_push_active_goal_state_noop_without_session_manager() -> No
     channel._attach(mock_ws, "chat-1")
     channel._session_manager = None
     await channel._maybe_push_active_goal_state("chat-1")
-    mock_ws.send.assert_not_called()
+    mock_ws.send_text.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -715,7 +715,7 @@ async def test_maybe_push_active_goal_state_skips_when_no_goal_on_disk() -> None
     mock_ws = AsyncMock()
     channel._attach(mock_ws, "chat-1")
     await channel._maybe_push_active_goal_state("chat-1")
-    mock_ws.send.assert_not_called()
+    mock_ws.send_text.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -737,8 +737,8 @@ async def test_maybe_push_active_goal_state_notifies_when_goal_active_on_disk() 
     mock_ws = AsyncMock()
     channel._attach(mock_ws, "chat-1")
     await channel._maybe_push_active_goal_state("chat-1")
-    mock_ws.send.assert_awaited_once()
-    body = json.loads(mock_ws.send.await_args.args[0])
+    mock_ws.send_text.assert_awaited_once()
+    body = json.loads(mock_ws.send_text.await_args.args[0])
     assert body["event"] == "goal_state"
     assert body["chat_id"] == "chat-1"
     assert body["goal_state"]["active"] is True
@@ -756,7 +756,7 @@ async def test_maybe_push_turn_run_wall_clock_skips_when_no_active_turn() -> Non
 
     wth._WEBSOCKET_TURN_WALL_STARTED_AT.clear()
     await channel._maybe_push_turn_run_wall_clock("chat-1")
-    mock_ws.send.assert_not_called()
+    mock_ws.send_text.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -774,8 +774,8 @@ async def test_maybe_push_turn_run_wall_clock_replays_running() -> None:
     finally:
         wth._WEBSOCKET_TURN_WALL_STARTED_AT.pop("chat-1", None)
 
-    mock_ws.send.assert_awaited_once()
-    body = json.loads(mock_ws.send.await_args.args[0])
+    mock_ws.send_text.assert_awaited_once()
+    body = json.loads(mock_ws.send_text.await_args.args[0])
     assert body == {
         "event": "goal_status",
         "chat_id": "chat-1",
@@ -798,8 +798,8 @@ async def test_send_session_updated_emits_session_updated_event() -> None:
         metadata={"_session_updated": True},
     ))
 
-    mock_ws.send.assert_awaited_once()
-    body = json.loads(mock_ws.send.await_args.args[0])
+    mock_ws.send_text.assert_awaited_once()
+    body = json.loads(mock_ws.send_text.await_args.args[0])
     assert body == {"event": "session_updated", "chat_id": "chat-1"}
 
 
@@ -808,7 +808,7 @@ async def test_send_non_connection_closed_exception_is_raised() -> None:
     bus = MagicMock()
     channel = WebSocketChannel({"enabled": True, "allowFrom": ["*"]}, bus)
     mock_ws = AsyncMock()
-    mock_ws.send.side_effect = RuntimeError("unexpected")
+    mock_ws.send_text.side_effect = RuntimeError("unexpected")
     channel._attach(mock_ws, "chat-1")
 
     msg = OutboundMessage(channel="websocket", chat_id="chat-1", content="hello")
@@ -1084,7 +1084,7 @@ async def test_secrets_api_crud(bus: MagicMock, monkeypatch, tmp_path) -> None:
                 self.sent: list[str] = []
                 self.remote_address = ("127.0.0.1", 0)
 
-            async def send(self, raw: str) -> None:
+            async def send_text(self, raw: str) -> None:
                 self.sent.append(raw)
 
         conn = _Conn()

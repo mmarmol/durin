@@ -504,6 +504,50 @@ def _issue_route_secret_matches(headers: Any, configured_secret: str) -> bool:
     return hmac.compare_digest(header_token.strip(), configured_secret)
 
 
+class ConnectionAdapter:
+    """Transport-agnostic seam around a single WebSocket connection.
+
+    Step 1 (this commit): wraps a ``websockets.ServerConnection`` and delegates
+    all I/O to it.  Step 3 will add a Starlette-``WebSocket``-backed subclass so
+    the chat logic (``_connection_loop``, ``_safe_send_to``, ``_send_event``)
+    never touches the transport library directly.
+
+    The instance is used as the identity key in ``_subs`` / ``_conn_chats`` /
+    ``_conn_default`` — default object identity (``id(self)``) provides the
+    stable, hashable key each connection needs.
+    """
+
+    __slots__ = ("_conn", "_iter")
+
+    def __init__(self, conn: Any) -> None:
+        self._conn = conn
+        self._iter: Any = None
+
+    async def send_text(self, raw: str) -> None:
+        """Send a text frame; delegates to the underlying connection."""
+        await self._conn.send(raw)
+
+    @property
+    def remote(self) -> Any:
+        """Remote address of the underlying connection (same shape as ``remote_address``)."""
+        return getattr(self._conn, "remote_address", None)
+
+    def __aiter__(self) -> "ConnectionAdapter":
+        self._iter = self._conn.__aiter__()
+        return self
+
+    async def __anext__(self) -> Any:
+        if self._iter is None:
+            self._iter = self._conn.__aiter__()
+        return await self._iter.__anext__()
+
+    async def close(self, code: int = 1000, reason: str = "") -> None:
+        """Close the underlying connection (used by the Starlette adapter in step 3)."""
+        close_fn = getattr(self._conn, "close", None)
+        if close_fn is not None:
+            await close_fn(code, reason)
+
+
 class WebSocketChannel(BaseChannel):
     """Run a local WebSocket server; forward text/JSON messages to the message bus."""
 
@@ -642,7 +686,7 @@ class WebSocketChannel(BaseChannel):
         payload.update(fields)
         raw = json.dumps(payload, ensure_ascii=False)
         try:
-            await connection.send(raw)
+            await connection.send_text(raw)
         except ConnectionClosed:
             self._cleanup_connection(connection)
         except Exception as e:
@@ -2719,6 +2763,7 @@ class WebSocketChannel(BaseChannel):
         await self._server_task
 
     async def _connection_loop(self, connection: Any) -> None:
+        adapter = ConnectionAdapter(connection)
         request = connection.request
         path_part = request.path if request else "/"
         _, query = _parse_request_path(path_part)
@@ -2733,7 +2778,7 @@ class WebSocketChannel(BaseChannel):
         default_chat_id = str(uuid.uuid4())
 
         try:
-            await connection.send(
+            await adapter.send_text(
                 json.dumps(
                     {
                         "event": "ready",
@@ -2744,11 +2789,11 @@ class WebSocketChannel(BaseChannel):
                 )
             )
             # Register only after ready is successfully sent to avoid out-of-order sends
-            self._conn_default[connection] = default_chat_id
-            self._attach(connection, default_chat_id)
+            self._conn_default[adapter] = default_chat_id
+            self._attach(adapter, default_chat_id)
             await self._hydrate_after_subscribe(default_chat_id)
 
-            async for raw in connection:
+            async for raw in adapter:
                 if isinstance(raw, bytes):
                     try:
                         raw = raw.decode("utf-8")
@@ -2758,7 +2803,7 @@ class WebSocketChannel(BaseChannel):
 
                 envelope = _parse_envelope(raw)
                 if envelope is not None:
-                    await self._dispatch_envelope(connection, client_id, envelope)
+                    await self._dispatch_envelope(adapter, client_id, envelope)
                     continue
 
                 content = _parse_inbound_payload(raw)
@@ -2771,13 +2816,13 @@ class WebSocketChannel(BaseChannel):
                     sender_id=client_id,
                     chat_id=default_chat_id,
                     content=content,
-                    metadata={"remote": getattr(connection, "remote_address", None)},
+                    metadata={"remote": adapter.remote},
                     is_dm=False,
                 )
         except Exception as e:
             self.logger.debug("connection ended: {}", e)
         finally:
-            self._cleanup_connection(connection)
+            self._cleanup_connection(adapter)
 
     def _save_envelope_media(
         self,
@@ -2905,7 +2950,7 @@ class WebSocketChannel(BaseChannel):
             # Auto-attach on first use so clients can one-shot without a separate attach.
             self._attach(connection, cid)
             await self._hydrate_after_subscribe(cid)
-            metadata: dict[str, Any] = {"remote": getattr(connection, "remote_address", None)}
+            metadata: dict[str, Any] = {"remote": getattr(connection, "remote", None)}
             if envelope.get("webui") is True:
                 metadata["webui"] = True
             await self._handle_message(
@@ -3049,7 +3094,7 @@ class WebSocketChannel(BaseChannel):
     async def _safe_send_to(self, connection: Any, raw: str, *, label: str = "") -> None:
         """Send a raw frame to one connection, cleaning up on ConnectionClosed."""
         try:
-            await connection.send(raw)
+            await connection.send_text(raw)
         except ConnectionClosed:
             self._cleanup_connection(connection)
             self.logger.warning("connection gone{}", label)
