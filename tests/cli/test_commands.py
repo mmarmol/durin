@@ -1690,6 +1690,12 @@ def test_gateway_health_endpoint_binds_and_serves_expected_responses(
         async def stop_all(self) -> None:
             return None
 
+        def get_channel(self, _name: str):
+            # No real websocket channel in this fake → the gateway skips the
+            # unified ASGI server and just runs the health server (what this
+            # test exercises).
+            return None
+
     class _FakeCronService:
         def __init__(self, _store_path: Path) -> None:
             self.on_job = None
