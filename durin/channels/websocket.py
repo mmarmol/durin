@@ -2882,25 +2882,36 @@ class WebSocketChannel(BaseChannel):
             extra_headers=[("Cache-Control", cache)],
         )
 
-    def _authorize_websocket_handshake(self, connection: Any, query: dict[str, list[str]]) -> Any:
+    def _ws_auth_ok(self, query: dict[str, list[str]]) -> bool:
+        """Return True if the WebSocket handshake is authorised.
+
+        Transport-neutral: called by both the websockets path
+        (``_authorize_websocket_handshake``) and the Starlette endpoint.
+        Side-effect: consumes a single-use issued token when one is accepted.
+        """
         supplied = _query_first(query, "token")
         static_token = self.config.token.strip()
 
         if static_token:
             if supplied and hmac.compare_digest(supplied, static_token):
-                return None
+                return True
             if supplied and self._take_issued_token_if_valid(supplied):
-                return None
-            return connection.respond(401, "Unauthorized")
+                return True
+            return False
 
         if self.config.websocket_requires_token:
             if supplied and self._take_issued_token_if_valid(supplied):
-                return None
-            return connection.respond(401, "Unauthorized")
+                return True
+            return False
 
         if supplied:
             self._take_issued_token_if_valid(supplied)
-        return None
+        return True
+
+    def _authorize_websocket_handshake(self, connection: Any, query: dict[str, list[str]]) -> Any:
+        if self._ws_auth_ok(query):
+            return None
+        return connection.respond(401, "Unauthorized")
 
     async def start(self) -> None:
         from durin.utils.logging_bridge import redirect_lib_logging
@@ -2956,12 +2967,27 @@ class WebSocketChannel(BaseChannel):
         await self._server_task
 
     async def _connection_loop(self, connection: Any) -> None:
+        """Entry point for the websockets transport path.
+
+        Wraps the raw ServerConnection in a ConnectionAdapter, extracts
+        client_id from the request path, then delegates to _run_connection.
+        """
         adapter = ConnectionAdapter(connection)
         request = connection.request
         path_part = request.path if request else "/"
         _, query = _parse_request_path(path_part)
         client_id_raw = _query_first(query, "client_id")
         client_id = client_id_raw.strip() if client_id_raw else ""
+        await self._run_connection(adapter, client_id)
+
+    async def _run_connection(self, adapter: Any, client_id: str) -> None:
+        """Transport-agnostic chat loop.
+
+        Accepts a pre-built ConnectionAdapter (websockets or Starlette-backed)
+        and a pre-parsed client_id string.  Called by:
+        - ``_connection_loop``  — websockets path (step 1).
+        - The Starlette WebSocket endpoint  — Starlette path (step 3).
+        """
         if not client_id:
             client_id = f"anon-{uuid.uuid4().hex[:12]}"
         elif len(client_id) > 128:

@@ -31,8 +31,9 @@ from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
-from starlette.routing import Mount, Route
+from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
+from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from durin.service.auth import AuthService
 from durin.service.principal import Principal, Scope
@@ -49,6 +50,55 @@ from durin.service.types import (
 
 if TYPE_CHECKING:
     from durin.channels.websocket import HttpResult, WebSocketChannel
+
+# ---------------------------------------------------------------------------
+# Starlette WebSocket connection adapter
+# ---------------------------------------------------------------------------
+
+
+class StarletteConnectionAdapter:
+    """ConnectionAdapter backed by a Starlette WebSocket.
+
+    Satisfies the same interface as ``durin.channels.websocket.ConnectionAdapter``
+    so that ``WebSocketChannel._run_connection`` works unchanged with both the
+    websockets and the Starlette transports.
+
+    Iteration yields inbound text frames; ``WebSocketDisconnect`` stops the
+    iteration cleanly.  The instance itself is the identity key in ``_subs``
+    (default object identity is hashable and stable per connection).
+    """
+
+    __slots__ = ("_ws", "_iter")
+
+    def __init__(self, ws: WebSocket) -> None:
+        self._ws = ws
+        self._iter: Any = None
+
+    async def send_text(self, raw: str) -> None:
+        await self._ws.send_text(raw)
+
+    @property
+    def remote(self) -> Any:
+        return self._ws.client
+
+    def __aiter__(self) -> "StarletteConnectionAdapter":
+        self._iter = self._ws.iter_text().__aiter__()
+        return self
+
+    async def __anext__(self) -> str:
+        if self._iter is None:
+            self._iter = self._ws.iter_text().__aiter__()
+        try:
+            return await self._iter.__anext__()
+        except (WebSocketDisconnect, StopAsyncIteration):
+            raise StopAsyncIteration
+
+    async def close(self, code: int = 1000, reason: str = "") -> None:
+        try:
+            await self._ws.close(code)
+        except Exception:
+            pass
+
 
 # ---------------------------------------------------------------------------
 # DomainError → HTTP status map
@@ -458,6 +508,32 @@ def build_gateway_http_app(
         result = await channel._dispatch_legacy_http(shim)
         return _http_result_to_starlette(result)
 
+    # -- WebSocket chat endpoint --------------------------------------------
+
+    ws_path = channel._expected_path() or "/"
+
+    async def chat_ws_endpoint(websocket: WebSocket) -> None:
+        # Auth before accept — on reject close with 1008 (policy violation).
+        query: dict[str, list[str]] = {}
+        raw_query = websocket.query_params
+        for k in raw_query.keys():
+            query[k] = raw_query.getlist(k)
+
+        if not channel._ws_auth_ok(query):
+            await websocket.close(1008)
+            return
+
+        await websocket.accept()
+
+        client_id_raw = websocket.query_params.get("client_id", "")
+        client_id = client_id_raw.strip()
+
+        adapter = StarletteConnectionAdapter(websocket)
+        try:
+            await channel._run_connection(adapter, client_id)
+        except WebSocketDisconnect:
+            channel._cleanup_connection(adapter)
+
     # -- assemble routes ----------------------------------------------------
 
     # Build the /api/v1/* routes from the service registry. build_api_app's
@@ -466,6 +542,9 @@ def build_gateway_http_app(
     api_app = build_api_app(registry, auth=auth, static_token=static_token)
 
     routes: list[Any] = [
+        # WebSocket chat — must precede HTTP routes so the upgrade is not
+        # swallowed by the legacy /api/* catch-all.
+        WebSocketRoute(ws_path, chat_ws_endpoint),
         # /api/v1/* — new front door (highest priority).
         *api_app.routes,
         # /webui/bootstrap — token mint.
