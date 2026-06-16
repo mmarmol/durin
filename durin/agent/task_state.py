@@ -5,8 +5,7 @@ plan) under one ``<task-state>`` frame and adds the decision log. Pure
 presentation: storage for goal/todos/plan is unchanged. Empty sections are
 omitted; an all-empty anchor yields no lines at all.
 
-See docs/architecture/loop.md and
-.workdocs/superpowers/specs/2026-06-15-task-state-anchor-design.md.
+See docs/architecture/loop.md.
 """
 from __future__ import annotations
 
