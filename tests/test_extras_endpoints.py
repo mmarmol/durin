@@ -2,11 +2,16 @@ import asyncio
 import json
 
 import durin.channels.websocket as ws
+from durin.service.health import HealthService
+from durin.service.registry import ServiceRegistry
 
 
 def _channel():
     c = ws.WebSocketChannel.__new__(ws.WebSocketChannel)
     c._check_api_token = lambda req: True
+    registry = ServiceRegistry()
+    registry.register("health", HealthService())
+    c._services = registry
     return c
 
 
@@ -14,7 +19,7 @@ def test_status_reports_present(monkeypatch):
     import durin.extras as ex
     monkeypatch.setattr(ex, "_module_present", lambda m: True)
     c = _channel()
-    resp = c._handle_extras_status(None, {"feature": ["web_search"]})
+    resp = asyncio.run(c._handle_extras_status(None, {"feature": ["web_search"]}))
     assert resp.status_code == 200
     body = json.loads(resp.body)
     assert body["present"] is True
@@ -24,7 +29,7 @@ def test_status_reports_present(monkeypatch):
 
 def test_status_unknown_feature_400():
     c = _channel()
-    resp = c._handle_extras_status(None, {"feature": ["nope"]})
+    resp = asyncio.run(c._handle_extras_status(None, {"feature": ["nope"]}))
     assert resp.status_code == 400
 
 

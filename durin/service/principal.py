@@ -43,6 +43,8 @@ class Scope(str, Enum):
     MEMORY_WRITE = "memory:write"
     CHAT_READ = "chat:read"
     CHAT_WRITE = "chat:write"
+    SYSTEM_READ = "system:read"
+    SYSTEM_WRITE = "system:write"
 
 
 @dataclass(frozen=True)
