@@ -114,14 +114,18 @@ def _token(client: TestClient) -> str:
 
 def test_cron_routes_require_token(client: TestClient) -> None:
     """All four cron routes return 401 without a valid bearer token."""
-    for path in (
-        "/api/cron",
-        "/api/cron/remove?id=abc12345",
-        "/api/cron/toggle?id=abc12345&enabled=false",
-        "/api/cron/run?id=abc12345",
-    ):
-        r = client.get(path)
-        assert r.status_code == 401, f"expected 401 for {path}, got {r.status_code}"
+    assert client.get("/api/v1/cron").status_code == 401
+    assert (
+        client.request("DELETE", "/api/v1/cron", json={"id": "abc12345"}).status_code
+        == 401
+    )
+    assert (
+        client.post(
+            "/api/v1/cron/toggle", json={"id": "abc12345", "enabled": False}
+        ).status_code
+        == 401
+    )
+    assert client.post("/api/v1/cron/run", json={"id": "abc12345"}).status_code == 401
 
 
 def test_cron_list_returns_jobs(client: TestClient) -> None:
@@ -129,7 +133,7 @@ def test_cron_list_returns_jobs(client: TestClient) -> None:
     tok = _token(client)
     auth = {"Authorization": f"Bearer {tok}"}
 
-    r = client.get("/api/cron", headers=auth)
+    r = client.get("/api/v1/cron", headers=auth)
     assert r.status_code == 200
     body = r.json()
     assert "jobs" in body
@@ -156,41 +160,49 @@ def test_cron_remove_removes_user_job(client: TestClient) -> None:
     """`GET /api/cron/remove?id=` removes a user job and returns {result: removed}."""
     auth = {"Authorization": f"Bearer {_token(client)}"}
 
-    r = client.get("/api/cron/remove?id=abc12345", headers=auth)
+    r = client.request("DELETE", "/api/v1/cron", headers=auth, json={"id": "abc12345"})
     assert r.status_code == 200
     assert r.json() == {"result": "removed"}
 
-    r404 = client.get("/api/cron/remove?id=ghost", headers=auth)
+    r404 = client.request("DELETE", "/api/v1/cron", headers=auth, json={"id": "ghost"})
     assert r404.status_code == 404
 
-    r403 = client.get("/api/cron/remove?id=sys00001", headers=auth)
+    r403 = client.request(
+        "DELETE", "/api/v1/cron", headers=auth, json={"id": "sys00001"}
+    )
     assert r403.status_code == 403
 
-    r400 = client.get("/api/cron/remove", headers=auth)
-    assert r400.status_code == 400
+    # Missing id → pydantic validation failure on the v1 Command (422).
+    r422 = client.request("DELETE", "/api/v1/cron", headers=auth, json={})
+    assert r422.status_code == 422
 
 
 def test_cron_toggle_enables_and_disables(client: TestClient) -> None:
     """`GET /api/cron/toggle?id=&enabled=` returns {job: {...}}."""
     auth = {"Authorization": f"Bearer {_token(client)}"}
 
-    r = client.get("/api/cron/toggle?id=abc12345&enabled=false", headers=auth)
+    r = client.post(
+        "/api/v1/cron/toggle", headers=auth, json={"id": "abc12345", "enabled": False}
+    )
     assert r.status_code == 200
     body = r.json()
     assert "job" in body
     assert body["job"]["id"] == "abc12345"
     assert body["job"]["enabled"] is False
 
-    r404 = client.get("/api/cron/toggle?id=ghost&enabled=true", headers=auth)
+    r404 = client.post(
+        "/api/v1/cron/toggle", headers=auth, json={"id": "ghost", "enabled": True}
+    )
     assert r404.status_code == 404
 
-    r400 = client.get("/api/cron/toggle?enabled=true", headers=auth)
-    assert r400.status_code == 400
+    # Missing id → pydantic validation failure on the v1 Command (422).
+    r422 = client.post("/api/v1/cron/toggle", headers=auth, json={"enabled": True})
+    assert r422.status_code == 422
 
 
 def test_cron_run_returns_503_when_scheduler_unavailable(client: TestClient) -> None:
     """`GET /api/cron/run` returns 503 when no live scheduler is present."""
     auth = {"Authorization": f"Bearer {_token(client)}"}
 
-    r = client.get("/api/cron/run?id=abc12345", headers=auth)
+    r = client.post("/api/v1/cron/run", headers=auth, json={"id": "abc12345"})
     assert r.status_code == 503

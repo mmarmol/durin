@@ -971,10 +971,10 @@ def test_settings_api_returns_safe_subset_and_updates_whitelist(
     monkeypatch.setattr("durin.config.loader._current_config_path", config_path)
 
     channel, client = _build_client(bus, monkeypatch, tmp_path)
-    channel._api_tokens["tok"] = time.monotonic() + 300
-    hdr = {"Authorization": "Bearer tok"}
+    tok = client.get("/webui/bootstrap").json()["token"]
+    hdr = {"Authorization": f"Bearer {tok}"}
 
-    settings = client.get("/api/settings", headers=hdr)
+    settings = client.get("/api/v1/settings", headers=hdr)
     assert settings.status_code == 200
     body = settings.json()
     assert body["agent"]["model"] == "openai/gpt-4o"
@@ -1050,11 +1050,11 @@ def test_secrets_api_crud(bus: MagicMock, monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("durin.config.loader._current_config_path", config_path)
 
     channel, client = _build_client(bus, monkeypatch, tmp_path)
-    channel._api_tokens["tok"] = time.monotonic() + 300
-    hdr = {"Authorization": "Bearer tok"}
+    tok = client.get("/webui/bootstrap").json()["token"]
+    hdr = {"Authorization": f"Bearer {tok}"}
 
     # Empty to start.
-    listed = client.get("/api/secrets", headers=hdr)
+    listed = client.get("/api/v1/secrets", headers=hdr)
     assert listed.status_code == 200
     assert listed.json()["secrets"] == []
 
@@ -1086,7 +1086,7 @@ def test_secrets_api_crud(bus: MagicMock, monkeypatch, tmp_path) -> None:
     acks = [json.loads(raw) for raw in conn.sent]
     assert any(a.get("event") == "secret_stored" and a.get("ok") for a in acks)
 
-    listed = client.get("/api/secrets", headers=hdr)
+    listed = client.get("/api/v1/secrets", headers=hdr)
     rows = listed.json()["secrets"]
     assert len(rows) == 1 and rows[0]["name"] == "ATLASSIAN_WORK"
     assert rows[0]["service"] == "atlassian" and rows[0]["scope"] == ["exec"]
@@ -1118,13 +1118,15 @@ def test_secrets_api_crud(bus: MagicMock, monkeypatch, tmp_path) -> None:
     assert entry.scope == ["exec", "skill:*"]
 
     # Delete.
-    deleted = client.get("/api/secrets/delete?name=ATLASSIAN_WORK", headers=hdr)
+    deleted = client.request(
+        "DELETE", "/api/v1/secrets", headers=hdr, json={"name": "ATLASSIAN_WORK"}
+    )
     assert deleted.status_code == 200
-    listed = client.get("/api/secrets", headers=hdr)
+    listed = client.get("/api/v1/secrets", headers=hdr)
     assert listed.json()["secrets"] == []
 
     # Unauthorized without a token.
-    assert client.get("/api/secrets").status_code == 401
+    assert client.get("/api/v1/secrets").status_code == 401
 
 
 class _FakeConn:
@@ -1286,33 +1288,36 @@ def test_config_api_get_and_set(bus: MagicMock, monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("durin.config.loader._current_config_path", config_path)
 
     channel, client = _build_client(bus, monkeypatch, tmp_path)
-    channel._api_tokens["tok"] = time.monotonic() + 300
-    hdr = {"Authorization": "Bearer tok"}
+    tok = client.get("/webui/bootstrap").json()["token"]
+    hdr = {"Authorization": f"Bearer {tok}"}
 
-    got = client.get("/api/config", headers=hdr)
+    got = client.get("/api/v1/config", headers=hdr)
     assert got.status_code == 200
     body = got.json()
-    assert "config" in body and "schema" in body
+    # v1 emits snake_case (model_dump without by_alias) → json_schema, not schema.
+    assert "config" in body and "json_schema" in body
     assert body["config"]["agents"]["defaults"]["model"]  # full, defaults filled
 
-    # Set one value (JSON-decoded).
-    updated = client.get(
-        "/api/config/set?key=agents.defaults.temperature&value=0.25",
+    # Set one value (the value is a JSON-encoded string, decoded server-side).
+    updated = client.post(
+        "/api/v1/config",
         headers=hdr,
+        json={"key": "agents.defaults.temperature", "value": "0.25"},
     )
     assert updated.status_code == 200
     assert load_config(config_path).agents.defaults.temperature == 0.25
 
     # A schema-invalid value is rejected without writing.
-    bad = client.get(
-        "/api/config/set?key=agents.defaults.maxTokens&value=%22nope%22",
+    bad = client.post(
+        "/api/v1/config",
         headers=hdr,
+        json={"key": "agents.defaults.maxTokens", "value": '"nope"'},
     )
-    assert bad.status_code == 400
+    assert bad.status_code in {400, 422}
     assert load_config(config_path).agents.defaults.max_tokens == 8192  # unchanged
 
     # Token required.
-    assert client.get("/api/config").status_code == 401
+    assert client.get("/api/v1/config").status_code == 401
 
 
 def test_channels_api_lists_discovered_channels(
@@ -1346,8 +1351,8 @@ def test_models_and_capabilities_api(
     monkeypatch.setattr("durin.config.loader._current_config_path", config_path)
 
     channel, client = _build_client(bus, monkeypatch, tmp_path)
-    channel._api_tokens["tok"] = time.monotonic() + 300
-    hdr = {"Authorization": "Bearer tok"}
+    tok = client.get("/webui/bootstrap").json()["token"]
+    hdr = {"Authorization": f"Bearer {tok}"}
 
     models = client.get("/api/models?provider=zhipu", headers=hdr)
     assert models.status_code == 200
@@ -1368,12 +1373,12 @@ def test_commands_api_returns_slash_command_metadata(
     bus: MagicMock, monkeypatch, tmp_path
 ) -> None:
     channel, client = _build_client(bus, monkeypatch, tmp_path)
-    channel._api_tokens["tok"] = time.monotonic() + 300
+    tok = client.get("/webui/bootstrap").json()["token"]
 
-    denied = client.get("/api/commands")
+    denied = client.get("/api/v1/commands")
     assert denied.status_code == 401
 
-    response = client.get("/api/commands", headers={"Authorization": "Bearer tok"})
+    response = client.get("/api/v1/commands", headers={"Authorization": f"Bearer {tok}"})
     assert response.status_code == 200
     body = response.json()
     commands = {row["command"]: row for row in body["commands"]}

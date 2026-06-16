@@ -535,6 +535,62 @@ def build_gateway_http_app(
         result = await channel._dispatch_legacy_http(shim)
         return _http_result_to_starlette(result)
 
+    # -- signed v1 session reads --------------------------------------------
+    # Media-URL signing (and the webui-thread build) needs this channel's
+    # per-process ``_media_secret`` — an adapter concern the generic /api/v1
+    # handler cannot perform. These two routes call the service then sign, and
+    # are registered ahead of the generic ``/api/v1/sessions/*`` routes so they
+    # win (Starlette first-match).
+
+    async def v1_session_messages(request: Request) -> Response:
+        from durin.service.sessions import SessionMessagesQuery
+
+        principal = resolve_principal_from_headers(
+            request.headers, auth=auth, static_token=static_token
+        )
+        if principal is None:
+            return _problem_response(
+                UnauthenticatedError("Missing or invalid bearer token")
+            )
+        try:
+            result = await registry.get("sessions").messages(
+                SessionMessagesQuery(key=request.path_params["key"]), principal
+            )
+        except DomainError as exc:
+            return _problem_response(exc)
+        # Replace raw on-disk media paths with signed fetch URLs (in place).
+        channel._augment_media_urls(result.data)
+        return JSONResponse(result.model_dump())
+
+    async def v1_webui_thread(request: Request) -> Response:
+        from durin.service.sessions import WebuiThreadQuery
+        from durin.utils.webui_transcript import build_webui_thread_response
+
+        principal = resolve_principal_from_headers(
+            request.headers, auth=auth, static_token=static_token
+        )
+        if principal is None:
+            return _problem_response(
+                UnauthenticatedError("Missing or invalid bearer token")
+            )
+        key = request.path_params["key"]
+        try:
+            # Validates the key + enforces scope; the real payload is built below
+            # with the channel's signing callback (which the service cannot hold).
+            await registry.get("sessions").webui_thread(
+                WebuiThreadQuery(key=key), principal
+            )
+        except DomainError as exc:
+            return _problem_response(exc)
+        data = build_webui_thread_response(
+            key, augment_user_media=channel._augment_transcript_user_media
+        )
+        if data is None:
+            return _problem_response(
+                NotFoundError("webui thread not found", details={"key": key})
+            )
+        return JSONResponse({"data": data})
+
     # -- WebSocket chat endpoint --------------------------------------------
 
     ws_path = channel._expected_path() or "/"
@@ -575,6 +631,10 @@ def build_gateway_http_app(
         # WebSocket chat — must precede HTTP routes so the upgrade is not
         # swallowed by the legacy /api/* catch-all.
         WebSocketRoute(ws_path, chat_ws_endpoint),
+        # Signed session reads — must precede the generic /api/v1 routes so the
+        # media-signing versions win (the generic handler can't sign).
+        Route("/api/v1/sessions/{key}/messages", v1_session_messages, methods=["GET"]),
+        Route("/api/v1/sessions/{key}/webui-thread", v1_webui_thread, methods=["GET"]),
         # /api/v1/* — new front door (highest priority).
         *api_app.routes,
         # /webui/bootstrap — token mint.

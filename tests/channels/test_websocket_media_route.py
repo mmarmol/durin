@@ -288,11 +288,11 @@ def test_session_messages_exposes_signed_media_urls(
         auth = {"Authorization": f"Bearer {token}"}
 
         resp = client.get(
-            "/api/sessions/websocket:media-hydrate/messages",
+            "/api/v1/sessions/websocket:media-hydrate/messages",
             headers=auth,
         )
         assert resp.status_code == 200
-        body = resp.json()
+        body = resp.json()["data"]
 
         # The signed URL round-trips end-to-end: fetching it yields the same bytes.
         user_msg = next(m for m in body["messages"] if m["role"] == "user")
@@ -330,11 +330,13 @@ def test_session_messages_skips_vanished_media(
         token = boot.json()["token"]
 
         resp = client.get(
-            "/api/sessions/websocket:vanished/messages",
+            "/api/v1/sessions/websocket:vanished/messages",
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 200
-        user_msg = next(m for m in resp.json()["messages"] if m["role"] == "user")
+        user_msg = next(
+            m for m in resp.json()["data"]["messages"] if m["role"] == "user"
+        )
         # absent.png lives inside the media root so it *does* get a signed
         # URL (we don't stat the file at signing time — that would slow
         # the listing). Fetching the URL is where the 404 surfaces.
