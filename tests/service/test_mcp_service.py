@@ -303,3 +303,30 @@ async def test_enable_unknown_is_not_found(config_path) -> None:
 async def test_disable_unknown_is_not_found(config_path) -> None:
     with pytest.raises(NotFoundError):
         await McpService().disable(McpServerNameCommand(name="ghost"), LOCAL)
+
+
+# --- oauth logout ---------------------------------------------------------
+
+
+async def test_oauth_logout_clears_tokens(config_path, monkeypatch) -> None:
+    _seed({"o": MCPServerConfig(url="https://o/mcp", oauth=True)})
+    forgotten: list[str] = []
+
+    class _Store:
+        def __init__(self, name, server_url=None) -> None:
+            self.name = name
+
+        def forget(self) -> bool:
+            forgotten.append(self.name)
+            return True
+
+    monkeypatch.setattr("durin.agent.tools.mcp_oauth.SecretsTokenStorage", _Store)
+
+    res = await McpService().oauth_logout(McpServerNameCommand(name="o"), LOCAL)
+    assert res.ok is True
+    assert forgotten == ["o"]
+
+
+async def test_oauth_logout_unknown_is_not_found(config_path) -> None:
+    with pytest.raises(NotFoundError):
+        await McpService().oauth_logout(McpServerNameCommand(name="ghost"), LOCAL)
