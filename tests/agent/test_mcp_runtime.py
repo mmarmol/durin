@@ -163,5 +163,5 @@ async def test_mcp_runtime_connect_disconnect_delegate():
     await rt.connect("x")
     await rt.disconnect("x")
 
-    loop.connect_mcp_server.assert_awaited_once_with("x")
+    loop.connect_mcp_server.assert_awaited_once_with("x", None)
     loop.disconnect_mcp_server.assert_awaited_once_with("x")

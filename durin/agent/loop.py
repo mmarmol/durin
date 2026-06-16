@@ -793,13 +793,17 @@ class AgentLoop:
         if self._mcp_connected:
             self._maybe_defer_mcp_tools()
 
-    async def connect_mcp_server(self, name: str) -> None:
+    async def connect_mcp_server(self, name: str, cfg: Any = None) -> None:
         """Connect a single configured MCP server at runtime (idempotent).
 
         Reuses the same supervised-connection path as startup, so a server the
-        user just enabled comes online without a gateway restart. Raises
-        ``KeyError`` if ``name`` is not a configured server.
+        user just enabled comes online without a gateway restart. ``cfg`` (the
+        current config from the caller) is synced into the startup snapshot so a
+        server added at runtime — absent from the snapshot — is connectable.
+        Raises ``KeyError`` if ``name`` is unknown and no ``cfg`` is supplied.
         """
+        if cfg is not None:
+            self._mcp_servers[name] = cfg
         if name not in self._mcp_servers:
             raise KeyError(name)
         if name in self._mcp_connections:
