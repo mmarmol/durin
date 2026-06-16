@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+
 from durin.utils.atomic_write import atomic_write_text
 
 logger = logging.getLogger(__name__)

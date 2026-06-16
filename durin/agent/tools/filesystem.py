@@ -11,13 +11,13 @@ from typing import Any
 from durin.agent.tools.base import Tool, tool_parameters
 from durin.agent.tools.file_state import FileStates, _hash_file, current_file_states
 from durin.agent.tools.path_utils import resolve_workspace_path
+from durin.agent.tools.post_edit_check import run_post_edit_check
 from durin.agent.tools.schema import (
     BooleanSchema,
     IntegerSchema,
     StringSchema,
     tool_parameters_schema,
 )
-from durin.agent.tools.post_edit_check import run_post_edit_check
 from durin.telemetry.logger import current_telemetry
 from durin.utils.atomic_write import atomic_write_bytes, atomic_write_text
 from durin.utils.helpers import build_image_content_blocks, detect_image_mime

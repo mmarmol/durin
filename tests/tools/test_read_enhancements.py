@@ -6,8 +6,8 @@ from unittest.mock import patch
 
 import pytest
 
-from durin.agent.tools.filesystem import ReadFileTool, WriteFileTool
 from durin.agent.tools import file_state
+from durin.agent.tools.filesystem import ReadFileTool, WriteFileTool
 
 
 @pytest.fixture(autouse=True)

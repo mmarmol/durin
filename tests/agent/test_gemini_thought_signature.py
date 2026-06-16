@@ -11,7 +11,6 @@ from unittest.mock import patch
 from durin.providers.base import ToolCallRequest
 from durin.providers.openai_compat_provider import OpenAICompatProvider
 
-
 GEMINI_EXTRA = {"google": {"thought_signature": "sig-abc-123"}}
 
 

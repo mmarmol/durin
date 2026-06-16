@@ -177,7 +177,7 @@ describe("App layout", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
-        if (String(input).includes("/api/settings")) {
+        if (String(input).includes("/api/v1/settings")) {
           return {
             ok: true,
             status: 200,
@@ -322,7 +322,7 @@ describe("App layout", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
-        if (String(input).includes("/api/settings")) {
+        if (String(input).includes("/api/v1/settings")) {
           return {
             ok: true,
             status: 200,

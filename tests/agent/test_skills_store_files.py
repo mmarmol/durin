@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from durin.agent.skills_store import skill_files, read_skill_file, save_skill_file
+from durin.agent.skills_store import read_skill_file, save_skill_file, skill_files
 
 
 def _mk_skill(ws: Path, name: str) -> Path:
@@ -50,7 +50,7 @@ def test_read_skill_file_missing_file(tmp_path: Path):
     assert read_skill_file(tmp_path, "demo", "nope.md") is None
 
 
-from durin.agent.skills_store import set_mode, Attribution
+from durin.agent.skills_store import Attribution, set_mode
 
 
 def test_save_skill_file_rejects_directory_path(tmp_path: Path):
@@ -96,7 +96,7 @@ def test_save_skill_file_accepts_valid_python(tmp_path: Path):
     assert res["ok"] is True
 
 
-from durin.agent.skills_store import web_files, web_file_get, web_file_save, web_history
+from durin.agent.skills_store import web_file_get, web_file_save, web_files, web_history
 
 
 def test_web_files_and_file_get(tmp_path: Path):

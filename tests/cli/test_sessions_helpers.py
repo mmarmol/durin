@@ -5,8 +5,6 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-import pytest
-
 from durin.cli.sessions import (
     SessionInfo,
     fresh_session_id,

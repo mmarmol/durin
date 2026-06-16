@@ -15,7 +15,6 @@ from typer.testing import CliRunner
 
 from durin.cli.memory_cmd import memory_app
 
-
 runner = CliRunner()
 
 

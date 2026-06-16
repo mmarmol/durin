@@ -22,7 +22,9 @@ async def acquire_safe_seed(workspace, source: str, *, allowlist) -> dict | None
     ``None``. Rejects a non-allowlisted ref without downloading it."""
     from durin.agent.skill_resolve import resolve_candidates
     from durin.agent.skills_import import (
-        decide_action, fetch_candidate, validate_skill,
+        decide_action,
+        fetch_candidate,
+        validate_skill,
     )
     from durin.security.skill_scan import scan_skill
 

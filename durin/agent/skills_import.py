@@ -7,13 +7,16 @@ import re
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Awaitable, Callable
+from typing import TYPE_CHECKING, Awaitable, Callable
 
 import durin.agent.skill_resolve as _resolve
 from durin.agent.skill_resolve import SkillCandidate
 from durin.agent.skills_frontmatter import split_frontmatter
 from durin.security.skill_judge import audit_skill
 from durin.security.skill_scan import scan_skill
+
+if TYPE_CHECKING:
+    from durin.agent.skills_store import Attribution
 
 _VERDICT_ORDER = {"safe": 0, "caution": 1, "dangerous": 2}
 
@@ -296,7 +299,7 @@ def fetch_candidate(cand: SkillCandidate, *, quarantine_root: Path,
 
 # --- install (the gate invariant) --------------------------------------------
 
-class SkillImportRefused(Exception):
+class SkillImportRefused(Exception):  # noqa: N818 — deliberate event-style name, not *Error
     """install_imported_skill refused the install. `.action` is the gate verdict
     ('block' | 'confirm' | 'invalid' | 'exists'); `.verdict` is the §8.C verdict."""
 

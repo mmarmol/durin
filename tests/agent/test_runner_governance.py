@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from durin.config.schema import AgentDefaults
-from durin.providers.base import LLMResponse, ToolCallRequest
+from durin.providers.base import LLMResponse
 
 _MAX_TOOL_RESULT_CHARS = AgentDefaults().max_tool_result_chars
 
@@ -42,7 +42,7 @@ def _microcompact_spec(**overrides):
     return AgentRunSpec(**params)
 
 async def test_runner_uses_raw_messages_when_context_governance_fails():
-    from durin.agent.runner import AgentRunSpec, AgentRunner
+    from durin.agent.runner import AgentRunner, AgentRunSpec
 
     provider = MagicMock()
     captured_messages: list[dict] = []
@@ -72,7 +72,7 @@ async def test_runner_uses_raw_messages_when_context_governance_fails():
     assert result.final_content == "done"
     assert captured_messages == initial_messages
 def test_snip_history_drops_orphaned_tool_results_from_trimmed_slice(monkeypatch):
-    from durin.agent.runner import AgentRunSpec, AgentRunner
+    from durin.agent.runner import AgentRunner, AgentRunSpec
 
     provider = MagicMock()
     tools = MagicMock()
@@ -121,7 +121,7 @@ def test_snip_history_drops_orphaned_tool_results_from_trimmed_slice(monkeypatch
     assert non_system[0]["role"] == "user", f"Expected user after system, got {non_system[0]['role']}"
 async def test_backfill_missing_tool_results_inserts_error():
     """Orphaned tool_use (no matching tool_result) should get a synthetic error."""
-    from durin.agent.runner import AgentRunner, _BACKFILL_CONTENT
+    from durin.agent.runner import _BACKFILL_CONTENT, AgentRunner
 
     messages = [
         {"role": "user", "content": "hi"},
@@ -202,7 +202,7 @@ async def test_backfill_noop_when_complete():
 
 @pytest.mark.asyncio
 async def test_runner_drops_orphan_tool_results_before_model_request():
-    from durin.agent.runner import AgentRunSpec, AgentRunner
+    from durin.agent.runner import AgentRunner, AgentRunSpec
 
     provider = MagicMock()
     captured_messages: list[dict] = []
@@ -327,7 +327,7 @@ async def test_backfill_repairs_model_context_without_shifting_save_turn_boundar
 @pytest.mark.asyncio
 async def test_runner_backfill_only_mutates_model_context_not_returned_messages():
     """Runner should repair orphaned tool calls for the model without rewriting result.messages."""
-    from durin.agent.runner import AgentRunSpec, AgentRunner, _BACKFILL_CONTENT
+    from durin.agent.runner import _BACKFILL_CONTENT, AgentRunner, AgentRunSpec
 
     provider = MagicMock()
     captured_messages: list[dict] = []
@@ -410,7 +410,7 @@ async def test_runner_backfill_only_mutates_model_context_not_returned_messages(
 @pytest.mark.asyncio
 async def test_microcompact_replaces_old_tool_results():
     """Tool results beyond _MICROCOMPACT_KEEP_RECENT should be summarized."""
-    from durin.agent.runner import AgentRunner, _MICROCOMPACT_KEEP_RECENT
+    from durin.agent.runner import _MICROCOMPACT_KEEP_RECENT, AgentRunner
 
     total = _MICROCOMPACT_KEEP_RECENT + 5
     long_content = "x" * 600
@@ -439,7 +439,7 @@ async def test_microcompact_replaces_old_tool_results():
 @pytest.mark.asyncio
 async def test_microcompact_preserves_short_results():
     """Short tool results (< _MICROCOMPACT_MIN_CHARS) should not be replaced."""
-    from durin.agent.runner import AgentRunner, _MICROCOMPACT_KEEP_RECENT
+    from durin.agent.runner import _MICROCOMPACT_KEEP_RECENT, AgentRunner
 
     total = _MICROCOMPACT_KEEP_RECENT + 5
     messages: list[dict] = []
@@ -462,7 +462,7 @@ async def test_microcompact_preserves_short_results():
 @pytest.mark.asyncio
 async def test_microcompact_skips_non_compactable_tools():
     """Non-compactable tools (e.g. 'message') should never be replaced."""
-    from durin.agent.runner import AgentRunner, _MICROCOMPACT_KEEP_RECENT
+    from durin.agent.runner import _MICROCOMPACT_KEEP_RECENT, AgentRunner
 
     total = _MICROCOMPACT_KEEP_RECENT + 5
     long_content = "y" * 1000
@@ -487,7 +487,7 @@ async def test_microcompact_skips_non_compactable_tools():
 async def test_microcompact_keeps_recovery_path_when_result_already_spilled(tmp_path):
     """A stale result that was already spilled keeps its file path + read_file
     hint so the model can still recover it — not an opaque placeholder."""
-    from durin.agent.runner import AgentRunner, _MICROCOMPACT_KEEP_RECENT
+    from durin.agent.runner import _MICROCOMPACT_KEEP_RECENT, AgentRunner
 
     spill_path = tmp_path / ".durin" / "tool-results" / "sess" / "c0.txt"
     spill_path.parent.mkdir(parents=True, exist_ok=True)
@@ -527,7 +527,7 @@ async def test_microcompact_keeps_recovery_path_when_result_already_spilled(tmp_
 async def test_microcompact_spills_unpersisted_result_and_references_file(tmp_path):
     """A stale raw (never-spilled) result gets spilled to disk and the
     placeholder references the new file so it stays recoverable."""
-    from durin.agent.runner import AgentRunner, _MICROCOMPACT_KEEP_RECENT
+    from durin.agent.runner import _MICROCOMPACT_KEEP_RECENT, AgentRunner
 
     original = "RAW-" + "z" * 600
     total = _MICROCOMPACT_KEEP_RECENT + 3
@@ -621,7 +621,7 @@ def test_snip_history_preserves_user_message_after_truncation(monkeypatch):
     - _snip_history activates, keeping only recent assistant/tool pairs.
     - The injected user message is in the truncated prefix and gets lost.
     """
-    from durin.agent.runner import AgentRunSpec, AgentRunner
+    from durin.agent.runner import AgentRunner, AgentRunSpec
 
     provider = MagicMock()
     tools = MagicMock()
@@ -685,7 +685,7 @@ def test_snip_history_preserves_user_message_after_truncation(monkeypatch):
 def test_snip_history_no_user_at_all_falls_back_gracefully(monkeypatch):
     """Edge case: if non_system has zero user messages, _snip_history should
     still return a valid sequence (not crash or produce system→assistant)."""
-    from durin.agent.runner import AgentRunSpec, AgentRunner
+    from durin.agent.runner import AgentRunner, AgentRunSpec
 
     provider = MagicMock()
     tools = MagicMock()

@@ -97,14 +97,16 @@ def test_refine_quarantines_fresh_entities_min_age_hours(tmp_path):
     # written just now is NOT merged under a large window, but IS merged with
     # the window disabled. No data loss either way.
     from datetime import datetime, timezone
+
     from durin.memory.field_patch import FieldPatch
     from durin.memory.memory_writer import write_entity
     now = datetime(2026, 6, 5, tzinfo=timezone.utc)
     for ref, name in (("company:a", "A Inc"), ("company:a2", "A Incorporated")):
         write_entity(tmp_path, ref, [FieldPatch(kind="alias", value="A", author="agent",
                      source_ref="s", at=now)], create=True, name=name)
-    judge = lambda p, **k: ("===VERDICT===\nsame\n===CONFIDENCE===\n99\n"
-                            "===REASONING===\nx\n===END===")
+    def judge(p, **k):
+        return ("===VERDICT===\nsame\n===CONFIDENCE===\n99\n"
+                                "===REASONING===\nx\n===END===")
     quarantined = run_refine(tmp_path, llm_invoke=judge, min_age_hours=99999)
     assert not quarantined["merged"]
     assert any(s["reason"] == "quarantine" for s in quarantined["skipped"])

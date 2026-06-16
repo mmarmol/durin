@@ -1,5 +1,5 @@
+from durin.memory.paths import skill_path_from_uri, skill_uri, walk_skills
 from durin.memory.skill_page import SkillPage
-from durin.memory.paths import walk_skills, skill_uri, skill_path_from_uri
 
 
 def _mk(ws, name, desc="does things", body="Step 1\nStep 2\n", mode="auto", disabled=False):

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from durin.cli.tui.shell_paste import ShellPasteResult, process_shell_paste
+from durin.cli.tui.shell_paste import process_shell_paste
 
 
 def test_plain_text_passes_through() -> None:

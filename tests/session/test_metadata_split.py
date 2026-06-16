@@ -24,9 +24,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
-from durin.session.manager import Session, SessionManager
+from durin.session.manager import SessionManager
 from durin.session.session_meta import meta_path_for, read_meta
 
 

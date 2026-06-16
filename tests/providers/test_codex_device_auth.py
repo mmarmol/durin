@@ -1,7 +1,7 @@
-import types
 import base64
 import json
 import time
+import types
 
 import pytest
 
@@ -41,7 +41,6 @@ def test_expiry_ms_from_jwt_falls_back_when_missing(monkeypatch):
 
 
 import httpx  # noqa: E402
-
 from oauth_cli_kit.models import OAuthToken  # noqa: E402
 
 
@@ -246,8 +245,9 @@ def test_start_loopback_returns_url_and_listens(monkeypatch):
 
 
 def test_codex_secrets_storage_roundtrip(monkeypatch):
-    import durin.security.secrets as secmod
     from oauth_cli_kit.models import OAuthToken
+
+    import durin.security.secrets as secmod
 
     store: dict[str, str] = {}
 
@@ -277,8 +277,9 @@ def test_codex_secrets_storage_roundtrip(monkeypatch):
 
 
 def test_codex_secrets_storage_migrates_from_kit_file(monkeypatch):
-    import durin.security.secrets as secmod
     from oauth_cli_kit.models import OAuthToken
+
+    import durin.security.secrets as secmod
 
     store: dict[str, str] = {}
     saved: list[str] = []

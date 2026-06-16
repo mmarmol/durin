@@ -13,15 +13,12 @@ outputs but the model can't act on them.
 
 from __future__ import annotations
 
-import pytest
-
 from durin.utils.post_compaction_guard import (
     Observation,
     PostCompactionLoopGuard,
     hash_args,
     hash_result,
 )
-
 
 # ---------------------------------------------------------------------------
 # Hash helpers

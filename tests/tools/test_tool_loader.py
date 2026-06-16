@@ -5,8 +5,6 @@ from dataclasses import fields
 from typing import Any
 from unittest.mock import MagicMock
 
-import pytest
-
 from durin.agent.tools.base import Tool
 
 
@@ -75,7 +73,7 @@ def test_tool_context_defaults():
 
 # --- ToolLoader tests ---
 
-from durin.agent.tools.loader import ToolLoader, _SKIP_MODULES
+from durin.agent.tools.loader import _SKIP_MODULES, ToolLoader
 
 
 def test_skip_modules_excludes_infrastructure():
@@ -231,7 +229,7 @@ def test_exec_tool_create():
 
 
 def test_web_tools_config_cls():
-    from durin.agent.tools.web import WebSearchTool, WebFetchTool, WebToolsConfig
+    from durin.agent.tools.web import WebFetchTool, WebSearchTool, WebToolsConfig
     assert WebSearchTool.config_key == "web"
     assert WebSearchTool.config_cls() is WebToolsConfig
     assert WebFetchTool.config_key == "web"
@@ -292,7 +290,7 @@ def test_my_tool_enabled():
 
 
 def test_mcp_wrappers_not_discoverable():
-    from durin.agent.tools.mcp import MCPToolWrapper, MCPResourceWrapper, MCPPromptWrapper
+    from durin.agent.tools.mcp import MCPPromptWrapper, MCPResourceWrapper, MCPToolWrapper
     assert MCPToolWrapper._plugin_discoverable is False
     assert MCPResourceWrapper._plugin_discoverable is False
     assert MCPPromptWrapper._plugin_discoverable is False

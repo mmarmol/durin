@@ -8,8 +8,6 @@ having to pass `keywords` explicitly.
 
 from __future__ import annotations
 
-import pytest
-
 from durin.memory.query_router import decide_lexical_route
 
 

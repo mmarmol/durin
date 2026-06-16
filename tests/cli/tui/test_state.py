@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 
 def test_get_recent_models_empty(tmp_path, monkeypatch):
     from durin.cli.tui import state

@@ -902,8 +902,8 @@ def _get_exec_run(workspace: Path):
 
 def _spec_for_bin(skill_dir: Path, bin_name: str) -> list[dict]:
     """Find the runnable install spec for a specific bin name."""
-    from durin.security.tool_catalog import load_catalog
     from durin.security.requirements_scan import _PLATFORM_INSTALL_KINDS, _current_platform
+    from durin.security.tool_catalog import load_catalog
 
     catalog = load_catalog(skill_dir.parent.parent)
     entry = catalog.get(bin_name)
@@ -952,7 +952,7 @@ async def web_skill_approve(workspace: Path, name: str, *, confirm: bool,
         return 409, {"refused": exc.action, "verdict": exc.verdict, "message": str(exc)}
 
     if install_deps and exec_run:
-        from durin.agent.skills_import import runnable_install_specs, run_install_specs
+        from durin.agent.skills_import import run_install_specs, runnable_install_specs
         skill_dir = Path(workspace) / "skills" / name
         specs = runnable_install_specs(skill_dir)
         if specs:

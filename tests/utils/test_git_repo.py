@@ -7,13 +7,12 @@ from pathlib import Path
 import pytest
 
 from durin.utils.git_repo import (
-    CommitInfo,
     GitRepo,
     GitRepoError,
     NothingToCommitError,
+    _compose_message,
+    _split_message,
 )
-from durin.utils.git_repo import _compose_message, _split_message
-
 
 # ---------------------------------------------------------------------------
 # Message composition + parsing (pure helpers — fast feedback)
