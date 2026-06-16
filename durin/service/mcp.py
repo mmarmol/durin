@@ -11,7 +11,7 @@ reports config-only status and skips the live connect/disconnect side effects.
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from durin.config.schema import MCPServerConfig
 from durin.service.principal import Principal, Scope
@@ -163,11 +163,25 @@ def _validate_upsert(name: str, sc: MCPServerConfig) -> None:
 class McpService:
     """Manage configured MCP servers, their tools, and OAuth credentials."""
 
-    def __init__(self, *, mcp_runtime: "McpRuntime | None" = None) -> None:
+    def __init__(
+        self,
+        *,
+        mcp_runtime: "McpRuntime | None" = None,
+        oauth_flows: Any = None,
+    ) -> None:
         self._runtime = mcp_runtime
+        self._oauth_flows = oauth_flows
 
     def _live(self) -> dict[str, "RawConnState"]:
         return self._runtime.live_status() if self._runtime is not None else {}
+
+    def _flows(self) -> Any:
+        """The OAuth flow orchestrator (lazily constructed; injectable in tests)."""
+        if self._oauth_flows is None:
+            from durin.agent.tools.mcp_oauth_web import McpOauthFlows
+
+            self._oauth_flows = McpOauthFlows()
+        return self._oauth_flows
 
     async def _oauth_flags(self, name: str, sc: MCPServerConfig) -> tuple[bool, bool]:
         """Return (oauth_required, oauth_authenticated) for a server."""
@@ -403,3 +417,27 @@ class McpService:
 
         SecretsTokenStorage(cmd.name, server_url=sc.url or None).forget()
         return McpOkResult(ok=True)
+
+    @route(
+        "POST",
+        "/api/v1/mcp/servers/{name}/oauth/login",
+        scope=Scope.MCP_WRITE.value,
+        request_model=McpServerNameCommand,
+        response_model=McpOauthLoginResult,
+        summary="Start interactive OAuth sign-in; returns the authorization URL",
+    )
+    async def oauth_login(
+        self, cmd: McpServerNameCommand, principal: Principal
+    ) -> McpOauthLoginResult:
+        principal.require(Scope.MCP_WRITE)
+        from durin.config.loader import load_config
+
+        sc = load_config().tools.mcp_servers.get(cmd.name)
+        if sc is None:
+            raise NotFoundError("no such MCP server", details={"name": cmd.name})
+        if sc.oauth_config() is None:
+            raise ValidationFailedError(
+                "server is not OAuth-enabled", details={"name": cmd.name}
+            )
+        url, state = await self._flows().start(cmd.name, sc)
+        return McpOauthLoginResult(authorization_url=url, state=state)

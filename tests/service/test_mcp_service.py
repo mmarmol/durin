@@ -330,3 +330,49 @@ async def test_oauth_logout_clears_tokens(config_path, monkeypatch) -> None:
 async def test_oauth_logout_unknown_is_not_found(config_path) -> None:
     with pytest.raises(NotFoundError):
         await McpService().oauth_logout(McpServerNameCommand(name="ghost"), LOCAL)
+
+
+# --- oauth login ----------------------------------------------------------
+
+
+class _FakeFlows:
+    def __init__(self, *, raises: Exception | None = None) -> None:
+        self._raises = raises
+        self.started: list[str] = []
+
+    async def start(self, name, cfg) -> tuple[str, str]:
+        if self._raises is not None:
+            raise self._raises
+        self.started.append(name)
+        return ("https://auth/x?state=st", "st")
+
+
+async def test_oauth_login_returns_authorization_url(config_path) -> None:
+    _seed({"o": MCPServerConfig(url="https://o/mcp", oauth=True)})
+    flows = _FakeFlows()
+    res = await McpService(oauth_flows=flows).oauth_login(
+        McpServerNameCommand(name="o"), LOCAL
+    )
+    assert res.authorization_url == "https://auth/x?state=st"
+    assert res.state == "st"
+    assert flows.started == ["o"]
+
+
+async def test_oauth_login_non_oauth_server_is_validation_error(config_path) -> None:
+    _seed({"p": MCPServerConfig(url="https://p/mcp")})
+    with pytest.raises(ValidationFailedError):
+        await McpService().oauth_login(McpServerNameCommand(name="p"), LOCAL)
+
+
+async def test_oauth_login_unknown_is_not_found(config_path) -> None:
+    with pytest.raises(NotFoundError):
+        await McpService().oauth_login(McpServerNameCommand(name="ghost"), LOCAL)
+
+
+async def test_oauth_login_propagates_conflict(config_path) -> None:
+    _seed({"o": MCPServerConfig(url="https://o/mcp", oauth=True)})
+    flows = _FakeFlows(raises=ConflictError("pending", details={"name": "o"}))
+    with pytest.raises(ConflictError):
+        await McpService(oauth_flows=flows).oauth_login(
+            McpServerNameCommand(name="o"), LOCAL
+        )

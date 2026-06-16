@@ -1061,6 +1061,24 @@
         "title": "McpListResult",
         "type": "object"
       },
+      "McpOauthLoginResult": {
+        "properties": {
+          "authorization_url": {
+            "title": "Authorization Url",
+            "type": "string"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "authorization_url",
+          "state"
+        ],
+        "title": "McpOauthLoginResult",
+        "type": "object"
+      },
       "McpOkResult": {
         "properties": {
           "ok": {
@@ -3298,6 +3316,35 @@
           }
         },
         "summary": "Enable a server and connect it",
+        "x-required-scope": "mcp:write"
+      }
+    },
+    "/api/v1/mcp/servers/{name}/oauth/login": {
+      "post": {
+        "operationId": "mcp_oauth_login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpServerNameCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpOauthLoginResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Start interactive OAuth sign-in; returns the authorization URL",
         "x-required-scope": "mcp:write"
       }
     },

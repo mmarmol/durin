@@ -109,6 +109,26 @@ async def test_loopback_callback_success_html():
         cb.stop()
 
 
+@pytest.mark.asyncio
+async def test_loopback_callback_html_signals_opener_and_closes():
+    # The webui opens the auth URL in a popup; the callback page signals the
+    # opener (so status refreshes) and auto-closes.
+    from durin.agent.tools.mcp_oauth import LoopbackCallback
+
+    cb = LoopbackCallback(port=0)
+    cb.start()
+    try:
+        url = f"http://127.0.0.1:{cb.port}/callback?code=c&state={cb.state}"
+        html = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: urllib.request.urlopen(url, timeout=5).read().decode()
+        )
+        assert "postMessage" in html
+        assert "durin-mcp-oauth" in html
+        assert "window.close" in html
+    finally:
+        cb.stop()
+
+
 # ---------------------------------------------------------------------------
 # 4c.2 — CLI: login / logout / status
 # ---------------------------------------------------------------------------

@@ -328,10 +328,18 @@ class LoopbackCallback:
                     if ok
                     else "Authorization failed. Return to durin and retry."
                 )
+                # When the flow was opened from the webui (a popup), signal the
+                # opener so it can refresh status, then close. The payload is a
+                # non-sensitive ok flag, so a wildcard target origin is fine.
+                signal = "true" if ok else "false"
                 self.wfile.write(
                     f"<!doctype html><meta charset=utf-8>"
                     f"<body style='font-family:sans-serif;padding:2rem'>"
-                    f"<h2>{msg}</h2></body>".encode()
+                    f"<h2>{msg}</h2>"
+                    f"<script>try{{window.opener&&window.opener.postMessage("
+                    f"{{type:'durin-mcp-oauth',ok:{signal}}},'*');}}catch(e){{}}"
+                    f"setTimeout(function(){{window.close();}},800);</script>"
+                    f"</body>".encode()
                 )
                 if ok:
                     cb._resolve(code, got)  # type: ignore[arg-type]
