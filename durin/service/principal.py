@@ -41,6 +41,8 @@ class Scope(str, Enum):
     CONFIG_WRITE = "config:write"
     MEMORY_READ = "memory:read"
     MEMORY_WRITE = "memory:write"
+    MCP_READ = "mcp:read"
+    MCP_WRITE = "mcp:write"
     SYSTEM_READ = "system:read"
     SYSTEM_WRITE = "system:write"
 
