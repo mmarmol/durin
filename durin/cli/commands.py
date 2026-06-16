@@ -2687,6 +2687,10 @@ from durin.cli.skill_cmd import skill_app as _skill_app  # noqa: E402
 
 app.add_typer(_skill_app, name="skill")
 
+from durin.cli.auth_cmd import auth_app as _auth_app  # noqa: E402
+
+app.add_typer(_auth_app, name="auth")
+
 
 def _refresh_help_epilog() -> None:
     """Regenerate `durin --help`'s group listing from the live registry.
