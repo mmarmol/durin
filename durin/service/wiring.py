@@ -21,14 +21,22 @@ def build_service_registry(
     session_manager: Any = None,
     cron_service: Any = None,
     bus: Any = None,
+    mcp_runtime: Any = None,
 ) -> ServiceRegistry:
-    """Construct a registry with all 11 domain services wired to real deps."""
+    """Construct a registry with all domain services wired to real deps.
+
+    ``mcp_runtime`` (a :class:`~durin.agent.mcp_runtime.McpRuntime`) is optional:
+    the unified gateway passes one built from its live ``AgentLoop`` so MCP status
+    is live; surfaces without a loop (the websocket channel's shim registry) leave
+    it ``None`` and the MCP service reports config-only status.
+    """
     from durin.security.api_tokens import ApiTokenStore
     from durin.service.auth import AuthService
     from durin.service.commands import CommandsService
     from durin.service.config import ConfigService
     from durin.service.cron import CronService
     from durin.service.health import HealthService
+    from durin.service.mcp import McpService
     from durin.service.memory import MemoryService
     from durin.service.oauth import OAuthService
     from durin.service.secrets import SecretsService
@@ -58,6 +66,7 @@ def build_service_registry(
     registry.register("config", ConfigService())
     registry.register("skills", SkillsService(workspace=_workspace()))
     registry.register("memory", MemoryService(workspace_resolver=_workspace))
+    registry.register("mcp", McpService(mcp_runtime=mcp_runtime))
     registry.register("health", HealthService())
     registry.register("commands", CommandsService())
     registry.register("oauth", OAuthService())

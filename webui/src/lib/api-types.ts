@@ -195,6 +195,94 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/mcp/servers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List MCP servers with live status */
+        get: operations["mcp_list"];
+        put?: never;
+        /** Add an MCP server */
+        post: operations["mcp_add"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/mcp/servers/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Fetch an MCP server's config, status, and tools */
+        get: operations["mcp_get"];
+        put?: never;
+        post?: never;
+        /** Remove an MCP server */
+        delete: operations["mcp_remove"];
+        options?: never;
+        head?: never;
+        /** Replace an MCP server's config */
+        patch: operations["mcp_update"];
+        trace?: never;
+    };
+    "/api/v1/mcp/servers/{name}/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Disable a server and disconnect it */
+        post: operations["mcp_disable"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/mcp/servers/{name}/enable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Enable a server and connect it */
+        post: operations["mcp_enable"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/mcp/servers/{name}/oauth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Clear stored OAuth tokens for a server */
+        post: operations["mcp_oauth_logout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/memory/backlinks": {
         parameters: {
             query?: never;
@@ -1295,6 +1383,246 @@ export interface components {
             /** Scanned Through Ts */
             scanned_through_ts: unknown;
         };
+        /**
+         * MCPOAuthConfig
+         * @description OAuth settings for a remote MCP server.
+         *
+         *     Presence of an ``oauth`` value (``True`` or this object) marks the server
+         *     as OAuth-requiring. The SDK does dynamic client registration automatically;
+         *     ``client_id`` / ``client_secret`` are an optional static-registration
+         *     override. ``scope`` is an optional requested-scope hint.
+         */
+        MCPOAuthConfig: {
+            /**
+             * Callback Port
+             * @default 1456
+             */
+            callback_port: number;
+            /**
+             * Client Id
+             * @default null
+             */
+            client_id: string | null;
+            /**
+             * Client Secret
+             * @default null
+             */
+            client_secret: string | null;
+            /**
+             * Scope
+             * @default null
+             */
+            scope: string | null;
+        };
+        /**
+         * MCPSamplingConfig
+         * @description Governance for server-initiated ``sampling/createMessage`` (SP-6).
+         *
+         *     Sampling lets an MCP server ask durin's LLM to generate text. It is
+         *     **off by default** — a server only gains LLM access when the user opts
+         *     in. All limits below bound what a server can do once enabled.
+         */
+        MCPSamplingConfig: {
+            /**
+             * Allow Tools
+             * @default true
+             */
+            allow_tools: boolean;
+            /** Allowed Models */
+            allowed_models?: string[];
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled: boolean;
+            /**
+             * Max Tokens Cap
+             * @default 4096
+             */
+            max_tokens_cap: number;
+            /**
+             * Max Tool Rounds
+             * @default 4
+             */
+            max_tool_rounds: number;
+            /**
+             * Model
+             * @default null
+             */
+            model: string | null;
+            /**
+             * Requests Per Minute
+             * @default 10
+             */
+            requests_per_minute: number;
+        };
+        /**
+         * MCPServerConfig
+         * @description MCP server connection configuration (stdio or HTTP).
+         */
+        MCPServerConfig: {
+            /**
+             * Allow Private Url
+             * @default false
+             */
+            allow_private_url: boolean;
+            /** Args */
+            args?: string[];
+            /**
+             * Catalog Timeout
+             * @default 1.5
+             */
+            catalog_timeout: number;
+            /**
+             * Command
+             * @default
+             */
+            command: string;
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /** Enabled Tools */
+            enabled_tools?: string[];
+            /** Env */
+            env?: {
+                [key: string]: string;
+            };
+            /** Headers */
+            headers?: {
+                [key: string]: string;
+            };
+            /**
+             * Keepalive Interval
+             * @default 180
+             */
+            keepalive_interval: number;
+            /**
+             * Malware Check
+             * @default true
+             */
+            malware_check: boolean;
+            /**
+             * Oauth
+             * @default null
+             */
+            oauth: boolean | components["schemas"]["MCPOAuthConfig"] | null;
+            sampling?: components["schemas"]["MCPSamplingConfig"];
+            /**
+             * Spawn Egress Policy
+             * @default warn
+             * @enum {string}
+             */
+            spawn_egress_policy: "warn" | "refuse" | "off";
+            /**
+             * Tool Timeout
+             * @default 30
+             */
+            tool_timeout: number;
+            /** Tool Timeouts */
+            tool_timeouts?: {
+                [key: string]: number;
+            };
+            /**
+             * Type
+             * @default null
+             */
+            type: ("stdio" | "sse" | "streamableHttp") | null;
+            /**
+             * Url
+             * @default
+             */
+            url: string;
+        };
+        /**
+         * McpListQuery
+         * @description No inputs — lists all configured servers.
+         */
+        McpListQuery: Record<string, never>;
+        /** McpListResult */
+        McpListResult: {
+            /** Servers */
+            servers: components["schemas"]["McpServerSummary"][];
+        };
+        /** McpOkResult */
+        McpOkResult: {
+            /** Ok */
+            ok: boolean;
+        };
+        /** McpServerDetail */
+        McpServerDetail: {
+            config: components["schemas"]["MCPServerConfig"];
+            /** Enabled */
+            enabled: boolean;
+            /** Error */
+            error: string | null;
+            /** Name */
+            name: string;
+            /** Oauth Authenticated */
+            oauth_authenticated: boolean;
+            /** Oauth Required */
+            oauth_required: boolean;
+            /** Status */
+            status: string;
+            /** Target */
+            target: string;
+            /** Tools */
+            tools: components["schemas"]["McpToolInfo"][];
+            /** Transport */
+            transport: string;
+        };
+        /** McpServerGetQuery */
+        McpServerGetQuery: {
+            /** Name */
+            name: string;
+        };
+        /** McpServerNameCommand */
+        McpServerNameCommand: {
+            /** Name */
+            name: string;
+        };
+        /** McpServerSummary */
+        McpServerSummary: {
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * Error
+             * @default null
+             */
+            error: string | null;
+            /** Name */
+            name: string;
+            /** Oauth Authenticated */
+            oauth_authenticated: boolean;
+            /** Oauth Required */
+            oauth_required: boolean;
+            /** Status */
+            status: string;
+            /** Target */
+            target: string;
+            /** Tool Count */
+            tool_count: number;
+            /** Transport */
+            transport: string;
+        };
+        /**
+         * McpServerUpsertCommand
+         * @description Create or replace a server. ``config`` is the full server config so the
+         *     webui form can edit every field (basic + advanced).
+         */
+        McpServerUpsertCommand: {
+            config: components["schemas"]["MCPServerConfig"];
+            /** Name */
+            name: string;
+        };
+        /** McpToolInfo */
+        McpToolInfo: {
+            /** Description */
+            description: string;
+            /** Name */
+            name: string;
+        };
         /** MemoryBacklinksQuery */
         MemoryBacklinksQuery: {
             /** Uri */
@@ -2308,6 +2636,198 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LogsListResult"];
+                };
+            };
+        };
+    };
+    mcp_list: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["McpListQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpListResult"];
+                };
+            };
+        };
+    };
+    mcp_add: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["McpServerUpsertCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpServerDetail"];
+                };
+            };
+        };
+    };
+    mcp_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["McpServerGetQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpServerDetail"];
+                };
+            };
+        };
+    };
+    mcp_remove: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["McpServerNameCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpOkResult"];
+                };
+            };
+        };
+    };
+    mcp_update: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["McpServerUpsertCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpServerDetail"];
+                };
+            };
+        };
+    };
+    mcp_disable: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["McpServerNameCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpServerDetail"];
+                };
+            };
+        };
+    };
+    mcp_enable: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["McpServerNameCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpServerDetail"];
+                };
+            };
+        };
+    };
+    mcp_oauth_logout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["McpServerNameCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpOkResult"];
                 };
             };
         };

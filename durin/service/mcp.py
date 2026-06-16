@@ -381,3 +381,25 @@ class McpService:
         if self._runtime is not None and cmd.name in self._live():
             await self._runtime.disconnect(cmd.name)
         return await self._build_detail(cmd.name, sc)
+
+    @route(
+        "POST",
+        "/api/v1/mcp/servers/{name}/oauth/logout",
+        scope=Scope.MCP_WRITE.value,
+        request_model=McpServerNameCommand,
+        response_model=McpOkResult,
+        summary="Clear stored OAuth tokens for a server",
+    )
+    async def oauth_logout(
+        self, cmd: McpServerNameCommand, principal: Principal
+    ) -> McpOkResult:
+        principal.require(Scope.MCP_WRITE)
+        from durin.config.loader import load_config
+
+        sc = load_config().tools.mcp_servers.get(cmd.name)
+        if sc is None:
+            raise NotFoundError("no such MCP server", details={"name": cmd.name})
+        from durin.agent.tools.mcp_oauth import SecretsTokenStorage
+
+        SecretsTokenStorage(cmd.name, server_url=sc.url or None).forget()
+        return McpOkResult(ok=True)
