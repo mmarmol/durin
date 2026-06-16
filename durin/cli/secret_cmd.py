@@ -63,18 +63,26 @@ def cmd_set(
     if not value:
         console.print("[yellow]Empty value — nothing stored.[/yellow]")
         raise typer.Exit(1)
-    store = SecretStore().load()
-    existed = store.get(name) is not None
-    store.put(
-        name,
-        value=value,
-        service=service,
-        account=account,
-        description=description,
-        scope=_parse_scope(scope),
-        origin="user",
-    )
-    store.save()
+    # The write goes through the service layer's single source of truth
+    # (validation + put/save/reload) — same path as the webui, the websocket
+    # need-secret frame, and the TUI prompt.
+    from durin.service.secrets import SecretsService
+    from durin.service.types import ValidationFailedError
+
+    existed = SecretStore().load().get(name) is not None
+    try:
+        SecretsService().store_entry(
+            name=name,
+            value=value,
+            service=service,
+            account=account or "",
+            description=description,
+            scope=_parse_scope(scope),
+            origin="user",
+        )
+    except ValidationFailedError as exc:
+        console.print(f"[red]✗[/red] {exc.message}")
+        raise typer.Exit(1) from exc
     verb = "Updated" if existed else "Stored"
     console.print(f"[green]✓[/green] {verb} secret [bold]{name}[/bold] ({service}).")
 

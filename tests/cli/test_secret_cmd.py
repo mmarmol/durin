@@ -45,6 +45,23 @@ def test_secret_set_rejects_bad_name(secrets_path) -> None:
     assert "Invalid name" in result.output
 
 
+def test_secret_set_updates_existing(secrets_path) -> None:
+    """Re-setting an existing name reports 'Updated' and stores the new value
+    (the write now flows through SecretsService.store_entry)."""
+    store = SecretStore(path=secrets_path)
+    store.put("ATLASSIAN_WORK", value="old-value", service="atlassian", scope=["exec"])
+    store.save()
+    result = runner.invoke(
+        app,
+        ["secret", "set", "ATLASSIAN_WORK", "--service", "atlassian", "--scope", "exec"],
+        input="new-value-456\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert "Updated secret" in result.output
+    entry = SecretStore(path=secrets_path).load().get("ATLASSIAN_WORK")
+    assert entry.value == "new-value-456"
+
+
 def test_secret_list_masks_values(secrets_path) -> None:
     store = SecretStore(path=secrets_path)
     store.put("OPENAI_MAIN", value="sk-supersecret-value", service="provider:openai")
