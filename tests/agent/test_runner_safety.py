@@ -20,7 +20,7 @@ async def test_runner_does_not_abort_on_workspace_violation_anymore():
     we now hand the error back to the LLM as a recoverable tool result and
     rely on ``repeated_workspace_violation_error`` to throttle bypass loops.
     """
-    from durin.agent.runner import AgentRunSpec, AgentRunner
+    from durin.agent.runner import AgentRunner, AgentRunSpec
 
     provider = MagicMock()
     provider.chat_with_retry = AsyncMock(side_effect=[
@@ -88,7 +88,7 @@ def test_is_ssrf_violation_recognizes_private_url_blocks():
 @pytest.mark.asyncio
 async def test_runner_returns_non_retryable_hint_on_ssrf_violation():
     """SSRF stays blocked, but the runtime gives the LLM a final chance to recover."""
-    from durin.agent.runner import AgentRunSpec, AgentRunner
+    from durin.agent.runner import AgentRunner, AgentRunSpec
 
     provider = MagicMock()
     provider.chat_with_retry = AsyncMock(side_effect=[
@@ -141,7 +141,7 @@ async def test_runner_lets_llm_recover_from_shell_guard_path_outside():
     turn (silent hang on Telegram per #3605); now the LLM gets the soft
     error back and can finalize on the next iteration.
     """
-    from durin.agent.runner import AgentRunSpec, AgentRunner
+    from durin.agent.runner import AgentRunner, AgentRunSpec
 
     provider = MagicMock()
     captured_second_call: list[dict] = []
@@ -195,7 +195,7 @@ async def test_runner_throttles_repeated_workspace_bypass_attempts():
     the runner replaces the tool result with a hard "stop trying" message
     so the model finally gives up and surfaces the boundary to the user.
     """
-    from durin.agent.runner import AgentRunSpec, AgentRunner
+    from durin.agent.runner import AgentRunner, AgentRunSpec
 
     bypass_attempts = [
         ToolCallRequest(

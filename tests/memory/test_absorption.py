@@ -9,7 +9,6 @@ import pytest
 from durin.memory.absorption import (
     AbsorptionError,
     EntityAbsorption,
-    MergeCandidate,
 )
 from durin.memory.aliases_index import AliasIndex
 from durin.memory.embedding import EmbeddingProvider

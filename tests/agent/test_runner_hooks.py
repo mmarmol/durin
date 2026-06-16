@@ -16,7 +16,7 @@ _MAX_TOOL_RESULT_CHARS = AgentDefaults().max_tool_result_chars
 @pytest.mark.asyncio
 async def test_runner_calls_hooks_in_order():
     from durin.agent.hook import AgentHook, AgentHookContext
-    from durin.agent.runner import AgentRunSpec, AgentRunner
+    from durin.agent.runner import AgentRunner, AgentRunSpec
 
     provider = MagicMock(spec=LLMProvider)
     call_count = {"n": 0}
@@ -109,7 +109,7 @@ async def test_runner_calls_hooks_in_order():
 @pytest.mark.asyncio
 async def test_runner_streaming_hook_receives_deltas_and_end_signal():
     from durin.agent.hook import AgentHook, AgentHookContext
-    from durin.agent.runner import AgentRunSpec, AgentRunner
+    from durin.agent.runner import AgentRunner, AgentRunSpec
 
     provider = MagicMock(spec=LLMProvider)
     streamed: list[str] = []
@@ -155,7 +155,7 @@ async def test_runner_streaming_hook_receives_deltas_and_end_signal():
 async def test_runner_passes_cached_tokens_to_hook_context():
     """Hook context.usage should contain cached_tokens."""
     from durin.agent.hook import AgentHook, AgentHookContext
-    from durin.agent.runner import AgentRunSpec, AgentRunner
+    from durin.agent.runner import AgentRunner, AgentRunSpec
 
     provider = MagicMock(spec=LLMProvider)
     captured_usage: list[dict] = []

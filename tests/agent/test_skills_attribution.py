@@ -16,7 +16,9 @@ def test_attribution_drops_empty_strings():
 from pathlib import Path
 
 from durin.agent.skills_store import (
-    apply_skill_edit, dream_create_skill, _store, Attribution,
+    _store,
+    apply_skill_edit,
+    dream_create_skill,
 )
 
 

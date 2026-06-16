@@ -2,13 +2,12 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from durin.agent.tools.mcp import _probe_http_url, connect_mcp_servers
 from durin.agent.tools.registry import ToolRegistry
-
 
 # ---------------------------------------------------------------------------
 # _probe_http_url unit tests

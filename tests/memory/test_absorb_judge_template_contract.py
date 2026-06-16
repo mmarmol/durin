@@ -18,7 +18,6 @@ import pytest
 
 from durin.memory.absorb_judge import _VALID_VERDICTS
 
-
 _TEMPLATE_PATH = (
     Path(__file__).resolve().parents[2]
     / "durin" / "templates" / "dream" / "absorb_judge.md"

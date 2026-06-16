@@ -9,7 +9,6 @@ import pytest
 
 from durin.memory.entity_page import EntityPage, EntityPageError
 
-
 # ---------------------------------------------------------------------------
 # from_text — happy path
 # ---------------------------------------------------------------------------

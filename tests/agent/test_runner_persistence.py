@@ -6,15 +6,13 @@ import os
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
 from durin.config.schema import AgentDefaults
 from durin.providers.base import LLMResponse, ToolCallRequest
 
 _MAX_TOOL_RESULT_CHARS = AgentDefaults().max_tool_result_chars
 
 async def test_runner_persists_large_tool_results_for_follow_up_calls(tmp_path):
-    from durin.agent.runner import AgentRunSpec, AgentRunner
+    from durin.agent.runner import AgentRunner, AgentRunSpec
 
     provider = MagicMock()
     captured_second_call: list[dict] = []
@@ -124,7 +122,7 @@ def test_persist_tool_result_logs_cleanup_failures(monkeypatch, tmp_path):
     assert "[tool output persisted]" in persisted
     assert warnings and "Failed to clean stale tool result buckets" in warnings[0]
 async def test_runner_keeps_going_when_tool_result_persistence_fails():
-    from durin.agent.runner import AgentRunSpec, AgentRunner
+    from durin.agent.runner import AgentRunner, AgentRunSpec
 
     provider = MagicMock()
     captured_second_call: list[dict] = []

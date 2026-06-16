@@ -20,8 +20,8 @@ from pathlib import Path
 
 import yaml
 
-from durin.utils.helpers import estimate_text_tokens
 from durin.utils.atomic_write import atomic_write_text
+from durin.utils.helpers import estimate_text_tokens
 
 __all__ = [
     "ReferenceResult",

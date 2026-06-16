@@ -14,10 +14,6 @@ Sections with zero hits are omitted entirely.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-
-import pytest
-
 from durin.memory.sectioned_output import (
     DEFAULT_MAX_PER_SOURCE,
     SectionedHit,

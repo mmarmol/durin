@@ -15,7 +15,7 @@ _MAX_TOOL_RESULT_CHARS = AgentDefaults().max_tool_result_chars
 
 @pytest.mark.asyncio
 async def test_runner_returns_structured_tool_error():
-    from durin.agent.runner import AgentRunSpec, AgentRunner
+    from durin.agent.runner import AgentRunner, AgentRunSpec
 
     provider = MagicMock(spec=LLMProvider)
     provider.chat_with_retry = AsyncMock(return_value=LLMResponse(
@@ -53,9 +53,9 @@ async def test_llm_error_not_appended_to_session_messages():
     """When LLM returns finish_reason='error', the error content must NOT be
     appended to the messages list (prevents polluting session history)."""
     from durin.agent.runner import (
-        AgentRunSpec,
-        AgentRunner,
         _PERSISTED_MODEL_ERROR_PLACEHOLDER,
+        AgentRunner,
+        AgentRunSpec,
     )
 
     provider = MagicMock(spec=LLMProvider)
@@ -84,7 +84,7 @@ async def test_llm_error_not_appended_to_session_messages():
 
 @pytest.mark.asyncio
 async def test_runner_tool_error_sets_final_content():
-    from durin.agent.runner import AgentRunSpec, AgentRunner
+    from durin.agent.runner import AgentRunner, AgentRunSpec
 
     provider = MagicMock(spec=LLMProvider)
 
@@ -118,7 +118,7 @@ async def test_runner_tool_error_sets_final_content():
 async def test_runner_tool_error_preserves_tool_results_in_messages():
     """When a tool raises a fatal error, its results must still be appended
     to messages so the session never contains orphan tool_calls (#2943)."""
-    from durin.agent.runner import AgentRunSpec, AgentRunner
+    from durin.agent.runner import AgentRunner, AgentRunSpec
 
     provider = MagicMock(spec=LLMProvider)
 

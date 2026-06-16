@@ -7,7 +7,6 @@ import pytest
 from durin.providers.azure_openai_provider import AzureOpenAIProvider
 from durin.providers.base import LLMResponse
 
-
 # ---------------------------------------------------------------------------
 # Init & validation
 # ---------------------------------------------------------------------------

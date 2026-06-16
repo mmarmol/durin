@@ -7,7 +7,6 @@ FooterBar) mount, render, and respond to a user submission.
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any
 
 import pytest
 

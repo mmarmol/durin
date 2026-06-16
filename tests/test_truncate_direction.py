@@ -11,7 +11,6 @@ from __future__ import annotations
 from durin.agent.loop import _TAIL_TRUNCATION_TOOLS, _truncate_tool_output
 from durin.utils.helpers import truncate_text
 
-
 # ---------------------------------------------------------------------------
 # truncate_text — direction parameter
 # ---------------------------------------------------------------------------

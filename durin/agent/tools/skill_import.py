@@ -230,7 +230,10 @@ class SkillImportTool(Tool, ContextAware):
                         skill_dir = self._workspace / "skills" / skill_name
                     if skill_dir.is_dir():
                         try:
-                            from durin.agent.skills_import import run_install_specs, runnable_install_specs
+                            from durin.agent.skills_import import (
+                                run_install_specs,
+                                runnable_install_specs,
+                            )
                             specs = runnable_install_specs(skill_dir)
                             if specs:
                                 deps_results = await run_install_specs(

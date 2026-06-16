@@ -1,7 +1,7 @@
 """Tests for tool hint formatting (durin.utils.tool_hints)."""
 
-from durin.utils.tool_hints import format_tool_hints
 from durin.providers.base import ToolCallRequest
+from durin.utils.tool_hints import format_tool_hints
 
 
 def _tc(name: str, args) -> ToolCallRequest:

@@ -20,8 +20,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 
 def test_session_logger_stamps_session_key(tmp_path: Path) -> None:
     from durin.telemetry.logger import get_session_logger
@@ -78,7 +76,9 @@ def test_caller_supplied_values_win(tmp_path: Path) -> None:
     when needed (e.g. subagent forwarding parent's session)."""
     from durin.agent.tools._telemetry import emit_tool_event
     from durin.telemetry.logger import (
-        bind_telemetry, get_session_logger, reset_telemetry,
+        bind_telemetry,
+        get_session_logger,
+        reset_telemetry,
     )
 
     logger = get_session_logger("telegram:c1", base_dir=tmp_path)

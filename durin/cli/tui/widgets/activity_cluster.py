@@ -16,8 +16,8 @@ Lifecycle:
 from __future__ import annotations
 
 from textual.containers import Vertical
-from textual.widgets import Label
 from textual.reactive import reactive
+from textual.widgets import Label
 
 __all__ = ["ActivityCluster"]
 

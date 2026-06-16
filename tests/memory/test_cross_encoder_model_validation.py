@@ -22,7 +22,6 @@ import pytest
 
 from durin.memory.cross_encoder import probe_model
 
-
 _SENTINEL = object()
 
 

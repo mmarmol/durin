@@ -202,7 +202,7 @@ def test_regenerate_explicit_output_path(tmp_path: Path) -> None:
 
 def test_session_save_writes_md_sibling(tmp_path: Path) -> None:
     """End-to-end: SessionManager.save() must regenerate the .md view."""
-    from durin.session.manager import Session, SessionManager
+    from durin.session.manager import SessionManager
 
     mgr = SessionManager(workspace=tmp_path)
     session = mgr.get_or_create("integration-test")

@@ -4,7 +4,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from durin.providers.base import LLMResponse, ToolCallRequest
 from durin.providers.openai_responses.converters import (
     convert_messages,
     convert_tools,
@@ -16,7 +15,6 @@ from durin.providers.openai_responses.parsing import (
     map_finish_reason,
     parse_response_output,
 )
-
 
 # ======================================================================
 # converters - split_tool_call_id

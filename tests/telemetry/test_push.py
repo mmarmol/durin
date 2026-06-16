@@ -11,8 +11,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
-
 from durin.telemetry.push import (
     DEFAULT_BATCH_SIZE,
     PushSink,

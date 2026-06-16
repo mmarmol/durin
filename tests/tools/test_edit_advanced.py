@@ -8,13 +8,12 @@
 - Stale detection with content-equality fallback
 """
 
-import os
 import time
 
 import pytest
 
-from durin.agent.tools.filesystem import EditFileTool, ReadFileTool, _find_match
 from durin.agent.tools import file_state
+from durin.agent.tools.filesystem import EditFileTool, ReadFileTool, _find_match
 
 
 @pytest.fixture(autouse=True)
