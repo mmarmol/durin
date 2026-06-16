@@ -6,12 +6,11 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from starlette.routing import Route
 from starlette.testclient import TestClient
 from websockets.exceptions import ConnectionClosed
 from websockets.frames import Close
 
-from durin.api.asgi import _http_result_to_starlette, build_gateway_http_app
+from durin.api.asgi import build_gateway_http_app
 from durin.bus.events import OUTBOUND_META_AGENT_UI, OutboundMessage
 from durin.bus.queue import MessageBus
 from durin.channels.websocket import (
@@ -63,8 +62,6 @@ def _build_client(
     Any keyword argument accepted by ``_ch`` can be passed to override the
     default channel config (e.g. ``allowFrom``, ``token``, ``websocketRequiresToken``).
     The data dir is isolated to ``tmp_path`` so tests never touch ``~/.durin``.
-    If ``tokenIssuePath`` is set, an extra Starlette route is added to the app
-    so the endpoint is reachable via the TestClient.
     """
     data_dir = tmp_path / "durin_data"
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -74,21 +71,6 @@ def _build_client(
     registry = channel._services
     auth = registry.get("auth")
     app = build_gateway_http_app(channel, registry, auth=auth)
-
-    # If a tokenIssuePath was configured, splice in an explicit Starlette route
-    # so tests can reach it without going through /api/{path:path}.
-    issue_path = channel_kw.get("tokenIssuePath", "")
-    if issue_path:
-        from starlette.requests import Request
-
-        async def _token_issue_handler(request: Request) -> Any:
-            from durin.api.asgi import _StarletteRequestShim
-            shim = _StarletteRequestShim(request)
-            result = channel._handle_token_issue_http(shim)
-            return _http_result_to_starlette(result)
-
-        app.routes.insert(0, Route(issue_path, _token_issue_handler, methods=["GET"]))
-
     client = TestClient(app, raise_server_exceptions=False)
     return channel, client
 
@@ -153,12 +135,6 @@ def test_default_config_includes_safe_bind_and_streaming() -> None:
     assert defaults["host"] == "127.0.0.1"
     assert defaults["streaming"] is True
     assert defaults["allowFrom"] == ["*"]
-    assert defaults.get("tokenIssuePath", "") == ""
-
-
-def test_token_issue_path_must_differ_from_websocket_path() -> None:
-    with pytest.raises(ValueError, match="token_issue_path must differ"):
-        WebSocketConfig(path="/ws", token_issue_path="/ws")
 
 
 def test_issue_route_secret_matches_bearer_and_header() -> None:
@@ -900,26 +876,20 @@ def test_registry_discovers_websocket_channel() -> None:
     assert cls.name == "websocket"
 
 
-def test_http_route_issues_token_then_websocket_requires_it(
+def test_bootstrap_token_then_websocket_requires_it(
     bus: MagicMock, monkeypatch, tmp_path
 ) -> None:
     channel, client = _build_client(
         bus,
         monkeypatch,
         tmp_path,
-        tokenIssuePath="/auth/token",
-        tokenIssueSecret="route-secret",
         websocketRequiresToken=True,
     )
 
-    deny = client.get("/auth/token")
-    assert deny.status_code == 401
-
-    issue = client.get("/auth/token", headers={"Authorization": "Bearer route-secret"})
-    assert issue.status_code == 200
-    token = issue.json()["token"]
+    token = client.get("/webui/bootstrap").json()["token"]
     assert token.startswith("nbwt_")
 
+    # No token -> handshake rejected.
     with pytest.raises(Exception):
         with client.websocket_connect("/ws?client_id=x") as ws:
             ws.receive_text()
@@ -1431,22 +1401,19 @@ def test_end_to_end_server_pushes_streaming_deltas_to_client(
         assert turn_end == {"event": "turn_end", "chat_id": chat_id}
 
 
-def test_token_issue_rejects_when_at_capacity(
+def test_bootstrap_rejects_when_issued_tokens_at_capacity(
     bus: MagicMock, monkeypatch, tmp_path
 ) -> None:
-    channel, client = _build_client(
-        bus, monkeypatch, tmp_path, tokenIssuePath="/auth/token", tokenIssueSecret="s"
-    )
+    channel, client = _build_client(bus, monkeypatch, tmp_path)
 
-    # Fill issued tokens to capacity.
+    # Fill the issued-token pool to capacity.
     channel._issued_tokens = {
         f"nbwt_fill_{i}": time.monotonic() + 300 for i in range(channel._MAX_ISSUED_TOKENS)
     }
 
-    resp = client.get("/auth/token", headers={"Authorization": "Bearer s"})
+    resp = client.get("/webui/bootstrap")
     assert resp.status_code == 429
-    data = resp.json()
-    assert "error" in data
+    assert "error" in resp.json()
 
 
 def test_allow_from_rejects_unauthorized_client_id(
@@ -1488,14 +1455,14 @@ def test_static_token_accepts_issued_token_as_fallback(
         monkeypatch,
         tmp_path,
         token="static-secret",
-        tokenIssuePath="/auth/token",
-        tokenIssueSecret="route-secret",
     )
 
-    resp = client.get("/auth/token", headers={"Authorization": "Bearer route-secret"})
-    assert resp.status_code == 200
-    issued_token = resp.json()["token"]
+    # With a static token configured, bootstrap is gated on that secret.
+    issued_token = client.get(
+        "/webui/bootstrap", headers={"Authorization": "Bearer static-secret"}
+    ).json()["token"]
 
+    # The handshake accepts the issued token even though a static token is set.
     with client.websocket_connect(f"/ws?token={issued_token}&client_id=caller") as ws:
         ready = json.loads(ws.receive_text())
         assert ready["event"] == "ready"

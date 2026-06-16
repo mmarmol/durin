@@ -1722,7 +1722,7 @@ export interface components {
          *
          *     ``agent``, ``providers``, ``web_search``, and ``runtime`` mirror the keys
          *     the existing handler returns.  The nested structures are ``dict[str, Any]``
-         *     escape hatches — SP3 can tighten them.
+         *     escape hatches — open by design.
          */
         SettingsResult: {
             /** Agent */

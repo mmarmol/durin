@@ -16,8 +16,8 @@ System-op split (mirrors ``cron.run``):
 Escape hatches:
 - ``LogsListResult``: ``lines``, ``facets``, and ``next_cursor`` carry
   ``dict[str, Any]`` / ``list[Any]`` payloads whose sub-structure comes
-  directly from ``durin.logs.reader`` — not modelled further here (SP3 can
-  tighten if needed).
+  directly from ``durin.logs.reader`` — not modelled further here (open by
+  design; tighten if the shape is ever frozen).
 """
 
 from __future__ import annotations

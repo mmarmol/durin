@@ -27,6 +27,7 @@ Extracted from ``durin/channels/websocket.py`` (``_codex_status_payload`` /
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from durin.service.principal import Principal, Scope
@@ -202,7 +203,9 @@ class OAuthService:
         try:
             from durin.providers.codex_device_auth import start_loopback_login
 
-            url = start_loopback_login()
+            # Blocking httpx network call — offload to a thread so it never
+            # stalls the single gateway event loop (spec's headline risk).
+            url = await asyncio.to_thread(start_loopback_login)
         except Exception as exc:  # noqa: BLE001
             raise UnavailableError(f"loopback login failed to start: {exc}") from exc
         return OAuthStartLoopbackResult(authorize_url=url)
@@ -220,7 +223,8 @@ class OAuthService:
         try:
             from durin.providers.codex_device_auth import request_device_code
 
-            ch = request_device_code()
+            # Blocking httpx POST — offload off the gateway loop (see start_loopback).
+            ch = await asyncio.to_thread(request_device_code)
         except Exception as exc:  # noqa: BLE001
             raise UnavailableError(f"device code request failed: {exc}") from exc
         return OAuthStartResult(
@@ -248,7 +252,8 @@ class OAuthService:
 
         from durin.providers.codex_device_auth import poll_once as codex_poll_once
 
-        res = codex_poll_once(device_auth_id, user_code)
+        # Blocking httpx POST — offload off the gateway loop (see start_loopback).
+        res = await asyncio.to_thread(codex_poll_once, device_auth_id, user_code)
         if res.status == "ok":
             session = self._codex_status_payload()
             return OAuthPollResult(

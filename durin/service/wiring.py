@@ -1,10 +1,10 @@
 """Build the service registry with real gateway dependencies.
 
-Shared by the websocket channel (legacy HTTP shims) and the gateway's Starlette
-front door (SP4) so both surfaces serve the SAME service set, wired to the same
-``session_manager`` / ``cron_service`` / ``config``. The SP3 ``catalog`` builds a
-deps-less registry for spec-reading; this one is the functional, dependency-wired
-registry.
+Shared by the websocket channel (bootstrap, the secret-store frame, media) and
+the unified Starlette front door so both surfaces serve the SAME service set,
+wired to the same ``session_manager`` / ``cron_service`` / ``config``. The
+``catalog`` builds a deps-less registry for spec-reading; this one is the
+functional, dependency-wired registry.
 """
 
 from __future__ import annotations

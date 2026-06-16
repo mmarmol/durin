@@ -12,7 +12,8 @@ Rather than modelling every dynamic payload shape, all 18 methods share a
 single ``SkillsResult`` that carries the raw ``(status, payload)`` tuple.
 The shim reads ``result.status`` to forward the HTTP status code and passes
 ``result.data`` directly to ``_http_json_response``.  This is the
-``dict[str, Any]`` escape hatch documented in the plan (SP3 can tighten).
+``dict[str, Any]`` escape hatch documented in the plan (open by design — the
+skills store payload is dynamic).
 
 The workspace must be injected at construction: ``SkillsService(workspace)``
 because ``_endpoint_workspace()`` is a channel concern, not a service concern.

@@ -1,7 +1,7 @@
 """Lightweight WebSocket test client for integration testing the durin WebSocket channel.
 
-Provides an async ``WsTestClient`` class and token-issuance helpers that
-integration tests can import and use directly::
+Provides an async ``WsTestClient`` class that integration tests can import and
+use directly::
 
     from ws_test_client import WsTestClient
 
@@ -18,7 +18,6 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
-import httpx
 import websockets
 from websockets.asyncio.client import ClientConnection
 
@@ -183,45 +182,3 @@ class WsTestClient:
         return self._ws is None or self._ws.closed
 
 
-# -- Token issuance helpers -----------------------------------------------
-
-
-async def issue_token(
-    host: str = "127.0.0.1",
-    port: int = 8765,
-    issue_path: str = "/auth/token",
-    secret: str = "",
-) -> tuple[dict[str, Any] | None, int]:
-    """Request a short-lived token from the token-issue HTTP endpoint.
-
-    Returns ``(parsed_json_or_None, status_code)``.
-    """
-    url = f"http://{host}:{port}{issue_path}"
-    headers: dict[str, str] = {}
-    if secret:
-        headers["Authorization"] = f"Bearer {secret}"
-
-    loop = asyncio.get_running_loop()
-    resp = await loop.run_in_executor(
-        None, lambda: httpx.get(url, headers=headers, timeout=5.0)
-    )
-    try:
-        data = resp.json()
-    except Exception:
-        data = None
-    return data, resp.status_code
-
-
-async def issue_token_ok(
-    host: str = "127.0.0.1",
-    port: int = 8765,
-    issue_path: str = "/auth/token",
-    secret: str = "",
-) -> str:
-    """Request a token, asserting success, and return the token string."""
-    (data, status) = await issue_token(host, port, issue_path, secret)
-    assert status == 200, f"Token issue failed with status {status}"
-    assert data is not None
-    token = data["token"]
-    assert token.startswith("nbwt_"), f"Unexpected token format: {token}"
-    return token

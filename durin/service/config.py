@@ -16,7 +16,7 @@ call off the event loop — identical to the original handler.
 ----------------------------------
 - ``ConfigGetResult.config`` / ``.schema``: the effective config dict and its JSON
   schema are large, dynamic, provider-generated dicts. Typed as ``dict[str, Any]``
-  escape hatches; SP3 can tighten sub-structure if needed.
+  escape hatches; the sub-structure can tighten if it is ever frozen.
 - ``ModelsListResult.suggested`` / ``.models``: free-form string lists (``list[str]``
   typed properly).
 - ``ModelCapabilitiesResult`` fields are typed scalars (no escape hatch needed).

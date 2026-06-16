@@ -21,7 +21,7 @@ class Scope(str, Enum):
     """Permission scopes, named ``<domain>:<read|write>``.
 
     The domain set mirrors the planned service classes (settings, secrets,
-    skills, cron, sessions, config, memory, chat). It is adjusted as SP1 extracts
+    skills, cron, sessions, config, memory). It is adjusted as SP1 extracts
     the real services; unused scopes are removed rather than left speculative.
     """
 
@@ -41,8 +41,6 @@ class Scope(str, Enum):
     CONFIG_WRITE = "config:write"
     MEMORY_READ = "memory:read"
     MEMORY_WRITE = "memory:write"
-    CHAT_READ = "chat:read"
-    CHAT_WRITE = "chat:write"
     SYSTEM_READ = "system:read"
     SYSTEM_WRITE = "system:write"
 

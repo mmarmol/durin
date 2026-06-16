@@ -1,7 +1,9 @@
-"""Step 2 of the ASGI unify: the unified Starlette HTTP app
-(``build_gateway_http_app``) serves the full gateway HTTP surface from one app —
-the `/api/v1` front door + legacy `/api/*` + `/webui/bootstrap` + `/api/media` +
-the SPA — reusing the channel's now transport-neutral handlers (parity).
+"""The unified Starlette HTTP app (``build_gateway_http_app``) serves the full
+gateway HTTP surface from one app — the `/api/v1` front door + `/webui/bootstrap`
++ `/api/media` + the SPA — reusing the channel's transport-neutral handlers.
+
+Also pins the bootstrap localhost gate (SEC-1): unauthenticated ADMIN-token
+minting is allowed only from a loopback peer, or with the configured secret.
 """
 
 import pytest
@@ -10,15 +12,14 @@ from starlette.testclient import TestClient
 from durin.bus.queue import MessageBus
 
 
-@pytest.fixture()
-def client(tmp_path, monkeypatch):
+def _build_app(tmp_path, monkeypatch, **cfg_extra):
     # Isolate the persisted token store (bootstrap mints into it) to a tmp dir.
     data_dir = tmp_path / "durin_data"
     data_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr("durin.config.paths.get_data_dir", lambda: data_dir)
 
     spa = tmp_path / "dist"
-    spa.mkdir()
+    spa.mkdir(exist_ok=True)
     (spa / "index.html").write_text(
         "<!doctype html><title>durin</title><div id=root></div>", encoding="utf-8"
     )
@@ -33,11 +34,21 @@ def client(tmp_path, monkeypatch):
         "port": 8765,
         "path": "/",
         "websocketRequiresToken": False,
+        **cfg_extra,
     }
     channel = WebSocketChannel(cfg, MessageBus())
     registry = channel._services
     auth = registry.get("auth")
-    app = build_gateway_http_app(channel, registry, auth=auth, static_dist_path=spa)
+    return build_gateway_http_app(channel, registry, auth=auth, static_dist_path=spa)
+
+
+@pytest.fixture()
+def app(tmp_path, monkeypatch):
+    return _build_app(tmp_path, monkeypatch)
+
+
+@pytest.fixture()
+def client(app):
     return TestClient(app)
 
 
@@ -78,3 +89,32 @@ def test_media_bad_signature_rejected(client):
     # "invalid signature").
     r = client.get("/api/media/deadbeef/Zm9v")
     assert r.status_code in (401, 403, 404)
+
+
+# -- SEC-1: bootstrap localhost gate -----------------------------------------
+
+
+def test_bootstrap_allowed_from_localhost_no_secret(app):
+    # A loopback peer with no token_issue_secret configured may mint a token.
+    c = TestClient(app, client=("127.0.0.1", 0))
+    assert c.get("/webui/bootstrap").status_code == 200
+
+
+def test_bootstrap_rejected_from_remote_when_no_secret(app):
+    # Regression guard (SEC-1): a NON-loopback peer must NOT mint an ADMIN token
+    # when no token_issue_secret is configured. Before the fix the ASGI adapter
+    # handed _handle_bootstrap a hardcoded localhost peer, so any remote caller
+    # got 200 — a privilege-escalation on a non-loopback bind.
+    c = TestClient(app, client=("203.0.113.7", 0))  # TEST-NET-3, definitely remote
+    r = c.get("/webui/bootstrap")
+    assert r.status_code == 403, r.text
+
+
+def test_bootstrap_remote_allowed_only_with_secret(tmp_path, monkeypatch):
+    # With a token_issue_secret configured, a remote caller is gated on the
+    # secret (the reverse-proxy deployment path), not on the peer IP.
+    app = _build_app(tmp_path, monkeypatch, tokenIssueSecret="s3cr3t")
+    c = TestClient(app, client=("203.0.113.7", 0))
+    assert c.get("/webui/bootstrap").status_code == 401  # missing secret
+    r = c.get("/webui/bootstrap", headers={"Authorization": "Bearer s3cr3t"})
+    assert r.status_code == 200, r.text

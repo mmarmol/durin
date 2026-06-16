@@ -1818,9 +1818,9 @@ def _run_gateway(
             await cron.start()
             await heartbeat.start()
 
-            # Unified uvicorn server: the gateway serves WS chat + /api/v1 +
-            # legacy /api/* + SPA via a single Starlette app on the websocket
-            # channel's port.  The channel acts purely as the handler.
+            # Unified uvicorn server: the gateway serves WS chat + /api/v1 + SPA
+            # via a single Starlette app on the websocket channel's port.  The
+            # channel acts purely as the handler.
             import contextlib as _contextlib_unified
 
             import uvicorn as _uvicorn_unified
@@ -1887,9 +1887,11 @@ def _run_gateway(
             if unified_server is not None:
                 tasks.append(unified_server.serve())
 
-            # SP4: optional read-only Starlette front door on a 2nd port, served
-            # as a coroutine in this same loop (like _health_server). Off unless
-            # gateway.api_port is set.
+            # Optional: also serve the full /api/v1 front door (reads + writes)
+            # on a SEPARATE port, as a coroutine in this same loop (like
+            # _health_server). Off unless gateway.api_port is set; the unified
+            # server above already serves /api/v1 on the ws-port, so this is an
+            # opt-in for deployments that want the API isolated on its own port.
             if config.gateway.api_port:
                 import contextlib as _contextlib
 

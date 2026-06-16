@@ -4,10 +4,11 @@ Tokens are stored at ``~/.durin/api_tokens.json`` (or an injected path for
 tests).  Only a salted SHA-256 hash is written; the plaintext token is returned
 once at issue and never persisted.
 
-The media HMAC secret lives in the same file so it survives a restart.
+The media HMAC secret lives in the same file so it survives a restart; the
+file is therefore written mode 0600 (never world-readable), like secrets.json.
 
 Thread-safety mirrors ``durin/pairing/store.py``: a module-level
-``threading.Lock`` wraps every op; ``_write_text_atomic`` makes writes
+``threading.Lock`` wraps every op; ``atomic_write_text`` makes writes
 crash-safe.
 """
 
@@ -23,7 +24,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from durin.utils.helpers import _write_text_atomic
+from durin.utils.atomic_write import atomic_write_text
 
 _LOCK = threading.Lock()
 
@@ -75,7 +76,13 @@ class ApiTokenStore:
 
     def _save(self, data: dict[str, Any]) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        _write_text_atomic(self._path, json.dumps(data, indent=2, ensure_ascii=False))
+        # mode 0600 — the store holds the media HMAC signing secret and token
+        # hashes; it must never be world-readable (mirrors secrets.json).
+        atomic_write_text(
+            self._path,
+            json.dumps(data, indent=2, ensure_ascii=False),
+            mode=0o600,
+        )
 
     @staticmethod
     def _purge_expired(data: dict[str, Any], now: float) -> None:

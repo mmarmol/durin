@@ -19,6 +19,7 @@ The controller (durin/cli/commands.py) is responsible for:
 
 from __future__ import annotations
 
+import hmac
 import json
 import uuid
 from collections.abc import Callable
@@ -167,7 +168,7 @@ def resolve_principal_from_headers(
     principal = auth.resolve(token)
     if principal is not None:
         return principal
-    if static_token and token == static_token:
+    if static_token and hmac.compare_digest(token, static_token):
         return Principal.remote("static", frozenset({Scope.ADMIN.value}))
     return None
 
@@ -205,11 +206,15 @@ def _build_422(exc: ValidationError) -> Response:
 def _result_response(result: Any) -> JSONResponse:
     """Serialize a service ``Result`` to JSON.
 
-    An ``int`` ``status`` attribute becomes the HTTP status code — only
-    ``SkillsResult`` carries one (the skills store's own HTTP status for the
-    import/approve/reject gate, e.g. ``409`` when a confirm is required). Every
-    other result has no ``status`` (or a *string* one, which is data, not an
-    HTTP code) and is served as ``200``.
+    Some domain results carry an ``int`` ``status`` that becomes the HTTP status
+    code — a deliberate "domain-status response" pattern, distinct from the
+    problem+json error mapping: the body IS the domain payload and the status is
+    a domain outcome the client branches on, not an error. Two results use it —
+    ``SkillsResult`` (the skills store's gate status, e.g. ``409`` confirm-required)
+    and ``ForgetResult`` (``403`` protected / ``400`` invalid). The webui reads the
+    body for these non-2xx codes and only throws on 5xx (see webui/src/lib/api.ts
+    ``forgetMemoryEntry`` / the skills web_* callers). Every other result has no
+    ``status`` (or a *string* one, which is data, not an HTTP code) → ``200``.
     """
     status = getattr(result, "status", None)
     return JSONResponse(
@@ -477,17 +482,20 @@ def build_gateway_http_app(
 ) -> Starlette:
     """Build a Starlette ASGI app serving the full gateway HTTP surface.
 
-    Mounts (in priority order):
-    - ``GET /api/v1/*``                — new service front door (build_api_app routes).
+    Mounts (in priority order; the literal/signed routes precede the generic
+    /api/v1 table so the overrides win on first match):
+    - WebSocket chat at the configured ws path — ConnectionAdapter-backed.
+    - ``GET /api/v1/sessions/{key}/messages`` and ``/webui-thread`` — signed
+      overrides that call the service, then sign media URLs via the channel.
+    - ``/api/v1/*``                    — service front door (build_api_app routes).
     - ``GET /webui/bootstrap``         — token mint + session metadata.
     - ``GET /api/media/{sig}/{payload}`` — signed media fetch.
-    - ``GET /api/*``                   — legacy channel REST routes (shim-forwarded).
     - Static SPA files at ``/``        — served from ``static_dist_path`` if provided,
                                          with SPA history-mode fallback to index.html.
 
-    The legacy ``/api/*`` routes delegate to the channel's ``_handle_*`` methods via
-    a ``_StarletteRequestShim``.  The channel's ``_handle_*`` methods now return
-    ``HttpResult`` (transport-neutral); :func:`_http_result_to_starlette` converts them.
+    The bootstrap and media handlers delegate to the channel's ``_handle_*``
+    methods (which return transport-neutral ``HttpResult``) via a
+    ``_StarletteRequestShim``; :func:`_http_result_to_starlette` converts them.
 
     Args:
         channel:          The live WebSocketChannel (owns business logic + token store).
@@ -503,21 +511,31 @@ def build_gateway_http_app(
 
     # -- /webui/bootstrap ---------------------------------------------------
 
-    class _LocalConn:
-        """Fake 'connection' that looks like localhost to _handle_bootstrap."""
+    class _ClientConn:
+        """Connection shim exposing the REAL peer address to _handle_bootstrap.
 
-        remote_address = ("127.0.0.1", 0)
+        When no ``token_issue_secret`` is configured, bootstrap gates
+        unauthenticated ADMIN-token minting on a localhost peer (local-dev mode;
+        see ``_handle_bootstrap`` + ``_is_localhost``). We must therefore hand the
+        channel the actual client IP (Starlette exposes it on ``request.client``),
+        NOT a hardcoded localhost — that would let a remote caller mint ADMIN
+        tokens on a non-loopback bind. ``request.client`` is None only when the
+        ASGI server omits the peer; we then leave ``remote_address`` None so
+        ``_is_localhost`` fails closed (deny).
+        """
+
+        def __init__(self, request: Request) -> None:
+            client = request.client
+            self.remote_address = (client.host, client.port) if client else None
 
         @staticmethod
         def respond(status: int, body: str) -> _HttpResult:
             from durin.channels.websocket import _http_error
             return _http_error(status, body)
 
-    _local_conn = _LocalConn()
-
     async def bootstrap_handler(request: Request) -> Response:
         shim = _StarletteRequestShim(request)
-        result = channel._handle_bootstrap(_local_conn, shim)
+        result = channel._handle_bootstrap(_ClientConn(request), shim)
         return _http_result_to_starlette(result)
 
     # -- /api/media/{sig}/{payload} -----------------------------------------
@@ -621,8 +639,7 @@ def build_gateway_http_app(
     api_app = build_api_app(registry, auth=auth, static_token=static_token)
 
     routes: list[Any] = [
-        # WebSocket chat — must precede HTTP routes so the upgrade is not
-        # swallowed by the legacy /api/* catch-all.
+        # WebSocket chat — listed first so the upgrade matches before any HTTP route.
         WebSocketRoute(ws_path, chat_ws_endpoint),
         # Signed session reads — must precede the generic /api/v1 routes so the
         # media-signing versions win (the generic handler can't sign).

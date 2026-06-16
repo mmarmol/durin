@@ -1701,7 +1701,7 @@
         "type": "object"
       },
       "SettingsResult": {
-        "description": "Full settings payload.\n\n``agent``, ``providers``, ``web_search``, and ``runtime`` mirror the keys\nthe existing handler returns.  The nested structures are ``dict[str, Any]``\nescape hatches \u2014 SP3 can tighten them.",
+        "description": "Full settings payload.\n\n``agent``, ``providers``, ``web_search``, and ``runtime`` mirror the keys\nthe existing handler returns.  The nested structures are ``dict[str, Any]``\nescape hatches \u2014 open by design.",
         "properties": {
           "agent": {
             "additionalProperties": true,

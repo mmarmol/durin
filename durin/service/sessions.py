@@ -13,7 +13,7 @@ wire-identical shims.
 ``SessionMessagesResult.data`` and ``WebuiThreadResult.data`` are typed as
 ``dict[str, Any]`` because the session JSONL payload (message lists, tool
 events, metadata) is a large dynamic structure defined by the session manager.
-SP3 can tighten these to a proper submodel once the wire shape is stable.
+These can tighten to a proper submodel if the wire shape is ever frozen.
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ class SessionMessagesQuery(Query):
 
 
 class SessionMessagesResult(Result):
-    data: dict[str, Any]  # escape hatch — full session JSONL payload; SP3 to tighten
+    data: dict[str, Any]  # escape hatch — full session JSONL payload (open by design)
 
 
 # ---------------------------------------------------------------------------
@@ -67,7 +67,7 @@ class WebuiThreadQuery(Query):
 
 
 class WebuiThreadResult(Result):
-    data: dict[str, Any]  # escape hatch — webui thread response dict; SP3 to tighten
+    data: dict[str, Any]  # escape hatch — webui thread response dict (open by design)
 
 
 # ---------------------------------------------------------------------------
