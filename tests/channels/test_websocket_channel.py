@@ -1413,7 +1413,8 @@ def test_bootstrap_rejects_when_issued_tokens_at_capacity(
 
     resp = client.get("/webui/bootstrap")
     assert resp.status_code == 429
-    assert "error" in resp.json()
+    # problem+json (RFC-9457), not the old {error} shape.
+    assert resp.json()["status"] == 429
 
 
 def test_allow_from_rejects_unauthorized_client_id(

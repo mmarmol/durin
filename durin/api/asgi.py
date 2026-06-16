@@ -44,13 +44,14 @@ from durin.service.types import (
     DomainError,
     ForbiddenError,
     NotFoundError,
+    TooManyRequestsError,
     UnauthenticatedError,
     UnavailableError,
     ValidationFailedError,
 )
 
 if TYPE_CHECKING:
-    from durin.channels.websocket import HttpResult, WebSocketChannel
+    from durin.channels.websocket import WebSocketChannel
 
 # ---------------------------------------------------------------------------
 # Starlette WebSocket connection adapter
@@ -111,6 +112,7 @@ _ERROR_STATUS: dict[str, int] = {
     NotFoundError.code: 404,
     ConflictError.code: 409,
     ValidationFailedError.code: 422,
+    TooManyRequestsError.code: 429,
     UnavailableError.code: 503,
 }
 
@@ -120,6 +122,7 @@ _ERROR_TITLE: dict[str, str] = {
     NotFoundError.code: "Not Found",
     ConflictError.code: "Conflict",
     ValidationFailedError.code: "Unprocessable Entity",
+    TooManyRequestsError.code: "Too Many Requests",
     UnavailableError.code: "Service Unavailable",
 }
 
@@ -424,48 +427,6 @@ async def _health_handler(_request: Request) -> Response:
 
 
 # ---------------------------------------------------------------------------
-# Transport adapter: HttpResult → Starlette Response
-# ---------------------------------------------------------------------------
-
-
-def _http_result_to_starlette(result: HttpResult) -> Response:
-    """Convert a transport-neutral HttpResult to a Starlette Response."""
-    return Response(
-        content=result.body,
-        status_code=result.status,
-        headers=result.headers,
-    )
-
-
-# ---------------------------------------------------------------------------
-# WsRequest duck-type shim
-# ---------------------------------------------------------------------------
-
-
-class _StarletteRequestShim:
-    """Minimal duck-type shim that makes a Starlette Request look like a
-    ``WsRequest`` to the ``_handle_*`` channel methods.
-
-    The channel handlers only access:
-    - ``request.headers`` — for bearer token and X-Durin-Auth.
-    - ``request.path``    — for path + query string (parsed by helpers).
-    """
-
-    def __init__(self, request: Request) -> None:
-        self._request = request
-
-    @property
-    def headers(self) -> Any:
-        return self._request.headers
-
-    @property
-    def path(self) -> str:
-        path = self._request.url.path
-        query = self._request.url.query
-        return f"{path}?{query}" if query else path
-
-
-# ---------------------------------------------------------------------------
 # Gateway HTTP app factory
 # ---------------------------------------------------------------------------
 
@@ -491,9 +452,9 @@ def build_gateway_http_app(
     - Static SPA files at ``/``        — served from ``static_dist_path`` if provided,
                                          with SPA history-mode fallback to index.html.
 
-    The bootstrap and media handlers delegate to the channel's ``_handle_*``
-    methods (which return transport-neutral ``HttpResult``) via a
-    ``_StarletteRequestShim``; :func:`_http_result_to_starlette` converts them.
+    The bootstrap and media handlers call the channel's ``bootstrap`` /
+    ``media_fetch`` methods (which return plain data and raise ``DomainError`` on
+    failure) and build the Starlette response — problem+json on a DomainError.
 
     Args:
         channel:          The live WebSocketChannel (owns business logic + token store).
@@ -503,46 +464,31 @@ def build_gateway_http_app(
         static_dist_path: If provided, serve the built SPA from this directory.
                           Falls back to ``channel._static_dist_path`` if None.
     """
-    from durin.channels.websocket import HttpResult as _HttpResult
-
     resolved_static = static_dist_path or channel._static_dist_path
 
     # -- /webui/bootstrap ---------------------------------------------------
 
-    class _ClientConn:
-        """Connection shim exposing the REAL peer address to _handle_bootstrap.
-
-        When no ``token_issue_secret`` is configured, bootstrap gates
-        unauthenticated ADMIN-token minting on a localhost peer (local-dev mode;
-        see ``_handle_bootstrap`` + ``_is_localhost``). We must therefore hand the
-        channel the actual client IP (Starlette exposes it on ``request.client``),
-        NOT a hardcoded localhost — that would let a remote caller mint ADMIN
-        tokens on a non-loopback bind. ``request.client`` is None only when the
-        ASGI server omits the peer; we then leave ``remote_address`` None so
-        ``_is_localhost`` fails closed (deny).
-        """
-
-        def __init__(self, request: Request) -> None:
-            client = request.client
-            self.remote_address = (client.host, client.port) if client else None
-
-        @staticmethod
-        def respond(status: int, body: str) -> _HttpResult:
-            from durin.channels.websocket import _http_error
-            return _http_error(status, body)
-
     async def bootstrap_handler(request: Request) -> Response:
-        shim = _StarletteRequestShim(request)
-        result = channel._handle_bootstrap(_ClientConn(request), shim)
-        return _http_result_to_starlette(result)
+        # Pass the REAL peer (request.client) so the channel's localhost gate
+        # sees the actual client IP — a hardcoded localhost would let a remote
+        # caller mint ADMIN tokens on a non-loopback bind. request.client is None
+        # only when the ASGI server omits the peer; the gate then fails closed.
+        try:
+            payload = channel.bootstrap(peer=request.client, headers=request.headers)
+        except DomainError as exc:
+            return _problem_response(exc)
+        return JSONResponse(payload)
 
     # -- /api/media/{sig}/{payload} -----------------------------------------
 
     async def media_handler(request: Request) -> Response:
-        sig = request.path_params["sig"]
-        payload = request.path_params["payload"]
-        result = channel._handle_media_fetch(sig, payload)
-        return _http_result_to_starlette(result)
+        try:
+            body, media_type, headers = channel.media_fetch(
+                request.path_params["sig"], request.path_params["payload"]
+            )
+        except DomainError as exc:
+            return _problem_response(exc)
+        return Response(body, media_type=media_type, headers=dict(headers))
 
     # -- signed v1 session reads --------------------------------------------
     # Media-URL signing (and the webui-thread build) needs this channel's

@@ -196,7 +196,7 @@ class SessionsService:
         2. Discards the sentinel result.
         3. Calls ``build_webui_thread_response(decoded_key,
            augment_user_media=self._augment_transcript_user_media)`` directly.
-        4. Sends the result through ``_http_json_response``.
+        4. Returns the signed payload as the JSON response.
 
         This mirrors the cron ``run`` pattern: service decides + validates,
         shim performs the adapter-specific side effect.

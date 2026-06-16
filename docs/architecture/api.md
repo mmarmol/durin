@@ -276,7 +276,7 @@ route — the gateway calls it to build a `Principal.remote` from the stored
 scopes before dispatching.
 
 **Token-minting surface.** `GET /webui/bootstrap` (`bootstrap_handler` →
-`channel._handle_bootstrap`, `durin/channels/websocket.py`) mints an
+`channel.bootstrap`, `durin/channels/websocket.py`) mints an
 `admin`-scoped token through the persisted store (`auth_svc._store.issue`,
 `durin/channels/websocket.py`) and
 returns `{token, ws_path, expires_in, model_name, requires_secret}`. Access is

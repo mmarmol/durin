@@ -1,6 +1,7 @@
 """The unified Starlette HTTP app (``build_gateway_http_app``) serves the full
 gateway HTTP surface from one app — the `/api/v1` front door + `/webui/bootstrap`
-+ `/api/media` + the SPA — reusing the channel's transport-neutral handlers.
++ `/api/media` + the SPA — building the responses from the channel's
+``bootstrap`` / ``media_fetch`` methods.
 
 Also pins the bootstrap localhost gate (SEC-1): unauthenticated ADMIN-token
 minting is allowed only from a loopback peer, or with the configured secret.
@@ -103,7 +104,7 @@ def test_bootstrap_allowed_from_localhost_no_secret(app):
 def test_bootstrap_rejected_from_remote_when_no_secret(app):
     # Regression guard (SEC-1): a NON-loopback peer must NOT mint an ADMIN token
     # when no token_issue_secret is configured. Before the fix the ASGI adapter
-    # handed _handle_bootstrap a hardcoded localhost peer, so any remote caller
+    # handed bootstrap a hardcoded localhost peer, so any remote caller
     # got 200 — a privilege-escalation on a non-loopback bind.
     c = TestClient(app, client=("203.0.113.7", 0))  # TEST-NET-3, definitely remote
     r = c.get("/webui/bootstrap")
