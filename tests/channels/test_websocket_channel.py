@@ -992,10 +992,14 @@ def test_settings_api_returns_safe_subset_and_updates_whitelist(
     assert "secret-key" not in settings.text
     assert "brave-secret" not in settings.text
 
-    provider_updated = client.get(
-        "/api/settings/provider/update?provider=openrouter"
-        "&api_key=sk-or-test&api_base=https%3A%2F%2Fopenrouter.ai%2Fapi%2Fv1",
+    provider_updated = client.post(
+        "/api/v1/settings/provider",
         headers=hdr,
+        json={
+            "provider": "openrouter",
+            "api_key": "sk-or-test",
+            "api_base": "https://openrouter.ai/api/v1",
+        },
     )
     assert provider_updated.status_code == 200
     provider_body = provider_updated.json()
@@ -1004,17 +1008,18 @@ def test_settings_api_returns_safe_subset_and_updates_whitelist(
     assert provider_rows["openrouter"]["configured"] is True
     assert "sk-or-test" not in provider_updated.text
 
-    updated = client.get(
-        "/api/settings/update?model=openrouter/test&provider=openrouter",
+    updated = client.post(
+        "/api/v1/settings",
         headers=hdr,
+        json={"model": "openrouter/test", "provider": "openrouter"},
     )
     assert updated.status_code == 200
     assert updated.json()["requires_restart"] is False
 
-    search_updated = client.get(
-        "/api/settings/web-search/update?provider=searxng"
-        "&base_url=https%3A%2F%2Fsearch.example.com",
+    search_updated = client.post(
+        "/api/v1/settings/web-search",
         headers=hdr,
+        json={"provider": "searxng", "base_url": "https://search.example.com"},
     )
     assert search_updated.status_code == 200
     search_body = search_updated.json()
@@ -1329,9 +1334,9 @@ def test_channels_api_lists_discovered_channels(
     monkeypatch.setattr("durin.config.loader._current_config_path", config_path)
 
     channel, client = _build_client(bus, monkeypatch, tmp_path)
-    channel._api_tokens["tok"] = time.monotonic() + 300
+    tok = client.get("/webui/bootstrap").json()["token"]
 
-    got = client.get("/api/channels", headers={"Authorization": "Bearer tok"})
+    got = client.get("/api/v1/channels", headers={"Authorization": f"Bearer {tok}"})
     assert got.status_code == 200
     channels = {c["name"]: c for c in got.json()["channels"]}
     assert "telegram" in channels
@@ -1339,7 +1344,7 @@ def test_channels_api_lists_discovered_channels(
     assert tg["enabled"] is False
     assert "display_name" in tg and "credential_field" in tg
 
-    assert client.get("/api/channels").status_code == 401
+    assert client.get("/api/v1/channels").status_code == 401
 
 
 def test_models_and_capabilities_api(
@@ -1354,19 +1359,21 @@ def test_models_and_capabilities_api(
     tok = client.get("/webui/bootstrap").json()["token"]
     hdr = {"Authorization": f"Bearer {tok}"}
 
-    models = client.get("/api/models?provider=zhipu", headers=hdr)
+    models = client.get("/api/v1/models?provider=zhipu", headers=hdr)
     assert models.status_code == 200
     body = models.json()
     assert "suggested" in body and "models" in body
     assert any("glm" in m for m in body["suggested"])  # curated zhipu shortlist
 
-    caps = client.get("/api/model/capabilities?model=glm-5.1&provider=zhipu", headers=hdr)
+    caps = client.get(
+        "/api/v1/model/capabilities?model=glm-5.1&provider=zhipu", headers=hdr
+    )
     assert caps.status_code == 200
     cb = caps.json()
     assert cb["model"] == "glm-5.1"
     assert "supports_vision" in cb and "max_input_tokens" in cb
 
-    assert client.get("/api/models").status_code == 401
+    assert client.get("/api/v1/models").status_code == 401
 
 
 def test_commands_api_returns_slash_command_metadata(
@@ -1721,26 +1728,24 @@ def test_is_valid_chat_id(value: Any, expected: bool) -> None:
     assert _is_valid_chat_id(value) is expected
 
 
-@pytest.mark.asyncio
-async def test_handle_webui_thread_get_returns_json(tmp_path, monkeypatch) -> None:
-    from urllib.parse import quote
-
-    from websockets.datastructures import Headers
-    from websockets.http11 import Request
-
+def test_v1_webui_thread_returns_signed_json(tmp_path, monkeypatch) -> None:
+    """GET /api/v1/sessions/{key}/webui-thread — the signed front-door route
+    builds the persisted display thread (media URLs HMAC-signed by the channel)."""
     from durin.utils.webui_transcript import append_transcript_object
 
-    monkeypatch.setattr("durin.config.paths.get_data_dir", lambda: tmp_path)
+    bus = MagicMock()
+    # _build_client patches get_data_dir; seed the transcript afterwards so it
+    # lands in the same dir the route reads from.
+    _channel, client = _build_client(bus, monkeypatch, tmp_path)
     key = "websocket:c1"
     append_transcript_object(key, {"event": "user", "chat_id": "c1", "text": "hi"})
-    bus = MagicMock()
-    channel = _ch(bus)
-    channel._api_tokens["tok"] = time.monotonic() + 300.0
-    enc = quote(key, safe="")
-    req = Request(f"/api/sessions/{enc}/webui-thread", Headers([("Authorization", "Bearer tok")]))
-    resp = await channel._handle_webui_thread_get(req, enc)
+    tok = client.get("/webui/bootstrap").json()["token"]
+    resp = client.get(
+        f"/api/v1/sessions/{key}/webui-thread",
+        headers={"Authorization": f"Bearer {tok}"},
+    )
     assert resp.status_code == 200
-    body = json.loads(resp.body.decode())
+    body = resp.json()["data"]
     assert body["sessionKey"] == key
     assert len(body["messages"]) == 1
     assert body["messages"][0]["role"] == "user"

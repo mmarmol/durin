@@ -458,7 +458,6 @@ def test_skills_resolve_route_lists_local_candidates(
 def test_skills_import_then_approve_installs(
     bus: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from urllib.parse import quote
     ws = tmp_path / "ws"
     ws.mkdir()
     src = _mk_source_skill(tmp_path)
@@ -540,7 +539,6 @@ def test_github_token_test_route_not_shadowed(
 def test_skill_reject_route_removes_quarantine(
     bus: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from urllib.parse import quote
     ws = tmp_path / "ws"
     ws.mkdir()
     src = _mk_source_skill(tmp_path)
@@ -567,25 +565,6 @@ def test_unknown_route_returns_404(
     assert resp.status_code == 404
 
 
-def test_api_token_pool_purges_expired(bus: MagicMock, tmp_path: Path) -> None:
-    sm = _seed_session(tmp_path)
-    channel = _ch(bus, session_manager=sm)
-    # Don't start a server — directly inject and validate.
-    import time as _time
-    channel._api_tokens["expired"] = _time.monotonic() - 1
-    channel._api_tokens["live"] = _time.monotonic() + 60
-
-    class _FakeReq:
-        path = "/api/sessions"
-        headers = {"Authorization": "Bearer expired"}
-
-    assert channel._check_api_token(_FakeReq()) is False
-
-    class _LiveReq:
-        path = "/api/sessions"
-        headers = {"Authorization": "Bearer live"}
-
-    assert channel._check_api_token(_LiveReq()) is True
 
 
 class _FakeConn:

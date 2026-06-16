@@ -1,22 +1,19 @@
-"""Characterization test for /api/models codex discovery.
+"""Characterization test for GET /api/v1/models codex discovery.
 
-After SP1 the logic lives in ``durin.service.config`` (ConfigService.models_list)
-and ``_handle_models_list`` is an async shim. Build a real channel (so
-``_services`` is wired), call the shim, and patch ``list_codex_models`` at its
-source module since the service imports it lazily from there.
+The logic lives in ``durin.service.config`` (ConfigService.models_list); this
+drives it through the unified v1 front door and patches ``list_codex_models`` at
+its source module since the service imports it lazily from there.
 """
 
-import json
-import types
-
 import pytest
+from starlette.testclient import TestClient
 
 pytest.importorskip("oauth_cli_kit")
 
+from durin.api.asgi import build_gateway_http_app
 from durin.bus.queue import MessageBus
 from durin.channels import websocket as ws
 from durin.providers import codex_models
-from durin.service.principal import Principal
 
 
 def _channel():
@@ -31,17 +28,18 @@ def _channel():
     return ws.WebSocketChannel(cfg, MessageBus())
 
 
-async def test_models_list_uses_codex_discovery(monkeypatch):
-    inst = _channel()
-    monkeypatch.setattr(
-        inst, "_resolve_principal", lambda request: Principal.local(), raising=False
-    )
+def test_models_list_uses_codex_discovery(monkeypatch, tmp_path):
+    monkeypatch.setattr("durin.config.paths.get_data_dir", lambda: tmp_path)
     monkeypatch.setattr(
         codex_models, "list_codex_models", lambda access_token: ["gpt-5.5", "gpt-5.4"]
     )
-    req = types.SimpleNamespace(
-        path="/api/models?provider=openai-codex&token=t", headers={}
+    inst = _channel()
+    app = build_gateway_http_app(inst, inst._services, auth=inst._services.get("auth"))
+    client = TestClient(app)
+    tok = client.get("/webui/bootstrap").json()["token"]
+    resp = client.get(
+        "/api/v1/models?provider=openai-codex",
+        headers={"Authorization": f"Bearer {tok}"},
     )
-    resp = await inst._handle_models_list(req)
-    body = json.loads(resp.body.decode("utf-8"))
-    assert "gpt-5.5" in body["models"]
+    assert resp.status_code == 200
+    assert "gpt-5.5" in resp.json()["models"]
