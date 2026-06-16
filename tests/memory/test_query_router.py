@@ -8,8 +8,6 @@ returns a typed decision the lexical-search layer consumes.
 
 from __future__ import annotations
 
-import pytest
-
 from durin.memory.query_router import (
     LexicalRoute,
     RoutingDecision,
@@ -17,7 +15,6 @@ from durin.memory.query_router import (
     decide_lexical_route,
     normalize_query,
 )
-
 
 # ---------------------------------------------------------------------------
 # count_cjk_chars

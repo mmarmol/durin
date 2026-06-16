@@ -8,10 +8,6 @@ listed fields at 200 chars; nested structures pass through.
 
 from __future__ import annotations
 
-from typing import Any
-
-import pytest
-
 from durin.agent.tools._telemetry import _truncate_freetext
 
 

@@ -18,7 +18,6 @@ import pytest
 
 from durin.memory.entity_page import EntityPage, EntityPageError
 
-
 # ---------------------------------------------------------------------------
 # Read path — v2 frontmatter parses into typed fields
 # ---------------------------------------------------------------------------

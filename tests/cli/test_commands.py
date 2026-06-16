@@ -10,10 +10,9 @@ from typer.testing import CliRunner
 
 from durin.bus.events import OutboundMessage
 from durin.cli.commands import app
-from durin.providers.factory import make_provider
 from durin.config.schema import Config
 from durin.cron.types import CronJob, CronPayload
-from durin.providers.factory import ProviderSnapshot
+from durin.providers.factory import ProviderSnapshot, make_provider
 from durin.providers.openai_codex_provider import _strip_model_prefix
 from durin.providers.registry import find_by_name
 
@@ -646,8 +645,8 @@ def test_openai_compat_provider_passes_model_through():
 
 
 def test_make_provider_uses_github_copilot_backend():
-    from durin.providers.factory import make_provider
     from durin.config.schema import Config
+    from durin.providers.factory import make_provider
 
     config = Config.model_validate(
         {
@@ -1688,6 +1687,12 @@ def test_gateway_health_endpoint_binds_and_serves_expected_responses(
             await asyncio.Event().wait()
 
         async def stop_all(self) -> None:
+            return None
+
+        def get_channel(self, _name: str):
+            # No real websocket channel in this fake → the gateway skips the
+            # unified ASGI server and just runs the health server (what this
+            # test exercises).
             return None
 
     class _FakeCronService:

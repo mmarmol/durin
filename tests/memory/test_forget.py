@@ -11,8 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from durin.memory.fts_index import FTSIndex
 from durin.memory.forget import ForgetError, forget_entry, parse_memory_uri
+from durin.memory.fts_index import FTSIndex
 from durin.memory.indexer import reindex_one_file
 from durin.memory.store import store_memory
 

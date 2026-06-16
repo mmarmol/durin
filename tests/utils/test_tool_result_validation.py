@@ -9,9 +9,9 @@ path so a single huge block can't crowd out its siblings.
 from __future__ import annotations
 
 from durin.utils.tool_result_validation import (
+    MAX_AUDIO_BLOCK_BYTES,
     MAX_BLOCK_TEXT_CHARS,
     MAX_IMAGE_BLOCK_BYTES,
-    MAX_AUDIO_BLOCK_BYTES,
     validate_tool_result_blocks,
 )
 

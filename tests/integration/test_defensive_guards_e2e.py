@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from pathlib import Path
 from typing import Callable
 from unittest.mock import AsyncMock, MagicMock
 
@@ -161,8 +160,8 @@ async def test_mid_turn_precheck_writes_overflow_event(e2e_telemetry, monkeypatc
     """Force the estimator to report we'd exceed budget → runner aborts
     PRE-LLM-call with ``mid_turn_precheck_overflow`` stop_reason +
     ``mid_turn_precheck.overflow`` event."""
-    from durin.agent.runner import AgentRunner
     from durin.agent import runner as runner_mod
+    from durin.agent.runner import AgentRunner
 
     monkeypatch.setattr(
         runner_mod, "estimate_prompt_tokens_chain",
@@ -452,10 +451,10 @@ async def test_preemptive_compaction_writes_event(e2e_telemetry, tmp_path, monke
     ``estimated < input_budget`` (the pre-emptive trigger fires below
     the hard wall), the consolidator emits
     ``compaction.preemptive_trigger`` for visibility."""
+    import durin.agent.memory as memory_module
     from durin.agent.loop import AgentLoop
     from durin.bus.queue import MessageBus
     from durin.providers.base import GenerationSettings
-    import durin.agent.memory as memory_module
 
     provider = MagicMock()
     provider.get_default_model.return_value = "test-model"

@@ -18,8 +18,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from durin.utils.atomic_write import atomic_write_text
 from typing import Any
+
+from durin.utils.atomic_write import atomic_write_text
 
 __all__ = ["SessionMdError", "regenerate_session_md", "render_session_md"]
 

@@ -10,12 +10,12 @@ import pytest
 import pytest_asyncio
 
 from durin.api.server import (
-    API_CHAT_ID,
-    API_SESSION_KEY,
     _AGENT_LOOP_KEY,
     _MODEL_NAME_KEY,
     _REQUEST_TIMEOUT_KEY,
     _SESSION_LOCKS_KEY,
+    API_CHAT_ID,
+    API_SESSION_KEY,
     _chat_completion_response,
     _error_json,
     create_app,

@@ -3,9 +3,8 @@
 
 import pytest
 
-from durin.agent.tools.filesystem import EditFileTool, ReadFileTool, WriteFileTool
 from durin.agent.tools import file_state
-
+from durin.agent.tools.filesystem import EditFileTool, ReadFileTool
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -21,7 +21,6 @@ from durin.utils.tool_argument_repair import (
     repair_tool_call_arguments,
 )
 
-
 # ---------------------------------------------------------------------------
 # Unit tests for repair_tool_call_arguments
 # ---------------------------------------------------------------------------

@@ -8,8 +8,8 @@ import pytest
 
 from durin.utils.media_decode import (
     DEFAULT_MAX_BYTES,
-    FileSizeExceeded,
     MAX_FILE_SIZE,
+    FileSizeExceeded,
     save_base64_data_url,
 )
 

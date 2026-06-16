@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "eslint src --max-warnings 0"
+    "lint": "eslint src --max-warnings 0",
+    "gen:api-types": "openapi-typescript ../contract/openapi-v1.json -o src/lib/api-types.ts"
   },
   "dependencies": {
     "@flowershow/remark-wiki-link": "^3.4.0",
@@ -37,6 +38,7 @@
   },
   "devDependencies": {
     "@tailwindcss/typography": "^0.5.19",
+    "openapi-typescript": "^7.8.0",
     "@testing-library/jest-dom": "^6.6.3",
     "@testing-library/react": "^16.1.0",
     "@testing-library/user-event": "^14.5.2",

@@ -12,7 +12,6 @@ from durin.cli.memory_cmd import memory_app
 from durin.memory.entity_page import EntityPage
 from durin.memory.fts_index import FTSIndex
 
-
 runner = CliRunner()
 
 

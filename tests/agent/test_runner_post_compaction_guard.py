@@ -204,8 +204,9 @@ async def test_consolidator_arms_guard_after_successful_compaction(tmp_path):
 
     # Force estimator above budget so consolidation runs.
     loop.consolidator.estimate_session_prompt_tokens = lambda _s, **_: (500, "test")
-    import durin.agent.memory as memory_module
     from unittest.mock import patch
+
+    import durin.agent.memory as memory_module
     with patch.object(memory_module, "estimate_message_tokens", lambda _m: 100):
         await loop.consolidator.maybe_consolidate_by_tokens(session)
 

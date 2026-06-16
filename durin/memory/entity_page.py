@@ -26,10 +26,11 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from durin.utils.atomic_write import atomic_write_text
 from typing import Any
 
 import yaml
+
+from durin.utils.atomic_write import atomic_write_text
 
 __all__ = [
     "EntityPage",

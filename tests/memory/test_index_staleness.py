@@ -11,8 +11,6 @@ import os
 import time
 from pathlib import Path
 
-import pytest
-
 from durin.memory.entity_page import EntityPage
 from durin.memory.fts_index import FTSIndex
 from durin.memory.indexer import (

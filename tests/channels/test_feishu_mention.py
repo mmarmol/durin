@@ -2,8 +2,6 @@
 
 from types import SimpleNamespace
 
-import pytest
-
 from durin.channels.feishu import FeishuChannel
 
 

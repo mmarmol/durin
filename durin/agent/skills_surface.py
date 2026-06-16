@@ -36,9 +36,9 @@ def skills_inventory(workspace) -> list[dict]:
     sweep_unverified_skills(workspace)
     loader = _loader(workspace)
     dirs = _skill_dirs(workspace)
+    from durin.agent.skills_frontmatter import split_frontmatter
     from durin.security.requirements_scan import resolve_display
     from durin.security.tool_catalog import load_catalog
-    from durin.agent.skills_frontmatter import split_frontmatter
     catalog = load_catalog(workspace)
     out = []
     for info in list_skills_info(workspace):

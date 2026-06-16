@@ -21,7 +21,7 @@ MAX_FILE_SIZE = DEFAULT_MAX_BYTES
 _DATA_URL_RE = re.compile(r"^data:([^;]+);base64,(.+)$", re.DOTALL)
 
 
-class FileSizeExceeded(Exception):
+class FileSizeExceeded(Exception):  # noqa: N818 — deliberate event-style name, not *Error
     """Raised when a decoded payload exceeds the caller's size limit."""
 
 

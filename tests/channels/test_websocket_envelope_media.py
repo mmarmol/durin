@@ -175,7 +175,7 @@ async def test_image_only_message_allows_empty_text(tmp_path) -> None:
 
     channel._handle_message.assert_awaited_once()
     # Error event NOT sent.
-    mock_conn.send.assert_not_awaited()
+    mock_conn.send_text.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -195,8 +195,8 @@ async def test_message_rejected_when_more_than_four_images(tmp_path) -> None:
         await channel._dispatch_envelope(mock_conn, "client-1", envelope)
 
     channel._handle_message.assert_not_awaited()
-    mock_conn.send.assert_awaited_once()
-    err = json.loads(mock_conn.send.call_args[0][0])
+    mock_conn.send_text.assert_awaited_once()
+    err = json.loads(mock_conn.send_text.call_args[0][0])
     assert err["event"] == "error"
     assert err["detail"] == "image_rejected"
     assert err["reason"] == "too_many_images"
@@ -220,7 +220,7 @@ async def test_message_rejected_on_oversize_payload(tmp_path) -> None:
         await channel._dispatch_envelope(mock_conn, "client-1", envelope)
 
     channel._handle_message.assert_not_awaited()
-    err = json.loads(mock_conn.send.call_args[0][0])
+    err = json.loads(mock_conn.send_text.call_args[0][0])
     assert err["detail"] == "image_rejected"
     assert err["reason"] == "size"
 
@@ -242,7 +242,7 @@ async def test_message_rejected_on_non_image_mime(tmp_path) -> None:
         await channel._dispatch_envelope(mock_conn, "client-1", envelope)
 
     channel._handle_message.assert_not_awaited()
-    err = json.loads(mock_conn.send.call_args[0][0])
+    err = json.loads(mock_conn.send_text.call_args[0][0])
     assert err["detail"] == "image_rejected"
     assert err["reason"] == "mime"
 
@@ -265,7 +265,7 @@ async def test_message_rejected_on_svg_mime(tmp_path) -> None:
         await channel._dispatch_envelope(mock_conn, "client-1", envelope)
 
     channel._handle_message.assert_not_awaited()
-    err = json.loads(mock_conn.send.call_args[0][0])
+    err = json.loads(mock_conn.send_text.call_args[0][0])
     assert err["reason"] == "mime"
 
 
@@ -286,7 +286,7 @@ async def test_message_rejected_on_malformed_data_url(tmp_path) -> None:
         await channel._dispatch_envelope(mock_conn, "client-1", envelope)
 
     channel._handle_message.assert_not_awaited()
-    err = json.loads(mock_conn.send.call_args[0][0])
+    err = json.loads(mock_conn.send_text.call_args[0][0])
     assert err["reason"] == "decode"
 
 
@@ -307,7 +307,7 @@ async def test_message_rejected_on_broken_base64(tmp_path) -> None:
         await channel._dispatch_envelope(mock_conn, "client-1", envelope)
 
     channel._handle_message.assert_not_awaited()
-    err = json.loads(mock_conn.send.call_args[0][0])
+    err = json.loads(mock_conn.send_text.call_args[0][0])
     assert err["reason"] == "decode"
 
 
@@ -329,7 +329,7 @@ async def test_message_rejected_when_media_item_shape_wrong(tmp_path) -> None:
         await channel._dispatch_envelope(mock_conn, "client-1", envelope)
 
     channel._handle_message.assert_not_awaited()
-    err = json.loads(mock_conn.send.call_args[0][0])
+    err = json.loads(mock_conn.send_text.call_args[0][0])
     assert err["reason"] == "malformed"
 
 
@@ -347,7 +347,7 @@ async def test_message_rejected_when_media_field_is_not_list() -> None:
     await channel._dispatch_envelope(mock_conn, "client-1", envelope)
 
     channel._handle_message.assert_not_awaited()
-    err = json.loads(mock_conn.send.call_args[0][0])
+    err = json.loads(mock_conn.send_text.call_args[0][0])
     assert err["detail"] == "image_rejected"
     assert err["reason"] == "malformed"
 
@@ -377,7 +377,7 @@ async def test_failed_media_does_not_partially_persist(tmp_path) -> None:
         await channel._dispatch_envelope(mock_conn, "client-1", envelope)
 
     channel._handle_message.assert_not_awaited()
-    err = json.loads(mock_conn.send.call_args[0][0])
+    err = json.loads(mock_conn.send_text.call_args[0][0])
     assert err["reason"] == "mime"
     # Partial-batch failures must not leak files to disk.
     leftover = [p for p in tmp_path.iterdir() if p.is_file()]
@@ -399,7 +399,7 @@ async def test_rejects_empty_text_without_media() -> None:
     await channel._dispatch_envelope(mock_conn, "client-1", envelope)
 
     channel._handle_message.assert_not_awaited()
-    err = json.loads(mock_conn.send.call_args[0][0])
+    err = json.loads(mock_conn.send_text.call_args[0][0])
     assert err["detail"] == "missing content"
 
 
@@ -416,5 +416,5 @@ async def test_non_string_content_still_rejected() -> None:
     await channel._dispatch_envelope(mock_conn, "client-1", envelope)
 
     channel._handle_message.assert_not_awaited()
-    err = json.loads(mock_conn.send.call_args[0][0])
+    err = json.loads(mock_conn.send_text.call_args[0][0])
     assert err["detail"] == "missing content"

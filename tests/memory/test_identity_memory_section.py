@@ -12,7 +12,6 @@ from pathlib import Path
 
 import pytest
 
-
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _IDENTITY_PATH = _REPO_ROOT / "durin" / "templates" / "agent" / "identity.md"
 

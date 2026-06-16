@@ -1,0 +1,237 @@
+"""SP1: CronService — unit tests (called directly, no HTTP)."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+import pytest
+
+from durin.service.cron import (
+    CronListQuery,
+    CronRemoveCommand,
+    CronRunCommand,
+    CronService,
+    CronToggleCommand,
+)
+from durin.service.principal import Principal, Scope
+from durin.service.types import ForbiddenError, NotFoundError, UnavailableError
+
+
+def _seed_jobs(tmp_path: Path) -> Path:
+    """Write jobs.json (camelCase, as the CronScheduler expects) and return its path."""
+    cron_dir = tmp_path / "cron"
+    cron_dir.mkdir(parents=True, exist_ok=True)
+    jobs_data = {
+        "version": 1,
+        "jobs": [
+            {
+                "id": "abc12345",
+                "name": "test job",
+                "enabled": True,
+                "schedule": {
+                    "kind": "every",
+                    "everyMs": 3600000,
+                    "atMs": None,
+                    "expr": None,
+                    "tz": None,
+                },
+                "payload": {
+                    "kind": "agent_turn",
+                    "message": "hello",
+                    "deliver": False,
+                    "channel": None,
+                    "to": None,
+                    "channelMeta": {},
+                    "sessionKey": None,
+                },
+                "state": {
+                    "nextRunAtMs": None,
+                    "lastRunAtMs": None,
+                    "lastStatus": None,
+                    "lastError": None,
+                    "runHistory": [],
+                },
+                "createdAtMs": 1000000,
+                "updatedAtMs": 1000000,
+                "deleteAfterRun": False,
+            },
+            {
+                "id": "sys00001",
+                "name": "system consolidation",
+                "enabled": True,
+                "schedule": {
+                    "kind": "cron",
+                    "expr": "0 3 * * *",
+                    "tz": "UTC",
+                    "atMs": None,
+                    "everyMs": None,
+                },
+                "payload": {
+                    "kind": "system_event",
+                    "message": "__consolidate__",
+                    "deliver": False,
+                    "channel": None,
+                    "to": None,
+                    "channelMeta": {},
+                    "sessionKey": None,
+                },
+                "state": {
+                    "nextRunAtMs": None,
+                    "lastRunAtMs": None,
+                    "lastStatus": None,
+                    "lastError": None,
+                    "runHistory": [],
+                },
+                "createdAtMs": 1000000,
+                "updatedAtMs": 1000000,
+                "deleteAfterRun": False,
+            },
+        ],
+    }
+    jobs_path = cron_dir / "jobs.json"
+    jobs_path.write_text(json.dumps(jobs_data), encoding="utf-8")
+    return cron_dir.parent  # workspace root
+
+
+@pytest.fixture()
+def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Seed a workspace with two cron jobs and patch load_config to use it."""
+    ws = _seed_jobs(tmp_path)
+    fake_cfg = SimpleNamespace(workspace_path=ws)
+    monkeypatch.setattr("durin.config.loader.load_config", lambda *a, **k: fake_cfg)
+    return ws
+
+
+async def test_list_returns_all_jobs(workspace: Path) -> None:
+    result = await CronService().list(CronListQuery(), Principal.local())
+    assert len(result.jobs) == 2
+    ids = {j.id for j in result.jobs}
+    assert "abc12345" in ids
+    assert "sys00001" in ids
+
+
+async def test_list_job_shape(workspace: Path) -> None:
+    result = await CronService().list(CronListQuery(), Principal.local())
+    user_job = next(j for j in result.jobs if j.id == "abc12345")
+
+    assert user_job.name == "test job"
+    assert user_job.enabled is True
+    assert user_job.is_system is False
+    assert user_job.message == "hello"
+    assert user_job.schedule.kind == "every"
+    assert user_job.schedule.label == "every 1h"
+    assert user_job.schedule.every_ms == 3600000
+
+    sys_job = next(j for j in result.jobs if j.id == "sys00001")
+    assert sys_job.is_system is True
+    assert sys_job.message == ""  # hidden for system jobs
+    assert sys_job.schedule.kind == "cron"
+    assert "0 3 * * *" in sys_job.schedule.label
+    assert "(UTC)" in sys_job.schedule.label
+
+
+async def test_list_requires_read_scope(workspace: Path) -> None:
+    principal = Principal.remote("t", frozenset())
+    with pytest.raises(ForbiddenError):
+        await CronService().list(CronListQuery(), principal)
+
+
+async def test_remove_user_job(workspace: Path) -> None:
+    result = await CronService().remove(
+        CronRemoveCommand(id="abc12345"), Principal.local()
+    )
+    assert result.result == "removed"
+
+    listed = await CronService().list(CronListQuery(), Principal.local())
+    assert not any(j.id == "abc12345" for j in listed.jobs)
+
+
+async def test_remove_unknown_raises_not_found(workspace: Path) -> None:
+    with pytest.raises(NotFoundError):
+        await CronService().remove(CronRemoveCommand(id="ghost"), Principal.local())
+
+
+async def test_remove_system_job_raises_forbidden(workspace: Path) -> None:
+    with pytest.raises(ForbiddenError):
+        await CronService().remove(CronRemoveCommand(id="sys00001"), Principal.local())
+
+
+async def test_remove_requires_write_scope(workspace: Path) -> None:
+    principal = Principal.remote("t", frozenset({Scope.CRON_READ.value}))
+    with pytest.raises(ForbiddenError):
+        await CronService().remove(CronRemoveCommand(id="abc12345"), principal)
+
+
+async def test_toggle_disables_job(workspace: Path) -> None:
+    result = await CronService().toggle(
+        CronToggleCommand(id="abc12345", enabled=False), Principal.local()
+    )
+    assert result.job.id == "abc12345"
+    assert result.job.enabled is False
+
+
+async def test_toggle_unknown_raises_not_found(workspace: Path) -> None:
+    with pytest.raises(NotFoundError):
+        await CronService().toggle(
+            CronToggleCommand(id="ghost", enabled=True), Principal.local()
+        )
+
+
+async def test_toggle_requires_write_scope(workspace: Path) -> None:
+    principal = Principal.remote("t", frozenset({Scope.CRON_READ.value}))
+    with pytest.raises(ForbiddenError):
+        await CronService().toggle(
+            CronToggleCommand(id="abc12345", enabled=False), principal
+        )
+
+
+async def test_run_raises_unavailable_when_no_scheduler(workspace: Path) -> None:
+    with pytest.raises(UnavailableError):
+        await CronService(cron_scheduler=None).run(
+            CronRunCommand(id="abc12345"), Principal.local()
+        )
+
+
+async def test_run_raises_not_found_for_unknown_job(workspace: Path) -> None:
+    mock_scheduler = MagicMock()
+    mock_scheduler.get_job.return_value = None
+    with pytest.raises(NotFoundError):
+        await CronService(cron_scheduler=mock_scheduler).run(
+            CronRunCommand(id="ghost"), Principal.local()
+        )
+
+
+async def test_run_returns_started_false_when_executing(workspace: Path) -> None:
+    mock_scheduler = MagicMock()
+    mock_scheduler.get_job.return_value = MagicMock()
+    mock_scheduler.is_executing.return_value = True
+
+    result = await CronService(cron_scheduler=mock_scheduler).run(
+        CronRunCommand(id="abc12345"), Principal.local()
+    )
+    assert result.started is False
+    assert result.reason == "already_running"
+
+
+async def test_run_returns_started_true_when_ready(workspace: Path) -> None:
+    mock_scheduler = MagicMock()
+    mock_scheduler.get_job.return_value = MagicMock()
+    mock_scheduler.is_executing.return_value = False
+
+    result = await CronService(cron_scheduler=mock_scheduler).run(
+        CronRunCommand(id="abc12345"), Principal.local()
+    )
+    assert result.started is True
+    assert result.reason is None
+
+
+async def test_run_requires_write_scope(workspace: Path) -> None:
+    mock_scheduler = MagicMock()
+    principal = Principal.remote("t", frozenset({Scope.CRON_READ.value}))
+    with pytest.raises(ForbiddenError):
+        await CronService(cron_scheduler=mock_scheduler).run(
+            CronRunCommand(id="abc12345"), principal
+        )

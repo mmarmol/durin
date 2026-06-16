@@ -21,7 +21,6 @@ import pytest
 
 from durin.memory.vector_index import vector_index_available
 
-
 pytestmark = pytest.mark.skipif(
     not vector_index_available(),
     reason="lancedb is not installed; install durin[memory] to run these tests",
@@ -86,8 +85,8 @@ async def test_store_upserts_into_vector_index(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from durin.agent.tools.memory_store import MemoryStoreTool
-    from durin.memory.vector_index import VectorIndex
     from durin.memory.embedding import FastembedProvider
+    from durin.memory.vector_index import VectorIndex
 
     with _stub_fastembed():
         tool = MemoryStoreTool(

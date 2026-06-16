@@ -90,6 +90,7 @@ def test_onboard_does_not_crash_with_legacy_memory_window(tmp_path, monkeypatch)
     monkeypatch.setattr("durin.cli.commands.get_workspace_path", lambda _workspace=None: workspace)
 
     from typer.testing import CliRunner
+
     from durin.cli.commands import app
     runner = CliRunner()
     # `--no-wizard` for a deterministic non-interactive path.
@@ -140,6 +141,7 @@ def test_onboard_refresh_backfills_missing_channel_fields(tmp_path, monkeypatch)
     )
 
     from typer.testing import CliRunner
+
     from durin.cli.commands import app
     runner = CliRunner()
     # `--no-wizard` does not auto-refresh existing configs (the migration

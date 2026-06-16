@@ -42,6 +42,38 @@ os.environ["TERM"] = "dumb"
 os.environ["COLUMNS"] = "200"
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _testclient_localhost_peer():
+    """Model the in-process Starlette TestClient as a localhost peer, suite-wide.
+
+    Starlette's TestClient defaults the ASGI scope's client address to
+    ("testclient", 50000), which is NOT a loopback IP. durin's /webui/bootstrap
+    gates unauthenticated ADMIN-token minting on a real localhost peer when no
+    token_issue_secret is set (durin/api/asgi.py bootstrap_handler + _is_localhost).
+    An in-process TestClient genuinely IS a local client, so model its peer as
+    127.0.0.1. A test exercising the remote-rejection path passes ``client=(...)``
+    explicitly (``setdefault`` leaves it untouched).
+
+    Session-scoped and self-undoing so the patch is tied to the pytest run, not a
+    permanent import-time mutation. Safe because no test constructs a TestClient
+    at module/collection time — they all build it inside fixtures/functions, which
+    run after this fixture is set up.
+    """
+    import starlette.testclient as stc
+
+    original_init = stc.TestClient.__init__
+
+    def _init_with_localhost_peer(self, *args, **kwargs):
+        kwargs.setdefault("client", ("127.0.0.1", 0))
+        return original_init(self, *args, **kwargs)
+
+    stc.TestClient.__init__ = _init_with_localhost_peer
+    try:
+        yield
+    finally:
+        stc.TestClient.__init__ = original_init
+
+
 @pytest.fixture(autouse=True)
 def _test_default_author_scope():
     with author_scope("agent_created"):

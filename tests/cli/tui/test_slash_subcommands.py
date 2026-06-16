@@ -7,7 +7,6 @@ import pytest
 from durin.cli.tui.app import DurinApp
 from durin.cli.tui.widgets import CompletionsHint, InputArea, SlashCommandSuggester
 
-
 # ---------------------------------------------------------------------------
 # SlashCommandSuggester — subcommand awareness
 # ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from durin.agent.skills_store import skill_history, save_skill_file, set_mode, Attribution
+from durin.agent.skills_store import Attribution, save_skill_file, set_mode, skill_history
 
 
 def _mk(ws: Path, name: str) -> None:

@@ -97,19 +97,15 @@ class SecretPromptScreen(ModalScreen[bool]):
             self._show_error("The value is required.")
             return
         try:
-            from durin.security.secrets import SecretStore, get_secret_store
+            from durin.service.secrets import SecretsService
 
-            store = SecretStore().load()
-            existing = store.get(self._name)
-            store.put(
-                self._name,
+            SecretsService().store_entry(
+                name=self._name,
                 value=value,
                 service=self._service,
                 scope=["exec"],
-                origin=existing.origin if existing else "tui",
+                origin="tui",
             )
-            store.save()
-            get_secret_store(reload=True)
         except Exception as exc:  # noqa: BLE001
             self._show_error(f"Could not store the secret: {exc}")
             return

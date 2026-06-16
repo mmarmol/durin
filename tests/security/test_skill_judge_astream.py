@@ -1,5 +1,4 @@
 import asyncio
-from pathlib import Path
 
 from durin.security import skill_judge
 
