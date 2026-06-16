@@ -20,11 +20,8 @@ from durin.channels.websocket import (
     _is_valid_chat_id,
     _issue_route_secret_matches,
     _normalize_config_path,
-    _normalize_http_path,
     _parse_envelope,
     _parse_inbound_payload,
-    _parse_query,
-    _parse_request_path,
     publish_runtime_model_update,
 )
 from durin.config.loader import load_config, save_config
@@ -96,27 +93,9 @@ def _build_client(
     return channel, client
 
 
-def test_normalize_http_path_strips_trailing_slash_except_root() -> None:
-    assert _normalize_http_path("/chat/") == "/chat"
-    assert _normalize_http_path("/chat?x=1") == "/chat"
-    assert _normalize_http_path("/") == "/"
-
-
-def test_parse_request_path_matches_normalize_and_query() -> None:
-    path, query = _parse_request_path("/ws/?token=secret&client_id=u1")
-    assert path == _normalize_http_path("/ws/?token=secret&client_id=u1")
-    assert query == _parse_query("/ws/?token=secret&client_id=u1")
-
-
 def test_normalize_config_path_matches_request() -> None:
     assert _normalize_config_path("/ws/") == "/ws"
     assert _normalize_config_path("/") == "/"
-
-
-def test_parse_query_extracts_token_and_client_id() -> None:
-    query = _parse_query("/?token=secret&client_id=u1")
-    assert query.get("token") == ["secret"]
-    assert query.get("client_id") == ["u1"]
 
 
 @pytest.mark.parametrize(
@@ -1405,7 +1384,7 @@ def test_settings_payload_normalizes_camel_case_provider(
     save_config(config, config_path)
     monkeypatch.setattr("durin.config.loader._current_config_path", config_path)
 
-    body = _ch(bus)._settings_payload()
+    body = _ch(bus)._services.get("settings")._payload().model_dump()
 
     assert body["agent"]["provider"] == "minimax_anthropic"
 

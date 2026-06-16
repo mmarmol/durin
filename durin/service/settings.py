@@ -16,10 +16,8 @@ step 10); they are NOT extracted here.
 dynamically from the provider registry and the web-search option tables.
 SP3 can tighten these into proper sub-models once the wire shape is frozen.
 
-Extracted from ``durin/channels/websocket.py``
-(``_settings_payload`` / ``_handle_settings`` / ``_handle_settings_update`` /
-``_handle_settings_provider_update`` / ``_handle_settings_web_search_update``)
-in SP1; the channel keeps wire-identical shims.
+Extracted from ``durin/channels/websocket.py`` in SP1; the channel shims it
+left behind were removed in SP8, so this service is now the sole owner.
 """
 
 from __future__ import annotations
@@ -121,7 +119,7 @@ class SettingsService:
     def _payload(self, *, requires_restart: bool = False) -> SettingsResult:
         """Build the full settings dict.
 
-        This is the moved body of ``WebSocketChannel._settings_payload``.
+        Formerly ``WebSocketChannel._settings_payload`` (removed in SP8).
         """
         from durin.config.loader import get_config_path, load_config
         from durin.providers.registry import PROVIDERS, find_by_name
