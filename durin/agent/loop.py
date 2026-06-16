@@ -793,6 +793,45 @@ class AgentLoop:
         if self._mcp_connected:
             self._maybe_defer_mcp_tools()
 
+    async def connect_mcp_server(self, name: str) -> None:
+        """Connect a single configured MCP server at runtime (idempotent).
+
+        Reuses the same supervised-connection path as startup, so a server the
+        user just enabled comes online without a gateway restart. Raises
+        ``KeyError`` if ``name`` is not a configured server.
+        """
+        if name not in self._mcp_servers:
+            raise KeyError(name)
+        if name in self._mcp_connections:
+            return
+        from durin.agent.tools.mcp import connect_mcp_servers
+
+        new = await connect_mcp_servers(
+            {name: self._mcp_servers[name]}, self.tools,
+            defer_cb=self._maybe_defer_mcp_tools,
+            provider=self.provider,
+            default_model=self.model,
+            workspace=str(self.workspace) if self.workspace else None,
+        )
+        self._mcp_connections.update(new)
+        if self._mcp_connections:
+            self._mcp_connected = True
+        self._maybe_defer_mcp_tools()
+
+    async def disconnect_mcp_server(self, name: str) -> None:
+        """Disconnect a single MCP server at runtime (idempotent).
+
+        Closes the supervised connection and unregisters its tools. Raises
+        ``KeyError`` if ``name`` is not a configured server.
+        """
+        if name not in self._mcp_servers:
+            raise KeyError(name)
+        conn = self._mcp_connections.pop(name, None)
+        if conn is None:
+            return
+        await conn.aclose()
+        self._maybe_defer_mcp_tools()
+
     def _maybe_defer_mcp_tools(self) -> None:
         """P3 (2026-06-10): hide oversized MCP surfaces behind the bridge.
 
