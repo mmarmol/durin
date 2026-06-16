@@ -362,3 +362,88 @@ export type Outbound =
       chat_id: string;
       name: string;
     };
+
+// ---------------------------------------------------------------------------
+// MCP server management (snake_case to match the /api/v1 wire shape —
+// service Results are dumped with model_dump(), i.e. by field name).
+// ---------------------------------------------------------------------------
+
+export interface McpToolInfo {
+  name: string;
+  description: string;
+}
+
+/** One of: connected | connecting | failed | needs_auth | disabled. */
+export type McpStatus =
+  | "connected"
+  | "connecting"
+  | "failed"
+  | "needs_auth"
+  | "disabled";
+
+export interface McpServerSummary {
+  name: string;
+  transport: string;
+  target: string;
+  enabled: boolean;
+  oauth_required: boolean;
+  oauth_authenticated: boolean;
+  status: McpStatus;
+  tool_count: number;
+  error: string | null;
+}
+
+export interface McpSamplingConfig {
+  enabled?: boolean;
+  model?: string | null;
+  allowed_models?: string[];
+  max_tokens_cap?: number;
+  requests_per_minute?: number;
+  allow_tools?: boolean;
+  max_tool_rounds?: number;
+}
+
+export interface McpOauthStaticConfig {
+  scope?: string | null;
+  client_id?: string | null;
+  client_secret?: string | null;
+  callback_port?: number;
+}
+
+export interface McpServerConfig {
+  enabled?: boolean;
+  type?: "stdio" | "sse" | "streamableHttp" | null;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+  headers?: Record<string, string>;
+  tool_timeout?: number;
+  tool_timeouts?: Record<string, number>;
+  catalog_timeout?: number;
+  keepalive_interval?: number;
+  enabled_tools?: string[];
+  oauth?: boolean | McpOauthStaticConfig | null;
+  allow_private_url?: boolean;
+  spawn_egress_policy?: "warn" | "refuse" | "off";
+  malware_check?: boolean;
+  sampling?: McpSamplingConfig;
+}
+
+export interface McpServerDetail {
+  name: string;
+  transport: string;
+  target: string;
+  enabled: boolean;
+  oauth_required: boolean;
+  oauth_authenticated: boolean;
+  status: McpStatus;
+  error: string | null;
+  tools: McpToolInfo[];
+  config: McpServerConfig;
+}
+
+export interface McpOauthLoginResult {
+  authorization_url: string;
+  state: string;
+}
