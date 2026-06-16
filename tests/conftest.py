@@ -78,3 +78,26 @@ def _testclient_localhost_peer():
 def _test_default_author_scope():
     with author_scope("agent_created"):
         yield
+
+
+@pytest.fixture(autouse=True)
+def _restore_loguru_durin_activation():
+    """Keep loguru's ``durin`` namespace enabled across test boundaries.
+
+    The ``serve`` and ``agent`` CLI commands call ``logger.disable("durin")``
+    when not run verbosely (durin/cli/commands.py) — a deliberate, process-wide
+    side effect that quiets durin's internal logs for a long-running command.
+    loguru's enable/disable state is global, like the stdlib ``logging`` config,
+    so in a single pytest process that mutation outlives the invoking test. A
+    later test that asserts on loguru output (the MCP server→client logging,
+    sampling, and spawn-policy harnesses) would then see an empty sink.
+
+    Restore the production default (``durin`` enabled) after every test so one
+    test's activation state can never suppress another's log assertions.
+    """
+    from loguru import logger
+
+    try:
+        yield
+    finally:
+        logger.enable("durin")
