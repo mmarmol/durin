@@ -27,6 +27,7 @@ import {
   Moon,
   Orbit,
   RotateCcw,
+  Plug,
   ScrollText,
   Settings,
   ShieldCheck,
@@ -80,6 +81,7 @@ import { cn } from "@/lib/utils";
 import { ConnectionBadge } from "@/components/ConnectionBadge";
 import { useClient } from "@/providers/ClientProvider";
 import type { SecretEntry, SettingsPayload, WebSearchSettingsUpdate } from "@/lib/types";
+import { McpSettings } from "./McpSettings";
 
 type SettingsSectionKey =
   | "general"
@@ -88,6 +90,7 @@ type SettingsSectionKey =
   | "channels"
   | "memory"
   | "skills-security"
+  | "mcp"
   | "cron"
   | "secrets"
   | "advanced"
@@ -417,6 +420,8 @@ export function SettingsView({
                 <MemorySettings token={token} />
               ) : activeSection === "skills-security" ? (
                 <SkillsSecuritySettings token={token} />
+              ) : activeSection === "mcp" ? (
+                <McpSettings token={token} />
               ) : activeSection === "cron" ? (
                 <CronSettings token={token} />
               ) : activeSection === "secrets" ? (
@@ -483,6 +488,7 @@ const SETTINGS_NAV_ITEMS = [
   { key: "channels", icon: MessagesSquare },
   { key: "memory", icon: Brain },
   { key: "skills-security", icon: ShieldCheck },
+  { key: "mcp", icon: Plug },
   { key: "cron", icon: Clock },
   { key: "secrets", icon: Lock },
   { key: "advanced", icon: Sliders },
