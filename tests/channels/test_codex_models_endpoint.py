@@ -16,6 +16,7 @@ pytest.importorskip("oauth_cli_kit")
 from durin.bus.queue import MessageBus
 from durin.channels import websocket as ws
 from durin.providers import codex_models
+from durin.service.principal import Principal
 
 
 def _channel():
@@ -32,7 +33,9 @@ def _channel():
 
 async def test_models_list_uses_codex_discovery(monkeypatch):
     inst = _channel()
-    monkeypatch.setattr(inst, "_check_api_token", lambda request: True, raising=False)
+    monkeypatch.setattr(
+        inst, "_resolve_principal", lambda request: Principal.local(), raising=False
+    )
     monkeypatch.setattr(
         codex_models, "list_codex_models", lambda access_token: ["gpt-5.5", "gpt-5.4"]
     )

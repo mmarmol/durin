@@ -18,6 +18,7 @@ from durin.bus.queue import MessageBus
 from durin.channels import websocket as ws
 from durin.providers import codex_device_auth
 from durin.providers.codex_device_auth import CodexSessionInfo, DeviceCodeChallenge
+from durin.service.principal import Principal
 
 
 def _handler_instance():
@@ -33,7 +34,9 @@ def _handler_instance():
 
 
 def _ok_token(monkeypatch, inst):
-    monkeypatch.setattr(inst, "_check_api_token", lambda request: True, raising=False)
+    monkeypatch.setattr(
+        inst, "_resolve_principal", lambda request: Principal.local(), raising=False
+    )
 
 
 def _req(path):

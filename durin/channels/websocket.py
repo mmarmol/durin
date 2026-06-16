@@ -36,6 +36,7 @@ from durin.channels.base import BaseChannel
 from durin.config.paths import get_media_dir
 from durin.config.schema import Base
 from durin.service import DomainError, Principal, ServiceRegistry
+from durin.service.principal import Scope
 from durin.session.goal_state import goal_state_ws_blob
 from durin.utils.helpers import safe_filename
 from durin.utils.media_decode import (
@@ -546,11 +547,11 @@ class WebSocketChannel(BaseChannel):
         self._cron_service = cron_service
         # Strong refs to fire-and-forget run-now tasks (else GC'd mid-run).
         self._background_run_tasks: set[asyncio.Task] = set()
-        # Process-local secret used to HMAC-sign media URLs. The signed URL is
-        # the capability — anyone who holds a valid URL can fetch that one
-        # file, nothing else. The secret regenerates on restart so links
-        # become self-expiring (callers just refresh the session list).
-        self._media_secret: bytes = secrets.token_bytes(32)
+        # Persistent HMAC secret for media URL signing.  Lives in the token
+        # store so signed URLs survive a process restart (SP2).
+        from durin.security.api_tokens import ApiTokenStore as _ApiTokenStore
+
+        self._media_secret: bytes = _ApiTokenStore().get_or_create_media_secret()
         # Service-core registry: domain logic extracted out of this channel
         # (SP1). The HTTP handlers are now thin shims that call these services.
         # Built here so the deps are available; services are registered as each
@@ -584,9 +585,12 @@ class WebSocketChannel(BaseChannel):
         registry.register("memory", MemoryService(workspace_resolver=self._endpoint_workspace))
         registry.register("health", HealthService())
         registry.register("commands", CommandsService())
+        from durin.security.api_tokens import ApiTokenStore
+        from durin.service.auth import AuthService
         from durin.service.oauth import OAuthService
 
         registry.register("oauth", OAuthService())
+        registry.register("auth", AuthService(ApiTokenStore()))
         return registry
 
     def _endpoint_workspace(self) -> Path:
@@ -725,7 +729,16 @@ class WebSocketChannel(BaseChannel):
                 len(self._issued_tokens),
             )
             return _http_json_response({"error": "too many outstanding tokens"}, status=429)
-        token_value = f"nbwt_{secrets.token_urlsafe(32)}"
+        # Persist via store (restart-survival) and dual-write to in-memory pool.
+        auth_svc = self._services.get("auth")
+        if auth_svc is not None:
+            _, token_value = auth_svc._store.issue(
+                [Scope.ADMIN.value],
+                label="token-issue",
+                ttl_s=float(self.config.token_ttl_s),
+            )
+        else:
+            token_value = f"nbwt_{secrets.token_urlsafe(32)}"
         self._issued_tokens[token_value] = time.monotonic() + float(self.config.token_ttl_s)
 
         return _http_json_response(
@@ -998,6 +1011,42 @@ class WebSocketChannel(BaseChannel):
             return False
         return True
 
+    def _resolve_principal(self, request: WsRequest) -> "Principal | None":
+        """Resolve the bearer token in *request* to a :class:`Principal`.
+
+        Resolution order (dual-accept for overlap, removed in SP8):
+        1. Persisted store via AuthService.resolve → scoped Principal.remote.
+        2. Static ``config.token`` → ADMIN Principal.remote (back-compat).
+        3. In-memory ``_api_tokens`` entry → ADMIN Principal.remote (legacy,
+           covers tokens minted before the store was wired; SP8 removes this).
+        4. None → caller returns 401.
+        """
+        token = _bearer_token(request.headers) or _query_first(
+            _parse_query(request.path), "token"
+        )
+        if not token:
+            return None
+
+        # 1. Persisted store.
+        auth_svc = self._services.get("auth")
+        if auth_svc is not None:
+            principal = auth_svc.resolve(token)
+            if principal is not None:
+                return principal
+
+        # 2. Static config token.
+        static = self.config.token.strip()
+        if static and token == static:
+            return Principal.remote("static", frozenset({Scope.ADMIN.value}))
+
+        # 3. Legacy in-memory multi-use token (dual-accept until SP8).
+        self._purge_expired_api_tokens()
+        expiry = self._api_tokens.get(token)
+        if expiry is not None and time.monotonic() <= expiry:
+            return Principal.remote("legacy", frozenset({Scope.ADMIN.value}))
+
+        return None
+
     def _purge_expired_api_tokens(self) -> None:
         now = time.monotonic()
         for token_key, expiry in list(self._api_tokens.items()):
@@ -1027,10 +1076,21 @@ class WebSocketChannel(BaseChannel):
                 status=429,
                 content_type="application/json; charset=utf-8",
             )
-        token = f"nbwt_{secrets.token_urlsafe(32)}"
+        # Mint via the persisted store so this token survives a restart (SP2).
+        # The store generates a fresh plaintext; we use that as the token so
+        # the hash in the store always matches what we hand to the client.
+        auth_svc = self._services.get("auth")
+        if auth_svc is not None:
+            _, token = auth_svc._store.issue(
+                [Scope.ADMIN.value],
+                label="bootstrap",
+                ttl_s=float(self.config.token_ttl_s),
+            )
+        else:
+            token = f"nbwt_{secrets.token_urlsafe(32)}"
         expiry = time.monotonic() + float(self.config.token_ttl_s)
-        # Same string registered in both pools: the WS handshake consumes one copy
-        # while the REST surface keeps validating the other until TTL expiry.
+        # Dual-write to in-memory pools: WS handshake consumes from
+        # _issued_tokens; _api_tokens covers HTTP until TTL (back-compat).
         self._issued_tokens[token] = expiry
         self._api_tokens[token] = expiry
         return _http_json_response(
@@ -1053,13 +1113,14 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_memory_graph(self, request: WsRequest) -> Response:
         """GET /api/memory/graph — entity-centric memory as nodes + edges."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         from durin.service.memory import MemoryGraphQuery
 
         try:
             result = await self._services.get("memory").graph(
-                MemoryGraphQuery(), Principal.local()
+                MemoryGraphQuery(), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -1069,7 +1130,8 @@ class WebSocketChannel(BaseChannel):
         self, request: WsRequest, query: dict[str, list[str]]
     ) -> Response:
         """GET /api/memory/subgraph?ref=<type:slug>&hops=N — ego-graph."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         ref = _query_first(query, "ref") or ""
         if ":" not in ref:
@@ -1082,7 +1144,7 @@ class WebSocketChannel(BaseChannel):
 
         try:
             result = await self._services.get("memory").subgraph(
-                MemorySubgraphQuery(ref=ref, hops=hops), Principal.local()
+                MemorySubgraphQuery(ref=ref, hops=hops), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -1090,7 +1152,8 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_memory_entity(self, request: WsRequest, ref_encoded: str) -> Response:
         """GET /api/memory/entity/<ref> — full page + history + archive + entries."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         from urllib.parse import unquote
 
@@ -1099,7 +1162,7 @@ class WebSocketChannel(BaseChannel):
         ref = unquote(ref_encoded)
         try:
             result = await self._services.get("memory").entity(
-                MemoryEntityQuery(ref=ref), Principal.local()
+                MemoryEntityQuery(ref=ref), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -1109,7 +1172,8 @@ class WebSocketChannel(BaseChannel):
         self, request: WsRequest, stem_encoded: str,
     ) -> Response:
         """GET /api/memory/session/<stem> — session detail for the graph view."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         from urllib.parse import unquote
 
@@ -1118,7 +1182,7 @@ class WebSocketChannel(BaseChannel):
         stem = unquote(stem_encoded)
         try:
             result = await self._services.get("memory").session(
-                MemorySessionQuery(stem=stem), Principal.local()
+                MemorySessionQuery(stem=stem), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -1128,14 +1192,15 @@ class WebSocketChannel(BaseChannel):
         self, request: WsRequest, query: dict[str, list[str]],
     ) -> Response:
         """GET /api/memory/entry?uri=memory/<class>/<id> — one entry's frontmatter + body."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         from durin.service.memory import MemoryEntryQuery
 
         uri = (_query_first(query, "uri") or "").strip()
         try:
             result = await self._services.get("memory").entry(
-                MemoryEntryQuery(uri=uri), Principal.local()
+                MemoryEntryQuery(uri=uri), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -1150,14 +1215,15 @@ class WebSocketChannel(BaseChannel):
         HTTP status mirrors the result: 200 archived/not_found,
         403 protected, 400 invalid.
         """
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         from durin.service.memory import MemoryForgetCommand
 
         uri = (_query_first(query, "uri") or "").strip()
         try:
             result = await self._services.get("memory").forget(
-                MemoryForgetCommand(uri=uri), Principal.local()
+                MemoryForgetCommand(uri=uri), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -1172,14 +1238,15 @@ class WebSocketChannel(BaseChannel):
         self, request: WsRequest, query: dict[str, list[str]],
     ) -> Response:
         """GET /api/memory/backlinks?uri=memory/<class>/<id> — entries that reference this one."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         from durin.service.memory import MemoryBacklinksQuery
 
         uri = (_query_first(query, "uri") or "").strip()
         try:
             result = await self._services.get("memory").backlinks(
-                MemoryBacklinksQuery(uri=uri), Principal.local()
+                MemoryBacklinksQuery(uri=uri), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -1189,7 +1256,8 @@ class WebSocketChannel(BaseChannel):
         self, request: WsRequest, source_enc: str, target_enc: str,
     ) -> Response:
         """GET /api/memory/edge/<source>/<target> — entries co-mentioning both."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         from urllib.parse import unquote
 
@@ -1199,7 +1267,7 @@ class WebSocketChannel(BaseChannel):
         b = unquote(target_enc)
         try:
             result = await self._services.get("memory").edge(
-                MemoryEdgeQuery(a=a, b=b), Principal.local()
+                MemoryEdgeQuery(a=a, b=b), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -1209,7 +1277,8 @@ class WebSocketChannel(BaseChannel):
         self, request: WsRequest, query: dict[str, list[str]],
     ) -> Response:
         """GET /api/memory/search?q=…&scope=…&level=… — same shape as memory_search tool."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         from durin.service.memory import MemorySearchQuery
 
@@ -1220,20 +1289,21 @@ class WebSocketChannel(BaseChannel):
         try:
             result = await self._services.get("memory").search(
                 MemorySearchQuery(q=q, scope=scope, level=level, kinds=kinds),
-                Principal.local(),
+                principal,
             )
         except DomainError as err:
             return _domain_error_response(err)
         return _http_json_response(result.data)
 
     async def _handle_sessions_list(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         from durin.service.sessions import SessionsListQuery
 
         try:
             result = await self._services.get("sessions").list(
-                SessionsListQuery(), Principal.local()
+                SessionsListQuery(), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -1244,13 +1314,14 @@ class WebSocketChannel(BaseChannel):
         return self._services.get("settings")._payload(requires_restart=requires_restart).model_dump()
 
     async def _handle_settings(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         from durin.service.settings import SettingsQuery
 
         try:
             result = await self._services.get("settings").get(
-                SettingsQuery(), Principal.local()
+                SettingsQuery(), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -1258,14 +1329,15 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_codex_oauth_status(self, request: WsRequest) -> Response:
         """`GET /api/oauth/codex/status` — shim → OAuthService.status."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         from durin.service.oauth import OAuthStatusQuery
 
         is_local = _request_host_is_local(request)
         try:
             result = await self._services.get("oauth").status(
-                OAuthStatusQuery(is_local=is_local), Principal.local()
+                OAuthStatusQuery(is_local=is_local), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -1273,7 +1345,8 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_codex_oauth_start_loopback(self, request: WsRequest) -> Response:
         """`GET /api/oauth/codex/start-loopback` — shim → OAuthService.start_loopback."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         from durin.service.oauth import OAuthStartLoopbackCommand
         from durin.service.types import ForbiddenError, UnavailableError
@@ -1281,7 +1354,7 @@ class WebSocketChannel(BaseChannel):
         is_local = _request_host_is_local(request)
         try:
             result = await self._services.get("oauth").start_loopback(
-                OAuthStartLoopbackCommand(is_local=is_local), Principal.local()
+                OAuthStartLoopbackCommand(is_local=is_local), principal
             )
         except ForbiddenError as err:
             return _http_error(400, err.message)
@@ -1293,14 +1366,15 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_codex_oauth_start(self, request: WsRequest) -> Response:
         """`GET /api/oauth/codex/start` — shim → OAuthService.start."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         from durin.service.oauth import OAuthStartCommand
         from durin.service.types import UnavailableError
 
         try:
             result = await self._services.get("oauth").start(
-                OAuthStartCommand(), Principal.local()
+                OAuthStartCommand(), principal
             )
         except UnavailableError as err:
             return _http_error(502, err.message)
@@ -1310,7 +1384,8 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_codex_oauth_poll(self, request: WsRequest) -> Response:
         """`GET /api/oauth/codex/poll` — shim → OAuthService.poll."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         from durin.service.oauth import OAuthPollQuery
 
@@ -1320,7 +1395,7 @@ class WebSocketChannel(BaseChannel):
         try:
             result = await self._services.get("oauth").poll(
                 OAuthPollQuery(device_auth_id=device_auth_id, user_code=user_code),
-                Principal.local(),
+                principal,
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -1328,13 +1403,14 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_codex_oauth_disconnect(self, request: WsRequest) -> Response:
         """`GET /api/oauth/codex/disconnect` — shim → OAuthService.disconnect."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         from durin.service.oauth import OAuthDisconnectCommand
 
         try:
             result = await self._services.get("oauth").disconnect(
-                OAuthDisconnectCommand(), Principal.local()
+                OAuthDisconnectCommand(), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -1345,20 +1421,22 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_commands(self, request: WsRequest) -> Response:
         """`GET /api/commands` — shim → CommandsService.list."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         from durin.service.commands import CommandsListQuery
 
         try:
             result = await self._services.get("commands").list(
-                CommandsListQuery(), Principal.local()
+                CommandsListQuery(), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
         return _http_json_response(result.model_dump())
 
     async def _handle_settings_update(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         from durin.service.settings import SettingsUpdateCommand
 
@@ -1368,14 +1446,15 @@ class WebSocketChannel(BaseChannel):
         try:
             result = await self._services.get("settings").update(
                 SettingsUpdateCommand(model=model, provider=provider),
-                Principal.local(),
+                principal,
             )
         except DomainError as err:
             return _domain_error_response(err)
         return _http_json_response(result.model_dump())
 
     async def _handle_settings_provider_update(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         from durin.service.settings import SettingsProviderUpdateCommand
 
@@ -1397,14 +1476,15 @@ class WebSocketChannel(BaseChannel):
                 SettingsProviderUpdateCommand(
                     provider=provider_name, api_key=api_key, api_base=api_base
                 ),
-                Principal.local(),
+                principal,
             )
         except DomainError as err:
             return _domain_error_response(err)
         return _http_json_response(result.model_dump())
 
     async def _handle_settings_web_search_update(self, request: WsRequest) -> Response:
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         from durin.service.settings import SettingsWebSearchUpdateCommand
 
@@ -1422,7 +1502,7 @@ class WebSocketChannel(BaseChannel):
                 SettingsWebSearchUpdateCommand(
                     provider=provider_name, api_key=api_key, base_url=base_url
                 ),
-                Principal.local(),
+                principal,
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -1432,12 +1512,13 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_secrets_list(self, request: WsRequest) -> Response:
         """`GET /api/secrets` — entries' metadata. Never returns a value."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         from durin.service.secrets import SecretsListQuery
 
         result = await self._services.get("secrets").list(
-            SecretsListQuery(), Principal.local()
+            SecretsListQuery(), principal
         )
         return _http_json_response(result.model_dump())
 
@@ -1447,14 +1528,15 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_secret_delete(self, request: WsRequest) -> Response:
         """`GET /api/secrets/delete` — remove a secret."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         from durin.service.secrets import SecretDeleteCommand
 
         name = (_query_first(_parse_query(request.path), "name") or "").strip()
         try:
             result = await self._services.get("secrets").delete(
-                SecretDeleteCommand(name=name), Principal.local()
+                SecretDeleteCommand(name=name), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -1526,25 +1608,27 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_skills_list(self, request: WsRequest) -> Response:
         """`GET /api/skills` — shim → SkillsService.list."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         from durin.service.skills import SkillsListQuery
 
         try:
-            result = await self._services.get("skills").list(SkillsListQuery(), Principal.local())
+            result = await self._services.get("skills").list(SkillsListQuery(), principal)
         except DomainError as err:
             return _domain_error_response(err)
         return _http_json_response(result.data, status=result.status)
 
     async def _handle_skills_quarantine(self, request: WsRequest) -> Response:
         """`GET /api/skills/quarantine` — shim → SkillsService.quarantine."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         from durin.service.skills import SkillsQuarantineQuery
 
         try:
             result = await self._services.get("skills").quarantine(
-                SkillsQuarantineQuery(), Principal.local()
+                SkillsQuarantineQuery(), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -1552,7 +1636,8 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_skill_get(self, request: WsRequest, name: str) -> Response:
         """`GET /api/skills/{name}` — shim → SkillsService.get."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         decoded = _decode_api_key(name)
         if decoded is None:
@@ -1561,7 +1646,7 @@ class WebSocketChannel(BaseChannel):
 
         try:
             result = await self._services.get("skills").get(
-                SkillGetQuery(name=decoded), Principal.local()
+                SkillGetQuery(name=decoded), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -1569,7 +1654,8 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_skill_save(self, request: WsRequest, name: str) -> Response:
         """`GET /api/skills/{name}/save?content=...` — shim → SkillsService.save."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         decoded = _decode_api_key(name)
         if decoded is None:
@@ -1582,7 +1668,7 @@ class WebSocketChannel(BaseChannel):
 
         try:
             result = await self._services.get("skills").save(
-                SkillSaveCommand(name=decoded, content=content), Principal.local()
+                SkillSaveCommand(name=decoded, content=content), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -1590,7 +1676,8 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_skill_files(self, request: WsRequest, name: str) -> Response:
         """`GET /api/skills/{name}/files` — shim → SkillsService.files."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         decoded = _decode_api_key(name)
         if decoded is None:
@@ -1599,7 +1686,7 @@ class WebSocketChannel(BaseChannel):
 
         try:
             result = await self._services.get("skills").files(
-                SkillFilesQuery(name=decoded), Principal.local()
+                SkillFilesQuery(name=decoded), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -1607,7 +1694,8 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_skill_file(self, request: WsRequest, name: str) -> Response:
         """`GET /api/skills/{name}/file?path=...` — shim → SkillsService.file_get."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         decoded = _decode_api_key(name)
         if decoded is None:
@@ -1619,7 +1707,7 @@ class WebSocketChannel(BaseChannel):
 
         try:
             result = await self._services.get("skills").file_get(
-                SkillFileQuery(name=decoded, path=path), Principal.local()
+                SkillFileQuery(name=decoded, path=path), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -1627,7 +1715,8 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_skill_file_save(self, request: WsRequest, name: str) -> Response:
         """`GET /api/skills/{name}/file/save?path=&content=` — shim → SkillsService.file_save."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         decoded = _decode_api_key(name)
         if decoded is None:
@@ -1643,7 +1732,7 @@ class WebSocketChannel(BaseChannel):
 
         try:
             result = await self._services.get("skills").file_save(
-                SkillFileSaveCommand(name=decoded, path=path, content=content), Principal.local()
+                SkillFileSaveCommand(name=decoded, path=path, content=content), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -1651,7 +1740,8 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_skill_history(self, request: WsRequest, name: str) -> Response:
         """`GET /api/skills/{name}/history` — shim → SkillsService.history."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         decoded = _decode_api_key(name)
         if decoded is None:
@@ -1660,7 +1750,7 @@ class WebSocketChannel(BaseChannel):
 
         try:
             result = await self._services.get("skills").history(
-                SkillHistoryQuery(name=decoded), Principal.local()
+                SkillHistoryQuery(name=decoded), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -1668,7 +1758,8 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_skill_mode(self, request: WsRequest, name: str) -> Response:
         """`GET /api/skills/{name}/mode?value=auto|manual` — shim → SkillsService.mode."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         decoded = _decode_api_key(name)
         if decoded is None:
@@ -1678,7 +1769,7 @@ class WebSocketChannel(BaseChannel):
 
         try:
             result = await self._services.get("skills").mode(
-                SkillModeCommand(name=decoded, value=value), Principal.local()
+                SkillModeCommand(name=decoded, value=value), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -1686,7 +1777,8 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_skills_resolve(self, request: WsRequest) -> Response:
         """`GET /api/skills/resolve?source=` — shim → SkillsService.resolve."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         source = (_query_first(_parse_query(request.path), "source") or "").strip()
         if not source:
@@ -1695,7 +1787,7 @@ class WebSocketChannel(BaseChannel):
 
         try:
             result = await self._services.get("skills").resolve(
-                SkillsResolveQuery(source=source), Principal.local()
+                SkillsResolveQuery(source=source), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -1703,7 +1795,8 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_skills_import(self, request: WsRequest) -> Response:
         """`GET /api/skills/import?source=` — shim → SkillsService.import_skill."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         source = (_query_first(_parse_query(request.path), "source") or "").strip()
         if not source:
@@ -1712,7 +1805,7 @@ class WebSocketChannel(BaseChannel):
 
         try:
             result = await self._services.get("skills").import_skill(
-                SkillsImportCommand(source=source), Principal.local()
+                SkillsImportCommand(source=source), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -1720,7 +1813,8 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_skill_search(self, request: WsRequest) -> Response:
         """`GET /api/skills/search?query=&limit=` — shim → SkillsService.search (async off-thread)."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         query = _parse_query(request.path)
         q = (_query_first(query, "query") or "").strip()
@@ -1734,7 +1828,7 @@ class WebSocketChannel(BaseChannel):
 
         try:
             result = await self._services.get("skills").search(
-                SkillSearchQuery(q=q, limit=limit), Principal.local()
+                SkillSearchQuery(q=q, limit=limit), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -1742,7 +1836,8 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_skill_describe(self, request: WsRequest) -> Response:
         """`GET /api/skills/describe?ref=` — shim → SkillsService.describe (async off-thread)."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         ref = (_query_first(_parse_query(request.path), "ref") or "").strip()
         if not ref:
@@ -1751,7 +1846,7 @@ class WebSocketChannel(BaseChannel):
 
         try:
             result = await self._services.get("skills").describe(
-                SkillDescribeQuery(ref=ref), Principal.local()
+                SkillDescribeQuery(ref=ref), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -1759,14 +1854,15 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_skills_github_token_test(self, request: WsRequest) -> Response:
         """`GET /api/skills/github-token-test?secret=` — shim → SkillsService.github_token_test."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         secret = (_query_first(_parse_query(request.path), "secret") or "").strip()
         from durin.service.skills import GithubTokenTestQuery
 
         try:
             result = await self._services.get("skills").github_token_test(
-                GithubTokenTestQuery(secret=secret), Principal.local()
+                GithubTokenTestQuery(secret=secret), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -1774,7 +1870,8 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_skill_approve(self, request: WsRequest, name: str) -> Response:
         """`GET /api/skills/{name}/approve?confirm=&override=&install_deps=` — shim → SkillsService.approve."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         decoded = _decode_api_key(name)
         if decoded is None:
@@ -1792,7 +1889,7 @@ class WebSocketChannel(BaseChannel):
                     name=decoded, confirm=confirm, override=override,
                     replace=replace, install_deps=install_deps,
                 ),
-                Principal.local(),
+                principal,
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -1800,7 +1897,8 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_skill_install_deps(self, request: WsRequest, name: str) -> Response:
         """`GET /api/skills/{name}/install-deps?bin=` — shim → SkillsService.install_deps."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         decoded = _decode_api_key(name)
         if decoded is None:
@@ -1810,7 +1908,7 @@ class WebSocketChannel(BaseChannel):
 
         try:
             result = await self._services.get("skills").install_deps(
-                SkillInstallDepsCommand(name=decoded, bin_name=bin_name), Principal.local()
+                SkillInstallDepsCommand(name=decoded, bin_name=bin_name), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -1879,7 +1977,8 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_skill_judge(self, request: WsRequest, name: str) -> Response:
         """`GET /api/skills/{name}/judge` — shim → SkillsService.judge (async off-thread)."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         decoded = _decode_api_key(name)
         if decoded is None:
@@ -1888,7 +1987,7 @@ class WebSocketChannel(BaseChannel):
 
         try:
             result = await self._services.get("skills").judge(
-                SkillJudgeQuery(name=decoded), Principal.local()
+                SkillJudgeQuery(name=decoded), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -1896,7 +1995,8 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_skill_reject(self, request: WsRequest, name: str) -> Response:
         """`GET /api/skills/{name}/reject` — shim → SkillsService.reject."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         decoded = _decode_api_key(name)
         if decoded is None:
@@ -1905,7 +2005,7 @@ class WebSocketChannel(BaseChannel):
 
         try:
             result = await self._services.get("skills").reject(
-                SkillRejectCommand(name=decoded), Principal.local()
+                SkillRejectCommand(name=decoded), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -1913,7 +2013,8 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_skill_remove(self, request: WsRequest, name: str) -> Response:
         """`GET /api/skills/{name}/remove` — shim → SkillsService.remove."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         decoded = _decode_api_key(name)
         if decoded is None:
@@ -1922,7 +2023,7 @@ class WebSocketChannel(BaseChannel):
 
         try:
             result = await self._services.get("skills").remove(
-                SkillRemoveCommand(name=decoded), Principal.local()
+                SkillRemoveCommand(name=decoded), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -1930,19 +2031,21 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_cron_list(self, request: WsRequest) -> Response:
         """`GET /api/cron` — list all scheduled jobs."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         from durin.service.cron import CronListQuery
 
         try:
-            result = await self._services.get("cron").list(CronListQuery(), Principal.local())
+            result = await self._services.get("cron").list(CronListQuery(), principal)
         except DomainError as err:
             return _domain_error_response(err)
         return _http_json_response(result.model_dump())
 
     async def _handle_cron_remove(self, request: WsRequest) -> Response:
         """`GET /api/cron/remove?id=...` — remove a non-system job."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         from durin.service.cron import CronRemoveCommand
 
@@ -1951,7 +2054,7 @@ class WebSocketChannel(BaseChannel):
             return _http_error(400, "id is required")
         try:
             result = await self._services.get("cron").remove(
-                CronRemoveCommand(id=job_id), Principal.local()
+                CronRemoveCommand(id=job_id), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -1964,7 +2067,8 @@ class WebSocketChannel(BaseChannel):
         When it returns ``started=True``, this shim spawns the actual background
         task on the live scheduler (loop/connection concern stays here).
         """
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         from durin.service.cron import CronRunCommand
 
@@ -1973,7 +2077,7 @@ class WebSocketChannel(BaseChannel):
             return _http_error(400, "id is required")
         try:
             decision = await self._services.get("cron").run(
-                CronRunCommand(id=job_id), Principal.local()
+                CronRunCommand(id=job_id), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -1991,7 +2095,8 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_cron_toggle(self, request: WsRequest) -> Response:
         """`GET /api/cron/toggle?id=...&enabled=true|false` — enable or disable a job."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         from durin.service.cron import CronToggleCommand
 
@@ -2003,7 +2108,7 @@ class WebSocketChannel(BaseChannel):
         enabled = enabled_raw in ("1", "true", "yes")
         try:
             result = await self._services.get("cron").toggle(
-                CronToggleCommand(id=job_id, enabled=enabled), Principal.local()
+                CronToggleCommand(id=job_id, enabled=enabled), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -2013,19 +2118,21 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_config_get(self, request: WsRequest) -> Response:
         """`GET /api/config` — shim → ConfigService.get."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         from durin.service.config import ConfigGetQuery
 
         try:
-            result = await self._services.get("config").get(ConfigGetQuery(), Principal.local())
+            result = await self._services.get("config").get(ConfigGetQuery(), principal)
         except DomainError as err:
             return _domain_error_response(err)
         return _http_json_response(result.model_dump(by_alias=True))
 
     async def _handle_config_set(self, request: WsRequest) -> Response:
         """`GET /api/config/set` — shim → ConfigService.set."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         from durin.service.config import ConfigSetCommand
 
@@ -2039,7 +2146,7 @@ class WebSocketChannel(BaseChannel):
 
         try:
             result = await self._services.get("config").set(
-                ConfigSetCommand(key=key, value=raw_value), Principal.local()
+                ConfigSetCommand(key=key, value=raw_value), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -2047,7 +2154,8 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_logs_list(self, request: WsRequest) -> Response:
         """`GET /api/logs?source=&...` — shim → HealthService.logs_list."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         from durin.service.health import LogsListQuery
 
@@ -2066,7 +2174,7 @@ class WebSocketChannel(BaseChannel):
         )
         try:
             result = await self._services.get("health").logs_list(
-                query, Principal.local()
+                query, principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -2075,7 +2183,8 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_models_list(self, request: WsRequest) -> Response:
         """`GET /api/models?provider=X&capability=Y` — shim → ConfigService.models_list."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         from durin.service.config import ModelsListQuery
 
@@ -2084,7 +2193,7 @@ class WebSocketChannel(BaseChannel):
         capability = (_query_first(query, "capability") or "").strip().lower()
         try:
             result = await self._services.get("config").models_list(
-                ModelsListQuery(provider=provider, capability=capability), Principal.local()
+                ModelsListQuery(provider=provider, capability=capability), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -2092,7 +2201,8 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_model_capabilities(self, request: WsRequest) -> Response:
         """`GET /api/model/capabilities?model=&provider=` — shim → ConfigService.model_capabilities."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         from durin.service.config import ModelCapabilitiesQuery
 
@@ -2103,7 +2213,7 @@ class WebSocketChannel(BaseChannel):
             return _http_error(400, "model is required")
         try:
             result = await self._services.get("config").model_capabilities(
-                ModelCapabilitiesQuery(model=model, provider=provider), Principal.local()
+                ModelCapabilitiesQuery(model=model, provider=provider), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -2112,13 +2222,14 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_channels_list(self, request: WsRequest) -> Response:
         """`GET /api/channels` — shim → ConfigService.channels_list."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         from durin.service.config import ChannelsListQuery
 
         try:
             result = await self._services.get("config").channels_list(
-                ChannelsListQuery(), Principal.local()
+                ChannelsListQuery(), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -2126,7 +2237,8 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_model_test(self, request: WsRequest) -> Response:
         """`GET /api/model/test` — shim → ConfigService.model_test (async probe)."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         from durin.service.config import ModelTestQuery
 
@@ -2135,7 +2247,7 @@ class WebSocketChannel(BaseChannel):
         provider = (_query_first(query, "provider") or "").strip()
         try:
             result = await self._services.get("config").model_test(
-                ModelTestQuery(model=model, provider=provider), Principal.local()
+                ModelTestQuery(model=model, provider=provider), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -2145,7 +2257,8 @@ class WebSocketChannel(BaseChannel):
         self, request: WsRequest, query: dict,
     ) -> Response:
         """`GET /api/memory/cross-encoder/test?model=<id>` — shim → ConfigService.cross_encoder_test."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         from durin.service.config import CrossEncoderTestQuery
 
@@ -2154,7 +2267,7 @@ class WebSocketChannel(BaseChannel):
             return _http_error(400, "missing required `model` query param")
         try:
             result = await self._services.get("config").cross_encoder_test(
-                CrossEncoderTestQuery(model=model), Principal.local()
+                CrossEncoderTestQuery(model=model), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -2163,14 +2276,15 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_extras_status(self, request: WsRequest, query: dict) -> Response:
         """`GET /api/extras/status?feature=<f>` — shim → HealthService.extras_status."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         from durin.service.health import ExtrasStatusQuery
 
         feature = (_query_first(query, "feature") or "").strip()
         try:
             result = await self._services.get("health").extras_status(
-                ExtrasStatusQuery(feature=feature), Principal.local()
+                ExtrasStatusQuery(feature=feature), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -2183,7 +2297,8 @@ class WebSocketChannel(BaseChannel):
         The service performs the install and signals whether a restart is needed;
         the actual subprocess spawn stays here (loop/process concern).
         """
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         from durin.service.health import ExtrasEnsureCommand
 
@@ -2191,7 +2306,7 @@ class WebSocketChannel(BaseChannel):
         restart = (_query_first(query, "restart") or "").lower() in ("1", "true", "yes")
         try:
             result = await self._services.get("health").extras_ensure(
-                ExtrasEnsureCommand(feature=feature, restart=restart), Principal.local()
+                ExtrasEnsureCommand(feature=feature, restart=restart), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -2211,13 +2326,14 @@ class WebSocketChannel(BaseChannel):
 
         The service returns the decision; subprocess spawn stays here.
         """
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         from durin.service.health import ExtrasRestartCommand
 
         try:
             result = await self._services.get("health").extras_restart(
-                ExtrasRestartCommand(), Principal.local()
+                ExtrasRestartCommand(), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -2242,7 +2358,8 @@ class WebSocketChannel(BaseChannel):
         return key.startswith("websocket:")
 
     async def _handle_session_messages(self, request: WsRequest, key: str) -> Response:
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         decoded_key = _decode_api_key(key)
         if decoded_key is None:
@@ -2251,7 +2368,7 @@ class WebSocketChannel(BaseChannel):
 
         try:
             result = await self._services.get("sessions").messages(
-                SessionMessagesQuery(key=decoded_key), Principal.local()
+                SessionMessagesQuery(key=decoded_key), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -2263,7 +2380,8 @@ class WebSocketChannel(BaseChannel):
         return _http_json_response(result.data)
 
     async def _handle_webui_thread_get(self, request: WsRequest, key: str) -> Response:
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         decoded_key = _decode_api_key(key)
         if decoded_key is None:
@@ -2272,7 +2390,7 @@ class WebSocketChannel(BaseChannel):
 
         try:
             await self._services.get("sessions").webui_thread(
-                WebuiThreadQuery(key=decoded_key), Principal.local()
+                WebuiThreadQuery(key=decoded_key), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -2466,7 +2584,8 @@ class WebSocketChannel(BaseChannel):
         )
 
     async def _handle_session_delete(self, request: WsRequest, key: str) -> Response:
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         decoded_key = _decode_api_key(key)
         if decoded_key is None:
@@ -2475,7 +2594,7 @@ class WebSocketChannel(BaseChannel):
 
         try:
             result = await self._services.get("sessions").delete(
-                SessionDeleteCommand(key=decoded_key), Principal.local()
+                SessionDeleteCommand(key=decoded_key), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
@@ -2483,7 +2602,8 @@ class WebSocketChannel(BaseChannel):
 
     async def _handle_session_rename(self, request: WsRequest, key: str) -> Response:
         """P2 (doc 20): set a user-edited title for a webui session."""
-        if not self._check_api_token(request):
+        principal = self._resolve_principal(request)
+        if principal is None:
             return _http_error(401, "Unauthorized")
         decoded_key = _decode_api_key(key)
         if decoded_key is None:
@@ -2494,7 +2614,7 @@ class WebSocketChannel(BaseChannel):
         raw_title = _query_first(query, "title") or ""
         try:
             result = await self._services.get("sessions").rename(
-                SessionRenameCommand(key=decoded_key, title=raw_title), Principal.local()
+                SessionRenameCommand(key=decoded_key, title=raw_title), principal
             )
         except DomainError as err:
             return _domain_error_response(err)
