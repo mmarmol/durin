@@ -589,6 +589,7 @@ class WebSocketChannel(BaseChannel):
 
     def _build_services(self, bus: MessageBus) -> ServiceRegistry:
         """Construct the registry holding the extracted domain services."""
+        from durin.service.cron import CronService
         from durin.service.secrets import SecretsService
 
         registry = ServiceRegistry(
@@ -598,6 +599,7 @@ class WebSocketChannel(BaseChannel):
             bus=bus,
         )
         registry.register("secrets", SecretsService())
+        registry.register("cron", CronService(cron_scheduler=self._cron_service))
         return registry
 
     def _endpoint_workspace(self) -> Path:
@@ -800,16 +802,16 @@ class WebSocketChannel(BaseChannel):
             return await self._handle_secret_delete(request)
 
         if got == "/api/cron":
-            return self._handle_cron_list(request)
+            return await self._handle_cron_list(request)
 
         if got == "/api/cron/remove":
-            return self._handle_cron_remove(request)
+            return await self._handle_cron_remove(request)
 
         if got == "/api/cron/toggle":
-            return self._handle_cron_toggle(request)
+            return await self._handle_cron_toggle(request)
 
         if got == "/api/cron/run":
-            return self._handle_cron_run(request)
+            return await self._handle_cron_run(request)
 
         if got == "/api/config":
             return self._handle_config_get(request)
@@ -2115,75 +2117,73 @@ class WebSocketChannel(BaseChannel):
             return _http_error(500, f"remove failed: {exc}")
         return _http_json_response(payload, status=status)
 
-    def _handle_cron_list(self, request: WsRequest) -> Response:
-        """`GET /api/cron` — list all scheduled jobs (including disabled
-        + system jobs). System jobs are flagged so the UI can disable
-        the delete button for them."""
+    async def _handle_cron_list(self, request: WsRequest) -> Response:
+        """`GET /api/cron` — list all scheduled jobs."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
-        try:
-            cron = self._fresh_cron_service()
-            jobs = cron.list_jobs(include_disabled=True)
-            return _http_json_response({
-                "jobs": [self._cron_job_to_dict(j) for j in jobs],
-            })
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"could not load cron jobs: {exc}")
+        from durin.service.cron import CronListQuery
 
-    def _handle_cron_remove(self, request: WsRequest) -> Response:
+        try:
+            result = await self._services.get("cron").list(CronListQuery(), Principal.local())
+        except DomainError as err:
+            return _domain_error_response(err)
+        return _http_json_response(result.model_dump())
+
+    async def _handle_cron_remove(self, request: WsRequest) -> Response:
         """`GET /api/cron/remove?id=...` — remove a non-system job."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
+        from durin.service.cron import CronRemoveCommand
+
         job_id = (_query_first(_parse_query(request.path), "id") or "").strip()
         if not job_id:
             return _http_error(400, "id is required")
         try:
-            cron = self._fresh_cron_service()
-            result = cron.remove_job(job_id)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"could not remove job: {exc}")
-        if result == "not_found":
-            return _http_error(404, "no such job")
-        if result == "protected":
-            return _http_error(403, "system job; cannot remove")
-        return _http_json_response({"result": result})
+            result = await self._services.get("cron").remove(
+                CronRemoveCommand(id=job_id), Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
+        return _http_json_response(result.model_dump())
 
-    def _handle_cron_run(self, request: WsRequest) -> Response:
+    async def _handle_cron_run(self, request: WsRequest) -> Response:
         """`GET /api/cron/run?id=...` — manually trigger a job now.
 
-        Dispatches the run on the LIVE scheduler in the background (the dream
-        job can take minutes; we don't block the request). The scheduler's
-        in-process guard refuses an overlapping run, so a job already in
-        flight returns ``started: false`` instead of double-executing.
+        The service validates whether the job can run and returns the decision.
+        When it returns ``started=True``, this shim spawns the actual background
+        task on the live scheduler (loop/connection concern stays here).
         """
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
-        if self._cron_service is None:
-            return _http_error(503, "scheduler not available")
+        from durin.service.cron import CronRunCommand
+
         job_id = (_query_first(_parse_query(request.path), "id") or "").strip()
         if not job_id:
             return _http_error(400, "id is required")
-        if self._cron_service.get_job(job_id) is None:
-            return _http_error(404, "no such job")
-        if self._cron_service.is_executing(job_id):
-            return _http_json_response({"started": False, "reason": "already_running"})
+        try:
+            decision = await self._services.get("cron").run(
+                CronRunCommand(id=job_id), Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
+        if decision.started:
+            async def _run() -> None:
+                try:
+                    await self._cron_service.run_job(job_id, force=True)
+                except Exception:  # noqa: BLE001
+                    logger.exception("cron run-now failed for {}", job_id)
 
-        async def _run() -> None:
-            try:
-                await self._cron_service.run_job(job_id, force=True)
-            except Exception:  # noqa: BLE001
-                logger.exception("cron run-now failed for {}", job_id)
+            task = asyncio.create_task(_run())
+            self._background_run_tasks.add(task)
+            task.add_done_callback(self._background_run_tasks.discard)
+        return _http_json_response(decision.model_dump(exclude_none=True))
 
-        task = asyncio.create_task(_run())
-        self._background_run_tasks.add(task)
-        task.add_done_callback(self._background_run_tasks.discard)
-        return _http_json_response({"started": True})
-
-    def _handle_cron_toggle(self, request: WsRequest) -> Response:
-        """`GET /api/cron/toggle?id=...&enabled=true|false` — enable
-        or disable a job without removing it."""
+    async def _handle_cron_toggle(self, request: WsRequest) -> Response:
+        """`GET /api/cron/toggle?id=...&enabled=true|false` — enable or disable a job."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
+        from durin.service.cron import CronToggleCommand
+
         query = _parse_query(request.path)
         job_id = (_query_first(query, "id") or "").strip()
         enabled_raw = (_query_first(query, "enabled") or "").strip().lower()
@@ -2191,13 +2191,12 @@ class WebSocketChannel(BaseChannel):
             return _http_error(400, "id is required")
         enabled = enabled_raw in ("1", "true", "yes")
         try:
-            cron = self._fresh_cron_service()
-            job = cron.enable_job(job_id, enabled=enabled)
-        except Exception as exc:  # noqa: BLE001
-            return _http_error(500, f"could not toggle job: {exc}")
-        if job is None:
-            return _http_error(404, "no such job")
-        return _http_json_response({"job": self._cron_job_to_dict(job)})
+            result = await self._services.get("cron").toggle(
+                CronToggleCommand(id=job_id, enabled=enabled), Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
+        return _http_json_response(result.model_dump())
 
     # -- generic config API (web parity Phase B) ---------------------------
 
