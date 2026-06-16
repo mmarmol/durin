@@ -1,4 +1,6 @@
-"""SP4: build_api_app — read-only Starlette front door (TestClient)."""
+"""build_api_app — the read (GET) routes of the Starlette front door (TestClient).
+
+Write routes (POST/DELETE) are covered by test_asgi_writes.py."""
 
 from __future__ import annotations
 
