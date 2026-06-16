@@ -4,7 +4,7 @@
  */
 
 export interface paths {
-    "/api/auth/tokens": {
+    "/api/v1/auth/tokens": {
         parameters: {
             query?: never;
             header?: never;
@@ -23,7 +23,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/channels": {
+    "/api/v1/channels": {
         parameters: {
             query?: never;
             header?: never;
@@ -40,7 +40,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/commands": {
+    "/api/v1/commands": {
         parameters: {
             query?: never;
             header?: never;
@@ -57,7 +57,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/config": {
+    "/api/v1/config": {
         parameters: {
             query?: never;
             header?: never;
@@ -67,31 +67,15 @@ export interface paths {
         /** Return effective config (secrets masked) + JSON schema */
         get: operations["config_get"];
         put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/config/set": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
         /** Set one dotted config key (schema-validated before write) */
-        get: operations["config_set"];
-        put?: never;
-        post?: never;
+        post: operations["config_set"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/cron": {
+    "/api/v1/cron": {
         parameters: {
             query?: never;
             header?: never;
@@ -102,98 +86,82 @@ export interface paths {
         get: operations["cron_list"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/cron/remove": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
         /** Remove a non-system cron job by id */
-        get: operations["cron_remove"];
-        put?: never;
-        post?: never;
-        delete?: never;
+        delete: operations["cron_remove"];
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/cron/run": {
+    "/api/v1/cron/run": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
+        get?: never;
+        put?: never;
         /** Manually trigger a cron job now (non-blocking) */
-        get: operations["cron_run"];
-        put?: never;
-        post?: never;
+        post: operations["cron_run"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/cron/toggle": {
+    "/api/v1/cron/toggle": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
+        get?: never;
+        put?: never;
         /** Enable or disable a cron job without removing it */
-        get: operations["cron_toggle"];
-        put?: never;
-        post?: never;
+        post: operations["cron_toggle"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/extras/ensure": {
+    "/api/v1/extras/ensure": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
+        get?: never;
+        put?: never;
         /** Install a pip extra (off-loop); signal whether a restart is needed */
-        get: operations["health_extras_ensure"];
-        put?: never;
-        post?: never;
+        post: operations["health_extras_ensure"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/extras/restart": {
+    "/api/v1/extras/restart": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Unconditionally restart the gateway daemon */
-        get: operations["health_extras_restart"];
+        get?: never;
         put?: never;
-        post?: never;
+        /** Unconditionally restart the gateway daemon */
+        post: operations["health_extras_restart"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/extras/status": {
+    "/api/v1/extras/status": {
         parameters: {
             query?: never;
             header?: never;
@@ -210,7 +178,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/logs": {
+    "/api/v1/logs": {
         parameters: {
             query?: never;
             header?: never;
@@ -227,7 +195,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/memory/backlinks": {
+    "/api/v1/memory/backlinks": {
         parameters: {
             query?: never;
             header?: never;
@@ -244,7 +212,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/memory/cross-encoder/test": {
+    "/api/v1/memory/cross-encoder/test": {
         parameters: {
             query?: never;
             header?: never;
@@ -261,7 +229,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/memory/edge/{a}/{b}": {
+    "/api/v1/memory/edge/{a}/{b}": {
         parameters: {
             query?: never;
             header?: never;
@@ -278,7 +246,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/memory/entity/{ref}": {
+    "/api/v1/memory/entity/{ref}": {
         parameters: {
             query?: never;
             header?: never;
@@ -295,7 +263,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/memory/entry": {
+    "/api/v1/memory/entry": {
         parameters: {
             query?: never;
             header?: never;
@@ -306,30 +274,14 @@ export interface paths {
         get: operations["memory_entry"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/memory/forget": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
         /** Archive a memory entry */
-        get: operations["memory_forget"];
-        put?: never;
-        post?: never;
-        delete?: never;
+        delete: operations["memory_forget"];
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/memory/graph": {
+    "/api/v1/memory/graph": {
         parameters: {
             query?: never;
             header?: never;
@@ -346,7 +298,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/memory/search": {
+    "/api/v1/memory/search": {
         parameters: {
             query?: never;
             header?: never;
@@ -363,7 +315,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/memory/session/{stem}": {
+    "/api/v1/memory/session/{stem}": {
         parameters: {
             query?: never;
             header?: never;
@@ -380,7 +332,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/memory/subgraph": {
+    "/api/v1/memory/subgraph": {
         parameters: {
             query?: never;
             header?: never;
@@ -397,7 +349,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/model/capabilities": {
+    "/api/v1/model/capabilities": {
         parameters: {
             query?: never;
             header?: never;
@@ -414,7 +366,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/model/test": {
+    "/api/v1/model/test": {
         parameters: {
             query?: never;
             header?: never;
@@ -431,7 +383,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/models": {
+    "/api/v1/models": {
         parameters: {
             query?: never;
             header?: never;
@@ -448,24 +400,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/oauth/codex/disconnect": {
+    "/api/v1/oauth/codex": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Disconnect the Codex OAuth session */
-        get: operations["oauth_disconnect"];
+        get?: never;
         put?: never;
         post?: never;
-        delete?: never;
+        /** Disconnect the Codex OAuth session */
+        delete: operations["oauth_disconnect"];
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/oauth/codex/poll": {
+    "/api/v1/oauth/codex/poll": {
         parameters: {
             query?: never;
             header?: never;
@@ -482,41 +434,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/oauth/codex/start": {
+    "/api/v1/oauth/codex/start": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
+        get?: never;
+        put?: never;
         /** Request a device-code challenge for Codex OAuth */
-        get: operations["oauth_start"];
-        put?: never;
-        post?: never;
+        post: operations["oauth_start"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/oauth/codex/start-loopback": {
+    "/api/v1/oauth/codex/start-loopback": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Start the loopback PKCE login (localhost-only) */
-        get: operations["oauth_start_loopback"];
+        get?: never;
         put?: never;
-        post?: never;
+        /** Start the loopback PKCE login (localhost-only) */
+        post: operations["oauth_start_loopback"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/oauth/codex/status": {
+    "/api/v1/oauth/codex/status": {
         parameters: {
             query?: never;
             header?: never;
@@ -533,7 +485,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/secrets": {
+    "/api/v1/secrets": {
         parameters: {
             query?: never;
             header?: never;
@@ -544,30 +496,14 @@ export interface paths {
         get: operations["secrets_list"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/secrets/delete": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
         /** Delete a secret by name */
-        get: operations["secrets_delete"];
-        put?: never;
-        post?: never;
-        delete?: never;
+        delete: operations["secrets_delete"];
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/sessions": {
+    "/api/v1/sessions": {
         parameters: {
             query?: never;
             header?: never;
@@ -584,24 +520,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/sessions/{key}/delete": {
+    "/api/v1/sessions/{key}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Delete a websocket-channel session and its webui thread */
-        get: operations["sessions_delete"];
+        get?: never;
         put?: never;
         post?: never;
-        delete?: never;
+        /** Delete a websocket-channel session and its webui thread */
+        delete: operations["sessions_delete"];
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/sessions/{key}/messages": {
+    "/api/v1/sessions/{key}/messages": {
         parameters: {
             query?: never;
             header?: never;
@@ -618,24 +554,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/sessions/{key}/rename": {
+    "/api/v1/sessions/{key}/rename": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Set a user-edited title for a websocket-channel session */
-        get: operations["sessions_rename"];
+        get?: never;
         put?: never;
-        post?: never;
+        /** Set a user-edited title for a websocket-channel session */
+        post: operations["sessions_rename"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/sessions/{key}/webui-thread": {
+    "/api/v1/sessions/{key}/webui-thread": {
         parameters: {
             query?: never;
             header?: never;
@@ -652,7 +588,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/settings": {
+    "/api/v1/settings": {
         parameters: {
             query?: never;
             header?: never;
@@ -662,65 +598,49 @@ export interface paths {
         /** Return the full settings payload (secrets masked) */
         get: operations["settings_get"];
         put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/settings/provider/update": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Update provider API key and/or base URL (key stored as secret ref) */
-        get: operations["settings_provider_update"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/settings/update": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
         /** Update agent model and/or provider */
-        get: operations["settings_update"];
-        put?: never;
-        post?: never;
+        post: operations["settings_update"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/settings/web-search/update": {
+    "/api/v1/settings/provider": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Update web-search provider and credentials */
-        get: operations["settings_web_search_update"];
+        get?: never;
         put?: never;
-        post?: never;
+        /** Update provider API key and/or base URL (key stored as secret ref) */
+        post: operations["settings_provider_update"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/skills": {
+    "/api/v1/settings/web-search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Update web-search provider and credentials */
+        post: operations["settings_web_search_update"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/skills": {
         parameters: {
             query?: never;
             header?: never;
@@ -737,7 +657,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/skills/describe": {
+    "/api/v1/skills/describe": {
         parameters: {
             query?: never;
             header?: never;
@@ -754,7 +674,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/skills/github-token-test": {
+    "/api/v1/skills/github-token-test": {
         parameters: {
             query?: never;
             header?: never;
@@ -771,24 +691,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/skills/import": {
+    "/api/v1/skills/import": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Fetch one candidate to quarantine + scan */
-        get: operations["skills_import_skill"];
+        get?: never;
         put?: never;
-        post?: never;
+        /** Fetch one candidate to quarantine + scan */
+        post: operations["skills_import_skill"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/skills/quarantine": {
+    "/api/v1/skills/quarantine": {
         parameters: {
             query?: never;
             header?: never;
@@ -805,7 +725,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/skills/resolve": {
+    "/api/v1/skills/resolve": {
         parameters: {
             query?: never;
             header?: never;
@@ -822,7 +742,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/skills/search": {
+    "/api/v1/skills/search": {
         parameters: {
             query?: never;
             header?: never;
@@ -839,7 +759,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/skills/{name}": {
+    "/api/v1/skills/{name}": {
         parameters: {
             query?: never;
             header?: never;
@@ -850,30 +770,31 @@ export interface paths {
         get: operations["skills_get"];
         put?: never;
         post?: never;
-        delete?: never;
+        /** Delete a workspace skill / revert a fork */
+        delete: operations["skills_remove"];
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/skills/{name}/approve": {
+    "/api/v1/skills/{name}/approve": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Approve a quarantined skill */
-        get: operations["skills_approve"];
+        get?: never;
         put?: never;
-        post?: never;
+        /** Approve a quarantined skill */
+        post: operations["skills_approve"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/skills/{name}/file": {
+    "/api/v1/skills/{name}/file": {
         parameters: {
             query?: never;
             header?: never;
@@ -890,24 +811,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/skills/{name}/file/save": {
+    "/api/v1/skills/{name}/file/save": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Save one text file in a skill (manual) */
-        get: operations["skills_file_save"];
+        get?: never;
         put?: never;
-        post?: never;
+        /** Save one text file in a skill (manual) */
+        post: operations["skills_file_save"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/skills/{name}/files": {
+    "/api/v1/skills/{name}/files": {
         parameters: {
             query?: never;
             header?: never;
@@ -924,7 +845,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/skills/{name}/history": {
+    "/api/v1/skills/{name}/history": {
         parameters: {
             query?: never;
             header?: never;
@@ -941,24 +862,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/skills/{name}/install-deps": {
+    "/api/v1/skills/{name}/install-deps": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Install deps for a skill */
-        get: operations["skills_install_deps"];
+        get?: never;
         put?: never;
-        post?: never;
+        /** Install deps for a skill */
+        post: operations["skills_install_deps"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/skills/{name}/judge": {
+    "/api/v1/skills/{name}/judge": {
         parameters: {
             query?: never;
             header?: never;
@@ -975,68 +896,51 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/skills/{name}/mode": {
+    "/api/v1/skills/{name}/mode": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
+        get?: never;
+        put?: never;
         /** Set a skill's mode (auto|manual) */
-        get: operations["skills_mode"];
-        put?: never;
-        post?: never;
+        post: operations["skills_mode"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/skills/{name}/reject": {
+    "/api/v1/skills/{name}/quarantine": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
+        get?: never;
+        put?: never;
+        post?: never;
         /** Discard a quarantined skill */
-        get: operations["skills_reject"];
-        put?: never;
-        post?: never;
-        delete?: never;
+        delete: operations["skills_reject"];
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/skills/{name}/remove": {
+    "/api/v1/skills/{name}/save": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Delete a workspace skill / revert a fork */
-        get: operations["skills_remove"];
+        get?: never;
         put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/skills/{name}/save": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
         /** Overwrite a MANUAL skill */
-        get: operations["skills_save"];
-        put?: never;
-        post?: never;
+        post: operations["skills_save"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1090,8 +994,8 @@ export interface components {
             config: {
                 [key: string]: unknown;
             };
-            /** Schema */
-            schema: {
+            /** Json Schema */
+            json_schema: {
                 [key: string]: unknown;
             };
         };
@@ -1115,29 +1019,29 @@ export interface components {
         CronJobItem: {
             /** Channel */
             channel: string;
-            /** Createdatms */
-            createdAtMs: number;
+            /** Created At Ms */
+            created_at_ms: number;
             /** Enabled */
             enabled: boolean;
             /** Id */
             id: string;
-            /** Issystem */
-            isSystem: boolean;
+            /** Is System */
+            is_system: boolean;
             /** Message */
             message: string;
             /** Name */
             name: string;
             schedule: components["schemas"]["CronJobScheduleResult"];
             state: components["schemas"]["CronJobStateResult"];
-            /** Updatedatms */
-            updatedAtMs: number;
+            /** Updated At Ms */
+            updated_at_ms: number;
         };
         /** CronJobScheduleResult */
         CronJobScheduleResult: {
-            /** Atms */
-            atMs: number | null;
-            /** Everyms */
-            everyMs: number | null;
+            /** At Ms */
+            at_ms: number | null;
+            /** Every Ms */
+            every_ms: number | null;
             /** Expr */
             expr: string | null;
             /** Kind */
@@ -1151,14 +1055,14 @@ export interface components {
         CronJobStateResult: {
             /** Executing */
             executing: boolean;
-            /** Lasterror */
-            lastError: string | null;
-            /** Lastrunatms */
-            lastRunAtMs: number | null;
-            /** Laststatus */
-            lastStatus: string | null;
-            /** Nextrunatms */
-            nextRunAtMs: number | null;
+            /** Last Error */
+            last_error: string | null;
+            /** Last Run At Ms */
+            last_run_at_ms: number | null;
+            /** Last Status */
+            last_status: string | null;
+            /** Next Run At Ms */
+            next_run_at_ms: number | null;
         };
         /**
          * CronListQuery
@@ -1213,12 +1117,12 @@ export interface components {
         };
         /** CrossEncoderTestResult */
         CrossEncoderTestResult: {
-            /** Durationms */
-            durationMs: number;
+            /** Duration Ms */
+            duration_ms: number;
             /** Message */
             message: string;
-            /** Modelid */
-            modelId: string;
+            /** Model Id */
+            model_id: string;
             /** Status */
             status: string;
         };
@@ -1236,8 +1140,8 @@ export interface components {
         ExtrasEnsureResult: {
             /** Message */
             message: string;
-            /** Needsrestart */
-            needsRestart: boolean;
+            /** Needs Restart */
+            needs_restart: boolean;
             /**
              * Restarting
              * @default false
@@ -1263,14 +1167,14 @@ export interface components {
         };
         /** ExtrasStatusResult */
         ExtrasStatusResult: {
-            /** Approxsize */
-            approxSize: string;
+            /** Approx Size */
+            approx_size: string;
             /** Extra */
             extra: string;
             /** Label */
             label: string;
-            /** Needsrestart */
-            needsRestart: boolean;
+            /** Needs Restart */
+            needs_restart: boolean;
             /** Present */
             present: boolean;
         };
@@ -1297,21 +1201,21 @@ export interface components {
             /** Scopes */
             scopes: string[];
             /**
-             * Ttls
+             * Ttl S
              * @default null
              */
-            ttlS: number | null;
+            ttl_s: number | null;
         };
         /** IssueTokenResult */
         IssueTokenResult: {
-            /** Expiresat */
-            expiresAt: number | null;
+            /** Expires At */
+            expires_at: number | null;
             /** Scopes */
             scopes: string[];
             /** Token */
             token: string;
-            /** Tokenid */
-            tokenId: string;
+            /** Token Id */
+            token_id: string;
         };
         /**
          * ListTokensQuery
@@ -1326,10 +1230,10 @@ export interface components {
         /** LogsListQuery */
         LogsListQuery: {
             /**
-             * Beforets
+             * Before Ts
              * @default null
              */
-            beforeTs: number | null;
+            before_ts: number | null;
             /**
              * Channel
              * @default []
@@ -1366,10 +1270,10 @@ export interface components {
              */
             type: string[];
             /**
-             * Windowhours
+             * Window Hours
              * @default 24
              */
-            windowHours: number | null;
+            window_hours: number | null;
         };
         /** LogsListResult */
         LogsListResult: {
@@ -1377,14 +1281,14 @@ export interface components {
             facets: {
                 [key: string]: unknown;
             };
-            /** Hasmore */
-            hasMore: boolean;
+            /** Has More */
+            has_more: boolean;
             /** Lines */
             lines: unknown[];
-            /** Nextcursor */
-            nextCursor: unknown;
-            /** Scannedthroughts */
-            scannedThroughTs: unknown;
+            /** Next Cursor */
+            next_cursor: unknown;
+            /** Scanned Through Ts */
+            scanned_through_ts: unknown;
         };
         /** MemoryBacklinksQuery */
         MemoryBacklinksQuery: {
@@ -1475,18 +1379,18 @@ export interface components {
         };
         /** ModelCapabilitiesResult */
         ModelCapabilitiesResult: {
-            /** Maxinputtokens */
-            maxInputTokens: number | null;
+            /** Max Input Tokens */
+            max_input_tokens: number | null;
             /** Model */
             model: string;
-            /** Supportsaudioinput */
-            supportsAudioInput: boolean;
-            /** Supportsfunctioncalling */
-            supportsFunctionCalling: boolean;
-            /** Supportsreasoning */
-            supportsReasoning: boolean;
-            /** Supportsvision */
-            supportsVision: boolean;
+            /** Supports Audio Input */
+            supports_audio_input: boolean;
+            /** Supports Function Calling */
+            supports_function_calling: boolean;
+            /** Supports Reasoning */
+            supports_reasoning: boolean;
+            /** Supports Vision */
+            supports_vision: boolean;
         };
         /** ModelTestQuery */
         ModelTestQuery: {
@@ -1540,10 +1444,10 @@ export interface components {
          * @description Query for ``GET /api/oauth/codex/poll``.
          */
         OAuthPollQuery: {
-            /** Deviceauthid */
-            deviceAuthId: string;
-            /** Usercode */
-            userCode: string;
+            /** Device Auth Id */
+            device_auth_id: string;
+            /** User Code */
+            user_code: string;
         };
         /**
          * OAuthPollResult
@@ -1595,28 +1499,28 @@ export interface components {
          */
         OAuthStartLoopbackCommand: {
             /**
-             * Islocal
+             * Is Local
              * @default false
              */
-            isLocal: boolean;
+            is_local: boolean;
         };
         /** OAuthStartLoopbackResult */
         OAuthStartLoopbackResult: {
-            /** Authorizeurl */
-            authorizeUrl: string;
+            /** Authorize Url */
+            authorize_url: string;
         };
         /** OAuthStartResult */
         OAuthStartResult: {
-            /** Deviceauthid */
-            deviceAuthId: string;
-            /** Expiresin */
-            expiresIn: number;
+            /** Device Auth Id */
+            device_auth_id: string;
+            /** Expires In */
+            expires_in: number;
             /** Interval */
             interval: number;
-            /** Usercode */
-            userCode: string;
-            /** Verificationuri */
-            verificationUri: string;
+            /** User Code */
+            user_code: string;
+            /** Verification Uri */
+            verification_uri: string;
         };
         /**
          * OAuthStatusQuery
@@ -1627,18 +1531,18 @@ export interface components {
          */
         OAuthStatusQuery: {
             /**
-             * Islocal
+             * Is Local
              * @default false
              */
-            isLocal: boolean;
+            is_local: boolean;
         };
         /** OAuthStatusResult */
         OAuthStatusResult: {
             /**
-             * Canloopback
+             * Can Loopback
              * @default false
              */
-            canLoopback: boolean;
+            can_loopback: boolean;
             /** Connected */
             connected: boolean;
             /**
@@ -1659,8 +1563,8 @@ export interface components {
         };
         /** RevokeTokenCommand */
         RevokeTokenCommand: {
-            /** Tokenid */
-            tokenId: string;
+            /** Token Id */
+            token_id: string;
         };
         /** RevokeTokenResult */
         RevokeTokenResult: {
@@ -1681,8 +1585,8 @@ export interface components {
         SecretItem: {
             /** Account */
             account: string;
-            /** Createdat */
-            createdAt: string;
+            /** Created At */
+            created_at: string;
             /** Description */
             description: string;
             /** Name */
@@ -1693,8 +1597,8 @@ export interface components {
             scope: string[];
             /** Service */
             service: string;
-            /** Valuehint */
-            valueHint: string | null;
+            /** Value Hint */
+            value_hint: string | null;
         };
         /**
          * SecretsListQuery
@@ -1755,15 +1659,15 @@ export interface components {
         /** SettingsProviderUpdateCommand */
         SettingsProviderUpdateCommand: {
             /**
-             * Apibase
+             * Api Base
              * @default null
              */
-            apiBase: string | null;
+            api_base: string | null;
             /**
-             * Apikey
+             * Api Key
              * @default null
              */
-            apiKey: string | null;
+            api_key: string | null;
             /** Provider */
             provider: string;
         };
@@ -1789,14 +1693,14 @@ export interface components {
             providers: {
                 [key: string]: unknown;
             }[];
-            /** Requiresrestart */
-            requiresRestart: boolean;
+            /** Requires Restart */
+            requires_restart: boolean;
             /** Runtime */
             runtime: {
                 [key: string]: unknown;
             };
-            /** Websearch */
-            webSearch: {
+            /** Web Search */
+            web_search: {
                 [key: string]: unknown;
             };
         };
@@ -1816,15 +1720,15 @@ export interface components {
         /** SettingsWebSearchUpdateCommand */
         SettingsWebSearchUpdateCommand: {
             /**
-             * Apikey
+             * Api Key
              * @default null
              */
-            apiKey: string | null;
+            api_key: string | null;
             /**
-             * Baseurl
+             * Base Url
              * @default null
              */
-            baseUrl: string | null;
+            base_url: string | null;
             /** Provider */
             provider: string;
         };
@@ -1836,10 +1740,10 @@ export interface components {
              */
             confirm: boolean;
             /**
-             * Installdeps
+             * Install Deps
              * @default false
              */
-            installDeps: boolean;
+            install_deps: boolean;
             /** Name */
             name: string;
             /**
@@ -1892,10 +1796,10 @@ export interface components {
         /** SkillInstallDepsCommand */
         SkillInstallDepsCommand: {
             /**
-             * Binname
+             * Bin Name
              * @default null
              */
-            binName: string | null;
+            bin_name: string | null;
             /** Name */
             name: string;
         };
@@ -1972,20 +1876,20 @@ export interface components {
         };
         /** TokenMetadata */
         TokenMetadata: {
-            /** Createdat */
-            createdAt: number | null;
-            /** Expiresat */
-            expiresAt: number | null;
+            /** Created At */
+            created_at: number | null;
+            /** Expires At */
+            expires_at: number | null;
             /** Kind */
             kind: string;
             /** Label */
             label: string;
-            /** Lastusedat */
-            lastUsedAt: number | null;
+            /** Last Used At */
+            last_used_at: number | null;
             /** Scopes */
             scopes: string[];
-            /** Tokenid */
-            tokenId: string;
+            /** Token Id */
+            token_id: string;
         };
         /** WebuiThreadQuery */
         WebuiThreadQuery: {
@@ -2992,7 +2896,7 @@ export interface operations {
             };
         };
     };
-    settings_provider_update: {
+    settings_update: {
         parameters: {
             query?: never;
             header?: never;
@@ -3001,7 +2905,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["SettingsProviderUpdateCommand"];
+                "application/json": components["schemas"]["SettingsUpdateCommand"];
             };
         };
         responses: {
@@ -3016,7 +2920,7 @@ export interface operations {
             };
         };
     };
-    settings_update: {
+    settings_provider_update: {
         parameters: {
             query?: never;
             header?: never;
@@ -3025,7 +2929,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["SettingsUpdateCommand"];
+                "application/json": components["schemas"]["SettingsProviderUpdateCommand"];
             };
         };
         responses: {
@@ -3256,6 +3160,30 @@ export interface operations {
             };
         };
     };
+    skills_remove: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SkillRemoveCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillsResult"];
+                };
+            };
+        };
+    };
     skills_approve: {
         parameters: {
             query?: never;
@@ -3458,30 +3386,6 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["SkillRejectCommand"];
-            };
-        };
-        responses: {
-            /** @description Success */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SkillsResult"];
-                };
-            };
-        };
-    };
-    skills_remove: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SkillRemoveCommand"];
             };
         };
         responses: {

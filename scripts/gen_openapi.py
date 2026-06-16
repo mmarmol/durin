@@ -46,7 +46,9 @@ def _collect_schemas(
     ``components/schemas``.  Idempotent: re-collecting the same model is a
     no-op (schemas are identical for the same pydantic class).
     """
-    schema = model.model_json_schema(ref_template="#/components/schemas/{model}")
+    schema = model.model_json_schema(
+        ref_template="#/components/schemas/{model}", by_alias=False
+    )
     # Hoist sub-model definitions — pydantic puts them in "$defs".
     for name, defn in schema.pop("$defs", {}).items():
         components[name] = defn

@@ -61,15 +61,15 @@
             "title": "Config",
             "type": "object"
           },
-          "schema": {
+          "json_schema": {
             "additionalProperties": true,
-            "title": "Schema",
+            "title": "Json Schema",
             "type": "object"
           }
         },
         "required": [
           "config",
-          "schema"
+          "json_schema"
         ],
         "title": "ConfigGetResult",
         "type": "object"
@@ -118,8 +118,8 @@
             "title": "Channel",
             "type": "string"
           },
-          "createdAtMs": {
-            "title": "Createdatms",
+          "created_at_ms": {
+            "title": "Created At Ms",
             "type": "integer"
           },
           "enabled": {
@@ -130,8 +130,8 @@
             "title": "Id",
             "type": "string"
           },
-          "isSystem": {
-            "title": "Issystem",
+          "is_system": {
+            "title": "Is System",
             "type": "boolean"
           },
           "message": {
@@ -148,8 +148,8 @@
           "state": {
             "$ref": "#/components/schemas/CronJobStateResult"
           },
-          "updatedAtMs": {
-            "title": "Updatedatms",
+          "updated_at_ms": {
+            "title": "Updated At Ms",
             "type": "integer"
           }
         },
@@ -157,20 +157,20 @@
           "id",
           "name",
           "enabled",
-          "isSystem",
+          "is_system",
           "schedule",
           "message",
           "channel",
           "state",
-          "createdAtMs",
-          "updatedAtMs"
+          "created_at_ms",
+          "updated_at_ms"
         ],
         "title": "CronJobItem",
         "type": "object"
       },
       "CronJobScheduleResult": {
         "properties": {
-          "atMs": {
+          "at_ms": {
             "anyOf": [
               {
                 "type": "integer"
@@ -179,9 +179,9 @@
                 "type": "null"
               }
             ],
-            "title": "Atms"
+            "title": "At Ms"
           },
-          "everyMs": {
+          "every_ms": {
             "anyOf": [
               {
                 "type": "integer"
@@ -190,7 +190,7 @@
                 "type": "null"
               }
             ],
-            "title": "Everyms"
+            "title": "Every Ms"
           },
           "expr": {
             "anyOf": [
@@ -227,8 +227,8 @@
           "kind",
           "label",
           "expr",
-          "everyMs",
-          "atMs",
+          "every_ms",
+          "at_ms",
           "tz"
         ],
         "title": "CronJobScheduleResult",
@@ -240,7 +240,7 @@
             "title": "Executing",
             "type": "boolean"
           },
-          "lastError": {
+          "last_error": {
             "anyOf": [
               {
                 "type": "string"
@@ -249,9 +249,9 @@
                 "type": "null"
               }
             ],
-            "title": "Lasterror"
+            "title": "Last Error"
           },
-          "lastRunAtMs": {
+          "last_run_at_ms": {
             "anyOf": [
               {
                 "type": "integer"
@@ -260,9 +260,9 @@
                 "type": "null"
               }
             ],
-            "title": "Lastrunatms"
+            "title": "Last Run At Ms"
           },
-          "lastStatus": {
+          "last_status": {
             "anyOf": [
               {
                 "type": "string"
@@ -271,9 +271,9 @@
                 "type": "null"
               }
             ],
-            "title": "Laststatus"
+            "title": "Last Status"
           },
-          "nextRunAtMs": {
+          "next_run_at_ms": {
             "anyOf": [
               {
                 "type": "integer"
@@ -282,14 +282,14 @@
                 "type": "null"
               }
             ],
-            "title": "Nextrunatms"
+            "title": "Next Run At Ms"
           }
         },
         "required": [
-          "nextRunAtMs",
-          "lastRunAtMs",
-          "lastStatus",
-          "lastError",
+          "next_run_at_ms",
+          "last_run_at_ms",
+          "last_status",
+          "last_error",
           "executing"
         ],
         "title": "CronJobStateResult",
@@ -431,16 +431,16 @@
       },
       "CrossEncoderTestResult": {
         "properties": {
-          "durationMs": {
-            "title": "Durationms",
+          "duration_ms": {
+            "title": "Duration Ms",
             "type": "number"
           },
           "message": {
             "title": "Message",
             "type": "string"
           },
-          "modelId": {
-            "title": "Modelid",
+          "model_id": {
+            "title": "Model Id",
             "type": "string"
           },
           "status": {
@@ -451,8 +451,8 @@
         "required": [
           "status",
           "message",
-          "modelId",
-          "durationMs"
+          "model_id",
+          "duration_ms"
         ],
         "title": "CrossEncoderTestResult",
         "type": "object"
@@ -482,8 +482,8 @@
             "title": "Message",
             "type": "string"
           },
-          "needsRestart": {
-            "title": "Needsrestart",
+          "needs_restart": {
+            "title": "Needs Restart",
             "type": "boolean"
           },
           "restarting": {
@@ -498,7 +498,7 @@
         },
         "required": [
           "status",
-          "needsRestart",
+          "needs_restart",
           "message"
         ],
         "title": "ExtrasEnsureResult",
@@ -540,8 +540,8 @@
       },
       "ExtrasStatusResult": {
         "properties": {
-          "approxSize": {
-            "title": "Approxsize",
+          "approx_size": {
+            "title": "Approx Size",
             "type": "string"
           },
           "extra": {
@@ -552,8 +552,8 @@
             "title": "Label",
             "type": "string"
           },
-          "needsRestart": {
-            "title": "Needsrestart",
+          "needs_restart": {
+            "title": "Needs Restart",
             "type": "boolean"
           },
           "present": {
@@ -564,8 +564,8 @@
         "required": [
           "present",
           "extra",
-          "approxSize",
-          "needsRestart",
+          "approx_size",
+          "needs_restart",
           "label"
         ],
         "title": "ExtrasStatusResult",
@@ -614,7 +614,7 @@
             "title": "Scopes",
             "type": "array"
           },
-          "ttlS": {
+          "ttl_s": {
             "anyOf": [
               {
                 "type": "number"
@@ -624,7 +624,7 @@
               }
             ],
             "default": null,
-            "title": "Ttls"
+            "title": "Ttl S"
           }
         },
         "required": [
@@ -635,7 +635,7 @@
       },
       "IssueTokenResult": {
         "properties": {
-          "expiresAt": {
+          "expires_at": {
             "anyOf": [
               {
                 "type": "number"
@@ -644,7 +644,7 @@
                 "type": "null"
               }
             ],
-            "title": "Expiresat"
+            "title": "Expires At"
           },
           "scopes": {
             "items": {
@@ -657,16 +657,16 @@
             "title": "Token",
             "type": "string"
           },
-          "tokenId": {
-            "title": "Tokenid",
+          "token_id": {
+            "title": "Token Id",
             "type": "string"
           }
         },
         "required": [
-          "tokenId",
+          "token_id",
           "token",
           "scopes",
-          "expiresAt"
+          "expires_at"
         ],
         "title": "IssueTokenResult",
         "type": "object"
@@ -697,7 +697,7 @@
       "LogsListQuery": {
         "additionalProperties": false,
         "properties": {
-          "beforeTs": {
+          "before_ts": {
             "anyOf": [
               {
                 "type": "number"
@@ -707,7 +707,7 @@
               }
             ],
             "default": null,
-            "title": "Beforets"
+            "title": "Before Ts"
           },
           "channel": {
             "default": [],
@@ -763,7 +763,7 @@
             "title": "Type",
             "type": "array"
           },
-          "windowHours": {
+          "window_hours": {
             "anyOf": [
               {
                 "type": "number"
@@ -773,7 +773,7 @@
               }
             ],
             "default": 24.0,
-            "title": "Windowhours"
+            "title": "Window Hours"
           }
         },
         "title": "LogsListQuery",
@@ -786,8 +786,8 @@
             "title": "Facets",
             "type": "object"
           },
-          "hasMore": {
-            "title": "Hasmore",
+          "has_more": {
+            "title": "Has More",
             "type": "boolean"
           },
           "lines": {
@@ -795,19 +795,19 @@
             "title": "Lines",
             "type": "array"
           },
-          "nextCursor": {
-            "title": "Nextcursor"
+          "next_cursor": {
+            "title": "Next Cursor"
           },
-          "scannedThroughTs": {
-            "title": "Scannedthroughts"
+          "scanned_through_ts": {
+            "title": "Scanned Through Ts"
           }
         },
         "required": [
           "lines",
           "facets",
-          "nextCursor",
-          "scannedThroughTs",
-          "hasMore"
+          "next_cursor",
+          "scanned_through_ts",
+          "has_more"
         ],
         "title": "LogsListResult",
         "type": "object"
@@ -999,7 +999,7 @@
       },
       "ModelCapabilitiesResult": {
         "properties": {
-          "maxInputTokens": {
+          "max_input_tokens": {
             "anyOf": [
               {
                 "type": "integer"
@@ -1008,36 +1008,36 @@
                 "type": "null"
               }
             ],
-            "title": "Maxinputtokens"
+            "title": "Max Input Tokens"
           },
           "model": {
             "title": "Model",
             "type": "string"
           },
-          "supportsAudioInput": {
-            "title": "Supportsaudioinput",
+          "supports_audio_input": {
+            "title": "Supports Audio Input",
             "type": "boolean"
           },
-          "supportsFunctionCalling": {
-            "title": "Supportsfunctioncalling",
+          "supports_function_calling": {
+            "title": "Supports Function Calling",
             "type": "boolean"
           },
-          "supportsReasoning": {
-            "title": "Supportsreasoning",
+          "supports_reasoning": {
+            "title": "Supports Reasoning",
             "type": "boolean"
           },
-          "supportsVision": {
-            "title": "Supportsvision",
+          "supports_vision": {
+            "title": "Supports Vision",
             "type": "boolean"
           }
         },
         "required": [
           "model",
-          "maxInputTokens",
-          "supportsVision",
-          "supportsAudioInput",
-          "supportsFunctionCalling",
-          "supportsReasoning"
+          "max_input_tokens",
+          "supports_vision",
+          "supports_audio_input",
+          "supports_function_calling",
+          "supports_reasoning"
         ],
         "title": "ModelCapabilitiesResult",
         "type": "object"
@@ -1134,18 +1134,18 @@
         "additionalProperties": false,
         "description": "Query for ``GET /api/oauth/codex/poll``.",
         "properties": {
-          "deviceAuthId": {
-            "title": "Deviceauthid",
+          "device_auth_id": {
+            "title": "Device Auth Id",
             "type": "string"
           },
-          "userCode": {
-            "title": "Usercode",
+          "user_code": {
+            "title": "User Code",
             "type": "string"
           }
         },
         "required": [
-          "deviceAuthId",
-          "userCode"
+          "device_auth_id",
+          "user_code"
         ],
         "title": "OAuthPollQuery",
         "type": "object"
@@ -1235,9 +1235,9 @@
         "additionalProperties": false,
         "description": "Command for ``GET /api/oauth/codex/start-loopback``.\n\n``is_local`` gates the loopback flow \u2014 the service raises ``ForbiddenError``\nif False.",
         "properties": {
-          "isLocal": {
+          "is_local": {
             "default": false,
-            "title": "Islocal",
+            "title": "Is Local",
             "type": "boolean"
           }
         },
@@ -1246,46 +1246,46 @@
       },
       "OAuthStartLoopbackResult": {
         "properties": {
-          "authorizeUrl": {
-            "title": "Authorizeurl",
+          "authorize_url": {
+            "title": "Authorize Url",
             "type": "string"
           }
         },
         "required": [
-          "authorizeUrl"
+          "authorize_url"
         ],
         "title": "OAuthStartLoopbackResult",
         "type": "object"
       },
       "OAuthStartResult": {
         "properties": {
-          "deviceAuthId": {
-            "title": "Deviceauthid",
+          "device_auth_id": {
+            "title": "Device Auth Id",
             "type": "string"
           },
-          "expiresIn": {
-            "title": "Expiresin",
+          "expires_in": {
+            "title": "Expires In",
             "type": "integer"
           },
           "interval": {
             "title": "Interval",
             "type": "integer"
           },
-          "userCode": {
-            "title": "Usercode",
+          "user_code": {
+            "title": "User Code",
             "type": "string"
           },
-          "verificationUri": {
-            "title": "Verificationuri",
+          "verification_uri": {
+            "title": "Verification Uri",
             "type": "string"
           }
         },
         "required": [
-          "userCode",
-          "verificationUri",
-          "deviceAuthId",
+          "user_code",
+          "verification_uri",
+          "device_auth_id",
           "interval",
-          "expiresIn"
+          "expires_in"
         ],
         "title": "OAuthStartResult",
         "type": "object"
@@ -1294,9 +1294,9 @@
         "additionalProperties": false,
         "description": "Query for ``GET /api/oauth/codex/status``.\n\n``is_local`` \u2014 True when the HTTP request arrived via localhost \u2014 is used\nto populate ``can_loopback`` in the response.",
         "properties": {
-          "isLocal": {
+          "is_local": {
             "default": false,
-            "title": "Islocal",
+            "title": "Is Local",
             "type": "boolean"
           }
         },
@@ -1305,9 +1305,9 @@
       },
       "OAuthStatusResult": {
         "properties": {
-          "canLoopback": {
+          "can_loopback": {
             "default": false,
-            "title": "Canloopback",
+            "title": "Can Loopback",
             "type": "boolean"
           },
           "connected": {
@@ -1360,13 +1360,13 @@
       "RevokeTokenCommand": {
         "additionalProperties": false,
         "properties": {
-          "tokenId": {
-            "title": "Tokenid",
+          "token_id": {
+            "title": "Token Id",
             "type": "string"
           }
         },
         "required": [
-          "tokenId"
+          "token_id"
         ],
         "title": "RevokeTokenCommand",
         "type": "object"
@@ -1417,8 +1417,8 @@
             "title": "Account",
             "type": "string"
           },
-          "createdAt": {
-            "title": "Createdat",
+          "created_at": {
+            "title": "Created At",
             "type": "string"
           },
           "description": {
@@ -1444,7 +1444,7 @@
             "title": "Service",
             "type": "string"
           },
-          "valueHint": {
+          "value_hint": {
             "anyOf": [
               {
                 "type": "string"
@@ -1453,7 +1453,7 @@
                 "type": "null"
               }
             ],
-            "title": "Valuehint"
+            "title": "Value Hint"
           }
         },
         "required": [
@@ -1463,8 +1463,8 @@
           "description",
           "scope",
           "origin",
-          "createdAt",
-          "valueHint"
+          "created_at",
+          "value_hint"
         ],
         "title": "SecretItem",
         "type": "object"
@@ -1606,7 +1606,7 @@
       "SettingsProviderUpdateCommand": {
         "additionalProperties": false,
         "properties": {
-          "apiBase": {
+          "api_base": {
             "anyOf": [
               {
                 "type": "string"
@@ -1616,9 +1616,9 @@
               }
             ],
             "default": null,
-            "title": "Apibase"
+            "title": "Api Base"
           },
-          "apiKey": {
+          "api_key": {
             "anyOf": [
               {
                 "type": "string"
@@ -1628,7 +1628,7 @@
               }
             ],
             "default": null,
-            "title": "Apikey"
+            "title": "Api Key"
           },
           "provider": {
             "title": "Provider",
@@ -1664,8 +1664,8 @@
             "title": "Providers",
             "type": "array"
           },
-          "requiresRestart": {
-            "title": "Requiresrestart",
+          "requires_restart": {
+            "title": "Requires Restart",
             "type": "boolean"
           },
           "runtime": {
@@ -1673,18 +1673,18 @@
             "title": "Runtime",
             "type": "object"
           },
-          "webSearch": {
+          "web_search": {
             "additionalProperties": true,
-            "title": "Websearch",
+            "title": "Web Search",
             "type": "object"
           }
         },
         "required": [
           "agent",
           "providers",
-          "webSearch",
+          "web_search",
           "runtime",
-          "requiresRestart"
+          "requires_restart"
         ],
         "title": "SettingsResult",
         "type": "object"
@@ -1723,7 +1723,7 @@
       "SettingsWebSearchUpdateCommand": {
         "additionalProperties": false,
         "properties": {
-          "apiKey": {
+          "api_key": {
             "anyOf": [
               {
                 "type": "string"
@@ -1733,9 +1733,9 @@
               }
             ],
             "default": null,
-            "title": "Apikey"
+            "title": "Api Key"
           },
-          "baseUrl": {
+          "base_url": {
             "anyOf": [
               {
                 "type": "string"
@@ -1745,7 +1745,7 @@
               }
             ],
             "default": null,
-            "title": "Baseurl"
+            "title": "Base Url"
           },
           "provider": {
             "title": "Provider",
@@ -1766,9 +1766,9 @@
             "title": "Confirm",
             "type": "boolean"
           },
-          "installDeps": {
+          "install_deps": {
             "default": false,
-            "title": "Installdeps",
+            "title": "Install Deps",
             "type": "boolean"
           },
           "name": {
@@ -1894,7 +1894,7 @@
       "SkillInstallDepsCommand": {
         "additionalProperties": false,
         "properties": {
-          "binName": {
+          "bin_name": {
             "anyOf": [
               {
                 "type": "string"
@@ -1904,7 +1904,7 @@
               }
             ],
             "default": null,
-            "title": "Binname"
+            "title": "Bin Name"
           },
           "name": {
             "title": "Name",
@@ -2080,7 +2080,7 @@
       },
       "TokenMetadata": {
         "properties": {
-          "createdAt": {
+          "created_at": {
             "anyOf": [
               {
                 "type": "number"
@@ -2089,9 +2089,9 @@
                 "type": "null"
               }
             ],
-            "title": "Createdat"
+            "title": "Created At"
           },
-          "expiresAt": {
+          "expires_at": {
             "anyOf": [
               {
                 "type": "number"
@@ -2100,7 +2100,7 @@
                 "type": "null"
               }
             ],
-            "title": "Expiresat"
+            "title": "Expires At"
           },
           "kind": {
             "title": "Kind",
@@ -2110,7 +2110,7 @@
             "title": "Label",
             "type": "string"
           },
-          "lastUsedAt": {
+          "last_used_at": {
             "anyOf": [
               {
                 "type": "number"
@@ -2119,7 +2119,7 @@
                 "type": "null"
               }
             ],
-            "title": "Lastusedat"
+            "title": "Last Used At"
           },
           "scopes": {
             "items": {
@@ -2128,19 +2128,19 @@
             "title": "Scopes",
             "type": "array"
           },
-          "tokenId": {
-            "title": "Tokenid",
+          "token_id": {
+            "title": "Token Id",
             "type": "string"
           }
         },
         "required": [
-          "tokenId",
+          "token_id",
           "label",
           "scopes",
           "kind",
-          "createdAt",
-          "expiresAt",
-          "lastUsedAt"
+          "created_at",
+          "expires_at",
+          "last_used_at"
         ],
         "title": "TokenMetadata",
         "type": "object"
