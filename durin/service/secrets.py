@@ -131,6 +131,12 @@ class SecretsService:
         :class:`ValidationFailedError`. ``created_at`` and ``origin`` survive an
         edit (``SecretStore.put`` preserves ``created_at``; ``origin`` is taken
         from the existing entry here).
+
+        Distinct from ``durin.security.secrets.store_secret`` (used by the
+        onboard wizard / provider setup): that helper *sanitizes* an arbitrary
+        label into an env-var-safe name and returns a ``${secret:}`` reference,
+        whereas this takes an already-valid name and returns the stored
+        metadata. The two have different contracts — do not merge them.
         """
         from durin.security.secrets import (
             SecretError,
