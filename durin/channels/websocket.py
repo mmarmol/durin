@@ -590,6 +590,8 @@ class WebSocketChannel(BaseChannel):
         registry.register("settings", SettingsService())
         registry.register("config", ConfigService())
         registry.register("skills", SkillsService(workspace=self._endpoint_workspace()))
+        from durin.service.memory import MemoryService
+        registry.register("memory", MemoryService(workspace_resolver=self._endpoint_workspace))
         return registry
 
     def _endpoint_workspace(self) -> Path:
@@ -890,34 +892,34 @@ class WebSocketChannel(BaseChannel):
             return await self._handle_models_list(request)
 
         if got == "/api/memory/graph":
-            return self._handle_memory_graph(request)
+            return await self._handle_memory_graph(request)
 
         if got == "/api/memory/subgraph":
-            return self._handle_memory_subgraph(request, query)
+            return await self._handle_memory_subgraph(request, query)
 
         if got == "/api/memory/search":
             return await self._handle_memory_search_api(request, query)
 
         m = re.match(r"^/api/memory/entity/(.+)$", got)
         if m:
-            return self._handle_memory_entity(request, m.group(1))
+            return await self._handle_memory_entity(request, m.group(1))
 
         m = re.match(r"^/api/memory/session/(.+)$", got)
         if m:
-            return self._handle_memory_session(request, m.group(1))
+            return await self._handle_memory_session(request, m.group(1))
 
         m = re.match(r"^/api/memory/edge/([^/]+)/([^/]+)$", got)
         if m:
-            return self._handle_memory_edge(request, m.group(1), m.group(2))
+            return await self._handle_memory_edge(request, m.group(1), m.group(2))
 
         if got == "/api/memory/entry":
-            return self._handle_memory_entry(request, query)
+            return await self._handle_memory_entry(request, query)
 
         if got == "/api/memory/forget":
-            return self._handle_memory_forget(request, query)
+            return await self._handle_memory_forget(request, query)
 
         if got == "/api/memory/backlinks":
-            return self._handle_memory_backlinks(request, query)
+            return await self._handle_memory_backlinks(request, query)
 
         if got == "/api/model/test":
             return await self._handle_model_test(request)
@@ -1054,37 +1056,24 @@ class WebSocketChannel(BaseChannel):
             }
         )
 
-    def _handle_memory_graph(self, request: WsRequest) -> Response:
-        """GET /api/memory/graph — entity-centric memory as nodes + edges.
-
-        Read-only over ``memory/entities/<type>/*.md`` + episodic
-        co-occurrence. Powers the Obsidian-style graph view in the
-        webui. No LLM call, no mutation. See
-        :func:`durin.memory.graph.build_memory_graph` for the shape.
-        """
+    async def _handle_memory_graph(self, request: WsRequest) -> Response:
+        """GET /api/memory/graph — entity-centric memory as nodes + edges."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
-        from durin.config.loader import load_config
-        from durin.memory.graph import build_memory_graph
+        from durin.service.memory import MemoryGraphQuery
 
         try:
-            workspace = self._endpoint_workspace()
-            payload = build_memory_graph(workspace)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("memory graph build failed")
-            return _http_error(500, f"memory graph build failed: {exc}")
-        return _http_json_response(payload)
+            result = await self._services.get("memory").graph(
+                MemoryGraphQuery(), Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
+        return _http_json_response(result.data)
 
-    def _handle_memory_subgraph(
+    async def _handle_memory_subgraph(
         self, request: WsRequest, query: dict[str, list[str]]
     ) -> Response:
-        """GET /api/memory/subgraph?ref=<type:slug>&hops=N — ego-graph.
-
-        Returns the node + its N-hop neighbourhood (default 1), UNcapped, so
-        the webui "focus" mode can centre any node — including one the global
-        overview dropped or that the user reached via search. See
-        :func:`durin.memory.graph.build_entity_subgraph`.
-        """
+        """GET /api/memory/subgraph?ref=<type:slug>&hops=N — ego-graph."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         ref = _query_first(query, "ref") or ""
@@ -1094,210 +1083,153 @@ class WebSocketChannel(BaseChannel):
             hops = int(_query_first(query, "hops") or "1")
         except ValueError:
             hops = 1
-        from durin.memory.graph import build_entity_subgraph
+        from durin.service.memory import MemorySubgraphQuery
 
         try:
-            workspace = self._endpoint_workspace()
-            payload = build_entity_subgraph(workspace, ref, hops=max(1, min(hops, 3)))
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("memory subgraph build failed")
-            return _http_error(500, f"memory subgraph build failed: {exc}")
-        return _http_json_response(payload)
+            result = await self._services.get("memory").subgraph(
+                MemorySubgraphQuery(ref=ref, hops=hops), Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
+        return _http_json_response(result.data)
 
-    def _handle_memory_entity(self, request: WsRequest, ref_encoded: str) -> Response:
-        """GET /api/memory/entity/<ref> — full page + history + archive + entries.
-
-        ``<ref>`` is the entity reference (``type:slug``) URL-encoded —
-        ``person%3Amarcelo``. Returns 404 when the canonical page is
-        missing on disk. See :func:`graph_api.get_entity_detail`.
-        """
+    async def _handle_memory_entity(self, request: WsRequest, ref_encoded: str) -> Response:
+        """GET /api/memory/entity/<ref> — full page + history + archive + entries."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         from urllib.parse import unquote
 
-        from durin.config.loader import load_config
-        from durin.memory.graph_api import get_entity_detail
+        from durin.service.memory import MemoryEntityQuery
 
         ref = unquote(ref_encoded)
         try:
-            workspace = self._endpoint_workspace()
-            payload = get_entity_detail(workspace, ref)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("memory entity detail failed for {}", ref)
-            return _http_error(500, f"entity detail failed: {exc}")
-        if payload is None:
-            return _http_error(404, f"entity not found: {ref}")
-        return _http_json_response(payload)
+            result = await self._services.get("memory").entity(
+                MemoryEntityQuery(ref=ref), Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
+        return _http_json_response(result.data)
 
-    def _handle_memory_session(
+    async def _handle_memory_session(
         self, request: WsRequest, stem_encoded: str,
     ) -> Response:
-        """GET /api/memory/session/<stem> — session detail for the graph view.
-
-        ``<stem>`` is the filename stem (e.g. ``cli_direct``,
-        ``websocket_<uuid>``), URL-encoded. Returns 404 when the
-        corresponding ``sessions/<stem>.jsonl`` doesn't exist.
-        """
+        """GET /api/memory/session/<stem> — session detail for the graph view."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         from urllib.parse import unquote
 
-        from durin.config.loader import load_config
-        from durin.memory.graph_api import get_session_detail
+        from durin.service.memory import MemorySessionQuery
 
         stem = unquote(stem_encoded)
         try:
-            workspace = self._endpoint_workspace()
-            payload = get_session_detail(workspace, stem)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("memory session detail failed for {}", stem)
-            return _http_error(500, f"session detail failed: {exc}")
-        if payload is None:
-            return _http_error(404, f"session not found: {stem}")
-        return _http_json_response(payload)
+            result = await self._services.get("memory").session(
+                MemorySessionQuery(stem=stem), Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
+        return _http_json_response(result.data)
 
-    def _handle_memory_entry(
+    async def _handle_memory_entry(
         self, request: WsRequest, query: dict[str, list[str]],
     ) -> Response:
-        """GET /api/memory/entry?uri=memory/<class>/<id> — one entry's frontmatter + body.
-
-        Distinct from ``_handle_memory_entity`` (which serves entity
-        PAGES under ``memory/entities/``). This handler is for the
-        individual entries — episodic / stable / corpus /
-        session_summary — that the P12 Entries panel browses.
-        """
+        """GET /api/memory/entry?uri=memory/<class>/<id> — one entry's frontmatter + body."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
-        from durin.config.loader import load_config
-        from durin.memory.graph_api import get_entry_detail
+        from durin.service.memory import MemoryEntryQuery
 
         uri = (_query_first(query, "uri") or "").strip()
         try:
-            workspace = self._endpoint_workspace()
-            payload = get_entry_detail(workspace, uri)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("memory entry detail failed for {}", uri)
-            return _http_error(500, f"entry detail failed: {exc}")
-        if payload is None:
-            return _http_error(404, f"entry not found: {uri}")
-        return _http_json_response(payload)
+            result = await self._services.get("memory").entry(
+                MemoryEntryQuery(uri=uri), Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
+        return _http_json_response(result.data)
 
-    def _handle_memory_forget(
+    async def _handle_memory_forget(
         self, request: WsRequest, query: dict[str, list[str]],
     ) -> Response:
         """GET /api/memory/forget?uri=memory/<class>/<id> — archive an entry.
 
         Returns ``{"result": "archived"|"not_found"|"protected"|"invalid"}``.
         HTTP status mirrors the result: 200 archived/not_found,
-        403 protected, 400 invalid. (Operators can distinguish "URI
-        was malformed" from "URI named a real entry that's gone"
-        without parsing the body.)
+        403 protected, 400 invalid.
         """
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
-        from durin.config.loader import load_config
-        from durin.memory.graph_api import forget_entry
+        from durin.service.memory import MemoryForgetCommand
 
         uri = (_query_first(query, "uri") or "").strip()
         try:
-            workspace = self._endpoint_workspace()
-            payload = forget_entry(workspace, uri)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("memory forget failed for {}", uri)
-            return _http_error(500, f"forget failed: {exc}")
-        result = payload.get("result")
-        if result == "protected":
-            # 403 + payload so the UI can switch on result text too.
+            result = await self._services.get("memory").forget(
+                MemoryForgetCommand(uri=uri), Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
+        payload = {"result": result.result}
+        if result.result == "protected":
             return _http_json_response(payload, status=403)
-        if result == "invalid":
+        if result.result == "invalid":
             return _http_json_response(payload, status=400)
         return _http_json_response(payload)
 
-    def _handle_memory_backlinks(
+    async def _handle_memory_backlinks(
         self, request: WsRequest, query: dict[str, list[str]],
     ) -> Response:
-        """GET /api/memory/backlinks?uri=memory/<class>/<id> — entries that reference this one.
-
-        Walks ``memory/`` (excluding archive / pending) once and returns
-        up to 50 hits (``truncated`` flag indicates more were found).
-        Synchronous; benchmark target is < 100 ms over O(thousands) of
-        entries.
-        """
+        """GET /api/memory/backlinks?uri=memory/<class>/<id> — entries that reference this one."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
-        from durin.config.loader import load_config
-        from durin.memory.graph_api import get_entry_backlinks
+        from durin.service.memory import MemoryBacklinksQuery
 
         uri = (_query_first(query, "uri") or "").strip()
         try:
-            workspace = self._endpoint_workspace()
-            payload = get_entry_backlinks(workspace, uri)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("memory backlinks failed for {}", uri)
-            return _http_error(500, f"backlinks failed: {exc}")
-        return _http_json_response(payload)
+            result = await self._services.get("memory").backlinks(
+                MemoryBacklinksQuery(uri=uri), Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
+        return _http_json_response(result.data)
 
-    def _handle_memory_edge(
+    async def _handle_memory_edge(
         self, request: WsRequest, source_enc: str, target_enc: str,
     ) -> Response:
-        """GET /api/memory/edge/<source>/<target> — entries co-mentioning both.
-
-        Both refs URL-encoded. Returns the raw evidence behind a graph
-        edge: episodic entries that tag BOTH refs.
-        """
+        """GET /api/memory/edge/<source>/<target> — entries co-mentioning both."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
         from urllib.parse import unquote
 
-        from durin.config.loader import load_config
-        from durin.memory.graph_api import get_edge_detail
+        from durin.service.memory import MemoryEdgeQuery
 
         a = unquote(source_enc)
         b = unquote(target_enc)
         try:
-            workspace = self._endpoint_workspace()
-            payload = get_edge_detail(workspace, a, b)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("memory edge detail failed for {} ↔ {}", a, b)
-            return _http_error(500, f"edge detail failed: {exc}")
-        return _http_json_response(payload)
+            result = await self._services.get("memory").edge(
+                MemoryEdgeQuery(a=a, b=b), Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
+        return _http_json_response(result.data)
 
     async def _handle_memory_search_api(
         self, request: WsRequest, query: dict[str, list[str]],
     ) -> Response:
-        """GET /api/memory/search?q=…&scope=…&level=… — same shape as memory_search tool.
-
-        Mirrors the LLM tool's surface so the webui filter behaves
-        identically to what the agent sees. Results carry ``kind`` +
-        ``rendered`` per doc 25 §2.H so canonical vs fragment markers
-        stay consistent across paths.
-        """
+        """GET /api/memory/search?q=…&scope=…&level=… — same shape as memory_search tool."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
-        from durin.config.loader import load_config
-        from durin.memory.graph_api import search_memory_api
+        from durin.service.memory import MemorySearchQuery
 
         q = _query_first(query, "q") or ""
         scope = _query_first(query, "scope") or "all"
         level = _query_first(query, "level") or "warm"
         kinds = _query_first(query, "kinds") or "all"
         try:
-            cfg = load_config()
-            workspace = cfg.workspace_path
-            embedding_model = None
-            try:
-                if cfg.memory.enabled:
-                    embedding_model = cfg.memory.embedding.model
-            except (AttributeError, TypeError):
-                embedding_model = None
-            payload = await search_memory_api(
-                workspace, q, scope=scope, level=level, kinds=kinds,
-                embedding_model=embedding_model,
+            result = await self._services.get("memory").search(
+                MemorySearchQuery(q=q, scope=scope, level=level, kinds=kinds),
+                Principal.local(),
             )
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("memory search api failed")
-            return _http_error(500, f"memory search failed: {exc}")
-        return _http_json_response(payload)
+        except DomainError as err:
+            return _domain_error_response(err)
+        return _http_json_response(result.data)
 
     async def _handle_sessions_list(self, request: WsRequest) -> Response:
         if not self._check_api_token(request):
