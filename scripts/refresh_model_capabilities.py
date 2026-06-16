@@ -309,12 +309,9 @@ _NUMERIC_FIELDS = ("max_input_tokens", "max_output_tokens")
 
 
 def _merge(into: dict[str, Any], incoming: dict[str, Any]) -> None:
-    """Merge *incoming* capability dict into *into* in place.
-
-    Booleans use OR — once True, stays True. Numerics take MAX of the
-    two values (None < int). ``mode`` keeps the first non-default
-    value seen (sources rarely disagree here).
-    """
+    """Legacy OR/MAX merge — kept for backward compat with tests that
+    call it directly. The main ``consolidate()`` path now uses the
+    staged majority-vote merger instead."""
     for f in _BOOL_FIELDS:
         if incoming.get(f):
             into[f] = True
@@ -328,26 +325,78 @@ def _merge(into: dict[str, Any], incoming: dict[str, Any]) -> None:
         into["mode"] = incoming["mode"]
 
 
+# Source priority for tie-breaking when sources disagree equally.
+# Lower index = higher confidence. Vendor adapters always win (Phase 2
+# overlay handles that separately); this ordering is for community
+# sources only.
+_SOURCE_PRIORITY = ("litellm", "models.dev", "openrouter")
+
+
+def _resolve_bool_majority(values: dict[str, bool]) -> tuple[bool, list[str] | None]:
+    """Majority vote on boolean values across sources.
+
+    Returns ``(resolved_value, conflicting_sources)``. If 2+ sources
+    agree, that value wins. If sources disagree, the conflict list is
+    non-None. Ties (1v1) break by ``_SOURCE_PRIORITY``.
+    """
+    true_srcs = [s for s, v in values.items() if v is True]
+    false_srcs = [s for s, v in values.items() if v is False]
+    if len(true_srcs) > len(false_srcs):
+        conflict = list(values.keys()) if false_srcs else None
+        return True, conflict
+    if len(false_srcs) > len(true_srcs):
+        conflict = list(values.keys()) if true_srcs else None
+        return False, conflict
+    # Tie — break by source priority.
+    conflict = list(values.keys()) if len(values) > 1 else None
+    for src in _SOURCE_PRIORITY:
+        for s, v in values.items():
+            if s.startswith(src):
+                return v, conflict
+    # Fallback: first value seen.
+    return next(iter(values.values())), conflict
+
+
+def _resolve_numeric_median(values: dict[str, int]) -> tuple[int | None, list[str] | None]:
+    """Take the median of numeric values across sources.
+
+    Median is more robust than MAX — it doesn't inflate context windows
+    when one source overestimates. Returns ``(resolved, conflict)``.
+    Conflict is flagged when max/min ratio exceeds 2x.
+    """
+    nums = sorted(v for v in values.values() if v is not None and v > 0)
+    if not nums:
+        return None, None
+    mid = len(nums) // 2
+    resolved = nums[mid] if len(nums) % 2 else (nums[mid - 1] + nums[mid]) // 2
+    conflict = None
+    if len(nums) > 1 and min(nums) > 0 and max(nums) / min(nums) > 2.0:
+        conflict = list(values.keys())
+    return resolved, conflict
+
+
 def consolidate(
     litellm: dict[str, Any] | None,
     openrouter: dict[str, Any] | None,
     models_dev: dict[str, Any] | None,
     vendor_streams: list[Iterable[tuple[str, str, dict[str, Any]]]] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """Merge community sources + apply vendor-API overrides.
+    """Merge community sources via majority vote + apply vendor overrides.
 
-    Phase 1 — community merge (OR for bools, MAX for numerics): same as
-    before. Phase 2 — vendor overlay: for every field a vendor adapter
-    explicitly asserted, overwrite the merged value. Vendor-sourced
+    Phase 1 — community merge with conflict detection: per-source values
+    are staged, then bools resolved by majority vote (2 of 3 wins, ties
+    break by source priority), numerics by median. Disagreements are
+    recorded in ``_conflicts``.
+
+    Phase 2 — vendor overlay: sparse — only fields a vendor adapter
+    explicitly asserted overwrite the merged values. Vendor-sourced
     entries are tagged ``_authority="vendor"``; everything else stays
     ``_authority="merge"``.
-
-    ``vendor_streams`` accepts a pre-materialised list (the CLI builds
-    it via ``_vendor_sources.iter_vendor_streams``). Tests can pass
-    custom streams directly. ``None`` means "no vendor data" and the
-    function behaves identically to the pre-vendor version.
     """
-    out: dict[str, dict[str, Any]] = {}
+    # Stage 1: collect per-source values per model per field.
+    # staged[canon][field] = {source_label: value}
+    staged: dict[str, dict[str, dict[str, Any]]] = {}
+    source_order: dict[str, list[str]] = {}
 
     streams: list[Iterable[tuple[str, str, dict[str, Any]]]] = []
     if litellm:
@@ -359,14 +408,49 @@ def consolidate(
 
     for stream in streams:
         for canon, src_label, caps in stream:
-            entry = out.setdefault(canon, _empty_entry())
-            _merge(entry, caps)
-            entry["_sources"].append(src_label)
+            model = staged.setdefault(canon, {})
+            order = source_order.setdefault(canon, [])
+            if src_label not in order:
+                order.append(src_label)
+            for field in _BOOL_FIELDS + _NUMERIC_FIELDS:
+                val = caps.get(field)
+                if val is not None:
+                    model.setdefault(field, {})[src_label] = val
+
+    # Stage 2: resolve staged values into final entries.
+    out: dict[str, dict[str, Any]] = {}
+    for canon, fields in staged.items():
+        entry = _empty_entry()
+        entry["_sources"] = source_order.get(canon, [])
+        conflicts: list[str] = []
+
+        for f in _BOOL_FIELDS:
+            vals = fields.get(f)
+            if vals:
+                resolved, conflict = _resolve_bool_majority(vals)
+                entry[f] = resolved
+                if conflict:
+                    pretty = ", ".join(f"{s}={vals[s]}" for s in conflict)
+                    conflicts.append(f"{f}({pretty})")
+
+        for f in _NUMERIC_FIELDS:
+            vals = fields.get(f)
+            if vals:
+                resolved, conflict = _resolve_numeric_median(vals)
+                if resolved is not None:
+                    entry[f] = resolved
+                if conflict:
+                    pretty = ", ".join(f"{s}={vals[s]}" for s in conflict)
+                    conflicts.append(f"{f}({pretty})")
+
+        if conflicts:
+            entry["_conflicts"] = conflicts
+
+        out[canon] = entry
 
     # Phase 2: vendor overlay. Sparse — only fields the vendor
     # explicitly answered overwrite the merged values. New canonical
-    # keys discovered by vendors (not in any community source) are
-    # added with _authority="vendor".
+    # keys discovered by vendors are added with _authority="vendor".
     for stream in vendor_streams or []:
         for canon, src_label, caps in stream:
             entry = out.setdefault(canon, _empty_entry())
@@ -396,6 +480,34 @@ def _empty_entry() -> dict[str, Any]:
     }
 
 
+def sanity_check(models: dict[str, dict[str, Any]]) -> list[str]:
+    """Post-merge validation — flags logically contradictory entries.
+
+    Returns a list of human-readable warning strings. Does NOT mutate
+    the data; only reports issues for the operator to review.
+    """
+    warnings: list[str] = []
+    for name, entry in models.items():
+        if not isinstance(entry, dict):
+            continue
+        # audio_output without audio_input is suspicious (a model that
+        # can speak but not hear?).
+        if entry.get("supports_audio_output") and not entry.get("supports_audio_input"):
+            warnings.append(f"{name}: supports_audio_output=True but supports_audio_input=False")
+        # image_output without vision is extremely unlikely.
+        if entry.get("supports_image_output") and not entry.get("supports_vision"):
+            warnings.append(f"{name}: supports_image_output=True but supports_vision=False")
+        # output > input tokens — the model produces more than it can read.
+        mi = entry.get("max_input_tokens")
+        mo = entry.get("max_output_tokens")
+        if isinstance(mi, int) and isinstance(mo, int) and mi > 0 and mo > mi * 4:
+            warnings.append(f"{name}: max_output_tokens ({mo}) >> max_input_tokens ({mi})")
+        # function_calling without any text chat mode is suspicious.
+        if entry.get("supports_function_calling") and entry.get("mode") == "image_generation":
+            warnings.append(f"{name}: supports_function_calling=True but mode=image_generation")
+    return warnings
+
+
 def build_consensus_file(
     litellm: dict[str, Any] | None,
     openrouter: dict[str, Any] | None,
@@ -406,6 +518,10 @@ def build_consensus_file(
 ) -> dict[str, Any]:
     """Wrap the merged models dict in the on-disk schema."""
     models = consolidate(litellm, openrouter, models_dev, vendor_streams=vendor_streams)
+    sanity_warnings = sanity_check(models)
+    if sanity_warnings:
+        for w in sanity_warnings:
+            print(f"  ⚠ {w}", file=sys.stderr)
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     return {
         # v2: vendor-source provenance added. Backward-compatible with
