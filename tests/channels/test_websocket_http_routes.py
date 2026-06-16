@@ -10,6 +10,7 @@ from starlette.testclient import TestClient
 
 from durin.api.asgi import build_gateway_http_app
 from durin.channels.websocket import WebSocketChannel
+from durin.service.types import UnauthenticatedError
 from durin.session.manager import Session, SessionManager
 
 
@@ -568,32 +569,12 @@ def test_unknown_route_returns_404(
 
 
 
-class _FakeConn:
-    """Minimal connection stub with a configurable remote_address."""
-
-    def __init__(self, remote_address: tuple[str, int]):
-        self.remote_address = remote_address
-
-    def respond(self, status: int, body: str) -> Any:
-        from websockets.http11 import Response
-
-        return Response(status=status, body=body.encode())
-
-
-class _FakeReq:
-    """Minimal request stub with configurable headers."""
-
-    def __init__(self, headers: dict[str, str] | None = None):
-        self.headers = headers or {}
-
-
-_REMOTE = _FakeConn(("192.168.1.5", 12345))
-_LOCAL = _FakeConn(("127.0.0.1", 12345))
-_NO_HEADERS = _FakeReq()
+# bootstrap is exercised directly via (peer, headers); failures raise DomainError.
+_REMOTE = ("192.168.1.5", 12345)
+_LOCAL = ("127.0.0.1", 12345)
 
 
 def test_wildcard_host_without_auth_raises_on_startup(bus: MagicMock) -> None:
-    import pytest
     from pydantic_core import ValidationError
 
     with pytest.raises(ValidationError, match="token"):
@@ -611,7 +592,6 @@ def test_wildcard_host_with_secret_is_valid(bus: MagicMock) -> None:
 
 
 def test_wildcard_ipv6_without_auth_raises(bus: MagicMock) -> None:
-    import pytest
     from pydantic_core import ValidationError
 
     with pytest.raises(ValidationError, match="token"):
@@ -620,27 +600,21 @@ def test_wildcard_ipv6_without_auth_raises(bus: MagicMock) -> None:
 
 def test_wildcard_ipv6_with_secret_is_valid(bus: MagicMock) -> None:
     channel = _ch(bus, host="::", tokenIssueSecret="s3cret")
-    resp = channel._handle_bootstrap(
-        _REMOTE, _FakeReq({"X-Durin-Auth": "s3cret"})
-    )
-    assert resp.status_code == 200
+    payload = channel.bootstrap(peer=_REMOTE, headers={"X-Durin-Auth": "s3cret"})
+    assert payload["token"].startswith("nbwt_")
 
 
 def test_bootstrap_accepts_static_token_as_secret(bus: MagicMock) -> None:
     """When only token (not token_issue_secret) is set, bootstrap accepts it."""
     channel = _ch(bus, host="0.0.0.0", token="static-tok")
-    resp = channel._handle_bootstrap(
-        _REMOTE, _FakeReq({"Authorization": "Bearer static-tok"})
-    )
-    assert resp.status_code == 200
-    body = json.loads(resp.body)
-    assert body["token"].startswith("nbwt_")
+    payload = channel.bootstrap(peer=_REMOTE, headers={"Authorization": "Bearer static-tok"})
+    assert payload["token"].startswith("nbwt_")
 
 
 def test_localhost_without_auth_is_valid(bus: MagicMock) -> None:
     channel = _ch(bus, host="127.0.0.1")
-    resp = channel._handle_bootstrap(_LOCAL, _NO_HEADERS)
-    assert resp.status_code == 200
+    payload = channel.bootstrap(peer=_LOCAL, headers={})
+    assert payload["token"].startswith("nbwt_")
 
 
 def test_bootstrap_prefers_runtime_model_name(bus: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -649,10 +623,8 @@ def test_bootstrap_prefers_runtime_model_name(bus: MagicMock, monkeypatch: pytes
         lambda: "from-disk",
     )
     channel = _ch(bus, host="127.0.0.1", runtime_model_name=lambda: "  live/model  ")
-    resp = channel._handle_bootstrap(_LOCAL, _NO_HEADERS)
-    assert resp.status_code == 200
-    body = json.loads(resp.body)
-    assert body["model_name"] == "live/model"
+    payload = channel.bootstrap(peer=_LOCAL, headers={})
+    assert payload["model_name"] == "live/model"
 
 
 def test_bootstrap_falls_back_when_runtime_returns_empty(bus: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -661,10 +633,8 @@ def test_bootstrap_falls_back_when_runtime_returns_empty(bus: MagicMock, monkeyp
         lambda: "from-disk",
     )
     channel = _ch(bus, host="127.0.0.1", runtime_model_name=lambda: "   ")
-    resp = channel._handle_bootstrap(_LOCAL, _NO_HEADERS)
-    assert resp.status_code == 200
-    body = json.loads(resp.body)
-    assert body["model_name"] == "from-disk"
+    payload = channel.bootstrap(peer=_LOCAL, headers={})
+    assert payload["model_name"] == "from-disk"
 
 
 def test_bootstrap_falls_back_when_runtime_raises(bus: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -677,40 +647,30 @@ def test_bootstrap_falls_back_when_runtime_raises(bus: MagicMock, monkeypatch: p
         raise RuntimeError("resolver failed")
 
     channel = _ch(bus, host="127.0.0.1", runtime_model_name=boom)
-    resp = channel._handle_bootstrap(_LOCAL, _NO_HEADERS)
-    assert resp.status_code == 200
-    body = json.loads(resp.body)
-    assert body["model_name"] == "from-disk"
+    payload = channel.bootstrap(peer=_LOCAL, headers={})
+    assert payload["model_name"] == "from-disk"
 
 
 def test_bootstrap_rejects_wrong_secret(bus: MagicMock) -> None:
     channel = _ch(bus, host="0.0.0.0", tokenIssueSecret="correct")
-    resp = channel._handle_bootstrap(
-        _REMOTE, _FakeReq({"Authorization": "Bearer wrong"})
-    )
-    assert resp.status_code == 401
+    with pytest.raises(UnauthenticatedError):
+        channel.bootstrap(peer=_REMOTE, headers={"Authorization": "Bearer wrong"})
 
 
 def test_bootstrap_accepts_remote_with_valid_secret(bus: MagicMock) -> None:
     channel = _ch(bus, host="0.0.0.0", tokenIssueSecret="s3cret")
-    resp = channel._handle_bootstrap(
-        _REMOTE, _FakeReq({"Authorization": "Bearer s3cret"})
-    )
-    assert resp.status_code == 200
-    body = json.loads(resp.body)
-    assert body["token"].startswith("nbwt_")
+    payload = channel.bootstrap(peer=_REMOTE, headers={"Authorization": "Bearer s3cret"})
+    assert payload["token"].startswith("nbwt_")
 
 
 def test_bootstrap_accepts_x_durin_auth_header(bus: MagicMock) -> None:
     channel = _ch(bus, host="0.0.0.0", tokenIssueSecret="s3cret")
-    resp = channel._handle_bootstrap(
-        _REMOTE, _FakeReq({"X-Durin-Auth": "s3cret"})
-    )
-    assert resp.status_code == 200
+    payload = channel.bootstrap(peer=_REMOTE, headers={"X-Durin-Auth": "s3cret"})
+    assert payload["token"].startswith("nbwt_")
 
 
 def test_bootstrap_secret_also_enforced_on_localhost(bus: MagicMock) -> None:
     """When secret is set, even localhost must provide it (reverse-proxy safety)."""
     channel = _ch(bus, host="0.0.0.0", tokenIssueSecret="s3cret")
-    resp = channel._handle_bootstrap(_LOCAL, _NO_HEADERS)
-    assert resp.status_code == 401
+    with pytest.raises(UnauthenticatedError):
+        channel.bootstrap(peer=_LOCAL, headers={})

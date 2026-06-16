@@ -106,6 +106,12 @@ class ValidationFailedError(DomainError):
     code = "validation_failed"
 
 
+class TooManyRequestsError(DomainError):
+    """The caller exceeded a rate or quantity limit (HTTP 429)."""
+
+    code = "too_many_requests"
+
+
 class UnavailableError(DomainError):
     """A dependency needed to serve the request is not available (HTTP 503)."""
 

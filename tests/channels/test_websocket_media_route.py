@@ -3,7 +3,7 @@ integration on ``/api/sessions/<key>/messages``.
 
 The route is the return path for images attached to persisted user turns:
 :meth:`WebSocketChannel._sign_media_path` mints URLs during session reads,
-and :meth:`WebSocketChannel._handle_media_fetch` serves the bytes back.
+and :meth:`WebSocketChannel.media_fetch` serves the bytes back.
 These tests cover the two halves end-to-end plus the adversarial edges
 (bad signatures, ``..`` traversal, non-existent files, non-image types).
 """

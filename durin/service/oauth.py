@@ -3,13 +3,11 @@
 Wraps ``durin.providers.codex_device_auth`` functions.  Pure: no HTTP/WS
 imports, no request object.
 
-Adapter concerns that stay in the shim
----------------------------------------
-``is_local`` — whether the request came via localhost — is an HTTP adapter
-concern (reads ``request.headers["Host"]``).  The shim computes it via
-``_request_host_is_local(request)`` and passes it into every Command/Query that
-needs it.  The service enforces the constraint (raises ``ForbiddenError`` if
-a loopback start is attempted from a non-local context).
+Locality
+--------
+``is_local`` — whether the loopback OAuth flow can reach the caller's browser —
+is carried on the Command/Query and enforced by the service, which raises
+``ForbiddenError`` when a loopback start is attempted from a non-local context.
 
 Scopes
 ------

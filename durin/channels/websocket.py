@@ -5,11 +5,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
-import dataclasses
-import email.utils
 import hashlib
 import hmac
-import http
 import json
 import mimetypes
 import re
@@ -25,7 +22,6 @@ from typing import TYPE_CHECKING, Any, Self
 from loguru import logger
 from pydantic import Field, field_validator, model_validator
 from websockets.exceptions import ConnectionClosed
-from websockets.http11 import Request as WsRequest
 
 from durin.bus.events import OUTBOUND_META_AGENT_UI, OutboundMessage
 from durin.bus.queue import MessageBus
@@ -34,6 +30,13 @@ from durin.config.paths import get_media_dir
 from durin.config.schema import Base
 from durin.service import DomainError, Principal, ServiceRegistry
 from durin.service.principal import Scope
+from durin.service.types import (
+    ForbiddenError,
+    NotFoundError,
+    TooManyRequestsError,
+    UnauthenticatedError,
+    ValidationFailedError,
+)
 from durin.session.goal_state import goal_state_ws_blob
 from durin.utils.helpers import safe_filename
 from durin.utils.media_decode import (
@@ -112,39 +115,6 @@ class WebSocketConfig(Base):
         )
 
 
-@dataclasses.dataclass
-class HttpResult:
-    """Transport-neutral HTTP response.
-
-    The ``_handle_*`` methods (bootstrap, media) and ``_http_*`` helpers return
-    this instead of a Starlette ``Response`` directly.  It is converted at the
-    boundary by :func:`http_result_to_starlette` (in ``durin/api/asgi.py``).
-
-    ``status_code`` is provided as an alias for ``status`` so that existing
-    unit tests that call ``_handle_*`` directly and assert ``resp.status_code``
-    continue to work without changes.
-    """
-
-    status: int
-    headers: dict[str, str]
-    body: bytes
-
-    @property
-    def status_code(self) -> int:
-        return self.status
-
-
-def _http_json_response(data: dict[str, Any], *, status: int = 200) -> HttpResult:
-    body = json.dumps(data, ensure_ascii=False).encode("utf-8")
-    headers = {
-        "Date": email.utils.formatdate(usegmt=True),
-        "Connection": "close",
-        "Content-Length": str(len(body)),
-        "Content-Type": "application/json; charset=utf-8",
-    }
-    return HttpResult(status=status, headers=headers, body=body)
-
-
 def publish_runtime_model_update(
     bus: MessageBus,
     model: str,
@@ -196,25 +166,6 @@ def _query_first(query: dict[str, list[str]], key: str) -> str | None:
     """Return the first value for *key*, or None."""
     values = query.get(key)
     return values[0] if values else None
-
-
-def _request_host_is_local(request: WsRequest) -> bool:
-    """True when the browser reached the webui via localhost.
-
-    Used to decide whether the loopback OAuth flow (callback on localhost:1455,
-    served by this gateway) can reach the user's browser — only when both run on
-    the same machine, i.e. the dashboard was opened at localhost/127.0.0.1/::1.
-    """
-    try:
-        host = request.headers.get("Host") or request.headers.get("host") or ""
-    except Exception:  # noqa: BLE001
-        host = ""
-    host = host.strip()
-    if host.startswith("["):  # bracketed IPv6, e.g. [::1]:8765
-        host = host[1:].split("]", 1)[0]
-    else:
-        host = host.rsplit(":", 1)[0] if host.count(":") == 1 else host
-    return host in ("localhost", "127.0.0.1", "::1")
 
 
 def _logs_query_from_params(query: dict[str, list[str]]):
@@ -341,12 +292,15 @@ def _extract_data_url_mime(url: str) -> str | None:
 _LOCALHOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
 
-def _is_localhost(connection: Any) -> bool:
-    """Return True if *connection* originated from the loopback interface."""
-    addr = getattr(connection, "remote_address", None)
-    if not addr:
+def _peer_is_loopback(peer: Any) -> bool:
+    """True when *peer* (a ``(host, port)`` tuple/Address, or None) is loopback.
+
+    The adapter passes Starlette's ``request.client`` (an ``Address`` namedtuple,
+    or None when the server omits the peer — then we fail closed → False).
+    """
+    if not peer:
         return False
-    host = addr[0] if isinstance(addr, tuple) else addr
+    host = peer[0] if isinstance(peer, (tuple, list)) else peer
     if not isinstance(host, str):
         return False
     # ``::ffff:127.0.0.1`` is loopback in IPv6-mapped form.
@@ -355,47 +309,12 @@ def _is_localhost(connection: Any) -> bool:
     return host in _LOCALHOSTS
 
 
-def _http_response(
-    body: bytes,
-    *,
-    status: int = 200,
-    content_type: str = "text/plain; charset=utf-8",
-    extra_headers: list[tuple[str, str]] | None = None,
-) -> HttpResult:
-    headers: dict[str, str] = {
-        "Date": email.utils.formatdate(usegmt=True),
-        "Connection": "close",
-        "Content-Length": str(len(body)),
-        "Content-Type": content_type,
-    }
-    if extra_headers:
-        for k, v in extra_headers:
-            headers[k] = v
-    return HttpResult(status=status, headers=headers, body=body)
-
-
-def _http_error(status: int, message: str | None = None) -> HttpResult:
-    body = (message or http.HTTPStatus(status).phrase).encode("utf-8")
-    return _http_response(body, status=status)
-
-
 def _bearer_token(headers: Any) -> str | None:
     """Pull a Bearer token out of standard or query-style headers."""
     auth = headers.get("Authorization") or headers.get("authorization")
     if auth and auth.lower().startswith("bearer "):
         return auth[7:].strip() or None
     return None
-
-
-def _is_websocket_upgrade(request: WsRequest) -> bool:
-    """Detect an actual WS upgrade; plain HTTP GETs to the same path should fall through."""
-    upgrade = request.headers.get("Upgrade") or request.headers.get("upgrade")
-    connection = request.headers.get("Connection") or request.headers.get("connection")
-    if not upgrade or "websocket" not in upgrade.lower():
-        return False
-    if not connection or "upgrade" not in connection.lower():
-        return False
-    return True
 
 
 def _b64url_encode(data: bytes) -> str:
@@ -669,25 +588,26 @@ class WebSocketChannel(BaseChannel):
 
     # -- HTTP endpoints (bootstrap, media) ----------------------------------
 
-    def _handle_bootstrap(self, connection: Any, request: Any) -> HttpResult:
-        # When a secret is configured (token_issue_secret or static token),
-        # validate it regardless of source IP.  This secures deployments
-        # behind a reverse proxy where all connections appear as localhost.
+    def bootstrap(self, *, peer: Any, headers: Any) -> dict[str, Any]:
+        """Mint a short-lived ADMIN token + session metadata for the webui.
+
+        Gates (raised as DomainError → problem+json by the adapter):
+        - a configured ``token_issue_secret``/static ``token`` must match the
+          request header (secures deployments behind a reverse proxy where every
+          connection appears local);
+        - with NO secret, only a loopback *peer* may mint (local-dev mode);
+        - the issued-token pool is capped to bound runaway growth.
+        """
         secret = self.config.token_issue_secret.strip() or self.config.token.strip()
         if secret:
-            if not _issue_route_secret_matches(request.headers, secret):
-                return _http_error(401, "Unauthorized")
-        elif not _is_localhost(connection):
-            # No secret configured: only allow localhost (local dev mode).
-            return _http_error(403, "bootstrap is localhost-only")
+            if not _issue_route_secret_matches(headers, secret):
+                raise UnauthenticatedError("invalid bootstrap secret")
+        elif not _peer_is_loopback(peer):
+            raise ForbiddenError("bootstrap is localhost-only")
         # Cap outstanding tokens to avoid runaway growth from a misbehaving client.
         self._purge_expired_issued_tokens()
         if len(self._issued_tokens) >= self._MAX_ISSUED_TOKENS:
-            return _http_response(
-                json.dumps({"error": "too many outstanding tokens"}).encode("utf-8"),
-                status=429,
-                content_type="application/json; charset=utf-8",
-            )
+            raise TooManyRequestsError("too many outstanding tokens")
         # Mint via the persisted store so this token survives a restart (SP2).
         # The store generates a fresh plaintext; we use that as the token so
         # the hash in the store always matches what we hand to the client.
@@ -700,26 +620,20 @@ class WebSocketChannel(BaseChannel):
             )
         else:
             token = f"nbwt_{secrets.token_urlsafe(32)}"
-        expiry = time.monotonic() + float(self.config.token_ttl_s)
         # The WS handshake consumes a single-use token from _issued_tokens.
-        self._issued_tokens[token] = expiry
-        return _http_json_response(
-            {
-                "token": token,
-                "ws_path": self._expected_path(),
-                "expires_in": self.config.token_ttl_s,
-                "model_name": _resolve_bootstrap_model_name(self._runtime_model_name),
-                # True when this deploy gates bootstrap on a setup
-                # secret (token_issue_secret or static token). The
-                # webui uses this to decide whether to expose a
-                # "Logout" affordance — without a secret in play,
-                # logout would just strand the user on an auth form
-                # they have nothing to type into (the bootstrap
-                # auto-mints tokens for localhost). UX trap removed
-                # by hiding the button when requires_secret=false.
-                "requires_secret": bool(secret),
-            }
-        )
+        self._issued_tokens[token] = time.monotonic() + float(self.config.token_ttl_s)
+        return {
+            "token": token,
+            "ws_path": self._expected_path(),
+            "expires_in": self.config.token_ttl_s,
+            "model_name": _resolve_bootstrap_model_name(self._runtime_model_name),
+            # True when this deploy gates bootstrap on a setup secret
+            # (token_issue_secret or static token). The webui uses this to decide
+            # whether to expose a "Logout" affordance — without a secret in play,
+            # logout would strand the user on an auth form they have nothing to
+            # type into (bootstrap auto-mints for localhost).
+            "requires_secret": bool(secret),
+        }
 
     async def _run_skill_audit(self, connection: Any, name: str) -> None:
         """Stream an on-demand LLM audit of a quarantined skill: reasoning deltas
@@ -923,53 +837,51 @@ class WebSocketChannel(BaseChannel):
             return None
         return {"url": signed, "name": path.name}
 
-    def _handle_media_fetch(self, sig: str, payload: str) -> HttpResult:
-        """Serve a single media file previously signed via
-        :meth:`_sign_media_path`. Validates the signature, decodes the
-        payload to a relative path, and streams the file bytes with a
-        long-lived immutable cache header (the URL already encodes the
-        file identity, so caches can be aggressive)."""
+    def media_fetch(self, sig: str, payload: str) -> tuple[bytes, str, list[tuple[str, str]]]:
+        """Serve a single media file previously signed via :meth:`_sign_media_path`.
+
+        Validates the signature, decodes the payload to a relative path, and
+        returns ``(body, content_type, headers)`` with a long-lived immutable
+        cache (the URL already encodes the file identity). Raises DomainError on a
+        bad signature (401), bad payload (422), or missing file (404) — the
+        adapter renders those as problem+json.
+        """
         try:
             provided_mac = _b64url_decode(sig)
-        except (ValueError, binascii.Error):
-            return _http_error(401, "invalid signature")
+        except (ValueError, binascii.Error) as exc:
+            raise UnauthenticatedError("invalid media signature") from exc
         expected_mac = hmac.new(
             self._media_secret, payload.encode("ascii"), hashlib.sha256
         ).digest()[:16]
         if not hmac.compare_digest(expected_mac, provided_mac):
-            return _http_error(401, "invalid signature")
+            raise UnauthenticatedError("invalid media signature")
         try:
-            rel_bytes = _b64url_decode(payload)
-            rel_str = rel_bytes.decode("utf-8")
-        except (ValueError, binascii.Error, UnicodeDecodeError):
-            return _http_error(400, "invalid payload")
+            rel_str = _b64url_decode(payload).decode("utf-8")
+        except (ValueError, binascii.Error, UnicodeDecodeError) as exc:
+            raise ValidationFailedError("invalid media payload") from exc
         # An attacker who somehow bypassed the HMAC check would still need
         # the resolved path to escape the media root; guard defensively.
         try:
             media_root = get_media_dir().resolve()
             candidate = (media_root / rel_str).resolve()
             candidate.relative_to(media_root)
-        except (OSError, ValueError):
-            return _http_error(404, "not found")
+        except (OSError, ValueError) as exc:
+            raise NotFoundError("media not found") from exc
         if not candidate.is_file():
-            return _http_error(404, "not found")
+            raise NotFoundError("media not found")
         try:
             body = candidate.read_bytes()
-        except OSError:
-            return _http_error(500, "read error")
+        except OSError as exc:
+            raise DomainError("media read error") from exc
         mime, _ = mimetypes.guess_type(candidate.name)
         if mime not in _MEDIA_ALLOWED_MIMES:
             mime = "application/octet-stream"
-        return _http_response(
-            body,
-            content_type=mime,
-            extra_headers=[
-                ("Cache-Control", "private, max-age=31536000, immutable"),
-                # Paired with the MIME whitelist above: prevents browsers from
-                # MIME-sniffing an octet-stream fallback into executable HTML.
-                ("X-Content-Type-Options", "nosniff"),
-            ],
-        )
+        return body, mime, [
+            ("Cache-Control", "private, max-age=31536000, immutable"),
+            # Paired with the MIME whitelist above: prevents browsers from
+            # MIME-sniffing an octet-stream fallback into executable HTML.
+            ("X-Content-Type-Options", "nosniff"),
+        ]
 
     def _ws_auth_ok(self, query: dict[str, list[str]]) -> bool:
         """Return True if the WebSocket handshake is authorised.
