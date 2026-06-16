@@ -267,44 +267,12 @@ export interface CronJobRow {
   updated_at_ms: number;
 }
 
-/** Map v1 camelCase CronJobItem to the legacy snake_case CronJobRow shape
- *  expected by the UI components. */
-function mapCronJob(j: Record<string, unknown>): CronJobRow {
-  const sched = (j.schedule ?? {}) as Record<string, unknown>;
-  const state = (j.state ?? {}) as Record<string, unknown>;
-  return {
-    id: j.id as string,
-    name: j.name as string,
-    enabled: j.enabled as boolean,
-    is_system: (j.isSystem ?? j.is_system) as boolean,
-    schedule: {
-      kind: sched.kind as string,
-      label: sched.label as string,
-      expr: (sched.expr ?? null) as string | null,
-      every_ms: (sched.everyMs ?? sched.every_ms ?? null) as number | null,
-      at_ms: (sched.atMs ?? sched.at_ms ?? null) as number | null,
-      tz: (sched.tz ?? null) as string | null,
-    },
-    message: j.message as string,
-    channel: j.channel as string,
-    state: {
-      next_run_at_ms: (state.nextRunAtMs ?? state.next_run_at_ms ?? null) as number | null,
-      last_run_at_ms: (state.lastRunAtMs ?? state.last_run_at_ms ?? null) as number | null,
-      last_status: (state.lastStatus ?? state.last_status ?? null) as "ok" | "error" | "skipped" | null,
-      last_error: (state.lastError ?? state.last_error ?? null) as string | null,
-      executing: (state.executing ?? false) as boolean,
-    },
-    created_at_ms: (j.createdAtMs ?? j.created_at_ms) as number,
-    updated_at_ms: (j.updatedAtMs ?? j.updated_at_ms) as number,
-  };
-}
-
 export async function listCronJobs(
   token: string,
   base: string = "",
 ): Promise<CronJobRow[]> {
-  const res = await request<{ jobs: Record<string, unknown>[] }>(`${base}/api/v1/cron`, token);
-  return res.jobs.map(mapCronJob);
+  const res = await request<{ jobs: CronJobRow[] }>(`${base}/api/v1/cron`, token);
+  return res.jobs;
 }
 
 export async function removeCronJob(
@@ -321,12 +289,12 @@ export async function toggleCronJob(
   enabled: boolean,
   base: string = "",
 ): Promise<CronJobRow> {
-  const res = await post<{ job: Record<string, unknown> }>(
+  const res = await post<{ job: CronJobRow }>(
     `${base}/api/v1/cron/toggle`,
     token,
     { id, enabled },
   );
-  return mapCronJob(res.job);
+  return res.job;
 }
 
 /** Trigger a job now (background).
@@ -851,16 +819,10 @@ export async function testCrossEncoderModel(
   base: string = "",
 ): Promise<CrossEncoderTestResult> {
   const query = new URLSearchParams({ model });
-  const raw = await request<{ modelId?: string; model_id?: string; durationMs?: number; duration_ms?: number; status: string; message: string }>(
+  return request<CrossEncoderTestResult>(
     `${base}/api/v1/memory/cross-encoder/test?${query.toString()}`,
     token,
   );
-  return {
-    status: raw.status as "ok" | "fail",
-    message: raw.message,
-    model_id: (raw.modelId ?? raw.model_id ?? "") as string,
-    duration_ms: (raw.durationMs ?? raw.duration_ms ?? 0) as number,
-  };
 }
 
 export interface ExtraStatus {
@@ -877,17 +839,10 @@ export async function getExtraStatus(
   base: string = "",
 ): Promise<ExtraStatus> {
   const q = new URLSearchParams({ feature });
-  const raw = await request<{ present: boolean; extra: string; approxSize?: string; approx_size?: string; needsRestart?: boolean; needs_restart?: boolean; label: string }>(
+  return request<ExtraStatus>(
     `${base}/api/v1/extras/status?${q.toString()}`,
     token,
   );
-  return {
-    present: raw.present,
-    extra: raw.extra,
-    label: raw.label,
-    approx_size: (raw.approxSize ?? raw.approx_size ?? "") as string,
-    needs_restart: (raw.needsRestart ?? raw.needs_restart ?? false) as boolean,
-  };
 }
 
 export interface EnsureExtraResult {
@@ -903,17 +858,11 @@ export async function ensureExtra(
   restart: boolean,
   base: string = "",
 ): Promise<EnsureExtraResult> {
-  const raw = await post<{ status: string; needsRestart?: boolean; needs_restart?: boolean; message: string; restarting?: boolean }>(
+  return post<EnsureExtraResult>(
     `${base}/api/v1/extras/ensure`,
     token,
     { feature, restart },
   );
-  return {
-    status: raw.status as EnsureExtraResult["status"],
-    message: raw.message,
-    restarting: raw.restarting,
-    needs_restart: (raw.needsRestart ?? raw.needs_restart ?? false) as boolean,
-  };
 }
 
 export interface ChannelInfo {
@@ -972,30 +921,10 @@ export async function getModelCapabilities(
 ): Promise<ModelCapabilities> {
   const query = new URLSearchParams({ model });
   if (provider) query.set("provider", provider);
-  const raw = await request<{
-    model: string;
-    maxInputTokens?: number | null;
-    max_input_tokens?: number | null;
-    supportsVision?: boolean;
-    supports_vision?: boolean;
-    supportsAudioInput?: boolean;
-    supports_audio_input?: boolean;
-    supportsFunctionCalling?: boolean;
-    supports_function_calling?: boolean;
-    supportsReasoning?: boolean;
-    supports_reasoning?: boolean;
-  }>(
+  return request<ModelCapabilities>(
     `${base}/api/v1/model/capabilities?${query}`,
     token,
   );
-  return {
-    model: raw.model,
-    max_input_tokens: (raw.maxInputTokens ?? raw.max_input_tokens ?? null),
-    supports_vision: (raw.supportsVision ?? raw.supports_vision ?? false) as boolean,
-    supports_audio_input: (raw.supportsAudioInput ?? raw.supports_audio_input ?? false) as boolean,
-    supports_function_calling: (raw.supportsFunctionCalling ?? raw.supports_function_calling ?? false) as boolean,
-    supports_reasoning: (raw.supportsReasoning ?? raw.supports_reasoning),
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1050,23 +979,7 @@ export async function fetchLogs(
   if (params.beforeTs != null) sp.set("beforeTs", String(params.beforeTs));
   if (params.windowHours != null) sp.set("windowHours", String(params.windowHours));
   if (params.limit != null) sp.set("limit", String(params.limit));
-  const raw = await request<{
-    lines: LogLineRow[];
-    facets: LogFacets;
-    nextCursor?: number | null;
-    next_cursor?: number | null;
-    scannedThroughTs?: number | null;
-    scanned_through_ts?: number | null;
-    hasMore?: boolean;
-    has_more?: boolean;
-  }>(`${base}/api/v1/logs?${sp.toString()}`, token);
-  return {
-    lines: raw.lines,
-    facets: raw.facets,
-    next_cursor: (raw.nextCursor ?? raw.next_cursor ?? null),
-    scanned_through_ts: (raw.scannedThroughTs ?? raw.scanned_through_ts ?? null),
-    has_more: (raw.hasMore ?? raw.has_more ?? false) as boolean,
-  };
+  return request<LogPage>(`${base}/api/v1/logs?${sp.toString()}`, token);
 }
 
 // ---------------------------------------------------------------------------
@@ -1434,58 +1347,25 @@ export async function fetchCodexStatus(
   token: string,
   base: string = "",
 ): Promise<CodexStatus> {
-  const raw = await request<{
-    connected: boolean;
-    email?: string | null;
-    plan?: string | null;
-    source?: string | null;
-    canLoopback?: boolean;
-    can_loopback?: boolean;
-  }>(`${base}/api/v1/oauth/codex/status`, token);
-  return {
-    connected: raw.connected,
-    email: raw.email,
-    plan: raw.plan,
-    source: raw.source as CodexStatus["source"],
-    can_loopback: (raw.canLoopback ?? raw.can_loopback ?? false),
-  };
+  return request<CodexStatus>(`${base}/api/v1/oauth/codex/status`, token);
 }
 
 export async function startCodexDeviceAuth(
   token: string,
   base: string = "",
 ): Promise<CodexDeviceChallenge> {
-  const raw = await post<{
-    userCode?: string;
-    user_code?: string;
-    verificationUri?: string;
-    verification_uri?: string;
-    deviceAuthId?: string;
-    device_auth_id?: string;
-    interval: number;
-    expiresIn?: number;
-    expires_in?: number;
-  }>(`${base}/api/v1/oauth/codex/start`, token, {});
-  return {
-    user_code: (raw.userCode ?? raw.user_code ?? "") as string,
-    verification_uri: (raw.verificationUri ?? raw.verification_uri ?? "") as string,
-    device_auth_id: (raw.deviceAuthId ?? raw.device_auth_id ?? "") as string,
-    interval: raw.interval,
-    expires_in: (raw.expiresIn ?? raw.expires_in ?? 0) as number,
-  };
+  return post<CodexDeviceChallenge>(`${base}/api/v1/oauth/codex/start`, token, {});
 }
 
 export async function startCodexLoopbackAuth(
   token: string,
   base: string = "",
 ): Promise<{ authorize_url: string }> {
-  const raw = await post<{
-    authorizeUrl?: string;
-    authorize_url?: string;
-  }>(`${base}/api/v1/oauth/codex/start-loopback`, token, { isLocal: false });
-  return {
-    authorize_url: (raw.authorizeUrl ?? raw.authorize_url ?? "") as string,
-  };
+  return post<{ authorize_url: string }>(
+    `${base}/api/v1/oauth/codex/start-loopback`,
+    token,
+    { isLocal: false },
+  );
 }
 
 export async function pollCodexDeviceAuth(
@@ -1507,19 +1387,5 @@ export async function disconnectCodex(
   token: string,
   base: string = "",
 ): Promise<CodexStatus> {
-  const raw = await del<{
-    connected: boolean;
-    email?: string | null;
-    plan?: string | null;
-    source?: string | null;
-    canLoopback?: boolean;
-    can_loopback?: boolean;
-  }>(`${base}/api/v1/oauth/codex`, token, {});
-  return {
-    connected: raw.connected,
-    email: raw.email,
-    plan: raw.plan,
-    source: raw.source as CodexStatus["source"],
-    can_loopback: (raw.canLoopback ?? raw.can_loopback ?? false),
-  };
+  return del<CodexStatus>(`${base}/api/v1/oauth/codex`, token, {});
 }

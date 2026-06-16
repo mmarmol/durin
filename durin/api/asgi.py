@@ -216,7 +216,7 @@ def _build_handler(
       1. Resolves the principal (401 if missing).
       2. Builds the request model from params (422 on ValidationError).
       3. Awaits the service handler (DomainError → problem+json).
-      4. Returns JSONResponse(result.model_dump(by_alias=True)).
+      4. Returns JSONResponse(result.model_dump()).
     """
     request_model = bound.spec.request_model
     handler = bound.handler
@@ -259,7 +259,7 @@ def _build_handler(
         except DomainError as exc:
             return _problem_response(exc)
 
-        return JSONResponse(result.model_dump(by_alias=True))
+        return JSONResponse(result.model_dump())
 
     return endpoint
 
@@ -280,7 +280,7 @@ def _build_write_handler(
       2. Parses the JSON body (empty/absent → {}) merged with path params.
       3. Builds the request model (422 on ValidationError).
       4. Awaits the service handler (DomainError → problem+json).
-      5. Returns JSONResponse(result.model_dump(by_alias=True)).
+      5. Returns JSONResponse(result.model_dump()).
     """
     request_model = bound.spec.request_model
     handler = bound.handler
@@ -323,7 +323,7 @@ def _build_write_handler(
         except DomainError as exc:
             return _problem_response(exc)
 
-        return JSONResponse(result.model_dump(by_alias=True))
+        return JSONResponse(result.model_dump())
 
     return endpoint
 

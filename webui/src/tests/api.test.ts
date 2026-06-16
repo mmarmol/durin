@@ -27,7 +27,6 @@ describe("webui API helpers", () => {
           messages: [],
           title: "",
           authorize_url: "",
-          authorizeUrl: "",
           connected: false,
         }),
       }),
