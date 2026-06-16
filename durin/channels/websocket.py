@@ -48,6 +48,8 @@ from durin.providers.codex_device_auth import (
     poll_once as codex_poll_once,
 )
 from durin.providers.codex_models import list_codex_models
+from durin.security.secrets import mask_secret_hint
+from durin.service import DomainError, Principal, ServiceRegistry
 from durin.session.goal_state import goal_state_ws_blob
 from durin.utils.helpers import safe_filename
 from durin.utils.media_decode import (
@@ -162,6 +164,24 @@ class WebSocketConfig(Base):
             "host is 0.0.0.0 (all interfaces) but neither token nor "
             "token_issue_secret is set — set one to prevent unauthenticated access"
         )
+
+
+_DOMAIN_ERROR_STATUS: dict[str, int] = {
+    "unauthenticated": 401,
+    "forbidden": 403,
+    "not_found": 404,
+    "conflict": 409,
+    "validation_failed": 400,
+    "unavailable": 503,
+    "error": 500,
+}
+
+
+def _domain_error_response(err: DomainError) -> Response:
+    """Map a service-layer ``DomainError`` to the HTTP response the legacy
+    handlers returned — a plain-text body with the matching status."""
+    status = _DOMAIN_ERROR_STATUS.get(err.code, 500)
+    return _http_error(status, err.message)
 
 
 def _http_json_response(data: dict[str, Any], *, status: int = 200) -> Response:
@@ -295,14 +315,6 @@ def _logs_query_from_params(query: dict[str, list[str]]):
         limit=max(1, min(int(limit), 1000)) if limit else 200,
         filters=filters,
     )
-
-
-def _mask_secret_hint(secret: str | None) -> str | None:
-    if not secret:
-        return None
-    if len(secret) <= 8:
-        return "••••"
-    return f"{secret[:4]}••••{secret[-4:]}"
 
 
 _WEB_SEARCH_PROVIDER_OPTIONS: tuple[dict[str, str], ...] = (
@@ -569,6 +581,24 @@ class WebSocketChannel(BaseChannel):
         # file, nothing else. The secret regenerates on restart so links
         # become self-expiring (callers just refresh the session list).
         self._media_secret: bytes = secrets.token_bytes(32)
+        # Service-core registry: domain logic extracted out of this channel
+        # (SP1). The HTTP handlers are now thin shims that call these services.
+        # Built here so the deps are available; services are registered as each
+        # domain is extracted.
+        self._services: ServiceRegistry = self._build_services(bus)
+
+    def _build_services(self, bus: MessageBus) -> ServiceRegistry:
+        """Construct the registry holding the extracted domain services."""
+        from durin.service.secrets import SecretsService
+
+        registry = ServiceRegistry(
+            config=self.config,
+            session_manager=self._session_manager,
+            cron_service=self._cron_service,
+            bus=bus,
+        )
+        registry.register("secrets", SecretsService())
+        return registry
 
     def _endpoint_workspace(self) -> Path:
         """The gateway's ACTUAL workspace for read-only memory endpoints.
@@ -764,10 +794,10 @@ class WebSocketChannel(BaseChannel):
             return self._handle_codex_oauth_disconnect(request)
 
         if got == "/api/secrets":
-            return self._handle_secrets_list(request)
+            return await self._handle_secrets_list(request)
 
         if got == "/api/secrets/delete":
-            return self._handle_secret_delete(request)
+            return await self._handle_secret_delete(request)
 
         if got == "/api/cron":
             return self._handle_cron_list(request)
@@ -1330,7 +1360,7 @@ class WebSocketChannel(BaseChannel):
                     "name": spec.name,
                     "label": spec.label,
                     "configured": bool(provider_config.api_key),
-                    "api_key_hint": _mask_secret_hint(provider_config.api_key),
+                    "api_key_hint": mask_secret_hint(provider_config.api_key),
                     "api_base": provider_config.api_base,
                     "default_api_base": spec.default_api_base or None,
                 }
@@ -1351,7 +1381,7 @@ class WebSocketChannel(BaseChannel):
             "providers": providers,
             "web_search": {
                 "provider": search_provider,
-                "api_key_hint": _mask_secret_hint(search_config.api_key),
+                "api_key_hint": mask_secret_hint(search_config.api_key),
                 "base_url": search_config.base_url or None,
                 "providers": list(_WEB_SEARCH_PROVIDER_OPTIONS),
             },
@@ -1609,45 +1639,35 @@ class WebSocketChannel(BaseChannel):
 
     # -- secret store --------------------------------------------------------
 
-    def _handle_secrets_list(self, request: WsRequest) -> Response:
+    async def _handle_secrets_list(self, request: WsRequest) -> Response:
         """`GET /api/secrets` — entries' metadata. Never returns a value."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
-        from durin.security.secrets import SecretStore
+        from durin.service.secrets import SecretsListQuery
 
-        store = SecretStore().load()
-        items = [
-            {
-                "name": name,
-                "service": entry.service,
-                "account": entry.account or "",
-                "description": entry.description,
-                "scope": list(entry.scope),
-                "origin": entry.origin,
-                "created_at": entry.created_at,
-                "value_hint": _mask_secret_hint(entry.value),
-            }
-            for name, entry in sorted(store.all().items())
-        ]
-        return _http_json_response({"secrets": items})
+        result = await self._services.get("secrets").list(
+            SecretsListQuery(), Principal.local()
+        )
+        return _http_json_response(result.model_dump())
 
     # A secret is created/updated over the websocket — see the
     # ``secret_store`` envelope in ``_handle_secret_store_envelope``.
     # The value rides a JSON frame, never a URL query.
 
-    def _handle_secret_delete(self, request: WsRequest) -> Response:
+    async def _handle_secret_delete(self, request: WsRequest) -> Response:
         """`GET /api/secrets/delete` — remove a secret."""
         if not self._check_api_token(request):
             return _http_error(401, "Unauthorized")
-        from durin.security.secrets import SecretStore, get_secret_store
+        from durin.service.secrets import SecretDeleteCommand
 
         name = (_query_first(_parse_query(request.path), "name") or "").strip()
-        store = SecretStore().load()
-        if not store.remove(name):
-            return _http_error(404, "no such secret")
-        store.save()
-        get_secret_store(reload=True)
-        return _http_json_response({"ok": True})
+        try:
+            result = await self._services.get("secrets").delete(
+                SecretDeleteCommand(name=name), Principal.local()
+            )
+        except DomainError as err:
+            return _domain_error_response(err)
+        return _http_json_response(result.model_dump())
 
     # -- cron API (P11) ----------------------------------------------------
 
