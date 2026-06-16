@@ -18,7 +18,6 @@ from durin.utils.helpers import (
     latest_prompt_tokens_anchor,
 )
 
-
 # ---------------------------------------------------------------------------
 # build_assistant_message — stamp behaviour
 # ---------------------------------------------------------------------------

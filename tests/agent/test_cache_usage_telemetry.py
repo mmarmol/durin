@@ -8,9 +8,6 @@ grepping their telemetry file. Inspired by pi's perf review.
 
 from __future__ import annotations
 
-import asyncio
-from unittest.mock import AsyncMock, MagicMock
-
 import pytest
 
 from durin.agent.hook import AgentHookContext

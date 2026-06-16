@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import pytest
-
 from durin.memory.model_resolve import resolve_memory_model
 
 

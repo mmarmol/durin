@@ -63,7 +63,8 @@ def test_mtime_lag_emits_delta_seconds(
     """A file whose disk mtime is N seconds ahead of its indexed
     row's mtime emits `delta_seconds` ≈ N on the mtime_lag event."""
     from durin.memory.indexer import (
-        detect_index_staleness, rebuild_fts_index,
+        detect_index_staleness,
+        rebuild_fts_index,
     )
 
     md = _make_entity_page(tmp_path, "person", "g3_subject")
@@ -96,7 +97,8 @@ def test_missing_row_omits_delta_seconds(
     """A file present on disk but absent from the FTS index has no
     indexed_mtime to compare against — `delta_seconds` is omitted."""
     from durin.memory.indexer import (
-        detect_index_staleness, rebuild_fts_index,
+        detect_index_staleness,
+        rebuild_fts_index,
     )
 
     # Rebuild on an empty workspace so the FTS table exists but has
@@ -125,7 +127,8 @@ def test_row_for_missing_file_omits_delta_seconds(
     """A row whose .md was deleted from disk has nothing to compare
     against — `delta_seconds` is omitted."""
     from durin.memory.indexer import (
-        detect_index_staleness, rebuild_fts_index,
+        detect_index_staleness,
+        rebuild_fts_index,
     )
 
     md = _make_entity_page(tmp_path, "person", "g3_doomed")

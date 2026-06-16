@@ -29,7 +29,6 @@ from durin.config.schema import (
     MemoryHealthCheckConfig,
 )
 
-
 # ---------------------------------------------------------------------------
 # config defaults — both services ON by default
 # ---------------------------------------------------------------------------
@@ -62,8 +61,8 @@ def test_scheduler_ticks_on_start(
 ) -> None:
     """First tick fires immediately (within the wait timeout)."""
     from durin.memory.health_check import (
-        HealthCheckScheduler,
         HealthChecker,
+        HealthCheckScheduler,
     )
 
     checker = HealthChecker(workspace=tmp_path)
@@ -90,8 +89,8 @@ def test_scheduler_stop_is_responsive(
     """`stop()` returns quickly even though the configured
     interval is large — the inner `wait()` short-circuits."""
     from durin.memory.health_check import (
-        HealthCheckScheduler,
         HealthChecker,
+        HealthCheckScheduler,
     )
 
     checker = HealthChecker(workspace=tmp_path)
@@ -115,8 +114,8 @@ def test_scheduler_isolates_run_tick_failures(
 ) -> None:
     """A `run_tick()` exception logs but the thread keeps going."""
     from durin.memory.health_check import (
-        HealthCheckScheduler,
         HealthChecker,
+        HealthCheckScheduler,
     )
 
     checker = HealthChecker(workspace=tmp_path)

@@ -95,7 +95,7 @@ def test_sectioned_output_uses_shared_helper() -> None:
     import inspect
 
     from durin.memory import section_markers as sm
-    from durin.memory.sectioned_output import _marker_for, SectionedHit
+    from durin.memory.sectioned_output import SectionedHit, _marker_for
 
     src = inspect.getsource(_marker_for)
     assert (
@@ -143,6 +143,7 @@ def test_hot_layer_fragment_block_uses_shared_helper() -> None:
     `=== FRAGMENT: ===` header the shared helper produces."""
     from datetime import date
     from types import SimpleNamespace
+
     from durin.memory.hot_layer import _render_fragment_block
     from durin.memory.section_markers import fragment_marker
 
@@ -242,8 +243,10 @@ def test_markers_without_completeness_stay_unchanged() -> None:
     to pre-H5 shape, so existing tests and hot-layer callsites don't
     break."""
     from durin.memory.section_markers import (
-        canonical_marker, fragment_marker,
-        ingested_marker, session_marker,
+        canonical_marker,
+        fragment_marker,
+        ingested_marker,
+        session_marker,
     )
     assert fragment_marker("p", ts="2026") == "=== FRAGMENT: p (ts 2026) ==="
     assert canonical_marker("r", ts="2026") == (

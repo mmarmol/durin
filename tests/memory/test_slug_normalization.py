@@ -15,13 +15,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from durin.memory.entities import (
-    slugify_name,
     resolve_slug_collision,
+    slugify_name,
 )
-
 
 # ---------------------------------------------------------------------------
 # slugify_name — the pure transformation (no I/O, no collision check)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from durin.cli.tui.widgets.chat_view import MessageBubble, looks_like_error
+from durin.cli.tui.widgets.chat_view import looks_like_error
 
 
 def test_error_colon_detected():

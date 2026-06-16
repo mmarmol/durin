@@ -1,4 +1,4 @@
-from durin.agent.skill_registry import SkillsShRegistry, SkillSearchHit
+from durin.agent.skill_registry import SkillsShRegistry
 
 
 class _Resp:

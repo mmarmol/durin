@@ -1,7 +1,7 @@
-from durin.config.schema import Config
-from durin.agent.tools.loader import ToolLoader
 from durin.agent.tools.context import ToolContext
+from durin.agent.tools.loader import ToolLoader
 from durin.agent.tools.registry import ToolRegistry
+from durin.config.schema import Config
 
 
 def test_tool_loader_scope_memory_only_returns_memory_tools():

@@ -1,7 +1,7 @@
 import pytest
 
-from durin.utils.evaluator import evaluate_response
 from durin.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from durin.utils.evaluator import evaluate_response
 
 
 class DummyProvider(LLMProvider):

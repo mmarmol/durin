@@ -14,7 +14,6 @@ from durin.agent.tools.loader import ToolLoader
 from durin.agent.tools.registry import ToolRegistry
 from durin.providers.base import LLMResponse
 
-
 # Minimal valid PNG file (1×1 pixel) — used so detect_image_mime sees
 # the magic bytes and treats the file as a real image.
 _PNG_BYTES = base64.b64decode(

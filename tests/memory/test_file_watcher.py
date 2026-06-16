@@ -12,15 +12,14 @@ to flush events, and stop. Production wiring lives in
 
 from __future__ import annotations
 
-import threading
 import time
 from pathlib import Path
 
 import pytest
 
 from durin.memory.entity_page import EntityPage
-from durin.memory.fts_index import FTSIndex
 from durin.memory.file_watcher import MemoryFileWatcher
+from durin.memory.fts_index import FTSIndex
 
 
 def _flush(watcher: MemoryFileWatcher, *, timeout_s: float = 5.0) -> None:

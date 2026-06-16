@@ -1,7 +1,6 @@
 import durin.agent.skill_resolve as R
 from durin.agent.skill_resolve import resolve_candidates
 
-
 # --- local sources -----------------------------------------------------------
 
 def test_local_skill_dir_one_candidate(tmp_path):

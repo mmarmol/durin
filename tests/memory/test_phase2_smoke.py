@@ -18,7 +18,6 @@ docs/08 §0d.8.
 
 from __future__ import annotations
 
-import string
 import sys
 import types
 from contextlib import contextmanager
@@ -119,7 +118,6 @@ async def test_vector_path_runs_end_to_end(
     corpus: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from durin.agent.tools.memory_search import MemorySearchTool
-    from durin.agent.tools.memory_store import MemoryStoreTool
 
     with _stub_fastembed():
         # Index the existing corpus so the vector path has content.

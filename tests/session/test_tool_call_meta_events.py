@@ -7,8 +7,6 @@ pointing back to the assistant message in ``session.messages``.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
 import pytest
 
 from durin.session.session_meta import (

@@ -84,10 +84,10 @@ async def test_memory_ingest_makes_reference_searchable_grep_fts_vector(tmp_path
     old chunked `corpus/` model. This is the test that was missing when
     references shipped unwired."""
     from durin.agent.tools.memory_ingest import MemoryIngestTool
+    from durin.memory.embedding import FastembedProvider
     from durin.memory.fts_index import FTSIndex
     from durin.memory.search import search_memory
     from durin.memory.vector_index import VectorIndex
-    from durin.memory.embedding import FastembedProvider
 
     body = ("Set the SMTP relay host to smtp.example.com on port 587 with "
             "STARTTLS. The AI Supervisor approval flow routes attachments "

@@ -97,6 +97,7 @@ def test_refine_quarantines_fresh_entities_min_age_hours(tmp_path):
     # written just now is NOT merged under a large window, but IS merged with
     # the window disabled. No data loss either way.
     from datetime import datetime, timezone
+
     from durin.memory.field_patch import FieldPatch
     from durin.memory.memory_writer import write_entity
     now = datetime(2026, 6, 5, tzinfo=timezone.utc)

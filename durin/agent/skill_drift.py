@@ -28,7 +28,10 @@ def check_upstream_drift(workspace, name, *, allowlist=None) -> DriftReport | No
     from durin.agent import skills_store as ss
     from durin.agent.skill_resolve import resolve_candidates
     from durin.agent.skills_import import (
-        _content_hash, decide_action, fetch_candidate, validate_skill,
+        _content_hash,
+        decide_action,
+        fetch_candidate,
+        validate_skill,
     )
     from durin.security.skill_scan import scan_skill
 

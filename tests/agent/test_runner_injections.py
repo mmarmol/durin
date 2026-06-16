@@ -43,7 +43,7 @@ def _make_loop(tmp_path):
 @pytest.mark.asyncio
 async def test_drain_injections_returns_empty_when_no_callback():
     """No injection_callback → empty list."""
-    from durin.agent.runner import AgentRunSpec, AgentRunner
+    from durin.agent.runner import AgentRunner, AgentRunSpec
 
     provider = MagicMock()
     runner = AgentRunner(provider)
@@ -61,7 +61,7 @@ async def test_drain_injections_returns_empty_when_no_callback():
 @pytest.mark.asyncio
 async def test_drain_injections_extracts_content_from_inbound_messages():
     """Should extract .content from InboundMessage objects."""
-    from durin.agent.runner import AgentRunSpec, AgentRunner
+    from durin.agent.runner import AgentRunner, AgentRunSpec
     from durin.bus.events import InboundMessage
 
     provider = MagicMock()
@@ -92,7 +92,7 @@ async def test_drain_injections_extracts_content_from_inbound_messages():
 @pytest.mark.asyncio
 async def test_drain_injections_passes_limit_to_callback_when_supported():
     """Limit-aware callbacks can preserve overflow in their own queue."""
-    from durin.agent.runner import AgentRunSpec, AgentRunner, _MAX_INJECTIONS_PER_TURN
+    from durin.agent.runner import _MAX_INJECTIONS_PER_TURN, AgentRunner, AgentRunSpec
     from durin.bus.events import InboundMessage
 
     provider = MagicMock()
@@ -127,7 +127,7 @@ async def test_drain_injections_passes_limit_to_callback_when_supported():
 @pytest.mark.asyncio
 async def test_drain_injections_skips_empty_content():
     """Messages with blank content should be filtered out."""
-    from durin.agent.runner import AgentRunSpec, AgentRunner
+    from durin.agent.runner import AgentRunner, AgentRunSpec
     from durin.bus.events import InboundMessage
 
     provider = MagicMock()
@@ -156,7 +156,7 @@ async def test_drain_injections_skips_empty_content():
 @pytest.mark.asyncio
 async def test_drain_injections_handles_callback_exception():
     """If the callback raises, return empty list (error is logged)."""
-    from durin.agent.runner import AgentRunSpec, AgentRunner
+    from durin.agent.runner import AgentRunner, AgentRunSpec
 
     provider = MagicMock()
     runner = AgentRunner(provider)
@@ -178,7 +178,7 @@ async def test_drain_injections_handles_callback_exception():
 @pytest.mark.asyncio
 async def test_checkpoint1_injects_after_tool_execution():
     """Follow-up messages are injected after tool execution, before next LLM call."""
-    from durin.agent.runner import AgentRunSpec, AgentRunner
+    from durin.agent.runner import AgentRunner, AgentRunSpec
     from durin.bus.events import InboundMessage
 
     provider = MagicMock()
@@ -231,8 +231,8 @@ async def test_checkpoint1_injects_after_tool_execution():
 @pytest.mark.asyncio
 async def test_checkpoint2_injects_after_final_response_with_resuming_stream():
     """After final response, if injections exist, stream_end should get resuming=True."""
-    from durin.agent.runner import AgentRunSpec, AgentRunner
     from durin.agent.hook import AgentHook, AgentHookContext
+    from durin.agent.runner import AgentRunner, AgentRunSpec
     from durin.bus.events import InboundMessage
 
     provider = MagicMock()
@@ -290,7 +290,7 @@ async def test_checkpoint2_injects_after_final_response_with_resuming_stream():
 @pytest.mark.asyncio
 async def test_checkpoint2_preserves_final_response_in_history_before_followup():
     """A follow-up injected after a final answer must still see that answer in history."""
-    from durin.agent.runner import AgentRunSpec, AgentRunner
+    from durin.agent.runner import AgentRunner, AgentRunSpec
     from durin.bus.events import InboundMessage
 
     provider = MagicMock()
@@ -405,7 +405,7 @@ async def test_loop_injected_followup_preserves_image_media(tmp_path):
 @pytest.mark.asyncio
 async def test_runner_merges_multiple_injected_user_messages_without_losing_media():
     """Multiple injected follow-ups should not create lossy consecutive user messages."""
-    from durin.agent.runner import AgentRunSpec, AgentRunner
+    from durin.agent.runner import AgentRunner, AgentRunSpec
 
     provider = MagicMock()
     call_count = {"n": 0}
@@ -468,7 +468,7 @@ async def test_runner_merges_multiple_injected_user_messages_without_losing_medi
 @pytest.mark.asyncio
 async def test_injection_cycles_capped_at_max():
     """Injection cycles should be capped at _MAX_INJECTION_CYCLES."""
-    from durin.agent.runner import AgentRunSpec, AgentRunner, _MAX_INJECTION_CYCLES
+    from durin.agent.runner import _MAX_INJECTION_CYCLES, AgentRunner, AgentRunSpec
     from durin.bus.events import InboundMessage
 
     provider = MagicMock()
@@ -509,7 +509,7 @@ async def test_injection_cycles_capped_at_max():
 @pytest.mark.asyncio
 async def test_no_injections_flag_is_false_by_default():
     """had_injections should be False when no injection callback or no messages."""
-    from durin.agent.runner import AgentRunSpec, AgentRunner
+    from durin.agent.runner import AgentRunner, AgentRunSpec
 
     provider = MagicMock()
 
@@ -589,9 +589,9 @@ async def test_followup_routed_to_pending_queue(tmp_path):
 async def test_pending_queue_preserves_overflow_for_next_injection_cycle(tmp_path):
     """Pending queue should leave overflow messages queued for later drains."""
     from durin.agent.loop import AgentLoop
+    from durin.agent.runner import _MAX_INJECTIONS_PER_TURN
     from durin.bus.events import InboundMessage
     from durin.bus.queue import MessageBus
-    from durin.agent.runner import _MAX_INJECTIONS_PER_TURN
 
     bus = MessageBus()
     provider = MagicMock()
@@ -714,7 +714,7 @@ async def test_dispatch_republishes_leftover_queue_messages(tmp_path):
 @pytest.mark.asyncio
 async def test_drain_injections_on_fatal_tool_error():
     """Pending injections should be drained even when a fatal tool error occurs."""
-    from durin.agent.runner import AgentRunSpec, AgentRunner
+    from durin.agent.runner import AgentRunner, AgentRunSpec
     from durin.bus.events import InboundMessage
 
     provider = MagicMock()
@@ -767,7 +767,7 @@ async def test_drain_injections_on_fatal_tool_error():
 @pytest.mark.asyncio
 async def test_drain_injections_on_llm_error():
     """Pending injections should be drained when the LLM returns an error finish_reason."""
-    from durin.agent.runner import AgentRunSpec, AgentRunner
+    from durin.agent.runner import AgentRunner, AgentRunSpec
     from durin.bus.events import InboundMessage
 
     provider = MagicMock()
@@ -822,7 +822,7 @@ async def test_drain_injections_on_llm_error():
 @pytest.mark.asyncio
 async def test_drain_injections_on_empty_final_response():
     """Pending injections should be drained when the runner exits due to empty response."""
-    from durin.agent.runner import AgentRunSpec, AgentRunner, _MAX_EMPTY_RETRIES
+    from durin.agent.runner import _MAX_EMPTY_RETRIES, AgentRunner, AgentRunSpec
     from durin.bus.events import InboundMessage
 
     provider = MagicMock()
@@ -877,7 +877,7 @@ async def test_drain_injections_on_max_iterations():
     injections are appended to messages but not processed by the LLM.
     The key point is they are consumed from the queue to prevent re-publish.
     """
-    from durin.agent.runner import AgentRunSpec, AgentRunner
+    from durin.agent.runner import AgentRunner, AgentRunSpec
     from durin.bus.events import InboundMessage
 
     provider = MagicMock()
@@ -929,7 +929,7 @@ async def test_drain_injections_on_max_iterations():
 async def test_drain_injections_set_flag_when_followup_arrives_after_last_iteration():
     """Late follow-ups drained in max_iterations should still flip had_injections."""
     from durin.agent.hook import AgentHook
-    from durin.agent.runner import AgentRunSpec, AgentRunner
+    from durin.agent.runner import AgentRunner, AgentRunSpec
     from durin.bus.events import InboundMessage
 
     provider = MagicMock()
@@ -991,7 +991,7 @@ async def test_drain_injections_set_flag_when_followup_arrives_after_last_iterat
 @pytest.mark.asyncio
 async def test_injection_cycle_cap_on_error_path():
     """Injection cycles should be capped even when every iteration hits an LLM error."""
-    from durin.agent.runner import AgentRunSpec, AgentRunner, _MAX_INJECTION_CYCLES
+    from durin.agent.runner import _MAX_INJECTION_CYCLES, AgentRunner, AgentRunSpec
     from durin.bus.events import InboundMessage
 
     provider = MagicMock()

@@ -54,7 +54,6 @@ def test_refine_pass(tmp_path):
 
 def test_dreams_emit_telemetry(tmp_path, monkeypatch):
     # the new dreams must emit dashboard-compatible telemetry (the legacy did).
-    import json
     import durin.agent.tools._telemetry as T
     events = []
     monkeypatch.setattr(T, "emit_tool_event", lambda ev, data: events.append(ev))

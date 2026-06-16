@@ -1,8 +1,6 @@
 """Tests for Feishu/Lark domain configuration."""
 from unittest.mock import MagicMock
 
-import pytest
-
 from durin.bus.queue import MessageBus
 from durin.channels.feishu import FeishuChannel, FeishuConfig
 

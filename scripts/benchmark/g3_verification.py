@@ -29,17 +29,16 @@ import logging
 import sys
 import tempfile
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 logging.basicConfig(level=logging.WARNING)
 
 _REPO = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(_REPO))
 
-from durin.agent.tools.memory_search import MemorySearchTool  # noqa: E402
 from durin.agent.tools.context import ToolContext  # noqa: E402
+from durin.agent.tools.memory_search import MemorySearchTool  # noqa: E402
 from durin.config.loader import load_config  # noqa: E402
 from durin.memory.embedding import FastembedProvider  # noqa: E402
 from durin.memory.provenance import author_scope  # noqa: E402

@@ -19,9 +19,10 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from durin.utils.atomic_write import atomic_write_text
 
 import yaml
+
+from durin.utils.atomic_write import atomic_write_text
 
 __all__ = ["archive_episodic", "archive_entity", "archive_generic_entry"]
 

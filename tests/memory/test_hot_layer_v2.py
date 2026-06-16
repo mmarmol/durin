@@ -15,8 +15,6 @@ from datetime import date, datetime
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
 from durin.memory.entity_page import EntityPage
 from durin.memory.hot_layer import (
     _CANONICAL_BUDGET_CHARS,
@@ -32,7 +30,6 @@ from durin.memory.hot_layer import (
 )
 from durin.memory.store import store_memory
 from durin.telemetry.logger import TelemetryLogger, bind_telemetry, reset_telemetry
-
 
 # ---------------------------------------------------------------------------
 # §8.2 Budgets — spec values locked

@@ -25,7 +25,6 @@ from durin.agent.tools.loader import ToolLoader
 from durin.agent.tools.registry import ToolRegistry
 from durin.providers.base import LLMResponse
 
-
 # Minimal valid WAV header (44 bytes) + empty PCM data. Real audio
 # bytes aren't needed; the tool only checks magic bytes for format
 # detection and forwards the content to the provider (mocked).
