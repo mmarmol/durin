@@ -21,14 +21,11 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Self
-from urllib.parse import parse_qs, unquote, urlparse
 
 from loguru import logger
 from pydantic import Field, field_validator, model_validator
-from websockets.datastructures import Headers
 from websockets.exceptions import ConnectionClosed
 from websockets.http11 import Request as WsRequest
-from websockets.http11 import Response
 
 from durin.bus.events import OUTBOUND_META_AGENT_UI, OutboundMessage
 from durin.bus.queue import MessageBus
@@ -151,25 +148,13 @@ class WebSocketConfig(Base):
         )
 
 
-_DOMAIN_ERROR_STATUS: dict[str, int] = {
-    "unauthenticated": 401,
-    "forbidden": 403,
-    "not_found": 404,
-    "conflict": 409,
-    "validation_failed": 400,
-    "unavailable": 503,
-    "error": 500,
-}
-
-
 @dataclasses.dataclass
 class HttpResult:
     """Transport-neutral HTTP response.
 
-    All ``_handle_*`` methods and ``_http_*`` helpers return this instead of a
-    websockets ``Response`` directly.  Two adapters convert it at the boundary:
-    - :func:`_http_result_to_ws_response` — for the still-live websockets server.
-    - :func:`http_result_to_starlette` (in ``durin/api/asgi.py``) — for Starlette.
+    The ``_handle_*`` methods (bootstrap, media) and ``_http_*`` helpers return
+    this instead of a Starlette ``Response`` directly.  It is converted at the
+    boundary by :func:`http_result_to_starlette` (in ``durin/api/asgi.py``).
 
     ``status_code`` is provided as an alias for ``status`` so that existing
     unit tests that call ``_handle_*`` directly and assert ``resp.status_code``
@@ -183,20 +168,6 @@ class HttpResult:
     @property
     def status_code(self) -> int:
         return self.status
-
-
-def _http_result_to_ws_response(result: HttpResult) -> Response:
-    """Adapt an HttpResult to the websockets Response the existing server expects."""
-    reason = http.HTTPStatus(result.status).phrase
-    ws_headers = Headers(list(result.headers.items()))
-    return Response(result.status, reason, ws_headers, result.body)
-
-
-def _domain_error_response(err: DomainError) -> HttpResult:
-    """Map a service-layer ``DomainError`` to the HTTP response the legacy
-    handlers returned — a plain-text body with the matching status."""
-    status = _DOMAIN_ERROR_STATUS.get(err.code, 500)
-    return _http_error(status, err.message)
 
 
 def _http_json_response(data: dict[str, Any], *, status: int = 200) -> HttpResult:
@@ -255,22 +226,6 @@ def _resolve_bootstrap_model_name(
                 if stripped:
                     return stripped
     return _default_model_name_from_config()
-
-
-def _parse_request_path(path_with_query: str) -> tuple[str, dict[str, list[str]]]:
-    """Parse normalized path and query parameters in one pass."""
-    parsed = urlparse("ws://x" + path_with_query)
-    path = _strip_trailing_slash(parsed.path or "/")
-    return path, parse_qs(parsed.query, keep_blank_values=True)
-
-
-def _normalize_http_path(path_with_query: str) -> str:
-    """Return the path component (no query string), with trailing slash normalized (root stays ``/``)."""
-    return _parse_request_path(path_with_query)[0]
-
-
-def _parse_query(path_with_query: str) -> dict[str, list[str]]:
-    return _parse_request_path(path_with_query)[1]
 
 
 def _query_first(query: dict[str, list[str]], key: str) -> str | None:
@@ -420,18 +375,6 @@ def _extract_data_url_mime(url: str) -> str | None:
 
 
 _LOCALHOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
-
-# Matches the legacy chat-id pattern but allows file-system-safe stems too,
-# so the API can address sessions whose keys came from non-WebSocket channels.
-_API_KEY_RE = re.compile(r"^[A-Za-z0-9_:.-]{1,128}$")
-
-
-def _decode_api_key(raw_key: str) -> str | None:
-    """Decode a percent-encoded API path segment, then validate the result."""
-    key = unquote(raw_key)
-    if _API_KEY_RE.match(key) is None:
-        return None
-    return key
 
 
 def _is_localhost(connection: Any) -> bool:
@@ -603,8 +546,6 @@ class WebSocketChannel(BaseChannel):
         self._conn_default: dict[Any, str] = {}
         # Single-use tokens consumed at WebSocket handshake.
         self._issued_tokens: dict[str, float] = {}
-        # Multi-use tokens for HTTP routes served beside WS; checked but not consumed.
-        self._api_tokens: dict[str, float] = {}
         self._session_manager = session_manager
         self._static_dist_path: Path | None = (
             static_dist_path.resolve() if static_dist_path is not None else None
@@ -795,63 +736,7 @@ class WebSocketChannel(BaseChannel):
             {"token": token_value, "expires_in": self.config.token_ttl_s}
         )
 
-    # -- HTTP dispatch ------------------------------------------------------
-
-    def _check_api_token(self, request: WsRequest) -> bool:
-        """Validate a request against the API token pool (multi-use, TTL-bound)."""
-        self._purge_expired_api_tokens()
-        token = _bearer_token(request.headers) or _query_first(
-            _parse_query(request.path), "token"
-        )
-        if not token:
-            return False
-        expiry = self._api_tokens.get(token)
-        if expiry is None or time.monotonic() > expiry:
-            self._api_tokens.pop(token, None)
-            return False
-        return True
-
-    def _resolve_principal(self, request: WsRequest) -> "Principal | None":
-        """Resolve the bearer token in *request* to a :class:`Principal`.
-
-        Resolution order (dual-accept for overlap, removed in SP8):
-        1. Persisted store via AuthService.resolve → scoped Principal.remote.
-        2. Static ``config.token`` → ADMIN Principal.remote (back-compat).
-        3. In-memory ``_api_tokens`` entry → ADMIN Principal.remote (legacy,
-           covers tokens minted before the store was wired; SP8 removes this).
-        4. None → caller returns 401.
-        """
-        token = _bearer_token(request.headers) or _query_first(
-            _parse_query(request.path), "token"
-        )
-        if not token:
-            return None
-
-        # 1. Persisted store.
-        auth_svc = self._services.get("auth")
-        if auth_svc is not None:
-            principal = auth_svc.resolve(token)
-            if principal is not None:
-                return principal
-
-        # 2. Static config token.
-        static = self.config.token.strip()
-        if static and token == static:
-            return Principal.remote("static", frozenset({Scope.ADMIN.value}))
-
-        # 3. Legacy in-memory multi-use token (dual-accept until SP8).
-        self._purge_expired_api_tokens()
-        expiry = self._api_tokens.get(token)
-        if expiry is not None and time.monotonic() <= expiry:
-            return Principal.remote("legacy", frozenset({Scope.ADMIN.value}))
-
-        return None
-
-    def _purge_expired_api_tokens(self) -> None:
-        now = time.monotonic()
-        for token_key, expiry in list(self._api_tokens.items()):
-            if now > expiry:
-                self._api_tokens.pop(token_key, None)
+    # -- HTTP endpoints (bootstrap, media) ----------------------------------
 
     def _handle_bootstrap(self, connection: Any, request: Any) -> HttpResult:
         # When a secret is configured (token_issue_secret or static token),
@@ -866,11 +751,7 @@ class WebSocketChannel(BaseChannel):
             return _http_error(403, "bootstrap is localhost-only")
         # Cap outstanding tokens to avoid runaway growth from a misbehaving client.
         self._purge_expired_issued_tokens()
-        self._purge_expired_api_tokens()
-        if (
-            len(self._issued_tokens) >= self._MAX_ISSUED_TOKENS
-            or len(self._api_tokens) >= self._MAX_ISSUED_TOKENS
-        ):
+        if len(self._issued_tokens) >= self._MAX_ISSUED_TOKENS:
             return _http_response(
                 json.dumps({"error": "too many outstanding tokens"}).encode("utf-8"),
                 status=429,
@@ -889,10 +770,8 @@ class WebSocketChannel(BaseChannel):
         else:
             token = f"nbwt_{secrets.token_urlsafe(32)}"
         expiry = time.monotonic() + float(self.config.token_ttl_s)
-        # Dual-write to in-memory pools: WS handshake consumes from
-        # _issued_tokens; _api_tokens covers HTTP until TTL (back-compat).
+        # The WS handshake consumes a single-use token from _issued_tokens.
         self._issued_tokens[token] = expiry
-        self._api_tokens[token] = expiry
         return _http_json_response(
             {
                 "token": token,
@@ -910,10 +789,6 @@ class WebSocketChannel(BaseChannel):
                 "requires_secret": bool(secret),
             }
         )
-
-    def _settings_payload(self, *, requires_restart: bool = False) -> dict[str, Any]:
-        """Thin wrapper — delegates to ``SettingsService._payload`` (moved in SP1)."""
-        return self._services.get("settings")._payload(requires_restart=requires_restart).model_dump()
 
     def _fresh_cron_service(self):
         """Build a non-running CronService bound to the workspace's
@@ -1279,8 +1154,8 @@ class WebSocketChannel(BaseChannel):
     def _ws_auth_ok(self, query: dict[str, list[str]]) -> bool:
         """Return True if the WebSocket handshake is authorised.
 
-        Transport-neutral: called by both the websockets path
-        (``_authorize_websocket_handshake``) and the Starlette endpoint.
+        Called by the Starlette WebSocket endpoint (``chat_ws_endpoint`` in
+        ``durin/api/asgi.py``).
         Side-effect: consumes a single-use issued token when one is accepted.
         """
         supplied = _query_first(query, "token")
@@ -1301,11 +1176,6 @@ class WebSocketChannel(BaseChannel):
         if supplied:
             self._take_issued_token_if_valid(supplied)
         return True
-
-    def _authorize_websocket_handshake(self, connection: Any, query: dict[str, list[str]]) -> Any:
-        if self._ws_auth_ok(query):
-            return None
-        return connection.respond(401, "Unauthorized")
 
     async def start(self) -> None:
         from durin.utils.logging_bridge import redirect_lib_logging
@@ -1613,7 +1483,6 @@ class WebSocketChannel(BaseChannel):
         self._conn_chats.clear()
         self._conn_default.clear()
         self._issued_tokens.clear()
-        self._api_tokens.clear()
 
     async def _safe_send_to(self, connection: Any, raw: str, *, label: str = "") -> None:
         """Send a raw frame to one connection, cleaning up on ConnectionClosed."""
