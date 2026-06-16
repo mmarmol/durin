@@ -261,3 +261,45 @@ async def test_write_requires_mcp_write(config_path) -> None:
             McpServerUpsertCommand(name="x", config=MCPServerConfig(url="https://x/mcp")),
             Principal.remote("t", set()),
         )
+
+
+# --- enable / disable -----------------------------------------------------
+
+
+async def test_enable_persists_and_connects(config_path) -> None:
+    _seed({"e": MCPServerConfig(url="https://e/mcp", enabled=False)})
+    runtime = _FakeRuntime()
+    detail = await McpService(mcp_runtime=runtime).enable(
+        McpServerNameCommand(name="e"), LOCAL
+    )
+    assert _stored()["e"].enabled is True
+    assert runtime.connected and runtime.connected[0][0] == "e"
+    assert detail.enabled is True
+
+
+async def test_disable_persists_and_disconnects_when_live(config_path) -> None:
+    _seed({"d": MCPServerConfig(url="https://d/mcp", enabled=True)})
+    runtime = _FakeRuntime({"d": _raw("closed")})
+    detail = await McpService(mcp_runtime=runtime).disable(
+        McpServerNameCommand(name="d"), LOCAL
+    )
+    assert _stored()["d"].enabled is False
+    assert runtime.disconnected == ["d"]
+    assert detail.status == "disabled"
+
+
+async def test_enable_without_runtime_persists(config_path) -> None:
+    _seed({"e": MCPServerConfig(url="https://e/mcp", enabled=False)})
+    detail = await McpService().enable(McpServerNameCommand(name="e"), LOCAL)
+    assert _stored()["e"].enabled is True
+    assert detail.enabled is True
+
+
+async def test_enable_unknown_is_not_found(config_path) -> None:
+    with pytest.raises(NotFoundError):
+        await McpService().enable(McpServerNameCommand(name="ghost"), LOCAL)
+
+
+async def test_disable_unknown_is_not_found(config_path) -> None:
+    with pytest.raises(NotFoundError):
+        await McpService().disable(McpServerNameCommand(name="ghost"), LOCAL)
