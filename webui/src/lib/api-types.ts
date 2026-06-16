@@ -495,7 +495,8 @@ export interface paths {
         /** List secret metadata (values never returned) */
         get: operations["secrets_list"];
         put?: never;
-        post?: never;
+        /** Create or update a secret (value never returned) */
+        post: operations["secrets_store"];
         /** Delete a secret by name */
         delete: operations["secrets_delete"];
         options?: never;
@@ -1599,6 +1600,39 @@ export interface components {
             service: string;
             /** Value Hint */
             value_hint: string | null;
+        };
+        /**
+         * SecretStoreCommand
+         * @description Create or update a secret. An empty ``value`` is allowed ONLY as a
+         *     metadata-only edit of an existing secret (the stored credential is kept).
+         */
+        SecretStoreCommand: {
+            /**
+             * Account
+             * @default
+             */
+            account: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /** Name */
+            name: string;
+            /**
+             * Origin
+             * @default user
+             */
+            origin: string;
+            /** Scope */
+            scope?: string[];
+            /** Service */
+            service: string;
+            /**
+             * Value
+             * @default
+             */
+            value: string;
         };
         /**
          * SecretsListQuery
@@ -2724,6 +2758,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SecretsListResult"];
+                };
+            };
+        };
+    };
+    secrets_store: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SecretStoreCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretItem"];
                 };
             };
         };

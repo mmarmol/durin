@@ -1469,6 +1469,53 @@
         "title": "SecretItem",
         "type": "object"
       },
+      "SecretStoreCommand": {
+        "additionalProperties": false,
+        "description": "Create or update a secret. An empty ``value`` is allowed ONLY as a\nmetadata-only edit of an existing secret (the stored credential is kept).",
+        "properties": {
+          "account": {
+            "default": "",
+            "title": "Account",
+            "type": "string"
+          },
+          "description": {
+            "default": "",
+            "title": "Description",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "origin": {
+            "default": "user",
+            "title": "Origin",
+            "type": "string"
+          },
+          "scope": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Scope",
+            "type": "array"
+          },
+          "service": {
+            "title": "Service",
+            "type": "string"
+          },
+          "value": {
+            "default": "",
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "service"
+        ],
+        "title": "SecretStoreCommand",
+        "type": "object"
+      },
       "SecretsListQuery": {
         "additionalProperties": false,
         "description": "No inputs \u2014 lists all secret metadata.",
@@ -3182,6 +3229,33 @@
         },
         "summary": "List secret metadata (values never returned)",
         "x-required-scope": "secrets:read"
+      },
+      "post": {
+        "operationId": "secrets_store",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SecretStoreCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretItem"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Create or update a secret (value never returned)",
+        "x-required-scope": "secrets:write"
       }
     },
     "/api/v1/sessions": {
