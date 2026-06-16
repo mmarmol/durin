@@ -1146,6 +1146,158 @@ async def test_secrets_api_crud(bus: MagicMock, monkeypatch, tmp_path) -> None:
         await server_task
 
 
+class _FakeConn:
+    """Minimal connection stub for unit-testing frame handlers."""
+
+    def __init__(self) -> None:
+        self.sent: list[dict] = []
+        self.remote_address = ("127.0.0.1", 0)
+
+    async def send_text(self, raw: str) -> None:
+        self.sent.append(json.loads(raw))
+
+    def last_event(self, name: str) -> dict | None:
+        for frame in reversed(self.sent):
+            if frame.get("event") == name:
+                return frame
+        return None
+
+
+@pytest.mark.asyncio
+async def test_secret_store_valid_new_secret_emits_ok_and_agent_resume(
+    bus: MagicMock, monkeypatch, tmp_path
+) -> None:
+    """Behavior 1: valid new secret → secret_stored {ok: True, name} + agent-resume."""
+    monkeypatch.setattr(
+        "durin.config.loader._current_config_path", tmp_path / "config.json"
+    )
+    channel = _ch(bus)
+    conn = _FakeConn()
+    await channel._handle_secret_store_envelope(
+        conn,
+        "client-1",
+        {
+            "type": "secret_store",
+            "request_id": "r1",
+            "name": "MY_TOKEN",
+            "service": "github",
+            "value": "s3cr3t-value",
+            "scope": ["exec"],
+            "chat_id": "chat-abc",
+        },
+    )
+    ok_frame = conn.last_event("secret_stored")
+    assert ok_frame is not None
+    assert ok_frame["ok"] is True
+    assert ok_frame["name"] == "MY_TOKEN"
+    assert ok_frame.get("request_id") == "r1"
+    # Agent-resume: a message carrying the metadata (but never the value) is
+    # posted to the chat so the agent can continue.
+    bus.publish_inbound.assert_awaited()
+    resume = bus.publish_inbound.call_args[0][0]
+    assert resume.chat_id == "chat-abc"
+    assert "MY_TOKEN" in resume.content
+    assert "s3cr3t-value" not in resume.content
+
+
+@pytest.mark.asyncio
+async def test_secret_store_invalid_name_emits_fail(
+    bus: MagicMock, monkeypatch, tmp_path
+) -> None:
+    """Behavior 2: invalid name → {ok: False, detail: 'invalid secret name (use UPPER_SNAKE)'}."""
+    monkeypatch.setattr(
+        "durin.config.loader._current_config_path", tmp_path / "config.json"
+    )
+    channel = _ch(bus)
+    conn = _FakeConn()
+    await channel._handle_secret_store_envelope(
+        conn,
+        "client-1",
+        {"name": "lower-case", "service": "github", "value": "x" * 12},
+    )
+    fail_frame = conn.last_event("secret_stored")
+    assert fail_frame is not None
+    assert fail_frame["ok"] is False
+    assert fail_frame["detail"] == "invalid secret name (use UPPER_SNAKE)"
+
+
+@pytest.mark.asyncio
+async def test_secret_store_missing_service_emits_fail(
+    bus: MagicMock, monkeypatch, tmp_path
+) -> None:
+    """Behavior 3: missing service → {ok: False, detail: 'service is required'}."""
+    monkeypatch.setattr(
+        "durin.config.loader._current_config_path", tmp_path / "config.json"
+    )
+    channel = _ch(bus)
+    conn = _FakeConn()
+    await channel._handle_secret_store_envelope(
+        conn,
+        "client-1",
+        {"name": "MY_TOKEN", "service": "", "value": "x" * 12},
+    )
+    fail_frame = conn.last_event("secret_stored")
+    assert fail_frame is not None
+    assert fail_frame["ok"] is False
+    assert fail_frame["detail"] == "service is required"
+
+
+@pytest.mark.asyncio
+async def test_secret_store_empty_value_on_new_secret_emits_fail(
+    bus: MagicMock, monkeypatch, tmp_path
+) -> None:
+    """Behavior 4: empty value on new secret → {ok: False, detail: 'value is required for a new secret'}."""
+    monkeypatch.setattr(
+        "durin.config.loader._current_config_path", tmp_path / "config.json"
+    )
+    channel = _ch(bus)
+    conn = _FakeConn()
+    await channel._handle_secret_store_envelope(
+        conn,
+        "client-1",
+        {"name": "BRAND_NEW", "service": "github", "value": ""},
+    )
+    fail_frame = conn.last_event("secret_stored")
+    assert fail_frame is not None
+    assert fail_frame["ok"] is False
+    assert fail_frame["detail"] == "value is required for a new secret"
+
+
+@pytest.mark.asyncio
+async def test_secret_store_empty_value_on_existing_secret_keeps_credential(
+    bus: MagicMock, monkeypatch, tmp_path
+) -> None:
+    """Behavior 5: empty value on an existing secret → {ok: True}, credential unchanged.
+
+    An empty value is a metadata-only edit — it must NEVER wipe the stored
+    secret. Updated metadata (service/scope) is applied; the value survives.
+    """
+    monkeypatch.setattr(
+        "durin.config.loader._current_config_path", tmp_path / "config.json"
+    )
+    channel = _ch(bus)
+    conn = _FakeConn()
+    await channel._handle_secret_store_envelope(
+        conn,
+        "client-1",
+        {"name": "MY_TOKEN", "service": "github", "value": "keep-this-value", "scope": ["exec"]},
+    )
+    await channel._handle_secret_store_envelope(
+        conn,
+        "client-1",
+        {"name": "MY_TOKEN", "service": "gitlab", "value": "", "scope": ["skill:deploy"]},
+    )
+    ok_frame = conn.last_event("secret_stored")
+    assert ok_frame is not None
+    assert ok_frame["ok"] is True
+    from durin.security.secrets import get_secret_store
+
+    entry = get_secret_store(reload=True).get("MY_TOKEN")
+    assert entry.value == "keep-this-value"  # credential preserved
+    assert entry.service == "gitlab"  # metadata updated
+    assert entry.scope == ["skill:deploy"]
+
+
 @pytest.mark.asyncio
 async def test_config_api_get_and_set(bus: MagicMock, monkeypatch, tmp_path) -> None:
     """`/api/config` returns the effective config + schema; `/set` writes one key."""
