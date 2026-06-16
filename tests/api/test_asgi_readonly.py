@@ -148,8 +148,11 @@ def test_token_lacking_scope_returns_403(client, write_only_token):
 # ---------------------------------------------------------------------------
 
 
-def test_write_route_not_mounted(client):
-    """GET /api/v1/secrets/delete is a write route (secrets:write) — must be 404."""
+def test_write_route_not_mounted_as_get(client):
+    """The secrets delete route is now DELETE /api/v1/secrets, not GET /api/v1/secrets/delete.
+
+    The old GET path must return 404 (it was never registered).
+    """
     r = client.get(
         "/api/v1/secrets/delete",
         headers={"Authorization": f"Bearer {STATIC_TOKEN}"},

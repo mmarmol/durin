@@ -208,8 +208,8 @@ class ConfigService:
         )
 
     @route(
-        "GET",
-        "/api/v1/config/set",
+        "POST",
+        "/api/v1/config",
         scope=Scope.CONFIG_WRITE.value,
         request_model=ConfigSetCommand,
         response_model=ConfigSetResult,

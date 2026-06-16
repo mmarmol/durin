@@ -75,8 +75,8 @@ class SecretsService:
         return SecretsListResult(secrets=items)
 
     @route(
-        "GET",
-        "/api/v1/secrets/delete",
+        "DELETE",
+        "/api/v1/secrets",
         scope=Scope.SECRETS_WRITE.value,
         request_model=SecretDeleteCommand,
         response_model=SecretDeleteResult,

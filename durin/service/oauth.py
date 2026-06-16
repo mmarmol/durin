@@ -184,7 +184,7 @@ class OAuthService:
         )
 
     @route(
-        "GET",
+        "POST",
         "/api/v1/oauth/codex/start-loopback",
         scope=Scope.SETTINGS_WRITE.value,
         request_model=OAuthStartLoopbackCommand,
@@ -208,7 +208,7 @@ class OAuthService:
         return OAuthStartLoopbackResult(authorize_url=url)
 
     @route(
-        "GET",
+        "POST",
         "/api/v1/oauth/codex/start",
         scope=Scope.SETTINGS_WRITE.value,
         request_model=OAuthStartCommand,
@@ -263,8 +263,8 @@ class OAuthService:
         return OAuthPollResult(status=res.status)
 
     @route(
-        "GET",
-        "/api/v1/oauth/codex/disconnect",
+        "DELETE",
+        "/api/v1/oauth/codex",
         scope=Scope.SETTINGS_WRITE.value,
         request_model=OAuthDisconnectCommand,
         response_model=OAuthStatusResult,
