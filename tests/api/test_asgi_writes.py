@@ -289,6 +289,44 @@ def test_delete_with_empty_body_422_missing_required_field(client):
 
 
 # ---------------------------------------------------------------------------
+# POST write route — secrets store
+# ---------------------------------------------------------------------------
+
+
+def test_post_secrets_creates_and_returns_metadata(client):
+    resp = client.post(
+        "/api/v1/secrets",
+        headers={"Authorization": f"Bearer {STATIC_TOKEN}"},
+        json={"name": "API_PLAN_TOKEN", "value": "value-1234-5678", "service": "github", "scope": ["exec"]},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["name"] == "API_PLAN_TOKEN"
+    assert body["service"] == "github"
+    assert body["scope"] == ["exec"]
+    # snake_case on the wire (consistent with the rest of /api/v1), value never present.
+    assert "value_hint" in body
+    assert "value" not in body
+
+
+def test_post_secrets_rejects_bad_name_422(client):
+    resp = client.post(
+        "/api/v1/secrets",
+        headers={"Authorization": f"Bearer {STATIC_TOKEN}"},
+        json={"name": "bad-name", "value": "value-1234-5678", "service": "github"},
+    )
+    assert resp.status_code == 422
+
+
+def test_post_secrets_requires_auth_401(client):
+    resp = client.post(
+        "/api/v1/secrets",
+        json={"name": "API_PLAN_TOKEN", "value": "value-1234-5678", "service": "github"},
+    )
+    assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
 # Read routes still work (reads unchanged)
 # ---------------------------------------------------------------------------
 
