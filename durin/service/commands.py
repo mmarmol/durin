@@ -30,7 +30,7 @@ class CommandsService:
 
     @route(
         "GET",
-        "/api/commands",
+        "/api/v1/commands",
         scope=Scope.SYSTEM_READ.value,
         request_model=CommandsListQuery,
         response_model=CommandsResult,

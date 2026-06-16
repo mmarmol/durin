@@ -120,7 +120,7 @@ class HealthService:
 
     @route(
         "GET",
-        "/api/extras/status",
+        "/api/v1/extras/status",
         scope=Scope.SYSTEM_READ.value,
         request_model=ExtrasStatusQuery,
         response_model=ExtrasStatusResult,
@@ -148,7 +148,7 @@ class HealthService:
 
     @route(
         "GET",
-        "/api/extras/ensure",
+        "/api/v1/extras/ensure",
         scope=Scope.SYSTEM_WRITE.value,
         request_model=ExtrasEnsureCommand,
         response_model=ExtrasEnsureResult,
@@ -179,7 +179,7 @@ class HealthService:
 
     @route(
         "GET",
-        "/api/extras/restart",
+        "/api/v1/extras/restart",
         scope=Scope.SYSTEM_WRITE.value,
         request_model=ExtrasRestartCommand,
         response_model=ExtrasRestartResult,
@@ -198,7 +198,7 @@ class HealthService:
 
     @route(
         "GET",
-        "/api/logs",
+        "/api/v1/logs",
         scope=Scope.SYSTEM_READ.value,
         request_model=LogsListQuery,
         response_model=LogsListResult,

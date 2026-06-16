@@ -193,7 +193,7 @@ class SettingsService:
 
     @route(
         "GET",
-        "/api/settings",
+        "/api/v1/settings",
         scope=Scope.SETTINGS_READ.value,
         request_model=SettingsQuery,
         response_model=SettingsResult,
@@ -205,7 +205,7 @@ class SettingsService:
 
     @route(
         "GET",
-        "/api/settings/update",
+        "/api/v1/settings/update",
         scope=Scope.SETTINGS_WRITE.value,
         request_model=SettingsUpdateCommand,
         response_model=SettingsResult,
@@ -260,7 +260,7 @@ class SettingsService:
 
     @route(
         "GET",
-        "/api/settings/provider/update",
+        "/api/v1/settings/provider/update",
         scope=Scope.SETTINGS_WRITE.value,
         request_model=SettingsProviderUpdateCommand,
         response_model=SettingsResult,
@@ -322,7 +322,7 @@ class SettingsService:
 
     @route(
         "GET",
-        "/api/settings/web-search/update",
+        "/api/v1/settings/web-search/update",
         scope=Scope.SETTINGS_WRITE.value,
         request_model=SettingsWebSearchUpdateCommand,
         response_model=SettingsResult,

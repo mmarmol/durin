@@ -76,7 +76,7 @@ class AuthService:
 
     @route(
         "POST",
-        "/api/auth/tokens",
+        "/api/v1/auth/tokens",
         scope=_SYSTEM_WRITE,
         request_model=IssueTokenCommand,
         response_model=IssueTokenResult,
@@ -103,7 +103,7 @@ class AuthService:
 
     @route(
         "GET",
-        "/api/auth/tokens",
+        "/api/v1/auth/tokens",
         scope=_SYSTEM_READ,
         request_model=ListTokensQuery,
         response_model=ListTokensResult,
@@ -129,7 +129,7 @@ class AuthService:
 
     @route(
         "DELETE",
-        "/api/auth/tokens",
+        "/api/v1/auth/tokens",
         scope=_SYSTEM_WRITE,
         request_model=RevokeTokenCommand,
         response_model=RevokeTokenResult,

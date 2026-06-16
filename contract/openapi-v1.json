@@ -2181,7 +2181,7 @@
   },
   "openapi": "3.1.0",
   "paths": {
-    "/api/auth/tokens": {
+    "/api/v1/auth/tokens": {
       "delete": {
         "operationId": "auth_revoke_token",
         "requestBody": {
@@ -2264,7 +2264,7 @@
         "x-required-scope": "system:write"
       }
     },
-    "/api/channels": {
+    "/api/v1/channels": {
       "get": {
         "operationId": "config_channels_list",
         "requestBody": {
@@ -2293,7 +2293,7 @@
         "x-required-scope": "config:read"
       }
     },
-    "/api/commands": {
+    "/api/v1/commands": {
       "get": {
         "operationId": "commands_list",
         "requestBody": {
@@ -2322,7 +2322,7 @@
         "x-required-scope": "system:read"
       }
     },
-    "/api/config": {
+    "/api/v1/config": {
       "get": {
         "operationId": "config_get",
         "requestBody": {
@@ -2351,7 +2351,7 @@
         "x-required-scope": "config:read"
       }
     },
-    "/api/config/set": {
+    "/api/v1/config/set": {
       "get": {
         "operationId": "config_set",
         "requestBody": {
@@ -2380,7 +2380,7 @@
         "x-required-scope": "config:write"
       }
     },
-    "/api/cron": {
+    "/api/v1/cron": {
       "get": {
         "operationId": "cron_list",
         "requestBody": {
@@ -2409,7 +2409,7 @@
         "x-required-scope": "cron:read"
       }
     },
-    "/api/cron/remove": {
+    "/api/v1/cron/remove": {
       "get": {
         "operationId": "cron_remove",
         "requestBody": {
@@ -2438,7 +2438,7 @@
         "x-required-scope": "cron:write"
       }
     },
-    "/api/cron/run": {
+    "/api/v1/cron/run": {
       "get": {
         "operationId": "cron_run",
         "requestBody": {
@@ -2467,7 +2467,7 @@
         "x-required-scope": "cron:write"
       }
     },
-    "/api/cron/toggle": {
+    "/api/v1/cron/toggle": {
       "get": {
         "operationId": "cron_toggle",
         "requestBody": {
@@ -2496,7 +2496,7 @@
         "x-required-scope": "cron:write"
       }
     },
-    "/api/extras/ensure": {
+    "/api/v1/extras/ensure": {
       "get": {
         "operationId": "health_extras_ensure",
         "requestBody": {
@@ -2525,7 +2525,7 @@
         "x-required-scope": "system:write"
       }
     },
-    "/api/extras/restart": {
+    "/api/v1/extras/restart": {
       "get": {
         "operationId": "health_extras_restart",
         "requestBody": {
@@ -2554,7 +2554,7 @@
         "x-required-scope": "system:write"
       }
     },
-    "/api/extras/status": {
+    "/api/v1/extras/status": {
       "get": {
         "operationId": "health_extras_status",
         "requestBody": {
@@ -2583,7 +2583,7 @@
         "x-required-scope": "system:read"
       }
     },
-    "/api/logs": {
+    "/api/v1/logs": {
       "get": {
         "operationId": "health_logs_list",
         "requestBody": {
@@ -2612,7 +2612,7 @@
         "x-required-scope": "system:read"
       }
     },
-    "/api/memory/backlinks": {
+    "/api/v1/memory/backlinks": {
       "get": {
         "operationId": "memory_backlinks",
         "requestBody": {
@@ -2641,7 +2641,7 @@
         "x-required-scope": "memory:read"
       }
     },
-    "/api/memory/cross-encoder/test": {
+    "/api/v1/memory/cross-encoder/test": {
       "get": {
         "operationId": "config_cross_encoder_test",
         "requestBody": {
@@ -2670,7 +2670,7 @@
         "x-required-scope": "config:read"
       }
     },
-    "/api/memory/edge/{a}/{b}": {
+    "/api/v1/memory/edge/{a}/{b}": {
       "get": {
         "operationId": "memory_edge",
         "requestBody": {
@@ -2699,7 +2699,7 @@
         "x-required-scope": "memory:read"
       }
     },
-    "/api/memory/entity/{ref}": {
+    "/api/v1/memory/entity/{ref}": {
       "get": {
         "operationId": "memory_entity",
         "requestBody": {
@@ -2728,7 +2728,7 @@
         "x-required-scope": "memory:read"
       }
     },
-    "/api/memory/entry": {
+    "/api/v1/memory/entry": {
       "get": {
         "operationId": "memory_entry",
         "requestBody": {
@@ -2757,7 +2757,7 @@
         "x-required-scope": "memory:read"
       }
     },
-    "/api/memory/forget": {
+    "/api/v1/memory/forget": {
       "get": {
         "operationId": "memory_forget",
         "requestBody": {
@@ -2786,7 +2786,7 @@
         "x-required-scope": "memory:write"
       }
     },
-    "/api/memory/graph": {
+    "/api/v1/memory/graph": {
       "get": {
         "operationId": "memory_graph",
         "requestBody": {
@@ -2815,7 +2815,7 @@
         "x-required-scope": "memory:read"
       }
     },
-    "/api/memory/search": {
+    "/api/v1/memory/search": {
       "get": {
         "operationId": "memory_search",
         "requestBody": {
@@ -2844,7 +2844,7 @@
         "x-required-scope": "memory:read"
       }
     },
-    "/api/memory/session/{stem}": {
+    "/api/v1/memory/session/{stem}": {
       "get": {
         "operationId": "memory_session",
         "requestBody": {
@@ -2873,7 +2873,7 @@
         "x-required-scope": "memory:read"
       }
     },
-    "/api/memory/subgraph": {
+    "/api/v1/memory/subgraph": {
       "get": {
         "operationId": "memory_subgraph",
         "requestBody": {
@@ -2902,7 +2902,7 @@
         "x-required-scope": "memory:read"
       }
     },
-    "/api/model/capabilities": {
+    "/api/v1/model/capabilities": {
       "get": {
         "operationId": "config_model_capabilities",
         "requestBody": {
@@ -2931,7 +2931,7 @@
         "x-required-scope": "config:read"
       }
     },
-    "/api/model/test": {
+    "/api/v1/model/test": {
       "get": {
         "operationId": "config_model_test",
         "requestBody": {
@@ -2960,7 +2960,7 @@
         "x-required-scope": "config:read"
       }
     },
-    "/api/models": {
+    "/api/v1/models": {
       "get": {
         "operationId": "config_models_list",
         "requestBody": {
@@ -2989,7 +2989,7 @@
         "x-required-scope": "config:read"
       }
     },
-    "/api/oauth/codex/disconnect": {
+    "/api/v1/oauth/codex/disconnect": {
       "get": {
         "operationId": "oauth_disconnect",
         "requestBody": {
@@ -3018,7 +3018,7 @@
         "x-required-scope": "settings:write"
       }
     },
-    "/api/oauth/codex/poll": {
+    "/api/v1/oauth/codex/poll": {
       "get": {
         "operationId": "oauth_poll",
         "requestBody": {
@@ -3047,7 +3047,7 @@
         "x-required-scope": "settings:read"
       }
     },
-    "/api/oauth/codex/start": {
+    "/api/v1/oauth/codex/start": {
       "get": {
         "operationId": "oauth_start",
         "requestBody": {
@@ -3076,7 +3076,7 @@
         "x-required-scope": "settings:write"
       }
     },
-    "/api/oauth/codex/start-loopback": {
+    "/api/v1/oauth/codex/start-loopback": {
       "get": {
         "operationId": "oauth_start_loopback",
         "requestBody": {
@@ -3105,7 +3105,7 @@
         "x-required-scope": "settings:write"
       }
     },
-    "/api/oauth/codex/status": {
+    "/api/v1/oauth/codex/status": {
       "get": {
         "operationId": "oauth_status",
         "requestBody": {
@@ -3134,7 +3134,7 @@
         "x-required-scope": "settings:read"
       }
     },
-    "/api/secrets": {
+    "/api/v1/secrets": {
       "get": {
         "operationId": "secrets_list",
         "requestBody": {
@@ -3163,7 +3163,7 @@
         "x-required-scope": "secrets:read"
       }
     },
-    "/api/secrets/delete": {
+    "/api/v1/secrets/delete": {
       "get": {
         "operationId": "secrets_delete",
         "requestBody": {
@@ -3192,7 +3192,7 @@
         "x-required-scope": "secrets:write"
       }
     },
-    "/api/sessions": {
+    "/api/v1/sessions": {
       "get": {
         "operationId": "sessions_list",
         "requestBody": {
@@ -3221,7 +3221,7 @@
         "x-required-scope": "sessions:read"
       }
     },
-    "/api/sessions/{key}/delete": {
+    "/api/v1/sessions/{key}/delete": {
       "get": {
         "operationId": "sessions_delete",
         "requestBody": {
@@ -3250,7 +3250,7 @@
         "x-required-scope": "sessions:write"
       }
     },
-    "/api/sessions/{key}/messages": {
+    "/api/v1/sessions/{key}/messages": {
       "get": {
         "operationId": "sessions_messages",
         "requestBody": {
@@ -3279,7 +3279,7 @@
         "x-required-scope": "sessions:read"
       }
     },
-    "/api/sessions/{key}/rename": {
+    "/api/v1/sessions/{key}/rename": {
       "get": {
         "operationId": "sessions_rename",
         "requestBody": {
@@ -3308,7 +3308,7 @@
         "x-required-scope": "sessions:write"
       }
     },
-    "/api/sessions/{key}/webui-thread": {
+    "/api/v1/sessions/{key}/webui-thread": {
       "get": {
         "operationId": "sessions_webui_thread",
         "requestBody": {
@@ -3337,7 +3337,7 @@
         "x-required-scope": "sessions:read"
       }
     },
-    "/api/settings": {
+    "/api/v1/settings": {
       "get": {
         "operationId": "settings_get",
         "requestBody": {
@@ -3366,7 +3366,7 @@
         "x-required-scope": "settings:read"
       }
     },
-    "/api/settings/provider/update": {
+    "/api/v1/settings/provider/update": {
       "get": {
         "operationId": "settings_provider_update",
         "requestBody": {
@@ -3395,7 +3395,7 @@
         "x-required-scope": "settings:write"
       }
     },
-    "/api/settings/update": {
+    "/api/v1/settings/update": {
       "get": {
         "operationId": "settings_update",
         "requestBody": {
@@ -3424,7 +3424,7 @@
         "x-required-scope": "settings:write"
       }
     },
-    "/api/settings/web-search/update": {
+    "/api/v1/settings/web-search/update": {
       "get": {
         "operationId": "settings_web_search_update",
         "requestBody": {
@@ -3453,7 +3453,7 @@
         "x-required-scope": "settings:write"
       }
     },
-    "/api/skills": {
+    "/api/v1/skills": {
       "get": {
         "operationId": "skills_list",
         "requestBody": {
@@ -3482,7 +3482,7 @@
         "x-required-scope": "skills:read"
       }
     },
-    "/api/skills/describe": {
+    "/api/v1/skills/describe": {
       "get": {
         "operationId": "skills_describe",
         "requestBody": {
@@ -3511,7 +3511,7 @@
         "x-required-scope": "skills:read"
       }
     },
-    "/api/skills/github-token-test": {
+    "/api/v1/skills/github-token-test": {
       "get": {
         "operationId": "skills_github_token_test",
         "requestBody": {
@@ -3540,7 +3540,7 @@
         "x-required-scope": "skills:read"
       }
     },
-    "/api/skills/import": {
+    "/api/v1/skills/import": {
       "get": {
         "operationId": "skills_import_skill",
         "requestBody": {
@@ -3569,7 +3569,7 @@
         "x-required-scope": "skills:write"
       }
     },
-    "/api/skills/quarantine": {
+    "/api/v1/skills/quarantine": {
       "get": {
         "operationId": "skills_quarantine",
         "requestBody": {
@@ -3598,7 +3598,7 @@
         "x-required-scope": "skills:read"
       }
     },
-    "/api/skills/resolve": {
+    "/api/v1/skills/resolve": {
       "get": {
         "operationId": "skills_resolve",
         "requestBody": {
@@ -3627,7 +3627,7 @@
         "x-required-scope": "skills:read"
       }
     },
-    "/api/skills/search": {
+    "/api/v1/skills/search": {
       "get": {
         "operationId": "skills_search",
         "requestBody": {
@@ -3656,7 +3656,7 @@
         "x-required-scope": "skills:read"
       }
     },
-    "/api/skills/{name}": {
+    "/api/v1/skills/{name}": {
       "get": {
         "operationId": "skills_get",
         "requestBody": {
@@ -3685,7 +3685,7 @@
         "x-required-scope": "skills:read"
       }
     },
-    "/api/skills/{name}/approve": {
+    "/api/v1/skills/{name}/approve": {
       "get": {
         "operationId": "skills_approve",
         "requestBody": {
@@ -3714,7 +3714,7 @@
         "x-required-scope": "skills:write"
       }
     },
-    "/api/skills/{name}/file": {
+    "/api/v1/skills/{name}/file": {
       "get": {
         "operationId": "skills_file_get",
         "requestBody": {
@@ -3743,7 +3743,7 @@
         "x-required-scope": "skills:read"
       }
     },
-    "/api/skills/{name}/file/save": {
+    "/api/v1/skills/{name}/file/save": {
       "get": {
         "operationId": "skills_file_save",
         "requestBody": {
@@ -3772,7 +3772,7 @@
         "x-required-scope": "skills:write"
       }
     },
-    "/api/skills/{name}/files": {
+    "/api/v1/skills/{name}/files": {
       "get": {
         "operationId": "skills_files",
         "requestBody": {
@@ -3801,7 +3801,7 @@
         "x-required-scope": "skills:read"
       }
     },
-    "/api/skills/{name}/history": {
+    "/api/v1/skills/{name}/history": {
       "get": {
         "operationId": "skills_history",
         "requestBody": {
@@ -3830,7 +3830,7 @@
         "x-required-scope": "skills:read"
       }
     },
-    "/api/skills/{name}/install-deps": {
+    "/api/v1/skills/{name}/install-deps": {
       "get": {
         "operationId": "skills_install_deps",
         "requestBody": {
@@ -3859,7 +3859,7 @@
         "x-required-scope": "skills:write"
       }
     },
-    "/api/skills/{name}/judge": {
+    "/api/v1/skills/{name}/judge": {
       "get": {
         "operationId": "skills_judge",
         "requestBody": {
@@ -3888,7 +3888,7 @@
         "x-required-scope": "skills:read"
       }
     },
-    "/api/skills/{name}/mode": {
+    "/api/v1/skills/{name}/mode": {
       "get": {
         "operationId": "skills_mode",
         "requestBody": {
@@ -3917,7 +3917,7 @@
         "x-required-scope": "skills:write"
       }
     },
-    "/api/skills/{name}/reject": {
+    "/api/v1/skills/{name}/reject": {
       "get": {
         "operationId": "skills_reject",
         "requestBody": {
@@ -3946,7 +3946,7 @@
         "x-required-scope": "skills:write"
       }
     },
-    "/api/skills/{name}/remove": {
+    "/api/v1/skills/{name}/remove": {
       "get": {
         "operationId": "skills_remove",
         "requestBody": {
@@ -3975,7 +3975,7 @@
         "x-required-scope": "skills:write"
       }
     },
-    "/api/skills/{name}/save": {
+    "/api/v1/skills/{name}/save": {
       "get": {
         "operationId": "skills_save",
         "requestBody": {

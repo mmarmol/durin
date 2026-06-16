@@ -759,6 +759,10 @@ class GatewayConfig(Base):
         validation_alias=AliasChoices("webuiEnabled", "webui_enabled"),
         serialization_alias="webuiEnabled",
     )
+    # When set, the gateway also serves the Starlette read-only API on this
+    # second port. Off by default (None) — existing behaviour is unchanged.
+    # Set via `gateway.api_port: 18791` to activate the new HTTP front door.
+    api_port: int | None = None
 
 
 class MCPServerConfig(Base):

@@ -166,7 +166,7 @@ class OAuthService:
 
     @route(
         "GET",
-        "/api/oauth/codex/status",
+        "/api/v1/oauth/codex/status",
         scope=Scope.SETTINGS_READ.value,
         request_model=OAuthStatusQuery,
         response_model=OAuthStatusResult,
@@ -185,7 +185,7 @@ class OAuthService:
 
     @route(
         "GET",
-        "/api/oauth/codex/start-loopback",
+        "/api/v1/oauth/codex/start-loopback",
         scope=Scope.SETTINGS_WRITE.value,
         request_model=OAuthStartLoopbackCommand,
         response_model=OAuthStartLoopbackResult,
@@ -209,7 +209,7 @@ class OAuthService:
 
     @route(
         "GET",
-        "/api/oauth/codex/start",
+        "/api/v1/oauth/codex/start",
         scope=Scope.SETTINGS_WRITE.value,
         request_model=OAuthStartCommand,
         response_model=OAuthStartResult,
@@ -233,7 +233,7 @@ class OAuthService:
 
     @route(
         "GET",
-        "/api/oauth/codex/poll",
+        "/api/v1/oauth/codex/poll",
         scope=Scope.SETTINGS_READ.value,
         request_model=OAuthPollQuery,
         response_model=OAuthPollResult,
@@ -264,7 +264,7 @@ class OAuthService:
 
     @route(
         "GET",
-        "/api/oauth/codex/disconnect",
+        "/api/v1/oauth/codex/disconnect",
         scope=Scope.SETTINGS_WRITE.value,
         request_model=OAuthDisconnectCommand,
         response_model=OAuthStatusResult,

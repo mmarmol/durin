@@ -156,7 +156,7 @@ class SkillsService:
 
     @route(
         "GET",
-        "/api/skills",
+        "/api/v1/skills",
         scope=Scope.SKILLS_READ.value,
         request_model=SkillsListQuery,
         response_model=SkillsResult,
@@ -171,7 +171,7 @@ class SkillsService:
 
     @route(
         "GET",
-        "/api/skills/quarantine",
+        "/api/v1/skills/quarantine",
         scope=Scope.SKILLS_READ.value,
         request_model=SkillsQuarantineQuery,
         response_model=SkillsResult,
@@ -186,7 +186,7 @@ class SkillsService:
 
     @route(
         "GET",
-        "/api/skills/{name}",
+        "/api/v1/skills/{name}",
         scope=Scope.SKILLS_READ.value,
         request_model=SkillGetQuery,
         response_model=SkillsResult,
@@ -201,7 +201,7 @@ class SkillsService:
 
     @route(
         "GET",
-        "/api/skills/{name}/files",
+        "/api/v1/skills/{name}/files",
         scope=Scope.SKILLS_READ.value,
         request_model=SkillFilesQuery,
         response_model=SkillsResult,
@@ -216,7 +216,7 @@ class SkillsService:
 
     @route(
         "GET",
-        "/api/skills/{name}/file",
+        "/api/v1/skills/{name}/file",
         scope=Scope.SKILLS_READ.value,
         request_model=SkillFileQuery,
         response_model=SkillsResult,
@@ -231,7 +231,7 @@ class SkillsService:
 
     @route(
         "GET",
-        "/api/skills/{name}/history",
+        "/api/v1/skills/{name}/history",
         scope=Scope.SKILLS_READ.value,
         request_model=SkillHistoryQuery,
         response_model=SkillsResult,
@@ -246,7 +246,7 @@ class SkillsService:
 
     @route(
         "GET",
-        "/api/skills/resolve",
+        "/api/v1/skills/resolve",
         scope=Scope.SKILLS_READ.value,
         request_model=SkillsResolveQuery,
         response_model=SkillsResult,
@@ -261,7 +261,7 @@ class SkillsService:
 
     @route(
         "GET",
-        "/api/skills/search",
+        "/api/v1/skills/search",
         scope=Scope.SKILLS_READ.value,
         request_model=SkillSearchQuery,
         response_model=SkillsResult,
@@ -278,7 +278,7 @@ class SkillsService:
 
     @route(
         "GET",
-        "/api/skills/describe",
+        "/api/v1/skills/describe",
         scope=Scope.SKILLS_READ.value,
         request_model=SkillDescribeQuery,
         response_model=SkillsResult,
@@ -293,7 +293,7 @@ class SkillsService:
 
     @route(
         "GET",
-        "/api/skills/github-token-test",
+        "/api/v1/skills/github-token-test",
         scope=Scope.SKILLS_READ.value,
         request_model=GithubTokenTestQuery,
         response_model=SkillsResult,
@@ -310,7 +310,7 @@ class SkillsService:
 
     @route(
         "GET",
-        "/api/skills/{name}/judge",
+        "/api/v1/skills/{name}/judge",
         scope=Scope.SKILLS_READ.value,
         request_model=SkillJudgeQuery,
         response_model=SkillsResult,
@@ -329,7 +329,7 @@ class SkillsService:
 
     @route(
         "GET",
-        "/api/skills/{name}/save",
+        "/api/v1/skills/{name}/save",
         scope=Scope.SKILLS_WRITE.value,
         request_model=SkillSaveCommand,
         response_model=SkillsResult,
@@ -344,7 +344,7 @@ class SkillsService:
 
     @route(
         "GET",
-        "/api/skills/{name}/file/save",
+        "/api/v1/skills/{name}/file/save",
         scope=Scope.SKILLS_WRITE.value,
         request_model=SkillFileSaveCommand,
         response_model=SkillsResult,
@@ -365,7 +365,7 @@ class SkillsService:
 
     @route(
         "GET",
-        "/api/skills/{name}/mode",
+        "/api/v1/skills/{name}/mode",
         scope=Scope.SKILLS_WRITE.value,
         request_model=SkillModeCommand,
         response_model=SkillsResult,
@@ -380,7 +380,7 @@ class SkillsService:
 
     @route(
         "GET",
-        "/api/skills/import",
+        "/api/v1/skills/import",
         scope=Scope.SKILLS_WRITE.value,
         request_model=SkillsImportCommand,
         response_model=SkillsResult,
@@ -397,7 +397,7 @@ class SkillsService:
 
     @route(
         "GET",
-        "/api/skills/{name}/approve",
+        "/api/v1/skills/{name}/approve",
         scope=Scope.SKILLS_WRITE.value,
         request_model=SkillApproveCommand,
         response_model=SkillsResult,
@@ -421,7 +421,7 @@ class SkillsService:
 
     @route(
         "GET",
-        "/api/skills/{name}/install-deps",
+        "/api/v1/skills/{name}/install-deps",
         scope=Scope.SKILLS_WRITE.value,
         request_model=SkillInstallDepsCommand,
         response_model=SkillsResult,
@@ -441,7 +441,7 @@ class SkillsService:
 
     @route(
         "GET",
-        "/api/skills/{name}/reject",
+        "/api/v1/skills/{name}/reject",
         scope=Scope.SKILLS_WRITE.value,
         request_model=SkillRejectCommand,
         response_model=SkillsResult,
@@ -456,7 +456,7 @@ class SkillsService:
 
     @route(
         "GET",
-        "/api/skills/{name}/remove",
+        "/api/v1/skills/{name}/remove",
         scope=Scope.SKILLS_WRITE.value,
         request_model=SkillRemoveCommand,
         response_model=SkillsResult,
