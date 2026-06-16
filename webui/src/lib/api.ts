@@ -535,7 +535,8 @@ export async function installSkillDeps(
   });
   if (res.status >= 500) throw new ApiError(res.status, `HTTP ${res.status}`);
   const envelope = await res.json();
-  return envelope.data ?? envelope;
+  // 2xx → data; a 4xx is problem+json with the payload under details.
+  return envelope.details ?? envelope.data ?? envelope;
 }
 
 export async function approveSkill(
@@ -549,7 +550,8 @@ export async function approveSkill(
   if (opts.override) body.override = true;
   if (opts.replace) body.replace = true;
   if (opts.install_deps) body.installDeps = true;
-  // 200 (installed) and 409 (gate refused) both carry a useful body; only 5xx throws.
+  // 2xx carries the result in `data`; a 409 (gate refused) is problem+json with
+  // the gate payload under `details`; only 5xx throws.
   const res = await fetch(`${base}/api/v1/skills/${encodeURIComponent(name)}/approve`, {
     method: "POST",
     headers: {
@@ -561,7 +563,7 @@ export async function approveSkill(
   });
   if (res.status >= 500) throw new ApiError(res.status, `HTTP ${res.status}`);
   const envelope = await res.json();
-  return (envelope.data ?? envelope) as ApproveResult;
+  return (envelope.details ?? envelope.data ?? envelope) as ApproveResult;
 }
 
 export async function rejectSkill(
@@ -754,7 +756,8 @@ export async function getSkillFile(
 export async function saveSkillFile(
   token: string, name: string, path: string, content: string, base: string = "",
 ): Promise<SaveFileResult> {
-  // 200 (ok) and 400 (syntax / manual-gate) both carry a useful body; only 5xx throws.
+  // 2xx carries the result in `data`; a 4xx (syntax / manual-gate) is problem+json
+  // with the payload under `details`; only 5xx throws.
   const res = await fetch(
     `${base}/api/v1/skills/${encodeURIComponent(name)}/file/save`,
     {
@@ -768,7 +771,7 @@ export async function saveSkillFile(
     });
   if (res.status >= 500) throw new ApiError(res.status, `HTTP ${res.status}`);
   const envelope = await res.json();
-  return (envelope.data ?? envelope) as SaveFileResult;
+  return (envelope.details ?? envelope.data ?? envelope) as SaveFileResult;
 }
 
 export async function getSkillHistory(
@@ -1228,8 +1231,10 @@ export async function fetchMemoryEntry(
   return (envelope.data ?? envelope) as MemoryEntryDetail;
 }
 
-/** DELETE /api/v1/memory/entry with body {uri} — archive an entry. Returns the
- *  backend's ``{result}`` payload verbatim so the UI can branch on
+/** DELETE /api/v1/memory/entry with body {uri} — archive an entry. Returns
+ *  ``{result, detail?}``: a 2xx is ``{result: "archived"}``; a failure is
+ *  problem+json (403 protected / 404 not_found / 422 invalid) whose outcome is
+ *  read from ``details.result`` — so the UI still branches on
  *  ``"archived" | "not_found" | "protected" | "invalid"``. */
 export async function forgetMemoryEntry(
   token: string,
@@ -1246,13 +1251,14 @@ export async function forgetMemoryEntry(
     credentials: "same-origin",
     body: JSON.stringify({ uri }),
   });
-  // 200, 400, 403 all carry a JSON body with `result` — surface it
-  // verbatim so the caller picks the message. Only network / 5xx
-  // errors throw.
+  // 2xx → {result: "archived"}; a 4xx is problem+json whose domain outcome is
+  // under details.result. Only network / 5xx errors throw.
   if (res.status >= 500) {
     throw new ApiError(res.status, `HTTP ${res.status}`);
   }
-  return (await res.json()) as { result: string; detail?: string };
+  const body = await res.json();
+  if (res.ok) return { result: body.result };
+  return { result: body.details?.result ?? "invalid", detail: body.detail };
 }
 
 /** GET /api/v1/memory/backlinks?uri=… — entries that reference this one. */

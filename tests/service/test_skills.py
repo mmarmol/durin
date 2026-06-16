@@ -1,6 +1,8 @@
 """SP1: SkillsService — focused unit tests covering read, write, async, and error paths.
 
 These tests call the service directly (no HTTP) using a tmp skills workspace.
+A successful call returns a ``SkillsResult`` (2xx, ``.data`` only); a non-2xx
+store outcome is raised as a DomainError (payload echoed in ``.details``).
 """
 
 from __future__ import annotations
@@ -26,7 +28,12 @@ from durin.service.skills import (
     SkillsResolveQuery,
     SkillsService,
 )
-from durin.service.types import ForbiddenError
+from durin.service.types import (
+    ConflictError,
+    ForbiddenError,
+    NotFoundError,
+    ValidationFailedError,
+)
 
 
 def _make_workspace(tmp_path: Path) -> Path:
@@ -85,7 +92,6 @@ async def test_list_returns_skills(tmp_path: Path) -> None:
     ws = _make_workspace(tmp_path)
     svc = _svc(ws)
     result = await svc.list(SkillsListQuery(), Principal.local())
-    assert result.status == 200
     assert "skills" in result.data
     names = {s["name"] for s in result.data["skills"]}
     assert "hello" in names
@@ -104,7 +110,6 @@ async def test_quarantine_returns_quarantined_list(tmp_path: Path) -> None:
     _make_quarantine(ws, "pending")
     svc = _svc(ws)
     result = await svc.quarantine(SkillsQuarantineQuery(), Principal.local())
-    assert result.status == 200
     assert "quarantined" in result.data
     names = {s["name"] for s in result.data["quarantined"]}
     assert "pending" in names
@@ -114,15 +119,15 @@ async def test_get_existing_skill(tmp_path: Path) -> None:
     ws = _make_workspace(tmp_path)
     svc = _svc(ws)
     result = await svc.get(SkillGetQuery(name="hello"), Principal.local())
-    assert result.status == 200
     assert result.data["name"] == "hello"
 
 
-async def test_get_missing_skill_returns_404_status(tmp_path: Path) -> None:
+async def test_get_missing_skill_raises_not_found(tmp_path: Path) -> None:
     ws = _make_workspace(tmp_path)
     svc = _svc(ws)
-    result = await svc.get(SkillGetQuery(name="no-such"), Principal.local())
-    assert result.status == 404
+    with pytest.raises(NotFoundError) as exc:
+        await svc.get(SkillGetQuery(name="no-such"), Principal.local())
+    assert "error" in exc.value.details
 
 
 # ---------------------------------------------------------------------------
@@ -137,7 +142,6 @@ async def test_save_overwrites_skill_content(tmp_path: Path) -> None:
         SkillSaveCommand(name="hello", content="---\nname: hello\ndescription: updated\n---\nNew body.\n"),
         Principal.local(),
     )
-    assert result.status == 200
     assert result.data.get("ok") or result.data.get("name") == "hello"
 
 
@@ -156,7 +160,7 @@ async def test_mode_changes_skill_mode(tmp_path: Path) -> None:
     ws = _make_workspace(tmp_path)
     svc = _svc(ws)
     result = await svc.mode(SkillModeCommand(name="hello", value="auto"), Principal.local())
-    assert result.status == 200
+    assert "error" not in result.data
 
 
 async def test_reject_removes_quarantine_dir(tmp_path: Path) -> None:
@@ -164,7 +168,6 @@ async def test_reject_removes_quarantine_dir(tmp_path: Path) -> None:
     _make_quarantine(ws, "toreject")
     svc = _svc(ws)
     result = await svc.reject(SkillRejectCommand(name="toreject"), Principal.local())
-    assert result.status == 200
     assert result.data.get("ok") is True
     assert not (ws / ".durin" / "import-quarantine" / "toreject").exists()
 
@@ -173,7 +176,6 @@ async def test_remove_installed_skill(tmp_path: Path) -> None:
     ws = _make_workspace(tmp_path)
     svc = _svc(ws)
     result = await svc.remove(SkillRemoveCommand(name="hello"), Principal.local())
-    assert result.status == 200
     assert result.data.get("ok") is True
     assert not (ws / "skills" / "hello").exists()
 
@@ -192,17 +194,17 @@ async def test_judge_runs_on_quarantined_skill(tmp_path: Path, monkeypatch: pyte
     )
     svc = _svc(ws)
     result = await svc.judge(SkillJudgeQuery(name="cand"), Principal.local())
-    assert result.status == 200
     assert result.data.get("judged") is True
 
 
 # ---------------------------------------------------------------------------
-# Status pass-through
+# Error paths — non-2xx store outcomes are raised as DomainErrors
 # ---------------------------------------------------------------------------
 
 
-async def test_approve_without_confirm_returns_409(tmp_path: Path) -> None:
-    """The store returns status=409 when confirm is not set for a safe skill."""
+async def test_approve_without_confirm_raises_conflict(tmp_path: Path) -> None:
+    """The store returns status=409 when confirm is not set for a safe skill —
+    surfaced as a ConflictError with the gate payload in ``details``."""
     ws = _make_workspace(tmp_path)
     src = tmp_path / "src" / "newskill"
     src.mkdir(parents=True)
@@ -210,13 +212,13 @@ async def test_approve_without_confirm_returns_409(tmp_path: Path) -> None:
 
     svc = _svc(ws)
     imp = await svc.import_skill(SkillsImportCommand(source=str(src)), Principal.local())
-    assert imp.status == 200
+    assert imp.data is not None
 
-    result = await svc.approve(
-        SkillApproveCommand(name="newskill", confirm=False), Principal.local()
-    )
-    assert result.status == 409
-    assert "refused" in result.data
+    with pytest.raises(ConflictError) as exc:
+        await svc.approve(
+            SkillApproveCommand(name="newskill", confirm=False), Principal.local()
+        )
+    assert "refused" in exc.value.details
 
 
 async def test_resolve_lists_local_candidates(tmp_path: Path) -> None:
@@ -227,19 +229,19 @@ async def test_resolve_lists_local_candidates(tmp_path: Path) -> None:
 
     svc = _svc(ws)
     result = await svc.resolve(SkillsResolveQuery(source=str(src)), Principal.local())
-    assert result.status == 200
     assert "candidates" in result.data
 
 
-async def test_github_token_test_missing_name_returns_400(
+async def test_github_token_test_missing_name_raises_validation(
     tmp_path: Path,
 ) -> None:
-    """An empty secret name is rejected by the store with status 400."""
+    """An empty secret name is rejected by the store with status 400 →
+    ValidationFailedError (422)."""
     ws = _make_workspace(tmp_path)
     svc = _svc(ws)
-    result = await svc.github_token_test(GithubTokenTestQuery(secret=""), Principal.local())
-    assert result.status == 400
-    assert "error" in result.data
+    with pytest.raises(ValidationFailedError) as exc:
+        await svc.github_token_test(GithubTokenTestQuery(secret=""), Principal.local())
+    assert "error" in exc.value.details
 
 
 async def test_github_token_test_unknown_secret_returns_ok_false(
@@ -253,5 +255,4 @@ async def test_github_token_test_unknown_secret_returns_ok_false(
     ws = _make_workspace(tmp_path)
     svc = _svc(ws)
     result = await svc.github_token_test(GithubTokenTestQuery(secret="MYTOKEN"), Principal.local())
-    assert result.status == 200
     assert result.data["ok"] is False

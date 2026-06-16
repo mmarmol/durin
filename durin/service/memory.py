@@ -43,16 +43,19 @@ class MemoryResult(Result):
 
 
 # ---------------------------------------------------------------------------
-# Forget result — status selection depends on the result field
+# Forget result — success only; failures are raised as DomainErrors
 # ---------------------------------------------------------------------------
 
 
 class ForgetResult(Result):
-    """Result of an archive operation.  ``result`` drives the HTTP ``status``
-    (200 archived/not_found, 403 protected, 400 invalid)."""
+    """Result of a SUCCESSFUL archive — ``result`` is always ``"archived"``.
 
-    result: str  # "archived" | "not_found" | "protected" | "invalid"
-    status: int = 200
+    The failure outcomes are raised as DomainErrors so the front door renders
+    them as problem+json (one error format): protected → ``ForbiddenError`` (403),
+    invalid → ``ValidationFailedError`` (422), not_found → ``NotFoundError`` (404).
+    """
+
+    result: str  # "archived"
 
 
 # ---------------------------------------------------------------------------
@@ -307,9 +310,20 @@ class MemoryService:
     ) -> ForgetResult:
         principal.require(Scope.MEMORY_WRITE)
         from durin.memory.graph_api import forget_entry
+        from durin.service.types import (
+            ForbiddenError,
+            NotFoundError,
+            ValidationFailedError,
+        )
 
         ws = self._workspace_resolver()
-        payload = forget_entry(ws, cmd.uri)
-        result = payload.get("result", "invalid")
-        status = {"protected": 403, "invalid": 400}.get(result, 200)
-        return ForgetResult(result=result, status=status)
+        result = forget_entry(ws, cmd.uri).get("result", "invalid")
+        if result == "archived":
+            return ForgetResult(result=result)
+        # Failure outcomes → one problem+json error format (result echoed in details).
+        details = {"result": result, "uri": cmd.uri}
+        if result == "protected":
+            raise ForbiddenError("memory entry is protected", details=details)
+        if result == "not_found":
+            raise NotFoundError("memory entry not found", details=details)
+        raise ValidationFailedError("invalid memory uri", details=details)

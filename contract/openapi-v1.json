@@ -572,16 +572,11 @@
         "type": "object"
       },
       "ForgetResult": {
-        "description": "Result of an archive operation.  ``result`` drives the HTTP ``status``\n(200 archived/not_found, 403 protected, 400 invalid).",
+        "description": "Result of a SUCCESSFUL archive \u2014 ``result`` is always ``\"archived\"``.\n\nThe failure outcomes are raised as DomainErrors so the front door renders\nthem as problem+json (one error format): protected \u2192 ``ForbiddenError`` (403),\ninvalid \u2192 ``ValidationFailedError`` (422), not_found \u2192 ``NotFoundError`` (404).",
         "properties": {
           "result": {
             "title": "Result",
             "type": "string"
-          },
-          "status": {
-            "default": 200,
-            "title": "Status",
-            "type": "integer"
           }
         },
         "required": [
@@ -2111,20 +2106,15 @@
         "type": "object"
       },
       "SkillsResult": {
-        "description": "Carries a store status code + raw payload dict (escape hatch).",
+        "description": "A successful skills response \u2014 ``data`` is the raw store payload.\n\nThe store returns ``(status, payload)``; a non-2xx status is raised as a\nDomainError by :func:`_skills_result` (payload echoed in ``details``) so the\nfront door renders it as problem+json. Returned SkillsResults are 2xx only.",
         "properties": {
           "data": {
             "additionalProperties": true,
             "title": "Data",
             "type": "object"
-          },
-          "status": {
-            "title": "Status",
-            "type": "integer"
           }
         },
         "required": [
-          "status",
           "data"
         ],
         "title": "SkillsResult",
