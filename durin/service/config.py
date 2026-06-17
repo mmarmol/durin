@@ -188,14 +188,6 @@ _CRED_FIELDS: tuple[str, ...] = (
     "api_key", "claw_token", "access_token",
 )
 
-#: Plan-variant → base provider for keyword lookup.
-_PLAN_BASE: dict[str, str] = {
-    "zai_coding_plan": "zhipu",
-    "volcengine_coding_plan": "volcengine",
-    "byteplus_coding_plan": "byteplus",
-}
-
-
 class ConfigService:
     """Read/write the effective config, list models/channels, probe model health."""
 
@@ -275,8 +267,6 @@ class ConfigService:
         self, query: ModelsListQuery, principal: Principal
     ) -> ModelsListResult:
         principal.require(Scope.CONFIG_READ)
-        from durin.cli.onboard_wizard import DEFAULT_MODELS
-        from durin.providers.registry import find_by_name
 
         provider = query.provider.strip()
         capability = query.capability.strip().lower()
@@ -298,90 +288,35 @@ class ConfigService:
             models = list_codex_models(access)
             return ModelsListResult(suggested=models, models=models)
 
-        suggested = list(DEFAULT_MODELS.get(provider, ()))
-        if not provider:
-            # The composer's model popover opens with no provider filter. Seed
-            # `suggested` from the default models of every *configured* provider
-            # so the picker isn't blank until the user types — and so it leans
-            # toward models that can actually be sent. Full-catalog browsing
-            # still works via the `models` list below.
-            from durin.cli.onboard_wizard import _all_provider_rows
-            from durin.config.loader import load_config
+        from durin.config.loader import load_config
+        from durin.providers.provider_catalog import provider_models
+        from durin.providers.selection import configured_provider_names
 
-            try:
-                rows = _all_provider_rows(load_config())
-            except Exception:  # noqa: BLE001
-                rows = []
-            seen: set[str] = set()
-            for name, _label, configured, _is_default in rows:
-                if not configured:
-                    continue
-                for mid in DEFAULT_MODELS.get(name, ()):
-                    if mid not in seen:
-                        seen.add(mid)
-                        suggested.append(mid)
-
-        provider_keywords: tuple[str, ...] = ()
-        if provider:
-            lookup_name = _PLAN_BASE.get(provider, provider)
-            spec = find_by_name(lookup_name)
-            if spec is not None:
-                provider_keywords = spec.keywords
-
-        def _capability_ok(info: object) -> bool:
+        def _cap_ok(mi) -> bool:
             if capability in ("", "text"):
                 return True
-            if not isinstance(info, dict):
-                return False
             if capability == "vision":
-                return bool(info.get("supports_vision"))
+                return mi.supports_vision
             if capability == "audio":
-                return bool(info.get("supports_audio_input"))
+                return mi.supports_audio_input
             return True
 
-        def _provider_ok(mid: str) -> bool:
-            if not provider_keywords:
-                return True
-            mid_lower = mid.lower()
-            mid_normalized = mid_lower.replace("-", "_")
-            for kw in provider_keywords:
-                kw_lower = kw.lower()
-                if kw_lower in mid_lower or kw_lower.replace("-", "_") in mid_normalized:
-                    return True
-            return False
+        if provider:
+            models = sorted(mi.id for mi in provider_models(provider) if _cap_ok(mi))
+            return ModelsListResult(suggested=models, models=models)
 
-        catalog: list[str] = []
-        try:
-            from durin.providers.capabilities import _load_capabilities_snapshot
-
-            models_data = _load_capabilities_snapshot() or {}
-            catalog = sorted(
-                mid
-                for mid, info in models_data.items()
-                if isinstance(mid, str)
-                and (
-                    not isinstance(info, dict)
-                    or info.get("mode") != "image_generation"
-                )
-                and _capability_ok(info)
-                and _provider_ok(mid)
-            )
-        except Exception:  # noqa: BLE001
-            catalog = []
-
-        if capability in ("vision", "audio", "image"):
-            try:
-                from durin.providers.capabilities import _load_capabilities_snapshot
-
-                snapshot = _load_capabilities_snapshot() or {}
-            except Exception:  # noqa: BLE001
-                snapshot = {}
-            suggested = [
-                m for m in suggested
-                if m not in snapshot or _capability_ok(snapshot.get(m))
-            ]
-
-        return ModelsListResult(suggested=suggested, models=catalog)
+        # No provider filter: union of every configured provider's catalog.
+        cfg = load_config()
+        suggested: list[str] = []
+        seen: set[str] = set()
+        for pname in sorted(configured_provider_names(cfg)):
+            if pname == "custom":
+                continue
+            for mi in provider_models(pname):
+                if mi.id not in seen and _cap_ok(mi):
+                    seen.add(mi.id)
+                    suggested.append(mi.id)
+        return ModelsListResult(suggested=suggested, models=suggested)
 
     @route(
         "GET",
