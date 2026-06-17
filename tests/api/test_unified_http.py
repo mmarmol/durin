@@ -85,6 +85,15 @@ def test_spa_history_fallback_to_index(client):
     assert "durin" in r.text
 
 
+def test_spa_index_served_no_cache(client):
+    # The SPA shell must be no-cache so a redeploy's new hashed-asset references
+    # are picked up on the next load (stale index.html → stale JS otherwise).
+    for path in ("/", "/settings/general"):
+        r = client.get(path)
+        assert r.status_code == 200
+        assert r.headers.get("cache-control") == "no-cache", (path, dict(r.headers))
+
+
 def test_media_bad_signature_rejected(client):
     # A forged signature must not return a file (the handler returns 401
     # "invalid signature").

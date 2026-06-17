@@ -28,13 +28,13 @@ def infer_provider(model: str) -> str:
 
 def configured_provider_names(config: Any) -> set[str]:
     """Provider config-names the user has set up (key / base / OAuth)."""
-    from durin.utils.oauth import any_token_present
+    from durin.utils.oauth import oauth_token_present
 
     out: set[str] = set()
     for spec in PROVIDERS:
         pc = getattr(config.providers, spec.name, None)
         if getattr(spec, "is_oauth", False):
-            ok = any_token_present(spec.name)
+            ok = oauth_token_present(spec.name)
         elif getattr(spec, "is_local", False):
             ok = bool(pc and getattr(pc, "api_base", None))
         else:
