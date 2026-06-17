@@ -81,6 +81,7 @@ export function ThreadShell({
   const [scrollToBottomSignal, setScrollToBottomSignal] = useState(0);
   const [canReason, setCanReason] = useState(false);
   const [localPendingPrompt, setLocalPendingPrompt] = useState<string | null>(null);
+  const [agentMode, setAgentMode] = useState("build");
   const pendingFirstRef = useRef<PendingFirstMessage | null>(null);
   const messageCacheRef = useRef<Map<string, UIMessage[]>>(new Map());
   /** Last chatId we associated with the in-memory thread (for cache-on-switch). */
@@ -282,6 +283,15 @@ export function ThreadShell({
     }
   }, [messages]);
 
+  const handleModeChange = useCallback(
+    (mode: string) => {
+      setAgentMode(mode);
+      const cid = chatId ?? client.defaultChatId;
+      if (cid) client.sendMessage(cid, `/mode ${mode}`);
+    },
+    [chatId, client],
+  );
+
   // Lets an interaction block deep in the transcript answer a question
   // or store a requested secret without drilling callbacks through
   // viewport → list → bubble.
@@ -422,6 +432,8 @@ export function ThreadShell({
         onToggleTheme={onToggleTheme}
         hideSidebarToggleOnDesktop={hideSidebarToggleOnDesktop}
         minimal={!session && !loading}
+        agentMode={agentMode}
+        onModeChange={handleModeChange}
       />
       <ThreadViewport
         messages={displayMessages}

@@ -1096,6 +1096,7 @@ class DurinApp(App[None]):
             header = self.query_one(HeaderBar)
             header.session_label = f"{self._cli_channel}:{self._cli_chat_id}"
             header.session_meta = self._compute_session_meta()
+            header.agent_mode = self._get_agent_mode()
         except Exception:  # noqa: BLE001
             pass
 
@@ -1106,6 +1107,19 @@ class DurinApp(App[None]):
             return str(Path(self._agent_loop.workspace))
         except Exception:  # noqa: BLE001
             return ""
+
+    def _get_agent_mode(self) -> str:
+        """Return the current agent mode (build/plan/explore)."""
+        if self._agent_loop is None:
+            return "build"
+        try:
+            from durin.agent.agent_mode import get_active_mode_name
+
+            session_key = f"{self._cli_channel}:{self._cli_chat_id}"
+            session = self._agent_loop.sessions.get_or_create(session_key)
+            return get_active_mode_name(session)
+        except Exception:  # noqa: BLE001
+            return "build"
 
     def _model_label(self) -> tuple[str, str]:
         if self._agent_loop is None:

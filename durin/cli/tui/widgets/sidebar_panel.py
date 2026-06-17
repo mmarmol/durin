@@ -145,7 +145,8 @@ class SidebarPanel(Static):
         todos = self._gather_todos(self._session_key)
         files = self._gather_files()
         mcp = self._gather_mcp()
-        self.update(self._format_content(todos, files, mcp))
+        info = self._gather_info()
+        self.update(self._format_content(todos, files, mcp, info))
 
     # ---- data gathering ----------------------------------------------------
 
@@ -203,6 +204,34 @@ class SidebarPanel(Static):
             return []
         return [(name, name in stacks) for name in servers]
 
+    def _gather_info(self) -> dict[str, str]:
+        """Return session/runtime info for the sidebar Info section."""
+        info: dict[str, str] = {}
+        loop = self._agent_loop
+        if loop is not None:
+            info["model"] = getattr(loop, "model", "?")
+            ctx = getattr(loop, "context_window_tokens", 0)
+            if ctx:
+                info["ctx"] = f"{ctx // 1000}K"
+            workspace = getattr(loop, "workspace", None)
+            if workspace:
+                info["workdir"] = str(workspace)
+            try:
+                from durin.agent.agent_mode import get_active_mode_name
+
+                session = loop.sessions.get_or_create(self._session_key) if self._session_key else None
+                if session is not None:
+                    info["mode"] = get_active_mode_name(session)
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            from durin import __version__
+
+            info["version"] = f"v{__version__}"
+        except Exception:  # noqa: BLE001
+            pass
+        return info
+
     # ---- rendering ---------------------------------------------------------
 
     def _format_content(
@@ -210,8 +239,27 @@ class SidebarPanel(Static):
         todos: list[dict[str, str]],
         files: list[tuple[str, str]],
         mcp: list[tuple[str, bool]],
+        info: dict[str, str] | None = None,
     ) -> str:
         lines: list[str] = []
+
+        # --- Info section ---
+        if info:
+            lines.append("[sidebar-section-header]INFO[/]")
+            if "mode" in info:
+                lines.append(f"[sidebar-item]Mode: [sidebar-active]{info['mode']}[/][/]")
+            if "model" in info:
+                lines.append(f"[sidebar-item]Model: {info['model']}[/]")
+            if "ctx" in info:
+                lines.append(f"[sidebar-item]Context: {info['ctx']}[/]")
+            if "version" in info:
+                lines.append(f"[sidebar-item]Version: {info['version']}[/]")
+            if "workdir" in info:
+                wd = info["workdir"]
+                if len(wd) > 30:
+                    wd = "…" + wd[-29:]
+                lines.append(f"[sidebar-item]Workdir: {wd}[/]")
+            lines.append("")
 
         # --- Todos section ---
         pending = sum(1 for t in todos if t["status"] != "completed")

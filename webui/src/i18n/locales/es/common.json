@@ -681,7 +681,8 @@
       "toggleSidebar": "Mostrar u ocultar la barra lateral",
       "newChat": "Iniciar un nuevo chat",
       "settings": "Abrir configuración",
-      "toggleTheme": "Cambiar tema"
+      "toggleTheme": "Cambiar tema",
+      "agentMode": "Modo del agente"
     },
     "composer": {
       "placeholderThread": "Escribe tu mensaje…",

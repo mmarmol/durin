@@ -680,7 +680,8 @@
       "toggleSidebar": "Toggle sidebar",
       "newChat": "Start a new chat",
       "toggleTheme": "Toggle theme from header",
-      "settings": "Open settings"
+      "settings": "Open settings",
+      "agentMode": "Agent mode"
     },
     "composer": {
       "placeholderThread": "Type your message…",
