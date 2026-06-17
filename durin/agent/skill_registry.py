@@ -51,12 +51,11 @@ class SkillsShRegistry:
             if not source or not skill_id:
                 continue
             installs = it.get("installs")
-            label = f" · {installs:,} installs" if isinstance(installs, int) else ""
             hits.append(SkillSearchHit(
                 name=str(it.get("name") or skill_id.rsplit("/", 1)[-1]),
                 ref=f"github:{source}/{skill_id}",
                 registry="skills.sh",
-                description=f"skills.sh: {source}{label}",
+                description="",  # skills.sh search returns no description; the detail view fetches it
                 signals={"installs": installs} if isinstance(installs, int) else {},
             ))
         return hits
