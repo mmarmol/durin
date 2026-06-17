@@ -459,7 +459,11 @@
       "emptyHint": "Agregá uno para darle herramientas extra al agente.",
       "autoHint": "Se infiere del command o la URL. Completá el que aplique.",
       "stdioGroup": "Para stdio",
-      "httpGroup": "Para HTTP / SSE"
+      "httpGroup": "Para HTTP / SSE",
+      "fieldOauthClientId": "OAuth Client ID",
+      "hintOauthClientId": "Opcional. Para servers sin registro dinámico (ej. GitHub): de una OAuth app registrada.",
+      "fieldOauthClientSecret": "OAuth Client Secret",
+      "hintOauthClientSecret": "Opcional. Va con el Client ID para registro OAuth estático."
     }
   },
   "skills": {

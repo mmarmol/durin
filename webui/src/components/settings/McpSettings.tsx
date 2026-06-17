@@ -61,6 +61,8 @@ interface McpFormState {
   toolTimeout: string;
   enabledTools: string;
   oauth: boolean;
+  oauthClientId: string;
+  oauthClientSecret: string;
   allowPrivateUrl: boolean;
   spawnEgressPolicy: "warn" | "refuse" | "off";
   malwareCheck: boolean;
@@ -78,6 +80,8 @@ const EMPTY_MCP_FORM: McpFormState = {
   toolTimeout: "",
   enabledTools: "*",
   oauth: false,
+  oauthClientId: "",
+  oauthClientSecret: "",
   allowPrivateUrl: false,
   spawnEgressPolicy: "warn",
   malwareCheck: false,
@@ -257,6 +261,12 @@ export function McpSettings({ token }: { token: string }) {
         toolTimeout: c.tool_timeout != null ? String(c.tool_timeout) : "",
         enabledTools: (c.enabled_tools ?? ["*"]).join(", "),
         oauth: oauthIsObject ? true : Boolean(c.oauth),
+        oauthClientId: oauthIsObject
+          ? ((c.oauth as McpOauthStaticConfig).client_id ?? "")
+          : "",
+        oauthClientSecret: oauthIsObject
+          ? ((c.oauth as McpOauthStaticConfig).client_secret ?? "")
+          : "",
         allowPrivateUrl: Boolean(c.allow_private_url),
         spawnEgressPolicy: c.spawn_egress_policy ?? "warn",
         malwareCheck: Boolean(c.malware_check),
@@ -297,9 +307,24 @@ export function McpSettings({ token }: { token: string }) {
     const enabledTools = splitList(form.enabledTools);
     if (enabledTools.length) config.enabled_tools = enabledTools;
 
-    // Preserve a configured static client object when the box stays checked.
-    if (form.oauth) config.oauth = oauthObject ?? true;
-    else config.oauth = false;
+    // OAuth: a client id/secret means static registration (for servers without
+    // dynamic registration, e.g. GitHub); otherwise `true` uses DCR. Preserve any
+    // other fields (scope, callback_port) from an existing object.
+    if (form.oauth) {
+      const cid = form.oauthClientId.trim();
+      const csecret = form.oauthClientSecret.trim();
+      if (cid || csecret) {
+        config.oauth = {
+          ...(oauthObject ?? {}),
+          ...(cid ? { client_id: cid } : {}),
+          ...(csecret ? { client_secret: csecret } : {}),
+        };
+      } else {
+        config.oauth = oauthObject ?? true;
+      }
+    } else {
+      config.oauth = false;
+    }
 
     if (form.allowPrivateUrl) config.allow_private_url = true;
     if (form.spawnEgressPolicy !== "warn")
@@ -728,6 +753,33 @@ export function McpSettings({ token }: { token: string }) {
                     {t("settings.mcp.fieldOauth")}
                   </label>
                 </SettingsRow>
+                {form.oauth ? (
+                  <>
+                    <SettingsRow
+                      title={t("settings.mcp.fieldOauthClientId")}
+                      description={t("settings.mcp.hintOauthClientId")}
+                    >
+                      <Input
+                        value={form.oauthClientId}
+                        onChange={text("oauthClientId")}
+                        className="w-[260px]"
+                        autoComplete="off"
+                      />
+                    </SettingsRow>
+                    <SettingsRow
+                      title={t("settings.mcp.fieldOauthClientSecret")}
+                      description={t("settings.mcp.hintOauthClientSecret")}
+                    >
+                      <Input
+                        type="password"
+                        value={form.oauthClientSecret}
+                        onChange={text("oauthClientSecret")}
+                        className="w-[260px]"
+                        autoComplete="off"
+                      />
+                    </SettingsRow>
+                  </>
+                ) : null}
                 <SettingsRow
                   title={t("settings.mcp.fieldAllowPrivateUrl")}
                   description={t("settings.mcp.hintAllowPrivateUrl")}
@@ -868,10 +920,21 @@ function McpDetailPane({
         "width=540,height=720",
       );
 
+      let done = false;
       const finish = async () => {
+        if (done) return; // guard: both the message and the poll can fire
+        done = true;
         stopWatching();
         setOauthBusy(false);
-        await onRefresh();
+        // The gateway reconnects the server after the token is stored (race-free
+        // server-side; the popup closes a beat before the SDK finishes the token
+        // exchange, so the webui must NOT reconnect itself). Refresh a few times
+        // so the UI reflects the server coming up (needs_auth -> connecting ->
+        // connected) without a manual refresh.
+        for (let i = 0; i < 6; i++) {
+          await onRefresh();
+          await new Promise((r) => setTimeout(r, 1800));
+        }
       };
 
       // Faster completion signal: the callback page posts a message back.
