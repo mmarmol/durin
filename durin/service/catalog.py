@@ -17,6 +17,7 @@ registry.  Each class's dep handling:
 - ``ConfigService``    — no deps.
 - ``SkillsService``    — ``workspace=Path("/")`` (stored, never touched).
 - ``MemoryService``    — ``workspace_resolver=lambda: Path("/")`` (callable, never called).
+- ``McpService``        — ``mcp_runtime=None`` (config-only status; never called here).
 - ``HealthService``    — no deps.
 - ``CommandsService``  — no deps.
 - ``OAuthService``     — no deps.
@@ -32,6 +33,7 @@ from durin.service.commands import CommandsService
 from durin.service.config import ConfigService
 from durin.service.cron import CronService
 from durin.service.health import HealthService
+from durin.service.mcp import McpService
 from durin.service.memory import MemoryService
 from durin.service.oauth import OAuthService
 from durin.service.registry import ServiceRegistry
@@ -48,6 +50,7 @@ SERVICE_CLASSES: list[type] = [
     ConfigService,
     SkillsService,
     MemoryService,
+    McpService,
     HealthService,
     CommandsService,
     OAuthService,
@@ -70,6 +73,7 @@ def build_catalog_registry() -> ServiceRegistry:
     registry.register("config", ConfigService())
     registry.register("skills", SkillsService(workspace=Path("/")))
     registry.register("memory", MemoryService(workspace_resolver=lambda: Path("/")))
+    registry.register("mcp", McpService())
     registry.register("health", HealthService())
     registry.register("commands", CommandsService())
     registry.register("oauth", OAuthService())

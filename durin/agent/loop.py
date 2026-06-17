@@ -6,7 +6,7 @@ import asyncio
 import dataclasses
 import os
 import time
-from contextlib import AsyncExitStack, nullcontext, suppress
+from contextlib import nullcontext, suppress
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
@@ -373,7 +373,8 @@ class AgentLoop:
         self._max_messages = max_messages if max_messages > 0 else 120
         self._running = False
         self._mcp_servers = mcp_servers or {}
-        self._mcp_stacks: dict[str, AsyncExitStack] = {}
+        self._mcp_connections: dict[str, Any] = {}
+        self._mcp_connect_errors: dict[str, str] = {}  # name -> last connect failure message
         self._mcp_connected = False
         self._mcp_connecting = False
         # Last-known telemetry snapshots, cached in-memory so /status
@@ -745,23 +746,44 @@ class AgentLoop:
         self._mcp_connecting = True
         from durin.agent.tools.mcp import connect_mcp_servers
 
+        # Only connect servers the user has left enabled; the full configured
+        # set stays in self._mcp_servers so a disabled server can be connected
+        # at runtime (connect_mcp_server) without a gateway restart.
+        enabled_servers = {
+            name: cfg
+            for name, cfg in self._mcp_servers.items()
+            if getattr(cfg, "enabled", True)
+        }
+        self._mcp_connect_errors.clear()
         try:
-            self._mcp_stacks = await connect_mcp_servers(self._mcp_servers, self.tools)
-            if self._mcp_stacks:
+            self._mcp_connections = await connect_mcp_servers(
+                enabled_servers, self.tools,
+                defer_cb=self._maybe_defer_mcp_tools,
+                provider=self.provider,
+                default_model=self.model,
+                workspace=str(self.workspace) if self.workspace else None,
+                errors=self._mcp_connect_errors,
+            )
+            if self._mcp_connections:
                 self._mcp_connected = True
             else:
                 logger.warning("No MCP servers connected successfully (will retry next message)")
         except asyncio.CancelledError:
             logger.warning("MCP connection cancelled (will retry next message)")
-            self._mcp_stacks.clear()
+            self._mcp_connections.clear()
         except ImportError:
             res = ensure_or_note("mcp", config=getattr(self, "app_config", None))
             if res.status in ("present", "installed"):
                 try:
-                    self._mcp_stacks = await connect_mcp_servers(
-                        self._mcp_servers, self.tools
+                    self._mcp_connections = await connect_mcp_servers(
+                        enabled_servers, self.tools,
+                        defer_cb=self._maybe_defer_mcp_tools,
+                        provider=self.provider,
+                        default_model=self.model,
+                        workspace=str(self.workspace) if self.workspace else None,
+                        errors=self._mcp_connect_errors,
                     )
-                    if self._mcp_stacks:
+                    if self._mcp_connections:
                         self._mcp_connected = True
                 except BaseException as e:  # noqa: BLE001
                     logger.warning("Failed to connect MCP after install: {}", e)
@@ -769,11 +791,57 @@ class AgentLoop:
                 logger.warning("MCP unavailable: {}", res.message)
         except BaseException as e:
             logger.warning("Failed to connect MCP servers (will retry next message): {}", e)
-            self._mcp_stacks.clear()
+            self._mcp_connections.clear()
         finally:
             self._mcp_connecting = False
         if self._mcp_connected:
             self._maybe_defer_mcp_tools()
+
+    async def connect_mcp_server(self, name: str, cfg: Any = None) -> None:
+        """Connect a single configured MCP server at runtime (idempotent).
+
+        Reuses the same supervised-connection path as startup, so a server the
+        user just enabled comes online without a gateway restart. ``cfg`` (the
+        current config from the caller) is synced into the startup snapshot so a
+        server added at runtime — absent from the snapshot — is connectable.
+        Raises ``KeyError`` if ``name`` is unknown and no ``cfg`` is supplied.
+        """
+        if cfg is not None:
+            self._mcp_servers[name] = cfg
+        if name not in self._mcp_servers:
+            raise KeyError(name)
+        if name in self._mcp_connections:
+            return
+        from durin.agent.tools.mcp import connect_mcp_servers
+
+        self._mcp_connect_errors.pop(name, None)
+        new = await connect_mcp_servers(
+            {name: self._mcp_servers[name]}, self.tools,
+            defer_cb=self._maybe_defer_mcp_tools,
+            provider=self.provider,
+            default_model=self.model,
+            workspace=str(self.workspace) if self.workspace else None,
+            errors=self._mcp_connect_errors,
+        )
+        self._mcp_connections.update(new)
+        if self._mcp_connections:
+            self._mcp_connected = True
+        self._maybe_defer_mcp_tools()
+
+    async def disconnect_mcp_server(self, name: str) -> None:
+        """Disconnect a single MCP server at runtime (idempotent).
+
+        Closes the supervised connection and unregisters its tools. Raises
+        ``KeyError`` if ``name`` is not a configured server.
+        """
+        if name not in self._mcp_servers:
+            raise KeyError(name)
+        self._mcp_connect_errors.pop(name, None)  # intentional: not a failure
+        conn = self._mcp_connections.pop(name, None)
+        if conn is None:
+            return
+        await conn.aclose()
+        self._maybe_defer_mcp_tools()
 
     def _maybe_defer_mcp_tools(self) -> None:
         """P3 (2026-06-10): hide oversized MCP surfaces behind the bridge.
@@ -1554,12 +1622,12 @@ class AgentLoop:
         if _proc_reg._registry is not None:
             with suppress(Exception):
                 await _proc_reg._registry.shutdown()
-        for name, stack in self._mcp_stacks.items():
+        for name, conn in self._mcp_connections.items():
             try:
-                await stack.aclose()
-            except (RuntimeError, BaseExceptionGroup):
+                await conn.aclose()
+            except Exception:  # noqa: BLE001
                 logger.debug("MCP server '{}' cleanup error (can be ignored)", name)
-        self._mcp_stacks.clear()
+        self._mcp_connections.clear()
 
     def _schedule_background(self, coro) -> None:
         """Schedule a coroutine as a tracked background task (drained on shutdown)."""

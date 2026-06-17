@@ -1825,6 +1825,7 @@ def _run_gateway(
 
             import uvicorn as _uvicorn_unified
 
+            from durin.agent.mcp_runtime import McpRuntime as _McpRuntime
             from durin.api.asgi import build_gateway_http_app as _build_gw_app
             from durin.service.wiring import build_service_registry as _build_reg
 
@@ -1835,6 +1836,7 @@ def _run_gateway(
                     session_manager=session_manager,
                     cron_service=cron,
                     bus=bus,
+                    mcp_runtime=_McpRuntime(agent),
                 )
                 # Static token lives on the websocket channel config.
                 _ws_cfg_u = getattr(config.channels, "websocket", None)
@@ -2761,6 +2763,10 @@ app.add_typer(_skill_app, name="skill")
 from durin.cli.auth_cmd import auth_app as _auth_app  # noqa: E402
 
 app.add_typer(_auth_app, name="auth")
+
+from durin.cli.mcp_cmd import mcp_app as _mcp_app  # noqa: E402
+
+app.add_typer(_mcp_app, name="mcp")
 
 
 def _refresh_help_epilog() -> None:

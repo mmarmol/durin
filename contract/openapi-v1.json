@@ -812,6 +812,478 @@
         "title": "LogsListResult",
         "type": "object"
       },
+      "MCPOAuthConfig": {
+        "description": "OAuth settings for a remote MCP server.\n\nPresence of an ``oauth`` value (``True`` or this object) marks the server\nas OAuth-requiring. The SDK does dynamic client registration automatically;\n``client_id`` / ``client_secret`` are an optional static-registration\noverride. ``scope`` is an optional requested-scope hint.",
+        "properties": {
+          "callback_port": {
+            "default": 1456,
+            "title": "Callback Port",
+            "type": "integer"
+          },
+          "client_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Client Id"
+          },
+          "client_secret": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Client Secret"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Scope"
+          }
+        },
+        "title": "MCPOAuthConfig",
+        "type": "object"
+      },
+      "MCPSamplingConfig": {
+        "description": "Governance for server-initiated ``sampling/createMessage`` (SP-6).\n\nSampling lets an MCP server ask durin's LLM to generate text. It is\n**off by default** \u2014 a server only gains LLM access when the user opts\nin. All limits below bound what a server can do once enabled.",
+        "properties": {
+          "allow_tools": {
+            "default": true,
+            "title": "Allow Tools",
+            "type": "boolean"
+          },
+          "allowed_models": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Allowed Models",
+            "type": "array"
+          },
+          "enabled": {
+            "default": false,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "max_tokens_cap": {
+            "default": 4096,
+            "title": "Max Tokens Cap",
+            "type": "integer"
+          },
+          "max_tool_rounds": {
+            "default": 4,
+            "title": "Max Tool Rounds",
+            "type": "integer"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model"
+          },
+          "requests_per_minute": {
+            "default": 10,
+            "title": "Requests Per Minute",
+            "type": "integer"
+          }
+        },
+        "title": "MCPSamplingConfig",
+        "type": "object"
+      },
+      "MCPServerConfig": {
+        "description": "MCP server connection configuration (stdio or HTTP).",
+        "properties": {
+          "allow_private_url": {
+            "default": false,
+            "title": "Allow Private Url",
+            "type": "boolean"
+          },
+          "args": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Args",
+            "type": "array"
+          },
+          "catalog_timeout": {
+            "default": 1.5,
+            "title": "Catalog Timeout",
+            "type": "number"
+          },
+          "command": {
+            "default": "",
+            "title": "Command",
+            "type": "string"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "enabled_tools": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Enabled Tools",
+            "type": "array"
+          },
+          "env": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Env",
+            "type": "object"
+          },
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Headers",
+            "type": "object"
+          },
+          "keepalive_interval": {
+            "default": 180.0,
+            "title": "Keepalive Interval",
+            "type": "number"
+          },
+          "malware_check": {
+            "default": true,
+            "title": "Malware Check",
+            "type": "boolean"
+          },
+          "oauth": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "$ref": "#/components/schemas/MCPOAuthConfig"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Oauth"
+          },
+          "sampling": {
+            "$ref": "#/components/schemas/MCPSamplingConfig"
+          },
+          "spawn_egress_policy": {
+            "default": "warn",
+            "enum": [
+              "warn",
+              "refuse",
+              "off"
+            ],
+            "title": "Spawn Egress Policy",
+            "type": "string"
+          },
+          "tool_timeout": {
+            "default": 30,
+            "title": "Tool Timeout",
+            "type": "integer"
+          },
+          "tool_timeouts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Tool Timeouts",
+            "type": "object"
+          },
+          "type": {
+            "anyOf": [
+              {
+                "enum": [
+                  "stdio",
+                  "sse",
+                  "streamableHttp"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Type"
+          },
+          "url": {
+            "default": "",
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "title": "MCPServerConfig",
+        "type": "object"
+      },
+      "McpListQuery": {
+        "additionalProperties": false,
+        "description": "No inputs \u2014 lists all configured servers.",
+        "properties": {},
+        "title": "McpListQuery",
+        "type": "object"
+      },
+      "McpListResult": {
+        "properties": {
+          "servers": {
+            "items": {
+              "$ref": "#/components/schemas/McpServerSummary"
+            },
+            "title": "Servers",
+            "type": "array"
+          }
+        },
+        "required": [
+          "servers"
+        ],
+        "title": "McpListResult",
+        "type": "object"
+      },
+      "McpOauthLoginResult": {
+        "properties": {
+          "authorization_url": {
+            "title": "Authorization Url",
+            "type": "string"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "authorization_url",
+          "state"
+        ],
+        "title": "McpOauthLoginResult",
+        "type": "object"
+      },
+      "McpOkResult": {
+        "properties": {
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok"
+        ],
+        "title": "McpOkResult",
+        "type": "object"
+      },
+      "McpServerDetail": {
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/MCPServerConfig"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "oauth_authenticated": {
+            "title": "Oauth Authenticated",
+            "type": "boolean"
+          },
+          "oauth_required": {
+            "title": "Oauth Required",
+            "type": "boolean"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "target": {
+            "title": "Target",
+            "type": "string"
+          },
+          "tools": {
+            "items": {
+              "$ref": "#/components/schemas/McpToolInfo"
+            },
+            "title": "Tools",
+            "type": "array"
+          },
+          "transport": {
+            "title": "Transport",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "transport",
+          "target",
+          "enabled",
+          "oauth_required",
+          "oauth_authenticated",
+          "status",
+          "error",
+          "tools",
+          "config"
+        ],
+        "title": "McpServerDetail",
+        "type": "object"
+      },
+      "McpServerGetQuery": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "McpServerGetQuery",
+        "type": "object"
+      },
+      "McpServerNameCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "McpServerNameCommand",
+        "type": "object"
+      },
+      "McpServerSummary": {
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Error"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "oauth_authenticated": {
+            "title": "Oauth Authenticated",
+            "type": "boolean"
+          },
+          "oauth_required": {
+            "title": "Oauth Required",
+            "type": "boolean"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "target": {
+            "title": "Target",
+            "type": "string"
+          },
+          "tool_count": {
+            "title": "Tool Count",
+            "type": "integer"
+          },
+          "transport": {
+            "title": "Transport",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "transport",
+          "target",
+          "enabled",
+          "oauth_required",
+          "oauth_authenticated",
+          "status",
+          "tool_count"
+        ],
+        "title": "McpServerSummary",
+        "type": "object"
+      },
+      "McpServerUpsertCommand": {
+        "additionalProperties": false,
+        "description": "Create or replace a server. ``config`` is the full server config so the\nwebui form can edit every field (basic + advanced).",
+        "properties": {
+          "config": {
+            "$ref": "#/components/schemas/MCPServerConfig"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "config"
+        ],
+        "title": "McpServerUpsertCommand",
+        "type": "object"
+      },
+      "McpToolInfo": {
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "description"
+        ],
+        "title": "McpToolInfo",
+        "type": "object"
+      },
       "MemoryBacklinksQuery": {
         "additionalProperties": false,
         "properties": {
@@ -2648,6 +3120,290 @@
         },
         "summary": "Read JSONL log segments (gateway or telemetry) with pagination",
         "x-required-scope": "system:read"
+      }
+    },
+    "/api/v1/mcp/servers": {
+      "get": {
+        "operationId": "mcp_list",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpListQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpListResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "List MCP servers with live status",
+        "x-required-scope": "mcp:read"
+      },
+      "post": {
+        "operationId": "mcp_add",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpServerUpsertCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpServerDetail"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Add an MCP server",
+        "x-required-scope": "mcp:write"
+      }
+    },
+    "/api/v1/mcp/servers/{name}": {
+      "delete": {
+        "operationId": "mcp_remove",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpServerNameCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpOkResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Remove an MCP server",
+        "x-required-scope": "mcp:write"
+      },
+      "get": {
+        "operationId": "mcp_get",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpServerGetQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpServerDetail"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Fetch an MCP server's config, status, and tools",
+        "x-required-scope": "mcp:read"
+      },
+      "patch": {
+        "operationId": "mcp_update",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpServerUpsertCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpServerDetail"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Replace an MCP server's config",
+        "x-required-scope": "mcp:write"
+      }
+    },
+    "/api/v1/mcp/servers/{name}/disable": {
+      "post": {
+        "operationId": "mcp_disable",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpServerNameCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpServerDetail"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Disable a server and disconnect it",
+        "x-required-scope": "mcp:write"
+      }
+    },
+    "/api/v1/mcp/servers/{name}/enable": {
+      "post": {
+        "operationId": "mcp_enable",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpServerNameCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpServerDetail"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Enable a server and connect it",
+        "x-required-scope": "mcp:write"
+      }
+    },
+    "/api/v1/mcp/servers/{name}/oauth/login": {
+      "post": {
+        "operationId": "mcp_oauth_login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpServerNameCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpOauthLoginResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Start interactive OAuth sign-in; returns the authorization URL",
+        "x-required-scope": "mcp:write"
+      }
+    },
+    "/api/v1/mcp/servers/{name}/oauth/logout": {
+      "post": {
+        "operationId": "mcp_oauth_logout",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpServerNameCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpOkResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Clear stored OAuth tokens for a server",
+        "x-required-scope": "mcp:write"
+      }
+    },
+    "/api/v1/mcp/servers/{name}/reconnect": {
+      "post": {
+        "operationId": "mcp_reconnect",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpServerNameCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpServerDetail"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Reconnect a server to apply config changes or retry a failure",
+        "x-required-scope": "mcp:write"
       }
     },
     "/api/v1/memory/backlinks": {

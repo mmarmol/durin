@@ -761,9 +761,42 @@ class GatewayConfig(Base):
     )
 
 
+class MCPOAuthConfig(Base):
+    """OAuth settings for a remote MCP server.
+
+    Presence of an ``oauth`` value (``True`` or this object) marks the server
+    as OAuth-requiring. The SDK does dynamic client registration automatically;
+    ``client_id`` / ``client_secret`` are an optional static-registration
+    override. ``scope`` is an optional requested-scope hint.
+    """
+
+    scope: str | None = None
+    client_id: str | None = None  # static client registration (skips DCR)
+    client_secret: str | None = None
+    callback_port: int = 1456  # loopback callback port for `durin mcp login`
+
+
+class MCPSamplingConfig(Base):
+    """Governance for server-initiated ``sampling/createMessage`` (SP-6).
+
+    Sampling lets an MCP server ask durin's LLM to generate text. It is
+    **off by default** — a server only gains LLM access when the user opts
+    in. All limits below bound what a server can do once enabled.
+    """
+
+    enabled: bool = False
+    model: str | None = None
+    allowed_models: list[str] = Field(default_factory=list)
+    max_tokens_cap: int = 4096
+    requests_per_minute: int = 10
+    allow_tools: bool = True
+    max_tool_rounds: int = 4
+
+
 class MCPServerConfig(Base):
     """MCP server connection configuration (stdio or HTTP)."""
 
+    enabled: bool = True  # server-level on/off; disabled servers are skipped at connect and toggled at runtime
     type: Literal["stdio", "sse", "streamableHttp"] | None = None  # auto-detected if omitted
     command: str = ""  # Stdio: command to run (e.g. "npx")
     args: list[str] = Field(default_factory=list)  # Stdio: command arguments
@@ -771,7 +804,23 @@ class MCPServerConfig(Base):
     url: str = ""  # HTTP/SSE: endpoint URL
     headers: dict[str, str] = Field(default_factory=dict)  # HTTP/SSE: custom headers
     tool_timeout: int = 30  # seconds before a tool call is cancelled
+    tool_timeouts: dict[str, int] = Field(default_factory=dict)  # per-tool read-timeout override (raw tool name -> seconds)
+    catalog_timeout: float = 1.5  # short tools/list timeout at connect so a hung server can't stall startup
+    keepalive_interval: float = 180.0  # seconds between idle keepalive heartbeats
     enabled_tools: list[str] = Field(default_factory=lambda: ["*"])  # Only register these tools; accepts raw MCP names or wrapped mcp_<server>_<tool> names; ["*"] = all tools; [] = no tools
+    oauth: bool | MCPOAuthConfig | None = None  # mark server as OAuth-requiring; True = DCR defaults
+    allow_private_url: bool = False  # opt this server out of the SSRF private-IP block (off = blocked)
+    spawn_egress_policy: Literal["warn", "refuse", "off"] = "warn"  # stdio: action on a shell-interpreter+egress-tool spawn shape
+    malware_check: bool = True  # stdio: query OSV API for MAL-* advisories before spawning; fail-open on network error
+    sampling: MCPSamplingConfig = Field(default_factory=MCPSamplingConfig)
+
+    def oauth_config(self) -> "MCPOAuthConfig | None":
+        """Normalize the oauth field to MCPOAuthConfig | None."""
+        if self.oauth is True:
+            return MCPOAuthConfig()
+        if isinstance(self.oauth, MCPOAuthConfig):
+            return self.oauth
+        return None
 
 
 class MCPDeferralConfig(Base):
