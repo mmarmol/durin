@@ -309,10 +309,12 @@ export function ThreadShell({
   );
 
   const handleModelPick = useCallback(
-    (model: string) => {
+    (ref: string) => {
       const cid = chatId ?? client.defaultChatId;
       if (cid) {
-        client.sendMessage(cid, `/model ${model}`);
+        // `ref` is the exact `/model` argument: "default", a preset name, or
+        // "provider model" — committed verbatim, no client-side inference.
+        client.sendMessage(cid, `/model ${ref}`);
       }
     },
     [chatId, client],

@@ -98,6 +98,22 @@ class ModelsListResult(Result):
     models: list[str]
 
 
+class ModelPickerQuery(Query):
+    recent: str = ""
+
+
+class PickerEntryModel(Result):
+    name: str
+    provider: str
+    group: str
+    role: str
+    ref: str
+
+
+class ModelPickerResult(Result):
+    entries: list[PickerEntryModel]
+
+
 # ---------------------------------------------------------------------------
 # DTOs — model capabilities
 # ---------------------------------------------------------------------------
@@ -283,6 +299,27 @@ class ConfigService:
             return ModelsListResult(suggested=models, models=models)
 
         suggested = list(DEFAULT_MODELS.get(provider, ()))
+        if not provider:
+            # The composer's model popover opens with no provider filter. Seed
+            # `suggested` from the default models of every *configured* provider
+            # so the picker isn't blank until the user types — and so it leans
+            # toward models that can actually be sent. Full-catalog browsing
+            # still works via the `models` list below.
+            from durin.cli.onboard_wizard import _all_provider_rows
+            from durin.config.loader import load_config
+
+            try:
+                rows = _all_provider_rows(load_config())
+            except Exception:  # noqa: BLE001
+                rows = []
+            seen: set[str] = set()
+            for name, _label, configured, _is_default in rows:
+                if not configured:
+                    continue
+                for mid in DEFAULT_MODELS.get(name, ()):
+                    if mid not in seen:
+                        seen.add(mid)
+                        suggested.append(mid)
 
         provider_keywords: tuple[str, ...] = ()
         if provider:
@@ -345,6 +382,38 @@ class ConfigService:
             ]
 
         return ModelsListResult(suggested=suggested, models=catalog)
+
+    @route(
+        "GET",
+        "/api/v1/model/picker",
+        scope=Scope.CONFIG_READ.value,
+        request_model=ModelPickerQuery,
+        response_model=ModelPickerResult,
+        summary="Ordered model picker entries (easy-pick + configured catalog)",
+    )
+    async def model_picker(
+        self, query: ModelPickerQuery, principal: Principal
+    ) -> ModelPickerResult:
+        principal.require(Scope.CONFIG_READ)
+        from durin.agent.model_picker import picker_entries
+        from durin.config.loader import load_config
+
+        config = load_config()
+        recent = [r for r in query.recent.split(",") if r]
+        entries = picker_entries(
+            config,
+            presets=config.model_presets,
+            recent=recent,
+            active=config.agents.defaults.model_preset,
+        )
+        return ModelPickerResult(
+            entries=[
+                PickerEntryModel(
+                    name=e.name, provider=e.provider, group=e.group, role=e.role, ref=e.ref
+                )
+                for e in entries
+            ]
+        )
 
     @route(
         "GET",

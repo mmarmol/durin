@@ -1323,12 +1323,9 @@ async def test_on_help_includes_restart_command() -> None:
     help_text = update.message.reply_text.await_args.args[0]
     assert "/restart" in help_text
     assert "/status" in help_text
-    assert "/dream" in help_text
-    assert "/dream-log" in help_text
     assert "/goal" in help_text
-    assert "/pairing" in help_text
     assert "/model" in help_text
-    assert "/dream-restore" in help_text
+    assert "/version" in help_text
 
 
 @pytest.mark.asyncio

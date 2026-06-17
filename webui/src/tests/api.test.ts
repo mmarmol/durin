@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   deleteSession,
   disconnectCodex,
+  fetchModelPicker,
   fetchSettings,
   fetchWebuiThread,
   listSessions,
@@ -183,6 +184,28 @@ describe("webui API helpers", () => {
     expect((calls[0][1] as RequestInit).method).toBe("POST");
     expect(calls[1][0]).toBe("/api/v1/oauth/codex");
     expect((calls[1][1] as RequestInit).method).toBe("DELETE");
+  });
+
+  it("fetches model picker entries with recents and returns them", async () => {
+    vi.mocked(fetch).mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        entries: [
+          { name: "base-model", provider: "openai_codex", group: "Easy pick", role: "default", ref: "default" },
+          { name: "gemini-2.5-pro", provider: "gemini", group: "gemini", role: "catalog", ref: "gemini gemini-2.5-pro" },
+        ],
+      }),
+    } as Response);
+
+    const out = await fetchModelPicker("tok", ["gpt-5"]);
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/api/v1/model/picker?recent=gpt-5",
+      expect.objectContaining({ headers: { Authorization: "Bearer tok" } }),
+    );
+    expect(out[0].ref).toBe("default");
+    expect(out[1].provider).toBe("gemini");
   });
 
   it("re-bootstraps and retries once when a request gets 401", async () => {

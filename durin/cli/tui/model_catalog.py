@@ -16,7 +16,9 @@ from dataclasses import dataclass, field
 
 from durin.config.schema import ModelPresetConfig
 from durin.providers.capabilities import ModelCapabilities, get_model_capabilities
-from durin.providers.registry import PROVIDERS
+from durin.providers.selection import infer_provider
+
+__all__ = ["ModelEntry", "build_entries", "format_entry", "infer_provider"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,29 +30,10 @@ class ModelEntry:
     is_preset: bool
     is_recent: bool
     capabilities: ModelCapabilities = field(default_factory=lambda: ModelCapabilities(model=""))
-
-
-def infer_provider(model: str) -> str:
-    """Infer the provider name for *model* via keyword matching.
-
-    Returns the first matching provider's config name, or ``"auto"``
-    if no keywords match.
-    """
-    model_lower = model.lower()
-    model_normalized = model_lower.replace("-", "_")
-    for spec in PROVIDERS:
-        for kw in spec.keywords:
-            if kw in model_lower or kw.replace("-", "_") in model_normalized:
-                return spec.name
-    return "auto"
-
-
-def _provider_has_key(config, provider_name: str) -> bool:
-    """Check if a provider has an API key configured."""
-    pc = getattr(config.providers, provider_name, None)
-    if pc is None:
-        return False
-    return bool(pc.api_key)
+    # The ``/model`` argument to commit this row (see model_picker.PickerEntry).
+    ref: str = ""
+    # Section header for the picker ("Easy pick" or a provider name).
+    group: str = ""
 
 
 def _get_caps(model: str, provider: str | None = None) -> ModelCapabilities:
@@ -99,70 +82,26 @@ def build_entries(
     config,
     presets: dict[str, ModelPresetConfig],
     recent: list[str],
-    active: str,
+    active: str | None,
 ) -> list[ModelEntry]:
-    """Build the full list of model entries for the picker.
+    """Picker rows via the shared builder: easy-pick (active/default/presets/
+    recents) first, then the curated catalog of every configured provider.
 
-    Order: recent first, then configured presets, then suggestions.
-    Duplicates are removed (a model in both presets and suggestions
-    only appears in presets).
+    Each row carries its provider, role flags, and the ``/model`` ref to
+    commit it (a preset/default switches by name; a catalog model by pair).
     """
-    from durin.cli.onboard_wizard import DEFAULT_MODELS
+    from durin.agent.model_picker import picker_entries
 
-    entries: list[ModelEntry] = []
-    seen_names: set[str] = set()
-
-    # --- Recent ---
-    for model in recent:
-        if model in seen_names:
-            continue
-        seen_names.add(model)
-        provider = infer_provider(model)
-        entries.append(
-            ModelEntry(
-                name=model,
-                provider=provider,
-                is_preset=False,
-                is_recent=True,
-                capabilities=_get_caps(model, provider),
-            )
+    rows = picker_entries(config, presets=presets, recent=recent, active=active)
+    return [
+        ModelEntry(
+            name=r.name,
+            provider=r.provider,
+            is_preset=(r.role == "preset"),
+            is_recent=(r.role == "recent"),
+            capabilities=_get_caps(r.name, r.provider),
+            ref=r.ref,
+            group=r.group,
         )
-
-    # --- Configured presets ---
-    for name in sorted(presets):
-        if name in seen_names:
-            continue
-        seen_names.add(name)
-        preset = presets[name]
-        provider = preset.provider if preset.provider != "auto" else infer_provider(preset.model)
-        entries.append(
-            ModelEntry(
-                name=name,
-                provider=provider,
-                is_preset=True,
-                is_recent=False,
-                capabilities=_get_caps(preset.model, provider),
-            )
-        )
-
-    # --- Suggested (curated DEFAULT_MODELS for configured providers) ---
-    for provider_name, model_names in DEFAULT_MODELS.items():
-        if provider_name == "custom":
-            continue
-        if not _provider_has_key(config, provider_name):
-            continue
-        for model in model_names:
-            if model in seen_names:
-                continue
-            seen_names.add(model)
-            entries.append(
-                ModelEntry(
-                    name=model,
-                    provider=provider_name,
-                    is_preset=False,
-                    is_recent=False,
-                    capabilities=_get_caps(model, provider_name),
-                )
-            )
-
-    return entries
+        for r in rows
+    ]

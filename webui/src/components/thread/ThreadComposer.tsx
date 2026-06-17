@@ -70,8 +70,8 @@ interface ThreadComposerProps {
   runStartedAt?: number | null;
   /** Sustained objective for this chat (WebSocket ``goal_state``). */
   goalState?: GoalStateWsPayload;
-  /** Called when user picks a model from the popover. */
-  onModelPick?: (model: string) => void;
+  /** Called when user picks a model; receives the exact `/model` argument. */
+  onModelPick?: (ref: string) => void;
   /** Called when user picks a reasoning effort level. */
   onEffortPick?: (effort: string) => void;
   /** Active reasoning effort, if known. */

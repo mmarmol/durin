@@ -726,11 +726,10 @@ class DurinApp(App[None]):
 
     @work
     async def _open_model_picker(self) -> None:
-        from durin.cli.tui.model_catalog import build_entries, infer_provider
+        from durin.cli.tui.model_catalog import build_entries
         from durin.cli.tui.screens import ModelPickerScreen
         from durin.cli.tui.state import add_recent_model, get_recent_models
         from durin.config.loader import load_config
-        from durin.config.schema import ModelPresetConfig
 
         if self._agent_loop is None:
             return
@@ -757,13 +756,13 @@ class DurinApp(App[None]):
         if not selected or selected == active:
             return
 
-        if selected not in presets:
-            provider = infer_provider(selected)
-            temp = ModelPresetConfig(model=selected, provider=provider)
-            presets[selected] = temp
-
+        # Each row carries the exact `/model` argument (preset/default by name,
+        # else `provider model`); the command builds the temp preset with the
+        # explicit provider — no inference here.
+        entry = next((e for e in entries if e.name == selected), None)
+        ref = entry.ref if entry and entry.ref else selected
         add_recent_model(selected)
-        await self._publish_inbound(f"/model {selected}", [])
+        await self._publish_inbound(f"/model {ref}", [])
 
     @work
     async def _open_theme_picker(self) -> None:

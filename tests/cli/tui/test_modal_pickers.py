@@ -168,8 +168,9 @@ async def test_bare_slash_model_opens_picker(tmp_path) -> None:
         from textual.widgets import OptionList
         opts = app.screen.query_one(OptionList)
         labels = [str(opts.get_option_at_index(i).prompt) for i in range(opts.option_count)]
-        assert any("default" in l for l in labels)
-        assert any("fast" in l for l in labels)
+        # Preset rows show the model (with provider), opencode-style.
+        assert any("glm-5.2" in l for l in labels)
+        assert any("glm-5-turbo" in l for l in labels)
         await pilot.press("escape")
         await pilot.pause()
 

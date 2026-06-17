@@ -1514,6 +1514,34 @@
         "title": "ModelCapabilitiesResult",
         "type": "object"
       },
+      "ModelPickerQuery": {
+        "additionalProperties": false,
+        "properties": {
+          "recent": {
+            "default": "",
+            "title": "Recent",
+            "type": "string"
+          }
+        },
+        "title": "ModelPickerQuery",
+        "type": "object"
+      },
+      "ModelPickerResult": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/PickerEntryModel"
+            },
+            "title": "Entries",
+            "type": "array"
+          }
+        },
+        "required": [
+          "entries"
+        ],
+        "title": "ModelPickerResult",
+        "type": "object"
+      },
       "ModelTestQuery": {
         "additionalProperties": false,
         "properties": {
@@ -1827,6 +1855,39 @@
           "connected"
         ],
         "title": "OAuthStatusResult",
+        "type": "object"
+      },
+      "PickerEntryModel": {
+        "properties": {
+          "group": {
+            "title": "Group",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "ref": {
+            "title": "Ref",
+            "type": "string"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "provider",
+          "group",
+          "role",
+          "ref"
+        ],
+        "title": "PickerEntryModel",
         "type": "object"
       },
       "RevokeTokenCommand": {
@@ -3720,6 +3781,35 @@
           }
         },
         "summary": "Resolve capability metadata for a model id",
+        "x-required-scope": "config:read"
+      }
+    },
+    "/api/v1/model/picker": {
+      "get": {
+        "operationId": "config_model_picker",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelPickerQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelPickerResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Ordered model picker entries (easy-pick + configured catalog)",
         "x-required-scope": "config:read"
       }
     },
