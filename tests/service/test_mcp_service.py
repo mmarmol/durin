@@ -397,10 +397,12 @@ class _FakeFlows:
         self._raises = raises
         self.started: list[str] = []
 
-    async def start(self, name, cfg) -> tuple[str, str]:
+    async def start(self, name, cfg, on_success=None) -> tuple[str, str]:
         if self._raises is not None:
             raise self._raises
         self.started.append(name)
+        if on_success is not None:
+            await on_success()
         return ("https://auth/x?state=st", "st")
 
 

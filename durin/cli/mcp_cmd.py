@@ -51,13 +51,10 @@ async def _run_login_flow(server: str, cfg) -> None:
     forces a single authenticated request so async_auth_flow runs the full
     handshake. Uses the SDK's own ClientSession against the configured URL.
     """
-    import httpx
-    from mcp import ClientSession
-    from mcp.client.streamable_http import streamable_http_client
-
     from durin.agent.tools.mcp_oauth import (
         LoopbackCallback,
         build_oauth_provider,
+        drive_oauth_handshake,
         make_interactive_handlers,
     )
 
@@ -73,15 +70,8 @@ async def _run_login_flow(server: str, cfg) -> None:
         callback_handler=callback_h,
     )
     try:
-        async with httpx.AsyncClient(
-            headers=getattr(cfg, "headers", None) or None,
-            follow_redirects=True,
-            timeout=None,
-            auth=provider,
-        ) as http_client:
-            async with streamable_http_client(cfg.url, http_client=http_client) as (r, w, _):
-                async with ClientSession(r, w) as session:
-                    await session.initialize()  # triggers the OAuth handshake
+        # Transport-aware: SSE servers must not be driven over streamable-HTTP.
+        await drive_oauth_handshake(provider, cfg)
     finally:
         callback.stop()
 

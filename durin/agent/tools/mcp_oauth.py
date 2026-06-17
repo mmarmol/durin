@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import html
 import http.server
 import os
 import re
@@ -319,14 +320,32 @@ class LoopbackCallback:
                 qs = urllib.parse.parse_qs(parsed.query)
                 code = (qs.get("code") or [None])[0]
                 got = (qs.get("state") or [None])[0]
-                ok = bool(code) and got == cb.state
+                err = (qs.get("error") or [None])[0]
+                err_desc = (qs.get("error_description") or [None])[0]
+                # The OAuth `state` is generated AND validated by the MCP SDK
+                # (mcp.client.auth.oauth2 compares the returned state to the one
+                # it created via secrets.compare_digest). The loopback only relays
+                # (code, state) back to the SDK; it must NOT enforce its own state
+                # — that value is unrelated to the SDK's and would reject every
+                # real callback. CSRF stays guarded by the SDK's check.
+                ok = bool(code) and not err
+                logger.info(
+                    "MCP OAuth callback hit: has_code={} has_state={} provider_error={} desc={}",
+                    bool(code), got is not None, err or "-", (err_desc or "")[:200],
+                )
+                if not ok:
+                    logger.warning(
+                        "MCP OAuth callback rejected (has_code={}, provider_error={}): {}",
+                        bool(code), err or "-", err_desc or "(no authorization code)",
+                    )
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.end_headers()
+                reason = err_desc or err or "no authorization code"
                 msg = (
                     "Connected to durin. You can close this tab."
                     if ok
-                    else "Authorization failed. Return to durin and retry."
+                    else f"Authorization failed: {html.escape(reason)}. Return to durin and retry."
                 )
                 # When the flow was opened from the webui (a popup), signal the
                 # opener so it can refresh status, then close. The payload is a
@@ -394,3 +413,44 @@ def make_interactive_handlers(
         return await asyncio.wait_for(callback.wait(), timeout=300)
 
     return _redirect, _callback
+
+
+async def drive_oauth_handshake(provider: Any, cfg: Any) -> None:
+    """Open one MCP session so the SDK runs the OAuth handshake and stores tokens.
+
+    Picks the transport from ``cfg`` the same way ``MCPServerConnection`` does
+    (sse vs streamable-HTTP). Using the wrong transport (e.g. streamable-HTTP for
+    an ``sse`` server like Atlassian) lets the token exchange succeed but fails
+    the post-token ``session.initialize()`` with an opaque ExceptionGroup — so
+    both the webui flow and ``durin mcp login`` must honour ``cfg.type`` here.
+    """
+    import httpx
+    from mcp import ClientSession
+
+    transport = getattr(cfg, "type", None)
+    if not transport:
+        url = (getattr(cfg, "url", "") or "").rstrip("/")
+        transport = "sse" if url.endswith("/sse") else "streamableHttp"
+    headers = getattr(cfg, "headers", None) or None
+
+    if transport == "sse":
+        from mcp.client.sse import sse_client
+
+        def _factory(headers: Any = None, timeout: Any = None, auth: Any = None) -> Any:
+            return httpx.AsyncClient(
+                headers=headers, timeout=timeout, auth=provider or auth, follow_redirects=True
+            )
+
+        async with sse_client(cfg.url, httpx_client_factory=_factory) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+        return
+
+    from mcp.client.streamable_http import streamable_http_client
+
+    async with httpx.AsyncClient(
+        headers=headers, follow_redirects=True, timeout=None, auth=provider
+    ) as http_client:
+        async with streamable_http_client(cfg.url, http_client=http_client) as (read, write, _):
+            async with ClientSession(read, write) as session:
+                await session.initialize()

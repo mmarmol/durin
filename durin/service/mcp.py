@@ -476,5 +476,16 @@ class McpService:
             raise ValidationFailedError(
                 "server is not OAuth-enabled", details={"name": cmd.name}
             )
-        url, state = await self._flows().start(cmd.name, sc)
+
+        runtime = self._runtime
+        name = cmd.name
+
+        async def _reconnect_with_token() -> None:
+            # Runs after the token is stored: reconnect the live connection so it
+            # builds a fresh provider that finds the token and lists tools.
+            if runtime is not None:
+                await runtime.disconnect(name)
+                await runtime.connect(name, sc)
+
+        url, state = await self._flows().start(name, sc, on_success=_reconnect_with_token)
         return McpOauthLoginResult(authorization_url=url, state=state)
