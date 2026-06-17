@@ -411,6 +411,30 @@ class McpService:
 
     @route(
         "POST",
+        "/api/v1/mcp/servers/{name}/reconnect",
+        scope=Scope.MCP_WRITE.value,
+        request_model=McpServerNameCommand,
+        response_model=McpServerDetail,
+        summary="Reconnect a server to apply config changes or retry a failure",
+    )
+    async def reconnect(
+        self, cmd: McpServerNameCommand, principal: Principal
+    ) -> McpServerDetail:
+        principal.require(Scope.MCP_WRITE)
+        from durin.config.loader import load_config
+
+        sc = load_config().tools.mcp_servers.get(cmd.name)
+        if sc is None:
+            raise NotFoundError("no such MCP server", details={"name": cmd.name})
+        # Apply the current config to the live connection (and retry failures).
+        # A disabled server has nothing to (re)connect.
+        if self._runtime is not None and sc.enabled:
+            await self._runtime.disconnect(cmd.name)
+            await self._runtime.connect(cmd.name, sc)
+        return await self._build_detail(cmd.name, sc)
+
+    @route(
+        "POST",
         "/api/v1/mcp/servers/{name}/oauth/logout",
         scope=Scope.MCP_WRITE.value,
         request_model=McpServerNameCommand,

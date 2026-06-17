@@ -365,6 +365,30 @@ async def test_oauth_logout_unknown_is_not_found(config_path) -> None:
         await McpService().oauth_logout(McpServerNameCommand(name="ghost"), LOCAL)
 
 
+# --- reconnect ------------------------------------------------------------
+
+
+async def test_reconnect_disconnects_then_connects(config_path) -> None:
+    _seed({"r": MCPServerConfig(url="https://r/mcp", enabled=True)})
+    runtime = _FakeRuntime(status={"r": _raw("closed")})
+    await McpService(mcp_runtime=runtime).reconnect(McpServerNameCommand(name="r"), LOCAL)
+    assert runtime.disconnected == ["r"]
+    assert runtime.connected and runtime.connected[0][0] == "r"
+
+
+async def test_reconnect_disabled_server_is_noop(config_path) -> None:
+    _seed({"d": MCPServerConfig(url="https://d/mcp", enabled=False)})
+    runtime = _FakeRuntime()
+    await McpService(mcp_runtime=runtime).reconnect(McpServerNameCommand(name="d"), LOCAL)
+    assert runtime.connected == []
+    assert runtime.disconnected == []
+
+
+async def test_reconnect_unknown_is_not_found(config_path) -> None:
+    with pytest.raises(NotFoundError):
+        await McpService().reconnect(McpServerNameCommand(name="ghost"), LOCAL)
+
+
 # --- oauth login ----------------------------------------------------------
 
 

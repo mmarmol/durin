@@ -1481,6 +1481,14 @@ export async function disableMcpServer(
   return post<McpServerDetail>(`${base}${mcpPath(name, "/disable")}`, token, {});
 }
 
+export async function reconnectMcpServer(
+  token: string,
+  name: string,
+  base: string = "",
+): Promise<McpServerDetail> {
+  return post<McpServerDetail>(`${base}${mcpPath(name, "/reconnect")}`, token, {});
+}
+
 export async function mcpOauthLogin(
   token: string,
   name: string,
