@@ -10,22 +10,23 @@ from durin.cli.tui.model_catalog import ModelEntry
 from durin.providers.capabilities import ModelCapabilities
 
 
-def _make_entry(name, is_preset=False, is_recent=False):
+def _make_entry(name, *, group="Easy pick", is_preset=False, is_recent=False):
     return ModelEntry(
         name=name,
         provider="auto",
         is_preset=is_preset,
         is_recent=is_recent,
         capabilities=ModelCapabilities(model=name),
+        group=group,
     )
 
 
 @pytest.fixture
 def entries():
     return [
-        _make_entry("glm-5.2", is_recent=True),
-        _make_entry("default", is_preset=True),
-        _make_entry("claude-sonnet-4-6"),
+        _make_entry("glm-5.2", group="Easy pick", is_recent=True),
+        _make_entry("default", group="Easy pick", is_preset=True),
+        _make_entry("claude-sonnet-4-6", group="anthropic"),
     ]
 
 
@@ -54,7 +55,8 @@ async def test_screen_shows_all_sections_when_empty_filter(entries):
         await pilot.app.push_screen(screen)
         await pilot.pause()
         ol = screen.query_one("#model-picker-list", OptionList)
-        assert ol.option_count == 6
+        # 2 group headers ("Easy pick", "anthropic") + 3 model rows.
+        assert ol.option_count == 5
 
 
 async def test_screen_filters_by_fuzzy_query(entries):
