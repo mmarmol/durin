@@ -13,12 +13,9 @@ hard blocks (except the command scan under an explicit ``refuse`` policy).
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import re
-import urllib.error
-import urllib.request
 from typing import Optional, Tuple
 
 from durin.security.network import _URL_RE  # reuse the existing URL matcher
@@ -137,9 +134,6 @@ def scan_spawn_command(command: str, args: object) -> list[str]:
 # ---------------------------------------------------------------------------
 # OSV malware preflight (supply-chain / typosquat guard)
 # ---------------------------------------------------------------------------
-
-_OSV_ENDPOINT = "https://api.osv.dev/v1/query"
-_OSV_TIMEOUT = 3  # seconds; tight — fail-open on slow infra
 
 # Package runners and their ecosystems.
 _PACKAGE_RUNNERS: dict[str, str] = {
@@ -276,23 +270,11 @@ def _parse_pypi_package(token: str) -> Tuple[Optional[str], Optional[str]]:
 def _query_osv(
     package: str, ecosystem: str, version: Optional[str] = None
 ) -> list[dict]:
-    """POST to OSV API and return only MAL-* advisories. Raises on any error."""
-    payload: dict = {"package": {"name": package, "ecosystem": ecosystem}}
-    if version:
-        payload["version"] = version
+    """Return OSV MAL-* advisories as ``[{"id": ...}]``. Raises on any error.
 
-    data = json.dumps(payload).encode()
-    req = urllib.request.Request(
-        _OSV_ENDPOINT,
-        data=data,
-        headers={
-            "Content-Type": "application/json",
-            "User-Agent": "durin-osv-preflight/1.0",
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=_OSV_TIMEOUT) as resp:
-        result = json.loads(resp.read())
+    Delegates the HTTP query to the shared ``durin.security.osv`` helper; the
+    dict shape is kept for ``check_package_for_malware``'s existing caller.
+    """
+    from durin.security.osv import query_malware
 
-    vulns = result.get("vulns", [])
-    return [v for v in vulns if v.get("id", "").startswith("MAL-")]
+    return [{"id": mal_id} for mal_id in query_malware(package, ecosystem, version)]
