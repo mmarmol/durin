@@ -165,3 +165,25 @@ async def test_mcp_runtime_connect_disconnect_delegate():
 
     loop.connect_mcp_server.assert_awaited_once_with("x", None)
     loop.disconnect_mcp_server.assert_awaited_once_with("x")
+
+
+# --- connect-error tracking (failed servers, opencode parity) -------------
+
+
+async def test_failed_connect_records_error_and_runtime_exposes_it(tmp_path):
+    from durin.agent.mcp_runtime import McpRuntime
+
+    cfg = MCPServerConfig(command="durin-nonexistent-cmd-xyz", enabled=True)
+    loop = _loop(tmp_path, {"bad": cfg})
+    rt = McpRuntime(loop)
+
+    await loop.connect_mcp_server("bad", cfg)  # spawn fails
+
+    assert "bad" not in loop._mcp_connections  # never connected
+    assert "bad" in loop._mcp_connect_errors  # failure recorded
+    assert "bad" in rt.connect_errors()
+    assert rt.connect_errors()["bad"]  # a non-empty message
+
+    # An intentional disconnect clears the failure record.
+    await loop.disconnect_mcp_server("bad")
+    assert "bad" not in rt.connect_errors()

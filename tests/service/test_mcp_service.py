@@ -45,13 +45,17 @@ def _seed(servers: dict) -> None:
 
 
 class _FakeRuntime:
-    def __init__(self, status: dict | None = None) -> None:
+    def __init__(self, status: dict | None = None, errors: dict | None = None) -> None:
         self._status = status or {}
+        self._errors = errors or {}
         self.connected: list[tuple] = []
         self.disconnected: list[str] = []
 
     def live_status(self) -> dict:
         return self._status
+
+    def connect_errors(self) -> dict:
+        return self._errors
 
     async def connect(self, name: str, cfg=None) -> None:
         self.connected.append((name, cfg))
@@ -107,6 +111,26 @@ def test_derive_status_connecting() -> None:
     ) == ("connecting", None)
 
 
+def test_derive_status_failed_when_connect_errored() -> None:
+    # No live connection, but the last connect attempt failed → failed (opencode
+    # parity: a broken server shows failed + error, not a perpetual "connecting").
+    assert derive_status(
+        enabled=True,
+        oauth_required=False,
+        oauth_authenticated=False,
+        raw=None,
+        connect_error="spawn npx ENOENT",
+    ) == ("failed", "spawn npx ENOENT")
+    # A live connection takes precedence over a stale connect error.
+    assert derive_status(
+        enabled=True,
+        oauth_required=False,
+        oauth_authenticated=False,
+        raw=_raw("closed"),
+        connect_error="old error",
+    ) == ("connected", None)
+
+
 # --- list + get -----------------------------------------------------------
 
 
@@ -135,6 +159,15 @@ async def test_list_returns_summaries_with_live_status(config_path) -> None:
 async def test_list_requires_mcp_read(config_path) -> None:
     with pytest.raises(ForbiddenError):
         await McpService().list(McpListQuery(), Principal.remote("t", set()))
+
+
+async def test_list_shows_failed_for_connect_error(config_path) -> None:
+    _seed({"bad": MCPServerConfig(command="nope", enabled=True)})
+    runtime = _FakeRuntime(status={}, errors={"bad": "spawn nope ENOENT"})
+    res = await McpService(mcp_runtime=runtime).list(McpListQuery(), LOCAL)
+    bad = next(s for s in res.servers if s.name == "bad")
+    assert bad.status == "failed"
+    assert bad.error == "spawn nope ENOENT"
 
 
 async def test_get_unknown_raises_not_found(config_path) -> None:

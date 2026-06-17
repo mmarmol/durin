@@ -54,6 +54,15 @@ class McpRuntime:
             )
         return out
 
+    def connect_errors(self) -> dict[str, str]:
+        """Last connect-failure message per server.
+
+        Populated when an enabled server fails to connect (so the service can
+        report ``failed`` instead of a perpetual ``connecting``); cleared on a
+        successful connect or an intentional disconnect.
+        """
+        return dict(getattr(self._loop, "_mcp_connect_errors", {}))
+
     async def connect(self, name: str, cfg: Any = None) -> None:
         await self._loop.connect_mcp_server(name, cfg)
 

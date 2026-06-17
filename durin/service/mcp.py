@@ -108,20 +108,25 @@ def derive_status(
     oauth_required: bool,
     oauth_authenticated: bool,
     raw: "RawConnState | None",
+    connect_error: str | None = None,
 ) -> tuple[str, str | None]:
     """Map config + OAuth-credential + live-connection facts to a status.
 
     Returns ``(status, error)``. Precedence: ``disabled`` (config off) >
     ``needs_auth`` (OAuth server with no token) > the live connection state
-    (``connected`` / ``failed`` / ``connecting``). ``raw is None`` means no live
-    connection — the server is coming up (or the runtime is absent), reported as
-    ``connecting``.
+    (``connected`` / ``failed`` / ``connecting``). When there is no live
+    connection (``raw is None``): a recorded ``connect_error`` (the last connect
+    attempt failed) surfaces as ``failed`` — matching opencode, so a broken
+    server isn't shown as a perpetual ``connecting`` — otherwise the server is
+    coming up (or the runtime is absent) and is reported as ``connecting``.
     """
     if not enabled:
         return ("disabled", None)
     if oauth_required and not oauth_authenticated:
         return ("needs_auth", None)
     if raw is None:
+        if connect_error:
+            return ("failed", connect_error)
         return ("connecting", None)
     if raw.breaker_state == "closed":
         return ("connected", None)
@@ -175,6 +180,12 @@ class McpService:
     def _live(self) -> dict[str, "RawConnState"]:
         return self._runtime.live_status() if self._runtime is not None else {}
 
+    def _connect_errors(self) -> dict[str, str]:
+        if self._runtime is None:
+            return {}
+        getter = getattr(self._runtime, "connect_errors", None)
+        return getter() if callable(getter) else {}
+
     def _flows(self) -> Any:
         """The OAuth flow orchestrator (lazily constructed; injectable in tests)."""
         if self._oauth_flows is None:
@@ -201,6 +212,7 @@ class McpService:
             oauth_required=required,
             oauth_authenticated=authed,
             raw=raw,
+            connect_error=self._connect_errors().get(name),
         )
         return McpServerSummary(
             name=name,
@@ -261,6 +273,7 @@ class McpService:
             oauth_required=required,
             oauth_authenticated=authed,
             raw=raw,
+            connect_error=self._connect_errors().get(name),
         )
         tools = [
             McpToolInfo(name=tname, description=desc)
