@@ -46,25 +46,36 @@ _UNICODE_RE = re.compile(
     "[\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff\U000e0000-\U000e007f]"
 )
 
-# (regex, category, severity, detail) — applied to the SKILL.md body
-_BODY_RULES = [
+# Rules are (regex, category, severity, detail), grouped per category so adding
+# a category is a localized change (layout mirrors SkillSpector's static_patterns_*).
+# `_BODY_RULES` (run against SKILL.md) and `_CODE_RULES` (run against bundled
+# scripts) are composed from these groups; scan_skill consumes the composed lists.
+
+# --- body categories (SKILL.md) ---
+PROMPT_INJECTION_RULES = [
     (r"(?i)ignore\s+(all\s+|the\s+)?(previous|prior|above)\s+instructions", "prompt_injection", "dangerous", "ignore-previous-instructions"),
     (r"(?i)\byou\s+are\s+now\b|\bdisregard\s+(your|the|all)\s+(system|safety|previous)|\bact\s+as\s+(a\s+)?(dan|jailbroken|unrestricted)", "prompt_injection", "dangerous", "role-override/jailbreak"),
     (r"(?i)do\s+not\s+(tell|inform|notify|mention\s+to)\s+the\s+user", "prompt_injection", "high", "covert-action directive"),
+]
+HIDDEN_INSTRUCTION_RULES = [
     # Hidden instruction in an HTML comment — only when it ADDRESSES the model
     # (ai/assistant/claude/llm near an imperative) or contains an injection
     # phrase. A bare "ignore"/"run" in a comment (e.g. `ascii-guard-ignore`, a
     # build note) is NOT flagged — that was a false-positive source on real skills.
     (r"(?is)<!--.*?(?:\b(?:ai|assistant|claude|llm)\b.*?\b(?:ignore|run|exec|execute|delete|send|post|fetch|disregard)\b|\bignore\s+(?:all\s+|the\s+|prior\s+|previous\s+|above\s+)*instructions|\byou\s+are\s+now\b|\bdisregard\s+(?:all|previous|the)\b).*?-->", "hidden_instructions", "high", "AI-directed instruction inside HTML comment"),
+]
+SENSITIVE_PATH_RULES = [
     # A *mention* of a sensitive path (e.g. SSH-key setup docs) is caution, not
     # dangerous — legit setup skills reference ~/.ssh. Real theft is the path
     # read INSIDE a script combined with exfil (caught by dangerous_code).
     (r"~/\.ssh\b|~/\.aws/credentials|~/\.aws\b|~/\.gnupg\b|~/\.env\b|/etc/passwd|/etc/shadow", "sensitive_path", "caution", "sensitive path reference"),
+]
+SECRET_RULES = [
     (r"AKIA[0-9A-Z]{16}|\bsk-[A-Za-z0-9]{20,}|\bghp_[A-Za-z0-9]{36}|-----BEGIN [A-Z ]*PRIVATE KEY-----", "secrets", "caution", "hardcoded secret"),
 ]
 
-# applied to bundled script files
-_CODE_RULES = [
+# --- code categories (bundled scripts) ---
+DANGEROUS_CODE_RULES = [
     (r"(?:curl|wget)\s+[^\n|]*\|\s*(?:ba)?sh", "dangerous_code", "dangerous", "fetch-and-execute (curl|bash)"),
     (r"\brm\s+-rf?\s+[~/]|\bmkfs\b|\bdd\s+if=", "dangerous_code", "dangerous", "destructive command"),
     (r"\beval\s*\(|\bexec\s*\(|\bos\.system\s*\(|subprocess\.[A-Za-z_]+\([^)]*shell\s*=\s*True", "dangerous_code", "dangerous", "dynamic/shell exec"),
@@ -72,6 +83,10 @@ _CODE_RULES = [
     (r"\bos\.environ\b|\bprocess\.env\b", "dangerous_code", "caution", "environment access (exfil-adjacent)"),
     (r"\batob\s*\(|\bbase64\.b64decode\s*\(|(?:\\x[0-9a-fA-F]{2}){8,}", "dangerous_code", "caution", "obfuscation (base64/hex)"),
 ]
+
+# Composed lists consumed by scan_skill (preserves existing behavior exactly).
+_BODY_RULES = PROMPT_INJECTION_RULES + HIDDEN_INSTRUCTION_RULES + SENSITIVE_PATH_RULES + SECRET_RULES
+_CODE_RULES = DANGEROUS_CODE_RULES
 
 
 def _apply(text: str, where: str, rules) -> list[Finding]:
