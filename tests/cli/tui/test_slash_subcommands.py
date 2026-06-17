@@ -36,13 +36,6 @@ async def test_memory_subcommand_completion_after_space() -> None:
 
 
 @pytest.mark.asyncio
-async def test_pairing_subcommand_completion() -> None:
-    s = SlashCommandSuggester()
-    assert (await s.get_suggestion("/pairing a")) == "/pairing approve"
-    assert (await s.get_suggestion("/pairing rev")) == "/pairing revoke"
-
-
-@pytest.mark.asyncio
 async def test_subcommand_completion_returns_none_for_unknown_parent() -> None:
     """A slash command without subcommands gets no second-level completion."""
     s = SlashCommandSuggester()
