@@ -107,6 +107,13 @@ cross-encoder = [
     # gated behind the extra rather than in `memory`.
     "sentence-transformers>=3.0,<6.0",
 ]
+skill-yara = [
+    # YARA signature scan for imported skills (spec §4.f). Compiled C extension
+    # (libyara) with prebuilt wheels for x86/x86_64/ARM on Linux/macOS/Windows.
+    # Optional so a no-wheel platform never breaks the base install; installed by
+    # default via `durin onboard`. Rules come from a maintained feed, not authored.
+    "yara-python>=4.5.0",
+]
 api = [
     # Starlette ASGI framework + uvicorn server for the new HTTP front door (SP4).
     # Both are transitively installed via mcp, but declared here so any install
