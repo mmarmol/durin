@@ -248,13 +248,13 @@ describe("App layout", () => {
     fireEvent.click(within(settingsNav).getByRole("button", { name: "Model providers" }));
     expect(screen.getByText("OpenRouter")).toBeInTheDocument();
     expect(screen.getAllByText("Not configured").length).toBeGreaterThan(0);
-    fireEvent.click(screen.getByText("OpenAI"));
+    fireEvent.click(screen.getAllByText("OpenAI")[0]);
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     fireEvent.change(screen.getByPlaceholderText("Leave blank to keep the current key"), {
       target: { value: "unsaved-openai-key" },
     });
     fireEvent.click(screen.getByText("OpenRouter"));
-    fireEvent.click(screen.getByText("OpenAI"));
+    fireEvent.click(screen.getAllByText("OpenAI")[0]);
     expect(screen.getByText("open••••-key")).toBeInTheDocument();
     expect(screen.queryByDisplayValue("unsaved-openai-key")).not.toBeInTheDocument();
 

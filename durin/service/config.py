@@ -118,6 +118,43 @@ class ModelPickerResult(Result):
     entries: list[PickerEntryModel]
 
 
+class ProviderModelsQuery(Query):
+    provider: str
+
+
+class ProviderModelEntry(Result):
+    id: str
+    configured: bool = False
+    max_input_tokens: int | None = None
+    supports_vision: bool = False
+    supports_audio_input: bool = False
+    supports_reasoning: bool = False
+    # User param overrides (None = inherit catalog / default).
+    max_tokens: int | None = None
+    context_window_tokens: int | None = None
+    temperature: float | None = None
+    reasoning_effort: str | None = None
+
+
+class ProviderModelsResult(Result):
+    provider: str
+    models: list[ProviderModelEntry]
+
+
+class ProviderModelUpsertCommand(Command):
+    provider: str
+    model: str
+    max_tokens: int | None = None
+    context_window_tokens: int | None = None
+    temperature: float | None = None
+    reasoning_effort: str | None = None
+
+
+class ProviderModelDeleteCommand(Command):
+    provider: str
+    model: str
+
+
 # ---------------------------------------------------------------------------
 # DTOs — model capabilities
 # ---------------------------------------------------------------------------
@@ -257,6 +294,116 @@ class ConfigService:
         return ConfigSetResult(
             ok=True,
             config=mask_secrets(config.model_dump(mode="json", by_alias=True)),
+        )
+
+    @route(
+        "GET",
+        "/api/v1/providers/models",
+        scope=Scope.CONFIG_READ.value,
+        request_model=ProviderModelsQuery,
+        response_model=ProviderModelsResult,
+        summary="Per-provider catalog models with caps and configured params",
+    )
+    async def provider_models_route(
+        self, query: ProviderModelsQuery, principal: Principal
+    ) -> ProviderModelsResult:
+        principal.require(Scope.CONFIG_READ)
+        from durin.config.loader import load_config
+        from durin.providers.provider_catalog import provider_models
+
+        provider = query.provider.strip()
+        cfg = load_config()
+        pc = getattr(cfg.providers, provider, None)
+        configured = dict(getattr(pc, "models", {}) or {})
+        out: list[ProviderModelEntry] = []
+        seen: set[str] = set()
+        for mi in provider_models(provider):
+            seen.add(mi.id)
+            ov = configured.get(mi.id)
+            out.append(
+                ProviderModelEntry(
+                    id=mi.id,
+                    configured=mi.id in configured,
+                    max_input_tokens=mi.max_input_tokens,
+                    supports_vision=mi.supports_vision,
+                    supports_audio_input=mi.supports_audio_input,
+                    supports_reasoning=mi.supports_reasoning,
+                    max_tokens=getattr(ov, "max_tokens", None),
+                    context_window_tokens=getattr(ov, "context_window_tokens", None),
+                    temperature=getattr(ov, "temperature", None),
+                    reasoning_effort=getattr(ov, "reasoning_effort", None),
+                )
+            )
+        for mid, ov in configured.items():  # user customs not in the catalog
+            if mid in seen:
+                continue
+            out.append(
+                ProviderModelEntry(
+                    id=mid, configured=True,
+                    max_tokens=ov.max_tokens,
+                    context_window_tokens=ov.context_window_tokens,
+                    temperature=ov.temperature,
+                    reasoning_effort=ov.reasoning_effort,
+                )
+            )
+        out.sort(key=lambda e: e.id)
+        return ProviderModelsResult(provider=provider, models=out)
+
+    @route(
+        "POST",
+        "/api/v1/providers/model",
+        scope=Scope.CONFIG_WRITE.value,
+        request_model=ProviderModelUpsertCommand,
+        response_model=ConfigSetResult,
+        summary="Add or update a configured model's params under a provider",
+    )
+    async def provider_model_upsert(
+        self, cmd: ProviderModelUpsertCommand, principal: Principal
+    ) -> ConfigSetResult:
+        principal.require(Scope.CONFIG_WRITE)
+        from durin.cli.config_cmd import mask_secrets
+        from durin.config.loader import get_config_path, load_config, save_config
+        from durin.config.schema import ModelEntry
+
+        path = get_config_path()
+        cfg = load_config(path)
+        pc = getattr(cfg.providers, cmd.provider, None)
+        if pc is None:
+            raise ValidationFailedError(f"unknown provider {cmd.provider!r}")
+        pc.models[cmd.model] = ModelEntry(
+            max_tokens=cmd.max_tokens,
+            context_window_tokens=cmd.context_window_tokens,
+            temperature=cmd.temperature,
+            reasoning_effort=cmd.reasoning_effort,
+        )
+        save_config(cfg, path)
+        return ConfigSetResult(
+            ok=True, config=mask_secrets(cfg.model_dump(mode="json", by_alias=True))
+        )
+
+    @route(
+        "POST",
+        "/api/v1/providers/model/remove",
+        scope=Scope.CONFIG_WRITE.value,
+        request_model=ProviderModelDeleteCommand,
+        response_model=ConfigSetResult,
+        summary="Remove a configured model from a provider",
+    )
+    async def provider_model_remove(
+        self, cmd: ProviderModelDeleteCommand, principal: Principal
+    ) -> ConfigSetResult:
+        principal.require(Scope.CONFIG_WRITE)
+        from durin.cli.config_cmd import mask_secrets
+        from durin.config.loader import get_config_path, load_config, save_config
+
+        path = get_config_path()
+        cfg = load_config(path)
+        pc = getattr(cfg.providers, cmd.provider, None)
+        if pc is not None and getattr(pc, "models", None):
+            pc.models.pop(cmd.model, None)
+            save_config(cfg, path)
+        return ConfigSetResult(
+            ok=True, config=mask_secrets(cfg.model_dump(mode="json", by_alias=True))
         )
 
     @route(

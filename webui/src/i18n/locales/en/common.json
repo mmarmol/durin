@@ -385,6 +385,27 @@
         }
       }
     },
+    "providerModels": {
+      "title": "models",
+      "loading": "Loading models…",
+      "empty": "No models for this provider",
+      "addPlaceholder": "Add a model id (e.g. my-model)",
+      "add": "Add",
+      "edit": "Edit",
+      "save": "Save",
+      "cancel": "Cancel",
+      "remove": "Remove",
+      "confirmRemove": "Remove this model?",
+      "configured": "Configured",
+      "contextWindow": "Context window",
+      "maxTokens": "Max output",
+      "temperature": "Temperature",
+      "reasoningEffort": "Reasoning effort",
+      "catalogDefault": "catalog default",
+      "capVision": "vision",
+      "capAudio": "audio",
+      "capReasoning": "reasoning"
+    },
     "mcp": {
       "description": "Connect Model Context Protocol (MCP) servers to give the agent extra tools. Status is read live from the running gateway.",
       "servers": "Servers",

@@ -947,6 +947,64 @@ export async function fetchModelPicker(
   return res.entries;
 }
 
+export interface ProviderModelEntry {
+  id: string;
+  configured: boolean;
+  max_input_tokens?: number | null;
+  supports_vision?: boolean;
+  supports_audio_input?: boolean;
+  supports_reasoning?: boolean;
+  max_tokens?: number | null;
+  context_window_tokens?: number | null;
+  temperature?: number | null;
+  reasoning_effort?: string | null;
+}
+
+export interface ProviderModelParams {
+  max_tokens?: number | null;
+  context_window_tokens?: number | null;
+  temperature?: number | null;
+  reasoning_effort?: string | null;
+}
+
+export async function fetchProviderModels(
+  token: string,
+  provider: string,
+  base: string = "",
+): Promise<ProviderModelEntry[]> {
+  const res = await request<{ provider: string; models: ProviderModelEntry[] }>(
+    `${base}/api/v1/providers/models?provider=${encodeURIComponent(provider)}`,
+    token,
+  );
+  return res.models;
+}
+
+export async function upsertProviderModel(
+  token: string,
+  provider: string,
+  model: string,
+  params: ProviderModelParams,
+  base: string = "",
+): Promise<void> {
+  await post<{ ok: boolean }>(`${base}/api/v1/providers/model`, token, {
+    provider,
+    model,
+    ...params,
+  });
+}
+
+export async function removeProviderModel(
+  token: string,
+  provider: string,
+  model: string,
+  base: string = "",
+): Promise<void> {
+  await post<{ ok: boolean }>(`${base}/api/v1/providers/model/remove`, token, {
+    provider,
+    model,
+  });
+}
+
 export interface ModelCapabilities {
   model: string;
   max_input_tokens: number | null;
