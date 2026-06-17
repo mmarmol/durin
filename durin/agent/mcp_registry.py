@@ -209,3 +209,30 @@ class OfficialMcpRegistry:
         data = await self._http.get_json(f"{self.BASE}/v0/servers?{urllib.parse.urlencode(params)}")
         servers = [e.get("server") or {} for e in (data.get("servers") or [])]
         return servers, (data.get("metadata") or {}).get("nextCursor")
+
+
+def build_mcp_adapters(registries) -> list:
+    """Instantiate enabled registry adapters (mirror of ``skill_registry.build_adapters``).
+
+    v1: only ``official``. mpak is a fast-follow — its trust score lives in a native
+    endpoint, not the spec-compatible ``/v0.1/servers`` — so it is intentionally not
+    built here even if configured.
+    """
+    out: list = []
+    for r in registries:
+        if not getattr(r, "enabled", True):
+            continue
+        if r.kind == "official":
+            out.append(OfficialMcpRegistry())
+        # elif r.kind == "mpak": out.append(MpakRegistry())  # fast-follow
+    return out
+
+
+async def search_mcp_registries(query, *, cache, adapters, limit):
+    """Rank from the local catalog cache; sync from the official adapter if empty."""
+    if not cache._servers:
+        for adapter in adapters:
+            if getattr(adapter, "name", "") == "official":
+                await cache.sync(adapter)
+                break
+    return cache.rank(query, limit=limit)
