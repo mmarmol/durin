@@ -40,3 +40,14 @@ async def test_skillssh_non_200_returns_empty(monkeypatch):
     monkeypatch.setattr("durin.agent.skill_registry.ssrf_safe_async_client",
                         lambda: _Client(_Resp(500, {})))
     assert await SkillsShRegistry().search("x", limit=5) == []
+
+
+async def test_skillssh_description_is_empty_not_synthetic(monkeypatch):
+    payload = {"skills": [
+        {"id": "openai/skills/pdf", "source": "openai/skills", "skillId": "pdf",
+         "name": "pdf", "installs": 1200}]}
+    monkeypatch.setattr("durin.agent.skill_registry.ssrf_safe_async_client",
+                        lambda: _Client(_Resp(200, payload)))
+    hits = await SkillsShRegistry().search("pdf", limit=5)
+    assert hits[0].description == ""          # no "skills.sh: …" synthetic string
+    assert hits[0].signals == {"installs": 1200}   # installs still flow via signals
