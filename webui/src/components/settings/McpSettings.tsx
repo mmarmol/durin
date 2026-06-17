@@ -6,6 +6,7 @@ import {
   LogOut,
   Pencil,
   Plus,
+  RotateCw,
   Trash2,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -27,6 +28,7 @@ import {
   listMcpServers,
   mcpOauthLogin,
   mcpOauthLogout,
+  reconnectMcpServer,
   removeMcpServer,
   updateMcpServer,
 } from "@/lib/api";
@@ -111,7 +113,7 @@ function formatKeyValues(record: Record<string, string> | undefined): string {
 }
 
 // Status dot colors, mirroring the success/warning/critical/muted tokens used
-// across Skills/Secrets (emerald/amber/red/muted-foreground).
+// across Skills/Secrets (emerald/amber/destructive/muted-foreground).
 function statusDotClass(status: McpStatus): string {
   switch (status) {
     case "connected":
@@ -119,7 +121,7 @@ function statusDotClass(status: McpStatus): string {
     case "connecting":
       return "bg-amber-500";
     case "failed":
-      return "bg-red-500";
+      return "bg-destructive";
     case "needs_auth":
       return "bg-amber-500";
     case "disabled":
@@ -392,9 +394,10 @@ export function McpSettings({ token }: { token: string }) {
     (key: keyof McpFormState) => (e: React.ChangeEvent<HTMLInputElement>) =>
       setForm((prev) => ({ ...prev, [key]: e.target.checked }));
 
+  const isAutoForm = form.type === "auto";
   const isHttpForm =
-    form.type === "sse" || form.type === "streamableHttp" || form.type === "auto";
-  const isStdioForm = form.type === "stdio" || form.type === "auto";
+    form.type === "sse" || form.type === "streamableHttp" || isAutoForm;
+  const isStdioForm = form.type === "stdio" || isAutoForm;
 
   return (
     <div className="space-y-5">
@@ -428,7 +431,24 @@ export function McpSettings({ token }: { token: string }) {
           {loading ? (
             <SettingsRow title={t("settings.status.loading")} />
           ) : servers.length === 0 ? (
-            <SettingsRow title={t("settings.mcp.empty")} />
+            <div className="flex flex-col items-start gap-2 px-4 py-5 sm:px-5">
+              <p className="text-[13px] font-medium text-foreground">
+                {t("settings.mcp.emptyTitle")}
+              </p>
+              <p className="text-[12px] leading-5 text-muted-foreground">
+                {t("settings.mcp.emptyHint")}
+              </p>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busy}
+                onClick={onAdd}
+                className="mt-1 rounded-full"
+              >
+                <Plus className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+                {t("settings.mcp.add")}
+              </Button>
+            </div>
           ) : (
             servers.map((server) => {
               const isExpanded = expandedName === server.name;
@@ -559,8 +579,19 @@ export function McpSettings({ token }: { token: string }) {
               </select>
             </SettingsRow>
 
+            {isAutoForm ? (
+              <div className="px-4 pt-2 text-[12px] leading-5 text-muted-foreground sm:px-5">
+                {t("settings.mcp.autoHint")}
+              </div>
+            ) : null}
+
             {isStdioForm ? (
               <>
+                {isAutoForm ? (
+                  <div className="px-4 pt-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground sm:px-5">
+                    {t("settings.mcp.stdioGroup")}
+                  </div>
+                ) : null}
                 <SettingsRow
                   title={t("settings.mcp.fieldCommand")}
                   description={t("settings.mcp.hintCommand")}
@@ -599,6 +630,11 @@ export function McpSettings({ token }: { token: string }) {
 
             {isHttpForm ? (
               <>
+                {isAutoForm ? (
+                  <div className="px-4 pt-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground sm:px-5">
+                    {t("settings.mcp.httpGroup")}
+                  </div>
+                ) : null}
                 <SettingsRow
                   title={t("settings.mcp.fieldUrl")}
                   description={t("settings.mcp.hintUrl")}
@@ -804,6 +840,7 @@ function McpDetailPane({
 }) {
   const { t } = useTranslation();
   const [oauthBusy, setOauthBusy] = useState(false);
+  const [reconnectBusy, setReconnectBusy] = useState(false);
   // The popup handle + its watchdog interval, so cleanup can clear both.
   const pollRef = useRef<number | null>(null);
   const messageHandlerRef = useRef<((e: MessageEvent) => void) | null>(null);
@@ -871,6 +908,20 @@ function McpDetailPane({
     } catch (e) {
       onError(e);
     } finally {
+      setBusy(false);
+    }
+  }, [token, detail.name, onRefresh, onError, setBusy]);
+
+  const onReconnect = useCallback(async () => {
+    setBusy(true);
+    setReconnectBusy(true);
+    try {
+      await reconnectMcpServer(token, detail.name);
+      await onRefresh();
+    } catch (e) {
+      onError(e);
+    } finally {
+      setReconnectBusy(false);
       setBusy(false);
     }
   }, [token, detail.name, onRefresh, onError, setBusy]);
@@ -979,8 +1030,26 @@ function McpDetailPane({
         </div>
       ) : null}
 
-      {/* Edit / Delete */}
+      {/* Reconnect / Edit / Delete */}
       <div className="flex items-center gap-1 pt-1">
+        {detail.enabled ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={busy}
+            onClick={() => void onReconnect()}
+            className="rounded-full"
+          >
+            {reconnectBusy ? (
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden />
+            ) : (
+              <RotateCw className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+            )}
+            {reconnectBusy
+              ? t("settings.mcp.reconnecting")
+              : t("settings.mcp.reconnect")}
+          </Button>
+        ) : null}
         <Button
           size="sm"
           variant="ghost"
@@ -1029,6 +1098,12 @@ function McpDetailPane({
           </Button>
         )}
       </div>
+
+      {detail.enabled && detail.status === "failed" ? (
+        <p className="text-[11px] leading-4 text-muted-foreground">
+          {t("settings.mcp.reconnectHint")}
+        </p>
+      ) : null}
     </div>
   );
 }

@@ -415,7 +415,7 @@
       "fieldToolTimeout": "Timeout de tool (s)",
       "hintToolTimeout": "Segundos antes de cancelar una llamada a tool.",
       "fieldEnabledTools": "Tools habilitadas",
-      "hintEnabledTools": "Nombres de tools separados por coma, o * para todas.",
+      "hintEnabledTools": "Nombres de tools separados por coma, o * para todas. Reconectá para aplicar.",
       "fieldOauth": "Requiere OAuth",
       "hintOauth": "Marcar este servidor como que requiere inicio de sesión OAuth.",
       "fieldAllowPrivateUrl": "Permitir URL privada",
@@ -451,7 +451,15 @@
         "failed": "Falló",
         "needs_auth": "Requiere inicio de sesión",
         "disabled": "Deshabilitado"
-      }
+      },
+      "reconnect": "Reconectar",
+      "reconnecting": "Reconectando…",
+      "reconnectHint": "Reconectá para reintentar el server o aplicar cambios de config.",
+      "emptyTitle": "Todavía no hay servidores MCP",
+      "emptyHint": "Agregá uno para darle herramientas extra al agente.",
+      "autoHint": "Se infiere del command o la URL. Completá el que aplique.",
+      "stdioGroup": "Para stdio",
+      "httpGroup": "Para HTTP / SSE"
     }
   },
   "skills": {
