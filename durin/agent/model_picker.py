@@ -66,7 +66,11 @@ def picker_entries(
             served_by.setdefault(mi.id, pname)
 
     def add(name: str, provider: str, group: str, role: str, ref: str) -> None:
-        if not name or not provider or provider == "auto" or ref in seen:
+        # Easy-pick rows (default/active/preset) commit by name, so an unresolved
+        # "auto" provider is fine — the default must always be offered. Catalog
+        # rows always pass a real provider; recents are pre-filtered to resolvable
+        # ones. So only guard against empties and duplicate refs.
+        if not name or not provider or ref in seen:
             return
         seen.add(ref)
         mi = catalog_model_caps(provider, name)

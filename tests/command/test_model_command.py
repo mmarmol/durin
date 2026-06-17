@@ -115,10 +115,9 @@ async def test_model_command_bare_name_resolves_from_catalog(tmp_path, monkeypat
         pc, "_load_index",
         lambda: {"zai_coding_plan": [ModelInfo(id="glm-5v-turbo", max_input_tokens=200_000)]},
     )
-    monkeypatch.setattr(
-        "durin.providers.selection.configured_provider_names",
-        lambda _c: {"zai_coding_plan"},
-    )
+    import durin.providers.selection as _sel
+
+    monkeypatch.setattr(_sel, "configured_provider_names", lambda _c: {"zai_coding_plan"})
     captured: dict = {}
 
     def loader(name, preset=None):
@@ -162,10 +161,9 @@ async def test_model_command_bare_name_threads_runtime_preset_through_loader(
         pc, "_load_index",
         lambda: {"zai_coding_plan": [ModelInfo(id="glm-5v-turbo", max_input_tokens=200_000)]},
     )
-    monkeypatch.setattr(
-        "durin.providers.selection.configured_provider_names",
-        lambda _c: {"zai_coding_plan"},
-    )
+    import durin.providers.selection as _sel
+
+    monkeypatch.setattr(_sel, "configured_provider_names", lambda _c: {"zai_coding_plan"})
     new_provider = _provider("glm-5v-turbo", max_tokens=4096)
     on_disk = {"default": ModelPresetConfig(model="base-model")}
 
@@ -234,10 +232,9 @@ async def test_model_command_bare_unknown_rejected_with_guidance(tmp_path, monke
     from durin.config.schema import Config
 
     monkeypatch.setattr(pc, "_load_index", lambda: {"zai_coding_plan": []})
-    monkeypatch.setattr(
-        "durin.providers.selection.configured_provider_names",
-        lambda _c: {"zai_coding_plan"},
-    )
+    import durin.providers.selection as _sel
+
+    monkeypatch.setattr(_sel, "configured_provider_names", lambda _c: {"zai_coding_plan"})
     loop = AgentLoop(
         bus=MessageBus(), provider=_provider("base-model"),
         workspace=tmp_path, model="base-model", context_window_tokens=1000,
