@@ -1195,6 +1195,40 @@
         "title": "McpRegistryHit",
         "type": "object"
       },
+      "McpRegistryInstallCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "env_values": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Env Values"
+          },
+          "prefer": {
+            "default": "remote",
+            "title": "Prefer",
+            "type": "string"
+          },
+          "ref": {
+            "title": "Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref"
+        ],
+        "title": "McpRegistryInstallCommand",
+        "type": "object"
+      },
       "McpRegistryPackage": {
         "properties": {
           "env": {
@@ -3478,6 +3512,35 @@
         },
         "summary": "Full install metadata for one registry server",
         "x-required-scope": "mcp:read"
+      }
+    },
+    "/api/v1/mcp/registry/install": {
+      "post": {
+        "operationId": "mcp_registry_install",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpRegistryInstallCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpServerDetail"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Install (add) an MCP server from the registry by ref",
+        "x-required-scope": "mcp:write"
       }
     },
     "/api/v1/mcp/registry/search": {

@@ -42,6 +42,7 @@ class _FakeReg:
                     {"name": "JIRA_TOKEN", "isSecret": True, "isRequired": True},
                 ],
             }],
+            "remotes": [{"type": "streamable-http", "url": "https://m/jira"}],
         })
 
 
@@ -68,3 +69,40 @@ async def test_registry_describe_route(config_path, monkeypatch):
     assert res.version == "1.0.0"
     assert res.packages[0].runtime_hint == "npx"
     assert res.packages[0].env[0].is_secret is True
+
+
+@pytest.mark.asyncio
+async def test_registry_install_remote(config_path, monkeypatch):
+    monkeypatch.setattr(
+        "durin.agent.mcp_registry.build_mcp_adapters", lambda regs: [_FakeReg()]
+    )
+    from durin.service.mcp import McpRegistryInstallCommand
+
+    res = await McpService().registry_install(
+        McpRegistryInstallCommand(ref="io.x/jira", prefer="remote"), LOCAL
+    )
+    assert res.name == "jira"
+    assert res.config.type == "streamableHttp"
+    assert res.config.url == "https://m/jira"
+    assert res.config.source_ref == "io.x/jira"
+
+
+@pytest.mark.asyncio
+async def test_registry_install_local_stores_secret(config_path, monkeypatch):
+    import durin.security.secrets as s
+
+    monkeypatch.setattr(s, "_STORE", None)
+    monkeypatch.setattr(
+        "durin.agent.mcp_registry.build_mcp_adapters", lambda regs: [_FakeReg()]
+    )
+    from durin.service.mcp import McpRegistryInstallCommand
+
+    res = await McpService().registry_install(
+        McpRegistryInstallCommand(
+            ref="io.x/jira", prefer="local", env_values={"JIRA_TOKEN": "tok-secret-12345"}
+        ),
+        LOCAL,
+    )
+    assert res.config.type == "stdio"
+    # the secret is stored as a reference, never inline plaintext
+    assert res.config.env["JIRA_TOKEN"].startswith("${secret:")
