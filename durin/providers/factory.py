@@ -246,10 +246,12 @@ def load_provider_snapshot(
     config_path: Path | None = None,
     *,
     preset_name: str | None = None,
+    preset: ModelPresetConfig | None = None,
 ) -> ProviderSnapshot:
     from durin.config.loader import load_config, resolve_config_env_vars
 
     return build_provider_snapshot(
         resolve_config_env_vars(load_config(config_path)),
         preset_name=preset_name,
+        preset=preset,
     )

@@ -115,6 +115,62 @@ async def test_models_list_empty_provider_no_filter(config_path):
     assert isinstance(result.models, list)
 
 
+async def test_models_list_empty_provider_suggests_configured_provider_models(
+    tmp_path, monkeypatch
+):
+    """The composer model popover opens with no provider filter. ``suggested``
+    must not be empty when a provider is configured, so the picker isn't blank
+    until the user types. Regression: opening it showed 'no models available'.
+    """
+    from durin.config.loader import save_config
+    from durin.config.schema import Config
+
+    config = Config()
+    config.providers.zhipu.api_key = "sk-test-zhipu"
+    path = tmp_path / "config.json"
+    save_config(config, path)
+    monkeypatch.setattr("durin.config.loader._current_config_path", path)
+
+    result = await ConfigService().models_list(ModelsListQuery(), LOCAL)
+
+    assert result.suggested, "expected suggestions for a configured provider"
+    assert any("glm" in m for m in result.suggested)
+
+
+async def test_models_list_empty_provider_no_config_stays_empty(config_path):
+    """With nothing configured, suggested is empty (catalog still browsable)."""
+    result = await ConfigService().models_list(ModelsListQuery(), LOCAL)
+    assert result.suggested == []
+
+
+async def test_model_picker_returns_easy_pick_and_catalog(tmp_path, monkeypatch):
+    from durin.config.loader import save_config
+    from durin.config.schema import Config
+    from durin.service.config import ModelPickerQuery
+
+    config = Config()
+    config.agents.defaults.model = "base-model"
+    config.providers.gemini.api_key = "k"
+    path = tmp_path / "config.json"
+    save_config(config, path)
+    monkeypatch.setattr("durin.config.loader._current_config_path", path)
+    monkeypatch.setattr("durin.utils.oauth.any_token_present", lambda _n: False)
+
+    result = await ConfigService().model_picker(ModelPickerQuery(recent=""), LOCAL)
+    groups = {e.group for e in result.entries}
+    assert "Easy pick" in groups
+    assert "gemini" in groups
+    assert all(e.provider for e in result.entries)
+
+
+async def test_model_picker_requires_read_scope():
+    from durin.service.config import ModelPickerQuery
+
+    principal = Principal.remote("t", frozenset())
+    with pytest.raises(ForbiddenError):
+        await ConfigService().model_picker(ModelPickerQuery(recent=""), principal)
+
+
 async def test_models_list_requires_read_scope():
     principal = Principal.remote("t", frozenset())
     with pytest.raises(ForbiddenError):

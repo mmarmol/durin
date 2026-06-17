@@ -93,35 +93,10 @@ BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
         "<goal>",
     ),
     BuiltinCommandSpec(
-        "/dream",
-        "Run Dream",
-        "Manually trigger memory consolidation.",
-        "sparkles",
-    ),
-    BuiltinCommandSpec(
-        "/dream-log",
-        "Show Dream log",
-        "Show what the last Dream consolidation changed.",
-        "book-open",
-    ),
-    BuiltinCommandSpec(
-        "/dream-restore",
-        "Restore memory",
-        "Revert memory to a previous Dream snapshot.",
-        "undo-2",
-    ),
-    BuiltinCommandSpec(
         "/help",
         "Show help",
         "List available slash commands.",
         "circle-help",
-    ),
-    BuiltinCommandSpec(
-        "/pairing",
-        "Manage pairing",
-        "List, approve, deny or revoke pairing requests.",
-        "shield",
-        "[list|approve <code>|deny <code>|revoke <user_id>]",
     ),
     BuiltinCommandSpec(
         "/plan",
@@ -235,6 +210,12 @@ BUILTIN_COMMAND_SPECS: tuple[BuiltinCommandSpec, ...] = (
         "Search memory for a claim and surface the source links it came from.",
         "search-check",
         "<claim>",
+    ),
+    BuiltinCommandSpec(
+        "/version",
+        "Show version",
+        "Display the installed durin version.",
+        "tag",
     ),
 )
 
@@ -401,18 +382,49 @@ async def cmd_model(ctx: CommandContext) -> OutboundMessage:
         )
 
     parts = args.split()
-    if len(parts) != 1:
+    if len(parts) > 2:
         return OutboundMessage(
             channel=ctx.msg.channel,
             chat_id=ctx.msg.chat_id,
-            content="Usage: `/model [preset]`",
+            content="Usage: `/model [preset | provider model]`",
             metadata=metadata,
         )
 
-    name = parts[0]
+    from durin.config.schema import ModelPresetConfig
+
+    if len(parts) == 2:
+        # Explicit `provider model` pair (the picker commits this form) — no
+        # provider inference needed; the model resolves on the named provider.
+        provider, model = parts
+        loop.model_presets[model] = ModelPresetConfig(model=model, provider=provider)
+        name = model
+    else:
+        name = parts[0]
+
     try:
         loop.set_model_preset(name)
-    except (KeyError, ValueError) as exc:
+    except KeyError:
+        # A bare name that is not a preset: switch on the active provider
+        # rather than guessing one from the model name.
+        config = getattr(loop, "app_config", None)
+        provider = config.agents.defaults.provider if config is not None else "auto"
+        loop.model_presets[name] = ModelPresetConfig(
+            model=name, provider=provider,
+        )
+        try:
+            loop.set_model_preset(name)
+        except (KeyError, ValueError) as exc:
+            names = _model_preset_names(loop)
+            return OutboundMessage(
+                channel=ctx.msg.channel,
+                chat_id=ctx.msg.chat_id,
+                content=(
+                    f"Could not switch model preset: {_command_error_message(exc)}\n\n"
+                    f"Available presets: {_format_preset_names(names)}"
+                ),
+                metadata=metadata,
+            )
+    except ValueError as exc:
         names = _model_preset_names(loop)
         return OutboundMessage(
             channel=ctx.msg.channel,
@@ -486,203 +498,6 @@ async def cmd_effort(ctx: CommandContext) -> OutboundMessage:
         chat_id=ctx.msg.chat_id,
         content=f"Reasoning effort set to `{label}` for `{base_preset.model}`.",
         metadata=metadata,
-    )
-
-
-async def cmd_dream(ctx: CommandContext) -> OutboundMessage:
-    """Manually trigger a Dream consolidation run."""
-    import time
-
-    loop = ctx.loop
-    msg = ctx.msg
-
-    async def _run_dream():
-        t0 = time.monotonic()
-        try:
-            did_work = await loop.dream.run()
-            elapsed = time.monotonic() - t0
-            if did_work:
-                content = f"Dream completed in {elapsed:.1f}s."
-            else:
-                content = "Dream: nothing to process."
-        except Exception as e:
-            elapsed = time.monotonic() - t0
-            content = f"Dream failed after {elapsed:.1f}s: {e}"
-        await loop.bus.publish_outbound(OutboundMessage(
-            channel=msg.channel, chat_id=msg.chat_id, content=content,
-        ))
-
-    _spawn_background(_run_dream())
-    return OutboundMessage(
-        channel=msg.channel, chat_id=msg.chat_id, content="Dreaming...",
-    )
-
-
-def _extract_changed_files(diff: str) -> list[str]:
-    """Extract changed file paths from a unified diff."""
-    files: list[str] = []
-    seen: set[str] = set()
-    for line in diff.splitlines():
-        if not line.startswith("diff --git "):
-            continue
-        parts = line.split()
-        if len(parts) < 4:
-            continue
-        path = parts[3]
-        if path.startswith("b/"):
-            path = path[2:]
-        if path in seen:
-            continue
-        seen.add(path)
-        files.append(path)
-    return files
-
-
-def _format_changed_files(diff: str) -> str:
-    files = _extract_changed_files(diff)
-    if not files:
-        return "No tracked memory files changed."
-    return ", ".join(f"`{path}`" for path in files)
-
-
-def _format_dream_log_content(commit, diff: str, *, requested_sha: str | None = None) -> str:
-    files_line = _format_changed_files(diff)
-    lines = [
-        "## Dream Update",
-        "",
-        "Here is the selected Dream memory change." if requested_sha else "Here is the latest Dream memory change.",
-        "",
-        f"- Commit: `{commit.sha}`",
-        f"- Time: {commit.timestamp}",
-        f"- Changed files: {files_line}",
-    ]
-    if diff:
-        lines.extend([
-            "",
-            f"Use `/dream-restore {commit.sha}` to undo this change.",
-            "",
-            "```diff",
-            diff.rstrip(),
-            "```",
-        ])
-    else:
-        lines.extend([
-            "",
-            "Dream recorded this version, but there is no file diff to display.",
-        ])
-    return "\n".join(lines)
-
-
-def _format_dream_restore_list(commits: list) -> str:
-    lines = [
-        "## Dream Restore",
-        "",
-        "Choose a Dream memory version to restore. Latest first:",
-        "",
-    ]
-    for c in commits:
-        lines.append(f"- `{c.sha}` {c.timestamp} - {c.message.splitlines()[0]}")
-    lines.extend([
-        "",
-        "Preview a version with `/dream-log <sha>` before restoring it.",
-        "Restore a version with `/dream-restore <sha>`.",
-    ])
-    return "\n".join(lines)
-
-
-async def cmd_dream_log(ctx: CommandContext) -> OutboundMessage:
-    """Show what the last Dream changed.
-
-    Default: diff of the latest commit (HEAD~1 vs HEAD).
-    With /dream-log <sha>: diff of that specific commit.
-    """
-    store = ctx.loop.consolidator.store
-    git = store.git
-
-    if not git.is_initialized():
-        if store.get_last_dream_cursor() == 0:
-            msg = "Dream has not run yet. Run `/dream`, or wait for the next scheduled Dream cycle."
-        else:
-            msg = "Dream history is not available because memory versioning is not initialized."
-        return OutboundMessage(
-            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
-            content=msg, metadata={"render_as": "text"},
-        )
-
-    args = ctx.args.strip()
-
-    if args:
-        # Show diff of a specific commit
-        sha = args.split()[0]
-        result = git.show_commit_diff(sha)
-        if not result:
-            content = (
-                f"Couldn't find Dream change `{sha}`.\n\n"
-                "Use `/dream-restore` to list recent versions, "
-                "or `/dream-log` to inspect the latest one."
-            )
-        else:
-            commit, diff = result
-            content = _format_dream_log_content(commit, diff, requested_sha=sha)
-    else:
-        # Default: show the latest commit's diff
-        commits = git.log(max_entries=1)
-        result = git.show_commit_diff(commits[0].sha) if commits else None
-        if result:
-            commit, diff = result
-            content = _format_dream_log_content(commit, diff)
-        else:
-            content = "Dream memory has no saved versions yet."
-
-    return OutboundMessage(
-        channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
-        content=content, metadata={"render_as": "text"},
-    )
-
-
-async def cmd_dream_restore(ctx: CommandContext) -> OutboundMessage:
-    """Restore memory files from a previous dream commit.
-
-    Usage:
-        /dream-restore          — list recent commits
-        /dream-restore <sha>    — revert a specific commit
-    """
-    store = ctx.loop.consolidator.store
-    git = store.git
-    if not git.is_initialized():
-        return OutboundMessage(
-            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
-            content="Dream history is not available because memory versioning is not initialized.",
-        )
-
-    args = ctx.args.strip()
-    if not args:
-        # Show recent commits for the user to pick
-        commits = git.log(max_entries=10)
-        if not commits:
-            content = "Dream memory has no saved versions to restore yet."
-        else:
-            content = _format_dream_restore_list(commits)
-    else:
-        sha = args.split()[0]
-        result = git.show_commit_diff(sha)
-        changed_files = _format_changed_files(result[1]) if result else "the tracked memory files"
-        new_sha = git.revert(sha)
-        if new_sha:
-            content = (
-                f"Restored Dream memory to the state before `{sha}`.\n\n"
-                f"- New safety commit: `{new_sha}`\n"
-                f"- Restored files: {changed_files}\n\n"
-                f"Use `/dream-log {new_sha}` to inspect the restore diff."
-            )
-        else:
-            content = (
-                f"Couldn't restore Dream change `{sha}`.\n\n"
-                "It may not exist, or it may be the first saved version with no earlier state to restore."
-            )
-    return OutboundMessage(
-        channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
-        content=content, metadata={"render_as": "text"},
     )
 
 
@@ -785,18 +600,6 @@ async def cmd_goal(ctx: CommandContext) -> OutboundMessage | None:
     ctx.msg.content = _GOAL_PROMPT_TEMPLATE.format(goal=goal)
     return None
 
-
-async def cmd_pairing(ctx: CommandContext) -> OutboundMessage:
-    """List, approve, deny or revoke pairing requests."""
-    from durin.pairing import PAIRING_COMMAND_META_KEY, handle_pairing_command
-
-    reply = handle_pairing_command(ctx.msg.channel, ctx.args)
-    return OutboundMessage(
-        channel=ctx.msg.channel,
-        chat_id=ctx.msg.chat_id,
-        content=reply,
-        metadata={PAIRING_COMMAND_META_KEY: True},
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -1998,6 +1801,16 @@ async def cmd_help(ctx: CommandContext) -> OutboundMessage:
     )
 
 
+async def cmd_version(ctx: CommandContext) -> OutboundMessage:
+    """Return the installed durin version."""
+    return OutboundMessage(
+        channel=ctx.msg.channel,
+        chat_id=ctx.msg.chat_id,
+        content=f"durin v{__version__}",
+        metadata={**dict(ctx.msg.metadata or {}), "render_as": "text"},
+    )
+
+
 def build_help_text() -> str:
     """Build canonical help text shared across channels."""
     lines = ["⚒️ durin commands:"]
@@ -2024,14 +1837,7 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.prefix("/history ", cmd_history)
     router.exact("/goal", cmd_goal)
     router.prefix("/goal ", cmd_goal)
-    router.exact("/dream", cmd_dream)
-    router.exact("/dream-log", cmd_dream_log)
-    router.prefix("/dream-log ", cmd_dream_log)
-    router.exact("/dream-restore", cmd_dream_restore)
-    router.prefix("/dream-restore ", cmd_dream_restore)
     router.exact("/help", cmd_help)
-    router.exact("/pairing", cmd_pairing)
-    router.prefix("/pairing ", cmd_pairing)
     router.exact("/plan", cmd_plan)
     router.prefix("/plan ", cmd_plan)
     router.exact("/build", cmd_build)
@@ -2060,3 +1866,4 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.exact("/audit", cmd_audit)
     router.exact("/why", cmd_why)
     router.prefix("/why ", cmd_why)
+    router.exact("/version", cmd_version)

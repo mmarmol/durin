@@ -96,7 +96,7 @@ def test_model_preset_setter_replaces_provider_from_snapshot(tmp_path) -> None:
         model="base-model",
         context_window_tokens=1000,
         model_presets={"deep": preset},
-        preset_snapshot_loader=lambda name: ProviderSnapshot(
+        preset_snapshot_loader=lambda name, preset=None: ProviderSnapshot(
             provider=new_provider,
             model=preset.model,
             context_window_tokens=preset.context_window_tokens,
@@ -125,7 +125,7 @@ def test_model_preset_setter_failure_leaves_old_state(tmp_path) -> None:
         model="base-model",
         context_window_tokens=1000,
         model_presets={"fast": preset},
-        preset_snapshot_loader=lambda _name: (_ for _ in ()).throw(
+        preset_snapshot_loader=lambda _name, preset=None: (_ for _ in ()).throw(
             RuntimeError("provider unavailable")
         ),
     )
@@ -165,7 +165,7 @@ def test_active_model_preset_survives_unchanged_config_refresh(tmp_path) -> None
         provider_signature=default_snapshot.signature,
         model_presets={"fast": ModelPresetConfig(model="openai/gpt-4.1")},
         provider_snapshot_loader=lambda: default_snapshot,
-        preset_snapshot_loader=lambda _name: fast_snapshot,
+        preset_snapshot_loader=lambda _name, preset=None: fast_snapshot,
     )
 
     loop.set_model_preset("fast")
@@ -201,7 +201,7 @@ def test_config_model_refresh_clears_active_model_preset(tmp_path) -> None:
         provider_snapshot_loader=lambda: webui_snapshot,
         provider_signature=("base-model", "auto", "openai", "sk-old"),
         model_presets={"fast": ModelPresetConfig(model="openai/gpt-4.1")},
-        preset_snapshot_loader=lambda _name: fast_snapshot,
+        preset_snapshot_loader=lambda _name, preset=None: fast_snapshot,
     )
 
     loop.set_model_preset("fast")
@@ -288,3 +288,55 @@ def test_from_config_static_preset_loader_does_not_enable_hot_reload(tmp_path) -
         loop = AgentLoop.from_config(config)
     assert loop._provider_snapshot_loader is None
     assert loop._preset_snapshot_loader is not None
+
+
+def test_set_model_preset_resolves_runtime_only_preset_via_in_memory_object(
+    tmp_path,
+) -> None:
+    """A preset injected into ``loop.model_presets`` at runtime (the way the
+    webui/TUI ``/model <arbitrary>`` path works) must switch even though the
+    snapshot loader resolves names against the on-disk config it reloads,
+    which never saw the injection.
+
+    Regression: ``/model glm-5v-turbo`` reported ``not found in model_presets``
+    while simultaneously listing it as an available preset, because the
+    injection only reached ``loop.model_presets`` and the loader re-resolved
+    the name against ``config.model_presets``.
+    """
+    base_provider = _provider("base-model", max_tokens=123)
+    new_provider = _provider("glm-5v-turbo", max_tokens=4096)
+
+    # Mimics production ``load_provider_snapshot``: blind to runtime injections
+    # (resolves ``name`` against the on-disk presets), but honors an explicit
+    # in-memory preset object when one is forwarded.
+    on_disk = {"default": ModelPresetConfig(model="base-model")}
+
+    def loader(name, preset=None):
+        target = preset if preset is not None else on_disk.get(name)
+        if target is None:
+            raise KeyError(f"model_preset {name!r} not found in model_presets")
+        return ProviderSnapshot(
+            provider=new_provider,
+            model=target.model,
+            context_window_tokens=target.context_window_tokens,
+            signature=("model_preset", name, target.model),
+        )
+
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=base_provider,
+        workspace=tmp_path,
+        model="base-model",
+        context_window_tokens=1000,
+        model_presets={"default": ModelPresetConfig(model="base-model")},
+        preset_snapshot_loader=loader,
+    )
+
+    loop.model_presets["glm-5v-turbo"] = ModelPresetConfig(
+        model="glm-5v-turbo", provider="custom",
+    )
+    loop.set_model_preset("glm-5v-turbo")
+
+    assert loop.model == "glm-5v-turbo"
+    assert loop.provider is new_provider
+    assert loop.model_preset == "glm-5v-turbo"
