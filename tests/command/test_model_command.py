@@ -158,6 +158,61 @@ async def test_model_command_arbitrary_name_switches_under_config_loader(
 
 
 @pytest.mark.asyncio
+async def test_model_command_provider_model_pair_uses_explicit_provider(tmp_path) -> None:
+    captured = {}
+    new_provider = _provider("glm-5v-turbo", max_tokens=4096)
+
+    def loader(name, preset=None):
+        captured["preset"] = preset
+        target = preset or ModelPresetConfig(model=name)
+        return ProviderSnapshot(
+            provider=new_provider, model=target.model,
+            context_window_tokens=target.context_window_tokens,
+            signature=("model_preset", name, target.model),
+        )
+
+    loop = AgentLoop(
+        bus=MessageBus(), provider=_provider("base-model"),
+        workspace=tmp_path, model="base-model", context_window_tokens=1000,
+        model_presets={"default": ModelPresetConfig(model="base-model")},
+        preset_snapshot_loader=loader,
+    )
+    out = await cmd_model(_ctx(loop, "/model zai_coding_plan glm-5v-turbo",
+                               args="zai_coding_plan glm-5v-turbo"))
+    assert "Could not switch" not in out.content
+    assert loop.model == "glm-5v-turbo"
+    assert captured["preset"].provider == "zai_coding_plan"
+
+
+@pytest.mark.asyncio
+async def test_model_command_bare_name_uses_active_provider(tmp_path) -> None:
+    from durin.config.schema import Config
+
+    captured = {}
+
+    def loader(name, preset=None):
+        captured["preset"] = preset
+        target = preset or ModelPresetConfig(model=name)
+        return ProviderSnapshot(
+            provider=_provider(target.model), model=target.model,
+            context_window_tokens=target.context_window_tokens,
+            signature=("model_preset", name, target.model),
+        )
+
+    app_config = Config()
+    app_config.agents.defaults.provider = "openai_codex"
+    loop = AgentLoop(
+        bus=MessageBus(), provider=_provider("base-model"),
+        workspace=tmp_path, model="base-model", context_window_tokens=1000,
+        model_presets={"default": ModelPresetConfig(model="base-model")},
+        preset_snapshot_loader=loader, app_config=app_config,
+    )
+    out = await cmd_model(_ctx(loop, "/model some-new-model", args="some-new-model"))
+    assert "Could not switch" not in out.content
+    assert captured["preset"].provider == "openai_codex"
+
+
+@pytest.mark.asyncio
 async def test_model_command_does_not_depend_on_my_allow_set(tmp_path) -> None:
     loop = _make_loop(tmp_path)
     assert loop.tools_config.my.allow_set is False

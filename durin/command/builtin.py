@@ -382,22 +382,32 @@ async def cmd_model(ctx: CommandContext) -> OutboundMessage:
         )
 
     parts = args.split()
-    if len(parts) != 1:
+    if len(parts) > 2:
         return OutboundMessage(
             channel=ctx.msg.channel,
             chat_id=ctx.msg.chat_id,
-            content="Usage: `/model [preset]`",
+            content="Usage: `/model [preset | provider model]`",
             metadata=metadata,
         )
 
-    name = parts[0]
+    from durin.config.schema import ModelPresetConfig
+
+    if len(parts) == 2:
+        # Explicit `provider model` pair (the picker commits this form) — no
+        # provider inference needed; the model resolves on the named provider.
+        provider, model = parts
+        loop.model_presets[model] = ModelPresetConfig(model=model, provider=provider)
+        name = model
+    else:
+        name = parts[0]
+
     try:
         loop.set_model_preset(name)
     except KeyError:
-        from durin.cli.tui.model_catalog import infer_provider
-        from durin.config.schema import ModelPresetConfig
-
-        provider = infer_provider(name)
+        # A bare name that is not a preset: switch on the active provider
+        # rather than guessing one from the model name.
+        config = getattr(loop, "app_config", None)
+        provider = config.agents.defaults.provider if config is not None else "auto"
         loop.model_presets[name] = ModelPresetConfig(
             model=name, provider=provider,
         )
