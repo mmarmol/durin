@@ -1871,6 +1871,10 @@
             "title": "Provider",
             "type": "string"
           },
+          "ref": {
+            "title": "Ref",
+            "type": "string"
+          },
           "role": {
             "title": "Role",
             "type": "string"
@@ -1880,7 +1884,8 @@
           "name",
           "provider",
           "group",
-          "role"
+          "role",
+          "ref"
         ],
         "title": "PickerEntryModel",
         "type": "object"

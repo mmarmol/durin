@@ -107,6 +107,7 @@ class PickerEntryModel(Result):
     provider: str
     group: str
     role: str
+    ref: str
 
 
 class ModelPickerResult(Result):
@@ -408,7 +409,7 @@ class ConfigService:
         return ModelPickerResult(
             entries=[
                 PickerEntryModel(
-                    name=e.name, provider=e.provider, group=e.group, role=e.role
+                    name=e.name, provider=e.provider, group=e.group, role=e.role, ref=e.ref
                 )
                 for e in entries
             ]
