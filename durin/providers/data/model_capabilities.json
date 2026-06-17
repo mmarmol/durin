@@ -16105,6 +16105,25 @@
         "models.dev:minimax/MiniMax-M2.7-highspeed"
       ],
       "_authority": "merge"
+    },
+    "glm-5.2": {
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 131072,
+      "mode": "chat",
+      "supports_vision": false,
+      "supports_audio_input": false,
+      "supports_pdf_input": false,
+      "supports_video_input": false,
+      "supports_audio_output": false,
+      "supports_image_output": false,
+      "supports_function_calling": true,
+      "supports_reasoning": true,
+      "supports_prompt_caching": false,
+      "supports_response_schema": false,
+      "_sources": [
+        "manual:zai-coding-plan/glm-5.2"
+      ],
+      "_authority": "manual"
     }
   }
 }
