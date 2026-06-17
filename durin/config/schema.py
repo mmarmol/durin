@@ -388,19 +388,6 @@ DEFAULT_SKILL_ALLOWLIST: list[str] = [
 ]
 
 
-class SkillYaraConfig(Base):
-    """YARA signature scan (spec §4.f). Honored only when the optional
-    ``[skill-yara]`` extra (yara-python) is installed; absent -> guarded no-op.
-    Rules come from an externally-maintained feed (reuse-not-author): durin
-    refreshes them, it does not author signatures."""
-
-    enabled: bool = True
-    feed_url: str = ""        # pinned rule feed; empty -> vendored Apache-2.0 set
-    feed_pin: str = ""        # commit/tag the feed is pinned to
-    refresh_hours: int = 24   # 0 = manual only; staleness-checked before use
-    max_severity: str = "dangerous"
-
-
 class SkillSecurityConfig(Base):
     """Security floor + policy for skill import (§8.C/§6.B). ``allowlist`` =
     trusted source-ref prefixes (e.g. ``github:anthropics/``). A match skips only
@@ -418,7 +405,6 @@ class SkillSecurityConfig(Base):
     max_total_bytes: int = 3 * 1024 * 1024
     max_file_bytes: int = 1024 * 1024
     llm_judge: SkillJudgeConfig = Field(default_factory=SkillJudgeConfig)
-    yara: SkillYaraConfig = Field(default_factory=SkillYaraConfig)
 
 
 class SkillRegistryConfig(Base):
