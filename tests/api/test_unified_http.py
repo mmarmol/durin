@@ -94,6 +94,33 @@ def test_spa_index_served_no_cache(client):
         assert r.headers.get("cache-control") == "no-cache", (path, dict(r.headers))
 
 
+def test_provider_models_endpoint_serves_catalog(client):
+    # E2E through the real gateway HTTP app: the new Providers-settings endpoint
+    # serves the per-provider catalog (vendored provider_models.json).
+    tok = _token(client)
+    r = client.get(
+        "/api/v1/providers/models?provider=zai_coding_plan",
+        headers={"Authorization": f"Bearer {tok}"},
+    )
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["provider"] == "zai_coding_plan"
+    ids = [m["id"] for m in data["models"]]
+    assert "glm-5.2" in ids  # the model the old shortlist missed
+
+
+def test_model_picker_endpoint_serves_entries(client, monkeypatch):
+    # E2E: the picker endpoint resolves through the catalog. Keep codex
+    # undetected so the build stays network-free regardless of the host's store.
+    import durin.providers.codex_device_auth as _cda
+
+    monkeypatch.setattr(_cda, "codex_token_present", lambda: False)
+    tok = _token(client)
+    r = client.get("/api/v1/model/picker", headers={"Authorization": f"Bearer {tok}"})
+    assert r.status_code == 200, r.text
+    assert "entries" in r.json()
+
+
 def test_media_bad_signature_rejected(client):
     # A forged signature must not return a file (the handler returns 401
     # "invalid signature").
