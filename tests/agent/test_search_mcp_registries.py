@@ -12,6 +12,12 @@ class _Reg:
     async def fetch_page(self, *, cursor=None, updated_since=None):
         return [{"name": "io.x/jira", "description": "Jira"}], None
 
+    async def search(self, query, *, limit):
+        from durin.agent.mcp_registry import _hit_from_server
+
+        servers, _ = await self.fetch_page()
+        return [_hit_from_server(s, registry="official") for s in servers][:limit]
+
 
 def test_build_adapters_only_enabled_official():
     ads = build_mcp_adapters([
