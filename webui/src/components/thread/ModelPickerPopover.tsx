@@ -2,14 +2,30 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Search, Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
-import { listModels } from "@/lib/api";
+import { fetchModelPicker, type PickerEntry } from "@/lib/api";
 import { useClient } from "@/providers/ClientProvider";
 import { cn } from "@/lib/utils";
+
+const RECENTS_KEY = "durin.recentModels";
+
+function readRecents(): string[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(RECENTS_KEY) || "[]");
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function pushRecent(model: string) {
+  const next = [model, ...readRecents().filter((m) => m !== model)].slice(0, 8);
+  localStorage.setItem(RECENTS_KEY, JSON.stringify(next));
+}
 
 interface ModelPickerPopoverProps {
   open: boolean;
   onClose: () => void;
-  onSelect: (model: string) => void;
+  onSelect: (ref: string) => void;
   activeModel: string | null;
 }
 
@@ -17,8 +33,7 @@ export function ModelPickerPopover({ open, onClose, onSelect, activeModel }: Mod
   const { t } = useTranslation();
   const { token } = useClient();
   const [query, setQuery] = useState("");
-  const [suggested, setSuggested] = useState<string[]>([]);
-  const [allModels, setAllModels] = useState<string[]>([]);
+  const [entries, setEntries] = useState<PickerEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -27,10 +42,9 @@ export function ModelPickerPopover({ open, onClose, onSelect, activeModel }: Mod
   useEffect(() => {
     if (!open || loaded) return;
     setLoading(true);
-    listModels(token, "")
-      .then((cat) => {
-        setSuggested(cat.suggested ?? []);
-        setAllModels(cat.models ?? []);
+    fetchModelPicker(token, readRecents())
+      .then((rows) => {
+        setEntries(rows);
         setLoaded(true);
       })
       .catch(() => {})
@@ -55,18 +69,29 @@ export function ModelPickerPopover({ open, onClose, onSelect, activeModel }: Mod
     return () => document.removeEventListener("mousedown", handler);
   }, [open, onClose]);
 
-  const filtered = useMemo(() => {
+  // Group filtered entries by their section, preserving server order (the
+  // "Easy pick" block is emitted first, then one block per configured provider).
+  const groups = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return { suggested: suggested.slice(0, 10), rest: [] as string[] };
-    const matches = allModels.filter((m) => m.toLowerCase().includes(q)).slice(0, 50);
-    const suggestedMatches = suggested.filter((m) => m.toLowerCase().includes(q));
-    return { suggested: suggestedMatches.slice(0, 8), rest: matches };
-  }, [query, suggested, allModels]);
+    const matched = q
+      ? entries.filter(
+          (e) => e.name.toLowerCase().includes(q) || e.provider.toLowerCase().includes(q),
+        )
+      : entries;
+    const out: { group: string; items: PickerEntry[] }[] = [];
+    for (const e of matched) {
+      const last = out[out.length - 1];
+      if (last && last.group === e.group) last.items.push(e);
+      else out.push({ group: e.group, items: [e] });
+    }
+    return out;
+  }, [query, entries]);
 
   if (!open) return null;
 
-  const handleSelect = (model: string) => {
-    onSelect(model);
+  const handleSelect = (entry: PickerEntry) => {
+    pushRecent(entry.name);
+    onSelect(entry.ref);
     onClose();
   };
 
@@ -74,12 +99,17 @@ export function ModelPickerPopover({ open, onClose, onSelect, activeModel }: Mod
     if (e.key === "Enter") {
       e.preventDefault();
       const trimmed = query.trim();
-      if (trimmed) handleSelect(trimmed);
+      if (trimmed) {
+        onSelect(trimmed);
+        onClose();
+      }
     } else if (e.key === "Escape") {
       e.preventDefault();
       onClose();
     }
   };
+
+  const empty = !loading && groups.length === 0;
 
   return (
     <div
@@ -104,30 +134,22 @@ export function ModelPickerPopover({ open, onClose, onSelect, activeModel }: Mod
         {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" /> : null}
       </div>
       <div className="max-h-[280px] overflow-y-auto py-1">
-        {filtered.suggested.length > 0 ? (
-          <>
+        {groups.map((g) => (
+          <div key={g.group}>
             <p className="px-3 py-1 text-[10.5px] font-semibold uppercase tracking-wide text-muted-foreground/70">
-              {t("thread.composer.modelPicker.suggested")}
+              {g.group}
             </p>
-            {filtered.suggested.map((m) => (
-              <ModelRow key={m} model={m} active={m === activeModel} onSelect={handleSelect} />
+            {g.items.map((entry) => (
+              <ModelRow
+                key={`${entry.provider}:${entry.name}`}
+                entry={entry}
+                active={entry.name === activeModel}
+                onSelect={handleSelect}
+              />
             ))}
-          </>
-        ) : null}
-        {filtered.rest.length > 0 ? (
-          <>
-            {filtered.suggested.length > 0 ? (
-              <div className="mx-3 my-1 border-t border-border/40" />
-            ) : null}
-            <p className="px-3 py-1 text-[10.5px] font-semibold uppercase tracking-wide text-muted-foreground/70">
-              {t("thread.composer.modelPicker.all")}
-            </p>
-            {filtered.rest.map((m) => (
-              <ModelRow key={m} model={m} active={m === activeModel} onSelect={handleSelect} />
-            ))}
-          </>
-        ) : null}
-        {!loading && filtered.suggested.length === 0 && filtered.rest.length === 0 ? (
+          </div>
+        ))}
+        {empty ? (
           <div className="px-3 py-4 text-center text-[12px] text-muted-foreground">
             {query.trim()
               ? t("thread.composer.modelPicker.noMatch")
@@ -140,18 +162,18 @@ export function ModelPickerPopover({ open, onClose, onSelect, activeModel }: Mod
 }
 
 function ModelRow({
-  model,
+  entry,
   active,
   onSelect,
 }: {
-  model: string;
+  entry: PickerEntry;
   active: boolean;
-  onSelect: (m: string) => void;
+  onSelect: (entry: PickerEntry) => void;
 }) {
   return (
     <button
       type="button"
-      onClick={() => onSelect(model)}
+      onClick={() => onSelect(entry)}
       className={cn(
         "flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12.5px] transition-colors",
         active
@@ -159,10 +181,9 @@ function ModelRow({
           : "text-foreground/85 hover:bg-muted/60",
       )}
     >
-      <span className="min-w-0 flex-1 truncate">{model}</span>
-      {active ? (
-        <span className="flex-none text-[10px] text-emerald-500">●</span>
-      ) : null}
+      <span className="min-w-0 flex-1 truncate">{entry.name}</span>
+      <span className="flex-none text-[10px] text-muted-foreground/70">{entry.provider}</span>
+      {active ? <span className="flex-none text-[10px] text-emerald-500">●</span> : null}
     </button>
   );
 }

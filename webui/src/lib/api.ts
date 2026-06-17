@@ -920,6 +920,29 @@ export async function listModels(
   );
 }
 
+export interface PickerEntry {
+  name: string;
+  provider: string;
+  group: string;
+  role: string;
+  ref: string;
+}
+
+export async function fetchModelPicker(
+  token: string,
+  recent: string[],
+  base: string = "",
+): Promise<PickerEntry[]> {
+  const params = new URLSearchParams();
+  if (recent.length) params.set("recent", recent.join(","));
+  const qs = params.toString();
+  const res = await request<{ entries: PickerEntry[] }>(
+    `${base}/api/v1/model/picker${qs ? `?${qs}` : ""}`,
+    token,
+  );
+  return res.entries;
+}
+
 export interface ModelCapabilities {
   model: string;
   max_input_tokens: number | null;
