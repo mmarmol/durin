@@ -815,7 +815,7 @@ def web_skill_describe(ref: str) -> tuple[int, dict]:
     Never executes or writes anything. Any failure degrades to an empty string."""
     ref = (ref or "").strip()
     if not ref:
-        return 200, {"ref": ref, "description": "",
+        return 200, {"ref": ref, "description": "", "body": "",
                       "platforms": None, "requires": None}
     try:
         from durin.agent import skills_import as si
@@ -824,7 +824,7 @@ def web_skill_describe(ref: str) -> tuple[int, dict]:
 
         cands = resolve_candidates(ref).candidates
         if not cands:
-            return 200, {"ref": ref, "description": "",
+            return 200, {"ref": ref, "description": "", "body": "",
                           "platforms": None, "requires": None}
         cand = cands[0]
         if cand.kind == "https":
@@ -834,10 +834,10 @@ def web_skill_describe(ref: str) -> tuple[int, dict]:
             path = f"{skill_dir}/SKILL.md" if skill_dir else "SKILL.md"
             url = f"{si._GITHUB_RAW}/{owner}/{repo}/{branch}/{path}"
         else:
-            return 200, {"ref": ref, "description": "",
+            return 200, {"ref": ref, "description": "", "body": "",
                           "platforms": None, "requires": None}
         raw = si._http_get_bytes(url)[:65_536]
-        data, _ = split_frontmatter(raw.decode("utf-8", errors="replace"))
+        data, body = split_frontmatter(raw.decode("utf-8", errors="replace"))
         desc = str(data.get("description") or "").strip()
         plats = data.get("platforms")
         if isinstance(plats, str):
@@ -855,10 +855,10 @@ def web_skill_describe(ref: str) -> tuple[int, dict]:
                 }
                 if not requires["bins"] and not requires["env"]:
                     requires = None
-        return 200, {"ref": ref, "description": desc[:280],
+        return 200, {"ref": ref, "description": desc[:1024], "body": body.strip(),
                       "platforms": platforms, "requires": requires}
     except Exception:  # noqa: BLE001 — describe is best-effort, never fatal
-        return 200, {"ref": ref, "description": "",
+        return 200, {"ref": ref, "description": "", "body": "",
                       "platforms": None, "requires": None}
 
 

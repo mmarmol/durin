@@ -73,3 +73,27 @@ def test_describe_no_candidates_returns_none_platforms_requires(monkeypatch):
     assert status == 200
     assert payload["platforms"] is None
     assert payload["requires"] is None
+
+
+def test_describe_returns_body_and_full_description(monkeypatch):
+    long_desc = "X" * 400  # longer than the old 280-char clip
+    raw_md = (
+        "---\n"
+        "name: test\n"
+        f"description: {long_desc}\n"
+        "---\n"
+        "## How it works\n\nDoes the thing.\n"
+    )
+    _resolve_https(monkeypatch)
+    monkeypatch.setattr(si, "_http_get_bytes", lambda url: raw_md.encode())
+    status, payload = ss.web_skill_describe("https://example.com/SKILL.md")
+    assert status == 200
+    assert payload["description"] == long_desc            # not truncated to 280
+    assert "## How it works" in payload["body"]           # markdown body returned
+    assert "Does the thing." in payload["body"]
+
+
+def test_describe_empty_string_returns_empty_body(monkeypatch):
+    status, payload = ss.web_skill_describe("")
+    assert status == 200
+    assert payload["body"] == ""
