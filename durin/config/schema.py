@@ -654,6 +654,17 @@ class AgentsConfig(Base):
     )
 
 
+class ModelEntry(Base):
+    """Per-model params under a provider. Empty fields fall back to the catalog
+    (``provider_models.json``), then to ``agents.defaults`` / the schema default.
+    A configured model under its provider is what a ``model_preset`` used to be."""
+
+    max_tokens: int | None = None
+    context_window_tokens: int | None = None
+    temperature: float | None = None
+    reasoning_effort: str | None = None
+
+
 class ProviderConfig(Base):
     """LLM provider configuration."""
 
@@ -661,6 +672,7 @@ class ProviderConfig(Base):
     api_base: str | None = None
     extra_headers: dict[str, str] | None = None  # Custom headers (e.g. APP-Code for AiHubMix)
     extra_body: dict[str, Any] | None = None  # Extra fields merged into every request body
+    models: dict[str, ModelEntry] = Field(default_factory=dict)  # Configured models + param overrides
 
 
 class BedrockProviderConfig(ProviderConfig):
@@ -1020,13 +1032,44 @@ class Config(BaseSettings):
                 raise ValueError(f"fallback_models entry {fallback!r} not found in model_presets")
         return self
 
+    def _resolve_model_params(self, provider: str, model: str):
+        """Return ``(entry, caps)`` for a ``(provider, model)``: the user's
+        ``ModelEntry`` override (if any) and the catalog capabilities (if any).
+        Skips the catalog for codex (no caps there, and it is a network call)."""
+        entry = None
+        caps = None
+        if provider and provider != "auto":
+            pc = getattr(self.providers, provider, None)
+            if pc is not None:
+                entry = (getattr(pc, "models", None) or {}).get(model)
+            if provider not in ("openai_codex", "openai-codex"):
+                try:
+                    from durin.providers.provider_catalog import catalog_model_caps
+
+                    caps = catalog_model_caps(provider, model)
+                except Exception:  # noqa: BLE001
+                    caps = None
+        return entry, caps
+
     def resolve_default_preset(self) -> ModelPresetConfig:
-        """Return the implicit `default` preset from agents.defaults fields."""
+        """The implicit `default` preset: provider.models → catalog → defaults."""
         d = self.agents.defaults
+        entry, caps = self._resolve_model_params(d.provider, d.model)
+        ctx = (
+            entry.context_window_tokens
+            if entry and entry.context_window_tokens is not None
+            else (caps.max_input_tokens if caps and caps.max_input_tokens else d.context_window_tokens)
+        )
+        mt = (
+            entry.max_tokens
+            if entry and entry.max_tokens is not None
+            else (caps.max_output_tokens if caps and caps.max_output_tokens else d.max_tokens)
+        )
+        temp = entry.temperature if entry and entry.temperature is not None else d.temperature
+        eff = entry.reasoning_effort if entry and entry.reasoning_effort is not None else d.reasoning_effort
         return ModelPresetConfig(
-            model=d.model, provider=d.provider, max_tokens=d.max_tokens,
-            context_window_tokens=d.context_window_tokens,
-            temperature=d.temperature, reasoning_effort=d.reasoning_effort,
+            model=d.model, provider=d.provider, max_tokens=mt,
+            context_window_tokens=ctx, temperature=temp, reasoning_effort=eff,
         )
 
     def resolve_preset(self, name: str | None = None) -> ModelPresetConfig:
