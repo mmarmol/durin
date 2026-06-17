@@ -196,6 +196,103 @@ function SecurityReport({ row }: { row: QuarantineRow }) {
  * drills in. A skill is conceptually a directory; today the surface edits its
  * SKILL.md — a per-skill file tree is a later phase this layout leaves room for.
  */
+// Detail/preview of a registry hit: full description + the SKILL.md body
+// rendered as markdown + the complete declared requirements. Shown in place of
+// the search results when a result is clicked; Import reuses the normal flow.
+function SkillPreview({
+  hit,
+  detail,
+  importing,
+  onImport,
+  onBack,
+}: {
+  hit: SkillSearchHit;
+  detail: SkillDescribeResult | null | undefined;
+  importing: boolean;
+  onImport: () => void;
+  onBack: () => void;
+}) {
+  const { t } = useTranslation();
+  const loading = detail === null;
+  const desc = detail?.description || hit.description;
+  const body = detail?.body || "";
+  const req = detail?.requires;
+  const platforms = detail?.platforms;
+  const hasReq = !!req && (req.bins.length > 0 || req.env.length > 0);
+  const hasPlat = !!platforms && platforms.length > 0;
+  const platLabel = (p: string) =>
+    p === "macos" ? "macOS" : p === "linux" ? "Linux" : p;
+
+  return (
+    <div className="mt-4 flex flex-col gap-3">
+      <div className="flex items-center justify-between">
+        <button
+          type="button"
+          onClick={onBack}
+          className="text-[12px] text-muted-foreground hover:text-foreground"
+        >
+          {t("skills.preview.back")}
+        </button>
+        <Button type="button" size="sm" disabled={importing} onClick={onImport}>
+          {t("skills.import.button")}
+        </Button>
+      </div>
+
+      <div className="flex flex-col">
+        <span className="flex items-center gap-1.5">
+          <span className="text-[14px] font-medium text-foreground">{hit.name}</span>
+          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+            {hit.registry}
+          </span>
+          {typeof hit.signals?.installs === "number" ? (
+            <span className="text-[11px] text-muted-foreground">
+              {t("skills.search.installs", { count: hit.signals.installs })}
+            </span>
+          ) : null}
+        </span>
+        <span className="break-all text-[11px] text-muted-foreground/70">{hit.ref}</span>
+      </div>
+
+      {loading ? (
+        <Loader2 className="h-4 w-4 animate-spin" />
+      ) : (
+        <>
+          {desc ? <p className="text-[13px] text-foreground">{desc}</p> : null}
+
+          {hasReq || hasPlat ? (
+            <div className="rounded-[8px] border border-border/40 bg-muted/20 p-2 text-[12px]">
+              <p className="font-medium text-foreground">{t("skills.requirements.title")}</p>
+              {req && req.bins.length > 0 ? (
+                <p className="text-muted-foreground">
+                  {t("skills.requirements.tools")}: {req.bins.join(", ")}
+                </p>
+              ) : null}
+              {req && req.env.length > 0 ? (
+                <p className="text-muted-foreground">
+                  {t("skills.requirements.environment")}: {req.env.join(", ")}
+                </p>
+              ) : null}
+              {hasPlat ? (
+                <p className="text-muted-foreground">
+                  {t("skills.requirements.platform")}: {platforms!.map(platLabel).join(", ")}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+
+          {body ? (
+            <div className="rounded-[8px] border border-border/40 bg-background p-3 text-[13px]">
+              <MarkdownText>{body}</MarkdownText>
+            </div>
+          ) : !desc && !hasReq && !hasPlat ? (
+            <p className="text-[12px] text-muted-foreground">{t("skills.preview.unavailable")}</p>
+          ) : null}
+        </>
+      )}
+    </div>
+  );
+}
+
 export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => void }) {
   const { token, client } = useClient();
   const { t } = useTranslation();
@@ -227,7 +324,7 @@ export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => v
   const [hits, setHits] = useState<SkillSearchHit[] | null>(null);
   const [sortBy, setSortBy] = useState<"installs" | "name" | "relevance">("installs");
   const [searchLimit, setSearchLimit] = useState(10);
-  const [expanded, setExpanded] = useState<string | null>(null);
+  const [previewHit, setPreviewHit] = useState<SkillSearchHit | null>(null);
   const [descCache, setDescCache] = useState<Record<string, SkillDescribeResult | null>>({}); // null = loading
   const [importByRefOpen, setImportByRefOpen] = useState(false);
   const [acting, setActing] = useState<string | null>(null);
@@ -320,22 +417,19 @@ export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => v
     [token, t],
   );
 
-  // Lazy SKILL.md description peek on expand: clawhub hits already carry one;
-  // github hits fetch it once and cache it per ref (null while loading).
-  const toggleExpand = useCallback(
+  // Clicking a result opens its detail view; the SKILL.md description+body is
+  // fetched once per ref and cached (null while loading). clawhub/non-github
+  // refs carry their summary inline and aren't fetched here.
+  const openPreview = useCallback(
     async (hit: SkillSearchHit) => {
-      if (expanded === hit.ref) {
-        setExpanded(null);
-        return;
-      }
-      setExpanded(hit.ref);
+      setPreviewHit(hit);
       if (hit.registry === "clawhub" || !hit.ref.startsWith("github:")) return;
       if (descCache[hit.ref] !== undefined) return;
       setDescCache((c) => ({ ...c, [hit.ref]: null }));
       const r = await describeSkill(token, hit.ref);
       setDescCache((c) => ({ ...c, [hit.ref]: r }));
     },
-    [token, expanded, descCache],
+    [token, descCache],
   );
 
   // The gate is server-side: approve, and react to what it asks for. A safe,
@@ -836,151 +930,126 @@ export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => v
                   {t("skills.search.acquireExplainer")}
                 </p>
 
-                {/* Primary: search the registry. */}
-                <form
-                  className="mt-4 flex gap-2"
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    void doSearch(searchQuery);
-                  }}
-                >
-                  <input
-                    type="search"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder={t("skills.search.placeholder")}
-                    className="min-w-0 flex-1 rounded-[8px] border border-border/60 bg-background px-2.5 py-1.5 text-[12px] outline-none focus:border-primary/60"
+                {/* Primary: search the registry, or preview a clicked result. */}
+                {previewHit ? (
+                  <SkillPreview
+                    hit={previewHit}
+                    detail={descCache[previewHit.ref]}
+                    importing={importing}
+                    onImport={() => void doImport(previewHit.ref)}
+                    onBack={() => setPreviewHit(null)}
                   />
-                  <Button type="submit" size="sm" disabled={searching || !searchQuery.trim()}>
-                    {searching ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      t("skills.search.button")
-                    )}
-                  </Button>
-                </form>
-                {searchMsg ? (
-                  <p className="mt-1.5 text-[12px] text-muted-foreground">{searchMsg}</p>
-                ) : null}
+                ) : (
+                  <>
+                    <form
+                      className="mt-4 flex gap-2"
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        void doSearch(searchQuery);
+                      }}
+                    >
+                      <input
+                        type="search"
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        placeholder={t("skills.search.placeholder")}
+                        className="min-w-0 flex-1 rounded-[8px] border border-border/60 bg-background px-2.5 py-1.5 text-[12px] outline-none focus:border-primary/60"
+                      />
+                      <Button type="submit" size="sm" disabled={searching || !searchQuery.trim()}>
+                        {searching ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          t("skills.search.button")
+                        )}
+                      </Button>
+                    </form>
+                    {searchMsg ? (
+                      <p className="mt-1.5 text-[12px] text-muted-foreground">{searchMsg}</p>
+                    ) : null}
 
-                {hits ? (
-                  <div className="mt-3">
-                    <div className="mb-2 flex items-center justify-between">
-                      <span className="text-[12px] text-muted-foreground">
-                        {t("skills.search.resultsCount", { count: hits.length })}
-                      </span>
-                      <label className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
-                        {t("skills.search.sortLabel")}
-                        <select
-                          value={sortBy}
-                          onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
-                          className="rounded-[6px] border border-border/60 bg-background px-1.5 py-0.5 text-[12px]"
-                        >
-                          <option value="installs">{t("skills.search.sortInstalls")}</option>
-                          <option value="name">{t("skills.search.sortName")}</option>
-                          <option value="relevance">{t("skills.search.sortRelevance")}</option>
-                        </select>
-                      </label>
-                    </div>
-                    <div className="flex flex-col gap-1">
-                      {sortedHits.map((h) => {
-                        const desc =
-                          h.registry === "clawhub" || !h.ref.startsWith("github:")
-                            ? h.description
-                            : descCache[h.ref]?.description;
-                        const open = expanded === h.ref;
-                        return (
-                          <div
-                            key={h.ref}
-                            className="rounded-[8px] border border-border/40 bg-muted/20 p-2"
-                          >
-                            <div className="flex items-start gap-2">
-                              <button
-                                type="button"
-                                aria-label={`expand ${h.name}`}
-                                onClick={() => void toggleExpand(h)}
-                                className="mt-0.5 text-muted-foreground hover:text-foreground"
-                              >
-                                {open ? (
-                                  <ChevronDown className="h-3.5 w-3.5" />
-                                ) : (
-                                  <ChevronRight className="h-3.5 w-3.5" />
-                                )}
-                              </button>
-                              <div className="flex min-w-0 flex-1 flex-col">
-                                <span className="flex items-center gap-1.5">
-                                  <span
-                                    data-testid="hit-name"
-                                    className="truncate text-[13px] font-medium text-foreground"
-                                  >
-                                    {h.name}
+                    {hits ? (
+                      <div className="mt-3">
+                        <div className="mb-2 flex items-center justify-between">
+                          <span className="text-[12px] text-muted-foreground">
+                            {t("skills.search.resultsCount", { count: hits.length })}
+                          </span>
+                          <label className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
+                            {t("skills.search.sortLabel")}
+                            <select
+                              value={sortBy}
+                              onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
+                              className="rounded-[6px] border border-border/60 bg-background px-1.5 py-0.5 text-[12px]"
+                            >
+                              <option value="installs">{t("skills.search.sortInstalls")}</option>
+                              <option value="name">{t("skills.search.sortName")}</option>
+                              <option value="relevance">{t("skills.search.sortRelevance")}</option>
+                            </select>
+                          </label>
+                        </div>
+                        <div className="flex flex-col gap-1">
+                          {sortedHits.map((h) => (
+                            <div
+                              key={h.ref}
+                              className="rounded-[8px] border border-border/40 bg-muted/20 p-2"
+                            >
+                              <div className="flex items-start gap-2">
+                                <div className="flex min-w-0 flex-1 flex-col">
+                                  <span className="flex items-center gap-1.5">
+                                    <button
+                                      type="button"
+                                      data-testid="hit-name"
+                                      onClick={() => void openPreview(h)}
+                                      className="truncate text-left text-[13px] font-medium text-foreground hover:underline"
+                                    >
+                                      {h.name}
+                                    </button>
+                                    <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                                      {h.registry}
+                                    </span>
+                                    {typeof h.signals?.installs === "number" ? (
+                                      <span className="shrink-0 text-[11px] text-muted-foreground">
+                                        {t("skills.search.installs", { count: h.signals.installs })}
+                                      </span>
+                                    ) : null}
                                   </span>
-                                  <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                                    {h.registry}
-                                  </span>
-                                  {typeof h.signals?.installs === "number" ? (
-                                    <span className="shrink-0 text-[11px] text-muted-foreground">
-                                      {t("skills.search.installs", { count: h.signals.installs })}
+                                  {h.description ? (
+                                    <span className="mt-0.5 truncate text-[12px] text-muted-foreground">
+                                      {h.description}
                                     </span>
                                   ) : null}
-                                </span>
-                                {open ? (
-                                  <span className="mt-1 text-[12px] text-muted-foreground">
-                                    {desc === null ? (
-                                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                    ) : desc ? (
-                                      desc
-                                    ) : (
-                                      t("skills.search.noDescription")
-                                    )}
+                                  <span className="truncate text-[11px] text-muted-foreground/70">
+                                    {h.ref}
                                   </span>
-                                ) : null}
-                                {descCache[h.ref]?.platforms && descCache[h.ref]!.platforms!.length > 0 && (
-                                  <div className="mt-1 flex gap-1">
-                                    {descCache[h.ref]!.platforms!.map((p) => (
-                                      <span key={p} className="rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
-                                        {p === "macos" ? "macOS" : p === "linux" ? "Linux" : p}
-                                      </span>
-                                    ))}
-                                  </div>
-                                )}
-                                {descCache[h.ref]?.requires?.bins && descCache[h.ref]!.requires!.bins.length > 0 && (
-                                  <p className="mt-1 text-[11px] text-muted-foreground">
-                                    {t("skills.requirements.needs")}: {descCache[h.ref]!.requires!.bins.slice(0, 3).join(", ")}
-                                  </p>
-                                )}
-                                <span className="truncate text-[11px] text-muted-foreground/70">
-                                  {h.ref}
-                                </span>
+                                </div>
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="ghost"
+                                  disabled={importing}
+                                  onClick={() => void doImport(h.ref)}
+                                >
+                                  {t("skills.import.button")}
+                                </Button>
                               </div>
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant="ghost"
-                                disabled={importing}
-                                onClick={() => void doImport(h.ref)}
-                              >
-                                {t("skills.import.button")}
-                              </Button>
                             </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                    {hits.length >= searchLimit ? (
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        className="mt-2"
-                        disabled={searching}
-                        onClick={() => void doSearch(searchQuery, searchLimit + 10)}
-                      >
-                        {t("skills.search.showMore")}
-                      </Button>
+                          ))}
+                        </div>
+                        {hits.length >= searchLimit ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="mt-2"
+                            disabled={searching}
+                            onClick={() => void doSearch(searchQuery, searchLimit + 10)}
+                          >
+                            {t("skills.search.showMore")}
+                          </Button>
+                        ) : null}
+                      </div>
                     ) : null}
-                  </div>
-                ) : null}
+                  </>
+                )}
 
                 {/* Secondary: import by an explicit reference (path/URL/repo). */}
                 <div className="mt-4 border-t border-border/30 pt-3">

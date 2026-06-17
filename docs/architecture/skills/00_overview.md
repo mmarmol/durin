@@ -128,7 +128,18 @@ refs `github:owner/repo/skill`) and `ClawHubRegistry` (clawhub → `clawhub:slug
 versioned zip store). `search_registries` queries adapters in parallel (SSRF-safe),
 dedupes by ref, round-robin interleaves, floats allowlisted refs first. `build_adapters`
 wires only skills.sh + clawhub today (github-taps/well-known/lobehub are roadmap). Exposed
-as the `skill_search` core tool, plus CLI (`durin skill search`) and web.
+as the `skill_search` core tool, plus CLI (`durin skill search`) and web. skills.sh hits
+carry **no** synthetic description in search results (the search API returns none) — the
+real one is fetched on preview.
+
+**Preview / detail (`describe`).** `skills_store.py::web_skill_describe`
+(`GET /api/v1/skills/describe?ref=`) is a read-only peek used by the web UI before import:
+it resolves the ref like import does, reads just that one SKILL.md, and returns its full
+`description` (≤1024 chars), `body` (the markdown after the frontmatter), `platforms`, and
+declared `requires` (bins/env). It never executes or writes anything and degrades to empty
+fields on any failure. The webui renders this as a per-result detail view (description +
+rendered body + requirements) so the user can decide before importing into quarantine; the
+§8.C verdict still appears in the triage pane after import.
 
 **Acquire-on-gap (§6.C)** — durin's own initiative to acquire a skill when it lacks one.
 Search is the seed; the gate (§7) is enforced. Both paths (spec
