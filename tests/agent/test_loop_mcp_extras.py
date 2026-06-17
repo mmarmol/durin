@@ -33,6 +33,7 @@ def test_connect_mcp_installs_then_retries(monkeypatch):
     lp._mcp_connecting = False
     lp._mcp_servers = {"x": object()}  # _mcp_servers is always a dict[name, cfg]
     lp._mcp_connections = {}
+    lp._mcp_connect_errors = {}
     lp.tools = []
     lp.app_config = None
     lp.provider = None

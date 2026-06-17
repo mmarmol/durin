@@ -491,6 +491,7 @@ async def connect_mcp_servers(
     provider: Any = None,
     default_model: str | None = None,
     workspace: str | None = None,
+    errors: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Connect to configured MCP servers, returning one supervised connection each.
 
@@ -500,6 +501,9 @@ async def connect_mcp_servers(
     P3 MCP deferral stays applied across reconnects and list_changed refreshes.
     ``provider``, ``default_model``, and ``workspace`` are threaded to each
     connection to support server-initiated sampling (SP-6) and roots.
+    ``errors`` (optional) is populated with ``{name: message}`` for every server
+    that failed to connect, so callers (the gateway runtime) can surface a
+    ``failed`` status instead of a perpetual ``connecting``.
     """
     from durin.agent.tools.mcp_connection import MCPServerConnection
 
@@ -517,6 +521,8 @@ async def connect_mcp_servers(
         except Exception as e:  # noqa: BLE001
             hint = _stdio_pollution_hint(e)
             logger.exception("MCP server '{}': failed to connect: {}", name, hint)
+            if errors is not None:
+                errors[name] = f"{e}{hint}".strip() or "connection failed"
             continue
         if ok:
             connections[name] = conn
@@ -524,6 +530,8 @@ async def connect_mcp_servers(
             err = conn._error
             hint = _stdio_pollution_hint(err) if err is not None else ""
             logger.exception("MCP server '{}': failed to connect: {}", name, hint)
+            if errors is not None:
+                errors[name] = f"{err}{hint}".strip() if err else "connection failed"
             await conn.aclose()
     return connections
 

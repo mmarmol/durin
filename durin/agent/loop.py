@@ -374,6 +374,7 @@ class AgentLoop:
         self._running = False
         self._mcp_servers = mcp_servers or {}
         self._mcp_connections: dict[str, Any] = {}
+        self._mcp_connect_errors: dict[str, str] = {}  # name -> last connect failure message
         self._mcp_connected = False
         self._mcp_connecting = False
         # Last-known telemetry snapshots, cached in-memory so /status
@@ -753,6 +754,7 @@ class AgentLoop:
             for name, cfg in self._mcp_servers.items()
             if getattr(cfg, "enabled", True)
         }
+        self._mcp_connect_errors.clear()
         try:
             self._mcp_connections = await connect_mcp_servers(
                 enabled_servers, self.tools,
@@ -760,6 +762,7 @@ class AgentLoop:
                 provider=self.provider,
                 default_model=self.model,
                 workspace=str(self.workspace) if self.workspace else None,
+                errors=self._mcp_connect_errors,
             )
             if self._mcp_connections:
                 self._mcp_connected = True
@@ -778,6 +781,7 @@ class AgentLoop:
                         provider=self.provider,
                         default_model=self.model,
                         workspace=str(self.workspace) if self.workspace else None,
+                        errors=self._mcp_connect_errors,
                     )
                     if self._mcp_connections:
                         self._mcp_connected = True
@@ -810,12 +814,14 @@ class AgentLoop:
             return
         from durin.agent.tools.mcp import connect_mcp_servers
 
+        self._mcp_connect_errors.pop(name, None)
         new = await connect_mcp_servers(
             {name: self._mcp_servers[name]}, self.tools,
             defer_cb=self._maybe_defer_mcp_tools,
             provider=self.provider,
             default_model=self.model,
             workspace=str(self.workspace) if self.workspace else None,
+            errors=self._mcp_connect_errors,
         )
         self._mcp_connections.update(new)
         if self._mcp_connections:
@@ -830,6 +836,7 @@ class AgentLoop:
         """
         if name not in self._mcp_servers:
             raise KeyError(name)
+        self._mcp_connect_errors.pop(name, None)  # intentional: not a failure
         conn = self._mcp_connections.pop(name, None)
         if conn is None:
             return
