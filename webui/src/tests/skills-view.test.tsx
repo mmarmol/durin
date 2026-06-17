@@ -184,18 +184,17 @@ describe("SkillsView security surface", () => {
     expect(api.importSource).toHaveBeenCalledWith("tok", "github:acme/pdf-tools");
   });
 
-  it("search shows count, sorts, and lazy-describes on expand", async () => {
+  it("search shows count and sorts by installs", async () => {
     vi.mocked(api.listSkills).mockResolvedValue([
       { name: "clean", source: "builtin", mode: "auto", status: "active", verdict: "safe", findings: [] },
     ]);
     vi.mocked(api.listQuarantine).mockResolvedValue([]);
     vi.mocked(api.searchSkills).mockResolvedValue({
       hits: [
-        { name: "alpha", ref: "github:o/alpha", registry: "skills.sh", description: "skills.sh: o · 5 installs", signals: { installs: 5 } },
-        { name: "zeta", ref: "github:o/zeta", registry: "skills.sh", description: "skills.sh: o · 90 installs", signals: { installs: 90 } },
+        { name: "alpha", ref: "github:o/alpha", registry: "skills.sh", description: "", signals: { installs: 5 } },
+        { name: "zeta", ref: "github:o/zeta", registry: "skills.sh", description: "", signals: { installs: 90 } },
       ],
     });
-    vi.mocked(api.describeSkill).mockResolvedValue({ ref: "github:o/alpha", description: "Alpha does X." });
 
     const user = userEvent.setup();
     render(wrap(<SkillsView />));
@@ -210,11 +209,50 @@ describe("SkillsView security surface", () => {
     // default sort = installs desc → zeta (90) before alpha (5)
     const names = screen.getAllByTestId("hit-name").map((n) => n.textContent);
     expect(names).toEqual(["zeta", "alpha"]);
+  });
 
-    // expanding alpha lazy-fetches its description
-    await user.click(screen.getByRole("button", { name: /expand alpha/i }));
-    expect(await screen.findByText("Alpha does X.")).toBeInTheDocument();
+  it("clicking a result opens a detail preview with body + full requirements; Import and Back work", async () => {
+    vi.mocked(api.listSkills).mockResolvedValue([
+      { name: "clean", source: "builtin", mode: "auto", status: "active", verdict: "safe", findings: [] },
+    ]);
+    vi.mocked(api.listQuarantine).mockResolvedValue([]);
+    vi.mocked(api.searchSkills).mockResolvedValue({
+      hits: [
+        { name: "alpha", ref: "github:o/alpha", registry: "skills.sh", description: "", signals: { installs: 5 } },
+      ],
+    });
+    vi.mocked(api.describeSkill).mockResolvedValue({
+      ref: "github:o/alpha",
+      description: "Alpha does X.",
+      body: "## How it works\n\nDoes the thing.",
+      platforms: ["macos"],
+      requires: { bins: ["gh", "jq", "curl", "node"], env: ["TOKEN"] },
+    });
+    vi.mocked(api.importSource).mockResolvedValue({ quarantined: "alpha", verdict: "safe", findings: [] });
+
+    const user = userEvent.setup();
+    render(wrap(<SkillsView />));
+    await screen.findByText("clean");
+    await user.click(screen.getByRole("button", { name: /add skill/i }));
+    await user.type(await screen.findByPlaceholderText(/Search the registry/i), "x");
+    await user.click(screen.getByRole("button", { name: "Search" }));
+
+    // open the detail
+    await user.click(await screen.findByRole("button", { name: "alpha" }));
+
     expect(api.describeSkill).toHaveBeenCalledWith("tok", "github:o/alpha");
+    expect(await screen.findByText("Alpha does X.")).toBeInTheDocument(); // full description
+    expect(screen.getByText(/How it works/i)).toBeInTheDocument(); // markdown body
+    expect(screen.getByText(/gh, jq, curl, node/)).toBeInTheDocument(); // ALL bins (no 3-clip)
+    expect(screen.getByText(/TOKEN/)).toBeInTheDocument(); // env
+
+    // Import uses the existing import path
+    await user.click(screen.getByRole("button", { name: "Import" }));
+    expect(api.importSource).toHaveBeenCalledWith("tok", "github:o/alpha");
+
+    // Back restores the results list
+    await user.click(await screen.findByRole("button", { name: /back to results/i }));
+    expect(await screen.findByTestId("hit-name")).toHaveTextContent("alpha");
   });
 
   it("surfaces the install gate inline (no native dialog) and forces on confirm", async () => {

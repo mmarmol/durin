@@ -485,6 +485,7 @@ export async function searchSkills(
 export interface SkillDescribeResult {
   ref: string;
   description: string;
+  body?: string;
   platforms?: string[] | null;
   requires?: { bins: string[]; env: string[] } | null;
 }
