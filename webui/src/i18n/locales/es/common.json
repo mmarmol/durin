@@ -706,7 +706,10 @@
         "suggested": "Sugeridos",
         "all": "Todos",
         "noMatch": "Sin coincidencias",
-        "empty": "Sin modelos disponibles"
+        "empty": "Sin modelos disponibles",
+        "capVision": "visión",
+        "capAudio": "audio",
+        "capReasoning": "razonamiento"
       },
       "effort": {
         "title": "Esfuerzo de razonamiento",

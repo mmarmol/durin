@@ -926,6 +926,10 @@ export interface PickerEntry {
   group: string;
   role: string;
   ref: string;
+  max_input_tokens?: number | null;
+  supports_vision?: boolean;
+  supports_audio_input?: boolean;
+  supports_reasoning?: boolean;
 }
 
 export async function fetchModelPicker(

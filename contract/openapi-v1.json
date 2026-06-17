@@ -1863,6 +1863,18 @@
             "title": "Group",
             "type": "string"
           },
+          "max_input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Max Input Tokens"
+          },
           "name": {
             "title": "Name",
             "type": "string"
@@ -1878,6 +1890,21 @@
           "role": {
             "title": "Role",
             "type": "string"
+          },
+          "supports_audio_input": {
+            "default": false,
+            "title": "Supports Audio Input",
+            "type": "boolean"
+          },
+          "supports_reasoning": {
+            "default": false,
+            "title": "Supports Reasoning",
+            "type": "boolean"
+          },
+          "supports_vision": {
+            "default": false,
+            "title": "Supports Vision",
+            "type": "boolean"
           }
         },
         "required": [
