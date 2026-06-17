@@ -9,7 +9,11 @@ from durin.config.schema import ModelPresetConfig
 from durin.providers.base import LLMProvider
 from durin.providers.factory import ProviderSnapshot, build_provider_snapshot
 
-PresetSnapshotLoader = Callable[[str], ProviderSnapshot]
+# Loaders receive the preset name and the in-memory preset object (when one is
+# known). Forwarding the object lets a runtime-injected preset — one the loader
+# would otherwise fail to find when it re-resolves the name against the on-disk
+# config — resolve from memory while the config still supplies credentials.
+PresetSnapshotLoader = Callable[..., ProviderSnapshot]
 
 
 def default_selection_signature(signature: tuple[object, ...] | None) -> tuple[object, ...] | None:
@@ -25,8 +29,12 @@ def make_preset_snapshot_loader(
     provider_snapshot_loader: Callable[..., ProviderSnapshot] | None,
 ) -> PresetSnapshotLoader:
     if provider_snapshot_loader is not None:
-        return lambda name: provider_snapshot_loader(preset_name=name)
-    return lambda name: build_provider_snapshot(config, preset_name=name)
+        return lambda name, preset=None: provider_snapshot_loader(
+            preset_name=name, preset=preset
+        )
+    return lambda name, preset=None: build_provider_snapshot(
+        config, preset_name=name, preset=preset
+    )
 
 
 def build_static_preset_snapshot(
@@ -52,7 +60,7 @@ def build_runtime_preset_snapshot(
     loader: PresetSnapshotLoader | None,
 ) -> ProviderSnapshot:
     if loader is not None:
-        return loader(name)
+        return loader(name, preset=presets.get(name))
     return build_static_preset_snapshot(provider, name, presets[name])
 
 

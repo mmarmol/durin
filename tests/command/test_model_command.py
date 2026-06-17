@@ -15,6 +15,7 @@ from durin.command.builtin import (
 )
 from durin.command.router import CommandContext, CommandRouter
 from durin.config.schema import ModelPresetConfig
+from durin.providers.factory import ProviderSnapshot
 
 
 def _provider(default_model: str, max_tokens: int = 123) -> MagicMock:
@@ -112,6 +113,48 @@ async def test_model_command_arbitrary_name_creates_temp_preset(tmp_path) -> Non
     assert "glm-5.2" in out.content
     assert loop.model == "glm-5.2"
     assert "glm-5.2" in loop.model_presets
+
+
+@pytest.mark.asyncio
+async def test_model_command_arbitrary_name_switches_under_config_loader(
+    tmp_path,
+) -> None:
+    """End-to-end mirror of the webui/TUI bug: ``/model <arbitrary>`` must
+    switch even when the loop resolves presets through a loader that re-reads
+    the on-disk config (the gateway's ``load_provider_snapshot``), which never
+    saw the runtime injection. Previously this returned 'Could not switch model
+    preset: ... not found in model_presets' while listing the name as available.
+    """
+    new_provider = _provider("glm-5v-turbo", max_tokens=4096)
+    on_disk = {"default": ModelPresetConfig(model="base-model")}
+
+    def loader(name, preset=None):
+        target = preset if preset is not None else on_disk.get(name)
+        if target is None:
+            raise KeyError(f"model_preset {name!r} not found in model_presets")
+        return ProviderSnapshot(
+            provider=new_provider,
+            model=target.model,
+            context_window_tokens=target.context_window_tokens,
+            signature=("model_preset", name, target.model),
+        )
+
+    loop = AgentLoop(
+        bus=MessageBus(),
+        provider=_provider("base-model", max_tokens=123),
+        workspace=tmp_path,
+        model="base-model",
+        context_window_tokens=1000,
+        model_presets={"default": ModelPresetConfig(model="base-model")},
+        preset_snapshot_loader=loader,
+    )
+
+    out = await cmd_model(_ctx(loop, "/model glm-5v-turbo", args="glm-5v-turbo"))
+
+    assert "Could not switch" not in out.content
+    assert "Switched model preset to `glm-5v-turbo`." in out.content
+    assert loop.model == "glm-5v-turbo"
+    assert "glm-5v-turbo" in loop.model_presets
 
 
 @pytest.mark.asyncio
