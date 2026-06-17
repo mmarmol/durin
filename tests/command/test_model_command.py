@@ -212,6 +212,49 @@ async def test_model_command_bare_name_uses_active_provider(tmp_path) -> None:
     assert captured["preset"].provider == "openai_codex"
 
 
+def test_arbitrary_model_preset_applies_catalog_capabilities() -> None:
+    """A temp preset for a known catalog model carries its real capabilities,
+    not the schema defaults (65536 / 8192). Regression: glm-5.2 switched with a
+    65536 context window instead of its real 1M.
+    """
+    from durin.command.builtin import _arbitrary_model_preset
+
+    p = _arbitrary_model_preset("glm-5.2", "zai_coding_plan")
+    assert p.provider == "zai_coding_plan"
+    assert p.context_window_tokens == 1_000_000
+    assert p.max_tokens == 131072
+
+
+@pytest.mark.asyncio
+async def test_model_command_applies_caps_and_shows_provider(tmp_path) -> None:
+    new_provider = _provider("glm-5.2", max_tokens=131072)
+
+    def loader(name, preset=None):
+        target = preset or ModelPresetConfig(model=name)
+        new_provider.generation = SimpleNamespace(
+            max_tokens=target.max_tokens, temperature=0.1, reasoning_effort=None,
+        )
+        return ProviderSnapshot(
+            provider=new_provider, model=target.model,
+            context_window_tokens=target.context_window_tokens,
+            signature=("model_preset", name, target.model),
+        )
+
+    loop = AgentLoop(
+        bus=MessageBus(), provider=_provider("base-model"),
+        workspace=tmp_path, model="base-model", context_window_tokens=1000,
+        model_presets={"default": ModelPresetConfig(model="base-model")},
+        preset_snapshot_loader=loader,
+    )
+    out = await cmd_model(
+        _ctx(loop, "/model zai_coding_plan glm-5.2", args="zai_coding_plan glm-5.2")
+    )
+    assert "Could not switch" not in out.content
+    assert "- Provider: `zai_coding_plan`" in out.content
+    assert "Context window: 1000000" in out.content
+    assert "Max output tokens: 131072" in out.content
+
+
 @pytest.mark.asyncio
 async def test_model_command_does_not_depend_on_my_allow_set(tmp_path) -> None:
     loop = _make_loop(tmp_path)

@@ -97,8 +97,8 @@ PROVIDER_CHOICES: tuple[tuple[str, str, str], ...] = (
 # escape hatch. Wrong/stale ids only cost an inaccurate capability
 # hint; they never block the user.
 DEFAULT_MODELS: dict[str, tuple[str, ...]] = {
-    "zhipu": ("glm-5.1", "glm-4.6", "glm-5-turbo", "glm-4.5v"),
-    "zai_coding_plan": ("glm-5.1", "glm-4.6", "glm-5-turbo"),
+    "zhipu": ("glm-5.2", "glm-5.1", "glm-4.6", "glm-5-turbo", "glm-4.5v"),
+    "zai_coding_plan": ("glm-5.2", "glm-5.1", "glm-4.6", "glm-5-turbo"),
     "anthropic": ("claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"),
     "openai": ("gpt-5", "gpt-5-mini", "gpt-4.1", "gpt-4o", "gpt-4o-mini"),
     "openai_codex": ("gpt-5.5", "gpt-5.4-mini", "gpt-5.4", "gpt-5.3-codex", "gpt-5.3-codex-spark"),

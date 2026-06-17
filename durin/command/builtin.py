@@ -367,6 +367,28 @@ def _model_command_status(loop) -> str:
     ])
 
 
+def _arbitrary_model_preset(model: str, provider: str):
+    """Build a temp preset for an arbitrary model with the catalog's known
+    capabilities applied (context window, max output) instead of the schema
+    defaults (65536 / 8192), so switching to e.g. ``glm-5.2`` keeps its real
+    1M context / 128K output.
+    """
+    from durin.config.schema import ModelPresetConfig
+    from durin.providers.capabilities import get_model_capabilities
+
+    fields: dict = {"model": model, "provider": provider}
+    try:
+        caps = get_model_capabilities(model, provider if provider and provider != "auto" else None)
+    except Exception:  # noqa: BLE001
+        caps = None
+    if caps is not None:
+        if getattr(caps, "max_input_tokens", None):
+            fields["context_window_tokens"] = caps.max_input_tokens
+        if getattr(caps, "max_output_tokens", None):
+            fields["max_tokens"] = caps.max_output_tokens
+    return ModelPresetConfig(**fields)
+
+
 async def cmd_model(ctx: CommandContext) -> OutboundMessage:
     """Show or switch model presets."""
     loop = ctx.loop
@@ -390,13 +412,11 @@ async def cmd_model(ctx: CommandContext) -> OutboundMessage:
             metadata=metadata,
         )
 
-    from durin.config.schema import ModelPresetConfig
-
     if len(parts) == 2:
-        # Explicit `provider model` pair (the picker commits this form) — no
-        # provider inference needed; the model resolves on the named provider.
+        # Explicit `provider model` pair (the picker commits this form) — the
+        # model resolves on the named provider, with catalog capabilities.
         provider, model = parts
-        loop.model_presets[model] = ModelPresetConfig(model=model, provider=provider)
+        loop.model_presets[model] = _arbitrary_model_preset(model, provider)
         name = model
     else:
         name = parts[0]
@@ -408,9 +428,7 @@ async def cmd_model(ctx: CommandContext) -> OutboundMessage:
         # rather than guessing one from the model name.
         config = getattr(loop, "app_config", None)
         provider = config.agents.defaults.provider if config is not None else "auto"
-        loop.model_presets[name] = ModelPresetConfig(
-            model=name, provider=provider,
-        )
+        loop.model_presets[name] = _arbitrary_model_preset(name, provider)
         try:
             loop.set_model_preset(name)
         except (KeyError, ValueError) as exc:
@@ -436,10 +454,16 @@ async def cmd_model(ctx: CommandContext) -> OutboundMessage:
             metadata=metadata,
         )
 
+    active_preset = loop.model_presets.get(loop.model_preset or "")
+    provider_name = getattr(active_preset, "provider", None) if active_preset else None
+    if not provider_name or provider_name == "auto":
+        cfg = getattr(loop, "app_config", None)
+        provider_name = cfg.agents.defaults.provider if cfg is not None else provider_name
     max_tokens = getattr(getattr(loop.provider, "generation", None), "max_tokens", None)
     lines = [
         f"Switched model preset to `{loop.model_preset}`.",
         f"- Model: `{loop.model}`",
+        f"- Provider: `{provider_name or 'auto'}`",
         f"- Context window: {loop.context_window_tokens}",
     ]
     if max_tokens is not None:
