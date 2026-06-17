@@ -8,6 +8,7 @@ registry's own search is substring-on-name only — see
 """
 from __future__ import annotations
 
+import urllib.parse
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -154,3 +155,57 @@ def _hit_from_server(obj: dict, *, registry: str) -> McpServerHit:
         kind=kind,
         description=obj.get("description", ""),
     )
+
+
+class _DefaultHTTP:
+    """Minimal async JSON GET, used when no http client is injected."""
+
+    async def get_json(self, url: str) -> dict:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            return resp.json()
+
+
+class OfficialMcpRegistry:
+    """Adapter for the official MCP registry (registry.modelcontextprotocol.io).
+
+    No auth. Its ``search`` param is substring-on-name only, so breadth/quality
+    search is done by syncing the catalog (``fetch_page``) into a local cache and
+    ranking there — see ``durin/agent/mcp_catalog_cache.py``.
+    """
+
+    name = "official"
+    BASE = "https://registry.modelcontextprotocol.io"
+
+    def __init__(self, http=None) -> None:
+        self._http = http or _DefaultHTTP()
+
+    async def search(self, query: str, *, limit: int) -> list[McpServerHit]:
+        q = urllib.parse.urlencode({"search": query, "limit": min(limit, 100)})
+        data = await self._http.get_json(f"{self.BASE}/v0/servers?{q}")
+        hits = [
+            _hit_from_server(e.get("server") or {}, registry=self.name)
+            for e in (data.get("servers") or [])
+        ]
+        return [h for h in hits if h.ref][:limit]
+
+    async def describe(self, ref: str) -> McpServerDetail | None:
+        url = f"{self.BASE}/v0/servers/{urllib.parse.quote(ref, safe='')}/versions/latest"
+        try:
+            data = await self._http.get_json(url)
+        except Exception:  # noqa: BLE001
+            return None
+        return parse_server_json(data.get("server") or data)
+
+    async def fetch_page(self, *, cursor: str | None = None, updated_since: str | None = None):
+        params: dict = {"limit": 100}
+        if cursor:
+            params["cursor"] = cursor
+        if updated_since:
+            params["updated_since"] = updated_since
+        data = await self._http.get_json(f"{self.BASE}/v0/servers?{urllib.parse.urlencode(params)}")
+        servers = [e.get("server") or {} for e in (data.get("servers") or [])]
+        return servers, (data.get("metadata") or {}).get("nextCursor")
