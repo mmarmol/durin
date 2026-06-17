@@ -46,3 +46,11 @@ def test_new_fields_camel_roundtrip():
     assert si.llm_judge.trigger == "always"
     assert si.llm_judge.max_severity == "dangerous"
     assert si.llm_judge.model == "fast"
+
+
+def test_yara_defaults():
+    y = Config().skills.security.yara
+    assert y.enabled is True
+    assert y.refresh_hours == 24
+    assert y.feed_url == ""
+    assert y.max_severity == "dangerous"
