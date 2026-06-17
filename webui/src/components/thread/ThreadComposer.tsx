@@ -27,6 +27,7 @@ import {
   Target,
   Undo2,
   X,
+  Compass,
   type LucideIcon,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -600,35 +601,6 @@ export function ThreadComposer({
     [resizeTextarea],
   );
 
-  const submit = useCallback(() => {
-    if (!canSend) return;
-    const trimmed = value.trim();
-    // Share the same normalized ``data:`` URL with both the wire payload and
-    // the optimistic bubble preview: data URLs are self-contained (no blob
-    // lifetime, safe under React StrictMode double-mount) and keep the
-    // bubble in sync with whatever the backend actually sees.
-    const payload: SendImage[] | undefined =
-      readyImages.length > 0
-        ? readyImages.map((img) => ({
-            media: {
-              data_url: img.dataUrl,
-              name: img.file.name,
-            },
-            preview: { url: img.dataUrl, name: img.file.name },
-          }))
-        : undefined;
-    onSend(trimmed, payload);
-    promptHistory.addEntry(trimmed);
-    promptHistory.reset();
-    setValue("");
-    setInlineError(null);
-    // Bubble owns the data URL copy; safe to revoke every staged blob
-    // preview here without affecting the rendered message.
-    clear();
-    setSlashMenuDismissed(false);
-    resizeTextarea();
-  }, [canSend, clear, onSend, readyImages, resizeTextarea, value]);
-
   const onKeyDown = (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (showSlashMenu) {
       if (e.key === "ArrowDown") {
@@ -720,6 +692,43 @@ export function ThreadComposer({
 
   const attachButtonDisabled = disabled || full;
   const showStopButton = isStreaming && !!onStop;
+  const [queuedFlash, setQueuedFlash] = useState(false);
+
+  const submit = useCallback(() => {
+    if (!canSend) return;
+    const trimmed = value.trim();
+    const payload: SendImage[] | undefined =
+      readyImages.length > 0
+        ? readyImages.map((img) => ({
+            media: {
+              data_url: img.dataUrl,
+              name: img.file.name,
+            },
+            preview: { url: img.dataUrl, name: img.file.name },
+          }))
+        : undefined;
+    onSend(trimmed, payload);
+    promptHistory.addEntry(trimmed);
+    promptHistory.reset();
+    setValue("");
+    setInlineError(null);
+    clear();
+    setSlashMenuDismissed(false);
+    resizeTextarea();
+    if (isStreaming) {
+      setQueuedFlash(true);
+      window.setTimeout(() => setQueuedFlash(false), 2500);
+    }
+  }, [canSend, clear, isStreaming, onSend, promptHistory, readyImages, resizeTextarea, value]);
+
+  const steer = useCallback(() => {
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    onSend(`[steer] ${trimmed}`);
+    setValue("");
+    setQueuedFlash(true);
+    window.setTimeout(() => setQueuedFlash(false), 2500);
+  }, [onSend, value]);
 
   return (
     <form
@@ -901,27 +910,55 @@ export function ThreadComposer({
             </span>
           </div>
           <span className={cn(isHero ? "hidden" : "sm:hidden")} aria-hidden />
+          {queuedFlash ? (
+            <span className="mr-2 inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+              ⏳ {t("thread.composer.queued")}
+            </span>
+          ) : null}
+          {showStopButton && canSend ? (
+            <Button
+              type="button"
+              size="icon"
+              disabled={disabled}
+              aria-label={t("thread.composer.stop")}
+              onClick={onStop}
+              className="mr-1 rounded-full border border-border/70 bg-card text-foreground/85 shadow-[0_3px_10px_rgba(15,23,42,0.08)] hover:bg-muted/65 hover:text-foreground"
+            >
+              <Square className="h-2.5 w-2.5 fill-current stroke-current" />
+            </Button>
+          ) : null}
+          {isStreaming && canSend ? (
+            <Button
+              type="button"
+              size="icon"
+              disabled={disabled}
+              aria-label={t("thread.composer.steer")}
+              title={t("thread.composer.steer")}
+              onClick={steer}
+              className="mr-1 rounded-full border border-border/70 bg-card text-foreground/85 shadow-[0_3px_10px_rgba(15,23,42,0.08)] hover:bg-muted/65 hover:text-foreground"
+            >
+              <Compass className="h-3.5 w-3.5" />
+            </Button>
+          ) : null}
           <Button
-            type={showStopButton ? "button" : "submit"}
+            type={showStopButton && !canSend ? "button" : "submit"}
             size="icon"
-            disabled={showStopButton ? disabled : !canSend}
-            aria-label={showStopButton ? t("thread.composer.stop") : t("thread.composer.send")}
-            onClick={showStopButton ? onStop : undefined}
+            disabled={showStopButton && !canSend ? disabled : !canSend}
+            aria-label={showStopButton && !canSend ? t("thread.composer.stop") : t("thread.composer.send")}
+            onClick={showStopButton && !canSend ? onStop : undefined}
             className={cn(
               "rounded-full transition-transform",
-              showStopButton
+              showStopButton && !canSend
                 ? "border border-border/70 bg-card text-foreground/85 shadow-[0_3px_10px_rgba(15,23,42,0.08)] hover:bg-muted/65 hover:text-foreground disabled:text-muted-foreground/50"
                 : isHero
                   ? "border border-foreground bg-foreground text-background shadow-[0_4px_12px_rgba(15,23,42,0.20)] hover:bg-foreground/90 disabled:border-foreground/35 disabled:bg-foreground/35 disabled:text-background/80"
                   : "border border-foreground bg-foreground text-background shadow-[0_3px_10px_rgba(15,23,42,0.18)] hover:bg-foreground/90 disabled:border-foreground/35 disabled:bg-foreground/35 disabled:text-background/80",
               isHero ? "" : "h-7.5 w-7.5",
-              (canSend || showStopButton) && "hover:scale-[1.03] active:scale-95",
+              (canSend || (showStopButton && !canSend)) && "hover:scale-[1.03] active:scale-95",
             )}
           >
-            {showStopButton ? (
+            {showStopButton && !canSend ? (
               <Square className={cn("fill-current stroke-current", isHero ? "h-3 w-3" : "h-2.5 w-2.5")} />
-            ) : isStreaming ? (
-              <Loader2 className={cn(isHero ? "h-4.5 w-4.5" : "h-4 w-4", "animate-spin")} />
             ) : (
               <ArrowUp className={cn(isHero ? "h-4.5 w-4.5" : "h-4 w-4")} />
             )}

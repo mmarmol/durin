@@ -6,7 +6,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { AlertTriangle, Check, ChevronRight, Copy, FileIcon, ImageIcon, PlaySquare, Sparkles, Wrench } from "lucide-react";
+import { AlertTriangle, Check, ChevronRight, Copy, FileIcon, ImageIcon, PlaySquare, Pencil, RefreshCw, Sparkles, Wrench } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { ImageLightbox } from "@/components/ImageLightbox";
@@ -20,6 +20,10 @@ interface MessageBubbleProps {
   message: UIMessage;
   /** When false, hide the assistant reply copy button (mid-turn text before more agent activity). Default true. */
   showAssistantCopyAction?: boolean;
+  /** Show a retry button on the last assistant message. */
+  onRetry?: () => void;
+  /** Show an edit button on the last user message. Loads text into composer. */
+  onEdit?: () => void;
 }
 
 /**
@@ -46,6 +50,8 @@ function looksLikeProviderError(content: string): boolean {
 export function MessageBubble({
   message,
   showAssistantCopyAction = true,
+  onRetry,
+  onEdit,
 }: MessageBubbleProps) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
@@ -105,6 +111,17 @@ export function MessageBubble({
             {message.content}
           </p>
         ) : null}
+        {onEdit ? (
+          <button
+            type="button"
+            onClick={onEdit}
+            aria-label={t("message.edit")}
+            title={t("message.edit")}
+            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-muted-foreground/60 opacity-0 transition-all hover:bg-muted/55 hover:text-foreground group-hover:opacity-100"
+          >
+            <Pencil className="h-3.5 w-3.5" aria-hidden />
+          </button>
+        ) : null}
       </div>
     );
   }
@@ -128,7 +145,7 @@ export function MessageBubble({
     && latencyMs != null
     && !message.isStreaming
     && (!empty || hasReasoning || media.length > 0);
-  const showAssistantFooterRow = showCopyButton || showLatencyFooter;
+  const showAssistantFooterRow = showCopyButton || !!onRetry || showLatencyFooter;
   return (
     <div className={cn("w-full text-[15px]", baseAnim)} style={{ lineHeight: "var(--cjk-line-height)" }}>
       {hasReasoning ? (
@@ -173,6 +190,17 @@ export function MessageBubble({
                   ) : (
                     <Copy className="h-4 w-4" aria-hidden />
                   )}
+                </button>
+              ) : null}
+              {onRetry ? (
+                <button
+                  type="button"
+                  onClick={onRetry}
+                  aria-label={t("message.retry")}
+                  title={t("message.retry")}
+                  className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-muted/55 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <RefreshCw className="h-4 w-4" aria-hidden />
                 </button>
               ) : null}
               {showLatencyFooter ? (

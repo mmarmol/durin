@@ -11,6 +11,10 @@ interface ThreadMessagesProps {
   messages: UIMessage[];
   /** When true, agent turn still in flight — keeps activity cluster expanded. */
   isStreaming?: boolean;
+  /** Retry callback — passed to the last finished assistant message only. */
+  onRetryLast?: () => void;
+  /** Edit callback — passed to the last user message only. */
+  onEditLastUser?: () => void;
 }
 
 export type DisplayUnit =
@@ -103,8 +107,28 @@ function buildDisplayUnits(messages: UIMessage[]): DisplayUnit[] {
   return out;
 }
 
-export function ThreadMessages({ messages, isStreaming = false }: ThreadMessagesProps) {
+export function ThreadMessages({
+  messages,
+  isStreaming = false,
+  onRetryLast,
+  onEditLastUser,
+}: ThreadMessagesProps) {
   const units = buildDisplayUnits(messages);
+
+  // Find the last single-message unit indices for retry/edit targeting.
+  let lastAssistantUnitIdx = -1;
+  let lastUserUnitIdx = -1;
+  for (let i = units.length - 1; i >= 0; i--) {
+    const u = units[i];
+    if (u.type !== "single") continue;
+    if (lastAssistantUnitIdx === -1 && u.message.role === "assistant" && !u.message.isStreaming) {
+      lastAssistantUnitIdx = i;
+    }
+    if (lastUserUnitIdx === -1 && u.message.role === "user") {
+      lastUserUnitIdx = i;
+    }
+    if (lastAssistantUnitIdx !== -1 && lastUserUnitIdx !== -1) break;
+  }
 
   return (
     <div className="flex w-full flex-col">
@@ -139,6 +163,16 @@ export function ThreadMessages({ messages, isStreaming = false }: ThreadMessages
                   unit.message.role === "assistant"
                     ? isFinalAssistantSliceBeforeNextUser(units, index)
                     : true
+                }
+                onRetry={
+                  !isStreaming && index === lastAssistantUnitIdx && onRetryLast
+                    ? onRetryLast
+                    : undefined
+                }
+                onEdit={
+                  index === lastUserUnitIdx && onEditLastUser
+                    ? onEditLastUser
+                    : undefined
                 }
               />
             )}

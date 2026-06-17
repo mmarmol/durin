@@ -680,7 +680,8 @@
       "toggleSidebar": "Toggle sidebar",
       "newChat": "Start a new chat",
       "toggleTheme": "Toggle theme from header",
-      "settings": "Open settings"
+      "settings": "Open settings",
+      "agentMode": "Agent mode"
     },
     "composer": {
       "placeholderThread": "Type your message…",
@@ -697,6 +698,8 @@
       "goalStateCloseAria": "Close goal",
       "send": "Send message",
       "stop": "Stop response",
+      "queued": "Queued for next turn",
+      "steer": "Steer — inject guidance mid-turn",
       "attachImage": "Attach image",
       "modelPicker": {
         "search": "Search models…",
@@ -817,6 +820,8 @@
     "agentActivityLiveToolsOnly": "Working… · {{tools}} tool calls",
     "imageAttachment": "Image attachment",
     "copyReply": "Copy reply",
+    "edit": "Edit message",
+    "retry": "Retry",
     "errorTitle": "The provider returned an error",
     "copiedReply": "Copied reply",
     "turnLatencyTitle": "Response time (end-to-end)",
