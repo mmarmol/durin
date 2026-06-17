@@ -23,20 +23,14 @@ from durin.service.types import ConflictError, UnavailableError
 
 
 async def _drive_auth(provider: Any, cfg: Any) -> None:
-    """Force one authenticated request so the SDK runs the full OAuth handshake."""
-    import httpx
-    from mcp import ClientSession
-    from mcp.client.streamable_http import streamable_http_client
+    """Force one authenticated request so the SDK runs the full OAuth handshake.
 
-    async with httpx.AsyncClient(
-        headers=getattr(cfg, "headers", None) or None,
-        follow_redirects=True,
-        timeout=None,
-        auth=provider,
-    ) as http_client:
-        async with streamable_http_client(cfg.url, http_client=http_client) as (r, w, _):
-            async with ClientSession(r, w) as session:
-                await session.initialize()
+    Delegates to the transport-aware handshake driver so SSE servers complete
+    cleanly (using the wrong transport stores the token but fails the post-token
+    init with an opaque ExceptionGroup)."""
+    from durin.agent.tools.mcp_oauth import drive_oauth_handshake
+
+    await drive_oauth_handshake(provider, cfg)
 
 
 class PendingFlow:
@@ -78,9 +72,17 @@ class McpOauthFlows:
         pending.task.cancel()
         pending.callback.stop()
 
-    async def start(self, server: str, cfg: Any) -> tuple[str, str]:
+    async def start(
+        self,
+        server: str,
+        cfg: Any,
+        on_success: "Callable[[], Awaitable[None]] | None" = None,
+    ) -> tuple[str, str]:
         """Begin a sign-in; return ``(authorization_url, state)``.
 
+        ``on_success`` (optional) is awaited once the token is stored — used to
+        reconnect the live connection race-free (the webui can't, since the popup
+        closes a beat before the SDK finishes the token exchange).
         Raises ``ConflictError`` if a flow is already pending for the server, and
         ``UnavailableError`` if the callback can't bind or no URL surfaces.
         """
@@ -133,10 +135,23 @@ class McpOauthFlows:
         async def _run() -> None:
             try:
                 await driver(provider, cfg)
+                logger.info("MCP '{}' OAuth sign-in completed (token stored)", server)
+                if on_success is not None:
+                    # Reconnect now that the token is stored — race-free, unlike
+                    # the webui doing it on popup-close (which beats the token).
+                    try:
+                        await on_success()
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "MCP '{}' post-OAuth reconnect failed: {}", server, exc
+                        )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001
-                logger.warning("MCP '{}' OAuth sign-in failed: {}", server, exc)
+                logger.warning(
+                    "MCP '{}' OAuth sign-in failed: {}: {}",
+                    server, type(exc).__name__, exc,
+                )
             finally:
                 callback.stop()
                 self._pending.pop(server, None)
@@ -154,4 +169,5 @@ class McpOauthFlows:
                 "OAuth flow did not produce an authorization URL",
                 details={"name": server},
             ) from None
+        logger.info("MCP '{}' OAuth flow started; authorize_url={}", server, url)
         return url, getattr(callback, "state", "")

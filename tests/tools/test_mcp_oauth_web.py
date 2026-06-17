@@ -79,6 +79,29 @@ async def test_start_returns_url_then_completes_and_clears_pending() -> None:
     assert created[0].stopped is True
 
 
+async def test_start_calls_on_success_after_token_stored() -> None:
+    captured: dict = {}
+    called: list[bool] = []
+
+    async def driver(provider, cfg):
+        await captured["redirect"]("https://auth/x")
+        await captured["callback"]()  # blocks until released → token stored
+
+    flows, created = _build_flows(captured, driver)
+
+    async def on_success() -> None:
+        called.append(True)
+
+    url, _ = await flows.start("o", CFG, on_success=on_success)
+    assert url == "https://auth/x"
+    assert called == []  # not yet — the callback hasn't fired
+
+    task = flows._pending["o"].task
+    created[0].release()
+    await task
+    assert called == [True]  # fired after the driver completed (token stored)
+
+
 async def test_second_start_while_pending_is_conflict() -> None:
     captured: dict = {}
 
@@ -110,6 +133,44 @@ async def test_cancel_clears_pending_and_stops_loopback() -> None:
 
     assert not flows.is_pending("o")
     assert created[0].stopped is True
+
+
+async def test_drive_oauth_handshake_picks_transport_by_cfg(monkeypatch) -> None:
+    # The handshake driver must honour cfg.type (and infer from a /sse URL),
+    # else an SSE server is driven over streamable-HTTP and fails post-token.
+    import durin.agent.tools.mcp_oauth as mo
+
+    calls: list[str] = []
+
+    class _Stop(Exception):
+        pass
+
+    def fake_sse(url, **kw):
+        calls.append("sse")
+        raise _Stop
+
+    def fake_stream(url, **kw):
+        calls.append("stream")
+        raise _Stop
+
+    monkeypatch.setattr("mcp.client.sse.sse_client", fake_sse, raising=False)
+    monkeypatch.setattr(
+        "mcp.client.streamable_http.streamable_http_client", fake_stream, raising=False
+    )
+
+    import httpx
+
+    provider = httpx.BasicAuth("u", "p")  # a real httpx.Auth (never exercised)
+
+    async def drive(cfg):
+        with pytest.raises(_Stop):
+            await mo.drive_oauth_handshake(provider, cfg)
+        return calls[-1]
+
+    assert await drive(MCPServerConfig(type="sse", url="https://x/sse")) == "sse"
+    assert await drive(MCPServerConfig(type="streamableHttp", url="https://x/mcp")) == "stream"
+    assert await drive(MCPServerConfig(url="https://y/v1/sse")) == "sse"  # inferred
+    assert await drive(MCPServerConfig(url="https://y/mcp")) == "stream"  # inferred
 
 
 async def test_start_times_out_and_cleans_up_when_no_url() -> None:

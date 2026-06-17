@@ -59,17 +59,40 @@ async def test_loopback_callback_captures_code_and_state():
 
 
 @pytest.mark.asyncio
-async def test_loopback_callback_rejects_bad_state():
+async def test_loopback_callback_relays_state_for_sdk_validation():
+    # The loopback must NOT validate state against its own value — the MCP SDK
+    # generates the real OAuth state and validates the returned one (oauth2.py,
+    # secrets.compare_digest). A state the loopback never generated must still be
+    # relayed (code + that state), not rejected. Rejecting it (the old bug) broke
+    # every real OAuth login.
     from durin.agent.tools.mcp_oauth import LoopbackCallback
 
     cb = LoopbackCallback(port=0)
     cb.start()
     try:
-        url = f"http://127.0.0.1:{cb.port}/callback?code=c&state=WRONG"
+        url = f"http://127.0.0.1:{cb.port}/callback?code=the-code&state=sdk-generated-state"
         await asyncio.get_event_loop().run_in_executor(
             None, lambda: urllib.request.urlopen(url, timeout=5).read()
         )
-        # Future must NOT be resolved — bad state is rejected.
+        code, state = await asyncio.wait_for(cb.wait(), timeout=5)
+        assert code == "the-code"
+        assert state == "sdk-generated-state"  # relayed verbatim for the SDK
+    finally:
+        cb.stop()
+
+
+@pytest.mark.asyncio
+async def test_loopback_callback_rejects_provider_error():
+    # A provider error redirect (?error=...) must not resolve the flow.
+    from durin.agent.tools.mcp_oauth import LoopbackCallback
+
+    cb = LoopbackCallback(port=0)
+    cb.start()
+    try:
+        url = f"http://127.0.0.1:{cb.port}/callback?error=access_denied&error_description=nope"
+        await asyncio.get_event_loop().run_in_executor(
+            None, lambda: urllib.request.urlopen(url, timeout=5).read()
+        )
         with pytest.raises(asyncio.TimeoutError):
             await asyncio.wait_for(cb.wait(), timeout=1)
     finally:
