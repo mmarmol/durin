@@ -697,6 +697,15 @@ export function ThreadComposer({
   const submit = useCallback(() => {
     if (!canSend) return;
     const trimmed = value.trim();
+    // Bare `/model` opens the picker (parity with the TUI and the model button)
+    // rather than sending a status-text command.
+    if (trimmed === "/model" && onModelPick) {
+      setValue("");
+      setSlashMenuDismissed(false);
+      setModelPickerOpen(true);
+      resizeTextarea();
+      return;
+    }
     const payload: SendImage[] | undefined =
       readyImages.length > 0
         ? readyImages.map((img) => ({
