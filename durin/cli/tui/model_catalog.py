@@ -16,7 +16,9 @@ from dataclasses import dataclass, field
 
 from durin.config.schema import ModelPresetConfig
 from durin.providers.capabilities import ModelCapabilities, get_model_capabilities
-from durin.providers.registry import PROVIDERS
+from durin.providers.selection import infer_provider
+
+__all__ = ["ModelEntry", "build_entries", "format_entry", "infer_provider"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,21 +30,6 @@ class ModelEntry:
     is_preset: bool
     is_recent: bool
     capabilities: ModelCapabilities = field(default_factory=lambda: ModelCapabilities(model=""))
-
-
-def infer_provider(model: str) -> str:
-    """Infer the provider name for *model* via keyword matching.
-
-    Returns the first matching provider's config name, or ``"auto"``
-    if no keywords match.
-    """
-    model_lower = model.lower()
-    model_normalized = model_lower.replace("-", "_")
-    for spec in PROVIDERS:
-        for kw in spec.keywords:
-            if kw in model_lower or kw.replace("-", "_") in model_normalized:
-                return spec.name
-    return "auto"
 
 
 def _provider_has_key(config, provider_name: str) -> bool:
