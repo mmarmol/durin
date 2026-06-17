@@ -83,3 +83,74 @@ class McpRegistry(Protocol):
     async def search(self, query: str, *, limit: int) -> list[McpServerHit]: ...
 
     async def describe(self, ref: str) -> McpServerDetail | None: ...
+
+
+def _env_specs(items: list[dict] | None) -> list[EnvVarSpec]:
+    out: list[EnvVarSpec] = []
+    for it in items or []:
+        out.append(
+            EnvVarSpec(
+                name=it.get("name", ""),
+                description=it.get("description", ""),
+                is_required=bool(it.get("isRequired")),
+                is_secret=bool(it.get("isSecret")),
+                default=it.get("default"),
+            )
+        )
+    return out
+
+
+def _arg_values(items: list[dict] | None) -> list[str]:
+    return [str(it.get("value", it.get("name", ""))) for it in (items or []) if it]
+
+
+def parse_server_json(obj: dict) -> McpServerDetail:
+    """Parse one registry ``server.json`` object into an ``McpServerDetail``."""
+    repo = obj.get("repository") or {}
+    packages: list[PackageSpec] = []
+    for p in obj.get("packages") or []:
+        tr = p.get("transport") or {}
+        packages.append(
+            PackageSpec(
+                registry_type=p.get("registryType", ""),
+                identifier=p.get("identifier", ""),
+                version=p.get("version", ""),
+                runtime_hint=p.get("runtimeHint", ""),
+                transport_type=tr.get("type", "stdio"),
+                runtime_arguments=_arg_values(p.get("runtimeArguments")),
+                package_arguments=_arg_values(p.get("packageArguments")),
+                env=_env_specs(p.get("environmentVariables")),
+            )
+        )
+    remotes: list[RemoteSpec] = []
+    for r in obj.get("remotes") or []:
+        remotes.append(
+            RemoteSpec(
+                transport_type=r.get("type", ""),
+                url=r.get("url", ""),
+                headers=_env_specs(r.get("headers")),
+            )
+        )
+    return McpServerDetail(
+        name=obj.get("name", ""),
+        ref=obj.get("name", ""),
+        description=obj.get("description", ""),
+        version=obj.get("version", ""),
+        repository=repo.get("url", ""),
+        packages=packages,
+        remotes=remotes,
+    )
+
+
+def _hit_from_server(obj: dict, *, registry: str) -> McpServerHit:
+    """Build a lightweight search hit; ``kind`` from packages/remotes presence."""
+    has_pkg = bool(obj.get("packages"))
+    has_remote = bool(obj.get("remotes"))
+    kind = "both" if (has_pkg and has_remote) else ("local" if has_pkg else "remote")
+    return McpServerHit(
+        name=obj.get("name", ""),
+        ref=obj.get("name", ""),
+        registry=registry,
+        kind=kind,
+        description=obj.get("description", ""),
+    )
