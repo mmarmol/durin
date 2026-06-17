@@ -46,6 +46,17 @@ def picker_entries(
     default_provider = config.agents.defaults.provider
     default_model = config.agents.defaults.model
 
+    # Which configured provider serves each curated model — used to resolve a
+    # recent's provider WITHOUT keyword-guessing (glm-* keyword-matches zhipu,
+    # but the user may run zai_coding_plan).
+    configured = configured_provider_names(config)
+    served_by: dict[str, str] = {}
+    for pname, models in DEFAULT_MODELS.items():
+        if pname == "custom" or pname not in configured:
+            continue
+        for mm in models:
+            served_by.setdefault(mm, pname)
+
     def _provider_of(preset: ModelPresetConfig) -> str:
         return preset.provider if preset.provider != "auto" else infer_provider(preset.model)
 
@@ -70,11 +81,10 @@ def picker_entries(
         p = presets[pname]
         add(p.model, _provider_of(p), _EASY, "preset", pname)
     for m in recent:
-        prov = infer_provider(m)
+        prov = served_by.get(m) or infer_provider(m)
         add(m, prov, _EASY, "recent", f"{prov} {m}")
 
     # Catalog — curated defaults of every configured provider.
-    configured = configured_provider_names(config)
     for provider_name, models in DEFAULT_MODELS.items():
         if provider_name == "custom" or provider_name not in configured:
             continue

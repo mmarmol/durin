@@ -51,6 +51,17 @@ def test_recent_pinned_in_easy_pick(monkeypatch):
     assert any(e.name == "gemini-2.5-flash" and e.role == "recent" for e in easy)
 
 
+def test_recent_uses_configured_provider_not_keyword_guess(monkeypatch):
+    # glm-* keyword-matches zhipu, but the user configured zai_coding_plan. A
+    # recent must resolve to the configured provider that serves it, not the
+    # keyword guess — otherwise its ref fails with "No API key for zhipu".
+    cfg = _cfg(monkeypatch, zai_coding_plan="k")
+    entries = picker_entries(cfg, presets={}, recent=["glm-5.1"], active=None)
+    rec = next(e for e in entries if e.role == "recent")
+    assert rec.provider == "zai_coding_plan"
+    assert rec.ref == "zai_coding_plan glm-5.1"
+
+
 def test_picker_entry_carries_provider():
     e = PickerEntry(name="m", provider="p", group="g", role="catalog", ref="p m")
     assert (e.name, e.provider, e.group, e.role, e.ref) == ("m", "p", "g", "catalog", "p m")
