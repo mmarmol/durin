@@ -488,6 +488,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/model/picker": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Ordered model picker entries (easy-pick + configured catalog) */
+        get: operations["config_model_picker"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/model/test": {
         parameters: {
             query?: never;
@@ -1766,6 +1783,19 @@ export interface components {
             /** Supports Vision */
             supports_vision: boolean;
         };
+        /** ModelPickerQuery */
+        ModelPickerQuery: {
+            /**
+             * Recent
+             * @default
+             */
+            recent: string;
+        };
+        /** ModelPickerResult */
+        ModelPickerResult: {
+            /** Entries */
+            entries: components["schemas"]["PickerEntryModel"][];
+        };
         /** ModelTestQuery */
         ModelTestQuery: {
             /**
@@ -1934,6 +1964,39 @@ export interface components {
              * @default null
              */
             source: string | null;
+        };
+        /** PickerEntryModel */
+        PickerEntryModel: {
+            /** Group */
+            group: string;
+            /**
+             * Max Input Tokens
+             * @default null
+             */
+            max_input_tokens: number | null;
+            /** Name */
+            name: string;
+            /** Provider */
+            provider: string;
+            /** Ref */
+            ref: string;
+            /** Role */
+            role: string;
+            /**
+             * Supports Audio Input
+             * @default false
+             */
+            supports_audio_input: boolean;
+            /**
+             * Supports Reasoning
+             * @default false
+             */
+            supports_reasoning: boolean;
+            /**
+             * Supports Vision
+             * @default false
+             */
+            supports_vision: boolean;
         };
         /** RevokeTokenCommand */
         RevokeTokenCommand: {
@@ -3181,6 +3244,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ModelCapabilitiesResult"];
+                };
+            };
+        };
+    };
+    config_model_picker: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelPickerQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelPickerResult"];
                 };
             };
         };

@@ -108,6 +108,10 @@ class PickerEntryModel(Result):
     group: str
     role: str
     ref: str
+    max_input_tokens: int | None = None
+    supports_vision: bool = False
+    supports_audio_input: bool = False
+    supports_reasoning: bool = False
 
 
 class ModelPickerResult(Result):
@@ -344,7 +348,11 @@ class ConfigService:
         return ModelPickerResult(
             entries=[
                 PickerEntryModel(
-                    name=e.name, provider=e.provider, group=e.group, role=e.role, ref=e.ref
+                    name=e.name, provider=e.provider, group=e.group, role=e.role,
+                    ref=e.ref, max_input_tokens=e.max_input_tokens,
+                    supports_vision=e.supports_vision,
+                    supports_audio_input=e.supports_audio_input,
+                    supports_reasoning=e.supports_reasoning,
                 )
                 for e in entries
             ]

@@ -710,7 +710,10 @@
         "suggested": "Suggested",
         "all": "All models",
         "noMatch": "No models match",
-        "empty": "No models available"
+        "empty": "No models available",
+        "capVision": "vision",
+        "capAudio": "audio",
+        "capReasoning": "reasoning"
       },
       "effort": {
         "title": "Reasoning effort",

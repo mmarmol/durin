@@ -183,6 +183,12 @@ async def test_model_picker_returns_easy_pick_and_catalog(tmp_path, monkeypatch)
     assert "Easy pick" in groups
     assert "gemini" in groups
     assert all(e.provider for e in result.entries)
+    # Catalog entries carry capabilities from provider_models.json.
+    gemini_catalog = [
+        e for e in result.entries if e.provider == "gemini" and e.role == "catalog"
+    ]
+    assert gemini_catalog, "expected gemini catalog entries"
+    assert any(e.max_input_tokens for e in gemini_catalog), "expected caps from the catalog"
 
 
 async def test_model_picker_requires_read_scope():
