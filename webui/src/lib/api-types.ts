@@ -195,6 +195,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/mcp/registry/describe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Full install metadata for one registry server */
+        get: operations["mcp_registry_describe"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/mcp/registry/install": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Install (add) an MCP server from the registry by ref */
+        post: operations["mcp_registry_install"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/mcp/registry/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Search the MCP registry for installable servers */
+        get: operations["mcp_registry_search"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/mcp/servers": {
         parameters: {
             query?: never;
@@ -480,6 +531,23 @@ export interface paths {
         };
         /** Resolve capability metadata for a model id */
         get: operations["config_model_capabilities"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/model/picker": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Ordered model picker entries (easy-pick + configured catalog) */
+        get: operations["config_model_picker"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1544,6 +1612,11 @@ export interface components {
             oauth: boolean | components["schemas"]["MCPOAuthConfig"] | null;
             sampling?: components["schemas"]["MCPSamplingConfig"];
             /**
+             * Source Ref
+             * @default
+             */
+            source_ref: string;
+            /**
              * Spawn Egress Policy
              * @default warn
              * @enum {string}
@@ -1568,6 +1641,11 @@ export interface components {
              * @default
              */
             url: string;
+            /**
+             * Version
+             * @default
+             */
+            version: string;
         };
         /**
          * McpListQuery
@@ -1590,6 +1668,121 @@ export interface components {
         McpOkResult: {
             /** Ok */
             ok: boolean;
+        };
+        /** McpRegistryDescribeQuery */
+        McpRegistryDescribeQuery: {
+            /** Ref */
+            ref: string;
+        };
+        /** McpRegistryEnvVar */
+        McpRegistryEnvVar: {
+            /** Default */
+            default: string | null;
+            /** Description */
+            description: string;
+            /** Is Required */
+            is_required: boolean;
+            /** Is Secret */
+            is_secret: boolean;
+            /** Name */
+            name: string;
+        };
+        /** McpRegistryHit */
+        McpRegistryHit: {
+            /** Description */
+            description: string;
+            /** Kind */
+            kind: string;
+            /** Name */
+            name: string;
+            /** Ref */
+            ref: string;
+            /** Registry */
+            registry: string;
+            /** Signals */
+            signals: {
+                [key: string]: unknown;
+            };
+        };
+        /** McpRegistryInstallCommand */
+        McpRegistryInstallCommand: {
+            /**
+             * Env Values
+             * @default null
+             */
+            env_values: {
+                [key: string]: string;
+            } | null;
+            /**
+             * Prefer
+             * @default remote
+             */
+            prefer: string;
+            /** Ref */
+            ref: string;
+        };
+        /** McpRegistryPackage */
+        McpRegistryPackage: {
+            /** Env */
+            env: components["schemas"]["McpRegistryEnvVar"][];
+            /** Identifier */
+            identifier: string;
+            /** Package Arguments */
+            package_arguments: string[];
+            /** Registry Type */
+            registry_type: string;
+            /** Runtime Arguments */
+            runtime_arguments: string[];
+            /** Runtime Hint */
+            runtime_hint: string;
+            /** Transport Type */
+            transport_type: string;
+            /** Version */
+            version: string;
+        };
+        /** McpRegistryRemote */
+        McpRegistryRemote: {
+            /** Headers */
+            headers: components["schemas"]["McpRegistryEnvVar"][];
+            /** Transport Type */
+            transport_type: string;
+            /** Url */
+            url: string;
+        };
+        /** McpRegistrySearchQuery */
+        McpRegistrySearchQuery: {
+            /**
+             * Limit
+             * @default 10
+             */
+            limit: number;
+            /**
+             * Q
+             * @default
+             */
+            q: string;
+        };
+        /** McpRegistrySearchResult */
+        McpRegistrySearchResult: {
+            /** Hits */
+            hits: components["schemas"]["McpRegistryHit"][];
+        };
+        /** McpRegistryServerDetail */
+        McpRegistryServerDetail: {
+            /** Description */
+            description: string;
+            /** Name */
+            name: string;
+            /** Packages */
+            packages: components["schemas"]["McpRegistryPackage"][];
+            /** Ref */
+            ref: string;
+            /** Remotes */
+            remotes: components["schemas"]["McpRegistryRemote"][];
+            /** Repository */
+            repository: string;
+            /** Version */
+            version: string;
         };
         /** McpServerDetail */
         McpServerDetail: {
@@ -1766,6 +1959,19 @@ export interface components {
             /** Supports Vision */
             supports_vision: boolean;
         };
+        /** ModelPickerQuery */
+        ModelPickerQuery: {
+            /**
+             * Recent
+             * @default
+             */
+            recent: string;
+        };
+        /** ModelPickerResult */
+        ModelPickerResult: {
+            /** Entries */
+            entries: components["schemas"]["PickerEntryModel"][];
+        };
         /** ModelTestQuery */
         ModelTestQuery: {
             /**
@@ -1934,6 +2140,19 @@ export interface components {
              * @default null
              */
             source: string | null;
+        };
+        /** PickerEntryModel */
+        PickerEntryModel: {
+            /** Group */
+            group: string;
+            /** Name */
+            name: string;
+            /** Provider */
+            provider: string;
+            /** Ref */
+            ref: string;
+            /** Role */
+            role: string;
         };
         /** RevokeTokenCommand */
         RevokeTokenCommand: {
@@ -2681,6 +2900,78 @@ export interface operations {
             };
         };
     };
+    mcp_registry_describe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["McpRegistryDescribeQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpRegistryServerDetail"];
+                };
+            };
+        };
+    };
+    mcp_registry_install: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["McpRegistryInstallCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpServerDetail"];
+                };
+            };
+        };
+    };
+    mcp_registry_search: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["McpRegistrySearchQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpRegistrySearchResult"];
+                };
+            };
+        };
+    };
     mcp_list: {
         parameters: {
             query?: never;
@@ -3181,6 +3472,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ModelCapabilitiesResult"];
+                };
+            };
+        };
+    };
+    config_model_picker: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelPickerQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelPickerResult"];
                 };
             };
         };

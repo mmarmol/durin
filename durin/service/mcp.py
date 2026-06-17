@@ -109,6 +109,12 @@ class McpRegistryDescribeQuery(Query):
     ref: str
 
 
+class McpRegistryInstallCommand(Command):
+    ref: str
+    prefer: str = "remote"  # "remote" | "local"
+    env_values: dict[str, str] | None = None  # required/secret env collected from the user
+
+
 class McpRegistryHit(Result):
     name: str
     ref: str
@@ -386,6 +392,44 @@ class McpService:
             if detail is not None:
                 return _reg_detail(detail)
         raise NotFoundError("server not found in registry", details={"ref": query.ref})
+
+    @route(
+        "POST",
+        "/api/v1/mcp/registry/install",
+        scope=Scope.MCP_WRITE.value,
+        request_model=McpRegistryInstallCommand,
+        response_model=McpServerDetail,
+        summary="Install (add) an MCP server from the registry by ref",
+    )
+    async def registry_install(
+        self, cmd: McpRegistryInstallCommand, principal: Principal
+    ) -> McpServerDetail:
+        principal.require(Scope.MCP_WRITE)
+        from durin.agent.mcp_install import (
+            build_server_config_from_detail,
+            collect_secret_env,
+        )
+        from durin.agent.mcp_registry import build_mcp_adapters
+        from durin.config.loader import load_config
+
+        disc = load_config().tools.mcp_discovery
+        detail = None
+        for adapter in build_mcp_adapters(disc.registries):
+            detail = await adapter.describe(cmd.ref)
+            if detail is not None:
+                break
+        if detail is None:
+            raise NotFoundError("server not found in registry", details={"ref": cmd.ref})
+        server_name = cmd.ref.rsplit("/", 1)[-1] or cmd.ref
+        secret_refs = collect_secret_env(
+            detail, cmd.env_values or {}, server_name=server_name
+        )
+        sc = build_server_config_from_detail(
+            detail, prefer=cmd.prefer, secret_env_refs=secret_refs
+        )
+        return await self.add(
+            McpServerUpsertCommand(name=server_name, config=sc), principal
+        )
 
     @route(
         "GET",
