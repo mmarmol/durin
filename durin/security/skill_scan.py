@@ -1,6 +1,9 @@
 """Deterministic security scan for skills (§8.C). Body-first. Honest finite
 recall — feeds the human gate, not a guarantee. v2 = LLM-judge semantic layer.
-Rule set curated from SkillSpector / Prompt-Shield / AgentShield / SkillSieve.
+Rule set curated from SkillSpector (Apache-2.0) / Prompt-Shield / AgentShield /
+SkillSieve. Ported SkillSpector categories: data_exfiltration, privilege_escalation,
+excessive_agency, tool_misuse (regex) + the AST behavioral pass (skill_ast). YARA
+signatures (skill_yara) are consumed from a maintained feed, not authored here.
 
 Layering / multilingual contract: the natural-language regex rules below
 (prompt_injection / hidden_instructions) are a FAST ENGLISH PRE-FILTER, not the
