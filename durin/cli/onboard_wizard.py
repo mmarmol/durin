@@ -441,14 +441,14 @@ def _all_provider_rows(config: Config) -> list[tuple[str, str, bool, bool]]:
     Returns ``(name, label, configured, is_default)`` tuples.
     """
     from durin.providers.registry import PROVIDERS
-    from durin.utils.oauth import any_token_present
+    from durin.utils.oauth import oauth_token_present
 
     rows: list[tuple[str, str, bool, bool]] = []
     default_name = config.agents.defaults.provider
     for spec in PROVIDERS:
         p = getattr(config.providers, spec.name, None)
         if getattr(spec, "is_oauth", False):
-            configured = any_token_present(spec.name)
+            configured = oauth_token_present(spec.name)
         elif getattr(spec, "is_local", False):
             configured = bool(p and getattr(p, "api_base", None))
         else:
