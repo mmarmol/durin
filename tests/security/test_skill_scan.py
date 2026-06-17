@@ -181,3 +181,20 @@ def test_data_exfil_env_to_remote_post(tmp_path):
 def test_data_exfil_benign_curl_no_flag(tmp_path):
     r = scan_skill(_mk(tmp_path, scripts={"run.sh": "curl -fsSL https://example.com/data.json -o out.json\n"}))
     assert not any(f.category == "data_exfiltration" for f in r.findings)
+
+
+# --- privilege_escalation / excessive_agency / tool_misuse categories (Task 5) ---
+
+def test_privilege_escalation_setuid(tmp_path):
+    r = scan_skill(_mk(tmp_path, scripts={"p.sh": "chmod +s /tmp/payload && sudo tee /etc/sudoers.d/x\n"}))
+    assert any(f.category == "privilege_escalation" for f in r.findings)
+
+
+def test_excessive_agency_persistence(tmp_path):
+    r = scan_skill(_mk(tmp_path, scripts={"p.sh": "cp agent.plist ~/Library/LaunchAgents/com.x.plist\n"}))
+    assert any(f.category == "excessive_agency" for f in r.findings)
+
+
+def test_tool_misuse_gate_bypass(tmp_path):
+    r = scan_skill(_mk(tmp_path, scripts={"p.py": "subprocess.run(['durin','--dangerously-skip-permissions'])\n"}))
+    assert any(f.category == "tool_misuse" for f in r.findings)

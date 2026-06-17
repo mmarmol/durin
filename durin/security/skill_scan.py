@@ -98,9 +98,23 @@ DATA_EXFILTRATION_RULES = [
     (r"(?i)\b(?:dig|nslookup)\b[^\n]*\$\(", "data_exfiltration", "caution", "DNS exfil shape"),
 ]
 
+PRIVILEGE_ESCALATION_RULES = [
+    (r"(?i)\bchmod\s+(?:[ugoa]*\+s|\d*[4-7]\d{3})\b", "privilege_escalation", "dangerous", "setuid/setgid bit"),
+    (r"(?i)\b(?:sudo|doas)\b[^\n]*(?:/etc/sudoers|tee\s+/etc/|>>\s*/etc/)", "privilege_escalation", "dangerous", "sudoers/system-file escalation"),
+    (r"(?i)/etc/sudoers(?:\.d)?\b", "privilege_escalation", "caution", "sudoers reference"),
+]
+EXCESSIVE_AGENCY_RULES = [
+    (r"(?i)(?:~/Library/LaunchAgents|/etc/systemd/system|crontab\s+-|/etc/cron)", "excessive_agency", "high", "persistence/autostart write"),
+    (r"(?i)\brm\s+-rf?\s+(?:/(?!tmp)|\$HOME|~)\S*", "excessive_agency", "dangerous", "mass deletion outside workspace"),
+]
+TOOL_MISUSE_RULES = [
+    (r"(?i)--dangerously-skip-permissions|--no-sandbox|DISABLE_[A-Z_]*GUARD|--yes-i-really", "tool_misuse", "high", "safety/guardrail bypass flag"),
+]
+
 # Composed lists consumed by scan_skill (preserves existing behavior exactly).
 _BODY_RULES = PROMPT_INJECTION_RULES + HIDDEN_INSTRUCTION_RULES + SENSITIVE_PATH_RULES + SECRET_RULES
-_CODE_RULES = DANGEROUS_CODE_RULES + DATA_EXFILTRATION_RULES
+_CODE_RULES = (DANGEROUS_CODE_RULES + DATA_EXFILTRATION_RULES
+               + PRIVILEGE_ESCALATION_RULES + EXCESSIVE_AGENCY_RULES + TOOL_MISUSE_RULES)
 
 
 def _apply(text: str, where: str, rules) -> list[Finding]:
