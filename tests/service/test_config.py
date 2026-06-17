@@ -143,6 +143,28 @@ async def test_models_list_empty_provider_no_config_stays_empty(config_path):
     assert result.suggested == []
 
 
+async def test_models_list_provider_uses_catalog_with_capability(config_path, monkeypatch):
+    """A provider filter returns the per-provider catalog, capability-filtered."""
+    import durin.providers.provider_catalog as pc
+    from durin.providers.provider_catalog import ModelInfo
+
+    monkeypatch.setattr(
+        pc, "_load_index",
+        lambda: {"zai_coding_plan": [
+            ModelInfo(id="glm-5.2", supports_vision=False),
+            ModelInfo(id="glm-5v-turbo", supports_vision=True),
+        ]},
+    )
+    vision = await ConfigService().models_list(
+        ModelsListQuery(provider="zai_coding_plan", capability="vision"), LOCAL
+    )
+    assert vision.models == ["glm-5v-turbo"]
+    all_models = await ConfigService().models_list(
+        ModelsListQuery(provider="zai_coding_plan"), LOCAL
+    )
+    assert all_models.models == ["glm-5.2", "glm-5v-turbo"]
+
+
 async def test_model_picker_returns_easy_pick_and_catalog(tmp_path, monkeypatch):
     from durin.config.loader import save_config
     from durin.config.schema import Config
