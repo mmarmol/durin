@@ -624,8 +624,14 @@ class _SpaStaticFiles(StaticFiles):
         from starlette.exceptions import HTTPException
 
         try:
-            return await super().get_response(path, scope)
+            response = await super().get_response(path, scope)
         except HTTPException as exc:
-            if exc.status_code == 404:
-                return await super().get_response("index.html", scope)
-            raise
+            if exc.status_code != 404:
+                raise
+            response = await super().get_response("index.html", scope)
+        # The SPA shell (the only text/html we serve) must be no-cache so a
+        # redeploy's new hashed-asset references are picked up on the next load.
+        # Hashed assets (their URL encodes identity) keep their default validators.
+        if response.headers.get("content-type", "").startswith("text/html"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
