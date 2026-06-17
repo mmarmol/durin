@@ -1,6 +1,14 @@
 """Deterministic security scan for skills (§8.C). Body-first. Honest finite
 recall — feeds the human gate, not a guarantee. v2 = LLM-judge semantic layer.
-Rule set curated from SkillSpector / Prompt-Shield / AgentShield / SkillSieve."""
+Rule set curated from SkillSpector / Prompt-Shield / AgentShield / SkillSieve.
+
+Layering / multilingual contract: the natural-language regex rules below
+(prompt_injection / hidden_instructions) are a FAST ENGLISH PRE-FILTER, not the
+recall layer. Non-English or paraphrased injection is caught by the LLM judge
+(durin/security/skill_judge.py), which runs on durin's own models and is the
+multilingual / semantic recall layer. Do NOT add per-language NL token lists here
+— extend the judge instead (project rule: heuristic detectors must not be
+English-only)."""
 from __future__ import annotations
 
 import re
