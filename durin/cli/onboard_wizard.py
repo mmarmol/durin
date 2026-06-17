@@ -284,6 +284,12 @@ def _reconcile_extras_from_config(config: Config, extras: set[str]) -> None:
         extras.add("discord")
     if config.agents.defaults.provider in ("openai_codex", "github_copilot"):
         extras.add("oauth")
+    # YARA skill signature scan ships on by default (config flag defaults True),
+    # installed as an extra here so the base install stays robust on no-wheel
+    # platforms. Opt out via `skills.security.yara.enabled = false`.
+    yara = getattr(getattr(getattr(config, "skills", None), "security", None), "yara", None)
+    if getattr(yara, "enabled", False):
+        extras.add("skill-yara")
 
 
 def run_wizard(initial_config: Config, *, q: Any | None = None) -> WizardResult:
