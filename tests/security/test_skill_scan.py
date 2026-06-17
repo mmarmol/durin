@@ -198,3 +198,10 @@ def test_excessive_agency_persistence(tmp_path):
 def test_tool_misuse_gate_bypass(tmp_path):
     r = scan_skill(_mk(tmp_path, scripts={"p.py": "subprocess.run(['durin','--dangerously-skip-permissions'])\n"}))
     assert any(f.category == "tool_misuse" for f in r.findings)
+
+
+# --- AST pass integration (Task 6) ---
+
+def test_scan_skill_runs_ast_on_py(tmp_path):
+    r = scan_skill(_mk(tmp_path, scripts={"go.py": "import os\nos.system('x')\n"}))
+    assert any(f.where.endswith("go.py") and "os.system" in f.detail for f in r.findings)

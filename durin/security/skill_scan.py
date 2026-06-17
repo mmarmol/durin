@@ -219,6 +219,11 @@ def scan_skill(skill_dir: Path) -> ScanReport:
                 continue
             rel = str(p.relative_to(skill_dir))
             rep.findings += _apply(txt, rel, _CODE_RULES)
+            # AST behavioral pass for Python scripts. Local import breaks the
+            # skill_ast <-> skill_scan import cycle (skill_ast imports Finding).
+            if p.suffix == ".py":
+                from durin.security.skill_ast import scan_python_ast
+                rep.findings += scan_python_ast(txt, rel)
             # secrets + sensitive paths also matter inside scripts
             rep.findings += _apply(txt, rel, [r for r in _BODY_RULES if r[1] in ("secrets", "sensitive_path")])
     return rep
