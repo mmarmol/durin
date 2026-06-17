@@ -681,7 +681,8 @@
       "toggleSidebar": "Mostrar u ocultar la barra lateral",
       "newChat": "Iniciar un nuevo chat",
       "settings": "Abrir configuración",
-      "toggleTheme": "Cambiar tema"
+      "toggleTheme": "Cambiar tema",
+      "agentMode": "Modo del agente"
     },
     "composer": {
       "placeholderThread": "Escribe tu mensaje…",
@@ -697,6 +698,8 @@
       "goalStateSheetTitle": "Objetivo",
       "send": "Enviar mensaje",
       "stop": "Detener respuesta",
+      "queued": "En cola para el próximo turno",
+      "steer": "Guiar — inyectar guía durante el turno",
       "attachImage": "Adjuntar imagen",
       "modelPicker": {
         "search": "Buscar modelos…",
@@ -812,6 +815,8 @@
     },
     "copiedReply": "Respuesta copiada",
     "copyReply": "Copiar respuesta",
+    "edit": "Editar mensaje",
+    "retry": "Reintentar",
     "errorTitle": "El proveedor devolvió un error",
     "reqSecret": {
       "alreadyStored": "Ya está guardado — no hay nada que hacer",

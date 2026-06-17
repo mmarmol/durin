@@ -45,6 +45,7 @@ class HeaderBar(Horizontal):
     session_label: reactive[str] = reactive("")
     session_meta: reactive[str] = reactive("")  # e.g. "47 msgs · 12h ago"
     is_busy: reactive[bool] = reactive(False)
+    agent_mode: reactive[str] = reactive("build")
 
     def __init__(
         self,
@@ -63,9 +64,11 @@ class HeaderBar(Horizontal):
     def _title_text(self) -> str:
         label = self.session_label or "scratch"
         meta = self.session_meta
+        mode = self.agent_mode or "build"
+        mode_str = f"  [$warning]\\[{mode}][/]"
         if meta:
-            return f"[bold $accent]durin[/] · {label}  [dim]· {meta}[/dim]"
-        return f"[bold $accent]durin[/] · {label}"
+            return f"[bold $accent]durin[/] · {label}{mode_str}  [dim]· {meta}[/dim]"
+        return f"[bold $accent]durin[/] · {label}{mode_str}"
 
     def _status_glyph(self) -> str:
         # pi uses `•` for idle and dims/animates while busy. Plain dot for now.
@@ -78,6 +81,9 @@ class HeaderBar(Horizontal):
         self._refresh()
 
     def watch_is_busy(self, _old: bool, _new: bool) -> None:
+        self._refresh()
+
+    def watch_agent_mode(self, _old: str, _new: str) -> None:
         self._refresh()
 
     def _refresh(self) -> None:
