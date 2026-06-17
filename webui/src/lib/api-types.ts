@@ -624,6 +624,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/providers/model": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Add or update a configured model's params under a provider */
+        post: operations["config_provider_model_upsert"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/providers/model/remove": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Remove a configured model from a provider */
+        post: operations["config_provider_model_remove"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/providers/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Per-provider catalog models with caps and configured params */
+        get: operations["config_provider_models_route"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/secrets": {
         parameters: {
             query?: never;
@@ -1997,6 +2048,102 @@ export interface components {
              * @default false
              */
             supports_vision: boolean;
+        };
+        /** ProviderModelDeleteCommand */
+        ProviderModelDeleteCommand: {
+            /** Model */
+            model: string;
+            /** Provider */
+            provider: string;
+        };
+        /** ProviderModelEntry */
+        ProviderModelEntry: {
+            /**
+             * Configured
+             * @default false
+             */
+            configured: boolean;
+            /**
+             * Context Window Tokens
+             * @default null
+             */
+            context_window_tokens: number | null;
+            /** Id */
+            id: string;
+            /**
+             * Max Input Tokens
+             * @default null
+             */
+            max_input_tokens: number | null;
+            /**
+             * Max Tokens
+             * @default null
+             */
+            max_tokens: number | null;
+            /**
+             * Reasoning Effort
+             * @default null
+             */
+            reasoning_effort: string | null;
+            /**
+             * Supports Audio Input
+             * @default false
+             */
+            supports_audio_input: boolean;
+            /**
+             * Supports Reasoning
+             * @default false
+             */
+            supports_reasoning: boolean;
+            /**
+             * Supports Vision
+             * @default false
+             */
+            supports_vision: boolean;
+            /**
+             * Temperature
+             * @default null
+             */
+            temperature: number | null;
+        };
+        /** ProviderModelUpsertCommand */
+        ProviderModelUpsertCommand: {
+            /**
+             * Context Window Tokens
+             * @default null
+             */
+            context_window_tokens: number | null;
+            /**
+             * Max Tokens
+             * @default null
+             */
+            max_tokens: number | null;
+            /** Model */
+            model: string;
+            /** Provider */
+            provider: string;
+            /**
+             * Reasoning Effort
+             * @default null
+             */
+            reasoning_effort: string | null;
+            /**
+             * Temperature
+             * @default null
+             */
+            temperature: number | null;
+        };
+        /** ProviderModelsQuery */
+        ProviderModelsQuery: {
+            /** Provider */
+            provider: string;
+        };
+        /** ProviderModelsResult */
+        ProviderModelsResult: {
+            /** Models */
+            models: components["schemas"]["ProviderModelEntry"][];
+            /** Provider */
+            provider: string;
         };
         /** RevokeTokenCommand */
         RevokeTokenCommand: {
@@ -3436,6 +3583,78 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OAuthStatusResult"];
+                };
+            };
+        };
+    };
+    config_provider_model_upsert: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProviderModelUpsertCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigSetResult"];
+                };
+            };
+        };
+    };
+    config_provider_model_remove: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProviderModelDeleteCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigSetResult"];
+                };
+            };
+        };
+    };
+    config_provider_models_route: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProviderModelsQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderModelsResult"];
                 };
             };
         };

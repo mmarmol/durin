@@ -205,6 +205,61 @@ async def test_models_list_requires_read_scope():
         await ConfigService().models_list(ModelsListQuery(), principal)
 
 
+async def test_provider_models_route_lists_caps_and_overrides(config_path, monkeypatch):
+    import durin.providers.provider_catalog as pc
+    from durin.providers.provider_catalog import ModelInfo
+    from durin.service.config import ProviderModelsQuery
+
+    monkeypatch.setattr(
+        pc, "_load_index",
+        lambda: {"zai_coding_plan": [
+            ModelInfo(id="glm-5.2", max_input_tokens=1_000_000, supports_reasoning=True),
+            ModelInfo(id="glm-5v-turbo", supports_vision=True),
+        ]},
+    )
+    res = await ConfigService().provider_models_route(
+        ProviderModelsQuery(provider="zai_coding_plan"), LOCAL
+    )
+    assert {m.id for m in res.models} == {"glm-5.2", "glm-5v-turbo"}
+    glm = next(m for m in res.models if m.id == "glm-5.2")
+    assert glm.supports_reasoning is True
+    assert glm.max_input_tokens == 1_000_000
+    assert glm.configured is False
+
+
+async def test_provider_model_upsert_and_remove(config_path):
+    from durin.config.loader import load_config
+    from durin.service.config import (
+        ProviderModelDeleteCommand,
+        ProviderModelUpsertCommand,
+    )
+
+    await ConfigService().provider_model_upsert(
+        ProviderModelUpsertCommand(
+            provider="zai_coding_plan", model="glm-5.2", context_window_tokens=1_000_000
+        ),
+        LOCAL,
+    )
+    cfg = load_config(config_path)
+    assert cfg.providers.zai_coding_plan.models["glm-5.2"].context_window_tokens == 1_000_000
+
+    await ConfigService().provider_model_remove(
+        ProviderModelDeleteCommand(provider="zai_coding_plan", model="glm-5.2"), LOCAL
+    )
+    cfg2 = load_config(config_path)
+    assert "glm-5.2" not in (cfg2.providers.zai_coding_plan.models or {})
+
+
+async def test_provider_model_upsert_requires_write_scope():
+    from durin.service.config import ProviderModelUpsertCommand
+
+    principal = Principal.remote("t", frozenset({Scope.CONFIG_READ.value}))
+    with pytest.raises(ForbiddenError):
+        await ConfigService().provider_model_upsert(
+            ProviderModelUpsertCommand(provider="zai_coding_plan", model="x"), principal
+        )
+
+
 # ---------------------------------------------------------------------------
 # model capabilities
 # ---------------------------------------------------------------------------
