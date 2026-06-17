@@ -571,6 +571,10 @@
       "needs": "Needs",
       "none": "No requirements detected"
     },
+    "preview": {
+      "back": "← Back to results",
+      "unavailable": "Preview unavailable — you can still import."
+    },
     "search": {
       "placeholder": "Search the registry for skills",
       "button": "Search",
