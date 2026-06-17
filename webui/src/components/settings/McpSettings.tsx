@@ -7,6 +7,7 @@ import {
   Pencil,
   Plus,
   RotateCw,
+  Search,
   Trash2,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -19,6 +20,7 @@ import {
   SettingsRow,
   SettingsSectionTitle,
 } from "@/components/settings/primitives";
+import { McpDiscoverPane } from "@/components/settings/McpDiscoverPane";
 import {
   ApiError,
   addMcpServer,
@@ -146,6 +148,7 @@ export function McpSettings({ token }: { token: string }) {
   const [form, setForm] = useState<McpFormState>(EMPTY_MCP_FORM);
   const [editingName, setEditingName] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [discovering, setDiscovering] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   // Carries the existing static-OAuth client object so a checkbox toggle does
   // not lose it; null means "no object configured".
@@ -424,6 +427,18 @@ export function McpSettings({ token }: { token: string }) {
     form.type === "sse" || form.type === "streamableHttp" || isAutoForm;
   const isStdioForm = form.type === "stdio" || isAutoForm;
 
+  if (discovering) {
+    return (
+      <McpDiscoverPane
+        token={token}
+        onClose={(installed) => {
+          setDiscovering(false);
+          if (installed) void load();
+        }}
+      />
+    );
+  }
+
   return (
     <div className="space-y-5">
       <p className="px-1 text-[13px] leading-5 text-muted-foreground">
@@ -441,16 +456,28 @@ export function McpSettings({ token }: { token: string }) {
           <SettingsSectionTitle>
             {t("settings.mcp.servers")}
           </SettingsSectionTitle>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={busy}
-            onClick={onAdd}
-            className="rounded-full"
-          >
-            <Plus className="mr-1.5 h-3.5 w-3.5" aria-hidden />
-            {t("settings.mcp.add")}
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy}
+              onClick={() => setDiscovering(true)}
+              className="rounded-full"
+            >
+              <Search className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+              Discover
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy}
+              onClick={onAdd}
+              className="rounded-full"
+            >
+              <Plus className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+              {t("settings.mcp.add")}
+            </Button>
+          </div>
         </div>
         <SettingsGroup>
           {loading ? (
