@@ -82,6 +82,20 @@ def any_token_present(provider_name: str) -> bool:
     return any(p.exists() for p in token_storage_paths(provider_name))
 
 
+def oauth_token_present(provider_name: str) -> bool:
+    """Like :func:`any_token_present`, but for ``openai_codex`` consult the
+    secret store — its OAuth token lives there, not on a file path. Used by
+    ``configured_provider_names`` so the codex catalog group shows up."""
+    if provider_name in ("openai_codex", "openai-codex"):
+        try:
+            from durin.providers.codex_device_auth import codex_token_present
+
+            return codex_token_present()
+        except Exception:  # noqa: BLE001
+            return False
+    return any_token_present(provider_name)
+
+
 def should_use_device_code() -> bool:
     """True when loopback PKCE is unlikely to work (remote/headless shell).
 

@@ -176,7 +176,12 @@ async def test_model_picker_returns_easy_pick_and_catalog(tmp_path, monkeypatch)
     path = tmp_path / "config.json"
     save_config(config, path)
     monkeypatch.setattr("durin.config.loader._current_config_path", path)
+    import durin.providers.codex_device_auth as _cda
+
     monkeypatch.setattr("durin.utils.oauth.any_token_present", lambda _n: False)
+    # Keep codex undetected so the picker build stays network-free in tests
+    # (codex detection consults the secret store, then would list models live).
+    monkeypatch.setattr(_cda, "codex_token_present", lambda: False)
 
     result = await ConfigService().model_picker(ModelPickerQuery(recent=""), LOCAL)
     groups = {e.group for e in result.entries}
