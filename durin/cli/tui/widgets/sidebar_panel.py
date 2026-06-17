@@ -210,9 +210,9 @@ class SidebarPanel(Static):
         loop = self._agent_loop
         if loop is not None:
             info["model"] = getattr(loop, "model", "?")
-            ctx = getattr(loop, "context_window_tokens", 0)
-            if ctx:
-                info["ctx"] = f"{ctx // 1000}K"
+            ctx_window = getattr(loop, "context_window_tokens", 0)
+            if ctx_window:
+                info["ctx"] = f"{ctx_window // 1000}K"
             workspace = getattr(loop, "workspace", None)
             if workspace:
                 info["workdir"] = str(workspace)
@@ -224,6 +224,15 @@ class SidebarPanel(Static):
                     info["mode"] = get_active_mode_name(session)
             except Exception:  # noqa: BLE001
                 pass
+            # Context usage estimate
+            if ctx_window and self._session_key:
+                try:
+                    used = self._estimate_context_tokens(loop, self._session_key)
+                    if used > 0:
+                        pct = min(100, used * 100 // ctx_window)
+                        info["ctx"] = f"{used // 1000}K/{ctx_window // 1000}K ({pct}%)"
+                except Exception:  # noqa: BLE001
+                    pass
         try:
             from durin import __version__
 
@@ -231,6 +240,19 @@ class SidebarPanel(Static):
         except Exception:  # noqa: BLE001
             pass
         return info
+
+    def _estimate_context_tokens(self, loop: Any, session_key: str) -> int:
+        """Rough token estimate for the current session context."""
+        try:
+            from durin.utils.helpers import estimate_message_tokens
+
+            session = loop.sessions.get_or_create(session_key)
+            total = 0
+            for msg in session.messages:
+                total += estimate_message_tokens(msg)
+            return total
+        except Exception:  # noqa: BLE001
+            return 0
 
     # ---- rendering ---------------------------------------------------------
 
