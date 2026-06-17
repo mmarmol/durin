@@ -10,18 +10,15 @@ from durin.cli.tui.model_catalog import (
 )
 
 
-def _make_config(providers_with_keys: tuple[str, ...] = ()):
-    """Minimal config mock with provider configs that have/don't have keys."""
-    from unittest.mock import MagicMock
+def _cfg(monkeypatch, *, model="base-model", **keys):
+    """Real Config with given providers' api_key set; no OAuth tokens present."""
+    from durin.config.schema import Config
 
-    config = MagicMock()
-    config.providers = MagicMock()
-    for name in ("anthropic", "openai", "zhipu", "zai_coding_plan", "gemini", "deepseek"):
-        pc = MagicMock()
-        pc.api_key = "test-key" if name in providers_with_keys else None
-        pc.api_base = None
-        setattr(config.providers, name, pc)
-    config.model_presets = {}
+    monkeypatch.setattr("durin.utils.oauth.any_token_present", lambda _n: False)
+    config = Config()
+    config.agents.defaults.model = model
+    for name, val in keys.items():
+        getattr(config.providers, name).api_key = val
     return config
 
 
@@ -35,58 +32,45 @@ def test_infer_provider_unknown():
     assert infer_provider("some-random-model") == "auto"
 
 
-def test_build_entries_includes_configured_presets():
+def test_build_entries_pins_default(monkeypatch):
+    cfg = _cfg(monkeypatch, gemini="k")
+    entries = build_entries(config=cfg, presets={}, recent=[], active=None)
+    assert entries[0].name == "base-model"  # default pinned first
+    assert all(e.provider for e in entries)
+
+
+def test_build_entries_preset_row_switches_by_name(monkeypatch):
     from durin.config.schema import ModelPresetConfig
 
-    config = _make_config()
-    config.model_presets = {
-        "fast": ModelPresetConfig(model="glm-5-turbo"),
-    }
+    cfg = _cfg(monkeypatch, gemini="k")
     entries = build_entries(
-        config=config,
-        presets={"default": config.model_presets["fast"], "fast": config.model_presets["fast"]},
+        config=cfg,
+        presets={"fast": ModelPresetConfig(model="gemini-2.5-flash", provider="gemini")},
         recent=[],
-        active="default",
+        active=None,
     )
-    names = [e.name for e in entries]
-    assert "default" in names
-    assert "fast" in names
+    preset_entries = [e for e in entries if e.is_preset]
+    assert any(e.name == "gemini-2.5-flash" and e.ref == "fast" for e in preset_entries)
 
 
-def test_build_entries_includes_suggested_for_configured_providers():
-    config = _make_config(providers_with_keys=("anthropic",))
+def test_build_entries_includes_catalog_for_configured_providers(monkeypatch):
+    cfg = _cfg(monkeypatch, anthropic="k")
+    entries = build_entries(config=cfg, presets={}, recent=[], active=None)
+    assert any(e.name == "claude-opus-4-7" for e in entries)
+
+
+def test_build_entries_excludes_catalog_for_unconfigured_providers(monkeypatch):
+    cfg = _cfg(monkeypatch)  # nothing configured
+    entries = build_entries(config=cfg, presets={}, recent=[], active=None)
+    assert not any(e.name == "claude-opus-4-7" for e in entries)
+
+
+def test_build_entries_includes_recent(monkeypatch):
+    cfg = _cfg(monkeypatch, gemini="k")
     entries = build_entries(
-        config=config,
-        presets={"default": _preset("glm-5.2")},
-        recent=[],
-        active="default",
+        config=cfg, presets={}, recent=["gemini-2.5-flash"], active=None,
     )
-    suggested_names = [e.name for e in entries if not e.is_preset]
-    assert "claude-opus-4-7" in suggested_names
-
-
-def test_build_entries_excludes_suggested_for_unconfigured_providers():
-    config = _make_config(providers_with_keys=())
-    entries = build_entries(
-        config=config,
-        presets={"default": _preset("glm-5.2")},
-        recent=[],
-        active="default",
-    )
-    suggested_names = [e.name for e in entries if not e.is_preset]
-    assert "claude-opus-4-7" not in suggested_names
-
-
-def test_build_entries_includes_recent():
-    config = _make_config()
-    entries = build_entries(
-        config=config,
-        presets={"default": _preset("glm-5.2")},
-        recent=["claude-sonnet-4-6"],
-        active="default",
-    )
-    recent_entries = [e for e in entries if e.is_recent]
-    assert any(e.name == "claude-sonnet-4-6" for e in recent_entries)
+    assert any(e.name == "gemini-2.5-flash" and e.is_recent for e in entries)
 
 
 def test_format_entry_shows_context_window():
@@ -123,9 +107,3 @@ def test_format_entry_none_capabilities():
     )
     text = format_entry(entry)
     assert text == "unknown-model"
-
-
-def _preset(model: str):
-    from durin.config.schema import ModelPresetConfig
-
-    return ModelPresetConfig(model=model)

@@ -113,12 +113,7 @@ class ModelPickerScreen(ModalScreen[str | None]):
         for entry in self._entries:
             if query_lower and not fuzzy_match(query_lower, entry.name):
                 continue
-            if entry.is_recent:
-                matched.append((_HEADER_RECENT, entry))
-            elif entry.is_preset:
-                matched.append((_HEADER_PRESETS, entry))
-            else:
-                matched.append((_HEADER_SUGGESTED, entry))
+            matched.append((entry.group or _HEADER_SUGGESTED, entry))
 
         if not matched:
             no_results.update("No models match. Press Enter to use this name.")
@@ -142,9 +137,13 @@ class ModelPickerScreen(ModalScreen[str | None]):
         if current_list:
             sections.append((current_header, current_list))
 
+        seen_ids: set[str] = set()
         for header, entries in sections:
             ol.add_option(Option(header, id=f"__header__{header}", disabled=True))
             for entry in entries:
+                if entry.name in seen_ids:
+                    continue
+                seen_ids.add(entry.name)
                 marker = " ← active" if entry.name == self._active else ""
                 label = format_entry(entry) + marker
                 ol.add_option(Option(label, id=entry.name))
