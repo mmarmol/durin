@@ -8,8 +8,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from durin.agent.skills_frontmatter import split_frontmatter
+from durin.security.osv import query_malware
 
 _SEV = {"info": 0, "caution": 1, "high": 2, "dangerous": 3}
+
+# install-spec kind -> OSV ecosystem. Unmapped kinds (brew/apt/download) skip OSV.
+_OSV_ECOSYSTEM = {"pip": "PyPI", "uv": "PyPI", "npm": "npm", "node": "npm",
+                  "cargo": "crates.io", "go": "Go"}
 _VERDICT = {0: "safe", 1: "caution", 2: "dangerous", 3: "dangerous"}  # high+ -> dangerous
 
 
@@ -151,6 +156,21 @@ def validate_install_specs(data: dict) -> list[Finding]:
             # model, and flagging every unmodeled installer false-positives on
             # legit skills. A code-carrying skill is gated by the carries-code
             # confirm regardless.
+
+            # Supply-chain malware lookup (OSV) for mappable language ecosystems.
+            # Fail-open: a network/timeout error never blocks a scan.
+            ecosystem = _OSV_ECOSYSTEM.get(kind)
+            if ecosystem:
+                pkg = str(spec.get("package") or spec.get("module")
+                          or spec.get("formula") or "").split("@")[0].strip()
+                if pkg:
+                    try:
+                        mal = query_malware(pkg, ecosystem)
+                    except Exception:  # noqa: BLE001 — fail-open, never block a scan
+                        mal = []
+                    if mal:
+                        out.append(Finding("supply_chain", "dangerous", where,
+                                           f"package {pkg!r} has malware advisory {', '.join(mal[:3])}"))
     return out
 
 
