@@ -3377,6 +3377,35 @@
         "x-required-scope": "mcp:write"
       }
     },
+    "/api/v1/mcp/servers/{name}/reconnect": {
+      "post": {
+        "operationId": "mcp_reconnect",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpServerNameCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpServerDetail"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Reconnect a server to apply config changes or retry a failure",
+        "x-required-scope": "mcp:write"
+      }
+    },
     "/api/v1/memory/backlinks": {
       "get": {
         "operationId": "memory_backlinks",

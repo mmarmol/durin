@@ -300,6 +300,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/mcp/servers/{name}/reconnect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reconnect a server to apply config changes or retry a failure */
+        post: operations["mcp_reconnect"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/memory/backlinks": {
         parameters: {
             query?: never;
@@ -2876,6 +2893,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["McpOkResult"];
+                };
+            };
+        };
+    };
+    mcp_reconnect: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["McpServerNameCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpServerDetail"];
                 };
             };
         };
