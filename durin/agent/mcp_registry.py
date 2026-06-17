@@ -228,11 +228,31 @@ def build_mcp_adapters(registries) -> list:
     return out
 
 
+def _spawn_catalog_sync(cache, adapter) -> None:
+    """Fire-and-forget catalog sync to build the fuzzy cache for later searches.
+
+    The official registry has hundreds of servers (many pages), so a blocking full
+    sync would make the FIRST search slow. Instead the first search returns the
+    registry's fast direct (substring) results and kicks this background sync. In the
+    long-running gateway the task completes and the cache persists to disk, so
+    subsequent searches (even after a restart) rank fuzzily; in a short-lived CLI run
+    the task is dropped when the loop ends and the CLI just uses direct search.
+    """
+    import asyncio
+
+    try:
+        asyncio.get_running_loop().create_task(cache.sync(adapter))
+    except RuntimeError:
+        pass
+
+
 async def search_mcp_registries(query, *, cache, adapters, limit):
-    """Rank from the local catalog cache; sync from the official adapter if empty."""
-    if not cache._servers:
-        for adapter in adapters:
-            if getattr(adapter, "name", "") == "official":
-                await cache.sync(adapter)
-                break
-    return cache.rank(query, limit=limit)
+    """Rank from the local fuzzy cache when populated; otherwise return the registry's
+    fast direct (substring) results and kick a background sync to build the cache."""
+    if cache._servers:
+        return cache.rank(query, limit=limit)
+    official = next((a for a in adapters if getattr(a, "name", "") == "official"), None)
+    if official is None:
+        return cache.rank(query, limit=limit)
+    _spawn_catalog_sync(cache, official)
+    return await official.search(query, limit=limit)

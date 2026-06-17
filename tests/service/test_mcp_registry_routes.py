@@ -30,6 +30,12 @@ class _FakeReg:
     async def fetch_page(self, *, cursor=None, updated_since=None):
         return [{"name": "io.x/jira", "description": "Jira issues"}], None
 
+    async def search(self, query, *, limit):
+        from durin.agent.mcp_registry import _hit_from_server
+
+        servers, _ = await self.fetch_page()
+        return [_hit_from_server(s, registry="official") for s in servers][:limit]
+
     async def describe(self, ref):
         from durin.agent.mcp_registry import parse_server_json
 
