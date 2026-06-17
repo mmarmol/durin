@@ -103,16 +103,15 @@ async def test_model_command_switches_back_to_default(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_model_command_unknown_preset_keeps_old_state(tmp_path) -> None:
+async def test_model_command_arbitrary_name_creates_temp_preset(tmp_path) -> None:
     loop = _make_loop(tmp_path)
 
-    out = await cmd_model(_ctx(loop, "/model missing", args="missing"))
+    out = await cmd_model(_ctx(loop, "/model glm-5.2", args="glm-5.2"))
 
-    assert "Could not switch model preset" in out.content
-    assert "\"model_preset" not in out.content
-    assert "Available presets: `default`, `fast`" in out.content
-    assert loop.model_preset is None
-    assert loop.model == "base-model"
+    assert "Switched model preset" in out.content
+    assert "glm-5.2" in out.content
+    assert loop.model == "glm-5.2"
+    assert "glm-5.2" in loop.model_presets
 
 
 @pytest.mark.asyncio

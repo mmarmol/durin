@@ -393,7 +393,28 @@ async def cmd_model(ctx: CommandContext) -> OutboundMessage:
     name = parts[0]
     try:
         loop.set_model_preset(name)
-    except (KeyError, ValueError) as exc:
+    except KeyError:
+        from durin.cli.tui.model_catalog import infer_provider
+        from durin.config.schema import ModelPresetConfig
+
+        provider = infer_provider(name)
+        loop.model_presets[name] = ModelPresetConfig(
+            model=name, provider=provider,
+        )
+        try:
+            loop.set_model_preset(name)
+        except (KeyError, ValueError) as exc:
+            names = _model_preset_names(loop)
+            return OutboundMessage(
+                channel=ctx.msg.channel,
+                chat_id=ctx.msg.chat_id,
+                content=(
+                    f"Could not switch model preset: {_command_error_message(exc)}\n\n"
+                    f"Available presets: {_format_preset_names(names)}"
+                ),
+                metadata=metadata,
+            )
+    except ValueError as exc:
         names = _model_preset_names(loop)
         return OutboundMessage(
             channel=ctx.msg.channel,
