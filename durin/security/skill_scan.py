@@ -89,9 +89,18 @@ DANGEROUS_CODE_RULES = [
     (r"\batob\s*\(|\bbase64\.b64decode\s*\(|(?:\\x[0-9a-fA-F]{2}){8,}", "dangerous_code", "caution", "obfuscation (base64/hex)"),
 ]
 
+DATA_EXFILTRATION_RULES = [
+    # outbound POST/PUT whose payload pulls env / credentials / local files
+    (r"(?is)\b(?:curl|wget)\b[^\n]*?(?:-X\s*(?:POST|PUT)|--data|-d)\b[^\n]*?(?:\$\(\s*env\b|\benv\b|/etc/passwd|~/\.aws|~/\.ssh|process\.env)", "data_exfiltration", "dangerous", "outbound POST of env/credentials"),
+    # piping a sensitive read straight into a network tool
+    (r"(?is)\b(?:cat|tar|zip)\b[^\n|]*?(?:~/\.ssh|~/\.aws|\.env|id_rsa)[^\n|]*\|\s*(?:curl|wget|nc|ncat)\b", "data_exfiltration", "dangerous", "sensitive read piped to network"),
+    # DNS / webhook beacon of host data
+    (r"(?i)\b(?:dig|nslookup)\b[^\n]*\$\(", "data_exfiltration", "caution", "DNS exfil shape"),
+]
+
 # Composed lists consumed by scan_skill (preserves existing behavior exactly).
 _BODY_RULES = PROMPT_INJECTION_RULES + HIDDEN_INSTRUCTION_RULES + SENSITIVE_PATH_RULES + SECRET_RULES
-_CODE_RULES = DANGEROUS_CODE_RULES
+_CODE_RULES = DANGEROUS_CODE_RULES + DATA_EXFILTRATION_RULES
 
 
 def _apply(text: str, where: str, rules) -> list[Finding]:
