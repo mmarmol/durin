@@ -234,4 +234,16 @@ def scan_skill(skill_dir: Path) -> ScanReport:
                 rep.findings += scan_python_ast(txt, rel)
             # secrets + sensitive paths also matter inside scripts
             rep.findings += _apply(txt, rel, [r for r in _BODY_RULES if r[1] in ("secrets", "sensitive_path")])
+
+    # Optional YARA signature pass: guarded (no-op without the [skill-yara] extra
+    # or when disabled in config) + advisory (never fatal). scan_yara itself stays
+    # pure; the config policy is applied here, in the orchestrator.
+    try:
+        from durin.config.loader import load_config
+        from durin.security.skill_yara import scan_yara, yara_available
+        if yara_available() and load_config().skills.security.yara.enabled:
+            rep.findings += scan_yara(skill_dir)
+    except Exception as exc:  # noqa: BLE001 — YARA is advisory, never fatal
+        import logging
+        logging.getLogger(__name__).debug("YARA pass skipped: %s", exc)
     return rep
