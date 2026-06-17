@@ -33,8 +33,20 @@ def _rules_dir() -> Path:
 
 
 def _compiled():
-    """Compile the active rule set, or None when absent / non-compiling."""
+    """Compile the active rule set, or None when absent / non-compiling.
+
+    Opportunistically refreshes from the configured feed when stale (best-effort;
+    a failed refresh keeps the existing rules). No feed configured -> no refresh.
+    """
     rd = _rules_dir()
+    try:
+        from durin.config.loader import load_config
+        from durin.security.yara_updater import is_stale, refresh_rules
+        ycfg = load_config().skills.security.yara
+        if ycfg.feed_url and is_stale(rd, ycfg.refresh_hours):
+            refresh_rules(rd, ycfg.feed_url, ycfg.feed_pin, sha256=None)
+    except Exception as exc:  # noqa: BLE001 — refresh is best-effort
+        logger.debug("YARA refresh skipped: %s", exc)
     files = {p.name: str(p) for p in rd.glob("*.yar")} if rd.is_dir() else {}
     if not files:
         return None
