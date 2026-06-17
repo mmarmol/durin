@@ -98,6 +98,21 @@ class ModelsListResult(Result):
     models: list[str]
 
 
+class ModelPickerQuery(Query):
+    recent: str = ""
+
+
+class PickerEntryModel(Result):
+    name: str
+    provider: str
+    group: str
+    role: str
+
+
+class ModelPickerResult(Result):
+    entries: list[PickerEntryModel]
+
+
 # ---------------------------------------------------------------------------
 # DTOs — model capabilities
 # ---------------------------------------------------------------------------
@@ -366,6 +381,38 @@ class ConfigService:
             ]
 
         return ModelsListResult(suggested=suggested, models=catalog)
+
+    @route(
+        "GET",
+        "/api/v1/model/picker",
+        scope=Scope.CONFIG_READ.value,
+        request_model=ModelPickerQuery,
+        response_model=ModelPickerResult,
+        summary="Ordered model picker entries (easy-pick + configured catalog)",
+    )
+    async def model_picker(
+        self, query: ModelPickerQuery, principal: Principal
+    ) -> ModelPickerResult:
+        principal.require(Scope.CONFIG_READ)
+        from durin.agent.model_picker import picker_entries
+        from durin.config.loader import load_config
+
+        config = load_config()
+        recent = [r for r in query.recent.split(",") if r]
+        entries = picker_entries(
+            config,
+            presets=config.model_presets,
+            recent=recent,
+            active=config.agents.defaults.model_preset,
+        )
+        return ModelPickerResult(
+            entries=[
+                PickerEntryModel(
+                    name=e.name, provider=e.provider, group=e.group, role=e.role
+                )
+                for e in entries
+            ]
+        )
 
     @route(
         "GET",
