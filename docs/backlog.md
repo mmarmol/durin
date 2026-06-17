@@ -43,31 +43,38 @@ cliente" a **superset best-in-class** — paridad-o-mejor que hermes-agent, open
 openclaw en las 13 dimensiones (matriz en el doc maestro). Comparativa hecha contra los
 3 repos en `git_personal/` (reportes verificados a file:line).
 
-**Problema**: `durin/agent/tools/mcp.py` (665 LOC) es example-grade: sesión directa
-(stale forever en crash), `str(block)` lossy (pierde Image/Audio/Embedded), `isError`
-ignorado, timeout per-server único, sin reconnect/keepalive/circuit-breaker/list_changed,
-sin OAuth, schema sólo nullable. (El SDK 1.27.1 además valida outputSchema y revienta
-`call_tool` ante un `$ref` roto.)
+**Problema**: `durin/agent/tools/mcp.py` era example-grade: sesión directa (stale forever
+en crash), `str(block)` lossy (perdía Image/Audio/Embedded), `isError` ignorado, timeout
+per-server único, sin reconnect/keepalive/circuit-breaker/list_changed, sin OAuth, schema
+sólo nullable. (El SDK 1.27.1 además valida outputSchema y revienta `call_tool` ante un
+`$ref` roto.)
 
 **Plan**: descompuesto en 6 sub-proyectos (cada uno spec→plan→PRs), secuencia
 SP-1 → SP-2 → {SP-3,4,5 paralelo} → SP-6:
-- **SP-1** fidelidad de resultado + schema sanitization (independiente, sin refactor;
-  desbloquea browser-via-MCP). ← **arrancando acá**
-- **SP-2** supervisión/reconnect (pivote arquitectónico: `MCPServerConnection`,
-  task-per-server, keepalive, circuit breaker, list_changed, timeouts, transport fallback).
-- **SP-3** stdio hygiene (orphan-kill, stderr→log, env-scrub).
-- **SP-4** OAuth (PKCE + DCR + cold-load + 401 dedup; `durin mcp login`).
-- **SP-5** security (cred-redaction, injection-scan, SSRF).
-- **SP-6** server→cliente (sampling, roots, logging).
+- **SP-1** fidelidad + schema — **IMPLEMENTADO**: 3 wrappers (isError, Image+guard #90710,
+  audio/embedded/resource_link/unknown→JSON, structuredContent); schema (required-pruning,
+  $defs, type-array→anyOf); output-schema opt-out total.
+- **SP-2** supervisión/reconnect — **IMPLEMENTADO**: `MCPServerConnection` task-per-server +
+  live-session-indirection, reconnect/backoff, keepalive capability-aware, circuit breaker
+  3-state, tools/list_changed, per-tool/progress/dual timeouts, HTTP→SSE fallback (tests con server real).
+- **SP-3** stdio hygiene — **IMPLEMENTADO**: stderr→logfile + OSV malware-preflight (orphan-kill +
+  env-scrub ya los da el SDK 1.27.2; Linux-OOM = macOS-N/A).
+- **SP-4** OAuth — **IMPLEMENTADO**: `SecretsTokenStorage` sobre el secret store de durin + wiring
+  (httpx.Auth) + `durin mcp login/logout/status` + auth-401 reauth. **Cierra el item secrets-bypass.**
+- **SP-5** security — **IMPLEMENTADO**: SSRF wiring (motor `network.py` ya existía) + injection-scan
+  vendor-agnostic + command exfil-blocklist. (cred-redaction ya la da el runner.)
+- **SP-6** server→cliente — **IMPLEMENTADO**: roots + logging + sampling (al provider primario,
+  off-by-default, governance RPM/token/model/round-caps).
 
-**Doc maestro** (matriz de paridad + detalle de los 6 SP + hechos del SDK):
-`.workdocs/superpowers/specs/2026-06-15-mcp-best-in-class-design.md`.
+**Doc maestro** (matriz de paridad + detalle de los 6 SP + hechos del SDK + notas de
+implementación de SP-1): `.workdocs/superpowers/specs/2026-06-15-mcp-best-in-class-design.md`.
 **Notas de investigación** (gitignored):
 `.workdocs/research/2026-06-10-mcp-client-investigation.md` y
 `.workdocs/research/2026-06-10-tool-gaps-deep-dive.md`.
 
-**Estado**: investigación + descomposición completas (2026-06-15); SP-1 en diseño,
-implementación no iniciada.
+**Estado**: **los 6 sub-proyectos IMPLEMENTADOS** (2026-06-16) en la branch
+`worktree-mcp-sp1-fidelity-schema` (~55 commits, **250 tests MCP verdes**, ruff limpio, sin mergear).
+Pendiente: review conjunta + integración (merge/PR) + 1 verificación live manual del flujo OAuth.
 
 ### P3 — Comando para cambiar modelo es precario — autocompletion progresivo
 

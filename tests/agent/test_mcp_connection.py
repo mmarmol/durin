@@ -29,7 +29,7 @@ async def test_connect_mcp_retries_when_no_servers_connect(tmp_path, monkeypatch
     loop = _make_loop(tmp_path)
     attempts = 0
 
-    async def _fake_connect(_servers, _registry):
+    async def _fake_connect(_servers, _registry, **kwargs):
         nonlocal attempts
         attempts += 1
         return {}
@@ -41,4 +41,4 @@ async def test_connect_mcp_retries_when_no_servers_connect(tmp_path, monkeypatch
 
     assert attempts == 2
     assert loop._mcp_connected is False
-    assert loop._mcp_stacks == {}
+    assert loop._mcp_connections == {}

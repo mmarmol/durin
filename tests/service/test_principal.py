@@ -68,3 +68,8 @@ def test_scope_values_are_domain_colon_action():
         assert ":" in scope.value
         domain, action = scope.value.split(":", 1)
         assert domain and action in {"read", "write"}
+
+
+def test_mcp_scopes_defined():
+    assert Scope.MCP_READ.value == "mcp:read"
+    assert Scope.MCP_WRITE.value == "mcp:write"

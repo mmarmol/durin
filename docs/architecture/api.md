@@ -58,7 +58,7 @@ constructors: `Principal.local()` (in-process TUI/cron — full authority via
 
 `Scope` (`principal.py`) is the single authorization vocabulary, named
 `<domain>:<read|write>` — `settings`, `secrets`, `skills`, `cron`, `sessions`,
-`config`, `memory`, `system`, plus `admin`. The route table references these
+`config`, `memory`, `mcp`, `system`, plus `admin`. The route table references these
 same values. Unused scopes are removed rather than left speculative, so chat has
 no scope — chat flows through the WS endpoint, not `/api/v1`.
 
@@ -81,8 +81,11 @@ Two builders consume the registry:
 
 - `durin/service/wiring.py::build_service_registry` — the **functional**
   registry, wired to real `config` / `session_manager` / `cron_service` / `bus`.
-  Registers all eleven services (`wiring.py`). Shared by the gateway front
+  Registers all twelve services (`wiring.py`). Shared by the gateway front
   door and (historically) the WS channel so both serve the same service set.
+  The `mcp` service additionally receives an optional `mcp_runtime` (an
+  `McpRuntime` over the gateway's live `AgentLoop`); the front door passes one,
+  the catalog/TUI leave it `None` (config-only status).
 - `durin/service/catalog.py::build_catalog_registry` — a **deps-less** registry
   for spec-reading only (the OpenAPI generator). Services are instantiated with
   inert `None`/stub deps because no method is ever called through it
@@ -109,9 +112,22 @@ first. Patterns worth noting:
   than a captured path. `forget` returns a success-only `ForgetResult`
   (`memory.py`); the failure outcomes (protected/not_found/invalid) are
   raised as DomainErrors so they render as problem+json like every other 4xx.
+- **mcp** (`service/mcp.py`) — manage MCP servers under `/api/v1/mcp/servers`
+  (`GET` list/detail, `POST` add, `PATCH` update, `DELETE` remove, `POST`
+  `…/enable`|`…/disable`, `POST` `…/oauth/login`|`…/oauth/logout`). CRUD mutates
+  `tools.mcp_servers` via `save_config`; **live status** is overlaid from the
+  injected `McpRuntime` (`durin/agent/mcp_runtime.py`), which reads the gateway
+  `AgentLoop`'s persistent connections — `connected` / `connecting` / `failed`
+  (with the connect error) / `needs_auth` / `disabled` (`derive_status`,
+  `mcp.py`). `enable`/`disable` persist the server-level `enabled` flag **and**
+  connect/disconnect the live connection at runtime (`AgentLoop.connect_mcp_server`
+  / `disconnect_mcp_server`). `oauth/login` runs the SDK handshake from the
+  gateway and returns the authorization URL for the webui to open
+  (`durin/agent/tools/mcp_oauth_web.py`); the loopback callback captures the
+  redirect on localhost (a remote gateway is out of scope).
 
 The full service set: `secrets`, `cron`, `sessions`, `settings`, `config`,
-`skills`, `memory`, `health`, `commands`, `oauth`, `auth`.
+`skills`, `memory`, `mcp`, `health`, `commands`, `oauth`, `auth`.
 
 ---
 
