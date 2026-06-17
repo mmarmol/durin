@@ -62,12 +62,14 @@ class CatalogRefreshScheduler:
         self._thread.start()
 
     def _run(self) -> None:
-        while not self._stop.is_set():
+        # Wait first, THEN refresh: the vendored floor is the day-1 data, so this
+        # keeps process (and test) startup free of any network call. ``wait``
+        # returns True the instant ``stop()`` fires, so shutdown is immediate.
+        while not self._stop.wait(self._interval):
             try:
                 refresh_provider_models_cache(self._data_dir)
             except Exception:  # noqa: BLE001
                 pass
-            self._stop.wait(self._interval)
 
     def stop(self) -> None:
         self._stop.set()
