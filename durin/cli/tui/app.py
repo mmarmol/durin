@@ -57,6 +57,8 @@ class DurinApp(App[None]):
         ("ctrl+p", "open_command_palette", "Commands"),
         ("ctrl+shift+l", "open_variant_picker", "Effort"),
         ("ctrl+b", "toggle_sidebar", "Sidebar"),
+        ("ctrl+r", "retry_last", "Retry"),
+        ("ctrl+g", "steer", "Steer"),
     ]
 
     def __init__(
@@ -669,6 +671,39 @@ class DurinApp(App[None]):
             self.notify(f"Copied last reply ({len(last_body):,} chars).")
         except NoClipboardError as e:
             self.notify(f"Copy failed: {e}", severity="error")
+
+    def action_retry_last(self) -> None:
+        """Ctrl+R: re-send the last user message to get a fresh response."""
+        try:
+            chat = self.query_one("#chat", ChatView)
+        except Exception:  # noqa: BLE001
+            return
+        for bubble in reversed(list(chat.query(MessageBubble))):
+            if bubble._role == "user" and bubble.body:
+                task = asyncio.create_task(self._publish_inbound(bubble.body, []))
+                _ = task  # prevent gc
+                self.notify("Retrying last message…")
+                return
+        self.notify("No message to retry.", severity="warning")
+
+    def action_steer(self) -> None:
+        """Ctrl+G: send current input as a steer (mid-turn guidance).
+
+        Prefixes the message with [steer] so it's visually distinct.
+        If the agent isn't working, it's just a normal message.
+        """
+        try:
+            input_area = self.query_one(InputArea)
+        except Exception:  # noqa: BLE001
+            return
+        text = input_area.value.strip()
+        if not text:
+            self.notify("Type guidance first, then Ctrl+G.", severity="warning")
+            return
+        input_area.value = ""
+        task = asyncio.create_task(self._publish_inbound(f"[steer] {text}", []))
+        _ = task
+        self.notify("Steer sent.")
 
     # ---- D5.5 modal pickers ----------------------------------------------
 

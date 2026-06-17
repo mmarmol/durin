@@ -697,6 +697,8 @@
       "goalStateCloseAria": "Close goal",
       "send": "Send message",
       "stop": "Stop response",
+      "queued": "Queued for next turn",
+      "steer": "Steer — inject guidance mid-turn",
       "attachImage": "Attach image",
       "modelPicker": {
         "search": "Search models…",
@@ -817,6 +819,8 @@
     "agentActivityLiveToolsOnly": "Working… · {{tools}} tool calls",
     "imageAttachment": "Image attachment",
     "copyReply": "Copy reply",
+    "edit": "Edit message",
+    "retry": "Retry",
     "errorTitle": "The provider returned an error",
     "copiedReply": "Copied reply",
     "turnLatencyTitle": "Response time (end-to-end)",
