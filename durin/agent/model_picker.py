@@ -24,6 +24,11 @@ class PickerEntry:
     provider: str
     group: str
     role: str  # active | default | preset | recent | catalog
+    # The exact ``/model`` argument to commit this row. Named presets (and the
+    # reserved ``default``) switch by name to preserve their params; everything
+    # else commits an explicit ``provider model`` pair. Clients send
+    # ``/model {ref}`` verbatim — no per-client branching.
+    ref: str
 
 
 def picker_entries(
@@ -44,28 +49,29 @@ def picker_entries(
     def _provider_of(preset: ModelPresetConfig) -> str:
         return preset.provider if preset.provider != "auto" else infer_provider(preset.model)
 
-    def add(name: str, provider: str, group: str, role: str) -> None:
+    def add(name: str, provider: str, group: str, role: str, ref: str) -> None:
         key = (provider, name)
         if not name or key in seen:
             return
         seen.add(key)
-        out.append(PickerEntry(name=name, provider=provider, group=group, role=role))
+        out.append(
+            PickerEntry(name=name, provider=provider, group=group, role=role, ref=ref)
+        )
 
     # Easy pick — active, default, presets, recents.
     if active and active in presets:
         p = presets[active]
-        add(p.model, _provider_of(p), _EASY, "active")
-    add(
-        default_model,
-        default_provider if default_provider != "auto" else infer_provider(default_model),
-        _EASY,
-        "default",
+        add(p.model, _provider_of(p), _EASY, "active", active)
+    default_prov = (
+        default_provider if default_provider != "auto" else infer_provider(default_model)
     )
+    add(default_model, default_prov, _EASY, "default", "default")
     for pname in sorted(presets):
         p = presets[pname]
-        add(p.model, _provider_of(p), _EASY, "preset")
+        add(p.model, _provider_of(p), _EASY, "preset", pname)
     for m in recent:
-        add(m, infer_provider(m), _EASY, "recent")
+        prov = infer_provider(m)
+        add(m, prov, _EASY, "recent", f"{prov} {m}")
 
     # Catalog — curated defaults of every configured provider.
     configured = configured_provider_names(config)
@@ -73,6 +79,6 @@ def picker_entries(
         if provider_name == "custom" or provider_name not in configured:
             continue
         for m in models:
-            add(m, provider_name, provider_name, "catalog")
+            add(m, provider_name, provider_name, "catalog", f"{provider_name} {m}")
 
     return out
