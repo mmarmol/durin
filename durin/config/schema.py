@@ -958,6 +958,22 @@ class LoggingConfig(Base):
     )  # Age at which rotated gateway segments are deleted.
 
 
+class CatalogRefreshConfig(Base):
+    """Daily models.dev catalog refresh into a user-cache overlay.
+
+    A top-level section (not under ``providers``) — it is not a provider, and
+    nesting it in the providers dict would entangle it with the provider-section
+    prune/iteration logic.
+    """
+
+    enabled: bool = True
+    interval_hours: int = Field(
+        default=24, ge=1,
+        validation_alias=AliasChoices("intervalHours", "interval_hours"),
+        serialization_alias="intervalHours",
+    )
+
+
 class Config(BaseSettings):
     """Root configuration for durin."""
 
@@ -967,6 +983,11 @@ class Config(BaseSettings):
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
+    catalog_refresh: CatalogRefreshConfig = Field(
+        default_factory=CatalogRefreshConfig,
+        validation_alias=AliasChoices("catalogRefresh", "catalog_refresh"),
+        serialization_alias="catalogRefresh",
+    )
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     api: ApiConfig = Field(default_factory=ApiConfig)

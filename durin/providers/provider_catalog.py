@@ -44,15 +44,32 @@ def _coerce(entries: list) -> list[ModelInfo]:
     return out
 
 
-@lru_cache(maxsize=1)
-def _load_index() -> dict[str, list[ModelInfo]]:
-    """Vendored floor; Part 3 extends this with the user-cache overlay."""
+def _user_cache_path() -> Path | None:
     try:
-        raw = json.loads(_INDEX_PATH.read_text(encoding="utf-8"))
+        from durin.config.paths import get_data_dir
+
+        return get_data_dir() / "provider_models_cache.json"
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _read_index_file(path: Path) -> dict[str, list[ModelInfo]]:
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
     providers = (raw or {}).get("providers") or {}
     return {name: _coerce(entries) for name, entries in providers.items()}
+
+
+@lru_cache(maxsize=1)
+def _load_index() -> dict[str, list[ModelInfo]]:
+    """Vendored floor, overlaid by the daily user-cache refresh when present."""
+    index = _read_index_file(_INDEX_PATH)  # vendored floor
+    cache = _user_cache_path()
+    if cache is not None and cache.exists():
+        index = {**index, **_read_index_file(cache)}  # fresher cache wins per provider
+    return index
 
 
 def provider_models(provider: str, *, access_token: str | None = None) -> list[ModelInfo]:
