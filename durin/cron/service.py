@@ -218,7 +218,11 @@ class CronService:
 
         def _del(params: dict):
             if job_id := params.get("job_id"):
-                jobs_map.pop(job_id)
+                # Idempotent: a del for an already-absent job is a no-op (the
+                # desired end-state holds). pop() without a default would raise
+                # KeyError, leaving ``changed`` False so the action log never
+                # cleared and the stale del replayed on every load.
+                jobs_map.pop(job_id, None)
 
         with self._lock:
             with open(self._action_path, "r", encoding="utf-8") as f:
