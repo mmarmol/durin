@@ -82,6 +82,7 @@ import { ConnectionBadge } from "@/components/ConnectionBadge";
 import { useClient } from "@/providers/ClientProvider";
 import type { SecretEntry, SettingsPayload, WebSearchSettingsUpdate } from "@/lib/types";
 import { McpSettings } from "./McpSettings";
+import { ProviderModelsSettings } from "./ProviderModelsSettings";
 
 type SettingsSectionKey =
   | "general"
@@ -431,6 +432,7 @@ export function SettingsView({
               ) : activeSection === "logs" ? (
                 <LogsSettings token={token} />
               ) : (
+                <div className="space-y-4">
                 <ByokSettings
                   forcePane={activeSection === "web-search" ? "web-search" : "llm"}
                   settings={settings}
@@ -472,6 +474,19 @@ export function SettingsView({
                   onResetWebSearchDraft={resetWebSearchDraft}
                   onSaveWebSearch={saveWebSearch}
                 />
+                {activeSection === "providers"
+                  ? settings.providers
+                      .filter((p) => p.configured)
+                      .map((p) => (
+                        <ProviderModelsSettings
+                          key={p.name}
+                          token={token}
+                          provider={p.name}
+                          label={p.label}
+                        />
+                      ))
+                  : null}
+                </div>
               )}
             </div>
           ) : null}

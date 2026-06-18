@@ -22,6 +22,26 @@ function pushRecent(model: string) {
   localStorage.setItem(RECENTS_KEY, JSON.stringify(next));
 }
 
+function formatCtx(n?: number | null): string | null {
+  if (!n) return null;
+  if (n >= 1_000_000) {
+    const m = n / 1_000_000;
+    return `${Number.isInteger(m) ? m : m.toFixed(1)}M`;
+  }
+  if (n >= 1_000) return `${Math.round(n / 1_000)}K`;
+  return String(n);
+}
+
+function capLine(e: PickerEntry, t: (k: string) => string): string {
+  const parts: string[] = [];
+  const ctx = formatCtx(e.max_input_tokens);
+  if (ctx) parts.push(ctx);
+  if (e.supports_vision) parts.push(t("thread.composer.modelPicker.capVision"));
+  if (e.supports_audio_input) parts.push(t("thread.composer.modelPicker.capAudio"));
+  if (e.supports_reasoning) parts.push(t("thread.composer.modelPicker.capReasoning"));
+  return parts.join(" · ");
+}
+
 interface ModelPickerPopoverProps {
   open: boolean;
   onClose: () => void;
@@ -170,20 +190,27 @@ function ModelRow({
   active: boolean;
   onSelect: (entry: PickerEntry) => void;
 }) {
+  const { t } = useTranslation();
+  const caps = capLine(entry, t);
   return (
     <button
       type="button"
       onClick={() => onSelect(entry)}
       className={cn(
-        "flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12.5px] transition-colors",
+        "flex w-full flex-col gap-0.5 px-3 py-1.5 text-left transition-colors",
         active
           ? "bg-accent/60 font-medium text-accent-foreground"
           : "text-foreground/85 hover:bg-muted/60",
       )}
     >
-      <span className="min-w-0 flex-1 truncate">{entry.name}</span>
-      <span className="flex-none text-[10px] text-muted-foreground/70">{entry.provider}</span>
-      {active ? <span className="flex-none text-[10px] text-emerald-500">●</span> : null}
+      <span className="flex w-full items-center gap-2 text-[12.5px]">
+        <span className="min-w-0 flex-1 truncate">{entry.name}</span>
+        <span className="flex-none text-[10px] text-muted-foreground/70">{entry.provider}</span>
+        {active ? <span className="flex-none text-[10px] text-emerald-500">●</span> : null}
+      </span>
+      {caps ? (
+        <span className="text-[10px] text-muted-foreground/60">{caps}</span>
+      ) : null}
     </button>
   );
 }
