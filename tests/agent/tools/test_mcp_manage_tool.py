@@ -103,6 +103,45 @@ async def test_install_dry_run(monkeypatch):
     assert out["dry_run"] is True
 
 
+class _LocalReg:
+    name = "official"
+
+    async def describe(self, ref):
+        from durin.agent.mcp_registry import parse_server_json
+
+        return parse_server_json({
+            "name": ref, "version": "1.0.0",
+            "packages": [{
+                "registryType": "npm", "transport": {"type": "stdio"},
+                "runtimeHint": "npx", "identifier": "@x/fs", "version": "1.0.0",
+            }],
+        })
+
+
+@pytest.mark.asyncio
+async def test_install_local_missing_runtime_runs_install_command(monkeypatch):
+    """The auto-install path (runtime missing → brew/apt install) actually fires the
+    right command through exec_run before adding the server."""
+    import durin.agent.mcp_install as inst
+    import durin.agent.tools.mcp_manage as m
+
+    monkeypatch.setattr(m, "build_mcp_adapters", lambda regs: [_LocalReg()])
+    monkeypatch.setattr(inst, "runtime_present", lambda rt: False)  # node "missing"
+    ran: list[str] = []
+
+    async def fake_exec(**kw):
+        ran.append(kw.get("command"))
+        return "ok"
+
+    svc = _FakeService()
+    tool = McpManageTool(
+        service=svc, exec_run=fake_exec, install_policy="auto", registries=[])
+    out = await tool.execute(action="install", ref="io.x/fs", prefer="local")
+    assert any("node" in (c or "") for c in ran)  # ran the runtime install
+    assert svc.calls[0][0] == "add"  # then added the server
+    assert out["name"] == "fs"
+
+
 def test_mcp_manage_discoverable():
     import durin.agent.tools as tools_pkg
     from durin.agent.tools.loader import ToolLoader

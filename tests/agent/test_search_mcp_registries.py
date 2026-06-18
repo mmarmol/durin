@@ -32,3 +32,21 @@ async def test_search_syncs_empty_cache_then_ranks(tmp_path):
     cache = McpCatalogCache(tmp_path / "c.json")
     hits = await search_mcp_registries("jira", cache=cache, adapters=[_Reg()], limit=5)
     assert hits[0].ref == "io.x/jira"
+
+
+@pytest.mark.asyncio
+async def test_background_sync_survives_and_populates_cache(tmp_path):
+    """Guards the GC fix: the background catalog sync must run to completion and
+    persist the catalog to disk. If the task were GC-collected mid-run (the
+    fire-and-forget footgun), the on-disk cache would stay empty and this fails."""
+    import asyncio
+
+    from durin.agent.mcp_registry import _BACKGROUND_TASKS
+
+    cache = McpCatalogCache(tmp_path / "c.json")
+    await search_mcp_registries("jira", cache=cache, adapters=[_Reg()], limit=5)
+    await asyncio.sleep(0)
+    if _BACKGROUND_TASKS:
+        await asyncio.gather(*list(_BACKGROUND_TASKS))
+    # a fresh cache loads the catalog the background task wrote to disk
+    assert McpCatalogCache(tmp_path / "c.json")._servers
