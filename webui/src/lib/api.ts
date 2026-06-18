@@ -3,7 +3,10 @@ import type {
   ProviderSettingsUpdate,
   ConfigSnapshot,
   McpOauthLoginResult,
+  McpRegistryHit,
+  McpRegistryServerDetail,
   McpServerConfig,
+  McpUpdateInfo,
   McpServerDetail,
   McpServerSummary,
   SecretEntry,
@@ -1498,6 +1501,67 @@ export async function disconnectCodex(
 
 function mcpPath(name: string, suffix = ""): string {
   return `/api/v1/mcp/servers/${encodeURIComponent(name)}${suffix}`;
+}
+
+export async function searchMcpRegistry(
+  token: string,
+  q: string,
+  limit = 10,
+  base: string = "",
+): Promise<McpRegistryHit[]> {
+  const res = await request<{ hits: McpRegistryHit[] }>(
+    `${base}/api/v1/mcp/registry/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+    token,
+  );
+  return res.hits;
+}
+
+export async function describeMcpRegistryServer(
+  token: string,
+  ref: string,
+  base: string = "",
+): Promise<McpRegistryServerDetail> {
+  return request<McpRegistryServerDetail>(
+    `${base}/api/v1/mcp/registry/describe?ref=${encodeURIComponent(ref)}`,
+    token,
+  );
+}
+
+export async function installMcpFromRegistry(
+  token: string,
+  ref: string,
+  prefer: "remote" | "local",
+  envValues: Record<string, string>,
+  base: string = "",
+): Promise<McpServerDetail> {
+  return post<McpServerDetail>(`${base}/api/v1/mcp/registry/install`, token, {
+    ref,
+    prefer,
+    env_values: envValues,
+  });
+}
+
+export async function listMcpUpdates(
+  token: string,
+  base: string = "",
+): Promise<McpUpdateInfo[]> {
+  const res = await request<{ updates: McpUpdateInfo[] }>(
+    `${base}/api/v1/mcp/registry/updates`,
+    token,
+  );
+  return res.updates;
+}
+
+export async function updateMcpFromRegistry(
+  token: string,
+  name: string,
+  base: string = "",
+): Promise<McpServerDetail> {
+  return post<McpServerDetail>(
+    `${base}/api/v1/mcp/servers/${encodeURIComponent(name)}/registry-update`,
+    token,
+    {},
+  );
 }
 
 export async function listMcpServers(
