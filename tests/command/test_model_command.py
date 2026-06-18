@@ -104,27 +104,66 @@ async def test_model_command_switches_back_to_default(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_model_command_arbitrary_name_creates_temp_preset(tmp_path) -> None:
-    loop = _make_loop(tmp_path)
+async def test_model_command_bare_name_resolves_from_catalog(tmp_path, monkeypatch) -> None:
+    """A bare model resolves to the provider that serves it in the catalog —
+    NOT the active provider (the glm-5v-turbo→codex bug). Caps are applied."""
+    import durin.providers.provider_catalog as pc
+    from durin.config.schema import Config
+    from durin.providers.provider_catalog import ModelInfo
 
-    out = await cmd_model(_ctx(loop, "/model glm-5.2", args="glm-5.2"))
+    monkeypatch.setattr(
+        pc, "_load_index",
+        lambda: {"zai_coding_plan": [ModelInfo(id="glm-5v-turbo", max_input_tokens=200_000)]},
+    )
+    import durin.providers.selection as _sel
 
-    assert "Switched model preset" in out.content
-    assert "glm-5.2" in out.content
-    assert loop.model == "glm-5.2"
-    assert "glm-5.2" in loop.model_presets
+    monkeypatch.setattr(_sel, "configured_provider_names", lambda _c: {"zai_coding_plan"})
+    captured: dict = {}
+
+    def loader(name, preset=None):
+        captured["preset"] = preset
+        target = preset or ModelPresetConfig(model=name)
+        return ProviderSnapshot(
+            provider=_provider(target.model), model=target.model,
+            context_window_tokens=target.context_window_tokens,
+            signature=("model_preset", name, target.model),
+        )
+
+    app_config = Config()
+    app_config.agents.defaults.provider = "openai_codex"  # active provider is codex
+    loop = AgentLoop(
+        bus=MessageBus(), provider=_provider("base-model"),
+        workspace=tmp_path, model="base-model", context_window_tokens=1000,
+        model_presets={"default": ModelPresetConfig(model="base-model")},
+        preset_snapshot_loader=loader, app_config=app_config,
+    )
+    out = await cmd_model(_ctx(loop, "/model glm-5v-turbo", args="glm-5v-turbo"))
+    assert "Could not switch" not in out.content
+    assert "Unknown model" not in out.content
+    assert captured["preset"].provider == "zai_coding_plan"  # catalog, not codex
+    assert captured["preset"].context_window_tokens == 200_000  # caps applied
 
 
 @pytest.mark.asyncio
-async def test_model_command_arbitrary_name_switches_under_config_loader(
-    tmp_path,
+async def test_model_command_bare_name_threads_runtime_preset_through_loader(
+    tmp_path, monkeypatch,
 ) -> None:
-    """End-to-end mirror of the webui/TUI bug: ``/model <arbitrary>`` must
-    switch even when the loop resolves presets through a loader that re-reads
-    the on-disk config (the gateway's ``load_provider_snapshot``), which never
-    saw the runtime injection. Previously this returned 'Could not switch model
-    preset: ... not found in model_presets' while listing the name as available.
+    """End-to-end mirror of the webui/TUI bug: a catalog-resolved bare name must
+    switch even when the loop resolves presets through a loader that re-reads the
+    on-disk config (the gateway's ``load_provider_snapshot``), which never saw
+    the runtime injection. The in-memory preset must thread through the loader.
     """
+    import durin.providers.provider_catalog as pc
+    from durin.config.schema import Config
+    from durin.providers.provider_catalog import ModelInfo
+
+    monkeypatch.setattr(
+        pc, "_load_index",
+        lambda: {"zai_coding_plan": [ModelInfo(id="glm-5v-turbo", max_input_tokens=200_000)]},
+    )
+    import durin.providers.selection as _sel
+
+    monkeypatch.setattr(_sel, "configured_provider_names", lambda _c: {"zai_coding_plan"})
     new_provider = _provider("glm-5v-turbo", max_tokens=4096)
     on_disk = {"default": ModelPresetConfig(model="base-model")}
 
@@ -147,6 +186,7 @@ async def test_model_command_arbitrary_name_switches_under_config_loader(
         context_window_tokens=1000,
         model_presets={"default": ModelPresetConfig(model="base-model")},
         preset_snapshot_loader=loader,
+        app_config=Config(),
     )
 
     out = await cmd_model(_ctx(loop, "/model glm-5v-turbo", args="glm-5v-turbo"))
@@ -185,31 +225,25 @@ async def test_model_command_provider_model_pair_uses_explicit_provider(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_model_command_bare_name_uses_active_provider(tmp_path) -> None:
+async def test_model_command_bare_unknown_rejected_with_guidance(tmp_path, monkeypatch) -> None:
+    """A bare name not served by any configured provider's catalog is rejected
+    with guidance — no active-provider guessing."""
+    import durin.providers.provider_catalog as pc
     from durin.config.schema import Config
 
-    captured = {}
+    monkeypatch.setattr(pc, "_load_index", lambda: {"zai_coding_plan": []})
+    import durin.providers.selection as _sel
 
-    def loader(name, preset=None):
-        captured["preset"] = preset
-        target = preset or ModelPresetConfig(model=name)
-        return ProviderSnapshot(
-            provider=_provider(target.model), model=target.model,
-            context_window_tokens=target.context_window_tokens,
-            signature=("model_preset", name, target.model),
-        )
-
-    app_config = Config()
-    app_config.agents.defaults.provider = "openai_codex"
+    monkeypatch.setattr(_sel, "configured_provider_names", lambda _c: {"zai_coding_plan"})
     loop = AgentLoop(
         bus=MessageBus(), provider=_provider("base-model"),
         workspace=tmp_path, model="base-model", context_window_tokens=1000,
         model_presets={"default": ModelPresetConfig(model="base-model")},
-        preset_snapshot_loader=loader, app_config=app_config,
+        app_config=Config(),
     )
-    out = await cmd_model(_ctx(loop, "/model some-new-model", args="some-new-model"))
-    assert "Could not switch" not in out.content
-    assert captured["preset"].provider == "openai_codex"
+    out = await cmd_model(_ctx(loop, "/model totally-unknown", args="totally-unknown"))
+    assert "Unknown model `totally-unknown`" in out.content
+    assert "/model <provider> <model>" in out.content
 
 
 @pytest.mark.asyncio
