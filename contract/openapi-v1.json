@@ -1586,6 +1586,52 @@
         "title": "McpToolInfo",
         "type": "object"
       },
+      "McpUpdateInfo": {
+        "properties": {
+          "current": {
+            "title": "Current",
+            "type": "string"
+          },
+          "latest": {
+            "title": "Latest",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "current",
+          "latest"
+        ],
+        "title": "McpUpdateInfo",
+        "type": "object"
+      },
+      "McpUpdatesQuery": {
+        "additionalProperties": false,
+        "description": "No inputs \u2014 checks every configured server against the registry.",
+        "properties": {},
+        "title": "McpUpdatesQuery",
+        "type": "object"
+      },
+      "McpUpdatesResult": {
+        "properties": {
+          "updates": {
+            "items": {
+              "$ref": "#/components/schemas/McpUpdateInfo"
+            },
+            "title": "Updates",
+            "type": "array"
+          }
+        },
+        "required": [
+          "updates"
+        ],
+        "title": "McpUpdatesResult",
+        "type": "object"
+      },
       "MemoryBacklinksQuery": {
         "additionalProperties": false,
         "properties": {
@@ -3572,6 +3618,35 @@
         "x-required-scope": "mcp:read"
       }
     },
+    "/api/v1/mcp/registry/updates": {
+      "get": {
+        "operationId": "mcp_registry_updates",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpUpdatesQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpUpdatesResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "List configured servers with a newer version in the registry",
+        "x-required-scope": "mcp:read"
+      }
+    },
     "/api/v1/mcp/servers": {
       "get": {
         "operationId": "mcp_list",
@@ -3853,6 +3928,35 @@
           }
         },
         "summary": "Reconnect a server to apply config changes or retry a failure",
+        "x-required-scope": "mcp:write"
+      }
+    },
+    "/api/v1/mcp/servers/{name}/registry-update": {
+      "post": {
+        "operationId": "mcp_registry_update",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/McpServerNameCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/McpServerDetail"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Re-pin a server to the registry's latest version and reconnect",
         "x-required-scope": "mcp:write"
       }
     },

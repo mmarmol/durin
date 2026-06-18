@@ -246,6 +246,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/mcp/registry/updates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List configured servers with a newer version in the registry */
+        get: operations["mcp_registry_updates"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/mcp/servers": {
         parameters: {
             query?: never;
@@ -362,6 +379,23 @@ export interface paths {
         put?: never;
         /** Reconnect a server to apply config changes or retry a failure */
         post: operations["mcp_reconnect"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/mcp/servers/{name}/registry-update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Re-pin a server to the registry's latest version and reconnect */
+        post: operations["mcp_registry_update"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1857,6 +1891,25 @@ export interface components {
             /** Name */
             name: string;
         };
+        /** McpUpdateInfo */
+        McpUpdateInfo: {
+            /** Current */
+            current: string;
+            /** Latest */
+            latest: string;
+            /** Name */
+            name: string;
+        };
+        /**
+         * McpUpdatesQuery
+         * @description No inputs — checks every configured server against the registry.
+         */
+        McpUpdatesQuery: Record<string, never>;
+        /** McpUpdatesResult */
+        McpUpdatesResult: {
+            /** Updates */
+            updates: components["schemas"]["McpUpdateInfo"][];
+        };
         /** MemoryBacklinksQuery */
         MemoryBacklinksQuery: {
             /** Uri */
@@ -2972,6 +3025,30 @@ export interface operations {
             };
         };
     };
+    mcp_registry_updates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["McpUpdatesQuery"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpUpdatesResult"];
+                };
+            };
+        };
+    };
     mcp_list: {
         parameters: {
             query?: never;
@@ -3189,6 +3266,30 @@ export interface operations {
         };
     };
     mcp_reconnect: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["McpServerNameCommand"];
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["McpServerDetail"];
+                };
+            };
+        };
+    };
+    mcp_registry_update: {
         parameters: {
             query?: never;
             header?: never;

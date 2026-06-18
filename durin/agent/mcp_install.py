@@ -7,6 +7,7 @@ install path and the ``mcp_manage`` agent tool.
 """
 from __future__ import annotations
 
+import re
 import shutil
 
 from durin.agent.mcp_registry import McpServerDetail
@@ -31,14 +32,33 @@ def runtime_install_spec(runtime_hint: str) -> dict | None:
     return _RUNTIME_INSTALL.get(runtime_hint)
 
 
+def _pinned_identifier(pkg) -> str:
+    """Pin the package version into the launch arg so the server is reproducible.
+
+    Without this, ``npx <pkg>`` / ``uvx <pkg>`` would resolve to @latest on every
+    spawn — and the update-available check (`version` vs registry latest) would be
+    meaningless.
+    """
+    if not pkg.version:
+        return pkg.identifier
+    if pkg.registry_type == "npm":
+        return f"{pkg.identifier}@{pkg.version}"
+    if pkg.registry_type == "pypi":
+        return f"{pkg.identifier}=={pkg.version}"
+    if pkg.registry_type == "oci":
+        return f"{pkg.identifier}:{pkg.version}"
+    return pkg.identifier
+
+
 def _stdio_args(pkg) -> list[str]:
+    ident = _pinned_identifier(pkg)
     if pkg.runtime_hint == "docker":
-        return ["run", "-i", "--rm", *pkg.runtime_arguments, pkg.identifier,
+        return ["run", "-i", "--rm", *pkg.runtime_arguments, ident,
                 *pkg.package_arguments]
     args = list(pkg.runtime_arguments)
     if pkg.runtime_hint == "npx" and "-y" not in args:
         args.insert(0, "-y")
-    return [*args, pkg.identifier, *pkg.package_arguments]
+    return [*args, ident, *pkg.package_arguments]
 
 
 def build_server_config_from_detail(
@@ -97,3 +117,35 @@ def collect_secret_env(
                 origin="user",
             )
     return refs
+
+
+def _version_key(v: str) -> tuple:
+    return tuple(int(n) for n in re.findall(r"\d+", v or ""))
+
+
+def has_update(current: str, latest: str) -> bool:
+    """True when ``latest`` is a strictly newer version than ``current``.
+
+    Conservative: unparseable versions never flag an update (no false nags).
+    """
+    if not current or not latest:
+        return False
+    ck, lk = _version_key(current), _version_key(latest)
+    if not ck or not lk:
+        return False
+    return lk > ck
+
+
+def rebuild_for_update(old: MCPServerConfig, detail: McpServerDetail) -> MCPServerConfig:
+    """Re-pin a configured local server to the registry's latest version, preserving
+    the user's env/secrets/auth/customisations. Remote servers are returned unchanged
+    (the provider owns their version)."""
+    if old.type != "stdio" or not detail.packages:
+        return old
+    pkg = detail.packages[0]
+    new = old.model_copy(deep=True)
+    new.command = _RUNTIME_BIN.get(pkg.runtime_hint, pkg.runtime_hint)
+    new.args = _stdio_args(pkg)
+    new.version = pkg.version
+    new.source_ref = detail.ref
+    return new

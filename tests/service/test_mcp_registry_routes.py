@@ -42,6 +42,7 @@ class _FakeReg:
         return parse_server_json({
             "name": ref, "version": "1.0.0",
             "packages": [{
+                "registryType": "npm",
                 "transport": {"type": "stdio"}, "runtimeHint": "npx",
                 "identifier": "@x/jira", "version": "1.0.0",
                 "environmentVariables": [
@@ -112,3 +113,44 @@ async def test_registry_install_local_stores_secret(config_path, monkeypatch):
     assert res.config.type == "stdio"
     # the secret is stored as a reference, never inline plaintext
     assert res.config.env["JIRA_TOKEN"].startswith("${secret:")
+
+
+def _seed_jira(version: str) -> None:
+    from durin.config.loader import get_config_path, load_config, save_config
+    from durin.config.schema import MCPServerConfig
+
+    cfg = load_config()
+    cfg.tools.mcp_servers["jira"] = MCPServerConfig(
+        type="stdio", command="npx", args=["-y", f"@x/jira@{version}"],
+        version=version, source_ref="io.x/jira")
+    save_config(cfg, get_config_path())
+
+
+@pytest.mark.asyncio
+async def test_registry_updates_route(config_path, monkeypatch):
+    monkeypatch.setattr(
+        "durin.agent.mcp_registry.build_mcp_adapters", lambda regs: [_FakeReg()]
+    )
+    _seed_jira("0.9.0")  # registry latest is 1.0.0 → update available
+    from durin.service.mcp import McpUpdatesQuery
+
+    res = await McpService().registry_updates(McpUpdatesQuery(), LOCAL)
+    assert any(
+        u.name == "jira" and u.current == "0.9.0" and u.latest == "1.0.0"
+        for u in res.updates
+    )
+
+
+@pytest.mark.asyncio
+async def test_registry_update_repins(config_path, monkeypatch):
+    monkeypatch.setattr(
+        "durin.agent.mcp_registry.build_mcp_adapters", lambda regs: [_FakeReg()]
+    )
+    _seed_jira("0.9.0")
+    from durin.config.loader import load_config
+    from durin.service.mcp import McpServerNameCommand
+
+    await McpService().registry_update(McpServerNameCommand(name="jira"), LOCAL)
+    updated = load_config().tools.mcp_servers["jira"]
+    assert updated.version == "1.0.0"
+    assert "@x/jira@1.0.0" in updated.args
