@@ -42,3 +42,10 @@ def configured_provider_names(config: Any) -> set[str]:
         if ok:
             out.add(spec.name)
     return out
+
+
+def configured_model_ids(config: Any, provider: str) -> list[str]:
+    """Model ids the user configured under a provider (``providers.<p>.models``)
+    — customs or param-overrides that may not be in the models.dev catalog."""
+    pc = getattr(config.providers, provider, None)
+    return list(getattr(pc, "models", None) or {})

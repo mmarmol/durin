@@ -393,17 +393,37 @@ async def cmd_model(ctx: CommandContext) -> OutboundMessage:
     from durin.config.schema import ModelPresetConfig
     from durin.providers.provider_catalog import catalog_model_caps
 
+    config = getattr(loop, "app_config", None)
+
+    def _config_entry(provider: str, model: str):
+        if config is None or not provider or provider == "auto":
+            return None
+        pc = getattr(config.providers, provider, None)
+        return (getattr(pc, "models", None) or {}).get(model)
+
     def _preset_for(model: str, provider: str) -> ModelPresetConfig:
-        # Apply the model's real caps from the catalog so the temp preset gets
-        # the right context window / max output (not the schema defaults).
+        # Params resolve: the user's per-model config override → the catalog caps
+        # → the schema default. Switching to a configured/custom model uses the
+        # params set in Settings, not generic defaults.
+        entry = _config_entry(provider, model)
         caps = catalog_model_caps(provider, model)
         return ModelPresetConfig(
             model=model,
             provider=provider,
             context_window_tokens=(
-                caps.max_input_tokens if caps and caps.max_input_tokens else 65_536
+                entry.context_window_tokens
+                if entry and entry.context_window_tokens is not None
+                else (caps.max_input_tokens if caps and caps.max_input_tokens else 65_536)
             ),
-            max_tokens=(caps.max_output_tokens if caps and caps.max_output_tokens else 8192),
+            max_tokens=(
+                entry.max_tokens
+                if entry and entry.max_tokens is not None
+                else (caps.max_output_tokens if caps and caps.max_output_tokens else 8192)
+            ),
+            temperature=(entry.temperature if entry and entry.temperature is not None else 0.1),
+            reasoning_effort=(
+                entry.reasoning_effort if entry and entry.reasoning_effort is not None else None
+            ),
         )
 
     if len(parts) == 2:
@@ -421,13 +441,18 @@ async def cmd_model(ctx: CommandContext) -> OutboundMessage:
         # A bare name that is not a preset: resolve the provider from the
         # configured catalog rather than guessing the active provider (which was
         # the `glm-5v-turbo` → codex bug). Reject with guidance if unresolvable.
-        from durin.providers.selection import configured_provider_names
+        from durin.providers.selection import (
+            configured_model_ids,
+            configured_provider_names,
+        )
 
-        config = getattr(loop, "app_config", None)
         serving: list[str] = []
         if config is not None:
             for p in configured_provider_names(config):
-                if catalog_model_caps(p, name) is not None:
+                if (
+                    catalog_model_caps(p, name) is not None
+                    or name in configured_model_ids(config, p)
+                ):
                     serving.append(p)
         if len(serving) == 1:
             loop.model_presets[name] = _preset_for(name, serving[0])
