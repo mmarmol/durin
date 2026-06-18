@@ -56,3 +56,32 @@ def test_ast_exec_of_compile_still_dangerous():
 def test_ast_subprocess_shell_true_is_dangerous_severity():
     fs = scan_python_ast("import subprocess\nsubprocess.run(cmd, shell=True)\n", "scripts/a.py")
     assert any(f.detail == "subprocess shell=True" and f.severity == "dangerous" for f in fs)
+
+
+def test_ast_resolves_import_as_alias_for_shell_true():
+    # `import subprocess as sp; sp.run(..., shell=True)` must still flag.
+    fs = scan_python_ast("import subprocess as sp\nsp.run('id', shell=True)\n", "scripts/a.py")
+    assert any("shell=True" in f.detail for f in fs)
+
+
+def test_ast_resolves_import_as_alias_for_os_system():
+    fs = scan_python_ast("import os as o\no.system('id')\n", "scripts/a.py")
+    assert any("os.system" in f.detail for f in fs)
+
+
+def test_ast_flags_getattr_dynamic_danger_access():
+    # getattr(os, "system")("id") evades the literal os.system check.
+    fs = scan_python_ast('import os\ngetattr(os, "system")("id")\n', "scripts/a.py")
+    assert any(f.severity == "dangerous" and "getattr" in f.detail for f in fs)
+
+
+def test_ast_flags_builtins_subscript_exec():
+    # __builtins__["exec"]("...") evades the literal exec check.
+    fs = scan_python_ast('__builtins__["exec"]("import os")\n', "scripts/a.py")
+    assert any(f.severity == "dangerous" and "__builtins__" in f.detail for f in fs)
+
+
+def test_ast_benign_getattr_not_flagged():
+    # getattr for an innocuous attribute name must NOT flag.
+    fs = scan_python_ast('getattr(obj, "name")\n', "scripts/a.py")
+    assert fs == []
