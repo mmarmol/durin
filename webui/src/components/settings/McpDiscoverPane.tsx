@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -42,6 +43,9 @@ export function McpDiscoverPane({
   token: string;
   onClose: (installed?: boolean) => void;
 }) {
+  const { t } = useTranslation();
+  const tx = (k: string, opts?: Record<string, unknown>) =>
+    t(`settings.mcp.discover.${k}`, opts);
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<McpRegistryHit[]>([]);
   const [searching, setSearching] = useState(false);
@@ -61,7 +65,7 @@ export function McpDiscoverPane({
       setHits(await searchMcpRegistry(token, query.trim()));
       setSearched(true);
     } catch {
-      setError("Search failed.");
+      setError(tx("searchFailed"));
     } finally {
       setSearching(false);
     }
@@ -75,7 +79,7 @@ export function McpDiscoverPane({
       setDetail(d);
       setPrefer(defaultPrefer(d));
     } catch {
-      setError("Could not load server details.");
+      setError(tx("detailFailed"));
     }
   }
 
@@ -87,7 +91,7 @@ export function McpDiscoverPane({
       await installMcpFromRegistry(token, detail.ref, prefer, envValues);
       onClose(true);
     } catch {
-      setError("Install failed.");
+      setError(tx("installFailed"));
       setInstalling(false);
     }
   }
@@ -103,7 +107,7 @@ export function McpDiscoverPane({
           className="text-[12px] text-muted-foreground hover:text-foreground"
           onClick={() => setDetail(null)}
         >
-          ← Back to results
+          {tx("back")}
         </button>
         <div className="space-y-1">
           <h3 className="text-[15px] font-medium text-foreground">{detail.name}</h3>
@@ -111,7 +115,7 @@ export function McpDiscoverPane({
             <p className="text-[11px] text-muted-foreground">v{detail.version}</p>
           ) : null}
           <p className="text-[13px] leading-5 text-muted-foreground">
-            {detail.description || "No description."}
+            {detail.description || tx("noDescription")}
           </p>
           {detail.repository ? (
             <a
@@ -139,21 +143,21 @@ export function McpDiscoverPane({
                     : "border-border text-muted-foreground")
                 }
               >
-                {p === "remote"
-                  ? "Hosted (no install)"
-                  : "Local (runs on your machine)"}
+                {p === "remote" ? tx("preferRemote") : tx("preferLocal")}
               </button>
             ))}
           </div>
         ) : (
           <span className="inline-block rounded-full border border-border px-3 py-1 text-[12px] text-muted-foreground">
-            {hasRemote ? "Hosted — no install" : "Local — runs on your machine"}
+            {hasRemote ? tx("hostedOnly") : tx("localOnly")}
           </span>
         )}
 
         {envs.length > 0 ? (
           <div className="space-y-2">
-            <p className="text-[12px] font-medium text-foreground">Configuration</p>
+            <p className="text-[12px] font-medium text-foreground">
+              {tx("configuration")}
+            </p>
             {envs.map((e) => (
               <div key={e.name} className="space-y-1">
                 <label className="block text-[12px] text-muted-foreground">
@@ -177,10 +181,14 @@ export function McpDiscoverPane({
 
         <div className="flex gap-2">
           <Button size="sm" onClick={() => void doInstall()} disabled={installing}>
-            {installing ? "Adding…" : prefer === "remote" ? "Connect" : "Install"}
+            {installing
+              ? tx("adding")
+              : prefer === "remote"
+                ? tx("connect")
+                : tx("install")}
           </Button>
           <Button size="sm" variant="outline" onClick={() => onClose()}>
-            Cancel
+            {tx("cancel")}
           </Button>
         </div>
       </div>
@@ -192,7 +200,7 @@ export function McpDiscoverPane({
       <div className="flex items-center gap-2">
         <Input
           autoFocus
-          placeholder="Search MCP servers (e.g. jira, postgres, github)…"
+          placeholder={tx("searchPlaceholder")}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
@@ -200,10 +208,10 @@ export function McpDiscoverPane({
           }}
         />
         <Button size="sm" onClick={() => void runSearch()} disabled={searching}>
-          {searching ? "…" : "Search"}
+          {searching ? "…" : tx("search")}
         </Button>
         <Button size="sm" variant="outline" onClick={() => onClose()}>
-          Close
+          {tx("close")}
         </Button>
       </div>
 
@@ -223,10 +231,10 @@ export function McpDiscoverPane({
               </span>
               <span className="rounded-full border border-border px-2 py-0.5 text-[10px] text-muted-foreground">
                 {h.kind === "remote"
-                  ? "no install"
+                  ? tx("badgeRemote")
                   : h.kind === "both"
-                    ? "hosted / local"
-                    : "local"}
+                    ? tx("badgeBoth")
+                    : tx("badgeLocal")}
               </span>
             </span>
             {h.description ? (
@@ -237,9 +245,7 @@ export function McpDiscoverPane({
           </button>
         ))}
         {searched && !searching && hits.length === 0 ? (
-          <p className="px-1 text-[12px] text-muted-foreground">
-            No servers found.
-          </p>
+          <p className="px-1 text-[12px] text-muted-foreground">{tx("noResults")}</p>
         ) : null}
       </div>
     </div>

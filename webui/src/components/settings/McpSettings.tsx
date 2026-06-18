@@ -489,7 +489,7 @@ export function McpSettings({ token }: { token: string }) {
               className="rounded-full"
             >
               <Search className="mr-1.5 h-3.5 w-3.5" aria-hidden />
-              Discover
+              {t("settings.mcp.discover.button")}
             </Button>
             <Button
               size="sm"
@@ -555,7 +555,9 @@ export function McpSettings({ token }: { token: string }) {
                         <span>{server.name}</span>
                         {updates[server.name] ? (
                           <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-600">
-                            update → {updates[server.name]}
+                            {t("settings.mcp.discover.update", {
+                              version: updates[server.name],
+                            })}
                           </span>
                         ) : null}
                       </button>
@@ -579,7 +581,9 @@ export function McpSettings({ token }: { token: string }) {
                           onClick={() => void onUpdate(server.name)}
                           className="rounded-full"
                         >
-                          Update to {updates[server.name]}
+                          {t("settings.mcp.discover.updateButton", {
+                            version: updates[server.name],
+                          })}
                         </Button>
                       ) : null}
                       <label className="flex cursor-pointer items-center gap-1.5 text-[12px] text-muted-foreground">
