@@ -1113,6 +1113,17 @@ class MemoryDreamSkillExtractEvent(TypedDict):
     duration_ms: NotRequired[int]
 
 
+class MemoryDreamSkillSignalsEvent(TypedDict):
+    """The extract dream's skill-signal stage (stage 3) logged correction/gap
+    observations from a session's turns in hindsight. ``proposed`` is what the
+    LLM returned; ``logged`` is what was written to the observation queue. Lets
+    dashboards measure skill-signal precision over time."""
+
+    proposed: int
+    logged: int
+    skills: NotRequired[list[str]]
+
+
 class MemoryDreamMaxSecondsReachedEvent(TypedDict):
     """An extract pass hit ``memory.dream.max_seconds_per_run`` and yielded;
     the per-session cursor resumes the remainder on the next trigger (§8e)."""
@@ -1235,6 +1246,7 @@ EVENTS: dict[str, type] = {
     "memory.dream.patch_applied": MemoryDreamPatchAppliedEvent,
     "memory.dream.discover": MemoryDreamDiscoverEvent,
     "memory.dream.skill_extract": MemoryDreamSkillExtractEvent,
+    "memory.dream.skill_signals": MemoryDreamSkillSignalsEvent,
     "memory.dream.max_seconds_reached": MemoryDreamMaxSecondsReachedEvent,
     "memory.dream.throttled": MemoryDreamThrottledEvent,
     "memory.dream.always_on": MemoryDreamAlwaysOnEvent,
