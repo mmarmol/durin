@@ -349,8 +349,18 @@ def test_config_dump_excludes_oauth_provider_blocks():
     assert "githubCopilot" not in providers
 
 
+def _isolate_secret_store(monkeypatch, tmp_path):
+    """Point the secret store at a tmp file so logout never mutates the real
+    ~/.durin/secrets.json (logout now goes through provider disconnect())."""
+    monkeypatch.setattr(
+        "durin.security.secrets._default_secrets_path",
+        lambda: tmp_path / "secrets.json",
+    )
+
+
 def test_provider_logout_openai_codex_removes_local_oauth_files(tmp_path, monkeypatch):
     pytest.importorskip("oauth_cli_kit", reason="oauth-cli-kit not installed")
+    _isolate_secret_store(monkeypatch, tmp_path)
     token_path = tmp_path / "auth" / "codex.json"
     lock_path = token_path.with_suffix(".lock")
     token_path.parent.mkdir(parents=True, exist_ok=True)
@@ -366,8 +376,29 @@ def test_provider_logout_openai_codex_removes_local_oauth_files(tmp_path, monkey
     assert "Logged out from OpenAI Codex" in result.stdout
 
 
+def test_provider_logout_openai_codex_removes_stored_secret(tmp_path, monkeypatch):
+    """Regression: the token lives in the secret store, not a file. Logout must
+    remove the secret even when no legacy kit file exists."""
+    pytest.importorskip("oauth_cli_kit", reason="oauth-cli-kit not installed")
+    _isolate_secret_store(monkeypatch, tmp_path)
+    monkeypatch.setenv("OAUTH_CLI_KIT_TOKEN_PATH", str(tmp_path / "auth" / "codex.json"))
+    from durin.security.secrets import SecretStore, store_secret
+
+    store_secret(
+        "OPENAI_CODEX_OAUTH", "{}", service="provider:openai_codex",
+        scope=["provider:openai_codex"],
+    )
+
+    result = runner.invoke(app, ["oauth", "logout", "openai-codex"])
+
+    assert result.exit_code == 0
+    assert "Logged out from OpenAI Codex" in result.stdout
+    assert SecretStore(path=tmp_path / "secrets.json").load().get("OPENAI_CODEX_OAUTH") is None
+
+
 def test_provider_logout_openai_codex_succeeds_when_no_local_oauth_file(monkeypatch, tmp_path):
     pytest.importorskip("oauth_cli_kit", reason="oauth-cli-kit not installed")
+    _isolate_secret_store(monkeypatch, tmp_path)
     token_path = tmp_path / "auth" / "codex.json"
     monkeypatch.setenv("OAUTH_CLI_KIT_TOKEN_PATH", str(token_path))
 
@@ -379,6 +410,7 @@ def test_provider_logout_openai_codex_succeeds_when_no_local_oauth_file(monkeypa
 
 def test_provider_logout_github_copilot_removes_local_oauth_files(tmp_path, monkeypatch):
     pytest.importorskip("oauth_cli_kit", reason="oauth-cli-kit not installed")
+    _isolate_secret_store(monkeypatch, tmp_path)
     token_path = tmp_path / "auth" / "github-copilot.json"
     lock_path = token_path.with_suffix(".lock")
     token_path.parent.mkdir(parents=True, exist_ok=True)
@@ -394,8 +426,30 @@ def test_provider_logout_github_copilot_removes_local_oauth_files(tmp_path, monk
     assert "Logged out from GitHub Copilot" in result.stdout
 
 
+def test_provider_logout_github_copilot_removes_stored_secret(tmp_path, monkeypatch):
+    """Regression: logout removes the GitHub Copilot OAuth secret with no file."""
+    pytest.importorskip("oauth_cli_kit", reason="oauth-cli-kit not installed")
+    _isolate_secret_store(monkeypatch, tmp_path)
+    monkeypatch.setenv(
+        "OAUTH_CLI_KIT_TOKEN_PATH", str(tmp_path / "auth" / "github-copilot.json")
+    )
+    from durin.security.secrets import SecretStore, store_secret
+
+    store_secret(
+        "GITHUB_COPILOT_OAUTH", "{}", service="provider:github_copilot",
+        scope=["provider:github_copilot"],
+    )
+
+    result = runner.invoke(app, ["oauth", "logout", "github-copilot"])
+
+    assert result.exit_code == 0
+    assert "Logged out from GitHub Copilot" in result.stdout
+    assert SecretStore(path=tmp_path / "secrets.json").load().get("GITHUB_COPILOT_OAUTH") is None
+
+
 def test_provider_logout_github_copilot_succeeds_when_no_local_oauth_file(monkeypatch, tmp_path):
     pytest.importorskip("oauth_cli_kit", reason="oauth-cli-kit not installed")
+    _isolate_secret_store(monkeypatch, tmp_path)
     token_path = tmp_path / "auth" / "github-copilot.json"
     monkeypatch.setenv("OAUTH_CLI_KIT_TOKEN_PATH", str(token_path))
 
