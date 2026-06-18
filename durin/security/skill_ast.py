@@ -10,18 +10,22 @@ import ast
 
 from durin.security.skill_scan import Finding
 
-# Dotted call names that are dangerous regardless of args. ``subprocess.*`` is
+# Dotted call names to flag regardless of args, mapped to ``(label, severity)``.
+# ``compile`` is CAUTION not dangerous: it produces a code object but does not
+# execute — execution needs a subsequent ``exec``/``eval``, which is flagged
+# ``dangerous`` on its own (so ``exec(compile(...))`` stays dangerous). See
+# docs/architecture/skills/00_overview.md (security scan). ``subprocess.*`` is
 # deliberately NOT here: a plain ``subprocess.run`` is common and benign — only
 # ``shell=True`` is flagged, by the dedicated check below.
 _DANGER_CALLS = {
-    "os.system": "os.system",
-    "os.popen": "os.popen",
-    "eval": "eval",
-    "exec": "exec",
-    "compile": "compile",
-    "__import__": "__import__",
-    "pickle.loads": "pickle.loads",
-    "marshal.loads": "marshal.loads",
+    "os.system": ("os.system", "dangerous"),
+    "os.popen": ("os.popen", "dangerous"),
+    "eval": ("eval", "dangerous"),
+    "exec": ("exec", "dangerous"),
+    "compile": ("compile", "caution"),
+    "__import__": ("__import__", "dangerous"),
+    "pickle.loads": ("pickle.loads", "dangerous"),
+    "marshal.loads": ("marshal.loads", "dangerous"),
 }
 
 
@@ -46,8 +50,9 @@ def scan_python_ast(text: str, where: str) -> list[Finding]:
             continue
         name = _dotted(node.func)
         if name in _DANGER_CALLS:
-            out.append(Finding("dangerous_code", "dangerous", where,
-                               f"dangerous call {_DANGER_CALLS[name]}"))
+            label, severity = _DANGER_CALLS[name]
+            out.append(Finding("dangerous_code", severity, where,
+                               f"dangerous call {label}"))
         if name.startswith("subprocess.") and any(
             isinstance(k, ast.keyword) and k.arg == "shell"
             and isinstance(k.value, ast.Constant) and k.value.value is True
