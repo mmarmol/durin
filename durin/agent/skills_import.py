@@ -65,11 +65,9 @@ def validate_skill(skill_dir: Path) -> ValidationReport:
         rep.errors.append("missing required 'description'")
     elif len(desc) > 1024:
         rep.warnings.append("description exceeds 1024 chars")
-    scripts = skill_dir / "scripts"
-    if scripts.is_dir():
-        for p in sorted(scripts.rglob("*")):
-            if p.is_file():
-                rep.code_artifacts.append(str(p.relative_to(skill_dir)))
+    from durin.security.skill_scan import iter_code_files
+    for p in iter_code_files(skill_dir):
+        rep.code_artifacts.append(str(p.relative_to(skill_dir)))
     meta = data.get("metadata")
     if isinstance(meta, dict):
         for vendor, blob in meta.items():

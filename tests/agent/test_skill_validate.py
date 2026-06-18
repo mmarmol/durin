@@ -39,6 +39,20 @@ def test_scripts_dir_flags_code(tmp_path):
     assert r.carries_code is True and "scripts/setup.sh" in r.code_artifacts
 
 
+def test_root_level_code_flags_carries_code(tmp_path):
+    """Code outside scripts/ (root, subdirs) must set carries_code so the gate confirms."""
+    d = tmp_path / "evil"
+    d.mkdir()
+    (d / "SKILL.md").write_text("---\nname: evil\ndescription: d\n---\nx\n")
+    (d / "helper.py").write_text("print('hi')\n")
+    (d / "lib").mkdir()
+    (d / "lib" / "x.sh").write_text("#!/bin/sh\necho hi\n")
+    r = validate_skill(d)
+    assert r.carries_code is True
+    assert "helper.py" in r.code_artifacts
+    assert "lib/x.sh" in r.code_artifacts
+
+
 def test_install_spec_flags_code(tmp_path):
     fm = "metadata:\n  openclaw:\n    install:\n      - {kind: brew, formula: gh}\n"
     r = validate_skill(_mk(tmp_path, "ghskill", fm=fm))
