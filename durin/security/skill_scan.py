@@ -207,6 +207,37 @@ def validate_install_specs(data: dict) -> list[Finding]:
     return out
 
 
+# Skills put runnable code under scripts/ by agentskills.io convention, but an
+# attacker is not bound by convention — the scan must see code WHEREVER it lives
+# (root, lib/, utils/, ...). An extension allowlist (+ a shebang sniff for
+# extensionless scripts) keeps the walk off data/markdown noise. SKILL.md is
+# scanned separately by the body rules.
+_CODE_EXTENSIONS = frozenset({
+    ".py", ".sh", ".bash", ".zsh", ".js", ".mjs", ".cjs", ".ts",
+    ".rb", ".pl", ".php", ".lua", ".ps1",
+})
+
+
+def _is_code_file(p: Path) -> bool:
+    if p.suffix.lower() in _CODE_EXTENSIONS:
+        return True
+    if p.suffix == "":  # extensionless: sniff a shebang
+        try:
+            with p.open("rb") as fh:
+                return fh.read(2) == b"#!"
+        except OSError:
+            return False
+    return False
+
+
+def iter_code_files(skill_dir: Path):
+    """Yield code files anywhere in the skill tree (not just scripts/), skipping SKILL.md."""
+    skill_dir = Path(skill_dir)
+    for p in sorted(skill_dir.rglob("*")):
+        if p.is_file() and p.name != "SKILL.md" and _is_code_file(p):
+            yield p
+
+
 def scan_skill(skill_dir: Path) -> ScanReport:
     skill_dir = Path(skill_dir)
     rep = ScanReport()
@@ -218,22 +249,18 @@ def scan_skill(skill_dir: Path) -> ScanReport:
         if _UNICODE_RE.search(body):
             rep.findings.append(Finding("unicode_smuggling", "dangerous", "SKILL.md",
                                         "invisible/bidi/tags unicode in body"))
-    scripts = skill_dir / "scripts"
-    if scripts.is_dir():
-        for p in sorted(scripts.rglob("*")):
-            if not p.is_file():
-                continue
-            try:
-                txt = p.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                continue
-            rel = str(p.relative_to(skill_dir))
-            rep.findings += _apply(txt, rel, _CODE_RULES)
-            # AST behavioral pass for Python scripts. Local import breaks the
-            # skill_ast <-> skill_scan import cycle (skill_ast imports Finding).
-            if p.suffix == ".py":
-                from durin.security.skill_ast import scan_python_ast
-                rep.findings += scan_python_ast(txt, rel)
-            # secrets + sensitive paths also matter inside scripts
-            rep.findings += _apply(txt, rel, [r for r in _BODY_RULES if r[1] in ("secrets", "sensitive_path")])
+    for p in iter_code_files(skill_dir):
+        try:
+            txt = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        rel = str(p.relative_to(skill_dir))
+        rep.findings += _apply(txt, rel, _CODE_RULES)
+        # AST behavioral pass for Python scripts. Local import breaks the
+        # skill_ast <-> skill_scan import cycle (skill_ast imports Finding).
+        if p.suffix == ".py":
+            from durin.security.skill_ast import scan_python_ast
+            rep.findings += scan_python_ast(txt, rel)
+        # secrets + sensitive paths also matter inside code files
+        rep.findings += _apply(txt, rel, [r for r in _BODY_RULES if r[1] in ("secrets", "sensitive_path")])
     return rep
