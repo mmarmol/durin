@@ -408,7 +408,21 @@
       "catalogDefault": "catalog default",
       "capVision": "vision",
       "capAudio": "audio",
-      "capReasoning": "reasoning"
+      "capReasoning": "reasoning",
+      "emptyTeach": "No catalog models for this provider yet. Add a custom one below.",
+      "loadError": "Could not load models."
+    },
+    "providers": {
+      "summary": "{{configured}} connected · {{available}} available",
+      "notConfigured": "Not configured",
+      "connected": "Connected",
+      "connect": "Connect",
+      "connection": "Connection",
+      "default": "default",
+      "defaultModel": "default: {{model}}",
+      "modelsCount": "{{count}} models",
+      "showMore": "Show {{n}} more",
+      "showLess": "Show less"
     },
     "mcp": {
       "description": "Connect Model Context Protocol (MCP) servers to give the agent extra tools. Status is read live from the running gateway.",
