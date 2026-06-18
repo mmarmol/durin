@@ -105,6 +105,16 @@ def test_has_update():
     assert has_update("weird", "alsoweird") is False  # unparseable → no nag
 
 
+def test_has_update_prerelease():
+    # A pre-release precedes its release (semver): a user on rc/beta must be told
+    # when GA ships, and a GA user must not be nagged to "upgrade" to an rc.
+    assert has_update("1.0.0-rc.1", "1.0.0") is True       # GA after rc → update
+    assert has_update("1.0.0-beta.5", "1.0.0") is True
+    assert has_update("1.0.0", "1.0.0-rc.1") is False      # rc is older → no update
+    assert has_update("1.0.0-rc.1", "1.0.0-rc.2") is True  # rc.2 newer than rc.1
+    assert has_update("1.0.0+build.9", "1.0.0") is False   # build metadata != newer
+
+
 def test_rebuild_for_update_repins_and_preserves_env():
     from durin.config.schema import MCPServerConfig
 
