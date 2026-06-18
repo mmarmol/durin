@@ -1,0 +1,21 @@
+{
+  "name": "io.github.acme/jira",
+  "description": "Jira tools",
+  "version": "1.4.0",
+  "repository": {"url": "https://github.com/acme/jira-mcp", "source": "github"},
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@acme/jira-mcp",
+      "version": "1.4.0",
+      "runtimeHint": "npx",
+      "transport": {"type": "stdio"},
+      "packageArguments": [{"type": "positional", "value": "--stdio"}],
+      "environmentVariables": [
+        {"name": "JIRA_URL", "description": "Your Jira base URL", "isRequired": true},
+        {"name": "JIRA_TOKEN", "description": "API token", "isRequired": true, "isSecret": true}
+      ]
+    }
+  ],
+  "remotes": [{"type": "streamable-http", "url": "https://mcp.acme.com/jira"}]
+}
