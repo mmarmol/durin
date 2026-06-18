@@ -164,9 +164,9 @@ def memory_summary(workspace: Path) -> dict[str, int | bool]:
     mem = workspace / "memory"
     if mem.exists():
         # Count only entries stored under the canonical class folders
-        # (stable / episodic / corpus / pending). `memory/MEMORY.md` is
-        # the Dream-managed summary file, not a memory entry — counting
-        # it inflated the banner number and disagreed with `/memory list`.
+        # (stable / episodic / corpus / pending). Other files under memory/
+        # are not memory entries and would inflate the banner / disagree with
+        # `/memory list`.
         from durin.memory.paths import MEMORY_CLASSES
 
         entry_count = 0

@@ -40,7 +40,7 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 class MemoryStore:
-    """Pure file I/O for memory files: MEMORY.md, history.jsonl, SOUL.md, USER.md."""
+    """Pure file I/O for memory files: history.jsonl, SOUL.md, USER.md."""
 
     _DEFAULT_MAX_HISTORY = 1000
     _LEGACY_ENTRY_START_RE = re.compile(r"^\[(\d{4}-\d{2}-\d{2}[^\]]*)\]\s*")
@@ -53,7 +53,6 @@ class MemoryStore:
         self.workspace = workspace
         self.max_history_entries = max_history_entries
         self.memory_dir = ensure_dir(workspace / "memory")
-        self.memory_file = self.memory_dir / "MEMORY.md"
         self.history_file = self.memory_dir / "history.jsonl"
         self.legacy_history_file = self.memory_dir / "HISTORY.md"
         self.soul_file = workspace / "SOUL.md"
@@ -63,7 +62,7 @@ class MemoryStore:
         self._corruption_logged = False  # rate-limit non-int cursor warning
         self._oversize_logged = False  # rate-limit oversized-entry warning
         self._git = GitStore(workspace, tracked_files=[
-            "SOUL.md", "USER.md", "memory/MEMORY.md", "memory/.dream_cursor",
+            "SOUL.md", "USER.md", "memory/.dream_cursor",
         ])
         self._maybe_migrate_legacy_history()
 
@@ -201,14 +200,6 @@ class MemoryStore:
             suffix += 1
         return candidate
 
-    # -- MEMORY.md (long-term facts) -----------------------------------------
-
-    def read_memory(self) -> str:
-        return self.read_file(self.memory_file)
-
-    def write_memory(self, content: str) -> None:
-        self.memory_file.write_text(content, encoding="utf-8")
-
     # -- SOUL.md -------------------------------------------------------------
 
     def read_soul(self) -> str:
@@ -224,12 +215,6 @@ class MemoryStore:
 
     def write_user(self, content: str) -> None:
         self.user_file.write_text(content, encoding="utf-8")
-
-    # -- context injection (used by context.py) ------------------------------
-
-    def get_memory_context(self) -> str:
-        long_term = self.read_memory()
-        return f"## Long-term Memory\n{long_term}" if long_term else ""
 
     # -- history.jsonl — append-only, JSONL format ---------------------------
 

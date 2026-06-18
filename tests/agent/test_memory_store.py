@@ -14,13 +14,6 @@ def store(tmp_path):
 
 
 class TestMemoryStoreBasicIO:
-    def test_read_memory_returns_empty_when_missing(self, store):
-        assert store.read_memory() == ""
-
-    def test_write_and_read_memory(self, store):
-        store.write_memory("hello")
-        assert store.read_memory() == "hello"
-
     def test_read_soul_returns_empty_when_missing(self, store):
         assert store.read_soul() == ""
 
@@ -34,15 +27,6 @@ class TestMemoryStoreBasicIO:
     def test_write_and_read_user(self, store):
         store.write_user("user content")
         assert store.read_user() == "user content"
-
-    def test_get_memory_context_returns_empty_when_missing(self, store):
-        assert store.get_memory_context() == ""
-
-    def test_get_memory_context_returns_formatted_content(self, store):
-        store.write_memory("important fact")
-        ctx = store.get_memory_context()
-        assert "Long-term Memory" in ctx
-        assert "important fact" in ctx
 
 
 class TestHistoryWithCursor:
@@ -243,22 +227,22 @@ class TestDreamCursor:
 
     def test_git_restore_rolls_back_dream_cursor(self, tmp_path):
         store = MemoryStore(tmp_path)
-        store.write_memory("before")
+        store.write_user("before")
         store.set_last_dream_cursor(1)
         assert store.git.init() is True
 
-        store.write_memory("after")
+        store.write_user("after")
         store.set_last_dream_cursor(2)
         dream_sha = store.git.auto_commit("dream: update")
         assert dream_sha is not None
 
-        store.write_memory("newer")
+        store.write_user("newer")
         store.set_last_dream_cursor(3)
 
         restore_sha = store.git.revert(dream_sha)
 
         assert restore_sha is not None
-        assert store.read_memory() == "before"
+        assert store.read_user() == "before"
         assert store.get_last_dream_cursor() == 1
 
 
