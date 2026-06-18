@@ -359,6 +359,15 @@ export interface SkillFinding {
   detail: string;
 }
 
+/** A user/LLM "Revisada" override that cleared a flagged active skill. */
+export interface SkillReview {
+  by: "user" | "llm";
+  verdict: string;
+  original: string;
+  note: string;
+  at: string;
+}
+
 export interface SkillRow {
   name: string;
   source: string;
@@ -368,6 +377,8 @@ export interface SkillRow {
   status?: "active" | "quarantined";
   verdict?: SkillVerdict;
   findings?: SkillFinding[];
+  /** Present when a review override is in effect (verdict/findings preserved). */
+  review?: SkillReview;
   /** Whether/how this skill can be removed: "remove" (workspace skill),
    *  "revert" (forked builtin → shipped version), or null/absent (pure builtin). */
   removable?: "remove" | "revert" | null;
@@ -638,6 +649,44 @@ export async function judgeSkill(
     token,
   );
   return res.data;
+}
+
+export interface SkillReviewResult {
+  name: string;
+  reviewed: boolean;
+  review?: SkillReview;
+  verdict?: SkillVerdict;
+  findings?: SkillFinding[];
+  error?: string;
+}
+
+/** Mark an active skill reviewed (user override to safe). */
+export async function reviewSkill(
+  token: string,
+  name: string,
+  note: string,
+  base: string = "",
+): Promise<SkillReviewResult> {
+  const res = await post<{ data: SkillReviewResult }>(
+    `${base}/api/v1/skills/${encodeURIComponent(name)}/review`,
+    token,
+    { name, note },
+  );
+  return res.data;
+}
+
+/** Reopen (drop) an active skill's review. */
+export async function unreviewSkill(
+  token: string,
+  name: string,
+  base: string = "",
+): Promise<SkillReviewResult> {
+  const res = await del<{ data: SkillReviewResult }>(
+    `${base}/api/v1/skills/${encodeURIComponent(name)}/review`,
+    token,
+    { name },
+  );
+  return res.data ?? res;
 }
 
 export interface GithubTokenTestResult {

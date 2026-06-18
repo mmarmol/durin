@@ -200,6 +200,13 @@ check; the code/dangerous gates have no opt-out. An optional LLM judge
 (`skills.security.llm_judge.trigger`, default `off`) can add a semantic layer on top of
 the static scan; it is opt-in.
 
+**Static scan internals (`skill_scan.py` + `skill_ast.py`).** Bundled Python scripts also
+get a stdlib-AST behavioral pass that flags dynamic-execution call shapes. `compile` is
+rated **caution**, not dangerous: it produces a code object but does not execute —
+execution needs a subsequent `exec`/`eval`, which is flagged dangerous on its own (so
+`exec(compile(...))` stays dangerous). This keeps pure syntax-checkers / linters (e.g.
+`skill-creator/scripts/quick_validate.py`) from tripping the gate as false positives.
+
 **Quarantine & lifecycle.** Fetched skills land in `.durin/import-quarantine/` until the
 gate passes; `reject_quarantined` discards. `durin/agent/skill_lifecycle.py::sweep_unverified_skills`
 ("Part C") relocates any workspace skill that reached `skills/` **without** durin
@@ -306,6 +313,19 @@ Three tiers, all in `durin/agent/context.py` + `skills.py`:
 `durin/agent/skills_surface.py` exposes the inventory (+ verdict/findings) and the
 quarantine to CLI/web; usage signal (`skill_usage.py`) drives the hot-tier (it does **not**
 drive curation — that's deliberate).
+
+**Active-skill review overrides ("Revisada").** A flagged *active* skill can be cleared by
+a user or the LLM judge without mutating the package (builtins are read-only).
+`durin/security/skill_reviews.py` stores reviews in `.durin/skill-reviews.json`, keyed by a
+content hash **and** the set of acked finding fingerprints: a review is valid only while
+the content is unchanged AND no new finding appeared — either a content edit or a
+newly-detected finding (e.g. a scanner upgrade) re-opens it. `skills_inventory` surfaces a
+`review` block; the deterministic verdict/findings are **preserved, not mutated**, and the
+webui shows a "Revisada" chip in place of the verdict badge. Two paths clear a skill: the
+websocket judge (`_run_skill_audit` on an active skill → `skills_store.record_review_from_judge`,
+recorded only when the judge does **not** confirm dangerous) and an explicit user override
+(`POST /api/v1/skills/{name}/review` → `web_skill_review_user`); `DELETE …/review`
+(`web_skill_unreview`) re-opens it.
 
 ---
 

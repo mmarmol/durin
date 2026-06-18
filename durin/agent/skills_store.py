@@ -1047,6 +1047,49 @@ def web_skill_judge(workspace: Path, name: str) -> tuple[int, dict]:
                  "summary": outcome.summary, "judged": True}
 
 
+def _active_findings(rep) -> list[dict]:
+    return [{"category": f.category, "severity": f.severity,
+             "where": f.where, "detail": f.detail} for f in rep.findings]
+
+
+def web_skill_review_user(workspace: Path, name: str, note: str = "") -> tuple[int, dict]:
+    """`POST /api/v1/skills/{name}/review` — user marks an ACTIVE skill reviewed
+    (override to safe). Persists a review keyed by content hash + findings."""
+    from durin.agent.skills_surface import _skill_dirs
+    from durin.security.skill_reviews import record_review
+    from durin.security.skill_scan import scan_skill
+
+    d = _skill_dirs(Path(workspace)).get(name)
+    if d is None or not (d / "SKILL.md").is_file():
+        return 404, {"error": f"skill not found: {name}"}
+    rep = scan_skill(d)
+    findings = _active_findings(rep)
+    review = record_review(Path(workspace), name, d, by="user", verdict="safe",
+                           original=rep.verdict, findings=findings, note=note)
+    return 200, {"name": name, "reviewed": True, "review": review,
+                 "verdict": rep.verdict, "findings": findings}
+
+
+def web_skill_unreview(workspace: Path, name: str) -> tuple[int, dict]:
+    """`DELETE /api/v1/skills/{name}/review` — reopen (drop) a skill's review."""
+    from durin.security.skill_reviews import clear_review
+    cleared = clear_review(Path(workspace), name)
+    return 200, {"name": name, "reviewed": False, "cleared": cleared}
+
+
+def record_review_from_judge(workspace: Path, name: str, skill_dir, *, judge_verdict,
+                             merged_findings, summary, original) -> dict | None:
+    """Persist an LLM review for an ACTIVE skill — only when the judge did NOT
+    confirm dangerous (i.e. it cleared to safe/caution). Returns the review or
+    None when nothing was recorded."""
+    from durin.security.skill_reviews import record_review
+    if judge_verdict not in ("safe", "caution"):
+        return None
+    return record_review(Path(workspace), name, skill_dir, by="llm",
+                         verdict=judge_verdict, original=original,
+                         findings=merged_findings, note=summary or "")
+
+
 def web_github_token_test(secret_name: str) -> tuple[int, dict]:
     """`GET /api/skills/github-token-test?secret=` — verify a GitHub-token secret
     against the GitHub API (rate_limit). Returns {ok, remaining, limit} or {ok:false, error}."""

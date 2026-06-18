@@ -602,6 +602,19 @@
       "dangerous": "Peligrosa",
       "unscanned": "Sin analizar"
     },
+    "review": {
+      "reviewedBy": "Revisada · {{by}}",
+      "byUser": "vos",
+      "byLlm": "LLM",
+      "markReviewed": "Marcar revisada",
+      "reopen": "Reabrir revisión",
+      "auditLlm": "Auditar con LLM",
+      "confirmSafe": "¿Marcar esta skill como revisada y segura?",
+      "confirmDangerous": "Esta skill tiene un hallazgo PELIGROSO. ¿Marcarla revisada y segura igual?",
+      "confirmAction": "Marcar revisada y segura",
+      "notePlaceholder": "Nota opcional (¿por qué es segura?)",
+      "reviewedAt": "Revisada · {{by}} · {{at}}"
+    },
     "import": {
       "placeholder": "Importar skill: ruta, https://…/SKILL.md o github:owner/repo",
       "button": "Importar",

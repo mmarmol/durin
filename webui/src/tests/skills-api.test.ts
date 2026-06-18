@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { listQuarantine, listSkills, saveSkill, searchSkills, setSkillMode } from "@/lib/api";
+import { listQuarantine, listSkills, reviewSkill, saveSkill, searchSkills, setSkillMode, unreviewSkill } from "@/lib/api";
 
 function mockFetchOnce(json: unknown) {
   return vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
@@ -92,5 +92,26 @@ describe("skills api", () => {
     expect(rows[0].name).toBe("q");
     expect(rows[0].source).toBe("github:owner/repo");
     expect(String(f.mock.calls[0][0])).toContain("/api/v1/skills/quarantine");
+  });
+
+  it("reviewSkill POSTs to /api/v1/skills/{name}/review with the note", async () => {
+    const f = mockFetchOnce({ status: 200, data: { name: "demo", reviewed: true,
+      review: { by: "user", verdict: "safe", original: "caution", note: "ok", at: "2026-06-18" } } });
+    const res = await reviewSkill("tok", "demo", "ok");
+    expect(res.reviewed).toBe(true);
+    const url = String(f.mock.calls[0][0]);
+    expect(url).toContain("/api/v1/skills/demo/review");
+    const init = f.mock.calls[0][1] as RequestInit;
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toMatchObject({ name: "demo", note: "ok" });
+  });
+
+  it("unreviewSkill DELETEs the review route", async () => {
+    const f = mockFetchOnce({ status: 200, data: { name: "demo", reviewed: false } });
+    const res = await unreviewSkill("tok", "demo");
+    expect(res.reviewed).toBe(false);
+    const url = String(f.mock.calls[0][0]);
+    expect(url).toContain("/api/v1/skills/demo/review");
+    expect((f.mock.calls[0][1] as RequestInit).method).toBe("DELETE");
   });
 });

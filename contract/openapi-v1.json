@@ -3147,6 +3147,25 @@
         "title": "SkillRemoveCommand",
         "type": "object"
       },
+      "SkillReviewCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "note": {
+            "default": "",
+            "title": "Note",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "SkillReviewCommand",
+        "type": "object"
+      },
       "SkillSaveCommand": {
         "additionalProperties": false,
         "properties": {
@@ -3183,6 +3202,20 @@
           "q"
         ],
         "title": "SkillSearchQuery",
+        "type": "object"
+      },
+      "SkillUnreviewCommand": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "SkillUnreviewCommand",
         "type": "object"
       },
       "SkillsImportCommand": {
@@ -5696,6 +5729,62 @@
           }
         },
         "summary": "Discard a quarantined skill",
+        "x-required-scope": "skills:write"
+      }
+    },
+    "/api/v1/skills/{name}/review": {
+      "delete": {
+        "operationId": "skills_unreview",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillUnreviewCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillsResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Reopen an active skill review",
+        "x-required-scope": "skills:write"
+      },
+      "post": {
+        "operationId": "skills_review",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillReviewCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillsResult"
+                }
+              }
+            },
+            "description": "Success"
+          }
+        },
+        "summary": "Mark an active skill reviewed (user override to safe)",
         "x-required-scope": "skills:write"
       }
     },
