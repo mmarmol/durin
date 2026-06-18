@@ -2,7 +2,9 @@ import { useCallback, useEffect, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
+  Globe,
   Loader2,
+  Package,
   Plus,
   Shield,
   ShieldAlert,
@@ -108,6 +110,23 @@ function VerdictBadge({ verdict }: { verdict?: SkillVerdict }) {
       )}
     >
       {label}
+    </span>
+  );
+}
+
+/** Source registry tag shown on every search result + its detail view. durin
+ * keeps a one-accent palette, so the two registries are distinguished by icon +
+ * name (neutral), never by a per-source accent colour. */
+function RegistryTag({ registry }: { registry: string }) {
+  const Icon = registry === "clawhub" ? Package : Globe;
+  return (
+    <span
+      title={registry}
+      data-registry={registry}
+      className="inline-flex shrink-0 items-center gap-1 rounded-full border border-border/60 px-1.5 py-0.5 text-[10px] text-muted-foreground"
+    >
+      <Icon className="h-3 w-3" aria-hidden />
+      {registry}
     </span>
   );
 }
@@ -241,9 +260,7 @@ function SkillPreview({
       <div className="flex flex-col">
         <span className="flex items-center gap-1.5">
           <span className="text-[14px] font-medium text-foreground">{hit.name}</span>
-          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-            {hit.registry}
-          </span>
+          <RegistryTag registry={hit.registry} />
           {typeof hit.signals?.installs === "number" ? (
             <span className="text-[11px] text-muted-foreground">
               {t("skills.search.installs", { count: hit.signals.installs })}
@@ -322,7 +339,10 @@ export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => v
   const [searching, setSearching] = useState(false);
   const [searchMsg, setSearchMsg] = useState<string | null>(null);
   const [hits, setHits] = useState<SkillSearchHit[] | null>(null);
-  const [sortBy, setSortBy] = useState<"installs" | "name" | "relevance">("installs");
+  // Default to relevance: it preserves the server's rank-fair cross-source merge
+  // order. Sorting by `installs` buries registries that don't report an install
+  // count (e.g. clawhub) regardless of how well they match the query.
+  const [sortBy, setSortBy] = useState<"installs" | "name" | "relevance">("relevance");
   const [searchLimit, setSearchLimit] = useState(10);
   const [previewHit, setPreviewHit] = useState<SkillSearchHit | null>(null);
   const [descCache, setDescCache] = useState<Record<string, SkillDescribeResult | null>>({}); // null = loading
@@ -418,12 +438,12 @@ export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => v
   );
 
   // Clicking a result opens its detail view; the SKILL.md description+body is
-  // fetched once per ref and cached (null while loading). clawhub/non-github
-  // refs carry their summary inline and aren't fetched here.
+  // fetched once per ref and cached (null while loading). github + clawhub refs
+  // both resolve to a fetchable SKILL.md; other refs carry their summary inline.
   const openPreview = useCallback(
     async (hit: SkillSearchHit) => {
       setPreviewHit(hit);
-      if (hit.registry === "clawhub" || !hit.ref.startsWith("github:")) return;
+      if (!hit.ref.startsWith("github:") && !hit.ref.startsWith("clawhub:")) return;
       if (descCache[hit.ref] !== undefined) return;
       setDescCache((c) => ({ ...c, [hit.ref]: null }));
       const r = await describeSkill(token, hit.ref);
@@ -1003,9 +1023,7 @@ export function SkillsView({ onAskDurin }: { onAskDurin?: (binName: string) => v
                                     >
                                       {h.name}
                                     </button>
-                                    <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                                      {h.registry}
-                                    </span>
+                                    <RegistryTag registry={h.registry} />
                                     {typeof h.signals?.installs === "number" ? (
                                       <span className="shrink-0 text-[11px] text-muted-foreground">
                                         {t("skills.search.installs", { count: h.signals.installs })}
