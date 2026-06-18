@@ -370,6 +370,19 @@ class SettingsService:
                 api_key = search_config.api_key
             if not api_key:
                 raise ValidationFailedError("api_key is required")
+            from durin.security.secrets import is_secret_ref, store_secret
+
+            # Mirror provider_update: persist only a ${secret:} ref in config,
+            # never plaintext (a re-submitted ref passes through untouched).
+            if not is_secret_ref(api_key):
+                api_key = store_secret(
+                    f"{provider_name}_API_KEY",
+                    api_key,
+                    service=f"web_search:{provider_name}",
+                    scope=[f"web_search:{provider_name}"],
+                    description=f"{provider_name} web-search API key",
+                    origin="webui",
+                )
             _set("api_key", api_key)
             _set("base_url", "")
 

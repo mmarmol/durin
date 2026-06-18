@@ -27,7 +27,11 @@ _EXPIRY_SKEW_SECONDS = 60
 _LONG_LIVED_TOKEN_SECONDS = 315360000
 
 
-def get_storage():
+_COPILOT_SECRET_NAME = "GITHUB_COPILOT_OAUTH"
+
+
+def _kit_file_storage():
+    """The kit's previous on-disk store — kept only for one-time migration."""
     from oauth_cli_kit.storage import FileTokenStorage
 
     return FileTokenStorage(
@@ -35,6 +39,110 @@ def get_storage():
         app_name=TOKEN_APP_NAME,
         import_codex_cli=False,
     )
+
+
+class _CopilotSecretsStorage:
+    """``oauth-cli-kit`` token storage backed by durin's secret store.
+
+    The GitHub OAuth token lives in ``~/.durin/secrets.json`` (mode 0600), like
+    every other credential, instead of the kit's own app-data dir. On first
+    ``load()`` a token left in the kit's file store is migrated into secrets.
+    Mirrors ``codex_device_auth._CodexSecretsStorage``.
+    """
+
+    def load(self):
+        import json
+
+        from oauth_cli_kit.models import OAuthToken
+
+        from durin.security.secrets import SecretNotFoundError, resolve_secret
+
+        raw = None
+        try:
+            raw = resolve_secret(f"${{secret:{_COPILOT_SECRET_NAME}}}")
+        except SecretNotFoundError:
+            raw = None
+        except Exception:  # noqa: BLE001
+            raw = None
+        if isinstance(raw, str) and raw.strip():
+            try:
+                d = json.loads(raw)
+                return OAuthToken(
+                    access=d.get("access", ""),
+                    refresh=d.get("refresh", ""),
+                    expires=int(d.get("expires", 0)),
+                    account_id=d.get("account_id"),
+                )
+            except Exception:  # noqa: BLE001
+                return None
+        # One-time migration from the kit's previous file store.
+        legacy = _kit_file_storage().load()
+        if legacy is not None and getattr(legacy, "access", None):
+            self.save(legacy)
+            return legacy
+        return None
+
+    def save(self, token) -> None:
+        import json
+
+        from durin.security.secrets import store_secret
+
+        blob = json.dumps(
+            {
+                "access": token.access,
+                "refresh": getattr(token, "refresh", ""),
+                "expires": getattr(token, "expires", 0),
+                "account_id": getattr(token, "account_id", None),
+            }
+        )
+        store_secret(
+            _COPILOT_SECRET_NAME,
+            blob,
+            service="provider:github_copilot",
+            scope=["provider:github_copilot"],
+            description="GitHub Copilot OAuth token",
+            origin="oauth",
+        )
+
+    def get_token_path(self):
+        # Data lives in secrets.json; this path is only used by the CLI logout
+        # to clean up the kit's previous file store (+ its lock).
+        return _kit_file_storage().get_token_path()
+
+
+def get_storage():
+    return _CopilotSecretsStorage()
+
+
+def disconnect() -> bool:
+    """Forget the Copilot token: delete the secret and any legacy kit file."""
+    removed = False
+    try:
+        from durin.security.secrets import SecretStore, get_secret_store
+
+        store = SecretStore().load()
+        if store.remove(_COPILOT_SECRET_NAME):
+            store.save()
+            get_secret_store(reload=True)
+            removed = True
+    except Exception as exc:  # noqa: BLE001
+        from loguru import logger
+
+        logger.warning("could not remove github copilot secret: {}", exc)
+    # Clean up the kit's previous file store (+ lock), if still around.
+    try:
+        legacy = _kit_file_storage().get_token_path()
+        for path in (legacy, legacy.with_suffix(".lock")):
+            try:
+                path.unlink()
+                removed = True
+            except FileNotFoundError:
+                continue
+            except OSError:
+                continue
+    except Exception:  # noqa: BLE001
+        pass
+    return removed
 
 
 def _copilot_headers(token: str) -> dict[str, str]:
